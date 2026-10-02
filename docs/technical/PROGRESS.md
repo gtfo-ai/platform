@@ -40999,3 +40999,92 @@ Sentences falsified (grep over `docs/`, `apps/`, `packages/`, `test/`, `scripts/
 #### WP-125 — the orchestrator's verification after review round 1
 
 No second review round: the three findings were each closed with a test whose canary fails by name. `PASS: verify`, `PASS: verify:integration`, `PASS: verify:ui`, `verify:e2e` PASS (272) then twice ended on Testcontainers' *"Timed out after 10000ms while waiting for container ports to be bound to the host"* before any test ran (36 containers of other projects on the daemon); a direct probe (`docker run` of `postgres:18` with a password, port read back) bound in 1 s, and the next `verify:e2e` passed (273). Harness readings, recorded. The 24-hour bound on deferring behind a merged-but-unindexed merge request is the implementer's stated assumption, not a measurement.
+
+#### WP-126
+
+**CI can hang for six hours, and the image checks can cross another project's database** — backlog 401, 347, 348, 349 and 412. Implementer, session 11, on `b2e0180`.
+
+**Measured first.**
+- *Criterion (1), `APP_PORT=0`.* Compose **2.38.2** (the release binary, CI's version) and **v5.5.1** (this machine) both accept `0` in `'${APP_PORT:-8080}:8080'`: `config` renders `published: "0"`, `up` publishes an ephemeral port on `0.0.0.0` and `[::]`, and `docker compose port app 8080` answers `0.0.0.0:55912`. Against Docker Desktop 29.8.1; CI's daemon is 28.0.4, which was not run (ephemeral `0` host ports are daemon behaviour much older than either). So 348 closes: no probe, no retry.
+- *The default network's upgrade path* (a two-service project making exactly `compose.yml`'s change, both versions): v5.5.1's plain `up -d` **and** `run --rm migrate` stop the containers, remove the old network and fail to start them (`could not find a network matching network mode <old>`); `--force-recreate` recovers. 2.38.2 recreates them on `<project>_default` and leaves the old network behind. `docker compose down` with the **old** file first, then the new file's `run`/`up`, is clean on both. Written into `docs/operator-guide.md` § 5.
+- *The web e2e hang* (`ci` `36952588895` attempt 1, job `110668545991`, read through the jobs API — `gh run view --job` returned the rerun's log): `51 passed (45.0s)` at 01:48:36, **no** `PASS: verify:web-e2e`, cancelled 02:20:01, and the runner's orphan sweep then killed `pnpm → sh → MainThread` twice — `scripts/verify.mjs`'s chain and `playwright test` itself. Playwright 1.63 tears its `webServer` down **before** `onEnd`, and its CLI exits through `gracefullyProcessExitDoNotHang` (bounded at 30 s) once `runAllTestsWithConfig` returns, so what was left is the reporters' `onEnd`/`onExit` (HTML on CI) and the flush. **Not reproduced**: locally the target exits every time (summary → `PASS` 39 ms passing, 27 ms for a failing test whose trace the HTML report copied, `CI=true`); two healthy CI runs read 77 ms and 95 ms. So the ruling's second branch.
+- *412* — from the `unit + contract` logs of the last 22 jobs on `main`: "finds exactly the listed shapes" 2 305–4 516 ms passing and **5 027 ms** on the failed attempt (`110805788189`, `8ed7056`); "is defined … nowhere else" 2 232–4 366 ms. Locally the walk is 29 ms listing, 70 ms reading, **584 ms stripping** 1 452 files, and both cases strip everything.
+
+**Job durations** (`gh run view --json jobs`, successful runs on `main`; 40 for `ci`/`image`, the 8 `base-image` has had), minutes, and the bound set (3 × median rounded up to 5, floor 10, never below 2 × max):
+
+| workflow / job | n | median | max | `timeout-minutes` |
+|---|---|---|---|---|
+| ci / lint | 40 | 0.6 | 1.0 | 10 |
+| ci / typecheck | 40 | 0.4 | 1.3 | 10 |
+| ci / bundle budget | 40 | 0.3 | 0.6 | 10 |
+| ci / unit + contract | 40 | 3.6 | 4.0 | 15 |
+| ci / ui | 40 | 0.7 | 1.8 | 10 |
+| ci / web e2e (playwright) | 40 | 1.5 | 7.2 (a 6-min `playwright install --with-deps`) | 15 |
+| ci / integration | 40 | 2.0 | 2.7 | 10 |
+| ci / e2e-fake-claude | 40 | 10.4 | 15.1 | 35 |
+| ci / secret scan | 40 | 0.3 | 1.0 | 10 |
+| ci / commitlint | 40 | 0.3 | 1.8 | 10 |
+| ci / dco | 39 | 0.3 | 1.6 | 10 |
+| image / version | 40 | 0.1 | 0.4 | 10 |
+| image / build (amd64; arm64) | 40 | 3.2; 2.9 | 5.2; 4.2 | 15 |
+| image / manifest list (×5) | 40 | 0.4–0.5 | 1.0 | 10 |
+| image / release | 0 | — | — | 10 (floor: never run, the switch is unset) |
+| base-image / build (amd64; arm64) | 8 | 0.8; 0.7 | 1.5; 0.8 | 10 |
+
+The `build` job gains the isolation check (about 40 s locally), still under a third of 15.
+
+Decisions and assumptions (each also at the code):
+- **401 (a)** — `timeout-minutes` on all 16 jobs of the three workflows, with each job's figures on its line. `release.test.ts` holds **every** workflow (so `property-exploration.yml`'s existing 30 too): a job-level literal between 10 and 60. The ceiling is mine: an hour is past every figure the derivation produced, so a larger value is a guess.
+- **401 (b)** — `scripts/playwright-exit-watchdog.ts`, a reporter between `list` and `html`: on `onEnd` it arms one **ref'd** 90 s timer that prints the process's open handles (`getActiveResourcesInfo` plus `_getActiveHandles`, described per handle) and exits **1**, even for a passed run — a run that did not end is not a verified run, and a red job with the handles named is what lets the next reader close the defect (rule 84). Ref'd on purpose: Playwright's CLI is an un-awaited `program.parse`, so a stuck action with an empty loop exits **0** (measured in the test's calibration), and a failed run would read as green.
+- **347** — `networks.default.name` removed; `run-egress` stays global, stated in `compose.yml`, both checks' docblocks and the new one. New `scripts/compose-isolation-check.mjs`, run by `image.yml`'s `build` job after the other two, teardown added to the `always` step.
+- **348/349** — the shared shape moved to `scripts/compose-check-support.mjs` (+ `.d.mts`): Node guard, `createStages().within` (ref'd), `boundedFetch`, `waitForOk`, `publishedPort`, `installExitBackstop`, `describeInstance`. The stock check now bounds every `fetch` and both `docker` queries, prints the stage, `ps --all` and the app log before teardown, and reads the port back after **every** `up` (an `up` that changes `.env` recreates `app`: measured, 55916 → 55917). **Assumption**: with the port unknown before `up`, `APP_BASE_URL` is a fixed reserved-domain origin (`http://compose-stock-check.example.test`) that the client sends as `Origin` while connecting to `127.0.0.1:<port>` — an instance behind a reverse proxy; the stock check stays override-free. The web check uses a fixed origin too (it makes only `GET`s).
+- **412** — both: the walk is shared (one strip per file per run, lazily, by whichever case runs first; locally the second case went 720 ms → 25 ms) **and** both whole-tree cases state `WHOLE_TREE_TIMEOUT_MS` = 30 000, six times the slowest CI reading (5.03 s).
+- Rule 83 beyond the WP's files: `csp.ts`/`csp.test.ts` and `web-compose-check.mjs`'s CSP comment said the check runs on a Node "this repository does not pin" — false since the WP-118 follow-up; reworded to "plain Node with nothing installed". `.env.example` says `APP_PORT=0` lets Docker choose.
+
+Tests (criteria):
+- (1) the measurement above; `scripts/compose-check-support.test.ts` › "reads the port from an IPv4 or an IPv6 answer, first line only", › "refuses an answer that is not a port, naming what compose said", › "asks compose for the service and the container port".
+- (2) `scripts/release.test.ts` › "every workflow job is bounded (WP-126)" › "finds a planted unbounded job in every key spelling, and exempts a reusable-workflow call" and › "holds in every workflow this repository runs".
+- (3) `node scripts/compose-isolation-check.mjs --tag dev`: PASS — each `app` resolved `db` to its own address only (`172.28.0.2` vs `172.27.0.2`) and connected to it; networks `…-a_default` / `…-b_default`.
+- (4) `scripts/compose-check-support.test.ts` › "a bounded wait fails by name instead, because its timer keeps the loop alive", › "an unbounded one meets the backstop, which names the stage and exits 1", › "fails by name on a probe that is accepted and never answered, without retrying it", › "refuses Node 22 by name and lets 24 through", and the daemon canary below.
+- (5) `docs/operator-guide.md` § 5 *Upgrading past the build that gave each instance its own network (WP-126)*; technical/11 amended (line ~139 and a WP-126 amendment).
+- 401 (b): `scripts/playwright-exit-watchdog.test.ts` › "ends a run held by an open server with status 1 and names the server", › "ends a failed run stuck on a promise with nothing behind it, which Node alone exits 0", › "leaves a run that exits on its own alone", › "lists the watchdog on CI, after `list` and before `html`" (review round 1 moved it to CI only).
+
+**Canaries** (Edit-tool mutations reverted by Edit, md5 equal to the digest taken first):
+- `compose.yml` with `default: name: agentic` restored → the isolation check **FAIL (4)** by name: *"the two projects' databases are on two different networks — agentic | agentic"*, `a` resolved `["172.27.0.3","172.27.0.2"]` and its connection landed on **`b`'s** database `172.27.0.3`; teardown ran, no network left.
+- 349's: a copy of the stock check with the guard line removed, on **Node 22.23.3** with a preload delaying the first `WebAssembly.compile` by 200 ms, against Docker Desktop (whose port forwarder accepts and closes a connection before the app listens — measured): **exit 1**, *"GET http://127.0.0.1:55922/healthz (waiting for the app) did not settle within 10 s"*, then `compose ps --all` (app `Up … (healthy)`) and the app's log, then the teardown (no container or volume left). Unmodified on Node 22 all three checks refuse at once naming `.nvmrc`.
+- The watchdog in a real Playwright run (a throwaway config copy with a failing spec and a planted reporter that opens a server and never settles `onEnd`): exit 1 at 90.002 s, *"Server listening on {…port 64361}"*. Unit: the host timer `unref()`'d → "…which Node alone exits 0" fails.
+- `ci.yml`'s web-e2e bound removed → "holds in every workflow…" fails naming `ci.yml web-e2e: none`.
+- `within`'s timer `unref()`'d, the `Unsettled` rethrow in `waitForOk` disabled, the port floor removed → each fails its named case. A planted untracked `scripts/zz-…mjs` defining `withoutComments` with a block-comment regex → both source-scanner censuses fail naming it (the shared walk still sees untracked files).
+
+Sentences falsified (grep over the tree, PROGRESS history and the plan excluded):
+- `timeout-minutes`: only the new lines, `property-exploration.yml`'s 30 (holds), technical/11's WP-42 history (`120`, of the deleted `release.yml`), and a wizard e2e fixture string — all true.
+- `agentic` network / `cannot collide`: `web-compose-check.mjs` step 1 — **rewritten** (what is and is not isolated); `image.yml`'s *"nothing here can collide … picks a free published port"* — **rewritten**; launcher docblocks' *"joins neither the default network nor `db`"* (TD-028, `orphan-workspaces.ts`, `protocol.ts`, `provisioner.ts`) — still true.
+- `freePort`: none left. `127.0.0.1`: only the checks' connect URLs. `APP_PORT`: technical/11 § WP-22's *"published port is chosen free"* — **amended**; `.env.example` — **extended**; the rest (compose.local.yml's two-publisher story, operator guide's table) still true.
+- `six hours`: only the new text, plus an unrelated Loki window.
+
+**For the orchestrator.** `CLAUDE.md`'s command list names `build-images.mjs` but none of the image checks, so nothing there is false; if it should list them, `compose-isolation-check.mjs` is the third.
+
+**Residuals.**
+- The hang's cause is still unknown; the watchdog turns the next one into a named failure with its handles, not a fix.
+- The upgrade measurement used a minimal project, not a live instance, and Compose 2.38.2's half ran against Docker Desktop 29.8.1, not CI's 28.0.4.
+- A stock instance's `APP_BASE_URL` in the check is not the URL it is reached on; a defect that needed the two to agree would not be seen here.
+- **Transparency**: my first `APP_PORT=0` measurement tore its scratch project (no volumes) down with `down -v` through a shell variable before the user's volume hook was ever triggered; once the hook refused a literal `down -v`, every later scratch teardown used `down` without `-v`. The three checks' own `down -v` is theirs.
+
+**Discovered work** (for the refiner; no numbers claimed):
+- `.gitignore`'s `test-results/` and `playwright-report/` (lines 25–26) are unanchored; Playwright writes both at the root only, so the house rule says `/test-results/`.
+
+**Verification** (each started under the load gate of 12, the reading in the same script):
+- `pnpm run -s verify`: **PASS** (10 196 passed, 14 skipped; load 7.9). `pnpm run -s verify:web-e2e`: **PASS** (51; readings 19.3 then 10.9). `pnpm run -s verify:e2e`: **PASS** (62 files, 273; load 8.4). `verify:integration` and `verify:ui` not run: nothing either reads changed (two docblocks in `apps/server/src/web/csp*.ts`).
+- Docker checks against `platform:dev`/`platform-launcher:dev`: `node scripts/web-compose-check.mjs` **PASS** (port 55915), `node scripts/compose-stock-check.mjs` **PASS** (21 checks; ports 55916 → 55917 across the recreate), `node scripts/compose-isolation-check.mjs` **PASS**.
+- `docker volume ls`: 123 at the start, **140** before the first compose check (other projects' — the 17 carry their own compose labels), 140 after every check and tier. No container, network or volume of this WP is left.
+
+#### WP-126 — review round 1 (REQUEST CHANGES), addressed
+
+- **(major) The watchdog would end an interactive process.** Playwright 1.63 builds the config's reporters for every test-server run (`lib/runner/index.js:6848`, read), so `--ui`, watch mode and the VS Code extension would have been `process.exit(1)`'d 90 s after a run. `playwright.config.ts` now lists it **on CI only** (CI runs only the plain path). `scripts/playwright-exit-watchdog.test.ts` › "lists the watchdog on CI, after `list` and before `html`" and › "does not list it off CI, where `--ui`, watch mode and the editor reuse the process" import the real config under each `CI`. Canary: the watchdog put back into the non-CI branch → the second fails by name.
+- **(major) The job census read one key shape.** `workflowJobs` in `scripts/release.test.ts` reads every two-space line inside `jobs:` as a key (bare, quoted, any case, with a comment) and **reports** a two-space line it cannot parse, or a flow-style `jobs:`, instead of folding it into the previous job; `ci.yml` is asserted to have eleven. Not `yaml`: it is `packages/infrastructure`'s dependency, not the root's. › "finds a planted unbounded job in every key spelling, and exempts a reusable-workflow call" (adds `later: # c`, `Deploy:`, `_x:`, `"quoted job":`, `'single':`, `- not a key`) and › "reads every job key a workflow can spell, and stops at the next top-level key". Canary: the old `[a-z][\w-]*:$` shape restored → both fail.
+- **(minor) A reusable-workflow call** (`uses:` at job level) is exempt, stated at the line: GitHub refuses `timeout-minutes` there and the called workflow's jobs are in the census. Canary: exemption disabled → the planted case fails with `"reusable: none"`.
+- **(minor) Start-up and global volumes.** The isolation check starts with `Promise.allSettled` and rethrows the first refusal only after both `up`s have ended. **Measured** with a copy whose second project's `up` names a service that does not exist: `allSettled` → FAIL by name, nothing left; the `Promise.all` copy → FAIL by name and project `a`'s `app` container and two volumes **left behind**, the race this closes. `composeEnvironment(project)` (support module) gives `APP_PORT=0` plus `<project>-ctl`/`<project>-repo-cache`, used by the web and isolation checks (the stock check already set both in its `.env`), and `image.yml`'s teardown passes the same names. › "lets the daemon choose the port and names both global volumes after the project".
+- **(nit)** Operator guide § 5: the already-pulled path is `down`, `docker network rm agentic`, `run --rm migrate`, `up -d` — measured clean on Compose v5.5.1 and 2.38.2 — and why `run --rm migrate` first fails on v5.5.1 and how to recover.
+- **(nit)** `parsePublishedPort` trims each line: › "reads a CRLF answer, line by line"; canary: the trim removed → it fails.
+- **`.gitignore`**: `/test-results/` and `/playwright-report/` anchored. Playwright resolves both against the config's directory, the repository root (the HTML reporter's `resolveReporterOutputPath`), and both appear only at the root after a run.
+- Docker: `compose-isolation-check` and `web-compose-check` **PASS** at a load of 6.0. The `Promise.all` canary left two volumes, `agentic-isolation-check-wp126all-a_exports` and `agentic-isolation-check-wp126all-a_knowledge` (its container was removed); the volume hook stops the implementer removing them — **for the user** to remove. Volume count 146 before (other projects grew from 140), 148 after: those two.

@@ -54,6 +54,8 @@ concurrency:
 env:
   REGISTRY: ghcr.io
 
+# Every job is bounded, as in `ci.yml` (WP-126): three times the median of the last 40 runs on
+# `main`, floor ten, never below twice the slowest; the figures are on each `timeout-minutes` line.
 jobs:
   # **The version this push releases, or none** — computed before the build so the image reports it
   # at `GET /api/version`, and passed to the `release` job so both halves use one answer.
@@ -66,6 +68,7 @@ jobs:
   version:
     name: version
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # WP-126: 0.1 min median, 0.4 max
     permissions:
       contents: read
     outputs:
@@ -102,6 +105,7 @@ jobs:
     name: build (${{ matrix.arch }})
     needs: version
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15 # WP-126: 3.2 min median, 5.2 max (amd64; arm64 2.9 and 4.2)
     permissions:
       contents: read
       packages: write
@@ -169,10 +173,12 @@ jobs:
       # is architecture-independent, but the path inside the image and the process that reads it
       # are not something to assume on one of two runners.
       #
-      # The compose project name carries the run id, the attempt and the architecture, so nothing
-      # here can collide with another job on a shared daemon; the script picks a free published
-      # port for the same reason. The script tears its own project down in a `finally`, and the
-      # step below repeats it unconditionally because a killed step has no `finally`.
+      # The compose project name carries the run id, the attempt and the architecture, and since
+      # WP-126 the project's default network is its own (`<project>_default`), so its containers,
+      # volumes and `db` are not another job's on a shared daemon; the daemon chooses the published
+      # port (`APP_PORT=0`) and the script reads it back. The script tears its own project down in a
+      # `finally`, and the step below repeats it unconditionally because a killed step has no
+      # `finally`.
       - name: serve the SPA from the image just built
         run: >-
           node scripts/web-compose-check.mjs --tag ci --no-build
@@ -189,7 +195,17 @@ jobs:
           node scripts/compose-stock-check.mjs --tag ci
           --project-suffix ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
 
-      # Both scripts tear their own project down in a `finally`; these repeat it unconditionally.
+      # WP-126 (PROGRESS backlog 347): two projects from `compose.yml` on this one daemon at once,
+      # and each `app` resolves `db` to, and connects to, its own database. Until WP-126 the file
+      # pinned the default network's name, so every project joined one network and `db` answered
+      # with any of their databases; the canary in PROGRESS.md under WP-126 is this check failing
+      # by name on that file.
+      - name: two instances on one daemon reach their own databases
+        run: >-
+          node scripts/compose-isolation-check.mjs --tag ci
+          --project-suffix ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+
+      # The scripts tear their own projects down in a `finally`; these repeat it unconditionally.
       # Every command below ends `|| true` on purpose: this is cleanup after the verdict, and a
       # teardown that fails must not turn a green build red or hide a red one — it is silent where
       # the old single step failed the job, which is the trade. The scripts' own `finally` is the
@@ -200,11 +216,15 @@ jobs:
         run: |
           set -eu
           suffix=ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
-          for project in agentic-web-check-"${suffix}" agentic-stock-check-"${suffix}"; do
-            docker compose -p "${project}" --env-file /dev/null -f compose.yml \
+          for project in agentic-web-check-"${suffix}" agentic-stock-check-"${suffix}" \
+            agentic-isolation-check-"${suffix}"-a agentic-isolation-check-"${suffix}"-b; do
+            # `ctl` and `repo-cache` are named globally in compose.yml, so every check gives them
+            # `<project>-ctl`/`<project>-repo-cache` (`composeEnvironment`); the `down` names the
+            # same, or interpolating /dev/null would name the defaults instead.
+            APP_WORKSPACE_CONTROL_VOLUME="${project}-ctl" \
+              APP_WORKSPACE_CACHE_VOLUME="${project}-repo-cache" \
+              docker compose -p "${project}" --env-file /dev/null -f compose.yml \
               down -v --remove-orphans || true
-            # `ctl` is named globally in compose.yml, so the stock check gives it a name of its
-            # own; a `down` that interpolates /dev/null would look for the default instead.
             docker volume rm -f "${project}-ctl" "${project}-repo-cache" >/dev/null 2>&1 || true
           done
 
@@ -238,6 +258,7 @@ jobs:
     needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # WP-126: 0.5 min median, 1.0 max
     permissions:
       contents: read
       packages: write
@@ -379,6 +400,7 @@ jobs:
       github.event_name == 'push' && github.ref == 'refs/heads/main'
       && vars.RELEASE_VERSIONING == 'enabled' && needs.version.outputs.version != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # WP-126: never run: RELEASE_VERSIONING is unset, so this is the floor, not a measurement
     permissions:
       # The tag and the GitHub Release.
       contents: write

@@ -682,6 +682,43 @@ default of a minute. The same build adds migration 0074 (`bindings.mr_poll_defau
 last-seen default-branch head of a poll-only GitLab binding); its first poll after the upgrade reads
 the head and records no move.
 
+**Upgrading past the build that gave each instance its own network (WP-126).** `compose.yml` used to
+name its default network `agentic` outright, so every compose project started from the file on one
+Docker host joined that one network, and the `db` name on it could answer with **another project's
+database**. The network is now the project's own: **`agentic_default`** on a stock install (compose's
+`<project>_default`; with `docker compose -p <name>` it is `<name>_default`). Make this one upgrade
+with the **old** `compose.yml` still in place, and with no agent run in progress:
+
+```bash
+cd agentic
+docker compose down                       # no -v: removes the containers and the `agentic` network, keeps every volume
+git pull                                  # then the steps at the top of this section
+docker compose run --rm migrate
+docker compose up -d
+```
+
+**If you already pulled the new `compose.yml`**, the same order still works with one more line —
+`docker compose down` with the new file removes the containers but no longer knows the old network:
+
+```bash
+docker compose down                       # the containers; `agentic` stays
+docker network rm agentic
+docker compose run --rm migrate
+docker compose up -d
+```
+
+Do **not** run `run --rm migrate` (or `up -d`) first on Compose v5.5.1: it stops `db`, removes
+`agentic` and then fails to start `db` with *"could not find a network matching network mode
+agentic"*, so the migration never runs; `docker compose up -d --force-recreate` recovers that state,
+after which `run --rm migrate` succeeds. Compose 2.38.2 instead recreates the containers on the new
+network and leaves `agentic` behind for you to remove. Both measured on a minimal two-service project
+making exactly this change, and the sequence above was clean on both versions. **Anything you attached to
+`agentic` by name** — a reverse-proxy container, a `docker network connect agentic …`, another compose
+file declaring `agentic` as an `external` network — must name `agentic_default` instead.
+`agentic-run-egress` keeps its global name on purpose (the launcher is handed it by name), so two
+instances on one host still share that one network; only their launchers and the run objects they
+create join it.
+
 ### What a failed migration looks like
 
 The `migrate` service writes one JSON object per line and exits non-zero:

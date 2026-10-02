@@ -22,8 +22,8 @@ build/
 # Test and tooling output
 coverage/
 .vitest/
-test-results/
-playwright-report/
+/test-results/
+/playwright-report/
 *.lcov
 
 # Local data and logs.

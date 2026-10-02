@@ -55,8 +55,8 @@
  * proof: the Playwright fake backend serves the built bundle under this exact header — imported,
  * so the fake cannot be kinder than the server (rule 1) — and the suite fails on a single
  * `securitypolicyviolation`, with a probe first to show the header is being enforced at all.
- * `scripts/web-compose-check.mjs` keeps a **literal copy**: it is plain Node run on the image
- * workflow's own interpreter, so importing a `.ts` module would make that job depend on type
+ * `scripts/web-compose-check.mjs` keeps a **literal copy**: it is plain Node run by the image
+ * workflow with nothing installed, so importing a `.ts` module would make that job depend on type
  * stripping; `csp.test.ts` reads the script off disk and fails when the two differ.
  */
 

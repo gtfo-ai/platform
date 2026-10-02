@@ -26,7 +26,16 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: process.env['CI'] === 'true',
   retries: 0,
-  reporter: process.env['CI'] === 'true' ? [['list'], ['html', { open: 'never' }]] : [['list']],
+  // The exit watchdog sits after `list` (so the summary is printed first) and before `html` (so the
+  // report's own `onEnd` is inside the bound): a run that reports and does not exit fails, naming
+  // what holds it, instead of holding the CI job (WP-126, `scripts/playwright-exit-watchdog.ts`).
+  // **On CI only**: Playwright 1.63 builds the config's reporters for every test-server run too
+  // (`--ui`, watch mode, the VS Code extension), and there `onEnd` ends one run of a long-lived
+  // process — a watchdog would `process.exit(1)` it 90 s later. CI runs only the plain path.
+  reporter:
+    process.env['CI'] === 'true'
+      ? [['list'], ['./scripts/playwright-exit-watchdog.ts'], ['html', { open: 'never' }]]
+      : [['list']],
   use: {
     baseURL,
     trace: 'retain-on-failure',

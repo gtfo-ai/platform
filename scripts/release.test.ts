@@ -994,3 +994,170 @@ describe("the Node a workflow's scripts run on (WP-118 follow-up)", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * **Every workflow job is bounded** (WP-126, PROGRESS backlog 401).
+ *
+ * No job set `timeout-minutes`, so a hung one held `main`'s CI — and every push queued behind it by
+ * the concurrency group — for GitHub's default of six hours: `web e2e (playwright)` once sat 31
+ * minutes after its last test had passed (`ci` `36952588895`), until somebody cancelled it. The
+ * bound is a job-level key (four spaces, beside `runs-on:`); a step's `timeout-minutes` bounds only
+ * that step and does not count. The value is a literal, at least the ten-minute floor and at most
+ * an hour: the derivation (three times the measured median, never below twice the slowest run) is
+ * on each line, and an hour is past every figure it produced, so a value above it is a guess.
+ */
+const TIMEOUT_FLOOR_MINUTES = 10;
+const TIMEOUT_CEILING_MINUTES = 60;
+
+/**
+ * The jobs of a workflow, read line by line rather than by one key regex (review round 1): every
+ * non-blank, non-comment line at exactly two spaces inside `jobs:` is a job key — bare, quoted, any
+ * case, with a trailing comment — and a two-space line that is not a key shape is **reported**, so
+ * a spelling this reader does not know fails the census instead of folding its lines into the job
+ * before it. A flow mapping (`jobs: { … }`) is reported the same way. The repository does not add
+ * `yaml` to the root for this; `packages/infrastructure` owns that dependency.
+ */
+const workflowJobs = (workflow: string): { name: string; body: string[] }[] => {
+  const lines = workflow.split('\n');
+  const start = lines.findIndex((line) => /^jobs:\s*(?:#.*)?$/.test(line));
+  if (start === -1) return [{ name: '(no block-style `jobs:` key)', body: [] }];
+  const jobs: { name: string; body: string[] }[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === '' || /^\s*#/.test(line)) {
+      jobs.at(-1)?.body.push(line);
+      continue;
+    }
+    if (!line.startsWith(' ')) break; // the next top-level key
+    if (/^ {2}\S/.test(line)) {
+      const key = /^ {2}(?:"([^"]+)"|'([^']+)'|([^\s:#'"][^:#]*?)):\s*(?:#.*)?$/.exec(line);
+      jobs.push({
+        name:
+          key === null ? `(unparsed job line: ${line.trim()})` : (key[1] ?? key[2] ?? key[3] ?? ''),
+        body: [],
+      });
+      continue;
+    }
+    jobs.at(-1)?.body.push(line);
+  }
+  return jobs;
+};
+
+const unboundedJobs = (workflow: string): string[] =>
+  workflowJobs(workflow).flatMap(({ name, body }) => {
+    if (name.startsWith('(')) return [name];
+    // A job that calls a reusable workflow (`uses:` at job level) cannot carry `timeout-minutes`
+    // (GitHub refuses the key there); the called workflow's jobs carry their own, and every
+    // workflow in this directory is in the census below. None exists today.
+    if (body.some((line) => /^ {4}uses:\s/.test(line))) return [];
+    const minutes = body
+      .map((line) => /^ {4}timeout-minutes:\s*(\S+)/.exec(line)?.[1])
+      .find((value) => value !== undefined);
+    if (minutes === undefined) return [`${name}: none`];
+    const value = /^\d+$/.test(minutes) ? Number(minutes) : Number.NaN;
+    return value >= TIMEOUT_FLOOR_MINUTES && value <= TIMEOUT_CEILING_MINUTES
+      ? []
+      : [`${name}: ${minutes}`];
+  });
+
+describe('every workflow job is bounded (WP-126)', () => {
+  it('finds a planted unbounded job in every key spelling, and exempts a reusable-workflow call', () => {
+    const planted = [
+      'jobs:',
+      '  bounded:',
+      '    runs-on: ubuntu-latest',
+      '    timeout-minutes: 15 # a comment beside it',
+      '    steps:',
+      '      - run: echo ok',
+      '  unbounded:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - run: echo hangs',
+      '  step-only:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - run: echo hangs',
+      '        timeout-minutes: 5',
+      '  expression:',
+      '    runs-on: ubuntu-latest',
+      '    timeout-minutes: ${{ inputs.minutes }}',
+      '    steps:',
+      '      - run: echo ok',
+      '  default:',
+      '    runs-on: ubuntu-latest',
+      '    timeout-minutes: 360',
+      '    steps:',
+      '      - run: echo ok',
+      '  too-tight:',
+      '    runs-on: ubuntu-latest',
+      '    timeout-minutes: 3',
+      '    steps:',
+      '      - run: echo ok',
+      '  later: # a comment on the key',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - run: echo hangs',
+      '  Deploy:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - run: echo hangs',
+      '  _x:',
+      '    runs-on: ubuntu-latest',
+      '  "quoted job":',
+      '    runs-on: ubuntu-latest',
+      "  'single':",
+      '    runs-on: ubuntu-latest',
+      '    timeout-minutes: 20',
+      '  reusable:',
+      '    uses: ./.github/workflows/other.yml',
+      '  - not a key',
+      '',
+    ].join('\n');
+    expect(unboundedJobs(planted)).toEqual([
+      'unbounded: none',
+      'step-only: none',
+      'expression: ${{',
+      'default: 360',
+      'too-tight: 3',
+      'later: none',
+      'Deploy: none',
+      '_x: none',
+      'quoted job: none',
+      '(unparsed job line: - not a key)',
+    ]);
+  });
+
+  it('reads every job key a workflow can spell, and stops at the next top-level key', () => {
+    const workflow = [
+      'on: push',
+      'jobs: # the jobs',
+      '  a:',
+      '    runs-on: x',
+      '',
+      '  # a comment between jobs',
+      '  "b c":',
+      '    runs-on: x',
+      'env:',
+      '  NOT_A_JOB: 1',
+      '',
+    ].join('\n');
+    expect(workflowJobs(workflow).map(({ name }) => name)).toEqual(['a', 'b c']);
+    expect(workflowJobs('jobs: { a: { runs-on: x } }').map(({ name }) => name)).toEqual([
+      '(no block-style `jobs:` key)',
+    ]);
+  });
+
+  it('holds in every workflow this repository runs', () => {
+    const workflows = tracked('.github/workflows/*.yml');
+    expect(workflows).toEqual(
+      expect.arrayContaining([CI_WORKFLOW, IMAGE_WORKFLOW, '.github/workflows/base-image.yml']),
+    );
+    // Not vacuous: jobs are read out of every workflow — ci.yml's eleven, the count CONTRIBUTING.md's
+    // required checks are held to above.
+    for (const path of workflows) expect(workflowJobs(read(path)).length, path).toBeGreaterThan(0);
+    expect(workflowJobs(read(CI_WORKFLOW))).toHaveLength(11);
+    const findings = workflows.flatMap((path) =>
+      unboundedJobs(read(path)).map((finding) => `${path} ${finding}`),
+    );
+    expect(findings, 'give the job a timeout-minutes from its measured duration').toEqual([]);
+  });
+});

@@ -26,8 +26,15 @@
  *
  * What it does, in order:
  *   1. builds `platform:${PLATFORM_TAG:-dev}` (unless `--no-build`) and starts `db`, `migrate` and
- *      `app` under a project name and a published port of its own, so two runs on one daemon — a
- *      developer's instance, or two CI jobs — cannot collide;
+ *      `app` under a project name of its own, on a host port the daemon chooses and the check reads
+ *      back (`APP_PORT=0`, then `docker compose port`; PROGRESS backlog 348). **What that isolates,
+ *      and what it does not** (WP-126, backlog 347): the containers, the volumes and — since
+ *      `compose.yml` stopped pinning the default network's name — the default network
+ *      (`<project>_default`), so this check's `app` resolves `db` to this check's database and to
+ *      no other project's; `scripts/compose-isolation-check.mjs` asserts exactly that with two
+ *      projects on one daemon. Not isolated: `agentic-run-egress`, which `compose.yml` names
+ *      globally on purpose (the launcher is handed it by name); this check starts no launcher, so
+ *      it never creates or joins it, but the stock check does;
  *   2. compares the bytes of `GET /` with `/app/apps/web/dist/index.html` **inside the container**;
  *   3. follows the shell's own `<script src>` and asserts the asset is served with a JavaScript
  *      content type and a year-long cache;
@@ -43,40 +50,34 @@
  * **A failure names its cause** (WP-118 follow-up). Every wait has a deadline on a *ref'd* timer, so
  * the event loop cannot empty under a pending `fetch` and end the process as an "unsettled
  * top-level await" (exit 13) that says nothing, which is how this check failed on CI twice, on the
- * runner's Node 22 (the mechanism is at {@link MINIMUM_NODE_MAJOR}). A failed run prints the stage
- * it was in, then `compose ps` and the app container's last log lines, before the teardown.
+ * runner's Node 22 (the mechanism is at `refuseOldNode`). A failed run prints the stage it was in,
+ * then `compose ps` and the app container's last log lines, before the teardown. Since WP-126 the
+ * deadlines, the Node guard and the backstop live in `scripts/compose-check-support.mjs`, shared
+ * with the stock and isolation checks.
  */
 import { execFile } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
-import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import {
+  boundedFetch,
+  composeEnvironment,
+  createStages,
+  describeInstance,
+  installExitBackstop,
+  publishedPort,
+  refuseOldNode,
+  Unsettled,
+  waitForOk,
+} from './compose-check-support.mjs';
+
+// `image.yml` sets up `.nvmrc`'s Node; this is the named refusal for a caller that did not.
+refuseOldNode('web-compose-check');
 
 const run = promisify(execFile);
-
-/**
- * The repository's Node (`.nvmrc`, `engines`), refused below it rather than run on it.
- *
- * Node 22's bundled undici (6.28.1 in 22.23.3) compiles its HTTP parser asynchronously on the
- * process's **first** connection and attaches that socket's listeners only afterwards, so a peer
- * that closes the connection inside the window is never observed: the `fetch` stays pending with
- * no handle behind it and the process exits 13. `docker-proxy` closes exactly that connection:
- * the first `/healthz` probe, sent before the app listens. Measured with a server that closes on
- * accept: 11 of 20 fresh Node 22.23.3 processes exited 13, 0 of 20 on Node 24.21.0, whose undici
- * compiles the parser synchronously. `image.yml` now sets this Node up; this is the named refusal
- * for a caller that did not.
- */
-const MINIMUM_NODE_MAJOR = 24;
-if (Number(process.versions.node.split('.')[0]) < MINIMUM_NODE_MAJOR) {
-  console.error(
-    `FAIL: web-compose-check — Node ${process.versions.node} is below this repository's ` +
-      `${MINIMUM_NODE_MAJOR} (.nvmrc): its fetch loses a first connection the peer closes early`,
-  );
-  process.exit(1);
-}
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const args = process.argv.slice(2);
@@ -106,9 +107,9 @@ if (unknown.length > 0) {
 /**
  * The policy `apps/server/src/web/csp.ts` serves, copied rather than imported.
  *
- * This script is plain Node and the image workflow runs it on the runner's own interpreter, with
- * no Node version this repository pins, so importing a `.ts` module would make an image job depend
- * on type stripping being enabled there. The copy is **pinned instead of trusted**:
+ * This script is plain Node, run by `image.yml` with nothing installed, so importing a `.ts`
+ * module would make an image job depend on type stripping and on the repository's `.js`
+ * specifiers resolving. The copy is **pinned instead of trusted**:
  * `apps/server/src/web/csp.test.ts` reads this file off disk and fails when the two differ.
  */
 const CONTENT_SECURITY_POLICY =
@@ -127,16 +128,6 @@ const check = (name, ok, detail) => {
     failures.push(name);
   }
 };
-
-const freePort = async () =>
-  new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address();
-      probe.close(() => resolve(port));
-    });
-  });
 
 /**
  * The configuration this check needs, as an override file of its own (WP-50).
@@ -157,7 +148,15 @@ const OVERRIDE = path.join(
   'compose.web-check.yml',
 );
 
-const compose = async (args, env) =>
+/**
+ * Compose's own interpolation (`composeEnvironment`): the daemon chooses the host port (backlog
+ * 348), and the two globally named volumes get this project's names, so `down -v` can never name
+ * a developer's `agentic-ctl`. `PLATFORM_TAG` names the image. The three values the *process*
+ * reads go on the service, above.
+ */
+const ENV = { ...composeEnvironment(PROJECT), PLATFORM_TAG: TAG };
+
+const compose = async (args) =>
   run(
     'docker',
     // `--env-file /dev/null` rather than the default `.env`: this check measures the file in the
@@ -179,114 +178,38 @@ const compose = async (args, env) =>
     ],
     {
       cwd: REPO,
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...ENV },
       maxBuffer: 64 * 1024 * 1024,
       timeout: TIMEOUT_MS,
     },
   );
 
 /** What the check is waiting for right now, named in every failure it reports. */
-let stage = 'starting';
-
-/** A wait that outlived its deadline: never "not ready yet", always a failure. */
-class Unsettled extends Error {}
-
-/**
- * `work()` within `ms`, or a rejection naming `what`.
- *
- * The timer is deliberately **ref'd**: it is what keeps the event loop alive under a promise that
- * nothing else is behind, so a wedged request is reported by name instead of the process ending
- * on an unsettled top-level await.
- */
-const within = async (what, ms, work) => {
-  stage = what;
-  let timer;
-  try {
-    return await Promise.race([
-      work(),
-      new Promise((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Unsettled(`${what} did not settle within ${ms / 1000} s`)),
-          ms,
-        );
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-};
-
-const REQUEST_MS = 30_000;
+const stages = createStages();
 /** One request and its whole body, bounded. */
-const get = (url, init) =>
-  within(`GET ${url}`, REQUEST_MS, async () => {
-    const response = await fetch(url, init);
-    return { response, body: await response.text() };
-  });
+const get = (url, init) => boundedFetch(stages, url, init);
 
 /**
- * Waits for the container to answer its own liveness probe before anything is concluded.
+ * The origin the instance is configured with, which is **not** the URL the check reaches it on.
  *
- * A probe that is *refused or closed* is the app not listening yet, and is tried again; a probe
- * that does not settle is not that, and fails the check by name rather than being retried.
+ * The daemon chooses the host port (`APP_PORT=0`) and the check reads it back once `app` is up,
+ * so the port is unknown when the override is written. Nothing this check asserts depends on the
+ * origin — every request is a `GET`, which the cross-site guard does not read — so it is a fixed,
+ * reserved-domain value: an instance behind a reverse proxy is configured exactly this way.
  */
-const waitForHealth = async (baseUrl) => {
-  const deadline = Date.now() + 180_000;
-  for (;;) {
-    let answered;
-    try {
-      answered = await within(`GET ${baseUrl}/healthz (waiting for the app)`, 10_000, () =>
-        fetch(`${baseUrl}/healthz`),
-      );
-    } catch (error) {
-      if (error instanceof Unsettled) {
-        throw error;
-      }
-      // refused or closed: not listening yet
-    }
-    await answered?.body?.cancel();
-    if (answered?.ok) {
-      return;
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`the app container never answered /healthz on ${baseUrl}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
-  }
-};
-
-/**
- * What the instance looked like when the check failed: every service's state (a dead app shows
- * its exit code there) and the app's last log lines. Best effort: it reports, it never decides.
- */
-const describeInstance = async (env) => {
-  for (const args of [
-    ['ps', '--all'],
-    ['logs', '--no-color', '--tail', '80', 'app'],
-  ]) {
-    try {
-      const { stdout, stderr } = await compose(args, env);
-      console.error(`--- docker compose ${args.join(' ')}\n${stdout}${stderr}`);
-    } catch (error) {
-      console.error(`--- docker compose ${args.join(' ')} failed: ${String(error)}`);
-    }
-  }
-};
+const BASE_URL = 'http://web-compose-check.example.test';
 
 const main = async () => {
   try {
-    const { stdout } = await run('docker', ['version', '--format', '{{.Server.Version}}']);
+    const { stdout } = await run('docker', ['version', '--format', '{{.Server.Version}}'], {
+      timeout: 60_000,
+    });
     console.log(`docker daemon ${stdout.trim()}`);
   } catch (error) {
     console.error(`FAIL: web-compose-check — no Docker daemon: ${String(error)}`);
     process.exit(1);
   }
 
-  const port = await freePort();
-  const baseUrl = `http://127.0.0.1:${port}`;
-  // `APP_PORT` and `PLATFORM_TAG` are still interpolation — they are read by compose itself, in
-  // the port publisher and the image reference. The three the *process* reads go on the service.
-  const env = { APP_PORT: String(port), PLATFORM_TAG: TAG };
   writeFileSync(
     OVERRIDE,
     [
@@ -294,7 +217,7 @@ const main = async () => {
       '  app:',
       '    environment:',
       `      APP_SECRET_KEY: ${SECRET_KEY}`,
-      `      APP_BASE_URL: ${baseUrl}`,
+      `      APP_BASE_URL: ${BASE_URL}`,
       '      LOG_LEVEL: warn',
       '',
     ].join('\n'),
@@ -303,11 +226,14 @@ const main = async () => {
 
   try {
     console.log(
-      `${BUILD ? 'building and starting' : 'starting'} ${PROJECT} from platform:${TAG} on ${baseUrl} …`,
+      `${BUILD ? 'building and starting' : 'starting'} ${PROJECT} from platform:${TAG} …`,
     );
-    stage = 'docker compose up';
-    await compose(['up', '-d', ...(BUILD ? ['--build'] : []), 'app'], env);
-    await waitForHealth(baseUrl);
+    stages.set('docker compose up');
+    await compose(['up', '-d', ...(BUILD ? ['--build'] : []), 'app']);
+    stages.set('docker compose port app 8080');
+    const baseUrl = `http://127.0.0.1:${await publishedPort(compose)}`;
+    console.log(`${PROJECT} publishes app on ${baseUrl}`);
+    await waitForOk(stages, `${baseUrl}/healthz`);
 
     const { response: shell, body: shellBody } = await get(`${baseUrl}/`);
     check('GET / answers 200', shell.status === 200, `status ${shell.status}`);
@@ -322,11 +248,8 @@ const main = async () => {
       shell.headers.get('cache-control') ?? 'no cache-control',
     );
 
-    stage = 'reading index.html inside the container';
-    const inImage = await compose(
-      ['exec', '-T', 'app', 'cat', '/app/apps/web/dist/index.html'],
-      env,
-    );
+    stages.set('reading index.html inside the container');
+    const inImage = await compose(['exec', '-T', 'app', 'cat', '/app/apps/web/dist/index.html']);
     check(
       'GET / is byte-for-byte the index.html in the image',
       inImage.stdout === shellBody,
@@ -414,14 +337,14 @@ const main = async () => {
       }`,
     );
   } catch (error) {
-    const where = error instanceof Unsettled ? '' : ` (while: ${stage})`;
+    const where = error instanceof Unsettled ? '' : ` (while: ${stages.current})`;
     check('the instance came up and answered', false, `${String(error)}${where}`);
   } finally {
     if (failures.length > 0) {
-      await describeInstance(env);
+      await describeInstance(compose);
     }
-    stage = 'docker compose down';
-    await compose(['down', '-v'], env).catch((error) => {
+    stages.set('docker compose down');
+    await compose(['down', '-v']).catch((error) => {
       console.error(`cleanup failed: ${String(error)}`);
     });
   }
@@ -433,20 +356,7 @@ const main = async () => {
   console.log('PASS: web-compose-check');
 };
 
-/**
- * The backstop for a wait nothing bounded: the loop emptied while `main()` was still pending. It
- * names the stage and exits 1 instead of Node's bare "unsettled top-level await" (exit 13). The
- * teardown cannot run from here, which `image.yml`'s `always` step covers.
- */
-let finished = false;
-process.on('beforeExit', () => {
-  if (!finished) {
-    console.error(
-      `FAIL: web-compose-check — the event loop emptied while waiting on: ${stage} ` +
-        '(an awaited promise had nothing behind it)',
-    );
-    process.exit(1);
-  }
-});
+// The backstop for a wait nothing bounded (`compose-check-support.mjs`).
+const finished = installExitBackstop('web-compose-check', stages);
 await main();
-finished = true;
+finished();

@@ -442,11 +442,19 @@ volumes:
   ctl:
     name: ${APP_WORKSPACE_CONTROL_VOLUME:-agentic-ctl}
 
+# **The default network is the project's own** (WP-126, PROGRESS backlog 347): compose names it
+# `<project>_default` — `agentic_default` for this file's `name: agentic` — so two projects started
+# from this file on one daemon (an instance and an image check, or two checks) each resolve `db` to
+# their own database. It was pinned to `name: agentic` until WP-126, which put every such project on
+# one network where `db` answered with any of their databases; an installation that attached
+# something to `agentic` by name has the upgrade note in docs/operator-guide.md § 5.
 networks:
-  default:
-    name: agentic
   # The network a run's egress sidecar is attached to besides its own `internal: true` one, and the
-  # network the mirror and export helpers use to reach the git host.
+  # network the mirror and export helpers use to reach the git host. **Named globally on purpose,
+  # unlike `default`**: the launcher is handed it by name (`APP_WORKSPACE_*_NETWORK` above) and
+  # attaches run objects to it, so a project prefix would break that. Two instances on one daemon
+  # therefore share it and both launchers join it; each `runner` reaches its own launcher over its
+  # project's `launcher-api` below, never over this one, and `app`, `runner` and `db` are not on it.
   run-egress:
     name: agentic-run-egress
   # Only `launcher` and `docker-socket-proxy` join this, and it has no route anywhere else.

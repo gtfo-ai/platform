@@ -64,6 +64,36 @@
  * directory, so the images have to exist, which is exactly the arrangement `image.yml` calls this
  * in and is checked before anything starts.
  *
+ * ## It ends, and says why (WP-126, PROGRESS backlog 349)
+ *
+ * The WP-118 follow-up gave `web-compose-check.mjs` deadlines after it died on CI with exit 13 and
+ * no `FAIL:` line; this script had none of them. It now has the same shape, from
+ * `scripts/compose-check-support.mjs`: a refusal below Node 24 naming `.nvmrc`; every HTTP call —
+ * the health probe, every API step, both `/metrics` reads — bounded by a ref'd deadline that fails
+ * naming the request; `docker version` and `docker image inspect` bounded too (every `docker
+ * compose` call already was, by `execFile`'s timeout); on a failure, the stage it was in,
+ * `compose ps --all` and the app's last log lines **before** the teardown; and a `beforeExit`
+ * backstop for a wait nothing bounded. No retry was added.
+ *
+ * ## The port is the daemon's, and the origin is not the port (WP-126, backlog 348)
+ *
+ * `.env` says `APP_PORT=0`, so the daemon chooses the host port and the check reads it back with
+ * `docker compose port app 8080` after **every** `up` — an `up` that changes `.env` recreates
+ * `app`, and a recreated container gets a new ephemeral port. There is no override file for this:
+ * `0` is a value an operator can write in `.env`, and compose accepts it (measured, Compose 2.38.2
+ * and v5.5.1). The port being unknown before `up`, `APP_BASE_URL` cannot carry it, so it is a fixed
+ * reserved-domain origin and the client sends that `Origin` while connecting to `127.0.0.1:<port>`
+ * — which is an instance behind a TLS-terminating reverse proxy, the arrangement the operator
+ * guide's §7 asks for (*"TLS is yours — put a reverse proxy in front"*).
+ *
+ * ## What is shared with another project on the daemon
+ *
+ * Since WP-126 the default network is the project's own (`<project>_default`), so this check's
+ * `app` resolves `db` to this check's database. `agentic-run-egress` is **not** per project:
+ * `compose.yml` names it globally because the launcher is handed it by name, and this check starts
+ * a launcher, so it shares that network with any other instance's launcher on the daemon; no
+ * `runner`, `app` or `db` is on it. `ctl` and `repo-cache` are given names of their own below.
+ *
  * Usage:
  *   node scripts/compose-stock-check.mjs                     against `platform:dev`
  *   node scripts/compose-stock-check.mjs --tag ci            against images built as `:ci`
@@ -71,12 +101,24 @@
  */
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import {
+  boundedFetch,
+  createStages,
+  describeInstance,
+  installExitBackstop,
+  publishedPort,
+  refuseOldNode,
+  Unsettled,
+  waitForOk,
+} from './compose-check-support.mjs';
+
+// `image.yml` sets up `.nvmrc`'s Node; this is the named refusal for a caller that did not.
+refuseOldNode('compose-stock-check');
 
 const run = promisify(execFile);
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -122,6 +164,13 @@ const LAUNCHER_TOKEN = 'wp53-compose-stock-check-not-a-real-launcher-token';
 /** `APP_RUN_REGISTRY_HOSTS` for this instance (WP-82): declared so the runner can be asked for it. */
 const RUN_REGISTRY_HOST = 'registry.example.test';
 const TIMEOUT_MS = 15 * 60 * 1000;
+/** `docker version` and `docker image inspect`: a local daemon answers both in well under a second. */
+const DOCKER_QUERY_MS = 60_000;
+/**
+ * The origin `.env` gives the instance (`APP_BASE_URL`), and the `Origin` every mutating request
+ * carries — a reserved domain, never resolved: the check connects to the published port.
+ */
+const ORIGIN = 'http://compose-stock-check.example.test';
 
 const failures = [];
 const check = (name, ok, detail) => {
@@ -130,16 +179,6 @@ const check = (name, ok, detail) => {
     failures.push(name);
   }
 };
-
-const freePort = async () =>
-  new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address();
-      probe.close(() => resolve(port));
-    });
-  });
 
 /**
  * `.env.example` with a value set, the way an operator edits the file.
@@ -153,7 +192,14 @@ const withValue = (text, name, value) => {
   return pattern.test(text) ? text.replace(pattern, line) : `${text}\n${line}\n`;
 };
 
-/** A cookie jar and the two headers every mutating request needs (technical/08's cross-site guard). */
+/** What the check is waiting for right now, named in every failure it reports. */
+const stages = createStages();
+
+/**
+ * A cookie jar and the two headers every mutating request needs (technical/08's cross-site guard).
+ * The `Origin` is the instance's configured one, {@link ORIGIN}; the URL is wherever the daemon
+ * published it. Every request is bounded and named (`boundedFetch`).
+ */
 class Client {
   #baseUrl;
   #cookies = new Map();
@@ -164,10 +210,10 @@ class Client {
 
   async json(path, init = {}) {
     const cookie = [...this.#cookies].map(([name, value]) => `${name}=${value}`).join('; ');
-    const response = await fetch(`${this.#baseUrl}${path}`, {
+    const { response, body: text } = await boundedFetch(stages, `${this.#baseUrl}${path}`, {
       ...init,
       headers: {
-        origin: this.#baseUrl,
+        origin: ORIGIN,
         'x-requested-with': 'XMLHttpRequest',
         ...(cookie === '' ? {} : { cookie }),
         ...(init.body === undefined ? {} : { 'content-type': 'application/json' }),
@@ -182,7 +228,6 @@ class Client {
         this.#cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
       }
     }
-    const text = await response.text();
     let body = text;
     try {
       body = JSON.parse(text);
@@ -195,7 +240,9 @@ class Client {
 
 const main = async () => {
   try {
-    const { stdout } = await run('docker', ['version', '--format', '{{.Server.Version}}']);
+    const { stdout } = await run('docker', ['version', '--format', '{{.Server.Version}}'], {
+      timeout: DOCKER_QUERY_MS,
+    });
     console.log(`docker daemon ${stdout.trim()}`);
   } catch (error) {
     console.error(`FAIL: compose-stock-check — no Docker daemon: ${String(error)}`);
@@ -206,7 +253,9 @@ const main = async () => {
   // missing image is a failure that names the command, never a skip (WP-22, PROGRESS backlog 27).
   for (const image of [`platform:${TAG}`, `platform-launcher:${TAG}`]) {
     try {
-      const { stdout } = await run('docker', ['image', 'inspect', image, '--format', '{{.Id}}']);
+      const { stdout } = await run('docker', ['image', 'inspect', image, '--format', '{{.Id}}'], {
+        timeout: DOCKER_QUERY_MS,
+      });
       console.log(`${image} ${stdout.trim()}`);
     } catch {
       console.error(
@@ -217,8 +266,6 @@ const main = async () => {
     }
   }
 
-  const port = await freePort();
-  const baseUrl = `http://127.0.0.1:${port}`;
   const projectDirectory = await mkdtemp(path.join(tmpdir(), 'compose-stock-'));
   const compose = async (composeArgs, extraEnv = {}) =>
     run(
@@ -241,25 +288,18 @@ const main = async () => {
       },
     );
 
-  const waitForHealth = async () => {
-    const deadline = Date.now() + 180_000;
-    for (;;) {
-      try {
-        const response = await fetch(`${baseUrl}/healthz`);
-        if (response.ok) {
-          return;
-        }
-      } catch {
-        // not listening yet
-      }
-      if (Date.now() > deadline) {
-        const { stdout } = await compose(['logs', '--tail', '40', 'app']).catch(() => ({
-          stdout: '',
-        }));
-        throw new Error(`the app container never answered /healthz on ${baseUrl}\n${stdout}`);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
-    }
+  /**
+   * Where the daemon published `app` this time: re-read after every `up`, because an `up` that
+   * changed `.env` recreates the container and a new container gets a new ephemeral port.
+   */
+  let baseUrl = '';
+  const up = async () => {
+    stages.set('docker compose up');
+    await compose(['up', '-d', '--no-build']);
+    stages.set('docker compose port app 8080');
+    baseUrl = `http://127.0.0.1:${await publishedPort(compose)}`;
+    console.log(`${PROJECT} publishes app on ${baseUrl}`);
+    await waitForOk(stages, `${baseUrl}/healthz`);
   };
 
   try {
@@ -270,8 +310,9 @@ const main = async () => {
       ['APP_SECRET_KEY', SECRET_KEY],
       ['APP_BOOTSTRAP_ADMIN_EMAIL', ADMIN_EMAIL],
       ['APP_BOOTSTRAP_ADMIN_PASSWORD', ADMIN_PASSWORD],
-      ['APP_BASE_URL', baseUrl],
-      ['APP_PORT', String(port)],
+      ['APP_BASE_URL', ORIGIN],
+      // The daemon chooses the host port (backlog 348); `up()` reads it back.
+      ['APP_PORT', '0'],
       // §4's two lines: the credential under its tool-native name, and the allow-list that permits
       // it. Both were unreachable from `.env` before WP-50, which is the whole finding.
       ['SENTRY_AUTH_TOKEN', PROVIDER_TOKEN],
@@ -305,9 +346,8 @@ const main = async () => {
     }
     await writeFile(path.join(projectDirectory, '.env'), env, 'utf8');
 
-    console.log(`starting ${PROJECT} from platform:${TAG} on ${baseUrl} …`);
-    await compose(['up', '-d', '--no-build']);
-    await waitForHealth();
+    console.log(`starting ${PROJECT} from platform:${TAG} …`);
+    await up();
 
     /*
      * The service list, **in both directions and with each one's state** — WP-53.
@@ -423,13 +463,13 @@ const main = async () => {
     );
 
     // 3. /metrics can be authenticated.
-    const anonymous = await fetch(`${baseUrl}/metrics`);
+    const { response: anonymous } = await boundedFetch(stages, `${baseUrl}/metrics`);
     check(
       'GET /metrics refuses an anonymous caller',
       anonymous.status === 401,
       `status ${anonymous.status}`,
     );
-    const authorised = await fetch(`${baseUrl}/metrics`, {
+    const { response: authorised } = await boundedFetch(stages, `${baseUrl}/metrics`, {
       headers: {
         authorization: `Basic ${Buffer.from(`${METRICS_USER}:${METRICS_PASSWORD}`).toString('base64')}`,
       },
@@ -454,7 +494,7 @@ const main = async () => {
 
     const created = await client.json('/api/integrations', {
       method: 'POST',
-      headers: { 'idempotency-key': `wp50-stock-check-${port}` },
+      headers: { 'idempotency-key': `wp50-stock-check-${PROJECT}` },
       body: JSON.stringify({
         type: 'errors',
         provider: 'sentry',
@@ -473,7 +513,7 @@ const main = async () => {
     // disabled — a name the operator did not declare is still refused, and by name.
     const refused = await client.json('/api/integrations', {
       method: 'POST',
-      headers: { 'idempotency-key': `wp50-stock-check-forbidden-${port}` },
+      headers: { 'idempotency-key': `wp50-stock-check-forbidden-${PROJECT}` },
       body: JSON.stringify({
         type: 'errors',
         provider: 'sentry',
@@ -500,7 +540,7 @@ const main = async () => {
      */
     const refusedHost = await client.json('/api/integrations', {
       method: 'POST',
-      headers: { 'idempotency-key': `wp51-stock-check-host-${port}` },
+      headers: { 'idempotency-key': `wp51-stock-check-host-${PROJECT}` },
       body: JSON.stringify({
         type: 'errors',
         provider: 'sentry',
@@ -527,8 +567,7 @@ const main = async () => {
     let fileEnv = withValue(env, 'APP_SECRET_KEY', '');
     fileEnv = withValue(fileEnv, 'APP_SECRET_KEY_FILE', '/var/lib/app/exports/app_secret_key');
     await writeFile(path.join(projectDirectory, '.env'), fileEnv, 'utf8');
-    await compose(['up', '-d', '--no-build']);
-    await waitForHealth();
+    await up();
     const secretInEnv = await compose(['exec', '-T', 'app', 'printenv', 'APP_SECRET_KEY']).catch(
       () => ({ stdout: '' }),
     );
@@ -588,8 +627,7 @@ const main = async () => {
     let configured = withValue(fileEnv, 'APP_LAUNCHER_URL', 'http://launcher:7780');
     configured = withValue(configured, 'APP_LAUNCHER_TOKEN', LAUNCHER_TOKEN);
     await writeFile(path.join(projectDirectory, '.env'), configured, 'utf8');
-    await compose(['up', '-d', '--no-build']);
-    await waitForHealth();
+    await up();
     /*
      * `printenv NAME…` answers one line per name, **and the lines may be empty** — which is exactly
      * the case `app` is in, because WP-53 pins both names to the empty string there. So the trailing
@@ -653,8 +691,13 @@ const main = async () => {
         .slice(0, 240) || '(no such line)',
     );
   } catch (error) {
-    check('the instance came up and answered', false, String(error));
+    const where = error instanceof Unsettled ? '' : ` (while: ${stages.current})`;
+    check('the instance came up and answered', false, `${String(error)}${where}`);
   } finally {
+    if (failures.length > 0) {
+      await describeInstance(compose);
+    }
+    stages.set('docker compose down');
     await compose(['down', '-v', '--remove-orphans']).catch((error) => {
       console.error(`cleanup failed: ${String(error)}`);
     });
@@ -668,4 +711,7 @@ const main = async () => {
   console.log('PASS: compose-stock-check');
 };
 
+// The backstop for a wait nothing bounded (`compose-check-support.mjs`).
+const finished = installExitBackstop('compose-stock-check', stages);
 await main();
+finished();

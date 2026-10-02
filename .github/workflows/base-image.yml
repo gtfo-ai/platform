@@ -37,10 +37,12 @@ concurrency:
   group: base-image-${{ github.ref }}
   cancel-in-progress: false
 
+# Every job is bounded, as in `ci.yml` (WP-126): here from the eight runs this workflow has had.
 jobs:
   build:
     name: rebuild the tool layer (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10 # WP-126: 0.8 min median, 1.5 max
     strategy:
       fail-fast: false
       matrix:

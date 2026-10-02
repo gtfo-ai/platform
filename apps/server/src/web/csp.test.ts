@@ -4,9 +4,9 @@
  * What the header *is* is asserted where it is served — `web-serving.test.ts` over three paths,
  * `test/e2e/server/web-bundle.e2e.test.ts` through a whole process, `test/web-e2e/csp.spec.ts` in
  * a real browser. What cannot be asserted there is that
- * `scripts/web-compose-check.mjs` — which measures the **image**, from a plain Node process whose
- * version this repository does not pin, and therefore keeps a literal copy rather than importing
- * `csp.ts` — still holds the same string. A copy nobody compares is the drift this file exists to
+ * `scripts/web-compose-check.mjs` — which measures the **image**, from a plain Node process with
+ * nothing installed, and therefore keeps a literal copy rather than importing `csp.ts` — still
+ * holds the same string. A copy nobody compares is the drift this file exists to
  * refuse (standing rule 62).
  */
 import { readFileSync } from 'node:fs';

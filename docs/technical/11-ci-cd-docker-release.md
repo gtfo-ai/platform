@@ -136,8 +136,9 @@ serving. `node scripts/web-compose-check.mjs` is the daemon-side measurement, be
 `image.yml` calls it with `--tag ci --no-build` after the images are built, on both architectures,
 so what is measured is the artefact that job is about to publish rather than a second build of the
 same tree. The compose project name carries the run id, the attempt and the architecture, the
-published port is chosen free, and the teardown is repeated in an `always` step because a cancelled
-step has no `finally`. It also asserts what the image puts **on the wire**: the hashed asset arrives
+published port is chosen by the daemon and read back (`APP_PORT=0`, then `docker compose port`;
+WP-126 — it was probed free on loopback and handed over, a check-to-use race), and the teardown is
+repeated in an `always` step because a cancelled step has no `finally`. It also asserts what the image puts **on the wire**: the hashed asset arrives
 `content-encoding: gzip` for a client that accepts it and decodes to the same bytes, and the shell
 carries the framing headers.
 
@@ -283,3 +284,33 @@ chooser) were the three TD-019 named and this repository did not have. The layou
 of this document still lists `dependabot.yml (security only)`, which does not exist and is not
 planned: `renovate.json` is what keeps the pins current.
 
+## Amendment (WP-126, 2026-10-02) — bounded jobs, a network per instance, and image checks that end
+
+- **Every job of every workflow sets `timeout-minutes`** (PROGRESS backlog 401). None did, so a
+  hung job held `main` for GitHub's default of six hours: `web e2e (playwright)` once sat 31 minutes
+  after its last test passed. Each value is three times the job's median over the last 40
+  successful runs on `main` (eight for `base-image.yml`), rounded up to five minutes, never below
+  ten and never below twice the slowest run; the figures are on each line, the table is in
+  PROGRESS.md under WP-126, and `scripts/release.test.ts` fails on a job without one or with one
+  outside 10–60. `image.yml`'s `release` job has never run (the switch is unset), so its 10 is the
+  floor and not a measurement.
+- **A Playwright run that reports and does not exit fails, naming what holds it.** The hang above
+  was not reproduced: the job's log ends at the list reporter's summary and the runner then killed
+  the `playwright test` process itself, so the process that stayed was Playwright's runner after
+  `onEnd`. `scripts/playwright-exit-watchdog.ts` sits between `list` and `html` in
+  `playwright.config.ts`, **on CI only** (`--ui`, watch mode and the editor reuse the process), and, 90 s after the run ends, prints the process's open handles and exits 1
+  — the measurement the first hang did not leave.
+- **The compose default network is the project's own** (backlog 347): `compose.yml` no longer names
+  it `agentic`, so it is `<project>_default` (`agentic_default` on a stock install) and two
+  projects on one daemon each resolve `db` to their own database. `agentic-run-egress` stays named
+  globally — the launcher is handed it by name — and the checks' docblocks say so. The upgrade note
+  is in `docs/operator-guide.md` § 5. `scripts/compose-isolation-check.mjs` starts two projects at
+  once and asserts each `app` resolves and connects to its own `db`; `image.yml`'s `build` job runs
+  it beside the other two checks, and on the old file it fails by name.
+- **The image checks' shape is shared** (`scripts/compose-check-support.mjs`, backlogs 348 and
+  349): a refusal below Node 24, every HTTP call on a ref'd deadline that names the request, the
+  stage plus `compose ps --all` and the app's log printed before the teardown, a `beforeExit`
+  backstop, and the host port chosen by the daemon (`APP_PORT=0`, accepted by Compose 2.38.2 and
+  v5.5.1) and read back after every `up`. `compose-stock-check.mjs` had none of the deadlines; it
+  stays override-free, so `APP_PORT=0` is in its `.env` and its `APP_BASE_URL` is a fixed origin
+  the client sends while connecting to the published port — an instance behind a reverse proxy.

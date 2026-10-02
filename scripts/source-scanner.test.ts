@@ -123,6 +123,31 @@ describe('a `//` inside a string on a line of code (backlog 269)', () => {
 });
 
 /**
+ * **The tree, read and stripped once for this file** (WP-126, PROGRESS backlog 412).
+ *
+ * Both whole-tree censuses below read every source git knows about through the scanner, and the
+ * scanner is the cost: locally (WP-126, 1 452 files) listing took 29 ms, reading 70 ms and
+ * stripping 584 ms. Each census paid all of it under vitest's default 5 s bound, and on CI's
+ * `unit + contract` runner one paid 2.2–4.5 s over the last twenty runs on `main` and **5.03 s**
+ * once, which failed `8ed7056` (`ci` `36996966790`). So the walk is done once, by whichever case
+ * runs first, and both carry {@link WHOLE_TREE_TIMEOUT_MS}: six times that slowest reading, the
+ * margin the repository's other whole-tree censuses state (`is-program.test.ts`,
+ * `nested-checkouts.test.ts`), because the reading moves with the runner's load (rule 64).
+ */
+const WHOLE_TREE_TIMEOUT_MS = 30_000;
+let strippedTree: ReadonlyMap<string, string> | undefined;
+const strippedSources = (): ReadonlyMap<string, string> => {
+  const root = new URL('..', import.meta.url).pathname;
+  strippedTree ??= new Map(
+    censusPaths(root, { pathspecs: ['*.ts', '*.tsx', '*.mjs', '*.js'] }).map((path) => [
+      path,
+      withoutComments(censusText(root, path)),
+    ]),
+  );
+  return strippedTree;
+};
+
+/**
  * **A comment stripper by its shape, not its name** (WP-96 review round 1). The name census below
  * missed `apps/web/src/no-html.test.ts`'s `stripBlockComments` — 261's regex, under another name —
  * and two line filters (`operating-mode.test.tsx`, `human-commands.test.ts`) that dropped lines
@@ -141,7 +166,6 @@ describe('a `//` inside a string on a line of code (backlog 269)', () => {
  * This file is out of its own scope by name, because its patterns are the shapes (rule 59).
  */
 describe('a comment stripper is recognised by its shape', () => {
-  const ROOT = new URL('..', import.meta.url).pathname;
   const SHAPES: Readonly<Record<string, RegExp>> = {
     slashStar: /\\\/\\\*/,
     slashSlash: /(?<!:)\\\/\\\//,
@@ -171,17 +195,20 @@ describe('a comment stripper is recognised by its shape', () => {
       'the third slash of `unix:///path` in an error message',
   };
 
-  it('finds exactly the listed shapes, in both directions', () => {
-    const found = censusPaths(ROOT, { pathspecs: ['*.ts', '*.tsx', '*.mjs', '*.js'] })
-      .filter((path) => path !== 'scripts/source-scanner.test.ts')
-      .flatMap((path) => {
-        const code = withoutComments(censusText(ROOT, path));
-        return Object.entries(SHAPES)
-          .filter(([, shape]) => shape.test(code))
-          .map(([name]) => `${path} ${name}`);
-      });
-    expect(found.toSorted()).toEqual(Object.keys(SHAPED).toSorted());
-  });
+  it(
+    'finds exactly the listed shapes, in both directions',
+    () => {
+      const found = [...strippedSources()]
+        .filter(([path]) => path !== 'scripts/source-scanner.test.ts')
+        .flatMap(([path, code]) =>
+          Object.entries(SHAPES)
+            .filter(([, shape]) => shape.test(code))
+            .map(([name]) => `${path} ${name}`),
+        );
+      expect(found.toSorted()).toEqual(Object.keys(SHAPED).toSorted());
+    },
+    WHOLE_TREE_TIMEOUT_MS,
+  );
 
   it('would see each stripper this round replaced', () => {
     const shapesOf = (code: string) =>
@@ -205,15 +232,18 @@ describe('a comment stripper is recognised by its shape', () => {
  * What it cannot see, stated: a copy under another name, which a reviewer still has to catch.
  */
 describe('the stripper is defined once', () => {
-  const ROOT = new URL('..', import.meta.url).pathname;
   const DEFINES = /\b(?:const|let|var|function)\s+withoutComments\b/;
 
-  it('is defined in scripts/source-scanner.mjs and nowhere else', () => {
-    const definers = censusPaths(ROOT, { pathspecs: ['*.ts', '*.tsx', '*.mjs', '*.js'] }).filter(
-      (path) => DEFINES.test(withoutComments(censusText(ROOT, path))),
-    );
-    expect(definers).toEqual(['scripts/source-scanner.mjs']);
-  });
+  it(
+    'is defined in scripts/source-scanner.mjs and nowhere else',
+    () => {
+      const definers = [...strippedSources()]
+        .filter(([, code]) => DEFINES.test(code))
+        .map(([path]) => path);
+      expect(definers).toEqual(['scripts/source-scanner.mjs']);
+    },
+    WHOLE_TREE_TIMEOUT_MS,
+  );
 
   it('would see a copy: the pattern matches the spelling the copies used', () => {
     // Assembled, so this file's own plant is not a definition in its own census (rule 59).
