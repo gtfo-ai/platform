@@ -25,6 +25,7 @@ import type {
   KnowledgeProposalSource,
   KnowledgeProposalStatus,
   KnowledgeProposalType,
+  MergeRequestRef,
 } from '@platform/contracts';
 import type {
   CodeFileSymbols,
@@ -370,7 +371,32 @@ export interface StoredKnowledgeProposal {
    * store reads it as `null` when unset.
    */
   readonly applyFailureReason?: string | null;
+  /**
+   * The merge request the apply that carried this proposal opened (WP-125, migration 0076, PROGRESS
+   * backlog 369) — what lets the next apply ask whether a page is already on an **open** knowledge
+   * merge request before it chooses `create`. Absent on a proposal applied before the column
+   * existed, or whose stored reference no longer parses (it is provider output, BD-022).
+   */
+  readonly appliedMergeRequest?: MergeRequestRef | null;
+  /**
+   * Platform text naming the open knowledge merge request this approved proposal waits behind
+   * (WP-125, backlog 369): it stays approved and is applied as an `update` once that one merges.
+   */
+  readonly applyDeferredReason?: string | null;
 }
+
+/**
+ * An applied proposal's merge request, for one path — what {@link KnowledgeProposalStore.applyCarriers}
+ * answers (WP-125, PROGRESS backlog 369).
+ */
+export interface KnowledgeApplyCarrier {
+  readonly proposalId: Id;
+  readonly targetPath: string;
+  readonly mergeRequest: MergeRequestRef;
+}
+
+/** How many carriers one apply pass reads per path — a bound on provider reads per pass. */
+export const MAX_CARRIERS_PER_PATH = 3;
 
 /**
  * Where a page of the proposal queue stopped: the last row it carried.
@@ -487,11 +513,51 @@ export interface KnowledgeProposalStore {
       readonly reason: string;
     },
   ): Promise<readonly Id[]>;
-  /** Marks a batch applied by one commit. */
+  /**
+   * The project's **curation refusal** for one artifact (WP-125, PROGRESS backlog 356): its stored
+   * settings did not parse, so nothing was curated. Records `settings_refused_at` and **clears the
+   * recovery's attempt mark** in the same statement, so a refusal never spends the one attempt the
+   * lost-wake-up recovery has (`recovery/stranded.ts`) — the pass re-offers the artifact at its
+   * interval until the document parses. Writes nothing for an artifact already curated or given up
+   * on. Called by the curation, in a transaction of its own.
+   */
+  markCurationRefused(
+    tx: Transaction,
+    input: { readonly artifactId: Id; readonly at: IsoDateTime },
+  ): Promise<void>;
+  /**
+   * Marks a batch applied by one commit, with the merge request that carries it (WP-125: `null` when
+   * the provider answered none), and clears any deferral the rows carried.
+   */
   markApplied(
     tx: Transaction,
-    input: { readonly ids: readonly Id[]; readonly commitSha: string },
+    input: {
+      readonly ids: readonly Id[];
+      readonly commitSha: string;
+      readonly mergeRequest?: MergeRequestRef | null;
+    },
   ): Promise<void>;
+  /**
+   * The **applied** proposals of this project for these paths that recorded a merge request, newest
+   * first, at most {@link MAX_CARRIERS_PER_PATH} per path (WP-125, PROGRESS backlog 369): the merge
+   * requests that may already carry a page an apply is about to `create`. Whether each is still open
+   * is the provider's answer, never this store's.
+   */
+  applyCarriers(projectId: Id, paths: readonly string[]): Promise<readonly KnowledgeApplyCarrier[]>;
+  /**
+   * Records why each of these approved proposals waits (platform text naming the merge request), only
+   * while it is still awaiting apply — a row decided or applied meanwhile is left alone.
+   */
+  deferApply(
+    tx: Transaction,
+    input: { readonly deferrals: readonly { readonly id: Id; readonly reason: string }[] },
+  ): Promise<void>;
+  /**
+   * Clears the deferral of these proposals — the ones a pass has put into its batch (WP-125 review
+   * round 1), before it calls the provider, so a pass that then fails leaves no stale reason on a
+   * proposal that no longer waits for anything, and the `knowledge_apply` recovery can reach it.
+   */
+  clearApplyDeferral(tx: Transaction, input: { readonly ids: readonly Id[] }): Promise<void>;
   /** Projects that have something waiting to be applied — the nightly pass's work list. */
   projectsAwaitingApply(limit: number): Promise<readonly Id[]>;
   /**

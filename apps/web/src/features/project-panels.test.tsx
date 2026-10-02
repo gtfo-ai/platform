@@ -194,6 +194,37 @@ describe('the proposal queue', () => {
     expect(screen.queryByRole('button', { name: 'Approve again' })).toBeNull();
   });
 
+  it('says, as text, that an approved proposal waits for the open knowledge merge request that creates its page (WP-125)', async () => {
+    proposals = {
+      items: [
+        proposal({
+          status: 'queued',
+          decided_at: '2026-09-14T11:00:00.000Z',
+          apply_deferred_reason: `this approved change waits for knowledge merge request !4 ${HOSTILE_EVIDENCE}`,
+        }),
+      ],
+      next_cursor: null,
+    };
+    const container = await renderScreen();
+    const notice = await waitFor(() => {
+      const found = container.querySelector('[data-apply-deferred="true"]');
+      expect(found).not.toBeNull();
+      return found as Element;
+    });
+    expect(notice.textContent).toContain('waits for a merge');
+    expect(notice.textContent).toContain('knowledge merge request !4');
+    expect(container.querySelector('script')).toBeNull();
+  });
+
+  it('draws no deferral on a proposal that waits for nothing (the other side)', async () => {
+    const container = await renderScreen();
+    await waitFor(() => {
+      expect(container.textContent).toContain('conventions.md');
+    });
+    expect(container.querySelector('[data-apply-deferred="true"]')).toBeNull();
+    expect(container.textContent).not.toContain('waits for a merge');
+  });
+
   it('renders a mined citation as text, whatever the merge request it came from said', async () => {
     const container = await renderScreen();
     await waitFor(() => {

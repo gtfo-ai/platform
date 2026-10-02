@@ -285,6 +285,36 @@ describe('the knowledge-apply recovery store (WP-124, backlog 366)', () => {
     expect(await applies.endApply(tx, { proposalIds: [attempted], reason: 'x' })).toEqual([]);
   });
 
+  /**
+   * WP-125, PROGRESS backlog 369: a proposal the apply pass deferred behind an open knowledge
+   * merge request waits on a person's merge. Neither marked nor ended — an `apply_failed` an hour
+   * later would say the platform could not commit it, which is false.
+   */
+  it('never marks or ends a proposal deferred behind an open knowledge merge request (WP-125)', async () => {
+    const project = await seedProject();
+    const deferred = await seedProposal(project, { status: 'queued' });
+    const deferredAttempted = await seedProposal(project, {
+      status: 'queued',
+      attemptedMinutesAgo: 90,
+    });
+    const stranded = await seedProposal(project, { status: 'queued' });
+    await client.query(
+      `update kb_proposals set apply_deferred_reason = 'waits for knowledge merge request !4'
+        where id = any($1::uuid[])`,
+      [[deferred, deferredAttempted]],
+    );
+    const found = (await applies.strandedApplies(tx, query())).map((row) => row.proposalId);
+    expect(found).toContain(stranded);
+    expect(found).not.toContain(deferred);
+    expect(found).not.toContain(deferredAttempted);
+    expect(
+      await applies.markApplyAttempt(tx, { proposalIds: [deferred], at: minutesAgo(0) }),
+    ).toEqual([]);
+    expect(await applies.endApply(tx, { proposalIds: [deferredAttempted], reason: 'x' })).toEqual(
+      [],
+    );
+  });
+
   it('lets a maintainer approve an apply_failed proposal again, clearing the mark and the reason', async () => {
     const project = await seedProject();
     const failed = await seedProposal(project, { status: 'queued', attemptedMinutesAgo: 90 });

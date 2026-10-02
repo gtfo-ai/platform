@@ -276,6 +276,14 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
                     />
                   </p>
                 ) : null}
+                {proposal.apply_deferred_reason == null ? null : (
+                  // WP-125, backlog 369: approved, and held back because an open knowledge merge
+                  // request already creates this page; applied as an update once that one merges.
+                  <p className="text-xs text-fg-muted" data-apply-deferred="true">
+                    <Badge tone="warning">waits for a merge</Badge>{' '}
+                    <UntrustedText value={proposal.apply_deferred_reason} />
+                  </p>
+                )}
                 {proposal.status === 'queued' ||
                 proposal.status === 'scored' ||
                 proposal.status === 'apply_failed' ? (

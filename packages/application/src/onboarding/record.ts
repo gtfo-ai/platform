@@ -379,7 +379,10 @@ export const supersededDraftReason = (taskId: Id): string =>
  * with nothing on either saying so. Three limits, each a decision:
  *
  *  - **Undecided rows only** (`queued`, no `decided_at`). A draft a maintainer has already approved
- *    is a human's decision on its way to a commit, and a re-evaluation does not overrule it.
+ *    is a human's decision on its way to a commit, and a re-evaluation does not overrule it. If the
+ *    newer draft is approved too while the older one's knowledge merge request is still open, the
+ *    apply pass defers the newer one until that merge request merges and then commits it as an
+ *    `update` (WP-125, PROGRESS backlog 369, `knowledge/apply.ts`) — never a second `create`.
  *  - **`bootstrap` rows only.** The newer draft supersedes an earlier discovery's draft of the same
  *    page; a Librarian's, a history run's or an interviewee's proposal is a different author's claim
  *    with its own evidence, and a model's re-draft is no reason to discard it.

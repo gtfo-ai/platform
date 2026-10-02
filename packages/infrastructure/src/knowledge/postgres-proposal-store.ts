@@ -27,12 +27,14 @@
 import type {
   KbHealthInputs,
   KbHealthReportWrite,
+  KnowledgeApplyCarrier,
   KnowledgeProposalDecision,
   KnowledgeProposalStore,
   ProposalCursor,
   StoredKnowledgeProposal,
   Transaction,
 } from '@platform/application';
+import { MAX_CARRIERS_PER_PATH } from '@platform/application';
 import type {
   Id,
   IsoDateTime,
@@ -41,7 +43,9 @@ import type {
   KnowledgeProposalSource,
   KnowledgeProposalStatus,
   KnowledgeProposalType,
+  MergeRequestRef,
 } from '@platform/contracts';
+import { mergeRequestRefSchema } from '@platform/contracts';
 import type { HealthDocument, HealthLink, HealthRefusal } from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
@@ -50,7 +54,8 @@ const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
 
 const PROPOSAL_COLUMNS =
   'id, project_id, task_id, run_id, source, kind, type, target_path, delta, evidence, ' +
-  'significance, status, decided_by, decided_at, applied_commit_sha, created_at, apply_failure_reason';
+  'significance, status, decided_by, decided_at, applied_commit_sha, created_at, apply_failure_reason, ' +
+  'applied_merge_request, apply_deferred_reason';
 
 interface ProposalRow extends Record<string, unknown> {
   readonly id: string;
@@ -70,7 +75,20 @@ interface ProposalRow extends Record<string, unknown> {
   readonly applied_commit_sha: string | null;
   readonly created_at: Date;
   readonly apply_failure_reason: string | null;
+  readonly applied_merge_request: unknown;
+  readonly apply_deferred_reason: string | null;
 }
+
+/**
+ * The stored merge-request reference, **parsed** (WP-125): it is the provider's answer to
+ * `openMergeRequest` (BD-022), so a value that does not parse is read as no merge request rather
+ * than handed to a provider read.
+ */
+const mergeRequestOf = (value: unknown): MergeRequestRef | null => {
+  if (value === null || value === undefined) return null;
+  const parsed = mergeRequestRefSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+};
 
 const at = (value: Date | null): IsoDateTime | null =>
   value === null ? null : (new Date(value).toISOString() as IsoDateTime);
@@ -98,6 +116,11 @@ const toProposal = (row: ProposalRow): StoredKnowledgeProposal => ({
   createdAt: at(row.created_at) as IsoDateTime,
   // Present only on an `apply_failed` row (WP-124), so a row with none reads as it did before.
   ...(row.apply_failure_reason === null ? {} : { applyFailureReason: row.apply_failure_reason }),
+  // WP-125: present only when set, so a row with neither reads as it did before.
+  ...(mergeRequestOf(row.applied_merge_request) === null
+    ? {}
+    : { appliedMergeRequest: mergeRequestOf(row.applied_merge_request) }),
+  ...(row.apply_deferred_reason === null ? {} : { applyDeferredReason: row.apply_deferred_reason }),
 });
 
 /** `isAwaitingApply`, as a `where` clause. Held to the predicate by the contract suite. */
@@ -176,6 +199,29 @@ export class PostgresProposalStore implements KnowledgeProposalStore {
     return (rowCount ?? 0) > 0;
   }
 
+  /**
+   * The curation's refusal (WP-125, PROGRESS backlog 356): the project's stored settings did not
+   * parse. One statement that records the instant **and clears the recovery's attempt**, so a
+   * refusal never spends the one attempt `recovery/stranded.ts` has — the pass then finds the row
+   * unattempted and re-offers it at its interval until the document parses. A row already curated
+   * or given up on is left as it is.
+   */
+  async markCurationRefused(
+    tx: Transaction,
+    input: { readonly artifactId: Id; readonly at: IsoDateTime },
+  ): Promise<void> {
+    await sqlOf(tx).query(
+      `insert into knowledge_curations (artifact_id, settings_refused_at)
+            values ($1, $2)
+       on conflict (artifact_id) do update
+          set settings_refused_at = excluded.settings_refused_at,
+              recovery_attempted_at = null
+        where knowledge_curations.curated_at is null
+          and knowledge_curations.abandoned_at is null`,
+      [input.artifactId, input.at],
+    );
+  }
+
   async load(projectId: Id, id: Id): Promise<StoredKnowledgeProposal | null> {
     const { rows } = await this.#sql.query<ProposalRow>(
       `select ${PROPOSAL_COLUMNS} from kb_proposals where project_id = $1 and id = $2`,
@@ -230,7 +276,9 @@ export class PostgresProposalStore implements KnowledgeProposalStore {
               decided_at = $4,
               delta = coalesce($5, delta),
               apply_recovery_attempted_at = null,
-              apply_failure_reason = null
+              apply_failure_reason = null,
+              -- WP-125: a deferral was a statement about the decision this one replaces.
+              apply_deferred_reason = null
         where id = $1 and status in ('scored', 'queued', 'apply_failed')`,
       [
         decision.id,
@@ -278,19 +326,90 @@ export class PostgresProposalStore implements KnowledgeProposalStore {
 
   async markApplied(
     tx: Transaction,
-    input: { readonly ids: readonly Id[]; readonly commitSha: string },
+    input: {
+      readonly ids: readonly Id[];
+      readonly commitSha: string;
+      readonly mergeRequest?: MergeRequestRef | null;
+    },
   ): Promise<void> {
     if (input.ids.length === 0) return;
     const sql = sqlOf(tx);
     // The `where` repeats the awaiting-apply predicate rather than trusting the caller's list: the
     // job read those rows before it made two provider calls, and a row somebody rejected in the
-    // meantime must not be marked applied by a commit that no longer carries a decision.
+    // meantime must not be marked applied by a commit that no longer carries a decision. WP-125:
+    // the merge request that carries the commit is recorded (backlog 369), and a deferral cleared.
     await sql.query(
       `update kb_proposals
-          set status = 'applied', applied_commit_sha = $2
+          set status = 'applied', applied_commit_sha = $2, applied_merge_request = $3::jsonb,
+              apply_deferred_reason = null
         where id = any($1::uuid[]) and ${AWAITING_APPLY}`,
-      [[...input.ids], input.commitSha],
+      [
+        [...input.ids],
+        input.commitSha,
+        input.mergeRequest == null ? null : JSON.stringify(input.mergeRequest),
+      ],
     );
+  }
+
+  /**
+   * The applied proposals of these paths that recorded a merge request, newest first, at most
+   * {@link MAX_CARRIERS_PER_PATH} per path (WP-125, backlog 369). A stored reference that does not
+   * parse is dropped here, never handed to a provider read.
+   */
+  async applyCarriers(
+    projectId: Id,
+    paths: readonly string[],
+  ): Promise<readonly KnowledgeApplyCarrier[]> {
+    if (paths.length === 0) return [];
+    const { rows } = await this.#sql.query<{
+      id: string;
+      target_path: string;
+      applied_merge_request: unknown;
+    }>(
+      `select id, target_path, applied_merge_request from (
+         select id, target_path, applied_merge_request,
+                row_number() over (partition by target_path order by created_at desc, id desc) as n
+           from kb_proposals
+          where project_id = $1
+            and target_path = any($2::text[])
+            and status = 'applied'
+            and applied_merge_request is not null
+       ) x
+       where x.n <= $3
+       order by target_path, n`,
+      [projectId, [...paths], MAX_CARRIERS_PER_PATH],
+    );
+    return rows.flatMap((row) => {
+      const mergeRequest = mergeRequestOf(row.applied_merge_request);
+      return mergeRequest === null
+        ? []
+        : [{ proposalId: row.id as Id, targetPath: row.target_path, mergeRequest }];
+    });
+  }
+
+  async clearApplyDeferral(tx: Transaction, input: { readonly ids: readonly Id[] }): Promise<void> {
+    if (input.ids.length === 0) return;
+    await sqlOf(tx).query(
+      `update kb_proposals set apply_deferred_reason = null
+        where id = any($1::uuid[]) and apply_deferred_reason is not null`,
+      [[...input.ids]],
+    );
+  }
+
+  async deferApply(
+    tx: Transaction,
+    input: { readonly deferrals: readonly { readonly id: Id; readonly reason: string }[] },
+  ): Promise<void> {
+    const sql = sqlOf(tx);
+    for (const deferral of input.deferrals) {
+      // Conditional on the awaiting-apply predicate: a row a maintainer rejected, or a commit
+      // carried, since the pass read it is not given a reason that is no longer true of it.
+      await sql.query(
+        `update kb_proposals set apply_deferred_reason = $2
+          where id = $1 and ${AWAITING_APPLY}`,
+        [deferral.id, deferral.reason],
+      );
+    }
   }
 
   async projectsAwaitingApply(limit: number): Promise<readonly Id[]> {

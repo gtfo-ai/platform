@@ -51,6 +51,7 @@ import {
   type KnowledgeProposalsData,
   type LibrarianJobOptions,
   readLibrarianProject,
+  recordCurationRefusal,
 } from './librarian.js';
 import type { StoredKnowledgeProposal } from './ports.js';
 
@@ -104,6 +105,8 @@ export const recordResearchPage = async (
   const taskId = data.task_id as Id;
   const read = await readLibrarianProject(options, projectId);
   if (read.kind === 'refused') {
+    // WP-125 (backlog 356): recorded, so the recovery re-offers it until the document parses.
+    await recordCurationRefusal(options, data.artifact_id as Id);
     return { ...EMPTY, status: 'refused', reason: read.reason };
   }
   const { project } = read;
@@ -281,7 +284,7 @@ export const researchPageJobHandler =
     if (report.status === 'refused') {
       logger.warn(
         fields,
-        'a spike’s research page was refused: the project’s stored settings do not parse; the recovery pass offers the artifact once more',
+        'a spike’s research page was refused: the project’s stored settings do not parse; the recovery pass offers the artifact again at its interval until they parse (PROGRESS backlog 356)',
       );
       return;
     }

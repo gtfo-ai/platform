@@ -201,7 +201,8 @@ export const MAX_REFUSED_SETTINGS_CLAUSES = 10;
  * nothing. So the document is parsed whole, and a document that fails is **refused, never read as
  * empty**: an empty layer drops every restriction the document states (standing rule 20).
  *
- * `clauses` are `key.path: <value>` (or `key.path (<why>)`), **already redacted and bounded** by
+ * `clauses` are `key.path: <value>` (or `key.path (<why>)`, which an unknown key always is — under
+ * its parent's path or `(root)`, WP-125), **already redacted and bounded** by
  * the composition root that parsed the column — it is text an operator typed and may carry a
  * pasted credential (BD-022, standing rules 13 and 37). The message quotes at most
  * {@link MAX_REFUSED_SETTINGS_CLAUSES} of them and counts the rest, and names the `PUT` that fixes
@@ -256,19 +257,39 @@ export const MAX_STORED_VALUE_CHARS = 120;
  */
 export const describeConfigIssues = (
   document: unknown,
-  issues: readonly { readonly path: readonly PropertyKey[]; readonly message: string }[],
+  issues: readonly ConfigIssueInput[],
   redactText: (value: string) => string,
 ): string => describedConfigClauses(document, issues, redactText).join(', ');
 
-/** {@link describeConfigIssues}, one clause per issue — what {@link ProjectSettingsInvalidError} carries. */
+/**
+ * One zod issue as {@link describedConfigClauses} reads it. `code` is optional so a caller holding
+ * only a path and a message still compiles; without it an issue is rendered by its value.
+ */
+export interface ConfigIssueInput {
+  readonly path: readonly PropertyKey[];
+  readonly message: string;
+  readonly code?: string;
+}
+
+/**
+ * {@link describeConfigIssues}, one clause per issue — what {@link ProjectSettingsInvalidError} carries.
+ *
+ * **An unrecognised key is rendered by its message, never by its value** (WP-125, PROGRESS backlog
+ * 355). A strict object's `unrecognized_keys` issue carries the **object's** path, so the value at
+ * that path is the whole parent: the value rendering quoted the parent and dropped zod's message —
+ * the only part that names the key — and at the root printed `: {…}` with no path at all, so the
+ * 120-character clause could end before the key it was refusing. It is `<path or (root)>
+ * (<message>)` instead, and still redacted before it is bounded, because the message carries the
+ * key and the key is text an operator typed (BD-022).
+ */
 export const describedConfigClauses = (
   document: unknown,
-  issues: readonly { readonly path: readonly PropertyKey[]; readonly message: string }[],
+  issues: readonly ConfigIssueInput[],
   redactText: (value: string) => string,
 ): readonly string[] =>
   issues.map((issue) => {
     const path = issue.path.map(String).join('.');
-    const value = valueAt(document, issue.path);
+    const value = issue.code === 'unrecognized_keys' ? undefined : valueAt(document, issue.path);
     const clause =
       value === undefined
         ? `${path === '' ? '(root)' : path} (${issue.message})`

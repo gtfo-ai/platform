@@ -314,9 +314,10 @@ describe('recording a librarian artifact', () => {
    * WP-106 (PROGRESS backlog 311): the project read parses the stored settings, and a document this
    * release refuses throws `ProjectSettingsInvalidError`. The curation **records the refusal
    * instead of proceeding** — a `refused` report naming the key and the `PUT`, no row, no event,
-   * no commit asked for — and writes no curation mark, so the recovery pass may offer it once more
-   * rather than this build calling an unreadable configuration a curation. The research page, which
-   * reads the same project, answers the same way.
+   * no commit asked for — and writes no curation mark, rather than this build calling an unreadable
+   * configuration a curation. Since WP-125 (backlog 356) it records the **refusal** instead
+   * (`markCurationRefused`), which is what keeps the recovery re-offering it until the document
+   * parses. The research page, which reads the same project, answers the same way.
    */
   it('records the refusal instead of proceeding when the project’s stored settings do not parse', async () => {
     const { options, proposals, jobs, eventing } = harness({ autoApply: true });
@@ -335,17 +336,22 @@ describe('recording a librarian artifact', () => {
     expect(report.reason).toContain(`PUT /api/projects/${PROJECT}/config`);
     expect(proposals.rows).toEqual([]);
     expect(proposals.curationOf(ARTIFACT)).toBeNull();
+    expect(proposals.refusalOf(ARTIFACT)).toBe('2026-09-12T09:00:00.000Z');
     expect(jobs.enqueued).toEqual([]);
     expect(await eventing.store.readStream('project', PROJECT)).toEqual([]);
 
+    const researchArtifact = '00000000-0000-4000-8000-0000000000c5' as Id;
     const research = await recordResearchPage(refusing, {
       ...job,
+      artifact_id: researchArtifact,
       artifact_type: 'ResearchReport',
     });
     expect(research.status).toBe('refused');
+    expect(proposals.refusalOf(researchArtifact)).toBe('2026-09-12T09:00:00.000Z');
     expect(research.reason).toContain('pipeline.wip.max_parallel_tasks: 500');
 
-    // Any other error is not a refusal: it escapes, as it did before.
+    // Any other error is not a refusal: it escapes, as it did before — and records no refusal.
+    const other = '00000000-0000-4000-8000-0000000000c6' as Id;
     await expect(
       recordLibrarianProposals(
         {
@@ -354,9 +360,28 @@ describe('recording a librarian artifact', () => {
             throw new Error('connection lost');
           },
         },
-        job,
+        { ...job, artifact_id: other },
       ),
     ).rejects.toThrow('connection lost');
+    expect(proposals.refusalOf(other)).toBeNull();
+  });
+
+  it('lands the curation once the document parses, after a refusal (WP-125, backlog 356)', async () => {
+    const { options, proposals } = harness();
+    const refusing: LibrarianJobOptions = {
+      ...options,
+      project: async () => {
+        throw new ProjectSettingsInvalidError(PROJECT, ['(root) (Unrecognized key: "bogus")']);
+      },
+    };
+    expect((await recordLibrarianProposals(refusing, job)).status).toBe('refused');
+    expect(proposals.curationOf(ARTIFACT)).toBeNull();
+    // The document is fixed: the same artifact is curated by the next offer, and the refusal is not
+    // a claim that stops it.
+    const report = await recordLibrarianProposals(options, job);
+    expect(report.status).toBe('recorded');
+    expect(proposals.curationOf(ARTIFACT)).toEqual({ proposals: 1 });
+    expect(proposals.rows).toHaveLength(1);
   });
 
   /**

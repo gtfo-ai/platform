@@ -346,6 +346,133 @@ export const runKnowledgeProposalsContract = (harness: KnowledgeProposalsHarness
       ).toEqual([]);
     });
 
+    /**
+     * WP-125, PROGRESS backlog **356**: a settings refusal is recorded and is **not** a curation —
+     * the artifact can still be claimed by the curation that lands once the document parses, and a
+     * refusal after a curation changes nothing about it.
+     */
+    it('records a curation refusal without curating, and the curation that follows still claims', async () => {
+      const artifactId = await context.seedArtifact();
+      await store.markCurationRefused(context.tx, { artifactId, at: AT });
+      await store.markCurationRefused(context.tx, { artifactId, at: AT });
+      expect(await store.markCurated(context.tx, { artifactId, at: AT, proposals: 2 })).toBe(true);
+      // After the curation, a late refusal neither un-curates it nor lets a second claim through.
+      await store.markCurationRefused(context.tx, { artifactId, at: AT });
+      expect(await store.markCurated(context.tx, { artifactId, at: AT, proposals: 2 })).toBe(false);
+    });
+
+    /**
+     * WP-125, PROGRESS backlog **369**: which merge request carries which path — recorded by
+     * `markApplied`, read back by `applyCarriers` for the paths asked, at most three per path — and
+     * a deferral that holds only while the proposal awaits apply.
+     */
+    it('records the merge request an apply opened, and answers it per path, bounded', async () => {
+      const page = '.agentic/knowledge/technical/overview.md';
+      const ref = (iid: number) => ({
+        provider: 'fake-git',
+        project_path: 'acme/api',
+        iid,
+        url: `https://git.example.test/acme/api/-/merge_requests/${String(iid)}`,
+      });
+      await store.insert(context.tx, [
+        ...[70, 71, 72, 73].map((n) =>
+          proposal({ id: id(n), status: 'auto_applied', targetPath: page }),
+        ),
+        proposal({ id: id(74), status: 'auto_applied', targetPath: `${page}.other` }),
+        proposal({ id: id(75), status: 'auto_applied', targetPath: page }),
+        proposal({ id: id(76), status: 'auto_applied', targetPath: page }),
+      ]);
+      for (const n of [70, 71, 72, 73, 74]) {
+        await store.markApplied(context.tx, {
+          ids: [id(n)],
+          commitSha: 'deadbee',
+          mergeRequest: ref(n),
+        });
+      }
+      // Applied with no merge request answered: nothing to read back.
+      await store.markApplied(context.tx, {
+        ids: [id(75)],
+        commitSha: 'deadbee',
+        mergeRequest: null,
+      });
+      expect((await store.load(context.projectId, id(70)))?.appliedMergeRequest).toEqual(ref(70));
+
+      const carriers = await store.applyCarriers(context.projectId, [page]);
+      expect(carriers).toHaveLength(3);
+      expect(carriers.every((carrier) => carrier.targetPath === page)).toBe(true);
+      expect(carriers.every((carrier) => [70, 71, 72, 73].includes(carrier.mergeRequest.iid))).toBe(
+        true,
+      );
+      // Another project's, an unasked path, and no path at all answer nothing.
+      expect(await store.applyCarriers(context.otherProjectId, [page])).toEqual([]);
+      expect(await store.applyCarriers(context.projectId, [])).toEqual([]);
+      expect(
+        (await store.applyCarriers(context.projectId, [`${page}.other`])).map(
+          (carrier) => carrier.mergeRequest.iid,
+        ),
+      ).toEqual([74]);
+      // An approved row (76) is not a carrier: only an applied one is.
+      expect(carriers.map((carrier) => carrier.proposalId)).not.toContain(id(76));
+    });
+
+    it('defers only a proposal still awaiting apply, and an apply or a decision clears the deferral', async () => {
+      await store.insert(context.tx, [
+        proposal({ id: id(80), status: 'auto_applied' }),
+        proposal({ id: id(81), status: 'queued', decidedAt: AT, decidedByUserId: context.userId }),
+        proposal({
+          id: id(82),
+          status: 'rejected',
+          decidedAt: AT,
+          decidedByUserId: context.userId,
+        }),
+      ]);
+      await store.deferApply(context.tx, {
+        deferrals: [80, 81, 82].map((n) => ({ id: id(n), reason: `waits for !${String(n)}` })),
+      });
+      expect((await store.load(context.projectId, id(80)))?.applyDeferredReason).toBe(
+        'waits for !80',
+      );
+      expect((await store.load(context.projectId, id(81)))?.applyDeferredReason).toBe(
+        'waits for !81',
+      );
+      // A rejected row is not awaiting apply, so it is given no reason that is not true of it.
+      expect((await store.load(context.projectId, id(82)))?.applyDeferredReason).toBeUndefined();
+      // Still awaiting apply: a deferral is not a status.
+      expect((await store.listAwaitingApply(context.projectId, 50)).map((row) => row.id)).toEqual(
+        expect.arrayContaining([id(80), id(81)]),
+      );
+
+      await store.markApplied(context.tx, { ids: [id(80)], commitSha: 'deadbee' });
+      expect((await store.load(context.projectId, id(80)))?.applyDeferredReason).toBeUndefined();
+      expect(
+        await store.decide(context.tx, {
+          id: id(81),
+          status: 'rejected',
+          decidedByUserId: context.userId,
+          decidedAt: AT,
+        }),
+      ).toBe(true);
+      expect((await store.load(context.projectId, id(81)))?.applyDeferredReason).toBeUndefined();
+    });
+
+    it('clears a deferral a pass no longer holds, and touches nothing else (WP-125 review round 1)', async () => {
+      await store.insert(context.tx, [
+        proposal({ id: id(90), status: 'auto_applied' }),
+        proposal({ id: id(91), status: 'auto_applied' }),
+      ]);
+      await store.deferApply(context.tx, {
+        deferrals: [90, 91].map((n) => ({ id: id(n), reason: `waits for !${String(n)}` })),
+      });
+      await store.clearApplyDeferral(context.tx, { ids: [id(90)] });
+      const cleared = await store.load(context.projectId, id(90));
+      expect(cleared?.applyDeferredReason).toBeUndefined();
+      expect(cleared?.status).toBe('auto_applied');
+      expect((await store.load(context.projectId, id(91)))?.applyDeferredReason).toBe(
+        'waits for !91',
+      );
+      await store.clearApplyDeferral(context.tx, { ids: [] });
+    });
+
     it('reports the health inputs the nightly pass reads', async () => {
       const inputs: KbHealthInputs = {
         commitSha: 'c0ffee1',

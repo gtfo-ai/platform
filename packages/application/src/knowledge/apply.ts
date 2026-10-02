@@ -32,23 +32,56 @@
  * the whole commit with `invalid_request`, which is the fail-closed direction: nothing is
  * overwritten and the batch is retried.
  *
+ * ## A page already on an open knowledge merge request waits for it (WP-125, backlog 369)
+ *
+ * The index holds a page only once its knowledge merge request has **merged**, so an approved
+ * proposal for a path an earlier apply put on a merge request nobody has merged yet read as
+ * `create` — and became a second merge request creating the same file from a branch cut before the
+ * first one, which a provider answers with an add/add conflict once the first merges (measured on
+ * the fake at WP-109: two branches, `!1` and `!2`, both `create`). So before choosing `create`, the
+ * pass asks the store which applied proposals of that path recorded a merge request
+ * (`applyCarriers`, migration 0076 — the store recorded only the commit before it, criterion 1's
+ * measurement) and asks the provider whether any of them is still open. If one is, the proposal is
+ * **deferred**: it stays approved, carries a platform reason naming the merge request
+ * (`apply_deferred_reason`), and is left out of this commit. It is never stacked onto the open
+ * branch, because that edits a merge request a human may be reviewing. Once that merge request
+ * merges, the index holds the page and the next pass applies the proposal as an `update`. A pass
+ * that runs **between** the merge and the index reading it (woken by another decision, say) keeps
+ * the proposal deferred rather than choosing `create` for a file that now exists — which the
+ * provider would refuse for the whole commit (WP-125 review round 1) — unless the merge is older
+ * than {@link INDEX_CATCH_UP_MS}, when an unindexed page was removed since and is created. A merge
+ * request that was **closed** blocks nothing, and the page is created. The next pass is asked for
+ * by the index run that read the merge ({@link wakeAwaitingKnowledgeApply}), and by the nightly
+ * hygiene sweep failing that. The WP-124 apply recovery leaves a deferred proposal alone: it is
+ * waiting on a person, not stranded. **A deferral is re-decided on every pass**: a proposal a pass
+ * puts into its batch has its reason cleared before the provider calls, so a later failure of that
+ * pass leaves no stale *"waits for !n"* and the recovery's `apply_failed` ending can reach it.
+ *
+ * Two things it does not do. It asks only before a `create`: an `update` of a page an open merge
+ * request also edits still becomes a second merge request (a modify/modify conflict, not the
+ * add/add one the ruling names). And a proposal applied before migration 0076 recorded no merge
+ * request, so it cannot hold a later proposal back.
+ *
  * `index.md` is **not** regenerated. technical/07 asks for it and this build does not do it: the
  * index page is a curated summary (product/05's "Curated, not dumped"), the Librarian can propose a
  * change to it like any other page — `index.md` is a legal `target_path` — and a generator that
  * rewrote it from the file list would overwrite whatever a human wrote there. Recorded in
  * technical/07 rather than left as a silent omission.
  */
-import type { Id, IsoDateTime } from '@platform/contracts';
+import type { Id, IsoDateTime, MergeRequestRef } from '@platform/contracts';
 import { knowledgeProposalAppliedEvent } from '@platform/contracts';
 import type { Clock, IdSource } from '@platform/domain';
 import {
+  gitReads,
   integrationsForProject,
   knowledgeWrites,
   noRunScopedSecrets,
+  type PipelineIntegrations,
   type PipelineIntegrationsPort,
 } from '../pipeline/integrations.js';
 import { appendOnProjectWithRetry } from '../pipeline/project-stream.js';
 import type { EventStore } from '../ports/event-store.js';
+import { IntegrationError } from '../ports/integrations/common.js';
 import type { CommitAction } from '../ports/integrations/git-provider.js';
 import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { EnqueueResult, JobHandler, Jobs } from '../ports/jobs.js';
@@ -56,10 +89,21 @@ import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
-import type { KnowledgeProposalStore, KnowledgeStore, StoredKnowledgeProposal } from './ports.js';
+import type {
+  KnowledgeApplyCarrier,
+  KnowledgeProposalStore,
+  KnowledgeStore,
+  StoredKnowledgeProposal,
+} from './ports.js';
 
 /** Why the apply job was asked for — a log field, and the only thing that separates two wake-ups. */
-export type KnowledgeApplyReason = 'auto_apply' | 'decision' | 'sweep' | 'recovery';
+export type KnowledgeApplyReason =
+  | 'auto_apply'
+  | 'decision'
+  | 'sweep'
+  | 'recovery'
+  /** An index run read a new default-branch commit while proposals waited (WP-125). */
+  | 'indexed';
 
 export interface KnowledgeApplyData {
   readonly project_id: string;
@@ -123,6 +167,11 @@ export interface KnowledgeApplyReport {
   readonly applied: number;
   /** Still waiting after this pass — the reason the job re-enqueues itself. */
   readonly remaining: number;
+  /**
+   * Proposals this pass left out because their page is on an open knowledge merge request (WP-125,
+   * backlog 369). Not counted in `remaining`: nothing this job does can move them.
+   */
+  readonly deferred: number;
 }
 
 const nothing = (reason: string): KnowledgeApplyReport => ({
@@ -133,6 +182,7 @@ const nothing = (reason: string): KnowledgeApplyReport => ({
   mergeRequestUrl: null,
   applied: 0,
   remaining: 0,
+  deferred: 0,
 });
 
 /**
@@ -261,6 +311,149 @@ const mergeRequestBodyFor = (input: {
   ].join('\n');
 
 /**
+ * The reason a deferred proposal carries — platform text, so it may be stored, rendered and logged.
+ * Both interpolated values are the platform's: the merge request's `iid` is an integer the schema
+ * admits, and the path is one the curator joined onto the knowledge directory (`vaultPathOf`).
+ */
+export const applyDeferredReason = (path: string, mergeRequestIid: number): string =>
+  `this approved change waits for knowledge merge request !${String(mergeRequestIid)}, which already creates ${path} and is not merged yet; it is applied as an update once that merge request merges, never added to its branch (PROGRESS backlog 369)`;
+
+/**
+ * The reason a deferred proposal carries when its merge request could not be read at all — a
+ * refusal no retry fixes (`forbidden`, `invalid_response`, …). Platform text, as above.
+ */
+export const applyUnreadableReason = (path: string, mergeRequestIid: number): string =>
+  `this approved change waits: knowledge merge request !${String(mergeRequestIid)} may already create ${path}, and the provider refused to say whether it is still open; it is retried when the project's index next moves and by the nightly knowledge pass (PROGRESS backlog 369)`;
+
+/**
+ * The reason a deferred proposal carries while its page's merge request has **merged** and the index
+ * has not read the merge yet (WP-125 review round 1). Platform text, as above.
+ */
+export const applyAwaitingIndexReason = (path: string, mergeRequestIid: number): string =>
+  `this approved change waits for the knowledge index to read knowledge merge request !${String(mergeRequestIid)}, which merged ${path}; the index run that reads the merge asks for it to be applied as an update (PROGRESS backlog 369)`;
+
+/**
+ * How long after a merge an unindexed page is still taken to be the index's lag (WP-125 review
+ * round 1). The index run is enqueued on the merge itself, so a day is far past any lag; past it, a
+ * merged page the index does not hold was **removed** from the default branch since, and a
+ * `create` is right. Without the bound, such a proposal would wait for an index that never comes.
+ */
+export const INDEX_CATCH_UP_MS = 24 * 60 * 60_000;
+
+/** States in which a merge request still holds its branch's change back from the default branch. */
+const UNMERGED_STATES: ReadonlySet<string> = new Set(['opened', 'locked']);
+
+/** What the provider says about a recorded knowledge merge request, as far as this pass cares. */
+type CarrierState = 'open' | 'merged_recently' | 'not_open' | 'unreadable';
+
+/**
+ * Whether a recorded knowledge merge request is still unmerged, asked of the provider through the
+ * executor (a read: audited, rate-limited, refused inside a transaction).
+ *
+ * One answer per merge request per pass. A merge request the provider no longer knows
+ * (`not_found`, deleted) holds nothing back. A **retryable** failure (`rate_limited`,
+ * `unavailable`) throws, so the pass fails closed and pg-boss retries it rather than choosing
+ * `create` on a guess. Any other refusal is `unreadable`: retrying it would fail the same way, and
+ * throwing it would fail the whole batch for one page (PROGRESS backlog 420's shape), so that one
+ * proposal waits instead — still never a `create` on a guess.
+ */
+const openMergeRequestReader = (
+  integrations: PipelineIntegrations,
+  projectId: Id,
+  now: IsoDateTime,
+): ((ref: MergeRequestRef) => Promise<CarrierState>) => {
+  const answers = new Map<number, Promise<CarrierState>>();
+  const reads = gitReads(integrations);
+  return (ref) => {
+    const known = answers.get(ref.iid);
+    if (known !== undefined) return known;
+    const answer = (async (): Promise<CarrierState> => {
+      try {
+        const current = await reads.mergeRequest(ref, { projectId, taskId: null });
+        if (current === null) return 'not_open';
+        if (UNMERGED_STATES.has(current.state)) return 'open';
+        // Merged, and the caller asks only for a path the index does not hold: the index has not
+        // read the merge yet, so a `create` now would be refused for a file that exists — unless
+        // the merge is old enough that the page must have been removed since.
+        if (current.state === 'merged') {
+          const mergedAt = current.merged_at == null ? null : Date.parse(current.merged_at);
+          if (mergedAt === null || Date.parse(now) - mergedAt < INDEX_CATCH_UP_MS) {
+            return 'merged_recently';
+          }
+        }
+        return 'not_open';
+      } catch (error) {
+        if (!(error instanceof IntegrationError) || error.retryable) throw error;
+        return error.code === 'not_found' ? 'not_open' : 'unreadable';
+      }
+    })();
+    answers.set(ref.iid, answer);
+    return answer;
+  };
+};
+
+interface PlannedAction {
+  readonly proposal: StoredKnowledgeProposal;
+  readonly action: CommitAction['action'];
+}
+
+/**
+ * Which waiting proposals this commit carries, as what, and which wait (WP-125, backlog 369).
+ *
+ * One action per path — a commit cannot carry two for the same file, and the ones left over are
+ * applied by the next pass (which the job asks for itself); taking the *first* keeps the order the
+ * decisions were made in. A path the index holds is an `update`. A path it does not hold is a
+ * `create` unless an applied proposal of that path recorded a merge request the provider still
+ * reports open, in which case the proposal is deferred. A deferred proposal does not take a place
+ * in the batch, so a page waiting on a merge does not hold back the other pages.
+ */
+const planBatch = async (input: {
+  readonly waiting: readonly StoredKnowledgeProposal[];
+  readonly indexed: ReadonlyMap<string, string>;
+  readonly carriers: readonly KnowledgeApplyCarrier[];
+  readonly isOpen: (ref: MergeRequestRef) => Promise<CarrierState>;
+}): Promise<{
+  readonly batch: readonly PlannedAction[];
+  readonly deferred: readonly { readonly id: Id; readonly reason: string }[];
+}> => {
+  const batch: PlannedAction[] = [];
+  const deferred: { id: Id; reason: string }[] = [];
+  const claimed = new Set<string>();
+  for (const proposal of input.waiting) {
+    if (batch.length >= MAX_PROPOSALS_PER_COMMIT) break;
+    if (claimed.has(proposal.targetPath)) continue;
+    claimed.add(proposal.targetPath);
+    if (input.indexed.has(proposal.targetPath)) {
+      batch.push({ proposal, action: 'update' });
+      continue;
+    }
+    let reason: string | null = null;
+    for (const carrier of input.carriers) {
+      if (carrier.targetPath !== proposal.targetPath) continue;
+      const state = await input.isOpen(carrier.mergeRequest);
+      if (state === 'open') {
+        reason = applyDeferredReason(proposal.targetPath, carrier.mergeRequest.iid);
+        break;
+      }
+      if (state === 'merged_recently') {
+        reason = applyAwaitingIndexReason(proposal.targetPath, carrier.mergeRequest.iid);
+        break;
+      }
+      if (state === 'unreadable') {
+        reason = applyUnreadableReason(proposal.targetPath, carrier.mergeRequest.iid);
+        break;
+      }
+    }
+    if (reason === null) {
+      batch.push({ proposal, action: 'create' });
+    } else {
+      deferred.push({ id: proposal.id, reason });
+    }
+  }
+  return { batch, deferred };
+};
+
+/**
  * One apply pass for one project.
  *
  * Exported beside the handler so a test can read the report; the handler is this plus logging and
@@ -284,19 +477,6 @@ export const applyKnowledgeProposals = async (
     return nothing('no proposal is waiting to be applied');
   }
 
-  // One action per path: a commit cannot carry two for the same file, and the ones left over are
-  // applied by the next pass (which this job asks for itself). Taking the *first* keeps the order
-  // the decisions were made in.
-  const batch: StoredKnowledgeProposal[] = [];
-  const claimed = new Set<string>();
-  for (const proposal of waiting) {
-    if (batch.length >= MAX_PROPOSALS_PER_COMMIT) break;
-    if (claimed.has(proposal.targetPath)) continue;
-    claimed.add(proposal.targetPath);
-    batch.push(proposal);
-  }
-  const remaining = waiting.length - batch.length;
-
   const integrations = await integrationsForProject(
     options.integrations,
     projectId,
@@ -311,10 +491,45 @@ export const applyKnowledgeProposals = async (
   }
 
   const indexed = await options.knowledge.readIndexedBlobs(projectId);
-  const actions: CommitAction[] = batch.map((proposal) => ({
-    action: indexed.has(proposal.targetPath) ? 'update' : 'create',
-    path: proposal.targetPath,
-    content: proposal.delta,
+  const plan = await planBatch({
+    waiting,
+    indexed,
+    carriers: await options.proposals.applyCarriers(projectId, [
+      ...new Set(
+        waiting
+          .filter((proposal) => !indexed.has(proposal.targetPath))
+          .map((proposal) => proposal.targetPath),
+      ),
+    ]),
+    isOpen: openMergeRequestReader(integrations, projectId, options.clock.now()),
+  });
+  const batch = plan.batch.map((entry) => entry.proposal);
+  // Every deferral is re-decided here (WP-125 review round 1): a proposal this pass carries loses a
+  // reason an earlier pass gave it **before** the provider calls, so a pass that then fails cannot
+  // leave a stale "waits for !n" that also keeps it outside the apply recovery for ever.
+  const undeferred = batch.filter((proposal) => proposal.applyDeferredReason != null);
+  if (plan.deferred.length > 0 || undeferred.length > 0) {
+    await options.unitOfWork.transaction(async (scope) => {
+      await options.proposals.clearApplyDeferral(scope.tx, {
+        ids: undeferred.map((proposal) => proposal.id),
+      });
+      await options.proposals.deferApply(scope.tx, { deferrals: plan.deferred });
+    });
+  }
+  const remaining = waiting.length - batch.length - plan.deferred.length;
+  if (batch.length === 0) {
+    return {
+      ...nothing(
+        'every waiting proposal is for a page an open knowledge merge request already creates; each is applied once that merge request merges',
+      ),
+      remaining,
+      deferred: plan.deferred.length,
+    };
+  }
+  const actions: CommitAction[] = plan.batch.map((entry) => ({
+    action: entry.action,
+    path: entry.proposal.targetPath,
+    content: entry.proposal.delta,
   }));
 
   const at = options.clock.now();
@@ -363,6 +578,9 @@ export const applyKnowledgeProposals = async (
       await options.proposals.markApplied(scope.tx, {
         ids: batch.map((proposal) => proposal.id),
         commitSha: commit.sha,
+        // WP-125 (backlog 369): which merge request carries these paths, so the next pass can ask
+        // whether it is still open before it chooses `create` for one of them.
+        mergeRequest: mergeRequest?.ref ?? null,
       });
       await scope.events.append(
         batch.map((proposal, index) =>
@@ -394,6 +612,7 @@ export const applyKnowledgeProposals = async (
     mergeRequestUrl: mergeRequest?.web_url ?? null,
     applied: batch.length,
     remaining,
+    deferred: plan.deferred.length,
   };
 };
 
@@ -416,6 +635,22 @@ export const enqueueKnowledgeApply = async (
     data: { project_id: request.projectId, reason: request.reason },
   });
 
+/**
+ * Asks for an apply pass when the project has an approved proposal waiting — what an index run that
+ * read a **new** default-branch commit calls (WP-125, backlog 369): the commit may be the merge a
+ * deferred proposal waits for, and the index now holds its page, so the next pass applies it as an
+ * `update`. Answers whether it enqueued. A project with nothing waiting enqueues nothing.
+ */
+export const wakeAwaitingKnowledgeApply = async (
+  options: { readonly proposals: KnowledgeProposalStore; readonly jobs: Jobs },
+  projectId: Id,
+): Promise<boolean> => {
+  const waiting = await options.proposals.listAwaitingApply(projectId, 1);
+  if (waiting.length === 0) return false;
+  await enqueueKnowledgeApply(options.jobs, { projectId, reason: 'indexed' });
+  return true;
+};
+
 export const declareKnowledgeApplyQueue = async (jobs: Jobs): Promise<void> => {
   await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.knowledgeApply));
 };
@@ -434,6 +669,7 @@ export const knowledgeApplyHandler =
       merge_request: report.mergeRequestUrl,
       applied: report.applied,
       remaining: report.remaining,
+      deferred: report.deferred,
       reason: report.reason,
     };
     if (report.status === 'unavailable') {

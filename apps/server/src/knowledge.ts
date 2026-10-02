@@ -76,6 +76,7 @@ import {
   shouldRecheckAfterIndex,
   startPatternReadingReread,
   thresholdsFromConfig,
+  wakeAwaitingKnowledgeApply,
 } from '@platform/application';
 import type { Id, IsoDateTime, TaskMode } from '@platform/contracts';
 import { materialisedAutonomySchema } from '@platform/contracts';
@@ -536,6 +537,7 @@ export const composeKnowledgeIndexing = async (
     }
   };
 
+  const indexWakeProposals = new knowledgeAdapters.PostgresProposalStore(options.pool);
   const runtime = createKnowledgeIndexRuntime({
     jobs: options.jobs,
     indexer,
@@ -559,6 +561,14 @@ export const composeKnowledgeIndexing = async (
         // the merge its re-check. The refresh's own error still reaches the index job's log.
         if (shouldRecheckAfterIndex(run)) {
           await enqueueReadinessRecheck(options.jobs, { projectId, commitSha });
+          // WP-125 (backlog 369): a new default-branch commit may be the merge a deferred knowledge
+          // proposal waits for, and the index now holds its page — so the apply pass is asked
+          // for, and applies it as an `update`. Nothing is enqueued for a project with nothing
+          // approved waiting; the nightly hygiene sweep is the fallback either way.
+          await wakeAwaitingKnowledgeApply(
+            { proposals: indexWakeProposals, jobs: options.jobs },
+            projectId,
+          );
         }
         await evictMirrors(projectId);
       }

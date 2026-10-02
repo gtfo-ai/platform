@@ -16,13 +16,17 @@ import {
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { TransactionOpenError, withOpenTransaction } from '../events/open-transaction.js';
+import { exactSecretRedactor } from '../integrations/redaction.js';
 import {
   autonomyPresetFor,
   DEFAULT_TEMPLATE_BY_ISSUE_TYPE,
   DEFAULT_TEMPLATE_ID,
   defaultProjectSettings,
   epicSplitRouting,
+  MAX_STORED_VALUE_CHARS,
+  ProjectSettingsInvalidError,
   projectSettingsFrom,
+  projectSettingsLayerFrom,
   resolveEpicSplitSettings,
   spikeRefusal,
   spikeTemplateEnabled,
@@ -274,5 +278,69 @@ describe('the settings port refuses a read without the caller’s transaction in
     );
     expect(inside.projectId).toBe(project);
     expect((await port.forProject(project)).projectId).toBe(project);
+  });
+});
+
+/**
+ * **A key this release does not know is named in the refusal** (WP-125, PROGRESS backlog 355).
+ *
+ * A strict object's `unrecognized_keys` issue carries the **parent's** path, so rendering the value
+ * at that path quoted the whole parent and dropped zod's message, the part that names the key — at
+ * the root as `: {…}` with no path at all. Each document below puts a long, valid sibling **before**
+ * the unknown key, so the old rendering is cut at {@link MAX_STORED_VALUE_CHARS} before the key it
+ * refuses: the cases fail on it by name (the canary, recorded in PROGRESS under WP-125).
+ */
+describe('a stored document with a key this release does not know (WP-125, backlog 355)', () => {
+  const LONG_DIR = `${'docs/'.repeat(40)}kb`;
+  const identity = (value: string): string => value;
+
+  const clausesOf = (stored: unknown, redactText: (value: string) => string = identity) => {
+    try {
+      projectSettingsLayerFrom(PROJECT, stored, redactText);
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProjectSettingsInvalidError);
+      return (error as ProjectSettingsInvalidError).clauses;
+    }
+    throw new Error('expected the stored document to be refused');
+  };
+
+  it('names an unknown key at the root, with (root) rather than an empty path', () => {
+    const clauses = clausesOf({
+      version: 1,
+      project: { knowledge_dir: LONG_DIR },
+      bogus_root_key: true,
+    });
+    expect(clauses).toEqual(['(root) (Unrecognized key: "bogus_root_key")']);
+  });
+
+  it('names an unknown key inside an object, under the object’s path', () => {
+    const clauses = clausesOf({
+      version: 1,
+      project: { knowledge_dir: LONG_DIR, bogus_nested_key: 1 },
+    });
+    expect(clauses).toEqual(['project (Unrecognized key: "bogus_nested_key")']);
+  });
+
+  it('still renders a refused value by its value (the other side)', () => {
+    expect(clausesOf({ version: 1, project: { knowledge_dir: 7 } })[0]).toBe(
+      'project.knowledge_dir: 7',
+    );
+  });
+
+  it('redacts the key before it bounds the clause, so a credential across the bound is not half-published', () => {
+    // An obviously fake credential, written as the unknown key's name, and padded so that it
+    // straddles the bound: cutting first would publish its prefix, which no rule can then match.
+    const planted = 'FAKE-wp125-credential-not-real-0001';
+    const redactor = exactSecretRedactor([{ name: 'pasted_key', value: planted }]);
+    const prefix = '(root) (Unrecognized key: "';
+    const pad = 'k'.repeat(MAX_STORED_VALUE_CHARS - prefix.length - 10);
+    const [clause] = clausesOf(
+      { version: 1, [`${pad}${planted}`]: true },
+      (value) => redactor.redactText(value).value,
+    );
+    expect(clause?.startsWith(prefix)).toBe(true);
+    expect(clause).not.toContain('FAKE-wp125');
+    expect(clause).toContain('[REDACTED');
+    expect(clause?.length).toBeLessThanOrEqual(MAX_STORED_VALUE_CHARS);
   });
 });

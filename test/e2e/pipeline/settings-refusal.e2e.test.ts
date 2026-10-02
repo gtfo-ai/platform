@@ -10,6 +10,7 @@
  * value and the `PUT` that fixes it. No run is created and nothing is dead-lettered on the way.
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
 import { inboundEvent, type PipelineE2E, startPipeline } from '../support/pipeline.js';
 import { featureScenarios, TICKETS } from '../support/scenarios.js';
 
@@ -74,5 +75,51 @@ describe('a stored settings document this release refuses', () => {
       'select count(*)::text as count from event_dispatch where dead_lettered_at is not null',
     );
     expect(deadLettered[0]?.count).toBe('0');
+  });
+
+  /**
+   * WP-125 review round 1 (PROGRESS backlog 356): the refusal `GET …/config` answers names how many
+   * knowledge curations the refused document holds back — through the real route, so the count has
+   * to reach the 409 from the composed query (the canary: drop `waitingCurations` at the route).
+   */
+  it('says in the config refusal how many knowledge curations wait on the document (WP-125)', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'settings-refusal-count',
+      tickets: TICKETS,
+      config: { version: 1, pipeline: { wip: { max_parallel_tasks: 500 } } },
+    });
+    harness = pipeline;
+    const task = await pipeline.query<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, mode, state)
+       values ($1, 'fake-task-management', 'ACME-99', 'https://tickets.example.test/browse/ACME-99',
+               'feature', 'normal', 'done')
+       returning id`,
+      [pipeline.projectId],
+    );
+    const artifact = await pipeline.query<{ id: string }>(
+      `insert into artifacts (task_id, type, data, schema_version, redaction_count)
+       values ($1, 'LibrarianProposals', '{}'::jsonb, '1', 0) returning id`,
+      [task[0]?.id],
+    );
+    await pipeline.query(
+      'insert into knowledge_curations (artifact_id, settings_refused_at) values ($1, now())',
+      [artifact[0]?.id],
+    );
+
+    const client = new Client(pipeline.instance.baseUrl);
+    const signedIn = await client.post('/api/auth/sign-in/email', {
+      email: BOOTSTRAP_EMAIL,
+      password: BOOTSTRAP_PASSWORD,
+    });
+    expect(signedIn.status, JSON.stringify(signedIn.body)).toBe(200);
+    const refused = await client.json<{ error: { code: string; message: string } }>(
+      `/api/projects/${pipeline.projectId}/config`,
+    );
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.code).toBe('invalid_stored_config');
+    expect(refused.body.error.message).toContain(
+      '1 knowledge curation of finished tasks waits on this document',
+    );
   });
 });

@@ -472,6 +472,32 @@ describe('the effective configuration’s layers (WP-63)', () => {
     expect(at.effective.project?.context_budget_tokens).toBe(MAX_CONTEXT_BUDGET_TOKENS);
   });
 
+  it('names how many knowledge curations wait on a refused document, and says nothing of them when none does (WP-125)', () => {
+    const refusal = (waitingCurations?: number): string => {
+      try {
+        effectiveConfigResponseOf({
+          projectId: ID,
+          row: row({ version: 1, project: { context_budget_tokens: 200_000 } }),
+          layers: null,
+          redactText,
+          ...(waitingCurations === undefined ? {} : { waitingCurations }),
+        });
+      } catch (error) {
+        return (error as Error).message;
+      }
+      throw new Error('expected the stored document to be refused');
+    };
+    expect(refusal(3)).toContain(
+      '3 knowledge curations of finished tasks wait on this document: they are offered again at every recovery interval and land once it parses.',
+    );
+    expect(refusal(1)).toContain('1 knowledge curation of finished tasks waits on this document');
+    // The other side (rule 42): no curation waits, and the refusal reads as it did before.
+    for (const none of [0, undefined]) {
+      expect(refusal(none)).not.toContain('knowledge curation');
+      expect(refusal(none)).toContain('Send a corrected document to PUT');
+    }
+  });
+
   it('refuses a stored repository reading whose context budget is above the ceiling, by name', () => {
     // A reading an older release stored as `valid` is re-validated on the read, so it answers the
     // repository refusal with the key path rather than merging a value this release refuses.

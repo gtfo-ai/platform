@@ -303,7 +303,16 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > close: an older draft already **approved** and committed on a knowledge branch whose merge request
 > has not merged, beside a newer draft a maintainer then approves — the index holds neither, so both
 > merge requests `create` the file (measured against the fake git provider at WP-109; the fake has no
-> merge, so the second one's conflict on a real provider is inferred).
+> merge, so the second one's conflict on a real provider is inferred). **Closed at WP-125** (PROGRESS
+> backlog 369, deferral): the apply pass records the merge request that carries each applied proposal
+> (`kb_proposals.applied_merge_request`, migration 0076), and before it chooses `create` for a page
+> the index does not hold it asks the provider whether any applied proposal of that path is on a
+> merge request still open. If one is, the newer proposal **waits**: it stays approved, carries a
+> platform reason naming that merge request (`apply_deferred_reason`), and is left out of the commit
+> — never stacked onto the open branch, which a human may be reviewing. Once that merge request
+> merges, the index run that reads the merge asks for an apply and the proposal is committed as an
+> `update`; a merge request closed without merging blocks nothing. The check is made only before a
+> `create`, so two approved updates of a page that already exists still become two merge requests.
 >
 > The business interview does the same for its own `human` rows (WP-109 review round 1, backlog
 > 370): a re-submission discards the earlier submission's undecided page for each section it

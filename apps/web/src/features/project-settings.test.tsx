@@ -654,6 +654,38 @@ describe('the project settings page', () => {
     expect(document.body.textContent).toContain('Reading it needs the maintainer role.');
   });
 
+  /**
+   * WP-125 (PROGRESS backlog 356): a stored document this release refuses holds back the
+   * knowledge curations it refused, and the refusal says how many — the settings screen shows the
+   * server's sentence as text, so the operator fixing the document knows what else waits on it.
+   */
+  it('shows how many knowledge curations wait on a refused stored configuration (WP-125)', async () => {
+    const waiting =
+      '2 knowledge curations of finished tasks wait on this document: they are offered again at every recovery interval and land once it parses.';
+    const refusing: typeof fetch = async (input, init) =>
+      String(input).endsWith(`/api/projects/${PROJECT}/config`) && init?.method !== 'PUT'
+        ? json(
+            {
+              error: {
+                code: 'invalid_stored_config',
+                message: `the stored configuration of project ${PROJECT} has 1 key(s) this release does not accept: (root) (Unrecognized key: "bogus_root_key"). ${waiting} Send a corrected document to PUT /api/projects/${PROJECT}/config`,
+              },
+            },
+            409,
+          )
+        : fetchFor({})(input, init);
+    render(createApp({ fetchImpl: refusing, realtime: false }).element);
+    expect(
+      await screen.findByText(
+        'This project’s configuration could not be read.',
+        {},
+        { timeout: 5_000 },
+      ),
+    ).toBeTruthy();
+    expect(document.body.textContent).toContain(waiting);
+    expect(document.body.textContent).toContain('Unrecognized key: "bogus_root_key"');
+  });
+
   it('mirrors all five wizard steps and shows the audit of who changed what', async () => {
     // product/18:55 — *"nothing is only reachable during onboarding"*. The headings are the five
     // steps, plus the audit product/18:5 requires and PROGRESS backlog 52 records as unread.

@@ -7,7 +7,8 @@
  * and the list, the conditional mark and the conditional ending each select from it, so the three
  * cannot disagree about what stranded means. "Awaiting apply" is the proposal store's own
  * {@link AWAITING_APPLY} clause — one spelling of `isAwaitingApply` in SQL (standing rule 41), held
- * to the TypeScript predicate by the contract suite.
+ * to the TypeScript predicate by the contract suite. A **deferred** proposal (`apply_deferred_reason`,
+ * WP-125) is outside it: it waits on a merge request a person has not merged, which no apply can move.
  *
  * **The job half reads pg-boss's own table** (`<schema>.job`), as the stranded-stage store does: a
  * `knowledge.apply` job keyed `project:<id>` that is `created`, `retry` or `active` is an apply still
@@ -43,6 +44,10 @@ const strandedSql = (schema: string): string => `
    -- Unqualified on purpose: the clause is the proposal store's own, and p is the only table
    -- its columns can resolve to here.
    where ${AWAITING_APPLY}
+     -- WP-125 (backlog 369): a proposal deferred behind an open knowledge merge request is waiting
+     -- on a person's merge, not stranded; it is never marked or ended here. The index run that reads
+     -- the merge, or the nightly hygiene sweep, asks for its apply.
+     and p.apply_deferred_reason is null
      and not exists (select 1 from ${schema}.job j
                       where j.name = $1 and j.singleton_key = 'project:' || p.project_id::text
                         and j.state in ('created', 'retry', 'active'))`;

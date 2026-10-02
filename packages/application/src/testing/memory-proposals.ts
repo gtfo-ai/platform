@@ -11,17 +11,19 @@
  * | 2 | **`decide` compares the status in JavaScript** where the adapter does it in the `where` clause of one statement. | *Different* | The adapter's version is atomic against a concurrent decider and this one is not, so a **lost-update** race cannot be reproduced here. The contract suite asserts the observable both share — a second decision on a decided row answers `false` — and the atomicity is the adapter's to keep. |
  * | 3 | **Ordering is insertion order reversed**, not `(created_at, id) desc`. | *Different* | For a batch written in id order — which is what `recordLibrarianProposals` does — the two agree, and the contract suite pages through a same-timestamp batch to hold them to it. A test that inserted out of id order would see the two disagree, so no test may assert an ordering from this double and claim it of PostgreSQL. |
  * | 4 | **`readHealthInputs` answers what it was seeded with.** It holds no index of its own, so a test decides what the pass sees. | *Different* | The real one reads `kb_documents` and `kb_links`. A test that asserted "the pass found the expired page the indexer wrote" would be asserting this seam rather than the query, which is why the postgres half of the contract suite seeds rows and asks the adapter. |
- * | 5 | **`markCurated` holds the claim in a map** rather than in `knowledge_curations`, and it does not model the recovery's own columns (`recovery_attempted_at`, `abandoned_at`). | *Different* | The observable both share — the first call answers `true` and every later one `false`, so a redelivered wake-up writes no second set of proposals — is what the contract suite asserts. The recovery's columns are written by `StrandedWorkStore`, whose queries are the integration tier's. |
+ * | 5 | **`markCurated` holds the claim in a map** rather than in `knowledge_curations`, and it does not model the recovery's own columns (`recovery_attempted_at`, `abandoned_at`). `markCurationRefused` (WP-125) records the refusal's instant in the same map and so cannot show that it **clears** the recovery's attempt. | *Different* | The observable both share — the first call answers `true` and every later one `false`, so a redelivered wake-up writes no second set of proposals, and a refusal does not curate — is what the contract suite asserts. The recovery's columns are written by `StrandedWorkStore`, whose queries are the integration tier's: `test/integration/knowledge/curation-settings-refusal.integration.test.ts` holds the cleared attempt. |
+ * | 6 | **`applyCarriers` orders by insertion, newest first**, where the adapter orders by `(created_at, id) desc` (WP-125). | *Different* | Divergence 3's shape; the contract suite asserts which carriers come back and the per-path bound, not their order. |
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
 import type {
   KbHealthInputs,
   KbHealthReportWrite,
+  KnowledgeApplyCarrier,
   KnowledgeProposalDecision,
   KnowledgeProposalStore,
   StoredKnowledgeProposal,
 } from '../knowledge/ports.js';
-import { isAwaitingApply } from '../knowledge/ports.js';
+import { isAwaitingApply, MAX_CARRIERS_PER_PATH } from '../knowledge/ports.js';
 import type { Transaction } from '../ports/transaction.js';
 
 export interface MemoryProposalStore extends KnowledgeProposalStore {
@@ -29,6 +31,8 @@ export interface MemoryProposalStore extends KnowledgeProposalStore {
   readonly rows: readonly StoredKnowledgeProposal[];
   /** Which artifacts have been curated, and what each curation produced (WP-48). */
   curationOf(artifactId: Id): { readonly proposals: number } | null;
+  /** When the project's settings last refused this artifact's curation, if they did (WP-125). */
+  refusalOf(artifactId: Id): IsoDateTime | null;
   readonly reports: readonly KbHealthReportWrite[];
   /** What {@link KnowledgeProposalStore.readHealthInputs} will answer for this project. */
   seedHealthInputs(projectId: Id, inputs: KbHealthInputs): void;
@@ -55,7 +59,10 @@ export const memoryProposalStore = (
   const rows: StoredKnowledgeProposal[] = [];
   const reports: KbHealthReportWrite[] = [];
   /** `knowledge_curations`, as much of it as this double needs: the claim and what it produced. */
-  const curations = new Map<Id, { curatedAt: IsoDateTime; proposals: number }>();
+  const curations = new Map<
+    Id,
+    { curatedAt: IsoDateTime | null; proposals: number; settingsRefusedAt: IsoDateTime | null }
+  >();
   const health = new Map<Id, KbHealthInputs>();
 
   const replace = (index: number, next: StoredKnowledgeProposal): void => {
@@ -72,8 +79,9 @@ export const memoryProposalStore = (
     reports,
     curationOf: (artifactId) => {
       const row = curations.get(artifactId);
-      return row === undefined ? null : { proposals: row.proposals };
+      return row === undefined || row.curatedAt === null ? null : { proposals: row.proposals };
     },
+    refusalOf: (artifactId) => curations.get(artifactId)?.settingsRefusedAt ?? null,
     seedHealthInputs: (projectId, inputs) => {
       health.set(projectId, inputs);
     },
@@ -93,12 +101,30 @@ export const memoryProposalStore = (
       if (existing?.curatedAt != null) {
         return false;
       }
-      curations.set(input.artifactId, { curatedAt: input.at, proposals: input.proposals });
+      curations.set(input.artifactId, {
+        curatedAt: input.at,
+        proposals: input.proposals,
+        settingsRefusedAt: existing?.settingsRefusedAt ?? null,
+      });
       undoOnRollback(tx, () => {
         if (existing === undefined) curations.delete(input.artifactId);
         else curations.set(input.artifactId, existing);
       });
       return true;
+    },
+
+    markCurationRefused: async (tx: Transaction, input) => {
+      const existing = curations.get(input.artifactId);
+      if (existing?.curatedAt != null) return;
+      curations.set(input.artifactId, {
+        curatedAt: null,
+        proposals: 0,
+        settingsRefusedAt: input.at,
+      });
+      undoOnRollback(tx, () => {
+        if (existing === undefined) curations.delete(input.artifactId);
+        else curations.set(input.artifactId, existing);
+      });
     },
 
     load: async (projectId, id) =>
@@ -130,8 +156,9 @@ export const memoryProposalStore = (
         return false;
       }
       // WP-124: a decision clears an apply failure, as the adapter's statement does — and, as the
-      // adapter reads it back, a row with no failure has no `applyFailureReason` key at all.
-      const { applyFailureReason: _cleared, ...unfailed } = row;
+      // adapter reads it back, a row with no failure has no `applyFailureReason` key at all. WP-125:
+      // and a deferral, which was a statement about the decision this one replaces.
+      const { applyFailureReason: _cleared, applyDeferredReason: _undeferred, ...unfailed } = row;
       replace(index, {
         ...unfailed,
         status: decision.status,
@@ -172,7 +199,58 @@ export const memoryProposalStore = (
         const index = rows.findIndex((row) => row.id === id);
         const row = rows[index];
         if (row === undefined || !isAwaitingApply(row)) continue;
-        replace(index, { ...row, status: 'applied', appliedCommitSha: input.commitSha });
+        const { applyDeferredReason: _applied, ...undeferred } = row;
+        replace(index, {
+          ...undeferred,
+          status: 'applied',
+          appliedCommitSha: input.commitSha,
+          ...(input.mergeRequest == null ? {} : { appliedMergeRequest: input.mergeRequest }),
+        });
+        undoOnRollback(tx, () => restore(row));
+      }
+    },
+
+    applyCarriers: async (projectId, paths) => {
+      const carriers: KnowledgeApplyCarrier[] = [];
+      for (const path of paths) {
+        carriers.push(
+          ...rows
+            .filter(
+              (row) =>
+                row.projectId === projectId &&
+                row.targetPath === path &&
+                row.status === 'applied' &&
+                row.appliedMergeRequest != null,
+            )
+            .reverse()
+            .slice(0, MAX_CARRIERS_PER_PATH)
+            .map((row) => ({
+              proposalId: row.id,
+              targetPath: row.targetPath,
+              mergeRequest: row.appliedMergeRequest as NonNullable<typeof row.appliedMergeRequest>,
+            })),
+        );
+      }
+      return carriers;
+    },
+
+    clearApplyDeferral: async (tx: Transaction, input) => {
+      for (const id of input.ids) {
+        const index = rows.findIndex((row) => row.id === id);
+        const row = rows[index];
+        if (row === undefined || row.applyDeferredReason == null) continue;
+        const { applyDeferredReason: _cleared, ...undeferred } = row;
+        replace(index, undeferred);
+        undoOnRollback(tx, () => restore(row));
+      }
+    },
+
+    deferApply: async (tx: Transaction, input) => {
+      for (const deferral of input.deferrals) {
+        const index = rows.findIndex((row) => row.id === deferral.id);
+        const row = rows[index];
+        if (row === undefined || !isAwaitingApply(row)) continue;
+        replace(index, { ...row, applyDeferredReason: deferral.reason });
         undoOnRollback(tx, () => restore(row));
       }
     },

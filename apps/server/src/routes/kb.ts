@@ -162,6 +162,11 @@ const toRecord = (proposal: StoredKnowledgeProposal) =>
     ...(proposal.applyFailureReason === undefined || proposal.applyFailureReason === null
       ? {}
       : { apply_failure_reason: proposal.applyFailureReason }),
+    // WP-125: present only on a proposal waiting for an open knowledge merge request — platform
+    // text naming it, never provider text.
+    ...(proposal.applyDeferredReason === undefined || proposal.applyDeferredReason === null
+      ? {}
+      : { apply_deferred_reason: proposal.applyDeferredReason }),
   });
 
 export const registerKbRoutes = async (

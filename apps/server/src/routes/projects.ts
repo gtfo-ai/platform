@@ -88,6 +88,7 @@ import {
 } from '../queries/identity-queries.js';
 import { listProjectTasks, type TaskCursor } from '../queries/pipeline-queries.js';
 import {
+  countCurationsWaitingOnSettings,
   findLastConfigExport,
   findProjectReadiness,
   listProjectSummaries,
@@ -272,6 +273,7 @@ const storedSettingsForRequest = (
   projectId: string,
   config: unknown,
   redactText: (value: string) => string,
+  waitingCurations: number,
 ): AgenticConfig => {
   try {
     return projectSettingsLayerFrom(projectId as Id, config, redactText).document;
@@ -282,12 +284,24 @@ const storedSettingsForRequest = (
         'invalid_stored_config',
         `the stored configuration of project ${projectId} has ${error.clauses.length} key(s) this release does not accept: ` +
           `${error.clauses.join(', ')}. ` +
+          waitingCurationsSentence(waitingCurations) +
           `Send a corrected document to PUT /api/projects/${projectId}/config`,
       );
     }
     throw error;
   }
 };
+
+/**
+ * The refusal's count of what waits on the fix (WP-125, PROGRESS backlog 356): knowledge curations
+ * the same document refused, which the recovery pass re-offers at its interval until it parses.
+ * Platform text and a number; nothing at all when none waits, so the refusal of a project with no
+ * finished task reads as it did before.
+ */
+export const waitingCurationsSentence = (waiting: number): string =>
+  waiting <= 0
+    ? ''
+    : `${String(waiting)} knowledge curation${waiting === 1 ? '' : 's'} of finished tasks ${waiting === 1 ? 'waits' : 'wait'} on this document: ${waiting === 1 ? 'it is' : 'they are'} offered again at every recovery interval and ${waiting === 1 ? 'lands' : 'land'} once it parses. `;
 
 /**
  * `GET …/config`'s answer — pure, so every refusal and both directions of precedence are driven
@@ -306,9 +320,19 @@ export const effectiveConfigResponseOf = (input: {
   readonly redactText: (value: string) => string;
   /** The project's last recorded export (WP-91, backlog 225); omitted reads as none. */
   readonly lastExport?: LastConfigExport | null;
+  /**
+   * Knowledge curations waiting on the stored settings (WP-125, backlog 356) — named by the
+   * `invalid_stored_config` refusal. Omitted reads as none.
+   */
+  readonly waitingCurations?: number;
 }): EffectiveConfigResponse => {
   const { projectId, row } = input;
-  const stored = storedSettingsForRequest(projectId, row.config, input.redactText);
+  const stored = storedSettingsForRequest(
+    projectId,
+    row.config,
+    input.redactText,
+    input.waitingCurations ?? 0,
+  );
 
   const organisation = organisationSettingsForRequest(input.layers?.orgSettings);
   const organisationCommands = organisation.commands;
@@ -518,6 +542,7 @@ export const registerProjectRoutes = async (
         layers: await findConfigLayers(options.database, projectId),
         redactText: (value) => options.redactor.redactText(value).value,
         lastExport: lastExportOf(await findLastConfigExport(options.database, projectId)),
+        waitingCurations: await countCurationsWaitingOnSettings(options.database, projectId),
       });
     },
   );

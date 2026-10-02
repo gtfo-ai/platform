@@ -266,6 +266,15 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > awaiting apply, so nothing retries it; a maintainer's **approve** moves it back to `queued` (the
 > decision clears the mark and the reason) and asks for an apply, and **reject** ends it.
 
+> **No new status at WP-125 (PROGRESS backlog 369, migration 0076): a deferral is a reason, not a
+> state.** An approved proposal whose page an earlier, still-open knowledge merge request already
+> creates stays `queued` with its decision (or `auto_applied`) and carries
+> `apply_deferred_reason` naming that merge request; the apply pass leaves it out of the commit
+> until the merge request merges, and then applies it as an `update`. It is still awaiting apply —
+> which is what the next pass reads — but outside the `knowledge_apply` recovery's predicate, so it
+> never reaches `apply_failed` for waiting on a person's merge. `markApplied` and a decision clear
+> the reason.
+
 ## Event catalogue
 
 Naming: `<aggregate>.<past-tense>`; payload always includes `task_id` when task-scoped and `project_id`. `actor` lives in the **event envelope**, not in each payload (implemented that way in WP-01, matching `events.actor` in technical/03); the `actor` column in the catalogue below therefore describes the envelope value for that event, not a payload field. Priorities: 0–99 platform core, 100–199 integrations, 200–299 notifications/UI, 300+ custom project handlers.

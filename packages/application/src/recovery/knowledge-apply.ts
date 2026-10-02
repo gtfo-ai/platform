@@ -20,6 +20,11 @@
  *  - **no `knowledge.apply` job** keyed `project:<id>` is `created`, `retry` or `active` — asked of
  *    pg-boss's own table, the `stranded_stage` row's way, because a pass in flight or waiting out a
  *    retry delay is the live path and must not be raced.
+ *  - it is **not deferred** (WP-125, PROGRESS backlog 369): a proposal the apply pass held back
+ *    because its page is on an open knowledge merge request (`apply_deferred_reason`) waits on a
+ *    person's merge, which no apply can hasten, so ending it `apply_failed` an hour later would be
+ *    false. The index run that reads the merge asks for its apply, and the nightly hygiene sweep
+ *    does failing that.
  *
  * ## What it does: once, then an ending
  *

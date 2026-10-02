@@ -92,7 +92,12 @@
  *    own write transaction, it is also what makes a re-enqueue safe: a second delivery writes **one**
  *    set of proposals, not two. **Bounded** by `knowledge_curations.recovery_attempted_at`, ending
  *    in `abandoned_at` with the reason, because a task's proposals are notification-shaped (rule 20)
- *    and re-running a curation for ever costs a model call a minute.
+ *    and a wake-up lost twice is not going to arrive. **A settings refusal is not a lost wake-up**
+ *    (WP-125, PROGRESS backlog 356): the curation ran and the project's stored settings refused it,
+ *    so it records `settings_refused_at` and clears the attempt in the same statement
+ *    (`KnowledgeProposalStore.markCurationRefused`). The row is then found unattempted at every
+ *    interval and re-offered until the document parses, and never ended for the refusal; a re-offer
+ *    is a settings read and no model call, which is what makes "until it parses" affordable.
  *  - **ask** (entry 84): a `pending` ask **with no run attached**, older than the interval
  *    (`task_asks_pending_idx` exists for exactly this query). `enqueueAsk` is `stately` with
  *    `singletonKey: ask:<id>`, so a redelivered wake-up for a question already in flight collapses

@@ -16,6 +16,7 @@ import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { PipelineIntegrations } from '../pipeline/integrations.js';
 import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import { PROJECT_STREAM_APPEND_ATTEMPTS } from '../pipeline/project-stream.js';
+import { IntegrationError } from '../ports/integrations/common.js';
 import type { CommitFilesRequest, CommitRef } from '../ports/integrations/git-provider.js';
 import { silentLogger } from '../ports/logger.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
@@ -23,11 +24,16 @@ import { memoryProposalStore } from '../testing/memory-proposals.js';
 import { recordingJobs } from '../testing/pipeline-harness.js';
 import { RIVAL_COMPONENT, racingProjectStream } from '../testing/project-stream-race.js';
 import {
+  applyAwaitingIndexReason,
+  applyDeferredReason,
   applyKnowledgeProposals,
+  applyUnreadableReason,
+  INDEX_CATCH_UP_MS,
   type KnowledgeApplyOptions,
   knowledgeBranchName,
   MAX_TRAILER_TOKEN_CHARS,
   provenanceTokenOf,
+  wakeAwaitingKnowledgeApply,
 } from './apply.js';
 import type { StoredKnowledgeProposal } from './ports.js';
 
@@ -81,6 +87,11 @@ const harness = (
     readonly ticketKey?: string;
     /** WP-109: how many project-stream races a rival wins; the stores then roll back with the fake. */
     readonly losses?: number;
+    /** WP-125: what the provider answers about a recorded knowledge merge request. */
+    readonly getMergeRequest?: () => Promise<{
+      readonly state: string;
+      readonly merged_at?: string | null;
+    }>;
   } = {},
 ) => {
   const calls: Calls = { commits: [], mergeRequests: [] };
@@ -113,6 +124,8 @@ const harness = (
         web_url: 'https://mr.test/7',
       };
     },
+    getMergeRequest: async () =>
+      options.getMergeRequest === undefined ? { state: 'opened' } : await options.getMergeRequest(),
   };
   const integrations: PipelineIntegrations = {
     executor: {
@@ -353,6 +366,178 @@ describe('applying knowledge proposals', () => {
     // The handler is what re-enqueues; the pass itself only reports. Asserted here so a reader is
     // not left thinking the job loops on its own.
     expect(jobs.enqueued).toEqual([]);
+  });
+
+  describe('a page an earlier apply put on a knowledge merge request (WP-125, backlog 369)', () => {
+    const PAGE = '.agentic/knowledge/lessons/L-1.md';
+    /** One page applied by an earlier pass, recorded with merge request !7, and a newer approval. */
+    const seeded = async (built: ReturnType<typeof harness>) => {
+      await built.proposals.insert({} as never, [
+        proposal({ id: 'a7000000-0000-4000-8000-00000000ac01' as Id, targetPath: PAGE }),
+      ]);
+      await built.proposals.markApplied({} as never, {
+        ids: ['a7000000-0000-4000-8000-00000000ac01' as Id],
+        commitSha: 'abc1234',
+        mergeRequest: {
+          provider: 'fake-git',
+          project_path: 'acme/api',
+          iid: 7,
+          url: 'https://mr.test/7',
+        },
+      });
+      await built.proposals.insert({} as never, [
+        proposal({ id: 'a8000000-0000-4000-8000-00000000ac02' as Id, targetPath: PAGE }),
+      ]);
+    };
+
+    it('defers the newer one while the merge request is open, and names it', async () => {
+      const built = harness();
+      await seeded(built);
+      const report = await applyKnowledgeProposals(built.applyOptions, data);
+      expect(report).toMatchObject({ status: 'nothing_to_apply', deferred: 1, applied: 0 });
+      expect(built.calls.commits).toEqual([]);
+      expect(built.proposals.rows.at(-1)?.applyDeferredReason).toBe(applyDeferredReason(PAGE, 7));
+    });
+
+    it.each([
+      ['closed without merging', async () => ({ state: 'closed' })],
+      [
+        'gone from the provider (not_found)',
+        async (): Promise<{ state: string }> => {
+          throw new IntegrationError('not_found', 'fake-git', 'merge request !7');
+        },
+      ],
+    ])('creates the page when the merge request was %s', async (_why, getMergeRequest) => {
+      const built = harness({ getMergeRequest });
+      await seeded(built);
+      const report = await applyKnowledgeProposals(built.applyOptions, data);
+      expect(report).toMatchObject({ status: 'applied', deferred: 0, applied: 1 });
+      expect(built.calls.commits[0]?.actions[0]?.action).toBe('create');
+    });
+
+    it('fails closed on a retryable provider failure: no commit, and the pass throws for pg-boss to retry', async () => {
+      const built = harness({
+        getMergeRequest: async () => {
+          throw new IntegrationError('unavailable', 'fake-git', 'the provider is down');
+        },
+      });
+      await seeded(built);
+      await expect(applyKnowledgeProposals(built.applyOptions, data)).rejects.toBeInstanceOf(
+        IntegrationError,
+      );
+      expect(built.calls.commits).toEqual([]);
+    });
+
+    it('holds back only that page when the provider refuses the read for good, never creating it on a guess', async () => {
+      const built = harness({
+        getMergeRequest: async () => {
+          throw new IntegrationError('forbidden', 'fake-git', 'no access to merge requests');
+        },
+      });
+      await seeded(built);
+      await built.proposals.insert({} as never, [
+        proposal({
+          id: 'a9000000-0000-4000-8000-00000000ac03' as Id,
+          targetPath: '.agentic/knowledge/lessons/L-other.md',
+        }),
+      ]);
+      const report = await applyKnowledgeProposals(built.applyOptions, data);
+      expect(report).toMatchObject({ status: 'applied', applied: 1, deferred: 1 });
+      expect(built.calls.commits[0]?.actions).toEqual([
+        expect.objectContaining({
+          action: 'create',
+          path: '.agentic/knowledge/lessons/L-other.md',
+        }),
+      ]);
+      const waiting = built.proposals.rows.find(
+        (row) => row.id === ('a8000000-0000-4000-8000-00000000ac02' as Id),
+      );
+      expect(waiting?.applyDeferredReason).toBe(applyUnreadableReason(PAGE, 7));
+    });
+
+    it('keeps the newer one waiting while the merge request has merged and the index has not read it (review round 1)', async () => {
+      const built = harness({
+        getMergeRequest: async () => ({ state: 'merged', merged_at: '2026-09-12T08:00:00.000Z' }),
+      });
+      await seeded(built);
+      const report = await applyKnowledgeProposals(built.applyOptions, data);
+      expect(report).toMatchObject({ status: 'nothing_to_apply', deferred: 1, applied: 0 });
+      expect(built.calls.commits).toEqual([]);
+      expect(built.proposals.rows.at(-1)?.applyDeferredReason).toBe(
+        applyAwaitingIndexReason(PAGE, 7),
+      );
+    });
+
+    it('creates the page when the merge is older than the index could lag: it was removed since (the other side)', async () => {
+      const longAgo = new Date(Date.parse(AT) - INDEX_CATCH_UP_MS - 60_000).toISOString();
+      const built = harness({
+        getMergeRequest: async () => ({ state: 'merged', merged_at: longAgo }),
+      });
+      await seeded(built);
+      const report = await applyKnowledgeProposals(built.applyOptions, data);
+      expect(report).toMatchObject({ status: 'applied', deferred: 0, applied: 1 });
+      expect(built.calls.commits[0]?.actions[0]?.action).toBe('create');
+    });
+
+    it('clears an earlier deferral before the provider calls, so a pass that then fails leaves no stale reason (review round 1)', async () => {
+      const built = harness({
+        getMergeRequest: async () => ({ state: 'closed' }),
+        onCommit: () => {
+          throw new IntegrationError('unavailable', 'fake-git', 'the provider is down');
+        },
+      });
+      await seeded(built);
+      await built.proposals.deferApply({} as never, {
+        deferrals: [
+          {
+            id: 'a8000000-0000-4000-8000-00000000ac02' as Id,
+            reason: applyDeferredReason(PAGE, 7),
+          },
+        ],
+      });
+      await expect(applyKnowledgeProposals(built.applyOptions, data)).rejects.toBeInstanceOf(
+        IntegrationError,
+      );
+      const row = built.proposals.rows.at(-1);
+      expect(row?.appliedCommitSha).toBeNull();
+      expect(row?.applyDeferredReason).toBeUndefined();
+    });
+
+    it('does not ask the provider about a page the index already holds', async () => {
+      let asked = 0;
+      const built = harness({
+        indexedPaths: [PAGE],
+        getMergeRequest: async () => {
+          asked += 1;
+          return { state: 'opened' };
+        },
+      });
+      await seeded(built);
+      const report = await applyKnowledgeProposals(built.applyOptions, data);
+      expect(report).toMatchObject({ status: 'applied', deferred: 0 });
+      expect(built.calls.commits[0]?.actions[0]?.action).toBe('update');
+      expect(asked).toBe(0);
+    });
+  });
+
+  it('wakes the apply after an index run only when an approved proposal waits', async () => {
+    const built = harness();
+    expect(
+      await wakeAwaitingKnowledgeApply({ proposals: built.proposals, jobs: built.jobs }, PROJECT),
+    ).toBe(false);
+    expect(built.jobs.enqueued).toEqual([]);
+    await built.proposals.insert({} as never, [
+      proposal({ id: '00000000-0000-4000-8000-00000000ad01' as Id }),
+    ]);
+    expect(
+      await wakeAwaitingKnowledgeApply({ proposals: built.proposals, jobs: built.jobs }, PROJECT),
+    ).toBe(true);
+    expect(built.jobs.enqueued).toEqual([
+      expect.objectContaining({
+        singletonKey: `project:${PROJECT}`,
+        data: { project_id: PROJECT, reason: 'indexed' },
+      }),
+    ]);
   });
 
   it('leaves the proposals alone when the project has no git binding', async () => {

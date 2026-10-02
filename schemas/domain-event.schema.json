@@ -5663,6 +5663,16 @@
               "type": "null"
             }
           ]
+        },
+        "apply_deferred_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

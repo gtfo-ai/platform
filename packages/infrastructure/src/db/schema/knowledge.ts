@@ -91,6 +91,13 @@ export const kbProposals = pgTable('kb_proposals', {
   applyRecoveryAttemptedAt: timestamp('apply_recovery_attempted_at', { withTimezone: true }),
   /** Platform text, set exactly when `status` is `apply_failed` (migration 0075). */
   applyFailureReason: text('apply_failure_reason'),
+  /**
+   * The merge request the apply that carried this proposal opened — provider output, parsed on read
+   * (migration 0076, WP-125, PROGRESS backlog 369).
+   */
+  appliedMergeRequest: jsonb('applied_merge_request').$type<JsonValue>(),
+  /** Platform text naming the open knowledge merge request this proposal waits behind (0076). */
+  applyDeferredReason: text('apply_deferred_reason'),
 });
 
 export const kbIndexState = pgTable('kb_index_state', {
@@ -331,6 +338,8 @@ export const knowledgeCurations = pgTable('knowledge_curations', {
   abandonedAt: timestamp('abandoned_at', { withTimezone: true }),
   detail: text('detail'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  /** The project's stored settings refused this curation — migration 0076 (WP-125, backlog 356). */
+  settingsRefusedAt: timestamp('settings_refused_at', { withTimezone: true }),
 });
 
 /**

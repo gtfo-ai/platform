@@ -614,7 +614,18 @@ Two messages come from the platform rather than from a task:
   ran, the recovery pass asked for one more apply, and an hour later it was still not committed (the
   project may have no git binding, or the provider refused the commit). The card says so, with the
   reason, and offers **Approve again**, which asks for another apply; **Reject** ends it. Until then
-  nothing retries it on its own.
+  nothing retries it on its own;
+- **waits for a merge**: an approved proposal for a page that an earlier knowledge merge request
+  already creates and nobody has merged yet. It is not stacked onto that merge request's branch (you
+  may be reviewing it) and does not open a second one that would conflict with it: it stays
+  approved, the card names the merge request it waits for, and once that one merges the change is
+  committed as an update on a branch of its own. If that merge request is closed instead, the page
+  is created. Only a page an earlier approval would *create* waits this way: two approved changes to
+  a page that already exists still open two merge requests.
+
+A Librarian curation that a project's **stored settings** refused (they do not parse under this
+release) is not lost: it is offered again at every recovery interval until the settings parse, and
+the settings screen's refusal says how many curations are waiting on the fix.
 
 The knowledge base lives **in your repository**
 ([BD-012](decisions/business/BD-012-knowledge-in-repo.md)), which is why there is no "export": it is

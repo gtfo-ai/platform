@@ -173,6 +173,12 @@ export const knowledgeProposalRecordSchema = z.strictObject({
    * it still parses.
    */
   apply_failure_reason: nonEmptyStringSchema.nullish(),
+  /**
+   * Why this approved proposal waits — platform text naming the open knowledge merge request that
+   * already creates its page (WP-125, PROGRESS backlog 369). It stays approved and is applied as an
+   * `update` once that merge request merges. Optional, so a record written before it still parses.
+   */
+  apply_deferred_reason: nonEmptyStringSchema.nullish(),
 });
 
 /**

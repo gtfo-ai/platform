@@ -265,7 +265,10 @@ export const createPostgresStrandedWorkStore = (): StrandedWorkStore => {
          * `curated_at` set is a curation that ran — including one that proposed nothing, which is
          * the case that made this site unbuildable before (standing rule 18). A row with only
          * `recovery_attempted_at` is this pass's own previous attempt, and one with `abandoned_at`
-         * is a site it has already given up on.
+         * is a site it has already given up on. A row with `settings_refused_at` and no attempt
+         * (WP-125, backlog 356) is a curation the project's settings refused: the refusal cleared
+         * the attempt, so it is found as unattempted and re-offered at every interval until the
+         * document parses — never ended for it.
          *
          * `artifacts_curated_types_idx` (migration 0036) is the partial index this `where` is
          * written for; without it the query would scan every artifact of every project.
@@ -313,11 +316,16 @@ export const createPostgresStrandedWorkStore = (): StrandedWorkStore => {
         // `curated_at is null` in the predicate: a curation that arrived between the pass's read
         // and this write keeps its row, and this ending writes nothing rather than labelling a
         // curation that ran as one the platform gave up on.
+        //
+        // WP-125 (backlog 356): and `recovery_attempted_at is not null` — a settings refusal clears
+        // the attempt (`markCurationRefused`), so a refusal that landed after the pass read the row
+        // as attempted makes this ending write nothing, and the next pass re-offers it instead.
         `insert into knowledge_curations (artifact_id, abandoned_at, detail)
               values ($1, $2, $3)
          on conflict (artifact_id) do update
             set abandoned_at = excluded.abandoned_at, detail = excluded.detail
-          where knowledge_curations.curated_at is null`,
+          where knowledge_curations.curated_at is null
+            and knowledge_curations.recovery_attempted_at is not null`,
         [input.artifactId, input.at, input.reason],
       );
     },

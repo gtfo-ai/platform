@@ -512,3 +512,27 @@ export const findLastConfigExport = async (
   }
   return null;
 };
+
+/**
+ * How many of this project's knowledge curations wait on its stored settings — curations the
+ * settings refused (`knowledge_curations.settings_refused_at`) that nothing has curated or given up
+ * on since (WP-125, PROGRESS backlog 356). What `GET …/config`'s `409 invalid_stored_config` names,
+ * so the refusal an operator reads says what else waits on the fix: the recovery pass re-offers each
+ * of them at its interval until the document parses. Served by the partial index migration 0076
+ * made for it.
+ */
+export const countCurationsWaitingOnSettings = async (
+  database: Database,
+  projectId: string,
+): Promise<number> => {
+  const { rows } = await database.execute<{ waiting: number }>(sql`
+    select count(*)::int as waiting
+      from knowledge_curations c
+      join artifacts a on a.id = c.artifact_id
+      join tasks t on t.id = a.task_id
+     where t.project_id = ${projectId}
+       and c.settings_refused_at is not null
+       and c.curated_at is null
+       and c.abandoned_at is null`);
+  return Number(rows[0]?.waiting ?? 0);
+};

@@ -147,10 +147,12 @@ export interface LibrarianJobOptions {
 export interface CurationReport {
   /**
    * `refused` (WP-106): the project's stored settings do not parse, so nothing was curated and the
-   * artifact was **not** marked curated. The reason names the keys. The recovery pass offers it
-   * once more (bounded by `knowledge_curations.recovery_attempted_at`, WP-48) and then abandons it
-   * with a reason, so a document still broken by then costs that task's proposals — notification-
-   * shaped, which is why the bound is one re-offer rather than for ever (standing rule 20).
+   * artifact was **not** marked curated. The reason names the keys. Since WP-125 (PROGRESS backlog
+   * 356) the refusal is recorded (`settings_refused_at`) and does **not** spend the recovery's one
+   * attempt (`knowledge_curations.recovery_attempted_at`, WP-48): the recovery pass re-offers the
+   * artifact at its interval until the document parses, and `GET …/config`'s refusal counts it.
+   * Before WP-125 the second refusal abandoned it, so a document still broken one interval later
+   * cost that task's proposals.
    */
   readonly status: 'recorded' | 'skipped' | 'refused';
   readonly reason: string | null;
@@ -232,9 +234,10 @@ const rowFor = (
  *
  * A refusal, not a throw, for the reason `librarianProposalsHandler` gives every skip: a throw
  * would spend pg-boss's retries on a document no retry can fix. And not a skip that marks the
- * artifact curated, because that would drop the proposals at once; the artifact stays uncurated, so
- * the recovery pass offers it once more ({@link CurationReport.status} has the bound). Any other
- * error still escapes.
+ * artifact curated, because that would drop the proposals at once; the artifact stays uncurated and
+ * the refusal is recorded ({@link recordCurationRefusal}), so the recovery pass re-offers it at its
+ * interval until the document parses ({@link CurationReport.status}). Any other error still
+ * escapes.
  */
 export const readLibrarianProject = async (
   options: Pick<LibrarianJobOptions, 'project'>,
@@ -254,6 +257,26 @@ export const readLibrarianProject = async (
 };
 
 /**
+ * Records that the project's stored settings refused this artifact's curation (WP-125, PROGRESS
+ * backlog 356) — `knowledge_curations.settings_refused_at`, with the recovery's attempt cleared in
+ * the same statement (`KnowledgeProposalStore.markCurationRefused`).
+ *
+ * Before WP-125 a refusal wrote nothing, so the recovery pass read it as a lost wake-up: one
+ * re-offer, and then the curation was **abandoned** — the task's proposals lost unless the document
+ * was fixed inside one recovery interval. A refusal is not a lost wake-up (the job ran and was told
+ * no), so it does not spend the attempt: the pass re-offers the artifact at its interval until the
+ * document parses, and the row is what `GET …/config`'s refusal counts as a curation waiting on it.
+ */
+export const recordCurationRefusal = async (
+  options: Pick<LibrarianJobOptions, 'unitOfWork' | 'proposals' | 'clock'>,
+  artifactId: Id,
+): Promise<void> => {
+  await options.unitOfWork.transaction(async (scope) =>
+    options.proposals.markCurationRefused(scope.tx, { artifactId, at: options.clock.now() }),
+  );
+};
+
+/**
  * Curates one Librarian artifact into rows, and asks for a commit when the policy decided on one.
  *
  * Exported separately from the job handler so a test can drive it directly and read the report; the
@@ -267,6 +290,7 @@ export const recordLibrarianProposals = async (
   const taskId = data.task_id as Id;
   const read = await readLibrarianProject(options, projectId);
   if (read.kind === 'refused') {
+    await recordCurationRefusal(options, data.artifact_id as Id);
     return { ...EMPTY_REPORT, status: 'refused', reason: read.reason };
   }
   const { project } = read;
@@ -431,7 +455,7 @@ export const librarianProposalsHandler =
     if (report.status === 'refused') {
       logger.warn(
         fields,
-        'a librarian curation run was refused: the project’s stored settings do not parse, so nothing was curated; the recovery pass offers the artifact once more',
+        'a librarian curation run was refused: the project’s stored settings do not parse, so nothing was curated; the recovery pass offers the artifact again at its interval until they parse (PROGRESS backlog 356)',
       );
       return;
     }
