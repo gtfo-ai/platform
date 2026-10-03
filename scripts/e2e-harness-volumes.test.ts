@@ -13,13 +13,17 @@
  * survives because the `rm` fails, and a network something is still attached to survives because
  * the daemon refuses it.
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   HARNESS_KINDS,
   HARNESS_LABEL,
   HARNESS_PID_LABEL,
   type HarnessKind,
+  harnessLabelMap,
   harnessLabels,
+  harnessProbe,
+  harnessProbeName,
   INSTANCE_LABEL,
   type ListedResource,
   RUN_LABEL,
@@ -48,6 +52,13 @@ const LISTED: readonly ListedResource[] = [
   // by the container shape, so a killed file's HTTP target was never swept.
   marked('agentic-e2e-http-k3j9x2'),
   marked('agentic-e2e-githttp-k3j9x2'),
+  // …and the short-lived probes (WP-132, backlog 427). Flipped like the two servers: until WP-132 a
+  // `docker run --rm` probe was unnamed and unmarked, and the engine-created probe, the planting
+  // container and the teardown case's sleeping grandchild were named but unmarked and refused by
+  // the container shape — so a killed file left them for ever.
+  marked('agentic-e2e-probe-0a1b2c3d'),
+  marked('agentic-e2e-plant-0a1b2c3d'),
+  marked('agentic-e2e-orphan-0a1b2c3d'),
   // Alive: a parallel file's fixture, mid-run — one of each kind.
   marked('agentic-e2e-ctl-a1b2c3', LIVE),
   marked('agentic-e2e-repo-a1b2c3', LIVE),
@@ -75,6 +86,11 @@ const LISTED: readonly ListedResource[] = [
   marked('agentic-e2e-http-k3j9x2-backup'),
   marked('my-agentic-e2e-githttp-k3j9x2'),
   marked('agentic-e2e-http-'),
+  marked('agentic-e2e-probe-'),
+  marked('agentic-e2e-probes-0a1b2c3d'),
+  marked('my-agentic-e2e-probe-0a1b2c3d'),
+  marked('agentic-e2e-probe-0a1b2c3d-old'),
+  marked('agentic-e2e-orphan-0a1b2c3d4'),
   marked('agentic-e2e-k3j9x2_default'),
   marked('agentic-e2e-K3J9X2'),
   marked('agentic-e2e-'),
@@ -100,7 +116,14 @@ describe('which resources the sweep may remove', () => {
     ['volume', ['agentic-e2e-cache-k3j9x2', 'agentic-e2e-ctl-k3j9x2']],
     [
       'container',
-      ['agentic-e2e-githttp-k3j9x2', 'agentic-e2e-http-k3j9x2', 'agentic-e2e-repo-k3j9x2'],
+      [
+        'agentic-e2e-githttp-k3j9x2',
+        'agentic-e2e-http-k3j9x2',
+        'agentic-e2e-orphan-0a1b2c3d',
+        'agentic-e2e-plant-0a1b2c3d',
+        'agentic-e2e-probe-0a1b2c3d',
+        'agentic-e2e-repo-k3j9x2',
+      ],
     ],
     ['network', ['agentic-e2e-k3j9x2']],
   ])(
@@ -127,6 +150,86 @@ describe('which resources the sweep may remove', () => {
       '--label',
       `${HARNESS_PID_LABEL}=1234`,
     ]);
+  });
+});
+
+/**
+ * **Every container the Docker e2e files start is one the sweep can name** — WP-132, PROGRESS
+ * backlog 427. A census over the source text of every file under `test/e2e/` that drives the
+ * daemon: each `docker run` array carries `...harnessProbe()` or `...harnessLabels()`, and each
+ * engine `createContainer(` call carries `Labels: harnessLabelMap()` — except the one the daemon
+ * refuses (an image that does not exist, so nothing is made), named here. What it cannot see: a
+ * `docker run` spelled through a variable rather than an array literal (none today).
+ */
+describe('the Docker e2e files mark every container they start (WP-132)', () => {
+  const FILES = [
+    'test/e2e/support/docker-workspace.ts',
+    'test/e2e/workspace/docker-workspace.e2e.test.ts',
+    // Not `harness-volumes.e2e.test.ts`: it plants resources with deliberately chosen labels (a
+    // lookalike, a foreign run) to test the sweep itself, and removes each by name in its `finally`.
+  ];
+  const sourceOf = (file: string): string =>
+    readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+  /** The text from `open` to its balanced `close`. */
+  const balanced = (text: string, start: number, open: string, close: string): string => {
+    let depth = 0;
+    for (let index = start; index < text.length; index += 1) {
+      if (text[index] === open) depth += 1;
+      if (text[index] === close) {
+        depth -= 1;
+        if (depth === 0) return text.slice(start, index + 1);
+      }
+    }
+    throw new Error('unbalanced');
+  };
+  const runArrays = (text: string): string[] =>
+    [...text.matchAll(/\[\s*'run',/g)].map((match) => balanced(text, match.index ?? 0, '[', ']'));
+  const creates = (text: string): string[] =>
+    [...text.matchAll(/\.createContainer\(/g)].map((match) =>
+      balanced(text, (match.index ?? 0) + match[0].length - 1, '(', ')'),
+    );
+
+  it('finds the sites it is about (calibration: the scope, before any verdict)', () => {
+    const all = FILES.map(sourceOf);
+    expect(all.flatMap(runArrays).length).toBeGreaterThanOrEqual(30);
+    expect(all.flatMap(creates).length).toBeGreaterThanOrEqual(4);
+  });
+
+  it.each(FILES)('%s: every docker run carries the harness name and marker', (file) => {
+    const unmarked = runArrays(sourceOf(file)).filter(
+      (array) => !/\.\.\.harnessProbe\(\)|\.\.\.harnessLabels\(\)/.test(array),
+    );
+    expect(unmarked).toEqual([]);
+  });
+
+  it.each(FILES)('%s: every engine-created container carries the marker', (file) => {
+    const unmarked = creates(sourceOf(file)).filter(
+      (call) =>
+        !call.includes('Labels: harnessLabelMap()') &&
+        // The class override's own signature and the two pass-throughs (the recording engine's
+        // `super` call, the WP-132 case's proxy), which forward a body built elsewhere — the
+        // provider's, labelled by the provider census — and the create the daemon refuses for want
+        // of an image.
+        call !== '(name: string, body: unknown)' &&
+        call !== '(name, body)' &&
+        !call.includes('agentic-e2e-absent-'),
+    );
+    expect(unmarked).toEqual([]);
+  });
+
+  it('names a probe in the container shape and marks it, so the sweep decides about it', () => {
+    const args = harnessProbe(4321);
+    expect(args.slice(2)).toEqual(harnessLabels(4321));
+    expect(args[0]).toBe('--name');
+    const name = args[1] ?? '';
+    expect(
+      staleHarnessResources('container', [{ name, labels: harnessLabelMap(DEAD) }], isAlive),
+    ).toEqual([name]);
+    for (const kind of ['plant', 'orphan'] as const) {
+      expect(
+        staleHarnessResources('container', [marked(harnessProbeName(kind))], isAlive),
+      ).toHaveLength(1);
+    }
   });
 });
 
@@ -181,8 +284,10 @@ describe('the sweep, against a daemon double', () => {
           `egress-${DEAD_RUN.slice(4)}`,
           { labels: runOf(DEAD_INSTANCE), network: 'agentic-e2e-k3j9x2' },
         ],
-        // A kept `export` helper: the run label and no instance label, mounting the dead fixture's
-        // cache volume — measured on the first `verify:e2e` over WP-128. Only the mount step names it.
+        // A kept `export` helper as a build before WP-132 made it: the run label and no instance
+        // label, mounting the dead fixture's cache volume — measured on the first `verify:e2e` over
+        // WP-128. Only the mount step names it (since WP-132 the provider writes the instance label
+        // on every helper, backlog 426, so the instance join would name a current one).
         [
           EXPORT,
           { labels: { [RUN_LABEL]: DEAD_RUN.slice(4) }, mounts: ['agentic-e2e-cache-k3j9x2'] },

@@ -957,6 +957,27 @@ describe('cancellation', () => {
     expect(kinds.slice(-2)).toEqual(['result', 'system:run_stopped']);
   });
 
+  /**
+   * **Nothing is left armed behind an ended run** — WP-132, PROGRESS backlog 405. The interrupted
+   * turn's `result` and the `run_stopped` row are written after the stop, through the same `append`
+   * that re-arms the stall on progress; before WP-132 each left a fresh stall timer pending, and the
+   * interrupt's grace stayed armed after the interrupt had answered. Counted on the manual clock.
+   */
+  it('leaves no timer pending once a stopped run’s outcome is in, the stall included (WP-132)', async () => {
+    const harness = startScript(loadScript('stall'), {
+      cli: { interruptedResult: { ...INTERRUPTED_RESULT } },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const result = await settleStop(harness, harness.handle.stop({ reason: 'cancelled' }));
+    expect(result.status).toBe('cancelled');
+    // The rows written after the stop exist, so the re-arm had something to re-arm on.
+    const kinds = harness.events.map((event) =>
+      event.kind === 'system' ? `system:${event.subtype}` : event.kind,
+    );
+    expect(kinds.slice(-2)).toEqual(['result', 'system:run_stopped']);
+    expect(harness.clock.pending).toBe(0);
+  });
+
   it('does not read past the grace for a result the CLI never sends (the bound, WP-101)', async () => {
     const harness = startScript(loadScript('stall'));
     const stopping = harness.handle.stop({ reason: 'cancelled' });

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:net';
 import path from 'node:path';
@@ -1295,5 +1296,144 @@ describe('the clone’s checkout (WP-105)', () => {
       ),
     ).rejects.toMatchObject({ code: 'invalid_spec' });
     expect(runContainerCreates()).toBe(0);
+  });
+});
+
+/**
+ * **Every object the provider creates carries the instance label** — WP-132, PROGRESS backlog 426.
+ *
+ * Until WP-132 the `export-<run-id>` and control-cleanup helpers and the `hold-<run-id>` volume
+ * carried the run label and no instance label, so `listLabelledRuns` never listed a run that only
+ * such a helper was left of, and `destroyRun` never found the helper. Two halves:
+ *
+ *  - **the source census**: every `this.#engine.create…(` call and every `this.#helper(` call in
+ *    `provider.ts` is counted and read. An engine call must build its labels through `#labels(` or
+ *    `#instanced(` (or be `#createHelperContainer`'s, whose body `#helper` built); a helper call
+ *    must either carry the run label or be one of the run-less helpers named here. A new call site
+ *    changes the count and fails until somebody reads it — which is what "a new helper is covered"
+ *    means for a census that reads text;
+ *  - **the daemon's record**: one instance's whole life — the CLI check, a mirror update, a create,
+ *    the tracked listing, an export with a tarball and a credential, a retention hold, a destroy,
+ *    a purge and an orphan destroy — driven through the fake daemon, and every create request it
+ *    received is read for both labels. The roles seen are compared with the expected set in both
+ *    directions, so the drive cannot quietly stop exercising one.
+ */
+describe('every object the provider creates carries the instance label (WP-132)', () => {
+  const SOURCE = readFileSync(new URL('./provider.ts', import.meta.url), 'utf8');
+
+  /** The text of the call that opens at `start` (its `(`), parentheses balanced. */
+  const callAt = (start: number): string => {
+    let depth = 0;
+    for (let index = start; index < SOURCE.length; index += 1) {
+      const char = SOURCE[index];
+      if (char === '(') depth += 1;
+      if (char === ')') {
+        depth -= 1;
+        if (depth === 0) return SOURCE.slice(start, index + 1);
+      }
+    }
+    throw new Error('unbalanced call');
+  };
+  const callsOf = (pattern: RegExp): string[] =>
+    [...SOURCE.matchAll(pattern)].map((match) => callAt((match.index ?? 0) + match[0].length - 1));
+
+  /** The helpers that belong to no run, by role: the label they carry is the instance alone. */
+  const RUNLESS_HELPER_ROLES = ['cli-check', 'mirror', 'control-sweep'] as const;
+
+  it('reads every engine create call in the source, and each builds its labels through the instance door', () => {
+    const calls = callsOf(/this\.#engine\.create(?:Container|Network|Volume)\(/g);
+    // The scope, asserted before anything is concluded from it (standing rule 4): two in
+    // `#createHelperContainer`, the run's network, volume and container, the shared volume, the
+    // egress configuration volume, the sidecar, the retention hold.
+    expect(calls).toHaveLength(9);
+    const unlabelled = calls.filter(
+      (call) =>
+        !/#labels\(|#instanced\(/.test(call) &&
+        // `#createHelperContainer(name, body)`: the body is `#helper`'s, read below.
+        call !== '(name, body)',
+    );
+    expect(unlabelled).toEqual([]);
+  });
+
+  it('reads every helper call in the source, and each carries the run label or is a named run-less one', () => {
+    const calls = callsOf(/this\.#helper\(/g);
+    expect(calls).toHaveLength(11);
+    const runless = calls.filter(
+      (call) => !/#labels\(|WORKSPACE_LABELS\.run\]|\blabels,/.test(call),
+    );
+    const roles = runless.map((call) => /WORKSPACE_LABELS\.role\]: '([a-z-]+)'/.exec(call)?.[1]);
+    expect(roles.sort()).toEqual([...RUNLESS_HELPER_ROLES].sort());
+    // `#helper` itself adds the instance to whatever it was given.
+    expect(SOURCE).toContain('Labels: this.#instanced(run.labels),');
+  });
+
+  it('labels every container, network and volume it asks the daemon for, as the daemon recorded them', async () => {
+    await daemon.stop();
+    await startDaemon(() => ({ exitCode: 0, logs: 'SHA=abc1234def\nPUSHED=yes\n' }));
+    const spec = workspaceSpecFixture();
+    await provider.assertRuntimeCli();
+    await provider.updateMirror({ projectId: spec.projectId, repo: spec.repo, credential: null });
+    const handle = await created();
+    await provider.listExistingProtectedPaths(handle, {
+      patterns: ['**/*.test.*'],
+      defaultBranch: 'main',
+    });
+    archives.set(`export-${FIXTURE_RUN_ID}:/work/export.tar`, exportArchive());
+    await provider.export(
+      handle,
+      {
+        branch: 'agentic/task-1',
+        tarballPath: path.join(workDir, 'census.tar'),
+        commitMessage: 'wip:',
+      },
+      { host: 'git.example.com', username: 'agentic', password: SECRET },
+    );
+    await provider.extendRetention(handle, '2030-01-01T00:00:00.000Z');
+    await provider.destroy(handle);
+    await provider.purgeExpired(new Date('2026-09-10T12:00:00.000Z'));
+    await provider.destroyRun(FIXTURE_RUN_ID);
+
+    const creates = daemon.requests
+      .filter(
+        (recorded) =>
+          recorded.method === 'POST' &&
+          ['/containers/create', '/networks/create', '/volumes/create'].includes(recorded.path),
+      )
+      .map((recorded) => {
+        const body = recorded.body as { Name?: string; Labels?: Record<string, string> };
+        const name = new URLSearchParams(recorded.query).get('name') ?? body.Name ?? '';
+        return { kind: recorded.path, name, labels: body.Labels ?? {} };
+      });
+    expect(creates.length).toBeGreaterThan(0);
+    const withoutInstance = creates.filter(
+      (entry) => entry.labels[WORKSPACE_LABELS.instance] !== 'ctl',
+    );
+    expect(withoutInstance).toEqual([]);
+    // Both labels on everything named for the run.
+    const runScopedWithoutRun = creates.filter(
+      (entry) =>
+        entry.name.includes(FIXTURE_RUN_ID) &&
+        entry.labels[WORKSPACE_LABELS.run] !== FIXTURE_RUN_ID,
+    );
+    expect(runScopedWithoutRun).toEqual([]);
+    // Both directions, so the drive cannot stop exercising a role unnoticed.
+    const roles = new Set(creates.map((entry) => entry.labels[WORKSPACE_LABELS.role]));
+    expect([...roles].sort()).toEqual(
+      [
+        'clone',
+        'control-cleanup',
+        'egress',
+        'egress-config',
+        'export',
+        'network',
+        'prepare',
+        'retention_hold',
+        'shared',
+        'skills',
+        'tracked',
+        'workspace',
+        ...RUNLESS_HELPER_ROLES,
+      ].sort(),
+    );
   });
 });

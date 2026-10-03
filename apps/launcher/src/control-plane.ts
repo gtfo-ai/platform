@@ -66,12 +66,13 @@
  *  - **This process abandons a create whose every requester has gone** (`abandon` below): when the
  *    create resolves and each request waiting on it closed its connection before the answer, what it
  *    made is ended with no export. A replay still waiting keeps it. What this cannot reach is a
- *    launcher that stops or dies during the create — a killed process runs nothing, and a stopped one
- *    is killed by the daemon before its close resolves: SIGTERM does wait for the in-flight create
- *    (`index.ts`), but a create outlasts the stop's grace (measured at WP-127, PROGRESS backlog 339:
- *    `docker stop -t 10` ended it with exit 137 and the create unanswered; with a 90 s grace the close
- *    resolved 12.1 s after the signal and the create was answered) — and a create that resolves in
- *    the instant before its socket's close arrives.
+ *    launcher that dies during the create, or is stopped and outlives its grace — a killed process
+ *    runs nothing. SIGTERM does wait for the in-flight create
+ *    (`index.ts`), and since WP-132 (PROGRESS backlog 425) `compose.yml` gives this service a
+ *    60 s stop grace, so a stop drains a create and answers it (measured: 11.7–12.6 s after the signal
+ *    at load 5–7); before it a stop under the daemon's default killed the process with the create
+ *    unanswered (WP-127, backlog 339). What remains is a kill, a create longer than the grace — and
+ *    a create that resolves in the instant before its socket's close arrives.
  *  - **The runner reaps what is left** (`packages/application/src/recovery/orphan-workspaces.ts`),
  *    because deciding that a run is over needs `runs` and this process reads no database (TD-021).
  *    It asks the two verbs below: `GET /v1/runs`, the run ids of the containers and networks this

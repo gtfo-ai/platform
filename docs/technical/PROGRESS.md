@@ -13781,7 +13781,7 @@ after:   (no container) · (no network) · (no volume)
 
 > **M7 (architect, session 11, after WP-119): folded into WP-131** — the projection is already open (404).
 
-### 405. **After a stop, the runner's transcript appends re-arm the stall timer the loop has already disarmed** (TODO, **nit — hygiene, not a leak**, by WP-119's reading: the callback is `requestStop('stalled')`, a no-op once `stopCause` is set, and the production clock unrefs its timers. **Read, not run. Unowned — for the orchestrator.** Found by WP-119, session 11) — `append` calls `armStall()` after every row (`packages/infrastructure/src/runner/claude-runner.ts:333`, `:337`), including the rows `readInterruptedResult` (`:603`) and the `run_stopped` append (`:552-560`) write after the stop. **Done**: `armStall` does nothing once `stopCause` is set, with a unit case on the manual clock asserting no timer is pending after the outcome. **Depends on** nothing; cheapest in the next row that edits `claude-runner.ts`.
+### 405. **After a stop, the runner's transcript appends re-arm the stall timer the loop has already disarmed** **RESOLVED** by WP-132, session 11 (commit pending; see `#### WP-132`) — (TODO, **nit — hygiene, not a leak**, by WP-119's reading: the callback is `requestStop('stalled')`, a no-op once `stopCause` is set, and the production clock unrefs its timers. **Read, not run. Unowned — for the orchestrator.** Found by WP-119, session 11) — `append` calls `armStall()` after every row (`packages/infrastructure/src/runner/claude-runner.ts:333`, `:337`), including the rows `readInterruptedResult` (`:603`) and the `run_stopped` append (`:552-560`) write after the stop. **Done**: `armStall` does nothing once `stopCause` is set, with a unit case on the manual clock asserting no timer is pending after the outcome. **Depends on** nothing; cheapest in the next row that edits `claude-runner.ts`.
 ### 406. **Money: the organisation and project caps refuse only a window that is already used up, without the admitting run's reserve, so one admission at the edge can take the window past its limit by that run's per-run cap; the other four caps count it** **RESOLVED** at `cccb032`, WP-131, session 11 — (TODO, **minor — a consistency defect, not a breach of the product spec**: BD-010 and product/09 promise the looser reading, and two sentences in the tree promise the stricter one. **Live** for every deployment with an org or project `budgets` row. **Read off the uncommitted WP-131 tree by WP-131 and the refiner, not run. Needs a ruling** (it changes two caps' comparison). **Unowned — for the orchestrator.** Found by WP-131, session 11)
 
 **What is wrong.** Two comparisons stand for one concept. `createBudgetGuard` (`packages/application/src/cost/guard.ts:157-168`) folds the window's spend, pending and hold into `spentUsd` and calls the domain's `blockingBudget`. That is `isExhausted`, `budget.spentUsd >= budget.limitUsd` (`packages/domain/src/aggregates/budget.ts:93`). The guard's `reserveUsd` values the scope's *other* live runs (the pending term). It never values the run being admitted. The shadow, maintenance and bootstrap caps use `capIsSpent` (`packages/application/src/cost/pending.ts:186-188`): `spent + pending + held + reserve > cap`. The task cap also adds the admitting reserve (`taskBudgetExhausted`, `packages/application/src/pipeline/stage-executor.ts:541`). WP-131's report: *"So the row's figures alone (cap 20, hold 15, a 10 USD admission) **admit** under org/project: 15 < 20."* Its unit cases had to charge an extra 5 to the window to make org/project refuse.
@@ -13926,7 +13926,7 @@ Add a case that expires a last-try job and finds the task escalated. **Depends o
 - TD-004's amendment reads *"burstWhenReadyExceeds where pg-boss's ready-count cache is populated as shipped"*. The cache is populated, and the burst branch was measured useless at the shipped cadence (table under 392), so the per-queue interval branch was built. **Done**: a one-line dated note on the amendment naming the branch and pointing to 392.
 - **Done**: WP-124's proposed `CLAUDE.md` line, quoted: *"Every job queue declares its exhaustion's shape in `JOB_EXHAUSTION` (TD-004's M7 amendment, WP-124): a recovery row, bound-and-escalate (`pipeline/job-escalation.ts`: the last try escalates the task with a brief, or tells a finished task's people, Q113), or listed only; `pipeline.outbound` declares each duty and polls at its own 0.5 s."* **Depends on** WP-124 merged.
 
-### 424. **An ask that cannot start escalates with the error's class name only — the class WP-127 closed for a stage run** (TODO, **minor — diagnosis; nothing is lost but the reason**. Found by WP-127's implementer and its reviewer, session 11; no row owns it, and under M7's convergence rule a minor stays here)
+### 424. **An ask that cannot start escalates with the error's class name only — the class WP-127 closed for a stage run** **RESOLVED** by WP-132, session 11 (commit pending; see `#### WP-132`) — (TODO, **minor — diagnosis; nothing is lost but the reason**. Found by WP-127's implementer and its reviewer, session 11; no row owns it, and under M7's convergence rule a minor stays here)
 
 `packages/application/src/ask/executor.ts` records a start failure the way `stage-executor.ts` did before
 WP-127: the escalation names the error's constructor and nothing else, so an ask refused by its workspace
@@ -13936,7 +13936,7 @@ platform reason code, never the message. **Done when** an ask-executor case mirr
 `stage-executor.test.ts` › "a run refused by its workspace names the kind and the reason (WP-127)", with a
 planted secret absent and a canary.
 
-### 425. **`compose.yml` gives the launcher the default ten-second stop, and a create in flight needs about twelve** (TODO, **minor — a stop during a create loses that create**. Found by WP-127's implementer, measured under backlog 339; the reviewer asked for a number. No row owns it)
+### 425. **`compose.yml` gives the launcher the default ten-second stop, and a create in flight needs about twelve** **RESOLVED** by WP-132, session 11 (commit pending; see `#### WP-132`) — (TODO, **minor — a stop during a create loses that create**. Found by WP-127's implementer, measured under backlog 339; the reviewer asked for a number. No row owns it)
 
 WP-127 measured (339) that the launcher's close drains an in-flight create and answers it, but the create
 took 12.1 s (read at load 14, above the gate, so an upper reading) while `docker compose stop` gives the
@@ -13948,7 +13948,7 @@ default is shorter than it reads. **Done when** the launcher's grace is set from
 the gate (with margin, rule 64) and stated beside it, `launcher-control-plane-check.mjs` asserts an
 answered create under a compose stop, and operator-guide § 5 names the setting.
 
-### 426. **The provider's `export` and `control-cleanup` helpers and the `hold-<run-id>` volume carry no `com.agentic.instance` label, so the orphan pass never lists them** (TODO, **minor — debris on the daemon after a crash; no data reaches anyone**. Found by WP-128's implementer, who had to make the e2e cleanup remove "everything its own engine created" because of it; the reviewer asked for a number. No row owns it)
+### 426. **The provider's `export` and `control-cleanup` helpers and the `hold-<run-id>` volume carry no `com.agentic.instance` label, so the orphan pass never lists them** **RESOLVED** by WP-132, session 11 (commit pending; see `#### WP-132`) — (TODO, **minor — debris on the daemon after a crash; no data reaches anyone**. Found by WP-128's implementer, who had to make the e2e cleanup remove "everything its own engine created" because of it; the reviewer asked for a number. No row owns it)
 
 `WORKSPACE_LABELS.instance`'s docblock says every object the launcher creates for a run carries the instance
 label, so WP-103's orphan pass (`GET /v1/runs`, TD-028 decision 12) can find it. The run container, sidecar
@@ -13959,18 +13959,24 @@ fixture's cleanup to its own instance left an `export-<run-id>` behind. **Done w
 provider creates carries both labels (a census over the provider's create calls, so a new helper is covered),
 the orphan pass lists and removes them, and a real-daemon case kills a helper mid-flight and finds it swept.
 
-### 427. **The Docker e2e probe containers carry no harness label** (TODO, **nit — test hygiene**. Found by WP-128's implementer; no row owns it)
+### 427. **The Docker e2e probe containers carry no harness label** **RESOLVED** by WP-132, session 11 (commit pending; see `#### WP-132`) — (TODO, **nit — test hygiene**. Found by WP-128's implementer; no row owns it)
 
 The short-lived probe containers the Docker e2e files start are not labelled with the harness marker WP-128
 gave the HTTP and git-HTTP servers (394), so a probe orphaned by a killed file is not swept at the next
 start. **Done when** they carry the label and the lookalike table has their row.
 
-### 428. **The `ForbiddenSecretNameError` message tells an operator to restart the process, and under compose a changed `.env` needs a recreate** (TODO, **nit — wording in a refusal message**. Found by WP-130's implementer, confirmed by its reviewer; no row owns it, and under M7's convergence rule it waits)
+### 428. **The `ForbiddenSecretNameError` message tells an operator to restart the process, and under compose a changed `.env` needs a recreate** **RESOLVED** by WP-132, session 11 (commit pending; see `#### WP-132`) — (TODO, **nit — wording in a refusal message**. Found by WP-130's implementer, confirmed by its reviewer; no row owns it, and under M7's convergence rule it waits)
 
 `apps/server/src/queries/onboarding-queries.ts`'s refusal (`secret_name_not_permitted`) says to add the
 name to `APP_INTEGRATION_SECRET_ENV` and restart the process. `docker compose restart` keeps the
 container's old environment (WP-130 changed the operator guide to say recreate, `docker compose up -d app`).
 **Done when** the message says recreate, or names both, and the guide's quotation of it matches.
+
+### 429. **`app`, `runner` and `db` have no `stop_grace_period`, so on Docker Desktop a stop kills them after about three seconds — a running agent run dies with its runner and PostgreSQL is killed rather than shut down** (TODO, **minor — live for every stop or upgrade during a run; measured 3.0 s and 3.2 s, exit 137, by WP-132**. **Folded into WP-133** by the orchestrator, session 11, because the product owner's first local test will stop and upgrade the stack)
+
+### 430. **Helpers that belong to no run (`clicheck-`, `ctlls-`) now carry the instance label but the orphan pass works by run id, so one orphaned by a crash is never listed** (TODO, **nit — debris, no data**. Found by WP-132's implementer; unowned)
+
+### 431. **Retention's `purgeExpired` lists volumes of every instance on the daemon, not only its own** (TODO, **minor — latent on a daemon shared by two instances; read off the code, not measured**. Found by WP-132's implementer; unowned. **Done when** the listing filters by `com.agentic.instance`, with a real-daemon case where another instance's expired volume survives)
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -41507,3 +41513,140 @@ New:
 - Several other `Q52` mentions in `apps/` docblocks (`apps/server/src/readiness.ts:33`, `config.ts:207`, `runtime.ts:173`) read as history or name Q52 as the transport's origin; they were not in this row's scope and were not re-derived one by one.
 
 **Discovered work**: the `ForbiddenSecretNameError` message (`apps/server/src/queries/onboarding-queries.ts`) says "restart the process"; under compose that has to be a recreate for a changed `.env` to be read. A nit for a later sweep (wording in a refusal message is code, not this row's comment-only scope).
+
+## WP notes — session 11 (M8)
+
+#### WP-132
+
+**A stack that stops, crashes or refuses during a first test leaves no lost create, no unnamed failure
+and no debris.** Folds backlogs 425, 424, 426, 428, 405 and 427 (each marked RESOLVED, commit pending).
+
+**(1) 425 — the launcher's stop grace, measured first (rule 27, rule 64).** All on Docker Desktop,
+Engine 29.8.1 / Compose 5.5.1, `linux/arm64`, load read before each step.
+- *Why a stop was ~3 s.* A two-service compose project with no volumes (a `sh` that traps TERM and
+  then sleeps 20 s): the service with `stop_grace_period: 30s` was created with `Config.StopTimeout`
+  30 and `docker compose stop` took 21 s, exit 0 (drained); the service with **no**
+  `stop_grace_period` (`StopTimeout` `<nil>`) was killed after **3 s**, exit 137. A bare `docker stop`
+  of a plain container: no `--stop-timeout` → 3.2 s, exit 137; `--stop-timeout 30` → 20.9 s, exit 0.
+  So on this daemon a container with no grace of its own gets about three seconds — through compose
+  too — not the documented ten (WP-103's "about three seconds", WP-127's 3.1 s). Cause inside Docker
+  Desktop not established; the docs say 10 s.
+- *The create under a stop.* `scripts/launcher-control-plane-check.mjs` now starts the launcher with
+  `--stop-timeout` = `compose.yml`'s `stop_grace_period` (read off the file; `--launcher-stop-grace-s`
+  overrides it) and stops it with a bare `docker stop`, which is compose's path. At 90 s (load ~5): the
+  stop came 1.6 s into the create and the close resolved **11 675 ms** after SIGTERM, create answered,
+  exit 0. With nothing in flight: **199 ms**. At the shipped 60 s (load 6–7): **12 597 ms**, answered,
+  exit 0; idle **169 ms**. WP-127's 12.1 s was at load 14, so the duration is barely load-sensitive.
+- *The setting.* `compose.yml` › `launcher` › `stop_grace_period: 60s`, about five times the longest
+  reading, stated beside it with the readings; the cost is nil unless something is in flight (idle
+  stop 0.2 s). Residual stated there: a first mirror clone of a large repository can outlast it.
+- *Assertions.* `backlog 339 and 425: a launcher stopped during a create drains it inside its 60 s
+  grace and answers it (WP-132)` (drained only — WP-127's record also accepted "killed at the grace"),
+  `backlog 286 (a) and 425: … answers it, under compose.yml's own grace` (the runner told `ok`), and
+  `backlog 425: a launcher stopped with nothing in flight exits well inside its 60 s grace` (< a fifth).
+  Result **PASS 49/49** at the shipped value (48 + the idle record). **Canary**: the same check with
+  `--launcher-stop-grace-s 5` → **FAIL 47/49**, both stop records failing by name (`ending: killed at
+  the grace`, exit 137, `engine_unavailable`).
+
+**(2) 424 — an ask's start failure.** `packages/application/src/ask/executor.ts` writes
+`describeStartFailure(error)` (WP-127's function) instead of the class name to the ask row and
+`run.failed`. Case: `packages/application/src/ask/ask-pipeline.test.ts` › "names the workspace kind,
+reason code and commit of a refused start, and no word of its message (WP-132)" — a terminal
+`invalid_spec`/`checkout_commit_missing` with a sha, a planted secret in the message and in the detail.
+Canaries (Edit-tool mutation, reverted by Edit, md5 re-read equal): the old `error.name` → fails
+(`Received: … RunStartError`); appending the cause's message → fails. The existing class-name and
+non-`Error` cases are unchanged and pass.
+
+**(3) 426 — every object the provider creates carries the instance label.** `provider.ts` gains
+`#instanced(labels)`, the one door: `#labels` (a run's own objects) goes through it, `#helper` puts
+every helper's labels through it, and so do `#ensureVolume` and the retention hold. Run-scoped helpers
+already carried the run label (export, control-cleanup); the run-less helpers (`cli-check`, `mirror`,
+`control-sweep`) and the shared volumes now carry the instance label alone, which is stated as *whose*
+they are, not something the run-keyed pass acts on.
+- Census: `packages/infrastructure/src/workspace/provider.test.ts` › "every object the provider
+  creates carries the instance label (WP-132)" — (a) the source: 9 `this.#engine.create…(` calls and 11
+  `this.#helper(` calls counted (a new site changes the count), each engine call building labels
+  through `#labels(`/`#instanced(`, each run-less helper named by role; (b) the daemon's record: one
+  instance's whole life through the fake daemon (CLI check, mirror, create, tracked listing, export
+  with tarball and credential, hold, destroy, purge, `destroyRun`), every create request read for both
+  labels, the roles compared both ways (15 roles). **Canary**: `#helper` back to `Labels: run.labels` →
+  two cases fail, the second listing exactly `clicheck-`, `mirror-`, `export-`, `ctlempty-`, `ctlrm-`,
+  `ctlls-`.
+- Real daemon: `test/e2e/workspace/docker-workspace.e2e.test.ts` › "a helper left mid-flight by its
+  launcher (WP-132)" › "is listed under its run and removed by the orphan pass" — a second provider
+  over a proxied engine whose wait on `export-<run>` never answers (what a SIGKILL between start and
+  removal leaves), the helper's labels read off the daemon, then the production
+  `runOrphanWorkspaceReap` over the fixture provider's real `listLabelledRuns`/`destroyRun` with the run
+  failed an hour ago: the helper is gone and the run is no longer listed. Before the fix `destroyRun`
+  (which finds containers by run **and** instance) could not name the helper. **Canary** on the real
+  daemon (`#helper` back to `run.labels`, reverted by Edit): the label assertion fails; with it made
+  soft for a second run, `export-<run> survived the orphan pass` — the pre-fix behaviour, measured.
+- Docs: `WORKSPACE_LABELS.instance`'s docblock (`packages/application/src/ports/workspace.ts`) now says
+  every object carries it; `listLabelledRuns`' docblock names the helpers; the e2e harness docblock and
+  its table row for the kept export helper now say "as a build before WP-132 made it";
+  technical/05's WP-103 paragraph and operator-guide § 5's WP-103 upgrade paragraph name the helpers.
+
+**(4) 428 — the refusal says recreate.** One constant, `RECREATE_TO_APPLY_SETTING`
+(`packages/application/src/integrations/egress.ts`), ends **both** allow-list refusals — the
+credential-name one (backlog 428) and the host one, which said the same "restart the process" (rule 63:
+the repeat was found by grep). Measured on Compose 5.5.1 with a no-volume project: `docker compose
+restart` kept `X=1` after `.env` said `X=2`; `docker compose up -d` recreated exactly the service whose
+resolved environment changed. That falsified a second sentence: the guide's host paragraph said
+`docker compose up -d app # picks up both`, but `runner` also takes `.env` and checks the host list at
+every call, so the guide now says `docker compose up -d` (step 4 of the credential flow too). Cases:
+`apps/server/src/queries/onboarding-queries.test.ts` › "the allow-list refusals and the guide that
+quotes them (WP-132)" (three: each message says recreate and the guide quotes it verbatim,
+whitespace-normalised; the third holds that the old phrase is gone from the guide). **Canary**: the constant
+back to `'and restart the process'` → the two message cases fail.
+
+**(5) 405 and 427.**
+- 405: `claude-runner.ts`'s `armStall` returns once the loop's `finally` has run (`stallDisarmed`) or a
+  stop cause is set, and the interrupt's grace timer is cancelled once both waits are over. Case:
+  `packages/infrastructure/src/runner/claude-runner.test.ts` › "leaves no timer pending once a stopped
+  run’s outcome is in, the stall included (WP-132)" (`clock.pending === 0` after a cancelled run whose
+  interrupted `result` and `run_stopped` rows were written after the stop). **Canary**: the guard
+  disabled → `pending` 1. The grace cancel has no canary of its own: `settleStop` advances the clock
+  past the grace anyway (stated, not hidden).
+- 427: every `docker run` probe in `test/e2e/support/docker-workspace.ts` and
+  `test/e2e/workspace/docker-workspace.e2e.test.ts` (27 sites) carries `...harnessProbe()` — a name
+  `agentic-e2e-probe-<8 hex>` and the harness marker with its pid — and the engine-created probe,
+  planting container and the teardown case's sleeping grandchild carry `Labels: harnessLabelMap()` in
+  the shapes `agentic-e2e-{probe,plant,orphan}-<suffix>`, now admitted by `HARNESS_CONTAINER`. The
+  lookalike table gained three flipped rows and five lookalikes. Census:
+  `scripts/e2e-harness-volumes.test.ts` › "the Docker e2e files mark every container they start
+  (WP-132)" (calibration: ≥ 30 run arrays, ≥ 4 creates found). **Canary**: one `...harnessProbe()`
+  removed → fails naming that file. `harness-volumes.e2e.test.ts` is excluded and says why (it plants
+  deliberately labelled lookalikes and removes them itself).
+
+**Sentences falsified, grepped and judged.**
+| Where | Sentence | Outcome |
+|---|---|---|
+| `apps/launcher/src/index.ts` SIGTERM docblock | "bounded by the grace the operator configured" (no guide said to configure one) | rewritten: compose sets 60 s, the readings, what the grace cannot cover |
+| `apps/launcher/src/control-plane.ts` module docblock | "a stopped one is killed by the daemon before its close resolves" | rewritten |
+| `scripts/launcher-control-plane-check.mjs` WP-127 section, `takeLauncherDown`, `measureRestartDuringCreate` | "the stop is `docker stop -t 10`", "SIGKILL after ten seconds" | past tense / the container's own grace |
+| `docs/technical/05` WP-103 paragraph | "a stopped one was measured not to finish the create" | qualified with WP-132's grace and readings, helpers named |
+| `docs/operator-guide.md` § 5 | the upgrade block's stop; WP-103's "a create a stopped launcher never answered"; the empty-column rule | new paragraph on the launcher's grace; "killed"; helpers before WP-132 named |
+| `WORKSPACE_LABELS.instance` docblock | (said only "the provider writes") | states every object carries it, with the census |
+| `test/e2e/support/harness-volumes.ts`, `scripts/e2e-harness-volumes.test.ts` | the export helper "carries `com.agentic.run` with no instance label" | "carried", as an older build's |
+| `onboarding-queries.ts`, `egress.ts`, operator-guide § 4 (×2 quotations, step 4, the hosts block) | "restart the process", `up -d app # picks up both` | recreate; `up -d` |
+
+**Verification.** `pnpm run -s verify` PASS (after the citation guard caught two short-form citations
+and a straight apostrophe in these notes). `pnpm run -s verify:e2e` PASS (62 files, 275 tests, load 7–9),
+and the WP-132 case alone with `--reporter=verbose` shows it ran (7.7 s). `node
+scripts/launcher-control-plane-check.mjs` PASS 49/49. `pnpm run -s verify:integration` PASS (78 files, 786 tests).
+
+**Docker discipline.** `agentic`-prefixed volumes: nine before, nine after, untouched. `com.agentic.run`
+objects: none before, none after each check run. Compose probes used projects whose services declare
+no volumes (`wp132envprobe`, `wp132grace`), removed with `down`; the plain probe containers removed by
+name. Scratch files under `/private/tmp/claude-501/wp132-impl/`.
+
+**Discovered work.**
+- **Every other compose service also gets ~3 s on Docker Desktop** (measured above): `app` and
+  `runner` have no `stop_grace_period`, so a `docker compose stop`/upgrade kills a runner mid-run and an
+  API mid-request at ~3 s instead of draining. `db` (postgres) likewise. Not in this row's scope; for
+  the refiner — a grace per service, measured the same way.
+- The run-less helpers (`clicheck-<random>`, `ctlls-<random>`) a dead launcher leaves are named by the
+  instance label now but listed by nothing (the pass is keyed by run id); `mirror-<key>` is cleared by
+  the next update of the same key.
+- `retention`'s `purgeExpired` lists `role=workspace` and `role=retention_hold` volumes of **every**
+  instance on the daemon (no instance filter), read off the code while here, not measured.

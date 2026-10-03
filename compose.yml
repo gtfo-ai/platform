@@ -381,6 +381,19 @@ services:
       - launcher-api
     depends_on:
       - docker-socket-proxy
+    # **How long a stop waits for a create in flight** (WP-132, PROGRESS backlog 425). On SIGTERM the
+    # launcher stops accepting and drains what it is doing — a create, an export, a destroy — before
+    # it exits (`apps/launcher/src/index.ts`); a create the daemon kills it during is answered with a
+    # closed socket and leaves its objects for the runner's orphan pass. Measured through
+    # `scripts/launcher-control-plane-check.mjs` (which reads this line): a stop about 2 s into a
+    # create drained it and answered it **11.7 s** and **12.6 s** after the signal at load 5–7
+    # (12.1 s at load 14, WP-127), and a stop with nothing in flight exited in **0.2 s** — so this
+    # grace costs a stop nothing unless something is in flight. 60 s is about five times the longest
+    # reading. Without the line, Docker Desktop 29.8.1 / Compose 5.5.1 gave a service **3 s**
+    # (measured, not the documented 10 s), and every stop during a create lost it. A first mirror
+    # clone of a large repository can still take longer than this; that create is then the orphan
+    # pass's, as before.
+    stop_grace_period: 60s
     # No healthcheck, still. Since WP-53 this process *does* have an HTTP surface, but only when
     # `APP_LAUNCHER_TOKEN` is set — and `GET /v1/health` is authenticated, so a check would have to
     # carry the token and would report "unhealthy" for the legitimate no-token deployment. The

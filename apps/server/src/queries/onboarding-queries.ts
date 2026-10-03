@@ -36,7 +36,7 @@
  * endpoint. The delete cascades nothing: `bindings` is referenced by nothing.
  */
 import type { IntegrationEgressPolicy } from '@platform/application';
-import { egressHostOf } from '@platform/application';
+import { egressHostOf, RECREATE_TO_APPLY_SETTING } from '@platform/application';
 import type {
   AutonomyLevel,
   Id,
@@ -341,7 +341,7 @@ export const environmentSecretSource = (
          */
         throw new ForbiddenSecretNameError(
           `this deployment does not permit reading "${name}" as an integration credential. ` +
-            `Add it to APP_INTEGRATION_SECRET_ENV (declared: ${declared.size === 0 ? 'none' : [...declared].join(', ')}) and restart the process`,
+            `Add it to APP_INTEGRATION_SECRET_ENV (declared: ${declared.size === 0 ? 'none' : [...declared].join(', ')}) ${RECREATE_TO_APPLY_SETTING}`,
         );
       }
       const filePath = env[`${name}_FILE`];

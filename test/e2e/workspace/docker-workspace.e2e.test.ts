@@ -45,6 +45,7 @@ import {
   runCredentialHandle,
   runCredentialRevocations,
   runCredentialWrites,
+  runOrphanWorkspaceReap,
   TOOLS_BY_ROLE,
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
@@ -60,6 +61,7 @@ import {
   controlSocketExists,
   type DockerFixture,
   docker,
+  EGRESS_IMAGE,
   exportPath,
   FIXTURE_TASK_BRANCH,
   FIXTURE_TASK_BRANCH_FILE,
@@ -76,6 +78,7 @@ import {
   startDockerFixture,
   startEgressTarget,
 } from '../support/docker-workspace.js';
+import { harnessLabelMap, harnessProbe, harnessProbeName } from '../support/harness-volumes.js';
 
 let fixture: DockerFixture;
 
@@ -465,6 +468,7 @@ describe('the workspace lifecycle against a real daemon', () => {
       const shape = await docker([
         'run',
         '--rm',
+        ...harnessProbe(),
         '-v',
         `${volume}:/ctl`,
         ALPINE_IMAGE,
@@ -477,6 +481,7 @@ describe('the workspace lifecycle against a real daemon', () => {
         [
           'run',
           '--rm',
+          ...harnessProbe(),
           '--user',
           '0:0',
           '--cap-drop',
@@ -535,6 +540,7 @@ describe('the workspace lifecycle against a real daemon', () => {
       [
         'run',
         '--rm',
+        ...harnessProbe(),
         '--mount',
         `type=volume,source=${fixture.controlVolume},target=/ctl,volume-subpath=${randomUUID()}`,
         'alpine:3.21',
@@ -596,6 +602,7 @@ describe('the workspace lifecycle against a real daemon', () => {
     const listing = await docker([
       'run',
       '--rm',
+      ...harnessProbe(),
       '--network',
       'none',
       '-v',
@@ -680,6 +687,7 @@ describe('the workspace lifecycle against a real daemon', () => {
         [
           'run',
           '--rm',
+          ...harnessProbe(),
           '--network',
           'none',
           '-v',
@@ -699,6 +707,7 @@ describe('the workspace lifecycle against a real daemon', () => {
       await docker([
         'run',
         '--rm',
+        ...harnessProbe(),
         '--network',
         'none',
         '-v',
@@ -1161,6 +1170,7 @@ describe('export', () => {
       const refs = await docker([
         'run',
         '--rm',
+        ...harnessProbe(),
         '--network',
         fixture.network,
         '--entrypoint',
@@ -1231,6 +1241,7 @@ describe('one project’s mirror, not every project’s (WP-75)', () => {
     const whole = await docker([
       'run',
       '--rm',
+      ...harnessProbe(),
       '--network',
       'none',
       '--user',
@@ -1320,6 +1331,7 @@ describe('one project’s mirror, not every project’s (WP-75)', () => {
       [
         'run',
         '--rm',
+        ...harnessProbe(),
         '--name',
         probe,
         '--network',
@@ -1349,6 +1361,7 @@ describe('one project’s mirror, not every project’s (WP-75)', () => {
     const listing = await docker([
       'run',
       '--rm',
+      ...harnessProbe(),
       '--network',
       'none',
       '-v',
@@ -1364,6 +1377,7 @@ describe('one project’s mirror, not every project’s (WP-75)', () => {
     await docker([
       'run',
       '--rm',
+      ...harnessProbe(),
       '--network',
       'none',
       '-v',
@@ -1383,6 +1397,7 @@ describe('one project’s mirror, not every project’s (WP-75)', () => {
     await docker([
       'run',
       '--rm',
+      ...harnessProbe(),
       '--network',
       'none',
       '--user',
@@ -1418,6 +1433,7 @@ describe('one project’s mirror, not every project’s (WP-75)', () => {
     const refs = await docker([
       'run',
       '--rm',
+      ...harnessProbe(),
       '--network',
       fixture.network,
       '--entrypoint',
@@ -1550,6 +1566,7 @@ describe('one project’s mirror, not every project’s (WP-75)', () => {
       const after = await docker([
         'run',
         '--rm',
+        ...harnessProbe(),
         '--network',
         'none',
         '--user',
@@ -1585,6 +1602,7 @@ describe('one project’s mirror, not every project’s (WP-75)', () => {
     await docker([
       'run',
       '--rm',
+      ...harnessProbe(),
       '--network',
       'none',
       '--user',
@@ -1886,6 +1904,7 @@ describe('a minted run credential against a credentialled git server (WP-76)', (
     await docker([
       'run',
       '--rm',
+      ...harnessProbe(),
       '--network',
       'none',
       '--user',
@@ -1914,6 +1933,7 @@ describe('a minted run credential against a credentialled git server (WP-76)', (
       await docker([
         'run',
         '--rm',
+        ...harnessProbe(),
         '--network',
         'none',
         '-v',
@@ -2017,6 +2037,7 @@ describe('a minted run credential against a credentialled git server (WP-76)', (
       [
         'run',
         '--rm',
+        ...harnessProbe(),
         '--network',
         fixture.network,
         '--entrypoint',
@@ -2128,6 +2149,7 @@ describe('a minted run credential against a credentialled git server (WP-76)', (
       await docker([
         'run',
         '--rm',
+        ...harnessProbe(),
         '--network',
         'none',
         '-v',
@@ -2177,6 +2199,7 @@ describe('teardown ends the pid namespace (WP-13 obligation 3)', () => {
     const probe = await docker([
       'run',
       '--rm',
+      ...harnessProbe(),
       '-v',
       `${volumeName}:/work`,
       'alpine:3.21',
@@ -2209,8 +2232,10 @@ describe('teardown ends the pid namespace (WP-13 obligation 3)', () => {
   it('a detached grandchild does not survive destroy', async () => {
     const { handle } = await startRun();
     const inspect = await fixture.engine.inspectContainer(handle.containerId);
-    const name = `agentic-e2e-orphan-${randomUUID().slice(0, 8)}`;
+    const name = harnessProbeName('orphan');
     const orphanId = await fixture.engine.createContainer(name, {
+      // Marked (WP-132, backlog 427): it sleeps ten minutes, so a killed file leaves it running.
+      Labels: harnessLabelMap(),
       Image: 'alpine:3.21',
       Entrypoint: ['/bin/sh', '-c'],
       // The grandchild is `setsid`, so it is in a new session and a new process group: a signal to
@@ -2494,6 +2519,117 @@ describe('create is atomic', () => {
 });
 
 /**
+ * **A helper whose launcher stopped attending to it is found and removed by the orphan pass** —
+ * WP-132, PROGRESS backlog 426.
+ *
+ * The launcher "dies" during an export: a second provider, configured exactly as the fixture's, runs
+ * the export over an engine whose wait on the `export-<run-id>` helper never answers, so the
+ * provider's own removal of the helper never runs — which is what a SIGKILL between the helper's
+ * start and its removal leaves (WP-128 measured one on this daemon). Then the **production** pass,
+ * `runOrphanWorkspaceReap`, runs over the fixture provider's real read verb and destroy, with the run
+ * row given as failed an hour ago. Before WP-132 the helper carried the run label and no instance
+ * label, so `destroyRun` (which finds a run's containers by both) never named it and it survived the
+ * pass; the run itself was still listed through its run container, which is why the assertion is on
+ * the helper and not on the listing.
+ */
+describe('a helper left mid-flight by its launcher (WP-132)', () => {
+  it('is listed under its run and removed by the orphan pass', async () => {
+    const { spec, handle } = await startRun();
+    const helperName = `export-${spec.runId}`;
+    let helperId: string | null = null;
+    let release: () => void = () => {};
+    const abandoned = new Promise<number>((resolve) => {
+      release = () => resolve(0);
+    });
+    const engine = new Proxy(fixture.engine, {
+      get(target, property) {
+        if (property === 'createContainer') {
+          return async (name: string, body: unknown) => {
+            const id = await target.createContainer(name, body);
+            if (name === helperName) helperId = id;
+            return id;
+          };
+        }
+        if (property === 'waitContainer') {
+          return async (id: string) => (id === helperId ? abandoned : target.waitContainer(id));
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function'
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+    const dying = new workspace.DockerWorkspaceProvider({
+      engine,
+      images: {
+        runtime: RUNTIME_IMAGE,
+        egress: EGRESS_IMAGE,
+        git: GIT_IMAGE,
+        runtimeSourceDir: null,
+      },
+      controlVolume: fixture.controlVolume,
+      controlRoot: fixture.controlRoot,
+      cacheVolume: fixture.cacheVolume,
+      helperNetwork: fixture.network,
+      egressNetwork: fixture.network,
+      skills: PLATFORM_SKILLS,
+      runnerUid: 1000,
+    });
+    const exporting = dying
+      .export(handle, { branch: 'agentic/wp132', tarballPath: null, commitMessage: 'wip:' }, null)
+      .catch(() => undefined);
+    const deadline = Date.now() + 60_000;
+    while (helperId === null && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    expect(helperId, 'the export never created its helper').not.toBeNull();
+    const labels = await docker([
+      'container',
+      'inspect',
+      '--format',
+      '{{json .Config.Labels}}',
+      helperName,
+    ]);
+    expect(JSON.parse(labels.stdout)).toMatchObject({
+      'com.agentic.run': spec.runId,
+      'com.agentic.instance': fixture.controlVolume,
+    });
+
+    const now = Date.now();
+    const report = await runOrphanWorkspaceReap({
+      inventory: {
+        list: () => fixture.provider.listLabelledRuns(),
+        destroy: (runId) => fixture.provider.destroyRun(runId),
+      },
+      store: {
+        runStates: async (_tx, runIds) =>
+          runIds
+            .filter((runId) => runId === spec.runId)
+            .map((runId) => ({
+              runId,
+              status: 'failed' as const,
+              endedAt: new Date(now - 3_600_000).toISOString() as never,
+            })),
+      },
+      unitOfWork: {
+        transaction: async (work: (scope: never) => Promise<unknown>) =>
+          work({ tx: null } as never),
+      } as never,
+      clock: { now: () => now },
+      graceMs: 60_000,
+    });
+    expect(report.reaped.terminal).toBeGreaterThanOrEqual(1);
+    const helper = await docker(['container', 'inspect', helperName], { allowFailure: true });
+    expect(helper.ok, `${helperName} survived the orphan pass`).toBe(false);
+    const listed = await fixture.provider.listLabelledRuns();
+    expect(listed.map((run) => run.runId)).not.toContain(spec.runId);
+    // The abandoned export is released only now, so nothing of it races the pass.
+    release();
+    await exporting;
+  }, 240_000);
+});
+
+/**
  * The shared `WorkspaceProvider` contract suite, against a real daemon.
  *
  * The same file the fake runs in the contract tier. Running it twice is the whole mechanism that
@@ -2627,6 +2763,7 @@ describe('on production’s control-volume shape, a plain named volume', () => {
     const listing = await docker([
       'run',
       '--rm',
+      ...harnessProbe(),
       '--network',
       'none',
       '-v',

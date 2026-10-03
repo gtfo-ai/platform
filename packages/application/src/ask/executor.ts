@@ -78,7 +78,7 @@ import type { Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import type { ClaudeRunner, RunOutcome } from '../ports/runner.js';
+import { type ClaudeRunner, describeStartFailure, type RunOutcome } from '../ports/runner.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import {
   ASK_RECORD_AUDIT_LIMIT,
@@ -826,9 +826,13 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
       } catch (error) {
         await stopHeartbeat();
         options.stopReasons.forget(runId);
-        // The **class name**, never the message: it is written to `events.payload` and to the ask
-        // row, and neither passes a redactor at the point it is read (the stage executor's rule).
-        const reason = `the runner could not start this ask: ${error instanceof Error ? error.name : 'unknown error'}`;
+        // The **class name and the platform's own diagnosis**, never the message: it is written to
+        // `events.payload` and to the ask row, and neither passes a redactor at the point it is
+        // read. So what is added to the class name is closed vocabulary only — the workspace's
+        // error kind, its reason code and a commit through `shaSchema` — the stage executor's rule
+        // and its function (`describeStartFailure`, WP-127; applied here by WP-132, backlog 424).
+        // The message is in the log line below.
+        const reason = `the runner could not start this ask: ${describeStartFailure(error)}`;
         logger.error({ err: error, ask_id: admitted.ask.id, run_id: runId }, reason);
         return await options.unitOfWork.transaction(async (scope) => {
           const failed = failRun(

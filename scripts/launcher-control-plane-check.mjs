@@ -98,22 +98,32 @@
  * ## What WP-127 added (PROGRESS backlog 339 and 346)
  *
  *  - **A stop during a create, with its exit code and whole log.** The launcher containers are no
- *    longer `--rm`, and the stop is `docker stop -t 10` — compose's grace — because a bare
+ *    longer `--rm`, and the stop was `docker stop -t 10` (until WP-132, below), because a bare
  *    `docker stop` measured 3.1 s on Docker Desktop 29.8.1, which is what WP-103 recorded as
  *    "about three seconds". Measured: the close waits for the create, the create outlasts ten
  *    seconds, and the daemon kills the launcher (exit 137) — not a rejected close, not an early
- *    exit. The record accepts that ending or a drained, answered create, and nothing else.
+ *    exit. WP-127's record accepted that ending or a drained, answered create; WP-132's accepts only
+ *    the second.
  *  - **The image's real `claude` with no route to the model** ({@link measureNoRoute}): the run's
  *    egress sidecar is stopped before the CLI starts. Measured with both limits past the CLI's own
  *    give-up: ten `api_retry` entries, the delay doubling from 0.6 s to about 35 s, and the give-up
  *    about three minutes after the first request. By default the stall is 45 s and the check
  *    asserts the run ends `stalled`, its error naming the route.
  *
+ * ## What WP-132 added (PROGRESS backlog 425)
+ *
+ *  - **The launcher stopped the way compose stops it.** Its container is started with
+ *    `--stop-timeout` equal to `compose.yml`'s `stop_grace_period` for the service (read off the
+ *    file) and stopped with a bare `docker stop`, which is compose's path. A stop during a create
+ *    must now drain it inside that grace and answer it; a stop with nothing in flight must exit in
+ *    well under it.
+ *
  * ## Environment
  *
  *     DOCKER_HOST=unix:///var/run/docker.sock node scripts/launcher-control-plane-check.mjs
  *     DOCKER_HOST=unix:///var/run/docker.sock node scripts/launcher-control-plane-check.mjs --runner-image platform:dev
  */
+import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import './ts-source-resolver.mjs';
 
@@ -162,7 +172,13 @@ const BAD_LAUNCHER_NAME = 'agentic-wp53-launcher-badcli';
  * that says whether the product image needs the Agent SDK's per-platform binary package.
  */
 const cliArgs = process.argv.slice(2);
-const FLAGS = ['--runner-image', '--observe-shim-ms', '--no-route-stall-ms', '--no-route-wall-ms'];
+const FLAGS = [
+  '--runner-image',
+  '--observe-shim-ms',
+  '--no-route-stall-ms',
+  '--no-route-wall-ms',
+  '--launcher-stop-grace-s',
+];
 const flagValue = (flag) => {
   const index = cliArgs.indexOf(flag);
   return index === -1 ? undefined : (cliArgs[index + 1] ?? null);
@@ -188,6 +204,29 @@ const numberFlag = (flag, fallback) => {
 };
 const NO_ROUTE_STALL_MS = numberFlag('--no-route-stall-ms', 45_000);
 const NO_ROUTE_WALL_MS = numberFlag('--no-route-wall-ms', 300_000);
+/**
+ * The launcher's stop grace **as `compose.yml` declares it** (WP-132, PROGRESS backlog 425): the
+ * `stop_grace_period` of the `launcher` service, read off the file so the check stops the launcher
+ * the way that file makes compose stop it, and a change to the number is a change this check sees.
+ *
+ * How compose applies it, measured on Compose 5.5.1 / Engine 29.8.1 (Docker Desktop): a service
+ * with `stop_grace_period: 30s` is created with `Config.StopTimeout` 30, and `docker compose stop`
+ * then gave a process that drains for 20 s its 20 s (exit 0); a service with **no**
+ * `stop_grace_period` was killed after **3 s** (exit 137) — and so was a bare `docker stop` of a
+ * container with no `StopTimeout`, 3.2 s. So the launcher container is started with
+ * `--stop-timeout <grace>` and stopped with a bare `docker stop`, which is the path compose takes.
+ * `--launcher-stop-grace-s <n>` overrides it for a measurement (the WP-132 notes ran it at 90).
+ */
+const composeLauncherStopGraceS = () => {
+  const text = readFileSync(new URL('../compose.yml', import.meta.url), 'utf8');
+  const start = text.indexOf('\n  launcher:\n');
+  const rest = start === -1 ? '' : text.slice(start + 1);
+  const end = rest.slice(1).search(/\n {2}[a-z][a-z0-9-]*:\n/);
+  const block = end === -1 ? rest : rest.slice(0, end + 1);
+  const match = /^ {4}stop_grace_period: (\d+)s$/m.exec(block);
+  return match === null ? null : Number(match[1]);
+};
+const LAUNCHER_STOP_GRACE_S = numberFlag('--launcher-stop-grace-s', composeLauncherStopGraceS());
 const unknownArgs = cliArgs.filter(
   (arg, index) => !(FLAGS.includes(arg) || (index > 0 && FLAGS.includes(cliArgs[index - 1]))),
 );
@@ -196,10 +235,12 @@ if (
   flagValue('--runner-image') === null ||
   !Number.isSafeInteger(OBSERVE_SHIM_MS) ||
   OBSERVE_SHIM_MS < 0 ||
-  ![NO_ROUTE_STALL_MS, NO_ROUTE_WALL_MS].every((ms) => Number.isSafeInteger(ms) && ms > 0)
+  ![NO_ROUTE_STALL_MS, NO_ROUTE_WALL_MS].every((ms) => Number.isSafeInteger(ms) && ms > 0) ||
+  !Number.isSafeInteger(LAUNCHER_STOP_GRACE_S) ||
+  LAUNCHER_STOP_GRACE_S <= 0
 ) {
   process.stderr.write(
-    `usage: launcher-control-plane-check.mjs [--runner-image <ref>] [--observe-shim-ms <n>] [--no-route-stall-ms <n>] [--no-route-wall-ms <n>] (got ${cliArgs.join(' ')})\n`,
+    `usage: launcher-control-plane-check.mjs [--runner-image <ref>] [--observe-shim-ms <n>] [--no-route-stall-ms <n>] [--no-route-wall-ms <n>] [--launcher-stop-grace-s <n>] (got ${cliArgs.join(' ')}; compose.yml's launcher stop_grace_period: ${String(composeLauncherStopGraceS())})\n`,
   );
   process.exit(2);
 }
@@ -226,6 +267,10 @@ const launcherArgs = (name, fixture, extra) => [
   // it is removed by name — every path that takes one down or starts one removes it with `rm -f`.
   '--name',
   name,
+  // What compose sets from the service's `stop_grace_period` (WP-132, measured above), so a bare
+  // `docker stop` below takes the path `docker compose stop` takes.
+  '--stop-timeout',
+  String(LAUNCHER_STOP_GRACE_S),
   // Root, so the daemon socket is usable and the shim's `0600` control socket (uid 1000, created
   // inside the run container) is reachable. The uid the *provider* is told about is still 1000.
   '--user',
@@ -430,7 +475,11 @@ const measureReplayAcrossRestart = async () => {
   const phaseEnv = { CHECK_REPLAY_RUN_ID: REPLAY_RUN_ID };
   const first = lastJsonLine(await runRunner({ ...phaseEnv, CHECK_PHASE: 'replay-create' }));
   const beforeRestart = await runObjects(REPLAY_RUN_ID);
+  // Timed (WP-132): a stop with **nothing in flight** must not cost the grace, or every
+  // `docker compose stop` would wait the whole of it.
+  const idleStopStarted = Date.now();
   await docker(['stop', LAUNCHER_NAME], { allowFailure: true });
+  const idleStopMs = Date.now() - idleStopStarted;
   await docker(['rm', '-f', LAUNCHER_NAME], { allowFailure: true });
   await docker(launcherArgs(LAUNCHER_NAME, fixture, []));
   const restarted = await waitForListening(LAUNCHER_NAME);
@@ -438,7 +487,16 @@ const measureReplayAcrossRestart = async () => {
   const retry = lastJsonLine(await runRunner({ ...phaseEnv, CHECK_PHASE: 'replay-retry' }));
   const afterRetry = await runObjects(REPLAY_RUN_ID);
   const launcherLog = await docker(['logs', LAUNCHER_NAME], { allowFailure: true });
-  return { first, beforeRestart, restarted, afterRestart, retry, afterRetry, launcherLog };
+  return {
+    first,
+    beforeRestart,
+    idleStopMs,
+    restarted,
+    afterRestart,
+    retry,
+    afterRetry,
+    launcherLog,
+  };
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -539,10 +597,12 @@ const waitUntilSettled = async (runIds, { quietMs, timeoutMs }) => {
 };
 
 /**
- * Stops (`docker stop -t 10`: SIGTERM, then SIGKILL after ten seconds — compose's default
- * `stop_grace_period`, and the daemon's documented default) or kills it. The grace is **explicit**
- * since WP-127: a bare `docker stop` measured 3.1 s on Docker Desktop 29.8.1, which is the
- * "about three seconds" WP-103 recorded and could not explain (backlog 339).
+ * Stops (a bare `docker stop`: SIGTERM, then SIGKILL after the container's `StopTimeout`, which is
+ * `compose.yml`'s `stop_grace_period` for the launcher — {@link LAUNCHER_STOP_GRACE_S}, WP-132) or
+ * kills it. Until WP-132 this was `docker stop -t 10`, compose's documented default, because a bare
+ * `docker stop` measured 3.1 s on Docker Desktop 29.8.1 (backlog 339); WP-132 measured why — a
+ * container with no `StopTimeout` gets about three seconds on that daemon, through compose too —
+ * and gave the launcher a grace of its own (backlog 425).
  *
  * WP-127 (backlog 339): the container is no longer `--rm`, so its **exit code** is read off the
  * daemon after it stops and its **whole** log is kept (`log`); `tail` is the last eight lines, as
@@ -550,7 +610,7 @@ const waitUntilSettled = async (runIds, { quietMs, timeoutMs }) => {
  */
 const takeLauncherDown = async (how) => {
   const started = Date.now();
-  await docker(how === 'stop' ? ['stop', '-t', '10', LAUNCHER_NAME] : ['kill', LAUNCHER_NAME], {
+  await docker(how === 'stop' ? ['stop', LAUNCHER_NAME] : ['kill', LAUNCHER_NAME], {
     allowFailure: true,
   });
   const tookMs = Date.now() - started;
@@ -586,7 +646,8 @@ const bringLauncherUp = async () => {
  * A runner provisions `runId` in a detached container and never releases it; the host waits for
  * the run's network — the first object `create` makes — and then takes the launcher down, either
  * the way compose restarts it (`docker stop`: SIGTERM, which `startLauncher`'s `close` answers by
- * waiting for in-flight requests, then SIGKILL after ten seconds) or the way a crash or an OOM kill
+ * waiting for in-flight requests, then SIGKILL after the container's own grace — `compose.yml`'s,
+ * since WP-132) or the way a crash or an OOM kill
  * does (`docker kill`). What is recorded is what the runner was told, and what the daemon holds for
  * the run after the launcher is gone and again after it is back — and, since WP-127 (backlog 339),
  * the launcher's exit code and its whole log.
@@ -1129,6 +1190,14 @@ try {
       replay.beforeRestart.containers.some((line) => line.startsWith(`ws-${REPLAY_RUN_ID} `)),
     JSON.stringify({ first: replay.first, objects: replay.beforeRestart }),
   );
+  // WP-132 (backlog 425): with nothing in flight the close has nothing to wait for, so a grace
+  // set for a create costs an ordinary stop nothing. Bounded at a fifth of the grace, far above the
+  // sub-second it should take, so a close that waited on something idle fails here by name.
+  record(
+    `backlog 425: a launcher stopped with nothing in flight exits well inside its ${LAUNCHER_STOP_GRACE_S} s grace (WP-132)`,
+    replay.idleStopMs < (LAUNCHER_STOP_GRACE_S * 1000) / 5,
+    JSON.stringify({ idle_stop_ms: replay.idleStopMs, grace_s: LAUNCHER_STOP_GRACE_S }),
+  );
   record(
     'backlog 136: the launcher restarted with an empty idempotency map',
     replay.restarted,
@@ -1186,18 +1255,19 @@ try {
     const measured = orphans[how];
     record(
       how === 'stop'
-        ? 'backlog 286 (a): a launcher stopped during a create answers it or leaves its objects for the reaper (measured; ten-second grace since WP-127)'
+        ? 'backlog 286 (a) and 425: a launcher stopped during a create answers it, under compose.yml’s own grace (WP-132)'
         : 'backlog 286 (a): a launcher killed during a create is not answered, and leaves objects behind (measured)',
       measured.networkAfterMs !== null &&
         measured.restarted &&
-        // WP-127: a stop now has compose's ten seconds, so the create may get further than under
-        // the bare `docker stop`'s three (even to its run container), or be answered outright.
+        // WP-132 (backlog 425): under the launcher's own `stop_grace_period` a stop during a create
+        // is drained and the create **answered** — the only ending accepted for a stop. A kill
+        // still leaves its objects for the reaper.
         ((how === 'stop' && measured.told?.ok === true) ||
-          (measured.told?.ok === false &&
+          (how === 'kill' &&
+            measured.told?.ok === false &&
             measured.told?.errorCode === 'engine_unavailable' &&
             measured.afterDown.networks.length === 1 &&
-            (how === 'stop' ||
-              !measured.afterDown.containers.some((line) => line.startsWith('ws-'))))),
+            !measured.afterDown.containers.some((line) => line.startsWith('ws-')))),
       JSON.stringify({
         told: measured.told?.errorCode,
         cause: measured.told?.errorCause,
@@ -1207,33 +1277,41 @@ try {
       }),
     );
   }
-  // WP-127, backlog 339 (b): what a stop does to an in-flight create. The close waits for the
-  // create; on Docker Desktop 29.8.1 the create outlasted compose's ten seconds, so the daemon
-  // killed the launcher (exit 137, SIGTERM logged, no close line and no exit line of its own), and
-  // with a 90 s grace the close resolved 12.1 s after the signal and answered the create (the
-  // WP-127 notes). Either ending is the docblock's (`apps/launcher/src/index.ts`): drained and
-  // answered, or killed at the grace. What fails is the third — a rejected close or an early exit.
+  // WP-127, backlog 339 (b), and WP-132, backlog 425: what a stop does to an in-flight create. The
+  // close waits for the create. WP-127 measured that under ten seconds the daemon killed the
+  // launcher before its close resolved (exit 137, no close line), and with a 90 s grace the close
+  // resolved 12.1 s after the signal (at load 14). Since WP-132 the launcher has a grace of its own,
+  // set from that measurement with margin (`compose.yml`), so the one ending accepted is the
+  // drained one: SIGTERM logged, the close resolved inside the grace, exit 0, the create answered.
   {
     const log = orphans.stop.launcherLog;
     const has = (prefix) => log.some((line) => line.startsWith(prefix));
-    const killedAtGrace =
-      orphans.stop.launcherExitCode === 137 &&
-      orphans.stop.downMs >= 9_500 &&
-      !has('launcher closed after') &&
-      !has('launcher exit code');
+    const closedAfterMs = Number(
+      /^launcher closed after (\d+) ms/.exec(
+        log.find((line) => line.startsWith('launcher closed after')) ?? '',
+      )?.[1] ?? Number.NaN,
+    );
     const drained =
       orphans.stop.launcherExitCode === 0 &&
-      has('launcher closed after') &&
+      Number.isFinite(closedAfterMs) &&
+      closedAfterMs < LAUNCHER_STOP_GRACE_S * 1000 &&
       orphans.stop.told?.ok === true;
     record(
-      'backlog 339: a launcher stopped during a create drains it or is killed at the grace, never leaves early (WP-127)',
+      `backlog 339 and 425: a launcher stopped during a create drains it inside its ${LAUNCHER_STOP_GRACE_S} s grace and answers it (WP-132)`,
       has('launcher signal: SIGTERM') &&
         !has('launcher close rejected') &&
         !has('launcher uncaught') &&
         !has('launcher unhandled') &&
-        (killedAtGrace || drained),
+        drained,
       JSON.stringify({
-        ending: killedAtGrace ? 'killed at the grace' : drained ? 'drained' : 'neither',
+        ending: drained
+          ? 'drained'
+          : orphans.stop.launcherExitCode === 137
+            ? 'killed at the grace'
+            : 'neither',
+        grace_s: LAUNCHER_STOP_GRACE_S,
+        closed_after_ms: Number.isFinite(closedAfterMs) ? closedAfterMs : null,
+        network_after_ms: orphans.stop.networkAfterMs,
         exit: orphans.stop.launcherExitCode,
         down_ms: orphans.stop.downMs,
         log: log.filter((line) => line.startsWith('launcher ')).slice(-4),

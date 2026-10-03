@@ -336,6 +336,14 @@ export const WORKSPACE_LABELS = {
    * new setting. The listing verb filters by it, so a second instance on the same daemon is never
    * listed — and therefore never reaped — by this one. Objects created before WP-103 carry no such
    * label and are not listed at all (`DockerWorkspaceProvider.listLabelledRuns` states it).
+   *
+   * **Every** container, network and volume the Docker provider creates carries it since WP-132
+   * (PROGRESS backlog 426) — before it, the `export-<run-id>` and control-cleanup helpers and the
+   * `hold-<run-id>` volume did not, so a helper killed mid-flight was never listed. A run's own
+   * objects carry {@link WORKSPACE_LABELS.run} beside it; the helpers with no run (`cli-check`,
+   * `mirror`, `control-sweep`) and the shared volumes carry this label alone. The census over the
+   * provider's create calls is
+   * `packages/infrastructure/src/workspace/provider.test.ts` › "every object the provider creates carries the instance label (WP-132)".
    */
   instance: 'com.agentic.instance',
 } as const;

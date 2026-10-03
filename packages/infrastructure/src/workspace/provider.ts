@@ -651,15 +651,32 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   #labels(spec: { runId: string; projectId: string }, role: string, keepUntil: string) {
-    return {
+    return this.#instanced({
       [WORKSPACE_LABELS.run]: spec.runId,
       [WORKSPACE_LABELS.project]: spec.projectId,
       [WORKSPACE_LABELS.role]: role,
       [WORKSPACE_LABELS.keepUntil]: keepUntil,
       [WORKSPACE_LABELS.createdAt]: this.#now().toISOString(),
-      // WP-103: which instance made it — the listing verb answers only this instance's runs.
-      [WORKSPACE_LABELS.instance]: this.#controlVolume,
-    };
+    });
+  }
+
+  /**
+   * `labels` plus **this instance's label** — the one door every object this class creates passes
+   * through (WP-132, PROGRESS backlog 426): `#labels` for a run's own objects, `#helper` for every
+   * helper container, and the two volumes made outside both (`#ensureVolume`, the retention hold).
+   *
+   * Until WP-132 only the objects `#labels` built carried it (WP-103), so the `export-<run-id>` and
+   * `ctlempty-`/`ctlrm-<run-id>` helpers — run-labelled, instance-less — were never listed by
+   * {@link listLabelledRuns} nor found by {@link destroyRun}: a helper whose launcher died
+   * mid-flight stayed on the daemon for ever (measured by WP-128 as an `export-<run-id>` left
+   * behind). A run-scoped object carries the run label too; a helper with no run (`cli-check`,
+   * `mirror`, `control-sweep`) and the shared volumes carry this one alone, which is a statement
+   * of *whose* they are and not something the run-keyed orphan pass can act on. The census is
+   * `packages/infrastructure/src/workspace/provider.test.ts` › "every object the provider creates carries the instance label (WP-132)".
+   */
+  #instanced(labels: Readonly<Record<string, string>>): Record<string, string> {
+    // WP-103: which instance made it — the listing verb answers only this instance's runs.
+    return { ...labels, [WORKSPACE_LABELS.instance]: this.#controlVolume };
   }
 
   /**
@@ -695,7 +712,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       Env: Object.entries(run.env ?? {}).map(([key, value]) => `${key}=${value}`),
       User: run.user,
       WorkingDir: '/',
-      Labels: run.labels,
+      Labels: this.#instanced(run.labels),
       AttachStdout: false,
       AttachStderr: false,
       OpenStdin: false,
@@ -1011,7 +1028,10 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   }
 
   async #ensureVolume(name: string): Promise<void> {
-    await this.#engine.createVolume({ name, labels: { [WORKSPACE_LABELS.role]: 'shared' } });
+    await this.#engine.createVolume({
+      name,
+      labels: this.#instanced({ [WORKSPACE_LABELS.role]: 'shared' }),
+    });
   }
 
   /**
@@ -1568,7 +1588,9 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * made, and the orphans a restart leaves are exactly the ones the reaper exists for. Every
    * container carrying a run label **and this instance's label** is read — any role, running or
    * not — because a create interrupted by a restart leaves a *helper* (`clone-<run-id>`,
-   * `prep-<run-id>`) and no run container (measured), and that helper is what makes
+   * `prep-<run-id>`; since WP-132 also an export's `export-<run-id>` and a destroy's
+   * `ctlempty-`/`ctlrm-<run-id>`, which carried no instance label before it — backlog 426) and no
+   * run container (measured), and that helper is what makes
    * `#sweepControlDirectories` keep the run's directory as `run_alive` for ever.
    *
    * **The instance is the control volume's name** (`WORKSPACE_LABELS.instance`). Two instances on
@@ -2123,13 +2145,13 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     }
     await this.#engine.createVolume({
       name,
-      labels: {
+      labels: this.#instanced({
         [WORKSPACE_LABELS.run]: runId,
         [WORKSPACE_LABELS.project]: handle.projectId,
         [WORKSPACE_LABELS.role]: 'retention_hold',
         [WORKSPACE_LABELS.keepUntil]: effective,
         [WORKSPACE_LABELS.createdAt]: this.#now().toISOString(),
-      },
+      }),
     });
     this.#logger.info(
       { run_id: runId, volume: handle.volumeName, keep_until: effective },

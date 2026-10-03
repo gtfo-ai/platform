@@ -360,7 +360,20 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
 
   // ── the single door to the transcript ─────────────────────────────────────
 
+  /**
+   * Set when the loop ends (its `finally`): from then on nothing re-arms the stall (WP-132, PROGRESS
+   * backlog 405). The entries written after it — the coalescer's flush, the interrupted turn's
+   * result, `run_stopped` — go through `append` like any other, and each used to leave a fresh
+   * stall timer behind a run that had already ended. Harmless only by luck (the callback is a
+   * `requestStop`, a no-op once a cause is set, and the system clock unrefs its timers), so the
+   * guard is here rather than in the reasoning.
+   */
+  let stallDisarmed = false;
+
   const armStall = (): void => {
+    if (stallDisarmed || stopCause !== null) {
+      return;
+    }
     cancelStall?.();
     cancelStall = deps.clock.setTimer(spec.limits.stallTimeoutMs, () => {
       if (retriesSinceProgress > 0) {
@@ -637,6 +650,7 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
       logger.error({ run_id: spec.runId, error: failure }, 'the run failed');
     } finally {
       cancelWallClock();
+      stallDisarmed = true;
       cancelStall?.();
       for (const block of coalescer.flush()) {
         await append((envelope) => ({
@@ -659,13 +673,16 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
         // is told there are no more turns, and it closes the CLI's stdin — after which the
         // interrupt control request has no transport to travel on and its promise never settles.
         // That ordering cost one debugging round and is the reason this comment exists.
+        let cancelGrace: () => void = () => {};
         const grace = new Promise<'grace'>((resolve) => {
-          deps.clock.setTimer(INTERRUPT_GRACE_MS, () => resolve('grace'));
+          cancelGrace = deps.clock.setTimer(INTERRUPT_GRACE_MS, () => resolve('grace'));
         });
         await Promise.race([session.interrupt().catch(() => undefined), grace]);
         if (READS_INTERRUPTED_RESULT.has(stopCause) && result === null && iterator !== null) {
           await readInterruptedResult(iterator, pending, grace);
         }
+        // Both waits are over, so the grace's timer has nothing left to release (WP-132, 405).
+        cancelGrace();
         abortController.abort();
         await append((envelope) => ({
           ...envelope,

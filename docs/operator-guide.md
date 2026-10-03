@@ -433,14 +433,19 @@ the [user guide](user-guide.md) walks through it. What the operator owns is the 
 2. add that variable's **name** to `APP_INTEGRATION_SECRET_ENV`, a comma-separated allow-list that is
    **empty by default**;
 3. create the integration, naming the variable;
-4. recreate `app` (`docker compose up -d app`) whenever you add a credential or change the
-   allow-list — both are read at start-up, and `docker compose restart` keeps the old environment
-   (rotation, and the `_FILE` form that avoids this, are below).
+4. recreate the containers that read `.env` (`docker compose up -d`) whenever you add a credential
+   or change an allow-list — both are read at start-up, and `docker compose restart` keeps the old
+   environment (rotation, and the `_FILE` form that avoids this, are below). Measured on Compose
+   5.5.1 (WP-132): `restart` kept the old value, and `up -d` recreated exactly the services whose
+   environment changed — `app` and `runner`, the two that take `.env`. The runner matters for
+   `APP_INTEGRATION_HOSTS` below: it makes a stage's provider calls, and its copy of the list is
+   checked at every call.
 
 The allow-list is not ceremony: without it a caller could name `APP_SECRET_KEY` and have the server
 seal and store its own master key. A name that is not on the list is refused by name:
-`secret_name_not_permitted … Add it to APP_INTEGRATION_SECRET_ENV (declared: none) and restart the
-process`.
+`secret_name_not_permitted … Add it to APP_INTEGRATION_SECRET_ENV (declared: none) and recreate the
+processes that read it (under compose: `docker compose up -d`; `docker compose restart` keeps the old
+environment)`.
 
 **And declare the hosts, or nothing will work.** `APP_INTEGRATION_HOSTS` is the second half of the
 same idea and is **also empty by default**: the admin who names a credential *field* never sees the
@@ -451,7 +456,7 @@ process**:
 
 ```
 integration_host_not_permitted: this deployment does not permit calling "gitlab.example.com".
-Add it to APP_INTEGRATION_HOSTS (declared: none) and restart the process
+Add it to APP_INTEGRATION_HOSTS (declared: none) and recreate the processes that read it (under compose: `docker compose up -d`; `docker compose restart` keeps the old environment)
 ```
 
 **What to put in it: the host of every integration you create, exactly as it appears in that
@@ -476,7 +481,7 @@ APP_INTEGRATION_HOSTS=gitlab.com,acme-example.atlassian.net
 ```
 
 ```bash
-docker compose up -d app                  # picks up both
+docker compose up -d                      # recreates app and runner, which both read .env
 ```
 
 ### Creating one: the Integrations screen, or the API
@@ -673,6 +678,16 @@ two processes that write turns that into a short outage you chose. An agent run 
 stop `runner` is interrupted — the recreate at the end of the block always did that — so upgrade with
 no agent run in progress where you can.
 
+**The launcher's stop waits up to a minute, and that is deliberate** (WP-132). On a stop the launcher
+finishes what it is doing — creating a run's workspace, exporting one, removing one — before it exits,
+so a run the runner was starting is finished and answered — or, when the runner has already stopped (a whole-stack `stop` or `down`, or the upgrade block above), removed rather than left on the Docker host. Compose stops the launcher before the socket proxy it depends on, so the drain still reaches the daemon; that order is read off `depends_on`, not measured. `compose.yml` gives the `launcher`
+service `stop_grace_period: 60s` for it: a create measured 11.7–12.6 s from the signal to the answer, and a
+launcher with nothing in flight stopped in 0.2 s, so the grace costs you nothing unless something is in
+flight. Do not shorten it, and do not stop the launcher with `docker stop -t <n>` or `docker kill`: on
+Docker Desktop 29.8.1 a service with no grace of its own was given about **three** seconds (measured,
+not the documented ten), and a stop that cuts a create short leaves that run's container, network and
+helper for the runner's recovery pass to remove later.
+
 `docker compose up -d --build` builds, runs `migrate` and starts the new `app` in one step — `app`
 waits for the `migrate` service to exit 0 (`condition: service_completed_successfully`) — but it was
 not measured whether it stops the old `app` before `migrate` runs, so run the `stop` line first if
@@ -772,10 +787,12 @@ instances on one host still share that one network; only their launchers and the
 create join it.
 
 **Upgrading past the build that removes orphaned run containers (WP-103).** Since that build the
-runner's recovery pass removes a run container nobody holds — a create a stopped launcher never
+runner's recovery pass removes a run container nobody holds — a create a killed launcher never
 answered, a run whose process died — but it finds them by a label, `com.agentic.instance`, that
 **older builds never wrote**, so an orphan left by an earlier build is never listed and stays on the
-Docker host until you remove it. Once, after the upgrade, list every run container with that label
+Docker host until you remove it. (Until WP-132 the platform's own short-lived helper containers —
+`export-<run>`, `ctlempty-<run>`, `ctlrm-<run>` — did not write it either, so one left by a launcher
+that died while it ran is in the same position.) Once, after the upgrade, list every run container with that label
 beside it:
 
 ```bash
@@ -783,7 +800,8 @@ docker ps -a --filter label=com.agentic.run \
   --format '{{.Label "com.agentic.run"}}  {{.Label "com.agentic.instance"}}  {{.Names}}  {{.Status}}'
 ```
 
-A row whose **second column is empty** was made by a build before WP-103. The upgrade restarted the
+A row whose **second column is empty** was made by a build before WP-103 — or, when its name starts
+with `export-`, `ctlempty-` or `ctlrm-`, by a build before WP-132. The upgrade restarted the
 runner, so no run of the old build is still being driven: each such run id is an orphan. Remove what
 it left — its run container and egress sidecar, its network and the sidecar's configuration volume:
 

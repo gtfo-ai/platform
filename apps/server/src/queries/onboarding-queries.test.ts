@@ -17,6 +17,7 @@
  *    configuration and is what they have to fix; the message reaches a log and an HTTP response.
  */
 
+import { readFileSync } from 'node:fs';
 import { createIntegrationEgressPolicy } from '@platform/application';
 import type { JsonObject } from '@platform/contracts';
 import type { ProviderCatalogueEntry } from '@platform/integrations';
@@ -177,6 +178,54 @@ describe('environmentSecretSource', () => {
     await expect(source.read('APP_SECRET_KEY_FILE')).rejects.toBeInstanceOf(
       ForbiddenSecretNameError,
     );
+  });
+});
+
+/**
+ * **The two allow-list refusals say recreate, and the operator guide quotes them as they are** —
+ * WP-132, PROGRESS backlog 428.
+ *
+ * Both settings are read at start-up, and under compose `docker compose restart` keeps a container's
+ * old environment (measured, the `RECREATE_TO_APPLY_SETTING` docblock), so a refusal that said
+ * "restart the process" sent an operator round the loop once more. The guide quotes each message
+ * (§ 4); the comparison is whitespace-normalised, because the guide wraps a long quotation.
+ */
+describe('the allow-list refusals and the guide that quotes them (WP-132)', () => {
+  const guide = readFileSync(
+    new URL('../../../../docs/operator-guide.md', import.meta.url),
+    'utf8',
+  ).replace(/\s+/g, ' ');
+  const tailOf = (message: string): string => {
+    const at = message.indexOf('Add it to');
+    expect(at, message).toBeGreaterThan(0);
+    return message.slice(at).replace(/\s+/g, ' ');
+  };
+
+  it('the credential-name refusal says recreate, and the guide quotes it verbatim', async () => {
+    const refusal = await sourceFor({}, {}, [])
+      .read('GITLAB_TOKEN')
+      .then(
+        () => null,
+        (error: unknown) => (error as Error).message,
+      );
+    const tail = tailOf(refusal ?? '');
+    expect(tail).toContain('recreate');
+    expect(tail).toContain('docker compose up -d');
+    expect(tail).not.toContain('restart the process');
+    expect(guide).toContain(tail);
+  });
+
+  it('the host refusal says recreate, and the guide quotes it verbatim', () => {
+    const verdict = createIntegrationEgressPolicy([]).check('https://gitlab.example.com');
+    expect(verdict.allowed).toBe(false);
+    const tail = tailOf(verdict.allowed ? '' : verdict.message);
+    expect(tail).toContain('recreate');
+    expect(tail).not.toContain('restart the process');
+    expect(guide).toContain(tail);
+  });
+
+  it('the guide no longer tells an operator to restart for either setting', () => {
+    expect(guide).not.toContain('and restart the process');
   });
 });
 

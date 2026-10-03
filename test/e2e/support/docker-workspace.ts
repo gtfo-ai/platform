@@ -35,7 +35,10 @@ import { type Logger, WORKSPACE_LABELS } from '@platform/application';
 import { workspace } from '@platform/infrastructure';
 import { PLATFORM_SKILLS } from '@platform/prompts';
 import {
+  harnessLabelMap,
   harnessLabels,
+  harnessProbe,
+  harnessProbeName,
   removeInstanceRunObjects,
   sweepStaleHarnessResources,
 } from './harness-volumes.js';
@@ -335,6 +338,7 @@ const startRepoContainer = async (name: string, network: string): Promise<void> 
       [
         'run',
         '--rm',
+        ...harnessProbe(),
         '--network',
         network,
         '--entrypoint',
@@ -593,6 +597,7 @@ export const startDockerFixture = async (
         [
           'run',
           '--rm',
+          ...harnessProbe(),
           '--network',
           'none',
           '-v',
@@ -648,8 +653,11 @@ export const probeUnderRunContainerConfig = async (
   if (overrides.dnsOptions !== undefined) {
     hostConfig['DnsOptions'] = overrides.dnsOptions;
   }
-  const name = `agentic-e2e-probe-${uniqueSuffix()}`;
+  // The harness's shape and marker (WP-132, backlog 427): not auto-removed, so a killed file
+  // leaves it, and the start sweep removes it.
+  const name = harnessProbeName('probe');
   const id = await engine.createContainer(name, {
+    Labels: harnessLabelMap(),
     Image: overrides.image ?? ALPINE_IMAGE,
     Entrypoint: ['/bin/sh', '-c'],
     Cmd: [script],
@@ -674,8 +682,9 @@ export const plantInWorkspace = async (
   volumeName: string,
   script: string,
 ): Promise<void> => {
-  const name = `agentic-e2e-plant-${uniqueSuffix()}`;
+  const name = harnessProbeName('plant');
   const id = await fixture.engine.createContainer(name, {
+    Labels: harnessLabelMap(),
     Image: ALPINE_IMAGE,
     Entrypoint: ['/bin/sh', '-c'],
     Cmd: [script],
@@ -733,6 +742,7 @@ export const relaxControlDirectoryForHost = async (
     [
       'run',
       '--rm',
+      ...harnessProbe(),
       '-v',
       `${fixture.controlVolume}:/ctl`,
       ALPINE_IMAGE,
@@ -757,6 +767,7 @@ export const removeControlSocket = async (fixture: DockerFixture, runId: string)
   await docker([
     'run',
     '--rm',
+    ...harnessProbe(),
     '--user',
     '0:0',
     '--network',
@@ -778,6 +789,7 @@ export const controlSocketExists = async (
   const probe = await docker([
     'run',
     '--rm',
+    ...harnessProbe(),
     '--user',
     '0:0',
     '--network',
@@ -1042,6 +1054,7 @@ export const startCredentialedGitServer = async (
       [
         'run',
         '--rm',
+        ...harnessProbe(),
         '--network',
         fixture.network,
         '--entrypoint',

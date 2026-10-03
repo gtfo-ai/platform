@@ -33,6 +33,8 @@ import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { NewRun } from '../pipeline/store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
+import { RunStartError } from '../ports/runner.js';
+import { WorkspaceError } from '../ports/workspace.js';
 import { askingRefinedSpec } from '../testing/artifact-fixtures.js';
 import { createMemoryAskStore } from '../testing/memory-ask.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
@@ -1059,6 +1061,61 @@ describe('an ask that never runs', () => {
     expect(ask?.status).toBe('failed');
     expect(ask?.refusalReason).toContain('LauncherUnreachableError');
     expect(ask?.refusalReason).not.toContain('glpat-FAKE');
+  });
+
+  /**
+   * **An ask refused by its workspace says why, in platform words** — WP-132, PROGRESS backlog 424,
+   * mirroring `stage-executor.test.ts` › "a run refused by its workspace names the kind and the
+   * reason (WP-127)". The ask row and `run.failed` carry the workspace's error kind, its reason code
+   * and the commit through `shaSchema`; the message and the detail, each carrying a planted secret,
+   * stay in the log.
+   */
+  it('names the workspace kind, reason code and commit of a refused start, and no word of its message (WP-132)', async () => {
+    const SHA = '0123456789abcdef0123456789abcdef01234567';
+    const PLANTED = 'FAKE-PLANTED-secret-wp132-0123456789';
+    const harness = createPipelineHarness({
+      projectId: PROJECT,
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          structuredOutput: askingRefinedSpec(),
+          costUsd: 0.1,
+        },
+        [`ask:${QUESTION}`]: {
+          status: 'failed',
+          terminalReason: 'error_during_execution',
+          throwsOnStart: new RunStartError(
+            `the run workspace could not be provisioned: WorkspaceError: ${PLANTED}`,
+            {
+              retryable: false,
+              cause: new WorkspaceError(
+                'invalid_spec',
+                `the commit ${SHA} this run must start from is not in the project's mirror — ${PLANTED}`,
+                { reason: 'checkout_commit_missing', commit: SHA, detail: PLANTED },
+              ),
+            },
+          ),
+        },
+      },
+    });
+    await seedTask(harness);
+    await askThroughHttp(harness);
+    const [ask] = harness.asks.all();
+    const cause = `RunStartError: invalid_spec, checkout_commit_missing, commit ${SHA}`;
+    expect(ask?.status).toBe('failed');
+    expect(ask?.refusalReason).toBe(`the runner could not start this ask: ${cause}`);
+    const failed = harness
+      .events()
+      .find(
+        (entry): entry is Extract<DomainEvent, { type: 'run.failed' }> =>
+          entry.type === 'run.failed' && entry.payload.run_id === ask?.runId,
+      );
+    expect(failed?.payload.error).toBe(`the runner could not start this ask: ${cause}`);
+    const serialised = JSON.stringify([harness.events(), harness.asks.all()]);
+    expect(serialised).toContain('checkout_commit_missing');
+    expect(serialised).not.toContain(PLANTED);
+    expect(serialised).not.toContain('must start from');
   });
 
   it('fails rather than storing an answer the contract rejects', async () => {

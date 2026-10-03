@@ -110,6 +110,21 @@ import { IntegrationError, type IntegrationRef } from '../ports/integrations/com
  */
 export const INTEGRATION_HOSTS_SETTING = 'APP_INTEGRATION_HOSTS';
 
+/**
+ * What an operator does after changing an allow-list setting, spelled once for both refusals that
+ * name one (`APP_INTEGRATION_HOSTS` here, `APP_INTEGRATION_SECRET_ENV` in the server's credential
+ * source) and quoted by `docs/operator-guide.md` § 4.
+ *
+ * **Recreate, not restart** (WP-132, PROGRESS backlog 428). Both settings are read at start-up, and
+ * under compose `.env` reaches a container through `env_file`, which is resolved when the container
+ * is *created*: measured on Compose 5.5.1, `docker compose restart` kept the old value and
+ * `docker compose up -d` recreated exactly the services whose resolved environment changed — here
+ * `app` and `runner`, the two that read `.env`, and the runner is the process that makes a stage's
+ * provider calls, so recreating `app` alone leaves the call-time half of the host list stale.
+ */
+export const RECREATE_TO_APPLY_SETTING =
+  'and recreate the processes that read it (under compose: `docker compose up -d`; `docker compose restart` keeps the old environment)';
+
 /** The one entry that declares the list open. See the docblock: rule 18's escape hatch. */
 export const ALLOW_ANY_HOST = '*';
 
@@ -234,7 +249,7 @@ export const createIntegrationEgressPolicy = (
         host,
         message:
           `this deployment does not permit calling "${host}". ` +
-          `Add it to ${INTEGRATION_HOSTS_SETTING} (declared: ${declaredList(entries)}) and restart the process`,
+          `Add it to ${INTEGRATION_HOSTS_SETTING} (declared: ${declaredList(entries)}) ${RECREATE_TO_APPLY_SETTING}`,
       };
     },
   };

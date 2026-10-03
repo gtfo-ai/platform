@@ -47,18 +47,21 @@ const main = async (): Promise<void> => {
    * the runner reads as `engine_unavailable` and retries, leaving the first container behind.
    * `stopping` guards a second signal from re-entering while the first close is in flight.
    *
-   * **What a stop does to an in-flight create is decided by the daemon, not by this handler**
-   * (WP-127, PROGRESS backlog 339, measured on Docker Desktop 29.8.1 through
-   * `scripts/launcher-control-plane-check.mjs`). The close does wait — no rejection, no early exit:
-   * with a 90 s grace it resolved **12.1 s** after SIGTERM, the create was answered and the process
-   * exited 0. But a create (mirror fetch, clone, sidecar, run container, the shim's socket) takes
-   * longer than the stop's grace, so under `docker stop -t 10` — compose's default
-   * `stop_grace_period` — the daemon SIGKILLs the process (exit **137**) before the close resolves,
-   * and the runner is told `engine_unavailable` (`other side closed`). A bare `docker stop` on Docker
-   * Desktop 29.8.1 measured a **3.1 s** grace, not the documented 10 s, which is what WP-103 saw. So
-   * the drain this handler gives is real and bounded by the grace the operator configured; a create
-   * it cannot finish in time is left to the runner's orphan pass (WP-103), and the retry starts a new
-   * attempt. A drain bounded below ten seconds was not chosen, because the create does not fit in one.
+   * **What a stop does to an in-flight create is decided by the grace the daemon gives, and
+   * `compose.yml` now sets it** (WP-127 measured, WP-132 set; PROGRESS backlogs 339 and 425,
+   * through `scripts/launcher-control-plane-check.mjs`). The close waits — no rejection, no early
+   * exit: a stop about 2 s into a create resolved **11.7 s** and **12.6 s** after SIGTERM at load
+   * 5–7 (12.1 s at load 14, WP-127), the create was answered and the process exited 0; with nothing in flight it exited in
+   * 0.2 s. A create (mirror fetch, clone, sidecar, run container, the shim's socket) is longer than
+   * ten seconds, and on Docker Desktop 29.8.1 a container with no stop grace of its own is given
+   * about **three** (3.2 s, through `docker stop` and `docker compose stop` alike), so before WP-132
+   * every stop during a create killed this process (exit **137**) and the runner was told
+   * `engine_unavailable`. `compose.yml` gives the `launcher` service `stop_grace_period: 60s` — about five
+   * times the longest reading — and the check stops it that way and asserts the answered create. What
+   * the grace still cannot cover (a first mirror clone of a large repository, a `docker kill`, an
+   * operator's own shorter `-t`) is left to the runner's orphan pass (WP-103), and the retry starts
+   * a new attempt. A drain bounded inside this handler was not chosen, because the create does not
+   * fit in any bound short enough to matter.
    */
   let stopping = false;
   const stop = (signal: string): void => {

@@ -41,8 +41,10 @@
  * network then. **No creator label is put on
  * the provider's objects** — the network they are attached to is the join. A stale **volume** is
  * treated the same way, for the same reason: the provider's `export` helper is kept when a tarball
- * is wanted, mounts the fixture's cache volume, and carries `com.agentic.run` with no instance
+ * is wanted, mounts the fixture's cache volume, and carried `com.agentic.run` with no instance
  * label — measured, it held a dead-created cache volume on the first `verify:e2e` over this row.
+ * Since WP-132 (PROGRESS backlog 426) it carries the instance label too, so the instance join
+ * names it first; the mount step stays for one an older build left.
  *
  * **The network's name test is the weakest of the three, stated**: its shape is
  * `agentic-e2e-<suffix>` with a one-to-eight character base-36 suffix, so `agentic-e2e-data` is
@@ -81,16 +83,24 @@
  * label. Nothing in this repository runs the e2e tier from a second host or pid namespace today.
  */
 
+import { randomBytes } from 'node:crypto';
+
 /** `agentic-e2e-ctl-<suffix>` / `agentic-e2e-cache-<suffix>`, the suffix as `uniqueSuffix` writes it. */
 export const HARNESS_VOLUME = /^agentic-e2e-(?:ctl|cache)-[0-9a-z]{1,8}$/;
 
 /**
- * The harness's long-running containers: `agentic-e2e-repo-<suffix>`, the fixture repository's
- * `git daemon`; `agentic-e2e-http-<suffix>`, the egress case's HTTP target; and
- * `agentic-e2e-githttp-<suffix>`, the credentialled git server (the last two since WP-128, backlog
- * 394).
+ * The harness's containers: `agentic-e2e-repo-<suffix>`, the fixture repository's `git daemon`;
+ * `agentic-e2e-http-<suffix>`, the egress case's HTTP target; `agentic-e2e-githttp-<suffix>`, the
+ * credentialled git server (the last two since WP-128, backlog 394); and since WP-132 (backlog 427)
+ * the short-lived ones — `agentic-e2e-probe-<suffix>`, every `docker run --rm` probe
+ * ({@link harnessProbe}) and the engine-created probe under a run's configuration,
+ * `agentic-e2e-plant-<suffix>`, the export cases' planting container, and
+ * `agentic-e2e-orphan-<suffix>`, the teardown case's sleeping grandchild. A `--rm` probe is removed
+ * by the daemon when it exits even if its file was killed, so what a killed file leaves of one is a
+ * probe **still running** — or an engine-created one, which is not auto-removed at all.
  */
-export const HARNESS_CONTAINER = /^agentic-e2e-(?:repo|http|githttp)-[0-9a-z]{1,8}$/;
+export const HARNESS_CONTAINER =
+  /^agentic-e2e-(?:repo|http|githttp|probe|plant|orphan)-[0-9a-z]{1,8}$/;
 
 /** `agentic-e2e-<suffix>`: the network the repository container and the runs share. */
 export const HARNESS_NETWORK = /^agentic-e2e-[0-9a-z]{1,8}$/;
@@ -126,6 +136,28 @@ export const harnessLabels = (pid: number = process.pid): string[] => [
   `${HARNESS_LABEL}=true`,
   '--label',
   `${HARNESS_PID_LABEL}=${pid}`,
+];
+
+/** The same two labels as an engine body's `Labels` map, for a container created through the API. */
+export const harnessLabelMap = (pid: number = process.pid): Record<string, string> => ({
+  [HARNESS_LABEL]: 'true',
+  [HARNESS_PID_LABEL]: String(pid),
+});
+
+/** A probe's name: this repository's shape, eight hex characters of suffix. */
+export const harnessProbeName = (kind: 'probe' | 'plant' | 'orphan' = 'probe'): string =>
+  `agentic-e2e-${kind}-${randomBytes(4).toString('hex')}`;
+
+/**
+ * The arguments every `docker run --rm` probe of the Docker e2e files carries (WP-132, PROGRESS
+ * backlog 427): a name in {@link HARNESS_CONTAINER}'s shape and the two labels, so a probe a killed
+ * file left running is one the next fixture's start sweep removes. `scripts/e2e-harness-volumes.test.ts`
+ * holds every `docker run` in those files to it.
+ */
+export const harnessProbe = (pid: number = process.pid): string[] => [
+  '--name',
+  harnessProbeName(),
+  ...harnessLabels(pid),
 ];
 
 /** Whether `pid` names a live process; `EPERM` is a live process somebody else owns. */
