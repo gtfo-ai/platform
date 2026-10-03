@@ -138,6 +138,10 @@ const start = async (options: { readonly budgetUsd?: number } = {}): Promise<Pip
   const pipeline = await startPipeline({
     label: 'shadow',
     tickets: TICKETS,
+    // WP-138: a shadow `open_mr` records no merge request; this case is about the comparison of
+    // the agent's diff, which the report reads off the merge request the task records.
+    shadowMergeRequests:
+      'the report compares the agent’s diff, read off the merge request the shadow task records',
     config: {
       version: 1,
       features: {

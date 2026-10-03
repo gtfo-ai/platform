@@ -29,15 +29,22 @@ import type {
   Id,
   IsoDateTime,
   MaterialisedAutonomy,
+  MergeRequestRef,
   OrganisationSettings,
   PipelineTemplate,
 } from '@platform/contracts';
-import { agentRoleSchema, artifactDataSchemas, refinedSpecDataSchema } from '@platform/contracts';
+import {
+  agentRoleSchema,
+  artifactDataSchemas,
+  mergeRequestRefSchema,
+  refinedSpecDataSchema,
+} from '@platform/contracts';
 import type { RolePromptDefinition, SkillDefinition } from '@platform/domain';
 import { readDataBlocks, SHIPPED_TEMPLATES } from '@platform/domain';
 import { onTestFinished, TestRunner } from 'vitest';
 import type * as z from 'zod';
 import { type AskRunPlanner, createAskRunPlanner } from '../ask/planner.js';
+import type { RepositoryFileSource } from '../config/repository-config.js';
 import { createBudgetGuard } from '../cost/guard.js';
 import { createLateCostRecorder } from '../cost/late.js';
 import { holdOf } from '../cost/pending.js';
@@ -280,6 +287,24 @@ export interface ScriptedRun {
    * escaped both of the executor's endings and left a run `running` for ever.
    */
   readonly throwsOnStart?: Error;
+  /**
+   * Whether the run **called `open_mr`** (WP-138). A completed run whose spec carries the tool and
+   * whose artifact reports `mr` is taken to have opened that merge request, and the harness records
+   * it the way the tool does (`tasks.recordMergeRequest`, compare-and-set) before the outcome
+   * settles — because since WP-138 the platform's record, not the artifact, is what the saga reads.
+   * `false` scripts a run that reported a merge request it never opened through the tool, and a
+   * reference scripts one that opened **that** merge request and reported another (the WP-138
+   * canary: the record wins). A shadow run records nothing, as the tool does not. @default true
+   */
+  readonly opensMergeRequest?: boolean | MergeRequestRef;
+  /**
+   * **Kinder than production, and why the case needs it.** A shadow run's `open_mr` records
+   * `would_have` and no merge request (WP-138 ruling (a)), so a shadow task never has `mr_ref`. A
+   * case about what follows a shadow task's merge request — the shadow report's comparison of the
+   * agent's diff (WP-34) — states here why it records the reported one anyway; unset, a shadow run
+   * records nothing, as production does. What production then does is PROGRESS's WP-138 notes.
+   */
+  readonly shadowMergeRequest?: string;
 }
 
 /**
@@ -491,6 +516,15 @@ const checkScripted = (
       };
 };
 
+/** The merge request a scripted `ImplementationNotes` reports, as the tool would record it. */
+const reportedMergeRequestOf = (output: unknown): MergeRequestRef | null => {
+  if (typeof output !== 'object' || output === null || Array.isArray(output)) {
+    return null;
+  }
+  const parsed = mergeRequestRefSchema.safeParse((output as { mr?: unknown }).mr);
+  return parsed.success ? parsed.data : null;
+};
+
 const outcomeFor = (runId: Id, scripted: ScriptedRun, structuredOutput: unknown): RunOutcome => ({
   runId,
   status: scripted.status,
@@ -617,6 +651,12 @@ export interface HarnessOptions {
    */
   readonly maintenanceHeldRuns?: readonly (number | null)[];
   readonly git?: Partial<GitProviderPort> | null;
+  /**
+   * The default branch's files as the platform's mirror reads them (WP-138 ruling (f)). @default a
+   * repository with **no** CI file — every path absent — so a head with no pipeline still reads as
+   * "no CI" in a case about anything else; a case about the gate's wait passes one that has it.
+   */
+  readonly repositoryFiles?: RepositoryFileSource;
   /**
    * The package-registry client the dependency gate asks for a licence (WP-38, Q84).
    *
@@ -800,6 +840,15 @@ const askPlannerWith = (
         },
       };
 
+/** A default branch with no file at all — the harness's "this project has no CI" (WP-138). */
+const noCiRepository: RepositoryFileSource = {
+  read: async (request) => ({
+    status: 'ok',
+    commitSha: 'c'.repeat(40),
+    files: Object.fromEntries(request.paths.map((path) => [path, { kind: 'absent' }])),
+  }),
+};
+
 const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitProviderPort | null =>
   overrides === null
     ? null
@@ -874,6 +923,47 @@ const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitPro
          */
         listMergedMergeRequests: async () => [],
         listCommits: async () => [],
+        /**
+         * WP-138's writes and reads, defaulted: the `mr_ready` duty marks every developer merge
+         * request ready, so every walk through Implementation makes the update. The answer is the
+         * merge request the reference names, now not a draft, at the reference's own head — the
+         * honest echo, never a provider's invention of a title or a head.
+         */
+        updateMergeRequest: async (
+          ref: {
+            readonly iid: number;
+            readonly url: string;
+            readonly branch?: string | null;
+            readonly head_sha?: string | null;
+          },
+          update: { readonly draft?: boolean | null },
+        ) => ({
+          ref,
+          state: 'opened',
+          draft: update.draft ?? false,
+          title: '',
+          description: '',
+          source_branch: ref.branch ?? 'agentic/unknown',
+          target_branch: 'main',
+          head_sha: ref.head_sha ?? 'b'.repeat(40),
+          labels: [],
+          reviewers: [],
+          web_url: ref.url,
+        }),
+        createMergeRequestPipeline: async (ref: { readonly head_sha?: string | null }) => ({
+          id: 'harness-pipeline',
+          head_sha: ref.head_sha ?? 'b'.repeat(40),
+          status: 'pending',
+          url: null,
+        }),
+        findOpenMergeRequest: async () => null,
+        authenticatedUser: async () => ({
+          provider: 'fake-git',
+          external_id: 'agentic-bot',
+          email: null,
+          display_name: 'agentic-bot',
+          verified: true,
+        }),
         ...overrides,
       } as unknown as GitProviderPort);
 
@@ -1398,12 +1488,29 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         refusals.push(refusal);
         throw refusal;
       }
+      const reported =
+        typeof scripted.opensMergeRequest === 'object'
+          ? scripted.opensMergeRequest
+          : reportedMergeRequestOf(checked.value);
+      const opens =
+        scripted.status === 'completed' &&
+        scripted.opensMergeRequest !== false &&
+        (spec.mode !== 'shadow' || (scripted.shadowMergeRequest ?? '').length > 0) &&
+        spec.platformTools.includes('open_mr') &&
+        reported !== null;
       return {
         runId: spec.runId,
         // The same value `outcomeFor` reports, from the start: a harness that answered `null` here
         // would be kinder than either shipped runner in the one direction a take-over reads.
         sessionId: `session-${spec.runId}`,
-        outcome: Promise.resolve(outcomeFor(spec.runId, scripted, checked.value)),
+        // WP-138: the `open_mr` call the run made, recorded as the tool records it, before the
+        // run ends — what the stage executor's final transaction then reads.
+        outcome: (opens && reported !== null
+          ? memory.transaction(async (scope) =>
+              store.tasks.recordMergeRequest(scope.tx, spec.taskId, reported),
+            )
+          : Promise.resolve()
+        ).then(() => outcomeFor(spec.runId, scripted, checked.value)),
         steer: async () => {},
         stop: async () => {},
       };
@@ -1416,6 +1523,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
 
   const runtime = createPipelineRuntime({
     store,
+    repositoryFiles: options.repositoryFiles ?? noCiRepository,
     shadow,
     bootstrap,
     /**

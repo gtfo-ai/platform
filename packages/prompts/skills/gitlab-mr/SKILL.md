@@ -21,7 +21,10 @@ somebody else's.
 - **Opening an MR and editing its description are platform tools** (`open_mr`,
   `update_mr_description`), not `glab` commands. The platform records the actor, the task and the
   cost of every outbound action, and an action made directly with `glab` is invisible to that audit
-  and to shadow mode. Use the tools.
+  and to shadow mode. Use the tools. `open_mr` takes a title and a description; the source branch
+  is the task's own `agentic/` branch and the target is the project's default branch — the platform
+  chooses both, and a branch you name is ignored. It opens a draft, and the platform marks it ready
+  when the Developer stage completes.
 - **Pushing** is the one write you make yourself, and only to a branch under `agentic/`. Never force
   push, never delete a branch, never push to the default branch.
 

@@ -1904,4 +1904,37 @@ describe('what a run checks out', () => {
       checkoutCommit: null,
     });
   });
+  /**
+   * WP-138 review round 1: the first Developer run of a task with no branch yet is on
+   * `agentic/<key>` — the branch its push allow-list admits and `open_mr` opens from — not on the
+   * default branch, where it could neither switch branches nor push. A recorded merge request's
+   * branch counts as the task's; a shadow task and every other role keep the old answer.
+   */
+  it('puts a normal task’s first Developer run on agentic/<key>, and nobody else', () => {
+    const task = (
+      mode: 'normal' | 'shadow',
+      branch: string | null = null,
+      mr: { branch: string } | null = null,
+    ) => ({ branch, mr, task: { mode, ticket: { key: 'ACME 7' } } });
+    expect(checkoutOf({ checkoutBase: null, task: task('normal') }, 'developer')).toEqual({
+      checkoutRef: 'agentic/ACME-7',
+      checkoutCommit: null,
+    });
+    expect(
+      checkoutOf(
+        { checkoutBase: null, task: task('normal', null, { branch: 'agentic/ACME-7-r2' }) },
+        'developer',
+      ).checkoutRef,
+    ).toBe('agentic/ACME-7-r2');
+    expect(
+      checkoutOf({ checkoutBase: null, task: task('normal', 'agentic/x-r3') }, 'developer')
+        .checkoutRef,
+    ).toBe('agentic/x-r3');
+    expect(checkoutOf({ checkoutBase: null, task: task('shadow') }, 'developer').checkoutRef).toBe(
+      null,
+    );
+    expect(checkoutOf({ checkoutBase: null, task: task('normal') }, 'reviewer').checkoutRef).toBe(
+      null,
+    );
+  });
 });

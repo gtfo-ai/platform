@@ -47,6 +47,7 @@ import type {
   Id,
   IsoDateTime,
   JsonValue,
+  MergeRequestRef,
   RunCost,
   Slug,
   TokenUsage,
@@ -1374,6 +1375,48 @@ export const withPlatformReviewRecord = (
 };
 
 /**
+ * **The platform's merge request, not the model's** (WP-138 ruling (e)).
+ *
+ * `ImplementationNotes.mr` is the developer's report of the merge request it opened, and until
+ * WP-138 the saga recorded it as the task's. The record is now the platform's — written when the
+ * `open_mr` tool opened or adopted the merge request — so when the task holds one, the stored
+ * artifact carries **the record's** reference, and a report that named another merge request is
+ * noted in `known_gaps` with a platform-written line (both iids, nothing else of the model's).
+ * A task with no record keeps the report as written: nothing is recorded from it either way.
+ * Every other artifact type is returned untouched.
+ */
+export const withPlatformMergeRequestRecord = (
+  artifactType: string,
+  data: JsonValue,
+  recorded: MergeRequestRef | null,
+): JsonValue => {
+  if (
+    artifactType !== 'ImplementationNotes' ||
+    recorded === null ||
+    typeof data !== 'object' ||
+    data === null ||
+    Array.isArray(data)
+  ) {
+    return data;
+  }
+  const object = data as { readonly [key: string]: JsonValue | undefined };
+  const reported = object.mr;
+  const reportedIid =
+    typeof reported === 'object' && reported !== null && !Array.isArray(reported)
+      ? (reported as { readonly [key: string]: JsonValue | undefined }).iid
+      : undefined;
+  const gaps: JsonValue[] = Array.isArray(object.known_gaps) ? [...object.known_gaps] : [];
+  if (reportedIid !== recorded.iid) {
+    gaps.push(
+      `The platform recorded merge request !${recorded.iid} for this task; the run reported ${
+        typeof reportedIid === 'number' ? `!${reportedIid}` : 'another one'
+      }, which was not recorded (WP-138: the platform's record wins).`,
+    );
+  }
+  return { ...object, mr: { ...recorded } as JsonValue, known_gaps: gaps } as JsonValue;
+};
+
+/**
  * Transaction 2: everything the run produced, written once.
  *
  * The artifact, the run's terminal event, the task's spend and `task.stage.completed` all commit
@@ -1493,10 +1536,14 @@ const record = async (
     try {
       redacted = redactArtifactData(
         stage.produces,
-        withPlatformReviewRecord(
+        withPlatformMergeRequestRecord(
           stage.produces,
-          outcome.structuredOutput as JsonValue,
-          input.reviewChecklists,
+          withPlatformReviewRecord(
+            stage.produces,
+            outcome.structuredOutput as JsonValue,
+            input.reviewChecklists,
+          ),
+          stored.mr,
         ),
         input.redactor,
       );

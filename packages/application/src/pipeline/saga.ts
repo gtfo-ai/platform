@@ -68,6 +68,7 @@ import {
   stageOf,
   toApprovalRecord,
 } from '@platform/domain';
+import type { RepositoryFileSource } from '../config/repository-config.js';
 import type { EventHandler, HandlerContext } from '../events/handler.js';
 import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -120,6 +121,16 @@ export interface PipelineSagaOptions {
   readonly logger?: Logger;
   /** BD-007's batch window for human merge-request comments. @default 2 minutes */
   readonly reviewCommentWindowMs?: number;
+  /**
+   * The default branch's files, read from the platform's mirror (TD-026) — what the CI gate asks
+   * before it reads a head with no pipeline as *"the project has no CI"* (WP-138 ruling (f)).
+   *
+   * Optional, and absent is **not** a permissive path: a gate that cannot ask whether the default
+   * branch has a CI file answers `pending`, never a pass (standing rule 31's direction, rule 18's
+   * shape). `apps/server` composes the mirror's reader; a unit test that means "no CI" passes one
+   * that answers the file absent.
+   */
+  readonly repositoryFiles?: RepositoryFileSource;
 }
 
 /** BD-007, technical/02 § ReviewCommentBatcher: "debounces `mr.review.comment` for 2 minutes". */
@@ -1118,9 +1129,20 @@ const budgetApprovalGate = async (
 };
 
 /**
- * The developer stage reports the merge request it opened in its `ImplementationNotes`
- * (technical/12: `mr: {url, iid, head_sha}`). That is how the platform learns which merge request
- * a task owns — the git provider's own `mr.opened` webhook cannot say which *task* it belongs to.
+ * The merge request the platform recorded, checked against the one the developer stage reported
+ * (WP-138 ruling (e)).
+ *
+ * Until WP-138 this handler **took** the reference from `ImplementationNotes.mr` — a model's
+ * claim — and wrote it to `tasks.mr_ref`, so whatever iid a run reported became the merge request
+ * `mr.merged` advances the task on. The record is now written by the platform itself, when the
+ * `open_mr` tool opens or adopts a merge request (`tasks.recordMergeRequest`), and this handler
+ * only **compares**: a report that names another merge request than the record is logged, and the
+ * stage executor has already noted it on the stored artifact and stored the record's reference in
+ * its place (`withPlatformMergeRequestRecord`). A report with no record behind it is logged too and
+ * moves nothing — a shadow task, or a run that never called the tool.
+ *
+ * The one column it still writes is `tasks.branch` (`save`'s), filled from the record when the task
+ * had none: the next run of the task checks out that branch (`checkoutOf`).
  */
 const recordMergeRequest = async (
   options: PipelineSagaOptions,
@@ -1137,40 +1159,37 @@ const recordMergeRequest = async (
     stored.task.id,
     'ImplementationNotes',
   );
-  const data = notes?.data;
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+  const reported = reportedMergeRequestIid(notes?.data);
+  const recorded = stored.mr;
+  if (reported !== null && (recorded === null || recorded.iid !== reported)) {
+    (options.logger ?? silentLogger).warn(
+      {
+        task_id: stored.task.id,
+        reported_iid: reported,
+        recorded_iid: recorded?.iid ?? null,
+      },
+      'the developer stage reported a merge request the platform did not record; the record stands',
+    );
+  }
+  if (recorded === null || stored.branch !== null || recorded.branch == null) {
     return stored;
+  }
+  // The saved snapshot: this handler writes the task again a few lines later, through
+  // `applyDecision`, and the second write carries the version this one consumed (WP-15e).
+  return options.store.tasks.save(context.scope.tx, { ...stored, branch: recorded.branch });
+};
+
+/** The iid an `ImplementationNotes` artifact reports, or `null` when it reports none. */
+const reportedMergeRequestIid = (data: unknown): number | null => {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return null;
   }
   const mr = (data as Record<string, unknown>).mr;
   if (typeof mr !== 'object' || mr === null || Array.isArray(mr)) {
-    return stored;
+    return null;
   }
-  const record = mr as Record<string, unknown>;
-  const iid = record.iid;
-  const url = record.url;
-  if (typeof iid !== 'number' || typeof url !== 'string') {
-    return stored;
-  }
-  const next: StoredTask = {
-    ...stored,
-    branch: typeof record.branch === 'string' ? record.branch : stored.branch,
-    mr: {
-      // Which account and which repository path this merge request is on is **not** recorded here
-      // (WP-15d): learning it means resolving the project's bindings, which is a pool borrow and a
-      // credential decryption, and this runs inside the handler's transaction. `gitReads` fills
-      // both in from the binding that is live when the ref is used, which is also the more correct
-      // answer — a project that was re-bound would otherwise be addressed at its old account.
-      provider: null,
-      project_path: null,
-      iid,
-      url,
-      branch: typeof record.branch === 'string' ? record.branch : null,
-      head_sha: typeof record.head_sha === 'string' ? record.head_sha : null,
-    },
-  };
-  // The saved snapshot: this handler writes the task again a few lines later, through
-  // `applyDecision`, and the second write carries the version this one consumed (WP-15e).
-  return options.store.tasks.save(context.scope.tx, next);
+  const iid = (mr as Record<string, unknown>).iid;
+  return typeof iid === 'number' ? iid : null;
 };
 
 // ── Questions and approvals ──────────────────────────────────────────────────

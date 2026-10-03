@@ -66,6 +66,7 @@ import type {
 import {
   acceptanceCriterionSchema,
   artifactTypeSchema,
+  mergeRequestRefSchema,
   pausedBudgetScopeSchema,
   taskCoverageSchema,
   taskDependenciesSchema,
@@ -668,8 +669,8 @@ export const createPostgresPipelineStore = (
      * the head moves (WP-60, PROGRESS backlog 182; ordered at review round 1).
      *
      * The row is locked and read first (`for update`), so the one statement below knows whether the
-     * sha moves: when it does, `jsonb_set` rewrites the key in place and `version` is bumped (rule 79 —
-     * `mr_ref` is `save`'s); when it does not, only `mr_head_at` advances. The predicate is the
+     * sha moves: when it does, `jsonb_set` rewrites the key in place and `version` is bumped (rule 79;
+     * `mr_ref` was `save`'s until WP-138, and the bump stays — the port says why); when it does not, only `mr_head_at` advances. The predicate is the
      * ordering rule: `mr_head_at is null or mr_head_at < $4` — strictly later, so an equal instant
      * moves nothing (the port's docblock says why).
      */
@@ -900,20 +901,21 @@ export const createPostgresPipelineStore = (
     save: async (tx, stored) => {
       const { task } = stored;
       const sql = sqlOf(tx);
-      const result = await sql.query<{ version: number }>(
+      // `mr_ref` is not in the list since WP-138: it belongs to `recordMergeRequest`,
+      // `releaseMergeRequest` and `saveMergeRequestHead`, and the row's own value is read back.
+      const result = await sql.query<{ version: number; mr_ref: MergeRequestRef | null }>(
         `update tasks
-            set state = $2::task_state, current_stage = $3, branch = $4, mr_ref = $5::jsonb,
-                stage_attempts = $6::jsonb, iteration_counters = $7::jsonb,
+            set state = $2::task_state, current_stage = $3, branch = $4,
+                stage_attempts = $5::jsonb, iteration_counters = $6::jsonb,
                 version = version + 1, updated_at = now(),
                 completed_at = case when $2::text in ('done', 'cancelled') then now() else completed_at end
-          where id = $1 and version = $8
-        returning version`,
+          where id = $1 and version = $7
+        returning version, mr_ref`,
         [
           task.id,
           task.state,
           task.currentStage,
           stored.branch,
-          stored.mr === null ? null : JSON.stringify(stored.mr),
           JSON.stringify(task.stageAttempts),
           JSON.stringify(task.iterationCounters),
           stored.version,
@@ -938,7 +940,64 @@ export const createPostgresPipelineStore = (
       }
       // The version the row now carries, read back rather than assumed: a caller that saves twice
       // in one transaction needs the value the first write consumed.
-      return { ...stored, version: Number(written.version) };
+      return { ...stored, mr: written.mr_ref ?? null, version: Number(written.version) };
+    },
+
+    /**
+     * `mr_ref` — the developer's merge request, compare-and-set (WP-138 ruling (e)): only while the
+     * row holds none or the same iid, and only on the task's own branch (or none yet). Re-recording
+     * the same iid **keeps the stored head** — the head moves forward only through
+     * `saveMergeRequestHead`, by the provider's instant, and a tool answer read before a later push
+     * must not put an older revision back (review round 1). No version bump: `save` does not name
+     * the column.
+     */
+    recordMergeRequest: async (tx, taskId, mr) => {
+      const sql = sqlOf(tx);
+      const parsed = mergeRequestRefSchema.parse(mr);
+      const result = await sql.query(
+        `update tasks
+            set mr_ref = case
+                  when mr_ref ->> 'head_sha' is not null
+                    then jsonb_set($2::jsonb, '{head_sha}', mr_ref -> 'head_sha')
+                  else $2::jsonb
+                end,
+                updated_at = now()
+          where id = $1
+            and (mr_ref is null or (mr_ref ->> 'iid')::int = $3)
+            and (branch is null or branch = $4)`,
+        [taskId, JSON.stringify(parsed), parsed.iid, parsed.branch ?? null],
+      );
+      if ((result.rowCount ?? 0) > 0) {
+        return { kind: 'recorded' };
+      }
+      const { rows } = await sql.query<{ mr_ref: MergeRequestRef | null }>(
+        'select mr_ref from tasks where id = $1',
+        [taskId],
+      );
+      const current = rows[0];
+      if (current === undefined) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+      return { kind: 'refused', recorded: current.mr_ref ?? null };
+    },
+
+    /** `mr_ref = null` while it names `iid` — the rework's let-go (WP-59, narrow since WP-138). */
+    releaseMergeRequest: async (tx, taskId, iid) => {
+      const sql = sqlOf(tx);
+      const result = await sql.query(
+        `update tasks
+            set mr_ref = null, updated_at = now()
+          where id = $1 and (mr_ref ->> 'iid')::int = $2`,
+        [taskId, iid],
+      );
+      if ((result.rowCount ?? 0) > 0) {
+        return true;
+      }
+      const { rows } = await sql.query('select 1 from tasks where id = $1', [taskId]);
+      if (rows.length === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+      return false;
     },
 
     /**

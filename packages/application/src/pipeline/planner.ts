@@ -54,6 +54,7 @@ import {
   DEFAULT_VERIFICATION_ALLOW,
   DISCOVERY_TEMPLATE_ID,
   HISTORY_BOOTSTRAP_TEMPLATE_ID,
+  InvariantViolationError,
   isPromptExcludedArtifact,
   type PromptContextPack,
   type PromptNonceSource,
@@ -67,6 +68,7 @@ import {
   STAGE_PROMPT_FOCUS,
   skillSetVersionOf,
   stageAgentDefaults,
+  taskBranchName,
 } from '@platform/domain';
 import { projectPromptsForStage } from '../config/project-prompts.js';
 import type { ContextPackAssembler, ContextPackDocument } from '../knowledge/context-pack.js';
@@ -1041,12 +1043,42 @@ export const RUN_MODE_BY_STAGE: Readonly<Record<string, RunSpec['mode']>> = {
  */
 export const checkoutOf = (
   request: Pick<StageRunRequest, 'checkoutBase'> & {
-    readonly task: Pick<StageRunRequest['task'], 'branch'>;
+    readonly task: Pick<StageRunRequest['task'], 'branch'> & {
+      readonly mr?: { readonly branch?: string | null } | null;
+      readonly task?: { readonly mode: string; readonly ticket: { readonly key: string } };
+    };
   },
-): Pick<RunSpec, 'checkoutRef' | 'checkoutCommit'> =>
-  request.checkoutBase !== null && request.checkoutBase !== undefined
-    ? { checkoutRef: null, checkoutCommit: request.checkoutBase }
-    : { checkoutRef: request.task.branch ?? null, checkoutCommit: null };
+  role: AgentRole | null = null,
+): Pick<RunSpec, 'checkoutRef' | 'checkoutCommit'> => {
+  if (request.checkoutBase !== null && request.checkoutBase !== undefined) {
+    return { checkoutRef: null, checkoutCommit: request.checkoutBase };
+  }
+  const own = request.task.branch ?? request.task.mr?.branch ?? null;
+  if (own !== null || role !== 'developer' || request.task.task?.mode !== 'normal') {
+    return { checkoutRef: own, checkoutCommit: null };
+  }
+  /**
+   * **A writing Developer run is on its task's branch from its first turn** (WP-138 review round
+   * 1). `tasks.branch` is filled only once a merge request is recorded, so the first Developer run
+   * used to check out the default branch — and the developer's command policy has no `git
+   * checkout`/`switch`/`branch`, while its push allow-list is `git push origin agentic/*`: the push
+   * failed, or became a question, and `open_mr` then had nothing to open. The clone helper creates
+   * a branch the mirror does not hold from the default branch (`git checkout -b`), so the run starts
+   * on `agentic/<key>` — the branch `open_mr` opens from. A key with no character a branch may
+   * carry has no such branch (`taskBranchName` refuses), and the run stays on the default branch.
+   */
+  try {
+    return {
+      checkoutRef: taskBranchName(request.task.task.ticket.key),
+      checkoutCommit: null,
+    };
+  } catch (error) {
+    if (!(error instanceof InvariantViolationError)) {
+      throw error;
+    }
+    return { checkoutRef: null, checkoutCommit: null };
+  }
+};
 
 /**
  * `runs.mode` — technical/04's mode table, which is about the **run** and not about the task.
@@ -1331,7 +1363,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         systemPromptAppend: prompt.systemPrompt,
         userPrompt: prompt.userPrompt,
         workspacePath: options.workspacePath(task.task.id),
-        ...checkoutOf(request),
+        ...checkoutOf(request, role),
         contextPack: [...pack.runContextPack],
         limits: limitsFor(settings, stage.id, role),
         tools: [...(TOOLS_BY_ROLE[role] ?? [])],

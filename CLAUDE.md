@@ -232,8 +232,9 @@ the CLI and a real `claude` never reached the sidecar (measured, backlog 342).
   worker's rather than nesting inside it, and the four re-validation questions are asked twice
   (`revalidate`). `apps/server/src/platform-tools.ts` is the production `PlatformToolPort` —
   `kb_search` and `get_task_context` are real (the second since WP-54, over the read projections in
-  `apps/server/src/queries/task-context-queries.ts`, refusing value by value what they cannot answer)
-  and the other seven **refuse by name**, which is why
+  `apps/server/src/queries/task-context-queries.ts`, refusing value by value what they cannot answer),
+  `open_mr` and `update_mr_description` are real since WP-138 (through `IntegrationActionExecutor`;
+  `packages/application/src/pipeline/merge-request-tool.ts`), and the other five **refuse by name**, which is why
   `PipelineComposition.runner` is a factory over the tools rather than a runner.
 - **What a run costs, and what a budget stops** (WP-19): the ledger is
   `packages/application/src/cost/` — one handler on `run.finished`/`run.failed` at TD-005 priority 10

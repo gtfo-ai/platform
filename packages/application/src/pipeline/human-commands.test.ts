@@ -989,7 +989,11 @@ describe('rework', () => {
     // duty's re-validation exists for, because closing it then would be closing live work.
     const reworked = taskOf(harness);
     await harness.memory.transaction(async (scope) => {
-      await harness.store.tasks.save(scope.tx, { ...reworked, mr: before.mr });
+      // `mr_ref` is the narrow writer's since WP-138, and on the task's current branch.
+      await harness.store.tasks.recordMergeRequest(scope.tx, reworked.task.id, {
+        ...(before.mr as NonNullable<typeof before.mr>),
+        branch: reworked.branch,
+      });
     });
     await harness.drain();
 

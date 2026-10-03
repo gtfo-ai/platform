@@ -112,6 +112,13 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // WP-122's manual start: one resolution for the ticket read a person asked for — from an HTTP
   // request, outside every transaction and outside any run, so no minted credential.
   'manual-start.ts': 1,
+  // WP-138's `mr_ready` duty: one resolution for the undraft and the merge-request pipeline, in a
+  // job after the Developer stage, outside every transaction and outside any run.
+  'merge-request-ready.ts': 1,
+  // WP-138's `open_mr` and `update_mr_description`: one resolution per tool call — the one door
+  // made **inside a run**, so its scope is the run's and not `noRunScopedSecrets()`
+  // (`RUN_SCOPED_DOOR_SITES` below).
+  'merge-request-tool.ts': 1,
   // WP-110's merge-request poller: WP-87's two — one resolution per poll of a git binding, one more
   // when a failed poll re-reads the plan to re-arm itself.
   'mr-poll.ts': 2,
@@ -143,6 +150,15 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   'workpad.ts': 2,
 };
 
+/**
+ * The sites that resolve a project's bindings **from inside a run** and therefore pass the run's
+ * own scope (Q55), with the literal that names it — WP-138's merge-request tools, whose call carries
+ * the model credential the run was given. Every other site names `noRunScopedSecrets()`.
+ */
+const RUN_SCOPED_DOOR_SITES: Readonly<Record<string, string>> = {
+  'merge-request-tool.ts': 'runScopedSecrets: options.runScopedSecrets()',
+};
+
 describe('every pipeline call into the integrations port', () => {
   it('names its scope with noRunScopedSecrets(), so a new one has to decide rather than default', () => {
     const offenders: string[] = [];
@@ -158,7 +174,8 @@ describe('every pipeline call into the integrations port', () => {
         found[file] = (found[file] ?? 0) + 1;
         // The scope may sit on the same line or below it; biome wraps at 100 characters.
         const window = lines.slice(line - 1, line + 3).join(' ');
-        if (!window.includes('noRunScopedSecrets()')) {
+        const named = RUN_SCOPED_DOOR_SITES[file] ?? 'noRunScopedSecrets()';
+        if (!window.includes(named)) {
           offenders.push(`${file}:${line}`);
         }
       }

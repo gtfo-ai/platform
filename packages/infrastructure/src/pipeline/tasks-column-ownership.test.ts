@@ -1,6 +1,6 @@
 /**
  * Every column of `tasks` has **one** writing statement — read off disk (WP-15e) — except the ones
- * {@link CO_OWNED_COLUMNS} names with an exact count and a reason (`mr_ref`, WP-60).
+ * {@link CO_OWNED_COLUMNS} names by shape with a reason (`mr_ref`, WP-60 and WP-138).
  *
  * This is the half of PROGRESS backlog 18 that a version column cannot do. Optimistic concurrency
  * makes `save` refuse a write over a row that moved; it says nothing about a column `save` names
@@ -65,23 +65,26 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const SHARED_COLUMNS: ReadonlySet<string> = new Set(['updated_at', 'version']);
 
 /**
- * Columns **two** statements write by decision, with the count and the reason — the exception to
- * "exactly one", stated as a number so a third writer still fails.
+ * Columns more than one statement writes by decision, with the statements named and the reason —
+ * the exception to "exactly one", stated by shape so a further writer still fails.
  *
- * `mr_ref` (WP-60, PROGRESS backlog 182): `save` owns the document, and `saveMergeRequestHead`
- * moves **one key of it** (`jsonb_set(mr_ref, '{head_sha}', …)`) when the provider announces a push
- * nobody on the platform made — a human's, take-over included. It is the one narrow writer that
- * shares a column, and it pays for that the way standing rule 79 says: the same statement bumps
- * `version`, so a `save` over a snapshot read before it is refused and re-reads rather than putting
- * the old revision back. Both statements live in `postgres-pipeline-store.ts`, which the per-file
- * list below still pins.
+ * `mr_ref` (WP-60, PROGRESS backlog 182; WP-138): since WP-138 it is **not** `save`'s — a whole-row
+ * write no longer names it, so no stale snapshot can put an older merge request back — and three
+ * narrow statements write it, each one key or one transition of the document:
+ * `recordMergeRequest` (the developer's `open_mr`, compare-and-set: only while the row holds none or
+ * the same iid, on the task's own branch), `releaseMergeRequest` (the rework's let-go, only while it
+ * names that iid) and `saveMergeRequestHead` (one key, `head_sha`, forward only by the provider's
+ * instant, still bumping the token as it did when `save` owned the document). All three live in
+ * `postgres-pipeline-store.ts`, which the per-file list below still pins.
  */
 const CO_OWNED_COLUMNS: Readonly<Record<string, readonly RegExp[]>> = {
   // Named by the statement's shape, not counted (review round 1): a substituted writer — a second
   // whole-document assignment, say — fails even at the same count.
   mr_ref: [
-    // `save`: the whole document, under the version predicate.
-    /mr_ref\s*=\s*\$5::jsonb[\s\S]*version\s*=\s*version\s*\+\s*1[\s\S]*and\s+version\s*=\s*\$8/,
+    // `recordMergeRequest`: the whole document, compare-and-set on the iid and the branch.
+    /mr_ref\s*=\s*case[\s\S]*jsonb_set\(\$2::jsonb,\s*'\{head_sha\}',\s*mr_ref\s*->\s*'head_sha'\)[\s\S]*mr_ref\s+is\s+null\s+or\s+\(mr_ref\s*->>\s*'iid'\)::int\s*=\s*\$3[\s\S]*branch\s+is\s+null\s+or\s+branch\s*=\s*\$4/,
+    // `releaseMergeRequest`: null, only while it names the iid.
+    /mr_ref\s*=\s*null[\s\S]*\(mr_ref\s*->>\s*'iid'\)::int\s*=\s*\$2/,
     // `saveMergeRequestHead`: one key, forward only by the provider's instant, bumping the token.
     /mr_ref\s*=\s*case\s+when\s+\$5\s+then\s+jsonb_set\(mr_ref,\s*'\{head_sha\}'[\s\S]*version\s*=\s*version\s*\+\s*case\s+when\s+\$5[\s\S]*mr_head_at\s*<\s*\$4::timestamptz/,
   ],
@@ -182,6 +185,8 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     'state',
     'current_stage',
     'branch',
+    // `recordMergeRequest`, `releaseMergeRequest`, `saveMergeRequestHead` — co-owned (above);
+    // not `save`'s since WP-138.
     'mr_ref',
     'stage_attempts',
     'iteration_counters',

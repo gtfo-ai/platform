@@ -71,6 +71,7 @@ import type { Id, TaskStageOutcome } from '@platform/contracts';
 import { isBuiltinGateStageId } from '@platform/contracts';
 import type { CompiledPipeline, PipelineStage } from '@platform/domain';
 import { stageOf } from '@platform/domain';
+import type { RepositoryFileSource } from '../config/repository-config.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { failingJobWithLog, readFailingJobLog } from './ci-log.js';
 import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
@@ -214,7 +215,40 @@ export interface CiGateOptions {
   readonly unitOfWork: UnitOfWork;
   readonly store: Pick<PipelineStore, 'artifacts'>;
   readonly clock: { now(): string };
+  /** WP-138 ruling (f): see `PipelineSagaOptions.repositoryFiles`. Absent: a head with no pipeline waits. */
+  readonly repositoryFiles?: RepositoryFileSource;
 }
+
+/** The CI file whose presence on the default branch makes a head with no pipeline "not yet" (WP-138). */
+export const CI_CONFIG_PATH = '.gitlab-ci.yml';
+
+/**
+ * Does the default branch carry a CI file? Read from the platform's mirror (TD-026), the reader the
+ * configuration and the readiness re-check use. Three answers, and only `absent` lets the gate read
+ * a head with no pipeline as *"the project has no CI"* (product/04 S4).
+ */
+export const ciConfigOnDefaultBranch = async (
+  files: RepositoryFileSource | undefined,
+  projectId: Id,
+): Promise<
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'present' }
+  | { readonly kind: 'unknown'; readonly reason: string }
+> => {
+  if (files === undefined) {
+    return { kind: 'unknown', reason: 'this process composed no reader of the repository' };
+  }
+  const read = await files.read({ projectId, paths: [CI_CONFIG_PATH] });
+  if (read.status !== 'ok') {
+    return { kind: 'unknown', reason: read.reason };
+  }
+  const entry = read.files[CI_CONFIG_PATH];
+  if (entry === undefined) {
+    return { kind: 'unknown', reason: `the reading did not answer ${CI_CONFIG_PATH}` };
+  }
+  // A symlink, a gitlink or an oversized file is still a CI file somebody committed.
+  return entry.kind === 'absent' ? { kind: 'absent' } : { kind: 'present' };
+};
 
 /** The pipeline's own answer for the live head, before the tamper check is made. */
 export type CiReading =
@@ -488,9 +522,26 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
         }
         const status = await git.pipelineStatus(headSha, context);
         if (status === null) {
-          // "If the project has no CI, the gate is skipped and the local test run is the
-          // evidence" (product/04 S4) — the pipeline's half is; the tamper check is not.
-          return judgeCiSettlement(options, bindings, stored, headSha, { kind: 'no_pipeline' });
+          /**
+           * **No pipeline is not no CI** (WP-138 ruling (f)). "If the project has no CI, the gate
+           * is skipped and the local test run is the evidence" (product/04 S4) — but a head with
+           * no pipeline on a project whose default branch carries a CI file is a pipeline that has
+           * not started (a draft merge request whose pipelines the project skips, a runner queue,
+           * a rule that does not match the branch), and passing it would be a pass with no
+           * evidence. Only a default branch with no CI file reads as no CI; the pipeline's half is
+           * then skipped, the tamper check is not.
+           */
+          const ci = await ciConfigOnDefaultBranch(options.repositoryFiles, stored.task.projectId);
+          if (ci.kind === 'absent') {
+            return judgeCiSettlement(options, bindings, stored, headSha, { kind: 'no_pipeline' });
+          }
+          return {
+            kind: 'pending',
+            detail:
+              ci.kind === 'present'
+                ? `no pipeline has run for the head ${headSha.slice(0, 12)} yet, and the default branch has a CI file (${CI_CONFIG_PATH}), so this is not a project without CI`
+                : `no pipeline has run for the head ${headSha.slice(0, 12)}, and whether the default branch has a CI file cannot be read (${ci.reason}), so the gate waits rather than passing`,
+          };
         }
         if (CI_TERMINAL_PASS.has(status.status)) {
           return judgeCiSettlement(options, bindings, stored, headSha, {

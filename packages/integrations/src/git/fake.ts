@@ -195,6 +195,11 @@
  *     it. And a note's `created_at` is the fake's clock unless `addHumanDiscussion` is given one —
  *     a clock that starts at `FAKE_EPOCH`, months behind any platform instant, so a tier comparing
  *     a note with a stage's `entered_at` states the note's instant.
+ * 23. **Different — a merge-request pipeline the platform asks for is recorded, never run** (WP-138).
+ *     `createMergeRequestPipeline` records a `pending` pipeline with no job at the merge request's
+ *     head, which the CI gate then reads as a pipeline in flight; a test that wants it to finish
+ *     installs the outcome with `setPipeline`. GitLab runs the project's CI and may refuse the
+ *     request when no job applies to such a pipeline (`invalid_request`), which this fake never does.
  */
 import {
   type CodeownersRules,
@@ -294,6 +299,11 @@ export interface FakeGitOptions {
    * GitLab's answer for a binding with no webhook secret.
    */
   readonly receivesWebhooks?: boolean;
+  /**
+   * The account the binding's credential acts as — what `authenticatedUser()` answers and the
+   * author of every merge request this fake opens (WP-138). @default `agentic-bot`.
+   */
+  readonly botUser?: string;
 }
 
 interface StoredProject {
@@ -368,6 +378,11 @@ interface StoredMergeRequest {
   base_sha: string | null;
   /** Divergence 10: what `getMergeRequestDiff` answers, seeded by `setDiff`. */
   files: FileDiff[];
+  /**
+   * The account that opened it (WP-138). Absent is the fake's own bot account — every merge request
+   * the port opens — and `setMergeRequestAuthor` makes one a person's.
+   */
+  author?: string;
 }
 
 /** One branch of one project, with the files this fake has been asked to write on it. */
@@ -465,6 +480,22 @@ export interface FakeGitProvider extends GitProviderPort {
   seedProject(seed: FakeProjectSeed): void;
   /** Maps a handle to the account id `resolveUserId` answers with (divergence 11). */
   seedUser(handle: string, externalId: string): void;
+  /**
+   * Moves a merge request to another source branch — a harness's way of handing a merge request it
+   * seeded before it knew the ticket to the task whose branch it turns out to be (WP-138). GitLab
+   * has no such operation; nothing in the platform calls it.
+   */
+  setMergeRequestSourceBranch(input: {
+    readonly project: string;
+    readonly iid: number;
+    readonly branch: string;
+  }): void;
+  /** Makes a merge request a person's rather than the bot's — the one `open_mr` must not adopt (WP-138). */
+  setMergeRequestAuthor(input: {
+    readonly project: string;
+    readonly iid: number;
+    readonly authorId: string;
+  }): void;
   /** Installs (or replaces) the pipeline for a commit. */
   setPipeline(pipeline: {
     readonly project: string;
@@ -664,6 +695,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     ...(options.clockStart === undefined ? {} : { clockStart: options.clockStart }),
   });
   const baseUrl = options.baseUrl ?? 'https://git.example.test';
+  const botUser = options.botUser ?? 'agentic-bot';
   const capabilities: GitProviderCapabilities = {
     webhooks: true,
     projectTokens: true,
@@ -831,7 +863,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       coverage_pct: mr.coverage_pct,
       labels: [...mr.labels],
       reviewers: mr.reviewers.map((id) => identityOf(id)),
-      author: identityOf('agentic-bot'),
+      author: identityOf(mr.author ?? botUser),
       web_url: mrUrl(mr),
       merged_at: mr.merged_at,
     });
@@ -1363,6 +1395,54 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       return toMergeRequest(mr);
     },
 
+    findOpenMergeRequest: async (projectPath, sourceBranch) => {
+      core.enter('find_open_merge_request');
+      requireProject('find_open_merge_request', projectPath);
+      const open = mergeRequests.filter(
+        (mr) =>
+          mr.project === projectPath && mr.source_branch === sourceBranch && mr.state === 'opened',
+      );
+      if (open.length > 1) {
+        throw conflict(
+          PROVIDER,
+          'find_open_merge_request',
+          `${open.length} open merge requests have source branch ${sourceBranch}`,
+        );
+      }
+      const [only] = open;
+      return only === undefined ? null : toMergeRequest(only);
+    },
+
+    authenticatedUser: async () => {
+      core.enter('authenticated_user');
+      return identityOf(botUser);
+    },
+
+    createMergeRequestPipeline: async (mrRef) => {
+      core.enter('create_merge_request_pipeline');
+      const mr = requireMr('create_merge_request_pipeline', mrRef);
+      pipelineCounter += 1;
+      // Divergence 23: the pipeline is recorded `pending` with no job and stays so until a test
+      // installs one with `setPipeline` — this fake runs no CI.
+      const pipeline: StoredPipeline = {
+        id: `p-${pipelineCounter}`,
+        project: mr.project,
+        head_sha: mr.head_sha,
+        status: 'pending',
+        jobs: [],
+        coverage_pct: null,
+        finished_at: null,
+      };
+      pipelines.push(pipeline);
+      const created = toPipeline(pipeline);
+      return {
+        id: created.id,
+        head_sha: created.head_sha,
+        status: created.status,
+        url: created.url,
+      };
+    },
+
     getMergeRequestDiffStats: async (mrRef) => {
       core.enter('get_merge_request_diff_stats');
       // Divergence 17: the same stored value the three `diff_stats` surfaces serve.
@@ -1681,6 +1761,24 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       mr.mergeable = input.mergeable;
       mr.has_conflicts = input.hasConflicts;
       return toMergeRequest(mr);
+    },
+
+    setMergeRequestSourceBranch: (input) => {
+      requireMr('set_merge_request_source_branch', {
+        provider: PROVIDER,
+        project_path: input.project,
+        iid: input.iid,
+        url: `${baseUrl}/${input.project}/-/merge_requests/${input.iid}`,
+      }).source_branch = input.branch;
+    },
+
+    setMergeRequestAuthor: (input) => {
+      requireMr('set_merge_request_author', {
+        provider: PROVIDER,
+        project_path: input.project,
+        iid: input.iid,
+        url: `${baseUrl}/${input.project}/-/merge_requests/${input.iid}`,
+      }).author = input.authorId;
     },
 
     setPipeline: (input) => {

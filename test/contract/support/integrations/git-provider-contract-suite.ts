@@ -183,6 +183,18 @@ export interface GitProviderContractContext {
     readonly systemNoteId: string;
     readonly platformNoteId: string;
   };
+  /**
+   * WP-138: the developer's `open_mr` adopts an existing open merge request only when it is the
+   * platform's own. `openBranch` has exactly one open merge request (`openIid`), opened by the
+   * binding's own account; `emptyBranch` has none. `pipelineIid` is the merge request a new
+   * merge-request pipeline is created for.
+   */
+  readonly adoption: {
+    readonly openBranch: string;
+    readonly openIid: number;
+    readonly emptyBranch: string;
+    readonly pipelineIid: number;
+  };
   /** Head sha of a pipeline the harness seeded, with one failing job that has a log. */
   readonly pipelineSha: string;
   readonly failingJobName: string;
@@ -483,6 +495,51 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         // `conflict`, not `invalid_request`: GitLab answers 409 here, and the caller's response is
         // "read the existing merge request", not "fix the call".
         await expectIntegrationError(() => port.openMergeRequest(draft), 'conflict');
+      });
+
+      /**
+       * WP-138's adoption read, both answers (rule 42): the one open merge request of a branch, and
+       * `null` for a branch with none — never an error, which would read as "cannot tell".
+       */
+      it('finds the one open merge request of a source branch, and none for a branch without one', async () => {
+        const found = await port.findOpenMergeRequest(context.project, context.adoption.openBranch);
+        expect(found, 'the branch has an open merge request').not.toBeNull();
+        const parsed = mergeRequestSchema.parse(found);
+        expect(parsed.ref.iid).toBe(context.adoption.openIid);
+        expect(parsed.state).toBe('opened');
+        expect(parsed.source_branch).toBe(context.adoption.openBranch);
+
+        const none = await port.findOpenMergeRequest(context.project, context.adoption.emptyBranch);
+        expect(none).toBeNull();
+      });
+
+      /**
+       * WP-138: the binding's own account is what tells the platform's merge request from a
+       * person's — so it must be the identity the provider writes as a merge request's author.
+       */
+      it("answers the binding's own account, the author of the merge requests it opened", async () => {
+        const me = await port.authenticatedUser();
+        expect(me.external_id.length).toBeGreaterThan(0);
+        const mine = await port.findOpenMergeRequest(context.project, context.adoption.openBranch);
+        expect(mine?.author?.external_id, 'the open merge request is the binding’s own').toBe(
+          me.external_id,
+        );
+      });
+
+      /**
+       * WP-138 ruling (g): a merge request marked ready with no pipeline on its head gets one.
+       * Asserted on the head the pipeline runs at, not only on an id coming back.
+       */
+      it("creates a merge-request pipeline at the merge request's head", async () => {
+        const mr = await port.getMergeRequest(mrRef(context.adoption.pipelineIid));
+        const created = await port.createMergeRequestPipeline(mrRef(context.adoption.pipelineIid));
+        expect(created.id.length).toBeGreaterThan(0);
+        expect(created.head_sha).toBe(mr.head_sha);
+        expect(['pending', 'running', 'created']).toContain(created.status);
+        await expectIntegrationError(
+          () => port.createMergeRequestPipeline(mrRef(context.missingMergeRequestIid)),
+          'not_found',
+        );
       });
 
       it('reports mergeability as the provider computed it, including "not computed yet"', async () => {

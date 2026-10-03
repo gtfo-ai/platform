@@ -71,6 +71,7 @@ import {
   type StageExecuteData,
   stageExecuteHandler,
 } from './jobs.js';
+import { mergeRequestReadyHandlers } from './merge-request-ready.js';
 import { type PipelineOutboundOptions, pipelineOutboundHandler } from './outbound.js';
 import { providerSignalHandlers } from './provider-signals.js';
 import { resolveOnMergeHandler } from './resolve-on-merge.js';
@@ -324,6 +325,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       ...coverageHandlers(options),
       // WP-38: the dependency gate, on the Developer stage's own completion (product/04:58).
       ...dependencyGateHandlers(options),
+      // WP-138 (g): the developer's merge request marked ready, with a pipeline when it has none.
+      ...mergeRequestReadyHandlers(options),
       // WP-34: the shadow report at the human stage, and the batch's own completion.
       ...shadowHandlers(shadowOptions),
       // The notify band (WP-32), TD-005 priority 210 — the one handler outside the core and

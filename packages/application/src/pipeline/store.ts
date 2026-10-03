@@ -357,6 +357,11 @@ export class TaskConcurrentModificationError extends Error implements Concurrenc
   }
 }
 
+/** What {@link TaskRepository.recordMergeRequest} did (WP-138). */
+export type MergeRequestRecording =
+  | { readonly kind: 'recorded' }
+  | { readonly kind: 'refused'; readonly recorded: MergeRequestRef | null };
+
 export interface TaskRepository {
   load(tx: Transaction, taskId: Id): Promise<StoredTask | null>;
   /**
@@ -429,6 +434,10 @@ export interface TaskRepository {
    *    below and to `CostStore.saveEstimate`; `save` does not name them, so it cannot put back a
    *    `null` one of them filled in. That direction was live until WP-15e: `saveWorkpad` stopped the workpad job
    *    from clobbering the executor, and nothing stopped the executor from clobbering the workpad.
+   *    **`mr_ref` joined them at WP-138**: the merge request is the `open_mr` tool's record
+   *    (`recordMergeRequest`), the rework's let-go (`releaseMergeRequest`) and the provider's head
+   *    (`saveMergeRequestHead`); a snapshot's `mr` is ignored here, and the returned snapshot carries
+   *    the row's own.
    *
    * The partition is enforced rather than described: `tasks-column-ownership.test.ts` reads the SQL
    * of every `update tasks` statement in the tree off disk and fails when two of them name the same
@@ -446,8 +455,8 @@ export interface TaskRepository {
    * residual that can be closed must live where it can be.
    *
    * **It returns the snapshot at its new version, and a caller that writes twice must use it.**
-   * Two saves in one transaction are an ordinary shape here — `recordMergeRequest` records the MR
-   * and then `applyDecision` moves the stage — and the second one carries the version the first
+   * Two saves in one transaction are an ordinary shape here — the saga's `recordMergeRequest` fills
+   * the branch from the record and then `applyDecision` moves the stage — and the second one carries the version the first
    * one consumed unless the value travels. The saga's own tests found this within minutes of the
    * check existing, which is the argument for returning it rather than documenting the hazard.
    */
@@ -601,6 +610,32 @@ export interface TaskRepository {
     },
   ) => Promise<number>;
   /**
+   * Records the merge request the developer's `open_mr` opened or adopted — the one writer that
+   * sets `mr_ref` to a merge request (WP-138 ruling (e)).
+   *
+   * **Compare-and-set**: written only while `mr_ref` is `null` or already names the same `iid`
+   * (then the stored reference is replaced, **except its `head_sha`**, which only
+   * `saveMergeRequestHead` moves forward — review round 1), and only while the task's `branch`
+   * is `null` or is `mr.branch` — so a call from a run a rework has since moved to a new branch
+   * cannot put the rejected merge request back. Anything else is refused and answered
+   * `{ kind: 'refused', recorded }` with the reference the row holds; nothing is written. No version
+   * bump: since WP-138 `save` does not name `mr_ref`, so no whole-row write can put an older value
+   * back (the partition `tasks-column-ownership.test.ts` holds).
+   *
+   * @throws when the task does not exist.
+   */
+  readonly recordMergeRequest: (
+    tx: Transaction,
+    taskId: Id,
+    mr: MergeRequestRef,
+  ) => Promise<MergeRequestRecording>;
+  /**
+   * Lets go of the task's merge request — `mr_ref = null`, only while it still names `iid` (WP-138).
+   * One caller: the rework command, in the transaction that also moves the task to its new branch
+   * (WP-59, Q92). Narrow because `mr_ref` left `save`'s columns at WP-138. Answers whether it moved.
+   */
+  readonly releaseMergeRequest: (tx: Transaction, taskId: Id, iid: number) => Promise<boolean>;
+  /**
    * Moves `mr_ref.head_sha` **forward only** — a push the provider announced, a human's or the
    * take-over's (WP-60, PROGRESS backlog 182; ordered at review round 1).
    *
@@ -618,9 +653,10 @@ export interface TaskRepository {
    * advances (no version bump: `save` does not own that column), so a stale delivery arriving after
    * the platform's own push was announced is refused too.
    *
-   * `mr_ref` belongs to `save`, so a head that **does** move bumps `version` in the same statement
-   * (rule 79): a `save` over a snapshot read before it is refused rather than putting the old
-   * revision back. The census in `tasks-column-ownership.test.ts` names both statements.
+   * A head that **does** move bumps `version` in the same statement. That was rule 79's answer while
+   * `mr_ref` belonged to `save`; since WP-138 `save` no longer names the column, and the bump stays
+   * so a decision a handler made over a snapshot read before the push is refused and re-made rather
+   * than written. The census in `tasks-column-ownership.test.ts` names all three `mr_ref` writers.
    *
    * Answers whether the head moved.
    *

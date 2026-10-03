@@ -280,7 +280,21 @@ is *Done*.
 - **The Inbox** gets the plan approval after Architecture (Supervised, probation). Approve it as the
   admin; the task continues into Implementation.
 - **GitLab** gets an `agentic/<ticket>` branch and a merge request from Implementation; **Jira** gets
-  the workpad comment and the status moves.
+  the workpad comment and the status moves. The merge request is opened by the Developer through the
+  platform's `open_mr` tool (WP-138): from `agentic/<ticket>` into the project's **default branch**
+  (Autix: `develop` — the project's `default_branch`, never a branch the agent names), as a
+  **draft**, with *"Opened by the agentic platform for <ticket>."* at the end of its description
+  (and *"Requested by <name>"* when the ticket's reporter maps to a platform user). When Implementation completes, the platform **marks it ready** (removes
+  `Draft:`), and — when its head has no pipeline and the default branch has a `.gitlab-ci.yml`, or the platform
+  cannot read whether it has one — asks
+  GitLab for a merge-request pipeline (the API behind the merge request's *Run pipeline* button),
+  because GitLab does not start one when a draft is marked ready. Read off GitLab's documentation,
+  not measured on gitlab.com (docs/TODO.md).
+- **Before the first feature ticket, admit `agentic/` in the project's CI rules.** Autix runs its
+  Composer jobs only for source branches matching `^(feature|bugfix)/` and skips merge-request
+  pipelines for a `Draft:` title: add `agentic` to that rule (`^(feature|bugfix|agentic)/`), or the
+  merge request gets no pipeline and the CI gate waits for one (the platform's branch namespace is
+  fixed, Q114).
 - **The runner's log** has a *"stage executed"* line per stage.
 
 ## 8. When something fails — where it is named
@@ -306,7 +320,10 @@ The gate asks GitLab for the merge request's head pipeline when it is entered an
 poll-only binding receives none. So a CI pipeline that takes longer than **about two minutes** parks
 the task *Needs human* at the CI gate even when it later goes green. When the pipeline has finished,
 **Hand back** at `ci_gate` from the task page: the gate is read again (with five fresh checks). A
-project with no CI at all passes the gate's pipeline half.
+project with no CI at all passes the gate's pipeline half — but **only when the default branch has
+no `.gitlab-ci.yml`** (WP-138): a head with no pipeline on a project that has one is a pipeline that
+has not started, and the gate waits for it rather than passing. The file is read from the platform's
+own mirror (`APP_KNOWLEDGE_MIRROR_ROOT`); a process that has none cannot tell, and waits too.
 
 The logs are JSON, one line per entry, with `task_id` and `run_id` where they apply:
 `docker compose logs -f app runner launcher`.

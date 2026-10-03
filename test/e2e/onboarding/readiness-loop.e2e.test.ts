@@ -451,7 +451,7 @@ describe('the readiness loop', () => {
     // ── Criterion 1: a merged task on a repository that gained a criterion ──
     const opened = await pipeline.git.openMergeRequest({
       project: repoPath,
-      branch: 'agentic/acme-1',
+      branch: 'agentic/ACME-1',
       target: 'main',
       title: 'Draft: sum the invoice footer',
       description: 'Opened by the developer stage.',
@@ -476,7 +476,7 @@ describe('the readiness loop', () => {
     });
     taskWorld = {
       mr: { iid: opened.ref.iid, url: opened.web_url, headSha: opened.head_sha },
-      branch: 'agentic/acme-1',
+      branch: 'agentic/ACME-1',
     };
     await pipeline.publish([
       inboundEvent('ticket.matched', {
@@ -522,7 +522,7 @@ describe('the readiness loop', () => {
           project_path: repoPath,
           iid: opened.ref.iid,
           url: opened.web_url,
-          branch: 'agentic/acme-1',
+          branch: 'agentic/ACME-1',
           head_sha: opened.head_sha,
         },
         draft: false,

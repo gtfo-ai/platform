@@ -572,6 +572,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             ...(workspaces === undefined ? {} : { workspaces }),
           },
           pool: database.pool,
+          // WP-138 (f): the CI gate reads the default branch's CI file from this mirror.
+          knowledgeMirrorRoot: config.knowledgeMirrorRoot,
           eventing,
           // Already wrapped above, which is why `composePipeline` no longer applies the seam.
           jobs,

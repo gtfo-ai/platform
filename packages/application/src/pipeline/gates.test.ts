@@ -29,6 +29,7 @@ import { BUILTIN_GATE_STAGE_IDS } from '@platform/contracts';
 import type { PipelineStage } from '@platform/domain';
 import { compilePipeline, FEATURE_TEMPLATE, stageOf } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import type { RepositoryFileEntry, RepositoryFileSource } from '../config/repository-config.js';
 import { createIntegrationActionExecutor } from '../integrations/action-executor.js';
 import { allowAnyIntegrationHost } from '../integrations/egress.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
@@ -256,6 +257,23 @@ const noTransaction: UnitOfWork = {
   transaction: async (fn) => fn({ tx: {} as never, events: {} as never } as never),
 } as UnitOfWork;
 
+/** A default branch whose files the mirror reads as `files`, every other path absent (WP-138). */
+const repositoryWith = (
+  files: Readonly<Record<string, RepositoryFileEntry>>,
+): RepositoryFileSource => ({
+  read: async (request) => ({
+    status: 'ok',
+    commitSha: 'd'.repeat(40),
+    files: Object.fromEntries(
+      request.paths.map((path) => [path, files[path] ?? { kind: 'absent' }]),
+    ),
+  }),
+});
+const NO_CI_FILE = repositoryWith({});
+const WITH_CI_FILE = repositoryWith({
+  '.gitlab-ci.yml': { kind: 'file', text: 'test:\n  script: make test\n', blobSha: 'e'.repeat(40) },
+});
+
 const evaluate = (
   stage: PipelineStage,
   stored: StoredTask,
@@ -265,9 +283,18 @@ const evaluate = (
     readonly protectedPaths?: readonly string[];
     /** WP-106 (backlog 354): the port's answer for a stored document this release refuses. */
     readonly configRefusal?: string;
+    /**
+     * WP-138 (f): the default branch's files. @default {@link NO_CI_FILE} — a project with no CI
+     * file, so a head with no pipeline still reads as "no CI" in a case about anything else; `null`
+     * composes no reader at all.
+     */
+    readonly repositoryFiles?: RepositoryFileSource | null;
   } = {},
 ) =>
   createGateEvaluator({
+    ...(world.repositoryFiles === null
+      ? {}
+      : { repositoryFiles: world.repositoryFiles ?? NO_CI_FILE }),
     integrations: staticPipelineIntegrations(integrationsWith(git)),
     settings: staticProjectSettings((projectId) =>
       defaultProjectSettings(projectId, {
@@ -509,6 +536,48 @@ describe('the CI gate', () => {
     });
     expect(result.kind).toBe('settled');
     expect(result).toMatchObject({ passed: true });
+  });
+
+  /**
+   * WP-138 ruling (f), the canary's three halves: **no pipeline is not no CI** when the default
+   * branch carries a CI file — a draft whose merge-request pipelines the project skips reads as a
+   * pass with no evidence otherwise — and a gate that cannot read the file waits rather than passes.
+   * The half above (`passes when the project has no pipeline…`) is the default-branch-without-a-CI-
+   * file case, which still passes.
+   */
+  it('waits, rather than passing, on a head with no pipeline when the default branch has a CI file (WP-138)', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      { getPipelineStatus: async () => null },
+      { repositoryFiles: WITH_CI_FILE },
+    );
+    expect(result.kind).toBe('pending');
+    expect(result.detail).toContain('.gitlab-ci.yml');
+    expect(result.detail).toContain('not a project without CI');
+  });
+
+  it('waits on a head with no pipeline when the CI file cannot be read, and when no reader is composed (WP-138)', async () => {
+    const unreadable = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      { getPipelineStatus: async () => null },
+      {
+        repositoryFiles: {
+          read: async () => ({ status: 'unavailable', reason: 'the mirror fetch failed' }),
+        },
+      },
+    );
+    expect(unreadable).toMatchObject({ kind: 'pending' });
+    expect(unreadable.detail).toContain('the mirror fetch failed');
+    const unread = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      { getPipelineStatus: async () => null },
+      { repositoryFiles: null },
+    );
+    expect(unread).toMatchObject({ kind: 'pending' });
+    expect(unread.detail).toContain('composed no reader of the repository');
   });
 
   it('waits while the pipeline is still running', async () => {

@@ -168,6 +168,25 @@ export interface GitLabClient {
     project: string,
     query: Readonly<Record<string, string | number>>,
   ): Promise<z.output<typeof gitlabMergeRequestSchema>[]>;
+  /**
+   * § "List project merge requests" with `state=opened` and `source_branch` (WP-138) — the open
+   * merge request of one branch, which `open_mr` reads when the create answered `409`. One page:
+   * GitLab holds at most one open merge request per source branch, and the caller refuses more.
+   */
+  openMergeRequestsForBranch(
+    project: string,
+    sourceBranch: string,
+  ): Promise<z.output<typeof gitlabMergeRequestSchema>[]>;
+  /**
+   * <https://docs.gitlab.com/api/merge_requests/> § "Create merge request pipeline" —
+   * `POST /projects/:id/merge_requests/:merge_request_iid/pipelines` (WP-138).
+   */
+  createMergeRequestPipeline(
+    project: string,
+    iid: number,
+  ): Promise<z.output<typeof gitlabPipelineSchema>>;
+  /** <https://docs.gitlab.com/api/users/> § "Retrieve the current user" — `GET /user` (WP-138). */
+  currentUser(): Promise<z.output<typeof gitlabUserSchema>>;
   /** <https://docs.gitlab.com/api/discussions/> § "List all merge request discussion items". */
   listDiscussions(project: string, iid: number): Promise<z.output<typeof gitlabDiscussionSchema>[]>;
   /** § "Retrieve a merge request discussion item". */
@@ -435,6 +454,38 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
           100,
         ),
         'list_merged_merge_requests',
+      ),
+
+    openMergeRequestsForBranch: async (project, sourceBranch) =>
+      parse(
+        z.array(gitlabMergeRequestSchema),
+        (
+          await http.request({
+            method: 'GET',
+            path: `/projects/${encodeProjectId(project)}/merge_requests`,
+            query: { state: 'opened', source_branch: sourceBranch },
+            action: 'find_open_merge_request',
+          })
+        )?.body ?? [],
+        'find_open_merge_request',
+      ),
+
+    createMergeRequestPipeline: async (project, iid) =>
+      required(
+        gitlabPipelineSchema,
+        'create_merge_request_pipeline',
+        http.request({
+          method: 'POST',
+          path: `${mrPath(project, iid)}/pipelines`,
+          action: 'create_merge_request_pipeline',
+        }),
+      ),
+
+    currentUser: async () =>
+      required(
+        gitlabUserSchema,
+        'authenticated_user',
+        http.request({ method: 'GET', path: '/user', action: 'authenticated_user' }),
       ),
 
     listDiscussions: async (project, iid) =>

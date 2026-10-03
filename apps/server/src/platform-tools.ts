@@ -8,14 +8,17 @@
  * so `kb_search` had no home and the retrieval layer was reachable by nothing a run sees. This file
  * is the home.
  *
- * ## Two tools are real and seven are refusals, and that is deliberate
+ * ## Four tools are real and five are refusals, and that is deliberate
  *
  * `kb_search` is wired to the PostgreSQL knowledge store, and **`get_task_context`** — since WP-54
  * (PROGRESS backlog 83) — to the read projections (`queries/task-context-queries.ts`), scoped to the
- * run's own task and refusing, value by value, what the projections cannot answer. The other seven
- * need collaborators this build does not have — the Question aggregate's HTTP surface and a waiter
- * for the human's answer, and `IntegrationActionExecutor` reached from inside a live run rather than
- * from the `pipeline.outbound` job (WP-15d). Each is therefore a **named refusal**, exactly like
+ * run's own task and refusing, value by value, what the projections cannot answer. **`open_mr` and
+ * `update_mr_description`** are real since WP-138 (`@platform/application`'s
+ * `createMergeRequestTools`): `IntegrationActionExecutor` reached from inside a live run, which is
+ * the no-transaction phase of `stage.execute` and so the *call* half of WP-15d's split by
+ * construction. The other five need collaborators this build does not have — the Question
+ * aggregate's HTTP surface and a waiter for the human's answer, a progress row's shape, and a ticket
+ * write from inside a run. Each is therefore a **named refusal**, exactly like
  * `unavailableClaudeRunner` beside it in `pipeline.ts`, and for the same reason: a null object that
  * returns `{}` is a tool the model believes it used.
  *
@@ -41,15 +44,27 @@
  */
 import type {
   GetTaskContextInput,
+  InjectedSecret,
   KbSearchInput,
   Logger,
+  MergeRequestToolReader,
+  OpenMrInput,
+  PipelineIntegrationsPort,
   PlatformToolContext,
   PlatformToolName,
   PlatformToolPort,
+  TaskRepository,
+  UnitOfWork,
+  UpdateMrDescriptionInput,
 } from '@platform/application';
-import { createKbSearchTool } from '@platform/application';
-import type { JsonValue } from '@platform/contracts';
-import { db as dbAdapters, knowledge as knowledgeAdapters } from '@platform/infrastructure';
+import { createKbSearchTool, createMergeRequestTools } from '@platform/application';
+import type { Id, JsonValue, MergeRequestRef, TaskMode } from '@platform/contracts';
+import { mergeRequestRefSchema } from '@platform/contracts';
+import {
+  db as dbAdapters,
+  eventing as eventingAdapters,
+  knowledge as knowledgeAdapters,
+} from '@platform/infrastructure';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { readTaskContext } from './queries/task-context-queries.js';
@@ -81,17 +96,18 @@ const MISSING: Readonly<Record<Exclude<PlatformToolName, ImplementedTool>, strin
   report_progress:
     'progress reporting writes a transcript row, and the run transcript sink now exists (WP-15g) — what is missing is a shape for it: the sink is the runner’s, it writes what the SDK produced, and `TranscriptEvent` has no kind for a tool-reported progress line',
   add_ticket_comment:
-    'every outbound provider call goes through IntegrationActionExecutor, which the pipeline reaches from its `pipeline.outbound` job (WP-15d); reaching it from inside a run is unbuilt',
-  open_mr:
-    'every outbound provider call goes through IntegrationActionExecutor (WP-15d); opening a merge request from inside a run is unbuilt',
-  update_mr_description:
-    'every outbound provider call goes through IntegrationActionExecutor (WP-15d); updating a merge request from inside a run is unbuilt',
+    'every outbound provider call goes through IntegrationActionExecutor, which the pipeline reaches from its `pipeline.outbound` job (WP-15d); a ticket comment from inside a run is unbuilt',
   create_followup_ticket:
     'every outbound provider call goes through IntegrationActionExecutor (WP-15d); filing a ticket from inside a run is unbuilt',
 };
 
 /** The tools this build actually performs. Read by the composition test, not by the runtime. */
-export const IMPLEMENTED_PLATFORM_TOOLS = ['kb_search', 'get_task_context'] as const;
+export const IMPLEMENTED_PLATFORM_TOOLS = [
+  'kb_search',
+  'get_task_context',
+  'open_mr',
+  'update_mr_description',
+] as const;
 
 type ImplementedTool = (typeof IMPLEMENTED_PLATFORM_TOOLS)[number];
 
@@ -106,13 +122,77 @@ const refuse = (tool: Exclude<PlatformToolName, ImplementedTool>, logger: Logger
 export interface PlatformToolsOptions {
   readonly pool: pg.Pool;
   readonly logger: Logger;
+  /** The developer's merge request (WP-138): the store's narrow writer, the executor's door. */
+  readonly mergeRequests: {
+    readonly unitOfWork: UnitOfWork;
+    readonly tasks: Pick<TaskRepository, 'recordMergeRequest'>;
+    readonly integrations: PipelineIntegrationsPort;
+    /** The model credential a run is given (`agentRunEnvironment`), as named secrets (Q55). */
+    readonly runScopedSecrets: () => readonly InjectedSecret[];
+  };
 }
+
+/**
+ * What `open_mr` reads about the run's task, in its own short transaction (WP-138): the task's
+ * mode, ticket key, branch and merge request, the project's default branch and the requesting
+ * person's name for BD-025 §4's footer.
+ */
+export const createMergeRequestToolReader = (): MergeRequestToolReader => ({
+  read: async (tx, taskId) => {
+    const { rows } = await eventingAdapters.postgresTransaction(tx).client.query<{
+      id: Id;
+      project_id: Id;
+      mode: TaskMode;
+      ticket_key: string;
+      branch: string | null;
+      mr_ref: MergeRequestRef | null;
+      default_branch: string;
+      requested_by: string | null;
+    }>(
+      `select t.id, t.project_id, t.mode, t.ticket_key, t.branch, t.mr_ref,
+              p.default_branch, u.name as requested_by
+         from tasks t
+         join projects p on p.id = t.project_id
+         left join users u on u.id = t.requested_by_user_id
+        where t.id = $1`,
+      [taskId],
+    );
+    const row = rows[0];
+    if (row === undefined) {
+      return null;
+    }
+    return {
+      taskId: row.id,
+      projectId: row.project_id,
+      mode: row.mode,
+      ticketKey: row.ticket_key,
+      branch: row.branch,
+      mr: row.mr_ref === null ? null : mergeRequestRefSchema.parse(row.mr_ref),
+      defaultBranch: row.default_branch,
+      requestedBy: row.requested_by,
+    };
+  },
+});
+
+const toolContextOf = (context: PlatformToolContext) => ({
+  taskId: context.taskId,
+  projectId: context.projectId,
+  ...(context.redactor === undefined ? {} : { redactor: context.redactor }),
+});
 
 export const composePlatformTools = (options: PlatformToolsOptions): PlatformToolPort => {
   // Built, not connected: drizzle issues nothing until a query runs, so wiring stays query-free.
   const database = drizzle(options.pool, { schema: dbAdapters.schema });
   const kbSearch = createKbSearchTool({
     store: new knowledgeAdapters.PostgresKnowledgeStore(options.pool),
+    logger: options.logger,
+  });
+  const mergeRequests = createMergeRequestTools({
+    unitOfWork: options.mergeRequests.unitOfWork,
+    reader: createMergeRequestToolReader(),
+    tasks: options.mergeRequests.tasks,
+    integrations: options.mergeRequests.integrations,
+    runScopedSecrets: options.mergeRequests.runScopedSecrets,
     logger: options.logger,
   });
   return {
@@ -137,8 +217,24 @@ export const composePlatformTools = (options: PlatformToolsOptions): PlatformToo
         projectId: context.projectId,
       })) as unknown as JsonValue,
     addTicketComment: async () => refuse('add_ticket_comment', options.logger),
-    openMergeRequest: async () => refuse('open_mr', options.logger),
-    updateMrDescription: async () => refuse('update_mr_description', options.logger),
+    /**
+     * The run's own task and project, never ones the model named (WP-138): the branch and the
+     * target are the platform's, and a branch in the input is ignored by the tool.
+     */
+    openMergeRequest: async (input: OpenMrInput, context: PlatformToolContext) =>
+      (await mergeRequests.open(
+        {
+          title: input.title,
+          description: input.description,
+          ...(input.draft === undefined ? {} : { draft: input.draft }),
+        },
+        toolContextOf(context),
+      )) as JsonValue,
+    updateMrDescription: async (input: UpdateMrDescriptionInput, context: PlatformToolContext) =>
+      (await mergeRequests.updateDescription(
+        { description: input.description },
+        toolContextOf(context),
+      )) as JsonValue,
     createFollowupTicket: async () => refuse('create_followup_ticket', options.logger),
   };
 };

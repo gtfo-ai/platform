@@ -227,6 +227,14 @@ runGitProviderContract({
         iid: existing.ref.iid,
         expected: { files_changed: 1, insertions: 10, deletions: 2 },
       },
+      // WP-138: `agentic/task-1`'s merge request above is the one open one, opened by the fake's
+      // bot account; nothing is open from `agentic/no-open`.
+      adoption: {
+        openBranch: 'agentic/task-1',
+        openIid: existing.ref.iid,
+        emptyBranch: 'agentic/no-open',
+        pipelineIid: existing.ref.iid,
+      },
       pipelineSha: existing.head_sha,
       failingJobName: FAILING_JOB,
       missingJobLogRef: 'log:does-not-exist',

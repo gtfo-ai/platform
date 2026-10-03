@@ -163,6 +163,7 @@ import {
   type RepositoryConfigColumns,
   repositorySnapshotFrom,
 } from './config-layers.js';
+import { composeKnowledgeMirror } from './knowledge.js';
 import { composePlatformTools } from './platform-tools.js';
 
 /**
@@ -328,6 +329,12 @@ const askerLabel = async (pool: pg.Pool, userId: string): Promise<string> => {
 export interface ComposePipelineOptions {
   readonly composition: PipelineComposition;
   readonly pool: pg.Pool;
+  /**
+   * `APP_KNOWLEDGE_MIRROR_ROOT` — the platform's mirror, which the CI gate reads the default
+   * branch's `.gitlab-ci.yml` from before it reads a head with no pipeline as "no CI" (WP-138
+   * ruling (f)). Absent or `null`: the gate cannot tell, and such a head waits rather than passes.
+   */
+  readonly knowledgeMirrorRoot?: string | null;
   readonly eventing: ReturnType<typeof eventingAdapters.createEventing>;
   readonly jobs: ReturnType<typeof jobsAdapters.createPgBossJobs>['jobs'];
   /** `APP_SECRET_KEY`, already validated by `config.ts`. */
@@ -848,8 +855,8 @@ export interface ComposedPipeline {
   readonly agentMissing: readonly string[];
   /**
    * The nine in-process MCP tools this process composed, exposed so a caller can see what a run
-   * would be given. `kb_search` and `get_task_context` (WP-54) are real; the other seven refuse
-   * and say why (`./platform-tools.ts`).
+   * would be given. `kb_search`, `get_task_context` (WP-54), `open_mr` and `update_mr_description`
+   * (WP-138) are real; the other five refuse and say why (`./platform-tools.ts`).
    */
   readonly platformTools: PlatformToolPort;
   stop(): Promise<void>;
@@ -977,7 +984,34 @@ export const composePipeline = async (
    * own admission transaction, so `POOL_RESERVATIONS` is unchanged.
    */
   const costStore = costAdapters.createPostgresCostStore();
-  const platformTools = composePlatformTools({ pool: options.pool, logger: options.logger });
+  /**
+   * One store instance, because three things read it: the pipeline runtime, the developer's merge-request tools (WP-138) and the maintenance
+   * schedule below, which creates a chore task through the same repository every other task is
+   * created through (WP-36).
+   */
+  const store = pipelineAdapters.createPostgresPipelineStore({
+    templates: SHIPPED_TEMPLATES,
+    // A list read that skips a task with an unreadable `pipeline_dial` names it here (WP-62).
+    logger: options.logger,
+  });
+  const platformTools = composePlatformTools({
+    pool: options.pool,
+    logger: options.logger,
+    mergeRequests: {
+      unitOfWork: options.eventing.unitOfWork,
+      tasks: store.tasks,
+      integrations,
+      // The model credential a run is given, as named secrets — the run's own redactor carries it
+      // too; the binding is resolved with it so the adapter's own redaction has it as well (Q55).
+      runScopedSecrets: () => {
+        const environment = agentRunEnvironment(options.agent);
+        return environment.secretEnvNames.flatMap((name) => {
+          const value = environment.env[name];
+          return value === undefined ? [] : [{ name, value }];
+        });
+      },
+    },
+  });
 
   /**
    * The agent runner (WP-15g), and the one line that decides whether this process runs agents.
@@ -1026,16 +1060,6 @@ export const composePipeline = async (
   );
 
   /**
-   * One store instance, because two things read it: the pipeline runtime and the maintenance
-   * schedule below, which creates a chore task through the same repository every other task is
-   * created through (WP-36).
-   */
-  const store = pipelineAdapters.createPostgresPipelineStore({
-    templates: SHIPPED_TEMPLATES,
-    // A list read that skips a task with an unreadable `pipeline_dial` names it here (WP-62).
-    logger: options.logger,
-  });
-  /**
    * TD-028 decision 5: this process takes `stage.execute` jobs **only if it can perform one**.
    *
    * The condition is exactly the one `composeAgentRunner` already answers — a workspace
@@ -1080,9 +1104,24 @@ export const composePipeline = async (
   /** One outbox for the notify band and the maintenance pass's report (WP-65), which both write it. */
   const notifications = notifyAdapters.createPostgresNotificationStore();
 
+  /**
+   * The default branch's files for the CI gate (WP-138 ruling (f)) — the same mirror, credential
+   * and default-branch rule the knowledge index and the configuration reading use, composed once
+   * here. A process with no mirror root gets a reader that refuses by name, and the gate then waits.
+   */
+  const repositoryFiles = (
+    await composeKnowledgeMirror({
+      pool: options.pool,
+      secretKey: options.secretKey,
+      registry: stack.registry,
+      mirrorRoot: options.knowledgeMirrorRoot ?? null,
+      logger: options.logger,
+    })
+  ).files;
   const runtime = createPipelineRuntime({
     store,
     settings,
+    repositoryFiles,
     jobs,
     integrations,
     ids,

@@ -88,6 +88,38 @@ describe('which tools a run gets', () => {
   });
 });
 
+describe('open_mr (WP-138)', () => {
+  /**
+   * Ruling (b): the model supplies the title and the description. A branch it names is still
+   * accepted — a model trained on the older shape sends one — and reaches the port only to be
+   * ignored there (`merge-request-tool.ts` never reads it); `draft` is optional. And the port is
+   * given the run's own redactor on the context, which the tool refuses to work without.
+   */
+  it('accepts a model-named branch without requiring one, and hands the port the run redactor', async () => {
+    const seen: PlatformToolContext[] = [];
+    const tools = recordingTools({
+      openMergeRequest: async (_input, toolContext) => {
+        seen.push(toolContext);
+        return { iid: 7 };
+      },
+    });
+    const value = runtime({ tools });
+    const [openMr] = definitionsFor(value, ['open_mr']);
+    const bare = await callTool(openMr!, { title: 'Sum the footer', description: 'Adds it.' });
+    expect(bare.isError).toBe(false);
+    const named = await callTool(openMr!, {
+      title: 'Sum the footer',
+      description: 'Adds it.',
+      source_branch: 'main',
+      target_branch: 'production',
+    });
+    expect(named.isError).toBe(false);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]?.redactor).toBe(value.redactor);
+    expect(seen[0]?.taskId).toBe(FIXTURE_TASK_ID);
+  });
+});
+
 describe('handling one call', () => {
   it('calls the port and returns its answer', async () => {
     const tools = recordingTools();

@@ -58,6 +58,10 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
     sites: 2,
     how: "inside the `pipeline.outbound` duty's transactions: the loaded row's `stored`/`current.pipelineDial`",
   },
+  'packages/application/src/pipeline/merge-request-ready.ts': {
+    sites: 1,
+    how: "inside the `mr_ready` handler's transaction (WP-138): the loaded row's `stored.pipelineDial` — only to ask whether the completed stage produces ImplementationNotes",
+  },
   'packages/application/src/pipeline/stage-executor.ts': {
     sites: 1,
     how: "the `stage.execute` job's revalidation: the loaded row's `stored.pipelineDial`",
@@ -196,9 +200,9 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
     expect(counts).toEqual(expected);
   });
 
-  it('counts twenty-six — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108 — and states how each resolves the dial', () => {
+  it('counts twenty-seven — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138 — and states how each resolves the dial', () => {
     const total = [...census().values()].reduce((sum, calls) => sum + calls.length, 0);
-    expect(total).toBe(26);
+    expect(total).toBe(27);
     for (const [file, entry] of Object.entries(EXPECTED_SITES)) {
       expect(entry.how.length, file).toBeGreaterThan(20);
     }

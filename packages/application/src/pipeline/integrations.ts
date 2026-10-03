@@ -55,6 +55,7 @@ import type {
   CodeownersRules,
   CommitAction,
   CommitRef,
+  CreatedPipeline,
   CredentialScope,
   Discussion,
   FileDiff,
@@ -535,13 +536,13 @@ const mutate = async <T>(
 /**
  * The merge request, addressed at the binding that is **live now**.
  *
- * `tasks.mr_ref` records what the developer stage reported — the iid, the URL, the branch, the head
- * commit — and deliberately not which account it is on: learning that means resolving the project's
- * bindings, and the saga learns about a merge request from inside its handler's transaction, where
- * resolving a binding is a nested pool borrow and a credential decryption (WP-15d). So the provider
- * and the repository path are filled in **here**, where the binding is already in hand and is the
- * one in force rather than the one that was in force when the row was written. A ref that carries
- * its own path (an older row, or an event payload that named one) keeps it.
+ * `tasks.mr_ref` records the merge request the developer's `open_mr` opened or adopted — the iid,
+ * the URL, the branch, the head commit, and since WP-138 the provider and the repository path the
+ * tool's binding answered. A row written before WP-138 came from the developer's report and carries
+ * neither, because the saga learned it inside its handler's transaction, where resolving a binding
+ * is a nested pool borrow and a credential decryption (WP-15d). So a missing provider or path is
+ * filled in **here**, where the binding is already in hand and is the one in force rather than the
+ * one that was in force when the row was written. A ref that carries its own path keeps it.
  */
 const addressed = (git: GitBinding, ref: MergeRequestRefInput): MergeRequestRefInput => ({
   ...ref,
@@ -1469,9 +1470,8 @@ export const knowledgeWrites = (integrations: PipelineIntegrations) => ({
       return null;
     }
     // Parsed here too, and for the same reason: the description carries the same two untrusted
-    // values the commit message does. **It does not cover the other caller** — the developer's
-    // `open_mr` platform tool will build its own draft, and that one is a named refusal today
-    // (`apps/server/src/platform-tools.ts`); whoever builds it inherits this obligation.
+    // values the commit message does. The developer's `open_mr` (WP-138) builds its own draft in
+    // `codeMergeRequestWrites.open` below and parses it there too.
     const draft = mergeRequestDraftSchema.parse({
       project: git.project,
       branch: input.branch,
@@ -1715,6 +1715,201 @@ export const reviewWrites = (integrations: PipelineIntegrations) => ({
       // fixed in `reviewers` above.
       (result) => (result === null ? null : { discussion_id: result.id }),
       replayable<Discussion>(input.idempotencyKey),
+    );
+  },
+});
+
+/**
+ * Why the developer's `open_mr` did not adopt the open merge request it met (WP-138 ruling (c)).
+ *
+ * The provider answered that a merge request is already open from the task's branch, and the
+ * platform read it: it is adopted only when it is the platform's own — its target is the project's
+ * default branch and its author is the binding's account. Anything else is a person's merge request
+ * (or one aimed elsewhere), and recording it on the task would hand that person's work to the
+ * pipeline — `mr.merged` would advance the task. So it is refused **by name**, and nothing is
+ * recorded.
+ */
+export class MergeRequestNotAdoptedError extends Error {
+  override readonly name = 'MergeRequestNotAdoptedError';
+}
+
+/** What {@link codeMergeRequestWrites}`.open` did. */
+export type CodeMergeRequestOpening =
+  | { readonly kind: 'opened' | 'adopted'; readonly mergeRequest: MergeRequest }
+  /** A shadow task: recorded `would_have`, nothing reached the provider (rule 18). */
+  | { readonly kind: 'shadow' };
+
+/**
+ * The developer's own merge request — opened, described, marked ready and given a pipeline
+ * (WP-138). Every call is the executor's, outside a transaction (WP-15d): the platform tool runs in
+ * `stage.execute`'s no-transaction phase and the ready duty in `pipeline.outbound`.
+ *
+ * The caller has already decided the branch (the task's), the target (`projects.default_branch`)
+ * and the text (bounded, redacted, footer appended); nothing here takes a value from the model.
+ * `null` is a project with no git binding, as for every other write surface.
+ */
+export const codeMergeRequestWrites = (integrations: PipelineIntegrations) => ({
+  open: async (
+    input: {
+      readonly branch: string;
+      readonly target: string;
+      readonly title: string;
+      readonly description: string;
+      readonly draft: boolean;
+      /** `open_mr:<task id>:<branch>` — one merge request per task and branch (ruling (c)). */
+      readonly idempotencyKey: string;
+    },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<CodeMergeRequestOpening | null> => {
+    assertPlatformBranch(input.branch);
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    const draft = mergeRequestDraftSchema.parse({
+      project: git.project,
+      branch: input.branch,
+      target: input.target,
+      title: input.title,
+      description: input.description,
+      draft: input.draft,
+      labels: ['agentic'],
+      reviewers: [],
+      remove_source_branch: true,
+    });
+    try {
+      const opened = await mutate(
+        integrations,
+        git.ref,
+        'open_merge_request',
+        // What was touched, never the text: the title and the description are a model's words.
+        { project: git.project, branch: input.branch, target: input.target, draft: input.draft },
+        context,
+        async () => git.port.openMergeRequest(draft),
+        () => null as unknown as MergeRequest,
+        (result) => (result === null ? null : { iid: result.ref.iid, url: result.web_url }),
+        replayable<MergeRequest>(input.idempotencyKey),
+      );
+      return context.mode === 'shadow' || opened === null
+        ? { kind: 'shadow' }
+        : { kind: 'opened', mergeRequest: opened };
+    } catch (error) {
+      if (!(error instanceof IntegrationError) || error.code !== 'conflict') {
+        throw error;
+      }
+    }
+    // The provider holds an open merge request from this branch already — a retried call whose
+    // idempotency record was never written, or a resumed run. Read it and adopt it only if it is ours.
+    const existing = await read(
+      integrations,
+      git.ref,
+      'find_open_merge_request',
+      { project: git.project, branch: input.branch },
+      context,
+      async () => git.port.findOpenMergeRequest(git.project, input.branch),
+    );
+    if (existing === null) {
+      throw new MergeRequestNotAdoptedError(
+        `the provider refused a merge request from ${input.branch} as a duplicate and lists no open one from it; nothing was recorded`,
+      );
+    }
+    const me = await read(integrations, git.ref, 'authenticated_user', {}, context, async () =>
+      git.port.authenticatedUser(),
+    );
+    if (existing.target_branch !== input.target) {
+      throw new MergeRequestNotAdoptedError(
+        `merge request !${existing.ref.iid} is already open from ${input.branch} but targets another branch than the project's default branch ${input.target}; the platform does not adopt it`,
+      );
+    }
+    if (existing.author?.external_id !== me.external_id) {
+      throw new MergeRequestNotAdoptedError(
+        `merge request !${existing.ref.iid} is already open from ${input.branch} and was opened by another account than the binding's; the platform does not adopt a person's merge request`,
+      );
+    }
+    return { kind: 'adopted', mergeRequest: existing };
+  },
+
+  /** Replaces the description — `update_mr_description`. Keyed per description digest. */
+  describe: async (
+    input: {
+      readonly ref: MergeRequestRefInput;
+      readonly description: string;
+      readonly idempotencyKey: string;
+    },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<MergeRequest | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      git.ref,
+      'update_merge_request_description',
+      { project: git.project, iid: input.ref.iid },
+      context,
+      async () =>
+        git.port.updateMergeRequest(addressed(git, input.ref), {
+          description: input.description,
+          title: null,
+          draft: null,
+          labels: null,
+          reviewers: null,
+        }),
+      () => null as unknown as MergeRequest,
+      (result) => (result === null ? null : { iid: result.ref.iid }),
+      replayable<MergeRequest>(input.idempotencyKey),
+    );
+  },
+
+  /** Removes the draft prefix (ruling (g)) — the provider's own title rewrite, nothing else. */
+  markReady: async (
+    input: { readonly ref: MergeRequestRefInput; readonly idempotencyKey: string },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<MergeRequest | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      git.ref,
+      'mark_merge_request_ready',
+      { project: git.project, iid: input.ref.iid },
+      context,
+      async () =>
+        git.port.updateMergeRequest(addressed(git, input.ref), {
+          draft: false,
+          title: null,
+          description: null,
+          labels: null,
+          reviewers: null,
+        }),
+      () => null as unknown as MergeRequest,
+      (result) => (result === null ? null : { iid: result.ref.iid, draft: result.draft }),
+      replayable<MergeRequest>(input.idempotencyKey),
+    );
+  },
+
+  /** Starts a merge-request pipeline at the head (ruling (g)); keyed per head sha by the caller. */
+  createPipeline: async (
+    input: { readonly ref: MergeRequestRefInput; readonly idempotencyKey: string },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<CreatedPipeline | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      git.ref,
+      'create_merge_request_pipeline',
+      { project: git.project, iid: input.ref.iid },
+      context,
+      async () => git.port.createMergeRequestPipeline(addressed(git, input.ref)),
+      () => null as unknown as CreatedPipeline,
+      (result) => (result === null ? null : { pipeline_id: result.id, head_sha: result.head_sha }),
+      replayable<CreatedPipeline>(input.idempotencyKey),
     );
   },
 });

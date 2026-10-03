@@ -59,11 +59,13 @@ export const PLATFORM_SKILL_VERSIONS = {
   'file-followup-ticket': '1',
   // WP-54, the four provider skills: each now says it is provisioned because the project has the
   // binding (backlog 40) and which of its recipes the run's command policy allows (backlog 39).
-  'gitlab-mr': '2',
+  // WP-138: `open_mr` takes a title and a description; the platform chooses both branches.
+  'gitlab-mr': '3',
   'jira-ticket': '2',
   kb: '1',
   'loki-logs': '2',
-  'mr-description': '1',
+  // WP-138: the platform marks the merge request ready at the Developer stage's completion.
+  'mr-description': '2',
   retro: '1',
   'sentry-issue': '2',
   'verify-work': '1',

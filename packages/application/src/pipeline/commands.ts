@@ -1046,6 +1046,11 @@ export const reworkStageCommand = async (
         escalationBrief: returnBrief(stored, input.stage),
       });
       const cause = applied.events[0]?.id;
+      if (stored.mr !== null) {
+        // `mr_ref` left `save`'s columns at WP-138, so the let-go is its own narrow write, in
+        // this transaction beside the new branch the save above wrote.
+        await deps.store.tasks.releaseMergeRequest(scope.tx, stored.task.id, stored.mr.iid);
+      }
       if (stored.mr !== null && cause !== undefined) {
         // PROGRESS backlog 178: the name of the merge request this commit lets go of, in this
         // commit — so a close wake-up lost after it can be found and re-driven by the recovery pass.

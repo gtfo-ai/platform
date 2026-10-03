@@ -743,6 +743,44 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
     },
 
     /**
+     * WP-138 — the open merge request of one source branch. GitLab holds at most one; two in the
+     * answer are refused rather than chosen between, as the port says.
+     */
+    findOpenMergeRequest: async (project, sourceBranch) => {
+      const open = (await client.openMergeRequestsForBranch(project, sourceBranch)).filter(
+        (mr) => mr.source_branch === sourceBranch && mapMergeRequestState(mr.state) === 'opened',
+      );
+      if (open.length > 1) {
+        throw new IntegrationError(
+          'conflict',
+          GITLAB_PROVIDER_ID,
+          `${open.length} open merge requests of ${project} have this source branch`,
+          { action: 'find_open_merge_request' },
+        );
+      }
+      const [only] = open;
+      return only === undefined ? null : toMergeRequest(project, only);
+    },
+
+    /** WP-138 — `GET /user`: the account the binding's token acts as, as an identity. */
+    authenticatedUser: async () => identityOf(await client.currentUser()),
+
+    /**
+     * WP-138 — `POST …/merge_requests/:iid/pipelines`. GitLab answers the pipeline it created; its
+     * status is mapped like every other (a status this adapter does not know is refused loudly).
+     */
+    createMergeRequestPipeline: async (mrRef) => {
+      const project = projectOf(mrRef, 'create_merge_request_pipeline');
+      const created = await client.createMergeRequestPipeline(project, mrRef.iid);
+      return {
+        id: String(created.id),
+        head_sha: created.sha,
+        status: mapPipelineStatus(created.status, 'create_merge_request_pipeline'),
+        url: created.web_url ?? null,
+      };
+    },
+
+    /**
      * WP-59 — GraphQL's `MergeRequest.diffStatsSummary`, mapped onto the port's names: `fileCount`
      * is `files_changed`, `additions` is `insertions`, `deletions` stays. A merge request GitLab
      * does not show this token — `project` or `mergeRequest` answering `null`, which is how GraphQL

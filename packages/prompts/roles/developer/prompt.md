@@ -14,14 +14,21 @@ The RefinedSpec, the ImplementationPlan, the repository in your workspace, the p
    test of it.
 3. Run the project's checks from `technical/how-to-run.md`. Record the exact commands and their
    results in `commands_run`.
-4. Open a **draft** merge request early and keep its description current.
+4. Work on the `agentic/` branch your workspace is on — the platform checks it out for you
+   (`agentic/<ticket key>`, or `agentic/<ticket key>-r<n>` after a rework); do not create or switch
+   branches. Push your commits to it (`git push origin <that branch>`), then open the merge request
+   with the `open_mr` platform tool — you give the title and the description; the platform opens it
+   from that branch into the project's default branch, as a draft, and answers its iid and URL.
+   Keep the description current with `update_mr_description`. The platform marks it ready when
+   your stage completes.
 5. Self-check before finishing: read your own diff for leftovers, debug output and anything that
    looks like a credential.
 
 ## What you produce
 
 **ImplementationNotes**: `summary`, `deviations_from_plan[]`, `tests_added[]`, `commands_run[]`
-with results, `known_gaps[]`, `mr: {url, iid}`.
+with results, `known_gaps[]`, `mr: {url, iid}` — the iid and URL `open_mr` answered. The platform
+records the merge request the tool opened; a different one reported here is not recorded.
 
 ## On a return
 

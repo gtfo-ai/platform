@@ -273,6 +273,11 @@ const startHarness = (options: {
         return options.accounts?.[handle] ?? null;
       },
       updateMergeRequest: async (_ref, update) => {
+        if (update.reviewers == null) {
+          // WP-138's `mr_ready` duty marks the merge request ready through the same port method;
+          // it sets no reviewers, so it is not an assignment and is not recorded as one.
+          return mergeRequest(current);
+        }
         if (options.assignmentFails === true) {
           // Not an `IntegrationError`, so the executor does not retry: one attempt, one `failed`
           // audit row, one throw — which is the shape a 403 from a revoked token has.

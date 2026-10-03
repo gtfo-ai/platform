@@ -60,6 +60,7 @@ import type {
   PlatformToolPort,
   RunSpec,
 } from '@platform/application';
+import { exactSecretRedactor } from '@platform/application';
 import type {
   DomainEvent,
   Id,
@@ -69,9 +70,11 @@ import type {
   TranscriptEvent,
 } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
+import { SHIPPED_TEMPLATES, taskBranchName } from '@platform/domain';
 import {
   eventing as eventingAdapters,
   type launcher as launcherAdapters,
+  pipeline as pipelineAdapters,
   runner as runnerAdapters,
   secrets as secretAdapters,
 } from '@platform/infrastructure';
@@ -295,6 +298,8 @@ export interface PipelineE2E {
    * that uses it (standing rule 76).
    */
   kbSearches(): Promise<readonly KbSearchCall[]>;
+  /** Every `open_mr` answer a Developer run got through the production port (WP-138). */
+  openMrAnswers(): readonly { readonly stage: string; readonly answer: JsonValue }[];
   /**
    * The `integration_actions` rows the **production** audit-log adapter wrote (WP-15b).
    *
@@ -610,6 +615,36 @@ export interface StartPipelineOptions {
    * over the tools rather than a runner.
    */
   readonly kbSearchQuery?: string;
+  /**
+   * Whether the Developer stage's runs call `open_mr` through the production `PlatformToolPort`
+   * before they report (WP-138). @default true — since WP-138 the merge request a task has is the
+   * one the tool recorded, never the one an artifact names, so a walk through Implementation needs
+   * the call. The harness's seeded merge request is on the task's own branch, so the tool **adopts**
+   * it (the provider refuses a duplicate, and it is the binding's own, targeting the default
+   * branch); a test that seeds none (`seedMergeRequest: false`) has the tool open one.
+   */
+  readonly openMergeRequests?: boolean;
+  /**
+   * Whether the harness opens the merge request {@link SeededWorld.mr} names before the ticket
+   * arrives (WP-138). @default true. `false` leaves the provider with no merge request, so the
+   * Developer stage's `open_mr` opens the first one; `world.mr` then names nothing.
+   */
+  readonly seedMergeRequest?: boolean;
+  /**
+   * The ticket key whose task branch the seeded merge request is on (WP-138). @default `ACME-1`.
+   * The seeded merge request is adopted only by the task of this ticket.
+   */
+  readonly seedTicketKey?: string;
+  /** The project's `default_branch` (WP-138). @default `main`. */
+  readonly defaultBranch?: string;
+  /**
+   * **Kinder than production, and why the case needs it** (WP-138). A shadow run's `open_mr`
+   * records `would_have` and no merge request, so a shadow task never has `mr_ref`; a case about
+   * what follows a shadow task's merge request (WP-34's comparison) states here why the harness
+   * records {@link SeededWorld.mr} for each shadow Developer run anyway — the record the tool
+   * writes, through the production store. Unset, a shadow task records nothing, as in production.
+   */
+  readonly shadowMergeRequests?: string;
   /** Extra environment for the instance — `APP_DB_POOL_MAX` at the shipped default, say. */
   readonly env?: Readonly<Record<string, string>>;
   /** The primary's `ROLE` (WP-72). Absent is `all`, which is what every file before it ran. */
@@ -751,19 +786,21 @@ export const seedWorld = async (
   config: JsonObject,
   chat: 'fake' | 'slack' = 'fake',
   observability: ObservabilitySeed | undefined = undefined,
+  /** `projects.default_branch` (WP-138) — the target of every merge request the developer opens. */
+  defaultBranch = 'main',
 ): Promise<{ projectId: Id; userId: Id }> => {
   const seed = await pool.query<{ project_id: string; user_id: string }>(
     `with org as (insert into organizations (name) values ('e2e') returning id),
           project as (
-            insert into projects (org_id, key, name, repo_url, config)
-            select id, 'api', 'API', 'https://git.example.test/acme/api.git', $1::jsonb from org
+            insert into projects (org_id, key, name, repo_url, config, default_branch)
+            select id, 'api', 'API', 'https://git.example.test/acme/api.git', $1::jsonb, $2 from org
             returning id
           ),
           human as (
             insert into users (email, name) values ('pipeline@example.test', 'Operator') returning id
           )
      select (select id from project) as project_id, (select id from human) as user_id`,
-    [JSON.stringify(config)],
+    [JSON.stringify(config), defaultBranch],
   );
   const projectId = seed.rows[0]?.project_id as Id;
   const userId = seed.rows[0]?.user_id as Id;
@@ -916,7 +953,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     projects: [
       {
         path: GIT_PROJECT,
-        defaultBranch: 'main',
+        defaultBranch: options.defaultBranch ?? 'main',
         // WP-37: the repository's `CODEOWNERS`, seeded **here** rather than by a later
         // `seedProject` — re-seeding replaces the stored project, which would reset the iid counter
         // and the head this world's merge request was opened against.
@@ -947,14 +984,16 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     streams: options.observability?.logs?.streams ?? [],
   });
 
-  // The merge request the Implementation stage will report. In production the developer agent opens
-  // it with the `open_mr` platform tool; the fake Claude runner does not call tools (its divergence
-  // 6), so the harness opens it and the scenario reports what the provider chose.
-  const branch = 'agentic/acme-1';
+  // The merge request the scenarios report, opened before any ticket so a case can seed its diff and
+  // pipeline. Since WP-138 a task has the merge request its Developer run's `open_mr` recorded: the
+  // harness makes that call through the production port (the fake Claude runner calls no tool, its
+  // divergence 6) and hands this one to the first task that reaches it (`handSeededMergeRequest`),
+  // so the tool adopts it. It is opened on the branch of the case's first ticket, or `ACME-1`'s.
+  const branch = taskBranchName(options.seedTicketKey ?? options.tickets?.[0]?.key ?? 'ACME-1');
   const seededMr = await git.openMergeRequest({
     project: GIT_PROJECT,
-    branch,
-    target: 'main',
+    branch: options.seedMergeRequest === false ? 'agentic/harness-unused' : branch,
+    target: options.defaultBranch ?? 'main',
     title: 'Draft: sum the invoice footer',
     description: 'Opened by the developer stage.',
     draft: true,
@@ -1045,10 +1084,175 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
    * rather than about a unit: the port, the PostgreSQL knowledge store and the pool all come from
    * `composePipeline`, and the only double is the thing standing in for the model.
    */
+  /**
+   * **Which task the seeded merge request belongs to** (WP-138). The harness opens it before any
+   * ticket arrives (the scenarios report it, and many cases seed its diff and pipeline), on the
+   * branch of the case's first ticket; since WP-138 a task has the merge request its Developer run
+   * opened or adopted on **its own** branch. So the first task to reach a Developer run is handed
+   * the seeded one — moved to that task's branch if it is not there already — and `open_mr` adopts
+   * it (the provider refuses the duplicate; it is the binding's own and targets the default
+   * branch). Every later task opens a fresh one, which gets the seeded one's CI ({@link
+   * mirrorSeededCi}). `null` when the case seeded none to hand over.
+   */
+  let seededOwner: string | null = options.seedMergeRequest === false ? 'nobody' : null;
+  const taskBranchOf = async (spec: RunSpec): Promise<string> => {
+    if (spec.checkoutRef !== null && spec.checkoutRef !== undefined) {
+      return spec.checkoutRef;
+    }
+    const rows = await pool.query<{ ticket_key: string }>(
+      'select ticket_key from tasks where id = $1',
+      [spec.taskId],
+    );
+    return taskBranchName(rows.rows[0]?.ticket_key ?? 'ACME-1');
+  };
+  const handSeededMergeRequest = async (spec: RunSpec, branch: string): Promise<void> => {
+    if (seededOwner === null) {
+      seededOwner = spec.taskId;
+      if (branch !== world.branch) {
+        git.setMergeRequestSourceBranch({ project: GIT_PROJECT, iid: world.mr.iid, branch });
+      }
+    }
+  };
+  /**
+   * A merge request the tool opened **fresh** gets what the seeded one has: one ordinary changed
+   * file and, unless the case asked for no pipeline, the same pipeline — the CI the agent's push
+   * would have started.
+   */
+  const mirrorSeededCi = async (iid: number): Promise<void> => {
+    if (iid === world.mr.iid) {
+      return;
+    }
+    git.setDiff({
+      project: GIT_PROJECT,
+      iid,
+      files: [{ path: 'src/totals.ts', diff: '@@ -1 +1 @@\n-a\n+b' }],
+    });
+    if (options.ciStatus === null) {
+      return;
+    }
+    const live = await git.getMergeRequest({
+      provider: FAKE_GIT_PROVIDER_ID,
+      project_path: GIT_PROJECT,
+      iid,
+      url: world.mr.url,
+    });
+    git.setPipeline({
+      project: GIT_PROJECT,
+      headSha: live.head_sha,
+      status: options.ciStatus ?? 'success',
+      jobs:
+        options.ciStatus === 'failed'
+          ? [
+              {
+                name: 'test:unit',
+                status: 'failed',
+                log: options.ciJobLog ?? 'FAIL src/totals.test.ts',
+              },
+            ]
+          : [{ name: 'test:unit', status: 'success' }],
+    });
+  };
+  /**
+   * The record `open_mr` writes (`tasks.recordMergeRequest`, through the production store), for
+   * the two kinds of Developer run whose call the harness cannot make through the port: a run of
+   * the `real-over-fake-cli` mode — the scripted CLI calls no MCP tool — and a shadow run a case
+   * opted into with {@link StartPipelineOptions.shadowMergeRequests}. It does what the tool does on
+   * the fake: adopt the open merge request of the task's branch, or open one.
+   */
+  const recordAsTheToolWould = async (spec: RunSpec): Promise<void> => {
+    const shadow = spec.mode === 'shadow';
+    if (
+      !spec.platformTools.includes('open_mr') ||
+      options.openMergeRequests === false ||
+      (shadow && (options.shadowMergeRequests ?? '').length === 0)
+    ) {
+      return;
+    }
+    const store = pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+    if (shadow) {
+      // The opted-in kindness, as stated on the option: every shadow task records the seeded one,
+      // which is what each of their scripted `ImplementationNotes` reports.
+      await inbound.unitOfWork.transaction(async (scope) => {
+        await store.tasks.recordMergeRequest(scope.tx, spec.taskId as Id, {
+          provider: FAKE_GIT_PROVIDER_ID,
+          project_path: GIT_PROJECT,
+          iid: world.mr.iid,
+          url: world.mr.url,
+          branch: world.branch,
+          head_sha: world.mr.headSha,
+        });
+      });
+      return;
+    }
+    const branch = await taskBranchOf(spec);
+    await handSeededMergeRequest(spec, branch);
+    const existing = await git.findOpenMergeRequest(GIT_PROJECT, branch);
+    const mr =
+      existing ??
+      (await git.openMergeRequest({
+        project: GIT_PROJECT,
+        branch,
+        target: options.defaultBranch ?? 'main',
+        title: 'Draft: the harness’s stand-in for open_mr',
+        description: 'Opened by the e2e harness for a run that cannot call the tool.',
+        draft: true,
+        labels: ['agentic'],
+        reviewers: [],
+        remove_source_branch: true,
+      }));
+    if (existing === null) {
+      await mirrorSeededCi(mr.ref.iid);
+    }
+    await inbound.unitOfWork.transaction(async (scope) => {
+      await store.tasks.recordMergeRequest(scope.tx, spec.taskId as Id, {
+        provider: FAKE_GIT_PROVIDER_ID,
+        project_path: GIT_PROJECT,
+        iid: mr.ref.iid,
+        url: mr.web_url,
+        branch,
+        head_sha: mr.head_sha,
+      });
+    });
+  };
   const kbSearchCalls: Promise<KbSearchCall>[] = [];
+  /** Every `open_mr` answer the Developer runs got through the production port (WP-138). */
+  const openMrAnswers: { readonly stage: string; readonly answer: JsonValue }[] = [];
   const runner = (tools: PlatformToolPort): ClaudeRunner => ({
     start: (spec) => {
       specs.push(spec);
+      const toolContext = {
+        runId: spec.runId,
+        taskId: spec.taskId,
+        projectId: spec.projectId,
+        mode: spec.mode,
+        signal: new AbortController().signal,
+        redactor: exactSecretRedactor([]),
+      };
+      // WP-138: the developer's `open_mr`, through the production port, before the run reports.
+      const opens =
+        options.openMergeRequests !== false &&
+        spec.platformTools.includes('open_mr') &&
+        spec.mode !== 'shadow';
+      const opened = opens
+        ? taskBranchOf(spec)
+            .then((branch) => handSeededMergeRequest(spec, branch))
+            .then(() =>
+              tools.openMergeRequest(
+                {
+                  title: `${spec.stage ?? 'the run'} change`,
+                  description: 'Opened by the developer stage of the e2e harness.',
+                },
+                toolContext,
+              ),
+            )
+            .then(async (answer: JsonValue) => {
+              openMrAnswers.push({ stage: spec.stage ?? '', answer });
+              const opened = answer as { status?: string; iid?: number };
+              if (opened.status === 'opened' && opened.iid !== undefined) {
+                await mirrorSeededCi(opened.iid);
+              }
+            })
+        : recordAsTheToolWould(spec);
       const query = options.kbSearchQuery;
       if (query !== undefined && spec.platformTools.includes('kb_search')) {
         kbSearchCalls.push(
@@ -1066,7 +1270,13 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
             .then((result: JsonValue) => ({ stage: spec.stage ?? '', result })),
         );
       }
-      return fake.start(spec);
+      if (!opens && !(spec.mode === 'shadow' && (options.shadowMergeRequests ?? '').length > 0)) {
+        return fake.start(spec);
+      }
+      // The run's outcome waits for the tool's answer, as a real run's `result` follows its tool
+      // calls; a refusal fails the harness loudly rather than a run that reported a merge request.
+      const handle = fake.start(spec);
+      return { ...handle, outcome: opened.then(() => handle.outcome) };
     },
   });
 
@@ -1169,6 +1379,8 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     },
     async (spec) => {
       specs.push(spec);
+      // WP-138: the scripted CLI calls no MCP tool, so the record `open_mr` writes is made here.
+      await recordAsTheToolWould(spec);
       await options.onAgentSpec?.(spec);
     },
   );
@@ -1266,6 +1478,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
             options.config ?? {},
             options.slack === undefined ? 'fake' : 'slack',
             options.observability,
+            options.defaultBranch ?? 'main',
           )
         : { projectId: options.reuse.projectId, userId: options.reuse.projectId };
 
@@ -1460,6 +1673,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       );
     },
     kbSearches: async () => Promise.all(kbSearchCalls),
+    openMrAnswers: () => [...openMrAnswers],
     auditRows: async () => {
       const { rows } = await pool.query<IntegrationActionRow>(
         `select action, status, project_id, task_id, redaction_count, attempts, payload

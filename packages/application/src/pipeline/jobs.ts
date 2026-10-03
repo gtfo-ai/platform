@@ -119,6 +119,8 @@ export interface ReviewWindowData {
 export interface PipelineOutboundData {
   readonly duty:
     | 'intake_check'
+    /** WP-138 ruling (g): the developer's merge request marked ready, and a pipeline if it has none. */
+    | 'mr_ready'
     | 'workpad'
     | 'status'
     /** WP-24, review-only mode: consider a human merge request, post a review, observe the outcome. */

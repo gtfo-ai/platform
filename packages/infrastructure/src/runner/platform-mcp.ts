@@ -102,7 +102,12 @@ const platformTool = <TSchema extends z.ZodObject>(
       return text(`invalid input for ${name}: ${issues}`, true);
     }
     try {
-      const result = await run(parsed.data as z.infer<TSchema>, runtime.context);
+      // The run's redactor rides the context (WP-138): a tool that sends a model's words to a
+      // provider redacts them with it before they leave, not only what comes back.
+      const result = await run(parsed.data as z.infer<TSchema>, {
+        ...runtime.context,
+        redactor: runtime.redactor,
+      });
       runtime.onCall(name, 'ok');
       return text(runtime.redactor.redactText(render(result)).value);
     } catch (error) {
@@ -172,7 +177,7 @@ const definitions = (
     platformTool(
       runtime,
       'open_mr',
-      'Open the merge request for this task.',
+      "Open this task's merge request, as a draft unless `draft` is false. Push your commits first. You give the title and the description; the platform opens it from the task's own branch (`agentic/<ticket key>`) into the project's default branch — any branch you name is ignored — appends who requested the work, and answers the merge request's iid, URL and both branches. Calling it again answers the same merge request.",
       openMrInputSchema,
       (input, context) => runtime.tools.openMergeRequest(input, context),
     ),
@@ -180,7 +185,7 @@ const definitions = (
     platformTool(
       runtime,
       'update_mr_description',
-      'Replace the merge request description with the current implementation notes.',
+      "Replace the description of this task's own merge request (opened with open_mr) with the current implementation notes.",
       updateMrDescriptionInputSchema,
       (input, context) => runtime.tools.updateMrDescription(input, context),
     ),

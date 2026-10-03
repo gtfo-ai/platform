@@ -63,6 +63,9 @@ openMergeRequest({branch, target, title, description, draft, labels, reviewers})
 updateMergeRequest(mr, {description?, draft?, labels?, reviewers?, title?})
 getMergeRequest(mr) -> {state, draft, headSha, mergeable, diffStats, coverage?}
 closeMergeRequest(mr) -> MergeRequest                 # WP-59: idempotent (closed stays closed), `conflict` for a merged MR; a rework's superseded MR (Q92)
+findOpenMergeRequest(project, sourceBranch) -> MergeRequest | null   # WP-138: the open MR of one branch — `open_mr` adopts it after a `conflict` only when it is the binding's own and targets the default branch
+authenticatedUser() -> ExternalIdentity               # WP-138: the account the binding's credential acts as (GitLab `GET /user`)
+createMergeRequestPipeline(mr) -> {id, headSha, status, url?}   # WP-138: a mutation, the `mr_ready` duty's, when the head has no pipeline and the default branch has a CI file
 getMergeRequestDiffStats(mr) -> {filesChanged, insertions, deletions} | null   # WP-59: GitLab answers from GraphQL `diffStatsSummary`; null = not computed
 listDiscussions(mr) ; replyToDiscussion(mr, discussionId, markdown) ; resolveDiscussion(mr, discussionId)
 createDiscussion(mr, {path?, line?, markdown})         # review findings; both absent = a thread on the MR (WP-24's neutral summary)

@@ -617,9 +617,9 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       /**
-       * WP-60, PROGRESS backlog 182: the one narrow writer that shares a column with `save`, and
-       * therefore the one that bumps the token — asserted on both stores with the stale save it
-       * exists to refuse.
+       * WP-60, PROGRESS backlog 182: the head's narrow writer, which bumps the token — asserted on
+       * both stores with the stale save it was written to refuse (since WP-138 `save` no longer
+       * names `mr_ref`, and the bump still refuses a snapshot read before the head moved).
        */
       it('moves only the recorded head of the merge request it names, and refuses a stale save after it', async () => {
         const mr = {
@@ -676,6 +676,69 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             at: '2026-06-01T09:30:00.000Z' as IsoDateTime,
           }),
         ).rejects.toThrow();
+      });
+
+      /**
+       * WP-138 ruling (e): the developer's merge request is recorded by a **compare-and-set** writer
+       * — only while the row holds none or the same iid, and only on the task's own branch — and a
+       * whole-row `save` never moves it, whatever its snapshot carries. The rework's let-go is the
+       * other narrow writer. Both stores, so the in-memory one cannot be kinder than PostgreSQL.
+       */
+      it('records the merge request compare-and-set, never by save, and lets go of it only by its iid (WP-138)', async () => {
+        const ref = (iid: number, branch = 'agentic/acme-11') => ({
+          provider: 'fake-git',
+          project_path: 'acme/api',
+          iid,
+          url: `https://git.example.test/acme/api/-/merge_requests/${iid}`,
+          branch,
+          head_sha: 'a'.repeat(40),
+        });
+        const stored = task({ task: { ...task().task, state: 'active' } });
+        await store.tasks.insert(tx, stored);
+        const load = async () => (await store.tasks.load(tx, stored.task.id)) as StoredTask;
+
+        expect(await store.tasks.recordMergeRequest(tx, stored.task.id, ref(11))).toEqual({
+          kind: 'recorded',
+        });
+        expect((await load()).mr).toEqual(ref(11));
+        // The same iid again: recorded — but the stored head stays, because only
+        // `saveMergeRequestHead` moves it, forward by the provider's instant (review round 1).
+        expect(
+          await store.tasks.recordMergeRequest(tx, stored.task.id, {
+            ...ref(11),
+            url: 'https://git.example.test/acme/api/-/merge_requests/11#again',
+            head_sha: 'b'.repeat(40),
+          }),
+        ).toEqual({ kind: 'recorded' });
+        expect((await load()).mr).toEqual({
+          ...ref(11),
+          url: 'https://git.example.test/acme/api/-/merge_requests/11#again',
+        });
+        // Another iid: refused, and the row names what it holds.
+        expect(await store.tasks.recordMergeRequest(tx, stored.task.id, ref(12))).toMatchObject({
+          kind: 'refused',
+          recorded: { iid: 11, head_sha: 'a'.repeat(40) },
+        });
+        // A whole-row save over a snapshot that names nothing leaves the record alone.
+        const current = await load();
+        await store.tasks.save(tx, { ...current, mr: null });
+        expect((await load()).mr?.iid).toBe(11);
+
+        // The let-go: only by the iid the row names.
+        expect(await store.tasks.releaseMergeRequest(tx, stored.task.id, 12)).toBe(false);
+        expect(await store.tasks.releaseMergeRequest(tx, stored.task.id, 11)).toBe(true);
+        expect((await load()).mr).toBeNull();
+
+        // On a task already on another branch (a rework moved it), a merge request from the old
+        // branch is refused even with no record.
+        const moved = await load();
+        await store.tasks.save(tx, { ...moved, branch: 'agentic/acme-11-r2' });
+        expect(await store.tasks.recordMergeRequest(tx, stored.task.id, ref(11))).toEqual({
+          kind: 'refused',
+          recorded: null,
+        });
+        await expect(store.tasks.recordMergeRequest(tx, nextId(), ref(13))).rejects.toThrow();
+        await expect(store.tasks.releaseMergeRequest(tx, nextId(), 13)).rejects.toThrow();
       });
 
       /**

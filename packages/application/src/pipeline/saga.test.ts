@@ -278,6 +278,56 @@ const taskOf = (harness: PipelineHarness) => {
   return stored;
 };
 
+/**
+ * WP-138 ruling (e): the merge request is the **platform's** record — written when the `open_mr`
+ * tool opened it — never the iid a model reported in `ImplementationNotes`.
+ */
+describe('the merge request the platform recorded, not the one the run reported (WP-138)', () => {
+  it('keeps the record when the run reports another merge request, and notes it on the artifact', async () => {
+    const harness = harnessWith({
+      runs: {
+        ...happyRuns(),
+        // The tool opened !7; the artifact claims !99.
+        implementation: {
+          ...completedRun(NOTES(99)),
+          opensMergeRequest: {
+            provider: 'fake-git',
+            project_path: 'acme/api',
+            iid: 7,
+            url: 'https://git.example.test/acme/api/-/merge_requests/7',
+            branch: 'agentic/acme-1',
+            head_sha: 'b'.repeat(40),
+          },
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+
+    expect(taskOf(harness).mr?.iid).toBe(7);
+    expect(taskOf(harness).branch).toBe('agentic/acme-1');
+    const notes = await harness.memory.transaction(async (scope) =>
+      harness.store.artifacts.latest(scope.tx, taskOf(harness).task.id, 'ImplementationNotes'),
+    );
+    const data = notes?.data as { mr: { iid: number }; known_gaps: string[] };
+    expect(data.mr.iid).toBe(7);
+    expect(data.known_gaps.join('\n')).toContain('the run reported !99');
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+  });
+
+  it('records nothing from a report the tool never opened, and the CI gate has no merge request', async () => {
+    const harness = harnessWith({
+      runs: {
+        ...happyRuns(),
+        implementation: { ...completedRun(NOTES(99)), opensMergeRequest: false },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+
+    expect(taskOf(harness).mr).toBeNull();
+    expect(taskOf(harness).task.state).toBe('needs_human');
+  });
+});
+
 describe('a feature ticket through the whole loop', () => {
   it('walks intake → refinement → … → done and ends with the task complete', async () => {
     const harness = harnessWith();

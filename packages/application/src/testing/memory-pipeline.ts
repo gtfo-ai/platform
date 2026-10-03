@@ -31,6 +31,7 @@ import type {
   TaskStageState,
 } from '@platform/contracts';
 import {
+  mergeRequestRefSchema,
   taskCoverageSchema,
   taskDependenciesSchema,
   taskReviewersSchema,
@@ -368,19 +369,54 @@ export const createMemoryPipelineStore = (
       if (current.version !== stored.version) {
         throw new TaskConcurrentModificationError(stored.task.id, stored.version, current.version);
       }
+      // `mr` is not written (WP-138): the merge request belongs to `recordMergeRequest` and
+      // `releaseMergeRequest`, like the SQL adapter's `save`, which no longer names `mr_ref`.
       const written: StoredTask = {
         ...current,
         task: stored.task,
         branch: stored.branch,
-        mr: stored.mr,
         version: current.version + 1,
       };
       tasks.set(stored.task.id, clone(written));
       // The caller's own snapshot at the new version, so a second save in the same unit is not a
       // conflict with the first: `{ ...stored }` rather than `{ ...current }`, because the columns
       // this write ignored are the store's and the ones it took are the caller's. `costActualUsd`
-      // is the store's since WP-31, so it comes back from `written` rather than from the caller.
-      return clone({ ...stored, costActualUsd: written.costActualUsd, version: written.version });
+      // is the store's since WP-31 and `mr` since WP-138, so they come back from `written`.
+      return clone({
+        ...stored,
+        costActualUsd: written.costActualUsd,
+        mr: written.mr,
+        version: written.version,
+      });
+    },
+    recordMergeRequest: async (_tx, taskId, mr) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      // The SQL's compare-and-set (WP-138): null or the same iid, on the task's own branch.
+      const sameOrNone = current.mr === null || current.mr.iid === mr.iid;
+      const onBranch = current.branch === null || current.branch === (mr.branch ?? null);
+      if (!sameOrNone || !onBranch) {
+        return { kind: 'refused', recorded: current.mr === null ? null : clone(current.mr) };
+      }
+      // The same iid again keeps the stored head, like the SQL (review round 1): the head moves
+      // forward only through `saveMergeRequestHead`.
+      const parsed = mergeRequestRefSchema.parse(mr);
+      const head = current.mr?.head_sha ?? parsed.head_sha ?? null;
+      tasks.set(taskId, clone({ ...current, mr: { ...parsed, head_sha: head } }));
+      return { kind: 'recorded' };
+    },
+    releaseMergeRequest: async (_tx, taskId, iid) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      if (current.mr === null || current.mr.iid !== iid) {
+        return false;
+      }
+      tasks.set(taskId, clone({ ...current, mr: null }));
+      return true;
     },
     saveWorkpad: async (_tx, taskId, workpad) => {
       const current = tasks.get(taskId);

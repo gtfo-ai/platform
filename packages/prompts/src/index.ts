@@ -66,7 +66,9 @@ export const ROLE_PROMPT_VERSIONS = {
   // WP-40: the spike template's `ResearchReport` section.
   // WP-81: `protected_path_changes` — declare every existing test / CI-lint file changed (BD-024).
   architect: '3',
-  developer: '1',
+  // WP-138: `open_mr` takes a title and a description; the branch and the target are the
+  // platform's, the platform marks the merge request ready, and the record is the tool's.
+  developer: '2',
   // WP-45: the project's `review_checklist` blocks, and `criteria` when a human's merge request is
   // compared against a RefinedSpec (the shadow report's review of the human MR).
   // WP-81: judge the plan's `protected_path_changes` into `protected_path_changes_confirmed`.

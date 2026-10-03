@@ -1,0 +1,117 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests?source_branch=agentic/task-1&state=opened",
+      "status": 200,
+      "body": [
+        {
+          "id": 155016007,
+          "iid": 7,
+          "project_id": 15513260,
+          "title": "Draft: fix the totals",
+          "description": "Requested by a human.",
+          "state": "opened",
+          "created_at": "2026-05-30T07:26:38.402Z",
+          "updated_at": "2026-06-01T03:38:31.354Z",
+          "merged_at": null,
+          "target_branch": "main",
+          "source_branch": "agentic/task-1",
+          "author": {
+            "id": 4242,
+            "username": "agentic-bot",
+            "name": "Agentic Bot",
+            "state": "active",
+            "web_url": "https://gitlab.example.test/agentic-bot",
+            "avatar_url": null
+          },
+          "assignees": [],
+          "reviewers": [],
+          "labels": ["agentic"],
+          "draft": true,
+          "work_in_progress": true,
+          "merge_status": "can_be_merged",
+          "detailed_merge_status": "draft_status",
+          "sha": "1111111111111111111111111111111111111111",
+          "merge_commit_sha": null,
+          "squash_commit_sha": null,
+          "has_conflicts": false,
+          "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/7"
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-10-03",
+        "kind": "documented-adapted",
+        "note": "\"List project merge requests\" filtered by its documented `state` (\"just those that are opened\") and `source_branch` (\"Returns merge requests with the given source branch\") attributes; the list item is the page's merge request object with this corpus's values for merge request 7 (the same author, branch and head as `merge-requests.json`), and the members the adapter never reads removed. WP-138's adoption read."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests?source_branch=agentic/no-open&state=opened",
+      "status": 200,
+      "body": [],
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-10-03",
+        "kind": "inferred",
+        "note": "The page does not publish the answer for a filter nothing matches; an empty array is inferred from the endpoint being a filtered list. The adapter answers null for it."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/user",
+      "status": 200,
+      "body": {
+        "id": 4242,
+        "username": "agentic-bot",
+        "name": "Agentic Bot",
+        "state": "active",
+        "avatar_url": null,
+        "web_url": "https://gitlab.example.test/agentic-bot",
+        "bot": false
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/users/",
+        "retrieved": "2026-10-03",
+        "kind": "documented-adapted",
+        "note": "\"Retrieve the current user\" (`GET /user`) example response for a regular user, cut to the members the adapter reads plus `bot`, with this corpus's own bot account (id 4242, the author of every merge request in this corpus)."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/merge_requests/7/pipelines",
+      "status": 201,
+      "body": {
+        "id": 905,
+        "iid": 17,
+        "project_id": 15513260,
+        "sha": "1111111111111111111111111111111111111111",
+        "ref": "refs/merge-requests/7/head",
+        "status": "created",
+        "source": "merge_request_event",
+        "created_at": "2026-06-01T08:00:00.000Z",
+        "updated_at": "2026-06-01T08:00:00.000Z",
+        "web_url": "https://gitlab.example.test/acme/api/-/pipelines/905"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-10-03",
+        "kind": "inferred",
+        "note": "\"Create merge request pipeline\" (`POST /projects/:id/merge_requests/:merge_request_iid/pipelines`) — the endpoint and its two attributes were read from the page's search excerpt (\"Create a new pipeline for a merge request. A pipeline created via this endpoint doesn't run a regular branch/tag pipeline\"); the rendered page did not show the section when fetched, and its example response was not read. The body is the pipeline object of the pipelines page (`id`, `sha`, `ref`, `status`, `source`, `web_url`) with status `created` and the merge-request ref, inferred rather than transcribed."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/merge_requests/4242/pipelines",
+      "status": 404,
+      "body": { "message": "404 Not found" },
+      "source": {
+        "url": "https://docs.gitlab.com/api/rest/troubleshooting/",
+        "retrieved": "2026-10-03",
+        "kind": "inferred",
+        "note": "The status table documents \"404 Not Found - A resource couldn't be accessed\"; the body for a merge request that does not exist is not published for this endpoint and is the shape the corpus's other 404s use. Only the status is load-bearing."
+      }
+    }
+  ]
+}

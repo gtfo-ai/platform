@@ -501,7 +501,13 @@ const walkedHarness = (
     runs: {
       refinement: completedRun(REFINED_SPEC),
       architecture: completedRun(PLAN),
-      implementation: completedRun(NOTES),
+      implementation: {
+        ...completedRun(NOTES),
+        // WP-138: a shadow `open_mr` records no merge request, and this walk is about the report
+        // comparing the agent's diff, which it reads off `tasks.mr_ref` (PROGRESS WP-138 notes).
+        shadowMergeRequest:
+          'the report compares the agent’s diff, read off the merge request the task records',
+      },
       code_review: completedRun(REVIEW),
       business_review: completedRun(ACCEPTANCE),
       ...options.runs,

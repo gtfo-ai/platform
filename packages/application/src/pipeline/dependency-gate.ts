@@ -165,8 +165,8 @@ const MAX_STORED_PATH = 500;
  * `task.stage.completed` for the Developer stage → decide to check, and let the job call.
  *
  * Priority **120**, the integrations band, beside the conflict warning and the reviewer routing.
- * The core band's own consumer of this event is the saga at priority 10, which records the merge
- * request and moves the task on; this handler reads the task only to ask whether the stage that
+ * The core band's own consumer of this event is the saga at priority 10, which checks the reported
+ * merge request against the platform's record (WP-138) and moves the task on; this handler reads the task only to ask whether the stage that
  * completed is the one that produces `ImplementationNotes`, and enqueues.
  */
 const dependencyGateHandler = (options: PipelineSagaOptions): EventHandler => ({

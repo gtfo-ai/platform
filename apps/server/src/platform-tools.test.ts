@@ -2,8 +2,8 @@
  * The production `PlatformToolPort`, over **every** name in `PLATFORM_TOOL_NAMES`.
  *
  * Parameterised over the set rather than over the tools somebody remembered (standing rule 68), and
- * asserted in **both** directions (rule 42): the seven that are not composed must refuse by name,
- * and the two that are must not — a port that threw for everything would pass the first half.
+ * asserted in **both** directions (rule 42): the five that are not composed must refuse by name,
+ * and the four that are must not — a port that threw for everything would pass the first half.
  *
  * It also keeps {@link IMPLEMENTED_PLATFORM_TOOLS} honest, which matters because that constant is a
  * *claim about this file* and standing rule 11 is about justifications that name something which
@@ -15,7 +15,13 @@ import type {
   PlatformToolName,
   PlatformToolPort,
 } from '@platform/application';
-import { MUTATING_PLATFORM_TOOLS, PLATFORM_TOOL_NAMES, silentLogger } from '@platform/application';
+import {
+  exactSecretRedactor,
+  MUTATING_PLATFORM_TOOLS,
+  PLATFORM_TOOL_NAMES,
+  silentLogger,
+  staticPipelineIntegrations,
+} from '@platform/application';
 import type { Id } from '@platform/contracts';
 import type pg from 'pg';
 import { describe, expect, it } from 'vitest';
@@ -72,11 +78,41 @@ const refusingPool = {
   },
 } as unknown as pg.Pool;
 
+/** A unit of work that refuses too: the merge-request tools' first step is a short transaction. */
+const refusingUnitOfWork = {
+  transaction: async () => {
+    throw new Error('the merge-request tool reached its task read');
+  },
+};
+
 describe('the production platform tools', () => {
-  const tools = composePlatformTools({ pool: refusingPool, logger: silentLogger });
+  const tools = composePlatformTools({
+    pool: refusingPool,
+    logger: silentLogger,
+    mergeRequests: {
+      unitOfWork: refusingUnitOfWork,
+      tasks: {
+        recordMergeRequest: async () => {
+          throw new Error('unreachable: the task read refuses first');
+        },
+      },
+      integrations: staticPipelineIntegrations({
+        executor: { execute: async () => Promise.reject(new Error('unreachable')) },
+        git: null,
+        taskManagement: null,
+        communication: null,
+      }),
+      runScopedSecrets: () => [],
+    },
+  });
 
   it('implements exactly what it claims to implement', () => {
-    expect([...IMPLEMENTED_PLATFORM_TOOLS]).toEqual(['kb_search', 'get_task_context']);
+    expect([...IMPLEMENTED_PLATFORM_TOOLS]).toEqual([
+      'kb_search',
+      'get_task_context',
+      'open_mr',
+      'update_mr_description',
+    ]);
     expect(PLATFORM_TOOL_NAMES).toContain('kb_search');
     expect(PLATFORM_TOOL_NAMES).toContain('get_task_context');
   });
@@ -92,7 +128,7 @@ describe('the production platform tools', () => {
 
   it('does not refuse kb_search — it reaches the store, which is what fails here', async () => {
     // The other direction of the boundary: this call gets past the refusal and dies in the pool
-    // double, so "every tool throws" cannot masquerade as "seven tools refuse".
+    // double, so "every tool throws" cannot masquerade as "five tools refuse".
     await expect(CALL.kb_search(tools)).rejects.toThrow('must not query at wiring time');
     await expect(CALL.kb_search(tools)).rejects.not.toThrow(PlatformToolUnavailableError);
   });
@@ -111,9 +147,28 @@ describe('the production platform tools', () => {
     await expect(CALL.get_task_context(tools)).rejects.not.toThrow(PlatformToolUnavailableError);
   });
 
-  it('refuses every mutating tool, so a run cannot reach a provider through this build', () => {
-    for (const name of MUTATING_PLATFORM_TOOLS) {
-      expect(IMPLEMENTED_PLATFORM_TOOLS as readonly PlatformToolName[]).not.toContain(name);
-    }
+  /**
+   * WP-138: the two merge-request tools are composed, and they are the **only** mutating ones — a
+   * ticket comment and a follow-up ticket from inside a run are still refused by name. Their
+   * behaviour (the executor, the branch, the record) is `merge-request-tool.test.ts`'s.
+   */
+  it('composes exactly the two merge-request tools among the mutating ones', () => {
+    expect(
+      MUTATING_PLATFORM_TOOLS.filter((name) =>
+        (IMPLEMENTED_PLATFORM_TOOLS as readonly PlatformToolName[]).includes(name),
+      ),
+    ).toEqual(['open_mr', 'update_mr_description']);
   });
+
+  it.each(['open_mr', 'update_mr_description'] as const)(
+    'does not refuse %s — it reaches its task read',
+    async (name) => {
+      const context = { ...CONTEXT, redactor: exactSecretRedactor([]) };
+      const call =
+        name === 'open_mr'
+          ? tools.openMergeRequest({ title: 'x', description: 'y' }, context)
+          : tools.updateMrDescription({ description: 'y' }, context);
+      await expect(call).rejects.toThrow('the merge-request tool reached its task read');
+    },
+  );
 });

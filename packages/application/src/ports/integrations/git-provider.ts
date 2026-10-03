@@ -24,7 +24,12 @@ import {
 } from '@platform/contracts';
 import * as z from 'zod';
 import type { MintedCredentialShape } from '../../integrations/credential-shape.js';
-import { externalIdentitySchema, type InboundNormaliser, type IntegrationPort } from './common.js';
+import {
+  type ExternalIdentity,
+  externalIdentitySchema,
+  type InboundNormaliser,
+  type IntegrationPort,
+} from './common.js';
 import {
   MAX_TICKET_POLL_INTERVAL_SECONDS,
   MIN_TICKET_POLL_INTERVAL_SECONDS,
@@ -162,6 +167,14 @@ export const pipelineStatusSchema = z.strictObject({
   jobs: z.array(pipelineJobSchema),
   coverage_pct: coveragePctSchema.nullish(),
   finished_at: isoDateTimeSchema.nullish(),
+});
+
+/** What {@link GitProviderPort.createMergeRequestPipeline} answers: the pipeline it started (WP-138). */
+export const createdPipelineSchema = z.strictObject({
+  id: nonEmptyStringSchema,
+  head_sha: shaSchema,
+  status: pipelineStatusValueSchema,
+  url: urlSchema.nullish(),
 });
 
 /** CODEOWNERS, parsed. Patterns keep provider syntax; owners keep their `@` prefix. */
@@ -360,6 +373,7 @@ export type MergeRequestRefInput = z.infer<typeof mergeRequestRefSchema>;
 export type Discussion = z.infer<typeof discussionSchema>;
 export type DiscussionNote = z.infer<typeof discussionNoteSchema>;
 export type PipelineStatus = z.infer<typeof pipelineStatusSchema>;
+export type CreatedPipeline = z.infer<typeof createdPipelineSchema>;
 export type PipelineStatusValue = z.infer<typeof pipelineStatusValueSchema>;
 export type CodeownersRules = z.infer<typeof codeownersRulesSchema>;
 export type MergedMergeRequest = z.infer<typeof mergedMergeRequestSchema>;
@@ -585,6 +599,46 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * does not exist.
    */
   readonly closeMergeRequest: (ref: MergeRequestRefInput) => Promise<MergeRequest>;
+
+  /**
+   * The **open** merge request whose source is `sourceBranch` in `project`, or `null` when there is
+   * none — WP-138's adoption read.
+   *
+   * `openMergeRequest` refuses a second open merge request for one source branch with `conflict`
+   * (asserted by the suite); the developer's `open_mr` tool then reads the one that exists and
+   * adopts it only when it is the platform's own (its target is the project's default branch and its
+   * author is {@link GitProviderPort.authenticatedUser}). One answer per branch is an obligation: a
+   * provider holds at most one open merge request per source branch, so an adapter that saw more
+   * than one answers `conflict` rather than choosing. A **read**, so it happens in every mode.
+   *
+   * @throws {IntegrationError} `not_found` for a project that does not exist.
+   */
+  readonly findOpenMergeRequest: (
+    project: string,
+    sourceBranch: string,
+  ) => Promise<MergeRequest | null>;
+
+  /**
+   * The account the binding's credential acts as (WP-138) — the identity a merge request the
+   * platform opened carries as its author, so an existing one can be told apart from a person's.
+   * `external_id` is the same identifier {@link MergeRequest.author} carries. A **read**.
+   */
+  readonly authenticatedUser: () => Promise<ExternalIdentity>;
+
+  /**
+   * Starts a new pipeline **for a merge request** at its current head (WP-138 ruling (g)) — GitLab's
+   * `POST /projects/:id/merge_requests/:iid/pipelines`, the API form of the merge request's own
+   * *Run pipeline* button. The platform asks only when the head has no pipeline after the merge
+   * request was marked ready, because removing a draft prefix is not one of the events GitLab
+   * documents as starting a merge-request pipeline.
+   *
+   * **It is a mutation** (technical/06): every call goes through `IntegrationActionExecutor`, so a
+   * shadow-mode caller never reaches it, and the caller keys it per head sha.
+   *
+   * @throws {IntegrationError} `not_found` when the merge request does not exist; `invalid_request`
+   * when the provider refuses to create one (a configuration with no job for such a pipeline).
+   */
+  readonly createMergeRequestPipeline: (ref: MergeRequestRefInput) => Promise<CreatedPipeline>;
 
   /**
    * How big a merge request's change is — files, inserted lines, deleted lines — or `null` when

@@ -139,6 +139,27 @@ carrying its own date.
   adapter reads first and answers a closed merge request without a write; the four interactions for
   merge requests 21 and 22 in `merge-requests.json` are `documented-adapted` and say what changed.
 
+## Pages read for WP-138 (`merge-request-adoption.json`)
+
+Retrieved **2026-10-03**. Nothing here was recorded against a real instance — the session had no
+gitlab.com credential — so the fixtures are what the pages state, and the two questions that only a
+real project answers stay open in `docs/TODO.md`.
+
+- `https://docs.gitlab.com/api/merge_requests/` § "List project merge requests" — the `state`
+  (*"just those that are `opened`"*) and `source_branch` (*"Returns merge requests with the given
+  source branch"*) filters the adoption read sends.
+- `https://docs.gitlab.com/api/users/` § "Retrieve the current user" — `GET /user`, *"Retrieves the
+  current user."*; the binding's own account, compared with a merge request's `author.id`.
+- `https://docs.gitlab.com/api/merge_requests/` § "Create merge request pipeline" —
+  `POST /projects/:id/merge_requests/:merge_request_iid/pipelines`, read from the search excerpt
+  (*"A pipeline created via this endpoint doesn't run a regular branch/tag pipeline"*); the fetched
+  page did not render the section, so the fixture's body is `inferred`.
+- `https://docs.gitlab.com/ci/pipelines/merge_request_pipelines/` — the three events that start a
+  merge-request pipeline: *"Create a new merge request from a source branch that has one or more
+  commits"*, *"Push a new commit to the source branch for a merge request"*, and *"select **Run
+  pipeline**"*. Marking a draft ready is not among them, which is why the ready duty creates one when
+  the head has none. Produced no fixture.
+
 ## Pages read for WP-59 that produced no fixture
 
 - `https://docs.gitlab.com/api/merge_requests/` § "Retrieve merge request changes" (retrieved

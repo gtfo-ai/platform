@@ -16,7 +16,7 @@
  *  - **The fake's clock is not the wall clock** (`FAKE_EPOCH`), and a binding's first poll reads
  *    its last interval only. So each case seeds `mr_poll_cursor` at the fake's epoch — the column a
  *    previous poll would have left — rather than waiting for two clocks to agree.
- *  - **The world's own merge request is listed too** (`agentic/acme-1`, opened by the harness for
+ *  - **The world's own merge request is listed too** (`agentic/ACME-1`, opened by the harness for
  *    the developer stage). It is the platform's, so review-only mode refuses it, and in the second
  *    case it is the merge request whose merge the poll reports.
  */

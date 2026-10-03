@@ -349,6 +349,25 @@ const gitlabScript = (): Script => ({
     body: [gitlabMr({ merged_at: NOW, state: 'merged', created_at: NOW, updated_at: NOW })],
   },
   [`GET /projects/${P}/merge_requests/7/discussions`]: { body: [gitlabDiscussion()] },
+  // WP-138: the binding's own account (`authenticatedUser`), its name the provider's text, and the
+  // merge-request pipeline the ready duty asks for, its URL carrying the plant.
+  'GET /user': {
+    body: {
+      id: 4242,
+      username: `agentic-bot-${GITLAB_TOKEN}`,
+      name: `Bot ${GITLAB_TOKEN}`,
+      state: 'active',
+    },
+  },
+  [`POST /projects/${P}/merge_requests/7/pipelines`]: {
+    status: 201,
+    body: {
+      id: 905,
+      sha: SHA,
+      status: 'created',
+      web_url: `${HOST}/acme/api/-/pipelines/905?trace=${encodeURIComponent(GITLAB_TOKEN)}`,
+    },
+  },
   // Planted in the patch text: a diff is somebody's source code, and a developer who committed a
   // credential is exactly how one reaches this response (WP-24).
   [`GET /projects/${P}/merge_requests/7/diffs`]: {
@@ -488,6 +507,9 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   update_merge_request: 'updateMergeRequest',
   get_merge_request: 'getMergeRequest',
   close_merge_request: 'closeMergeRequest',
+  find_open_merge_request: 'findOpenMergeRequest',
+  authenticated_user: 'authenticatedUser',
+  create_merge_request_pipeline: 'createMergeRequestPipeline',
   get_merge_request_diff_stats: 'getMergeRequestDiffStats',
   list_discussions: 'listDiscussions',
   reply_to_discussion: 'replyToDiscussion',
@@ -584,6 +606,11 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
     // can carry no credential — driven so the census holds, not because it has a plant to find.
     emitted.close_merge_request = await port.closeMergeRequest(ref);
     emitted.get_merge_request_diff_stats = await port.getMergeRequestDiffStats(ref);
+    // WP-138: the listing answers a merged merge request, which the open filter drops — driven so
+    // the census holds; the other two answer planted provider text.
+    emitted.find_open_merge_request = await port.findOpenMergeRequest(PROJECT, 'agentic/task-1');
+    emitted.authenticated_user = await port.authenticatedUser();
+    emitted.create_merge_request_pipeline = await port.createMergeRequestPipeline(ref);
     emitted.list_discussions = await port.listDiscussions(ref);
     emitted.reply_to_discussion = await port.replyToDiscussion(
       ref,
@@ -739,6 +766,8 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
   it.each([
     'test_connection',
     'open_merge_request',
+    'authenticated_user',
+    'create_merge_request_pipeline',
     'get_merge_request',
     'list_discussions',
     'get_pipeline_status',

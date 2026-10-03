@@ -183,6 +183,15 @@ export const gitlabReplayContext = (
       iid: MR_IID,
       expected: { files_changed: 3, insertions: 42, deletions: 7 },
     },
+    // WP-138: `merge-request-adoption.json` records merge request 7 as the one open merge request
+    // of `agentic/task-1` (authored by the bot account `GET /user` answers), an empty list for
+    // `agentic/no-open`, and the merge-request pipeline created for it.
+    adoption: {
+      openBranch: 'agentic/task-1',
+      openIid: MR_IID,
+      emptyBranch: 'agentic/no-open',
+      pipelineIid: MR_IID,
+    },
     pipelineSha: SHA_MR7,
     failingJobName: FAILING_JOB,
     // Provider-shaped: GitLab's log handle is the numeric job id, not the fake's `log:<id>`.

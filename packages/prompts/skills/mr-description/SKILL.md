@@ -29,8 +29,10 @@ change, and how do I know it works" without opening the ticket.
 Keep it **current**: when the change grows, the description grows with it. Update it through the
 `update_mr_description` platform tool, never with `glab`, so the edit is attributed and audited.
 
-Open the MR as a **draft** early, so CI runs and a human can watch. Mark it ready only when the
-self-check (`verify-work`) has passed.
+Open the MR with the `open_mr` platform tool once your commits are pushed: it opens a **draft**
+from the task's `agentic/` branch into the default branch, so a human can watch. Run the self-check
+(`verify-work`) before you finish: the platform marks the MR ready — and starts its pipeline when it
+has none — when your stage completes, not before.
 
 ## Commit messages
 

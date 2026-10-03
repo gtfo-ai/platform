@@ -496,6 +496,42 @@ type PreparedMirror =
  * ({@link createGitRepositoryFileSource}); two copies of "which commit may be read" would be one
  * copy that drifts (standing rule 41). The vault read below is unchanged in what it does.
  */
+/**
+ * **One refresh of a mirror at a time, per process** (WP-138 review round 1, measured).
+ *
+ * Every reader composed over the same `APP_KNOWLEDGE_MIRROR_ROOT` — the knowledge index, the
+ * configuration reading, the readiness re-check and, since WP-138, the CI gate and the `mr_ready`
+ * duty asking whether the default branch has a `.gitlab-ci.yml` — prepares its read with a
+ * `git remote update` into the same bare mirror, and they are separate instances of this adapter.
+ * Two refreshes of one mirror at once lose a ref race: *"cannot lock ref 'refs/heads/main': is at
+ * … but expected …"* (measured in `readiness-loop.e2e.test.ts`, where the `mr_ready` duty's read
+ * landed beside the after-merge index run and the index run reported `vault_unavailable`). So the
+ * refresh — the set-url and the update, or the clone — is serialised **per mirror directory** in a
+ * module-level map, which every instance in the process shares; the reads after it are not.
+ *
+ * **What it does not cover, stated**: two *processes* sharing the volume (`app` and `runner`) can
+ * still race the same way; the failing read is then `unavailable` for that run and the next
+ * trigger reads again. That residual predates WP-138.
+ */
+const refreshes = new Map<string, Promise<unknown>>();
+
+export const serialisedPerMirror = async <T>(mirror: string, fn: () => Promise<T>): Promise<T> => {
+  const before = refreshes.get(mirror) ?? Promise.resolve();
+  const turn = before.then(fn, fn);
+  const settled = turn.then(
+    () => undefined,
+    () => undefined,
+  );
+  refreshes.set(mirror, settled);
+  try {
+    return await turn;
+  } finally {
+    if (refreshes.get(mirror) === settled) {
+      refreshes.delete(mirror);
+    }
+  }
+};
+
 const prepareMirrorRead = async (
   options: GitVaultOptions,
   git: GitProcessRunner,
@@ -617,75 +653,79 @@ const prepareMirrorRead = async (
    * turn the after-merge trigger into a refusal.
    */
   let refreshed = false;
-  const pinnedIsReady =
-    present &&
-    request.commitSha !== undefined &&
-    (await inMirror(['cat-file', '-e', `${request.commitSha}^{commit}`])).code === 0 &&
-    (await inMirror(['merge-base', '--is-ancestor', request.commitSha, ref])).code === 0;
+  return serialisedPerMirror(mirror, async () => {
+    // Asked again inside the turn: a read that waited may find the clone the one before it made.
+    const present = await directoryExists(mirror);
+    const pinnedIsReady =
+      present &&
+      request.commitSha !== undefined &&
+      (await inMirror(['cat-file', '-e', `${request.commitSha}^{commit}`])).code === 0 &&
+      (await inMirror(['merge-base', '--is-ancestor', request.commitSha, ref])).code === 0;
 
-  if (!pinnedIsReady) {
-    if (present) {
-      const url = await inMirror(['remote', 'set-url', 'origin', repoUrl]);
-      if (url.code !== 0) {
-        return unavailable(`the mirror's remote could not be set: ${failureDetail(url)}`);
+    if (!pinnedIsReady) {
+      if (present) {
+        const url = await inMirror(['remote', 'set-url', 'origin', repoUrl]);
+        if (url.code !== 0) {
+          return unavailable(`the mirror's remote could not be set: ${failureDetail(url)}`);
+        }
+        const update = await inMirror(['remote', 'update', '--prune'], {
+          withCredential: true,
+        });
+        if (update.code !== 0) {
+          return unavailable(`the mirror could not be refreshed: ${failureDetail(update)}`);
+        }
+      } else {
+        /**
+         * The mirror is created here (Q63).
+         *
+         * One bare clone per project appears on that project's first index run, on the operator's
+         * data volume. Since WP-65 it is **measured** — `platform_storage_bytes{component=
+         * "knowledge_mirrors"}` and `knowledge_mirror_bytes{project_id}` (`mirror-storage.ts`) — and
+         * it is removed only under an operator-declared ceiling (`APP_KNOWLEDGE_MIRROR_MAX_BYTES`,
+         * unset by default, so **by default nothing removes it**), least recently used first and never
+         * within an hour of a read: BD-012 makes it a derived cache that is safe to delete, and Q63's
+         * recommendation is explicitly to *not* evict an active project's mirror at the worst moment.
+         * The residual on a stock instance is therefore disk growth proportional to the sum of the
+         * customers' repositories — now on a gauge rather than invisible.
+         */
+        const clone = await run(['clone', '--mirror', '--', repoUrl, mirror], {
+          withCredential: true,
+        });
+        if (clone.code !== 0) {
+          return unavailable(`the mirror could not be cloned: ${failureDetail(clone)}`);
+        }
       }
-      const update = await inMirror(['remote', 'update', '--prune'], {
-        withCredential: true,
-      });
-      if (update.code !== 0) {
-        return unavailable(`the mirror could not be refreshed: ${failureDetail(update)}`);
-      }
-    } else {
-      /**
-       * The mirror is created here (Q63).
-       *
-       * One bare clone per project appears on that project's first index run, on the operator's
-       * data volume. Since WP-65 it is **measured** — `platform_storage_bytes{component=
-       * "knowledge_mirrors"}` and `knowledge_mirror_bytes{project_id}` (`mirror-storage.ts`) — and
-       * it is removed only under an operator-declared ceiling (`APP_KNOWLEDGE_MIRROR_MAX_BYTES`,
-       * unset by default, so **by default nothing removes it**), least recently used first and never
-       * within an hour of a read: BD-012 makes it a derived cache that is safe to delete, and Q63's
-       * recommendation is explicitly to *not* evict an active project's mirror at the worst moment.
-       * The residual on a stock instance is therefore disk growth proportional to the sum of the
-       * customers' repositories — now on a gauge rather than invisible.
-       */
-      const clone = await run(['clone', '--mirror', '--', repoUrl, mirror], {
-        withCredential: true,
-      });
-      if (clone.code !== 0) {
-        return unavailable(`the mirror could not be cloned: ${failureDetail(clone)}`);
-      }
+      refreshed = true;
     }
-    refreshed = true;
-  }
 
-  const head = await inMirror(['rev-parse', '--verify', '--end-of-options', ref]);
-  if (head.code !== 0) {
-    return unavailable(
-      `the mirror has no ${ref}; the project's default branch is what the knowledge base is read from (BD-025): ${failureDetail(head)}`,
-    );
-  }
-  const headSha = head.stdout.toString('utf8').trim();
-
-  let commit = headSha;
-  if (request.commitSha !== undefined) {
-    const exists = await inMirror(['cat-file', '-e', `${request.commitSha}^{commit}`]);
-    if (exists.code !== 0) {
+    const head = await inMirror(['rev-parse', '--verify', '--end-of-options', ref]);
+    if (head.code !== 0) {
       return unavailable(
-        `commit ${request.commitSha} is not in the mirror after a fetch; it is not read (BD-022)`,
+        `the mirror has no ${ref}; the project's default branch is what the knowledge base is read from (BD-025): ${failureDetail(head)}`,
       );
     }
-    const ancestor = await inMirror(['merge-base', '--is-ancestor', request.commitSha, ref]);
-    if (ancestor.code !== 0) {
-      return unavailable(
-        `commit ${request.commitSha} is not an ancestor of ${ref}; the knowledge base is read from the default branch only (BD-025)`,
-      );
+    const headSha = head.stdout.toString('utf8').trim();
+
+    let commit = headSha;
+    if (request.commitSha !== undefined) {
+      const exists = await inMirror(['cat-file', '-e', `${request.commitSha}^{commit}`]);
+      if (exists.code !== 0) {
+        return unavailable(
+          `commit ${request.commitSha} is not in the mirror after a fetch; it is not read (BD-022)`,
+        );
+      }
+      const ancestor = await inMirror(['merge-base', '--is-ancestor', request.commitSha, ref]);
+      if (ancestor.code !== 0) {
+        return unavailable(
+          `commit ${request.commitSha} is not an ancestor of ${ref}; the knowledge base is read from the default branch only (BD-025)`,
+        );
+      }
+      commit = request.commitSha;
     }
-    commit = request.commitSha;
-  }
-  // The second stamp (see `stamp` above): the one a fresh clone gets.
-  await stamp();
-  return { status: 'ok', commit, refreshed, inMirror };
+    // The second stamp (see `stamp` above): the one a fresh clone gets.
+    await stamp();
+    return { status: 'ok', commit, refreshed, inMirror } as const;
+  });
 };
 
 export const createGitVaultSource = (options: GitVaultOptions): VaultSource => {

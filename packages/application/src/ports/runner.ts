@@ -42,6 +42,7 @@ import {
   usdSchema,
 } from '@platform/contracts';
 import * as z from 'zod';
+import type { SecretRedactor } from './integrations/audit.js';
 import {
   existingProtectedPathsSchema,
   WorkspaceError,
@@ -402,6 +403,12 @@ export interface PlatformToolContext {
   readonly projectId: Id;
   readonly mode: RunMode;
   readonly signal: AbortSignal;
+  /**
+   * The run's own TD-012 step-1 redactor — the one its transcript is redacted with (WP-138).
+   * `platform-mcp.ts` always supplies it; a tool that sends a model's words to a third party
+   * (`open_mr`, `update_mr_description`) **refuses** a call that carries none (standing rule 31).
+   */
+  readonly redactor?: SecretRedactor;
 }
 
 // ── Platform tool inputs (BD-022: everything the model writes is untrusted) ───
@@ -452,12 +459,18 @@ export const addTicketCommentInputSchema = z.strictObject({
   body: nonEmptyStringSchema,
 });
 
+/**
+ * `open_mr`'s input (WP-138 ruling (b)): the model supplies the **title and the description**.
+ * `draft` defaults to `true`. `source_branch` and `target_branch` are still accepted — a model
+ * trained on the older shape sends them — and **ignored**: the platform opens from the task's own
+ * branch into the project's default branch, and its answer names both.
+ */
 export const openMrInputSchema = z.strictObject({
   title: nonEmptyStringSchema,
   description: nonEmptyStringSchema,
-  source_branch: nonEmptyStringSchema,
-  target_branch: nonEmptyStringSchema,
-  draft: z.boolean(),
+  draft: z.boolean().optional(),
+  source_branch: nonEmptyStringSchema.optional(),
+  target_branch: nonEmptyStringSchema.optional(),
 });
 
 export const updateMrDescriptionInputSchema = z.strictObject({

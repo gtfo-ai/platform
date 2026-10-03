@@ -333,6 +333,10 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
     why: 'an organisation notification that spent its job is re-posted once under the same key',
     recoveredBy: 'notification_repost',
   },
+  mr_ready: {
+    shape: 'bound_and_escalate',
+    why: 'a draft nobody marks ready is a CI gate waiting for a pipeline the project skips for drafts; nothing re-runs the duty for this completion',
+  },
   ready_head_check: {
     shape: 'bound_and_escalate',
     why: 'a person’s resume, hand-back or retry waits on it, and the task stays where the command found it with nothing saying why',

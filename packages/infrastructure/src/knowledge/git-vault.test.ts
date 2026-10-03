@@ -175,6 +175,37 @@ const recordingRunner = (): GitProcessRunner & {
   };
 };
 
+/**
+ * WP-138 review round 1: two readers composed over one mirror root refresh one mirror **one at a
+ * time** — measured as a lost ref race (*"cannot lock ref"*) when the CI gate's file read landed
+ * beside an index run. Two separate instances (as the process composes them), five concurrent
+ * reads, the first of which clones: no two network commands of the mirror overlap, and every read
+ * answers.
+ */
+describe('one refresh of a mirror at a time', () => {
+  it('serialises the clone and the fetches of separate readers over one mirror', async () => {
+    let inFlight = 0;
+    let overlapped = 0;
+    const runner: GitProcessRunner = {
+      run: async (args, options) => {
+        const network = args.includes('clone') || args.includes('update');
+        if (network) {
+          inFlight += 1;
+          if (inFlight > 1) overlapped += 1;
+        }
+        try {
+          return await nodeGitProcessRunner.run(args, options);
+        } finally {
+          if (network) inFlight -= 1;
+        }
+      },
+    };
+    const results = await Promise.all(Array.from({ length: 5 }, () => read({ git: runner })));
+    expect(results.map((result) => result.status)).toEqual(['ok', 'ok', 'ok', 'ok', 'ok']);
+    expect(overlapped).toBe(0);
+  });
+});
+
 describe('createGitVaultSource', () => {
   it('reads the four indexed path classes from a mirror with no working tree', async () => {
     const snapshot = expectOk(await read());
