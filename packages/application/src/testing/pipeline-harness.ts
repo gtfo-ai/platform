@@ -272,11 +272,12 @@ export interface ScriptedRun {
   /**
    * The runner **throws** instead of returning a handle (WP-15c).
    *
-   * The production runner of every build until Q52 is answered does exactly this
-   * (`apps/server/src/pipeline.ts`'s `unavailableClaudeRunner`), and so does any transport error
-   * once there is a transport. Before this seam existed nothing in any tier could drive the branch,
-   * and the branch did not exist: a start that threw escaped both of the executor's endings and
-   * left a run `running` for ever.
+   * A configured instance's runner does exactly this when the start fails — the launcher
+   * unreachable, a spec it refuses, or a run image with no CLI at the path the platform named.
+   * (Since WP-53 the refusing `unavailableClaudeRunner` is composed only by a process with no
+   * launcher configuration, which does not subscribe `stage.execute`.) Before this seam existed
+   * nothing in any tier could drive the branch, and the branch did not exist: a start that threw
+   * escaped both of the executor's endings and left a run `running` for ever.
    */
   readonly throwsOnStart?: Error;
 }

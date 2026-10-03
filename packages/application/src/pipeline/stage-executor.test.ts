@@ -632,12 +632,14 @@ describe('the task budget', () => {
 /**
  * **A run that was created and could not be started** — WP-15c's Q52/Q60 decision.
  *
- * The production runner of every build until Q52 is answered throws from `start`
- * (`apps/server/src/pipeline.ts`'s `unavailableClaudeRunner`), and the day a webhook can reach the
- * pipeline is the day a real ticket meets it. Before this branch existed, the throw escaped both of
- * the executor's endings: transaction 1 had already written the `runs` row and emitted
- * `run.created`/`run.started`, so the run stayed `running` for ever, the task sat at its stage, and
- * the `stage.execute` job retried into pg-boss where no screen showed it (until WP-108).
+ * A configured instance's runner throws from `start` when the start itself fails — the launcher
+ * unreachable, a spec it refuses, or a run image with no CLI at the path the platform named. (Since
+ * WP-53 the refusing `unavailableClaudeRunner` is composed only by a process with no launcher
+ * configuration, and such a process does not subscribe `stage.execute`.) Before this branch
+ * existed, the throw escaped both of the executor's endings: transaction 1 had already written the
+ * `runs` row and emitted `run.created`/`run.started`, so the run stayed `running` for ever, the task
+ * sat at its stage, and the `stage.execute` job retried into pg-boss where no screen showed it
+ * (until WP-108).
  *
  * The answer is **no new task state**: `escalated` already means *a human must act*, and it is what
  * the executor does for every other run that ends without a usable result.

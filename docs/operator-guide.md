@@ -93,6 +93,21 @@ taken when a runner starts, bounded by pg-boss's 14-day default retention.
 Everything else — intake, the board, the knowledge index, every outbound provider call, the cost
 ledger, the audit — runs in `app`.
 
+**Orphaned run workspaces are removed only by `runner`'s recovery pass.** The pass that removes a run
+container nobody holds (WP-103) is composed only in a process configured with the launcher
+(`APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN`, which on a stock instance is `runner`), and it runs on
+`APP_INTAKE_RECONCILE_INTERVAL_MS` — at `0` it does not run at all and logs that it is off. So an
+instance without a runner removes no orphan, and nothing counts one in `orphan_run_workspaces_total`.
+An instance that runs no agent creates no new orphan; the case to know is one that *had* a runner
+and stopped running agents (the `runner` service removed or stopped, its launcher variables dropped)
+while a run's containers were still on the Docker host. Remove those by hand with the commands under
+*Upgrading past the build that removes orphaned run containers* in [§ 5](#5-upgrade): with no runner,
+no run is being driven, so every run id listed for this instance (the rows whose second column is
+this instance's `com.agentic.instance` value) is an orphan; leave its `ws-<run>` to the launcher's
+retention sweep as that paragraph says — while the `launcher` service still runs; with it removed too,
+nothing sweeps, and `ws-<run>` is removed by hand like the others. Read off the code (`composeOrphanWorkspaceReaper`
+in `apps/server/src/workspaces.ts` and its one call in `apps/server/src/runtime.ts`), not measured.
+
 ### The topology, and splitting it further with `ROLE`
 
 A stock instance is **already two product processes**: `app` (`ROLE` from `.env`, `all` by default —
@@ -418,7 +433,9 @@ the [user guide](user-guide.md) walks through it. What the operator owns is the 
 2. add that variable's **name** to `APP_INTEGRATION_SECRET_ENV`, a comma-separated allow-list that is
    **empty by default**;
 3. create the integration, naming the variable;
-4. restart `app` whenever you add a credential or change the allow-list — both are read at start-up.
+4. recreate `app` (`docker compose up -d app`) whenever you add a credential or change the
+   allow-list — both are read at start-up, and `docker compose restart` keeps the old environment
+   (rotation, and the `_FILE` form that avoids this, are below).
 
 The allow-list is not ceremony: without it a caller could name `APP_SECRET_KEY` and have the server
 seal and store its own master key. A name that is not on the list is refused by name:
@@ -484,12 +501,34 @@ same way as the create. Both forms offer the provider's **optional** fields too,
 of its type — a true/false choice, a number, a comma-separated list, a list of values — and an
 optional field left empty is not sent, so the provider's default applies (WP-114).
 
-**Rotating a credential.** Put the new value in a **new** environment variable on
-`APP_INTEGRATION_SECRET_ENV`, restart the process so it reads it, and press **Replace credentials** on
-the integration's card — `POST /api/integrations/<id>/secrets` with `{"secret_refs": {"<field>":
-"<VARIABLE>"}}` and an `Idempotency-Key`. The server reads and seals the value exactly as the create
+**Rotating a credential.** Make the new value readable under a name on `APP_INTEGRATION_SECRET_ENV`
+— which form, and whether that needs the container recreated, is the next paragraph — and press
+**Replace credentials** on the integration's card — `POST /api/integrations/<id>/secrets` with
+`{"secret_refs": {"<field>": "<VARIABLE>"}}` and an `Idempotency-Key`. The server reads and seals the value exactly as the create
 does, **deletes** the old sealed row, keeps the fields you did not name, and resets the health to
 *unknown*; press **Test connection** afterwards. A retry under the same key re-seals nothing.
+
+**For a credential you will rotate, use a `_FILE` companion** ([TD-020](decisions/technical/TD-020-configuration-and-env-naming.md)).
+The two forms are read differently (`environmentSecretSource` in
+`apps/server/src/queries/onboarding-queries.ts`): a **plain variable** is read from the process's
+environment, which is fixed when the container is created, while for `<NAME>_FILE` the **path** is
+fixed but the file is read again on every create and every re-seal, and wins over the plain variable.
+So:
+
+- with `<NAME>_FILE` (declare `<NAME>` on `APP_INTEGRATION_SECRET_ENV` once), rotation is: write the
+  new value into the file and press **Replace credentials** naming `<NAME>` — no restart;
+- with a plain variable, an edit to `.env` reaches nothing until the container serving the API is
+  **recreated** — `docker compose up -d app`, not `docker compose restart app`, which keeps the
+  environment the container was created with
+  ([compose `restart`](https://docs.docker.com/reference/cli/docker/compose/restart/)). A re-seal
+  pressed before that seals the **old** value again — the response does not tell you so — and a
+  variable that is new to the process answers `400 missing_secret`. Adding a name to
+  `APP_INTEGRATION_SECRET_ENV` needs the same recreate, whichever form you use.
+
+How the file reaches the container (a bind mount, a Docker secret) is your compose override's, and
+so is making sure the container sees the new contents before you re-seal; **Test connection**
+afterwards is the check that it did. The two paths were read off the code, not measured against a
+running instance.
 
 **Retiring an integration.** **Retire** on the card — `DELETE /api/integrations/<id>` — deletes the
 integration's sealed credentials and keeps the row, marked retired, because the audit names it for
@@ -618,13 +657,26 @@ migration. Until the first `vX.Y.Z` release exists nothing published carries one
 cd agentic
 git pull                                  # or: export PLATFORM_TAG=latest (or sha-<7>) and pull the images
 docker compose build                      # skip when you pulled published images
+docker compose stop app runner            # stop serving on the old code; db keeps running
 docker compose run --rm migrate           # forward-only, advisory-locked, idempotent
-docker compose up -d                      # recreates app and launcher on the new image
+docker compose up -d                      # recreates app, runner and launcher on the new image
 curl -fsS localhost:8080/readyz
 ```
 
-`docker compose up -d --build` does the same thing in one step: `app` waits for the `migrate`
-service to exit 0 (`condition: service_completed_successfully`).
+The `stop` line is what makes the commands do what the sentence above says. Without it the old `app`
+and `runner` keep serving while `migrate` runs, and a migration that builds an index (0071 does, with
+a plain `create index`: each migration runs in one transaction, so it cannot be `concurrently`)
+blocks writes to that table until the build finishes — a writer waits rather than fails, because no
+`lock_timeout` or `statement_timeout` is set. WP-115 measured those builds at 38 ms and 71 ms on its
+largest data sets (PROGRESS backlog 307 and 312); a larger installation waits longer. Stopping the
+two processes that write turns that into a short outage you chose. An agent run in progress when you
+stop `runner` is interrupted — the recreate at the end of the block always did that — so upgrade with
+no agent run in progress where you can.
+
+`docker compose up -d --build` builds, runs `migrate` and starts the new `app` in one step — `app`
+waits for the `migrate` service to exit 0 (`condition: service_completed_successfully`) — but it was
+not measured whether it stops the old `app` before `migrate` runs, so run the `stop` line first if
+you use it.
 
 **Take a dump first.** A migration is forward-only, so there is no down-step to run if one goes
 wrong:

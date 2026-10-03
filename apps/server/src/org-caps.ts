@@ -14,7 +14,14 @@
  * choice and caps nobody, so it lists none, and a project already held at the old maximum that the
  * new one holds at the same value is not news either. `before` is computed against the stored
  * document the write replaced, `after` against the one it wrote — both through the readers' own
- * functions, so the list cannot disagree with what the next read answers (standing rule 41).
+ * functions, so the list cannot disagree with what the next read answers (standing rule 41). That
+ * holds for `after`; `before` is the replaced document's **stated** values, not the state in force
+ * under it. The two differ in one case, the second limit below: under a replaced document that did
+ * not parse, the run path refused every agent run and held WIP at the 1/1 floor
+ * (`apps/server/src/pipeline.ts`), while `before` is computed as if it stated no maximum — so a
+ * write that repairs such a document can list a project as capped (`before: 3, after: 2`) although
+ * it loosened what was in force. It over-lists, in the response and the audit row; no cap is
+ * weakened (PROGRESS backlog 384, option (i)).
  *
  * ## Where it is computed
  *

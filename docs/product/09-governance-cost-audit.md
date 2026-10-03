@@ -42,7 +42,7 @@ Everything below is immutable, append-only, and exportable:
 - **Knowledge audit:** every KB change with provenance (task/run/human) — the KB lives in git, so git history is part of the audit.
 - **Integration audit:** every outbound action (ticket transition, comment, MR update, Slack message) with payload and result; every inbound event.
 
-Retention: configurable per organisation; **default is to keep everything forever** (Q13). Operators may set a purge window for raw transcripts; summaries, costs, artifacts and events are always kept. Export as JSON per task: the task record, its run records (with their settings hash), its audit rows and its events, the last two capped at 1 000 each; transcripts, prompts, settings snapshots and artifact bodies are their own downloads, which the export names (*as built at WP-112*).
+Retention: configurable per organisation; **default is to keep everything forever** (Q13). Operators may set a purge window for raw transcripts; summaries, costs, artifacts and events are always kept. Export as JSON per task: the task record, its run records (with their settings hash), its audit rows and its events, the last two capped at 1 000 each — the audit rows only for a caller who may read the task's audit (`org.audit.read`, maintainer), so the export is never a way around a narrower read, and a member's export says it carries none (Q112 (a)); transcripts, prompts, settings snapshots and artifact bodies are their own downloads, which the export names (*as built at WP-112*).
 
 ## Safety rails (product-level; technical enforcement in Round 2)
 

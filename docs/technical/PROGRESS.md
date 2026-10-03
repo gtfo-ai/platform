@@ -41293,3 +41293,61 @@ Sentences falsified (grep: *whole-table*, *no whole-table census*, *has no `vers
 - **Nit — scope**: it now reads `.ts`, `.mts`, `.cts`, `.tsx`, `.js`, `.mjs`, `.cjs` and `.sql` (no new hits).
 - **Nit — the guide check's blind spots** now include a tab rendered outside `TABS.map` and a second `role="tablist"`.
 - **Nit — `config`'s comment**: the compare-and-set on `config_hash` holds only when the request carries a base hash.
+
+#### WP-130
+
+**Documents that describe what the tree no longer does, third pass** — backlog 335, 340, 360, 380, 382, 384, 389 and 393, and the Q105/Q107/Q109/Q110/Q111 records, technical/README's status line and technical/15's rulings sentence. Implementer, session 11, on `8c377b3`. Docs and comment-only edits; nothing in `docs/decisions/**` or `docs/product/**` was edited — those changes are under "For the orchestrator" below.
+
+Decisions and assumptions:
+- **393**: the command block now **stops `app` and `runner`** before `migrate` (option one of the entry's *Done*), so the block does what the sentence above it says; `launcher` is not stopped because it holds no database connection (`compose.yml` gives it no `DATABASE_URL` and no `env_file`). Whether `docker compose up -d --build` stops the old `app` before `migrate` runs was **not measured** (no Docker in this row), and the guide now says so and tells the reader to run the `stop` line first. The in-flight run sentence says only that the run is interrupted, as the old block's recreate already did — what the platform then does with it on a graceful `runner` stop was not re-derived.
+- **389**: the paragraph recommends `<NAME>_FILE` and says why from `environmentSecretSource` (`apps/server/src/queries/onboarding-queries.ts`): the `_FILE` path is fixed at start but the file is read on every create and re-seal; a plain variable is fixed when the container is created. "Restart" is written as **recreate** (`docker compose up -d app`), because `docker compose restart` keeps the old environment (Docker's documentation, cited at the line). The install list's step 4, which said "restart `app`", was changed the same way (rule 83: the same false instruction one section up). How a file reaches the container is left to the operator's override; `compose.yml` mounts no secret for `app`.
+- **380**: the endpoint is struck from technical/08's Tasks row and the export entry says it carries the task's stored events, capped, with the trigger for a paged read named (a screen that needs one).
+- **README status line**: a new session-11 line is added above session 9's, which is kept, as the file keeps every earlier session's line. M7 is named as WP-119…WP-131 (WP-131 was added during the milestone, plan row at `13-implementation-plan.md:374`).
+
+**Item table (criterion 5).**
+
+| Item | What the tree says (evidence) | Outcome | Handed to the orchestrator |
+|---|---|---|---|
+| 335 | `grep -rn "until Q52" packages apps` hit `stage-executor.test.ts:635` and `pipeline-harness.ts:275`; since WP-53 a process with no launcher configuration does not subscribe `stage.execute` (`apps/server/src/runtime.ts:617-626`, `apps/server/src/pipeline.ts:1033`), and the executor's own comment names the configured-instance failures (`stage-executor.ts:1196-1201`) | both docblocks now name a configured instance's start failure (launcher unreachable, refused spec, missing CLI) and say where `unavailableClaudeRunner` is still composed; the grep is empty. The planted `(Q52)` error text at `stage-executor.test.ts:659` is fixture text and stays | none |
+| 340 | `composeOrphanWorkspaceReaper` returns `null` without both launcher settings (`apps/server/src/workspaces.ts:338-340`) and logs "off" at interval 0 (`:364`); composed once, `apps/server/src/runtime.ts:554` | new paragraph in `docs/operator-guide.md` § 1's runner-less part (`:96`), pointing at § 5's removal commands (WP-127's) | none |
+| 360 | crossing 6 at `test/e2e/topology/two-processes.e2e.test.ts:382-420` already states at its assertion that both instances share one module graph; `mintedShapeRules` is module state (`packages/infrastructure/src/redaction/pattern-redaction.ts:163`); the census `test/integration/redaction/shape-refresh-roles.integration.test.ts` reads each role's refresher status. TD-028's WP-72 amendment (6) does not say it | decision record, so not edited | yes (1) |
+| 380 | no route serves `GET /api/tasks/:id/events` (`grep -rn "/events" apps/server/src/routes` finds only `/events` and `/events/subscriptions`); `MAX_TASK_EXPORT_EVENTS` caps the export (`apps/server/src/queries/task-export.ts:62`) | struck from technical/08:17, the export entry says it carries the events | none |
+| 382 | `task.export` is `member`, `org.audit.read` is `maintainer` (`packages/domain/src/permissions.ts:167`, `:128`); `human_actions` is `null` for a caller who may not read the audit (`packages/contracts/src/api.ts:2106`); product/09:45 says nothing about who may export; Q112 already records (a) | product edit, so not edited | yes (2) |
+| 384 | `organisationOrNone` returns `{}` (`apps/server/src/org-caps.ts:91-98` after this edit); the run path refuses every run and holds WIP at the 1/1 floor under an organisation refusal (`apps/server/src/pipeline.ts:725-743`) | `org-caps.ts:17-24`: the rule-41 sentence now holds for `after`, and `before` is named as the document's stated values with the one case where they differ and its direction (over-listing) | none |
+| 389 | as above (`onboarding-queries.ts`, `environmentSecretSource`) | `docs/operator-guide.md:502-529` (rotation and the `_FILE` paragraph) and `:434` (step 4) | none |
+| 393 | `0071_payload_lookup_indexes.sql:51,55` plain `create index`; the migrator opens one transaction per migration (`packages/infrastructure/src/db/migrator.ts:249`); no `lock_timeout`/`statement_timeout` in `packages/infrastructure/src` or `apps/server/src` (grep); WP-115's 38 ms and 71 ms are in this file under 307 and 312 | `docs/operator-guide.md:654-677`: `stop app runner` before `migrate`, the reason, and the unmeasured `up -d --build` order stated | none |
+| Q105 | its record already says implemented as (c) at WP-73d; `CHANGELOG.md` is the pointer, `scripts/release.test.ts:688-700` and `scripts/changelog.test.ts:519` hold it; Open is right, the founder has not confirmed | already true | none |
+| Q107 | record: founder's answer *maintainer is fine*, `discovery.run` at `permissions.ts:183` (true); Decision log row names product/17, which says a maintainer re-evaluates (`docs/product/17-repository-readiness.md:11`) | already true | none |
+| Q109 | record: built at WP-102 (`tamper-confirmation.ts`, `confirmExcusedPaths` imported by `jobs.ts:62`, migration 0065's `ci_excused_paths`); the Decision log row said "BD-024 (M6)", but BD-024 has no M6 amendment — the answer is in its Consequences (`BD-024-verification-integrity.md:18`) | row's *Recorded in* corrected to "BD-024 § Consequences (WP-102)" | none |
+| Q110 | record and row name product/19 §2; `docs/product/19-operating-definitions.md:31` says migrations are blocked like the rest (Q110) | already true | none |
+| Q111 | record: built at WP-113 (migration 0069, `maintenanceTransitionOf`, `maintenanceTransitionDetail`, the writers census — all present); the row said "product/19", which has no such sentence; product/18's maintenance-pipeline row (`docs/product/18-adoption-and-operating-modes.md:30`) is where it is recorded | row's *Recorded in* corrected to product/18 | none |
+| README status | named M6 (session 9) | session-11 line naming M7 added above it | none |
+| technical/15 | "the M4, M5 and M6 rulings" (`docs/technical/15-orchestrator-prompt.md:42`) | now names M7's too | none |
+
+Criteria: (1) each row re-derived from the tree, evidence in the table; (2) no other M7 row is in flight; (3) `grep -rn "until Q52" packages apps` is empty; (4) the citation guard and `conflict:check` are green (below); (5) the table above.
+
+**For the orchestrator** (exact text; apply as written).
+
+(1) **Backlog 360** — `docs/decisions/technical/TD-028-launcher-control-plane.md`, the paragraph beginning `**Amendment (WP-72, 2026-09-27) — the crossings of the shipped topology`, crossing (6). Old:
+
+> — **superseded at WP-80**: every process now redacts it by the shape recorded beside the mint's audit row (TD-012's M5 amendment). The Consequences bullet's
+
+New:
+
+> — **superseded at WP-80**: every process now redacts it by the shape recorded beside the mint's audit row (TD-012's M5 amendment). For this crossing the tier proves the **composition**, not the per-process behaviour: both `apps/server` instances run in one Node process and the installed shape rules are module state (`packages/infrastructure/src/redaction/pattern-redaction.ts`), so it cannot tell which instance's refresher installed a rule; that each `ROLE` subscribes and reads is asserted per role by `test/integration/redaction/shape-refresh-roles.integration.test.ts` (WP-107; PROGRESS backlog 360). The Consequences bullet's
+
+(2) **Backlog 382 / Q112** — `docs/product/09-governance-cost-audit.md`, the Retention paragraph (line 45). Old:
+
+> its audit rows and its events, the last two capped at 1 000 each; transcripts,
+
+New:
+
+> its audit rows and its events, the last two capped at 1 000 each — the audit rows only for a caller who may read the task's audit (`org.audit.read`, maintainer), so the export is never a way around a narrower read, and a member's export says it carries none (Q112 (a)); transcripts,
+
+**Sentences falsified (rule 83)** — grep *until Q52*, *tasks/:id/events*, *restart the process so it reads*, *restart \`app\` whenever*, *does the same thing in one step*, *before* in `org-caps.ts`: the operator guide's install step 4 (changed, above); nothing else outside PROGRESS history. Not changed: the refusal message `secret_name_not_permitted … and restart the process` is code text that the guide quotes, and for a plain variable "restart" there means a recreate — left, filed below.
+
+**Residuals.**
+- 393's `up -d --build` ordering and 389's two read paths were read off the code and Docker's documentation, not measured against a running instance (no Docker in this row).
+- Several other `Q52` mentions in `apps/` docblocks (`apps/server/src/readiness.ts:33`, `config.ts:207`, `runtime.ts:173`) read as history or name Q52 as the transport's origin; they were not in this row's scope and were not re-derived one by one.
+
+**Discovered work**: the `ForbiddenSecretNameError` message (`apps/server/src/queries/onboarding-queries.ts`) says "restart the process"; under compose that has to be a recreate for a changed `.env` to be read. A nit for a later sweep (wording in a refusal message is code, not this row's comment-only scope).

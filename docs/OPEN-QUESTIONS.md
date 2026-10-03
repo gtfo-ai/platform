@@ -409,9 +409,9 @@ The entries below were closed in the tree, or their document corrections landed,
 | Q89 | The `latest` tag | Kept: the newest push to `main` (Q96) | TD-019 (amendment 2026-09-16) |
 | Q90 | CI on the release pull request | Closed by withdrawal: no release pull request exists | TD-019 (amendment 2026-09-16) |
 | Q107 | A maintainer re-running discovery | Yes, at `discovery.run` (maintainer), as built at WP-94 | product/17 (WP-94) |
-| Q109 | Confirming a protected change's reason | (b): recorded at `ci_gate`, settled in the rebase settlement (WP-102) | BD-024 (M6) |
+| Q109 | Confirming a protected change's reason | (b): recorded at `ci_gate`, settled in the rebase settlement (WP-102) | BD-024 § Consequences (WP-102) |
 | Q110 | `**/migrations/**` flag or block | (a): protected like every default path (WP-99) | product/19 §2 |
-| Q111 | A project paused at Observe in the digest | (c): one line when a pause begins or ends (WP-113) | product/19 |
+| Q111 | A project paused at Observe in the digest | (c): one line when a pause begins or ends (WP-113) | product/18 (the maintenance pipeline row) |
 | Q37 | The block-list's hazards written as one spelling each | product/19 §3 names the blocked spellings; an unlisted one lands on ask, never allow (WP-02a, WP-98) | product/19 §3 |
 | Q42 | `@slack/bolt` in TD-024 | A handwritten `fetch` client for every provider, Slack included; no Bolt (WP-10) | TD-024 (WP-98 amendment) |
 | Q44 | File-based routes | Code-based routes in `apps/web/src/routes/tree.tsx`, at technical/09's paths (WP-20) | technical/09 |

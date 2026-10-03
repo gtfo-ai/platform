@@ -39,7 +39,7 @@ order: the fail-closed defects that can spend money or brick a row first, then t
 them live, the record, providers, screens, onboarding, operations, the instruments. Every backlog
 entry graded major or blocker has an owner in the architect's disposition table; a new finding goes
 to a refiner, never fixed in place. When the milestone's last row merges, run one architect pass that
-writes the next milestone from the open backlog the way the M4, M5 and M6 rulings in `PROGRESS.md` did, and
+writes the next milestone from the open backlog the way the M4, M5, M6 and M7 rulings in `PROGRESS.md` did, and
 record the ruling in the ledger.
 
 **Constraints that stay in force.** Never generate synthetic CPU load, for any measurement, for any
