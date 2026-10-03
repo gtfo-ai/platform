@@ -7,8 +7,11 @@
  * it, a backfill that set it — would announce a pause nobody began or swallow one somebody did, and
  * nothing in the unit tier would notice, because the scheduler reads the column through a port. So
  * the single writer is checked rather than described (standing rule 44), the shape
- * `pipeline/tasks-column-ownership.test.ts` gives `tasks`. `projects` has no whole-table census;
- * this one holds the one column WP-113 added.
+ * `pipeline/tasks-column-ownership.test.ts` gives `tasks`. Since WP-129 `projects` has a
+ * whole-table census too (`db/projects-column-ownership.test.ts`), and this file is its **stricter
+ * half** for this one column: it counts any assignment to the column anywhere in code (a `where`
+ * that compares included) and any insert that names it, where the whole-table census reads `set`
+ * clauses and lists insert sites by file. It stays here because migration 0069 cites it by path.
  *
  * ## What it reads
  *

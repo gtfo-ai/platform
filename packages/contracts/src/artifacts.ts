@@ -612,6 +612,10 @@ export const askAnswerCitationSchema = z.strictObject({
   detail: z.string().max(MAX_ASK_CITATION_DETAIL_CHARS),
 });
 
+/**
+ * AskAnswer (docblock above, at `AskAnswer`). technical/12 lists its `data` fields since WP-129 —
+ * change the two together; `artifact-doc-names.test.ts` holds the type name to the page.
+ */
 export const askAnswerDataSchema = z.strictObject({
   /** The answer a human reads. Rendered as text nodes by the SPA, never as markup (BD-022). */
   answer: z.string().max(20_000),
@@ -686,6 +690,10 @@ export const historyProposalSchema = z.strictObject({
   reason: nonEmptyStringSchema,
 });
 
+/**
+ * HistoryFindings (docblock above, at {@link historyFindingKindSchema}). technical/12 lists its
+ * `data` fields since WP-129 — change the two together.
+ */
 export const historyFindingsDataSchema = z.strictObject({
   proposals: z.array(historyProposalSchema).max(MAX_HISTORY_PROPOSALS_PER_RUN),
   /**
@@ -756,6 +764,7 @@ export const researchOptionSchema = z.strictObject({
  *
  * `recommendation` is required and `options` may be empty: a spike that weighed nothing still owes
  * an answer, and a spike that weighed three things and recommends none of them has not finished.
+ * technical/12 lists its `data` fields since WP-129 — change the two together.
  */
 export const researchReportDataSchema = z.strictObject({
   question: nonEmptyStringSchema.max(MAX_RESEARCH_TEXT_CHARS),
@@ -810,7 +819,8 @@ export const breakdownChildSchema = z.strictObject({
  * `children` has **no `min`** and that is the honest shape: an epic the model could not split is a
  * finding, and the queue then holds nothing for a human to accept, which is different from a run
  * that failed. `out_of_scope` is where the work the split deliberately leaves out is named — the
- * same boundary `RefinedSpec` asks for, at the epic's grain.
+ * same boundary `RefinedSpec` asks for, at the epic's grain. technical/12 lists its `data` fields
+ * since WP-129 — change the two together.
  */
 export const ticketBreakdownDataSchema = z.strictObject({
   epic_summary: z.string().max(4_000),

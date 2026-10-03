@@ -15,9 +15,11 @@
  *
  * **The `projects` write names one column.** `update projects set readiness_level = $2 where id =
  * $1` — not a whole-row `save`, and not a read-modify-write. This adapter runs in the
- * `onboarding.discovery` job, beside a wizard that is editing the same row's name, configuration
- * and autonomy dial; standing rule 79 is the measurement that made every other narrow writer in
- * this repository narrow, and this is a new writer joining rather than its next instance.
+ * `onboarding.discovery` job, beside a wizard that is editing the same row's configuration and
+ * autonomy dial; standing rule 79 is the measurement that made every other narrow writer in this
+ * repository narrow, and this is a new writer joining rather than its next instance. Both of this
+ * adapter's `projects` statements are declared in `db/projects-column-ownership.test.ts` (WP-129),
+ * which refuses a second writer of either column and a whole-row one.
  *
  * **A `projects` row that has gone is not an error here.** The job re-reads the project first and
  * skips when it has been deleted, so a zero-row update at this point means the project was deleted

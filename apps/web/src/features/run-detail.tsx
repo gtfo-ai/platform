@@ -102,7 +102,11 @@ export const textSearchText = (pack: ContextPackRecord): string | null => {
   }
 };
 
-const TABS: readonly { readonly id: Tab; readonly label: string }[] = [
+/**
+ * The run page's tabs, in order. `docs/user-guide.md` § 5 names each one in bold and says how many
+ * there are; `user-guide-census.test.ts` holds the two together (WP-129).
+ */
+export const TABS: readonly { readonly id: Tab; readonly label: string }[] = [
   { id: 'transcript', label: 'Transcript' },
   { id: 'prompt', label: 'Prompt' },
   { id: 'context', label: 'Context pack' },

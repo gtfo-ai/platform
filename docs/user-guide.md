@@ -6,7 +6,9 @@
 > Every "not yet" below is read off the code rather than remembered: the screens themselves say what
 > they cannot show, and the one endpoint the application calls that the server does not serve is
 > named in `apps/server/src/routes/client-census.test.ts`, a test that fails if this list goes stale
-> in either direction.
+> in either direction. The run page's tabs (§ 5) and the top navigation are held to the screens the
+> same way, by `apps/web/src/features/user-guide-census.test.ts` — their names and counts, not what
+> the prose says they do.
 
 ## The shape of it
 

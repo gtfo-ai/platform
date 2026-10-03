@@ -17,7 +17,11 @@ import { type ThemePreference, useTheme } from '../ui/theme.js';
 import { useSession } from './queries.js';
 import { useServices } from './services.js';
 
-const NAV = [
+/**
+ * The top navigation, in order. `docs/user-guide.md` § "The top navigation" lists the same labels;
+ * `features/user-guide-census.test.ts` holds the two together (WP-129).
+ */
+export const NAV = [
   { to: '/', label: 'Dashboard' },
   { to: '/agents', label: 'Agents' },
   { to: '/inbox', label: 'Inbox' },

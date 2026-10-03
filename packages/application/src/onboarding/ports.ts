@@ -45,8 +45,10 @@ export interface ReadinessEvaluation {
  *
  * The `projects` write is **narrow** — one column — for the reason `tasks.saveWorkpad` is
  * (standing rule 79): this writer runs in a job, beside whatever else is editing the project row,
- * and a whole-row `update projects set …` from here would put back a name, a config or an autonomy
- * dial that a wizard step changed a moment ago.
+ * and a whole-row `update projects set …` from here would put back a configuration or an autonomy
+ * dial that a settings write changed a moment ago. Held, not described, since WP-129:
+ * `packages/infrastructure/src/db/projects-column-ownership.test.ts` declares every `projects`
+ * column's writing statements and refuses a whole-row writer.
  */
 export interface ReadinessStore {
   record(tx: Transaction, evaluation: ReadinessEvaluation): Promise<void>;
