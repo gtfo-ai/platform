@@ -1,16 +1,37 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { PROCESS_SUITES } from '../vitest.config.js';
+import { censusPaths } from './census-files.mjs';
 import { escapeGlob, findNestedCheckouts, isSeparateCheckout } from './nested-checkouts.js';
 
 /**
- * What `vitest.config.ts` collects, measured against **real** nested checkouts built inside this
- * repository.
+ * What `vitest.config.ts` collects, measured against **real** nested checkouts — built in a
+ * **mirror** of this repository's layout in the OS temp directory, never inside this checkout.
+ *
+ * **Why a mirror** (WP-128, PROGRESS backlog 390). Until WP-128 the fixtures were planted under
+ * `packages/`, `apps/web/src/` and the repository root of this checkout, and every census that
+ * lists the tree's untracked files (`scripts/census-files.mjs`) runs in a parallel test file: one
+ * listed `apps/web/src/zz-vitest-scope-linked-…` and the directory was gone when git came to read
+ * it, which failed `client-census.test.ts` in the orchestrator's `verify` with *fatal: Invalid
+ * path*. The mirror is a directory of its own with its own `git init`, holding this repository's
+ * shipped `vitest.config.ts` and `scripts/nested-checkouts.ts` **copied at the start of the run**
+ * (so a mutation of either is still what is measured), a symlink to this checkout's
+ * `node_modules`, and one inert test file per project standing in for this checkout's own. Nothing
+ * is written under this checkout, and a case asserts it.
  *
  * A test that asserted "no collected path contains `worktrees`" would test a name, and a test that
  * only asserted "the foreign files are absent" would pass just as happily on a fixture builder that
@@ -47,6 +68,13 @@ import { escapeGlob, findNestedCheckouts, isSeparateCheckout } from './nested-ch
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 
 /**
+ * The mirror every fixture below lives in, made in `beforeAll` — see the module docblock. A
+ * `realpath`, because macOS's temp directory is reached through the `/var` → `/private/var` link
+ * and `vitest list` prints paths relative to the real one.
+ */
+let mirrorRoot = '';
+
+/**
  * The host's git configuration is not part of these fixtures. A global `core.hooksPath`, a commit
  * template or a signing key would otherwise make the test fail for reasons unrelated to the walk.
  */
@@ -80,13 +108,12 @@ const write = (path: string): void => {
 };
 
 /**
- * Fixture roots. Two sit under directories whose globs are *anchored* (`packages/*` and
- * `apps/web/src`), because anchored only means a checkout at `.claude/worktrees/` cannot reach
- * them — it says nothing about one placed here, and one placed here **is** collected. The third is
- * a root-level directory, which is where the `integration` and `e2e-fake-claude` globs open with a
- * bare `**`, and it starts with a dot like the real `.claude/worktrees/` does.
- *
- * The prefixes are unmistakable so a crashed run can be swept up by the next one.
+ * Fixture roots, inside the mirror. Two sit under directories whose globs are *anchored*
+ * (`packages/*` and `apps/web/src`), because anchored only means a checkout at `.claude/worktrees/`
+ * cannot reach them — it says nothing about one placed there, and one placed there **is**
+ * collected. The third is a root-level directory, which is where the `integration` and
+ * `e2e-fake-claude` globs open with a bare `**`, and it starts with a dot like the real
+ * `.claude/worktrees/` does.
  */
 const FIXTURE_PREFIX = 'zz-vitest-scope-';
 const ROOT_PREFIX = '.vitest-scope-';
@@ -103,9 +130,6 @@ const id = `${String(process.pid)}-${Math.random().toString(36).slice(2, 8)}`;
  */
 const GLOB_SYNTAX_DIRECTORY = 'init (v2)';
 
-const packagesDir = join(repositoryRoot, 'packages');
-const webSourceDir = join(repositoryRoot, 'apps', 'web', 'src');
-
 const names = {
   packagePlain: `${FIXTURE_PREFIX}plain-${id}`,
   packageNested: `${FIXTURE_PREFIX}init-${id}`,
@@ -114,13 +138,66 @@ const names = {
   root: `${ROOT_PREFIX}${id}`,
 } as const;
 
-const fixtures = {
-  plainPackage: join(packagesDir, names.packagePlain),
-  nestedPackage: join(packagesDir, names.packageNested),
-  plainWeb: join(webSourceDir, names.webPlain),
-  nestedWeb: join(webSourceDir, names.webNested),
-  root: join(repositoryRoot, names.root),
-} as const;
+/** The fixture directories, as paths inside {@link mirrorRoot}. */
+const fixtureDirectories = () =>
+  ({
+    plainPackage: join(mirrorRoot, 'packages', names.packagePlain),
+    nestedPackage: join(mirrorRoot, 'packages', names.packageNested),
+    plainWeb: join(mirrorRoot, 'apps', 'web', 'src', names.webPlain),
+    nestedWeb: join(mirrorRoot, 'apps', 'web', 'src', names.webNested),
+    root: join(mirrorRoot, names.root),
+  }) as const;
+
+/**
+ * The mirror's **own** files, one per project, standing in for this checkout's: what
+ * `leaves every project with files of this checkout` reads, and the baseline the additions are
+ * measured against. `process` names its files one by one, so its stand-ins are exactly
+ * {@link PROCESS_SUITES}'s paths. `vitest list --filesOnly` resolves globs and imports nothing, so
+ * the setup and global-setup files the config names are inert stand-ins too.
+ */
+const MIRROR_OWN_FILES: readonly string[] = [
+  'packages/own/src/own.test.ts',
+  'packages/own/src/own.contract.test.ts',
+  'scripts/own.test.ts',
+  'apps/web/src/own.test.ts',
+  'test/integration/own.test.ts',
+  'test/e2e/own.test.ts',
+  ...PROCESS_SUITES,
+];
+const MIRROR_SUPPORT_FILES: readonly string[] = [
+  'test/support/property-seed.ts',
+  'test/integration/support/global-setup.ts',
+];
+
+/**
+ * Builds the mirror: its own repository, the two shipped files the collection depends on, the
+ * dependencies by symlink (`node_modules` is excluded by every project and skipped by the walk),
+ * and the stand-in files above.
+ */
+const buildMirror = (): string => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'nested-checkout-mirror-')));
+  // Assigned before anything can throw, so `afterAll` removes a mirror whose population failed.
+  mirrorRoot = root;
+  git(root, 'init', '--quiet');
+  writeFileSync(
+    join(root, 'package.json'),
+    `${JSON.stringify({ name: 'nested-checkout-mirror', private: true, type: 'module' })}\n`,
+    'utf8',
+  );
+  copyFileSync(join(repositoryRoot, 'vitest.config.ts'), join(root, 'vitest.config.ts'));
+  mkdirSync(join(root, 'scripts'), { recursive: true });
+  copyFileSync(
+    join(repositoryRoot, 'scripts', 'nested-checkouts.ts'),
+    join(root, 'scripts', 'nested-checkouts.ts'),
+  );
+  symlinkSync(join(repositoryRoot, 'node_modules'), join(root, 'node_modules'), 'dir');
+  for (const path of MIRROR_OWN_FILES) write(join(root, path));
+  for (const path of MIRROR_SUPPORT_FILES) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), 'export default () => undefined;\n', 'utf8');
+  }
+  return root;
+};
 
 /**
  * The plain fixtures, and **which project must collect each**. Naming the project is what makes the
@@ -170,7 +247,7 @@ const listCollectedFiles = (): ReadonlyMap<string, readonly string[]> => {
   }
 
   const result = spawnSync(process.execPath, [vitestCli, 'list', '--filesOnly'], {
-    cwd: repositoryRoot,
+    cwd: mirrorRoot,
     env,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -194,25 +271,13 @@ const listCollectedFiles = (): ReadonlyMap<string, readonly string[]> => {
   return new Map([...byProject].map(([project, files]) => [project, [...files].sort()]));
 };
 
-const sweepStaleFixtures = (): void => {
-  const sweep = (directory: string, prefix: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if (entry.isDirectory() && entry.name.startsWith(prefix)) {
-        rmSync(join(directory, entry.name), { recursive: true, force: true });
-      }
-    }
-  };
-  sweep(packagesDir, FIXTURE_PREFIX);
-  sweep(webSourceDir, FIXTURE_PREFIX);
-  sweep(repositoryRoot, ROOT_PREFIX);
-};
-
 let scratchRepository = '';
 let baseline: ReadonlyMap<string, readonly string[]> = new Map();
 let collected: ReadonlyMap<string, readonly string[]> = new Map();
 
 beforeAll(() => {
-  sweepStaleFixtures();
+  mirrorRoot = buildMirror();
+  const fixtures = fixtureDirectories();
   baseline = listCollectedFiles();
 
   // A repository of its own, so the linked worktrees below belong to somebody else — see above.
@@ -239,8 +304,8 @@ beforeAll(() => {
   write(join(fixtures.plainPackage, 'src', 'ordinary.test.ts'));
   write(join(fixtures.plainPackage, 'src', 'ordinary.contract.test.ts'));
 
-  // The web fixture takes the linked shape on purpose: `apps/web/src/no-html.test.ts` walks this
-  // directory, and a `.git` *file* leaves no object store there for it to read.
+  // The web fixture takes the linked shape, the root one both: each `.git` shape is built under an
+  // anchored glob and under a bare `**`.
   linkedWorktree(fixtures.nestedWeb);
   write(join(fixtures.nestedWeb, 'foreign.test.tsx'));
   write(join(fixtures.plainWeb, 'ordinary.test.tsx'));
@@ -258,13 +323,37 @@ beforeAll(() => {
 }, 180_000);
 
 afterAll(() => {
-  for (const path of Object.values(fixtures)) rmSync(path, { recursive: true, force: true });
+  // The mirror holds every fixture; the `node_modules` symlink is removed as a link, never followed.
+  if (mirrorRoot !== '') rmSync(mirrorRoot, { recursive: true, force: true });
   if (scratchRepository !== '') rmSync(scratchRepository, { recursive: true, force: true });
 });
+
+/** Whether `path` lies inside `root` (both resolved through symlinks first). */
+const isInside = (root: string, path: string): boolean => {
+  const from = relative(realpathSync(root), realpathSync(path));
+  return from === '' || (!from.startsWith('..') && !isAbsolute(from));
+};
 
 const everythingCollected = (): readonly string[] => [...collected.values()].flat();
 
 describe('vitest project scoping', () => {
+  it('plants nothing inside this checkout, so no census of it can list a fixture (WP-128)', () => {
+    // Backlog 390: a fixture under a tree the censuses read vanished between a parallel census's
+    // listing and its read. Every fixture is in the mirror or the scratch repository now.
+    const planted = [mirrorRoot, scratchRepository, ...Object.values(fixtureDirectories())];
+    for (const path of planted) {
+      expect(isInside(repositoryRoot, path), path).toBe(false);
+    }
+    // …and the census itself, read while every fixture exists, names none of them.
+    expect(
+      censusPaths(repositoryRoot).filter(
+        (path) => path.includes(FIXTURE_PREFIX) || path.includes(ROOT_PREFIX),
+      ),
+    ).toStrictEqual([]);
+    // The mirror is a checkout of its own, as the ruling asks: its own `.git`, its own root.
+    expect(isSeparateCheckout(mirrorRoot)).toBe(true);
+  });
+
   it('resolves the same six projects with the fixtures in place', () => {
     const projects = [...collected.keys()].sort();
     expect(projects).toStrictEqual([
@@ -313,7 +402,7 @@ describe('vitest project scoping', () => {
   });
 
   it('names every nested checkout under the repository root, and no plain directory', () => {
-    const found = findNestedCheckouts(repositoryRoot);
+    const found = findNestedCheckouts(mirrorRoot);
     expect(found).toContain(`packages/${names.packageNested}`);
     expect(found).toContain(`apps/web/src/${names.webNested}`);
     expect(found).toContain(`${names.root}/linked`);

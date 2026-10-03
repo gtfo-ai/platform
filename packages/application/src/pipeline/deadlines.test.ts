@@ -256,6 +256,7 @@ const taskOf = (harness: PipelineHarness) => {
 const eventsOf = <T extends DomainEvent['type']>(harness: PipelineHarness, type: T) =>
   harness.events().filter((event) => event.type === type) as Extract<DomainEvent, { type: T }>[];
 
+/** The deadline timers still **pending** — `drain` takes each one it fires (see `jobs.enqueued`). */
 const deadlineJobs = (harness: PipelineHarness) =>
   harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.deadlineSweep);
 
@@ -1138,6 +1139,8 @@ describe('a take-over’s inactivity timeout (product/19 §19, PROGRESS backlog 
 
     moveTo(harness, FIVE_WORKING_DAYS_LATER);
     await harness.drain();
+    // What is **pending**, on purpose: the timer fired and took itself off, and nothing re-armed it
+    // (WP-128 read this one; an absence of an *enqueue* would read `jobs.history`).
     expect(
       deadlineJobs(harness).filter(
         (request) => (request.data as DeadlineSweepData).kind === 'take_over_inactivity',

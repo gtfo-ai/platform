@@ -253,3 +253,46 @@ describe('the runs declared unable to start', () => {
     expect(found).toEqual(DECLARED);
   });
 });
+
+/**
+ * WP-128 (PROGRESS backlog 352): `enqueued` is what is **pending** and `history` is what was
+ * **asked**. The instrument is calibrated here on both halves, so an absence asserted on the history
+ * elsewhere is an absence the history can show.
+ */
+describe('what the job recorder remembers after a drain', () => {
+  it('takes every job drain ran off `enqueued`, and keeps each on `history`', async () => {
+    const harness = createPipelineHarness({
+      projectId: PROJECT,
+      runs: {
+        refinement: completed(PROCEEDING_REFINED_SPEC),
+        architecture: cannotStart('the walk ends at its second stage'),
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    const stageJobs = (requests: readonly { readonly queue: string }[]) =>
+      requests.filter((request) => request.queue === 'stage.execute');
+
+    // The walk ran its stages, so stage jobs were enqueued — and drain took every one it ran.
+    expect(harness.specs.length).toBeGreaterThan(0);
+    expect(stageJobs(harness.jobs.enqueued)).toEqual([]);
+    expect(stageJobs(harness.jobs.history).length).toBeGreaterThanOrEqual(harness.specs.length);
+  });
+
+  it('records in `history` what `take` and `takeDue` remove, in enqueue order', async () => {
+    const harness = createPipelineHarness({ projectId: PROJECT });
+    const later = new Date(harness.clock.epochMs + 60_000);
+    await harness.jobs.enqueue({ queue: 'a.queue', data: { n: 1 } });
+    await harness.jobs.enqueue({ queue: 'b.queue', data: { n: 2 }, startAfter: later });
+    await harness.jobs.enqueue({ queue: 'b.queue', data: { n: 3 } });
+
+    expect(harness.jobs.take('a.queue')).toHaveLength(1);
+    expect(harness.jobs.takeDue('b.queue', harness.clock.epochMs)).toHaveLength(1);
+
+    expect(harness.jobs.enqueued.map((request) => request.data)).toEqual([{ n: 2 }]);
+    expect(harness.jobs.history.map((request) => request.data)).toEqual([
+      { n: 1 },
+      { n: 2 },
+      { n: 3 },
+    ]);
+  });
+});

@@ -147,7 +147,23 @@ export const testIds = (prefix = 'aaaaaaaa'): { next(): Id } => {
 
 /** The `Jobs` port as a recorder: it accepts, it remembers, it never runs anything. */
 export interface RecordingJobs extends Jobs {
+  /**
+   * The jobs that are **pending**: enqueued and not yet taken. {@link take}, {@link takeDue} and
+   * therefore {@link PipelineHarness.drain} remove what they run, so after a `drain` this holds
+   * only the jobs that are not due yet or sit on a queue `drain` does not play.
+   *
+   * Read it for a statement about the queue's *state* ("one window is still armed", "nothing is
+   * due any more"). **Never read it for "X was not enqueued" after a `drain` or a `take`**: a job
+   * that was enqueued and run is gone from it, so such an absence passes whether or not the job
+   * was enqueued (PROGRESS backlog 352) — read {@link history} instead, or the effect.
+   */
   readonly enqueued: readonly EnqueueRequest[];
+  /**
+   * **Every** enqueue this instance accepted, in order, append-only — nothing takes from it
+   * (WP-128, PROGRESS backlog 352). What an absence ("no stage job", "no outbound duty") is
+   * asserted on; slice it at a recorded length to ask about one step.
+   */
+  readonly history: readonly EnqueueRequest[];
   readonly handlers: ReadonlyMap<string, JobHandler>;
   /**
    * Every worker registration as it was asked for, per queue (WP-124): the polling interval and
@@ -170,6 +186,7 @@ export interface RecordingJobs extends Jobs {
 
 export const recordingJobs = (): RecordingJobs => {
   const enqueued: EnqueueRequest[] = [];
+  const history: EnqueueRequest[] = [];
   const handlers = new Map<string, JobHandler>();
   const registrations = new Map<string, Omit<WorkRequest, 'handler'>>();
   const crons: CronScheduleDefinition[] = [];
@@ -177,7 +194,8 @@ export const recordingJobs = (): RecordingJobs => {
     defineQueue: async () => {},
     enqueue: async (request) => {
       enqueued.push(request as EnqueueRequest);
-      return { status: 'enqueued', jobId: `job-${enqueued.length}` };
+      history.push(request as EnqueueRequest);
+      return { status: 'enqueued', jobId: `job-${history.length}` };
     },
     scheduleCron: async (definition) => {
       crons.push(definition);
@@ -193,6 +211,9 @@ export const recordingJobs = (): RecordingJobs => {
     registrations,
     get enqueued() {
       return [...enqueued];
+    },
+    get history() {
+      return [...history];
     },
     get crons() {
       return [...crons];

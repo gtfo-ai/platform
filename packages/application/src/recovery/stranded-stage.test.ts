@@ -65,6 +65,7 @@ const harnessStore = (
         row.state === 'running' &&
         row.exitedAt === null,
     );
+    // `enqueued` on purpose: it stands for pg-boss's table, which holds the jobs still pending.
     const queued = harness.jobs.enqueued.some(
       (request) =>
         request.queue === JOB_QUEUES.stageExecute &&
@@ -196,6 +197,13 @@ const pass = (harness: PipelineHarness, store: StrandedStageRecoveryStore) =>
     },
   });
 
+/**
+ * The stage wake-ups enqueued since `asked` (a `history` length), read on the append-only history
+ * rather than on `enqueued`, which `drain` and `take` empty (WP-128, PROGRESS backlog 352).
+ */
+const stageJobsSince = (harness: PipelineHarness, asked: number) =>
+  harness.jobs.history.slice(asked).filter((r) => r.queue === JOB_QUEUES.stageExecute);
+
 const siteOf = (report: Awaited<ReturnType<typeof pass>>) =>
   report.find((site) => site.site === 'stranded_stage');
 
@@ -253,8 +261,9 @@ describe('the stranded-stage row (WP-108, PROGRESS backlog 320)', () => {
 
     // A pass inside the ending window waits: the attempt is spent, the ending is not due.
     harness.clock.advance(GRACE_MS + 1);
+    const asked = harness.jobs.history.length;
     expect(siteOf(await pass(harness, store))).toMatchObject({ found: 0, reEnqueued: 0, ended: 0 });
-    expect(harness.jobs.enqueued.filter((r) => r.queue === JOB_QUEUES.stageExecute)).toEqual([]);
+    expect(stageJobsSince(harness, asked)).toEqual([]);
 
     harness.clock.advance(STRANDED_ENDING_AFTER_MS);
     expect(siteOf(await pass(harness, store))).toEqual({
@@ -302,6 +311,7 @@ describe('the stranded-stage row (WP-108, PROGRESS backlog 320)', () => {
       const taskId = await lostDiscovery(harness);
       const { store, calls } = harnessStore(harness, { endedRun });
       harness.clock.advance(GRACE_MS + 1);
+      const asked = harness.jobs.history.length;
       expect(siteOf(await pass(harness, store))).toEqual({
         site: 'stranded_stage',
         found: 1,
@@ -310,7 +320,7 @@ describe('the stranded-stage row (WP-108, PROGRESS backlog 320)', () => {
       });
       expect(calls, 'no mark: an ended attempt is never attempted').toEqual([]);
       expect(
-        harness.jobs.enqueued.filter((r) => r.queue === JOB_QUEUES.stageExecute),
+        stageJobsSince(harness, asked),
         'a fresh paid run of a stage whose run ended (backlog 320, review round 1)',
       ).toEqual([]);
       expect(harness.specs).toEqual([]);
@@ -331,13 +341,14 @@ describe('the stranded-stage row (WP-108, PROGRESS backlog 320)', () => {
     await lostDiscovery(harness);
     const { store } = harnessStore(harness, { markRefused: true });
     harness.clock.advance(GRACE_MS + 1);
+    const asked = harness.jobs.history.length;
     expect(siteOf(await pass(harness, store))).toEqual({
       site: 'stranded_stage',
       found: 1,
       reEnqueued: 0,
       ended: 0,
     });
-    expect(harness.jobs.enqueued.filter((r) => r.queue === JOB_QUEUES.stageExecute)).toEqual([]);
+    expect(stageJobsSince(harness, asked)).toEqual([]);
   });
 
   it('ends nothing when the stage started between the read and the ending', async () => {

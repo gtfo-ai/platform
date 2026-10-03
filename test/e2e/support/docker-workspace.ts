@@ -34,7 +34,11 @@ import { promisify } from 'node:util';
 import { type Logger, WORKSPACE_LABELS } from '@platform/application';
 import { workspace } from '@platform/infrastructure';
 import { PLATFORM_SKILLS } from '@platform/prompts';
-import { harnessLabels, sweepStaleHarnessResources } from './harness-volumes.js';
+import {
+  harnessLabels,
+  removeInstanceRunObjects,
+  sweepStaleHarnessResources,
+} from './harness-volumes.js';
 
 const run = promisify(execFile);
 
@@ -111,6 +115,30 @@ export class RecordingDockerEngine extends workspace.DockerEngine {
    * soon as it exits, so what the export helper was *given* can only be read off the request.
    */
   readonly createdBodies = new Map<string, unknown>();
+  /**
+   * The name of every network and volume the daemon was asked to create through this engine
+   * (WP-128) — with {@link createdNames}, what the fixture's cleanup removes as **its own**. Not
+   * every provider object carries the instance label the cleanup also filters by: the `export` and
+   * `control-cleanup` helpers and the `hold-<run-id>` volume carry `com.agentic.run` alone, which a
+   * cleanup narrowed to its instance left behind on the first `verify:e2e` (an exited, kept
+   * `export-<run-id>` holding its `ws-<run-id>` and the fixture's cache volume).
+   */
+  readonly createdNetworks: string[] = [];
+  readonly createdVolumes: string[] = [];
+
+  override async createNetwork(
+    input: Parameters<workspace.DockerEngine['createNetwork']>[0],
+  ): Promise<string> {
+    this.createdNetworks.push(input.name);
+    return super.createNetwork(input);
+  }
+
+  override async createVolume(
+    input: Parameters<workspace.DockerEngine['createVolume']>[0],
+  ): Promise<string> {
+    this.createdVolumes.push(input.name);
+    return super.createVolume(input);
+  }
 
   override async createContainer(name: string, body: unknown): Promise<string> {
     this.createdNames.push(name);
@@ -216,6 +244,12 @@ const ensureImages = async (images: readonly string[]): Promise<void> => {
 const uniqueSuffix = (): string => Math.random().toString(36).slice(2, 8);
 
 /** `ws-<run-id>` with the run id spelled as `names.ts` writes it: a uuid, nothing else. */
+/** Whether `docker … inspect --format '{{json .Labels}}'` answered no label at all. */
+const isUnlabelled = (inspected: string): boolean => {
+  const labels = JSON.parse(inspected || 'null') as Record<string, string> | null;
+  return labels === null || Object.keys(labels).length === 0;
+};
+
 const WORKSPACE_VOLUME = /^ws-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
@@ -361,11 +395,14 @@ export const startDockerFixture = async (
   // reached through the CLI (which pulls) or through the engine (which does not).
   const images = imageTagsOf(providerImages);
   await ensureImages(images);
-  // What a killed run left behind — the repository container, the network and the two volumes —
-  // which no label sweep could see before they carried a label (WP-96 for the volumes, backlog 7
-  // bullet 8; WP-116 for the container and the network, backlog 329): only this repository's exact
-  // names, only marked, and only a creator pid that is no longer alive — a parallel file's are left
-  // alone. Containers go first, because the daemon refuses a network something is attached to.
+  // What a killed run left behind — the repository container and the two servers, the network,
+  // the two volumes, and the dead fixture's own run objects (WP-96 for the volumes, backlog 7
+  // bullet 8; WP-116 for the container and the network, backlog 329; WP-128 the rest): only this
+  // repository's exact names, only marked, and only a creator pid that is no longer alive — a
+  // parallel file's are left alone. The dead fixture's run objects go first (by its instance
+  // label), then the harness containers, then the labelled containers still attached to a stale
+  // network, then the network, then what still mounts a stale volume, then the volumes — because
+  // the daemon refuses a network something is attached to and a volume something mounts.
   await sweepStaleHarnessResources(docker);
   const suffix = uniqueSuffix();
   const network = `agentic-e2e-${suffix}`;
@@ -500,29 +537,27 @@ export const startDockerFixture = async (
         await docker(['rm', '-f', '-v', id], { allowFailure: true });
       }
       await docker(['rm', '-f', '-v', repoContainer], { allowFailure: true });
-      for (const label of ['com.agentic.run']) {
-        const owned = await docker(['ps', '-aq', '--filter', `label=${label}`], {
-          allowFailure: true,
-        });
-        for (const id of owned.stdout.split('\n').filter((line) => line.length > 0)) {
-          await docker(['rm', '-f', '-v', id], { allowFailure: true });
-        }
+      // The containers, networks and volumes **this fixture's provider** made — never every
+      // `com.agentic.run` object on the daemon, which is what this did until WP-128 and which
+      // removed a neighbouring product instance's held run (PROGRESS backlog 398, measured beside a
+      // disposable instance: its `run-<id>` container, network and `ws-<id>` volume were gone after
+      // this cleanup). Two answers to "which are ours", because neither is whole on its own: what
+      // this fixture's engine created, by name (`RecordingDockerEngine`), and what carries this
+      // fixture's instance label — the provider writes its control volume's name there (WP-103).
+      // A `run-<id>` network can outlive its `destroy` when something else is still attached to it
+      // — a probe container from this file, for instance — and the launcher tolerates that by
+      // design (it logs and carries on), so the test has to sweep them. The fixture's own two
+      // volumes are left to the end of this cleanup, which empties the control volume first.
+      for (const name of engine.createdNames) {
+        await docker(['rm', '-f', '-v', name], { allowFailure: true });
       }
-      // Networks and volumes the provider made, by label. A `run-<id>` network can outlive its
-      // `destroy` when something else is still attached to it — a probe container from this file,
-      // for instance — and the launcher tolerates that by design (it logs and carries on), so the
-      // test has to sweep them.
-      const networks = await docker(['network', 'ls', '-q', '--filter', 'label=com.agentic.run'], {
-        allowFailure: true,
-      });
-      for (const id of networks.stdout.split('\n').filter((line) => line.length > 0)) {
-        await docker(['network', 'rm', id], { allowFailure: true });
+      await removeInstanceRunObjects(docker, controlVolume);
+      for (const name of engine.createdNetworks) {
+        await docker(['network', 'rm', name], { allowFailure: true });
       }
-      const volumes = await docker(['volume', 'ls', '-q', '--filter', 'label=com.agentic.run'], {
-        allowFailure: true,
-      });
-      for (const id of volumes.stdout.split('\n').filter((line) => line.length > 0)) {
-        await docker(['volume', 'rm', '-f', id], { allowFailure: true });
+      for (const name of engine.createdVolumes) {
+        if (name === controlVolume || name === cacheVolume) continue;
+        await docker(['volume', 'rm', '-f', name], { allowFailure: true });
       }
       // And by name, because a label filter cannot see a volume that has no labels. Measured: one
       // `verify:e2e` run leaves exactly one `ws-<uuid>` with `labels=map[]` — the daemon creates it
@@ -534,11 +569,17 @@ export const startDockerFixture = async (
       // Fix the sweep, never the retention rule: removing unlabelled volumes removes other people's.
       // The daemon's name filter is a substring match, so the exact `ws-<uuid>` shape is required
       // here rather than there: this runs on developer machines, and removing every volume whose
-      // name merely contains `ws-` would remove somebody's.
+      // name merely contains `ws-` would remove somebody's. **And only an unlabelled one** (WP-128):
+      // a product instance's workspace volume has the same shape and carries its labels, and a
+      // paused or taken-over run's is exactly the one technical/05 retains.
       const byName = await docker(['volume', 'ls', '-q', '--filter', 'name=ws-'], {
         allowFailure: true,
       });
       for (const id of byName.stdout.split('\n').filter((line) => WORKSPACE_VOLUME.test(line))) {
+        const labels = await docker(['volume', 'inspect', '--format', '{{json .Labels}}', id], {
+          allowFailure: true,
+        });
+        if (!labels.ok || !isUnlabelled(labels.stdout)) continue;
         await docker(['volume', 'rm', '-f', id], { allowFailure: true });
       }
       await docker(['network', 'rm', network], { allowFailure: true });
@@ -770,6 +811,9 @@ export const startEgressTarget = async (
     '-d',
     '--name',
     name,
+    // Marked (WP-128, backlog 394): a killed file leaves it running on the fixture network, and the
+    // start sweep removes it by this marker and its creator's pid.
+    ...harnessLabels(),
     '--network',
     fixture.network,
     '--network-alias',
@@ -946,6 +990,8 @@ export const startCredentialedGitServer = async (
     '-d',
     '--name',
     name,
+    // Marked like the HTTP target above (WP-128, backlog 394).
+    ...harnessLabels(),
     '--network',
     fixture.network,
     '--user',

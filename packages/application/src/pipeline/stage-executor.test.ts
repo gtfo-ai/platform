@@ -770,10 +770,13 @@ describe('a run whose start failed for a transport reason', () => {
     expect(harness.types().filter((type) => type === 'run.failed')).toHaveLength(
       MAX_RUN_START_ATTEMPTS,
     );
-    // Nothing is queued after the escalation: an unbounded retry would hide the dead launcher.
+    // Nothing is queued after the escalation: an unbounded retry would hide the dead launcher. Read
+    // on the history, because the loop's last `drain` runs any retry that was due and takes it off
+    // `enqueued` (WP-128, backlog 352): one stage job per start attempt — the first and its
+    // retries — and none for the escalation.
     expect(
-      harness.jobs.enqueued.filter((request) => request.queue === 'stage.execute'),
-    ).toHaveLength(0);
+      harness.jobs.history.filter((request) => request.queue === 'stage.execute'),
+    ).toHaveLength(MAX_RUN_START_ATTEMPTS);
   });
 
   it('treats a failure it cannot classify as terminal, and carries no message into the log', async () => {

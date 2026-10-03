@@ -2470,12 +2470,19 @@ describe('registry egress follows the command baseline (WP-82)', () => {
 
 describe('create is atomic', () => {
   it('leaves no container, network or sidecar behind when a step fails', async () => {
-    const before = await docker(['ps', '-aq', '--filter', 'label=com.agentic.run']);
+    // This fixture's runs only (WP-128): another instance on the daemon may start one meanwhile.
+    const ours = [
+      '--filter',
+      'label=com.agentic.run',
+      '--filter',
+      `label=com.agentic.instance=${fixture.controlVolume}`,
+    ];
+    const before = await docker(['ps', '-aq', ...ours]);
     const spec = specFor({ repo: { cacheKey: 'no-such-mirror' } });
     await expect(fixture.provider.create(spec)).rejects.toMatchObject({
       code: 'workspace_failed',
     });
-    const after = await docker(['ps', '-aq', '--filter', 'label=com.agentic.run']);
+    const after = await docker(['ps', '-aq', ...ours]);
     expect(after.stdout.split('\n').filter(Boolean)).toEqual(
       before.stdout.split('\n').filter(Boolean),
     );
@@ -2581,9 +2588,10 @@ runWorkspaceProviderContractSuite('DockerWorkspaceProvider', {
  * not arise on it. This fixture is that shape (`controlVolumeBind: false`); it cannot read the
  * control root from this process, which none of these cases needs.
  *
- * **Last in the file on purpose**: a fixture's `cleanup` sweeps every container, network and volume
- * labelled `com.agentic.run` on the daemon, so this one's `afterAll` must not run while the file's
- * own fixture still has cases to serve.
+ * **Last in the file**, which was once required: a fixture's `cleanup` swept every container,
+ * network and volume labelled `com.agentic.run` on the daemon, so this one's `afterAll` could not
+ * run while the file's own fixture still had cases to serve. Since WP-128 a cleanup removes only its
+ * own instance's run objects (PROGRESS backlog 398), so the order no longer matters.
  */
 describe('on production’s control-volume shape, a plain named volume', () => {
   let named: DockerFixture;

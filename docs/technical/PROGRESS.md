@@ -13710,6 +13710,16 @@ At the new cadence intakes reach the lock about as often as WP-115's harness mad
 
 **Done.** The cleanup removes only objects this fixture's launcher created — filter by its `com.agentic.instance` value (the fixture's control volume name) — plus the unlabelled `ws-<uuid>` name sweep it already has; a real-daemon case plants a `com.agentic.run` container with another instance's label and asserts it survives the cleanup. **Depends on** nothing; decide with **395**.
 
+**Measured (WP-128, criterion (1), on `18f16d2`, before any change).** A disposable compose project `agentic-wp128-6kkn0` (`compose.yml` from `platform:dev`, its own `APP_WORKSPACE_CONTROL_VOLUME=agentic-wp128-6kkn0-ctl` and cache volume; `db`, `migrate`, `app`, `runner`, `launcher`, `docker-socket-proxy` all up and healthy) with **a stand-in for one held run** — no model credential exists here, so no real run can be held: a compose service `run-<uuid>` (alpine, `sleep`) on a network `run-<uuid>` with a volume `ws-<uuid>` mounted, all three labelled as `DockerWorkspaceProvider#labels` labels a run (`com.agentic.run`, `.project`, `.role`, `.keep_until`, `.created_at`, `com.agentic.instance=agentic-wp128-6kkn0-ctl`). Then `startDockerFixture()` and its `cleanup()` from the tree as it was, with `docker ps -a --filter label=com.agentic.run` (and the same filter on `network ls`/`volume ls`) read before and after:
+
+```
+before:  run-ab5f0c61-… running instance=agentic-wp128-6kkn0-ctl · network run-ab5f0c61-… · volume ws-ab5f0c61-…
+fixture: agentic-e2e-ctl-acwa23
+after:   (no container) · (no network) · (no volume)
+```
+
+**The hypothesis holds**: the cleanup removed the neighbouring instance's running run container, its network and its workspace volume. Fixed by WP-128 (its notes).
+
 ### 399. **technical/12 § "Artifact schemas" lists `data` for eleven of the fifteen types `artifactDataSchemas` publishes — `AskAnswer`, `HistoryFindings`, `ResearchReport` and `TicketBreakdown` have no line, and the section's *"`data` per type"* reads as complete** (TODO, **nit — documentation drift, docs win over code but here the code is the newer statement**. **Live**: a reader of the authoritative page cannot learn these four shapes without opening the schema. **Read off the tree, not run.** **Unowned — for the next architect pass.** Found by WP-117, session 11)
 > **M7 (architect, session 11): folded into **WP-129** — (a) and (b).**
 
@@ -13937,6 +13947,23 @@ Docker Desktop 29.8.1 gave the process 3.1 s, not the documented 10 s, so anythi
 default is shorter than it reads. **Done when** the launcher's grace is set from a measurement taken under
 the gate (with margin, rule 64) and stated beside it, `launcher-control-plane-check.mjs` asserts an
 answered create under a compose stop, and operator-guide § 5 names the setting.
+
+### 426. **The provider's `export` and `control-cleanup` helpers and the `hold-<run-id>` volume carry no `com.agentic.instance` label, so the orphan pass never lists them** (TODO, **minor — debris on the daemon after a crash; no data reaches anyone**. Found by WP-128's implementer, who had to make the e2e cleanup remove "everything its own engine created" because of it; the reviewer asked for a number. No row owns it)
+
+`WORKSPACE_LABELS.instance`'s docblock says every object the launcher creates for a run carries the instance
+label, so WP-103's orphan pass (`GET /v1/runs`, TD-028 decision 12) can find it. The run container, sidecar
+and network do; the short-lived `export-<run-id>` and control-cleanup helper containers and the
+`hold-<run-id>` volume do not. A helper killed mid-flight, or a hold volume whose run's launcher died, is
+therefore never listed and never removed. Measured by WP-128: the first `verify:e2e` after narrowing the
+fixture's cleanup to its own instance left an `export-<run-id>` behind. **Done when** every object the
+provider creates carries both labels (a census over the provider's create calls, so a new helper is covered),
+the orphan pass lists and removes them, and a real-daemon case kills a helper mid-flight and finds it swept.
+
+### 427. **The Docker e2e probe containers carry no harness label** (TODO, **nit — test hygiene**. Found by WP-128's implementer; no row owns it)
+
+The short-lived probe containers the Docker e2e files start are not labelled with the harness marker WP-128
+gave the HTTP and git-HTTP servers (394), so a probe orphaned by a killed file is not swept at the next
+start. **Done when** they carry the label and the lookalike table has their row.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -41168,3 +41195,58 @@ Sentences falsified (grep for *escalates with this sentence*, *which redacts*, *
 - `ask/executor.ts`'s start failure writes the class name only, as the stage executor did before WP-127; `describeStartFailure` is the one-line fix.
 - `compose.yml` gives the launcher compose's default ten-second `stop_grace_period`; a longer one (the measured drain was 12.1 s) would let SIGTERM answer an in-flight create instead of leaving it to the orphan pass.
 - A bare `docker stop` on Docker Desktop 29.8.1 grants 3.1 s, not the documented ten; any other script or doc that stops a container expecting ten seconds has the same gap.
+
+#### WP-128
+
+**The test tiers pass for the wrong reason or leave debris on a shared daemon** — backlog 398, 394, 395, 352 and 390. Implementer, session 11, on `18f16d2`.
+
+**Measured first** (criterion 1; pasted into 398 above). Beside a disposable compose instance `agentic-wp128-6kkn0` with a **stand-in** held run (no model credential, so three objects labelled as the launcher labels a run), the cleanup as it was removed that instance's running `run-<uuid>` container, its `run-<uuid>` network and its `ws-<uuid>` volume. The hypothesis holds.
+
+Decisions and assumptions (each also at the code):
+- **398** — `removeInstanceRunObjects(docker, instance)` (`test/e2e/support/harness-volumes.ts`) lists containers, networks and volumes by `label=com.agentic.run` **and** `label=com.agentic.instance=<instance>`; the fixture's cleanup calls it with its own control volume. The `ws-<uuid>` name sweep now removes a volume only when `inspect` answers **no labels at all**: before, it removed every `ws-<uuid>` volume on the daemon by name, labelled or not, which is the same defect a second time (a product instance's retained workspace volume has that shape). *"Create is atomic"* now counts this fixture's runs only, and the plain-volume describe's *"last in the file on purpose"* is rewritten (the order no longer matters). **The instance label alone was not enough, measured**: the first `verify:e2e` over the narrowed cleanup (PASS, 62 files) left an exited `export-<run-id>` container, its `ws-<run-id>` volume and the fixture's `agentic-e2e-cache-<suffix>` — the provider's `export` and `control-cleanup` helpers and its `hold-<run-id>` volume carry `com.agentic.run` **without** `com.agentic.instance` (`provider.ts` :1887, :1979, :2129). So the cleanup also removes, by name, every container, network and volume **this fixture's engine created** (`RecordingDockerEngine.createdNames`/`createdNetworks`/`createdVolumes`), and the start sweep removes what **mounts** a stale harness volume before the volume (below). The leaked three were removed by the next fixture's start sweep and cleanup — the fix's own first real reading.
+- **394** — both servers carry `harnessLabels()`; `HARNESS_CONTAINER` is `agentic-e2e-(?:repo|http|githttp)-<suffix>` and the container listing filters `name=agentic-e2e-`. The lookalike row `agentic-e2e-http-k3j9x2` **flipped** (now removed for the container kind), stated at the row; `githttp` joins it, and four new lookalikes (`https-`, `-backup`, `my-…githttp-`, the bare prefix) stay refused.
+- **395** — option (b): for each stale harness network, `container ls -a --filter network=<it>` and `rm -f -v` before the network's `rm` (`attached` in the sweep's answer) — **only a container carrying `com.agentic.run` or the harness marker** (review round 1); one with neither is somebody else's and is left, and its network with it (unit double's `someones-debug-shell` row; canary: the label check removed fails the ordering case). No creator label on the provider's objects. The same step runs for each stale harness **volume** (`--filter volume=<it>`), because a kept `export` helper mounting a dead fixture's cache volume is otherwise unreachable (see 398 above).
+- **Beyond the ruling's letter, because 398's fix made it necessary**: until now a killed file's provider objects that are **not** on its network (the run container — it sits on `run-<id>` only — that network and the run's volumes) were removed by the *next* completed fixture's cleanup, which is the over-broad sweep 398 removes. So the start sweep, for every **stale `agentic-e2e-ctl-<suffix>` control volume** (all three tests: shape, marker, dead pid), first calls `removeInstanceRunObjects` with that name — the provider's existing instance label is the join, so still no creator label. A product instance's objects carry its own control volume's name and are never named. Without this the row would have traded one leak for another.
+- **352** — `RecordingJobs.history`: append-only, every enqueue, nothing takes from it; `enqueued`'s docblock now says **pending**, and when to read which. The recorder's `jobId` is numbered off the history (it repeated after a `take`).
+- **390** — option (a): the fixtures live in a **mirror** in the OS temp directory with its own `git init`, holding the shipped `vitest.config.ts` and `scripts/nested-checkouts.ts` copied at the start of the run (so a mutation of either is still measured), a `node_modules` symlink, inert stand-ins for each project's own files (`PROCESS_SUITES`' three paths among them) and inert setup/global-setup files (`vitest list --filesOnly` imports none). The in-repo stale-fixture sweep went with the in-repo fixtures. The file runs in about a second now.
+
+**Census of after-`drain` reads of `enqueued`** (criterion 4; 18 files read it, and those with a harness `drain` or a `take` were read site by site):
+- **Moved — passed for the wrong reason**: `stage-executor.test.ts` › "escalates once the attempts are spent, and not before" — the loop's last `drain` runs a retry that is due and takes it off `enqueued`; now `history` holds exactly `MAX_RUN_START_ATTEMPTS` stage jobs.
+- **Moved — right on `enqueued` (the job would still have been pending), moved so no reader has to know that**: `human-commands.test.ts` › "still refuses what the aggregate refuses, as the command’s own 409" (history since the command); `saga.test.ts` › "ignores a comment on a resolved thread" and › "arms no window for the platform’s own note, and still arms one for a human’s"; `stranded-stage.test.ts` › "escalates with a brief when its one attempt did not take, and never re-enqueues the same entry twice", › "never re-enqueues an attempt whose run already ended (%o); it escalates at once, naming the ending (WP-108 review round 1)" and › "enqueues nothing when the mark finds the live path got there first (standing rule 9)" (each on `history` since the pass, `stageJobsSince`).
+- **Kept on `enqueued`, judged to assert what is pending**: `saga.test.ts` › "opens another window instead of returning while the human is still typing" (one window re-armed), `deadlines.test.ts`'s `deadlineJobs` (now documented as pending) at *"the queue holds nothing due any more"* and the take-over case beside it (commented), and `stranded-stage.test.ts`'s store double (it stands for pg-boss's table).
+- **Not after a `drain` or a `take`**: `deadlines.test.ts`'s two direct-handler cases, `maintenance/scheduler.test.ts`, `bootstrap/batch.test.ts`, the `knowledge/*` recorders, `ask-pipeline.test.ts`; the remaining reads are presence checks.
+
+Tests (criteria):
+- (1) the measurement above.
+- (2) `test/e2e/workspace/harness-volumes.e2e.test.ts` › "the fixture’s cleanup against the real daemon" › "leaves another instance’s run container, network and volume, and removes its own and the unlabelled ws-<uuid>" (a real `startDockerFixture` and its real `cleanup()`); unit: `scripts/e2e-harness-volumes.test.ts` › "removes exactly one instance’s run objects for a fixture’s cleanup (backlog 398)".
+- (3) `test/e2e/workspace/harness-volumes.e2e.test.ts` › "removes a dead run’s container, then its network, then its volume, and leaves lookalikes and a live run’s" now also attaches a marked `agentic-e2e-http-<suffix>` and a `run-<uuid>` container with only the run label to the dead network (name kept, so WP-116's citation holds); unit: `scripts/e2e-harness-volumes.test.ts` › "removes the stale container before its network, and the network before the volumes" (a daemon double that answers `name=`/`label=`/`network=`/`volume=` filters and refuses a network with an endpoint and a volume in use, holding a dead fixture's, a live fixture's and a product instance's run objects and a kept `export` helper) and the flipped lookalike row.
+- (4) the census above; `packages/application/src/testing/pipeline-harness.test.ts` › "what the job recorder remembers after a drain" › "takes every job drain ran off `enqueued`, and keeps each on `history`" and › "records in `history` what `take` and `takeDue` remove, in enqueue order".
+- (5) `scripts/nested-checkouts.test.ts` › "vitest project scoping" › "plants nothing inside this checkout, so no census of it can list a fixture (WP-128)" — every fixture path outside the checkout (realpaths), and `censusPaths` of the checkout, read while the fixtures exist, naming none.
+
+**Canaries** (Edit-tool mutation, reverted the same way, md5 equal before and after):
+- 352: `jobs.ts` re-enqueuing the stage on a `failed` outcome too → **HEAD's** "escalates once the attempts are spent" passes (`enqueued` is empty after the last drain) and the moved one fails (`expected [ …(4) ] to have a length of 3 but got 4`).
+- 398: the instance filter replaced by the run label alone → three unit cases fail, and the real-daemon cleanup case fails (`expected [ … ] to include 'run-27222267-…'`).
+- 395: the attached-container step disabled → the unit ordering case fails, and the real-daemon sweep case fails naming the `run-<uuid>` container left on the network.
+- 390/(5): the mirror created under the checkout → "plants nothing…" fails naming the path. The file's own docblock claim, re-measured on the mirror: `vitest.config.ts` without `nestedCheckoutExcludes` fails "collects nothing from a nested checkout, whichever shape its .git has" and "adds exactly the plain fixtures to each project and nothing else".
+- 394's shape widening is **not** discriminated by the real-daemon case (the attached step would remove the server anyway); the unit table is what holds it.
+
+Sentences falsified (grep for *every `com.agentic.run`*, *label=com.agentic.run*, *agentic-e2e-http*, *`HARNESS_CONTAINER`*, *jobs.enqueued*, *zz-vitest-scope*, *nested checkouts built inside*; PROGRESS history and the plan excluded):
+- `docker-workspace.ts` cleanup comment (*"Networks and volumes the provider made, by label"*, every `com.agentic.run`) — **rewritten**; the `ws-<uuid>` comment **extended** (unlabelled only).
+- `harness-volumes.ts` module docblock: the residual *"a stale network … is refused by the daemon and left"* — **false now, replaced**; the order paragraph and the shared-daemon paragraph **extended**.
+- `docker-workspace.e2e.test.ts` *"Last in the file on purpose"* — **rewritten**.
+- `scripts/e2e-harness-volumes.test.ts` docblock and the `agentic-e2e-http-…` lookalike row — **updated / flipped**.
+- `nested-checkouts.test.ts` docblock (*"measured against real nested checkouts built inside this repository"*, the fixture-roots and web-fixture comments) — **rewritten**. Still true: `census-files.mjs`'s *"a fixture another test in the same run plants and deletes"* (a general statement) and `tasks-column-ownership.test.ts`'s measured history.
+- `pipeline-harness.ts` `RecordingJobs` — `enqueued` had no docblock; it has one now. `human-commands.test.ts`'s WP-105 note (*"which `drain` empties"*) is still true.
+- `docs/operator-guide.md`'s `label=com.agentic.run` commands address an operator's own instance, not this harness.
+
+**Machine discipline, recorded.** Two runs were started over the gate, each with the reading taken in the same command rather than before it: a unit run of two files at a one-minute load of **30.4**, and the second `verify` at **23.9** (its own previous `verify:e2e` had just ended; it passed). The final `verify:e2e` waited through three readings a minute apart (32.7, 17.2, 9.3). **The instance's volumes leaked**: removing the disposable project's volumes through compose was **refused by the session's volume-removal hook**, so the project was taken down without them, leaving `agentic-wp128-6kkn0-ctl`, `agentic-wp128-6kkn0_db-data`, `agentic-wp128-6kkn0_exports`, `agentic-wp128-6kkn0_knowledge` and one anonymous volume created with them (`148bd463477544337e4bf39ca1b4df6b4b43cefe5fd941a98e3e18443db0ad1f`) — **for the user to remove**. The stand-in's own three objects were removed by the measured cleanup itself. No `com.agentic.run` container, network or volume was on the daemon before or after.
+
+**Residuals.**
+- An object with `com.agentic.run` and no instance label (made before WP-103) is never removed by a cleanup or a sweep, which fails towards keeping.
+- The liveness test is still this pid namespace's: on a daemon shared with another host, a live fixture's servers, attached containers and run objects are now removed as well (stated at the module).
+- An unlabelled `ws-<uuid>` volume belonging to another consumer is still removed by a cleanup's name sweep; production never makes one unlabelled (`provider.ts` creates it labelled).
+
+**Discovered work** (for the refiner; nothing measured unless said):
+- **Production, measured in the harness**: the provider's `export` helper (kept when a tarball is wanted), its `control-cleanup` helper and its `hold-<run-id>` volume carry `com.agentic.run` but not `com.agentic.instance` (`packages/infrastructure/src/workspace/provider.ts` :1887, :1979, :2129), while `WORKSPACE_LABELS.instance`'s docblock says the provider labels what it makes with it and WP-103's listing filters by it — so a kept `export-<run-id>` is never listed for the orphan pass and holds its workspace volume. One exited export container was observed after a `verify:e2e`.
+- `startDockerFixture`'s probe containers (`agentic-e2e-probe-<suffix>`) carry no marker and sit on a run's network; a probe left by a killed file would keep its `run-<id>` network from the instance join's `rm`.
+- A measurement that needs a disposable compose instance cannot remove that instance's volumes under the session's volume hook; the brief's teardown recipe assumes it can.

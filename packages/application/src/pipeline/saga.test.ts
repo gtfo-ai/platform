@@ -2708,6 +2708,7 @@ describe('human merge-request comments (BD-007)', () => {
     // The newest note is "now" on every wake, so the window keeps re-arming and never returns.
     await harness.drain();
     expect(harness.types().filter((type) => type === 'task.stage.returned')).toHaveLength(0);
+    // What is **pending**, on purpose: the window that ran re-armed one more (WP-128 read it).
     expect(
       harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.mrCommentDebounce),
     ).toHaveLength(1);
@@ -2733,8 +2734,10 @@ describe('human merge-request comments (BD-007)', () => {
         resolved: true,
       }),
     ]);
+    // On the history (WP-128, backlog 352): `publish` drains, and a window drain had run would be
+    // gone from `enqueued`.
     expect(
-      harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.mrCommentDebounce),
+      harness.jobs.history.filter((request) => request.queue === JOB_QUEUES.mrCommentDebounce),
     ).toHaveLength(0);
   });
 
@@ -2763,8 +2766,9 @@ describe('human merge-request comments (BD-007)', () => {
         text,
         resolved: false,
       });
+    // On the history (WP-128, backlog 352), for the reason the case above gives.
     const armed = () =>
-      harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.mrCommentDebounce);
+      harness.jobs.history.filter((request) => request.queue === JOB_QUEUES.mrCommentDebounce);
     await harness.publish([
       comment(
         `${conflictWarningMarker(taskOf(harness).task.id)}\nAnother open merge request changes src/totals.ts.`,

@@ -2530,12 +2530,14 @@ describe('a human’s way into Ready (WP-79)', () => {
   it('still refuses what the aggregate refuses, as the command’s own 409', async () => {
     const { harness } = await atReady();
     // Ready itself is not a state a hand-back can re-enter: `ready_for_merge → ready_for_merge`.
+    const asked = harness.jobs.history.length;
     await expect(handBackToReady(harness)).rejects.toThrow(IllegalTransitionError);
     expect(countOf(harness, 'task.handed_back')).toBe(0);
+    // On the history since the command (WP-128, backlog 352): `enqueued` is what is pending.
     expect(
-      harness.jobs.enqueued.filter(
-        (request) => (request.data as { duty?: string }).duty === 'ready_head_check',
-      ),
+      harness.jobs.history
+        .slice(asked)
+        .filter((request) => (request.data as { duty?: string }).duty === 'ready_head_check'),
     ).toHaveLength(0);
   });
 });
