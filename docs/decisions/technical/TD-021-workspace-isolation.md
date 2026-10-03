@@ -140,3 +140,14 @@ is unchanged — Developer, `write_repository`, expires next day (in practice up
 to midnight UTC), revoked at run end — except that a **read-only** run now gets a `read_repository`
 token rather than none, and a binding that cannot mint refuses a writing run rather than falling back
 to its static credential.
+
+## Amendment (2026-10-03 — the founder's answer to Q98 (b)) — a static run credential, opt-in, on the same path
+
+The WP-76 amendment's last clause — *"a binding that cannot mint refuses a writing run rather than
+falling back to its static credential"* — still holds for the **binding's** credential, which is never
+sent to a workspace. It gains one declared exception: an integration configured with
+`run_credential: static` and a dedicated `run_token` (BD-025's amendment of this date) gives its runs
+that token instead of a minted one, through the **same** path — carried on the control-plane create
+request, held in the launcher's broker map only, answered to `cred.get` by the runner, never in the
+container's environment or image, redacted like a minted value. What it loses against this record's
+design (per-run revocation, a run-lifetime bound) is stated in TD-028's amendment of the same date.

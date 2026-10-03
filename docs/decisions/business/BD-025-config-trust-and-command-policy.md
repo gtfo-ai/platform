@@ -60,3 +60,26 @@ environment into the transcript, which is redacted through the run's `secretEnvN
 never written. The bound on both is the sandbox — the container, the egress allow-list and the
 redactor — and an operator onboarding a repository they do not trust should read this paragraph
 before Step 2.
+
+## Amendment (2026-10-03 — the founder's answer to Q98 (b)) — an opt-in static run credential where the provider cannot mint
+
+§3 admits into a run only *"narrowly scoped, run-lifetime tokens"*. GitLab.com Free cannot mint one
+(project access tokens need Premium there, research/10's 2026-09-25 addendum), so on that tier no stage
+can check out a private repository and no writing stage can run at all. **The founder chose an explicit,
+opt-in fallback**: an operator may declare, per git integration, a **static run credential** — a
+dedicated, low-privilege token created for the platform (on GitLab: the personal access token of a
+dedicated user who is a member of **only** the bound project, with the **Developer** role, scopes
+`read_repository` + `write_repository`, a short expiry). It is handed to a run exactly where a minted
+token would be and nowhere else. §3 is read with this exception:
+
+- it is **opt-in and named** (`run_credential: static` on the integration, the token in its own secret
+  field `run_token`); the default stays `minted`, and nothing falls back to it silently;
+- it is **never the binding's own API token** (refused when the two are equal), and the platform never
+  uses it for its own provider API calls;
+- it is **narrowly scoped by the operator, not by the platform**: the platform states what it cannot
+  verify, and the **protected default branch** remains the enforcement for pushes (Q40);
+- it is **not run-lifetime**: there is no per-run revocation, so a token the agent exfiltrates (within
+  the run's egress, which admits the git host) lives to the expiry the operator set. The operator guide
+  and the first-test runbook say so beside the setting.
+
+The mechanism is TD-028's amendment of the same date; the work is plan row WP-137.

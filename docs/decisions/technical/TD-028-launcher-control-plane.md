@@ -232,6 +232,10 @@ answer is *"runlet has no credential responder; refusing"* (`runlet/spawn-adapte
    run-lifetime* tokens. A **read-only** run proceeds with `credential: null` (anonymous fetch) —
    today's behaviour, right for a public repository; a private one still fails at the mirror, and the
    operator guide must say a private repository needs `mint_credentials: true`.
+   **Amended by the founder's answer to Q98 (b), 2026-10-03 (decision 13 below):** the refusal stands
+   for the binding's **own** credential, which is still never sent; a binding whose integration declares
+   `run_credential: static` gives the run a dedicated `run_token` instead, and the refusal names both
+   settings when neither is configured.
 7. **Shadow mode is unchanged**: the executor answers `would_have` and the shadow result is **no
    credential** (never a fake value — rule 18), so a shadow run fetches anonymously. Whether a shadow
    task may mint a read token is **Q98**.
@@ -428,3 +432,73 @@ the recovery table. `docs/technical/05` § 2 (the WP-53 amendment), `docs/techni
 `docs/user-guide.md`'s cancel paragraph and `CLAUDE.md`'s WP-53 paragraph are amended by the rows that
 build them: decision 11 by M6 **WP-101**, decision 12 by M6 **WP-103**, whose first criterion is the
 daemon measurement 286 asks for.
+
+## Amendment (2026-10-03 — the founder's answer to Q98 (b)) — a static run credential, opt-in, where the provider cannot mint
+
+Recorded by the architect at the product owner's first local test (plan § "Milestone M8", row
+**WP-137**): the test runs on **gitlab.com Free**, which cannot create project access tokens
+(research/10, 2026-09-25 addendum), so under decision 6 no stage can fetch the private repository and no
+writing stage runs. The founder chose an explicit, opt-in fallback (BD-025's amendment of this date).
+Nothing here was run; it is read off `packages/application/src/pipeline/integrations.ts`
+(`runCredentialWrites`) and `packages/integrations/src/providers/gitlab/{config,index}.ts` at `d07ae04`.
+
+**13. A static run credential.**
+
+1. **Where it is declared.** On the git **integration** (the account, where `mint_credentials` lives),
+   never on the binding's API token: a config key `run_credential: minted | static` (default `minted`)
+   and a **separate secret field** `run_token`, listed in the provider's `secretFields` so the loader
+   decrypts it, `GET /api/integrations` strips it and it is sealed only through `secret_refs` (TD-020). A
+   write is refused, by name, when `static` has no `run_token`, when `run_token` equals the API token
+   (exact comparison of the two decrypted values, at the write and again at use), and when
+   `mint_credentials: true` and `static` are both set (one source per integration, so the audit says
+   which). A static integration may carry **one** project binding: a second is refused (`409`), because
+   the token's reach is a membership the platform cannot see and a second project would share it. GitLab
+   also takes `run_token_username` (non-secret; the helper's username) and `run_token_expires_at` (an ISO
+   date, required, at most **90 days** ahead at the write), because the platform does not use the token to
+   ask GitLab its own expiry (item 3).
+2. **How it reaches a run.** `runCredentialWrites.mint` returns a third kind, `static`, when minting is
+   off and the integration is static: the **same** `RunCredential` material (`host`, `username`,
+   `password`, `scope: 'push'`, `expiresAt` = the declared date) on the **same** control-plane create
+   request (decision 3), the broker map in the launcher, the runner's `cred.get` answer with the
+   exact-host comparison (decision 4) — never in an environment variable, a file in the image, the
+   prompt or a log. A read-only spec gets the same token: it cannot be narrowed (the loss is item 5). It
+   joins the run's injected-secret redactor and `runScopedSecrets` exactly as decision 8 says for a
+   minted value; and because it is a declared secret field, every process that loads the binding already
+   redacts it by exact value. The GitLab `glpat-` pattern rule is the backstop elsewhere. A use past
+   `run_token_expires_at` is refused before the create, naming the date. No `mint_credential` /
+   `revoke_credential` audit row is written (no call is made); the run records `credential_source`
+   (`minted` | `static` | `none`) and the integration it came from, so *which credential a run had* is
+   answerable from the audit.
+3. **What it may not do.** The platform never uses `run_token` for its own provider calls — the adapter's
+   API client is built from the API token alone, and a test holds that `run_token` is read only by the
+   run-credential path. The platform does not probe it either; the probe (`POST /api/integrations/:id/test`)
+   reads, **with the API token**, the declared user's membership of the bound project and **refuses an
+   access level above Developer** (a Maintainer can unprotect the default branch, which is the push
+   control, Q40), and reports that it cannot confirm the token belongs to that user.
+4. **Shadow mode.** A shadow task is **not** given a static credential: it is push-capable and cannot be
+   narrowed to the `read` decision 7 admits. The executor-equivalent answer is *no credential* (rule 18),
+   so a shadow run on a private repository on gitlab.com Free still fails at the fetch, by name.
+5. **What is lost, stated.** No per-run revocation and no run-lifetime bound: the token lives to its
+   declared expiry. Code in the container can read it through the helper (as with a minted one), and the
+   run's egress admits the git host, so it can be pushed **into the repository itself** — where, unlike a
+   revoked minted token, it still works. Its reach is bounded by the dedicated user's memberships (one
+   project) and its scopes (`read_repository`/`write_repository` grant no REST API), not by the
+   platform. A read-only stage holds a push-capable token. The control the platform adds: the gates that
+   already read the merge request's added lines (`dependency-gate.ts`'s reader) search them for the exact
+   value, and a hit parks the task *Needs human* with a brief that says **rotate the run token** and never
+   prints it.
+6. **The refusal when neither is configured**, terminal, before the create, naming the binding and both
+   settings: *"the git binding <id> (gitlab) cannot give run <id> a credential: minting is off (GitLab:
+   `mint_credentials: true`, which needs Premium on GitLab.com) and no static run credential is configured
+   (GitLab: `run_credential: static` with a dedicated `run_token`; weaker isolation, operator guide §
+   Integrations). The binding's own token is never sent instead (TD-028 decisions 6 and 13)."* The
+   provider's words come from `CredentialMintingHints` (WP-107), which gains a `static` hint.
+
+*Alternatives rejected.* Sending the binding's API token (decision 6's reasoning, unchanged). A deploy
+token (every tier, `read_repository` only — no push, so no writing stage). A deploy **key** (SSH, push
+possible, but the run's git path is HTTPS through the credential helper and the egress proxy). A group
+access token (Premium on GitLab.com too).
+
+*Consequences.* A migration (`runs.credential_source`); the GitLab config schema, catalogue and setup
+guide; `docs/operator-guide.md`'s integrations section and `docs/first-local-test.md`'s GitLab step and
+failure table (rule 83); technical/05's credentials paragraph and technical/06's GitLab section.
