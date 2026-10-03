@@ -2,7 +2,7 @@
 
 An open-source, self-hosted platform that turns a ticket into a reviewed, mergeable merge request through a pipeline of role-specialised Claude Code agents, with a per-project knowledge base that improves with every task.
 
-**Status:** early implementation, and it runs. The product and technical definition is complete and lives in [`docs/`](docs/README.md). A ticket reaches the platform through a provider webhook, walks the pipeline, and is watched and driven from a browser application the server itself serves; five integration providers, the knowledge base, the cost ledger and the task and run commands are built. **One thing is deliberately missing from a stock instance: there is no transport between the API process and the launcher container, so no agent stage runs** — see the [operator guide](docs/operator-guide.md) §10 and the [user guide](docs/user-guide.md). Follow [`docs/technical/PROGRESS.md`](docs/technical/PROGRESS.md) for what is built.
+**Status:** early implementation, and it runs. The product and technical definition is complete and lives in [`docs/`](docs/README.md). A ticket reaches the platform through a provider webhook, walks the pipeline, and is watched and driven from a browser application the server itself serves; five integration providers, the knowledge base, the cost ledger and the task and run commands are built. Agent stages run in the `runner` container once `.env` carries the launcher pair (`APP_LAUNCHER_URL`, `APP_LAUNCHER_TOKEN`) and a model credential — see the [operator guide](docs/operator-guide.md) §1 and §10 and the [user guide](docs/user-guide.md). *(Until WP-135 this sentence said no agent stage runs on a stock instance; that has been false since WP-53.)* Follow [`docs/technical/PROGRESS.md`](docs/technical/PROGRESS.md) for what is built.
 
 ## Quick start (contributors)
 
@@ -21,10 +21,15 @@ pnpm db:migrate                       # forward-only SQL migrations, advisory-lo
 pnpm dev                              # apps/server on $PORT, and the Vite dev server for apps/web
 ```
 
-To run a **whole instance** instead — five containers, the browser application included — read the
+To run a **whole instance** instead — seven containers, the browser application included — read the
 [operator guide](docs/operator-guide.md). The short version is `cp .env.example .env`, set
-`APP_SECRET_KEY` and the bootstrap administrator, and `docker compose up -d --build`: `.env` is the
-app container's environment, so there is no override file to write.
+`APP_SECRET_KEY` and the bootstrap administrator, build the images with `node scripts/build-images.mjs`
+(a bare `docker compose up --build` on a machine that never built them fails: the `app` and
+`launcher` images are built on `platform-base`, which compose does not build), and
+`docker compose up -d`: `.env` is the app container's environment, so there is no override file to
+write. **Trying it on a Mac with GitLab, Jira Cloud and your own Claude subscription?**
+[The first local test](docs/first-local-test.md) is a runbook for exactly that, from an empty clone
+to a first ticket.
 
 ## Layout
 
@@ -43,6 +48,7 @@ apps/launcher            workspace provider service
 ## Documentation
 
 - **Running an instance:** [operator guide](docs/operator-guide.md) — install, integrations, upgrade, backup, security posture
+- **A first local test** (GitLab + Jira Cloud + a Claude subscription, on a Mac): [runbook](docs/first-local-test.md)
 - **Using the product:** [user guide](docs/user-guide.md) — the wizard, the board, a task, a run, the inbox, the knowledge base, budgets
 - Start here: [`docs/README.md`](docs/README.md)
 - Product definition: [`docs/product/`](docs/product/)

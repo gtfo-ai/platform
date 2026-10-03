@@ -655,7 +655,10 @@ own timezone without anything scheduled.
 What a run costs is taken from what the provider reports, and the per-model entries sum to that
 total. A cost the provider did not report is priced from a price list and **labelled an estimate**; a
 model with no price row gets no ledger row at all and a log line, never a zero, because a zero reads
-as a free run.
+as a free run. **In `local` provider mode** (a Claude subscription) every run is that second case:
+the platform labels each run's cost an estimate and prices its token usage from the price list,
+keeping the figure the CLI reported beside it — so budgets count list-price dollars for tokens a
+subscription does not bill per token (operator guide § 8).
 
 A run that ended with **nobody measuring it** — the platform stopped it, or it crashed, or a cancel
 or a lost process ended it before it reported — has no cost at all, and is shown as *not measured*.
@@ -768,7 +771,9 @@ In one place, so it is not spread across thirteen sections:
 
 And one that is about the deployment rather than a screen: an agent stage runs only on an instance
 whose operator set `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN`, because those switch on the `runner`
-container WP-53 added. Without them a stage that needs an agent **queues** rather than failing —
+container WP-53 added — and a model credential: `ANTHROPIC_API_KEY`, or in `local` mode
+`CLAUDE_CODE_OAUTH_TOKEN`, which a `local`-mode instance has used since WP-133 (before it, such an
+instance ran no agent at all). [The first local test](first-local-test.md) sets all of it up. Without them a stage that needs an agent **queues** rather than failing —
 nothing is lost and nothing is escalated, but nothing moves either. The platform gates are on the
 same queue and stop with it, which on such an instance you only meet through a human path: a
 hand-back to a gate stage, or a merge you make by hand.

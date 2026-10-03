@@ -11,6 +11,10 @@
 > (health probes), [TD-020](decisions/technical/TD-020-configuration-and-env-naming.md) (variable
 > naming and `_FILE` secrets). The full variable reference is `.env.example`; it is the source, and
 > this guide names only the ones an install needs.
+>
+> **Setting up a first test on a Mac** with GitLab, Jira Cloud and a Claude subscription (`local`
+> mode)? [The first local test](first-local-test.md) is a runbook for exactly that, from an empty
+> clone to a first ticket, with every command marked run or not run.
 
 ## 1. What you are installing
 
@@ -182,7 +186,9 @@ never its role (above).
   sum to about **3.3 GB**, which counts the base inside each of the three images built on it, so it
   is an upper bound; plus whatever the database grows to.
 - Outbound network access at build time (the images fetch Node, the CLIs and the npm packages).
-- Nothing else: no Node, no pnpm, no PostgreSQL on the host.
+- Nothing else: no pnpm and no PostgreSQL on the host — and no Node either, unless you build the
+  images with `node scripts/build-images.mjs` (Node 24; the plain `docker build` lines in
+  [first-local-test.md](first-local-test.md) § 4 do the same without it).
 
 ## 2. Install
 
@@ -273,11 +279,19 @@ Three consequences worth knowing:
   with a route to the Docker daemon, and it reads a short, fixed list (`DOCKER_HOST`, `LOG_LEVEL`,
   `APP_WORKSPACE_*`). Everything it needs is written on the service.
 
-Then:
+Then build the images and start:
 
 ```bash
-docker compose up -d --build
+node scripts/build-images.mjs             # or the four `docker build`/`docker compose build` lines in first-local-test.md § 4
+docker compose up -d
 ```
+
+**A bare `docker compose up -d --build` fails on a machine that has never built the images**
+(WP-135, run with a tag nothing had built): the `app` and `launcher` images are built `FROM
+platform-base:<tag>`, compose does not build that base, and BuildKit looks for it on Docker Hub —
+*"failed to solve: pull access denied, repository does not exist"*. Nor does compose build
+`platform-runtime` or `platform-egress`, which the launcher needs for the first agent run. Once the
+base exists, `docker compose up -d --build` rebuilds `app` and `launcher` as before.
 
 The first build takes a while (it compiles nothing, but it downloads a Node image, six CLIs and the
 npm dependencies). Subsequent starts are seconds.
@@ -911,10 +925,16 @@ docker compose cp db-backup:/backups ./backups
 ### Restore
 
 ```bash
-docker compose stop app launcher
+docker compose stop app runner launcher
 docker compose exec -T db pg_restore -U app -d app --clean --if-exists < backup.dump
-docker compose start app launcher
+docker compose start app runner launcher
 ```
+
+Stop **all three**: `app` and `runner` both write the database (since WP-53 the runner is a second
+writer — its jobs, its runs' transcripts and leases), and a writer left running while `pg_restore
+--clean` drops and recreates the tables writes into a database that is half old and half new. The
+sentence was `stop app launcher` until WP-135 (PROGRESS backlog 433); the corrected commands were
+not run against a dump.
 
 ### What is deliberately **not** backed up
 
@@ -1075,9 +1095,15 @@ Max, Team, or Enterprise plan. It can only make model requests"* — and the tok
 ([Claude Code authentication](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token)).
 So the platform's runs spend the same usage limits your own Claude Code sessions do, and a run that
 meets the plan's limit should fail with the status the API answered, named the same way — inferred
-from the 401 case above, **not measured**. **Not measured**:
-what the CLI reports as a run's cost under a subscription token — the cost ledger and the budgets
-record whatever it reports, and no subscription run has been made from this build. Leave
+from the 401 case above, **not measured**. **What a run costs in `local` mode is the platform's
+estimate, not the CLI's figure** (read off the code, WP-135): the runner labels every `local`-mode
+run's cost an estimate (`is_estimate`, `packages/infrastructure/src/runner/claude-runner.ts`), and
+the ledger then prices the run's **token usage** from the `price_list` table rather than taking the
+reported total (`packages/domain/src/cost/ledger.ts`), keeping the CLI's figure beside it. So the
+budgets count list-price dollars for tokens your plan does not bill per token, and a model with no
+price row gets no ledger row. **Not measured**: what the CLI reports under a subscription token,
+and whether the model ids it reports match the seeded price rows — no subscription run has been made
+from this build. *(Until WP-135 this paragraph said the ledger records whatever the CLI reports.)* Leave
 `ANTHROPIC_API_KEY` unset in `.env`: the CLI prefers an API key over `CLAUDE_CODE_OAUTH_TOKEN` when both
 are present (same page, *Authentication precedence*), which is why `compose.local.yml` blanks it.
 

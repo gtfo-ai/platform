@@ -14004,6 +14004,8 @@ container's old environment (WP-130 changed the operator guide to say recreate, 
 
 ### 433. **The operator guide's Restore does not stop `runner`, and `db-backup` has no stop grace** (TODO, **nit — documentation and one compose line**. Found by WP-133's implementer; WP-135 may take the Restore sentence)
 
+*WP-135: the Restore half is **RESOLVED** (commit pending) — operator guide § 6 stops and starts `app runner launcher`. The `db-backup` grace is left open: whether its scheduler waits for a running dump on SIGTERM is unmeasured (WP-135 notes).*
+
 ### 434. **The in-memory pipeline store refuses a duplicate `(project, key, mode)` only, while PostgreSQL since 0077 also refuses a duplicate `ticket_id`, and the fake's divergence register says the two behave the same** (TODO, **minor — a fake more lenient than the store; a test written against the fake can pass where production refuses**. Found by WP-134's reviewer; unowned. **Done when** the fake refuses an equal non-null `ticket.id` or row 1 of its register states the divergence)
 
 ### 435. **A Jira issue id is unique per site only, and the one-task-per-ticket key includes the provider, not the site, so a project rebound to another Jira site can have a new issue taken for an old task** (TODO, **minor — latent; the product owner's single-site setup does not meet it; the key path has the same shape for two sites sharing a project key**. Found by WP-134's reviewer; unowned. **Done when** the uniqueness carries the binding's site, or technical/03 states the residual)
@@ -41941,3 +41943,121 @@ gate waited where it was over 12). Scratch under `/private/tmp/claude-501/wp134/
   not silent), and that task's edits are lost to the poll.
 - `dashboard.tsx:117` and `project-panels.tsx:365` still define project-level spend as
   *"Provider-reported cost"*, false in `local` mode (backlog 408's neighbours).
+
+#### WP-135
+
+**The first local test, written down and run.** Implementer, session 11, on `1c8b6b1c` (the ledger
+commit `14251eee` arrived during the row; nothing of it overlaps). Docs only; no credential of any kind
+was used. Docker Desktop 29.8.1, Compose 5.5.1, `linux/arm64`. Scratch under
+`/private/tmp/claude-501/wp135-impl/`.
+
+**Criterion (1) — the runbook.** `docs/first-local-test.md`: prerequisites (VM room, port 8080, a
+build at or after `11a17ae`, a Claude plan, Node optional), the plain statement that the host `claude`
+and its keychain login are not used (the pinned CLI in a per-run container with no host mount; the
+token crosses by name only), the GitLab side (PAT scope `api`, Maintainer; minting needs Premium or
+Ultimate on gitlab.com and any tier self-managed; a gitlab.com / self-managed table; protect the
+default branch; poll-only and what WP-123 gives it), the Jira side (API token, permissions, label
+`agentic` and polling, `project_keys`, what the platform writes, identity by issue id since WP-134),
+`.env` with exactly the lines to set, the build/up/check commands, sign-in (Q39's bootstrap
+administrator), the wizard, the first ticket (label or manual start), a healthy run, a failure table
+naming where each failure is named, stopping and upgrading (WP-132/133 graces, `up -d` not
+`restart`, a run in flight ends `lease_expired`), and what is not built. Linked from the README (twice)
+and from the operator guide's header.
+
+**Criterion (2) — each command's outcome.**
+
+| Command (runbook section) | Outcome |
+|---|---|
+| `git clone …` (3) | **not run** — the page was run from the existing checkout |
+| `git merge-base --is-ancestor 11a17ae HEAD && echo ok` (0, 3) | run: exit 0 at `1c8b6b1c` |
+| `cp .env.example .env` (3) | run, in a scratch project directory, then the runbook's lines set with fake values |
+| `openssl rand -base64 48`, `openssl rand -hex 32` (3) | run: 64 characters each (output discarded) |
+| `claude setup-token` (3) | **not run** (needs the owner's account); `claude setup-token --help` run: *"Set up a long-lived authentication token (requires Claude subscription)"* |
+| `COMPOSE_FILE=compose.yml:compose.local.yml` in `.env`, then `docker compose config` (3) | run in the scratch directory with the two compose files beside it: six services, `app` and `runner` `APP_PROVIDER_MODE=local`, the token set, `ANTHROPIC_API_KEY` empty; the runner has the launcher pair, `app` has both pinned empty; the launcher has the token and nothing of `.env` else; port 8080 |
+| `docker compose -f compose.yml -f compose.local.yml build` with no token (8) | run: *"required variable CLAUDE_CODE_OAUTH_TOKEN is missing a value: set CLAUDE_CODE_OAUTH_TOKEN for local mode"*, exit 1 |
+| `PLATFORM_TAG=wp135probe docker compose build app` — the empty-machine case (4) | run: *"failed to solve: pull access denied, repository does not exist"* for `docker.io/library/platform-base:wp135probe`, exit 1, 3 s; nothing created |
+| `docker build` base / runtime / egress (4) | run: exit 0, 1 s / 13 s / 2 s (cached) |
+| `APP_COMMIT=$(git rev-parse HEAD) docker compose build` (4) | run: exit 0, 3 s (cached); the image's environment carries `APP_COMMIT=1c8b6b1c…` (`docker run … node -e`); `/api/version` reads it at `apps/server/src/runtime.ts:189` (read, not requested) |
+| `docker compose up -d`, `ps`, `logs runner/app/launcher` (4) | run as `node scripts/compose-stock-check.mjs --project-suffix wp135` (both legs): **PASS**, 27 checks; the `local` leg: app, db, runner healthy, launcher listening, migrate exited; the runner composes an agent runner; the token by name only and in no log line (180) or row |
+| `curl /healthz`, `/readyz`, `/api/version` (4) | run against the stock leg's published port while it served: 200; `{"status":"ok","checks":{"database":"ok","migrations":"ok","queue":"ok","dispatch":"ok","agent_runs":"ok"}}`; `{"version":"0.0.0-dev","commit":null,…}` (that build had no `APP_COMMIT`). The `local` leg's port answered `000` at the one probe (not yet serving) — so `/readyz` was read on the stock arrangement only |
+| sign-in with the bootstrap administrator (5) | run by the stock leg: 200 |
+| Add integration refusals (5, 8) | run by the stock leg: `403 secret_name_not_permitted` and `403 integration_host_not_permitted`, each naming its setting |
+| GitLab / Jira integration create, Test connection, Bind, discovery, label, manual start (5, 6) | **not run** — each needs a real credential or site |
+| `command -v` for php, composer, node, npm, pnpm, python3, pip in `platform-runtime:dev` (3) | run: node and npm present; php, composer, pnpm, python3, pip **missing** |
+| `docker compose stop runner` / `app` / `db` (9) | run by the `local` leg: 0.2 s each, exit 0, inside 45 / 45 / 30 s |
+| `docker compose down`, `run --rm migrate`, `pg_dump`, `git pull` (9) | **not run** on this page |
+| `docker logs egress-<run id>` (8) | **not run** — no run was started |
+| `docker manifest inspect ghcr.io/gtfo-ai/<image>:sha-d5e7856` and the anonymous token endpoint (4) | run: the manifests resolve **with** this machine's GHCR login; anonymously the token endpoint answers 401 and a manifest read 403, so the runbook says the published route needs `docker login ghcr.io` |
+
+**Criterion (3) — the questions.** Q106, Q99 and Q34 moved from Open to a new subsection *"Answered by
+the founder (session 11, 2026-10-03)"* of `docs/OPEN-QUESTIONS.md`, each whole with the answer line
+*accepted as implemented* and a sentence saying what that means on this build (Q106: no business
+review after a continue, the recommendation (a) not built; Q99: the fail-closed park stays, the
+`scope: true` property not built; Q34: the 21 definitions accepted, none vetoed), and one row each
+at the end of the Decision log table. technical/12's *"Its reader waits on **Q99**"* is rewritten
+(rule 83).
+
+**Backlog 433.** The Restore half is done: operator guide § 6 stops and starts `app runner launcher`,
+with a sentence saying why and that the corrected commands were not run against a dump. The
+`db-backup` grace is **left**: what a grace buys depends on whether the backup image's scheduler waits
+for a running `pg_dump` on SIGTERM, which is unmeasured, and a `stop_grace_period` that nothing uses
+would claim a drain; `scripts/compose-check-support.test.ts`'s `NO_GRACE_NEEDED` reason for it stays
+true. 433 is therefore half resolved.
+
+**Sentences found false, and judged (rule 83).**
+
+| Where | Sentence | Outcome |
+|---|---|---|
+| operator guide § 2 | `docker compose up -d --build` as the install | **false on an empty machine** (measured above) — rewritten: `node scripts/build-images.mjs`, then `up -d`, with the measurement |
+| operator guide § 1 Requirements | *"Nothing else: no Node"* | amended: Node only for `build-images.mjs`, and the plain `docker build` route |
+| operator guide § 8 (WP-133's) | *"the cost ledger and the budgets record whatever it reports"* | **false** — `local` runs are labelled estimates (`claude-runner.ts`, `is_estimate: spec.providerMode === 'local'`) and the domain ledger refuses a reported total for an estimate (`reportedTotal … && !spend.isEstimate`) and prices token usage from `price_list` — rewritten, read off the code. WP-133's discovered-work bullet saying the same is history and left |
+| operator guide § 6 Restore | `stop app launcher` | rewritten (433) |
+| README status | *"there is no transport between the API process and the launcher container, so no agent stage runs"* | false since WP-53 — rewritten; *"five containers"* → seven; the short install amended as § 2 |
+| user guide § 8 budgets | (silent on `local` mode) | **extended**: every `local` run is priced from the list and labelled an estimate |
+| user guide § 13 | agents need the launcher pair | **extended**: and a model credential; `local` runs agents since WP-133 |
+| user guide § 3 board cost, `cost-text.ts` | *"priced from the price list in `local` provider mode"* | true per the code above; left |
+| user guide § 3 manual start | (WP-134 rewrote it) | true; left |
+
+**Decisions and assumptions.**
+- The runbook recommends `COMPOSE_FILE=compose.yml:compose.local.yml` in `.env` so no later plain
+  `docker compose` command can recreate `app`/`runner` in `api` mode — measured with `config` only.
+- It recommends **poll-only** for both providers on a laptop, and therefore states the CI-gate cost
+  below rather than hiding it.
+- Autix's stack is not assumed; the runbook states what the run image carries (Node and npm only) and
+  that CI is the evidence for a project in another language.
+- The `docker stats` reading of the stack's memory failed (the container list was empty by the time it
+  ran, so it listed other projects' containers); discarded — the runbook says the stack's own memory
+  is not measured.
+
+**Discovered work** (for the refiner; no numbers claimed):
+- **A poll-only GitLab binding parks every task whose CI runs longer than about two minutes**
+  (read off the code, not measured). `ci_gate` is evaluated on entry and re-checked every
+  `GATE_RECHECK_MS` (30 s) up to `MAX_GATE_CHECKS` (5), then escalates *undecided*; the pipeline event
+  that normally settles it is webhook-only, and WP-123's poll-only reads add no pipeline read. The
+  GitLab guide's *"The CI gate does not need the pipeline event (it asks GitLab for the head's pipeline
+  itself)"* is therefore true only for CI shorter than ~2 min. Graded **major for the first test** if
+  Autix's CI is longer: the first task stops at the CI gate. The runbook states it and the hand-back.
+- **`docker compose up --build` cannot build from an empty machine** (measured above); operator guide
+  fixed, but `compose.yml`'s and `compose.local.yml`'s headers still teach `up --build`, and nothing in
+  compose builds `platform-base`, `platform-runtime` or `platform-egress` (a `base` service with
+  `profiles`, or `additional_contexts`, would close it). No check covers the empty-machine path: the
+  stock check needs prebuilt images.
+- **No password change**: no screen in `apps/web/src`; operator guide § 2 still says *"change it after
+  first sign-in"*. Better Auth may serve an endpoint; not tried.
+- **Operator guide stale since WP-50**: § 3's *"Both of those are among the variables `compose.yml`
+  does not pass through, so they need the override from §2"* and § 10's *"`compose.yml` passes the
+  `app` service a fixed list of variables"* contradict § 2's `env_file` paragraph.
+- **The GHCR packages are not anonymously pullable** (401/403 without a login), while operator guide
+  § 2 and § 5 teach `docker pull ghcr.io/gtfo-ai/…` as if they were.
+- **The run image has no PHP, Composer, Python or pnpm**, and `LOCKFILE_INSTALL_ALLOW` names only
+  `npm ci`, `pnpm install --frozen-lockfile` and `pip install -r`, so a non-Node project's tests cannot
+  run inside a run (discovery's R1/R2/R6 included).
+- WP-133's discovered-work bullet *"the ledger and the budgets take it as reported"* is contradicted by
+  the code (above); whether the CLI's `modelUsage` ids match the seeded `price_list` rows under a
+  subscription is unmeasured.
+
+**Verification.** Citation guard (`scripts/citations.test.ts`) PASS 13/13; `pnpm run -s
+conflict:check` PASS; `pnpm run -s verify` **PASS** (load 10.5 at its start). Docker discipline: `agentic`-prefixed
+volumes **nine** before and after, untouched; `com.agentic.run` objects none before and after; the
+stock check's two projects removed by its own teardown (no `stock-check` container left); the probe
+build created nothing; two `--rm` containers.

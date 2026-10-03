@@ -217,7 +217,8 @@ read; `settingsNotApplied`, `packages/application/src/config/settings-grades.ts`
   by the plan-approval gate, from the **settings** layer (the repository file's `template_overrides` is *not applied*,
   per the grading table below). **`enabled`** — on a stage or on a template — switches nothing and is reported
   `not_applied`: a stage a project turns off still runs, and a template-level `enabled` has no specified meaning
-  yet. Its reader waits on **Q99**.
+  yet. Its reader waited on **Q99**, which the founder answered *accepted as implemented* (session 11, 2026-10-03),
+  so no reader is scheduled.
 - **`pipeline.custom_stages`**: no reader, and declined for 0.1 (M5: a custom stage has no loop counter, Q56). A
   project's `.agentic/pipeline.yml` is not read either (next section).
 - **`stages.<id>.prompt`** and **`stages.<id>.prompt_append`** **are read since WP-92** (next paragraph); what
