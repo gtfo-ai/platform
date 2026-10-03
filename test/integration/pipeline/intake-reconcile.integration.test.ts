@@ -49,6 +49,8 @@ const appendMatch = async (options: {
   readonly key: string;
   readonly actor?: Actor;
   readonly minutesAgo?: number;
+  /** The provider's stable id, as the Jira adapter sends it since WP-134. */
+  readonly ticketId?: string;
 }): Promise<string> => {
   streamSeq += 1;
   const id = randomUUID();
@@ -66,6 +68,7 @@ const appendMatch = async (options: {
           provider: 'jira-cloud',
           key: options.key,
           url: `https://acme.atlassian.net/browse/${options.key}`,
+          ...(options.ticketId === undefined ? {} : { id: options.ticketId }),
         },
         rule: 'label = "agentic"',
         priority: null,
@@ -80,11 +83,12 @@ const appendMatch = async (options: {
   return id;
 };
 
-const insertTask = async (key: string, mode = 'normal'): Promise<void> => {
+const insertTask = async (key: string, mode = 'normal', ticketId: string | null = null) => {
   await pool.query(
-    `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state, mode)
-       values ($1, 'jira-cloud', $2, $3, 'feature', 'queued', $4::task_mode)`,
-    [projectId, key, `https://acme.atlassian.net/browse/${key}`, mode],
+    `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state, mode,
+                        ticket_id)
+       values ($1, 'jira-cloud', $2, $3, 'feature', 'queued', $4::task_mode, $5)`,
+    [projectId, key, `https://acme.atlassian.net/browse/${key}`, mode, ticketId],
   );
 };
 
@@ -186,6 +190,21 @@ describe('finding the tickets nothing started', () => {
     await appendMatch({ key: 'ACME-1' });
 
     expect(await find()).toHaveLength(1);
+  });
+
+  /**
+   * WP-134 (backlog 418): intake drops a match for a moved issue — `NEW-5`, the id of the task
+   * `OLD-1` started — as that task's. Read by key alone, the reconciler would call the dropped match
+   * lost and re-emit it; by the id it is the task it already has. And a different id under the new
+   * key is still owed a task.
+   */
+  it('reports nothing for a moved issue whose task exists under its old key (WP-134)', async () => {
+    await appendMatch({ key: 'NEW-5', ticketId: '10001' });
+    await appendMatch({ key: 'NEW-6', ticketId: '10002' });
+    await insertTask('OLD-1', 'normal', '10001');
+
+    const found = await find();
+    expect(found.map(ticketKeyOf)).toEqual(['NEW-6']);
   });
 
   it('keeps two different tickets apart', async () => {

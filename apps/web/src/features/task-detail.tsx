@@ -93,6 +93,7 @@ import {
 import { DownloadLink, ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { AskThread } from './ask-thread.js';
 import { BreakdownPanel } from './breakdown-panel.js';
+import { unmeasuredRunsText } from './cost-text.js';
 import { FeedbackForm } from './feedback.js';
 import { TakeOverPanel } from './take-over.js';
 
@@ -147,11 +148,10 @@ const RaiseTaskCap = ({
 };
 
 /**
- * *"Excludes 1 run nobody measured."* — what `cost_actual_usd` leaves out (WP-131, backlog 403).
- * Exported for its own test; the words are the notification's, so the two say the same thing.
+ * *"Excludes 1 run nobody measured."* — now in `./cost-text.ts`, which the board card reads too
+ * (WP-134, backlog 408); re-exported here for the task page's own test.
  */
-export const unmeasuredRunsText = (count: number): string =>
-  `Excludes ${count} ${count === 1 ? 'run' : 'runs'} nobody measured.`;
+export { unmeasuredRunsText };
 
 /**
  * What the task's estimate rests on, as one sentence — the same four states the workpad prints.

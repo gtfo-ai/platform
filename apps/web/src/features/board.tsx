@@ -33,6 +33,7 @@ import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 // `sanitiseUntrusted` is what strips the bidi overrides and control characters that make a line
 // read backwards (CVE-2021-42574). `ExternalLink`'s own refusal tooltip does the same.
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { BOARD_COST_TITLE, unmeasuredRunsShortText, unmeasuredRunsText } from './cost-text.js';
 
 /** The columns, in pipeline order. Every state appears exactly once, so no task can be invisible. */
 export const BOARD_COLUMNS = [
@@ -113,9 +114,23 @@ const TaskCard = ({
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-fg-muted">
         <span>{task.current_stage ?? 'no stage'}</span>
         <span>·</span>
-        <span title="Provider-reported cost so far for this task.">
+        {/*
+          The measured total, and what it leaves out (WP-134, PROGRESS backlog 408): the card is the
+          third place `cost_actual_usd` appears, after the task page and the notification, and it
+          printed the bare figure as *"Provider-reported cost"* — false in local provider mode and
+          silent about a run nobody measured. The words are `./cost-text.ts`'s, shared with the page.
+        */}
+        <span title={BOARD_COST_TITLE} data-task-cost="measured">
           {formatUsd(task.cost_actual_usd)}
         </span>
+        {task.unmeasured_runs > 0 ? (
+          <span
+            title={unmeasuredRunsText(task.unmeasured_runs)}
+            data-unmeasured-runs={task.unmeasured_runs}
+          >
+            {unmeasuredRunsShortText(task.unmeasured_runs)}
+          </span>
+        ) : null}
         <span>·</span>
         <span title="Time since the task was last updated.">
           {formatElapsed(task.updated_at, nowMs)}

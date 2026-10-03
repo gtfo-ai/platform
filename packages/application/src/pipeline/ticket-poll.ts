@@ -83,8 +83,9 @@
  * sharing it is stated: a state the live read recorded first is never recorded as a `ticket.matched`
  * afterwards, which loses nothing, because a ticket with a live task is never started again (intake's
  * one task per ticket). A deleted live ticket does not break the read: the Jira adapter drops the
- * keys a `400` names as missing and asks again (WP-110 review round 1). The live read **fails
- * open** (rule 20) past that: a provider error is logged and the
+ * keys a `400` names as missing and asks again (WP-110 review round 1), bisects a refusal that names
+ * none of them, and reports the keys it left out, which this poll logs by name (WP-134, backlog
+ * 375). The live read **fails open** (rule 20) past that: a provider error is logged and the
  * poll's rule half stands, and the cursor is the rule read's alone — a live ticket newer than every
  * rule match must not move the window past rule matches not yet read.
  *
@@ -544,7 +545,22 @@ const pollLiveTickets = async (
       (await ticketReads(integrations).matches(
         rule,
         // A search answers each ticket at most once, so a limit of the key count is never a cut.
-        { since: new Date(edge - TICKET_POLL_OVERLAP_MS).toISOString(), limit: keys.length },
+        {
+          since: new Date(edge - TICKET_POLL_OVERLAP_MS).toISOString(),
+          limit: keys.length,
+          // WP-134 (backlog 375): the tickets the tracker refused as gone were left out so the read
+          // could answer the rest; their tasks are named here, once per poll, every poll.
+          onUnreadableKeys: (unreadable) => {
+            logger.warn(
+              {
+                project_id: binding.projectId,
+                integration_id: binding.integrationId,
+                ticket_keys: [...unreadable],
+              },
+              'the tracker refused these live tasks’ tickets as not existing (deleted, or moved out of the integration’s reach); the poll re-read the other tasks’ tickets without them',
+            );
+          },
+        },
         { projectId: binding.projectId, taskId: null },
       )) ?? [];
   } catch (error) {

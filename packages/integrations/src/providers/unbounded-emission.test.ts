@@ -229,8 +229,10 @@ describe('one readTicket, with the provider hostile in every string it controls'
     // a comment carries here (body and display name, 262 144) plus 345 bytes of its own frame. The
     // paths above did not move: each comment's text is still the consumer's to bound. Review round
     // 1 then added `comment_total` (backlog 290): `,"comment_total":200` is exactly 20 bytes, which
-    // is the whole move from 13 911 215.
-    expect(bytesOf(JSON.stringify(ticket) ?? '')).toBe(13_911_235);
+    // is the whole move from 13 911 215. WP-134 (backlog 418) added the issue's stable id to the
+    // ticket's reference: `,"id":"10001"` is exactly 13 bytes, the whole move from 13 911 235, and
+    // it is no new unbounded path — the adapter carries only 1–20 decimal digits there.
+    expect(bytesOf(JSON.stringify(ticket) ?? '')).toBe(13_911_248);
   });
 });
 

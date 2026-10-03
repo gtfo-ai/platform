@@ -35,7 +35,7 @@ import type {
   TicketLink,
   TicketMatch,
 } from '@platform/application';
-import { isoDateTimeSchema, nonEmptyStringSchema } from '@platform/contracts';
+import { isoDateTimeSchema, nonEmptyStringSchema, type TicketRef } from '@platform/contracts';
 import * as z from 'zod';
 import { adfMarkerId, adfToMarkdown } from './adf.js';
 
@@ -232,6 +232,33 @@ export const jiraErrorCollectionSchema = z.object({
 export const issueUrl = (siteUrl: string, key: string): string =>
   `${siteUrl.replace(/\/+$/, '')}/browse/${key}`;
 
+/**
+ * The issue's stable id when it is one: Jira's `id` is a decimal string (`"10001"`), and an issue
+ * moved to another project keeps it while its key changes (WP-134, PROGRESS backlog 418). Anything
+ * else — absent, or a shape Jira does not document — is left out rather than stored, so one task per
+ * ticket falls back to the key, which is what it was before.
+ */
+const stableIssueId = (id: string | undefined): string | null =>
+  id !== undefined && /^[0-9]{1,20}$/.test(id) ? id : null;
+
+/**
+ * The platform's reference to a Jira issue: the provider, the key it answered, its browse URL and —
+ * when Jira sent one — the stable id. Every reference the adapter builds to an issue it read comes
+ * from here (the read, the poll and the webhook), so the three doors cannot disagree about it.
+ */
+export const issueRef = (
+  issue: { readonly id?: string | undefined; readonly key: string },
+  siteUrl: string,
+): TicketRef => {
+  const id = stableIssueId(issue.id);
+  return {
+    provider: PROVIDER_ID,
+    key: issue.key,
+    url: issueUrl(siteUrl, issue.key),
+    ...(id === null ? {} : { id }),
+  };
+};
+
 export const commentUrl = (siteUrl: string, key: string, commentId: string): string =>
   `${issueUrl(siteUrl, key)}?focusedCommentId=${commentId}`;
 
@@ -309,7 +336,7 @@ export interface TicketMappingInput {
 export const toTicket = (input: TicketMappingInput): Ticket => {
   const { issue, siteUrl } = input;
   return {
-    ref: { provider: PROVIDER_ID, key: issue.key, url: issueUrl(siteUrl, issue.key) },
+    ref: issueRef(issue, siteUrl),
     issue_type: issue.fields.issuetype?.name ?? 'Task',
     title: issue.fields.summary ?? '',
     description: adfToMarkdown(issue.fields.description),
@@ -344,7 +371,7 @@ export const toTicket = (input: TicketMappingInput): Ticket => {
 };
 
 export const toTicketMatch = (issue: JiraIssueWithUpdated, siteUrl: string): TicketMatch => ({
-  ref: { provider: PROVIDER_ID, key: issue.key, url: issueUrl(siteUrl, issue.key) },
+  ref: issueRef(issue, siteUrl),
   issue_type: issue.fields.issuetype?.name ?? 'Task',
   priority: issue.fields.priority?.name ?? null,
   epic: issue.fields.parent?.key ?? null,

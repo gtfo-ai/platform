@@ -55,12 +55,15 @@
  * that reached one could never be taken out (BD-003). The ticket's text is not stored here; intake's
  * own read stores it as `tasks.ticket_snapshot`.
  *
- * **A moved ticket is a second key (residual, stated; review round 1).** Jira answers
+ * **A moved ticket is the same ticket (WP-134, PROGRESS backlog 418).** Jira answers
  * `GET issue/OLD-1` for an issue moved to another project under its **new** key, `NEW-5`. The
- * scope is judged on `NEW-5`, which is right; but both one-task checks here and intake's
- * `unique (project_id, ticket_key, mode)` compare key strings, so a task created as `OLD-1` does
- * not stop a second under `NEW-5`. The webhook door has the same gap (a delivery after a move
- * carries the new key), so it predates this row; it is filed, not closed here.
+ * scope is judged on `NEW-5`, which is right; and the one-task check inside the append's
+ * transaction asks with the provider's **stable id** too (`TicketRef.id`, Jira's issue id), as
+ * intake does on every door, so a task created as `OLD-1` stops a second under `NEW-5`
+ * (`tasks_project_ticket_id_mode`, migration 0077). The check before the read has only the typed
+ * key, so it catches a typed `OLD-1` and leaves a typed `NEW-5` to the one after the read. The
+ * residual, stated: a task created **before** migration 0077 recorded no id, so a moved issue whose
+ * task predates it is still judged by its key alone.
  *
  * A binding's **scope filter** — Jira's `project_keys` — is consulted through the port's
  * `ticketScope`, after the read and before any write (see the refusal).
@@ -155,7 +158,12 @@ const requestedRef = (provider: string, key: string): TicketRefInput => ({
 const existingTask = async (
   options: ManualStartOptions,
   scope: { readonly tx: TransactionScope['tx'] },
-  query: { readonly projectId: Id; readonly provider: string; readonly ticketKey: string },
+  query: {
+    readonly projectId: Id;
+    readonly provider: string;
+    readonly ticketKey: string;
+    readonly ticketId?: string | null | undefined;
+  },
 ): Promise<Id | null> =>
   (await options.store.tasks.findByTicket(scope.tx, { ...query, mode: 'normal' }))?.task.id ?? null;
 
@@ -308,6 +316,9 @@ export const startTicketManually = async (
         projectId,
         provider: payload.ticket.provider,
         ticketKey: payload.ticket.key,
+        // The provider's stable id (WP-134, backlog 418): a typed `NEW-5` whose issue was started
+        // as `OLD-1` meets that task here, after the read answered the id.
+        ticketId: payload.ticket.id ?? null,
       });
       if (taskId !== null) {
         throw taskExists(payload.ticket.key, taskId);

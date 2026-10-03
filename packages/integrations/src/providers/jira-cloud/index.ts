@@ -720,44 +720,99 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     }
   };
 
+  /**
+   * A `keys` search that still answers when one of its keys is gone (WP-110 review round 1; WP-134,
+   * PROGRESS backlog 375).
+   *
+   * Atlassian documents that search *"responds HTTP 400 'Bad Request' if the JQL query makes explicit
+   * reference to inexistent entities, like a specific Issue Key"*, with the message *"An issue with
+   * key 'KANBAN-123456789' does not exist for field 'key'."*
+   * (https://support.atlassian.com/jira/kb/how-to-handle-http-400-bad-request-errors-on-jira-search-rest-api-endpoint/,
+   * retrieved 2026-10-01 — a Data Center `/rest/api/2/search` article; that Cloud's `search/jql`
+   * answers the same is **inferred**, stated in the fixture). One deleted ticket of a live task would
+   * otherwise fail every live read of the binding, so a refusal is answered in two ways:
+   *
+   * - the keys the error **names** (either wording, {@link missingIssueKeysIn}) are dropped and the
+   *   rest asked again;
+   * - a refusal that names **none** of them — Cloud's wording is not measured, and the error text is
+   *   cut at 300 characters — is **bisected**: each half is asked on its own, and a single key Jira
+   *   still refuses is the one left out.
+   *
+   * Every search counts against {@link MAX_KEY_SEARCHES}; past it, or when Jira refuses **every** key
+   * on its own (the refusal was about the query, not a key), the original error is thrown and the
+   * poller fails the read open as before. The keys left out are reported once, through
+   * `onUnreadableKeys`, from the platform's own list — provider text only ever narrows it. The
+   * answer is the port's: oldest `updated` first, at most `limit`.
+   */
+  const searchKeys = async (
+    keys: readonly string[],
+    since: string | null,
+    limit: number,
+    onUnreadableKeys: ((keys: readonly string[]) => void) | undefined,
+  ): Promise<TicketMatch[]> => {
+    let searches = 0;
+    const unreadable: string[] = [];
+    /** Keys refused one by one with no key named — and the refusal, to throw if that is all of them. */
+    const probed: { keys: string[]; refusal: unknown } = { keys: [], refusal: null };
+    const ask = async (asked: readonly string[]): Promise<TicketMatch[]> => {
+      searches += 1;
+      try {
+        return await searchUpTo(
+          buildJql({ kind: 'keys', keys: [...asked] }, since, options.clock.now()),
+          Math.min(limit, asked.length),
+        );
+      } catch (error) {
+        if (!isSearchRefusal(error) || searches >= MAX_KEY_SEARCHES) {
+          throw error;
+        }
+        const named = missingIssueKeysIn(error, asked);
+        if (named.length > 0) {
+          unreadable.push(...named);
+          const rest = asked.filter((key) => !named.includes(key));
+          return rest.length === 0 ? [] : ask(rest);
+        }
+        if (asked.length === 1) {
+          unreadable.push(...asked);
+          probed.keys.push(...asked);
+          probed.refusal = error;
+          return [];
+        }
+        const middle = Math.ceil(asked.length / 2);
+        const first = await ask(asked.slice(0, middle));
+        return [...first, ...(await ask(asked.slice(middle)))];
+      }
+    };
+    const found = await ask(keys);
+    if (probed.keys.length > 0 && probed.keys.length >= keys.length) {
+      // Every key refused on its own and none named: the refusal was about the query, not a key,
+      // and an empty answer would read as "nothing changed" (rule 16). Jira's own error, as before.
+      throw probed.refusal;
+    }
+    if (unreadable.length > 0) {
+      onUnreadableKeys?.(keys.filter((key) => unreadable.includes(key)));
+    }
+    return found
+      .map((match, index) => ({ match, index }))
+      .sort(
+        (a, b) =>
+          Date.parse(a.match.updated_at) - Date.parse(b.match.updated_at) || a.index - b.index,
+      )
+      .map(({ match }) => match)
+      .slice(0, limit);
+  };
+
   const matchTickets = async (
     rule: TicketMatchRule,
-    matchOptions?: { readonly since?: string | null; readonly limit?: number },
+    matchOptions?: Parameters<TaskManagementPort['matchTickets']>[1],
   ): Promise<readonly TicketMatch[]> => {
     const limit = matchOptions?.limit ?? 50;
     const since = matchOptions?.since ?? null;
     const jql = buildJql(rule, since, options.clock.now());
-    return read('match_tickets', jsonPayload({ jql, limit }), async () => {
-      let current = rule;
-      for (let attempt = 0; ; attempt += 1) {
-        try {
-          return await searchUpTo(buildJql(current, since, options.clock.now()), limit);
-        } catch (error) {
-          // WP-110 review round 1: a `keys` rule naming a ticket that no longer exists. Atlassian
-          // documents that search *"responds HTTP 400 'Bad Request' if the JQL query makes explicit
-          // reference to inexistent entities, like a specific Issue Key"*, with the message *"An
-          // issue with key 'KANBAN-123456789' does not exist for field 'key'."*
-          // (https://support.atlassian.com/jira/kb/how-to-handle-http-400-bad-request-errors-on-jira-search-rest-api-endpoint/,
-          // retrieved 2026-10-01 — a Data Center `/rest/api/2/search` article; that Cloud's
-          // `search/jql` answers the same is **inferred**, stated in the fixture). One deleted ticket
-          // of a live task would otherwise fail every live read of the binding: the keys the error
-          // names are dropped and the search asked again, at most {@link MISSING_KEY_RETRIES} times
-          // (the error text is cut at 300 characters, so one error names a handful of keys).
-          if (current.kind !== 'keys' || attempt >= MISSING_KEY_RETRIES) {
-            throw error;
-          }
-          const missing = missingIssueKeysIn(error, current.keys);
-          if (missing.length === 0) {
-            throw error;
-          }
-          const remaining = current.keys.filter((key) => !missing.includes(key));
-          if (remaining.length === 0) {
-            return [];
-          }
-          current = { kind: 'keys', keys: remaining };
-        }
-      }
-    });
+    return read('match_tickets', jsonPayload({ jql, limit }), async () =>
+      rule.kind === 'keys'
+        ? searchKeys(rule.keys, since, limit, matchOptions?.onUnreadableKeys)
+        : searchUpTo(jql, limit),
+    );
   };
 
   const transition = async (
@@ -1228,26 +1283,41 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
 // ── Pure helpers, exported for their own tests ───────────────────────────────
 
 /**
- * How many times a `keys` search drops the keys Jira said do not exist and asks again (WP-110 review
- * round 1). Each refusal names at most a handful of keys (the error text is cut at 300 characters),
- * so three retries reach past roughly a dozen deleted tickets in one read; past that the read fails
- * and the poller fails it open, as before.
+ * How many searches one `keys` read may make before it gives up and fails open (WP-134, PROGRESS
+ * backlog 375; WP-110's `MISSING_KEY_RETRIES` = 3 before it).
+ *
+ * A refusal that names its keys costs one search per refusal. One that names none is bisected, which
+ * finds one bad key among the poller's hundred (`TICKET_POLL_LIVE_KEYS_LIMIT`) in about fifteen
+ * searches — two halves per level, seven levels — and two in about thirty. Thirty-two is that, so a
+ * poll with a deleted ticket or two still reads every other task's ticket, and a binding with many
+ * gone at once fails open after a bounded number of reads rather than walking every key.
  */
-export const MISSING_KEY_RETRIES = 3;
+export const MAX_KEY_SEARCHES = 32;
+
+/** A `400` from search: a refusal of the query, which is the only error a `keys` read narrows on. */
+const isSearchRefusal = (error: unknown): error is IntegrationError =>
+  error instanceof IntegrationError && error.code === 'invalid_request';
 
 /**
- * The keys of `asked` that a `400` names as missing — *"An issue with key 'X' does not exist for
- * field 'key'."* — and nothing else: a key the error mentions that was not asked for is ignored, so
- * provider text can only ever narrow the platform's own list.
+ * The keys of `asked` that a `400` names as missing, and nothing else: a key the error mentions that
+ * was not asked for is ignored, so provider text can only ever narrow the platform's own list.
+ *
+ * Two wordings: the documented one — *"An issue with key 'X' does not exist for field 'key'."*
+ * (Data Center's knowledge base, see `searchKeys`) — and the one Jira uses for every other JQL value,
+ * *"The value 'X' does not exist for the field 'key'."*, read only when the field is `key` or
+ * `issuekey`. Neither is measured on a Cloud site; a refusal in any other words is bisected instead.
  */
 export const missingIssueKeysIn = (error: unknown, asked: readonly string[]): string[] => {
-  if (!(error instanceof IntegrationError) || error.code !== 'invalid_request') {
+  if (!isSearchRefusal(error)) {
     return [];
   }
   const named = new Set(
-    [...error.message.matchAll(/An issue with key '([^']+)' does not exist/g)].map(
-      (match) => match[1] ?? '',
-    ),
+    [
+      ...error.message.matchAll(/An issue with key '([^']+)' does not exist/g),
+      ...error.message.matchAll(
+        /The value '([^']+)' does not exist for the field '(?:key|issuekey)'/gi,
+      ),
+    ].map((match) => match[1] ?? ''),
   );
   return asked.filter((key) => named.has(key));
 };

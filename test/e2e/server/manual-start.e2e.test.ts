@@ -163,6 +163,18 @@ describe('the manual start (WP-122)', () => {
       idempotency_key: 'start-acme-31',
     });
 
+    // WP-134 (backlog 416, criterion 1): the task's own *Who did what* lists the person who
+    // started it, though the row was written before the task existed and still has no task id.
+    const adminApi = spaEndpoints(admin, []);
+    const whoDidWhat = await adminApi.taskAudit(task?.id as string);
+    const startRows = whoDidWhat.items.filter((row) => row.action === 'task.start');
+    expect(startRows).toHaveLength(1);
+    const [memberId] = await pipeline.query<{ id: string }>(
+      "select id from users where email = 'member@example.test'",
+    );
+    expect(startRows[0]?.user_id).toBe(memberId?.id);
+    expect(startRows[0]?.params).toMatchObject({ event_id: started.event_id });
+
     // A replay of the same intent performs nothing twice: no second match, no second row.
     const replayed = await memberApi.startTask(
       pipeline.projectId,

@@ -956,7 +956,12 @@ export const ticketReads = (integrations: PipelineIntegrations) => ({
    */
   matches: async (
     rule: TicketMatchRule,
-    options: { readonly since: string; readonly limit: number },
+    options: {
+      readonly since: string;
+      readonly limit: number;
+      /** The port's: the keys a `keys` rule named that the provider refused (WP-134, backlog 375). */
+      readonly onUnreadableKeys?: (keys: readonly string[]) => void;
+    },
     context: CallContext,
   ): Promise<readonly TicketMatch[] | null> => {
     const binding = integrations.taskManagement;
@@ -969,7 +974,14 @@ export const ticketReads = (integrations: PipelineIntegrations) => ({
       'match_tickets',
       { rule: rule.kind, since: options.since, limit: options.limit },
       context,
-      async () => binding.port.matchTickets(rule, { since: options.since, limit: options.limit }),
+      async () =>
+        binding.port.matchTickets(rule, {
+          since: options.since,
+          limit: options.limit,
+          ...(options.onUnreadableKeys === undefined
+            ? {}
+            : { onUnreadableKeys: options.onUnreadableKeys }),
+        }),
     );
   },
 

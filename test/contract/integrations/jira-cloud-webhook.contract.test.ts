@@ -200,6 +200,8 @@ describe('jira-cloud webhooks', () => {
           provider: 'jira-cloud',
           key: 'ACME-1',
           url: 'https://acme-example.atlassian.net/browse/ACME-1',
+          // The issue's stable id (WP-134, backlog 418): a move changes the key, never this.
+          id: '10001',
         },
         comment_id: '10105',
         author: {
@@ -266,6 +268,8 @@ describe('jira-cloud webhooks', () => {
           provider: 'jira-cloud',
           key: 'ACME-1',
           url: 'https://acme-example.atlassian.net/browse/ACME-1',
+          // The issue's stable id (WP-134, backlog 418): a move changes the key, never this.
+          id: '10001',
         },
         rule: 'label = "agentic"',
         priority: 'High',
@@ -330,6 +334,8 @@ describe('jira-cloud webhooks', () => {
           provider: 'jira-cloud',
           key: 'ACME-1',
           url: 'https://acme-example.atlassian.net/browse/ACME-1',
+          // The issue's stable id (WP-134, backlog 418): a move changes the key, never this.
+          id: '10001',
         },
         // The fixture's `issue.fields.updated`, `2026-09-01T10:15:00.000+0000`, as ISO — the
         // provider's own instant, not the envelope's `timestamp` and not the platform's clock.
@@ -578,6 +584,8 @@ describe('jira-cloud webhooks', () => {
           provider: 'jira-cloud',
           key: 'ACME-1',
           url: 'https://acme-example.atlassian.net/browse/ACME-1',
+          // The issue's stable id (WP-134, backlog 418): a move changes the key, never this.
+          id: '10001',
         },
         issue_type: 'Bug',
       });
@@ -655,5 +663,76 @@ describe('jira-cloud webhooks', () => {
     it('is obviously fake, and the binding’s own', () => {
       expect(JIRA_REPLAY_SECRET).toContain('FAKE');
     });
+  });
+});
+
+/**
+ * **A moved issue answers with the same id on both doors** (WP-134, PROGRESS backlog 418, criterion
+ * 2). Jira answers `GET issue/OLD` for an issue moved to another project under its new key, and a
+ * webhook after the move carries the new key; one task per ticket can only hold across that if both
+ * doors carry the issue's stable id, which intake then asks by (`findByTicket`, migration 0077). The
+ * delivery is the documented status-change example with the key the move gave it; the id is the
+ * example's own, which Atlassian's knowledge base keys every former key of an issue to
+ * (`moved_issue_key.issue_id`, cited in `packages/infrastructure/src/db/migrations/0077_task_ticket_id.sql`).
+ */
+describe('jira-cloud: a moved issue (WP-134)', () => {
+  it('the read of the old key and a delivery under the new key carry the same issue id', async () => {
+    // A binding that reads both projects, so the move stays inside its scope.
+    const binding = createJiraBinding({
+      config: { pickup_status: 'In Progress', pickup_label: null, project_keys: ['ACME', 'NEW'] },
+    });
+    binding.replay.moveIssue('ACME-1', 'NEW-5');
+
+    // The manual start's door: the typed old key, answered under the new one, with the id.
+    const read = await binding.port.readTicket({
+      provider: 'jira-cloud',
+      key: 'ACME-1',
+      url: 'https://ticket-not-read-yet.invalid/',
+    });
+    expect(read.ref).toEqual({
+      provider: 'jira-cloud',
+      key: 'NEW-5',
+      url: 'https://acme-example.atlassian.net/browse/NEW-5',
+      id: '10001',
+    });
+
+    // The webhook's door: the same issue, delivered after the move, moving into the pick-up status.
+    const result = await binding.port.inbound.normalise(
+      binding.replay.delivery('webhook-issue-updated-status.json', {
+        patch: (body) => {
+          (body.issue as { key: string }).key = 'NEW-5';
+        },
+      }),
+      {
+        projectId: JIRA_PROJECT_ID,
+        integrationId: JIRA_INTEGRATION_ID,
+        resolveUser: () => null,
+        resolveThread: async () => null,
+      },
+    );
+    const matched = result.events.find((event) => event.type === 'ticket.matched');
+    expect((matched?.payload as { ticket?: unknown } | undefined)?.ticket).toEqual(read.ref);
+  });
+
+  it('carries no id rather than one Jira did not send in its documented shape', async () => {
+    const binding = createJiraBinding({
+      config: { pickup_status: 'In Progress', pickup_label: null },
+    });
+    const result = await binding.port.inbound.normalise(
+      binding.replay.delivery('webhook-issue-updated-status.json', {
+        patch: (body) => {
+          (body.issue as { id: string }).id = 'not-a-jira-id';
+        },
+      }),
+      {
+        projectId: JIRA_PROJECT_ID,
+        integrationId: JIRA_INTEGRATION_ID,
+        resolveUser: () => null,
+        resolveThread: async () => null,
+      },
+    );
+    const matched = result.events.find((event) => event.type === 'ticket.matched');
+    // The key alone then decides, as it did before WP-134.
+    expect((matched?.payload as { ticket?: object } | undefined)?.ticket).not.toHaveProperty('id');
   });
 });

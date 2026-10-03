@@ -69,6 +69,8 @@ export const tasks = pgTable('tasks', {
   ticketProvider: text('ticket_provider').notNull(),
   ticketKey: text('ticket_key').notNull(),
   ticketUrl: text('ticket_url').notNull(),
+  /** The provider's stable ticket id (Jira's issue id), when it has one — migration 0077, WP-134. */
+  ticketId: text('ticket_id'),
   template: text('template').notNull(),
   mode: taskModeEnum('mode').notNull().default('normal'),
   state: taskStateEnum('state').notNull().default('queued'),

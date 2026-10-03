@@ -80,13 +80,14 @@ import {
   type JsonObject,
   MAX_TICKET_UPDATED_FIELD_CHARS,
   MAX_TICKET_UPDATED_FIELDS,
+  type TicketRef,
 } from '@platform/contracts';
 import type { Clock } from '@platform/domain';
 import * as z from 'zod';
 import { adfToMarkdown } from './adf.js';
 import {
   identityOfUser,
-  issueUrl,
+  issueRef,
   jiraIssueWithUpdatedSchema,
   jiraUserSchema,
   PROVIDER_ID,
@@ -383,7 +384,7 @@ export const createJiraInboundNormaliser = (
       type: 'ticket.matched',
       payload: {
         project_id: context.projectId,
-        ticket: { provider: PROVIDER_ID, key: issue.key, url: issueUrl(siteUrl, issue.key) },
+        ticket: issueRef(issue, siteUrl),
         rule,
         priority: issue.fields.priority?.name ?? null,
         issue_type: issue.fields.issuetype?.name ?? null,
@@ -406,7 +407,7 @@ export const createJiraInboundNormaliser = (
     issue: NonNullable<JiraWebhookEnvelope['issue']>,
     envelope: JiraWebhookEnvelope,
     context: InboundContext,
-    ticket: { readonly provider: string; readonly key: string; readonly url: string },
+    ticket: TicketRef,
   ): NormalisedEvent<'ticket.updated'> => {
     const changed = changedFieldsOf(envelope);
     return {
@@ -497,7 +498,7 @@ export const createJiraInboundNormaliser = (
       return ignored('not_for_this_project', `${issue.key} is not in a project this binding reads`);
     }
 
-    const ticket = { provider: PROVIDER_ID, key: issue.key, url: issueUrl(siteUrl, issue.key) };
+    const ticket = issueRef(issue, siteUrl);
     const events: NormalisedEvent<TaskManagementInboundEvent>[] = [];
 
     if (body.webhookEvent === 'comment_created') {

@@ -500,7 +500,11 @@ the existing suite (BD-017).
   > delivery identifier, which no search result carries, so the two doors never share a key; what
   > keeps a binding with both from starting a ticket twice is intake's 1:1 rule
   > (`tasks_project_id_ticket_key_mode`, `saga.ts`'s `findByTicket`), asserted end to end in both
-  > orders (`test/e2e/pipeline/ticket-poll.e2e.test.ts`). The price is a second `ticket.matched` /
+  > orders (`test/e2e/pipeline/ticket-poll.e2e.test.ts`). Since WP-134 (PROGRESS backlog 418) the
+  > rule also holds across a **move**: a provider that sends a stable ticket id (`TicketRef.id`,
+  > Jira's numeric issue id, on the read, the poll and the webhook alike) is matched by that id under
+  > any key (`tasks_project_ticket_id_mode`, migration 0077), so `NEW-5` meets the task `OLD-1`
+  > started; a provider without one, and a task created before 0077, are matched by key. The price is a second `ticket.matched` /
   > `ticket.updated` for one change seen by both doors — absorbed by intake, and one extra snapshot
   > read for a live task.
   >
@@ -512,8 +516,12 @@ the existing suite (BD-017).
   > recorded as `ticket.updated` **only**, never `ticket.matched`, on the same key; so an edit to a
   > ticket a **status** rule no longer matches (the platform's status mapping moved it on) reaches its
   > live task. A key Jira says does not exist (`400`, a deleted ticket — documented for Data Center
-  > search, inferred for Cloud) is dropped and the search asked again (`MISSING_KEY_RETRIES`, 3);
-  > a read that still fails fails open (a warning; the rule half stands). It never moves the cursor.
+  > search, inferred for Cloud) is dropped and the search asked again; since WP-134 (backlog 375) a
+  > refusal that names **no** key — Cloud's wording is not measured — is bisected until the refused
+  > key stands alone, every search counted against `MAX_KEY_SEARCHES` (32), and the keys left out
+  > are reported to the poll, which names them in a warning every poll. A read that still fails —
+  > past the bound, or every key refused on its own — fails open (a warning; the rule half stands).
+  > It never moves the cursor.
   > **What a poll cannot see**: comments and `ticket.created` (so the ticket linter is
   > webhook-only); and tickets that matched before polling was switched on, because a binding's first
   > poll reads its last interval only — a first read of every ticket ever labelled would start closed

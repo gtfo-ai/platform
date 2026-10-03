@@ -11,7 +11,10 @@
  * Three predicates, each of which is load-bearing:
  *
  *  1. **no task row** for `(project_id, ticket.provider, ticket.key, mode = 'normal')` — the same
- *     tuple `tasks_project_id_ticket_key_mode` is unique on and `saga.ts`'s `findByTicket` reads;
+ *     tuple `tasks_project_id_ticket_key_mode` is unique on and `saga.ts`'s `findByTicket` reads —
+ *     nor for the ticket's stable id under another key (WP-134, migration 0077), which is how
+ *     `findByTicket` answers a moved issue; without it a match intake rightly dropped as the moved
+ *     issue's would read as a lost one;
  *  2. **not already re-emitted** by this component, which is what bounds the recovery to one
  *     attempt per ticket and stops an event log growing behind a permanently failing intake;
  *  3. **one row per ticket**, because a ticket legitimately matches more than once (a poll that
@@ -68,7 +71,8 @@ export const createPostgresIntakeReconciliationStore = (
                 from tasks t
                where t.project_id = (e.payload ->> 'project_id')::uuid
                  and t.ticket_provider = e.payload -> 'ticket' ->> 'provider'
-                 and t.ticket_key = e.payload -> 'ticket' ->> 'key'
+                 and (t.ticket_key = e.payload -> 'ticket' ->> 'key'
+                      or t.ticket_id = e.payload -> 'ticket' ->> 'id')
                  and t.mode = 'normal'
             )
             and not exists (

@@ -36,6 +36,13 @@
  *  8. **Stricter — a comment page holds at most {@link REPLAY_COMMENT_PAGE_CAP} comments** (WP-111),
  *     whatever `maxResults` asked, and its `total` is the thread's size. So the marker search's
  *     paging by `startAt` is exercised across short pages on every thread longer than the cap.
+ *  9. **Different — the wording of a search's refusal of an unknown key is chosen by the test**
+ *     (WP-134, backlog 375): Atlassian's documented sentence by default (`inferred` for Cloud), the
+ *     other JQL wording, or an **opaque** message that names no key — Cloud's wording is not
+ *     measured, so the adapter is driven through all three. The refusal is whole, as documented.
+ * 10. **Stricter — a moved issue answers its old key on `GET issue/{key}` only** (WP-134, backlog
+ *     418), as Atlassian's redirect does (`moveIssue`); a JQL `key in (…)` naming the old key is
+ *     refused as unknown, which Jira may not do.
  */
 import { readFileSync } from 'node:fs';
 import type { WebhookDelivery } from '@platform/application';
@@ -105,6 +112,13 @@ export interface JiraReplay {
    * exists so the adapter's "was this written by my own account" guard can be driven from outside.
    */
   reattributeComment(key: string, commentId: string, markerId: string): void;
+  /**
+   * Moves an issue to another project (WP-134, divergence 10): the issue keeps its `id`, answers
+   * under `to`, and `GET issue/{from}` answers it under `to` — Atlassian's redirect of a moved key.
+   */
+  moveIssue(from: string, to: string): void;
+  /** How a search refuses a key it does not hold (divergence 9). */
+  refuseUnknownKeysWith(wording: 'documented' | 'value' | 'opaque'): void;
   resetRequests(): void;
   /** A signed delivery built from a webhook fixture, with the harness's own secret. */
   delivery(fixtureName: string, overrides?: DeliveryOverrides): WebhookDelivery;
@@ -174,6 +188,9 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
   const remoteLinks = new Map<string, StoredRemoteLink[]>();
   const requests: RecordedRequest[] = [];
   const scripted: string[] = [];
+  /** Old key → current key, for a moved issue (divergence 10). */
+  const moved = new Map<string, string>();
+  let unknownKeyWording: 'documented' | 'value' | 'opaque' = 'documented';
   let nextId = 10_600;
 
   const transitionsFixture = bodyOf('transitions-acme-1.json') as {
@@ -325,10 +342,15 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
         const refusal = loadJiraFixture('error-issue-key-does-not-exist.json').response;
         const body = refusal?.body as { errorMessages?: string[] } | undefined;
         const template = body?.errorMessages?.[0] ?? '';
-        return jsonResponse(refusal?.status ?? 400, {
-          errorMessages: absent.map((key) => template.replace("'ACME-404'", `'${key}'`)),
-          errors: {},
-        });
+        const messages =
+          unknownKeyWording === 'opaque'
+            ? ['Error in the JQL Query: the query could not be completed.']
+            : absent.map((key) =>
+                unknownKeyWording === 'value'
+                  ? `The value '${key}' does not exist for the field 'key'.`
+                  : template.replace("'ACME-404'", `'${key}'`),
+              );
+        return jsonResponse(refusal?.status ?? 400, { errorMessages: messages, errors: {} });
       }
       const found = searchIssues(jql);
       const limit = Number(query.maxResults ?? '50');
@@ -372,7 +394,8 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
     }
 
     if (segments[0] === 'issue' && segments[1] !== undefined) {
-      const key = decodeURIComponent(segments[1]);
+      const asked = decodeURIComponent(segments[1]);
+      const key = moved.get(asked) ?? asked;
       if (!issues.has(key)) {
         return notFound();
       }
@@ -558,6 +581,27 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
           },
         ],
       };
+    },
+    moveIssue: (from, to) => {
+      const issue = issues.get(from);
+      if (issue === undefined) {
+        throw new Error(`jira replay: no issue ${from} to move`);
+      }
+      issues.delete(from);
+      issues.set(to, { ...issue, key: to });
+      comments.set(to, comments.get(from) ?? []);
+      comments.delete(from);
+      remoteLinks.set(to, remoteLinks.get(from) ?? []);
+      remoteLinks.delete(from);
+      for (const [old, current] of moved) {
+        if (current === from) {
+          moved.set(old, to);
+        }
+      }
+      moved.set(from, to);
+    },
+    refuseUnknownKeysWith: (wording) => {
+      unknownKeyWording = wording;
     },
     resetRequests: () => {
       requests.length = 0;

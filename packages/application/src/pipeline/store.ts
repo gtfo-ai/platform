@@ -359,13 +359,22 @@ export class TaskConcurrentModificationError extends Error implements Concurrenc
 
 export interface TaskRepository {
   load(tx: Transaction, taskId: Id): Promise<StoredTask | null>;
-  /** Intake's idempotency key: one task per ticket per mode (`tasks_project_id_ticket_key_mode`). */
+  /**
+   * Intake's idempotency key: one task per ticket per mode (`tasks_project_id_ticket_key_mode`).
+   *
+   * **A ticket is the same ticket under a new key** (WP-134, PROGRESS backlog 418): when the caller
+   * knows the provider's stable id (`TicketRef.id`, Jira's issue id), a task recorded with that id
+   * answers too, whatever key it was created under — so an issue moved from `OLD-1` to `NEW-5`
+   * finds the task `OLD-1` started (`tasks_project_ticket_id_mode`, migration 0077). Without an id
+   * the key alone decides, as before.
+   */
   findByTicket(
     tx: Transaction,
     query: {
       readonly projectId: Id;
       readonly provider: string;
       readonly ticketKey: string;
+      readonly ticketId?: string | null | undefined;
       readonly mode: TaskMode;
     },
   ): Promise<StoredTask | null>;

@@ -86,8 +86,8 @@ const start = (
   );
 
 let stream = 0;
-/** A rule match, as a webhook adapter would append it. */
-const ruleMatch = (key: string): DomainEvent => {
+/** A rule match, as a webhook adapter would append it — with the provider's stable id when given. */
+const ruleMatch = (key: string, id?: string): DomainEvent => {
   stream += 1;
   const suffix = stream.toString(16).padStart(12, '0');
   return domainEventSchemasByType['ticket.matched'].parse({
@@ -102,7 +102,12 @@ const ruleMatch = (key: string): DomainEvent => {
     type: 'ticket.matched',
     payload: {
       project_id: PROJECT,
-      ticket: { provider: 'fake-jira', key, url: `https://jira.example.test/browse/${key}` },
+      ticket: {
+        provider: 'fake-jira',
+        key,
+        url: `https://jira.example.test/browse/${key}`,
+        ...(id === undefined ? {} : { id }),
+      },
       rule: 'label:agentic',
       priority: 'High',
       issue_type: 'Bug',
@@ -391,5 +396,98 @@ describe('the refusals, each before anything is recorded', () => {
     await start(pickingUp, 'ACME-7');
     await pickingUp.drain();
     expect(stateOf(pickingUp, 'ACME-7')).toBeDefined();
+  });
+});
+
+/**
+ * **A moved issue is the same ticket** (WP-134, PROGRESS backlog 418, criterion 2). Jira answers
+ * `GET issue/OLD-1` for an issue moved to another project under its new key, `NEW-5`, and keeps
+ * its numeric id; a webhook (or a poll) after the move carries `NEW-5`. One task per ticket is
+ * decided by that id where the provider sends one, on both doors — and still by the key where it
+ * does not, which the last case holds.
+ */
+describe('a Jira issue moved to another project (WP-134, backlog 418)', () => {
+  const ISSUE_ID = '10001';
+  /** The tracker after the move: every key the issue ever had answers the issue under `NEW-5`. */
+  const moved: HarnessOptions['taskManagement'] = {
+    readTicket: async (ref) =>
+      ticketFor(ref, {
+        ref: {
+          provider: ref.provider,
+          key: 'NEW-5',
+          url: 'https://jira.example.test/browse/NEW-5',
+          id: ISSUE_ID,
+        },
+      }),
+  };
+  const tasksOf = (harness: PipelineHarness) => harness.store.snapshot().map((stored) => stored);
+
+  it('the webhook door: a match under the new key answers the task the old key started', async () => {
+    const harness = harnessWith({ taskManagement: moved });
+    await harness.publish([ruleMatch('OLD-1', ISSUE_ID)]);
+    await harness.drain();
+    expect(tasksOf(harness).map((stored) => stored.task.ticket)).toEqual([
+      {
+        provider: 'fake-jira',
+        key: 'OLD-1',
+        url: 'https://jira.example.test/browse/OLD-1',
+        id: ISSUE_ID,
+      },
+    ]);
+
+    await harness.publish([ruleMatch('NEW-5', ISSUE_ID)]);
+    await harness.drain();
+    // One task, still the first: the second announcement started nothing.
+    expect(tasksOf(harness).map((stored) => stored.task.ticket.key)).toEqual(['OLD-1']);
+    expect(harness.types().filter((type) => type === 'task.created')).toHaveLength(1);
+  });
+
+  it('the manual-start door: typing the new key is refused as the existing task, naming it', async () => {
+    const harness = harnessWith({ taskManagement: moved });
+    await harness.publish([ruleMatch('OLD-1', ISSUE_ID)]);
+    await harness.drain();
+    const existing = tasksOf(harness)[0]?.task.id;
+    expect(existing).toBeDefined();
+
+    const refused = await refusalOf(start(harness, 'NEW-5'));
+    expect(refused.reason).toBe('task_exists');
+    expect(refused.taskId).toBe(existing);
+    // And the old key, typed, is refused before the tracker is read at all.
+    expect((await refusalOf(start(harness, 'OLD-1'))).taskId).toBe(existing);
+    // Nothing was recorded by either attempt: the only match is the rule's.
+    expect(matchesOf(harness)).toHaveLength(1);
+    expect(tasksOf(harness)).toHaveLength(1);
+  });
+
+  it('a manual start records the id, so a later match under the old key starts nothing either', async () => {
+    const harness = harnessWith({ taskManagement: moved });
+    await start(harness, 'OLD-1');
+    await harness.drain();
+    // The read answered the issue under its new key, with its id, and the task carries both.
+    expect(tasksOf(harness).map((stored) => stored.task.ticket)).toEqual([
+      {
+        provider: 'fake-jira',
+        key: 'NEW-5',
+        url: 'https://jira.example.test/browse/NEW-5',
+        id: ISSUE_ID,
+      },
+    ]);
+    await harness.publish([ruleMatch('OLD-1', ISSUE_ID)]);
+    await harness.drain();
+    expect(tasksOf(harness)).toHaveLength(1);
+  });
+
+  it('a different issue — another id — still gets its own task, and a match with no id is judged by its key', async () => {
+    const harness = harnessWith({ taskManagement: moved });
+    await harness.publish([ruleMatch('OLD-1', ISSUE_ID)]);
+    await harness.publish([ruleMatch('NEW-6', '10002')]);
+    // No id (a provider without one): the key decides, so a new key is a new ticket, as before.
+    await harness.publish([ruleMatch('NEW-7')]);
+    await harness.drain();
+    expect(
+      tasksOf(harness)
+        .map((stored) => stored.task.ticket.key)
+        .sort(),
+    ).toEqual(['NEW-6', 'NEW-7', 'OLD-1']);
   });
 });

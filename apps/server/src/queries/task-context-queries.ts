@@ -40,11 +40,12 @@
 import type { Id, JsonObject, TicketSnapshot } from '@platform/contracts';
 import { isBuiltinGateStageId } from '@platform/contracts';
 import { isPromptExcludedArtifact } from '@platform/domain';
-import { db as dbAdapters } from '@platform/infrastructure';
-import { and, asc, desc, eq, inArray, isNotNull } from 'drizzle-orm';
+import { ask as askAdapters, db as dbAdapters } from '@platform/infrastructure';
+import { and, asc, desc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import { type Database, findArtifactBody, findTaskDetail } from './pipeline-queries.js';
 
 const { artifacts, humanActions, runs, taskStages, tasks } = dbAdapters.schema;
+const { MANUAL_START_ACTION_ID_SQL } = askAdapters;
 
 /** Every value `get_task_context`'s `include` accepts (`getTaskContextInputSchema`). */
 export type TaskContextInclude =
@@ -319,7 +320,8 @@ export const returnCauseOf = (
 };
 
 /**
- * This task's `human_actions`, newest first, on the table's `(task_id, created_at desc)` index.
+ * This task's `human_actions`, newest first, on the table's `(task_id, created_at desc)` index —
+ * plus the manual start that caused the task (WP-134), on `human_actions_project_idx`.
  *
  * `params` is **client-supplied** JSON (it carries the caller's own `Idempotency-Key`) and is
  * passed on as data, never interpreted.
@@ -334,7 +336,16 @@ const listTaskAudit = async (database: Database, taskId: string, limit: number) 
       createdAt: humanActions.createdAt,
     })
     .from(humanActions)
-    .where(eq(humanActions.taskId, taskId))
+    .where(
+      // The task's own rows, and the manual start that caused it, whose `task_id` is null (WP-134,
+      // backlog 416): the same subquery the Who-did-what read uses (`ask/task-audit.ts`).
+      or(
+        eq(humanActions.taskId, taskId),
+        sql`${humanActions.id} = ${sql.raw(MANUAL_START_ACTION_ID_SQL[0])}${taskId}${sql.raw(
+          MANUAL_START_ACTION_ID_SQL[1],
+        )}`,
+      ),
+    )
     .orderBy(desc(humanActions.createdAt))
     .limit(limit);
 

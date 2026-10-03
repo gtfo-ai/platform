@@ -20,7 +20,11 @@
  *     states.
  */
 import { exactSecretRedactor, IntegrationError, noSecretsRedactor } from '@platform/application';
-import { JiraMarkerSearchBoundError, MARKER_SEARCH_MAX_PAGES } from '@platform/integrations';
+import {
+  JiraMarkerSearchBoundError,
+  MARKER_SEARCH_MAX_PAGES,
+  MAX_KEY_SEARCHES,
+} from '@platform/integrations';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   createJiraBinding,
@@ -505,6 +509,72 @@ describe('jira-cloud — reaching the provider', () => {
         'key in ("ACME-404", "ACME-1") ORDER BY updated ASC',
         'key in ("ACME-1") ORDER BY updated ASC',
       ]);
+    });
+
+    /**
+     * WP-134 (PROGRESS backlog 375, criterion 3): Cloud's wording of the refusal is not measured, so
+     * the read must not depend on it. A refusal that names no key is bisected, and the live read
+     * still covers every other task's ticket; the key left out is reported, from the platform's own
+     * list.
+     */
+    it('bisects a refusal that names no key, and still reads every other ticket (WP-134)', async () => {
+      binding.replay.refuseUnknownKeysWith('opaque');
+      const reported: (readonly string[])[] = [];
+      const matches = await binding.port.matchTickets(
+        { kind: 'keys', keys: ['ACME-1', 'ACME-404', 'ACME-2'] },
+        { limit: 3, onUnreadableKeys: (keys) => reported.push(keys) },
+      );
+      expect(matches.map((match) => match.ref.key).sort()).toEqual(['ACME-1', 'ACME-2']);
+      expect(reported).toEqual([['ACME-404']]);
+      // Oldest first, as the port promises a poller whose cursor reads it.
+      const instants = matches.map((match) => Date.parse(match.updated_at));
+      expect(instants).toEqual([...instants].sort((a, b) => a - b));
+      // Bounded: the whole set, its two halves, and the half with the gone key split once more.
+      expect(binding.replay.requests.map((request) => request.query.jql)).toEqual([
+        'key in ("ACME-1", "ACME-404", "ACME-2") ORDER BY updated ASC',
+        'key in ("ACME-1", "ACME-404") ORDER BY updated ASC',
+        'key in ("ACME-1") ORDER BY updated ASC',
+        'key in ("ACME-404") ORDER BY updated ASC',
+        'key in ("ACME-2") ORDER BY updated ASC',
+      ]);
+    });
+
+    it('reads Jira’s other wording of a missing key as naming it (WP-134)', async () => {
+      binding.replay.refuseUnknownKeysWith('value');
+      const reported: (readonly string[])[] = [];
+      const matches = await binding.port.matchTickets(
+        { kind: 'keys', keys: ['ACME-404', 'ACME-1'] },
+        { onUnreadableKeys: (keys) => reported.push(keys) },
+      );
+      expect(matches.map((match) => match.ref.key)).toEqual(['ACME-1']);
+      expect(reported).toEqual([['ACME-404']]);
+      expect(binding.replay.requests).toHaveLength(2);
+    });
+
+    it('throws Jira’s refusal when every key is refused on its own, or past the search bound (WP-134)', async () => {
+      binding.replay.refuseUnknownKeysWith('opaque');
+      const reported: (readonly string[])[] = [];
+      // Nothing was readable, so the refusal was about the query: an empty answer would read as
+      // "nothing changed", and the poller fails the read open on the error instead.
+      await expect(
+        binding.port.matchTickets(
+          { kind: 'keys', keys: ['ACME-404', 'ACME-405'] },
+          { onUnreadableKeys: (keys) => reported.push(keys) },
+        ),
+      ).rejects.toMatchObject({ code: 'invalid_request' });
+      // Many gone at once: bounded at MAX_KEY_SEARCHES, never a walk of every key.
+      binding.replay.resetRequests();
+      const gone = Array.from({ length: 40 }, (_, index) => `GONE-${index + 1}`);
+      await expect(
+        binding.port.matchTickets(
+          { kind: 'keys', keys: ['ACME-1', ...gone] },
+          { limit: 41, onUnreadableKeys: (keys) => reported.push(keys) },
+        ),
+      ).rejects.toMatchObject({ code: 'invalid_request' });
+      expect(
+        binding.replay.requests.filter((request) => request.path === 'search/jql').length,
+      ).toBeLessThanOrEqual(MAX_KEY_SEARCHES);
+      expect(reported).toEqual([]);
     });
 
     it('names the live tasks’ tickets as JQL string literals, so a key is never JQL (WP-110)', async () => {

@@ -62,8 +62,18 @@ a label and pointing the URL at a domain that does not exist changed no test at 
   `errorMessages`. The article is scoped to Jira Data Center/Server and `/rest/api/2/search`; the
   Cloud swagger's `search/jql` documents a 400 without naming this case, so
   `error-issue-key-does-not-exist.json` is labelled `inferred`. The adapter drops the keys such an
-  error names and asks again (`MISSING_KEY_RETRIES`); the replay answers it for a `key in (…)` naming
-  a key it does not hold.
+  error names and asks again; since WP-134 (backlog 375) it also reads Jira's other JQL wording
+  (*"The value '…' does not exist for the field 'key'."*) and **bisects** a refusal that names no key,
+  within `MAX_KEY_SEARCHES`. The replay answers the documented sentence for a `key in (…)` naming a
+  key it does not hold, or — when a test asks (`refuseUnknownKeysWith`, its divergence 9) — the other
+  wording or an opaque message, because Cloud's wording is not measured.
+- `https://support.atlassian.com/jira/kb/moved-issues-no-longer-redirect-from-previous-issue-key-or-url-in-jira/`
+  — retrieved 2026-10-03 (WP-134, backlog 418): a moved issue's previous keys and URLs *"are
+  automatically redirected to the current key or URL"*, and the article's query joins every former
+  key to the issue's own id (`moved_issue_key.issue_id = jiraissue.id`) — which is what the adapter
+  relies on when it carries the issue's `id` as `TicketRef.id`. No fixture: the webhook and issue
+  documents above already carry `id` beside `key`, and the replay's `moveIssue` (divergence 10)
+  answers an old key under the new one.
 
 ## What is deliberately **not** in a fixture
 

@@ -167,3 +167,55 @@ describe('a malformed pipeline_dial', () => {
     }
   });
 });
+
+/**
+ * **One task per ticket, enforced by the database on the stable id too** (WP-134, PROGRESS backlog
+ * 418; migration 0077). `findByTicket` is the check; the partial unique index is the backstop for
+ * two intakes of one moved issue — `OLD-1` and `NEW-5`, one id — that both passed it. A row with no
+ * id is outside the index, and an id the shape check does not admit is refused rather than stored.
+ */
+describe('tasks.ticket_id (migration 0077)', () => {
+  it('refuses a second task for the same issue id under another key, and only that', async () => {
+    const client = createTestClient(database.connectionString);
+    await client.connect();
+    await client.query('begin');
+    const insert = (key: string, id: string | null, mode = 'normal') =>
+      client.query(
+        `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, ticket_id, template,
+                            mode, state)
+         values ($1, 'jira-cloud', $2, 'https://acme-example.atlassian.net/browse/' || $2, $3,
+                 'feature', $4, 'queued')`,
+        [projectId, key, id, mode],
+      );
+    // A thunk, so the statement is sent after the savepoint rather than before it.
+    const refusedWith = async (
+      attempt: () => Promise<unknown>,
+      code: string,
+      constraint: string,
+    ) => {
+      await client.query('savepoint attempt');
+      const error = (await attempt().then(
+        () => null,
+        (caught: unknown) => caught,
+      )) as { code?: string; constraint?: string } | null;
+      await client.query('rollback to savepoint attempt');
+      expect(error?.code).toBe(code);
+      expect(error?.constraint).toBe(constraint);
+    };
+    try {
+      await insert('OLD-1', '10001');
+      await refusedWith(() => insert('NEW-5', '10001'), '23505', 'tasks_project_ticket_id_mode');
+      // Another issue, a row with no id, and the same issue in another mode are all admitted.
+      await insert('NEW-6', '10002');
+      await insert('NEW-7', null);
+      await insert('NEW-8', null);
+      await insert('OLD-1', '10001', 'shadow');
+      // Provider text that is not an id is refused, not stored.
+      await refusedWith(() => insert('BAD-1', "1' or '1"), '23514', 'tasks_ticket_id_shape');
+      await refusedWith(() => insert('BAD-2', 'x'.repeat(65)), '23514', 'tasks_ticket_id_shape');
+    } finally {
+      await client.query('rollback');
+      await client.end();
+    }
+  });
+});

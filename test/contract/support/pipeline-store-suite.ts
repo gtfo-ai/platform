@@ -1137,6 +1137,41 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await store.tasks.findByMergeRequest(tx, { projectId, iid: 999 })).toBeNull();
       });
 
+      /**
+       * WP-134 (PROGRESS backlog 418): a Jira issue moved to another project answers under a new key
+       * and keeps its numeric id, so one task per ticket is asked by the id where the provider sent
+       * one. Both directions (rule 42): the id finds the task under another key, the id round-trips
+       * on load, and neither a different id nor a key-only query finds it.
+       */
+      it('finds a task by the ticket’s stable id under another key, and only by that id (WP-134)', async () => {
+        const base = task({}, 'OLD-1');
+        const stored: StoredTask = {
+          ...base,
+          task: { ...base.task, ticket: { ...base.task.ticket, id: '10001' } },
+        };
+        await store.tasks.insert(tx, stored);
+        expect((await store.tasks.load(tx, stored.task.id))?.task.ticket.id).toBe('10001');
+
+        const query = { projectId, provider: 'fake-jira', mode: 'normal' as const };
+        expect(
+          (await store.tasks.findByTicket(tx, { ...query, ticketKey: 'NEW-5', ticketId: '10001' }))
+            ?.task.id,
+        ).toBe(stored.task.id);
+        expect(
+          await store.tasks.findByTicket(tx, { ...query, ticketKey: 'NEW-5', ticketId: '10002' }),
+        ).toBeNull();
+        expect(await store.tasks.findByTicket(tx, { ...query, ticketKey: 'NEW-5' })).toBeNull();
+        // The key still answers on its own, as it always did.
+        expect(
+          (await store.tasks.findByTicket(tx, { ...query, ticketKey: 'OLD-1', ticketId: null }))
+            ?.task.id,
+        ).toBe(stored.task.id);
+        // A task that recorded no id loads with none — the shape of every task before 0077.
+        const plain = task({}, 'PLAIN-1');
+        await store.tasks.insert(tx, plain);
+        expect((await store.tasks.load(tx, plain.task.id))?.task.ticket).not.toHaveProperty('id');
+      });
+
       it('counts the WIP slots by state, not by row', async () => {
         const queued = task({}, 'ACME-Q');
         const active = task({}, 'ACME-A');

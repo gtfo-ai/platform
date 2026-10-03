@@ -14004,6 +14004,14 @@ container's old environment (WP-130 changed the operator guide to say recreate, 
 
 ### 433. **The operator guide's Restore does not stop `runner`, and `db-backup` has no stop grace** (TODO, **nit — documentation and one compose line**. Found by WP-133's implementer; WP-135 may take the Restore sentence)
 
+### 434. **The in-memory pipeline store refuses a duplicate `(project, key, mode)` only, while PostgreSQL since 0077 also refuses a duplicate `ticket_id`, and the fake's divergence register says the two behave the same** (TODO, **minor — a fake more lenient than the store; a test written against the fake can pass where production refuses**. Found by WP-134's reviewer; unowned. **Done when** the fake refuses an equal non-null `ticket.id` or row 1 of its register states the divergence)
+
+### 435. **A Jira issue id is unique per site only, and the one-task-per-ticket key includes the provider, not the site, so a project rebound to another Jira site can have a new issue taken for an old task** (TODO, **minor — latent; the product owner's single-site setup does not meet it; the key path has the same shape for two sites sharing a project key**. Found by WP-134's reviewer; unowned. **Done when** the uniqueness carries the binding's site, or technical/03 states the residual)
+
+### 436. **The poll's bisection of a refused `key in (…)` makes up to 32 searches inside one executor action, so the rate-limit budget and the audit undercount the calls, and a deleted ticket is re-bisected on every poll until its task ends** (TODO, **nit — bounded and fails open**. Found by WP-134's reviewer; unowned)
+
+### 437. **`ticket.updated` is matched to its task by ticket key, so edits made to a Jira issue after it moved to another project never reach the task** (TODO, **minor — the moved-issue case WP-134 closed for intake, still open for updates**. Found by WP-134's implementer; the reviewer judged it the item a real Jira trial is most likely to meet among the discovered work. Unowned. Also unmeasured: whether JQL resolves a moved issue's old key; the dashboard and project panels still say "Provider-reported cost"; the topology e2e's `knowledge.apply` case flaked once, 10/10 alone)
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -41828,3 +41836,108 @@ Scratch files under `/private/tmp/claude-501/wp133-impl/`; the scratch e2e file 
 - What the CLI reports as a run's cost under a subscription token is unmeasured; the ledger and the
   budgets take it as reported (BD-011), so in `local` mode a budget may be denominated in a figure that
   is not money billed.
+
+#### WP-134
+
+**What the first Jira ticket meets — 416, 418, 375, 408 folded.** No Docker by hand, no credential.
+
+**Measured first (418).** The key is stored as `tasks.ticket_key` and one task per ticket was
+`unique (project_id, ticket_key, mode)` plus `findByTicket` on the same tuple (0004). Every Jira
+document the adapter reads already carries the issue's `id` beside `key` — `GET issue/{key}` (manual
+start, intake's snapshot), `GET search/jql` (poll) and the webhook envelope's `issue` — and every
+fixture under `test/fixtures/http/jira-cloud/` shows it (`"id": "10001"`); `jiraIssueSchema` parsed it
+as `id?: string` and dropped it. That a move keeps the id is read, not measured: Atlassian's KB
+(`moved-issues-no-longer-redirect-…`, retrieved 2026-10-03) redirects every former key and joins it to
+`moved_issue_key.issue_id = jiraissue.id`; added to `SOURCES.md`. The id is available on all three
+doors, so no key-resolution fallback was needed.
+
+**Decisions.**
+- **416 — option (b), the projection.** Option (a) is an `update` of `human_actions`, which
+  `platform_apply_grants` (0001) gives the application role `insert` on and revokes `update` from —
+  measured: the integration case's `update` is refused `permission denied`. One SQL subquery
+  (`packages/infrastructure/src/ask/task-audit.ts`) is spliced into both audit readers — the ask store's
+  `auditForTask` (*Who did what* and the export) and `get_task_context`'s Drizzle `listTaskAudit`: the
+  `task.start` row with `task_id is null` whose `params.event_id` is the `task.created` event's
+  `cause_event_id` — or, for a match the intake reconciler re-emitted, that match's own cause — and
+  whose `params.project_id` is the task's project (on `human_actions_project_idx`).
+- **418 — `TicketRef.id`** (`ticketIdSchema`: 1–64 of `A–Z a–z 0–9 . _ : -`, `nullish`), carried by the
+  Jira adapter on every ref it builds (`issueRef`, only for 1–20 decimal digits, else omitted).
+  Migration **0077**: `tasks.ticket_id` (insert-only, outside the `save` partition), a shape check, and
+  a partial unique index `(project_id, ticket_provider, ticket_id, mode) where ticket_id is not null` as
+  the backstop. `findByTicket` takes an optional `ticketId` and answers key **or** id (oldest first);
+  intake (both reads), the manual start's in-transaction check and the intake reconciler ask with it.
+  **Residual, stated in technical/08 and the guide:** a task created before 0077 recorded no id (no
+  backfill — the id is the provider's) and is still judged by its key. The fake carries no id (one task
+  per key; its divergence register says so).
+- **375 — the adapter, plus a signal.** WP-110's review round already dropped the keys a `400` names.
+  What was left: Cloud's wording is unmeasured and the error text is cut at 300 characters, so a
+  refusal naming no key still blinded the read. Now: Jira's other wording (*"The value 'X' does not
+  exist for the field 'key'"*) is read too, a refusal naming none is **bisected** to the single
+  refused key, all within `MAX_KEY_SEARCHES` = 32 (replaces `MISSING_KEY_RETRIES`); every key refused
+  on its own with none named is the query's fault and Jira's error is thrown (fail open, as before).
+  The port's `matchTickets` gained an optional `onUnreadableKeys` callback (platform keys only); the
+  poll's live read logs a `warn` naming them every poll. No escalation — that stays a decision.
+- **408 — `apps/web/src/features/cost-text.ts`** holds the words both the task page and the card read;
+  the card's tooltip no longer says *"Provider-reported"* and an `excl. N unmeasured` count sits beside
+  the total when there is one.
+
+**Criteria and tests (each with a canary run).**
+1. `test/integration/server/task-audit-manual-start.integration.test.ts` › "Who did what lists the person
+   who started the task, and a rule-matched task lists no start" (+ the `get_task_context` and
+   append-only cases); e2e `test/e2e/server/manual-start.e2e.test.ts` reads `/api/tasks/:id/audit`
+   through the SPA endpoint. Canary: the subquery replaced by `false` → the first case fails.
+2. `packages/application/src/pipeline/manual-start.test.ts` › "the webhook door: a match under the new
+   key answers the task the old key started", › "the manual-start door: typing the new key is refused
+   as the existing task, naming it", › "a manual start records the id, so a later match under the old
+   key starts nothing either", and the key-only control; contract
+   `test/contract/support/pipeline-store-suite.ts` › "finds a task by the ticket’s stable id under
+   another key, and only by that id (WP-134)" (memory and Postgres);
+   `test/contract/integrations/jira-cloud-webhook.contract.test.ts` › "jira-cloud: a moved issue
+   (WP-134)" (the read of the old key and a delivery under the new key carry one id; the replay gained
+   `moveIssue`, divergence 10); Postgres `tasks.ticket_id (migration 0077)` and intake-reconcile's
+   "reports nothing for a moved issue whose task exists under its old key (WP-134)". Canary: the id
+   clause removed from the memory store's `findByTicket` → three manual-start cases fail.
+3. `test/contract/integrations/jira-cloud.contract.test.ts` › "bisects a refusal that names no key, and
+   still reads every other ticket (WP-134)", › "reads Jira’s other wording of a missing key as naming it
+   (WP-134)", › "throws Jira’s refusal when every key is refused on its own, or past the search bound
+   (WP-134)"; `packages/application/src/pipeline/ticket-poll.test.ts` › "re-reads the other live tickets
+   and names the gone one in a warn" (and none when all are there). The replay gained
+   `refuseUnknownKeysWith` (divergence 9). Canary: bisection replaced by a throw → the first fails.
+4. `apps/web/src/features/board-title.test.tsx` › "the board card’s cost (WP-134, backlog 408)" (one card
+   with two unmeasured runs, one with none). Canary: the count's condition set to `false` → fails.
+
+**Pinned figure moved (rule 81):** `unbounded-emission.test.ts`'s ticket size 13 911 235 → 13 911 248:
+`,"id":"10001"` is exactly 13 bytes; no new unbounded path.
+
+**Sentences falsified, each judged.** technical/08:17 (both residuals — rewritten); technical/02:22
+(*1:1 with a ticket* — amended with the id); technical/03 `tasks` (column list, index, amendment);
+technical/06:502 (*1:1 rule* — amended), :515 (`MISSING_KEY_RETRIES` — rewritten); `manual-start.ts`
+residual paragraph (rewritten); `task-start.ts` module docblock and OpenAPI description (rewritten);
+`ticket-poll.ts` module docblock (amended); `postgres-intake-reconciliation.ts` predicate 1 (amended);
+Jira `setup-guide.md` deleted-ticket paragraph (amended, plus a moved-ticket paragraph); `SOURCES.md`
+`MISSING_KEY_RETRIES` line (rewritten); user guide § 3 (*not in the task's own Who did what* —
+rewritten; *not started twice* — amended; the card's cost — added) and § budgets (*as do the board card*).
+Judged and left: technical/02:33 and 08:93 (the key-uniqueness is still true; the id is in addition);
+`dashboard.tsx:117` / `project-panels.tsx:365` *"Provider-reported cost"* (project totals, not the card —
+filed below).
+
+**Verification.** `pnpm run -s verify` **PASS**; `verify:ui` **PASS**; `verify:integration` **PASS**
+(792); `verify:e2e` run twice: first **FAIL** 275/276 on `test/e2e/topology/two-processes.e2e.test.ts` ›
+"commits, in the worker, a knowledge approval the API answered" (`pgboss.job` read `active`, not
+`completed`) — untouched by this row, it passed 10/10 alone and the second full run was **PASS**
+276/276; filed below. `scripts/citations.test.ts` **PASS**. Loads read before each tier (10–15; the
+gate waited where it was over 12). Scratch under `/private/tmp/claude-501/wp134/`.
+
+**Discovered work** (for the refiner):
+- `test/e2e/topology/two-processes.e2e.test.ts` › "commits, in the worker, a knowledge approval the API
+  answered" reads `pgboss.job.state` right after the commit is visible; the commit happens inside the
+  job, so the job can still be `active` (rule 87: the wait binds the commit, not the job's completion).
+  Failed once under load in WP-134's first `verify:e2e`.
+- `TaskRepository.recordTicketSignal` (and the webhook/poll `ticket.updated` path behind it) is keyed by
+  `ticket_key`: after a move, edits arrive under `NEW-5` and never stamp the task created as `OLD-1`, so
+  its snapshot is not re-read. Same for any other key-keyed lookup of a task by ticket.
+- The poll's live read asks `key in ("OLD-1")` for a moved ticket's task; whether Jira's JQL resolves a
+  former key is unmeasured. If it does not, the key is now reported as unreadable every poll (named,
+  not silent), and that task's edits are lost to the poll.
+- `dashboard.tsx:117` and `project-panels.tsx:365` still define project-level spend as
+  *"Provider-reported cost"*, false in `local` mode (backlog 408's neighbours).

@@ -672,11 +672,28 @@ export const actorSchema = z.discriminatedUnion('kind', [
 
 // ── Refs ─────────────────────────────────────────────────────────────────────
 
-/** `tasks.ticket_provider/ticket_key/ticket_url` (technical/03). */
+/**
+ * The provider's **stable** identity of a ticket, where it declares one — Jira's numeric issue `id`
+ * (WP-134, PROGRESS backlog 418). A key is not an identity: Jira answers a moved issue's old key
+ * under its new one (`OLD-1` → `NEW-5`), and the issue's `id` is what does not change. Bounded and
+ * held to a plain character set because it is provider text that reaches a unique index.
+ */
+export const ticketIdSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9._:-]+$/, 'a ticket id is letters, digits, ".", "_", ":" and "-"');
+
+/** `tasks.ticket_provider/ticket_key/ticket_url/ticket_id` (technical/03). */
 export const ticketRefSchema = z.strictObject({
   provider: nonEmptyStringSchema,
   key: nonEmptyStringSchema,
   url: urlSchema,
+  /**
+   * {@link ticketIdSchema}: absent where the provider has no stable id or did not send one, and
+   * then one task per ticket is decided by the key alone, as it was before WP-134.
+   */
+  id: ticketIdSchema.nullish(),
 });
 
 /** `tasks.mr_ref` (technical/03) and the `mr` field of ImplementationNotes (technical/12). */

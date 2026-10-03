@@ -293,7 +293,18 @@ export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabi
    */
   readonly matchTickets: (
     rule: TicketMatchRule,
-    options?: { readonly since?: string | null; readonly limit?: number },
+    options?: {
+      readonly since?: string | null;
+      readonly limit?: number;
+      /**
+       * For a `keys` rule: the asked-for keys the provider **refused** as not existing — a deleted
+       * ticket, or one moved out of the account's reach — which the read then left out so it could
+       * answer the others (WP-134, PROGRESS backlog 375). Called at most once per call, with keys
+       * from the caller's own list only, and never for a key that merely had no change in the
+       * window. A provider whose search does not refuse an unknown key (the fake) never calls it.
+       */
+      readonly onUnreadableKeys?: (keys: readonly string[]) => void;
+    },
   ) => Promise<readonly TicketMatch[]>;
 
   /**

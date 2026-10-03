@@ -69,6 +69,8 @@ interface World {
   live: string[];
   /** WP-110: the `keys` read throws this, once. */
   failKeys: Error | null;
+  /** WP-134: tickets the provider refuses as gone — left out and reported, as the Jira adapter does. */
+  gone: Set<string>;
 }
 
 const portFor = (world: World): TaskManagementPort =>
@@ -99,9 +101,17 @@ const portFor = (world: World): TaskManagementPort =>
         asked === null
           ? null
           : new Date(Math.floor(Date.parse(asked) / 60_000) * 60_000).toISOString();
+      if (rule.kind === 'keys') {
+        const gone = rule.keys.filter((key) => world.gone.has(key));
+        if (gone.length > 0) {
+          options?.onUnreadableKeys?.(gone);
+        }
+      }
       const searched =
         rule.kind === 'keys'
-          ? [...world.matches, ...world.others].filter((entry) => rule.keys.includes(entry.ref.key))
+          ? [...world.matches, ...world.others].filter(
+              (entry) => rule.keys.includes(entry.ref.key) && !world.gone.has(entry.ref.key),
+            )
           : world.matches;
       return searched
         .filter((entry) => !world.unindexed.has(entry.ref.key))
@@ -156,6 +166,7 @@ const harnessFor = (
     others: [],
     live: [],
     failKeys: null,
+    gone: new Set(),
   };
   const rows = new Map<string, InboxDelivery>();
   const recordFailure: { after: number | null } = { after: null };
@@ -553,6 +564,70 @@ describe('the live tasks’ tickets, whatever the rule says (WP-110)', () => {
     expect(harness.events.map((event) => event.type)).toEqual(['ticket.matched', 'ticket.updated']);
     expect(harness.cursor.value).toBe('2026-06-01T09:59:30.000Z');
     expect(report).toMatchObject({ live: { asked: 1, failed: true } });
+  });
+});
+
+/**
+ * WP-134 (PROGRESS backlog 375, criterion 3): a live task whose ticket was deleted does not blind
+ * the read for the binding's other live tasks — the provider leaves the gone key out (the Jira
+ * adapter's bisection, `jira-cloud.contract.test.ts`) — and the poll names the key it lost.
+ */
+describe('a live task whose ticket is gone (WP-134, backlog 375)', () => {
+  it('re-reads the other live tickets and names the gone one in a warn', async () => {
+    const harness = harnessFor();
+    const warned: { fields: Record<string, unknown>; message: string }[] = [];
+    harness.options = {
+      ...harness.options,
+      logger: {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: (fields: Record<string, unknown>, message: string) => {
+          warned.push({ fields, message });
+        },
+        error: () => undefined,
+      } as never,
+    };
+    harness.world.plan = {
+      rule: { kind: 'status', status: 'Ready for agent' },
+      interval_seconds: 60,
+    };
+    harness.world.others = [
+      match('ACME-1', '2026-06-01T09:59:10.000Z'),
+      match('ACME-3', '2026-06-01T09:59:20.000Z'),
+    ];
+    harness.world.live = ['ACME-1', 'ACME-2', 'ACME-3'];
+    harness.world.gone.add('ACME-2');
+
+    const report = await pollTicketBinding(harness.options, BINDING);
+
+    expect(report).toMatchObject({ live: { asked: 3, matched: 2, recorded: 2, failed: false } });
+    expect(
+      harness.events.map((event) => (event.payload as { ticket: { key: string } }).ticket.key),
+    ).toEqual(['ACME-1', 'ACME-3']);
+    const gone = warned.filter((entry) => Array.isArray(entry.fields.ticket_keys));
+    expect(gone).toHaveLength(1);
+    expect(gone[0]?.fields).toMatchObject({ project_id: PROJECT, ticket_keys: ['ACME-2'] });
+    expect(gone[0]?.message).toContain('refused these live tasks’ tickets as not existing');
+  });
+
+  it('names nothing when every live ticket is there', async () => {
+    const harness = harnessFor();
+    const warned: Record<string, unknown>[] = [];
+    harness.options = {
+      ...harness.options,
+      logger: {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: (fields: Record<string, unknown>) => {
+          warned.push(fields);
+        },
+        error: () => undefined,
+      } as never,
+    };
+    harness.world.others = [match('ACME-1', '2026-06-01T09:59:10.000Z')];
+    harness.world.live = ['ACME-1'];
+    await pollTicketBinding(harness.options, BINDING);
+    expect(warned.filter((fields) => 'ticket_keys' in fields)).toEqual([]);
   });
 });
 

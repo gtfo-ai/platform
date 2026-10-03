@@ -140,8 +140,17 @@ there are more). It never starts a ticket: what it finds is an edit, never a pic
 own writes — the status it sets, the workpad it updates — are edits too, so the next agent stage may
 re-read the ticket once more than it strictly needs to. A running task whose ticket was deleted does
 not break the read: Jira refuses a search naming a key that does not exist (`400`, *"An issue with key
-'…' does not exist"*), and the platform drops the keys it names and asks again. If the read still
-fails, the poll records the rule's matches, logs a warning, and tries again next time.
+'…' does not exist"*), and the platform drops the keys it names and asks again — or, when the refusal
+names no key, splits the list until the refused ticket stands alone — and re-reads every other task's
+ticket. The server log then names the gone ticket on every poll (*"the tracker refused these live
+tasks' tickets as not existing"*) until its task ends. If the read still fails, the poll records the
+rule's matches, logs a warning, and tries again next time.
+
+**A ticket moved to another Jira project is the same ticket.** Jira gives a moved issue a new key and
+keeps its issue id; the platform records the id beside the key, so a moved ticket that matches again
+— by webhook, by poll or by a manual start under its new key — meets the task it already has rather
+than starting a second one. A task created before this release recorded no id and is matched by key.
+Make sure the integration reads **both** projects (`project_keys`) if tickets move between them.
 
 ## 6. Map your statuses
 

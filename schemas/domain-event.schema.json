@@ -6048,6 +6048,19 @@
         },
         "url": {
           "$ref": "#/$defs/Url"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

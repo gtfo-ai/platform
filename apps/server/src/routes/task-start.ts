@@ -19,13 +19,14 @@
  * Every refusal is typed and recorded nothing — `manual-start.ts` lists them; the status for each is
  * chosen here, because this file is where a status meets its caller.
  *
- * **The audit row's `task_id` is null, and that is a residual, not an oversight.** The row commits
- * with the `ticket.matched` it records, and no task exists then: intake creates it later, in its own
- * `intake_check` job and transaction (and may not create one at all — a WIP-queued task is still
- * created, an unprotected default branch escalates one, a race with a webhook makes it the other
- * door's). So the task page's *Who did what* (`GET /api/tasks/:id/audit`, keyed by `task_id`) does
- * not list the start; the match's `actor` names the person, and the task's export carries that
- * event. The row's `params` name the project, the event and the ticket.
+ * **The audit row's `task_id` is null, and stays null.** The row commits with the `ticket.matched`
+ * it records, and no task exists then: intake creates it later, in its own `intake_check` job and
+ * transaction (and may not create one at all — a race with a webhook makes it the other door's).
+ * `human_actions` is append-only, so nothing fills it in afterwards. The row's `params` name the
+ * project, the event and the ticket, and since WP-134 (PROGRESS backlog 416) every task audit read —
+ * the task page's *Who did what* (`GET /api/tasks/:id/audit`), the export and `get_task_context` —
+ * also returns the `task.start` whose `event_id` is the task's originating match
+ * (`packages/infrastructure/src/ask/task-audit.ts`), so the person who started the task is listed.
  */
 
 import { MANUAL_START_ACTION, ManualStartRefusedError } from '@platform/application';
@@ -133,7 +134,7 @@ export const registerTaskStartRoutes = async (
       schema: {
         summary: 'Start a ticket by hand, from its key',
         description:
-          "product/04's manual Start. Reads the ticket through the project's task-management binding (audited and rate-limited like every provider call) and records the same `ticket.matched` a rule match records, with `rule: \"manual\"` — the **pick-up rule is bypassed and nothing else**: intake then creates the task under the WIP limits (above them it is `queued`), the protected-branch check, the issue type's template and one task per ticket. `202` names the recorded match, not a task. `Idempotency-Key` is required; a replay answers `performed: false` and reads nothing. Refusals record nothing: `409 no_task_management_binding`, `409 project_does_not_pick_up_tickets` (the autonomy dial is Observe), `409 ticket_has_task`, `409 ticket_outside_binding_scope` (the ticket is outside the projects the binding declares it reads — Jira's `project_keys` — naming that list), `404 ticket_not_found`, `502 ticket_unreadable` (the tracker failed; try again). The `human_actions` row `task.start` has `task_id` null: no task exists when it commits, so the task's audit read does not list it. The key is letters, digits, `.`, `_` and `-`, at most 64. `task.create` (member).",
+          "product/04's manual Start. Reads the ticket through the project's task-management binding (audited and rate-limited like every provider call) and records the same `ticket.matched` a rule match records, with `rule: \"manual\"` — the **pick-up rule is bypassed and nothing else**: intake then creates the task under the WIP limits (above them it is `queued`), the protected-branch check, the issue type's template and one task per ticket. `202` names the recorded match, not a task. `Idempotency-Key` is required; a replay answers `performed: false` and reads nothing. Refusals record nothing: `409 no_task_management_binding`, `409 project_does_not_pick_up_tickets` (the autonomy dial is Observe), `409 ticket_has_task`, `409 ticket_outside_binding_scope` (the ticket is outside the projects the binding declares it reads — Jira's `project_keys` — naming that list), `404 ticket_not_found`, `502 ticket_unreadable` (the tracker failed; try again). The `human_actions` row `task.start` has `task_id` null (no task exists when it commits); once intake has created the task, the task's audit read lists it, by the match it recorded. One task per ticket is decided by the provider's stable ticket id where it sends one (Jira's issue id), so a moved issue typed under its new key is `409 ticket_has_task`. The key is letters, digits, `.`, `_` and `-`, at most 64. `task.create` (member).",
         tags: ['tasks'],
         params: projectParamsSchema,
         body: createTaskRequestSchema,

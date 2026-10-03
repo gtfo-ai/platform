@@ -278,7 +278,9 @@ export const createMemoryPipelineStore = (
         (stored) =>
           stored.task.projectId === query.projectId &&
           stored.task.ticket.provider === query.provider &&
-          stored.task.ticket.key === query.ticketKey &&
+          (stored.task.ticket.key === query.ticketKey ||
+            // The stable id answers under any key (WP-134, migration 0077's partial index).
+            (typeof query.ticketId === 'string' && stored.task.ticket.id === query.ticketId)) &&
           stored.task.mode === query.mode,
       );
       return found === undefined ? null : readTask(found);

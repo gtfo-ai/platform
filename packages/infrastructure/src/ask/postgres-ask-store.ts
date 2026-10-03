@@ -37,6 +37,7 @@ import type {
 } from '@platform/contracts';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
+import { manualStartActionIdSql } from './task-audit.js';
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
 
@@ -265,9 +266,12 @@ export const createPostgresAskStore = (): AskStore => ({
       params: JsonObject;
       created_at: Date;
     }>(
+      // The task's own rows, and the manual start that caused it — whose `task_id` is null because
+      // no task existed when it committed (WP-134, backlog 416; `./task-audit.ts`).
       `select id, action, user_id, params, created_at
          from human_actions
         where task_id = $1
+           or id = ${manualStartActionIdSql('$1')}
         order by created_at desc
         limit $2`,
       [taskId, limit],

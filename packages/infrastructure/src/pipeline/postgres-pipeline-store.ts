@@ -116,6 +116,7 @@ interface TaskRow extends Record<string, unknown> {
   ticket_provider: string;
   ticket_key: string;
   ticket_url: string;
+  ticket_id: string | null;
   template: string;
   mode: 'normal' | 'shadow';
   state: TaskState;
@@ -154,7 +155,8 @@ interface TaskRow extends Record<string, unknown> {
   sequence: string | number | null;
 }
 
-const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.ticket_url, t.template,
+const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.ticket_url, t.ticket_id,
+    t.template,
     t.mode, t.state, t.current_stage, t.priority, t.template_snapshot, t.pipeline_dial, t.branch,
     t.mr_ref,
     t.workpad_ref, t.stage_attempts, t.iteration_limits, t.iteration_counters, t.cost_actual,
@@ -178,7 +180,13 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   task: {
     id: row.id,
     projectId: row.project_id,
-    ticket: { provider: row.ticket_provider, key: row.ticket_key, url: row.ticket_url },
+    ticket: {
+      provider: row.ticket_provider,
+      key: row.ticket_key,
+      url: row.ticket_url,
+      // Only when recorded (WP-134): a ref with no id is the shape every pre-0077 task had.
+      ...(row.ticket_id === null || row.ticket_id === undefined ? {} : { id: row.ticket_id }),
+    },
     template: row.template,
     mode: row.mode,
     state: row.state,
@@ -350,9 +358,14 @@ export const createPostgresPipelineStore = (
 
     findByTicket: async (tx, query) => {
       const { rows } = await sqlOf(tx).query<TaskRow>(
+        // The key, or the provider's stable id under any key (WP-134, migration 0077): a moved
+        // issue is the same ticket. Oldest first, so the answer is the task that was there first.
         `select ${TASK_COLUMNS} from tasks t
-          where t.project_id = $1 and t.ticket_provider = $2 and t.ticket_key = $3 and t.mode = $4`,
-        [query.projectId, query.provider, query.ticketKey, query.mode],
+          where t.project_id = $1 and t.ticket_provider = $2 and t.mode = $4
+            and (t.ticket_key = $3 or ($5::text is not null and t.ticket_id = $5::text))
+          order by t.created_at
+          limit 1`,
+        [query.projectId, query.provider, query.ticketKey, query.mode, query.ticketId ?? null],
       );
       const row = rows[0];
       return row === undefined ? null : toStoredTask(row, templateFor(row));
@@ -415,10 +428,10 @@ export const createPostgresPipelineStore = (
                             cost_actual, estimate_usd, estimate_basis, estimate_samples,
                             ticket_snapshot, ticket_snapshot_at, review_subject, history_sample,
                             version, pipeline_dial, requested_by_user_id, settings_refreeze_pending,
-                            refreeze_routing)
+                            refreeze_routing, ticket_id)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13::jsonb, $14::jsonb,
                  $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20, $21, $22::jsonb, $23, $24::jsonb,
-                 $25::jsonb, $26, $27::jsonb, $28, $29, $30::jsonb)`,
+                 $25::jsonb, $26, $27::jsonb, $28, $29, $30::jsonb, $31)`,
         [
           task.id,
           task.projectId,
@@ -476,6 +489,8 @@ export const createPostgresPipelineStore = (
                 issue_type: stored.refreezeRouting.issueType,
                 can_create_tickets: stored.refreezeRouting.canCreateTickets,
               }),
+          // WP-134 (migration 0077): the provider's stable id, written once and never updated.
+          task.ticket.id ?? null,
         ],
       );
     },

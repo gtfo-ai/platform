@@ -68,7 +68,11 @@
  *     first, as the port requires, and answers a `keys` rule (WP-110) with exactly the named
  *     tickets, ignoring a named key it does not hold — where Jira refuses the whole search with a
  *     `400` naming it, which the Jira adapter answers by dropping that key and asking again (WP-110
- *     review round 1), so the port's answer is the same.
+ *     review round 1), or by bisecting a refusal that names none (WP-134), so the port's answer is
+ *     the same. The fake never calls `onUnreadableKeys`: it holds no ticket that was deleted, so a
+ *     missing key is indistinguishable from one that was never there — where Jira's refusal is what
+ *     tells the adapter it is gone. It carries no stable `TicketRef.id` either, so its tickets are
+ *     one task per **key** (WP-134, backlog 418).
  * 11. **Stricter — `since` is minute-grained** (WP-87 review round 2). Jira's JQL window is a
  *     relative `-Nm` with the minutes rounded up, so it starts up to a minute before the instant
  *     asked for; the fake starts it at the minute boundary at or before it. A caller that relied on

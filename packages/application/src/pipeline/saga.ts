@@ -289,6 +289,8 @@ const intakeHandler = (options: PipelineSagaOptions): EventHandler => ({
       projectId: payload.project_id,
       provider: payload.ticket.provider,
       ticketKey: payload.ticket.key,
+      // A moved issue is the same ticket under a new key (WP-134, backlog 418).
+      ticketId: payload.ticket.id ?? null,
       mode: 'normal',
     });
     if (existing !== null) {
@@ -342,6 +344,7 @@ export const runIntakeCheck = async (
       projectId,
       provider: ticket.provider,
       ticketKey: ticket.key,
+      ticketId: ticket.id ?? null,
       mode: 'normal',
     }),
   );
@@ -462,6 +465,7 @@ export const runIntakeCheck = async (
       projectId,
       provider: ticket.provider,
       ticketKey: ticket.key,
+      ticketId: ticket.id ?? null,
       mode: 'normal',
     });
     if (existing !== null) {

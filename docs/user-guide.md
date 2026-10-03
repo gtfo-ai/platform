@@ -295,7 +295,9 @@ live.
 
 **A project → board.** One column per task state. Each card carries the ticket key and the ticket's
 **title** — its own words as the platform read them, or *Ticket not read yet* before it has — with
-the state and the pipeline stage beneath.
+the state and the pipeline stage beneath, and the task's measured cost so far: reported by the
+provider, or priced from the price list in `local` provider mode. A run that ended with nobody
+measuring it is left out of that figure, and the card then says so beside it — *excl. 2 unmeasured*.
 
 The columns are task **states**, not pipeline stages, and that is deliberate for now: the column list
 in the product spec is "the stages of the project's pipeline template, plus Queued / Needs human /
@@ -315,15 +317,17 @@ to a viewer. The key is letters, digits, `.`, `_` and `-` (for example `ACME-123
 The start reads the ticket from the tracker and records it as matched **by hand** — and that is the
 only thing it skips. The task is then created exactly as for a rule match: it gets the template its
 issue type maps to, it is **queued** if the project is at its WIP limit, it waits for a human if
-the default branch is unprotected, and a ticket that already has a task is not started twice. So the
+the default branch is unprotected, and a ticket that already has a task is not started twice — even
+under a new key: a Jira issue moved to another project is the same ticket, because the platform
+records Jira's own issue id beside the key (for tasks created before this release, the key alone). So the
 answer is *Started ACME-123 — its task appears on the board once intake has created it*, not a task.
 The start is refused, by name and with nothing recorded, when the project binds no task-management
 integration, when its autonomy dial is **Observe** (which picks up no new tickets), when the ticket
 already has a task, when the ticket is in a tracker project the integration is not set to read
 (a Jira integration's `project_keys`, the same filter a webhook delivery honours), when the tracker
 does not know the key, and when the tracker cannot be read at that moment (try again). Each start
-leaves one row in the audit log — not in the task's own *Who did what*, because the task does not
-exist yet when the start is recorded — and pressing **Start** twice sends one start.
+leaves one row in the audit log, and once intake has created the task, the task's own *Who did
+what* lists it: the start, with the person who pressed it. Pressing **Start** twice sends one start.
 
 ## 4. Task detail
 
@@ -666,7 +670,7 @@ may set budgets in its project: enter a figure above the cap shown, and the task
 stopped at. A cap is only ever raised, and raising it releases no hold — the held runs still count
 against the new cap. A task an organisation, project or feature budget paused is not offered it: that
 cap is raised where it is set. A task's **Cost so far** adds only the measured runs, and says *Excludes N runs nobody
-measured* beneath it when there are any — as does the chat message when a task completes.
+measured* beneath it when there are any — as do the board card and the chat message when a task completes.
 
 ## 9. Integrations
 
