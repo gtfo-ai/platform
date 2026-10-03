@@ -1,8 +1,10 @@
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import net from 'node:net';
 import { join } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { SERVER_CONFIG_DEFAULTS } from '@platform/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   composeEnvironment,
@@ -10,6 +12,7 @@ import {
   parsePublishedPort,
   publishedPort,
   refuseOldNode,
+  stopGracePeriodSeconds,
   Unsettled,
   waitForOk,
 } from './compose-check-support.mjs';
@@ -209,5 +212,104 @@ describe('a pending wait in a real process', () => {
     expect(run.stderr).toContain(
       'FAIL: a-check — the event loop emptied while waiting on: docker compose up',
     );
+  });
+});
+
+/**
+ * The stop graces `compose.yml` declares (WP-133, folding WP-132's discovered work).
+ *
+ * On Docker Desktop 29.8.1 / Compose 5.5.1 a service with no `stop_grace_period` was killed about
+ * three seconds after the stop signal (WP-132, measured), so every long-lived service either
+ * declares a grace derived from a reading — stated beside the line in `compose.yml` — or is named
+ * below with the reason it needs none. A new service is therefore a decision somebody writes down.
+ * The daemon half (each stops cleanly, exit 0, inside its grace) is `compose-stock-check.mjs`'s
+ * `local` leg; this is the half that runs without one.
+ */
+describe('the stop graces compose.yml declares (WP-133)', () => {
+  const composeText = readFileSync(join(import.meta.dirname, '..', 'compose.yml'), 'utf8');
+  /** The longest readings each grace was set from, in seconds (PROGRESS, WP-132 and WP-133). */
+  const LONGEST_READING_S = {
+    // A `postgres` of the pinned digest, 128 MB of dirty `shared_buffers`: 0.63 s and 0.76 s.
+    db: 0.76,
+    // A create drained under a stop: 11.7 s, 12.6 s (WP-132), 12.1 s (WP-127).
+    launcher: 12.6,
+  } as const;
+  /** Long-lived services that need no grace, each with its reason. */
+  const NO_GRACE_NEEDED: Record<string, string> = {
+    'docker-socket-proxy':
+      'a filtering proxy with no state of its own; the launcher, which stops first, is what drains',
+    'db-backup':
+      'an opt-in profile whose dump runs on a schedule; a dump cut short is not a backup and the next schedule writes one (not measured — PROGRESS, WP-133 discovered work)',
+  };
+
+  it('reads a service’s grace, answers null for none, and refuses a spelling it cannot read', () => {
+    const text = [
+      'name: x',
+      'services:',
+      '  a:',
+      '    image: a',
+      '    stop_grace_period: 45s',
+      '  b:',
+      '    image: b',
+      '  c:',
+      '    stop_grace_period: 1m30s',
+      'volumes:',
+      '  a:',
+      '    stop_grace_period: 9s',
+      '',
+    ].join('\n');
+    expect(stopGracePeriodSeconds(text, 'a')).toBe(45);
+    expect(stopGracePeriodSeconds(text, 'b')).toBeNull();
+    expect(() => stopGracePeriodSeconds(text, 'c')).toThrow(/only `<n>s` is read/);
+    expect(() => stopGracePeriodSeconds(text, 'nope')).toThrow(/declares no service `nope`/);
+  });
+
+  it('gives app and runner more than the server’s own shutdown deadline, with a margin', () => {
+    // `close-with-grace` exits the process at `APP_SHUTDOWN_TIMEOUT_MS` (exit 1) if the drain has
+    // not finished, so the default deadline is the longest either process can need.
+    const deadlineS = SERVER_CONFIG_DEFAULTS.shutdownTimeoutMs / 1000;
+    for (const service of ['app', 'runner']) {
+      const grace = stopGracePeriodSeconds(composeText, service);
+      expect(grace, service).not.toBeNull();
+      expect(grace as number, service).toBeGreaterThanOrEqual(deadlineS + 10);
+    }
+  });
+
+  it('gives db and the launcher several times the longest stop they were measured at', () => {
+    for (const [service, reading] of Object.entries(LONGEST_READING_S)) {
+      const grace = stopGracePeriodSeconds(composeText, service);
+      expect(grace, service).not.toBeNull();
+      expect(grace as number, service).toBeGreaterThanOrEqual(4 * reading);
+    }
+    // The database's margin is the wide one on purpose: its reading is one disk's.
+    expect(stopGracePeriodSeconds(composeText, 'db') as number).toBeGreaterThanOrEqual(
+      20 * LONGEST_READING_S.db,
+    );
+  });
+
+  it('leaves no long-lived service on the daemon’s three seconds unless it is named with a reason', () => {
+    const fromServices = composeText.slice(composeText.indexOf('\nservices:\n') + 1);
+    // Up to the next top-level key (`volumes:`), whose own two-space keys are not services.
+    const servicesBlock = fromServices.slice(
+      0,
+      fromServices.slice(1).search(/\n[^\s#][^\n]*:/) + 1,
+    );
+    const services = servicesBlock
+      .split('\n')
+      .filter((line) => /^ {2}[a-z][a-z0-9-]*:$/.test(line))
+      .map((line) => line.trim().slice(0, -1));
+    const longLived = services.filter(
+      (service) => service !== 'migrate' && !(service in NO_GRACE_NEEDED),
+    );
+    // Calibration: the parse found the services, not an empty list that passes.
+    expect(services).toEqual(
+      expect.arrayContaining(['db', 'app', 'runner', 'launcher', 'migrate', 'docker-socket-proxy']),
+    );
+    expect(
+      longLived.filter((service) => stopGracePeriodSeconds(composeText, service) === null),
+    ).toEqual([]);
+    for (const service of Object.keys(NO_GRACE_NEEDED)) {
+      expect(services, service).toContain(service);
+    }
   });
 });

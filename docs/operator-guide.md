@@ -676,7 +676,21 @@ blocks writes to that table until the build finishes — a writer waits rather t
 largest data sets (PROGRESS backlog 307 and 312); a larger installation waits longer. Stopping the
 two processes that write turns that into a short outage you chose. An agent run in progress when you
 stop `runner` is interrupted — the recreate at the end of the block always did that — so upgrade with
-no agent run in progress where you can.
+no agent run in progress where you can. What happens to it (WP-133): the runner's shutdown waits for
+the stage it is running and the run does not end on its own — measured, the shutdown of a runner
+holding a run was still waiting 60 s later — so the runner's own deadline (`APP_SHUTDOWN_TIMEOUT_MS`,
+30 s, read in `apps/server/src/main.ts`) is what ends the process. Nothing renews the run's lease after that, so once
+it lapses (it is five minutes long) the platform's lease sweep ends the run `lease_expired` and moves
+the task to `needs_human` — WP-47's recovery, which WP-133 did not re-measure. So a `stop runner` with
+a run in flight takes about 30 s, and the task waits for you afterwards rather than continuing.
+
+**`app`, `runner` and `db` stop gracefully as well** (WP-133). Each has a `stop_grace_period` in
+`compose.yml`: 45 s for `app` and `runner` (their own 30 s shutdown deadline plus a margin — if you
+raise `APP_SHUTDOWN_TIMEOUT_MS`, raise both with it) and 30 s for `db`, whose fast shutdown was measured
+at 0.2 s idle and 0.8 s with all of its shared buffers dirty. With nothing in flight each stopped in
+0.2 s with exit code 0, so the graces cost a stop nothing; before them Docker Desktop gave each about
+three seconds, which is too short for a draining server and is a crash for PostgreSQL if its
+checkpoint is still being written.
 
 **The launcher's stop waits up to a minute, and that is deliberate** (WP-132). On a stop the launcher
 finishes what it is doing — creating a run's workspace, exporting one, removing one — before it exits,
@@ -1021,6 +1035,51 @@ is invalid"*, which is a different message from a bogus `ANTHROPIC_API_KEY`). A 
 mode without the token composes no agent runner and names the missing credential in its start-up log
 — which is the same shape every other absent collaborator gets, rather than a start-up failure that
 would also stop the API.
+
+**What a `local`-mode instance was measured to do, without a credential** (WP-133). No real token was
+used; every reading below took an obviously fake `CLAUDE_CODE_OAUTH_TOKEN`.
+
+- **It runs agents.** Until WP-133 it did not: the `runner` composed no agent runner and logged
+  `CLAUDE_CODE_OAUTH_TOKEN` as missing *while its environment carried it*, because the composition
+  dropped the value on the way to the check. Now `docker compose -f compose.yml -f compose.local.yml
+  up -d` with the token and the launcher pair (`APP_LAUNCHER_URL`, `APP_LAUNCHER_TOKEN`) in `.env` gives
+  an `app` and a `runner` that report healthy, a launcher listening on its control plane, and a runner
+  whose log says *"this process runs agent stages"* and never *"composed without an agent runner"*
+  (`node scripts/compose-stock-check.mjs`, its `local` leg). The `app` service still runs none, by
+  design.
+- **The token reaches a run by name, and nowhere else.** A run's environment is
+  `CLAUDE_CODE_OAUTH_TOKEN` and nothing else (no `ANTHROPIC_API_KEY`), the name is handed to that
+  run's redactor, and the value was found in no service's log line and no database row of that
+  instance.
+- **Nothing the run asked for was refused.** The pinned `claude` (2.1.267), run through the launcher
+  in a real run container with the stock egress list (`APP_MODEL_EGRESS_HOSTS=api.anthropic.com` plus
+  the run's git host): **every host the CLI asked for is on the run's list; none was refused**, and the
+  API answered the fake token **401** twice (*"Failed to authenticate. API Error: 401
+  Invalid bearer token"*) before the CLI gave up, 2.3 s after starting
+  (`node scripts/launcher-control-plane-check.mjs`, the `backlog 137 (local)` records). The limit: the
+  sidecar logs a refused host but not an allowed one, so this shows nothing was refused, not which
+  allowed hosts were used (the 401 shows `api.anthropic.com` was). So the shipped list is enough to
+  **authenticate**. What the CLI contacts *after* a successful
+  authentication could not be measured without a real token; if your first run fails, the sidecar's
+  log names any host it refused (`Proxying refused on filtered domain "<host>"`), and
+  `APP_MODEL_EGRESS_HOSTS` is where you would add it.
+- **A wrong or expired token fails the run, named.** The run ends with *"the CLI gave up after
+  retrying the model API 2 times (api_retry) and the model API answered HTTP 401, so the provider
+  failed or refused the requests"* as its error (measured on the run's outcome; the task's path from
+  there is the ordinary one for a failed run). Fix the token in `.env` and recreate
+  (`docker compose -f compose.yml -f compose.local.yml up -d`).
+
+**A subscription token is billed to the plan, not to an API balance.** Anthropic's documentation of
+`claude setup-token`: *"This token authenticates with your Claude subscription and requires a Pro,
+Max, Team, or Enterprise plan. It can only make model requests"* — and the token is valid for one year
+([Claude Code authentication](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token)).
+So the platform's runs spend the same usage limits your own Claude Code sessions do, and a run that
+meets the plan's limit should fail with the status the API answered, named the same way — inferred
+from the 401 case above, **not measured**. **Not measured**:
+what the CLI reports as a run's cost under a subscription token — the cost ledger and the budgets
+record whatever it reports, and no subscription run has been made from this build. Leave
+`ANTHROPIC_API_KEY` unset in `.env`: the CLI prefers an API key over `CLAUDE_CODE_OAUTH_TOKEN` when both
+are present (same page, *Authentication precedence*), which is why `compose.local.yml` blanks it.
 
 ## 9. Day-to-day
 

@@ -94,8 +94,19 @@
  * a launcher, so it shares that network with any other instance's launcher on the daemon; no
  * `runner`, `app` or `db` is on it. `ctl` and `repo-cache` are given names of their own below.
  *
+ * ## The `local`-mode leg (WP-133)
+ *
+ * After the stock instance is torn down, a second project (`<project>-lm`) is started the way the
+ * product owner's first test starts one: `-f compose.yml -f compose.local.yml`, an obviously fake
+ * `CLAUDE_CODE_OAUTH_TOKEN` and the launcher pair in `.env` — see {@link localLeg}. Its first run, on
+ * an image of the tree before WP-133, **failed** (b): the runner logged *"composed without an agent
+ * runner"* naming `CLAUDE_CODE_OAUTH_TOKEN` while its environment carried the token, because the
+ * composition root dropped it. It also stops `runner`, `app` and `db` and holds each to the
+ * `stop_grace_period` `compose.yml` gives it.
+ *
  * Usage:
- *   node scripts/compose-stock-check.mjs                     against `platform:dev`
+ *   node scripts/compose-stock-check.mjs                     against `platform:dev`, both legs
+ *   node scripts/compose-stock-check.mjs --leg local         only the `local`-mode instance
  *   node scripts/compose-stock-check.mjs --tag ci            against images built as `:ci`
  *   node scripts/compose-stock-check.mjs --project-suffix x  a compose project of its own
  */
@@ -113,6 +124,7 @@ import {
   installExitBackstop,
   publishedPort,
   refuseOldNode,
+  stopGracePeriodSeconds,
   Unsettled,
   waitForOk,
 } from './compose-check-support.mjs';
@@ -129,13 +141,20 @@ const optionValue = (flag, fallback) => {
   return index === -1 ? fallback : (args[index + 1] ?? fallback);
 };
 const PROJECT = `agentic-stock-check-${optionValue('--project-suffix', process.env.GITHUB_RUN_ID ?? 'local')}`;
+/** The `local`-mode leg's project (WP-133): a second instance, never the stock one reconfigured. */
+const LOCAL_PROJECT = `${PROJECT}-lm`;
 const TAG = optionValue('--tag', process.env.PLATFORM_TAG ?? 'dev');
-const known = new Set(['--tag', '--project-suffix']);
+/**
+ * `--leg stock|local|all` (WP-133): which instance to start. `all`, the default, is what `image.yml`
+ * runs — the stock instance, torn down, then the `local`-mode one.
+ */
+const LEG = optionValue('--leg', 'all');
+const known = new Set(['--tag', '--project-suffix', '--leg']);
 const unknown = args.filter((argument) => argument.startsWith('--') && !known.has(argument));
-if (unknown.length > 0) {
+if (unknown.length > 0 || !['stock', 'local', 'all'].includes(LEG)) {
   console.error(
-    `FAIL: compose-stock-check — unknown option(s): ${unknown.join(', ')}\n` +
-      'usage: compose-stock-check.mjs [--tag <tag>] [--project-suffix <suffix>]',
+    `FAIL: compose-stock-check — unknown option(s): ${[...unknown, ...(['stock', 'local', 'all'].includes(LEG) ? [] : [`--leg ${LEG}`])].join(', ')}\n` +
+      'usage: compose-stock-check.mjs [--tag <tag>] [--project-suffix <suffix>] [--leg stock|local|all]',
   );
   process.exit(1);
 }
@@ -161,6 +180,13 @@ const PROVIDER_HOST = 'sentry.example.test';
  * floor both halves of the instance refuse below.
  */
 const LAUNCHER_TOKEN = 'wp53-compose-stock-check-not-a-real-launcher-token';
+/**
+ * BD-004 `local` mode's credential for the WP-133 leg — **obviously fake** (standing rule 93: not the
+ * shape `claude setup-token` prints). Nothing in this leg sends it anywhere: no run starts, so no
+ * request reaches a model host. It is spelled here so the leg can look for it in every log line and
+ * every row the instance wrote, and it is never printed — every check names it, none quotes it.
+ */
+const FAKE_OAUTH_TOKEN = 'FAKE-wp133-compose-oauth-token-not-a-credential';
 /** `APP_RUN_REGISTRY_HOSTS` for this instance (WP-82): declared so the runner can be asked for it. */
 const RUN_REGISTRY_HOST = 'registry.example.test';
 const TIMEOUT_MS = 15 * 60 * 1000;
@@ -238,7 +264,8 @@ class Client {
   }
 }
 
-const main = async () => {
+/** The daemon and the two images, which both legs need before anything starts. */
+const preflight = async () => {
   try {
     const { stdout } = await run('docker', ['version', '--format', '{{.Server.Version}}'], {
       timeout: DOCKER_QUERY_MS,
@@ -265,7 +292,9 @@ const main = async () => {
       process.exit(1);
     }
   }
+};
 
+const stockLeg = async () => {
   const projectDirectory = await mkdtemp(path.join(tmpdir(), 'compose-stock-'));
   const compose = async (composeArgs, extraEnv = {}) =>
     run(
@@ -703,12 +732,318 @@ const main = async () => {
     });
     await rm(projectDirectory, { recursive: true, force: true }).catch(() => {});
   }
+};
 
+/**
+ * WP-133's leg: **BD-004 `local` mode**, the arrangement the product owner's first run uses —
+ * `docker compose -f compose.yml -f compose.local.yml up` with `CLAUDE_CODE_OAUTH_TOKEN` in `.env` and
+ * the launcher configured — on a project of its own, from the same `.env.example`.
+ *
+ * Three properties, plus the stop graces WP-133 set (PROGRESS backlog 137 and WP-132's discovered
+ * work), and none of them needs a model credential: the token is obviously fake and no run starts.
+ *
+ *   (a) `app`, `runner` and `launcher` are up — `app` and `runner` **healthy** by the image's own
+ *       `HEALTHCHECK`, the launcher listening on its control plane;
+ *   (b) the runner **composes an agent runner** — it says it provisions run workspaces through the
+ *       launcher, it never says it composed none, and the launcher answers it — while `app` still
+ *       composes none (the pin, under the override too);
+ *   (c) a run's environment, built by the runner's own `agentRunEnvironment` from the runner's own
+ *       configuration, carries the token **by name** — `CLAUDE_CODE_OAUTH_TOKEN`, and nothing else —
+ *       and the token's value is in no service's log and in no row of the database.
+ *
+ * Then each of `runner`, `app` and `db` is stopped the way an upgrade stops it, and must exit 0
+ * inside the `stop_grace_period` `compose.yml` gives it — never the daemon's kill (exit 137).
+ *
+ * The leg runs at `LOG_LEVEL=info`, unlike the stock leg: (b)'s positive line is an `info` line, and
+ * (c)'s "in no log" is a stronger statement over the more verbose log.
+ */
+const localLeg = async () => {
+  const projectDirectory = await mkdtemp(path.join(tmpdir(), 'compose-local-'));
+  const compose = async (composeArgs) =>
+    run(
+      'docker',
+      [
+        'compose',
+        '-p',
+        LOCAL_PROJECT,
+        '--project-directory',
+        projectDirectory,
+        '-f',
+        path.join(REPO, 'compose.yml'),
+        '-f',
+        path.join(REPO, 'compose.local.yml'),
+        ...composeArgs,
+      ],
+      {
+        cwd: REPO,
+        env: { ...process.env, PLATFORM_TAG: TAG },
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: TIMEOUT_MS,
+      },
+    );
+  const failedBefore = failures.length;
+  try {
+    const example = await readFile(path.join(REPO, '.env.example'), 'utf8');
+    let env = example;
+    for (const [name, value] of [
+      ['APP_SECRET_KEY', SECRET_KEY],
+      ['APP_BOOTSTRAP_ADMIN_EMAIL', ADMIN_EMAIL],
+      ['APP_BOOTSTRAP_ADMIN_PASSWORD', ADMIN_PASSWORD],
+      ['APP_BASE_URL', ORIGIN],
+      ['APP_PORT', '0'],
+      ['LOG_LEVEL', 'info'],
+      // The runner's two halves, as `.env.example` names them for this topology.
+      ['APP_LAUNCHER_URL', 'http://launcher:7780'],
+      ['APP_LAUNCHER_TOKEN', LAUNCHER_TOKEN],
+      // `compose.local.yml`'s `:?` refuses to resolve without it.
+      ['CLAUDE_CODE_OAUTH_TOKEN', FAKE_OAUTH_TOKEN],
+      ['APP_WORKSPACE_CONTROL_VOLUME', `${LOCAL_PROJECT}-ctl`],
+      ['APP_WORKSPACE_CACHE_VOLUME', `${LOCAL_PROJECT}-repo-cache`],
+    ]) {
+      env = withValue(env, name, value);
+    }
+    await writeFile(path.join(projectDirectory, '.env'), env, 'utf8');
+
+    console.log(`starting ${LOCAL_PROJECT} (local mode) from platform:${TAG} …`);
+    stages.set('docker compose up (local mode)');
+    await compose(['up', '-d', '--no-build']);
+    stages.set('docker compose port app 8080 (local mode)');
+    const baseUrl = `http://127.0.0.1:${await publishedPort(compose)}`;
+    console.log(`${LOCAL_PROJECT} publishes app on ${baseUrl}`);
+    await waitForOk(stages, `${baseUrl}/healthz`);
+
+    // (a) The image's `HEALTHCHECK` (`curl /healthz`, every 15 s after a 20 s start period) is what
+    // `docker compose ps` reports; it is polled, bounded, rather than read once.
+    const readStates = async () => {
+      const { stdout } = await compose([
+        'ps',
+        '-a',
+        '--format',
+        '{{.Service}}|{{.State}}|{{.Health}}',
+      ]);
+      return new Map(
+        stdout
+          .trim()
+          .split('\n')
+          .filter((line) => line.includes('|'))
+          .map((line) => {
+            const [service = '', state = '', health = ''] = line.trim().split('|');
+            return [service, { state, health }];
+          }),
+      );
+    };
+    stages.set('waiting for app and runner to report healthy (local mode)');
+    let states = await readStates();
+    const deadline = Date.now() + 120_000;
+    while (
+      Date.now() < deadline &&
+      !['app', 'runner'].every((service) => states.get(service)?.health === 'healthy')
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      states = await readStates();
+    }
+    const describe = [...states]
+      .map(
+        ([service, value]) =>
+          `${service} ${value.state}${value.health === '' ? '' : ` (${value.health})`}`,
+      )
+      .join(' | ');
+    const launcherLog = await compose(['logs', '--no-color', '--no-log-prefix', 'launcher']).catch(
+      () => ({ stdout: '' }),
+    );
+    check(
+      'local mode: app and runner are healthy by the image’s own healthcheck, and the launcher is listening (WP-133 a)',
+      states.get('app')?.health === 'healthy' &&
+        states.get('runner')?.health === 'healthy' &&
+        states.get('launcher')?.state === 'running' &&
+        launcherLog.stdout.includes('the launcher control plane is listening'),
+      describe,
+    );
+
+    // (b) The runner's own statement at info, and the absence of the refusal.
+    const runnerLog = await compose(['logs', '--no-color', '--no-log-prefix', 'runner']).catch(
+      () => ({
+        stdout: '',
+      }),
+    );
+    check(
+      'local mode: the runner composes an agent runner — it provisions through the launcher and never says it composed none (WP-133 b)',
+      runnerLog.stdout.includes('this process runs agent stages') &&
+        !runnerLog.stdout.includes('composed without an agent runner'),
+      runnerLog.stdout
+        .split('\n')
+        .filter((line) => line.includes('agent runner') || line.includes('runs agent stages'))
+        .map((line) => line.slice(0, 160))
+        .join(' | ') || '(no such line)',
+    );
+    const appLog = await compose(['logs', '--no-color', '--no-log-prefix', 'app']).catch(() => ({
+      stdout: '',
+    }));
+    check(
+      'local mode: the app service still composes none, under the override too',
+      appLog.stdout.includes('composed without an agent runner'),
+      appLog.stdout.includes('composed without an agent runner') ? 'it says so' : '(no such line)',
+    );
+
+    /*
+     * (c) The run environment **the runner process builds**: the image's own `loadServerConfig` over
+     * the container's own environment, and the server's own `agentRunEnvironment` over that — the
+     * one function that decides what a run container is given (`apps/server/src/agent.ts`). It
+     * prints names and booleans only; the value is compared inside the container, never printed.
+     * The same probe asks the launcher's health through the runner's own client and configuration,
+     * so (b) is also a request that crossed the `launcher-api` network and its token check.
+     */
+    const probe = [
+      "const { loadServerConfig } = await import('/app/apps/server/src/config.ts');",
+      "const { agentRunEnvironment } = await import('/app/apps/server/src/agent.ts');",
+      "const { launcher } = await import('/app/packages/infrastructure/src/index.ts');",
+      'const config = loadServerConfig(process.env);',
+      'const run = agentRunEnvironment(config);',
+      'const quiet = { debug() {}, info() {}, warn() {}, error() {} };',
+      "let health = 'not asked';",
+      'try {',
+      '  await launcher.createLauncherControlClient({ baseUrl: config.launcherUrl, token: config.launcherToken, logger: quiet }).health();',
+      "  health = 'ok';",
+      '} catch (error) {',
+      "  health = `refused: ${error?.code ?? error?.name ?? 'error'}`;",
+      '}',
+      'const token = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "";',
+      'process.stdout.write(JSON.stringify({',
+      '  provider_mode: config.providerMode,',
+      '  env_names: Object.keys(run.env),',
+      '  secret_env_names: run.secretEnvNames,',
+      '  value_is_the_container_token: token.length > 0 && run.env.CLAUDE_CODE_OAUTH_TOKEN === token,',
+      "  api_key_blank: (process.env.ANTHROPIC_API_KEY ?? '') === '',",
+      '  launcher: health,',
+      '}));',
+    ].join('\n');
+    stages.set('the run-environment probe in the runner (local mode)');
+    const probed = await compose([
+      'exec',
+      '-T',
+      'runner',
+      'node',
+      '--import',
+      './scripts/ts-source-resolver.mjs',
+      '--input-type=module',
+      '-e',
+      probe,
+    ]).catch((error) => ({ stdout: '', stderr: String(error) }));
+    let answer = null;
+    try {
+      answer = JSON.parse(probed.stdout.trim().split('\n').at(-1) ?? '');
+    } catch {
+      // Reported below, from what the probe printed.
+    }
+    check(
+      'local mode: a run’s environment carries CLAUDE_CODE_OAUTH_TOKEN by name and nothing else, from the runner’s own configuration (WP-133 c)',
+      answer?.provider_mode === 'local' &&
+        JSON.stringify(answer?.env_names) === '["CLAUDE_CODE_OAUTH_TOKEN"]' &&
+        JSON.stringify(answer?.secret_env_names) === '["CLAUDE_CODE_OAUTH_TOKEN"]' &&
+        answer?.value_is_the_container_token === true &&
+        answer?.api_key_blank === true,
+      answer === null
+        ? `${probed.stdout}${probed.stderr ?? ''}`
+            .split(FAKE_OAUTH_TOKEN)
+            .join('[token]')
+            .slice(0, 400)
+        : JSON.stringify(answer),
+    );
+    check(
+      'local mode: the runner’s own client and token reach the launcher’s control plane (WP-133 b)',
+      answer?.launcher === 'ok',
+      String(answer?.launcher ?? 'no answer'),
+    );
+
+    // (c), the negative half: the value in no log line of any service and in no row.
+    stages.set('reading every log and the database for the token (local mode)');
+    const allLogs = await compose(['logs', '--no-color']).catch((error) => ({
+      stdout: '',
+      stderr: String(error),
+    }));
+    const dump = await compose([
+      'exec',
+      '-T',
+      'db',
+      'pg_dump',
+      '--data-only',
+      '-U',
+      'app',
+      'app',
+    ]).catch((error) => ({ stdout: '', stderr: String(error) }));
+    const seen = [
+      ['a service log', `${allLogs.stdout}${allLogs.stderr ?? ''}`.includes(FAKE_OAUTH_TOKEN)],
+      ['a database row', dump.stdout.includes(FAKE_OAUTH_TOKEN)],
+    ]
+      .filter(([, found]) => found)
+      .map(([where]) => where);
+    check(
+      'local mode: the token’s value is in no service’s log and no database row (WP-133 c)',
+      seen.length === 0 && allLogs.stdout.length > 0 && dump.stdout.includes('COPY public.'),
+      seen.length === 0
+        ? `${allLogs.stdout.split('\n').length} log lines, ${dump.stdout.length} bytes of rows read`
+        : `seen in ${seen.join(' and ')}`,
+    );
+
+    /*
+     * The stop graces (WP-133, folding WP-132's discovered work), the way an upgrade stops each:
+     * `docker compose stop <service>`, which signals with the image's stop signal and kills at the
+     * service's `stop_grace_period`. Each must exit **0** — the process's own clean ending — inside
+     * its grace. The durations are printed: they are the readings the graces were set from.
+     */
+    const composeText = await readFile(path.join(REPO, 'compose.yml'), 'utf8');
+    for (const service of ['runner', 'app', 'db']) {
+      stages.set(`docker compose stop ${service} (local mode)`);
+      const grace = stopGracePeriodSeconds(composeText, service);
+      const started = Date.now();
+      await compose(['stop', service]);
+      const seconds = (Date.now() - started) / 1000;
+      const { stdout } = await compose([
+        'ps',
+        '-a',
+        '--format',
+        '{{.Service}} {{.ExitCode}}',
+        service,
+      ]);
+      const exitCode = stdout.trim().split(/\s+/).at(-1);
+      check(
+        `local mode: \`docker compose stop ${service}\` ends it cleanly inside its stop_grace_period (WP-133)`,
+        grace !== null && exitCode === '0' && seconds < grace,
+        `${seconds.toFixed(1)} s, exit ${exitCode}, grace ${grace === null ? 'none' : `${grace} s`}`,
+      );
+    }
+  } catch (error) {
+    const where = error instanceof Unsettled ? '' : ` (while: ${stages.current})`;
+    check(
+      'the local-mode instance came up and answered',
+      false,
+      `${String(error).split(FAKE_OAUTH_TOKEN).join('[token]')}${where}`,
+    );
+  } finally {
+    if (failures.length > failedBefore) {
+      await describeInstance(compose, 'local mode: ');
+    }
+    stages.set('docker compose down (local mode)');
+    await compose(['down', '-v', '--remove-orphans']).catch((error) => {
+      console.error(`cleanup failed: ${String(error).split(FAKE_OAUTH_TOKEN).join('[token]')}`);
+    });
+    await rm(projectDirectory, { recursive: true, force: true }).catch(() => {});
+  }
+};
+
+const main = async () => {
+  await preflight();
+  if (LEG !== 'local') {
+    await stockLeg();
+  }
+  if (LEG !== 'stock') {
+    await localLeg();
+  }
   if (failures.length > 0) {
     console.error(`FAIL: compose-stock-check (${failures.length}): ${failures.join(', ')}`);
     process.exit(1);
   }
-  console.log('PASS: compose-stock-check');
+  console.log(`PASS: compose-stock-check (leg ${LEG})`);
 };
 
 // The backstop for a wait nothing bounded (`compose-check-support.mjs`).

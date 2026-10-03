@@ -40,6 +40,13 @@ const FAKE_CLI = '/repo/test/fixtures/runlet/fake-claude-cli';
 const FAKE_MODEL_KEY = 'FAKE-wp118-model-key-not-a-credential';
 /** The run's git credential in the `git-credential` phase — obviously fake, shaped past any real one. */
 const FAKE_GIT_TOKEN = 'FAKE-wp118-git-token-not-a-credential';
+/**
+ * BD-004 `local` mode's credential for the WP-133 leg — **obviously fake** and shaped past the
+ * subscription token's own prefix (standing rule 93). The leg allows the production model host, so
+ * this value does reach `api.anthropic.com`, which refuses it: that refusal is the evidence the CLI
+ * got there. It must appear in nothing this script prints, which the check asserts.
+ */
+const FAKE_OAUTH_TOKEN = 'FAKE-wp133-oauth-token-not-a-credential';
 
 const { noSecretsRedactor, runOrphanWorkspaceReap } = await import(
   new URL('../packages/application/src/index.ts', import.meta.url).href
@@ -420,13 +427,64 @@ if (PHASE === 'git-credential') {
  */
 if (PHASE === 'real-cli') {
   const runId = required('CHECK_REAL_CLI_RUN_ID');
+  /*
+   * WP-133 (PROGRESS backlog 137, its `local`-mode half): `CHECK_REAL_CLI_MODE=local` runs the same
+   * CLI the way `compose.local.yml` makes an instance run it — the spec's environment from the
+   * server's own `agentRunEnvironment` (so `CLAUDE_CODE_OAUTH_TOKEN` and nothing else), `providerMode`
+   * `local`, and the run's egress list from `CHECK_REAL_CLI_MODEL_HOSTS`, which the check fills from
+   * `SERVER_CONFIG_DEFAULTS.modelEgressHosts` — the list a stock instance gives every run. So unlike
+   * the `api` leg this one **reaches** the model host, and the sidecar's log holds every *other*
+   * host the CLI asked for (an allowed `CONNECT` is below the sidecar's log level).
+   */
+  const local = process.env['CHECK_REAL_CLI_MODE'] === 'local';
+  const modelHosts = (process.env['CHECK_REAL_CLI_MODEL_HOSTS'] ?? '')
+    .split(',')
+    .map((host) => host.trim())
+    .filter((host) => host.length > 0);
+  const { agentRunEnvironment } = local
+    ? await import(new URL('../apps/server/src/agent.ts', import.meta.url).href)
+    : { agentRunEnvironment: null };
+  const runEnvironment = local
+    ? agentRunEnvironment({
+        providerMode: 'local',
+        modelApiKey: null,
+        modelOauthToken: FAKE_OAUTH_TOKEN,
+      })
+    : null;
+  const runProvisioner = local
+    ? launcherAdapters.createLauncherRunWorkspaceProvisioner({
+        client,
+        credentials,
+        projects: projectSource,
+        controlRoot: CONTROL_ROOT,
+        modelEgressHosts: modelHosts,
+        runRegistryHosts: [],
+        credentialTtlSeconds: 3_600,
+        clock: runnerAdapters.systemClock,
+        logger,
+      })
+    : provisioner;
   const transcript = [];
-  const phase = { phase: PHASE, ok: false, claudeCodePath: null, status: null, notes };
+  const phase = {
+    phase: PHASE,
+    mode: local ? 'local' : 'api',
+    ok: false,
+    claudeCodePath: null,
+    status: null,
+    // Names only: the keys of the run's environment and the names its redactor is told about.
+    envNames: runEnvironment === null ? ['ANTHROPIC_API_KEY'] : Object.keys(runEnvironment.env),
+    secretEnvNames: runEnvironment === null ? ['ANTHROPIC_API_KEY'] : runEnvironment.secretEnvNames,
+    egressHosts: null,
+    notes,
+  };
   try {
     const runner = runnerAdapters.createWorkspaceClaudeRunner({
       provisioner: {
         provision: async (spec) => {
-          const workspace = await provisioner.provision(spec);
+          const workspace = await runProvisioner.provision(spec);
+          phase.egressHosts =
+            creates.filter((entry) => entry.spec.runId === spec.runId).at(-1)?.spec.egress?.hosts ??
+            null;
           phase.claudeCodePath = workspace.claudeCodePath ?? null;
           return workspace;
         },
@@ -458,6 +516,13 @@ if (PHASE === 'real-cli') {
       // sidecar in front of it. A spec with no file tool and no shell gets neither (WP-74), and its
       // CLI has no proxy to find whatever the environment says.
       tools: ['Read'],
+      ...(runEnvironment === null
+        ? {}
+        : {
+            providerMode: 'local',
+            env: runEnvironment.env,
+            secretEnvNames: runEnvironment.secretEnvNames,
+          }),
       limits: {
         ...runnerAdapters.runSpecFixture().limits,
         wallClockMs: Number(process.env['CHECK_REAL_CLI_WALL_CLOCK_MS'] ?? 90_000),
@@ -468,13 +533,24 @@ if (PHASE === 'real-cli') {
     phase.ok = true;
     phase.status = outcome.status;
     phase.terminalReason = outcome.terminalReason;
+    phase.outcomeError = outcome.error ?? null;
   } catch (error) {
     phase.error = String(error?.message ?? error).slice(0, 600);
   }
-  const redact = (text) => text.split(FAKE_MODEL_KEY).join('[FAKE_MODEL_KEY]');
+  // Both fake credentials are replaced by their names, and `leaked` is computed on the **raw**
+  // record first, so a credential that reached any field of it is a failure rather than a mask.
+  const raw = JSON.stringify({ phase, stderr: cliStderr, transcript });
+  phase.leaked = raw.includes(FAKE_MODEL_KEY) || raw.includes(FAKE_OAUTH_TOKEN);
+  const redact = (text) =>
+    text
+      .split(FAKE_MODEL_KEY)
+      .join('[FAKE_MODEL_KEY]')
+      .split(FAKE_OAUTH_TOKEN)
+      .join('[FAKE_OAUTH_TOKEN]');
   phase.stderr = redact(cliStderr.join('')).slice(-4_000);
   phase.transcript = redact(JSON.stringify(transcript)).slice(-4_000);
-  process.stdout.write(`${JSON.stringify(phase)}\n`);
+  phase.notes = notes.map(redact);
+  process.stdout.write(`${redact(JSON.stringify(phase))}\n`);
   process.exit(0);
 }
 

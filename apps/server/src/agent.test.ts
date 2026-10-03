@@ -77,6 +77,7 @@ describe('composing the agent runner', () => {
       tools,
       providerMode: 'api',
       modelApiKey: 'FAKE-anthropic-key-not-a-real-secret-000',
+      modelOauthToken: null,
       logger,
     });
     expect(composed.runner).not.toBeNull();
@@ -92,6 +93,7 @@ describe('composing the agent runner', () => {
       tools,
       providerMode: 'api',
       modelApiKey: 'FAKE-anthropic-key-not-a-real-secret-000',
+      modelOauthToken: null,
       logger,
     });
     expect(composed.runner).toBeNull();
@@ -113,6 +115,7 @@ describe('composing the agent runner', () => {
       tools,
       providerMode: 'api',
       modelApiKey: null,
+      modelOauthToken: null,
       logger,
     });
     expect(composed.runner).toBeNull();
@@ -156,6 +159,7 @@ describe('composing the agent runner', () => {
       tools,
       providerMode: 'local',
       modelApiKey: null,
+      modelOauthToken: null,
       logger,
     });
     expect(composed.runner).toBeNull();
@@ -172,6 +176,7 @@ describe('composing the agent runner', () => {
       tools,
       providerMode: 'api',
       modelApiKey: null,
+      modelOauthToken: null,
       logger,
     });
     expect(missingOf(composed)).toHaveLength(2);
@@ -219,6 +224,7 @@ describe('the composed runner hands the launcher’s CLI environment to the spaw
       tools,
       providerMode: 'api',
       modelApiKey: 'FAKE-anthropic-key-not-a-real-secret-000',
+      modelOauthToken: null,
       logger,
     });
     if (composed.runner === null) {
@@ -228,6 +234,7 @@ describe('the composed runner hands the launcher’s CLI environment to the spaw
       env: agentRunEnvironment({
         providerMode: 'api',
         modelApiKey: 'FAKE-anthropic-key-not-a-real-secret-000',
+        modelOauthToken: null,
       }).env,
       secretEnvNames: ['ANTHROPIC_API_KEY'],
       artifactType: null,
@@ -299,13 +306,15 @@ describe('the composed runner logs a containerised CLI’s stderr, redacted (WP-
         tools,
         providerMode: 'api',
         modelApiKey: key,
+        modelOauthToken: null,
         logger,
       });
       if (composed.runner === null) {
         throw new Error('expected a runner');
       }
       const spec = runnerAdapters.runSpecFixture({
-        env: agentRunEnvironment({ providerMode: 'api', modelApiKey: key }).env,
+        env: agentRunEnvironment({ providerMode: 'api', modelApiKey: key, modelOauthToken: null })
+          .env,
         secretEnvNames: ['ANTHROPIC_API_KEY'],
         artifactType: null,
       });
@@ -332,7 +341,13 @@ describe('the run environment', () => {
   it('names the credential it injects, so TD-012 step 1 covers it', () => {
     // A key in `env` that is not in `secretEnvNames` is a credential no redactor knows about, which
     // is precisely the defect step 1 exists to prevent — so the two are returned together.
-    expect(agentRunEnvironment({ providerMode: 'api', modelApiKey: 'FAKE-key-000000' })).toEqual({
+    expect(
+      agentRunEnvironment({
+        providerMode: 'api',
+        modelApiKey: 'FAKE-key-000000',
+        modelOauthToken: null,
+      }),
+    ).toEqual({
       env: { ANTHROPIC_API_KEY: 'FAKE-key-000000' },
       secretEnvNames: ['ANTHROPIC_API_KEY'],
     });
@@ -375,11 +390,15 @@ describe('the run environment', () => {
   });
 
   it('injects nothing when the mode’s own credential is absent', () => {
-    expect(agentRunEnvironment({ providerMode: 'local', modelApiKey: null })).toEqual({
+    expect(
+      agentRunEnvironment({ providerMode: 'local', modelApiKey: null, modelOauthToken: null }),
+    ).toEqual({
       env: {},
       secretEnvNames: [],
     });
-    expect(agentRunEnvironment({ providerMode: 'api', modelApiKey: null })).toEqual({
+    expect(
+      agentRunEnvironment({ providerMode: 'api', modelApiKey: null, modelOauthToken: null }),
+    ).toEqual({
       env: {},
       secretEnvNames: [],
     });

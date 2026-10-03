@@ -159,8 +159,15 @@ export interface AgentRunnerOptions {
    */
   readonly providerMode: 'api' | 'local';
   readonly modelApiKey: string | null;
-  /** `CLAUDE_CODE_OAUTH_TOKEN` — `local` mode's credential (PROGRESS backlog 128). */
-  readonly modelOauthToken?: string | null;
+  /**
+   * `CLAUDE_CODE_OAUTH_TOKEN` — `local` mode's credential (PROGRESS backlog 128).
+   *
+   * **Required, and that is the WP-133 fix.** It was `?:` until then, so the composition root's one
+   * call (`pipeline.ts`) could leave it out and still typecheck — and did: every `local`-mode process
+   * composed no agent runner while its environment carried the token. `null` is how a caller says
+   * "none"; leaving the field out is no longer a way to say anything.
+   */
+  readonly modelOauthToken: string | null;
   readonly logger: Logger;
 }
 

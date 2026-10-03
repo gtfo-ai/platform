@@ -25,6 +25,18 @@
 # missing credential** — which is a refusal at composition rather than the start-up error the old
 # sentence claimed, because the same process legitimately serves the API without running agents.
 #
+# **And until WP-133 the process composed none *with* the token either.** The composition root
+# (`apps/server/src/pipeline.ts`) did not pass `modelOauthToken` on to `composeAgentRunner`, whose
+# field was optional, so every `local`-mode `runner` logged `CLAUDE_CODE_OAUTH_TOKEN` as missing with
+# the token in its environment and ran no agent stage. Nothing had started this file's arrangement
+# before; `scripts/compose-stock-check.mjs` now does (its `local` leg: app, runner and launcher
+# healthy, the runner composing an agent runner, a run's environment carrying the token by name, the
+# value in no log and no row), and `test/e2e/pipeline/local-mode.e2e.test.ts` holds the composition.
+# What the pinned CLI asked for with this credential, up to the point a fake token is refused —
+# every host it asked for was on the run's list (`api.anthropic.com` plus the git host) and none was
+# refused; an allowed host is below the sidecar's log level, so which allowed hosts it used is not
+# logged — is in docs/operator-guide.md § 8.
+#
 # The `:?` below stays, and it is compose's own check rather than the server's: `docker compose` will
 # not resolve this file without a token. That is the honest description of what it does.
 #

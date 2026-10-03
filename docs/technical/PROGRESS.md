@@ -7950,6 +7950,28 @@ entry **133**, since that is the first time a full ticket walks the pipeline for
 (`APP_DISABLE_TELEMETRY` is documented and read by nothing, folded into WP-73 — the same subject from
 the platform's side), rule **18**, rule **21**, rule **83**.
 
+**Measured (WP-133, session 11, its `local`-mode half; no credential).** The real `claude` 2.1.267 in
+`platform-runtime:dev`, through the real launcher, shim and sidecar (`node
+scripts/launcher-control-plane-check.mjs`, records `backlog 137 (local): …`), with the run's environment
+from the server's own `agentRunEnvironment` for `local` mode (an obviously fake
+`CLAUDE_CODE_OAUTH_TOKEN`, nothing else) and the stock list (`SERVER_CONFIG_DEFAULTS.modelEgressHosts`
+plus the fixture's git host):
+
+| Host the CLI asked the sidecar for | On the run's list? | Why |
+|---|---|---|
+| `api.anthropic.com` | yes (allowed, so not in the sidecar's `Notice` log) | the model API: it answered **401** twice (`api_retry`, `error_status` 401, `authentication_failed`; *"Failed to authenticate. API Error: 401 Invalid bearer token"*), the run over in 2.3 s |
+| *(any other)* | — | **none**: the sidecar refused no host (its log: start, config load, shut down) |
+
+So every host the CLI asked for is on the run's list and none was refused; an allowed `CONNECT` is
+below the sidecar's `Notice` level, so the log cannot say which allowed hosts were used (the 401 shows
+the model host was). With the shipped opt-outs the list is enough for a first run to reach the model
+**up to authentication**. What an
+*authenticated* run contacts after that still needs a credential (part 3 above, WP-33's); the
+operator guide § 8 and `.env.example` say where a refused host is named. Not measured: a direct
+(non-proxied) connection would fail on the run's `internal: true` network and appear in no sidecar
+log, so "every host" means every host the CLI asked the proxy for. Part 1 (the field's sentence at
+`spec.ts:171-172`) was already gone from the tree when WP-133 looked.
+
 ### 138. **Two of the sweep's four control-directory outcomes reach no field and no line: an operator can count what was reclaimed and what could not be, but cannot tell a directory held by a live run from one carrying a name nothing here made** (**RESOLVED** at `9e3db59`, WP-86, session 9 — TODO, nit — **most of what this entry was filed for was closed by WP-53's rounds 2 and 3**; **working as designed**, the remaining operability missing; **latent**, it costs nothing until an orphan exists; **no work package owns it**; reported by WP-53 as discovered work, restated by the refiner after round 3, session 7)
 > **M5 (architect, session 8): folded into **WP-86**.**
 
@@ -13977,6 +13999,10 @@ container's old environment (WP-130 changed the operator guide to say recreate, 
 ### 430. **Helpers that belong to no run (`clicheck-`, `ctlls-`) now carry the instance label but the orphan pass works by run id, so one orphaned by a crash is never listed** (TODO, **nit — debris, no data**. Found by WP-132's implementer; unowned)
 
 ### 431. **Retention's `purgeExpired` lists volumes of every instance on the daemon, not only its own** (TODO, **minor — latent on a daemon shared by two instances; read off the code, not measured**. Found by WP-132's implementer; unowned. **Done when** the listing filters by `com.agentic.instance`, with a real-daemon case where another instance's expired volume survives)
+
+### 432. **Nothing stops a run on SIGTERM: a `runner` stopped with a run in flight waits out its 30 s shutdown deadline and exits, and the run is lost and its task goes to `needs_human`** (TODO, **minor — recoverable by a retry; live for every stop or upgrade during a run**. Measured by WP-133: with a run in flight the runner's stop was still waiting after 60 s until its own deadline ended it. Unowned; the operator guide tells the reader to upgrade with no run in progress)
+
+### 433. **The operator guide's Restore does not stop `runner`, and `db-backup` has no stop grace** (TODO, **nit — documentation and one compose line**. Found by WP-133's implementer; WP-135 may take the Restore sentence)
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -41650,3 +41676,155 @@ name. Scratch files under `/private/tmp/claude-501/wp132-impl/`.
   the next update of the same key.
 - `retention`'s `purgeExpired` lists `role=workspace` and `role=retention_hold` volumes of **every**
   instance on the daemon (no instance filter), read off the code while here, not measured.
+
+#### WP-133
+
+**The real CLI in `local` mode, measured without a credential, before the product owner's first run.**
+Folds backlog 137's `local`-mode half and WP-132's discovered work (the stop graces of `app`, `runner`
+and `db`). Implementer, session 11, on `677b6be`. Every reading used an obviously fake
+`CLAUDE_CODE_OAUTH_TOKEN`; no model credential was used. Docker Desktop 29.8.1, Compose 5.5.1,
+`linux/arm64`; images rebuilt from the tree (`node scripts/build-images.mjs platform launcher`).
+
+**The finding that matters most: a `local`-mode instance ran no agent at all.** The first run of the
+new `local` leg (image of the tree before the fix) failed (b): the `runner` logged *"the pipeline is
+composed without an agent runner"* with `missing: ["CLAUDE_CODE_OAUTH_TOKEN (…)"]` while the probe in
+the same container showed the token in its environment and in `agentRunEnvironment`'s output.
+`apps/server/src/pipeline.ts` called `composeAgentRunner` without `modelOauthToken`, and the field was
+optional on `AgentRunnerOptions`, so it typechecked. Fixed (the value passed), and the field is now
+**required** so leaving it out is a type error (`agent.test.ts` gained `modelOauthToken: null` at its
+`api`-mode call sites). The product owner's `compose.local.yml` instance would have queued every stage.
+
+**(1) The host list (backlog 137, pasted there).** `scripts/launcher-control-plane-check.mjs` runs the
+real `claude` 2.1.267 a second time in `local` mode — `launcher-control-plane-runner.mjs`'s `real-cli`
+phase with `CHECK_REAL_CLI_MODE=local`: the run's environment from the server's `agentRunEnvironment`,
+`providerMode: 'local'`, and the egress list from `SERVER_CONFIG_DEFAULTS.modelEgressHosts`. Result,
+twice (load 4–8): every host the CLI asked for is on the run's list; none was refused (allowed hosts
+are below the sidecar's log level, so not listed), and the API answered 401 twice
+(`api_retry` with `error_status` 401), *"Failed to authenticate. API Error: 401 Invalid bearer token"*,
+run over in 2.3 s. `api.anthropic.com` is allowed because it is the model API; the 401 proves it was
+reached. Records: *the run carries the server’s local-mode
+environment — CLAUDE_CODE_OAUTH_TOKEN by name, and nothing else*, *the run’s egress list is the stock
+model hosts and the git host*, *the CLI reached the model host and was refused the fake subscription
+token* (asserted on the transcript's `"error_status":401`), *the sidecar refused no host*, and *the
+token’s value is in no record and no log line* (runner record, sidecar log, launcher log). **PASS
+54/54** (49 + 5). Calibration in the same run: the `api` leg, which allows no model host, gives
+`refusedHosts: ["api.anthropic.com"]` through the same parser.
+
+**(2) The `local` leg of `scripts/compose-stock-check.mjs`** (`--leg stock|local|all`, default `all`,
+which `image.yml` runs; its teardown gains the `-lm` project). A second project from `compose.yml` +
+`compose.local.yml` with the launcher pair, a fake token and `LOG_LEVEL=info`: (a) `app` and `runner`
+**healthy** by the image's `HEALTHCHECK` and the launcher logging *"the launcher control plane is
+listening"*; (b) the runner logs *"this process runs agent stages"* and never *"composed without an
+agent runner"*, the `app` still composes none, and the runner's own client and token answer the
+launcher's `health`; (c) a probe run in the runner (`node --import ./scripts/ts-source-resolver.mjs`,
+the image's own `loadServerConfig` and `agentRunEnvironment`) prints names and booleans only:
+`env_names: ["CLAUDE_CODE_OAUTH_TOKEN"]`, the same `secret_env_names`, `value_is_the_container_token:
+true`, `api_key_blank: true`; and the value is in no line of `docker compose logs` (179 lines) and no row
+of a `pg_dump --data-only` (45 KB). Before the fix: (b) **FAIL**, everything else ok. After: **PASS**,
+both legs (21 stock checks unchanged + 9 local). Teardown is the script's own `down -v` through
+`execFile`, which the volume hook does not see (read, and WP-126 recorded the same); the leg creates no
+run, so no `repo-cache` volume.
+
+**(3) Operator guide § 8** now states what was measured (runs agents since the fix; the token by name;
+nothing refused up to authentication, with the log's limit; how a wrong token fails, named; the
+plan-limit failure marked inferred), that a subscription token is billed to
+the plan — Anthropic's page quoted, https://code.claude.com/docs/en/authentication#generate-a-long-lived-token
+— and what is not measured (the cost the CLI reports for a subscription run; hosts after a successful
+authentication). Also that the CLI prefers an API key when both are set (same page, *Authentication
+precedence*).
+
+**The fold: stop graces.** Measured first:
+- *Idle stops*, through compose with each grace in place (`local` leg, load ~6): `runner`, `app`, `db`
+  each **0.2 s, exit 0** (twice).
+- *PostgreSQL under load*: a `postgres` of the pinned digest with PGDATA in the container layer
+  (`--rm` / `rm -v`, no named volume), 3 M rows then a 1 M-row update leaving **16 269 of 16 384**
+  shared buffers dirty, then a plain `docker stop`: **0.63 s** and **0.76 s**, exit 0, *"database system
+  is shut down"* (stop signal SIGINT, fast shutdown).
+- *The runner with a run in flight*: a scratch e2e (two `apps/server` processes on one database, the
+  run held at its workspace in `runner`, then `runner.stop()`, deleted after) — the stop was **still
+  waiting after 60 s**, the run `running`, its `stage.execute` job `active`. So the runner's shutdown
+  waits for the stage (the pipeline worker's `offWork` with `wait`), and in a container the deadline
+  `close-with-grace` applies, `APP_SHUTDOWN_TIMEOUT_MS` (30 s), is what ends it (exit 1; read in
+  `main.ts` and the library, not measured in a container). The run then waits for the lease sweep
+  (WP-47, not re-measured). **This scratch run was started without a separate load reading: the load
+  was 12.5 at its start** — a breach of the gate, stated; the reading is a "did not finish in 60 s",
+  which load does not make shorter.
+- Settings, each stated beside it in `compose.yml`: `app` and `runner` **45 s** (the 30 s deadline plus
+  a margin; raise both with `APP_SHUTDOWN_TIMEOUT_MS`, which `.env.example` now says), `db` **30 s**
+  (about forty times 0.76 s, for a slower disk). Honest note at the line: on the measured disk three
+  seconds would have sufficed for `db`.
+- Operator guide § 5 (upgrade): what happens to a run in flight on `stop runner` and the three graces.
+
+Tests (criteria):
+- (1) the five `backlog 137 (local)` records above.
+- (2) the nine `local mode:` checks above; `test/e2e/pipeline/local-mode.e2e.test.ts` › "a runner in local mode (compose.local.yml’s arrangement)" › "composes an agent runner and spawns the CLI with CLAUDE_CODE_OAUTH_TOKEN by name (WP-133)"
+  (the shipped topology in-process: the `runner` in `local` mode takes the first stage, the spec's
+  `env` is the token's name alone, the SDK's spawn environment carries the value and no API key, and
+  the value is in no log line, no `runs` row and no transcript row).
+- The fold: `scripts/compose-check-support.test.ts` › "the stop graces compose.yml declares (WP-133)" › "reads a service’s grace, answers null for none, and refuses a spelling it cannot read", "gives app and runner more than the server’s own shutdown deadline, with a margin", "gives db and the launcher several times the longest stop they were measured at", "leaves no long-lived service on the daemon’s three seconds unless it is named with a reason";
+  and the three `local mode: docker compose stop <service> …` checks on the daemon.
+
+**Canaries** (copied aside, mutated, restored; md5 equal):
+- `pipeline.ts` with `modelOauthToken: null` at the call → the local-mode e2e **fails by name**: *"the
+  pipeline never reached the local-mode runner to finish its first stage; the task is state=active
+  stage=refinement"*. The image-level canary is the pre-fix `local` leg's (b) FAIL above.
+- `compose.yml` with `app`'s `stop_grace_period` removed → two grace cases fail (`app: expected null not
+  to be null`; `expected [ 'app' ] to deeply equal []`).
+
+**Decisions and assumptions** (each also at the code):
+- The `local` real-CLI leg allows the stock model host, so the fake token **does** reach
+  `api.anthropic.com` and is refused there — the brief's "before it fails authentication". An allowed
+  `CONNECT` is below the sidecar's `Notice` level, so the model host is shown reached by the 401, and
+  "every host" means every host asked of the proxy (a direct connection would die on the `internal`
+  network unlogged — stated in 137).
+- Stock check's `local` leg runs at `LOG_LEVEL=info` (the stock leg stays at `warn`): (b)'s positive
+  line is `info`, and "in no log" is stronger over the verbose log.
+- `stopGracePeriodSeconds` reads only `<n>s`, refusing other spellings by name rather than misreading
+  them. `docker-socket-proxy` and `db-backup` are exempted in the census with a reason each.
+- `db-backup`'s exemption is unmeasured (a dump cut short at three seconds) — discovered work.
+
+**Sentences falsified, grepped and judged** (PROGRESS history and the plan excluded):
+| Where | Sentence | Outcome |
+|---|---|---|
+| `compose.local.yml` header | "Both halves are closed: … a `local`-mode process without it composes no agent runner" | still true; **extended**: with it, it composed none either until WP-133 |
+| operator-guide § 8 | (silent on hosts, billing, the defect) | **extended** with the measurements and the billing sentence |
+| operator-guide § 5 upgrade | "An agent run in progress when you stop `runner` is interrupted" | true; **extended** with what happens and the graces |
+| operator-guide § 5 launcher paragraph | "a service with no grace of its own was given about three seconds" | still true (it is about a service with none) |
+| `.env.example` `APP_MODEL_EGRESS_HOSTS`, `CLAUDE_CODE_OAUTH_TOKEN`, `APP_SHUTDOWN_TIMEOUT_MS` | — | **extended** (the measurement, the defect, the 45 s coupling) |
+| technical/05 § Network policy | "What the variable changes … is still unmeasured (WP-33, backlog 137)" | true; **extended** with the measured half |
+| technical/12 `APP_MODEL_EGRESS_HOSTS` row | — | **extended** |
+| `docs/TODO.md` backlog 137 line (b) | "one real run … under the shipped allow-list" | **extended**: first half measured |
+| `apps/server/src/agent.ts` `modelOauthToken` docblock | (optional) | **rewritten**: required, why |
+| `spec.ts:171-172` (backlog 137 part 1) | "Empty in `local` provider mode … talks to nothing" | already gone from the tree; no edit |
+| operator-guide § Restore | `docker compose stop app launcher` | **not** a WP-133 sentence, but false since WP-53 (`runner` also writes) — discovered work |
+
+**Review round 1 (REQUEST CHANGES), addressed.** (major) the local-mode e2e's runner logged at
+`silent`, so both log assertions passed on an empty log: it now runs at `LOG_LEVEL=info` and asserts
+the log contains the stage executor's *"stage executed"* line (the reviewer's suggested *"this process
+runs agent stages"* is `composeRunWorkspaces`' line, which the harness bypasses — measured, the first
+run failed on it). Passes; **canary**: `LOG_LEVEL` removed → fails with `expected '' to contain
+'"msg":"stage executed"'`. (minor) the host claim narrowed everywhere to
+*"every host the CLI asked for is on the run's list; none was refused"* with the log-level limit
+stated. (minor) the plan-limit failure sentence in § 8 marked inferred.
+
+**For the orchestrator.** `CLAUDE.md`'s WP-53 paragraph says the control-plane check is *"45/45 since
+WP-118"*; it is **54/54** since WP-133 (48 at WP-127, 49 at WP-132).
+
+**Verification.** `pnpm run -s verify` **PASS**. `node scripts/launcher-control-plane-check.mjs` **PASS
+54/54** (twice). `node scripts/compose-stock-check.mjs --project-suffix wp133` **PASS** (both legs).
+`pnpm run -s verify:e2e` **PASS** (63 files, 276 tests, load ~8 at its start). Docker discipline: `agentic`-prefixed volumes **nine** before and
+after every step, untouched; `com.agentic.run` objects none before and after each check; the compose
+projects removed by the script's own teardown; the two `postgres` probes removed (`--rm`, `rm -v`).
+Scratch files under `/private/tmp/claude-501/wp133-impl/`; the scratch e2e file was deleted.
+
+**Discovered work** (for the refiner; no numbers claimed):
+- **Nothing stops a run on SIGTERM.** A runner stopped mid-run (an upgrade, `docker compose up -d`
+  after an `.env` change) waits its 30 s deadline, exits 1, and the run is left to the lease sweep and
+  the task to `needs_human`. Interrupting live runs on shutdown (with the WP-101 cancel path, charging
+  what was measured) would turn a lost run into a cancelled one.
+- operator-guide § Restore stops `app launcher` but not `runner`, which also writes the database.
+- `db-backup` has no `stop_grace_period`; whether a dump in flight survives a three-second stop is
+  unmeasured.
+- What the CLI reports as a run's cost under a subscription token is unmeasured; the ledger and the
+  budgets take it as reported (BD-011), so in `local` mode a budget may be denominated in a figure that
+  is not money billed.

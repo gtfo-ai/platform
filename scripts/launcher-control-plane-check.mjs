@@ -118,6 +118,19 @@
  *    must now drain it inside that grace and answer it; a stop with nothing in flight must exit in
  *    well under it.
  *
+ * ## What WP-133 added (PROGRESS backlog 137, its `local`-mode half)
+ *
+ *  - **The real `claude` the way `compose.local.yml` runs it** ({@link measureRealCli} with
+ *    `mode: 'local'`): the run's environment from the server's own `agentRunEnvironment` for `local`
+ *    mode with an obviously fake `CLAUDE_CODE_OAUTH_TOKEN`, and the run's egress list built from
+ *    `SERVER_CONFIG_DEFAULTS.modelEgressHosts` — the list a stock instance gives every run. Unlike the
+ *    `api` leg it **reaches** `api.anthropic.com`, which refuses the token; every other host the CLI
+ *    asks for is refused by the sidecar and named in its log ({@link refusedHostsOf}). Measured on
+ *    Docker Desktop 29.8.1 against `claude` 2.1.267: two `api_retry` entries with `error_status` 401
+ *    (`authentication_failed`), *"Failed to authenticate. API Error: 401 Invalid bearer token"*, the
+ *    run over in 2.3 s, and **no host refused** — so the shipped list is enough to authenticate. The
+ *    token's value is asserted absent from the runner's record, the sidecar's log and the launcher's.
+ *
  * ## Environment
  *
  *     DOCKER_HOST=unix:///var/run/docker.sock node scripts/launcher-control-plane-check.mjs
@@ -129,6 +142,14 @@ import './ts-source-resolver.mjs';
 
 const { startDockerFixture, RUNTIME_IMAGE, EGRESS_IMAGE, GIT_IMAGE, REPO_ROOT, docker } =
   await import(new URL('../test/e2e/support/docker-workspace.ts', import.meta.url).href);
+/**
+ * The model hosts a stock instance gives every run (`APP_MODEL_EGRESS_HOSTS`'s default), read off the
+ * server's own configuration so the `local` leg runs under the list an operator gets (WP-133).
+ */
+const { SERVER_CONFIG_DEFAULTS } = await import(
+  new URL('../apps/server/src/config.ts', import.meta.url).href
+);
+const STOCK_MODEL_EGRESS_HOSTS = [...SERVER_CONFIG_DEFAULTS.modelEgressHosts];
 
 const RUN_ID = '9f3a1c2e-0000-4000-8000-0000000053a1';
 const IDEMPOTENCY_RUN_ID = '9f3a1c2e-0000-4000-8000-0000000053a2';
@@ -153,6 +174,14 @@ const NETWORK_ONLY_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000286f';
 const GIT_CREDENTIAL_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000342b';
 /** WP-118's run of the image's real `claude` (PROGRESS backlog 342, consequence (a)). */
 const REAL_CLI_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000342a';
+/** WP-133's run of the real `claude` in BD-004 `local` mode (PROGRESS backlog 137). */
+const LOCAL_CLI_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000133a';
+/**
+ * The same obviously fake subscription token `launcher-control-plane-runner.mjs` gives that run,
+ * spelled here so the check can look for it in what the run left behind — the sidecar's log and the
+ * launcher's. Never printed: every record names it, none quotes it.
+ */
+const FAKE_OAUTH_TOKEN = 'FAKE-wp133-oauth-token-not-a-credential';
 /** WP-127's run of the real `claude` whose sidecar is stopped before it starts (backlog 346). */
 const NO_ROUTE_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000346a';
 /** The shortened client bound for 286 (b), below the create's own duration on this machine. */
@@ -811,15 +840,20 @@ const reapThroughTheVerbs = async () => {
  * The sidecar's log is followed from the moment its container exists, because `release` removes
  * it: `docker logs -f` returns when the container is gone, with everything it wrote.
  */
-const measureRealCli = async () => {
-  const sidecar = `egress-${REAL_CLI_RUN_ID}`;
+const measureRealCli = async (leg = {}) => {
+  const runId = leg.runId ?? REAL_CLI_RUN_ID;
+  const sidecar = `egress-${runId}`;
   const runner = runRunner(
     {
       CHECK_PHASE: 'real-cli',
-      CHECK_REAL_CLI_RUN_ID: REAL_CLI_RUN_ID,
+      CHECK_REAL_CLI_RUN_ID: runId,
       CHECK_REAL_CLI_WALL_CLOCK_MS: String(REAL_CLI_WALL_CLOCK_MS),
+      ...(leg.mode === undefined ? {} : { CHECK_REAL_CLI_MODE: leg.mode }),
+      ...(leg.modelHosts === undefined
+        ? {}
+        : { CHECK_REAL_CLI_MODEL_HOSTS: leg.modelHosts.join(',') }),
     },
-    { name: 'agentic-wp118-runner-real-cli' },
+    { name: leg.name ?? 'agentic-wp118-runner-real-cli' },
   );
   let following = null;
   let lastInspect = null;
@@ -844,8 +878,27 @@ const measureRealCli = async () => {
           .split('\n')
           .filter((line) => line.trim().length > 0)
           .map((line) => line.slice(0, 300));
-  return { told, sidecarLog };
+  return { told, sidecarLog, refusedHosts: refusedHostsOf(sidecarLog) };
 };
+
+/**
+ * Every host the sidecar refused, read off its log (WP-133): tinyproxy writes *"Proxying refused on
+ * filtered domain "<host>""* at `Notice` for each refused request, which is the level the rendered
+ * configuration logs at (`egress.ts`). An **allowed** `CONNECT` is logged at `Connect`, below that,
+ * so a host on the run's list never appears here — the leg that allows the model host proves it
+ * reached it by the model's own refusal of the fake credential instead.
+ */
+const refusedHostsOf = (sidecarLog) =>
+  sidecarLog === null
+    ? null
+    : [
+        ...new Set(
+          sidecarLog.flatMap((line) => {
+            const match = /filtered domain "?([^"\s]+)"?/.exec(line);
+            return match === null ? [] : [match[1].toLowerCase()];
+          }),
+        ),
+      ].sort();
 
 /**
  * WP-127, PROGRESS backlog **346**: the real `claude` with **no route to the model**. The runner
@@ -913,6 +966,7 @@ const environFindings = (environ) => {
 let fixture;
 let replay = null;
 let realCli = null;
+let localCli = null;
 let noRoute = null;
 let orphans = null;
 let report = null;
@@ -1110,6 +1164,88 @@ try {
       error: realCli.told?.error,
       stderr: (realCli.told?.stderr ?? '').slice(-400),
     }),
+  );
+
+  // WP-133 (backlog 137, its `local`-mode half): the real CLI as `compose.local.yml` runs it — the
+  // server's own `agentRunEnvironment` for `local` mode with an obviously fake subscription token,
+  // under the stock model host list. It reaches `api.anthropic.com`, which refuses the token; every
+  // host it asked for that is not on the run's list is in the sidecar's log.
+  localCli = await measureRealCli({
+    runId: LOCAL_CLI_RUN_ID,
+    mode: 'local',
+    modelHosts: STOCK_MODEL_EGRESS_HOSTS,
+    name: 'agentic-wp133-runner-local-cli',
+  });
+  const localText = JSON.stringify(localCli.told ?? {});
+  process.stdout.write(
+    `--- backlog 137 (local): the real CLI with a fake subscription token ---\n${JSON.stringify(
+      {
+        mode: localCli.told?.mode,
+        status: localCli.told?.status,
+        terminalReason: localCli.told?.terminalReason,
+        outcomeError: localCli.told?.outcomeError,
+        error: localCli.told?.error,
+        egressHosts: localCli.told?.egressHosts,
+        refusedHosts: localCli.refusedHosts,
+        sidecarLog: localCli.sidecarLog,
+        stderr: (localCli.told?.stderr ?? '').slice(-1_500),
+        transcript: (localCli.told?.transcript ?? '').slice(-2_500),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  record(
+    'backlog 137 (local): the run carries the server’s local-mode environment — CLAUDE_CODE_OAUTH_TOKEN by name, and nothing else (WP-133)',
+    JSON.stringify(localCli.told?.envNames) === '["CLAUDE_CODE_OAUTH_TOKEN"]' &&
+      JSON.stringify(localCli.told?.secretEnvNames) === '["CLAUDE_CODE_OAUTH_TOKEN"]',
+    JSON.stringify({
+      env: localCli.told?.envNames,
+      secretEnvNames: localCli.told?.secretEnvNames,
+    }),
+  );
+  record(
+    'backlog 137 (local): the run’s egress list is the stock model hosts and the git host (WP-133)',
+    JSON.stringify([...(localCli.told?.egressHosts ?? [])].sort()) ===
+      JSON.stringify([...STOCK_MODEL_EGRESS_HOSTS, fixture.repoContainer].sort()),
+    JSON.stringify({ egress: localCli.told?.egressHosts, stock: STOCK_MODEL_EGRESS_HOSTS }),
+  );
+  record(
+    'backlog 137 (local): the CLI reached the model host and was refused the fake subscription token (WP-133)',
+    // The CLI's own `api_retry` carries the status the model API answered: 401 is the API refusing
+    // the token, which it can only do once the request has crossed the sidecar to it.
+    (localCli.told?.transcript ?? '').includes('"error_status":401'),
+    JSON.stringify({
+      status: localCli.told?.status,
+      outcomeError: (localCli.told?.outcomeError ?? '').slice(0, 300),
+      error: (localCli.told?.error ?? '').slice(0, 300),
+    }),
+  );
+  record(
+    'backlog 137 (local): the sidecar refused no host — every host the CLI asked for is on the run’s list (WP-133)',
+    Array.isArray(localCli.refusedHosts) && localCli.refusedHosts.length === 0,
+    JSON.stringify({ refused: localCli.refusedHosts, lines: (localCli.sidecarLog ?? []).length }),
+  );
+  const launcherAfterLocal = await docker(['logs', LAUNCHER_NAME], { allowFailure: true });
+  const tokenSeen = [
+    ['the runner’s record', localCli.told?.leaked === true || localText.includes(FAKE_OAUTH_TOKEN)],
+    [
+      'the sidecar’s log',
+      (localCli.sidecarLog ?? []).some((line) => line.includes(FAKE_OAUTH_TOKEN)),
+    ],
+    [
+      'the launcher’s log',
+      `${launcherAfterLocal.stdout}${launcherAfterLocal.stderr}`.includes(FAKE_OAUTH_TOKEN),
+    ],
+  ]
+    .filter(([, seen]) => seen)
+    .map(([where]) => where);
+  record(
+    'backlog 137 (local): the token’s value is in no record and no log line, only its name (WP-133)',
+    localCli.told !== null && localCli.told?.leaked === false && tokenSeen.length === 0,
+    tokenSeen.length === 0
+      ? `leaked: ${String(localCli.told?.leaked)}`
+      : `seen in ${tokenSeen.join(', ')}`,
   );
 
   // WP-127 (backlog 346): the real CLI with its sidecar stopped. The retry sequence is printed
@@ -1440,6 +1576,7 @@ try {
     BAD_RUN_ID,
     REPLAY_RUN_ID,
     REAL_CLI_RUN_ID,
+    LOCAL_CLI_RUN_ID,
     NO_ROUTE_RUN_ID,
     GIT_CREDENTIAL_RUN_ID,
     ...ALL_286_RUN_IDS,

@@ -993,6 +993,12 @@ export const composePipeline = async (
     tools: platformTools,
     providerMode: options.agent.providerMode,
     modelApiKey: options.agent.modelApiKey,
+    // **`local` mode's credential, which this call did not pass until WP-133** (PROGRESS backlog
+    // 137's `local` half). The field was optional on `AgentRunnerOptions`, so its absence typechecked
+    // and every `local`-mode process — `compose.local.yml`'s `runner` included, with the token in
+    // its environment — composed no agent runner and logged `CLAUDE_CODE_OAUTH_TOKEN` as missing.
+    // Found by `scripts/compose-stock-check.mjs`'s `local` leg; the field is required now.
+    modelOauthToken: options.agent.modelOauthToken,
     // The SSE half of TD-007 (WP-15h): the transcript sink announces each stored entry's position
     // on the broadcast, and whichever process holds the `run:<id>` stream reads the rows back
     // (`sse/transcript-bridge.ts`). It is the same broadcast the outbox worker wakes on, so a

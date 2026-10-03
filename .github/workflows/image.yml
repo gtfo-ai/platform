@@ -189,7 +189,10 @@ jobs:
       # reaches a created integration, an authenticated `/metrics` and an instance configured with
       # only `APP_SECRET_KEY_FILE`. It needs a daemon *and* both images, which is this job and not
       # `ci.yml`'s e2e job (that one builds `platform-runtime` and `platform-egress` only). The
-      # compose-file half of the same row is asserted client-side in the e2e tier.
+      # compose-file half of the same row is asserted client-side in the e2e tier. Since WP-133 it
+      # also starts a second project with `compose.local.yml` (BD-004's `local` mode, a fake token,
+      # the `-lm` project torn down below): app, runner and launcher healthy, the runner composing an
+      # agent runner, a run's environment carrying the token by name, and each stop inside its grace.
       - name: a stock instance of the image just built creates an integration
         run: >-
           node scripts/compose-stock-check.mjs --tag ci
@@ -217,6 +220,7 @@ jobs:
           set -eu
           suffix=ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
           for project in agentic-web-check-"${suffix}" agentic-stock-check-"${suffix}" \
+            agentic-stock-check-"${suffix}"-lm \
             agentic-isolation-check-"${suffix}"-a agentic-isolation-check-"${suffix}"-b; do
             # `ctl` and `repo-cache` are named globally in compose.yml, so every check gives them
             # `<project>-ctl`/`<project>-repo-cache` (`composeEnvironment`); the `down` names the

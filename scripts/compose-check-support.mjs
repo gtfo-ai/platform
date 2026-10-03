@@ -208,3 +208,41 @@ export const describeInstance = async (compose, label = '') => {
     }
   }
 };
+
+/**
+ * A service's `stop_grace_period` in `compose.yml`, in seconds — or `null` when the service declares
+ * none (WP-133; WP-132 read the launcher's the same way).
+ *
+ * Read off the text rather than through a YAML parser because the root has none (`yaml` is
+ * `packages/infrastructure`'s dependency), and the shape is fixed by this repository's own file: a
+ * service is a two-space key under `services:`, its settings four spaces in. Only the `<n>s` spelling
+ * is accepted, which is the only one the file uses; `1m30s` or `90` is refused by name rather than
+ * misread, so a reworded line fails the census that reads it instead of passing it as "none".
+ */
+export const stopGracePeriodSeconds = (composeText, service) => {
+  const servicesAt = composeText.indexOf('\nservices:\n');
+  if (servicesAt === -1) {
+    throw new Error('compose text has no top-level `services:` key');
+  }
+  const services = composeText.slice(servicesAt + '\nservices:\n'.length);
+  const end = services.search(/\n[^\s#][^\n]*:/);
+  const body = end === -1 ? services : services.slice(0, end);
+  const start = body.search(new RegExp(`(^|\\n) {2}${service}:\\n`));
+  if (start === -1) {
+    throw new Error(`compose text declares no service \`${service}\``);
+  }
+  const rest = body.slice(start).replace(/^\n/, '');
+  const next = rest.slice(1).search(/\n {2}[A-Za-z0-9_-]+:\n/);
+  const block = next === -1 ? rest : rest.slice(0, next + 1);
+  const line = /^ {4}stop_grace_period:(.*)$/m.exec(block);
+  if (line === null) {
+    return null;
+  }
+  const value = /^ (\d+)s\s*(#.*)?$/.exec(line[1] ?? '');
+  if (value === null) {
+    throw new Error(
+      `\`${service}\`'s stop_grace_period is ${JSON.stringify((line[1] ?? '').trim())}; only \`<n>s\` is read`,
+    );
+  }
+  return Number(value[1]);
+};

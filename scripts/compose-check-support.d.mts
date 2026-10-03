@@ -51,3 +51,8 @@ export declare const publishedPort: (
 export declare const installExitBackstop: (check: string, stages: Stages) => () => void;
 
 export declare const describeInstance: (compose: Compose, label?: string) => Promise<void>;
+
+export declare const stopGracePeriodSeconds: (
+  composeText: string,
+  service: string,
+) => number | null;

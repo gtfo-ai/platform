@@ -112,6 +112,20 @@ services:
       timeout: 5s
       retries: 20
       start_period: 10s
+    # **How long a stop waits for PostgreSQL** (WP-133, folding WP-132's discovered work). The image's
+    # stop signal is SIGINT, PostgreSQL's *fast* shutdown: it ends every session, writes a shutdown
+    # checkpoint and exits 0. Without this line Docker Desktop 29.8.1 / Compose 5.5.1 gives a service
+    # about three seconds before the kill (WP-132's measurement), and a kill is a crash for
+    # PostgreSQL — the next start replays the WAL instead of opening a clean data directory. Measured:
+    # an idle
+    # `db` of this file stopped in **0.2 s**, exit 0 (`scripts/compose-stock-check.mjs`'s `local` leg,
+    # which reads this line), and a `postgres` of the same digest with its whole 128 MB of
+    # `shared_buffers` dirty (16 269 of 16 384 buffers, after a 1 M-row update) wrote its shutdown
+    # checkpoint and stopped in **0.63 s** and **0.76 s**, exit 0, *"database system is shut down"*.
+    # So on the measured disk three seconds would have been enough; the grace is for the disk that
+    # was not measured and a checkpoint that is larger. 30 s is about forty times the longest
+    # reading, and costs a stop nothing when the database is quick.
+    stop_grace_period: 30s
     restart: unless-stopped
 
   migrate:
@@ -200,6 +214,18 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    # **How long a stop waits for the server's own graceful shutdown** (WP-133). On SIGTERM the
+    # process runs TD-002's shutdown order under `close-with-grace` with `APP_SHUTDOWN_TIMEOUT_MS`
+    # (30 s by default) as its deadline, and exits 0 when the drain finishes or **1** when the deadline
+    # does — so 30 s is the longest this process can need, by construction. 45 s is that deadline and
+    # a margin for the exit itself. Measured with nothing in flight (`compose-stock-check.mjs`'s
+    # `local` leg, which reads this line): stopped in **0.2 s**, exit 0, so the grace costs a stop
+    # nothing unless something is draining. Without this line Docker Desktop 29.8.1 / Compose 5.5.1
+    # gives a service about three seconds before the kill (WP-132's measurement), which cuts short
+    # whatever *is* draining — the SSE streams (`APP_SSE_SHUTDOWN_DRAIN_MS`), in-flight requests, a
+    # handler the event dispatcher is running. **An operator who raises
+    # `APP_SHUTDOWN_TIMEOUT_MS` raises this with it**, or the daemon's kill comes first again.
+    stop_grace_period: 45s
     restart: unless-stopped
 
   # **The one product container that runs agent stages** (TD-028, WP-53).
@@ -278,6 +304,20 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    # **The same 45 s as `app`, and what it does not buy** (WP-133). The bound is the same
+    # `APP_SHUTDOWN_TIMEOUT_MS` deadline. With an agent run in flight the shutdown waits for that run's
+    # `stage.execute` job and the run does not end on its own: measured through two `apps/server`
+    # processes on one database (a run held in `runner`, then `runner`'s `stop()`), the stop was still
+    # waiting 60 s later with the run `running` and its job `active`. So in a container the deadline
+    # ends the process (exit 1), the run's lease is no longer renewed, and once it lapses
+    # (`RUN_LEASE_TTL_MS`, five minutes) the lease sweep ends the run `lease_expired` and escalates the
+    # task — WP-47's recovery, not re-measured here. The grace
+    # does not save the run — nothing on this build stops a run on SIGTERM. What it buys is the order
+    # `runtime.ts` stops in up to that point: HTTP, the held connections, the event dispatcher (a
+    # handler mid-transaction finishes) and the knowledge and onboarding workers all stop before the
+    # pipeline's workers, which is where the drain waits; at three seconds they were killed with it.
+    # With nothing in flight it stopped in **0.2 s**, exit 0 (the same `local` leg).
+    stop_grace_period: 45s
     restart: unless-stopped
 
   # TD-021's filter in front of the daemon: `CONTAINERS`, `NETWORKS`, `VOLUMES`, `IMAGES` and
