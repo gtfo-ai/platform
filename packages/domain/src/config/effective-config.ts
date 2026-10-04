@@ -29,6 +29,7 @@ import {
   DEFAULT_BOOTSTRAP_BUDGET_USD,
   DEFAULT_BOOTSTRAP_DAYS,
   DEFAULT_BOOTSTRAP_MERGE_REQUESTS,
+  DEFAULT_CI_TIMEOUT_MINUTES,
 } from '@platform/contracts';
 import { DEFAULT_ASK_BUDGET_USD, DEFAULT_ASK_MODEL } from '../ask/ask.js';
 import { DEFAULT_CONTEXT_BUDGET_TOKENS } from '../knowledge/retrieval.js';
@@ -94,6 +95,8 @@ export const PLATFORM_DEFAULT_CONFIG: ConfigValues = {
       business_review_iterations: 2,
       ci_fix_iterations: 3,
       human_rounds: 3,
+      // WP-136: the CI gate's wait on a poll-only git binding, so the settings show its source.
+      ci_timeout_minutes: DEFAULT_CI_TIMEOUT_MINUTES,
       question_timeout: '1 working day',
     },
     // BD-010:8's two per-project defaults, from the one table admission reads (WP-91).

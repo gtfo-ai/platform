@@ -102,6 +102,11 @@ const DECLARED: Readonly<Record<string, { readonly count: number; readonly reaso
     reason:
       'a statistic; it reads `templateByIssueType`, which the port never takes from the document',
   },
+  'packages/application/src/pipeline/gates.ts': {
+    count: 1,
+    reason:
+      'the CI wait on a poll-only binding (WP-136) reads only `ci_timeout_minutes`; on the defaults it waits 60 minutes and parks (closed), and the gate it waits for settles through `judgeCiSettlement`, which refuses a refused configuration by name',
+  },
   'packages/application/src/pipeline/manual-start.ts': {
     count: 1,
     reason:

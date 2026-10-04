@@ -137,8 +137,11 @@ nothing — a secret set for a webhook GitLab cannot reach turns both reads off.
 What polling does not see, so you can choose knowingly:
 
 - **Approvals and finished pipelines.** A list of merge requests says what each one *is*, not what
-  happened inside it, so these stay webhook-only. The CI gate does not need the pipeline event (it
-  asks GitLab for the head's pipeline itself). An approval counts toward the approver's review time
+  happened inside it, so these stay webhook-only. The CI gate does not need the pipeline event: it
+  asks GitLab for the head's pipeline itself — on a poll-only binding every minute after its first
+  five checks, until `pipeline.limits.ci_timeout_minutes` (default 60) has passed since the task
+  entered the gate, and then it parks the task with a brief naming that key (WP-136). An approval
+  counts toward the approver's review time
   and changes nothing else, so a poll-only binding undercounts that metric. A comment read by a poll
   is dated by the poll that read it, up to one interval after it was written.
 - **Merge requests that changed before you switched it on.** The first poll reads the last interval

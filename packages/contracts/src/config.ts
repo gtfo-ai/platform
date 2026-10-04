@@ -135,6 +135,13 @@ export const templateOverrideSchema = z.strictObject({
   stages: z.record(stageIdSchema, stageOverrideSchema).optional(),
 });
 
+/** The shortest CI timeout a document may state (WP-136) — GitLab's minimum job timeout. */
+export const MIN_CI_TIMEOUT_MINUTES = 10;
+/** The longest CI timeout a document may state (WP-136): one day. */
+export const MAX_CI_TIMEOUT_MINUTES = 1440;
+/** The CI timeout when nothing states one (WP-136) — GitLab's default job timeout. */
+export const DEFAULT_CI_TIMEOUT_MINUTES = 60;
+
 /** Bounded loops (BD-008). Every counter has a ceiling; hitting it escalates. */
 export const pipelineLimitsSchema = z.strictObject({
   code_review_iterations: z.int().min(0).max(20).optional(),
@@ -154,6 +161,15 @@ export const pipelineLimitsSchema = z.strictObject({
    * The ceiling is 50 rather than the 20 every loop above carries for the same reason.
    */
   rebase_rechecks: z.int().min(0).max(50).optional(),
+  /**
+   * How long the CI gate waits for a pipeline when the project's git binding receives **no
+   * webhooks** (WP-136, the product owner's decision of 2026-10-03): minutes since the gate's
+   * current entry, after which the task is parked with a brief naming this key. A binding a webhook
+   * reaches is settled by the pipeline's own event and keeps the five-check bound. The bounds are
+   * GitLab's job timeout's — its minimum is 10 minutes and its default 60 (research/10's 2026-10-03
+   * addendum), so a single-job pipeline the default admits is waited for.
+   */
+  ci_timeout_minutes: z.int().min(MIN_CI_TIMEOUT_MINUTES).max(MAX_CI_TIMEOUT_MINUTES).optional(),
   question_timeout: durationSchema.optional(),
 });
 

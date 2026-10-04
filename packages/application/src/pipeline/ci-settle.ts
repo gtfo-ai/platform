@@ -138,7 +138,8 @@ export const runCiSettle = async (
   );
   if (result.kind === 'pending') {
     // The tamper check cannot be made yet (no changed file listed); the gate's own poll asks again,
-    // bounded by `MAX_GATE_CHECKS` — this wake-up settles nothing rather than guessing.
+    // bounded by `MAX_GATE_CHECKS` (or, on a poll-only binding, by its CI timeout, WP-136) — this
+    // wake-up settles nothing rather than guessing.
     logger.info(
       { task_id: taskId, head_sha: headSha, detail: result.detail },
       'a finished pipeline could not settle the CI gate yet; the gate’s poll decides it',

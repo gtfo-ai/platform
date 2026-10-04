@@ -77,14 +77,15 @@ describe('the keys a file may not apply', () => {
         knowledge_apply: { auto_apply: true },
         protected_paths: ['secrets/**'],
       },
-      pipeline: { limits: { human_rounds: 9, ci_fix_iterations: 4 } },
+      pipeline: { limits: { human_rounds: 9, ci_fix_iterations: 4, ci_timeout_minutes: 120 } },
       features: { maintenance: { enabled: true } },
       stages: { implementation: { model: 'claude-sonnet-5', prompt: 'prompts/x.md' } },
     });
     // WP-92, criterion 3: `prompts/x.md` resolves into `.agentic/prompts/`, so it is applied.
     expect(values).toEqual({
       policies: { protected_paths: ['secrets/**'] },
-      pipeline: { limits: { ci_fix_iterations: 4 } },
+      // WP-136: the CI timeout is operational, like the loop limits — the file may raise it.
+      pipeline: { limits: { ci_fix_iterations: 4, ci_timeout_minutes: 120 } },
       stages: { implementation: { model: 'claude-sonnet-5', prompt: 'prompts/x.md' } },
     });
     expect(notApplied.map((item) => item.key).sort()).toEqual([

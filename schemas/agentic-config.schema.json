@@ -125,6 +125,11 @@
               "minimum": 0,
               "maximum": 50
             },
+            "ci_timeout_minutes": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 1440
+            },
             "question_timeout": {
               "$ref": "#/$defs/Duration"
             }

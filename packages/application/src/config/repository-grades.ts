@@ -68,6 +68,7 @@ export const REPOSITORY_KEY_GRADES: Readonly<Record<string, RepositoryKeyGrade>>
   'pipeline.limits.human_rounds': 'not_applied',
   'pipeline.limits.rebase_attempts': 'operational',
   'pipeline.limits.rebase_rechecks': 'operational',
+  'pipeline.limits.ci_timeout_minutes': 'operational',
   'pipeline.limits.question_timeout': 'not_applied',
   'pipeline.wip': 'tighten_only',
   'stages.*.model': 'operational',

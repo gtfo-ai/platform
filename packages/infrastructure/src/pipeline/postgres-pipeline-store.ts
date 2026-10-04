@@ -1145,6 +1145,21 @@ export const createPostgresPipelineStore = (
       return row === undefined ? 'absent' : row.open ? 'open' : 'closed';
     },
 
+    stageAttemptEntry: async (tx, taskId, stage, attempt) => {
+      const { rows } = await sqlOf(tx).query<{ open: boolean; entered_at: Date }>(
+        `select (state = 'running' and exited_at is null) as open, entered_at from task_stages
+          where task_id = $1 and stage = $2 and attempt = $3`,
+        [taskId, stage, attempt],
+      );
+      const row = rows[0];
+      return row === undefined
+        ? null
+        : {
+            open: row.open,
+            enteredAt: new Date(row.entered_at).toISOString() as IsoDateTime,
+          };
+    },
+
     recentStageSignatures: async (tx, taskId, stage, limit) => {
       const { rows } = await sqlOf(tx).query<{ signature: string }>(
         `select signature from task_stages

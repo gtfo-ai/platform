@@ -39,8 +39,10 @@ import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
+import { ciWaitBrief, ciWaitReason, decideCiWait } from './ci-wait.js';
 import {
   CI_GATE_STAGE,
+  type CiWait,
   createGateEvaluator,
   type GateResult,
   MAX_GATE_CHECKS,
@@ -490,7 +492,9 @@ export const retryWindowMs = (policy: {
  * before the pipeline it is waiting for has even started. Thirty seconds against a five-check
  * budget gives a CI pipeline two and a half minutes to reach a terminal status before anyone is
  * asked to look at it; the event (`ci.pipeline.finished`) normally arrives long before that and
- * settles the gate without a re-check at all.
+ * settles the gate without a re-check at all. **Not on a poll-only git binding** (WP-136), which
+ * receives no such event: there the CI gate keeps this delay for its first five checks, then asks
+ * every minute until `pipeline.limits.ci_timeout_minutes` (`ci-wait.ts`).
  */
 export const GATE_RECHECK_MS = 30_000;
 
@@ -750,6 +754,14 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
     const checks = (job.data.gate_checks ?? 0) + 1;
 
     if (result.kind === 'pending') {
+      // WP-136: the CI gate on a poll-only binding is bounded by time, not by the five checks —
+      // unless its attempt has no row to time it from, which keeps the five checks below.
+      if (
+        result.ciWait !== undefined &&
+        (await waitForPollOnlyCi(options, request, result.detail, result.ciWait, checks))
+      ) {
+        return;
+      }
       if (checks >= MAX_GATE_CHECKS) {
         await settle(options, request, {
           kind: 'escalate',
@@ -854,7 +866,8 @@ export type GateSettlement =
       readonly kind: 'escalate';
       /**
        * The word the gate's row is closed `failed` with (WP-46, backlog 160): `undecided` (still
-       * pending after `MAX_GATE_CHECKS`) or `unsupported` (the project's providers cannot answer).
+       * pending after `MAX_GATE_CHECKS`, or — the CI gate on a poll-only binding, WP-136 — after
+       * its CI timeout) or `unsupported` (the project's providers cannot answer).
        */
       readonly outcome: TaskStageOutcome;
       readonly reason: string;
@@ -882,6 +895,68 @@ export const gateSettlementOf = (
     ? {}
     : { detailOriginalChars: result.detailOriginalChars }),
 });
+
+/**
+ * **A pending CI read on a poll-only binding** (WP-136, `ci-wait.ts`): re-check on the cadence,
+ * or park at the CI timeout or the backstop. Answers whether it decided; `false` only for an
+ * attempt with no `task_stages` row, which has no instant to time the wait from — the caller then
+ * keeps the five-check bound rather than inventing a clock (standing rule 16).
+ *
+ * The entry is read in a transaction of its own, after the provider reads and before any write.
+ * A **closed** row is a job of an attempt somebody left — a hand-back at `ci_gate` opened a new one,
+ * whose own job carries its own clock — so this fire does nothing (TD-004: a timer cannot be
+ * cancelled, so it re-validates).
+ */
+const waitForPollOnlyCi = async (
+  options: PipelineJobOptions,
+  request: StageExecutionJob,
+  detail: string,
+  wait: CiWait,
+  checks: number,
+): Promise<boolean> => {
+  const logger: Logger = options.logger ?? silentLogger;
+  const entry = await options.unitOfWork.transaction(async (scope) =>
+    options.store.tasks.stageAttemptEntry(scope.tx, request.taskId, request.stage, request.attempt),
+  );
+  const fields = { task_id: request.taskId, stage: request.stage, attempt: request.attempt };
+  if (entry === null) {
+    logger.warn(
+      fields,
+      'the CI gate has no stage row to time its wait from; it keeps the five-check bound',
+    );
+    return false;
+  }
+  if (!entry.open) {
+    logger.info(fields, 'a CI gate check of an attempt that is no longer open does nothing');
+    return true;
+  }
+  const now = Date.parse(options.clock.now());
+  const decision = decideCiWait({
+    enteredAtMs: Date.parse(entry.enteredAt),
+    nowMs: now,
+    checks,
+    timeoutMinutes: wait.timeoutMinutes,
+  });
+  if (decision.kind === 'recheck') {
+    await enqueueStage(options.jobs, {
+      ...request,
+      gateChecks: checks,
+      startAfter: new Date(now + decision.delayMs),
+    });
+    return true;
+  }
+  logger.info(
+    { ...fields, checks, timeout_minutes: wait.timeoutMinutes, ending: decision.kind, detail },
+    'the CI gate on a poll-only binding stopped waiting; the task is parked',
+  );
+  await settle(options, request, {
+    kind: 'escalate',
+    outcome: 'undecided',
+    reason: `${ciWaitReason(wait, decision, checks)}; the last read: ${detail}`,
+    blockerBrief: ciWaitBrief(wait, decision, checks),
+  });
+  return true;
+};
 
 /** {@link settle}, for a duty that settles a gate outside `stage.execute` (`ci-settle.ts`). */
 export const settleGate = async (

@@ -1528,6 +1528,50 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await store.tasks.lastReturnReason(tx, stored.task.id, 'ci_gate', 2)).toBeNull();
       });
 
+      it('answers a stage attempt’s entry instant and whether it is open, and nothing for an attempt with no row (WP-136)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        expect(await store.tasks.stageAttemptEntry(tx, stored.task.id, 'ci_gate', 1)).toBeNull();
+        const before = Date.now();
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 1,
+          causedByEventId: null,
+        });
+        const open = await store.tasks.stageAttemptEntry(tx, stored.task.id, 'ci_gate', 1);
+        expect(open?.open).toBe(true);
+        // The database's clock (`clock_timestamp()`; the memory store's `now`, `Date.now` here):
+        // an instant, near this test's, which is all the CI gate's wait reads off it.
+        const entered = Date.parse(open?.enteredAt ?? '');
+        expect(Math.abs(entered - before)).toBeLessThan(60_000);
+        expect(new Date(entered).toISOString()).toBe(open?.enteredAt);
+
+        await store.tasks.closeOpenStage(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 1,
+          outcome: 'undecided',
+          reason: 'the gate could not be decided',
+        });
+        expect(await store.tasks.stageAttemptEntry(tx, stored.task.id, 'ci_gate', 1)).toEqual({
+          open: false,
+          enteredAt: open?.enteredAt,
+        });
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 2,
+          causedByEventId: null,
+        });
+        expect((await store.tasks.stageAttemptEntry(tx, stored.task.id, 'ci_gate', 2))?.open).toBe(
+          true,
+        );
+        expect((await store.tasks.stageAttemptEntry(tx, stored.task.id, 'ci_gate', 1))?.open).toBe(
+          false,
+        );
+      });
+
       it('has no signatures and no reason for a stage that has not run', async () => {
         const stored = task();
         await store.tasks.insert(tx, stored);

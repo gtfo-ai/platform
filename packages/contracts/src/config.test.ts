@@ -3,9 +3,12 @@ import { patchOrgSettingsRequestSchema } from './api.js';
 import {
   agenticConfigSchema,
   commandPolicySchema,
+  DEFAULT_CI_TIMEOUT_MINUTES,
+  MAX_CI_TIMEOUT_MINUTES,
   MAX_CONTEXT_BUDGET_TOKENS,
   MAX_WIP_PARALLEL_TASKS,
   MAX_WIP_TASKS_IN_PIPELINE,
+  MIN_CI_TIMEOUT_MINUTES,
   organisationSettingsSchema,
   pipelineLimitsSchema,
   policiesConfigSchema,
@@ -486,6 +489,28 @@ describe('pipeline.wip', () => {
     expect(below.error?.issues[0]?.path).toEqual(['pipeline', 'wip', 'max_tasks_in_pipeline']);
     expect(withWip({ max_parallel_tasks: 3, max_tasks_in_pipeline: 3 }).success).toBe(true);
     expect(withWip({ max_parallel_runs: 4 }).success).toBe(false);
+  });
+});
+
+describe('pipeline.limits.ci_timeout_minutes (WP-136)', () => {
+  const withTimeout = (minutes: unknown) =>
+    agenticConfigSchema.safeParse({
+      version: 1,
+      pipeline: { limits: { ci_timeout_minutes: minutes } },
+    });
+
+  it('accepts 10 to 1440 whole minutes and refuses 5, 9, 1441, a fraction and a string', () => {
+    expect([MIN_CI_TIMEOUT_MINUTES, MAX_CI_TIMEOUT_MINUTES, DEFAULT_CI_TIMEOUT_MINUTES]).toEqual([
+      10, 1440, 60,
+    ]);
+    for (const accepted of [10, 60, 1440]) {
+      expect(withTimeout(accepted).success, String(accepted)).toBe(true);
+    }
+    for (const refused of [5, 9, 1441, 30.5, '60', 0, -10]) {
+      const parsed = withTimeout(refused);
+      expect(parsed.success, String(refused)).toBe(false);
+      expect(parsed.error?.issues[0]?.path).toEqual(['pipeline', 'limits', 'ci_timeout_minutes']);
+    }
   });
 });
 

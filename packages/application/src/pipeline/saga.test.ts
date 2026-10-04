@@ -2631,6 +2631,303 @@ describe('the rebase gate', () => {
   });
 });
 
+/**
+ * **The CI gate on a poll-only binding waits for the pipeline, up to a CI timeout** (WP-136, the
+ * product owner's decision of 2026-10-03). A binding no webhook reaches is told nothing when its
+ * pipeline finishes, so the gate's own re-checks are the only reader: thirty seconds apart for the
+ * first five, sixty after, until `pipeline.limits.ci_timeout_minutes` from the gate's entry.
+ */
+describe('the CI gate on a poll-only binding (WP-136)', () => {
+  const MINUTE = 60_000;
+  const POLL_ONLY = { interval_seconds: 60, receives_webhooks: false } as const;
+  const WEBHOOK = { interval_seconds: 60, receives_webhooks: true } as const;
+  const pipeline = (status: 'running' | 'pending' | 'manual' | 'success') => ({
+    id: 'pipeline-9',
+    head_sha: 'b'.repeat(40),
+    status,
+    url: null,
+    jobs: [],
+    coverage_pct: null,
+    finished_at: null,
+  });
+  const USER = '00000000-0000-4000-8000-0000000000c1';
+
+  /** A harness whose pipeline answers `status()` at every read; the gate is entered on publish. */
+  const waiting = (
+    status: () => ReturnType<typeof pipeline> | null,
+    options: {
+      readonly plan?: typeof POLL_ONLY | typeof WEBHOOK | null;
+      readonly timeoutMinutes?: number;
+      readonly mergeability?: () => boolean | null;
+    } = {},
+  ) =>
+    harnessWith({
+      git: {
+        pollPlan: () => (options.plan === undefined ? POLL_ONLY : options.plan),
+        getPipelineStatus: async () => status(),
+        getMergeRequest: async () => mergeRequest(false),
+        ...(options.mergeability === undefined
+          ? {}
+          : {
+              getMergeRequest: async () =>
+                mergeRequest((options.mergeability as () => boolean | null)()),
+            }),
+      },
+      ...(options.timeoutMinutes === undefined
+        ? {}
+        : {
+            settings: {
+              config: { pipeline: { limits: { ci_timeout_minutes: options.timeoutMinutes } } },
+            },
+          }),
+    });
+
+  const stageJobs = (harness: PipelineHarness) =>
+    harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.stageExecute);
+
+  const ciRows = (harness: PipelineHarness) =>
+    harness.store.stageRows
+      .filter((row) => row.stage === 'ci_gate')
+      .map((row) => [row.attempt, row.state, row.outcome]);
+
+  const lastEscalation = (harness: PipelineHarness) =>
+    harness
+      .events()
+      .filter((entry) => entry.type === 'task.escalated')
+      .at(-1) as Extract<DomainEvent, { type: 'task.escalated' }> | undefined;
+
+  /** Moves the clock to the next queued stage job and fires it; answers the delay it waited. */
+  const nextCheck = async (harness: PipelineHarness): Promise<number> => {
+    const due = stageJobs(harness)
+      .map((request) => request.startAfter?.getTime() ?? harness.clock.epochMs)
+      .sort((a, b) => a - b)[0];
+    if (due === undefined) {
+      throw new Error('no CI gate check is queued');
+    }
+    const waited = due - harness.clock.epochMs;
+    harness.clock.advance(Math.max(0, waited));
+    await harness.drain();
+    return waited;
+  };
+
+  it('passes a gate whose pipeline is pending for 40 minutes and then succeeds', async () => {
+    let finishedAt = Number.POSITIVE_INFINITY;
+    let harness: PipelineHarness | undefined;
+    harness = waiting(() =>
+      (harness?.clock.epochMs ?? 0) >= finishedAt ? pipeline('success') : pipeline('running'),
+    );
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.currentStage).toBe('ci_gate');
+    const entered = harness.clock.epochMs;
+    finishedAt = entered + 40 * MINUTE;
+
+    while (taskOf(harness).task.currentStage === 'ci_gate') {
+      await nextCheck(harness);
+      expect(harness.clock.epochMs - entered).toBeLessThanOrEqual(41 * MINUTE);
+    }
+    expect(taskOf(harness).task.state).not.toBe('needs_human');
+    expect(lastEscalation(harness)).toBeUndefined();
+    expect(ciRows(harness)).toEqual([[1, 'completed', 'protected_paths_clean']]);
+  });
+
+  it('re-checks every 30 seconds for the first five checks and every 60 seconds after', async () => {
+    const harness = waiting(() => pipeline('running'));
+    await harness.publish([ticketMatched()]);
+    const delays: number[] = [];
+    for (let check = 0; check < 8; check += 1) {
+      delays.push(await nextCheck(harness));
+    }
+    // The entry was check 1; the delays before checks 2…9.
+    expect(delays).toEqual([30_000, 30_000, 30_000, 30_000, 60_000, 60_000, 60_000, 60_000]);
+    expect(taskOf(harness).task.state).toBe('active');
+  });
+
+  it('re-checks 60 seconds later at 59 minutes, and parks at 60 with the brief naming the timeout', async () => {
+    const harness = waiting(() => pipeline('running'));
+    await harness.publish([ticketMatched()]);
+    const entered = harness.clock.epochMs;
+    while (harness.clock.epochMs - entered < 59 * MINUTE) {
+      await nextCheck(harness);
+    }
+    expect(harness.clock.epochMs - entered).toBe(59 * MINUTE);
+    expect(taskOf(harness).task.state).toBe('active');
+    const [queued] = stageJobs(harness);
+    expect(queued?.startAfter?.getTime()).toBe(entered + 60 * MINUTE);
+
+    await nextCheck(harness);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    const escalation = lastEscalation(harness);
+    expect(escalation?.payload.blocker_brief).toBe(
+      'The CI pipeline pipeline-9 for this merge request was still running after 60 minutes — the CI timeout (`pipeline.limits.ci_timeout_minutes = 60`). ' +
+        "This project's fake-git binding is poll-only, so the platform asked fake-git every minute rather than waiting for a webhook. " +
+        'Look at the pipeline; when it has finished, hand the task back at ci_gate. If pipelines here routinely take longer, raise ci_timeout_minutes.',
+    );
+    expect(escalation?.payload.reason).toContain('timed out');
+    expect(ciRows(harness)).toEqual([[1, 'failed', 'undecided']]);
+    expect(stageJobs(harness)).toEqual([]);
+  });
+
+  it('parks at the configured timeout, says so when no pipeline has started, and says a manual pipeline waits for a person', async () => {
+    // WP-138: a head with no pipeline on a project whose default branch has a CI file is pending.
+    const harness = harnessWith({
+      git: {
+        pollPlan: () => POLL_ONLY,
+        getPipelineStatus: async () => null,
+        getMergeRequest: async () => mergeRequest(false),
+      },
+      settings: { config: { pipeline: { limits: { ci_timeout_minutes: 15 } } } },
+      repositoryFiles: {
+        read: async (request) => ({
+          status: 'ok',
+          commitSha: 'c'.repeat(40),
+          files: Object.fromEntries(
+            request.paths.map((path) => [path, { kind: 'file', content: 'test: {}\n' }]),
+          ),
+        }),
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    const entered = harness.clock.epochMs;
+    while (taskOf(harness).task.state === 'active') {
+      await nextCheck(harness);
+    }
+    expect(harness.clock.epochMs - entered).toBe(15 * MINUTE);
+    const brief = lastEscalation(harness)?.payload.blocker_brief ?? '';
+    expect(brief).toContain(
+      'No CI pipeline has started for the head commit of this merge request after 15 minutes — the CI timeout (`pipeline.limits.ci_timeout_minutes = 15`).',
+    );
+
+    const manual = waiting(() => pipeline('manual'), { timeoutMinutes: 10 });
+    await manual.publish([ticketMatched()]);
+    while (taskOf(manual).task.state === 'active') {
+      await nextCheck(manual);
+    }
+    expect(lastEscalation(manual)?.payload.blocker_brief).toContain(
+      'A manual pipeline does not finish by itself: it waits for someone to start its manual job.',
+    );
+  });
+
+  it('leaves a webhook binding and a binding with no poll plan at five checks (unchanged)', async () => {
+    for (const plan of [WEBHOOK, null]) {
+      const harness = waiting(() => pipeline('running'), { plan });
+      await harness.publish([ticketMatched()]);
+      for (let check = 1; check < MAX_GATE_CHECKS; check += 1) {
+        await nextCheck(harness);
+      }
+      expect(taskOf(harness).task.state, String(plan)).toBe('needs_human');
+      expect(lastEscalation(harness)?.payload.reason).toContain(
+        `could not be decided after ${MAX_GATE_CHECKS} attempts`,
+      );
+    }
+  });
+
+  it('leaves another gate on a poll-only binding at five checks (unchanged)', async () => {
+    const harness = waiting(() => pipeline('success'), { mergeability: () => null });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.currentStage).toBe('rebase_gate');
+    for (let check = 1; check < MAX_GATE_CHECKS; check += 1) {
+      await nextCheck(harness);
+    }
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(lastEscalation(harness)?.payload.reason).toContain(
+      `the "rebase_gate" gate could not be decided after ${MAX_GATE_CHECKS} attempts`,
+    );
+  });
+
+  it('does nothing on a fire after the task is cancelled — not even a provider read', async () => {
+    let reads = 0;
+    const harness = waiting(() => {
+      reads += 1;
+      return pipeline('running');
+    });
+    await harness.publish([ticketMatched()]);
+    await nextCheck(harness);
+    await cancelTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+    });
+    await harness.drain();
+    const before = { events: harness.events().length, reads };
+    // The wake-up queued before the cancel is still due (TD-004: a timer cannot be cancelled).
+    expect(stageJobs(harness)).toHaveLength(1);
+    harness.clock.advance(120 * MINUTE);
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('cancelled');
+    expect({ events: harness.events().length, reads }).toEqual(before);
+    expect(stageJobs(harness)).toEqual([]);
+  });
+
+  it('gives a hand-back a fresh clock, and a fire of the attempt it replaced does nothing', async () => {
+    const harness = waiting(() => pipeline('running'), { timeoutMinutes: 10 });
+    await harness.publish([ticketMatched()]);
+    while (taskOf(harness).task.state === 'active') {
+      await nextCheck(harness);
+    }
+    expect(ciRows(harness)).toEqual([[1, 'failed', 'undecided']]);
+    const escalations = harness.events().filter((entry) => entry.type === 'task.escalated').length;
+
+    await retryStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'ci_gate' as Slug,
+    });
+    await harness.drain();
+    expect(ciRows(harness)).toEqual([
+      [1, 'failed', 'undecided'],
+      [2, 'running', null],
+    ]);
+    // A wake-up of attempt 1 that was still queued (a timer cannot be cancelled, TD-004): its
+    // clock ran out ten minutes ago, and it must not park attempt 2.
+    await harness.jobs.enqueue({
+      queue: JOB_QUEUES.stageExecute,
+      singletonKey: `task:${taskOf(harness).task.id}`,
+      data: {
+        task_id: taskOf(harness).task.id,
+        project_id: PROJECT,
+        stage: 'ci_gate',
+        attempt: 1,
+        gate_checks: 7,
+      },
+    });
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('active');
+    expect(harness.events().filter((entry) => entry.type === 'task.escalated')).toHaveLength(
+      escalations,
+    );
+    // Attempt 2's own chain waits its full ten minutes from the hand-back.
+    const handedBack = harness.clock.epochMs;
+    while (taskOf(harness).task.state === 'active') {
+      await nextCheck(harness);
+    }
+    expect(harness.clock.epochMs - handedBack).toBe(10 * MINUTE);
+    expect(ciRows(harness)).toEqual([
+      [1, 'failed', 'undecided'],
+      [2, 'failed', 'undecided'],
+    ]);
+  });
+
+  it('does not restart the clock for a recovered job: a lost wake-up re-enqueued fresh still parks at the timeout', async () => {
+    const harness = waiting(() => pipeline('running'), { timeoutMinutes: 20 });
+    await harness.publish([ticketMatched()]);
+    const entered = harness.clock.epochMs;
+    while (harness.clock.epochMs - entered < 15 * MINUTE) {
+      await nextCheck(harness);
+    }
+    // The wake-up is lost, and recovery enqueues the entry's own job again — no check count.
+    expect(harness.jobs.take(JOB_QUEUES.stageExecute)).toHaveLength(1);
+    await harness.jobs.enqueue({
+      queue: JOB_QUEUES.stageExecute,
+      singletonKey: `task:${taskOf(harness).task.id}`,
+      data: { task_id: taskOf(harness).task.id, project_id: PROJECT, stage: 'ci_gate', attempt: 1 },
+    });
+    while (taskOf(harness).task.state === 'active') {
+      await nextCheck(harness);
+    }
+    expect(harness.clock.epochMs - entered).toBe(20 * MINUTE);
+    expect(lastEscalation(harness)?.payload.blocker_brief).toContain('after 20 minutes');
+  });
+});
+
 describe('human merge-request comments (BD-007)', () => {
   it('opens one batch window per merge request, two minutes out, and never coalesces', async () => {
     const harness = harnessWith();

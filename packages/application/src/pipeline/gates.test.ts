@@ -43,7 +43,7 @@ import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { createMemoryAuditLog, createVirtualTimer } from '../testing/memory-integrations.js';
 import { CI_LOG_HEAD_CHARS, CI_LOG_TAIL_CHARS } from './ci-log.js';
 import { MAX_CONFLICT_FILES } from './diff-coalescer.js';
-import { createGateEvaluator, rebaseAgainstCi } from './gates.js';
+import { ciTimeoutMinutesOf, createGateEvaluator, rebaseAgainstCi } from './gates.js';
 import type { PipelineIntegrations } from './integrations.js';
 import { staticPipelineIntegrations } from './integrations.js';
 import { defaultProjectSettings, staticProjectSettings } from './settings.js';
@@ -82,6 +82,8 @@ const integrationsWith = (git: Partial<GitProviderPort> | null): PipelineIntegra
       type: 'git',
     },
     capabilities: () => ({}),
+    // WP-136: no poll plan unless a case says otherwise — the five-check bound of a webhook binding.
+    pollPlan: () => null,
     getPipelineStatus: async () => {
       throw new Error('the test did not script getPipelineStatus');
     },
@@ -289,6 +291,8 @@ const evaluate = (
      * composes no reader at all.
      */
     readonly repositoryFiles?: RepositoryFileSource | null;
+    /** WP-136: `pipeline.limits.ci_timeout_minutes`. */
+    readonly ciTimeoutMinutes?: number;
   } = {},
 ) =>
   createGateEvaluator({
@@ -298,9 +302,18 @@ const evaluate = (
     integrations: staticPipelineIntegrations(integrationsWith(git)),
     settings: staticProjectSettings((projectId) =>
       defaultProjectSettings(projectId, {
-        ...(world.protectedPaths === undefined
+        ...(world.protectedPaths === undefined && world.ciTimeoutMinutes === undefined
           ? {}
-          : { config: { policies: { protected_paths: [...world.protectedPaths] } } }),
+          : {
+              config: {
+                ...(world.protectedPaths === undefined
+                  ? {}
+                  : { policies: { protected_paths: [...world.protectedPaths] } }),
+                ...(world.ciTimeoutMinutes === undefined
+                  ? {}
+                  : { pipeline: { limits: { ci_timeout_minutes: world.ciTimeoutMinutes } } }),
+              },
+            }),
         ...(world.configRefusal === undefined ? {} : { configRefusal: world.configRefusal }),
       }),
     ),
@@ -1006,5 +1019,76 @@ describe('the merged gate', () => {
       passed: true,
       detail: 'the merge request was merged',
     });
+  });
+});
+
+/**
+ * WP-136: the evaluator marks a pending CI read on a **poll-only** binding with the wait the job
+ * bounds by time — and nothing else: a webhook binding, a binding with no poll plan, and the
+ * rebase gate answer `pending` exactly as before.
+ */
+describe('the CI gate on a poll-only binding (WP-136)', () => {
+  const POLL_ONLY = { interval_seconds: 60, receives_webhooks: false };
+
+  it('marks a pending read with the configured timeout, the provider and the pipeline it saw', async () => {
+    const running = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      { pollPlan: () => POLL_ONLY, getPipelineStatus: async () => pipelineStatus('running') },
+      { ciTimeoutMinutes: 90 },
+    );
+    expect(running).toEqual({
+      kind: 'pending',
+      detail: 'pipeline pipeline-1 is running',
+      ciWait: {
+        timeoutMinutes: 90,
+        provider: 'fake-git',
+        pipeline: { id: 'pipeline-1', status: 'running' },
+      },
+    });
+    const none = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      { pollPlan: () => POLL_ONLY, getPipelineStatus: async () => null },
+      { repositoryFiles: WITH_CI_FILE },
+    );
+    expect(none).toMatchObject({
+      kind: 'pending',
+      ciWait: { timeoutMinutes: 60, pipeline: null },
+    });
+  });
+
+  it('leaves a webhook binding, a binding with no poll plan and the rebase gate unmarked', async () => {
+    for (const plan of [{ interval_seconds: 60, receives_webhooks: true }, null]) {
+      const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+        pollPlan: () => plan,
+        getPipelineStatus: async () => pipelineStatus('running'),
+      });
+      expect(result, JSON.stringify(plan)).toEqual({
+        kind: 'pending',
+        detail: 'pipeline pipeline-1 is running',
+      });
+    }
+    const rebase = await evaluate(templateStage('rebase_gate'), storedTask(MR), {
+      pollPlan: () => POLL_ONLY,
+      getMergeRequest: async () => liveMergeRequest(HEAD_SHA, null),
+    });
+    expect(rebase).toEqual({
+      kind: 'pending',
+      detail: 'the provider has not computed mergeability yet',
+    });
+  });
+
+  it('reads the default timeout for a value it cannot trust (standing rule 16)', () => {
+    const settingsWith = (limits: Record<string, unknown>) =>
+      defaultProjectSettings(PROJECT, { config: { pipeline: { limits } } as never });
+    expect(ciTimeoutMinutesOf(settingsWith({}))).toBe(60);
+    expect(ciTimeoutMinutesOf(settingsWith({ ci_timeout_minutes: 15 }))).toBe(15);
+    for (const untrusted of [5, 1441, 30.5, '45', Number.NaN, null]) {
+      expect(
+        ciTimeoutMinutesOf(settingsWith({ ci_timeout_minutes: untrusted })),
+        String(untrusted),
+      ).toBe(60);
+    }
   });
 });

@@ -69,10 +69,13 @@ describe('precedence and provenance', () => {
       business_review_iterations: 2,
       ci_fix_iterations: 3,
       human_rounds: 3,
+      // WP-136: the CI gate's wait on a poll-only binding, GitLab's default job timeout.
+      ci_timeout_minutes: 60,
       question_timeout: '1 working day',
     });
     expect(effective.sources['pipeline.limits.code_review_iterations']).toBe('project');
     expect(effective.sources['pipeline.limits.ci_fix_iterations']).toBe('default');
+    expect(effective.sources['pipeline.limits.ci_timeout_minutes']).toBe('default');
   });
 
   it('merges the user-keyed records (stages, risk classes, status mapping) per key', () => {

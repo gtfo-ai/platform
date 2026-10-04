@@ -182,7 +182,9 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > - **cannot be decided** — the provider lists **no** changed file (a merge request's diff is
 >   computed asynchronously, so `[]` is *not yet*, never *nothing*), or lists as many files as the
 >   read's bound so the rest are unseen — is never read as *no tamper* (fail closed on a mutation):
->   an empty list keeps the gate `pending` until `MAX_GATE_CHECKS` and then escalates `undecided`;
+>   an empty list keeps the gate `pending` until `MAX_GATE_CHECKS` (on a poll-only git binding,
+>   until `pipeline.limits.ci_timeout_minutes` from the gate's entry — WP-136) and then escalates
+>   `undecided`;
 >   a list at the bound escalates `unsupported` at once.
 >
 > **What a failed CI gate hands back** (BD-024 §5, Q55's remaining half): the failing job's names

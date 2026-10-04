@@ -960,6 +960,20 @@ export interface TaskRepository {
     stage: Slug,
     attempt: number,
   ): Promise<'open' | 'closed' | 'absent'>;
+  /**
+   * When `stage`'s attempt `attempt` was entered (`task_stages.entered_at`, the database's clock)
+   * and whether it is still open — `null` when the attempt has no row (WP-136).
+   *
+   * The CI gate's wait on a poll-only binding is timed from this instant, read on every fire, so a
+   * lost, recovered or replayed job cannot restart the clock; a hand-back opens a new attempt, and
+   * a job of the old attempt finds it closed.
+   */
+  stageAttemptEntry(
+    tx: Transaction,
+    taskId: Id,
+    stage: Slug,
+    attempt: number,
+  ): Promise<{ readonly open: boolean; readonly enteredAt: IsoDateTime } | null>;
   /** The last `limit` signatures at `stage`, oldest first — the order `hasIdenticalFailureStreak` wants. */
   recentStageSignatures(
     tx: Transaction,

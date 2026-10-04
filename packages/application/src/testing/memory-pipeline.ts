@@ -100,6 +100,12 @@ interface StageRow {
   returnReasonOriginalChars: number | null;
   signature: string | null;
   enteredAt: number;
+  /**
+   * The instant the row was entered, on {@link MemoryPipelineStoreOptions.now} — PostgreSQL's
+   * `entered_at` (`clock_timestamp()`), which the CI gate's wait is timed from (WP-136).
+   * `enteredAt` stays the write sequence the ordering reads use.
+   */
+  enteredAtMs: number;
   exitedAt: number | null;
 }
 
@@ -251,6 +257,8 @@ export const createMemoryPipelineStore = (
   let runCommandSequence = 0;
   const chargedRuns = new Set<Id>();
   let sequence = 0;
+  /** The database's clock for `task_stages.entered_at` (WP-136); `now` below is the same option. */
+  const stageClock = options.now ?? (() => Date.now());
 
   /**
    * A read of a task row, with `task.sequence` reconciled against the event log (divergence 7).
@@ -704,6 +712,7 @@ export const createMemoryPipelineStore = (
         returnReasonOriginalChars: null,
         signature: null,
         enteredAt: sequence,
+        enteredAtMs: stageClock(),
         exitedAt: null,
       });
     },
@@ -790,6 +799,7 @@ export const createMemoryPipelineStore = (
           returnReasonOriginalChars: null,
           signature: entry.signature,
           enteredAt: sequence,
+          enteredAtMs: stageClock(),
           exitedAt: null,
         });
         return;
@@ -803,6 +813,17 @@ export const createMemoryPipelineStore = (
       );
       if (row === undefined) return 'absent';
       return row.state === 'running' && row.exitedAt === null ? 'open' : 'closed';
+    },
+    stageAttemptEntry: async (_tx, taskId, stage, attempt) => {
+      const row = stages.find(
+        (candidate) =>
+          candidate.taskId === taskId && candidate.stage === stage && candidate.attempt === attempt,
+      );
+      if (row === undefined) return null;
+      return {
+        open: row.state === 'running' && row.exitedAt === null,
+        enteredAt: new Date(row.enteredAtMs).toISOString() as IsoDateTime,
+      };
     },
     recentStageSignatures: async (_tx, taskId, stage, limit) =>
       stages

@@ -656,6 +656,12 @@ re-checked for conflicts when `main` moves, and the comments on each merge reque
 with a webhook secret makes neither read: its webhook carries both. Approvals stay webhook-only
 (they count toward review time and change nothing else); the GitLab setup guide's step 3a lists the
 rest. One setting, `APP_POLL_SWEEP_INTERVAL_MS`, bounds how long a lost poll of either kind waits.
+**A finished pipeline is not polled either, so the CI gate waits for it itself** (WP-136): on a
+poll-only binding it asks GitLab for the merge request's head pipeline every 30 seconds for its first
+five checks and every minute after, until `pipeline.limits.ci_timeout_minutes` (default 60, 10–1440,
+settable in `.agentic/config.yml`) has passed since the task entered the gate, and then parks the task
+*Needs human* with a brief naming that key. A binding with a webhook secret keeps the gate's five checks
+30 seconds apart, because the pipeline's own event settles it. A resume after a pause keeps the gate's clock; a hand-back at `ci_gate` restarts it.
 
 ## 5. Upgrade
 

@@ -865,6 +865,8 @@ const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitPro
         getDefaultBranchHead: async () => ({ branch: 'main', sha: 'a'.repeat(40) }),
         isBranchProtected: async () => true,
         getPipelineStatus: async () => null,
+        // WP-136: no poll plan, so the CI gate keeps the five-check bound a webhook binding has.
+        pollPlan: () => null,
         getMergeRequest: async () => {
           throw new Error('the test did not script getMergeRequest');
         },
@@ -1243,6 +1245,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   // the *next* aggregate write clashes in production while this tier stays green.
   const humanActions: { taskId: Id; userId: Id; at: IsoDateTime }[] = [];
   const store = createMemoryPipelineStore({
+    // WP-136: the database's clock is the test's, so `task_stages.entered_at` — which the CI gate's
+    // wait on a poll-only binding is timed from — moves when the test moves the clock.
+    now: () => clock.epochMs,
     // WP-44: the activity rule's second input, as PostgreSQL reads `human_actions`.
     humanActions: (taskId) => humanActions.filter((row) => row.taskId === taskId),
     streamSequence: (taskId) => memory._committedLastSeq('task', taskId) + 1,

@@ -338,19 +338,26 @@ is *Done*.
 | a task parks with *"the merge request adds the static run token to the repository"* | the task page's brief | **rotate the run token**: revoke it in GitLab, create a new one, re-seal it, declare its expiry; remove it from the branch before anything else |
 | a run fails with *"…the model API answered HTTP 401…"* | the run page's error (measured with a fake token, WP-133) | a wrong or expired token: replace it in `.env`, `docker compose up -d` |
 | an agent cannot install a package or reach a host | the run's egress sidecar: `docker ps --filter label=com.agentic.run` lists `egress-<run id>` while the run lives, and `docker logs egress-<run id>` has *"Proxying refused on filtered domain …"* (not run here) | add a registry to `APP_RUN_REGISTRY_HOSTS`, or a model-side host to `APP_MODEL_EGRESS_HOSTS` |
-| **the CI gate on a poll-only binding**: the task parks with *"the "ci_gate" gate could not be decided after 5 attempts …"* | the task page's brief | see below |
+| **the CI gate on a poll-only binding**: the task parks with *"The CI pipeline … was still running after 60 minutes — the CI timeout (`pipeline.limits.ci_timeout_minutes = 60`) …"* | the task page's brief | see below |
 | something failed with no task to show it | **Settings → Dead letters** and **Settings → Failed jobs** (admin) | operator guide § 9 |
 
-**The CI gate on a poll-only binding** (read off the code, not measured — WP-135's discovered work).
-The gate asks GitLab for the merge request's head pipeline when it is entered and then every
-**30 seconds, five times in all**; a webhook's *pipeline finished* event normally settles it, and a
-poll-only binding receives none. So a CI pipeline that takes longer than **about two minutes** parks
-the task *Needs human* at the CI gate even when it later goes green. When the pipeline has finished,
-**Hand back** at `ci_gate` from the task page: the gate is read again (with five fresh checks). A
+**The CI gate on a poll-only binding** (WP-136; the unit tier drives it on a test clock, not
+measured on gitlab.com). A poll-only binding is told nothing when a pipeline finishes, so the gate
+asks GitLab for the merge request's head pipeline itself: when it is entered, then every **30
+seconds** for its first five checks, then **every minute**, until the **CI timeout** has passed since
+the task entered the gate — `pipeline.limits.ci_timeout_minutes`, **60 minutes** by default (10–1440;
+set it in `.agentic/config.yml` if Autix's pipelines routinely take longer). A pipeline that finishes
+green inside the timeout passes the gate within a minute of finishing; one still running at the
+timeout parks the task *Needs human* with a brief naming the pipeline, its status and the key — or
+saying *no pipeline has started for the head commit*, and for a `manual` pipeline that it waits for
+someone to start its manual job. When the pipeline has finished, **Hand back** at `ci_gate` from the
+task page: that is a new entry with a fresh timeout. A **pause and resume** keeps the clock: a task resumed after its timeout is read once more and then parks; only a hand-back restarts it. (A binding with a webhook secret keeps the old
+five checks 30 seconds apart, because the pipeline's own event settles it.) A
 project with no CI at all passes the gate's pipeline half — but **only when the default branch has
 no `.gitlab-ci.yml`** (WP-138): a head with no pipeline on a project that has one is a pipeline that
 has not started, and the gate waits for it rather than passing. The file is read from the platform's
-own mirror (`APP_KNOWLEDGE_MIRROR_ROOT`); a process that has none cannot tell, and waits too.
+own mirror (`APP_KNOWLEDGE_MIRROR_ROOT`); a process that has none cannot tell, and waits too — on a
+poll-only binding up to the same CI timeout.
 
 The logs are JSON, one line per entry, with `task_id` and `run_id` where they apply:
 `docker compose logs -f app runner launcher`.
