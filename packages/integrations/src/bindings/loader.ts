@@ -83,6 +83,7 @@
 import type {
   BindingRepository,
   CredentialMintingHints,
+  DeployKeyRunCredential,
   GitProviderPort,
   InjectedSecret,
   IntegrationAccount,
@@ -110,7 +111,7 @@ import {
 } from '@platform/application';
 import type { Id, IntegrationType, JsonObject } from '@platform/contracts';
 import type { IntegrationPortByType, IntegrationRegistry } from '../registry.js';
-import { staticRunCredentialOf } from '../static-run-credential.js';
+import { deployKeyRunCredentialOf, staticRunCredentialOf } from '../static-run-credential.js';
 
 export class BindingLoadError extends Error {
   override readonly name = 'BindingLoadError';
@@ -321,6 +322,8 @@ interface Built<TType extends IntegrationType> {
   readonly mintingHints?: CredentialMintingHints;
   /** The integration's static run credential (WP-137); absent unless it declares one. */
   readonly staticRunCredential?: StaticRunCredential;
+  /** The integration's SSH deploy key (WP-146); absent unless it declares one. */
+  readonly deployKeyRunCredential?: DeployKeyRunCredential;
 }
 
 /**
@@ -522,10 +525,25 @@ export const createPipelineIntegrationsLoader = (
                 secretName(binding, registration.staticRunCredential.tokenField),
               ),
             };
+      // WP-146 (TD-028 decision 13b): the deploy key, read the same way, with the placeholder the
+      // binding's redactor writes in its place (the leak search matches both).
+      const declaredKey = deployKeyRunCredentialOf(
+        registration.staticRunCredential,
+        parsed.data as Readonly<Record<string, unknown>>,
+      );
+      const deployKeyField = registration.staticRunCredential?.deployKey?.privateKeyField;
+      const deployKeyRunCredential =
+        declaredKey === undefined || deployKeyField === undefined
+          ? undefined
+          : {
+              ...declaredKey,
+              redactedAs: secretPlaceholder(secretName(binding, deployKeyField)),
+            };
       return {
         ...channels,
         ...(mintingHints === undefined ? {} : { mintingHints }),
         ...(staticRunCredential === undefined ? {} : { staticRunCredential }),
+        ...(deployKeyRunCredential === undefined ? {} : { deployKeyRunCredential }),
         port: declineUndeclaredMinting(
           registration,
           type,
@@ -682,6 +700,10 @@ export const createPipelineIntegrationsLoader = (
                 ...(git.built.staticRunCredential === undefined
                   ? {}
                   : { staticRunCredential: git.built.staticRunCredential }),
+                // WP-146: TD-028 decision 13b's deploy key, when the integration declares one.
+                ...(git.built.deployKeyRunCredential === undefined
+                  ? {}
+                  : { deployKeyRunCredential: git.built.deployKeyRunCredential }),
               },
         taskManagement:
           taskManagement === null

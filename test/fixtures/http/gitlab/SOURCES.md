@@ -403,3 +403,18 @@ reader repeating the search.
   a recording. What the corpus cannot say: which actions GitLab writes a system note for, and whether
   a note's `created_at` is ever rewritten (an edited note keeps it, by the page's `updated_at` beside
   it — not measured).
+
+## Pages read for WP-146 (`deploy-keys.json`)
+
+Retrieved **2026-10-04** (UTC), without a gitlab.com credential, so nothing was recorded against a real
+instance.
+
+- `https://docs.gitlab.com/api/deploy_keys/` — *"List deploy keys for project"*,
+  `GET /projects/:id/deploy_keys`, and its example response: `id`, `title`, `key` (the public key line),
+  `fingerprint`, `fingerprint_sha256`, `created_at`, `expires_at`, `can_push`. The first entry is the
+  page's example verbatim; the two Ed25519 entries are **added** in the same shape (one with write
+  access, one without) — their key lines are fake (one is RFC 8032's published test key's public half).
+- `https://docs.gitlab.com/user/gitlab_com/` — the documented `known_hosts` lines of gitlab.com and the
+  alternative SSH endpoint `altssh.gitlab.com` on port `443` (the platform's constant, not a fixture;
+  `packages/integrations/src/providers/gitlab/ssh-route.ts` carries the citation and the measurement).
+

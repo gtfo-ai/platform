@@ -401,6 +401,24 @@ export const createIntegrationRegistry = (
           'the static run token and the API token are declared as one field; the run token must be a separate secret (TD-028 decision 13)',
         );
       }
+      const deployKey = fixed.deployKey;
+      if (deployKey !== undefined) {
+        // WP-146 (TD-028 decision 13b item 1): both keys exist, and the private one is sealed.
+        for (const field of [deployKey.privateKeyField, deployKey.publicKeyField]) {
+          if (!(field in shape)) {
+            throw new ProviderRegistrationError(
+              registration.id,
+              `deploy key field "${field}" does not exist in the config schema`,
+            );
+          }
+        }
+        if (!registration.secretFields.includes(deployKey.privateKeyField)) {
+          throw new ProviderRegistrationError(
+            registration.id,
+            `deploy key field "${deployKey.privateKeyField}" is not in secretFields; a private key would be stored and published as plain configuration (BD-002)`,
+          );
+        }
+      }
     }
     const channels = registration.communicationChannels;
     if (registration.type === 'communication' && channels === undefined) {

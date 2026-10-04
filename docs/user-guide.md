@@ -806,7 +806,10 @@ GitLab cannot mint (GitLab.com Free), an administrator may declare a **static ru
 instead (`run_credential: static`): one token every run of that project is given — a dedicated
 user's, or the administrator's own repository-only one (`run_token_owner: operator`, handed to a run
 only while the default branch is protected with push "No one") — which is not revoked when a run ends
-and is never given to a shadow task — weaker isolation, which the operator guide states. With neither, such a stage fails at start naming the binding and both
+and is never given to a shadow task — weaker isolation, which the operator guide states. On GitLab.com
+the administrator may instead give the project an **SSH deploy key** (`run_credential: deploy_key`):
+the platform keeps the key and a run only asks it to sign, so the key never enters the run's
+workspace. With neither, such a stage fails at start naming the binding and both
 settings, and a read-only stage can check out only a repository GitLab serves without
 authentication. The [operator guide](operator-guide.md) §1 and §10
 say the same thing from the other side.

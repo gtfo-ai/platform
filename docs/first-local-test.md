@@ -69,17 +69,21 @@ TD-028 decisions 13 and 13a). **You choose which of three forms**, each with its
 
 | | A. A dedicated user's token | B. Your own repository-only token | C. A project SSH deploy key |
 |---|---|---|---|
-| Set | `run_credential: static` | `run_credential: static`, `run_token_owner: operator` | **not in this build** (WP-146) |
-| You create | a **dedicated** GitLab user on the Autix project **only**, role **Developer**, and its token | a token of **your own** account | — |
-| Token scopes | `read_repository` + `write_repository`, expiry ≤ 90 days | `read_repository` + `write_repository` **only** (no `api`, `read_api`, `read_user`), expiry ≤ 90 days | — |
+| Set | `run_credential: static` | `run_credential: static`, `run_token_owner: operator` | `run_credential: deploy_key`, `run_ssh_public_key` (gitlab.com only) |
+| You create | a **dedicated** GitLab user on the Autix project **only**, role **Developer**, and its token | a token of **your own** account | `ssh-keygen -t ed25519 -N ""`, added to the Autix project's **Deploy keys** with **write permissions** |
+| Token scopes | `read_repository` + `write_repository`, expiry ≤ 90 days | `read_repository` + `write_repository` **only** (no `api`, `read_api`, `read_user`), expiry ≤ 90 days | — (an unencrypted Ed25519 key; no expiry is required) |
 | Costs | a seat | nothing | nothing |
-| **Test connection** checks | the user's role: Developer passes, Maintainer/Owner refused | the token **cannot call the API** (`GET /user` with it must answer `403 insufficient_scope`) **and** every rule matching `develop`, wildcards included, leaves push **No one**, force push off — the latter **re-checked before every run**; the scope is not, so test again after every re-seal | — |
-| **Lost** | the token lives to its expiry, is not revoked per run, a read-only stage holds it with its push scope, and a run could push it into the repository where it still works | all of A's, and **reach**: it reads **every repository you can access** and pushes to every unprotected branch of them; pipelines on the branches and tags a run pushes run **as you**, and a tag matching a protected-tag rule open to Maintainers gets protected CI variables — protect release tags with *No one* too | — |
+| **Test connection** checks | the user's role: Developer passes, Maintainer/Owner refused | the token **cannot call the API** (`GET /user` with it must answer `403 insufficient_scope`) **and** every rule matching `develop`, wildcards included, leaves push **No one**, force push off — the latter **re-checked before every run**; the scope is not, so test again after every re-seal | the key is one of the project's deploy keys **with write access**, and the default branch is protected with push **No one** (no deploy key admitted) |
+| **Lost** | the token lives to its expiry, is not revoked per run, a read-only stage holds it with its push scope, and a run could push it into the repository where it still works | all of A's, and **reach**: it reads **every repository you can access** and pushes to every unprotected branch of them; pipelines on the branches and tags a run pushes run **as you**, and a tag matching a protected-tag rule open to Maintainers gets protected CI variables — protect release tags with *No one* too | no per-run revocation (removing the key from the project is the revocation); a read-only stage can sign pushes; a run's signing oracle reaches every project the key is enabled on. The key itself **never enters the run's container** |
 
 **Which today:** A if a seat is free, B otherwise — B needs no new user, and the checks are what stand
 in for the role limit, so protect the default branch (*Protect the default branch*, below — and leave **Allowed to force push** off) before testing. C is
-stronger than both (the key never enters the run's container) and lands later. Either way, put the
-token in `.env` as `GITLAB_RUN_TOKEN` and add the name to `APP_INTEGRATION_SECRET_ENV` (§3). The
+stronger than both (the key never enters the run's container) and is built since WP-146, but it has
+been run only against a local SSH server standing in for `altssh.gitlab.com` — its first gitlab.com
+run is the measurement (`docs/TODO.md`). Pick C if you would rather the key never reach a run; its
+procedure is the setup guide's step 5a, C. For A or B, put the
+token in `.env` as `GITLAB_RUN_TOKEN` and add the name to `APP_INTEGRATION_SECRET_ENV` (§3); for C, the
+private key as a file, `GITLAB_RUN_SSH_PRIVATE_KEY_FILE`, with `GITLAB_RUN_SSH_PRIVATE_KEY` in that list. The
 platform's one added control is a search of every merge request's added lines for the exact token —
 a hit parks the task with *"rotate the run token"*. The protected default branch stays the push
 control.
@@ -494,6 +498,8 @@ is *Done*.
 | *(your own token, form B)* `run_credential` is red: *"this token can call the GitLab API …"* or *"did not accept the run token at all (401)"* | the integration's card | create a new token with **only** `read_repository` + `write_repository`, put it in `.env`, re-seal `run_token`; a 401 is a wrong, expired or revoked token |
 | *(form B)* `default_branch_protection` is red, or a stage fails at start: *"… the default branch develop of … is not protected / lets Maintainers push / allows force push …"* | the integration's card; the task page's brief | **Settings → Repository → Protected branches**: `develop` with push **No one** and force push off; test again, then **Hand back** |
 | saving the integration or binding it is refused: `run_credential_refused`, `static_run_credential_shared` | the form shows the server's refusal, naming the field | the field it names; a static integration may be bound by **one** project |
+| *(deploy key, form C)* saving is refused: *"protected by a passphrase"*, *"this build signs with Ed25519 only"*, *"not the private key’s"*, *"altssh.gitlab.com:443 only; a self-managed host …"* | the form shows the server's refusal | `ssh-keygen -t ed25519 -N ""` again, paste the matching `.pub` line as `run_ssh_public_key`, re-seal `run_ssh_private_key`; a self-managed GitLab cannot use form C in this build |
+| *(form C)* `run_credential` is red: *"not one of … deploy keys"* or *"without write access"*; or `default_branch_protection` lets a deploy key push | the integration's card | **Settings → Repository → Deploy keys**: add the `.pub` with **Grant write permissions**; **Protected branches**: push **No one**, and remove the deploy key from *Allowed to push* |
 | a task parks with *"the merge request adds the static run token to the repository"* | the task page's brief | **rotate the run token**: revoke it in GitLab, create a new one, re-seal it, declare its expiry; remove it from the branch before anything else |
 | a run fails with *"…the model API answered HTTP 401…"* | the run page's error (measured with a fake token, WP-133) | a wrong or expired token: replace it in `.env`, `docker compose up -d` |
 | an agent cannot install a package or reach a host | the run's egress sidecar: `docker ps --filter label=com.agentic.run` lists `egress-<run id>` while the run lives, and `docker logs egress-<run id>` has *"Proxying refused on filtered domain …"* (not run here) | add a registry to `APP_RUN_REGISTRY_HOSTS`, or a model-side host to `APP_MODEL_EGRESS_HOSTS` |

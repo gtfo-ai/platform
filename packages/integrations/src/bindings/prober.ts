@@ -36,6 +36,7 @@
 import type {
   BindingRepository,
   BranchPushProtection,
+  DeployKeyAccess,
   GitProviderPort,
   HealthProbe,
   InjectedSecret,
@@ -50,12 +51,13 @@ import type {
 import {
   bindingSecretRedactor,
   composeSecretRedactors,
+  deployKeyProtectionFault,
   noSecretsRedactor,
   operatorProtectionFault,
 } from '@platform/application';
 import type { Id, IntegrationType } from '@platform/contracts';
 import type { IntegrationRegistry } from '../registry.js';
-import { staticRunCredentialOf } from '../static-run-credential.js';
+import { deployKeyRunCredentialOf, staticRunCredentialOf } from '../static-run-credential.js';
 import { BindingLoadError } from './loader.js';
 
 export interface IntegrationProberOptions {
@@ -141,7 +143,8 @@ export interface IntegrationProbeOutcome {
   readonly detail: string;
   /**
    * `connection` always; `run_credential` beside it for an integration that declares a static run
-   * credential (WP-137). `detail` above is the connection's.
+   * credential (WP-137) or a deploy key (WP-146), and `default_branch_protection` for an operator's
+   * own token (WP-141) and a deploy key. `detail` above is the connection's.
    */
   readonly checks: readonly IntegrationProbeCheck[];
 }
@@ -271,6 +274,25 @@ export const createIntegrationProber = (options: IntegrationProberOptions): Inte
         registration.staticRunCredential,
         parsed.data as Readonly<Record<string, unknown>>,
       );
+      // WP-146 (TD-028 decision 13b item 6): a deploy key's two checks.
+      const deployKey = deployKeyRunCredentialOf(
+        registration.staticRunCredential,
+        parsed.data as Readonly<Record<string, unknown>>,
+      );
+      if (deployKey !== undefined) {
+        checks.push(
+          ...(await checkDeployKey({
+            options,
+            integrationId,
+            ref,
+            port,
+            publicKey: deployKey.publicKey,
+            refusal: deployKey.refusal,
+            connected: result.ok,
+            redact: (text: string) => redactor.redactText(text).value,
+          })),
+        );
+      }
       if (fixed !== undefined) {
         const input = {
           options,
@@ -573,4 +595,121 @@ const protectionCheck = async (
         detail: `${bound.defaultBranch} of ${bound.path} is protected with push "No one" and force push off; it is read again before every run that gets the token.`,
       }
     : { name, ok: false, detail: `Refused: ${fault}.` };
+};
+
+/** What the deploy-key probe says it cannot see, on both of its checks (decision 13b item 6). */
+const DEPLOY_KEY_REACH =
+  'The platform cannot see whether this key is also enabled on other projects; a deploy key reaches every project it is enabled on, so enable it on this one only.';
+
+/**
+ * The probe of a **deploy key** (WP-146, TD-028 decision 13b item 6), both with the API token through
+ * the executor as reads:
+ *
+ *  - `run_credential` — the project's deploy keys list the declared public key with write access;
+ *  - `default_branch_protection` — the bound project's stored default branch protected with push
+ *    **No one**, which also admits no deploy key (a deploy key can be added to a protected branch's
+ *    push rule).
+ *
+ * The private key is sent nowhere: the platform never uses it against the API.
+ */
+const checkDeployKey = async (input: {
+  readonly options: IntegrationProberOptions;
+  readonly integrationId: Id;
+  readonly ref: IntegrationRef;
+  readonly port: object;
+  readonly publicKey: string;
+  readonly refusal: string | null;
+  readonly connected: boolean;
+  readonly redact: (text: string) => string;
+}): Promise<readonly IntegrationProbeCheck[]> => {
+  const key = 'run_credential';
+  const protection = 'default_branch_protection';
+  const both = (detail: string): readonly IntegrationProbeCheck[] => [
+    { name: key, ok: false, detail },
+    { name: protection, ok: false, detail },
+  ];
+  if (input.refusal !== null) {
+    return both(`Refused: ${input.refusal}.`);
+  }
+  if (!input.connected) {
+    return both(`Not checked: the API token's connection failed. ${DEPLOY_KEY_REACH}`);
+  }
+  const git = input.port as Partial<GitProviderPort>;
+  if (typeof git.deployKeyAccess !== 'function' || typeof git.branchPushProtection !== 'function') {
+    return both('This provider cannot read its deploy keys or a branch’s protection.');
+  }
+  const bound =
+    input.options.boundProjectOf === undefined
+      ? null
+      : await input.options.boundProjectOf(input.integrationId);
+  if (bound === null) {
+    return both(
+      'Not checked: no project is bound to this integration yet, so there is no project whose deploy keys and default branch could be read. Bind it and test again.',
+    );
+  }
+  const access = (
+    await input.options.executor.execute<DeployKeyAccess>({
+      integration: input.ref,
+      action: 'check_deploy_key',
+      // The project and the key's public half only — never the private key.
+      payload: { project: bound.path },
+      projectId: null,
+      taskId: null,
+      mutating: false,
+      perform: async () =>
+        (git.deployKeyAccess as GitProviderPort['deployKeyAccess'])(bound.path, input.publicKey),
+      describeResult: (result) => ({ enabled: result.enabled, can_push: result.canPush }),
+    })
+  ).result;
+  const keyCheck: IntegrationProbeCheck = !access.enabled
+    ? {
+        name: key,
+        ok: false,
+        detail: `Refused: the declared public key is not one of ${bound.path}'s deploy keys — add it under Settings › Repository › Deploy keys with "Grant write permissions". ${DEPLOY_KEY_REACH}`,
+      }
+    : !access.canPush
+      ? {
+          name: key,
+          ok: false,
+          detail: `Refused: the deploy key is enabled on ${bound.path} without write access, so no writing stage could push — grant it write permissions. ${DEPLOY_KEY_REACH}`,
+        }
+      : {
+          name: key,
+          ok: true,
+          detail: `The deploy key is enabled on ${bound.path} with write access. ${DEPLOY_KEY_REACH}`,
+        };
+  const rule = (
+    await input.options.executor.execute<BranchPushProtection>({
+      integration: input.ref,
+      action: 'check_default_branch_protection',
+      payload: { project: bound.path, branch: bound.defaultBranch },
+      projectId: null,
+      taskId: null,
+      mutating: false,
+      perform: async () =>
+        (git.branchPushProtection as GitProviderPort['branchPushProtection'])(
+          bound.path,
+          bound.defaultBranch,
+        ),
+      describeResult: (result) => ({
+        protected: result.protected,
+        nobody_pushes: result.nobodyPushes,
+        force_push_allowed: result.forcePushAllowed,
+      }),
+    })
+  ).result;
+  const fault = deployKeyProtectionFault(bound.path, bound.defaultBranch, {
+    ...rule,
+    pushers: rule.pushers.map(input.redact),
+  });
+  return [
+    keyCheck,
+    fault === null
+      ? {
+          name: protection,
+          ok: true,
+          detail: `${bound.defaultBranch} of ${bound.path} is protected with push "No one", which admits no deploy key.`,
+        }
+      : { name: protection, ok: false, detail: `Refused: ${fault}.` },
+  ];
 };

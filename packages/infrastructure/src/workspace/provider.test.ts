@@ -17,6 +17,8 @@ import {
   assertProjectEnv,
   assertRunnerUid,
   DockerWorkspaceProvider,
+  exportScript,
+  SSH_HELPER_SETUP,
 } from './provider.js';
 import { parseTar, writeTar } from './tar.js';
 import { FakeDockerDaemon } from './testing.js';
@@ -300,6 +302,7 @@ describe('create', () => {
       'RUNLET_CONTROL_SOCKET',
       'RUNLET_TOKEN_FILE',
       'GIT_CONFIG_VALUE_0',
+      'GIT_SSH_COMMAND',
       'LD_PRELOAD',
       'NODE_OPTIONS',
       'PATH',
@@ -1435,5 +1438,98 @@ describe('every object the provider creates carries the instance label (WP-132)'
         ...RUNLESS_HELPER_ROLES,
       ].sort(),
     );
+  });
+});
+
+/**
+ * WP-146 (TD-028 decision 13b items 2, 3 and 5): a deploy-key run's container gets the agent socket
+ * and its one public key, the CLI gets `GIT_SSH_COMMAND` and one `insteadOf` pair instead of the
+ * credential helper, the documented `known_hosts` is written by the platform, and the mirror helper
+ * holds the key in a `0600` file on its tmpfs — never in the run container.
+ */
+describe('a deploy-key run (WP-146)', () => {
+  const PRIVATE_KEY = 'FAKE-openssh-private-key-text-0123456789';
+  const SSH = {
+    publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf',
+    httpsPrefix: 'https://gitlab.com/',
+    sshPrefix: 'ssh://git@altssh.gitlab.com:443/',
+    connectHost: 'altssh.gitlab.com',
+    connectPort: 443,
+    hostKeyAlias: 'gitlab.com',
+    knownHosts: [
+      'gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf',
+    ],
+  };
+  const sshSpec = () =>
+    workspaceSpecFixture({
+      repo: { url: 'https://gitlab.com/acme/api.git', ssh: SSH } as never,
+      egress: {
+        hosts: ['gitlab.com', 'altssh.gitlab.com', 'api.anthropic.com'],
+        connectPorts: [443],
+      },
+    });
+
+  it('gives the shim its agent socket and key, and the CLI ssh through the sidecar with no credential helper', async () => {
+    const spec = sshSpec();
+    const handle = await provider.create(spec);
+    expect(handle.gitSsh).toEqual(SSH);
+    const env = daemon.containers.get(handle.containerId)?.body.Env ?? [];
+    expect(env).toContain('RUNLET_SSH_AGENT_SOCKET=/ctl/ssh-agent.sock');
+    expect(env).toContain(`RUNLET_SSH_PUBLIC_KEY=${SSH.publicKey}`);
+    expect(env).toContain('GIT_CONFIG_KEY_0=url.ssh://git@altssh.gitlab.com:443/.insteadOf');
+    expect(env).toContain('GIT_CONFIG_VALUE_0=https://gitlab.com/');
+    expect(env.some((entry) => entry.includes('credential.helper'))).toBe(false);
+    const cli = await provider.cliEnvironment(handle);
+    expect(cli.gitConfig).toEqual([
+      { key: 'url.ssh://git@altssh.gitlab.com:443/.insteadOf', value: 'https://gitlab.com/' },
+    ]);
+    expect(cli.gitSshCommand).toBe(
+      'ssh -F /dev/null -o IdentityAgent=/ctl/ssh-agent.sock -o IdentitiesOnly=no -o BatchMode=yes ' +
+        '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=/ctl/known_hosts -o HostKeyAlias=gitlab.com ' +
+        `-o "ProxyCommand=agentic-runlet connect --proxy ${cli.proxy?.url} %h %p" -p 443`,
+    );
+    expect(env).toContain(`GIT_SSH_COMMAND=${cli.gitSshCommand}`);
+    // The prepare helper writes the documented host keys, never a first connection's.
+    const prepare = daemon.byName(`prep-${FIXTURE_RUN_ID}`);
+    expect((prepare?.body.Cmd ?? []).join('\n')).toContain('/known_hosts');
+    expect(prepare?.body.Env).toContain(`SSH_KNOWN_HOSTS=${SSH.knownHosts[0]}`);
+  });
+
+  it('answers the same environment for a handle after a launcher restart: it is the handle’s', async () => {
+    const handle = await provider.create(sshSpec());
+    const restarted = providerWithSocketTimeout(1_000);
+    expect((await restarted.cliEnvironment(handle)).gitSshCommand).toContain(
+      'HostKeyAlias=gitlab.com',
+    );
+    const { gitSsh: _dropped, ...https } = handle;
+    expect((await restarted.cliEnvironment(https)).gitSshCommand).toBeNull();
+  });
+
+  it('fetches the mirror over SSH with the key on the helper’s tmpfs, never in the URL or the run container', async () => {
+    const spec = sshSpec();
+    await provider.updateMirror({
+      projectId: spec.projectId,
+      repo: spec.repo,
+      credential: { host: 'gitlab.com', username: 'git', password: PRIVATE_KEY, ssh: SSH },
+    });
+    const created = daemon.requests.find((recorded) => recorded.path === '/containers/create');
+    const body = JSON.stringify(created?.body ?? {});
+    expect(body).toContain('umask 077');
+    expect(body).toContain('/tmp/agentic-ssh/key');
+    expect(body).toContain('unset GIT_SSH_KEY');
+    expect(body).toContain('url.ssh://git@altssh.gitlab.com:443/.insteadOf');
+    expect(body).toContain('HostKeyAlias=gitlab.com');
+    expect(body).not.toContain('credential.helper');
+    expect(body).not.toContain(`${PRIVATE_KEY}@`);
+    const handle = await provider.create(spec);
+    const runEnv = JSON.stringify(daemon.containers.get(handle.containerId)?.body ?? {});
+    expect(runEnv).not.toContain(PRIVATE_KEY);
+  });
+
+  it('pushes a take-over export over SSH with the same tmpfs key, and over HTTPS otherwise', () => {
+    const ssh = exportScript({ mirror: '/cache/acme.git', push: true, tarball: false, ssh: true });
+    expect(ssh.split('\n').slice(1, 3)).toEqual([...SSH_HELPER_SETUP]);
+    const https = exportScript({ mirror: '/cache/acme.git', push: true, tarball: false });
+    expect(https).not.toContain('GIT_SSH_KEY');
   });
 });

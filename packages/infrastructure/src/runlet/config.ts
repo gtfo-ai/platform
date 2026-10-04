@@ -27,6 +27,13 @@ const positiveInt = z.coerce.number().int().positive();
 export const runletEnvSchema = z.strictObject({
   RUNLET_CONTROL_SOCKET: z.string().min(1),
   RUNLET_CREDENTIAL_SOCKET: z.string().min(1).optional(),
+  // WP-146 (TD-028 decision 13b): a deploy-key run's agent socket and the one key it lists.
+  RUNLET_SSH_AGENT_SOCKET: z.string().min(1).optional(),
+  RUNLET_SSH_PUBLIC_KEY: z
+    .string()
+    .max(200)
+    .regex(/^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$/)
+    .optional(),
   RUNLET_TOKEN: z.string().optional(),
   RUNLET_TOKEN_FILE: z.string().min(1).optional(),
   RUNLET_KILL_GRACE_MS: positiveInt.optional(),
@@ -41,6 +48,8 @@ export const runletEnvSchema = z.strictObject({
 export interface RunletConfig {
   readonly controlSocketPath: string;
   readonly credentialSocketPath: string | null;
+  readonly sshAgentSocketPath: string | null;
+  readonly sshPublicKey: string | null;
   readonly token: string;
   readonly killGraceMs?: number;
   readonly handshakeTimeoutMs?: number;
@@ -65,6 +74,8 @@ export const readRunletConfig = (
   const parsed = runletEnvSchema.parse({
     RUNLET_CONTROL_SOCKET: env['RUNLET_CONTROL_SOCKET'],
     ...optional('RUNLET_CREDENTIAL_SOCKET', env['RUNLET_CREDENTIAL_SOCKET']),
+    ...optional('RUNLET_SSH_AGENT_SOCKET', env['RUNLET_SSH_AGENT_SOCKET']),
+    ...optional('RUNLET_SSH_PUBLIC_KEY', env['RUNLET_SSH_PUBLIC_KEY']),
     ...optional('RUNLET_TOKEN', env['RUNLET_TOKEN']),
     ...optional('RUNLET_TOKEN_FILE', env['RUNLET_TOKEN_FILE']),
     ...optional('RUNLET_KILL_GRACE_MS', env['RUNLET_KILL_GRACE_MS']),
@@ -78,6 +89,15 @@ export const readRunletConfig = (
 
   // `_FILE` wins, per TD-020. `trim()` because a file written with a trailing newline is the
   // normal case and a token that differs from the runner's by one byte is a run that never starts.
+  // WP-146: a socket and its key come together, or the shim does not start.
+  if (
+    (parsed.RUNLET_SSH_AGENT_SOCKET === undefined) !==
+    (parsed.RUNLET_SSH_PUBLIC_KEY === undefined)
+  ) {
+    throw new Error(
+      'RUNLET_SSH_AGENT_SOCKET and RUNLET_SSH_PUBLIC_KEY are set together or not at all (TD-028 decision 13b)',
+    );
+  }
   const token = validateRunToken(
     parsed.RUNLET_TOKEN_FILE === undefined
       ? parsed.RUNLET_TOKEN
@@ -87,6 +107,8 @@ export const readRunletConfig = (
   return {
     controlSocketPath: parsed.RUNLET_CONTROL_SOCKET,
     credentialSocketPath: parsed.RUNLET_CREDENTIAL_SOCKET ?? null,
+    sshAgentSocketPath: parsed.RUNLET_SSH_AGENT_SOCKET ?? null,
+    sshPublicKey: parsed.RUNLET_SSH_PUBLIC_KEY ?? null,
     token,
     ...optional('killGraceMs', parsed.RUNLET_KILL_GRACE_MS),
     ...optional('handshakeTimeoutMs', parsed.RUNLET_HANDSHAKE_TIMEOUT_MS),

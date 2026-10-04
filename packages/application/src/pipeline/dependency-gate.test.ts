@@ -34,9 +34,10 @@ import {
   createPipelineHarness,
   type PipelineHarness,
 } from '../testing/pipeline-harness.js';
+import { FAKE_DEPLOY_KEY } from '../testing/ssh-deploy-key-fixtures.js';
 import { pauseTaskCommand, resumeTaskCommand } from './commands.js';
-import { runDependencyGate } from './dependency-gate.js';
-import { staticPipelineIntegrations } from './integrations.js';
+import { deployKeyLeaks, runDependencyGate } from './dependency-gate.js';
+import { type DeployKeyRunCredential, staticPipelineIntegrations } from './integrations.js';
 import { staticProjectSettings } from './settings.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000d1' as Id;
@@ -214,6 +215,8 @@ interface StartOptions {
   readonly storedSettings?: (harness: PipelineHarness | null, job: string | null) => unknown;
   /** WP-137: the git binding's static run credential. */
   readonly staticRunToken?: string;
+  /** WP-146: the git binding's deploy key. */
+  readonly deployKey?: DeployKeyRunCredential;
 }
 
 const start = async (options: StartOptions = {}): Promise<PipelineHarness> => {
@@ -247,6 +250,7 @@ const start = async (options: StartOptions = {}): Promise<PipelineHarness> => {
             redactedAs: RUN_TOKEN_PLACEHOLDER,
           },
         }),
+    ...(options.deployKey === undefined ? {} : { gitDeployKeyRunCredential: options.deployKey }),
     ...(options.storedSettings === undefined
       ? {}
       : {
@@ -359,6 +363,51 @@ describe('a static run token in the merge request (WP-137)', () => {
     expect((await storedTask(removed))?.task.state).not.toBe('needs_human');
     const none = await start({ files: [file('.env', `+GITLAB_TOKEN=${STATIC_TOKEN}`)] });
     expect((await storedTask(none))?.task.state).not.toBe('needs_human');
+  });
+});
+
+/**
+ * WP-146 (TD-028 decision 13b item 7): the added-lines search covers the deploy key's private text —
+ * its base64 body, each private armour line, and the binding redactor's placeholder.
+ */
+describe('a deploy key in a merge request’s added lines (WP-146)', () => {
+  const KEY: DeployKeyRunCredential = {
+    privateKey: FAKE_DEPLOY_KEY.privateKey,
+    publicKey: FAKE_DEPLOY_KEY.publicKey,
+    route: null,
+    refusal: null,
+    redactedAs:
+      '[REDACTED:integration:gitlab:00000000-0000-4000-8000-0000000000a9:run_ssh_private_key]',
+  };
+  const keyLines = FAKE_DEPLOY_KEY.privateKey.trim().split('\n');
+
+  it('parks the task when the key file is added, and never prints the key', async () => {
+    const harness = await start({
+      deployKey: KEY,
+      files: [file('deploy/id_ed25519', ...keyLines.map((line) => `+${line}`))],
+    });
+    const stored = await storedTask(harness);
+    expect(stored?.task.state).toBe('needs_human');
+    const escalated = harness
+      .events()
+      .filter((event) => event.type === 'task.escalated')
+      .map((event) => event.payload as { reason: string; blocker_brief: string });
+    expect(escalated).toHaveLength(1);
+    expect(escalated[0]?.reason).toMatch(/adds the deploy key/);
+    expect(escalated[0]?.blocker_brief).toMatch(/Replace it now/);
+    expect(JSON.stringify(harness.events())).not.toContain(keyLines[3] ?? 'unreachable');
+  });
+
+  it('finds the body joined, a private line alone, or the placeholder — and not the shared header', () => {
+    const body = keyLines.slice(1, -1).join('');
+    const diff = (line: string) => [{ diff: `@@ -0,0 +1 @@\n+${line}\n` }];
+    expect(deployKeyLeaks(KEY, diff(`KEY=${body}`))).toBe(1);
+    expect(deployKeyLeaks(KEY, diff(keyLines[3] ?? ''))).toBe(1);
+    expect(deployKeyLeaks(KEY, diff(KEY.redactedAs ?? ''))).toBe(1);
+    // The first armour line is the container's fixed header, shared by every Ed25519 key.
+    expect(deployKeyLeaks(KEY, diff(keyLines[1] ?? ''))).toBe(0);
+    expect(deployKeyLeaks(KEY, [{ diff: `@@ -1 +0,0 @@\n-${keyLines[3]}\n` }])).toBe(0);
+    expect(deployKeyLeaks(undefined, diff(body))).toBe(0);
   });
 });
 

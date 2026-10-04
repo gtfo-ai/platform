@@ -37,6 +37,8 @@ const EXPECTED_SITES: readonly string[] = [
   'apps/launcher/src/runtime.ts',
   'packages/infrastructure/src/workspace/egress.ts',
   'packages/infrastructure/src/workspace/provider.ts',
+  // WP-146: the deploy-key check renders its sidecar at `Connect` to read the run's one CONNECT.
+  'scripts/deploy-key-check.mjs',
   'scripts/launcher-control-plane-check.mjs',
   'scripts/launcher-control-plane-launcher.mjs',
 ];

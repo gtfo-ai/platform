@@ -84,6 +84,8 @@ const GITLAB_WEBHOOK_SECRET = 'FAKE-PLANTED-gitlab-webhook-secret-token-01';
 const GITLAB_SIGNING_TOKEN = 'whsec_FAKE-PLANTED-gitlab-signing-token-0123';
 /** WP-137: a static run credential planted beside the API token — no request may carry it. */
 const GITLAB_RUN_TOKEN = 'glpat-FAKE-PLANTED-static-run-token-0123456';
+/** WP-146: a planted stand-in for a deploy key's private text (never parsed by the adapter). */
+const GITLAB_DEPLOY_KEY_BODY = 'FAKE-PLANTED-openssh-private-key-body-0123456789';
 const JIRA_TOKEN = 'FAKE-PLANTED-jira-api-token-0123456789';
 const JIRA_WEBHOOK_SECRET = 'FAKE-PLANTED-jira-webhook-secret-0123456789';
 const JIRA_EMAIL = 'agentic-bot@example.test';
@@ -307,6 +309,17 @@ const gitlabScript = (): Script => ({
         push_access_levels: [{ access_level: 30, access_level_description: GITLAB_TOKEN }],
       },
       { name: 'main', allow_force_push: false, push_access_levels: [{ access_level: 0 }] },
+    ],
+  },
+  // WP-146: the deploy-key probe lists the project's keys; a title carries the plant.
+  [`GET /projects/${P}/deploy_keys`]: {
+    body: [
+      {
+        id: 7,
+        title: `deploy-${GITLAB_TOKEN}`,
+        key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf',
+        can_push: true,
+      },
     ],
   },
   [`GET /projects/${P}/protected_branches/main`]: {
@@ -549,6 +562,7 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   project_member_access: 'projectMemberAccess',
   branch_push_protection: 'branchPushProtection',
   run_token_api_access: 'runTokenApiAccess',
+  deploy_key_access: 'deployKeyAccess',
   create_merge_request_pipeline: 'createMergeRequestPipeline',
   get_merge_request_diff_stats: 'getMergeRequestDiffStats',
   list_discussions: 'listDiscussions',
@@ -594,6 +608,9 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
         // WP-137: handed to `create` exactly as the binding loader merges it; the registration must
         // build the adapter without it (TD-028 decision 13 item 3), which the census below holds.
         run_token: GITLAB_RUN_TOKEN,
+        // WP-146: the deploy key's private half, handed to `create` the same way; the registration
+        // builds the adapter without it, and the census below holds that no request carries it.
+        run_ssh_private_key: GITLAB_DEPLOY_KEY_BODY,
       },
       redactor: noSecretsRedactor(),
     });
@@ -660,6 +677,11 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
     // scope proof, the one call that carries the run token (the census below holds it to one).
     emitted.branch_push_protection = await port.branchPushProtection(PROJECT, 'main');
     emitted.run_token_api_access = await port.runTokenApiAccess(GITLAB_RUN_TOKEN);
+    // WP-146: the deploy-key probe's read, with the API token; its answer is two booleans and an id.
+    emitted.deploy_key_access = await port.deployKeyAccess(
+      PROJECT,
+      'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf',
+    );
     emitted.create_merge_request_pipeline = await port.createMergeRequestPipeline(ref);
     emitted.list_discussions = await port.listDiscussions(ref);
     emitted.reply_to_discussion = await port.replyToDiscussion(
@@ -817,6 +839,17 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
     expect(`${proof?.query} ${proof?.path} ${proof?.body}`).not.toContain(GITLAB_RUN_TOKEN);
     expect(proof?.headers).toContain(`["private-token","${GITLAB_RUN_TOKEN}"]`);
     expect(proof?.headers, 'the scope proof carries no API token').not.toContain(GITLAB_TOKEN);
+  });
+
+  /**
+   * WP-146 (TD-028 decision 13b): the deploy key's private half is handed to `create` beside the API
+   * token and is in **no** request — the platform never uses it against the API; the runner signs
+   * with it and the launcher's helpers fetch with it.
+   */
+  it('sends the deploy key’s private half in no request (WP-146)', () => {
+    const wire = calls.map((call) => `${call.headers} ${call.query} ${call.path} ${call.body}`);
+    expect(wire.length).toBeGreaterThan(0);
+    expect(wire.filter((line) => line.includes(GITLAB_DEPLOY_KEY_BODY))).toEqual([]);
   });
 
   it('drove every member of the port, and the list is the port’s own', () => {

@@ -16,6 +16,8 @@
  *   `agentic-runlet credential --socket <path> get`  the workspace's git credential helper
  *                                                    (technical/05; the socket is an argument
  *                                                    since WP-118).
+ *   `agentic-runlet connect --proxy <url> <host> <port>`  a deploy-key run's SSH `ProxyCommand`
+ *                                                    (WP-146): `CONNECT` through the sidecar.
  *
  * **WP-22 packages this, and the import above is part of the packaging.** TD-025 §1 wants a single
  * file with no runtime dependencies in the `platform-runtime` image: `pnpm --filter @platform/runlet
@@ -30,11 +32,14 @@
  */
 import process from 'node:process';
 import {
+  ConnectHelperUsageError,
   createRunletLogger,
   createRunletShim,
   NO_CREDENTIAL_SOCKET_MESSAGE,
+  parseConnectHelperArgs,
   parseCredentialHelperArgs,
   readRunletConfig,
+  runConnectHelper,
   runCredentialHelper,
   systemClock,
 } from '@platform/infrastructure/runlet';
@@ -68,6 +73,28 @@ const credentialMode = async (argv: readonly string[]): Promise<void> => {
   }
 };
 
+/**
+ * `agentic-runlet connect --proxy <url> <host> <port>` — a deploy-key run's SSH `ProxyCommand`
+ * (WP-146, TD-028 decision 13b item 4): `CONNECT` through the egress sidecar, then stdio both ways.
+ */
+const connectMode = async (argv: readonly string[]): Promise<void> => {
+  let args: ReturnType<typeof parseConnectHelperArgs>;
+  try {
+    args = parseConnectHelperArgs(argv);
+  } catch (error) {
+    if (!(error instanceof ConnectHelperUsageError)) throw error;
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  process.exitCode = await runConnectHelper({
+    args,
+    stdin: process.stdin,
+    stdout: process.stdout,
+    stderr: process.stderr,
+  });
+};
+
 /** How long a shut-down shim may take to drain before it is exited anyway. */
 const FORCE_EXIT_MS = 10_000;
 
@@ -78,6 +105,8 @@ const serveMode = async (): Promise<void> => {
   const shim = createRunletShim({
     controlSocketPath: config.controlSocketPath,
     credentialSocketPath: config.credentialSocketPath,
+    sshAgentSocketPath: config.sshAgentSocketPath,
+    sshPublicKey: config.sshPublicKey,
     token: config.token,
     clock: systemClock,
     logger,
@@ -146,6 +175,10 @@ const main = async (): Promise<void> => {
   const [mode = 'serve', ...rest] = process.argv.slice(2);
   if (mode === 'credential') {
     await credentialMode(rest);
+    return;
+  }
+  if (mode === 'connect') {
+    await connectMode(rest);
     return;
   }
   if (mode !== 'serve') {

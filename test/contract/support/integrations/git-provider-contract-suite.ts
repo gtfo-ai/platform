@@ -218,6 +218,15 @@ export interface GitProviderContractContext {
     readonly maintainersPush: string;
     readonly forcePush: string;
   };
+  /**
+   * WP-146 (TD-028 decision 13b item 6): public key lines of `project`'s deploy keys — `writable` is
+   * enabled with write access, `readOnly` without it, and `absent` is not enabled at all.
+   */
+  readonly deployKeys: {
+    readonly writable: string;
+    readonly readOnly: string;
+    readonly absent: string;
+  };
   readonly runTokens: {
     readonly repositoryOnly: string;
     readonly apiCapable: string;
@@ -631,6 +640,34 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         ).toMatchObject({ protected: true, nobodyPushes: true, forcePushAllowed: true });
         await expectIntegrationError(
           () => port.branchPushProtection(context.missingProject, context.protection.noOne),
+          'not_found',
+        );
+      });
+
+      /**
+       * WP-146 (TD-028 decision 13b item 6): a public key is matched by type and base64 — the comment
+       * is the operator's — and its write access answered as the provider has it.
+       */
+      it('answers whether a public key is one of the project’s deploy keys, and whether it may push', async () => {
+        expect(
+          await port.deployKeyAccess(
+            context.project,
+            `${context.deployKeys.writable} another-comment`,
+          ),
+        ).toMatchObject({ enabled: true, canPush: true });
+        expect(
+          await port.deployKeyAccess(context.project, context.deployKeys.readOnly),
+        ).toMatchObject({
+          enabled: true,
+          canPush: false,
+        });
+        expect(await port.deployKeyAccess(context.project, context.deployKeys.absent)).toEqual({
+          enabled: false,
+          canPush: false,
+          keyId: null,
+        });
+        await expectIntegrationError(
+          () => port.deployKeyAccess(context.missingProject, context.deployKeys.writable),
           'not_found',
         );
       });

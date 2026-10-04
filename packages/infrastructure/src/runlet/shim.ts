@@ -8,6 +8,9 @@
  *                     spawns, writes stdin, relays signals and reads stdout/stderr/exit over it.
  *   `/ctl/cred.sock`  the **credential** socket. The workspace's git credential helper asks for a
  *                     token here; the shim forwards the question and relays the answer.
+ *   `/ctl/ssh-agent.sock`  a deploy-key run's **ssh-agent** socket (WP-146, TD-028 decision 13b):
+ *                     list the run's one public key, relay sign requests to the runner — which
+ *                     holds the key — and refuse everything else (`ssh-agent.ts`).
  *
  * ## The trust boundary, stated honestly
  *
@@ -66,6 +69,15 @@ import type { RunletFatalReason, RunletFrame } from '@platform/contracts';
 import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import { createFrameConnection, type FrameConnection } from './connection.js';
 import { type DecodedFrame, MAX_FRAME_PAYLOAD_BYTES, RunletProtocolError } from './framing.js';
+import {
+  AGENT_FAILURE,
+  type AgentRequest,
+  encodeIdentitiesAnswer,
+  encodeSignResponse,
+  parseAgentRequest,
+  publicKeyBlobOf,
+  splitAgentMessages,
+} from './ssh-agent.js';
 import { tokensMatch, validateRunToken } from './token.js';
 
 /**
@@ -164,6 +176,15 @@ export interface RunletShimOptions {
   readonly controlSocketPath: string;
   /** Workspace-facing credential socket. Omit to run a shim with no credential channel at all. */
   readonly credentialSocketPath?: string | null;
+  /**
+   * The ssh-agent socket of a deploy-key run (TD-028 decision 13b, WP-146) — `/ctl/ssh-agent.sock`.
+   * Omit, and there is none. Requires {@link sshPublicKey}.
+   */
+  readonly sshAgentSocketPath?: string | null;
+  /** The run's one public key (`ssh-ed25519 AAAA…`), the identity the agent socket lists. */
+  readonly sshPublicKey?: string | null;
+  /** Sign requests one run may relay (decision 13b: each is counted). */
+  readonly maxSignRequests?: number;
   /** The run token. Empty, blank or too short is refused at construction (standing rule 18). */
   readonly token: string;
   readonly clock: RunnerClock;
@@ -201,8 +222,13 @@ export interface RunletShimMetrics {
   readonly stderrPauses: number;
   readonly credentialRequests: number;
   readonly credentialRefusals: number;
+  /** Sign requests relayed to the runner (WP-146), and agent requests answered `FAILURE`. */
+  readonly signRequests: number;
+  readonly agentRefusals: number;
   /** `cred.reply`s naming a request that had already timed out or never existed. */
   readonly staleCredentialReplies: number;
+  /** `ssh.sign.reply`s naming a sign request that had already timed out or never existed (WP-146). */
+  readonly staleSignReplies: number;
   readonly rejectedConnections: number;
   readonly failedHandshakes: number;
   /**
@@ -235,6 +261,7 @@ const DEFAULTS = {
   maxCredentialRequests: 32,
   maxConcurrentCredentials: 4,
   maxFailedHandshakes: 3,
+  maxSignRequests: 64,
 } as const;
 
 /** Frames the runner may send, by shim state. Parsing says well-formed; this says allowed. */
@@ -242,7 +269,7 @@ const CONTROL_ACCEPTS: Readonly<Record<'awaiting_hello' | 'ready' | 'running', r
   {
     awaiting_hello: ['hello'],
     ready: ['spawn', 'ping'],
-    running: ['stdin', 'stdin.end', 'signal', 'cred.reply', 'ping'],
+    running: ['stdin', 'stdin.end', 'signal', 'cred.reply', 'ssh.sign.reply', 'ping'],
   };
 
 /** Frames the workspace may send on the credential socket. Everything else is refused. */
@@ -280,6 +307,25 @@ export const createRunletShim = (options: RunletShimOptions): RunletShim => {
   // Standing rule 18: an empty credential is not a credential. This throws rather than warns, so a
   // shim can never be listening with a token that matches whatever an attacker sends.
   const token = validateRunToken(options.token);
+  // WP-146: a socket without a key to list is a configuration fault, refused at construction.
+  const agentKeyBlob =
+    options.sshAgentSocketPath === undefined || options.sshAgentSocketPath === null
+      ? null
+      : publicKeyBlobOf(options.sshPublicKey ?? '');
+  if (
+    options.sshAgentSocketPath !== undefined &&
+    options.sshAgentSocketPath !== null &&
+    agentKeyBlob === null
+  ) {
+    throw new RunletProtocolError(
+      'an ssh-agent socket was configured without an ssh-ed25519 public key to list (RUNLET_SSH_PUBLIC_KEY)',
+    );
+  }
+  const maxSignRequests = options.maxSignRequests ?? DEFAULTS.maxSignRequests;
+  let agentServer: Server | null = null;
+  const agentSockets = new Set<Socket>();
+  const pendingSigns = new Map<string, { socket: Socket; cancelTimeout: () => void }>();
+  let signCount = 0;
 
   let controlServer: Server | null = null;
   let credentialServer: Server | null = null;
@@ -299,7 +345,10 @@ export const createRunletShim = (options: RunletShimOptions): RunletShim => {
     stderrPauses: 0,
     credentialRequests: 0,
     credentialRefusals: 0,
+    signRequests: 0,
+    agentRefusals: 0,
     staleCredentialReplies: 0,
+    staleSignReplies: 0,
     rejectedConnections: 0,
     failedHandshakes: 0,
     teardownSignals: [] as string[],
@@ -532,6 +581,7 @@ export const createRunletShim = (options: RunletShimOptions): RunletShim => {
     }
     credentialConnections.clear();
     credentialServer?.close();
+    closeAgent();
     if (reason === 'control_disconnected') {
       killChild();
     }
@@ -611,6 +661,22 @@ export const createRunletShim = (options: RunletShimOptions): RunletShim => {
           request_id: entry.childRequestId,
           credential: frame.credential,
         });
+        return;
+      }
+      case 'ssh.sign.reply': {
+        const entry = pendingSigns.get(frame.request_id);
+        if (entry === undefined) {
+          metrics.staleSignReplies += 1;
+          logger.warn({ request_id: frame.request_id }, 'runlet dropped a stale ssh.sign.reply');
+          return;
+        }
+        pendingSigns.delete(frame.request_id);
+        entry.cancelTimeout();
+        entry.socket.write(
+          frame.signature === null
+            ? AGENT_FAILURE
+            : encodeSignResponse(Buffer.from(frame.signature, 'base64')),
+        );
         return;
       }
       case 'ping':
@@ -782,6 +848,99 @@ export const createRunletShim = (options: RunletShimOptions): RunletShim => {
     credentialConnections.add(connection);
   };
 
+  // ── the ssh-agent connection (WP-146) ──────────────────────────────────────
+
+  const refuseAgent = (socket: Socket, why: string): void => {
+    metrics.agentRefusals += 1;
+    logger.warn({ reason: why }, 'runlet answered an ssh-agent request with FAILURE');
+    socket.write(AGENT_FAILURE);
+  };
+
+  const handleAgentRequest = (socket: Socket, request: AgentRequest): void => {
+    if (request.kind === 'refused') {
+      refuseAgent(socket, `message type ${request.type} is not one of the two this agent answers`);
+      return;
+    }
+    if (request.kind === 'identities') {
+      socket.write(encodeIdentitiesAnswer(agentKeyBlob as Buffer, 'agentic deploy key'));
+      return;
+    }
+    if (control === null || controlState !== 'running' || !childIsRunning() || shuttingDown) {
+      refuseAgent(socket, 'no run is active');
+      return;
+    }
+    if (signCount >= maxSignRequests) {
+      refuseAgent(socket, 'the run has used its sign requests');
+      return;
+    }
+    if (pendingSigns.size >= maxConcurrentCredentials) {
+      refuseAgent(socket, 'too many sign requests in flight');
+      return;
+    }
+    signCount += 1;
+    metrics.signRequests += 1;
+    // Our id, rebuilt fields: the frame that reaches the runner is the shim's statement.
+    const requestId = `s${signCount}-${randomUUID().slice(0, 8)}`;
+    const cancelTimeout = clock.setTimer(credentialTimeoutMs, () => {
+      pendingSigns.delete(requestId);
+      logger.warn({}, 'runlet sign request timed out');
+      socket.write(AGENT_FAILURE);
+    });
+    pendingSigns.set(requestId, { socket, cancelTimeout });
+    control.send({
+      type: 'ssh.sign',
+      request_id: requestId,
+      key_blob: request.keyBlob.toString('base64'),
+      data: request.data.toString('base64'),
+      flags: request.flags,
+    });
+  };
+
+  const onAgentConnection = (socket: Socket): void => {
+    if (shuttingDown || agentSockets.size >= maxConcurrentCredentials) {
+      metrics.agentRefusals += 1;
+      socket.destroy();
+      return;
+    }
+    agentSockets.add(socket);
+    let buffered: Buffer = Buffer.alloc(0);
+    socket.on('data', (chunk: Buffer) => {
+      try {
+        const split = splitAgentMessages(Buffer.concat([buffered, chunk]));
+        buffered = Buffer.from(split.rest);
+        for (const message of split.messages) {
+          handleAgentRequest(socket, parseAgentRequest(message));
+        }
+      } catch (error) {
+        metrics.agentRefusals += 1;
+        logger.warn({ message: (error as Error).message }, 'runlet closed an ssh-agent connection');
+        socket.destroy();
+      }
+    });
+    socket.on('error', () => socket.destroy());
+    socket.on('close', () => {
+      agentSockets.delete(socket);
+      for (const [id, entry] of pendingSigns) {
+        if (entry.socket === socket) {
+          entry.cancelTimeout();
+          pendingSigns.delete(id);
+        }
+      }
+    });
+  };
+
+  function closeAgent(): void {
+    for (const [, entry] of pendingSigns) {
+      entry.cancelTimeout();
+    }
+    pendingSigns.clear();
+    for (const socket of agentSockets) {
+      socket.destroy();
+    }
+    agentSockets.clear();
+    agentServer?.close();
+  }
+
   // ── lifecycle ──────────────────────────────────────────────────────────────
 
   const listen = async (server: Server, socketPath: string): Promise<void> => {
@@ -819,10 +978,15 @@ export const createRunletShim = (options: RunletShimOptions): RunletShim => {
         credentialServer = createServer(onCredentialConnection);
         await listen(credentialServer, options.credentialSocketPath);
       }
+      if (options.sshAgentSocketPath !== undefined && options.sshAgentSocketPath !== null) {
+        agentServer = createServer(onAgentConnection);
+        await listen(agentServer, options.sshAgentSocketPath);
+      }
       logger.info(
         {
           control_socket: options.controlSocketPath,
           credential_socket: options.credentialSocketPath ?? null,
+          ssh_agent_socket: options.sshAgentSocketPath ?? null,
         },
         'runlet listening',
       );
@@ -837,10 +1001,11 @@ export const createRunletShim = (options: RunletShimOptions): RunletShim => {
         connection.close();
       }
       credentialConnections.clear();
+      closeAgent();
       control?.close();
       child?.kill('SIGKILL');
       await Promise.all(
-        [controlServer, credentialServer].map(
+        [controlServer, credentialServer, agentServer].map(
           (server) =>
             new Promise<void>((resolve) => {
               if (server === null) {
@@ -853,6 +1018,7 @@ export const createRunletShim = (options: RunletShimOptions): RunletShim => {
       );
       controlServer = null;
       credentialServer = null;
+      agentServer = null;
     },
   };
 };

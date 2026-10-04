@@ -91,7 +91,7 @@ export const gitlabConfigSchema = z.strictObject({
    * integration: `static` with `mint_credentials: true` is refused, and a static integration may be
    * bound by one project only.
    */
-  run_credential: z.enum(['minted', 'static']).default('minted'),
+  run_credential: z.enum(['minted', 'static', 'deploy_key']).default('minted'),
   /**
    * **Whose** personal access token `run_token` is, with `run_credential: static` (TD-028 decision
    * 13a, WP-141 — the founder's *"let the admin decide"*, 2026-10-04). The operator chooses, and
@@ -108,7 +108,7 @@ export const gitlabConfigSchema = z.strictObject({
    *    repository its owner can, and pushes to every unprotected branch of them.
    *
    * A third choice, a project SSH deploy key, is decision 13b (WP-146): another `run_credential`
-   * value, not an owner.
+   * value (`deploy_key`), not an owner.
    */
   run_token_owner: z.enum(['dedicated_user', 'operator']).default('dedicated_user'),
   /**
@@ -120,6 +120,18 @@ export const gitlabConfigSchema = z.strictObject({
    * task.
    */
   run_token: z.string().nullish(),
+  /**
+   * Secret. With `run_credential: deploy_key` (TD-028 decision 13b, WP-146): the project deploy key's
+   * **unencrypted OpenSSH Ed25519** private key (`ssh-keygen -t ed25519 -N ""`), the deploy key
+   * enabled on the bound project with **write access**. It never enters a run container: the runner
+   * holds it and answers the sign requests the run shim relays from `/ctl/ssh-agent.sock`. Refused at
+   * the write when it has a passphrase, is another type, or is not `run_ssh_public_key`'s; and
+   * mutually exclusive with `run_token`. GitLab.com only (`altssh.gitlab.com:443`): a self-managed
+   * instance is refused by name, because the egress sidecar admits no SSH port.
+   */
+  run_ssh_private_key: z.string().nullish(),
+  /** The deploy key's public `ssh-ed25519 AAAA…` line — what the probe looks for among the project's deploy keys. */
+  run_ssh_public_key: z.string().max(1_024).nullish(),
   /** The run token's GitLab username: what git sends beside `run_token`, and what the probe checks. */
   run_token_username: z
     .string()
@@ -176,4 +188,5 @@ export const gitlabSecretFields = [
   'webhook_secret_token',
   'webhook_signing_token',
   'run_token',
+  'run_ssh_private_key',
 ] as const;

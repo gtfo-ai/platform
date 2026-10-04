@@ -102,6 +102,7 @@ import {
 } from '@platform/domain';
 import type { EventHandler, HandlerContext } from '../events/handler.js';
 import { MIN_SECRET_LENGTH } from '../integrations/redaction.js';
+import { openSshPrivateKeyBody } from '../integrations/ssh-deploy-key.js';
 import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
 import {
   notCheckedMetadata,
@@ -114,6 +115,7 @@ import { parkForConfigRefusal } from './config-refusal.js';
 import { questionDeadlineRule } from './deadline-rules.js';
 import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
 import {
+  type DeployKeyRunCredential,
   integrationsForProject,
   noRunScopedSecrets,
   type StaticRunCredential,
@@ -355,6 +357,9 @@ export const runDependencyGate = async (
   ) {
     return;
   }
+  if (await parkOnDeployKeyLeak(options, stored, integrations.git?.deployKeyRunCredential, files)) {
+    return;
+  }
 
   // Redacted **before** anything parses, compares or stores them, for `changedPathsOf`'s stated
   // reason: an exact-match redactor cannot find a secret a later cut has already halved.
@@ -513,6 +518,82 @@ export const staticRunTokenLeaks = (
       typeof file.diff === 'string' &&
       needles.some((needle) => addedLinesContain(file.diff as string, needle)),
   ).length;
+};
+
+/**
+ * The needles of a deploy key's private text (WP-146, TD-028 decision 13b item 7): its whole base64
+ * body as one string, each armour line from the third on — the first two of every unencrypted Ed25519
+ * key share the container's fixed header and the public key, so they are not evidence of **this**
+ * private key — and the binding redactor's placeholder (a provider response the adapter hands back
+ * already carries that instead of the value). Empty when no key is held.
+ */
+export const deployKeyNeedles = (key: DeployKeyRunCredential | undefined): readonly string[] => {
+  const text = key?.privateKey ?? '';
+  const body = openSshPrivateKeyBody(text);
+  if (body === null || body.length < MIN_SECRET_LENGTH) {
+    return [];
+  }
+  const lines = text
+    .slice(text.indexOf('-----BEGIN'))
+    .split(/\r?\n/)
+    .slice(1)
+    .filter((line) => !line.startsWith('-----'))
+    .map((line) => line.trim())
+    .slice(2)
+    .filter((line) => line.length >= 40);
+  return [body, ...lines, ...(key?.redactedAs === undefined ? [] : [key.redactedAs])];
+};
+
+/** How many files of `files` add the deploy key's private text, by {@link deployKeyNeedles}. */
+export const deployKeyLeaks = (
+  key: DeployKeyRunCredential | undefined,
+  files: readonly { readonly diff?: string | null }[],
+): number => {
+  const needles = deployKeyNeedles(key);
+  if (needles.length === 0) {
+    return 0;
+  }
+  return files.filter(
+    (file) =>
+      typeof file.diff === 'string' &&
+      needles.some((needle) => addedLinesContain(file.diff as string, needle)),
+  ).length;
+};
+
+/**
+ * **A merge request that adds the deploy key's private text parks its task** (WP-146, decision 13b
+ * item 7) — the key never enters a run container, so a hit means it reached the repository some
+ * other way; either way it works until it is removed from the project. Same shape as the static
+ * token's: the brief says **remove the key**, and never prints it.
+ */
+const parkOnDeployKeyLeak = async (
+  options: DependencyGateOptions,
+  stored: StoredTask,
+  key: DeployKeyRunCredential | undefined,
+  files: readonly { readonly new_path: string; readonly diff?: string | null }[],
+): Promise<boolean> => {
+  const leaked = deployKeyLeaks(key, files);
+  if (leaked === 0) {
+    return false;
+  }
+  const logger = options.logger ?? silentLogger;
+  logger.error(
+    { task_id: stored.task.id, files: leaked },
+    'the merge request adds the deploy key to the repository: the task is parked, and the key must be replaced (TD-028 decision 13b)',
+  );
+  await escalateTaskWithBrief(options, {
+    taskId: stored.task.id,
+    projectId: stored.task.projectId,
+    causeEventId: null,
+    reason: 'the merge request adds the deploy key to the repository',
+    brief: (ticketKey) =>
+      `The merge request for ${ticketKey} adds the project's SSH deploy key — the git integration's \`run_ssh_private_key\` — to the repository, in ${leaked} file${leaked === 1 ? '' : 's'}. ` +
+      'A deploy key works until it is removed from the project. Replace it now: remove the deploy key from the project (Settings › Repository › Deploy keys), create a new one with `ssh-keygen -t ed25519 -N ""`, add it with write access, ' +
+      're-seal it with POST /api/integrations/:id/secrets and update `run_ssh_public_key`. Then remove the key from the branch (and from its history) before this merge request goes anywhere. ' +
+      'The key is not printed here or anywhere the platform writes.',
+    what: 'dependency_gate',
+  });
+  return true;
 };
 
 /**

@@ -327,7 +327,7 @@ describe('credential minting', () => {
           'declares it as `token_prefix` on the integration',
         // WP-137 (TD-028 decision 13 item 6): how a static run credential is declared instead.
         static:
-          'GitLab: `run_credential: static` with a `run_token` — a dedicated user’s, or your own repository-only one (`run_token_owner: operator`); weaker isolation, operator guide § Integrations',
+          'GitLab: `run_credential: static` with a `run_token` — a dedicated user’s, or your own repository-only one (`run_token_owner: operator`) — or, on GitLab.com, `run_credential: deploy_key` with a write deploy key; weaker isolation, operator guide § Integrations',
       },
     });
   });

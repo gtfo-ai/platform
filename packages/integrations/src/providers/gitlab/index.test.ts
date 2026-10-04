@@ -34,6 +34,8 @@ describe('gitlabProviderRegistration', () => {
 
   it('marks every credential-bearing field as a secret', () => {
     expect([...gitlabProviderRegistration.secretFields].sort()).toEqual([
+      // WP-146: the deploy key's private half (TD-028 decision 13b item 1).
+      'run_ssh_private_key',
       'run_token',
       'token',
       'webhook_secret_token',

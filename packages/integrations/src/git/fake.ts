@@ -221,6 +221,9 @@
  *     branch's own head for any branch `seedFile`, `commitFiles` or `setBranchHead` made; there is
  *     no commit graph. `setProviderDefaultBranch` renames which branch is the default without
  *     moving a head, which GitLab's setting change also does not.
+ * 29. **Stricter — `deployKeyAccess` knows exactly the keys a test enabled** (WP-146). A key
+ *     installed with `setDeployKey` answers its write access; any other is not enabled. GitLab
+ *     lists every key of the project, matched by type and base64 as the GitLab adapter matches them.
  */
 import {
   type BranchPushProtection,
@@ -511,6 +514,8 @@ export interface FakeGitProvider extends GitProviderPort {
   setCiConfig(project: string, location: CiConfigLocation): void;
   /** Installs the push rule `branchPushProtection` answers for one branch (WP-141, divergence 26). */
   setBranchPushProtection(project: string, branch: string, protection: BranchPushProtection): void;
+  /** Enables a deploy key on a project, with or without write access (WP-146, divergence 29). */
+  setDeployKey(project: string, publicKey: string, canPush: boolean): void;
   /** Installs what `runTokenApiAccess` answers for one token (WP-141, divergence 27). */
   setRunTokenApiAccess(runToken: string, answer: RunTokenApiAccess): void;
   /** How many times `runTokenApiAccess` was asked, and with which tokens — never logged. */
@@ -798,6 +803,9 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     });
   };
   const pushRules = new Map<string, BranchPushProtection>();
+  /** WP-146, divergence 29: `<project>\0<type base64>` → write access and an id. */
+  const deployKeys = new Map<string, { readonly canPush: boolean; readonly id: string }>();
+  const keyIdentity = (line: string): string => line.trim().split(/\s+/).slice(0, 2).join(' ');
   const runTokenAnswers = new Map<string, RunTokenApiAccess>();
   const runTokenProbes: string[] = [];
   const seedUser = (handle: string, externalId: string): void => {
@@ -1712,6 +1720,16 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         : { protected: false, nobodyPushes: false, forcePushAllowed: true, pushers: [] };
     },
 
+    /** Divergence 29: exactly the keys a test enabled, compared by type and base64. */
+    deployKeyAccess: async (project: string, publicKey: string) => {
+      core.enter('deploy_key_access');
+      requireProject('deploy_key_access', project);
+      const found = deployKeys.get(memberKey(project, keyIdentity(publicKey)));
+      return found === undefined
+        ? { enabled: false, canPush: false, keyId: null }
+        : { enabled: true, canPush: found.canPush, keyId: found.id };
+    },
+
     /** Divergence 27: exactly the tokens a test declared; any other is GitLab's `401`. */
     runTokenApiAccess: async (runToken: string) => {
       core.enter('run_token_api_access');
@@ -1827,6 +1845,12 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       requireProject('set_ci_config', project).ciConfig = location;
     },
     setProjectMember,
+    setDeployKey: (project, publicKey, canPush) => {
+      deployKeys.set(memberKey(project, keyIdentity(publicKey)), {
+        canPush,
+        id: String(deployKeys.size + 1),
+      });
+    },
     setBranchPushProtection: (project, branch, protection) => {
       pushRules.set(memberKey(project, branch), protection);
     },

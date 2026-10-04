@@ -33,7 +33,8 @@
  * ## Names
  *
  * TD-025 names the frames `hello`, `spawn`, `stdin`, `stdout`, `stderr`, `signal`, `exit`,
- * `cred.get`, `cred.reply`, `ping`, `pong`; those spellings are kept verbatim. Four are additions
+ * `cred.get`, `cred.reply`, `ping`, `pong`; those spellings are kept verbatim. `ssh.sign` and
+ * `ssh.sign.reply` are TD-028 decision 13b's pair (WP-146). Four more are additions
  * the decision implies but does not name: `hello.ok` and `spawn.ok` (the acknowledgements TD-025's
  * "accepts exactly one authenticated control connection" needs in order to *be* an authenticated
  * connection), `stdin.end` (the SDK closes the CLI's stdin to trigger its graceful exit — without a
@@ -144,6 +145,14 @@ const requestIdSchema = z
   .max(64)
   .regex(/^[A-Za-z0-9_-]+$/);
 
+/** Non-empty standard base64 of at most `max` characters — the two SSH byte fields above. */
+const base64Schema = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .regex(/^[A-Za-z0-9+/]+={0,2}$/, 'expected base64');
+
 /**
  * Every frame, both directions.
  *
@@ -183,6 +192,16 @@ export const runletFrameSchema = z.discriminatedUnion('type', [
     ]),
   }),
 
+  /**
+   * The runner's answer to `ssh.sign` (TD-028 decision 13b, WP-146): an SSH signature blob in
+   * base64, or `null` — refused (another key, the run's budget spent, no deploy key).
+   */
+  z.strictObject({
+    type: z.literal('ssh.sign.reply'),
+    request_id: requestIdSchema,
+    signature: base64Schema(1_024).nullable(),
+  }),
+
   // ── shim → runner ────────────────────────────────────────────────────────
   z.strictObject({ type: z.literal('hello.ok'), protocol: z.int() }),
   /**
@@ -214,6 +233,19 @@ export const runletFrameSchema = z.discriminatedUnion('type', [
     request_id: requestIdSchema,
     host: runletHostSchema,
     protocol: z.literal('https'),
+  }),
+  /**
+   * The run's ssh client asked the agent socket (`/ctl/ssh-agent.sock`) to sign — TD-028 decision 13b
+   * item 2, WP-146. The shim speaks the ssh-agent protocol's two requests a git client needs and
+   * relays **only** the sign request here, rebuilt from validated fields with its own request id; the
+   * key blob and the data are bounded, base64, and the private key stays with the runner.
+   */
+  z.strictObject({
+    type: z.literal('ssh.sign'),
+    request_id: requestIdSchema,
+    key_blob: base64Schema(1_024),
+    data: base64Schema(16_384),
+    flags: z.int().min(0).max(0xffff_ffff),
   }),
   z.strictObject({
     type: z.literal('fatal'),

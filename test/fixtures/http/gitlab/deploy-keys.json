@@ -1,0 +1,45 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/deploy_keys?page=1&per_page=100",
+      "status": 200,
+      "body": [
+        {
+          "id": 1,
+          "title": "Public key",
+          "key": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQDNJAkI3Wdf0r13c8a5pEExB2YowPWCSVzfZV22pNBc1CuEbyYLHpUyaD0GwpGvFdx2aP7lMEk35k6Rz3ccBF6jRaVJyhsn5VNnW92PMpBJ/P1UebhXwsFHdQf5rTt082cSxWuk61kGWRQtk4ozt/J2DF/dIUVaLvc+z4HomT41fQ==",
+          "fingerprint": "4a:9d:64:15:ed:3a:e6:07:6e:89:36:b3:3b:03:05:d9",
+          "fingerprint_sha256": "SHA256:Jrs3LD1Ji30xNLtTVf9NDCj7kkBgPBb2pjvTZ3HfIgU",
+          "created_at": "2013-10-02T10:12:29Z",
+          "expires_at": null,
+          "can_push": false
+        },
+        {
+          "id": 31,
+          "title": "agentic runs",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINdamAGCsQq31Uv+08lkBzoO4XLz2qYjJa8CGmj3B1Ea fake-deploy-key@example.test",
+          "fingerprint_sha256": "SHA256:FAKE-not-computed",
+          "created_at": "2026-10-04T08:00:00Z",
+          "expires_at": null,
+          "can_push": true
+        },
+        {
+          "id": 32,
+          "title": "read-only mirror",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER fake-read-only@example.test",
+          "fingerprint_sha256": "SHA256:FAKE-not-computed",
+          "created_at": "2026-10-04T08:00:00Z",
+          "expires_at": null,
+          "can_push": false
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/deploy_keys/",
+        "retrieved": "2026-10-04",
+        "kind": "documented-adapted",
+        "note": "The \"List deploy keys for project\" example response (the first entry verbatim) with two entries added in the same shape for WP-146's probe: an Ed25519 write key (`can_push: true`, the public half of RFC 8032 section 7.1 TEST 1's key, so obviously not a real deploy key) and an Ed25519 key without write access. The page publishes no pagination for this endpoint; the `page`/`per_page` query is the adapter's ordinary pager, as for every list this corpus records. Fingerprints of the two added keys are placeholders: the probe compares the key line, never a fingerprint."
+      }
+    }
+  ]
+}

@@ -46,7 +46,7 @@
  * so for a run that started the answer is `null` for the rest of its life. It is asserted rather
  * than described.
  */
-import type { Logger, WorkspaceGitCredential } from '@platform/application';
+import type { Logger, WorkspaceGitCredential, WorkspaceGitSsh } from '@platform/application';
 import { silentLogger, WorkspaceError } from '@platform/application';
 
 /** What a minted credential may be used for (`CredentialScope` on the provider port). */
@@ -56,7 +56,7 @@ export type RunCredentialScope = 'read' | 'push';
  * Where the run's credential came from: minted for the run, or the integration's declared static
  * run token (TD-028 decision 13, WP-137), which is always `push` and cannot be narrowed.
  */
-export type RunCredentialSource = 'minted' | 'static';
+export type RunCredentialSource = 'minted' | 'static' | 'deploy_key';
 
 /** The credential material the create request carries — never a `revokeId` (decision 3). */
 export interface CarriedRunCredential extends WorkspaceGitCredential {
@@ -75,6 +75,12 @@ export interface HoldRequest {
    */
   readonly readOnly: boolean;
   readonly credential: CarriedRunCredential;
+  /**
+   * The spec's SSH route, for a deploy key (WP-146) — required with `source: 'deploy_key'` and
+   * refused without it, so the helpers that read {@link RunCredentialBroker.credentialFor} know to
+   * go over SSH rather than hand the key to a credential helper as a password.
+   */
+  readonly ssh?: WorkspaceGitSsh;
 }
 
 export class RunCredentialBroker {
@@ -97,7 +103,13 @@ export class RunCredentialBroker {
     const { credential } = request;
     // TD-028 decision 13: a static run credential cannot be narrowed, so a read-only run holds it
     // with its push scope — the stated loss. A *minted* push credential there is still refused.
-    if (request.readOnly && credential.scope === 'push' && credential.source !== 'static') {
+    // TD-028 decision 13b: a deploy key with write access cannot be narrowed either.
+    if (
+      request.readOnly &&
+      credential.scope === 'push' &&
+      credential.source !== 'static' &&
+      credential.source !== 'deploy_key'
+    ) {
       throw new WorkspaceError(
         'invalid_spec',
         'a read-only run was sent a push credential; it may hold a read credential or none (BD-021)',
@@ -111,12 +123,22 @@ export class RunCredentialBroker {
         { runId: request.runId },
       );
     }
-    this.#held.set(request.runId, credential);
+    if ((credential.source === 'deploy_key') !== (request.ssh !== undefined)) {
+      throw new WorkspaceError(
+        'invalid_spec',
+        'a deploy key is held with its SSH route and nothing else is (TD-028 decision 13b)',
+        { runId: request.runId },
+      );
+    }
+    this.#held.set(
+      request.runId,
+      request.ssh === undefined ? credential : { ...credential, ssh: request.ssh },
+    );
     this.#logger.debug(
       { run_id: request.runId, scope: credential.scope },
       'holding the run credential the create request carried',
     );
-    return { host: credential.host, username: credential.username, password: credential.password };
+    return this.#gitPart(this.#held.get(request.runId) as CarriedRunCredential);
   }
 
   /**
@@ -128,6 +150,12 @@ export class RunCredentialBroker {
   answer(runId: string, host: string): WorkspaceGitCredential | null {
     const held = this.#held.get(runId);
     if (held === undefined) {
+      return null;
+    }
+    // WP-146 (TD-028 decision 13b item 2): a deploy key is never handed to the workspace — its
+    // signatures come from the runner through the agent socket. The answer is the ordinary refusal.
+    if (held.source === 'deploy_key') {
+      this.#logger.warn({ run_id: runId }, 'a deploy-key run asked the credential helper; refused');
       return null;
     }
     // Exact. Not `endsWith`, not `includes`, not a case fold, not a trailing-dot strip — see the
@@ -176,6 +204,11 @@ export class RunCredentialBroker {
   }
 
   #gitPart(credential: CarriedRunCredential): WorkspaceGitCredential {
-    return { host: credential.host, username: credential.username, password: credential.password };
+    return {
+      host: credential.host,
+      username: credential.username,
+      password: credential.password,
+      ...(credential.ssh === undefined ? {} : { ssh: credential.ssh }),
+    };
   }
 }

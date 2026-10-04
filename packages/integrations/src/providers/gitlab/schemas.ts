@@ -352,6 +352,18 @@ export const gitlabProtectedBranchSchema = z.object({
 });
 
 /**
+ * One of a project's deploy keys (`GET /projects/:id/deploy_keys`,
+ * <https://docs.gitlab.com/api/deploy_keys/>, retrieved 2026-10-04) — WP-146. `key` is the public
+ * key line; `can_push` its write access.
+ */
+export const gitlabDeployKeySchema = z.object({
+  id: z.int(),
+  title: z.string().nullish(),
+  key: z.string(),
+  can_push: z.boolean().nullish(),
+});
+
+/**
  * The create-token response. `token` is the one secret this whole module handles, so the schema
  * names it and nothing else ever puts the parsed object into a log line, an audit payload or an
  * error (BD-002, TD-012).

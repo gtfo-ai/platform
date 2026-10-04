@@ -924,6 +924,24 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
     },
 
     /**
+     * WP-146 (TD-028 decision 13b item 6) — the project's deploy keys
+     * (`GET /projects/:id/deploy_keys`, paged), read with the API token, matched on the key's type
+     * and base64 (the comment is the operator's and ignored). The project is read first, so an
+     * unknown project is `not_found`.
+     */
+    deployKeyAccess: async (project, publicKey) => {
+      await client.project(project);
+      const wanted = publicKeyIdentity(publicKey);
+      const found =
+        wanted === null
+          ? undefined
+          : (await client.deployKeys(project)).find((key) => publicKeyIdentity(key.key) === wanted);
+      return found === undefined
+        ? { enabled: false, canPush: false, keyId: null }
+        : { enabled: true, canPush: found.can_push === true, keyId: String(found.id) };
+    },
+
+    /**
      * WP-141 (TD-028 decision 13a item 1) — the scope proof: **one** `GET /user` made with the run
      * token, on a transport of its own built for this call alone and dropped after it, so the API
      * token is not on the request and the run token is on no other. `401` and `403` are answers
@@ -1473,4 +1491,12 @@ const asMintFailure = (error: unknown): unknown => {
     );
   }
   return error;
+};
+
+/** `<type> <base64>` of a public key line, or `null` — what two lines are compared by (WP-146). */
+export const publicKeyIdentity = (line: string): string | null => {
+  const parts = line.trim().split(/\s+/);
+  return parts.length >= 2 && /^[A-Za-z0-9+/]+={0,2}$/.test(parts[1] as string)
+    ? `${parts[0]} ${parts[1]}`
+    : null;
 };

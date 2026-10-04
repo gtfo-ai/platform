@@ -28,12 +28,16 @@ export const CLI_ENVIRONMENT_NAMES = [
   'HTTPS_PROXY',
   'HTTP_PROXY',
   'NO_PROXY',
+  'GIT_SSH_COMMAND',
 ] as const;
 
 /** Every name that starts a git command-line configuration variable (`GIT_CONFIG_COUNT`, …). */
 export const GIT_CONFIG_PREFIX = 'GIT_CONFIG';
 
-/** `HOME`, `CLAUDE_CONFIG_DIR`, `PATH` and — when the run has a sidecar — the three proxy names. */
+/**
+ * `HOME`, `CLAUDE_CONFIG_DIR`, `PATH`, — when the run has a sidecar — the three proxy names, and — for
+ * a deploy-key run — `GIT_SSH_COMMAND`.
+ */
 export const cliEnvironmentVariables = (
   environment: WorkspaceCliEnvironment,
 ): Record<string, string> => ({
@@ -47,6 +51,10 @@ export const cliEnvironmentVariables = (
         HTTPS_PROXY: environment.proxy.url,
         NO_PROXY: environment.proxy.noProxy,
       }),
+  // WP-146 (TD-028 decision 13b item 3): a deploy-key run's ssh, for the CLI's git and a `docker exec`.
+  ...(environment.gitSshCommand === undefined || environment.gitSshCommand === null
+    ? {}
+    : { GIT_SSH_COMMAND: environment.gitSshCommand }),
 });
 
 /**

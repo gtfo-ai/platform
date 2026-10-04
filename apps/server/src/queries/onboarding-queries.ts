@@ -54,7 +54,8 @@ import { db as dbAdapters, secrets as secretAdapters } from '@platform/infrastru
 import type { ProviderCatalogueEntry } from '@platform/integrations';
 import {
   configIssuesOf,
-  declaresStaticRunCredential,
+  declaresDedicatedRunCredential,
+  deployKeyWriteIssues,
   findShippedProvider,
   staticRunCredentialWriteIssues,
 } from '@platform/integrations';
@@ -545,12 +546,17 @@ export const assertStaticRunCredentialWrite = (
   secretValues: Readonly<Record<string, string>>,
   now: Date,
 ): void => {
-  const issues = staticRunCredentialWriteIssues(
-    provider.staticRunCredential ?? undefined,
-    config,
-    secretValues,
-    now,
-  );
+  const issues = [
+    ...staticRunCredentialWriteIssues(
+      provider.staticRunCredential ?? undefined,
+      config,
+      secretValues,
+      now,
+    ),
+    // WP-146 (TD-028 decision 13b item 1): a deploy key's write rules — an unencrypted Ed25519 key
+    // that is the declared public key's, and never beside a run token.
+    ...deployKeyWriteIssues(provider.staticRunCredential ?? undefined, config, secretValues),
+  ];
   if (issues.length > 0) {
     throw new HttpError(
       400,
@@ -617,7 +623,7 @@ export const assertStaticIntegrationBindable = async (
     throw new HttpError(
       409,
       'static_run_credential_shared',
-      `integration ${integrationId} gives its runs a static run credential, and a static integration may be bound by one project only — its run token reaches every project its user is a member of, which the platform cannot see (TD-028 decision 13); it is bound by ${rows.map((row) => row.project_id).join(', ') || 'no other project'}. Create a second integration with its own dedicated run token instead`,
+      `integration ${integrationId} gives its runs a static run credential or a deploy key, and such an integration may be bound by one project only — a run token reaches every project its user is a member of, and a deploy key every project it is enabled on, neither of which the platform can see (TD-028 decisions 13 and 13b); it is bound by ${rows.map((row) => row.project_id).join(', ') || 'no other project'}. Create a second integration with its own credential instead`,
     );
   }
 };
@@ -706,7 +712,7 @@ export const updateIntegrationConfig = async (
     Object.assign(next, input.set);
     assertHostIsDeclared({ ...provider.configDefaults, ...next }, input.egress);
     assertConfigParses(next, provider);
-    if (declaresStaticRunCredential(provider.staticRunCredential ?? undefined, next)) {
+    if (declaresDedicatedRunCredential(provider.staticRunCredential ?? undefined, next)) {
       // WP-137: the run token must already be sealed (and not be the API token), and a static
       // integration may be bound by one project — a PATCH is the other door into `static`.
       assertStaticRunCredentialWrite(
@@ -1038,7 +1044,7 @@ export const resealIntegrationSecrets = async (
       return { status: 'not_found' } as const;
     }
     assertNotRetired(input.integrationId, row.retiredAt);
-    if (declaresStaticRunCredential(provider.staticRunCredential ?? undefined, row.config)) {
+    if (declaresDedicatedRunCredential(provider.staticRunCredential ?? undefined, row.config)) {
       // WP-137: the credential set after this write — the sealed ones it keeps, the ones it seals —
       // still holds a run token that is not the API token, before anything is claimed or written.
       assertStaticRunCredentialWrite(
@@ -1452,7 +1458,9 @@ export const replaceProjectBindings = async (
       // WP-137 (TD-028 decision 13 item 1): a static integration is bound by this project alone.
       for (const row of known) {
         const provider = findShippedProvider(row.provider);
-        if (declaresStaticRunCredential(provider?.staticRunCredential ?? undefined, row.config)) {
+        if (
+          declaresDedicatedRunCredential(provider?.staticRunCredential ?? undefined, row.config)
+        ) {
           await assertStaticIntegrationBindable(tx, row.id, projectId, 1);
         }
       }

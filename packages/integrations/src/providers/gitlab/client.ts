@@ -18,6 +18,7 @@ import {
   gitlabAccessTokenSchema,
   gitlabBranchSchema,
   gitlabCommitSchema,
+  gitlabDeployKeySchema,
   gitlabDiffStatsSummaryResponseSchema,
   gitlabDiscussionSchema,
   gitlabJobSchema,
@@ -97,6 +98,8 @@ export interface GitLabClient {
    * wildcards included, paged (WP-141 review round 1).
    */
   protectedBranches(project: string): Promise<z.output<typeof gitlabProtectedBranchSchema>[]>;
+  /** WP-146: the project's deploy keys, paged. */
+  deployKeys(project: string): Promise<z.output<typeof gitlabDeployKeySchema>[]>;
   /** <https://docs.gitlab.com/api/protected_branches/> § "Retrieve a protected branch …". */
   protectedBranch(
     project: string,
@@ -335,6 +338,20 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
           path: `/projects/${encodeProjectId(project)}/repository/branches/${encodeURIComponent(branch)}`,
           action: 'get_branch',
         }),
+      ),
+
+    deployKeys: async (project) =>
+      parse(
+        z.array(gitlabDeployKeySchema),
+        await http.paginate(
+          {
+            method: 'GET',
+            path: `/projects/${encodeProjectId(project)}/deploy_keys`,
+            action: 'list_deploy_keys',
+          },
+          100,
+        ),
+        'list_deploy_keys',
       ),
 
     protectedBranches: async (project) =>

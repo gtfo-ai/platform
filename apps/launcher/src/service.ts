@@ -171,7 +171,13 @@ export class LauncherService {
     const held =
       credential === null
         ? null
-        : broker.hold({ runId: spec.runId, readOnly: spec.readOnly, credential });
+        : broker.hold({
+            runId: spec.runId,
+            readOnly: spec.readOnly,
+            credential,
+            // WP-146: a deploy key is held with the spec's SSH route, which its helpers take.
+            ...(spec.repo?.ssh === undefined ? {} : { ssh: spec.repo.ssh }),
+          });
     // The handle lives outside the `try` because a step *after* `create` can fail with the
     // container already up: `attach` reads the control volume and throws `not_found` on a
     // mis-mounted one, and it builds a socket path that a long control root makes too long for

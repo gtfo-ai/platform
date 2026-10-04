@@ -13,6 +13,8 @@ import {
   createMemoryAuditLog,
   createRunScopedSecrets,
   createVirtualTimer,
+  type DeployKeyRunCredential,
+  FAKE_DEPLOY_KEY,
   noSecretsRedactor,
   type PipelineIntegrations,
   type RunSpec,
@@ -175,6 +177,8 @@ describe('minting the run credential (WP-76)', () => {
       widen?: boolean;
       /** WP-137: the integration's static run credential, as the loader reads it. */
       staticRunCredential?: StaticRunCredential;
+      /** WP-146: the integration's deploy key, as the loader reads it. */
+      deployKeyRunCredential?: DeployKeyRunCredential;
       /** WP-137: `runs.credential_source` cannot be written. */
       failRecord?: boolean;
     } = {},
@@ -209,6 +213,9 @@ describe('minting the run credential (WP-76)', () => {
         ...(options.staticRunCredential === undefined
           ? {}
           : { staticRunCredential: options.staticRunCredential }),
+        ...(options.deployKeyRunCredential === undefined
+          ? {}
+          : { deployKeyRunCredential: options.deployKeyRunCredential }),
       },
       taskManagement: null,
       communication: null,
@@ -375,6 +382,83 @@ describe('minting the run credential (WP-76)', () => {
       ).rejects.toMatchObject({
         code: 'invalid_spec',
         message: expect.stringMatching(/expired on 2025-12-01/),
+      });
+      expect(runSecrets.size).toBe(0);
+      expect(credentialSources()).toEqual([['none', GIT_INTEGRATION]]);
+    });
+  });
+
+  /**
+   * WP-146 — TD-028 decision 13b, the production minter: a deploy key is handed on the minted path
+   * as `source: 'deploy_key'` with its route, joins the run's redactor, writes no audit row, and the
+   * run row says `deploy_key`; a shadow task gets nothing.
+   */
+  describe('an SSH deploy key (WP-146)', () => {
+    const KEY: DeployKeyRunCredential = {
+      privateKey: FAKE_DEPLOY_KEY.privateKey,
+      publicKey: FAKE_DEPLOY_KEY.publicKey,
+      route: {
+        httpsPrefix: 'https://gitlab.com/',
+        sshPrefix: 'ssh://git@altssh.gitlab.com:443/',
+        connectHost: 'altssh.gitlab.com',
+        connectPort: 443,
+        hostKeyAlias: 'gitlab.com',
+        knownHosts: [
+          'gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf',
+        ],
+      },
+      refusal: null,
+    };
+
+    it('hands it on the minted path with its route, redacted, with no audit row, and records the source', async () => {
+      const { git, auditLog, runSecrets, minter, spec, project, credentialSources } = harness(
+        'normal',
+        { minting: false, deployKeyRunCredential: KEY },
+      );
+      const answer = await minter.mint({ spec, project, scope: 'read', ttlSeconds: 86_400 });
+      if (answer.kind !== 'minted') throw new Error('expected a credential');
+      expect(answer.credential).toMatchObject({
+        username: 'git',
+        password: FAKE_DEPLOY_KEY.privateKey,
+        scope: 'push',
+        source: 'deploy_key',
+        ssh: { publicKey: FAKE_DEPLOY_KEY.publicKey, route: KEY.route },
+      });
+      // The canary: a transcript line that somehow carried the key text is redacted.
+      expect(
+        runSecrets.redactor.redactText(`cat key\n${FAKE_DEPLOY_KEY.privateKey}`).value,
+      ).not.toContain(FAKE_DEPLOY_KEY.privateKey);
+      await answer.credential.revoke();
+      expect(runSecrets.size).toBe(0);
+      expect(auditLog.entries).toEqual([]);
+      expect(git.credentials).toEqual([]);
+      expect(credentialSources()).toEqual([['deploy_key', GIT_INTEGRATION]]);
+    });
+
+    it('gives a shadow task no key, and records none (decision 13b item 7)', async () => {
+      const { runSecrets, minter, spec, project, credentialSources } = harness('shadow', {
+        deployKeyRunCredential: KEY,
+      });
+      const answer = await minter.mint({ spec, project, scope: 'push', ttlSeconds: 86_400 });
+      expect(answer.kind).toBe('unavailable');
+      expect(JSON.stringify(answer)).not.toContain(FAKE_DEPLOY_KEY.privateKey);
+      expect(runSecrets.size).toBe(0);
+      expect(credentialSources()).toEqual([['none', null]]);
+    });
+
+    it('refuses a self-managed one terminally, before the create, by name', async () => {
+      const { runSecrets, minter, spec, project, credentialSources } = harness('normal', {
+        deployKeyRunCredential: {
+          ...KEY,
+          route: null,
+          refusal: 'SSH deploy-key runs reach gitlab.com through altssh.gitlab.com:443 only',
+        },
+      });
+      await expect(
+        minter.mint({ spec, project, scope: 'push', ttlSeconds: 86_400 }),
+      ).rejects.toMatchObject({
+        code: 'invalid_spec',
+        message: expect.stringMatching(/altssh.gitlab.com:443 only/),
       });
       expect(runSecrets.size).toBe(0);
       expect(credentialSources()).toEqual([['none', GIT_INTEGRATION]]);

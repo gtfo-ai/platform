@@ -51,6 +51,13 @@ export const GITLAB_PROJECT_ID = '00000000-0000-4000-8000-0000000000b9';
  * `run-token-scope.json`'s `request_token` keys match, so the replay answers `GET /user` by the token
  * it was sent with.
  */
+/** WP-146: public key lines `deploy-keys.json` records (fake; one is RFC 8032's test key's). */
+export const GITLAB_FAKE_DEPLOY_KEYS = {
+  writable: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINdamAGCsQq31Uv+08lkBzoO4XLz2qYjJa8CGmj3B1Ea',
+  readOnly: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER',
+  absent: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi',
+} as const;
+
 export const GITLAB_FAKE_RUN_TOKENS = {
   repositoryOnly: 'FAKE-run-token-repository-only-DO-NOT-USE',
   apiCapable: 'FAKE-run-token-api-scope-DO-NOT-USE',
@@ -219,6 +226,8 @@ export const gitlabReplayContext = (
       maintainersPush: 'release',
       forcePush: 'stable',
     },
+    // WP-146: `deploy-keys.json` records an Ed25519 write key and one without write access.
+    deployKeys: GITLAB_FAKE_DEPLOY_KEYS,
     runTokens: GITLAB_FAKE_RUN_TOKENS,
     // WP-139: `repository-settings.json` records the three projects' `GET /projects/:id`.
     repositories: {

@@ -537,6 +537,19 @@ export interface BranchPushProtection {
 }
 
 /**
+ * {@link GitProviderPort.deployKeyAccess}'s answer (WP-146, TD-028 decision 13b item 6): whether a
+ * public key is one of the project's deploy keys, and whether it has write access.
+ */
+export interface DeployKeyAccess {
+  /** The key is enabled on the project. */
+  readonly enabled: boolean;
+  /** It may push (GitLab: `can_push`). `false` when not enabled. */
+  readonly canPush: boolean;
+  /** The provider's id of the deploy key, or `null` when not enabled. */
+  readonly keyId: string | null;
+}
+
+/**
  * {@link GitProviderPort.runTokenApiAccess}'s answer (WP-141, TD-028 decision 13a item 1): what the
  * provider said to **one** identity read made with a run token — the scope proof of a repository-only
  * token.
@@ -755,6 +768,18 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * `403`; {@link IntegrationRateLimitedError} for a `429`, as every read.
    */
   readonly runTokenApiAccess: (runToken: string) => Promise<RunTokenApiAccess>;
+
+  /**
+   * Whether `publicKey` (an `ssh-ed25519 AAAA…` line; the comment is ignored) is one of `project`'s
+   * deploy keys and may push — WP-146's probe of a **deploy-key** run credential (TD-028 decision
+   * 13b item 6), read **with the API token** (GitLab: `GET /projects/:id/deploy_keys`). It cannot
+   * see whether the key is also enabled on other projects, and the probe says so. A **read**.
+   *
+   * A key that is not enabled is `{ enabled: false }`, never an exception.
+   *
+   * @throws {IntegrationError} `not_found` for a project that does not exist.
+   */
+  readonly deployKeyAccess: (project: string, publicKey: string) => Promise<DeployKeyAccess>;
 
   /**
    * Starts a new pipeline **for a merge request** at its current head (WP-138 ruling (g)) — GitLab's

@@ -14,6 +14,13 @@ const INTEGRATION_ID = '00000000-0000-4000-8000-0000000000a2';
 const PROJECT_ID = '00000000-0000-4000-8000-0000000000b2';
 const PROJECT = 'acme/api';
 /** WP-141: obviously fake run tokens (BD-002), the same three the GitLab corpus records. */
+/** WP-146: the fake's deploy keys, as public key lines (fake). */
+const FAKE_DEPLOY_KEYS = {
+  writable: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINdamAGCsQq31Uv+08lkBzoO4XLz2qYjJa8CGmj3B1Ea fake',
+  readOnly: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER',
+  absent: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi',
+} as const;
+
 const FAKE_RUN_TOKENS = {
   repositoryOnly: 'FAKE-run-token-repository-only-DO-NOT-USE',
   apiCapable: 'FAKE-run-token-api-scope-DO-NOT-USE',
@@ -174,6 +181,9 @@ runGitProviderContract({
       forcePushAllowed: true,
       pushers: ['No one'],
     });
+    // WP-146, divergence 29: the deploy keys the suite reads.
+    port.setDeployKey('acme/api', FAKE_DEPLOY_KEYS.writable, true);
+    port.setDeployKey('acme/api', FAKE_DEPLOY_KEYS.readOnly, false);
     port.setRunTokenApiAccess(FAKE_RUN_TOKENS.repositoryOnly, {
       status: 403,
       refusedForScope: true,
@@ -309,6 +319,7 @@ runGitProviderContract({
         maintainersPush: 'release',
         forcePush: 'stable',
       },
+      deployKeys: FAKE_DEPLOY_KEYS,
       runTokens: FAKE_RUN_TOKENS,
       // WP-139, divergence 25: the fake answers the location a seed states.
       repositories: {

@@ -316,6 +316,35 @@ describe('a git provider’s static run credential declaration (WP-137)', () => 
       { type: 'task_management' },
       /only a git binding gives a run a credential/,
     ],
+    // WP-146: a deploy key's two keys are the schema's, and the private one is sealed.
+    [
+      'a deploy key field the schema lacks',
+      {
+        ...SUPPORT,
+        deployKey: {
+          modeValue: 'deploy_key',
+          privateKeyField: 'run_token',
+          publicKeyField: 'missing_public_key',
+          sshRoute: () => 'none',
+        },
+      },
+      {},
+      /deploy key field "missing_public_key" does not exist/,
+    ],
+    [
+      'a deploy key that is not a secret',
+      {
+        ...SUPPORT,
+        deployKey: {
+          modeValue: 'deploy_key',
+          privateKeyField: 'run_token_username',
+          publicKeyField: 'run_token_expires_at',
+          sshRoute: () => 'none',
+        },
+      },
+      {},
+      /"run_token_username" is not in secretFields/,
+    ],
   ])('refuses %s, naming the provider', (_case, support, overrides, message) => {
     expect(() => createIntegrationRegistry([declaring(support, overrides)])).toThrow(message);
   });

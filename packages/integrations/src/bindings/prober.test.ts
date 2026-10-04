@@ -33,6 +33,7 @@ import {
   createMemoryAuditLog,
   createVirtualTimer,
   exactSecretRedactor,
+  FAKE_DEPLOY_KEY,
   type MemoryIntegrationAuditLog,
   noSecretsRedactor,
   SecretResolutionError,
@@ -662,5 +663,197 @@ describe('the probe of an operator’s own run token (WP-141)', () => {
       check(await proberOver(unnamed.registration).test(INTEGRATION), 'default_branch_protection')
         ?.detail,
     ).toMatch(/lets someone push/);
+  });
+});
+
+/**
+ * WP-146 (TD-028 decision 13b item 6): a deploy key's probe — the key among the project's deploy keys
+ * with write access, and the default branch protected with push "No one" (no deploy key admitted),
+ * both read with the API token; the private key is sent nowhere, and the probe says what it cannot see.
+ */
+describe('the probe of a deploy key (WP-146)', () => {
+  const ROUTE = {
+    httpsPrefix: 'https://gitlab.com/',
+    sshPrefix: 'ssh://git@altssh.gitlab.com:443/',
+    connectHost: 'altssh.gitlab.com',
+    connectPort: 443,
+    hostKeyAlias: 'gitlab.com',
+    knownHosts: [
+      'gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf',
+    ],
+  };
+  const keyRegistration = (
+    options: {
+      readonly access?: { enabled: boolean; canPush: boolean; keyId: string | null };
+      readonly protection?: {
+        protected: boolean;
+        nobodyPushes: boolean;
+        forcePushAllowed: boolean;
+        pushers: string[];
+      };
+      readonly selfManaged?: boolean;
+    } = {},
+  ) => {
+    const calls: { member: string; argument: string }[] = [];
+    const registration: AnyProviderRegistration = {
+      id: 'probe-git',
+      type: 'git',
+      displayName: 'Probe git',
+      configSchema: z.strictObject({
+        token: z.string().min(1),
+        run_token: z.string().nullish(),
+        run_ssh_private_key: z.string().nullish(),
+        run_ssh_public_key: z.string().nullish(),
+        run_credential: z.enum(['minted', 'static', 'deploy_key']).default('minted'),
+        run_token_username: z.string().nullish(),
+        run_token_expires_at: z.string().nullish(),
+        run_token_owner: z.enum(['dedicated_user', 'operator']).default('dedicated_user'),
+        mint_credentials: z.boolean().default(false),
+      }),
+      secretFields: ['token', 'run_token', 'run_ssh_private_key'],
+      setupGuidePath: 'none',
+      agentTooling: null,
+      staticRunCredential: {
+        modeField: 'run_credential',
+        tokenField: 'run_token',
+        apiTokenField: 'token',
+        usernameField: 'run_token_username',
+        expiresAtField: 'run_token_expires_at',
+        mintingField: 'mint_credentials',
+        maxLifetimeDays: 90,
+        ownerField: 'run_token_owner',
+        scopeProofHint: 'this token can call the probe API; create one with repository scopes only',
+        deployKey: {
+          modeValue: 'deploy_key',
+          privateKeyField: 'run_ssh_private_key',
+          publicKeyField: 'run_ssh_public_key',
+          sshRoute: () => (options.selfManaged === true ? 'a self-managed host is refused' : ROUTE),
+        },
+      },
+      create: () =>
+        ({
+          ref: { integrationId: INTEGRATION, provider: 'probe-git', type: 'git', host: null },
+          capabilities: () => ({}),
+          testConnection: async () => ({
+            ok: true,
+            checked_at: '2026-10-04T04:00:00.000Z',
+            detail: 'probe',
+          }),
+          deployKeyAccess: async (project: string, publicKey: string) => {
+            calls.push({
+              member: 'deployKeyAccess',
+              argument: `${project}:${publicKey.slice(0, 11)}`,
+            });
+            return options.access ?? { enabled: true, canPush: true, keyId: '7' };
+          },
+          branchPushProtection: async (project: string, branch: string) => {
+            calls.push({ member: 'branchPushProtection', argument: `${project}@${branch}` });
+            return (
+              options.protection ?? {
+                protected: true,
+                nobodyPushes: true,
+                forcePushAllowed: false,
+                pushers: ['No one'],
+              }
+            );
+          },
+        }) as never,
+    };
+    return { registration, calls };
+  };
+  const proberOver = (registration: AnyProviderRegistration, bound: BoundProject | null = BOUND) =>
+    createIntegrationProber({
+      repository: repositoryOf(
+        accountOf({
+          type: 'git',
+          provider: 'probe-git',
+          config: { run_credential: 'deploy_key', run_ssh_public_key: FAKE_DEPLOY_KEY.publicKey },
+        }),
+      ),
+      secrets: secretsOf({ token: PLANTED_TOKEN, run_ssh_private_key: FAKE_DEPLOY_KEY.privateKey }),
+      registry: createIntegrationRegistry([registration]),
+      executor: executorFor(),
+      boundProjectOf: async () => bound,
+    });
+  const check = (
+    outcome: Awaited<ReturnType<ReturnType<typeof proberOver>['test']>>,
+    name: string,
+  ) => outcome?.checks.find((entry) => entry.name === name);
+  const KEY_BODY = FAKE_DEPLOY_KEY.privateKey.split('\n')[1] ?? '';
+
+  it('accepts a write deploy key behind a No-one default branch, read with the API token', async () => {
+    const { registration, calls } = keyRegistration();
+    const outcome = await proberOver(registration).test(INTEGRATION);
+    expect(outcome?.ok).toBe(true);
+    expect(outcome?.checks.map((entry) => entry.name)).toEqual([
+      'connection',
+      'run_credential',
+      'default_branch_protection',
+    ]);
+    expect(calls).toEqual([
+      { member: 'deployKeyAccess', argument: 'acme/api:ssh-ed25519' },
+      { member: 'branchPushProtection', argument: 'acme/api@main' },
+    ]);
+    expect(check(outcome, 'run_credential')?.detail).toMatch(
+      /cannot see whether this key is also enabled/,
+    );
+    expect(auditLog.entriesFor('check_deploy_key')).toHaveLength(1);
+    expect(auditLog.entriesFor('check_default_branch_protection')).toHaveLength(1);
+    // The canary: neither the outcome nor an audit row carries the private key.
+    expect(KEY_BODY.length).toBeGreaterThan(40);
+    expect(JSON.stringify([outcome, auditLog.entries])).not.toContain(KEY_BODY);
+  });
+
+  it.each([
+    [
+      'not enabled on the project',
+      { enabled: false, canPush: false, keyId: null },
+      /not one of acme\/api's deploy keys/,
+    ],
+    [
+      'enabled without write access',
+      { enabled: true, canPush: false, keyId: '7' },
+      /without write access/,
+    ],
+  ])('refuses a key %s', async (_, access, words) => {
+    const { registration } = keyRegistration({ access });
+    const outcome = await proberOver(registration).test(INTEGRATION);
+    expect(check(outcome, 'run_credential')).toMatchObject({
+      ok: false,
+      detail: expect.stringMatching(words),
+    });
+  });
+
+  it('refuses a default branch a deploy key may push to, or that is not protected', async () => {
+    const admitted = keyRegistration({
+      protection: {
+        protected: true,
+        nobodyPushes: false,
+        forcePushAllowed: false,
+        pushers: ['deploy key 7'],
+      },
+    });
+    expect(
+      check(await proberOver(admitted.registration).test(INTEGRATION), 'default_branch_protection')
+        ?.detail,
+    ).toMatch(/lets deploy key 7 push/);
+    const open = keyRegistration({
+      protection: { protected: false, nobodyPushes: false, forcePushAllowed: true, pushers: [] },
+    });
+    expect(
+      check(await proberOver(open.registration).test(INTEGRATION), 'default_branch_protection')
+        ?.detail,
+    ).toMatch(/is not protected/);
+  });
+
+  it('fails both checks, asking nothing, for a self-managed host or no bound project', async () => {
+    const selfManaged = keyRegistration({ selfManaged: true });
+    const refused = await proberOver(selfManaged.registration).test(INTEGRATION);
+    expect(check(refused, 'run_credential')?.detail).toMatch(/self-managed host is refused/);
+    expect(selfManaged.calls).toEqual([]);
+    const unbound = keyRegistration();
+    const outcome = await proberOver(unbound.registration, null).test(INTEGRATION);
+    expect(check(outcome, 'default_branch_protection')?.detail).toMatch(/no project is bound/);
+    expect(unbound.calls).toEqual([]);
   });
 });

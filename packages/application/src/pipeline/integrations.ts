@@ -134,6 +134,48 @@ export interface GitBinding {
    * carry it (decision 13 item 3).
    */
   readonly staticRunCredential?: StaticRunCredential;
+  /**
+   * The integration's **SSH deploy key** (TD-028 decision 13b, WP-146) — present exactly when the
+   * integration declares `run_credential: deploy_key`. Read by {@link runCredentialWrites} and the
+   * dependency gate's search, and by nothing else: the adapter is built without the private key.
+   */
+  readonly deployKeyRunCredential?: DeployKeyRunCredential;
+}
+
+/**
+ * How a run reaches the git host over **SSH** — TD-028 decision 13b items 3 and 4. A provider fact
+ * (GitLab.com: `altssh.gitlab.com:443`, pinned under `gitlab.com`), never an operator's string, so
+ * nothing in it is a credential and all of it may travel on the launcher's wire.
+ */
+export interface SshGitRoute {
+  /** The HTTPS URL prefix git rewrites (`https://gitlab.com/`) — the repository's ordinary URL. */
+  readonly httpsPrefix: string;
+  /** What it is rewritten to (`ssh://git@altssh.gitlab.com:443/`). */
+  readonly sshPrefix: string;
+  /** The host the egress sidecar is asked to `CONNECT` to, and the port — 443, never 22. */
+  readonly connectHost: string;
+  readonly connectPort: number;
+  /** The name the host keys are pinned under (`HostKeyAlias`), so `known_hosts` is the documented one. */
+  readonly hostKeyAlias: string;
+  /** The documented `known_hosts` lines, each `<hostKeyAlias> <type> <base64>`; never a first connection's. */
+  readonly knownHosts: readonly string[];
+}
+
+/**
+ * A deploy key as the loader read it (TD-028 decision 13b, WP-146). Like {@link StaticRunCredential},
+ * everything the run-credential path needs to **refuse** by name is here.
+ */
+export interface DeployKeyRunCredential {
+  /** The OpenSSH private key text. `''` when the integration declares `deploy_key` and holds none. */
+  readonly privateKey: string;
+  /** The declared `ssh-ed25519 AAAA…` line. Not a secret. */
+  readonly publicKey: string;
+  /** The route, or `null` when the provider has none for this host (self-managed). */
+  readonly route: SshGitRoute | null;
+  /** Every configuration and key fault (self-managed, minting on, a key that does not match), or `null`. */
+  readonly refusal: string | null;
+  /** The binding redactor's placeholder for the private key (as {@link StaticRunCredential.redactedAs}). */
+  readonly redactedAs?: string;
 }
 
 /**
@@ -2378,7 +2420,34 @@ export type RunCredentialMint =
       readonly credential: StaticRunCredentialGrant;
       readonly ref: IntegrationRef;
     }
+  | {
+      /**
+       * The integration's **SSH deploy key** (TD-028 decision 13b, WP-146): no provider call, no audit
+       * row, nothing to revoke per run (removing the key from the project is the revocation). Always
+       * `push` — a deploy key with write access cannot be narrowed.
+       */
+      readonly kind: 'deploy_key';
+      readonly credential: DeployKeyRunCredentialGrant;
+      readonly ref: IntegrationRef;
+    }
   | { readonly kind: 'unavailable'; readonly reason: string };
+
+/**
+ * What a run is handed from a deploy key (decision 13b item 2): the key, which the **runner** holds
+ * and signs with — it never enters the run container — and the route the run's git takes.
+ */
+export interface DeployKeyRunCredentialGrant {
+  /**
+   * The OpenSSH private key text. Joins the run's redactors as the **whole text** before use (the
+   * registry holds one value per run); its base64 body joined without line breaks is not a redaction
+   * needle — the dependency gate's added-lines search covers that shape (`deployKeyNeedles`).
+   */
+  readonly privateKey: string;
+  /** The `ssh-ed25519 AAAA…` line the run's agent socket lists. */
+  readonly publicKey: string;
+  readonly route: SshGitRoute;
+  readonly scope: 'push';
+}
 
 /** What a run is handed from a static run credential (TD-028 decision 13 item 2). */
 export interface StaticRunCredentialGrant {
@@ -2429,6 +2498,20 @@ const staticCredentialRefusal = (fixed: StaticRunCredential, now: string | null)
   }
   if (Date.parse(fixed.expiresAt) <= Date.parse(now)) {
     return `its run token expired on ${fixed.declaredExpiry} (the declared expiry); create a new one and declare its expiry`;
+  }
+  return null;
+};
+
+/**
+ * Why a declared deploy key is refused at use, or `null` — the write's checks asked again of the
+ * loaded values (decision 13b item 1), plus a key too short to redact.
+ */
+const deployKeyRefusal = (declared: DeployKeyRunCredential): string | null => {
+  if (declared.refusal !== null) {
+    return declared.refusal;
+  }
+  if (declared.privateKey.trim().length < MIN_SECRET_LENGTH) {
+    return 'the integration declares an SSH deploy key and holds no private key';
   }
   return null;
 };
@@ -2494,6 +2577,28 @@ export const operatorProtectionFault = (
   }
   if (protection.forcePushAllowed) {
     return `it is the operator’s own token, and the default branch ${branch} of ${project} allows force push — ${fix} (TD-028 decision 13a)`;
+  }
+  return null;
+};
+
+/**
+ * Why `branch`'s protection does not bound a project **deploy key** with write access, or `null`
+ * (TD-028 decision 13b item 6, WP-146): the default branch must be protected with push **No one** —
+ * which, read the provider's way, also means no deploy key is admitted to push there (GitLab lets a
+ * deploy key be added to a protected branch's push rule, and `nobodyPushes` is false then).
+ */
+export const deployKeyProtectionFault = (
+  project: string,
+  branch: string,
+  protection: BranchPushProtection,
+): string | null => {
+  const fix = `protect ${branch} with push "No one" and admit no deploy key to it`;
+  if (!protection.protected) {
+    return `the default branch ${branch} of ${project} is not protected, so a deploy key with write access could push to it — ${fix} (TD-028 decision 13b)`;
+  }
+  if (!protection.nobodyPushes) {
+    const who = protection.pushers.length === 0 ? 'someone' : protection.pushers.join(', ');
+    return `the default branch ${branch} of ${project} lets ${who} push — ${fix} (TD-028 decision 13b)`;
   }
   return null;
 };
@@ -2571,6 +2676,34 @@ export const runCredentialWrites = (
       return {
         kind: 'unavailable',
         reason: `project ${request.projectId} has no git binding, so no run credential can be minted for it`,
+      };
+    }
+    const deployKey = git.deployKeyRunCredential;
+    if (deployKey !== undefined) {
+      // TD-028 decision 13b item 7: a deploy key with write access cannot be narrowed to `read`, so
+      // a shadow task gets **no** credential (rule 18) — exactly as decision 13 item 4 says.
+      if (request.mode === 'shadow') {
+        return {
+          kind: 'unavailable',
+          reason: `a shadow task is never given the SSH deploy key of the git integration ${git.ref.integrationId}: it can push and cannot be narrowed to the read scope Q98 (a) admits (TD-028 decision 13b)`,
+        };
+      }
+      const refusal = deployKeyRefusal(deployKey);
+      if (refusal !== null || deployKey.route === null) {
+        throw new StaticRunCredentialRefusedError(
+          git.ref.integrationId,
+          `the git integration ${git.ref.integrationId} (${git.ref.provider}) declares an SSH deploy key this platform will not give run ${request.runId}: ${refusal ?? 'the provider has no SSH route for its host'}. Nothing else is sent instead (TD-028 decision 13b)`,
+        );
+      }
+      return {
+        kind: 'deploy_key',
+        credential: {
+          privateKey: deployKey.privateKey,
+          publicKey: deployKey.publicKey,
+          route: deployKey.route,
+          scope: 'push',
+        },
+        ref: git.ref,
       };
     }
     const fixed = git.staticRunCredential;

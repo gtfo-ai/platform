@@ -83,6 +83,8 @@ export * from './integrations/inbound-decisions.js';
 export * from './integrations/merge-request-lifecycle.js';
 export * from './integrations/rate-limiter.js';
 export * from './integrations/redaction.js';
+// A project SSH deploy key: read, check against its public key, sign (WP-146, TD-028 decision 13b)
+export * from './integrations/ssh-deploy-key.js';
 // The knowledge base (WP-16): indexer, context packs, `kb_search`, code map
 export * from './knowledge/apply.js';
 export * from './knowledge/code-mapper.js';
@@ -230,5 +232,6 @@ export * from './testing/memory-readiness.js';
 export * from './testing/memory-shadow.js';
 export * from './testing/memory-stats.js';
 export * from './testing/project-stream-race.js';
+export * from './testing/ssh-deploy-key-fixtures.js';
 
 export const packageId = '@platform/application' as const;

@@ -40,11 +40,13 @@ tokens, and **Developer** for everything else.
 | `webhook_signing_token` | see step 3 | Secret. `whsec_…` signing token (GitLab 19.0+). |
 | `webhook_tolerance_seconds` | no (300) | How old a signed delivery may be before it is treated as a replay. |
 | `mint_credentials` | no (off) | Whether the platform may mint short-lived project access tokens. A stage that writes, and any stage on a private repository, needs **this or** a static run credential (`run_credential: static`). See step 5. |
-| `run_credential` | no (`minted`) | Set on the integration, never on a project's binding (as are the two below). `minted` or `static`. `static` gives every run of the one bound project the dedicated `run_token` below instead of a minted token — for GitLab.com Free, which cannot mint. **Weaker isolation**: step 5a. Refused beside `mint_credentials: true`. |
+| `run_credential` | no (`minted`) | Set on the integration, never on a project's binding (as are the two below). `minted`, `static` or `deploy_key`. `static` gives every run of the one bound project the dedicated `run_token` below instead of a minted token — for GitLab.com Free, which cannot mint. `deploy_key` (GitLab.com only) gives it a project SSH deploy key the run never holds (step 5a, C). **Weaker isolation**: step 5a. Refused beside `mint_credentials: true`. |
 | `run_token_owner` | no (`dedicated_user`) | Whose token `run_token` is: `dedicated_user` (step 5a, A) or `operator` — your own, with repository scopes only (step 5a, B; checked differently, and it reaches every repository you can). Only with `static`. |
 | `run_token` | with `static` | Secret. The personal access token of a **dedicated** user, or your own repository-only one — never the `token` above (refused when equal). Step 5a. |
 | `run_token_username` | with `static` | The token owner's GitLab username: what git sends beside the token, and — for a dedicated user — whose role **Test connection** checks. |
 | `run_token_expires_at` | with `static` | The token's expiry as a date (`YYYY-MM-DD`), **at most 90 days ahead** when written. The platform does not ask GitLab for it, and refuses a run once it has passed. |
+| `run_ssh_private_key` | with `deploy_key` | Secret. An **unencrypted OpenSSH Ed25519** private key (`ssh-keygen -t ed25519 -N ""`) enabled on the bound project as a deploy key **with write access**. Never in a run's container. Refused with a passphrase, another type, a public key that is not its own, or a `run_token` beside it. Step 5a, C. |
+| `run_ssh_public_key` | with `deploy_key` | The key's `ssh-ed25519 AAAA…` line — what **Test connection** looks for among the project's deploy keys and what a run's agent socket lists. |
 | `read_access_level` / `push_access_level` | no (20 / 30) | Role given to a minted credential: 20 Reporter, 30 Developer, 40 Maintainer. |
 | `poll_enabled` | no (off) | Poll GitLab for this project's merge requests instead of (or beside) the webhook — step 3a. Needs `project`. |
 | `poll_interval_seconds` | no (60) | Seconds between two polls of this binding; 30 to 86400. |
@@ -222,15 +224,16 @@ in an environment variable, the image, the prompt or a log. **Three forms, side 
 
 | | A. A dedicated user's token | B. Your own repository-only token | C. A project SSH deploy key |
 |---|---|---|---|
-| Setting | `run_credential: static` (`run_token_owner: dedicated_user`, the default) | `run_credential: static`, `run_token_owner: operator` | `run_credential: deploy_key` — **not in this build** (WP-146) |
-| Costs | a seat on gitlab.com | nothing | nothing |
-| What **Test connection** checks | the user's role on the bound project: Developer passes, a higher role is refused | that the token **cannot call the API** (one `GET /user` with it must be refused, `403`), and that the default branch is protected with push **No one** and force push off | — |
-| Re-checked before each run | the declared expiry | the declared expiry **and** the default branch's protection — the token's scope is **not**: run **Test connection** again after every re-seal | — |
-| **What you lose** | the token lives to its expiry; a read-only stage holds a push-capable token; its reach is the user's memberships (one project), which the platform cannot see | all of A's, and **reach**: the token reaches **every repository you can access**, not one project — a read-only stage holds read access to all of them and a writing stage push access to every unprotected branch of all of them | no per-run revocation (removing the key is the revocation); a read-only stage can sign pushes |
+| Setting | `run_credential: static` (`run_token_owner: dedicated_user`, the default) | `run_credential: static`, `run_token_owner: operator` | `run_credential: deploy_key` (GitLab.com only) |
+| Costs | a seat on gitlab.com | nothing | nothing (whether a deploy key takes a seat is `[unverified]`, `docs/TODO.md`) |
+| What **Test connection** checks | the user's role on the bound project: Developer passes, a higher role is refused | that the token **cannot call the API** (one `GET /user` with it must be refused, `403`), and that the default branch is protected with push **No one** and force push off | that the key is one of the bound project's deploy keys **with write access**, and that the default branch is protected with push **No one** (which admits no deploy key) |
+| Re-checked before each run | the declared expiry | the declared expiry **and** the default branch's protection — the token's scope is **not**: run **Test connection** again after every re-seal | the key against its public half; the protection is **not** re-read: run **Test connection** after changing it |
+| **What you lose** | the token lives to its expiry; a read-only stage holds a push-capable token; its reach is the user's memberships (one project), which the platform cannot see | all of A's, and **reach**: the token reaches **every repository you can access**, not one project — a read-only stage holds read access to all of them and a writing stage push access to every unprotected branch of all of them | no per-run revocation (removing the key is the revocation); a read-only stage can sign pushes; the run's signing oracle can authenticate to any project the key is enabled on |
 
-C keeps the private key out of the run's container entirely and is the strongest of the three; it
-lands after the first test (plan row WP-146). Until it does, choose A if a seat is available, B
-otherwise.
+C keeps the private key out of the run's container entirely and is the strongest of the three: a run
+holds a **signing oracle** for its lifetime and nothing after it. It works on **GitLab.com only** — a
+self-managed instance is refused by name (see C below). Choose C where it applies, A if a seat is
+available, B otherwise.
 
 ### A. A dedicated user's token
 
@@ -295,6 +298,69 @@ under your identity, with what your role may read; a tag matching a protected-ta
 Maintainers gets the project's **protected** CI/CD variables. **Protect your release tags with
 "Allowed to create: No one"** too (Settings → Repository → Protected tags).
 
+### C. A project SSH deploy key (GitLab.com)
+
+TD-028 decision 13b (WP-146). No user and no seat: a **deploy key** is scoped by GitLab to the
+projects it is enabled on. The platform holds the private key **outside** the run: the run's
+container gets a socket, `/ctl/ssh-agent.sock`, served by the run shim, that answers exactly two
+ssh-agent requests — *list the one public key* and *sign* — and every sign request is relayed to the
+runner, which holds the key and signs with Ed25519. Every other agent request (add, remove, lock,
+extensions) is refused. The run's git reaches GitLab over **SSH on port 443**:
+`altssh.gitlab.com:443`, through the run's egress sidecar as an HTTP `CONNECT` — the sidecar admits
+no other port, and port 22 is never opened (it would be opened for every allowed host at once).
+
+1. **Protect the default branch** as step 4 says — push **No one**, and do **not** add the deploy key
+   to the branch's *Allowed to push* list (GitLab lets you; **Test connection** refuses it).
+2. Create the key **without a passphrase** and as **Ed25519** — the runner signs unattended and with
+   Ed25519 only:
+
+   ```bash
+   ssh-keygen -t ed25519 -N "" -C "agentic runs" -f agentic_deploy_key
+   ```
+
+3. In the bound project: **Settings → Repository → Deploy keys → Add new key**, paste
+   `agentic_deploy_key.pub`, and tick **Grant write permissions to this key**. Enable it on this one
+   project only.
+4. Give the platform the **private** key under a name of your choice, for example
+   `GITLAB_RUN_SSH_PRIVATE_KEY`. A key spans several lines, so give it as a file:
+   `GITLAB_RUN_SSH_PRIVATE_KEY_FILE` = the path of `agentic_deploy_key` mounted read-only into the
+   `app` container (TD-020's `_FILE` form). Add the name (without `_FILE`) to
+   `APP_INTEGRATION_SECRET_ENV`, and `docker compose up -d`.
+5. On the integration: `run_credential` = `deploy_key`, `run_ssh_public_key` = the `.pub` line,
+   `mint_credentials` off, no `run_token`, and `run_ssh_private_key` → the variable's **name** (on an
+   existing integration: re-seal it, `POST /api/integrations/:id/secrets`, then set the fields).
+   `base_url` must be `https://gitlab.com`.
+6. Bind it to **one** project — a second project's binding is refused (`409
+   static_run_credential_shared`), because the key reaches every project it is enabled on.
+7. **Test connection** reports two checks beside `connection`, both read with the integration's API
+   `token`: `run_credential` — the bound project's deploy keys list this public key **with write
+   access**; and `default_branch_protection` — push **No one**, with no deploy key admitted. Both say
+   the platform **cannot see whether the key is also enabled on other projects**.
+
+Refused at the write, by name: a key with a **passphrase**, a key that is **not Ed25519** (RSA,
+ECDSA, a PEM file), a `run_ssh_public_key` that is **not the private key's** (derived from its seed,
+never trusted from the file), `deploy_key` with `mint_credentials: true`, a `run_token` sealed beside
+the key (one kind of credential per integration), and a **self-managed** `base_url`: *"SSH deploy-key
+runs reach gitlab.com through altssh.gitlab.com:443 only; a self-managed host needs its SSH port
+admitted by the egress sidecar, which this build does not do"*. Refused at the run's start, before its
+workspace exists: the same key checks again. A **shadow** task is never given the key.
+
+How a run uses it: the run's git is configured through its environment — `GIT_SSH_COMMAND` (no
+configuration file, the agent socket, `StrictHostKeyChecking=yes` against a `known_hosts` the
+platform writes from **gitlab.com's documented host keys** pinned with `HostKeyAlias=gitlab.com`,
+and the shim's `CONNECT` helper as `ProxyCommand`) and one `url.ssh://git@altssh.gitlab.com:443/.insteadOf
+= https://gitlab.com/` pair — so the repository's ordinary URL fetches and pushes over SSH and no
+HTTPS credential helper is configured. The launcher's own mirror fetch uses the key from a `0600`
+file on its short-lived helper's tmpfs. The platform's **knowledge vault** mirror is unchanged: it
+reads over HTTPS with the integration's API `token`.
+
+**What C costs, stated** (TD-028 decision 13b item 8): **no per-run revocation** — removing the key
+from the project is the revocation; **a read-only stage can sign pushes**; and the signing oracle can
+be asked to authenticate to any SSH server the run's egress admits — only `altssh.gitlab.com` — so its
+reach is **every project the key is enabled on**. The one control the platform adds: the gate that
+reads a merge request's added lines searches them for the key's private text, and a hit parks the task
+*Needs human* with a brief that says **replace the deploy key**, never printing it.
+
 ### Both A and B
 
 Refused at the write, by name: `static` without a `run_token`; a `run_token` equal to `token`;
@@ -321,8 +387,9 @@ its start, a read-only one at the fetch.
   **rotate the run token** (revoke it in GitLab, create a new one, re-seal it, declare its expiry)
   and never prints it.
 
-Each run records which credential it had (`runs.credential_source`: `minted`, `static` or `none`),
-because a static token writes no mint row to the audit.
+Each run records which credential it had (`runs.credential_source`: `minted`, `static`,
+`deploy_key` or `none`), because neither a static token nor a deploy key writes a mint row to the
+audit.
 
 ## 6. Verify
 

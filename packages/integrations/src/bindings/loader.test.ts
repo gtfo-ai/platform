@@ -29,6 +29,7 @@ import {
   createMemoryAuditLog,
   createVirtualTimer,
   exactSecretRedactor,
+  FAKE_DEPLOY_KEY,
   SecretResolutionError,
   staticRunTokenLeaks,
 } from '@platform/application';
@@ -336,6 +337,31 @@ describe('a git binding that loads', () => {
       secrets: { token: BINDING_TOKEN, run_token: BINDING_TOKEN },
     }).forProject(PROJECT, outsideARun);
     expect(same.git?.staticRunCredential?.sameAsApiToken).toBe(true);
+  });
+
+  it('carries a deploy key to the run-credential path with its route, redacted like any secret (WP-146)', async () => {
+    const config = {
+      base_url: 'https://gitlab.com',
+      project: 'acme/api',
+      run_credential: 'deploy_key',
+      run_ssh_public_key: FAKE_DEPLOY_KEY.publicKey,
+    };
+    const integrations = await loaderFor({
+      bindings: [gitBinding({ config })],
+      secrets: { token: BINDING_TOKEN, run_ssh_private_key: FAKE_DEPLOY_KEY.privateKey },
+    }).forProject(PROJECT, outsideARun);
+    const loaded = integrations.git?.deployKeyRunCredential;
+    expect(loaded).toMatchObject({
+      privateKey: FAKE_DEPLOY_KEY.privateKey,
+      publicKey: FAKE_DEPLOY_KEY.publicKey,
+      refusal: null,
+      redactedAs: `[REDACTED:integration:gitlab:${GIT_INTEGRATION}:run_ssh_private_key]`,
+    });
+    expect(loaded?.route?.connectHost).toBe('altssh.gitlab.com');
+    expect(integrations.git?.staticRunCredential).toBeUndefined();
+    expect(
+      integrations.git?.redactor.redactText(`cat key\n${FAKE_DEPLOY_KEY.privateKey}`).value,
+    ).not.toContain(FAKE_DEPLOY_KEY.privateKey);
   });
 
   /**

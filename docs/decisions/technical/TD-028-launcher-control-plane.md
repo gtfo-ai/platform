@@ -595,3 +595,13 @@ mirror (it is a run credential; the vault mirror needs no write).
 config schema, catalogue, setup guide and `CredentialMintingHints`; the run shim's frame protocol (a
 `ssh.sign` request/answer pair, `@platform/contracts`); the run image; the egress renderer's per-run
 host; operator guide, `docs/first-local-test.md`, technical/05 and /06 (rule 83).
+
+**Amendment (WP-146, 2026-10-05, session 11) — decision 13b as built.** (i) The run image did not need to gain
+`openssh-client`: the base image already ships it. (ii) The signing oracle is narrower than item 2 first stated:
+the runner signs **only** an SSH user-authentication request (RFC 4252 §7, plain or OpenSSH's host-bound variant)
+for user `git` with the project's own public key, and refuses everything else — an `SSHSIG` request
+(`ssh-keygen -Y sign`, which would have let a run produce git or file signatures with the deploy key), another
+user, method or key, trailing bytes and raw data (WP-146 review round 1). (iii) `/ctl/known_hosts` is writable by
+the run's user; the pin protects a well-behaved agent from the network, not the platform from the agent, whose
+egress already admits only `altssh.gitlab.com:443` and whose signatures are bound to their SSH session.
+

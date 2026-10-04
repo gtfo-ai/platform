@@ -56,6 +56,7 @@ import { exactSecretRedactor, type InjectedSecret } from '../integrations/redact
 import { createContextPackAssembler } from '../knowledge/context-pack.js';
 import type { HumanCommandDependencies, TaskCommandDependencies } from '../pipeline/commands.js';
 import type {
+  DeployKeyRunCredential,
   OrganisationIntegrationsPort,
   PipelineIntegrations,
   StaticRunCredential,
@@ -706,6 +707,8 @@ export interface HarnessOptions {
   readonly gitRedactor?: SecretRedactor;
   /** The git binding's static run credential (WP-137), as the binding loader reads it. */
   readonly gitStaticRunCredential?: StaticRunCredential;
+  /** WP-146: the git binding's deploy key, as the loader reads it. */
+  readonly gitDeployKeyRunCredential?: DeployKeyRunCredential;
   readonly reviewCommentWindowMs?: number;
   /**
    * The knowledge index the planner's context pack is built from.
@@ -1425,6 +1428,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
             ...(options.gitStaticRunCredential === undefined
               ? {}
               : { staticRunCredential: options.gitStaticRunCredential }),
+            ...(options.gitDeployKeyRunCredential === undefined
+              ? {}
+              : { deployKeyRunCredential: options.gitDeployKeyRunCredential }),
           },
     taskManagement:
       taskManagementPort === null

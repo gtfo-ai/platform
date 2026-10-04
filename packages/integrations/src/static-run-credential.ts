@@ -32,14 +32,23 @@
  * re-read before each run) and the stated loss: an operator's token reaches every repository its
  * owner can.
  */
-import type { StaticRunCredential } from '@platform/application';
+import {
+  type DeployKeyRunCredential,
+  deployKeyPairFault,
+  parseSshEd25519PublicKey,
+  type SshGitRoute,
+  type StaticRunCredential,
+} from '@platform/application';
 
 /**
  * Which config keys hold a provider's static run credential. Every name is checked against the
  * provider's `configSchema` at registration, and the two token fields against its `secretFields`.
  */
 export interface StaticRunCredentialSupport {
-  /** `minted | static`; the default (absent) is `minted`. GitLab: `run_credential`. */
+  /**
+   * `minted | static` — and, for a provider that declares {@link deployKey}, its value too; the
+   * default (absent) is `minted`. GitLab: `run_credential`.
+   */
   readonly modeField: string;
   /** The run token's secret field. GitLab: `run_token`. Read only by the run-credential path. */
   readonly tokenField: string;
@@ -64,6 +73,29 @@ export interface StaticRunCredentialSupport {
    * `read_repository` and `write_repository`"*.
    */
   readonly scopeProofHint: string;
+  /**
+   * A project **SSH deploy key** as a third `modeField` value (TD-028 decision 13b, WP-146) — absent
+   * for a provider that offers none.
+   */
+  readonly deployKey?: DeployKeyRunCredentialSupport;
+}
+
+/**
+ * Which config keys hold a provider's deploy key (decision 13b item 1). The private key is a secret
+ * field (checked at registration), the public key plain configuration.
+ */
+export interface DeployKeyRunCredentialSupport {
+  /** The `modeField` value that selects it. GitLab: `deploy_key`. */
+  readonly modeValue: string;
+  /** The OpenSSH Ed25519 private key's secret field. GitLab: `run_ssh_private_key`. */
+  readonly privateKeyField: string;
+  /** The declared `ssh-ed25519 AAAA…` line. GitLab: `run_ssh_public_key`. */
+  readonly publicKeyField: string;
+  /**
+   * The SSH route a run of this integration takes, or the refusal **by name** when the provider has
+   * none for the configured host (GitLab: a self-managed instance, decision 13b item 4).
+   */
+  readonly sshRoute: (config: Readonly<Record<string, unknown>>) => SshGitRoute | string;
 }
 
 /** Whose personal access token a static run credential is (TD-028 decisions 13 and 13a). */
@@ -127,14 +159,19 @@ export const staticRunCredentialConfigIssues = (
   if (!declaresStaticRunCredential(support, config)) {
     // WP-141: an owner says whose static token it is, so it means nothing for any other source —
     // and a reader who sees `operator` beside `minted` would believe the wrong probe ran.
-    return runTokenOwnerOf(support, config) === 'operator'
-      ? [
-          {
-            path: support.ownerField,
-            message: `\`${support.ownerField}: operator\` applies only to \`${support.modeField}: static\`; it says whose run token is handed to runs, and this integration hands none (TD-028 decision 13a)`,
-          },
-        ]
-      : [];
+    // WP-146: a deploy key's own configuration rules (decision 13b) are read in the same place, so
+    // every write and the load that ask this question ask them too.
+    return [
+      ...(runTokenOwnerOf(support, config) === 'operator'
+        ? [
+            {
+              path: support.ownerField,
+              message: `\`${support.ownerField}: operator\` applies only to \`${support.modeField}: static\`; it says whose run token is handed to runs, and this integration hands none (TD-028 decision 13a)`,
+            },
+          ]
+        : []),
+      ...deployKeyConfigIssues(support, config),
+    ];
   }
   const issues: StaticRunCredentialIssue[] = [];
   if (config[support.mintingField] === true) {
@@ -222,7 +259,16 @@ export const staticRunCredentialOf = (
     return undefined;
   }
   const value = text(merged[support.tokenField]);
-  const issues = staticRunCredentialConfigIssues(support, merged);
+  const privateKeyField = support.deployKey?.privateKeyField;
+  const issues = [
+    ...staticRunCredentialConfigIssues(support, merged),
+    // WP-146: a deploy key sealed beside the run token is refused at use as at the write.
+    ...(privateKeyField === undefined
+      ? []
+      : deployKeyWriteIssues(support, merged, {
+          [privateKeyField]: text(merged[privateKeyField]),
+        })),
+  ];
   return {
     owner: runTokenOwnerOf(support, merged),
     username: text(merged[support.usernameField]),
@@ -234,6 +280,134 @@ export const staticRunCredentialOf = (
   };
 };
 
+/** Whether a document selects the provider's deploy key (TD-028 decision 13b, WP-146). */
+export const declaresDeployKeyRunCredential = (
+  support: StaticRunCredentialSupport | undefined,
+  config: Readonly<Record<string, unknown>>,
+): boolean =>
+  support?.deployKey !== undefined && config[support.modeField] === support.deployKey.modeValue;
+
+/**
+ * Whether a document hands its runs a credential **of its own** — a static run token or a deploy
+ * key — and may therefore be bound by one project only (decisions 13 item 1 and 13b item 1).
+ */
+export const declaresDedicatedRunCredential = (
+  support: StaticRunCredentialSupport | undefined,
+  config: Readonly<Record<string, unknown>>,
+): boolean =>
+  declaresStaticRunCredential(support, config) || declaresDeployKeyRunCredential(support, config);
+
+/**
+ * The refusals a deploy-key **configuration document** alone can answer: minting switched on, a
+ * public key that is not an Ed25519 line, and a host the provider has no SSH route for. Empty for a
+ * document that does not select `deploy_key`.
+ */
+export const deployKeyConfigIssues = (
+  support: StaticRunCredentialSupport | undefined,
+  config: Readonly<Record<string, unknown>>,
+): readonly StaticRunCredentialIssue[] => {
+  const deployKey = support?.deployKey;
+  if (
+    support === undefined ||
+    deployKey === undefined ||
+    !declaresDeployKeyRunCredential(support, config)
+  ) {
+    return [];
+  }
+  const issues: StaticRunCredentialIssue[] = [];
+  if (config[support.mintingField] === true) {
+    issues.push({
+      path: support.mintingField,
+      message: `\`${support.modeField}: ${deployKey.modeValue}\` and \`${support.mintingField}: true\` are both set; an integration gives its runs one kind of credential, so the audit can say which (TD-028 decision 13b)`,
+    });
+  }
+  if (parseSshEd25519PublicKey(text(config[deployKey.publicKeyField])) === null) {
+    issues.push({
+      path: deployKey.publicKeyField,
+      message: `\`${support.modeField}: ${deployKey.modeValue}\` needs \`${deployKey.publicKeyField}\`, the deploy key's \`ssh-ed25519 AAAA…\` line (an Ed25519 key; this build signs with no other type)`,
+    });
+  }
+  const route = deployKey.sshRoute(config);
+  if (typeof route === 'string') {
+    issues.push({ path: support.modeField, message: route });
+  }
+  return issues;
+};
+
+/**
+ * The refusals of a deploy-key **write** (decision 13b item 1): the configuration's, plus no private
+ * key, a key that is not an unencrypted Ed25519 one or not the declared public key's, and a run token
+ * sealed beside it (*"`run_token` and the key are mutually exclusive"*). For a `static` document the
+ * one rule in the other direction: a sealed private key beside it is refused too.
+ */
+export const deployKeyWriteIssues = (
+  support: StaticRunCredentialSupport | undefined,
+  config: Readonly<Record<string, unknown>>,
+  secrets: Readonly<Record<string, string>>,
+): readonly StaticRunCredentialIssue[] => {
+  const deployKey = support?.deployKey;
+  if (support === undefined || deployKey === undefined) {
+    return [];
+  }
+  const privateKey = secrets[deployKey.privateKeyField] ?? '';
+  const exclusive = (path: string): StaticRunCredentialIssue => ({
+    path,
+    message: `\`${support.tokenField}\` and \`${deployKey.privateKeyField}\` are both sealed; an integration gives its runs one kind of credential — remove the one its \`${support.modeField}\` does not use (TD-028 decision 13b)`,
+  });
+  if (declaresStaticRunCredential(support, config)) {
+    return privateKey.trim() === '' ? [] : [exclusive(deployKey.privateKeyField)];
+  }
+  if (!declaresDeployKeyRunCredential(support, config)) {
+    return [];
+  }
+  const issues = [...deployKeyConfigIssues(support, config)];
+  if ((secrets[support.tokenField] ?? '').trim() !== '') {
+    issues.push(exclusive(support.tokenField));
+  }
+  if (privateKey.trim() === '') {
+    issues.push({
+      path: deployKey.privateKeyField,
+      message: `\`${support.modeField}: ${deployKey.modeValue}\` needs the private key itself, sealed as \`${deployKey.privateKeyField}\` through \`secret_refs\`; nothing falls back to another credential`,
+    });
+    return issues;
+  }
+  const fault = deployKeyPairFault(privateKey, text(config[deployKey.publicKeyField]));
+  if (fault !== null && !issues.some((issue) => issue.path === deployKey.publicKeyField)) {
+    issues.push({ path: deployKey.privateKeyField, message: fault });
+  }
+  return issues;
+};
+
+/**
+ * The deploy key a **loaded** integration declares, for the run-credential path — or `undefined`
+ * when it declares none. Every fault is carried as `refusal`, so a declared-but-broken key is refused
+ * by name at use rather than becoming "no credential" (standing rule 18).
+ */
+export const deployKeyRunCredentialOf = (
+  support: StaticRunCredentialSupport | undefined,
+  merged: Readonly<Record<string, unknown>>,
+): DeployKeyRunCredential | undefined => {
+  const deployKey = support?.deployKey;
+  if (
+    support === undefined ||
+    deployKey === undefined ||
+    !declaresDeployKeyRunCredential(support, merged)
+  ) {
+    return undefined;
+  }
+  const secrets = Object.fromEntries(
+    [support.tokenField, deployKey.privateKeyField].map((field) => [field, text(merged[field])]),
+  );
+  const issues = deployKeyWriteIssues(support, merged, secrets);
+  const route = deployKey.sshRoute(merged);
+  return {
+    privateKey: text(merged[deployKey.privateKeyField]),
+    publicKey: text(merged[deployKey.publicKeyField]).trim(),
+    route: typeof route === 'string' ? null : route,
+    refusal: issues.length === 0 ? null : issues.map((issue) => issue.message).join('; '),
+  };
+};
+
 /** `secrets` (or a config) without the run-only token field — what an adapter is built from. */
 export const withoutRunOnlyFields = <T>(
   support: StaticRunCredentialSupport | undefined,
@@ -241,4 +415,9 @@ export const withoutRunOnlyFields = <T>(
 ): Readonly<Record<string, T>> =>
   support === undefined
     ? values
-    : Object.fromEntries(Object.entries(values).filter(([key]) => key !== support.tokenField));
+    : Object.fromEntries(
+        Object.entries(values).filter(
+          // WP-146: the deploy key's private half is a run-only field too (decision 13b item 2).
+          ([key]) => key !== support.tokenField && key !== support.deployKey?.privateKeyField,
+        ),
+      );

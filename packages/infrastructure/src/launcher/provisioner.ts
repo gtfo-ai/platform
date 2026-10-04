@@ -68,6 +68,8 @@ import type {
   Logger,
   RunnerClock,
   RunSpec,
+  SshGitRoute,
+  WorkspaceGitSsh,
   WorkspaceHandle,
   WorkspaceSpec,
 } from '@platform/application';
@@ -85,6 +87,7 @@ import {
 } from '../workspace/broker.js';
 import { buildWorkspaceSpec } from '../workspace/spec.js';
 import type { LauncherControlClient } from './client.js';
+import { createDeployKeySigner, type DeployKeySigner } from './deploy-key-signer.js';
 import type { CreateRunResponse, RunCredentialPayload } from './protocol.js';
 
 /**
@@ -126,6 +129,13 @@ export interface MintedRunGitCredential {
    * so a read-only run is handed it too (the stated loss of decision 13 item 5). Absent is `minted`.
    */
   readonly source?: RunCredentialSource;
+  /**
+   * A project SSH deploy key (`source: 'deploy_key'`, TD-028 decision 13b, WP-146): `password` is
+   * then the OpenSSH private key text, which **this process** signs with for the run's agent socket
+   * and carries to the launcher for its mirror and export helpers alone; the route and the public
+   * key go on the spec.
+   */
+  readonly ssh?: { readonly publicKey: string; readonly route: SshGitRoute };
   /**
    * Revokes it at the provider, through the executor. The provisioner calls it exactly once. A
    * static credential's is a no-op: nothing was minted, and it lives to its declared expiry.
@@ -280,6 +290,30 @@ export const createLauncherRunWorkspaceProvisioner = (
               logger,
             });
       const revokeOnce = onceRevoker(spec.runId, minted, logger);
+      // WP-146 (TD-028 decision 13b): a deploy key puts its route on the spec and its CONNECT host
+      // on the run's egress list — for this run only — and this process holds the signer. A key
+      // that does not parse refuses the run before the create, and the key is never sent instead.
+      let signer: DeployKeySigner | null = null;
+      let runSpec = workspaceSpec;
+      if (minted?.source === 'deploy_key') {
+        try {
+          const gitSsh = gitSshOf(minted);
+          signer = createDeployKeySigner({
+            privateKey: minted.password,
+            publicKey: gitSsh.publicKey,
+          });
+          runSpec = withGitSsh(workspaceSpec, gitSsh);
+        } catch (error) {
+          await revokeOnce();
+          throw error instanceof WorkspaceError
+            ? error
+            : new WorkspaceError(
+                'invalid_spec',
+                `run ${spec.runId}'s deploy key cannot be used: ${(error as Error).message}`,
+                { runId: spec.runId, reason: 'run_credential_unavailable' },
+              );
+        }
+      }
       const carried: RunCredentialPayload | null =
         minted === null
           ? null
@@ -292,11 +326,16 @@ export const createLauncherRunWorkspaceProvisioner = (
               source: minted.source ?? 'minted',
             };
       if (carried !== null) {
-        broker.hold({ runId: spec.runId, readOnly: workspaceSpec.readOnly, credential: carried });
+        broker.hold({
+          runId: spec.runId,
+          readOnly: runSpec.readOnly,
+          credential: carried,
+          ...(runSpec.repo?.ssh === undefined ? {} : { ssh: runSpec.repo.ssh }),
+        });
       }
       let created: CreateRunResponse | null = null;
       try {
-        created = await options.client.createRun({ spec: workspaceSpec, credential: carried });
+        created = await options.client.createRun({ spec: runSpec, credential: carried });
         assertControlSocketUnderRoot(created.attachment.socketPath, options.controlRoot);
       } catch (error) {
         // A run that never started must not leave a live token behind (TD-028's WP-76 amendment,
@@ -315,6 +354,7 @@ export const createLauncherRunWorkspaceProvisioner = (
         throw error;
       }
       const ready = created;
+      let released = false;
       logger.info(
         {
           run_id: spec.runId,
@@ -352,9 +392,29 @@ export const createLauncherRunWorkspaceProvisioner = (
               ? null
               : { username: answered.username, password: answered.password };
           },
+          // WP-146 (TD-028 decision 13b item 2): the run's agent socket relays sign requests here.
+          // `null` from the moment `release` begins, as `credentials` is.
+          ...(signer === null
+            ? {}
+            : {
+                sshSigner: async (request: { keyBlob: Buffer; data: Buffer; flags: number }) =>
+                  released ? null : (signer as DeployKeySigner).sign(request),
+              }),
         }),
         release: async (ending: RunWorkspaceEnding) => {
+          released = true;
           broker.forget(spec.runId);
+          if (signer !== null) {
+            // Decision 13b item 2: each signature is counted on the run — never its data.
+            logger.info(
+              {
+                run_id: spec.runId,
+                ssh_signatures: signer.signatures,
+                ssh_refusals: signer.refusals,
+              },
+              'the run’s deploy-key signatures, counted at release',
+            );
+          }
           await releaseRun({
             client: options.client,
             handle: ready.handle,
@@ -411,7 +471,8 @@ const mintFor = async (input: {
   if (
     scope === 'read' &&
     answer.credential.scope === 'push' &&
-    answer.credential.source !== 'static'
+    answer.credential.source !== 'static' &&
+    answer.credential.source !== 'deploy_key'
   ) {
     const revoked = await onceRevoker(input.spec.runId, answer.credential, input.logger)();
     throw new WorkspaceError(
@@ -509,4 +570,46 @@ const releaseRun = async (input: {
       'the launcher could not be told that this run ended; its container may still be running',
     );
   }
+};
+
+/** The spec's SSH half of a deploy key — its public key without a comment, and the provider's route. */
+const gitSshOf = (minted: MintedRunGitCredential): WorkspaceGitSsh => {
+  const ssh = minted.ssh;
+  if (ssh === undefined) {
+    throw new WorkspaceError(
+      'invalid_spec',
+      'a deploy key arrived without its SSH route, so no run can use it (TD-028 decision 13b)',
+      { reason: 'run_credential_unavailable' },
+    );
+  }
+  return {
+    publicKey: ssh.publicKey.trim().split(/\s+/).slice(0, 2).join(' '),
+    httpsPrefix: ssh.route.httpsPrefix,
+    sshPrefix: ssh.route.sshPrefix,
+    connectHost: ssh.route.connectHost,
+    connectPort: ssh.route.connectPort,
+    hostKeyAlias: ssh.route.hostKeyAlias,
+    knownHosts: [...ssh.route.knownHosts],
+  };
+};
+
+/**
+ * The spec of a deploy-key run: its repository carries the SSH route, and the route's `CONNECT` host
+ * joins the egress list of **this run only** (TD-021's 2026-10-04 amendment). The port is not added:
+ * it must already be one the sidecar admits (443), and the wire refuses 22.
+ */
+export const withGitSsh = (spec: WorkspaceSpec, gitSsh: WorkspaceGitSsh): WorkspaceSpec => {
+  if (spec.repo === null) {
+    return spec;
+  }
+  return {
+    ...spec,
+    repo: { ...spec.repo, ssh: gitSsh },
+    egress: {
+      ...spec.egress,
+      hosts: spec.egress.hosts.includes(gitSsh.connectHost)
+        ? spec.egress.hosts
+        : [...spec.egress.hosts, gitSsh.connectHost],
+    },
+  };
 };

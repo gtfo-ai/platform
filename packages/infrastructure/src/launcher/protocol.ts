@@ -49,6 +49,7 @@ import {
   existingProtectedPathsSchema,
   MAX_LABELLED_RUNS,
   workspaceErrorReasonSchema,
+  workspaceGitSshSchema,
   workspaceSpecSchema,
 } from '@platform/application';
 import { isoDateTimeSchema, nonEmptyStringSchema, shaSchema } from '@platform/contracts';
@@ -106,6 +107,8 @@ export const workspaceHandleSchema: z.ZodType<WorkspaceHandle> = z.strictObject(
   cacheKey: nonEmptyStringSchema.max(64).nullable(),
   controlSubPath: nonEmptyStringSchema.max(255),
   keepUntil: isoDateTimeSchema,
+  // WP-146: a deploy-key run's SSH route, absent for HTTPS.
+  gitSsh: workspaceGitSshSchema.optional(),
 });
 
 /**
@@ -184,14 +187,25 @@ export const workspaceCliEnvironmentSchema: z.ZodType<WorkspaceCliEnvironment> =
       z.strictObject({
         key: z
           .string()
-          .max(128)
-          .regex(/^[A-Za-z][A-Za-z0-9-]*\.[A-Za-z][A-Za-z0-9-]*$/, 'expected section.name'),
+          .max(400)
+          .regex(
+            // `section.name`, or WP-146's one `url.<ssh prefix>.insteadOf` (a subsection is the URL).
+            /^(?:[A-Za-z][A-Za-z0-9-]*\.[A-Za-z][A-Za-z0-9-]*|url\.ssh:\/\/git@[a-z0-9.-]+:\d{1,5}\/\.insteadOf)$/,
+            'expected section.name',
+          ),
         value: nonEmptyStringSchema
           .max(4_096)
           .refine((value) => !/[\r\n]/.test(value) && !value.includes('\0'), 'one line'),
       }),
     )
     .max(8),
+  // WP-146: a deploy-key run's `GIT_SSH_COMMAND`; absent (an earlier launcher) is `null`.
+  gitSshCommand: z
+    .string()
+    .max(4_096)
+    .refine((value) => !/[\r\n]/.test(value) && !value.includes('\0'), 'one line')
+    .nullable()
+    .optional(),
 });
 
 // ── Requests ─────────────────────────────────────────────────────────────────
@@ -227,8 +241,14 @@ export const runCredentialSchema = z.strictObject({
    * decision 13, WP-137) — the one credential a **read-only** spec may carry with `push` scope,
    * because it cannot be narrowed. Absent is `minted`, so an absent field falls under the strict
    * rule rather than the exception.
+   *
+   * `deploy_key` (TD-028 decision 13b, WP-146) is a project SSH deploy key: `password` is then the
+   * **OpenSSH private key text**, `username` is `git`, the spec's `repo.ssh` must be present (and is
+   * present only then), and the launcher uses the key for exactly one thing — its mirror and export
+   * helpers, from a `0600` file on the helper's tmpfs. It is never answered to the workspace's
+   * `cred.get`; the run's signatures come from the runner through `/ctl/ssh-agent.sock`.
    */
-  source: z.enum(['minted', 'static']).optional(),
+  source: z.enum(['minted', 'static', 'deploy_key']).optional(),
 });
 export type RunCredentialPayload = z.infer<typeof runCredentialSchema>;
 
@@ -276,6 +296,9 @@ export const createRunRequestSchema = z
       return;
     }
     if (credential === null) {
+      if (spec.repo.ssh !== undefined) {
+        refuse('a spec whose git goes over SSH carries its deploy key (TD-028 decision 13b)');
+      }
       if (!spec.readOnly) {
         refuse(
           'a spec that writes must carry a run credential; a binding that cannot mint refuses the run before it is created',
@@ -283,7 +306,30 @@ export const createRunRequestSchema = z
       }
       return;
     }
-    if (spec.readOnly && credential.scope === 'push' && credential.source !== 'static') {
+    // WP-146: a deploy key and the spec's SSH route travel together or not at all, and the route's
+    // CONNECT host and port are ones the run may reach — 443, never 22 (decision 13b item 4).
+    const ssh = spec.repo.ssh;
+    if ((credential.source === 'deploy_key') !== (ssh !== undefined)) {
+      refuse(
+        'a deploy-key credential and the spec’s repo.ssh route travel together: one without the other is an SSH run with no key or a key with no route (TD-028 decision 13b)',
+      );
+    }
+    if (ssh !== undefined) {
+      if (!spec.egress.hosts.includes(ssh.connectHost)) {
+        refuse('the SSH route’s CONNECT host is not one of the spec’s egress hosts');
+      }
+      if (!spec.egress.connectPorts.includes(ssh.connectPort) || ssh.connectPort === 22) {
+        refuse(
+          'the SSH route’s port must be one the sidecar admits for CONNECT, and never 22 (TD-028 decision 13b item 4)',
+        );
+      }
+    }
+    if (
+      spec.readOnly &&
+      credential.scope === 'push' &&
+      credential.source !== 'static' &&
+      credential.source !== 'deploy_key'
+    ) {
       refuse(
         'a read-only spec may carry a read credential or none, never a minted push one (BD-021); only a static run credential, which cannot be narrowed, is push-scoped there (TD-028 decision 13)',
       );

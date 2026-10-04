@@ -119,7 +119,8 @@ describe('TD-021: exactly one component reaches the Docker daemon', () => {
     expect(readers.filter(isShippedRing)).toEqual(['apps/launcher/src/config.ts']);
     expect(readers.filter((file) => !isShippedRing(file))).toEqual([
       // WP-53's two, beside WP-15g's two. Both start a launcher container; neither is a process a
-      // compose file starts.
+      // compose file starts. WP-146's deploy-key check starts one the same way.
+      'scripts/deploy-key-check.mjs',
       'scripts/launcher-control-plane-check.mjs',
       'scripts/launcher-control-plane-launcher.mjs',
       'scripts/runlet-launcher-check.mjs',

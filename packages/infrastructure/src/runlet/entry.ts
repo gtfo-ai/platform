@@ -26,6 +26,11 @@
 export { systemClock } from '../runner/clock.js';
 export { readRunletConfig } from './config.js';
 export {
+  ConnectHelperUsageError,
+  parseConnectHelperArgs,
+  runConnectHelper,
+} from './connect-helper.js';
+export {
   NO_CREDENTIAL_SOCKET_MESSAGE,
   parseCredentialHelperArgs,
   runCredentialHelper,

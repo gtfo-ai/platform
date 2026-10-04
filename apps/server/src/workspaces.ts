@@ -241,6 +241,36 @@ export const createRunGitCredentialMinter = (options: {
           },
         };
       }
+      if (minted.kind === 'deploy_key') {
+        const key = minted.credential;
+        // TD-028 decision 13b: the private key joins the run's redactors before anything can see it
+        // (it is also a sealed secret of the integration, so every binding redactor knows it). It
+        // lives for the run, held by this process; the agent never holds it.
+        const until = new Date(Date.parse(options.now()) + ttlSeconds * 1_000).toISOString();
+        options.runSecrets.add(spec.runId, key.privateKey, until);
+        await recordCredentialSource(
+          options.pool,
+          spec.runId,
+          'deploy_key',
+          minted.ref.integrationId,
+        );
+        return {
+          kind: 'minted',
+          credential: {
+            username: 'git',
+            password: key.privateKey,
+            scope: key.scope,
+            expiresAt: until,
+            source: 'deploy_key',
+            ssh: { publicKey: key.publicKey, route: key.route },
+            // Nothing to revoke per run: removing the key from the project is the revocation
+            // (decision 13b item 8). The run's registry entry goes with the run.
+            revoke: async () => {
+              options.runSecrets.forget(spec.runId);
+            },
+          },
+        };
+      }
       const { credential, handle } = minted;
       const revoke = async (): Promise<void> => {
         // TD-028 decision 10 (WP-80): through the integration that **minted**, bound or not — a
@@ -304,7 +334,7 @@ export const createRunGitCredentialMinter = (options: {
 export const recordCredentialSource = async (
   pool: pg.Pool,
   runId: string,
-  source: 'minted' | 'static' | 'none',
+  source: 'minted' | 'static' | 'deploy_key' | 'none',
   integrationId: string | null,
 ): Promise<void> => {
   await pool.query(

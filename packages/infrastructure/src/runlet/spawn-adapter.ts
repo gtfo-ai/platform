@@ -52,6 +52,13 @@ export type RunletCredentialResponder = (request: {
   readonly host: string;
 }) => Promise<RunletCredential | null>;
 
+/** Signs for a deploy-key run. `null` is a refusal: another key, the budget spent, a run that ended. */
+export type RunletSshSigner = (request: {
+  readonly keyBlob: Buffer;
+  readonly data: Buffer;
+  readonly flags: number;
+}) => Promise<Buffer | null>;
+
 /** Frames a runner may receive. Anything else is a protocol error even though it parses. */
 const RUNNER_ACCEPTS: readonly RunletFrame['type'][] = [
   'hello.ok',
@@ -60,6 +67,7 @@ const RUNNER_ACCEPTS: readonly RunletFrame['type'][] = [
   'stderr',
   'exit',
   'cred.get',
+  'ssh.sign',
   'pong',
   'fatal',
 ];
@@ -79,6 +87,11 @@ export interface RunletSpawnOptions {
    */
   readonly onStderr?: RunletStderrSink;
   readonly credentials?: RunletCredentialResponder;
+  /**
+   * Answers an `ssh.sign` relayed from a deploy-key run's agent socket (WP-146, TD-028 decision 13b):
+   * the SSH signature blob, or `null`. Absent, every sign request is refused — the run has no key.
+   */
+  readonly sshSigner?: RunletSshSigner;
   /** How long the handshake may take before the transport reports an error. */
   readonly connectTimeoutMs?: number;
 }
@@ -244,6 +257,37 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
         });
     };
 
+    const answerSign = (frame: Extract<RunletFrame, { type: 'ssh.sign' }>): void => {
+      const reply = (signature: Buffer | null): void => {
+        state.connection?.send({
+          type: 'ssh.sign.reply',
+          request_id: frame.request_id,
+          signature: signature === null ? null : signature.toString('base64'),
+        });
+      };
+      const signer = options.sshSigner;
+      if (signer === undefined) {
+        logger.warn({}, 'runlet has no ssh signer; refusing a sign request');
+        reply(null);
+        return;
+      }
+      // As `answerCredential`: a signer that throws is a refusal, never a dropped connection. The
+      // data and the signature are never logged (decision 13b: counted, not logged with content).
+      Promise.resolve()
+        .then(() =>
+          signer({
+            keyBlob: Buffer.from(frame.key_blob, 'base64'),
+            data: Buffer.from(frame.data, 'base64'),
+            flags: frame.flags,
+          }),
+        )
+        .then(reply)
+        .catch((error: unknown) => {
+          logger.error({ err: error }, 'runlet ssh signer threw');
+          reply(null);
+        });
+    };
+
     const onFrame = (frame: RunletFrame, payload: Buffer | null): void => {
       if (!RUNNER_ACCEPTS.includes(frame.type)) {
         throw new RunletProtocolError(
@@ -300,6 +344,9 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
           return;
         case 'cred.get':
           answerCredential(frame.request_id, frame.host);
+          return;
+        case 'ssh.sign':
+          answerSign(frame);
           return;
         case 'pong':
           return;

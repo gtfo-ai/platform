@@ -75,6 +75,7 @@ import type {
   WorkspaceExport,
   WorkspaceExportRequest,
   WorkspaceGitCredential,
+  WorkspaceGitSsh,
   WorkspaceHandle,
   WorkspaceProvider,
   WorkspaceRepo,
@@ -152,6 +153,8 @@ import {
 const RESERVED_ENV_PREFIXES = [
   'RUNLET_',
   'GIT_CONFIG',
+  // WP-146: a deploy-key run's ssh (`GIT_SSH_COMMAND`) is the launcher's, never a project's.
+  'GIT_SSH',
   'CLAUDE_',
   'HTTP_PROXY',
   'HTTPS_PROXY',
@@ -168,6 +171,66 @@ const RESERVED_ENV_PREFIXES = [
  * `RUNLET_CREDENTIAL_SOCKET` and the helper's `--socket`, one constant so the two cannot drift.
  */
 export const CONTAINER_CREDENTIAL_SOCKET = '/ctl/cred.sock';
+
+/** A deploy-key run's agent socket, served by the shim (WP-146, TD-028 decision 13b item 2). */
+export const CONTAINER_SSH_AGENT_SOCKET = '/ctl/ssh-agent.sock';
+
+/** The platform-written `known_hosts` of a deploy-key run, on its control directory (item 3). */
+export const CONTAINER_SSH_KNOWN_HOSTS = '/ctl/known_hosts';
+
+/** Where a helper writes a deploy key and its `known_hosts`: its own tmpfs, for its lifetime. */
+const HELPER_SSH_DIR = '/tmp/agentic-ssh';
+
+/**
+ * The lines a mirror or export helper runs first when it holds a deploy key (TD-028 decision 13b
+ * item 5): the key into a `0600` file on the helper's tmpfs (`umask 077`), the documented
+ * `known_hosts` beside it, and the variable dropped from the script's environment afterwards. The
+ * container and its tmpfs are removed when the helper ends.
+ */
+export const SSH_HELPER_SETUP: readonly string[] = [
+  `(umask 077 && mkdir -p ${HELPER_SSH_DIR} && printf '%s\\n' "$GIT_SSH_KEY" > ${HELPER_SSH_DIR}/key && printf '%s\\n' "$GIT_SSH_KNOWN_HOSTS" > ${HELPER_SSH_DIR}/known_hosts)`,
+  'unset GIT_SSH_KEY',
+];
+
+/**
+ * A helper's `GIT_SSH_COMMAND`: the key file, no agent, no configuration file, the documented host
+ * keys pinned by alias. A helper is on the helper network with a route out, so it connects to the
+ * `sshPrefix`'s host and port directly — 443 for `altssh.gitlab.com`, never 22.
+ */
+export const helperSshCommand = (ssh: WorkspaceGitSsh): string =>
+  [
+    'ssh -F /dev/null',
+    `-i ${HELPER_SSH_DIR}/key`,
+    '-o IdentitiesOnly=yes',
+    '-o IdentityAgent=none',
+    '-o BatchMode=yes',
+    '-o StrictHostKeyChecking=yes',
+    `-o UserKnownHostsFile=${HELPER_SSH_DIR}/known_hosts`,
+    `-o HostKeyAlias=${ssh.hostKeyAlias}`,
+  ].join(' ');
+
+/**
+ * A deploy-key run's `GIT_SSH_COMMAND` (TD-028 decision 13b item 3): no configuration file, the
+ * shim's agent socket and nothing else as an identity source (`IdentitiesOnly=no` so the agent's key
+ * is offered with no file), the platform-written `known_hosts` pinned by `HostKeyAlias`, and the
+ * shim's `CONNECT` helper as `ProxyCommand` — so the only route is the sidecar on the route's port.
+ */
+export const runSshCommand = (input: {
+  readonly ssh: WorkspaceGitSsh;
+  readonly proxyUrl: string;
+  readonly connectCommand: string;
+}): string =>
+  [
+    'ssh -F /dev/null',
+    `-o IdentityAgent=${CONTAINER_SSH_AGENT_SOCKET}`,
+    '-o IdentitiesOnly=no',
+    '-o BatchMode=yes',
+    '-o StrictHostKeyChecking=yes',
+    `-o UserKnownHostsFile=${CONTAINER_SSH_KNOWN_HOSTS}`,
+    `-o HostKeyAlias=${input.ssh.hostKeyAlias}`,
+    `-o "ProxyCommand=${input.connectCommand} --proxy ${input.proxyUrl} %h %p"`,
+    `-p ${input.ssh.connectPort}`,
+  ].join(' ');
 
 /** A `PATH` of absolute directories, colon-separated — what the run image may declare (WP-118). */
 const IMAGE_PATH_PATTERN = /^\/[\w./+-]*(?::\/[\w./+-]*)*$/;
@@ -283,9 +346,12 @@ export const exportScript = (input: {
   readonly mirror: string;
   readonly push: boolean;
   readonly tarball: boolean;
+  /** WP-146: the push goes over SSH with a deploy key written to the helper's tmpfs. */
+  readonly ssh?: boolean;
 }): string =>
   [
     'set -e',
+    ...(input.ssh === true ? SSH_HELPER_SETUP : []),
     'g() { git -c core.hooksPath=/dev/null "$@"; }',
     'cd /work/repo',
     `if [ -L .git ] || [ ! -d .git ] || [ -e .git/commondir ]; then echo "${UNSAFE_GITDIR_SENTINEL}"; exit 4; fi`,
@@ -818,6 +884,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
           // delete objects a live run's alternates still point at.
           script: [
             'set -e',
+            ...(input.credential?.ssh === undefined ? [] : SSH_HELPER_SETUP),
             `if [ -d "${cachePath}" ]; then`,
             `  git -C "${cachePath}" remote set-url origin "$REPO_URL"`,
             `  git -C "${cachePath}" config gc.auto 0`,
@@ -874,6 +941,24 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     const base: Record<string, string> = { HOME: '/tmp', ...extra };
     if (credential === null) {
       return { env: base, secrets: [] };
+    }
+    if (credential.ssh !== undefined) {
+      // WP-146 (TD-028 decision 13b item 5): a deploy key. The helper's script writes it to a
+      // `0600` file on its own tmpfs (`SSH_HELPER_SETUP`) and git reaches the host over SSH through
+      // one `insteadOf` pair — the same exposure class as `GIT_PASS` in this environment, stated.
+      const ssh = credential.ssh;
+      return {
+        env: {
+          ...base,
+          GIT_SSH_KEY: credential.password,
+          GIT_SSH_KNOWN_HOSTS: ssh.knownHosts.join('\n'),
+          GIT_SSH_COMMAND: helperSshCommand(ssh),
+          GIT_CONFIG_COUNT: '1',
+          GIT_CONFIG_KEY_0: `url.${ssh.sshPrefix}.insteadOf`,
+          GIT_CONFIG_VALUE_0: ssh.httpsPrefix,
+        },
+        secrets: [credential.password],
+      };
     }
     return {
       env: {
@@ -944,9 +1029,10 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
 
       const sidecarHost = await this.#startSidecar(spec, made);
 
+      const gitSsh = spec.repo?.ssh;
       const env = this.#runContainerEnv(
         spec,
-        this.#runCliEnvironment(spec.runId, sidecarHost !== null),
+        this.#runCliEnvironment(spec.runId, sidecarHost !== null, gitSsh),
       );
       made.container = await this.#engine.createContainer(
         names.container,
@@ -974,6 +1060,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         cacheKey: spec.repo === null ? null : spec.repo.cacheKey,
         controlSubPath: spec.runId,
         keepUntil: spec.keepUntil,
+        ...(gitSsh === undefined ? {} : { gitSsh }),
       };
     } catch (error) {
       // Either a handle or nothing: a half-created run whose container is up is a container
@@ -1073,6 +1160,13 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         // *Permission denied*).
         ...emptyWorkdir,
         `printf %s "$RUNLET_TOKEN" > ${dir}/token`,
+        // WP-146 (TD-028 decision 13b item 3): the documented host keys, never a first connection's.
+        ...(spec.repo?.ssh === undefined
+          ? []
+          : [
+              `printf '%s\\n' "$SSH_KNOWN_HOSTS" > ${dir}/known_hosts`,
+              `chmod 644 ${dir}/known_hosts`,
+            ]),
         `chmod 700 ${dir}`,
         `chmod 600 ${dir}/token`,
         `chown -R ${WORKSPACE_UID}:${WORKSPACE_GID} ${dir}`,
@@ -1084,7 +1178,12 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       // matters is the *run* container's, where every process the agent starts can read
       // `/proc/<pid>/environ`, and this is not that container. `RUNLET_TOKEN_FILE` exists for that
       // reason and is what the run container gets.
-      env: { RUNLET_TOKEN: token },
+      env: {
+        RUNLET_TOKEN: token,
+        ...(spec.repo?.ssh === undefined
+          ? {}
+          : { SSH_KNOWN_HOSTS: spec.repo.ssh.knownHosts.join('\n') }),
+      },
       // The run token authenticates the control connection; a helper that echoed it would
       // put it in the launcher's log.
       secrets: [token],
@@ -1339,12 +1438,15 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * socket — the same path the shim is told to listen on ({@link CONTAINER_CREDENTIAL_SOCKET}).
    */
   #credentialHelperCommand(): string {
-    const command =
-      this.#images.runtimeSourceDir === null
-        ? '!agentic-runlet credential'
-        : `!node --import ${RUNTIME_SOURCE_MOUNT}/scripts/ts-source-resolver.mjs ` +
-          `${RUNTIME_SOURCE_MOUNT}/apps/runlet/src/index.ts credential`;
-    return `${command} --socket ${CONTAINER_CREDENTIAL_SOCKET}`;
+    return `!${this.#runletCommand('credential')} --socket ${CONTAINER_CREDENTIAL_SOCKET}`;
+  }
+
+  /** `agentic-runlet <mode>` in the run image, or its source form under a mounted checkout. */
+  #runletCommand(mode: 'credential' | 'connect'): string {
+    return this.#images.runtimeSourceDir === null
+      ? `agentic-runlet ${mode}`
+      : `node --import ${RUNTIME_SOURCE_MOUNT}/scripts/ts-source-resolver.mjs ` +
+          `${RUNTIME_SOURCE_MOUNT}/apps/runlet/src/index.ts ${mode}`;
   }
 
   /**
@@ -1354,10 +1456,15 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * the runner, which composes the CLI's environment from it; `provider.test.ts` holds the two to
    * each other.
    *
-   * Derived from the run id and whether the run has a sidecar, both of which a handle carries, so a
-   * launcher that restarted answers the same values for a run it did not create.
+   * Derived from the run id, whether the run has a sidecar and — for a deploy-key run (WP-146) — its
+   * SSH route, all of which a handle carries, so a launcher that restarted answers the same values
+   * for a run it did not create.
    */
-  #runCliEnvironment(runId: string, hasSidecar: boolean): WorkspaceCliEnvironment {
+  #runCliEnvironment(
+    runId: string,
+    hasSidecar: boolean,
+    gitSsh: WorkspaceGitSsh | undefined,
+  ): WorkspaceCliEnvironment {
     if (this.#runtimeImagePath === null) {
       // Unreachable through `create` and `cliEnvironment`, which both await `assertRuntimeCli`.
       throw new WorkspaceError(
@@ -1366,17 +1473,38 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         { runId },
       );
     }
+    const proxyUrl = egressProxyUrl(egressContainerName(runId));
+    if (gitSsh !== undefined && !hasSidecar) {
+      // Unreachable through `create`: the route's CONNECT host is on the spec's egress list, so the
+      // run has a sidecar. Refused rather than answered with an SSH command that has no route.
+      throw new WorkspaceError(
+        'invalid_spec',
+        'a deploy-key run has no egress sidecar, so its SSH has no route (TD-028 decision 13b)',
+        { runId },
+      );
+    }
     return {
       // technical/05 § "Network policy": the sidecar is the only way off the `internal: true`
       // network, and this is how anything in the run finds it.
-      proxy: hasSidecar
-        ? { url: egressProxyUrl(egressContainerName(runId)), noProxy: 'localhost,127.0.0.1' }
-        : null,
+      proxy: hasSidecar ? { url: proxyUrl, noProxy: 'localhost,127.0.0.1' } : null,
       home: '/tmp',
       claudeConfigDir: '/tmp/claude',
       path: this.#runtimeImagePath,
-      // TD-021: `credential.helper=!agentic-cred` — git asks the shim, which asks the runner.
-      gitConfig: [{ key: 'credential.helper', value: this.#credentialHelperCommand() }],
+      gitConfig:
+        gitSsh === undefined
+          ? // TD-021: `credential.helper=!agentic-cred` — git asks the shim, which asks the runner.
+            [{ key: 'credential.helper', value: this.#credentialHelperCommand() }]
+          : // WP-146 (TD-028 decision 13b item 3): the repository's ordinary URL goes over SSH, and
+            // the HTTPS credential helper is not configured for such a run.
+            [{ key: `url.${gitSsh.sshPrefix}.insteadOf`, value: gitSsh.httpsPrefix }],
+      gitSshCommand:
+        gitSsh === undefined
+          ? null
+          : runSshCommand({
+              ssh: gitSsh,
+              proxyUrl,
+              connectCommand: this.#runletCommand('connect'),
+            }),
     };
   }
 
@@ -1398,6 +1526,13 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       RUNLET_CONTROL_SOCKET: '/ctl/ctl.sock',
       RUNLET_CREDENTIAL_SOCKET: CONTAINER_CREDENTIAL_SOCKET,
       RUNLET_TOKEN_FILE: '/ctl/token',
+      // WP-146: a deploy-key run's agent socket and the one public key it lists (not a secret).
+      ...(spec.repo?.ssh === undefined
+        ? {}
+        : {
+            RUNLET_SSH_AGENT_SOCKET: CONTAINER_SSH_AGENT_SOCKET,
+            RUNLET_SSH_PUBLIC_KEY: spec.repo.ssh.publicKey,
+          }),
       RUNLET_CHILD_UID: String(WORKSPACE_UID),
       RUNLET_CHILD_GID: String(WORKSPACE_GID),
     };
@@ -1411,7 +1546,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   async cliEnvironment(handle: WorkspaceHandle): Promise<WorkspaceCliEnvironment> {
     assertRunId(handle.runId);
     await this.assertRuntimeCli();
-    return this.#runCliEnvironment(handle.runId, handle.sidecarContainerId !== null);
+    return this.#runCliEnvironment(handle.runId, handle.sidecarContainerId !== null, handle.gitSsh);
   }
 
   // ── Attach, kill, destroy ──────────────────────────────────────────────────
@@ -1985,7 +2120,12 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     const helper = await this.#helper({
       name,
       image: this.#images.git,
-      script: exportScript({ mirror, push: credential !== null, tarball: wantsTarball }),
+      script: exportScript({
+        mirror,
+        push: credential !== null,
+        tarball: wantsTarball,
+        ssh: credential?.ssh !== undefined,
+      }),
       ...this.#gitCredentialEnv(credential, {
         BRANCH: request.branch,
         COMMIT_MESSAGE: request.commitMessage,

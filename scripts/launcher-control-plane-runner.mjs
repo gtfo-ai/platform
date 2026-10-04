@@ -340,6 +340,184 @@ if (PHASE === 'reap') {
 }
 
 /**
+ * WP-146 (TD-028 decision 13b): **a deploy-key run fetches and pushes over SSH** through the
+ * production provisioner and launcher, with a key the runner holds and the run container never does.
+ * `scripts/deploy-key-check.mjs` runs this phase against a local SSH git server standing in for
+ * `altssh.gitlab.com` (`CHECK_SSH_HOST`, port 443, its own host key pinned under the alias
+ * `gitlab.com` — stated: not gitlab.com's key). The minter is the one piece this check has no
+ * provider for: it answers a `deploy_key` credential with the key from `CHECK_DEPLOY_PRIVATE_KEY`
+ * (passed by name, a throwaway key the check generated). Then, through the run's own spawn and with
+ * exactly the CLI's environment, the run container commits, `git push`es `agentic/wp146-check` to
+ * the repository's ordinary `https://gitlab.com/…` URL (rewritten to SSH by the one `insteadOf`
+ * pair) and lists the remote; and, as the agent, searches its own filesystem and every
+ * `/proc/<pid>/environ` it can read for a fragment of the private key, passed as an **argument** so
+ * the search pattern is in no environment. Nothing of the key is printed.
+ */
+if (PHASE === 'deploy-key') {
+  const runId = required('CHECK_DEPLOY_KEY_RUN_ID');
+  const privateKey = required('CHECK_DEPLOY_PRIVATE_KEY');
+  const publicKey = required('CHECK_DEPLOY_PUBLIC_KEY');
+  const sshHost = required('CHECK_SSH_HOST');
+  const hostKey = required('CHECK_SSH_HOST_KEY');
+  const fragment = required('CHECK_DEPLOY_KEY_FRAGMENT_LENGTH');
+  const keyLines = privateKey.trim().split('\n');
+  // A fragment of the **seed** — `openssh-key-v1` puts the 64-byte private field at bytes ~161–225,
+  // which is the fourth base64 line of 70 (`keyLines[4]`, the armour being `keyLines[0]`); the lines
+  // before it are the container's fixed header, the check integers and the public key.
+  const probe = (keyLines[4] ?? '').slice(4, 4 + Number(fragment));
+  let signed = 0;
+  const minted = {
+    username: 'git',
+    password: privateKey,
+    scope: 'push',
+    expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    source: 'deploy_key',
+    ssh: {
+      publicKey,
+      route: {
+        httpsPrefix: 'https://gitlab.com/',
+        sshPrefix: `ssh://git@${sshHost}:443/`,
+        connectHost: sshHost,
+        connectPort: 443,
+        hostKeyAlias: 'gitlab.com',
+        knownHosts: [`gitlab.com ${hostKey}`],
+      },
+    },
+    revoke: async () => undefined,
+  };
+  const deployKeyProvisioner = launcherAdapters.createLauncherRunWorkspaceProvisioner({
+    client,
+    credentials: { mint: async () => ({ kind: 'minted', credential: minted }) },
+    projects: {
+      forRun: async () => ({
+        repoUrl: 'https://gitlab.com/acme/api.git',
+        defaultBranch: 'main',
+        projectPath: 'acme/api',
+        gitHost: 'gitlab.com',
+        branchPatterns: ['agentic/*'],
+        containerEnv: {},
+      }),
+    },
+    controlRoot: CONTROL_ROOT,
+    modelEgressHosts: [],
+    runRegistryHosts: [],
+    credentialTtlSeconds: 3_600,
+    clock: runnerAdapters.systemClock,
+    logger,
+  });
+  const phase = { phase: PHASE, ok: false, notes };
+  let workspace = null;
+  let told = false;
+  const inContainer = async (env, script, args = [], onOutput = () => undefined) => {
+    const child = workspace.spawn({
+      command: '/bin/sh',
+      args: ['-c', script, 'sh', ...args],
+      cwd: workspace.workdir,
+      env,
+      signal: new AbortController().signal,
+    });
+    let out = '';
+    child.stdout.on('data', (chunk) => {
+      out += chunk.toString('utf8');
+      onOutput(out);
+    });
+    const exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
+    child.stdin.end();
+    return { code: await exited, out };
+  };
+  try {
+    const spec = runnerAdapters.runSpecFixture({
+      runId,
+      tools: ['Read', 'Edit', 'Bash'],
+      artifactType: null,
+      providerMode: 'api',
+      claudeCodePath: null,
+      checkoutRef: 'agentic/wp146-check',
+      env: { ANTHROPIC_API_KEY: FAKE_MODEL_KEY },
+      secretEnvNames: ['ANTHROPIC_API_KEY'],
+    });
+    workspace = await deployKeyProvisioner.provision(spec);
+    const created = creates.filter((entry) => entry.spec.runId === runId).at(-1);
+    phase.egressHosts = created?.spec.egress.hosts ?? null;
+    phase.connectPorts = created?.spec.egress.connectPorts ?? null;
+    const env = runnerAdapters.cliEnvironment(spec, workspace.cliEnvironment ?? null);
+    phase.gitSshCommand = env.GIT_SSH_COMMAND ?? null;
+    phase.gitConfigKeys = Object.entries(env)
+      .filter(([name]) => name.startsWith('GIT_CONFIG_KEY_'))
+      .map(([, value]) => value);
+    // **One** child: the shim owns exactly one per run and exits when it does (TD-025 §1). It pushes,
+    // lists the remote, searches as the agent, prints a marker — on which this runner tells the host
+    // to search as root — and waits, bounded, for the host's `touch` of a file in its own /tmp.
+    const run = await inContainer(
+      env,
+      [
+        'set -e',
+        'git config user.email wp146@example.invalid',
+        'git config user.name wp146-check',
+        'echo wp146 > wp146.txt',
+        'git add wp146.txt',
+        'git commit -q -m "wp146 deploy-key check"',
+        'git push -q origin HEAD:refs/heads/agentic/wp146-check 2>&1',
+        'echo "FETCHED=$(git ls-remote origin refs/heads/agentic/wp146-check | cut -c1-40)"',
+        'echo "HEAD=$(git rev-parse HEAD)"',
+        'set +e',
+        // `--plant` (the check's own canary): the fragment written where the search must find it.
+        ...(process.env['CHECK_PLANT_FRAGMENT'] === '1' ? ['printf "%s" "$1" > /tmp/planted'] : []),
+        // The canary, as the agent: files it can read (not /proc, /sys, /dev) and every environ it can.
+        // Every top-level directory but the kernel's and the check's source mount, each walked on its
+        // own: `grep -r /` with `--exclude-dir=proc` still walked into `/proc` (measured, it read
+        // `/proc/<pid>/task/<pid>/pagemap` for ten minutes).
+        'FILES=$(for d in /*; do case "$d" in /proc|/sys|/dev|/repo) ;; *) grep -rlsF -- "$1" "$d" 2>/dev/null ;; esac; done | wc -l)',
+        'ENVIRON=0',
+        'for f in /proc/[0-9]*/environ; do if tr "\\0" "\\n" < "$f" 2>/dev/null | grep -qF -- "$1"; then ENVIRON=$((ENVIRON+1)); fi; done',
+        'READABLE=$(for f in /proc/[0-9]*/environ; do cat "$f" >/dev/null 2>&1 && echo x; done | wc -l)',
+        'echo "FILES=$FILES ENVIRON=$ENVIRON READABLE=$READABLE"',
+        'echo "AGENT=$(ls -l /ctl/ssh-agent.sock 2>/dev/null | cut -c1-10) KNOWN=$(wc -l < /ctl/known_hosts)"',
+        'echo SEARCH-DONE',
+        // `/repo` is the check's read-only source mount (the shim runs from source here), which no
+        // production run container has; it is excluded from both searches, stated in the script.
+        'i=0; while [ ! -e /tmp/wp146-continue ] && [ $i -lt 600 ]; do sleep 0.5; i=$((i+1)); done',
+      ].join('\n'),
+      [probe],
+      (soFar) => {
+        if (soFar.includes('SEARCH-DONE') && !told) {
+          told = true;
+          process.stdout.write('{"phase":"deploy-key","inspect":"now"}\n');
+        }
+      },
+    );
+    phase.pushExit = run.code;
+    phase.pushedHead = /HEAD=([0-9a-f]{40})/.exec(run.out)?.[1] ?? null;
+    phase.fetchedHead = /FETCHED=([0-9a-f]{40})/.exec(run.out)?.[1] ?? null;
+    phase.pushOutput = run.out.slice(0, 600);
+    const counts = /FILES=(\d+) ENVIRON=(\d+) READABLE=(\d+)/.exec(run.out);
+    phase.keyFilesInContainer = counts === null ? null : Number(counts[1]);
+    phase.keyEnvironsInContainer = counts === null ? null : Number(counts[2]);
+    phase.environsReadable = counts === null ? null : Number(counts[3]);
+    phase.agentSocket = /AGENT=(\S*)/.exec(run.out)?.[1] ?? null;
+    phase.knownHostsLines = Number(/KNOWN=(\d+)/.exec(run.out)?.[1] ?? -1);
+    signed = notes.filter((note) => note.includes('ssh')).length;
+    phase.ok =
+      run.code === 0 &&
+      phase.pushedHead !== null &&
+      phase.pushedHead === phase.fetchedHead &&
+      phase.keyFilesInContainer === 0 &&
+      phase.keyEnvironsInContainer === 0;
+  } catch (error) {
+    phase.error = String(error?.message ?? error).slice(0, 600);
+  } finally {
+    await workspace?.release({ kind: 'not_started' });
+  }
+  phase.sshNotes = signed;
+  const printed = JSON.stringify(phase);
+  // Never the key: the printed line is searched for the fragment before it leaves this process.
+  process.stdout.write(
+    `${printed.includes(probe) ? '{"phase":"deploy-key","ok":false,"error":"the report carried the key"}' : printed}\n`,
+  );
+  process.exit(0);
+}
+
+/**
  * WP-118 review round 1: **the CLI's git asks the shim for the run's credential**, end to end.
  *
  * A run minted a (fake) `read` credential — the one piece this check has no provider for — is

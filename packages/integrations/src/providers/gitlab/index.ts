@@ -13,6 +13,7 @@ import {
 import { gitlabConfigSchema, gitlabSecretFields } from './config.js';
 import { GITLAB_PROVIDER_ID } from './http.js';
 import { createGitLabProvider } from './provider.js';
+import { gitlabSshRoute } from './ssh-route.js';
 
 /**
  * What an agent may be handed inside a run (technical/06 § "Agent tooling exposure").
@@ -88,7 +89,7 @@ export const GITLAB_CREDENTIAL_MINTING_HINTS = {
     'GitLab: an instance whose administrator changed the personal-access-token prefix declares it ' +
     'as `token_prefix` on the integration',
   static:
-    'GitLab: `run_credential: static` with a `run_token` — a dedicated user’s, or your own repository-only one (`run_token_owner: operator`); weaker isolation, operator guide § Integrations',
+    'GitLab: `run_credential: static` with a `run_token` — a dedicated user’s, or your own repository-only one (`run_token_owner: operator`) — or, on GitLab.com, `run_credential: deploy_key` with a write deploy key; weaker isolation, operator guide § Integrations',
 } as const;
 
 /**
@@ -108,6 +109,13 @@ export const GITLAB_STATIC_RUN_CREDENTIAL: StaticRunCredentialSupport = {
   ownerField: 'run_token_owner',
   scopeProofHint:
     'this token can call the GitLab API; create one with only `read_repository` and `write_repository`',
+  // WP-146: TD-028 decision 13b — a project deploy key with write access, GitLab.com only.
+  deployKey: {
+    modeValue: 'deploy_key',
+    privateKeyField: 'run_ssh_private_key',
+    publicKeyField: 'run_ssh_public_key',
+    sshRoute: gitlabSshRoute,
+  },
 };
 
 /**
@@ -157,6 +165,8 @@ export const gitlabProviderRegistration: ProviderRegistration<'git'> = {
     'run_token_owner',
     'run_token_username',
     'run_token_expires_at',
+    // WP-146: the deploy key's public half is the account's too (decision 13b item 1).
+    'run_ssh_public_key',
   ],
   create: (input) => {
     const adapter = gitlabAdapterInput(input);

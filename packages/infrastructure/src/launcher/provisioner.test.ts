@@ -8,10 +8,24 @@
  * being true, so the case that matters is not "a spec was built" but **which branch** the built spec
  * names — asserted as the countable effect the row asks for.
  */
+import { createPublicKey, verify } from 'node:crypto';
+import { connect } from 'node:net';
 import path from 'node:path';
-import { WorkspaceError } from '@platform/application';
+import {
+  FAKE_DEPLOY_KEY,
+  RFC8032_TEST1,
+  sshEd25519PublicKeyBlob,
+  sshString,
+  WorkspaceError,
+} from '@platform/application';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRunletShim } from '../runlet/shim.js';
+import {
+  AGENT_FAILURE,
+  encodeAgentMessage,
+  SSH_AGENT_SIGN_RESPONSE,
+  SSH_AGENTC_SIGN_REQUEST,
+} from '../runlet/ssh-agent.js';
 import { connectProbe, createControlVolume, nodeScript } from '../runlet/testing.js';
 import { manualClock } from '../runner/clock.js';
 import { runSpecFixture } from '../runner/fixtures.js';
@@ -856,5 +870,190 @@ describe('the control root this process was configured with', () => {
         clock: manualClock(),
       }),
     ).toThrow(/absolute path/);
+  });
+});
+
+/**
+ * WP-146 (TD-028 decision 13b): a deploy key puts its route on the spec and its CONNECT host on this
+ * run's egress list, travels to the launcher as `source: 'deploy_key'`, is **never** answered to the
+ * workspace's `cred.get`, and signs — in this process — what the run shim's agent socket relays,
+ * until `release` begins.
+ */
+const userauthFor = (blob: Buffer): Buffer =>
+  Buffer.concat([
+    sshString(Buffer.alloc(32, 9)),
+    Buffer.from([50]),
+    sshString('git'),
+    sshString('ssh-connection'),
+    sshString('publickey'),
+    Buffer.from([1]),
+    sshString('ssh-ed25519'),
+    sshString(blob),
+  ]);
+
+describe('a deploy-key run (WP-146)', () => {
+  const cleanups: (() => Promise<void>)[] = [];
+  afterEach(async () => {
+    for (const cleanup of cleanups.splice(0)) {
+      await cleanup();
+    }
+  });
+  const TOKEN = 'run-token-kkkkkkkkkkkkkkkkkkkkkk';
+  const ROUTE = {
+    httpsPrefix: 'https://gitlab.com/',
+    sshPrefix: 'ssh://git@altssh.gitlab.com:443/',
+    connectHost: 'altssh.gitlab.com',
+    connectPort: 443,
+    hostKeyAlias: 'gitlab.com',
+    knownHosts: [
+      'gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf',
+    ],
+  };
+  const deployKeyMinter = (privateKey: string = FAKE_DEPLOY_KEY.privateKey) => {
+    let revoked = 0;
+    const minter: RunGitCredentialMinter = {
+      mint: async () => ({
+        kind: 'minted',
+        credential: {
+          username: 'git',
+          password: privateKey,
+          scope: 'push',
+          expiresAt: '2026-10-05T12:00:00.000Z',
+          source: 'deploy_key',
+          ssh: { publicKey: FAKE_DEPLOY_KEY.publicKey, route: ROUTE },
+          revoke: async () => {
+            revoked += 1;
+          },
+        },
+      }),
+    };
+    return { minter, revoked: () => revoked };
+  };
+
+  it.each([
+    ['a writing run', ['Read', 'Edit', 'Bash']],
+    ['a read-only run', ['Read', 'Grep']],
+  ])(
+    'carries the key to %s with its route on the spec and altssh on its egress list',
+    async (_, tools) => {
+      const { minter } = deployKeyMinter();
+      const { client, recorded } = clientWith();
+      await provisionerWith(client, minter).provision(runSpecFixture({ tools }));
+      const request = recorded.creates[0];
+      expect(request?.credential).toMatchObject({
+        source: 'deploy_key',
+        username: 'git',
+        scope: 'push',
+      });
+      expect(request?.spec.repo?.ssh).toMatchObject({
+        publicKey: FAKE_DEPLOY_KEY.publicKey.split(' ').slice(0, 2).join(' '),
+        connectHost: 'altssh.gitlab.com',
+        connectPort: 443,
+      });
+      expect(request?.spec.egress.hosts).toContain('altssh.gitlab.com');
+      expect(request?.spec.egress.connectPorts).not.toContain(22);
+      expect(createRunRequestSchema.safeParse(request).success).toBe(true);
+      // The wire's pair rule: the key without the route, or the route without the key, is refused.
+      const keyOnly = {
+        ...request,
+        spec: { ...request?.spec, repo: { ...request?.spec.repo, ssh: undefined } },
+      };
+      expect(createRunRequestSchema.safeParse(keyOnly).success).toBe(false);
+      const asMinted = { ...request, credential: { ...request?.credential, source: 'minted' } };
+      expect(createRunRequestSchema.safeParse(asMinted).success).toBe(false);
+    },
+  );
+
+  it('refuses a key that does not parse before the create, revokes once, and sends nothing', async () => {
+    const { minter, revoked } = deployKeyMinter('not a key at all, fake');
+    const { client, recorded } = clientWith();
+    await expect(provisionerWith(client, minter).provision(runSpecFixture())).rejects.toMatchObject(
+      {
+        code: 'invalid_spec',
+      },
+    );
+    expect(recorded.creates).toEqual([]);
+    expect(revoked()).toBe(1);
+  });
+
+  it('signs for the agent socket here, never answers cred.get, and stops signing at release', async () => {
+    const volume = await createControlVolume();
+    const agentSocket = path.join(volume.dir, 'a.sock');
+    const clock = manualClock(1_000);
+    const shim = createRunletShim({
+      controlSocketPath: volume.controlSocketPath,
+      credentialSocketPath: volume.credentialSocketPath,
+      sshAgentSocketPath: agentSocket,
+      sshPublicKey: FAKE_DEPLOY_KEY.publicKey.split(' ').slice(0, 2).join(' '),
+      token: TOKEN,
+      clock,
+    });
+    await shim.start();
+    cleanups.push(async () => {
+      await shim.close();
+      await volume.cleanup();
+    });
+    const base = clientWith({ socketPath: volume.controlSocketPath }).client;
+    const client: LauncherControlClient = {
+      ...base,
+      createRun: async (payload) => ({
+        ...(await base.createRun(payload)),
+        attachment: { socketPath: volume.controlSocketPath, token: TOKEN, workdir: '/work/repo' },
+      }),
+    };
+    const workspace = await provisionerWith(
+      client,
+      deployKeyMinter().minter,
+      path.dirname(volume.controlSocketPath),
+    ).provision(runSpecFixture());
+    const child = workspace.spawn({
+      ...nodeScript('setInterval(() => {}, 1000)'),
+      cwd: process.cwd(),
+      env: { PATH: process.env['PATH'] ?? '/usr/bin' },
+      signal: new AbortController().signal,
+    });
+    cleanups.push(async () => {
+      child.kill('SIGKILL');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const blob = sshEd25519PublicKeyBlob(RFC8032_TEST1.publicKey);
+    const sign = async (): Promise<Buffer> => {
+      const socket = connect(agentSocket);
+      // An SSH user-authentication request for `git` with this key (RFC 4252 § 7): the one
+      // shape the signer signs (review round 1).
+      const data = userauthFor(blob);
+      const reply = await new Promise<Buffer>((resolve, reject) => {
+        socket.once('data', resolve);
+        socket.once('error', reject);
+        socket.write(
+          encodeAgentMessage(
+            SSH_AGENTC_SIGN_REQUEST,
+            Buffer.concat([sshString(blob), sshString(data), Buffer.alloc(4)]),
+          ),
+        );
+      });
+      socket.destroy();
+      return reply;
+    };
+    const answer = await sign();
+    expect(answer[4]).toBe(SSH_AGENT_SIGN_RESPONSE);
+    const signature = answer.subarray(answer.length - 64);
+    const publicKey = createPublicKey({
+      key: { kty: 'OKP', crv: 'Ed25519', x: RFC8032_TEST1.publicKey.toString('base64url') },
+      format: 'jwk',
+    });
+    expect(verify(null, userauthFor(blob), publicKey, signature)).toBe(true);
+    // The HTTPS credential socket answers nothing for a deploy-key run.
+    const helper = await connectProbe(volume.credentialSocketPath);
+    helper.send({
+      type: 'cred.get',
+      request_id: 'git-1',
+      host: 'git.example.com',
+      protocol: 'https',
+    });
+    expect(((await helper.next('cred.reply')) as { credential: unknown }).credential).toBeNull();
+    helper.close();
+    await workspace.release({ kind: 'not_started' });
+    expect((await sign()).equals(AGENT_FAILURE)).toBe(true);
   });
 });

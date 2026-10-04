@@ -22,8 +22,10 @@ import type {
   MintedRunCredential,
 } from '../ports/integrations/git-provider.js';
 import { createMemoryAuditLog, createVirtualTimer } from '../testing/memory-integrations.js';
+import { FAKE_DEPLOY_KEY } from '../testing/ssh-deploy-key-fixtures.js';
 import {
   type CredentialMintingHints,
+  type DeployKeyRunCredential,
   type MintingIntegration,
   type MintingIntegrationLiveness,
   mintingIntegrationOf,
@@ -884,4 +886,90 @@ describe('an operator’s own run token (WP-141, TD-028 decision 13a)', () => {
       ),
     ).rejects.toBeInstanceOf(TransactionOpenError);
   });
+});
+
+describe('an SSH deploy key (WP-146, TD-028 decision 13b)', () => {
+  const AT_NOW: MintingIntegrationLiveness = {
+    isRetired: async () => false,
+    now: () => '2026-10-04T12:00:00.000Z',
+  };
+  const route = {
+    httpsPrefix: 'https://gitlab.com/',
+    sshPrefix: 'ssh://git@altssh.gitlab.com:443/',
+    connectHost: 'altssh.gitlab.com',
+    connectPort: 443,
+    hostKeyAlias: 'gitlab.com',
+    knownHosts: [
+      'gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf',
+    ],
+  };
+  const declared = (overrides: Partial<DeployKeyRunCredential> = {}): DeployKeyRunCredential => ({
+    privateKey: FAKE_DEPLOY_KEY.privateKey,
+    publicKey: FAKE_DEPLOY_KEY.publicKey,
+    route,
+    refusal: null,
+    ...overrides,
+  });
+  const keyHarness = (credential: DeployKeyRunCredential, minting = false) => {
+    const built = harness({ minting, hints: HINTS });
+    const git = built.integrations.git as NonNullable<PipelineIntegrations['git']>;
+    return {
+      ...built,
+      integrations: { ...built.integrations, git: { ...git, deployKeyRunCredential: credential } },
+    };
+  };
+
+  it.each([
+    ['writing', 'push'],
+    ['read-only', 'read'],
+  ] as const)(
+    'hands a %s run the key as push with its route, and calls no provider',
+    async (_, scope) => {
+      const { integrations, auditLog, minted } = keyHarness(declared());
+      const answer = await runCredentialWrites(integrations, AT_NOW).mint(request('normal', scope));
+      expect(answer).toEqual({
+        kind: 'deploy_key',
+        credential: {
+          privateKey: FAKE_DEPLOY_KEY.privateKey,
+          publicKey: FAKE_DEPLOY_KEY.publicKey,
+          route,
+          scope: 'push',
+        },
+        ref: GIT_REF,
+      });
+      expect(minted).toEqual([]);
+      expect(auditLog.entries).toEqual([]);
+    },
+  );
+
+  it('gives a shadow task no credential at all, never the key (decision 13b item 7)', async () => {
+    const { integrations, auditLog, minted } = keyHarness(declared(), true);
+    const answer = await runCredentialWrites(integrations, AT_NOW).mint(request('shadow', 'read'));
+    expect(answer.kind).toBe('unavailable');
+    expect(JSON.stringify(answer)).not.toContain(FAKE_DEPLOY_KEY.privateKey.slice(40, 80));
+    expect(answer.kind === 'unavailable' ? answer.reason : '').toMatch(
+      /shadow task is never given the SSH deploy key/,
+    );
+    expect(minted).toEqual([]);
+    expect(auditLog.entries).toEqual([]);
+  });
+
+  it.each([
+    [
+      'a load-time refusal',
+      { refusal: 'the private key is refused: it is protected by a passphrase' },
+      /passphrase/,
+    ],
+    ['no private key', { privateKey: '' }, /holds no private key/],
+    ['no route (a self-managed host)', { route: null, refusal: null }, /no SSH route/],
+  ])(
+    'refuses %s by name, before anything is sent, and never mints instead',
+    async (_, over, words) => {
+      const { integrations, minted } = keyHarness(declared(over), true);
+      const refused = runCredentialWrites(integrations, AT_NOW).mint(request('normal', 'push'));
+      await expect(refused).rejects.toBeInstanceOf(StaticRunCredentialRefusedError);
+      await expect(refused).rejects.toThrow(words);
+      expect(minted).toEqual([]);
+    },
+  );
 });

@@ -315,9 +315,10 @@ export const runs = pgTable('runs', {
    */
   promptsWithheld: jsonb('prompts_withheld').$type<JsonObject>(),
   /**
-   * Which credential the run had — `minted`, `static` or `none` — and the git integration it came
-   * from (migration 0078, WP-137, TD-028 decision 13): a static run credential writes no
-   * `mint_credential` audit row, so the run carries the answer. `null` is *"never asked"*.
+   * Which credential the run had — `minted`, `static`, `deploy_key` (migration 0081, WP-146, TD-028
+   * decision 13b) or `none` — and the git integration it came from (migration 0078, WP-137, TD-028
+   * decision 13): neither a static run credential nor a deploy key writes a `mint_credential` audit
+   * row, so the run carries the answer. `null` is *"never asked"*.
    */
   credentialSource: text('credential_source'),
   credentialIntegrationId: uuid('credential_integration_id'),

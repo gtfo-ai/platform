@@ -57,3 +57,32 @@ describe('the run shim configuration', () => {
     expect(() => readRunletConfig({ ...base, RUNLET_LOG_LEVEL: 'chatty' })).toThrow();
   });
 });
+
+describe('a deploy-key run’s agent socket (WP-146)', () => {
+  const base = { RUNLET_CONTROL_SOCKET: '/ctl/ctl.sock', RUNLET_TOKEN: 'a'.repeat(32) };
+  const KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf';
+
+  it('reads the socket and its key together', () => {
+    const config = readRunletConfig({
+      ...base,
+      RUNLET_SSH_AGENT_SOCKET: '/ctl/ssh-agent.sock',
+      RUNLET_SSH_PUBLIC_KEY: KEY,
+    });
+    expect(config.sshAgentSocketPath).toBe('/ctl/ssh-agent.sock');
+    expect(config.sshPublicKey).toBe(KEY);
+    expect(readRunletConfig(base).sshAgentSocketPath).toBeNull();
+  });
+
+  it('refuses one without the other, and a key that is not an Ed25519 line', () => {
+    expect(() =>
+      readRunletConfig({ ...base, RUNLET_SSH_AGENT_SOCKET: '/ctl/ssh-agent.sock' }),
+    ).toThrow(/set together/);
+    expect(() =>
+      readRunletConfig({
+        ...base,
+        RUNLET_SSH_AGENT_SOCKET: '/ctl/ssh-agent.sock',
+        RUNLET_SSH_PUBLIC_KEY: 'ssh-rsa AAAA',
+      }),
+    ).toThrow();
+  });
+});

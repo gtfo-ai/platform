@@ -106,6 +106,52 @@ export const workspaceEgressSchema = z.strictObject({
 export type WorkspaceEgress = z.infer<typeof workspaceEgressSchema>;
 
 /**
+ * A run whose git goes over **SSH** with a project deploy key — TD-028 decision 13b (WP-146). Every
+ * field is non-secret and platform-written (the provider's route, the key's public half): the private
+ * key never travels in a spec, only in the create request's credential, and never enters the run
+ * container. The launcher writes {@link knownHosts} to the run's control directory, serves
+ * `/ctl/ssh-agent.sock` through the shim listing {@link publicKey}, and answers the CLI's
+ * `GIT_SSH_COMMAND` and one `url.<sshPrefix>.insteadOf = <httpsPrefix>` pair (`cliEnvironment`).
+ */
+export const workspaceGitSshSchema = z.strictObject({
+  /** The deploy key's `ssh-ed25519 AAAA…` line, without a comment. */
+  publicKey: z
+    .string()
+    .max(200)
+    .regex(/^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$/, 'expected an ssh-ed25519 public key line'),
+  /** The repository URL prefix git rewrites (`https://gitlab.com/`). */
+  httpsPrefix: z
+    .string()
+    .max(300)
+    .regex(/^https:\/\/[a-z0-9.-]+\/$/, 'expected https://<host>/'),
+  /** What it becomes (`ssh://git@altssh.gitlab.com:443/`). */
+  sshPrefix: z
+    .string()
+    .max(300)
+    .regex(/^ssh:\/\/git@[a-z0-9.-]+:\d{1,5}\/$/, 'expected ssh://git@<host>:<port>/'),
+  /** The host the egress sidecar is asked to `CONNECT` to — one of the spec's egress hosts. */
+  connectHost: egressHostSchema,
+  /** Its port, one of the spec's `connectPorts` (443: no port 22 is ever admitted). */
+  connectPort: z.int().min(1).max(65_535),
+  /** The name the host keys are pinned under (`HostKeyAlias`). */
+  hostKeyAlias: egressHostSchema,
+  /** The documented `known_hosts` lines, each `<hostKeyAlias> <type> <base64>`. */
+  knownHosts: z
+    .array(
+      z
+        .string()
+        .max(1_024)
+        .regex(
+          /^[a-z0-9.-]+ (?:ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256) [A-Za-z0-9+/]+={0,2}$/,
+          'expected one known_hosts line',
+        ),
+    )
+    .min(1)
+    .max(8),
+});
+export type WorkspaceGitSsh = z.infer<typeof workspaceGitSshSchema>;
+
+/**
  * The repository half of the spec.
  *
  * `url` is what the mirror fetches from and what the export pushes to; `cacheKey` names the bare
@@ -124,6 +170,8 @@ export const workspaceRepoSchema = z
     cacheKey: z
       .string()
       .regex(/^[a-z0-9][a-z0-9._-]{0,62}$/, 'expected a lowercase mirror cache key'),
+    /** SSH with a deploy key (WP-146, TD-028 decision 13b); absent is HTTPS with the credential helper. */
+    ssh: workspaceGitSshSchema.optional(),
   })
   .refine((repo) => repo.checkoutBranch === null || repo.checkoutCommit === null, {
     message: 'a workspace checks out a branch or a commit, never both',
@@ -389,6 +437,12 @@ export interface WorkspaceHandle {
   /** The run's sub-directory of the shared control volume. */
   readonly controlSubPath: string;
   readonly keepUntil: string;
+  /**
+   * The run's SSH route when its git goes over a deploy key (WP-146), so `cliEnvironment` — which is
+   * derived from the handle — answers the same `GIT_SSH_COMMAND` after a launcher restart. Absent is
+   * HTTPS.
+   */
+  readonly gitSsh?: WorkspaceGitSsh;
 }
 
 /**
@@ -445,6 +499,13 @@ export interface WorkspaceCliEnvironment {
   readonly path: string;
   /** The container's git configuration (`credential.helper`), in order. */
   readonly gitConfig: readonly WorkspaceGitConfigEntry[];
+  /**
+   * `GIT_SSH_COMMAND` for a deploy-key run (WP-146, TD-028 decision 13b item 3), `null` for every
+   * other: ssh with no configuration file, the shim's agent socket, the platform-written
+   * `known_hosts` pinned by `HostKeyAlias`, and the shim's `CONNECT` helper as `ProxyCommand`.
+   * Optional on the wire, absent is `null`, so a launcher of an earlier build still parses.
+   */
+  readonly gitSshCommand?: string | null;
 }
 
 // ── Export and retention ─────────────────────────────────────────────────────
@@ -790,5 +851,12 @@ export interface WorkspaceProvider {
 export interface WorkspaceGitCredential {
   readonly host: string;
   readonly username: string;
+  /**
+   * The secret. For an SSH deploy key ({@link ssh} present, WP-146) it is the OpenSSH private key
+   * text, which a helper writes to a `0600` file on its own tmpfs and the shim's credential socket
+   * never answers.
+   */
   readonly password: string;
+  /** Present for a deploy key (TD-028 decision 13b): the route a helper's git takes over SSH. */
+  readonly ssh?: WorkspaceGitSsh;
 }

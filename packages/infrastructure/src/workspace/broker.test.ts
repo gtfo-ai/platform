@@ -119,3 +119,49 @@ describe('run credential broker', () => {
     expect(broker.answer(OTHER, HOST)?.password).toBe(`${SECRET}-2`);
   });
 });
+
+/** WP-146 (TD-028 decision 13b item 2): a deploy key is held with its route and never answered. */
+describe('a deploy key in the broker', () => {
+  const SSH = {
+    publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf',
+    httpsPrefix: 'https://gitlab.com/',
+    sshPrefix: 'ssh://git@altssh.gitlab.com:443/',
+    connectHost: 'altssh.gitlab.com',
+    connectPort: 443,
+    hostKeyAlias: 'gitlab.com',
+    knownHosts: [
+      'gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf',
+    ],
+  };
+  const KEY = carried({
+    username: 'git',
+    password: 'FAKE-openssh-private-key-0001',
+    source: 'deploy_key',
+  });
+
+  it('never answers the workspace’s cred.get with the key, even for the exact host', () => {
+    const broker = new RunCredentialBroker();
+    broker.hold({ runId: RUN, readOnly: false, credential: KEY, ssh: SSH });
+    expect(broker.answer(RUN, HOST)).toBeNull();
+    // The platform side's own helpers get it, with the route they take.
+    expect(broker.credentialFor(RUN)).toEqual({
+      host: HOST,
+      username: 'git',
+      password: 'FAKE-openssh-private-key-0001',
+      ssh: SSH,
+    });
+  });
+
+  it('holds it for a read-only run (it cannot be narrowed), and refuses it without its route', () => {
+    const broker = new RunCredentialBroker();
+    expect(() =>
+      broker.hold({ runId: RUN, readOnly: true, credential: KEY, ssh: SSH }),
+    ).not.toThrow();
+    expect(() => broker.hold({ runId: OTHER, readOnly: false, credential: KEY })).toThrow(
+      WorkspaceError,
+    );
+    expect(() =>
+      broker.hold({ runId: OTHER, readOnly: false, credential: carried(), ssh: SSH }),
+    ).toThrow(/held with its SSH route and nothing else is/);
+  });
+});
