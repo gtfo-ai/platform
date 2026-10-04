@@ -227,8 +227,9 @@ also at **Integrations → Jira Cloud → Setup guide**.
   Progress*, *In Review*, *Done* — only where your workflow has that status (product/19 § 6). Use a
   ticket you do not mind being commented on and moved.
 - **A ticket's identity is its Jira issue id** (WP-134, `1c8b6b1c`): a ticket moved to another Jira
-  project keeps its id, so it meets the task it already has rather than starting a second one. Put
-  both projects in `project_keys` if tickets move between them.
+  project keeps its id, so it meets the task it already has rather than starting a second one, and
+  its later edits reach that task, which follows it to the new key (WP-145). Put both projects in
+  `project_keys` if tickets move between them.
 
 ## 3. `.env`
 
@@ -576,6 +577,8 @@ docker compose up -d                              # run
 - **No password change screen**, and no account management beyond the user list in **Settings**.
 - **The business interview is a form**, not a conversation (Q102); **editing a knowledge page or the
   pipeline in the browser** is not built (user guide § 13).
-- **Edits to a Jira ticket moved to another project** do not reach its task: they arrive under the
-  new key, and the edit path still looks the task up by key (WP-134's discovered work).
+- **A Jira ticket moved to another project keeps its old key on the branch and the merge request**
+  (WP-145): edits made after the move reach its task by the issue id, by webhook and by poll, and
+  the task shows the new key, but the branch stays `agentic/<old key>` and the merge request is not
+  retitled. Whether Jira's search resolves the old key was not measured; the poll asks by id.
 - **Jira Data Center** is not supported; this is Jira Cloud only.

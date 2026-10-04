@@ -18,6 +18,7 @@
 import {
   isoDateTimeSchema,
   nonEmptyStringSchema,
+  ticketIdSchema,
   ticketRefSchema,
   urlSchema,
   workpadRefSchema,
@@ -131,10 +132,24 @@ export const ticketMatchRuleSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('status'), status: nonEmptyStringSchema }),
   z.strictObject({ kind: z.literal('epic'), epic_key: nonEmptyStringSchema }),
   z.strictObject({ kind: z.literal('query'), query: nonEmptyStringSchema }),
-  z.strictObject({
-    kind: z.literal('keys'),
-    keys: z.array(nonEmptyStringSchema).min(1).max(MAX_TICKET_MATCH_KEYS),
-  }),
+  z
+    .strictObject({
+      kind: z.literal('keys'),
+      keys: z.array(nonEmptyStringSchema).max(MAX_TICKET_MATCH_KEYS),
+      /**
+       * The provider's stable ids of tickets to read **by id** (WP-145, PROGRESS backlog 437): a
+       * live task that recorded its issue's id is asked by it, because a moved issue answers under
+       * its new key and whether a search resolves the old one is not measured. A task with no id is
+       * asked by `keys`. Together at most {@link MAX_TICKET_MATCH_KEYS}, and at least one.
+       */
+      ids: z.array(ticketIdSchema).max(MAX_TICKET_MATCH_KEYS).optional(),
+    })
+    .refine(
+      (rule) =>
+        rule.keys.length + (rule.ids?.length ?? 0) >= 1 &&
+        rule.keys.length + (rule.ids?.length ?? 0) <= MAX_TICKET_MATCH_KEYS,
+      { message: `a keys rule names 1 to ${MAX_TICKET_MATCH_KEYS} tickets, by key or by id` },
+    ),
 ]);
 
 /** Just enough of a match to build `ticket.matched` (technical/02) without a second read. */
@@ -302,8 +317,9 @@ export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabi
        * answer the others (WP-134, PROGRESS backlog 375). Called at most once per call, with keys
        * from the caller's own list only, and never for a key that merely had no change in the
        * window. A provider whose search does not refuse an unknown key (the fake) never calls it.
+       * `ids` is the same for the rule's `ids` (WP-145): the asked-for ids the provider refused.
        */
-      readonly onUnreadableKeys?: (keys: readonly string[]) => void;
+      readonly onUnreadableKeys?: (keys: readonly string[], ids: readonly string[]) => void;
     },
   ) => Promise<readonly TicketMatch[]>;
 

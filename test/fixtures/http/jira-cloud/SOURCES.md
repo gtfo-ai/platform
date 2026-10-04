@@ -74,6 +74,21 @@ a label and pointing the URL at a domain that does not exist changed no test at 
   relies on when it carries the issue's `id` as `TicketRef.id`. No fixture: the webhook and issue
   documents above already carry `id` beside `key`, and the replay's `moveIssue` (divergence 10)
   answers an old key under the new one.
+- `https://confluence.atlassian.com/jirasoftwareserver/advanced-searching-fields-reference-939938743.html`
+  — retrieved 2026-10-04 (WP-145, backlog 437): the JQL fields reference's *Issue key* section —
+  *"Allows searching for issues using their unique identifier or ID number"*, syntax `issueKey`,
+  aliases `id`, `issue`, `key`, operators including `IN`. The Data Center page, because the Cloud
+  page above renders client-side and its text could not be read; that Cloud's `search/jql` accepts
+  `id in (…)` is **inferred**. `search-jql-by-id-after-move.json` is that read after a move — the
+  issue's id answering it under its new key, inferred from this page and the moved-issues article
+  above — and the adapter asks a live task's ticket by the id the task recorded rather than by its
+  key. The replay answers `id in (…)` from its state (divergence 11).
+- `https://jira.atlassian.com/browse/JRASERVER-30245` — retrieved 2026-10-04 (WP-145): *"Have JIRA
+  Search Function Return Results When Searching Legacy Issue Keys"* (2012, Server, closed as a
+  duplicate of JRASERVER-30678, no fix version) reports that a JQL query naming a moved issue's
+  former key *"breaks instead of returning the updated result"*. Whether today's Cloud resolves a
+  former key in JQL is **not measured** and nothing here relies on it: that is why the poll asks by
+  id, and why the replay refuses an old key in `key in (…)` (divergence 10). No fixture.
 
 ## What is deliberately **not** in a fixture
 

@@ -225,6 +225,12 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     path_count: 1,
     truncated: false,
   },
+  'task.ticket.rekeyed': {
+    ...taskScoped,
+    ticket: { ...ticket, key: 'NEW-5', id: '10001' },
+    from_key: 'PROJ-1',
+    from_url: 'https://example.atlassian.net/browse/PROJ-1',
+  },
   'task.mr.measured': {
     ...taskScoped,
     mr,

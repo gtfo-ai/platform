@@ -587,6 +587,59 @@ describe('jira-cloud — reaching the provider', () => {
       );
     });
 
+    /**
+     * WP-145 (PROGRESS backlog 437, criterion 2): the poll's live re-read asks a task's ticket by the
+     * issue id the task recorded, so an issue moved to another project — which answers under its new
+     * key, and whose old key a search is not known to resolve (the replay refuses it, divergence
+     * 10) — is still found, under the key it holds now.
+     */
+    it('finds a moved issue by its id under its new key, where its old key is refused (WP-145)', async () => {
+      binding.replay.moveIssue('ACME-1', 'NEW-5');
+      const reported: [readonly string[], readonly string[]][] = [];
+      const matches = await binding.port.matchTickets(
+        { kind: 'keys', keys: ['ACME-2'], ids: ['10001'] },
+        { limit: 2, onUnreadableKeys: (keys, ids) => reported.push([keys, ids]) },
+      );
+      expect(
+        matches.map((match) => match.ref).toSorted((a, b) => a.key.localeCompare(b.key)),
+      ).toMatchObject([
+        { key: 'ACME-2', id: '10002' },
+        { key: 'NEW-5', id: '10001' },
+      ]);
+      expect(reported).toEqual([]);
+      expect(binding.replay.requests.map((request) => request.query.jql)).toEqual([
+        '(id in (10001) OR key in ("ACME-2")) ORDER BY updated ASC',
+      ]);
+      // The canary's other half: by its old key the moved issue is not read at all.
+      binding.replay.resetRequests();
+      const byOldKey = await binding.port.matchTickets(
+        { kind: 'keys', keys: ['ACME-1'] },
+        { onUnreadableKeys: (keys, ids) => reported.push([keys, ids]) },
+      );
+      expect(byOldKey).toEqual([]);
+      expect(reported).toEqual([[['ACME-1'], []]]);
+    });
+
+    it('reads the by-id answer after a move in its documented shape (WP-145, search-jql-by-id-after-move.json)', async () => {
+      binding.replay.script('search-jql-by-id-after-move.json');
+      const matches = await binding.port.matchTickets({ kind: 'keys', keys: [], ids: ['10001'] });
+      expect(matches.map((match) => match.ref)).toMatchObject([{ key: 'NEW-5', id: '10001' }]);
+      expect(binding.replay.requests[0]?.query.jql).toBe('id in (10001) ORDER BY updated ASC');
+    });
+
+    it('bisects a refused id like a refused key, and never writes an id that is not a Jira id (WP-145)', async () => {
+      const reported: [readonly string[], readonly string[]][] = [];
+      const matches = await binding.port.matchTickets(
+        { kind: 'keys', keys: [], ids: ['10001', '99999', 'abc'] },
+        { limit: 3, onUnreadableKeys: (keys, ids) => reported.push([keys, ids]) },
+      );
+      expect(matches.map((match) => match.ref.key)).toEqual(['ACME-1']);
+      expect(reported).toEqual([[[], ['99999', 'abc']]]);
+      const asked = binding.replay.requests.map((request) => request.query.jql ?? '');
+      expect(asked[0]).toBe('id in (10001, 99999) ORDER BY updated ASC');
+      expect(asked.some((jql) => jql.includes('abc'))).toBe(false);
+    });
+
     it('pages through nextPageToken up to the limit, oldest first (WP-87 review round 2)', async () => {
       // A bulk: more labelled tickets than one replay page (REPLAY_SEARCH_PAGE_CAP).
       for (let index = 0; index < 45; index += 1) {

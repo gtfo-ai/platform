@@ -112,6 +112,22 @@ interface StageRow {
 const clone = <T>(value: T): T => structuredClone(value);
 
 /**
+ * Whether a `ticket.updated` reaches a task (WP-145): by the stable id when both carry one, by the
+ * key when the task has none or the signal carries none — the SQL predicate of `recordTicketSignal`.
+ */
+const ticketSignalReaches = (
+  stored: StoredTask,
+  signal: { readonly ticketKey: string; readonly ticketId?: string | null },
+): boolean => {
+  const taskId = stored.task.ticket.id ?? null;
+  const signalId = signal.ticketId ?? null;
+  if (signalId !== null && taskId !== null) {
+    return taskId === signalId;
+  }
+  return stored.task.ticket.key === signal.ticketKey;
+};
+
+/**
  * An ended run nobody measured — the SQL adapter's `unmeasuredEndedRunSql` over this store's rows:
  * terminal, and no figure (`cost` null is both columns null, `finish` writing one or the other).
  */
@@ -477,7 +493,7 @@ export const createMemoryPipelineStore = (
         if (
           current.task.projectId !== signal.projectId ||
           current.task.ticket.provider !== signal.provider ||
-          current.task.ticket.key !== signal.ticketKey ||
+          !ticketSignalReaches(current, signal) ||
           current.task.state === 'done' ||
           current.task.state === 'cancelled'
         ) {
@@ -492,6 +508,53 @@ export const createMemoryPipelineStore = (
         moved += 1;
       }
       return moved;
+    },
+    listLiveByTicketId: async (_tx, query) =>
+      [...tasks.values()]
+        .filter(
+          (stored) =>
+            stored.task.projectId === query.projectId &&
+            stored.task.ticket.provider === query.provider &&
+            stored.task.ticket.id === query.ticketId &&
+            stored.task.state !== 'done' &&
+            stored.task.state !== 'cancelled',
+        )
+        .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
+        .map(readTask),
+    rekeyTicket: async (_tx, taskId, change) => {
+      const current = tasks.get(taskId);
+      if (
+        current === undefined ||
+        current.task.ticket.key !== change.fromKey ||
+        current.task.state === 'done' ||
+        current.task.state === 'cancelled'
+      ) {
+        return false;
+      }
+      // The `(project_id, ticket_key, mode)` unique key, refused rather than raised (the port says why).
+      const holder = [...tasks.values()].find(
+        (other) =>
+          other.task.id !== taskId &&
+          other.task.projectId === current.task.projectId &&
+          other.task.ticket.key === change.ticketKey &&
+          other.task.mode === current.task.mode,
+      );
+      if (holder !== undefined) {
+        return false;
+      }
+      tasks.set(
+        taskId,
+        clone({
+          ...current,
+          task: {
+            ...current.task,
+            ticket: { ...current.task.ticket, key: change.ticketKey, url: change.ticketUrl },
+          },
+          branch: current.branch ?? change.pinBranch,
+          version: current.version + 1,
+        }),
+      );
+      return true;
     },
     saveMergeRequestHead: async (_tx, taskId, head) => {
       const current = tasks.get(taskId);

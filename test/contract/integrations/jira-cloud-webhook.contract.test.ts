@@ -714,6 +714,41 @@ describe('jira-cloud: a moved issue (WP-134)', () => {
     expect((matched?.payload as { ticket?: unknown } | undefined)?.ticket).toEqual(read.ref);
   });
 
+  /**
+   * WP-145 (PROGRESS backlog 437, criterion 2): an **edit** made after the move — not a pick-up —
+   * normalises to `ticket.updated` under the new key with the issue's unchanged id, which is what
+   * the ticket signal handler matches the task created under the old key by
+   * (`provider-signals.test.ts` › "ticket.updated after the issue moved (WP-145)").
+   */
+  it('an edit after the move is ticket.updated under the new key, with the id the task recorded (WP-145)', async () => {
+    const binding = createJiraBinding({
+      config: { pickup_status: 'In Progress', pickup_label: null, project_keys: ['ACME', 'NEW'] },
+    });
+    binding.replay.moveIssue('ACME-1', 'NEW-5');
+    const result = await binding.port.inbound.normalise(
+      binding.replay.delivery('webhook-issue-updated-summary.json', {
+        patch: (body) => {
+          (body.issue as { key: string }).key = 'NEW-5';
+        },
+      }),
+      {
+        projectId: JIRA_PROJECT_ID,
+        integrationId: JIRA_INTEGRATION_ID,
+        resolveUser: () => null,
+        resolveThread: async () => null,
+      },
+    );
+    const updated = result.events.filter((event) => event.type === 'ticket.updated');
+    expect(updated).toHaveLength(1);
+    expect((updated[0]?.payload as { ticket?: unknown } | undefined)?.ticket).toEqual({
+      provider: 'jira-cloud',
+      key: 'NEW-5',
+      url: 'https://acme-example.atlassian.net/browse/NEW-5',
+      id: '10001',
+    });
+    expect(result.events.map((event) => event.type)).not.toContain('ticket.matched');
+  });
+
   it('carries no id rather than one Jira did not send in its documented shape', async () => {
     const binding = createJiraBinding({
       config: { pickup_status: 'In Progress', pickup_label: null },

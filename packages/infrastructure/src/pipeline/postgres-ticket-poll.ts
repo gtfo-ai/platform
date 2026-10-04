@@ -88,21 +88,23 @@ export const createPostgresTicketPollStore = (
 ): TicketPollStore => ({
   ...bindingPollStatements(options.sql, 'task_management', 'poll_cursor'),
   /**
-   * WP-110 (backlog 298): the live tasks' ticket keys, the set `recordTicketSignal` stamps
+   * WP-110 (backlog 298): the live tasks' tickets, the set `recordTicketSignal` stamps
    * (`state not in ('done', 'cancelled')`), most recently touched first — served by
    * `tasks (project_id, state)`.
    */
-  liveTicketKeys: async (binding, provider, limit) => {
-    const { rows } = await options.sql.query<{ ticket_key: string }>(
-      `select ticket_key
+  liveTickets: async (binding, provider, limit) => {
+    // WP-145: one row per issue — by its id where a task recorded one (the key it is grouped
+    // under is any of its tasks' keys; the re-read asks by the id), by the key otherwise.
+    const { rows } = await options.sql.query<{ ticket_key: string; ticket_id: string | null }>(
+      `select min(ticket_key) as ticket_key, ticket_id
          from tasks
         where project_id = $1 and ticket_provider = $2 and state not in ('done', 'cancelled')
-        group by ticket_key
-        order by max(updated_at) desc, ticket_key
+        group by coalesce('id:' || ticket_id, 'key:' || ticket_key), ticket_id
+        order by max(updated_at) desc, min(ticket_key)
         limit $3`,
       [binding.projectId, provider, limit],
     );
-    return rows.map((row) => row.ticket_key);
+    return rows.map((row) => ({ key: row.ticket_key, id: row.ticket_id }));
   },
 });
 

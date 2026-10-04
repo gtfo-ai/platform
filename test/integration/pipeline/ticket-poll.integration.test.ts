@@ -305,7 +305,7 @@ describe('a poll over the fake provider', () => {
 /**
  * WP-110, PROGRESS backlog 298: a **status** pick-up rule stops matching a ticket the moment the
  * platform's status mapping moves it on. The poll re-reads the binding's live tasks' tickets — the
- * `tasks` rows the store's `liveTicketKeys` answers — and records an edit to one as
+ * `tasks` rows the store's `liveTickets` answers — and records an edit to one as
  * `ticket.updated` only. That the stamp then lands on the live task is the e2e tier's
  * (`test/e2e/pipeline/ticket-poll.e2e.test.ts`), because it needs the dispatcher.
  */
@@ -352,6 +352,34 @@ describe('a status-rule binding’s live tasks (WP-110, backlog 298)', () => {
           where project_id = $1 and integration_id = $2`,
         [projectId, integrationId],
       );
+    }
+  });
+});
+
+/**
+ * WP-145, PROGRESS backlog 437: the live re-read asks a task's ticket by the issue id the task
+ * recorded (migration 0077), so `liveTickets` answers one row per **issue** — by its id where a task
+ * has one, by its key where none does — and never asks the old key of a task that knows its id.
+ */
+describe('the live tasks’ tickets, by id where the task recorded one (WP-145, backlog 437)', () => {
+  it('answers one row per issue: by id for tasks that carry one, by key for those that do not', async () => {
+    const binding = { projectId, integrationId };
+    try {
+      await pool.query(
+        `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state, current_stage, mode, ticket_id)
+           values ($1, $2, 'OLD-1', 'https://tickets.example.test/browse/OLD-1', 'feature', 'active', 'implementation', 'normal', '10001'),
+                  ($1, $2, 'OLD-1', 'https://tickets.example.test/browse/OLD-1', 'feature', 'active', 'implementation', 'shadow', '10001'),
+                  ($1, $2, 'ACME-9', 'https://tickets.example.test/browse/ACME-9', 'feature', 'active', 'implementation', 'normal', null),
+                  ($1, $2, 'DONE-1', 'https://tickets.example.test/browse/DONE-1', 'feature', 'done', null, 'normal', '10003')`,
+        [projectId, FAKE_TASK_MANAGEMENT_PROVIDER_ID],
+      );
+      const live = await store().liveTickets(binding, FAKE_TASK_MANAGEMENT_PROVIDER_ID, 10);
+      expect(live.toSorted((a, b) => a.key.localeCompare(b.key))).toEqual([
+        { key: 'ACME-9', id: null },
+        { key: 'OLD-1', id: '10001' },
+      ]);
+    } finally {
+      await pool.query(`delete from tasks where project_id = $1`, [projectId]);
     }
   });
 });

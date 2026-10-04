@@ -1235,6 +1235,115 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect((await store.tasks.load(tx, plain.task.id))?.task.ticket).not.toHaveProperty('id');
       });
 
+      /**
+       * WP-145 (PROGRESS backlog 437): a `ticket.updated` reaches its task by the issue's stable id
+       * first, and by the key only for a task that recorded none — on both stores, because a fake
+       * that matched by key alone would certify the defect this closes (rule 23).
+       */
+      it('records a ticket signal by the stable id first, and by the key only for a task with no id (WP-145)', async () => {
+        const withId = (key: string, id: string): StoredTask => {
+          const base = task({}, key);
+          return { ...base, task: { ...base.task, ticket: { ...base.task.ticket, id } } };
+        };
+        const moved = withId('SIGOLD-1', '30001');
+        const plain = task({}, 'SIGPLAIN-1');
+        await store.tasks.insert(tx, moved);
+        await store.tasks.insert(tx, plain);
+        const at = '2026-06-01T09:10:00.000Z' as IsoDateTime;
+        const signal = { projectId, provider: 'fake-jira', at };
+
+        // The moved issue's edit, under its new key: reaches the task by id.
+        expect(
+          await store.tasks.recordTicketSignal(tx, {
+            ...signal,
+            ticketKey: 'SIGNEW-5',
+            ticketId: '30001',
+          }),
+        ).toBe(1);
+        expect((await store.tasks.load(tx, moved.task.id))?.ticketSignalAt).toBe(at);
+        // Canary: an unrelated issue that holds the old key now reaches no task that knows its id.
+        const later = '2026-06-01T09:20:00.000Z' as IsoDateTime;
+        expect(
+          await store.tasks.recordTicketSignal(tx, {
+            ...signal,
+            at: later,
+            ticketKey: 'SIGOLD-1',
+            ticketId: '30999',
+          }),
+        ).toBe(0);
+        expect((await store.tasks.load(tx, moved.task.id))?.ticketSignalAt).toBe(at);
+        // Canary: a task with no id still matches by key, whatever id the signal carries.
+        expect(
+          await store.tasks.recordTicketSignal(tx, {
+            ...signal,
+            ticketKey: 'SIGPLAIN-1',
+            ticketId: '30002',
+          }),
+        ).toBe(1);
+        expect((await store.tasks.load(tx, plain.task.id))?.ticketSignalAt).toBe(at);
+      });
+
+      it('lists the live tasks of an issue id, and re-keys one compare-and-set, pinning a missing branch (WP-145)', async () => {
+        const base = task({}, 'MOVOLD-1');
+        const moved: StoredTask = {
+          ...base,
+          branch: null,
+          task: { ...base.task, ticket: { ...base.task.ticket, id: '40001' } },
+        };
+        await store.tasks.insert(tx, moved);
+        const query = { projectId, provider: 'fake-jira', ticketId: '40001' };
+        expect((await store.tasks.listLiveByTicketId(tx, query)).map((row) => row.task.id)).toEqual(
+          [moved.task.id],
+        );
+        const before = (await store.tasks.load(tx, moved.task.id)) as StoredTask;
+
+        const change = {
+          fromKey: 'MOVOLD-1',
+          ticketKey: 'MOVNEW-5',
+          ticketUrl: 'https://jira.example.test/browse/MOVNEW-5',
+          pinBranch: 'agentic/MOVOLD-1',
+        };
+        expect(await store.tasks.rekeyTicket(tx, moved.task.id, change)).toBe(true);
+        const after = (await store.tasks.load(tx, moved.task.id)) as StoredTask;
+        expect(after.task.ticket).toMatchObject({
+          key: 'MOVNEW-5',
+          url: 'https://jira.example.test/browse/MOVNEW-5',
+          id: '40001',
+        });
+        expect(after.branch).toBe('agentic/MOVOLD-1');
+        expect(after.version).toBe(before.version + 1);
+        // A whole-row save over the snapshot read before it is refused (rule 79).
+        await expect(store.tasks.save(tx, before)).rejects.toThrow();
+        // Compare-and-set: the old key no longer matches, so a replay moves nothing.
+        expect(await store.tasks.rekeyTicket(tx, moved.task.id, change)).toBe(false);
+        // A branch already set is kept.
+        expect(
+          await store.tasks.rekeyTicket(tx, moved.task.id, {
+            fromKey: 'MOVNEW-5',
+            ticketKey: 'MOVNEWER-9',
+            ticketUrl: 'https://jira.example.test/browse/MOVNEWER-9',
+            pinBranch: 'agentic/MOVNEW-5',
+          }),
+        ).toBe(true);
+        expect((await store.tasks.load(tx, moved.task.id))?.branch).toBe('agentic/MOVOLD-1');
+        // Another task of the project already holds the key: refused, not raised.
+        const holder = task({}, 'MOVHELD-1');
+        await store.tasks.insert(tx, holder);
+        expect(
+          await store.tasks.rekeyTicket(tx, moved.task.id, {
+            fromKey: 'MOVNEWER-9',
+            ticketKey: 'MOVHELD-1',
+            ticketUrl: 'https://jira.example.test/browse/MOVHELD-1',
+            pinBranch: null,
+          }),
+        ).toBe(false);
+        expect((await store.tasks.load(tx, moved.task.id))?.task.ticket.key).toBe('MOVNEWER-9');
+        // A task with no id is never listed by one.
+        expect(await store.tasks.listLiveByTicketId(tx, { ...query, ticketId: '49999' })).toEqual(
+          [],
+        );
+      });
+
       it('counts the WIP slots by state, not by row', async () => {
         const queued = task({}, 'ACME-Q');
         const active = task({}, 'ACME-A');

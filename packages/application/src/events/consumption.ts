@@ -325,6 +325,10 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // a job redelivered after its append committed cannot count one merge twice, which an additive
   // counter folded one event at a time could not guarantee.
   'task.mr.measured': 'unconsumed',
+  // WP-145, PROGRESS backlog 437: the record that the task followed its ticket's move to a new key.
+  // **An audit entry, not a step** — the key was rewritten in the same transaction by the handler
+  // that appended it, so nothing is left for a consumer to do.
+  'task.ticket.rekeyed': 'unconsumed',
   // WP-61, PROGRESS backlog 114, Q87: the defect-escape trace. **Read, not handled** — the
   // statistics query joins it to `stats_task_delivery` at request time, because "within thirty days
   // of the merge" is a comparison between this event and a delivery that a fold of one event at a
@@ -376,6 +380,7 @@ export const UNCONSUMED_OWNERS: Readonly<Partial<Record<DomainEventType, `WP-${s
     'integration.action.performed': null,
     'integration.action.failed': null,
     'task.mr.measured': null,
+    'task.ticket.rekeyed': null,
     'ticket.bug.traced': null,
   };
 

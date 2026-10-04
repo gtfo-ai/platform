@@ -1062,7 +1062,7 @@ export const ticketReads = (integrations: PipelineIntegrations) => ({
       readonly since: string;
       readonly limit: number;
       /** The port's: the keys a `keys` rule named that the provider refused (WP-134, backlog 375). */
-      readonly onUnreadableKeys?: (keys: readonly string[]) => void;
+      readonly onUnreadableKeys?: (keys: readonly string[], ids: readonly string[]) => void;
     },
     context: CallContext,
   ): Promise<readonly TicketMatch[] | null> => {

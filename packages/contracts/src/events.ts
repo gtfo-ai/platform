@@ -21,6 +21,7 @@ import {
   coveragePctSchema,
   effortSchema,
   externalIdentitySchema,
+  httpUrlSchema,
   idSchema,
   isoDateTimeSchema,
   mergeRequestRefSchema,
@@ -454,6 +455,26 @@ export const taskConflictWarnedEvent = defineEvent('task.conflict.warned', {
   paths: z.array(nonEmptyStringSchema.max(256)).max(20),
   path_count: z.int().nonnegative(),
   truncated: z.boolean(),
+});
+
+/**
+ * The task's ticket is the **same issue under a new key** — the platform followed a move (WP-145,
+ * PROGRESS backlog 437).
+ *
+ * Jira keeps an issue's numeric `id` when it moves to another project and gives it a new key
+ * (`OLD-1` → `NEW-5`). A `ticket.updated` that carries the task's own `ticket_id` under another key
+ * is that move announced, and the `pipeline.ticket.signal` handler rewrites `tasks.ticket_key` and
+ * `ticket_url` through a narrow writer and appends this event on the task's stream as the record of
+ * it, with the system actor — no person decided it. `from_key`/`from_url` are what the row held;
+ * `ticket` is the reference it holds now. **The branch and the merge request keep the old key**: a
+ * task with no branch yet is pinned to `agentic/<from_key>` in the same write, and nothing renames a
+ * pushed branch or retitles a merge request.
+ */
+export const taskTicketRekeyedEvent = defineEvent('task.ticket.rekeyed', {
+  ...taskScoped,
+  ticket: ticketRefSchema,
+  from_key: z.string().min(1).max(255),
+  from_url: httpUrlSchema,
 });
 
 /**
@@ -918,6 +939,7 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   taskLintPostedEvent,
   taskRebaseCheckedEvent,
   taskConflictWarnedEvent,
+  taskTicketRekeyedEvent,
   taskMergeRequestMeasuredEvent,
   ticketBugTracedEvent,
   taskBreakdownDecidedEvent,

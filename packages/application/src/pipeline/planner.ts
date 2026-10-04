@@ -1059,7 +1059,7 @@ export const checkoutOf = (
   }
   /**
    * **A writing Developer run is on its task's branch from its first turn** (WP-138 review round
-   * 1). `tasks.branch` is filled only once a merge request is recorded, so the first Developer run
+   * 1). `tasks.branch` was filled only once a merge request was recorded (WP-145's re-key now also pins it), so the first Developer run
    * used to check out the default branch — and the developer's command policy has no `git
    * checkout`/`switch`/`branch`, while its push allow-list is `git push origin agentic/*`: the push
    * failed, or became a question, and `open_mr` then had nothing to open. The clone helper creates

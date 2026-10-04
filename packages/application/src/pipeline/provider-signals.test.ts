@@ -26,12 +26,22 @@ const stored = (
   id: Id,
   key: string,
   state: TaskState,
-  options: { readonly mode?: 'normal' | 'shadow'; readonly iid?: number | null } = {},
+  options: {
+    readonly mode?: 'normal' | 'shadow';
+    readonly iid?: number | null;
+    readonly ticketId?: string;
+    readonly branch?: string | null;
+  } = {},
 ): StoredTask => ({
   task: {
     id,
     projectId: PROJECT,
-    ticket: { provider: PROVIDER, key, url: `https://jira.example.test/browse/${key}` },
+    ticket: {
+      provider: PROVIDER,
+      key,
+      url: `https://jira.example.test/browse/${key}`,
+      ...(options.ticketId === undefined ? {} : { id: options.ticketId }),
+    },
     template: 'feature',
     mode: options.mode ?? 'normal',
     state,
@@ -54,7 +64,7 @@ const stored = (
   template: { stages: [{ id: 'intake', kind: 'system' }] },
   priorityRank: 3,
   createdAt: '2026-06-01T08:00:00.000Z' as IsoDateTime,
-  branch: 'agentic/acme-1',
+  branch: options.branch === undefined ? 'agentic/acme-1' : options.branch,
   mr:
     options.iid === null || options.iid === undefined
       ? null
@@ -109,10 +119,20 @@ const signal = <T extends 'ticket.updated' | 'mr.updated'>(
   }) as DomainEvent;
 };
 
-const edited = (key: string, occurredAt: string, provider = PROVIDER): DomainEvent =>
+const edited = (
+  key: string,
+  occurredAt: string,
+  provider = PROVIDER,
+  ticketId?: string,
+): DomainEvent =>
   signal('ticket.updated', occurredAt, {
     project_id: PROJECT,
-    ticket: { provider, key, url: `https://jira.example.test/browse/${key}` },
+    ticket: {
+      provider,
+      key,
+      url: `https://jira.example.test/browse/${key}`,
+      ...(ticketId === undefined ? {} : { id: ticketId }),
+    },
     updated_at: occurredAt,
     changed_fields: ['description'],
     truncated: false,
@@ -198,6 +218,104 @@ describe('ticket.updated marks the live tasks of its ticket (Q61 (b))', () => {
     const harness = await harnessWith([]);
     await harness.publish([edited('ACME-404', '2026-06-01T09:05:00.000Z')]);
     expect(harness.store.snapshot()).toEqual([]);
+  });
+});
+
+/**
+ * WP-145 (PROGRESS backlog 437): an edit made after the Jira issue moved to another project arrives
+ * under the new key with the issue's unchanged id, and reaches the task created under the old key.
+ */
+describe('ticket.updated after the issue moved (WP-145)', () => {
+  const MOVED_AT = '2026-06-01T09:05:00.000Z';
+
+  it('reaches the task by its id, moves its key and URL, pins its branch to the old key and records the move', async () => {
+    const harness = await harnessWith([
+      stored(LIVE, 'OLD-1', 'active', { ticketId: '10001', branch: null }),
+    ]);
+    const before = row(harness, LIVE);
+    await harness.publish([edited('NEW-5', MOVED_AT, PROVIDER, '10001')]);
+
+    const after = row(harness, LIVE);
+    // The signal reached it, so the next stage re-reads the ticket — under the key it holds now.
+    expect(after.ticketSignalAt).toBe(MOVED_AT);
+    expect(after.task.ticket).toEqual({
+      provider: PROVIDER,
+      key: 'NEW-5',
+      url: 'https://jira.example.test/browse/NEW-5',
+      id: '10001',
+    });
+    // The work stays on the branch the first Developer run would have used; the token moved.
+    expect(after.branch).toBe('agentic/OLD-1');
+    expect(after.version).toBe(before.version + 1);
+    const recorded = harness.events().filter((event) => event.type === 'task.ticket.rekeyed');
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      stream_type: 'task',
+      stream_id: LIVE,
+      actor: { kind: 'system', component: 'pipeline' },
+      payload: {
+        task_id: LIVE,
+        from_key: 'OLD-1',
+        from_url: 'https://jira.example.test/browse/OLD-1',
+        ticket: { key: 'NEW-5', id: '10001' },
+      },
+    });
+    // A redelivery under the new key moves nothing more and records nothing more.
+    await harness.publish([edited('NEW-5', '2026-06-01T09:06:00.000Z', PROVIDER, '10001')]);
+    expect(row(harness, LIVE).version).toBe(after.version);
+    expect(harness.events().filter((event) => event.type === 'task.ticket.rekeyed')).toHaveLength(
+      1,
+    );
+  });
+
+  it('keeps a branch the task already has, and leaves its merge request alone', async () => {
+    const harness = await harnessWith([
+      stored(LIVE, 'OLD-1', 'active', { ticketId: '10001', branch: 'agentic/OLD-1-r2', iid: 7 }),
+    ]);
+    const before = row(harness, LIVE);
+    await harness.publish([edited('NEW-5', MOVED_AT, PROVIDER, '10001')]);
+    const after = row(harness, LIVE);
+    expect(after.task.ticket.key).toBe('NEW-5');
+    expect(after.branch).toBe('agentic/OLD-1-r2');
+    expect(after.mr).toEqual(before.mr);
+  });
+
+  it('canary: an unrelated issue that now holds the old key does not reach the task', async () => {
+    const harness = await harnessWith([stored(LIVE, 'OLD-1', 'active', { ticketId: '10001' })]);
+    const before = row(harness, LIVE);
+    await harness.publish([edited('OLD-1', MOVED_AT, PROVIDER, '20002')]);
+    expect(row(harness, LIVE)).toEqual(before);
+    expect(harness.events().filter((event) => event.type === 'task.ticket.rekeyed')).toEqual([]);
+  });
+
+  it('canary: a task with no recorded id still matches by key, and is never re-keyed', async () => {
+    const harness = await harnessWith([stored(LIVE, 'ACME-1', 'active')]);
+    await harness.publish([edited('ACME-1', MOVED_AT, PROVIDER, '10001')]);
+    const after = row(harness, LIVE);
+    expect(after.ticketSignalAt).toBe(MOVED_AT);
+    expect(after.task.ticket.key).toBe('ACME-1');
+    // And an update under another key cannot reach it: with no id, its key is its identity.
+    await harness.publish([edited('NEW-5', '2026-06-01T09:06:00.000Z', PROVIDER, '10001')]);
+    expect(row(harness, LIVE).ticketSignalAt).toBe(MOVED_AT);
+  });
+
+  it('leaves the key where another task of the project already holds the new one, and still marks the signal', async () => {
+    const harness = await harnessWith([
+      stored(LIVE, 'OLD-1', 'active', { ticketId: '10001', branch: null }),
+      stored(OTHER, 'NEW-5', 'active'),
+    ]);
+    await harness.publish([edited('NEW-5', MOVED_AT, PROVIDER, '10001')]);
+    const after = row(harness, LIVE);
+    expect(after.task.ticket.key).toBe('OLD-1');
+    expect(after.branch).toBeNull();
+    expect(after.ticketSignalAt).toBe(MOVED_AT);
+    expect(harness.events().filter((event) => event.type === 'task.ticket.rekeyed')).toEqual([]);
+  });
+
+  it('does not re-key a finished task', async () => {
+    const harness = await harnessWith([stored(DONE, 'OLD-1', 'done', { ticketId: '10001' })]);
+    await harness.publish([edited('NEW-5', MOVED_AT, PROVIDER, '10001')]);
+    expect(row(harness, DONE).task.ticket.key).toBe('OLD-1');
   });
 });
 

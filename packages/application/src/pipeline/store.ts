@@ -599,6 +599,11 @@ export interface TaskRepository {
    * write that never touched it — the partition `tasks-column-ownership.test.ts` holds.
    *
    * Answers how many rows moved, so the handler can log a signal that reached no task.
+   *
+   * **By the ticket's stable id first** (WP-145, PROGRESS backlog 437): with a `ticketId`, a task
+   * matches when it carries that id, or when it carries **no** id (a pre-0077 row, or a provider
+   * with none) and has the signal's key — so an unrelated issue that holds a moved issue's old key
+   * reaches no task that knows its own id. Without a `ticketId` the key alone decides, as before.
    */
   readonly recordTicketSignal: (
     tx: Transaction,
@@ -606,9 +611,42 @@ export interface TaskRepository {
       readonly projectId: Id;
       readonly provider: string;
       readonly ticketKey: string;
+      readonly ticketId?: string | null;
       readonly at: IsoDateTime;
     },
   ) => Promise<number>;
+  /**
+   * The **live** tasks (`state not in ('done', 'cancelled')`) whose ticket is `provider`'s issue
+   * `ticketId` (WP-145), oldest first — the tasks a `ticket.updated` under that id may move to a new
+   * key. A task with no recorded id is never answered: its identity is its key.
+   */
+  readonly listLiveByTicketId: (
+    tx: Transaction,
+    query: { readonly projectId: Id; readonly provider: string; readonly ticketId: string },
+  ) => Promise<readonly StoredTask[]>;
+  /**
+   * Moves a live task's ticket to the key its issue holds now — the narrow writer of
+   * `ticket_key`/`ticket_url` (WP-145, PROGRESS backlog 437; until it, both were insert-only).
+   *
+   * **Compare-and-set**: written only while the row still holds `fromKey`, is live, and **no other
+   * task of the project in the same mode holds `ticket.key`** (the `(project_id, ticket_key, mode)`
+   * unique key, which a pre-0077 task created under the new key would otherwise turn into a failed
+   * dispatch). `pinBranch`, when not `null`, fills `branch` **only while it is `null`**
+   * (`coalesce`), so the work keeps the `agentic/<old key>` branch the first Developer run checks
+   * out and `open_mr` opens from. Bumps `version` (rule 79: `branch` is `save`'s column) — which is
+   * also the row lock the caller's append on the task's stream needs before it reads the sequence.
+   * Answers whether the row moved.
+   */
+  readonly rekeyTicket: (
+    tx: Transaction,
+    taskId: Id,
+    change: {
+      readonly fromKey: string;
+      readonly ticketKey: string;
+      readonly ticketUrl: string;
+      readonly pinBranch: string | null;
+    },
+  ) => Promise<boolean>;
   /**
    * Records the merge request the developer's `open_mr` opened or adopted — the one writer that
    * sets `mr_ref` to a merge request (WP-138 ruling (e)).

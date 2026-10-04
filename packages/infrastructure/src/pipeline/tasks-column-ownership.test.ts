@@ -88,6 +88,16 @@ const CO_OWNED_COLUMNS: Readonly<Record<string, readonly RegExp[]>> = {
     // `saveMergeRequestHead`: one key, forward only by the provider's instant, bumping the token.
     /mr_ref\s*=\s*case\s+when\s+\$5\s+then\s+jsonb_set\(mr_ref,\s*'\{head_sha\}'[\s\S]*version\s*=\s*version\s*\+\s*case\s+when\s+\$5[\s\S]*mr_head_at\s*<\s*\$4::timestamptz/,
   ],
+  // WP-145 (PROGRESS backlog 437): `branch` is the aggregate's (`save`), and `rekeyTicket` fills it
+  // **only while it is null** — the old key's branch, pinned when a moved issue's task changes key,
+  // so the work stays on `agentic/<old key>`. It bumps the token, so `save` over a snapshot read
+  // before it is refused rather than writing the `null` back (rule 79).
+  branch: [
+    // `save`: the whole aggregate, guarded by the version.
+    /set\s+state\s*=\s*\$2::task_state,\s*current_stage\s*=\s*\$3,\s*branch\s*=\s*\$4/,
+    // `rekeyTicket`: coalesce only, compare-and-set on the old key, bumping the token.
+    /branch\s*=\s*coalesce\(branch,\s*\$5::text\),\s*version\s*=\s*version\s*\+\s*1[\s\S]*ticket_key\s*=\s*\$2/,
+  ],
 };
 
 /** The owner of every `tasks` column that any statement in this repository writes. */
@@ -119,6 +129,10 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     // ticket (WP-60, Q61 (b)). Narrow because its writer is an event handler on a *project*-stream
     // event, ordered with respect to none of the task's own transactions.
     'ticket_signal_at',
+    // `rekeyTicket` — the key and URL a moved issue holds now, compare-and-set on the old key
+    // (WP-145, backlog 437). Insert-only until it; its third column, `branch`, is co-owned (above).
+    'ticket_key',
+    'ticket_url',
     // `saveMergeRequestHead` — the provider's instant of the recorded head, which orders the head's
     // moves (WP-60 review round 1). Its other column, `mr_ref`, is co-owned (above).
     'mr_head_at',

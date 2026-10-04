@@ -42713,3 +42713,85 @@ Verification, round 1 (started at load < 12 after the coordinator's 40-minute wa
 - `RunHandle.stop` for `shutdown` waits the full 5 s interrupt grace when the CLI does not answer; a real CLI's interrupt timing is unmeasured (WP-33's credential).
 
 **Residuals.** A SIGKILL, an OOM kill, `docker kill` or the 45 s grace running out are still the lease sweep's (`lease_expired`, then *Needs human*). Work the interrupted run had not pushed is lost. With several stopping runners, the 10 s budget is per run in parallel, not summed (stops are issued together).
+
+#### WP-145
+
+**`ticket.updated` reaches its task after the Jira issue moved — 437 folded.** No Docker by hand, no
+credential, no Jira site.
+
+**Measured first (criterion 1) — documented, not recorded.** The Cloud JQL fields page renders
+client-side (its HTML carries no field text), so the *Issue key* section was read on the Data Center
+page: the field searches *"using their unique identifier or ID number"*, aliases `id`/`issue`/`key`,
+operators incl. `IN`. A move keeps the id (WP-134's KB article). JRASERVER-30245 (2012, Server, closed
+as a duplicate, no fix) reports JQL naming a former key *"breaks"*. So
+`test/fixtures/http/jira-cloud/search-jql-by-id-after-move.json` is **`inferred`**, both sources are in
+`SOURCES.md`, and `docs/TODO.md`'s row keeps the three reads owed on a Cloud site. Nothing relies on an
+old key resolving.
+
+**Decisions.**
+- **(a)** `recordTicketSignal` takes `ticketId`: with one, a task matches by id when it has one, by key
+  only when it has none; without one, by key (as before). `ticket.updated` already carried the id
+  (WP-134's `issueRef`) on the webhook and the poll.
+- **(b)** new narrow writer `rekeyTicket` (compare-and-set on the old key, live rows, refused — not
+  raised — while another task of the project holds the new key in the same mode); it sets
+  `ticket_key`/`ticket_url`, fills `branch` with `agentic/<old key>` **only while null** (normal-mode
+  tasks), bumps `version`. `branch` is now co-owned by `save` and `rekeyTicket`
+  (`tasks-column-ownership.test.ts`). **Audited** as a new event `task.ticket.rekeyed` on the **task**
+  stream, `PIPELINE_ACTOR`, appended in the handler's transaction after the writer's row lock and a
+  re-load (conflict-warning's order); declared unconsumed. The MR is never retitled. Done/cancelled
+  tasks are not re-keyed.
+- **(c)** the port's `keys` rule gains `ids` (1–100 terms together); the poll store's
+  `liveTicketKeys` became `liveTickets` (`{key, id}`, one row per issue); Jira builds
+  `(id in (10001) OR key in ("A-7"))`, writes only decimal-digit ids, bare; the bisection runs over
+  ids and keys alike; `onUnreadableKeys(keys, ids)`. The fake carries no ids (unchanged divergence).
+
+**Criteria and tests (each canary run, then restored).**
+1. Fixture above; `test/contract/integrations/jira-cloud.contract.test.ts` › "reads the by-id answer
+   after a move in its documented shape (WP-145, search-jql-by-id-after-move.json)".
+2. `jira-cloud.contract.test.ts` › "finds a moved issue by its id under its new key, where its old key
+   is refused (WP-145)", › "bisects a refused id like a refused key, and never writes an id that is not
+   a Jira id (WP-145)"; `jira-cloud-webhook.contract.test.ts` › "an edit after the move is
+   ticket.updated under the new key, with the id the task recorded (WP-145)";
+   `packages/application/src/pipeline/provider-signals.test.ts` › "reaches the task by its id, moves its
+   key and URL, pins its branch to the old key and records the move" (+ branch kept, key held by
+   another task, done task); `packages/application/src/pipeline/ticket-poll.test.ts` › "asks a live task’s
+   ticket by its id when the task recorded one, and records the moved issue under its new key
+   (WP-145)"; `test/contract/support/pipeline-store-suite.ts` (memory + Postgres) › "lists the live
+   tasks of an issue id, and re-keys one compare-and-set, pinning a missing branch (WP-145)";
+   `test/integration/pipeline/ticket-poll.integration.test.ts` › "answers one row per issue: by id for
+   tasks that carry one, by key for those that do not".
+3. Canaries: provider-signals › "canary: an unrelated issue that now holds the old key does not reach
+   the task", › "canary: a task with no recorded id still matches by key, and is never re-keyed"; store
+   suite › "records a ticket signal by the stable id first, …". Mutations: memory id clause off → 3
+   fail; Postgres predicate key-only → the Postgres case fails; handler's re-key off → 2 fail; poll asks
+   by key only → 1 fails; Jira id clause spelled as `key in` → 3 fail.
+
+**Sentences falsified, each judged.** `first-local-test.md:579` (*edits … do not reach its task* —
+rewritten as the branch/MR residual) and :229 (amended); Jira `setup-guide.md` moved-ticket paragraph
+(amended); user guide § 3 (amended); technical/03 `tasks` (*`ticket_key` insert-only* by implication —
+amendment added; `ticket_id` *never updated* still true); technical/02 `ticket.updated` row (amended)
+and a `task.ticket.rekeyed` row (`—`, so the 17-row divergence count is unchanged); technical/06 poll
+paragraph (amended); `ticket-poll.ts` and `provider-signals.ts` docblocks (amended). Judged and left:
+migration 0044's comment naming the key predicate (migrations are never edited; it is a note about an
+index); `manual-start.ts:66` residual (still true); `consumption.ts:165` (*every live task of the
+ticket* — still true, the set is now id-first).
+
+**Verification.** `pnpm run -s verify` **PASS**; `verify:integration` **PASS** (812); `verify:e2e`
+**PASS** (278/278, 617 s); `verify:static` and `scripts/citations.test.ts` **PASS** after the last doc
+edits; `verify:ui` not run (no web change). Loads read before each tier (one wait, 35 → 7.7). **Machine
+rule breach, recorded**: a two-file integration run started at a one-minute load of 12.9 (read and
+started without waiting). Scratch under `/private/tmp/claude-501/wp145/`.
+
+**Discovered work** (for the refiner):
+- `ask/commands.ts` (`ticket.comment.added` → `findByTicket`) still asks by key only: a comment on a
+  moved issue that arrives before any `ticket.updated` re-keys the task finds no task. Passing the id
+  would reintroduce the old-key collision unless `findByTicket` became id-first too.
+- Whether Jira sends `jira:issue_updated` for a move itself (with a `key`/`project` changelog) is not
+  measured; until an edit arrives, a moved task shows its old key.
+- The workpad comment and the status mapping address the issue by the task's key; after a re-key that
+  is the new key, before it the old one (Jira redirects `GET issue/{old}`; whether it redirects
+  `PUT …/comment/{id}` and `POST …/transitions` is not measured).
+
+**Residuals.** A task created before 0077 has no id: its edits after a move are still lost, and it is
+never re-keyed. A task another task of the project already holds the new key for keeps its old key
+(logged). The branch and the merge-request title keep the old key by ruling (b).

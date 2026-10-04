@@ -746,34 +746,49 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
    */
   const searchKeys = async (
     keys: readonly string[],
+    ids: readonly string[],
     since: string | null,
     limit: number,
-    onUnreadableKeys: ((keys: readonly string[]) => void) | undefined,
+    onUnreadableKeys: ((keys: readonly string[], ids: readonly string[]) => void) | undefined,
   ): Promise<TicketMatch[]> => {
     let searches = 0;
-    const unreadable: string[] = [];
-    /** Keys refused one by one with no key named — and the refusal, to throw if that is all of them. */
-    const probed: { keys: string[]; refusal: unknown } = { keys: [], refusal: null };
-    const ask = async (asked: readonly string[]): Promise<TicketMatch[]> => {
+    // WP-145: the terms are the rule's ids and keys together, so one search asks for both and a
+    // refusal is narrowed over both. An id Jira cannot have (not 1–20 decimal digits, the shape
+    // `issueRef` carries) is never written into JQL: it is unreadable before any search.
+    const askable = (id: string): boolean => JIRA_ISSUE_ID.test(id);
+    const terms: SearchTerm[] = [
+      ...ids.filter(askable).map((value) => ({ field: 'id' as const, value })),
+      ...keys.map((value) => ({ field: 'key' as const, value })),
+    ];
+    const unreadable: SearchTerm[] = ids
+      .filter((id) => !askable(id))
+      .map((value) => ({ field: 'id' as const, value }));
+    /** Terms refused one by one with nothing named — and the refusal, to throw if that is all of them. */
+    const probed: { terms: SearchTerm[]; refusal: unknown } = { terms: [], refusal: null };
+    const ask = async (asked: readonly SearchTerm[]): Promise<TicketMatch[]> => {
       searches += 1;
       try {
         return await searchUpTo(
-          buildJql({ kind: 'keys', keys: [...asked] }, since, options.clock.now()),
+          buildJql(ruleOfTerms(asked), since, options.clock.now()),
           Math.min(limit, asked.length),
         );
       } catch (error) {
         if (!isSearchRefusal(error) || searches >= MAX_KEY_SEARCHES) {
           throw error;
         }
-        const named = missingIssueKeysIn(error, asked);
+        const namedValues = missingIssueKeysIn(
+          error,
+          asked.map((term) => term.value),
+        );
+        const named = asked.filter((term) => namedValues.includes(term.value));
         if (named.length > 0) {
           unreadable.push(...named);
-          const rest = asked.filter((key) => !named.includes(key));
+          const rest = asked.filter((term) => !named.includes(term));
           return rest.length === 0 ? [] : ask(rest);
         }
         if (asked.length === 1) {
           unreadable.push(...asked);
-          probed.keys.push(...asked);
+          probed.terms.push(...asked);
           probed.refusal = error;
           return [];
         }
@@ -782,14 +797,18 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
         return [...first, ...(await ask(asked.slice(middle)))];
       }
     };
-    const found = await ask(keys);
-    if (probed.keys.length > 0 && probed.keys.length >= keys.length) {
-      // Every key refused on its own and none named: the refusal was about the query, not a key,
-      // and an empty answer would read as "nothing changed" (rule 16). Jira's own error, as before.
+    const found = terms.length === 0 ? [] : await ask(terms);
+    if (probed.terms.length > 0 && probed.terms.length >= terms.length) {
+      // Every term refused on its own and none named: the refusal was about the query, not a
+      // ticket, and an empty answer would read as "nothing changed" (rule 16). Jira's own error.
       throw probed.refusal;
     }
     if (unreadable.length > 0) {
-      onUnreadableKeys?.(keys.filter((key) => unreadable.includes(key)));
+      const of = (field: SearchTerm['field'], list: readonly string[]): string[] =>
+        list.filter((value) =>
+          unreadable.some((term) => term.field === field && term.value === value),
+        );
+      onUnreadableKeys?.(of('key', keys), of('id', ids));
     }
     return found
       .map((match, index) => ({ match, index }))
@@ -810,7 +829,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     const jql = buildJql(rule, since, options.clock.now());
     return read('match_tickets', jsonPayload({ jql, limit }), async () =>
       rule.kind === 'keys'
-        ? searchKeys(rule.keys, since, limit, matchOptions?.onUnreadableKeys)
+        ? searchKeys(rule.keys, rule.ids ?? [], since, limit, matchOptions?.onUnreadableKeys)
         : searchUpTo(jql, limit),
     );
   };
@@ -1294,6 +1313,21 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
  */
 export const MAX_KEY_SEARCHES = 32;
 
+/** One ticket a `keys` read names: by its stable id (WP-145) or by its key. */
+interface SearchTerm {
+  readonly field: 'id' | 'key';
+  readonly value: string;
+}
+
+/** The shape of a Jira issue id the adapter carries (`issueRef`): 1–20 decimal digits. */
+const JIRA_ISSUE_ID = /^[0-9]{1,20}$/;
+
+const ruleOfTerms = (terms: readonly SearchTerm[]): TicketMatchRule => ({
+  kind: 'keys',
+  keys: terms.filter((term) => term.field === 'key').map((term) => term.value),
+  ids: terms.filter((term) => term.field === 'id').map((term) => term.value),
+});
+
 /** A `400` from search: a refusal of the query, which is the only error a `keys` read narrows on. */
 const isSearchRefusal = (error: unknown): error is IntegrationError =>
   error instanceof IntegrationError && error.code === 'invalid_request';
@@ -1315,7 +1349,7 @@ export const missingIssueKeysIn = (error: unknown, asked: readonly string[]): st
     [
       ...error.message.matchAll(/An issue with key '([^']+)' does not exist/g),
       ...error.message.matchAll(
-        /The value '([^']+)' does not exist for the field '(?:key|issuekey)'/gi,
+        /The value '([^']+)' does not exist for the field '(?:key|issuekey|id|issue)'/gi,
       ),
     ].map((match) => match[1] ?? ''),
   );
@@ -1347,10 +1381,20 @@ export const buildJql = (rule: TicketMatchRule, since: string | null, now: strin
         return `parent = ${jqlLiteral(rule.epic_key)}`;
       case 'query':
         return `(${rule.query})`;
-      case 'keys':
+      case 'keys': {
         // WP-110 (backlog 298): the live tasks' tickets, whatever the pick-up rule says. Each key
         // is a JQL string literal, so a key is never JQL (`key in (…)`, the JQL fields reference).
-        return `key in (${rule.keys.map(jqlLiteral).join(', ')})`;
+        // WP-145 (backlog 437): a ticket whose id the task recorded is asked by it — `id` is an
+        // alias of the issue-key field, which searches "by issue key or issue ID number"
+        // (`search-jql-by-id-after-move.json`) — and only an id of decimal digits is ever written,
+        // bare, so an id is never JQL either.
+        const ids = (rule.ids ?? []).filter((id) => JIRA_ISSUE_ID.test(id));
+        const parts = [
+          ...(ids.length === 0 ? [] : [`id in (${ids.join(', ')})`]),
+          ...(rule.keys.length === 0 ? [] : [`key in (${rule.keys.map(jqlLiteral).join(', ')})`]),
+        ];
+        return parts.length > 1 ? `(${parts.join(' OR ')})` : (parts[0] ?? 'id = -1');
+      }
     }
   })();
   if (since === null) {

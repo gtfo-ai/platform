@@ -1,0 +1,34 @@
+{
+  "source": {
+    "url": "https://confluence.atlassian.com/jirasoftwareserver/advanced-searching-fields-reference-939938743.html",
+    "operation": "GET /rest/api/3/search/jql with `id in (10001)` after issue 10001 moved from ACME-1 to NEW-5 → 200, the issue under its new key",
+    "retrieved": "2026-10-04",
+    "evidence": "inferred",
+    "note": "WP-145 (PROGRESS backlog 437). The JQL fields reference's 'Issue key' section says the field 'Allows searching for issues using their unique identifier or ID number', with syntax `issueKey` and aliases `id`, `issue`, `key`, and the operators `=`, `IN`, `NOT IN` among others — read on the Data Center page because the Cloud page (support.atlassian.com/jira-software-cloud/docs/jql-fields/, cited in SOURCES.md) renders client-side and its text could not be retrieved; that Cloud's search accepts the same is inferred. That a moved issue keeps its id is Atlassian's knowledge base (moved-issues-no-longer-redirect…, SOURCES.md): the former key is joined to the issue's own id. So `id in (10001)` answering the issue as NEW-5 is inferred from the two, not recorded. The envelope is search-jql.json's (the swagger's documented example); the issue is issue-acme-1.json's id under the moved key. Not measured on a Cloud site: docs/TODO.md's WP-145 row."
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "isLast": true,
+      "issues": [
+        {
+          "id": "10001",
+          "key": "NEW-5",
+          "self": "https://acme-example.atlassian.net/rest/api/3/issue/10001",
+          "fields": {
+            "summary": "Totals are wrong in the invoice export",
+            "issuetype": { "id": "10004", "name": "Bug", "subtask": false },
+            "status": { "id": "10002", "name": "Ready for agent" },
+            "priority": { "id": "3", "name": "High" },
+            "labels": ["agentic"],
+            "created": "2026-08-30T09:00:00.000+0000",
+            "updated": "2026-09-02T11:58:00.000+0000"
+          }
+        }
+      ]
+    }
+  }
+}

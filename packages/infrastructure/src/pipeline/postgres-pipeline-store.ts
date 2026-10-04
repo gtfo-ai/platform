@@ -665,15 +665,52 @@ export const createPostgresPipelineStore = (
      * does not name the column. The port's docblock has the rest.
      */
     recordTicketSignal: async (tx, signal) => {
+      // WP-145: by the stable id when both the signal and the row carry one, by the key otherwise.
       const result = await sqlOf(tx).query(
         `update tasks
             set ticket_signal_at = greatest(coalesce(ticket_signal_at, $4::timestamptz), $4::timestamptz),
                 updated_at = now()
-          where project_id = $1 and ticket_provider = $2 and ticket_key = $3
+          where project_id = $1 and ticket_provider = $2
+            and (case when $5::text is not null and ticket_id is not null
+                      then ticket_id = $5::text
+                      else ticket_key = $3 end)
             and state not in ('done', 'cancelled')`,
-        [signal.projectId, signal.provider, signal.ticketKey, signal.at],
+        [signal.projectId, signal.provider, signal.ticketKey, signal.at, signal.ticketId ?? null],
       );
       return result.rowCount ?? 0;
+    },
+
+    listLiveByTicketId: async (tx, query) => {
+      const { rows } = await sqlOf(tx).query<TaskRow>(
+        `select ${TASK_COLUMNS} from tasks t
+          where t.project_id = $1 and t.ticket_provider = $2 and t.ticket_id = $3
+            and t.state not in ('done', 'cancelled')
+          order by t.created_at`,
+        [query.projectId, query.provider, query.ticketId],
+      );
+      return listed(rows);
+    },
+
+    /**
+     * `ticket_key`/`ticket_url` — the narrow writer that follows a moved issue (WP-145, backlog
+     * 437). Compare-and-set on the old key and a live row; the `not exists` keeps the
+     * `(project_id, ticket_key, mode)` unique key a refusal rather than a failed dispatch (a race
+     * past it still raises `23505` and the handler's dispatch is retried, which then refuses). The
+     * port's docblock has `pinBranch` and the version bump.
+     */
+    rekeyTicket: async (tx, taskId, change) => {
+      const result = await sqlOf(tx).query(
+        `update tasks
+            set ticket_key = $3, ticket_url = $4, branch = coalesce(branch, $5::text),
+                version = version + 1, updated_at = now()
+          where id = $1 and ticket_key = $2 and state not in ('done', 'cancelled')
+            and not exists (
+              select 1 from tasks other
+               where other.project_id = tasks.project_id and other.mode = tasks.mode
+                 and other.ticket_key = $3 and other.id <> tasks.id)`,
+        [taskId, change.fromKey, change.ticketKey, change.ticketUrl, change.pinBranch],
+      );
+      return (result.rowCount ?? 0) > 0;
     },
 
     /**

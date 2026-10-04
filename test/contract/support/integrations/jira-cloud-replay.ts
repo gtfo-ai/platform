@@ -43,6 +43,11 @@
  * 10. **Stricter — a moved issue answers its old key on `GET issue/{key}` only** (WP-134, backlog
  *     418), as Atlassian's redirect does (`moveIssue`); a JQL `key in (…)` naming the old key is
  *     refused as unknown, which Jira may not do.
+ * 11. **Different — an `id in (…)` naming an id the site does not hold is refused whole, in words
+ *     that name nothing** (WP-145, PROGRESS backlog 437). The issue-key field searches by id
+ *     (`search-jql-by-id-after-move.json`), and a held id answers the issue under the key it holds
+ *     now; what Jira answers an unknown id is not measured, so the adapter's bisection is what
+ *     reads past it.
  */
 import { readFileSync } from 'node:fs';
 import type { WebhookDelivery } from '@platform/application';
@@ -175,8 +180,12 @@ export const REPLAY_SEARCH_PAGE_CAP = 20;
 export const REPLAY_COMMENT_PAGE_CAP = 50;
 
 const JQL_CLAUSE = /^\(?(labels|status|parent) = "((?:[^"\\]|\\.)*)"/;
-/** WP-110: the live tasks' read, `key in ("ACME-1", "ACME-2")` — every key a JQL string literal. */
-const JQL_KEYS = /^key in \(((?:"(?:[^"\\]|\\.)*"(?:, )?)+)\)/;
+/**
+ * WP-110: the live tasks' read, `key in ("ACME-1", "ACME-2")` — every key a JQL string literal — and
+ * since WP-145 `id in (10001)` and `(id in (10001) OR key in ("ACME-1"))`.
+ */
+const JQL_KEYS = /^\(?(?:id in \([0-9, ]+\) OR )?key in \(((?:"(?:[^"\\]|\\.)*"(?:, )?)+)\)/;
+const JQL_IDS = /^\(?id in \(([0-9]+(?:, [0-9]+)*)\)/;
 const JQL_KEY_LITERAL = /"((?:[^"\\]|\\.)*)"/g;
 const JQL_KEY_EXCLUSION = /AND key != "([^"]+)"/;
 const JQL_WINDOW = /AND updated >= "-(\d+)m"/;
@@ -257,16 +266,13 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
         );
   };
 
+  const namedIdsOf = (jql: string): string[] =>
+    (JQL_IDS.exec(jql)?.[1] ?? '').split(', ').filter((id) => id.length > 0);
+
   const searchIssues = (jql: string): Record<string, unknown>[] => {
-    const keysClause = JQL_KEYS.exec(jql);
-    const named =
-      keysClause === null
-        ? null
-        : new Set(
-            [...(keysClause[1] ?? '').matchAll(JQL_KEY_LITERAL)].map((literal) =>
-              (literal[1] ?? '').replace(/\\"/g, '"').replace(/\\\\/g, '\\'),
-            ),
-          );
+    const byKeyOrId = JQL_KEYS.test(jql) || JQL_IDS.test(jql);
+    const named = byKeyOrId ? new Set(namedKeysOf(jql)) : null;
+    const namedIds = new Set(namedIdsOf(jql));
     const clause = (JQL_CLAUSE.exec(jql) ?? ['', 'labels', '']) as RegExpExecArray;
     const field = clause[1] as 'labels' | 'status' | 'parent';
     const value = (clause[2] ?? '').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
@@ -289,7 +295,8 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
           return false;
         }
         if (named !== null) {
-          return named.has(key);
+          // WP-145: an id answers the issue under whatever key it holds now (a move keeps it).
+          return named.has(key) || namedIds.has(String(issue.id));
         }
         if (field === 'labels') {
           return ((fields.labels as string[] | undefined) ?? []).includes(value);
@@ -332,11 +339,21 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
     }
     if (method === 'GET' && path === 'search/jql') {
       const jql = query.jql ?? '';
-      if (!JQL_CLAUSE.test(jql) && !JQL_KEYS.test(jql)) {
+      if (!JQL_CLAUSE.test(jql) && !JQL_KEYS.test(jql) && !JQL_IDS.test(jql)) {
         return harnessError(`jira replay: unsupported JQL "${jql}"`);
       }
       // WP-110 review round 1: a `key in (…)` naming a key that does not exist is refused whole,
       // as Atlassian documents for search (`error-issue-key-does-not-exist.json`, `inferred`).
+      const held = new Set([...issues.values()].map((issue) => String(issue.id)));
+      const absentIds = namedIdsOf(jql).filter((id) => !held.has(id));
+      if (absentIds.length > 0) {
+        // Divergence 11 (WP-145): what Jira answers an `id in (…)` naming an issue that does not
+        // exist is not measured, so the replay refuses it whole in words that name nothing.
+        return jsonResponse(400, {
+          errorMessages: ['Error in the JQL Query: the query could not be completed.'],
+          errors: {},
+        });
+      }
       const absent = namedKeysOf(jql).filter((key) => !issues.has(key));
       if (absent.length > 0) {
         const refusal = loadJiraFixture('error-issue-key-does-not-exist.json').response;

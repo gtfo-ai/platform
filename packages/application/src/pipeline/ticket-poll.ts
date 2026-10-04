@@ -74,7 +74,8 @@
  * particular — so a running task kept the ticket text it read at intake. So each poll also asks for
  * the tickets of the binding's **live tasks** (`state not in ('done', 'cancelled')`, the set WP-60's
  * ticket signal stamps) changed since the same window, with a `keys` rule that ignores the pick-up
- * rule, and records each as **`ticket.updated` only** — never `ticket.matched`, because a ticket
+ * rule — naming a task's ticket by the issue id the task recorded where it has one, by its key
+ * otherwise (WP-145, backlog 437: a moved issue answers under its new key) — and records each as **`ticket.updated` only** — never `ticket.matched`, because a ticket
  * that has left the rule must not read as a pick-up. The bound is one more provider read per poll,
  * naming at most {@link TICKET_POLL_LIVE_KEYS_LIMIT} (100) tickets: one Jira page, and a binding
  * with more live tasks than that reads the hundred most recently touched and says so in a warn
@@ -121,6 +122,12 @@ import {
   ticketReads,
 } from './integrations.js';
 
+/** A live task's ticket, as the poll's re-read asks for it (WP-145): by `id` when there is one. */
+export interface LiveTicket {
+  readonly key: string;
+  readonly id: string | null;
+}
+
 /** One task-management binding the poller serves. */
 export interface PolledBinding {
   readonly projectId: Id;
@@ -143,15 +150,16 @@ export interface TicketPollStore {
   /** Moves the cursor to `to` **only forward**; a binding that no longer exists is a no-op. */
   advanceCursor(binding: PolledBinding, to: IsoDateTime): Promise<void>;
   /**
-   * The ticket keys of the binding's project's **live** tasks (`state not in ('done', 'cancelled')`)
+   * The tickets of the binding's project's **live** tasks (`state not in ('done', 'cancelled')`)
    * whose ticket is `provider`'s, distinct, the most recently updated task first, at most `limit`
-   * (WP-110, backlog 298).
+   * (WP-110, backlog 298) — each with the issue's stable id when the task recorded one (WP-145,
+   * `tasks.ticket_id`), so the re-read can ask by it.
    */
-  liveTicketKeys(
+  liveTickets(
     binding: PolledBinding,
     provider: string,
     limit: number,
-  ): Promise<readonly string[]>;
+  ): Promise<readonly LiveTicket[]>;
 }
 
 /**
@@ -234,8 +242,16 @@ export const ticketMatchRuleText = (rule: TicketMatchRule): string => {
       return `epic = ${JSON.stringify(rule.epic_key)}`;
     case 'query':
       return rule.query;
-    case 'keys':
-      return `key in (${rule.keys.map((key) => JSON.stringify(key)).join(', ')})`;
+    case 'keys': {
+      // WP-145: the ids first, as the Jira adapter's JQL spells them.
+      const ids = rule.ids ?? [];
+      const byId = ids.length === 0 ? null : `id in (${ids.join(', ')})`;
+      const byKey =
+        rule.keys.length === 0
+          ? null
+          : `key in (${rule.keys.map((key) => JSON.stringify(key)).join(', ')})`;
+      return [byId, byKey].filter((part) => part !== null).join(' OR ');
+    }
   }
 };
 
@@ -510,15 +526,20 @@ const pollLiveTickets = async (
 ): Promise<LiveTicketPollReport> => {
   const logger = options.logger ?? silentLogger;
   const taskManagement = integrations.taskManagement as TaskManagementBinding;
-  const listed = await options.store.liveTicketKeys(
+  const listed = await options.store.liveTickets(
     binding,
     taskManagement.ref.provider,
     TICKET_POLL_LIVE_KEYS_LIMIT + 1,
   );
-  const keys = listed.slice(0, TICKET_POLL_LIVE_KEYS_LIMIT);
-  const omitted = listed.length - keys.length;
+  const live = listed.slice(0, TICKET_POLL_LIVE_KEYS_LIMIT);
+  const omitted = listed.length - live.length;
+  // WP-145 (backlog 437): a task that recorded its issue's id is asked by it — a moved issue answers
+  // under its new key, and a search for the old one is not measured to resolve — and the others by key.
+  const ids = [...new Set(live.flatMap((ticket) => (ticket.id === null ? [] : [ticket.id])))];
+  const keys = live.flatMap((ticket) => (ticket.id === null ? [ticket.key] : []));
+  const asked = ids.length + keys.length;
   const nothing = {
-    asked: keys.length,
+    asked,
     omitted,
     matched: 0,
     recorded: 0,
@@ -535,10 +556,14 @@ const pollLiveTickets = async (
       'the binding has more live tasks than one poll re-reads; edits to the tickets of the tasks touched least recently reach them only by webhook (TICKET_POLL_LIVE_KEYS_LIMIT)',
     );
   }
-  if (keys.length === 0) {
+  if (asked === 0) {
     return { ...nothing, failed: false };
   }
-  const rule: TicketMatchRule = { kind: 'keys', keys: [...keys] };
+  const rule: TicketMatchRule = {
+    kind: 'keys',
+    keys: [...keys],
+    ...(ids.length === 0 ? {} : { ids }),
+  };
   let matches: readonly TicketMatch[];
   try {
     matches =
@@ -547,15 +572,16 @@ const pollLiveTickets = async (
         // A search answers each ticket at most once, so a limit of the key count is never a cut.
         {
           since: new Date(edge - TICKET_POLL_OVERLAP_MS).toISOString(),
-          limit: keys.length,
+          limit: asked,
           // WP-134 (backlog 375): the tickets the tracker refused as gone were left out so the read
           // could answer the rest; their tasks are named here, once per poll, every poll.
-          onUnreadableKeys: (unreadable) => {
+          onUnreadableKeys: (unreadable, unreadableIds) => {
             logger.warn(
               {
                 project_id: binding.projectId,
                 integration_id: binding.integrationId,
                 ticket_keys: [...unreadable],
+                ticket_ids: [...unreadableIds],
               },
               'the tracker refused these live tasks’ tickets as not existing (deleted, or moved out of the integration’s reach); the poll re-read the other tasks’ tickets without them',
             );
@@ -569,7 +595,7 @@ const pollLiveTickets = async (
       {
         project_id: binding.projectId,
         integration_id: binding.integrationId,
-        asked: keys.length,
+        asked,
         error: error instanceof Error ? error.name : 'unknown',
       },
       'the ticket poll could not re-read the live tasks’ tickets; their edits wait for the next poll',

@@ -151,6 +151,13 @@ keeps its issue id; the platform records the id beside the key, so a moved ticke
 — by webhook, by poll or by a manual start under its new key — meets the task it already has rather
 than starting a second one. A task created before this release recorded no id and is matched by key.
 Make sure the integration reads **both** projects (`project_keys`) if tickets move between them.
+Edits made **after** the move reach the task too: an update under the new key carries the same id,
+so the task's ticket text is read again before its next stage, and the task itself follows the move —
+the board and the workpad name the new key, and the task's history records the change. The poll asks
+for a task's ticket by that id rather than by its key, so the poll finds a moved ticket as well. Two
+things keep the old key, by design: the task's branch (`agentic/<old key>`) and the merge request's
+title, because renaming either would break work already pushed. A task created before this release
+has no id and does not follow a move.
 
 ## 6. Map your statuses
 

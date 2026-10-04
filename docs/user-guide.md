@@ -337,7 +337,9 @@ only thing it skips. The task is then created exactly as for a rule match: it ge
 issue type maps to, it is **queued** if the project is at its WIP limit, it waits for a human if
 the default branch is unprotected, and a ticket that already has a task is not started twice — even
 under a new key: a Jira issue moved to another project is the same ticket, because the platform
-records Jira's own issue id beside the key (for tasks created before this release, the key alone). So the
+records Jira's own issue id beside the key (for tasks created before this release, the key alone).
+Edits made to the ticket after such a move still reach its task, which then shows the new key; its
+branch and merge request keep the old one. So the
 answer is *Started ACME-123 — its task appears on the board once intake has created it*, not a task.
 The start is refused, by name and with nothing recorded, when the project binds no task-management
 integration, when its autonomy dial is **Observe** (which picks up no new tickets), when the ticket

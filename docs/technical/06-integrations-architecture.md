@@ -528,7 +528,14 @@ the existing suite (BD-017).
   > key stands alone, every search counted against `MAX_KEY_SEARCHES` (32), and the keys left out
   > are reported to the poll, which names them in a warning every poll. A read that still fails —
   > past the bound, or every key refused on its own — fails open (a warning; the rule half stands).
-  > It never moves the cursor.
+  > It never moves the cursor. **Since WP-145 (PROGRESS backlog 437) a live task that recorded its
+  > issue's id is asked by it** — the rule carries `ids` beside `keys`, Jira's JQL is
+  > `(id in (10001) OR key in ("ACME-7"))`, and an id is written bare only when it is decimal digits —
+  > because a moved issue answers under its new key and whether JQL resolves a former key is not
+  > measured (`search-jql-by-id-after-move.json`, `inferred`); a refused id is narrowed and reported
+  > like a refused key. The `ticket.updated` it records carries the id, and the signal handler
+  > matches a task by that id first and by key only for a task with none, moving the task to the
+  > new key (`task.ticket.rekeyed`; the branch and the merge request keep the old one).
   > **What a poll cannot see**: comments and `ticket.created` (so the ticket linter is
   > webhook-only); and tickets that matched before polling was switched on, because a binding's first
   > poll reads its last interval only — a first read of every ticket ever labelled would start closed

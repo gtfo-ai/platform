@@ -508,7 +508,9 @@ export const createFakeTaskManagement = (
       case 'query':
         return matches(ticket, parseQuery(rule.query));
       case 'keys':
-        // WP-110: the tickets named, whatever their labels or status.
+        // WP-110: the tickets named, whatever their labels or status. WP-145: a rule's `ids` match
+        // nothing here — the fake's tickets carry no stable id (divergence register above), so no
+        // task of a fake binding records one and the poll never asks the fake by id.
         return rule.keys.includes(ticket.key);
     }
   };

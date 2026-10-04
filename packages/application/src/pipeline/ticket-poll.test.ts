@@ -26,6 +26,7 @@ import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import { createMemoryAuditLog, createVirtualTimer } from '../testing/memory-integrations.js';
 import { type PipelineIntegrations, staticPipelineIntegrations } from './integrations.js';
 import {
+  type LiveTicket,
   type PolledBinding,
   pollTicketBinding,
   runTicketPollSweep,
@@ -65,8 +66,8 @@ interface World {
   unindexed: Set<string>;
   /** WP-110: tickets the pick-up rule no longer matches — reachable by a `keys` rule only. */
   others: TicketMatch[];
-  /** WP-110: the binding's live tasks' ticket keys, as the store answers them. */
-  live: string[];
+  /** WP-110: the binding's live tasks' ticket keys, as the store answers them (WP-145: or tickets). */
+  live: (string | LiveTicket)[];
   /** WP-110: the `keys` read throws this, once. */
   failKeys: Error | null;
   /** WP-134: tickets the provider refuses as gone — left out and reported, as the Jira adapter does. */
@@ -104,13 +105,17 @@ const portFor = (world: World): TaskManagementPort =>
       if (rule.kind === 'keys') {
         const gone = rule.keys.filter((key) => world.gone.has(key));
         if (gone.length > 0) {
-          options?.onUnreadableKeys?.(gone);
+          options?.onUnreadableKeys?.(gone, []);
         }
       }
+      // WP-145: a ticket asked by id answers under whatever key it holds now.
       const searched =
         rule.kind === 'keys'
           ? [...world.matches, ...world.others].filter(
-              (entry) => rule.keys.includes(entry.ref.key) && !world.gone.has(entry.ref.key),
+              (entry) =>
+                (rule.keys.includes(entry.ref.key) ||
+                  (typeof entry.ref.id === 'string' && (rule.ids ?? []).includes(entry.ref.id))) &&
+                !world.gone.has(entry.ref.key),
             )
           : world.matches;
       return searched
@@ -207,7 +212,10 @@ const harnessFor = (
         cursor.value = to;
       }
     },
-    liveTicketKeys: async (_binding, _provider, limit) => world.live.slice(0, limit),
+    liveTickets: async (_binding, _provider, limit) =>
+      world.live
+        .slice(0, limit)
+        .map((entry) => (typeof entry === 'string' ? { key: entry, id: null } : entry)),
   };
   const jobs: Jobs = {
     defineQueue: async () => {},
@@ -551,6 +559,31 @@ describe('the live tasks’ tickets, whatever the rule says (WP-110)', () => {
     const rule = keysRead[0]?.rule;
     expect(rule?.kind === 'keys' ? rule.keys : []).toHaveLength(TICKET_POLL_LIVE_KEYS_LIMIT);
     expect(report).toMatchObject({ live: { asked: 100, omitted: 1 } });
+  });
+
+  it('asks a live task’s ticket by its id when the task recorded one, and records the moved issue under its new key (WP-145)', async () => {
+    const harness = harnessFor();
+    harness.world.plan = {
+      rule: { kind: 'status', status: 'Ready for agent' },
+      interval_seconds: 60,
+    };
+    // The task was created as OLD-1 (id 10001); the issue moved and answers as NEW-5 now.
+    const moved = match('NEW-5', '2026-06-01T09:59:10.000Z');
+    const movedMatch: TicketMatch = { ...moved, ref: { ...moved.ref, id: '10001' } };
+    harness.world.others = [movedMatch, match('ACME-7', '2026-06-01T09:59:20.000Z')];
+    harness.world.live = [{ key: 'OLD-1', id: '10001' }, 'ACME-7'];
+
+    const report = await pollTicketBinding(harness.options, BINDING);
+
+    const rule = harness.world.asked.find((entry) => entry.rule.kind === 'keys')?.rule;
+    // By id for the task that has one, by key for the one that does not — never the old key.
+    expect(rule).toEqual({ kind: 'keys', keys: ['ACME-7'], ids: ['10001'] });
+    expect(
+      harness.events.map(
+        (event) => (event.payload as { ticket: { key: string; id?: string } }).ticket,
+      ),
+    ).toMatchObject([{ key: 'NEW-5', id: '10001' }, { key: 'ACME-7' }]);
+    expect(report).toMatchObject({ live: { asked: 2, matched: 2, recorded: 2, failed: false } });
   });
 
   it('fails open: a refused live read leaves the rule half recorded and the cursor moved (rule 20)', async () => {
