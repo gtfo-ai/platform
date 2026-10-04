@@ -856,6 +856,88 @@ if (PHASE === 'no-route') {
   process.exit(0);
 }
 
+/**
+ * WP-144 (PROGRESS backlog 432): **the runner's own stop hands a live run back**, against a real
+ * daemon. A run of the fake CLI that never finishes (`--scenario signal-report`) is started through
+ * the production provisioner and runner, and once its session is live it is stopped exactly as
+ * `LiveRuns.stopAll` stops it on SIGTERM — `handle.stop({ reason: 'shutdown' })`. What is printed is
+ * how it ended and how long the stop took **including the workspace's release** (the launcher's
+ * destroy), which is the row's 10 s budget; the host then asks the daemon what is left.
+ */
+if (PHASE === 'shutdown') {
+  const runId = required('CHECK_SHUTDOWN_RUN_ID');
+  const phase = {
+    phase: PHASE,
+    ok: false,
+    live: false,
+    status: null,
+    terminalReason: null,
+    costUnmeasured: null,
+    stopMs: null,
+    releases: [],
+    notes,
+  };
+  try {
+    const transcript = [];
+    const runner = runnerAdapters.createWorkspaceClaudeRunner({
+      provisioner: {
+        provision: async (spec) => {
+          const workspace = await provisioner.provision(spec);
+          return {
+            ...workspace,
+            claudeCodePath: FAKE_CLI,
+            release: async (ending) => {
+              phase.releases.push(ending?.kind ?? String(ending));
+              await workspace.release(ending);
+            },
+          };
+        },
+      },
+      logger,
+      build: ({ spawn, cliEnvironment }) =>
+        runnerAdapters.createClaudeRunner({
+          sink: { append: async (event) => transcript.push(event) },
+          approvals: {
+            requestApproval: async () => ({
+              decision: 'deny',
+              reason: 'unattended',
+              questionId: null,
+            }),
+          },
+          tools: runnerAdapters.recordingTools(),
+          clock: runnerAdapters.systemClock,
+          logger,
+          injectedSecretRedactorFor: () => noSecretsRedactor(),
+          // The one change from the main run: the fake CLI is told never to finish, so the session
+          // is live when the stop lands — the shape of a run a `docker compose stop runner` meets.
+          spawnClaudeCodeProcess: Object.assign(
+            (options) =>
+              spawn({ ...options, args: [...(options.args ?? []), '--scenario', 'signal-report'] }),
+            { setStderrSink: spawn.setStderrSink },
+          ),
+          ...(cliEnvironment === undefined ? {} : { workspaceEnvironment: cliEnvironment }),
+        }),
+    });
+    const handle = runner.start(specFor(runId));
+    for (let waited = 0; waited < 240 && transcript.length === 0; waited += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    phase.live = transcript.length > 0;
+    const stopping = Date.now();
+    await handle.stop({ reason: 'shutdown' });
+    const outcome = await handle.outcome;
+    phase.stopMs = Date.now() - stopping;
+    phase.status = outcome.status;
+    phase.terminalReason = outcome.terminalReason;
+    phase.costUnmeasured = outcome.costUnmeasured === true;
+    phase.ok = true;
+  } catch (error) {
+    phase.error = String(error?.message ?? error).slice(0, 600);
+  }
+  process.stdout.write(`${JSON.stringify(phase)}\n`);
+  process.exit(0);
+}
+
 const report = {
   sdkPlatformPackages: sdkPlatformPackages(),
   environ: null,

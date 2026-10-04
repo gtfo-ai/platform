@@ -39,7 +39,12 @@ import { askingRefinedSpec } from '../testing/artifact-fixtures.js';
 import { createMemoryAskStore } from '../testing/memory-ask.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import { askTaskCommand } from './commands.js';
-import { redactAskAnswer, scopeCitations } from './executor.js';
+import {
+  ASK_HAND_BACK_DELAY_MS,
+  MAX_ASK_HAND_BACKS,
+  redactAskAnswer,
+  scopeCitations,
+} from './executor.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
 const ASKER = '00000000-0000-4000-8000-0000000000c1' as Id;
@@ -1473,5 +1478,72 @@ describe('an ask on a task that is gone', () => {
     const [ask] = harness.asks.all();
     expect(ask?.status).toBe('refused');
     expect(ask?.refusalReason).toContain('no longer exists');
+  });
+});
+
+/**
+ * WP-144 (PROGRESS backlog 432): an ask run its `runner`'s stop interrupted is handed back like a
+ * stage's — the run ends `failed`/`shutdown`, the question stays `pending`, and its `task.ask` job is
+ * re-enqueued 30 s later; the stop past `MAX_ASK_HAND_BACKS` ends the question `failed`, by name.
+ */
+describe('an ask run handed back by its runner’s stop (WP-144)', () => {
+  const SHUTDOWN = {
+    status: 'failed',
+    terminalReason: 'shutdown',
+    costUsd: 0.05,
+    error: 'the platform stopped the run: shutdown',
+    stopReason: 'shutdown',
+  } as const;
+  const askJobs = (harness: PipelineHarness) =>
+    harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.taskAsk);
+
+  it('keeps the question pending, re-enqueues it, and answers it on the next run', async () => {
+    const harness = harnessWith();
+    await seedTask(harness);
+    harness.script(`ask:${QUESTION}`, SHUTDOWN);
+    await askThroughHttp(harness);
+
+    const [pending] = harness.asks.all();
+    expect(pending?.status).toBe('pending');
+    const firstRun = pending?.runId as Id;
+    const run = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.load(scope.tx, firstRun),
+    );
+    expect(run?.terminalReason).toBe('shutdown');
+    const queued = askJobs(harness);
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.data).toMatchObject({ ask_id: pending?.id, hand_backs: 1 });
+    expect(queued[0]?.startAfter?.getTime()).toBe(harness.clock.epochMs + ASK_HAND_BACK_DELAY_MS);
+
+    harness.script(`ask:${QUESTION}`, {
+      status: 'completed',
+      terminalReason: 'success',
+      structuredOutput: ANSWER,
+      costUsd: 0.2,
+    });
+    harness.clock.advance(ASK_HAND_BACK_DELAY_MS);
+    await harness.drain();
+
+    const [answered] = harness.asks.all();
+    expect(answered?.status).toBe('answered');
+    expect(answered?.runId).not.toBe(firstRun);
+  });
+
+  it('ends the question failed at its third stop, naming the stops', async () => {
+    const harness = harnessWith();
+    await seedTask(harness);
+    harness.script(`ask:${QUESTION}`, SHUTDOWN);
+    await askThroughHttp(harness);
+    for (let round = 0; round < MAX_ASK_HAND_BACKS; round += 1) {
+      harness.clock.advance(ASK_HAND_BACK_DELAY_MS);
+      await harness.drain();
+    }
+
+    const [ask] = harness.asks.all();
+    expect(ask?.status).toBe('failed');
+    expect(ask?.refusalReason).toContain('stopped while answering this question 3 times');
+    expect(askJobs(harness)).toHaveLength(0);
+    // The task an ask is about is never moved by it (WP-31), the hand-back included.
+    expect(harness.store.snapshot()[0]?.task.state).toBe('waiting_answers');
   });
 });

@@ -71,6 +71,7 @@ import {
   type StageExecuteData,
   stageExecuteHandler,
 } from './jobs.js';
+import type { LiveRuns } from './live-runs.js';
 import { mergeRequestReadyHandlers } from './merge-request-ready.js';
 import { type PipelineOutboundOptions, pipelineOutboundHandler } from './outbound.js';
 import { providerSignalHandlers } from './provider-signals.js';
@@ -210,6 +211,14 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
    * would enqueue wake-ups its own outbound worker could only fail.
    */
   readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
+  /**
+   * The runs this process holds — the register the composition root wrapped its runner in — so
+   * that {@link PipelineRuntime.stop} can **hand them back** (WP-144, PROGRESS backlog 432).
+   *
+   * Optional, and absent is a statement rather than a gap: a process that runs no agent holds no
+   * run, and a test composition with no register keeps the old drain (it waits for the run).
+   */
+  readonly liveRuns?: Pick<LiveRuns, 'stopAll'>;
 }
 
 export interface PipelineRuntime {
@@ -218,7 +227,15 @@ export interface PipelineRuntime {
   readonly executor: StageExecutor;
   /** Declares the queues and starts the workers. Idempotent. */
   start(): Promise<void>;
-  /** Stops the workers; the handlers stop with the bus. */
+  /**
+   * Stops the workers; the handlers stop with the bus.
+   *
+   * **A run in flight is handed back** (WP-144): every worker is told to stop taking jobs first,
+   * then every run this process holds is stopped with `shutdown`, and only then are the workers'
+   * drains awaited — each `stage.execute`/`task.ask` job records its run's ending and re-enqueues
+   * its stage entry (or ask) before it returns. Before WP-144 the drain waited for the run itself,
+   * which nothing ended, until `APP_SHUTDOWN_TIMEOUT_MS` killed the process (backlog 432).
+   */
   stop(): Promise<void>;
 }
 
@@ -431,9 +448,17 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     },
     stop: async () => {
       const stopping = workers.splice(0, workers.length);
-      for (const worker of stopping) {
-        await worker.stop();
+      // Every worker stops *taking* jobs before any run is stopped (pg-boss sets the flag
+      // synchronously), so a hand-back's re-enqueue is not taken by this process on its way out.
+      const drains = stopping.map(async (worker) => worker.stop());
+      const handedBack = options.liveRuns?.stopAll({ reason: 'shutdown' }) ?? 0;
+      if (handedBack > 0) {
+        logger?.info(
+          { runs: handedBack },
+          'stopping: the runs this process holds are handed back and will be started again',
+        );
       }
+      await Promise.all(drains);
     },
   };
 };

@@ -304,18 +304,20 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    # **The same 45 s as `app`, and what it does not buy** (WP-133). The bound is the same
-    # `APP_SHUTDOWN_TIMEOUT_MS` deadline. With an agent run in flight the shutdown waits for that run's
-    # `stage.execute` job and the run does not end on its own: measured through two `apps/server`
-    # processes on one database (a run held in `runner`, then `runner`'s `stop()`), the stop was still
-    # waiting 60 s later with the run `running` and its job `active`. So in a container the deadline
-    # ends the process (exit 1), the run's lease is no longer renewed, and once it lapses
-    # (`RUN_LEASE_TTL_MS`, five minutes) the lease sweep ends the run `lease_expired` and escalates the
-    # task — WP-47's recovery, not re-measured here. The grace
-    # does not save the run — nothing on this build stops a run on SIGTERM. What it buys is the order
-    # `runtime.ts` stops in up to that point: HTTP, the held connections, the event dispatcher (a
-    # handler mid-transaction finishes) and the knowledge and onboarding workers all stop before the
-    # pipeline's workers, which is where the drain waits; at three seconds they were killed with it.
+    # **The same 45 s as `app`, and what it buys** (WP-133, WP-144). The bound is the same
+    # `APP_SHUTDOWN_TIMEOUT_MS` deadline. Since WP-144 a run in flight is **handed back** on SIGTERM:
+    # the runner stops taking `stage.execute`/`task.ask` jobs, interrupts each session it holds (the
+    # runner's 5 s grace for the interrupted turn's result, then the launcher removes the workspace),
+    # ends the run `failed`/`shutdown` with what it measured, and re-enqueues the same stage entry (or
+    # ask) 30 s out — twice per stage entry, the third escalates. Measured: a live session in a real
+    # run container was handed back in 5.7 s including its container's removal (the launcher check;
+    # budget 10 s), where before WP-144 the stop was still waiting after 60 s and the deadline ended
+    # the process (WP-133). A
+    # SIGKILL — this grace running out included — is still the lease sweep's: `lease_expired` once
+    # `RUN_LEASE_TTL_MS` (five minutes) lapses, and the task escalated (WP-47). The order `runtime.ts`
+    # stops in is unchanged: HTTP, the held connections, the event dispatcher and the knowledge and
+    # onboarding workers stop before the pipeline's workers, and pg-boss after them, so the
+    # re-enqueue lands.
     # With nothing in flight it stopped in **0.2 s**, exit 0 (the same `local` leg).
     stop_grace_period: 45s
     restart: unless-stopped

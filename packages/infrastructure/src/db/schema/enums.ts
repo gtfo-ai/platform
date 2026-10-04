@@ -97,6 +97,8 @@ export const runTerminalReasonEnum = pgEnum('run_terminal_reason', [
   'crash',
   /** Appended by migration 0035 (WP-47); the order is compared against the zod enum's. */
   'lease_expired',
+  /** Appended by migration 0080 (WP-144): the runner's own stop handed the run back. */
+  'shutdown',
 ]);
 export const effortEnum = pgEnum('effort', ['low', 'medium', 'high']);
 export const contextPackReasonEnum = pgEnum('context_pack_reason', [

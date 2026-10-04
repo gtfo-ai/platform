@@ -43,6 +43,9 @@
  *     window** (WP-101, TD-028 decision 11, backlog 294 and 295): the run ends `cancelled` in the
  *     runner with its measured cost, charged once and not late; and two steers by one person
  *     through two `ROLE=api` processes admit one.
+ 11. **A `runner` stopped mid-run hands the run back** (WP-144, backlog 432): its stop returns
+ *     inside 10 s with the run ended `failed`/`shutdown` and charged once, the same stage entry is
+ *     queued 30 s out, and a second runner runs it — the task never needs a human.
  *
  * ## The connection budget (criterion 3)
  *
@@ -53,6 +56,7 @@
  * with this file in it, and the margin under `max_connections`, are in PROGRESS under WP-72 and in
  * `test/integration/support/global-setup.ts`.
  */
+import process from 'node:process';
 import type { CancelRunResponse, RunRecord } from '@platform/contracts';
 import { redaction as redactionAdapters } from '@platform/infrastructure';
 import { loadServerConfig, requiredPoolConnections, UndersizedPoolError } from '@platform/server';
@@ -641,6 +645,123 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
     ).toEqual([{ reason: 'error_during_execution' }]);
     // The human's pause stands: nothing re-ran the stage behind them.
     expect((await pipeline.task()).state).toBe('paused');
+  }, 300_000);
+});
+
+/**
+ * **A `runner` stopped with a run in flight hands the run back** — WP-144, PROGRESS backlog 432.
+ *
+ * The measurement the row asks for first, through the processes: `Instance.stop()` is the
+ * `runtime.stop()` that `main.ts` calls on SIGTERM, with the session held open in the runner. Before
+ * WP-144 that stop was still waiting 60 s later (WP-133's measurement; `APP_SHUTDOWN_TIMEOUT_MS`'s
+ * 30 s deadline ended the process and the lease sweep escalated the task five minutes after). Now
+ * the stop interrupts the session, ends the run `failed`/`shutdown` with what it measured, charges
+ * it once, re-enqueues the same stage entry 30 s out, and returns inside the row's 10 s budget; a
+ * second runner then starts a new run of the same stage, and the task never needs a human.
+ */
+describe('a runner stopped mid-run (WP-144)', () => {
+  it('hands the run back inside 10 s, charges it once, and a runner that starts again runs the same stage', async () => {
+    const pipeline = await startPipeline({
+      scenarios: (world) => ({
+        ...featureScenarios(world),
+        refinement: { ...featureScenarios(world).refinement, awaitSteers: 1 },
+      }),
+      label: 'topology-shutdown',
+      tickets: TICKETS,
+      agent: 'none',
+      processName: 'app',
+    });
+    harness = pipeline;
+    const runner = await pipeline.addProcess({
+      name: 'runner',
+      role: 'runner',
+      agent: 'real-over-fake-cli',
+      env: { APP_DB_POOL_MAX: String(floorOf('runner')) },
+    });
+    await pipeline.publish([ticketMatched(pipeline, 'ACME-4')]);
+    await pipeline.waitFor('the refinement session to have taken its first turn', async () => {
+      const rows = await pipeline.query(
+        `select 1 from run_messages m join runs r on r.id = m.run_id
+          where r.status = 'running' and m.kind = 'assistant'`,
+      );
+      return rows.length > 0;
+    });
+    const [live] = await pipeline.query<{ id: string; attempt: number }>(
+      "select id, attempt from runs where status = 'running'",
+    );
+    const runId = live?.id as string;
+
+    const stopping = Date.now();
+    await runner.stop();
+    const stopMs = Date.now() - stopping;
+    // The measurement, printed for the ledger, and the row's budget asserted.
+    process.stdout.write(`WP-144 runner stop with a run in flight: ${String(stopMs)} ms\n`);
+    expect(stopMs).toBeLessThan(10_000);
+
+    const [ended] = await pipeline.query<{
+      status: string;
+      terminal_reason: string;
+      usd_reported: string | null;
+    }>(
+      `select status::text as status, terminal_reason::text as terminal_reason,
+              usd_reported::text as usd_reported
+         from runs where id = $1`,
+      [runId],
+    );
+    expect(ended).toEqual({
+      status: 'failed',
+      terminal_reason: 'shutdown',
+      usd_reported: '0.130000',
+    });
+    // The same stage entry, queued for later — not run by the process that was stopping.
+    const queued = await pipeline.query<{ stage: string; attempt: number; later: boolean }>(
+      `select data->>'stage' as stage, (data->>'attempt')::int as attempt,
+              start_after > now() + interval '20 seconds' as later
+         from pgboss.job where name = 'stage.execute' and state = 'created'`,
+    );
+    expect(queued).toEqual([{ stage: 'refinement', attempt: live?.attempt, later: true }]);
+    const task = await pipeline.task();
+    expect(task.state).toBe('active');
+    expect(task.current_stage).toBe('refinement');
+
+    // Charged once, by the ordinary handler on `run.failed` (in `app`, which dispatches), not late.
+    await pipeline.waitFor('the ledger to charge the handed-back run', async () => {
+      const charged = await pipeline.query('select 1 from cost_entries where run_id = $1', [runId]);
+      return charged.length > 0;
+    });
+    expect(
+      await pipeline.query<{ usd: string; late: boolean }>(
+        'select usd::text as usd, late from cost_entries where run_id = $1',
+        [runId],
+      ),
+    ).toEqual([{ usd: String(INTERRUPTED_COST_USD.toFixed(6)), late: false }]);
+
+    // The runner comes back. The 30 s delay is the job's `start_after`, moved to now here rather
+    // than waited out — the delay itself is asserted above and by the application case.
+    await pipeline.query(
+      "update pgboss.job set start_after = now() where name = 'stage.execute' and state = 'created'",
+    );
+    await pipeline.addProcess({
+      name: 'runner-2',
+      role: 'runner',
+      agent: 'real-over-fake-cli',
+      env: { APP_DB_POOL_MAX: String(floorOf('runner')) },
+    });
+    await pipeline.waitFor('a new run of the same stage', async () => {
+      const rows = await pipeline.query(
+        "select 1 from runs where status = 'running' and id <> $1",
+        [runId],
+      );
+      return rows.length > 0;
+    });
+    const runs = await pipeline.query<{ status: string; attempt: number }>(
+      'select status::text as status, attempt from runs order by created_at',
+    );
+    expect(runs).toEqual([
+      { status: 'failed', attempt: live?.attempt },
+      { status: 'running', attempt: live?.attempt },
+    ]);
+    expect(await pipeline.query("select 1 from events where type = 'task.escalated'")).toEqual([]);
   }, 300_000);
 });
 

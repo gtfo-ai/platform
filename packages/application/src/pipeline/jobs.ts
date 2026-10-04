@@ -509,6 +509,15 @@ export const GATE_RECHECK_MS = 30_000;
  */
 export const RUN_START_RETRY_MS = 30_000;
 
+/**
+ * How long a handed-back stage waits before its run is started again (WP-144 ruling (a)).
+ *
+ * Thirty seconds, {@link RUN_START_RETRY_MS}'s: long enough for the stopped `runner` to have exited
+ * and for compose (or the operator) to have started it again, short enough that a restart costs the
+ * task half a minute. Any process subscribed to `stage.execute` may take it — the job is durable.
+ */
+export const SHUTDOWN_HAND_BACK_DELAY_MS = 30_000;
+
 export const enqueueStage = async (
   jobs: Jobs,
   job: StageExecutionJob & { readonly gateChecks?: number; readonly startAfter?: Date },
@@ -722,6 +731,24 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
           ...request,
           startAttempts: outcome.startAttempts,
           startAfter: new Date(Date.parse(options.clock.now()) + RUN_START_RETRY_MS),
+        });
+      }
+      /**
+       * **A run handed back by this process's stop** (WP-144): the same stage entry, again, after
+       * {@link SHUTDOWN_HAND_BACK_DELAY_MS}. This handler is still running inside the worker's
+       * drain, and pg-boss is stopped after the pipeline's workers (`apps/server/src/runtime.ts`'s
+       * order), so the enqueue lands; the bound is the executor's (`MAX_SHUTDOWN_HAND_BACKS`, read
+       * off the runs), so nothing rides the payload. The start-attempt count does not carry over:
+       * a hand-back is not a start failure.
+       */
+      if (outcome.kind === 'handed_back') {
+        await enqueueStage(options.jobs, {
+          taskId: request.taskId,
+          projectId: request.projectId,
+          stage: request.stage,
+          attempt: request.attempt,
+          ...(request.overrides === undefined ? {} : { overrides: request.overrides }),
+          startAfter: new Date(Date.parse(options.clock.now()) + SHUTDOWN_HAND_BACK_DELAY_MS),
         });
       }
       logger.info(

@@ -57,7 +57,7 @@
  * that looked also misses, and has nothing left to stop; the error line names that case too.)
  */
 import type { Id } from '@platform/contracts';
-import type { ClaudeRunner, RunHandle } from '../ports/runner.js';
+import type { ClaudeRunner, RunHandle, RunStop } from '../ports/runner.js';
 
 /** See the module note: a bound on a leak, not a budget for concurrency. */
 export const MAX_LIVE_RUNS = 256;
@@ -87,12 +87,31 @@ export interface LiveRuns {
   forTask(taskId: Id): LiveRun | null;
   forget(runId: Id): void;
   readonly size: number;
+  /**
+   * **The process is stopping: hand every run back** (WP-144, PROGRESS backlog 432).
+   *
+   * Sends `stop` to every run registered here, and **closes** the register: a run whose `start` is
+   * called afterwards — a job taken in the moment between the worker's stop and this call — is
+   * stopped the instant it registers, so no session outlives the process's stop. Answers how many
+   * runs were stopped now. Never awaits the outcomes: the job that started each run awaits its own
+   * and records the ending (`stage-executor.ts`, `ask/executor.ts`), and the composition root
+   * awaits those jobs (`PipelineRuntime.stop`). A stop that rejects is logged by its caller's
+   * outcome, never thrown here — one session closing badly must not keep the others running.
+   */
+  stopAll(stop: RunStop): number;
+  /** `true` once {@link LiveRuns.stopAll} has been called. */
+  readonly closed: boolean;
 }
 
 export const createLiveRuns = (maxEntries: number = MAX_LIVE_RUNS): LiveRuns => {
   // Insertion-ordered, which is what makes "evict the oldest" a `keys().next()`.
   const byRun = new Map<Id, LiveRun>();
   const byTask = new Map<Id, Id>();
+  /** Set by `stopAll`; a run registered after it is stopped as it registers (WP-144). */
+  let closedWith: RunStop | null = null;
+  const stopQuietly = (handle: RunHandle, stop: RunStop): void => {
+    handle.stop(stop).catch(() => undefined);
+  };
 
   const drop = (runId: Id): void => {
     const entry = byRun.get(runId);
@@ -132,6 +151,9 @@ export const createLiveRuns = (maxEntries: number = MAX_LIVE_RUNS): LiveRuns => 
             drop(spec.runId);
           })
           .catch(() => undefined);
+        if (closedWith !== null) {
+          stopQuietly(handle, closedWith);
+        }
         return handle;
       },
     }),
@@ -143,6 +165,17 @@ export const createLiveRuns = (maxEntries: number = MAX_LIVE_RUNS): LiveRuns => 
     forget: drop,
     get size() {
       return byRun.size;
+    },
+    stopAll: (stop) => {
+      closedWith = stop;
+      const live = [...byRun.values()];
+      for (const entry of live) {
+        stopQuietly(entry.handle, stop);
+      }
+      return live.length;
+    },
+    get closed() {
+      return closedWith !== null;
     },
   };
 };

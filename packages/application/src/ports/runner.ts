@@ -522,8 +522,15 @@ export interface SteerMessage {
   readonly authorLabel: string;
 }
 
-/** Why the platform stopped a live run. */
-export type RunStopReason = 'cancelled' | 'taken_over';
+/**
+ * Why the platform stopped a live run.
+ *
+ * `shutdown` (WP-144) is the process's own stop: the `runner` holding the run was asked to stop
+ * (SIGTERM), so it interrupts the session and hands the run back — the run ends `failed` with the
+ * terminal reason `shutdown` and the stage entry (or the ask) is re-enqueued, bounded
+ * (`MAX_SHUTDOWN_HAND_BACKS`). No person asked for it, which is why it is not `cancelled`.
+ */
+export type RunStopReason = 'cancelled' | 'taken_over' | 'shutdown';
 
 /**
  * What a take-over asks the run's **workspace** for on the way out (product/19 §19, WP-27).
@@ -559,6 +566,7 @@ export interface RunTakeOverExport {
  */
 export type RunStop =
   | { readonly reason: 'cancelled' }
+  | { readonly reason: 'shutdown' }
   | { readonly reason: 'taken_over'; readonly workspaceExport: RunTakeOverExport };
 
 export interface RunHandle {

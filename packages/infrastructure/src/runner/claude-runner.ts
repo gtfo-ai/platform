@@ -211,6 +211,9 @@ type StopCause = 'stalled' | 'timed_out' | 'budget_exceeded' | 'cost_unreported'
 const READS_INTERRUPTED_RESULT: ReadonlySet<StopCause> = new Set<StopCause>([
   'cancelled',
   'taken_over',
+  // WP-144: the runner's own stop reads the interrupted turn's result within the same grace, so a
+  // handed-back run carries what it measured; nothing read is `costUnmeasured` (rule 16).
+  'shutdown',
   'stalled',
   'timed_out',
 ]);
@@ -222,6 +225,8 @@ const STOP_STATUS: Record<StopCause, TerminalRunStatus> = {
   cost_unreported: 'budget_exceeded',
   cancelled: 'cancelled',
   taken_over: 'cancelled',
+  // WP-144: a hand-back is a failure the platform retries, never a person's cancel.
+  shutdown: 'failed',
 };
 
 /**
@@ -248,6 +253,7 @@ const STOP_REASON: Record<StopCause, RunTerminalReason> = {
   cost_unreported: 'error_max_budget_usd',
   cancelled: 'cancelled',
   taken_over: 'cancelled',
+  shutdown: 'shutdown',
 };
 
 const STOP_MESSAGE: Record<StopCause, string> = {
@@ -259,6 +265,9 @@ const STOP_MESSAGE: Record<StopCause, string> = {
     'total_cost_usd, so the budget could not be verified and the run fails closed.',
   cancelled: 'the platform stopped the run: cancelled',
   taken_over: 'the platform stopped the run: taken_over',
+  shutdown:
+    'the platform stopped the run: shutdown — the process holding it was asked to stop, and the ' +
+    'run is handed back to be started again',
 };
 
 /**

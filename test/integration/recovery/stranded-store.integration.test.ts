@@ -166,7 +166,9 @@ const seedAsk = async (input: {
 };
 
 /** A run to attach: enough columns to satisfy `runs`' own `not null`s and nothing more. */
-const seedRun = async (input: { readonly endedAt?: string } = {}): Promise<string> => {
+const seedRun = async (
+  input: { readonly endedAt?: string; readonly terminalReason?: string } = {},
+): Promise<string> => {
   const row = await pool.query<{ id: string }>(
     `insert into runs (task_id, project_id, role, model, prompt_version, status, terminal_reason,
                        ended_at)
@@ -177,7 +179,7 @@ const seedRun = async (input: { readonly endedAt?: string } = {}): Promise<strin
       taskId,
       projectId,
       input.endedAt === undefined ? 'running' : 'failed',
-      input.endedAt === undefined ? null : 'lease_expired',
+      input.endedAt === undefined ? null : (input.terminalReason ?? 'lease_expired'),
       input.endedAt ?? null,
     ],
   );
@@ -724,6 +726,30 @@ describe('an ask whose run ended without answering it', () => {
       expect((await store.asksWithEndedRun(tx, query)).map((row) => row.askId)).not.toContain(
         ask as Id,
       );
+    });
+  });
+
+  /**
+   * WP-144: a run a `runner` stop handed back has its ask re-enqueued (durable, 30 s out), so the
+   * question is in flight until a runner takes it — an upgrade's downtime. It is ended here only an
+   * hour past the grace, when no restart explains it.
+   */
+  it('leaves a handed-back ask alone for an hour past the grace, then ends it (WP-144)', async () => {
+    const recent = await seedAsk({
+      status: 'pending',
+      createdAt: LONG_AGO,
+      runId: await seedRun({ endedAt: '2026-09-15T09:30:00.000Z', terminalReason: 'shutdown' }),
+    });
+    const abandoned = await seedAsk({
+      status: 'pending',
+      createdAt: LONG_AGO,
+      runId: await seedRun({ endedAt: '2026-09-15T08:30:00.000Z', terminalReason: 'shutdown' }),
+    });
+
+    await withTx(async (tx) => {
+      const found = (await store.asksWithEndedRun(tx, query)).map((row) => row.askId);
+      expect(found).not.toContain(recent as Id);
+      expect(found).toContain(abandoned as Id);
     });
   });
 });

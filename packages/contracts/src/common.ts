@@ -337,6 +337,14 @@ export const runTerminalReasonSchema = z.enum([
    * orders.
    */
   'lease_expired',
+  /**
+   * **Appended at WP-144** (migration 0080): the process holding the run was asked to stop
+   * (SIGTERM), interrupted the session and handed the run back — the stage entry (or the ask) is
+   * re-enqueued and the task retries by itself, at most twice per stage entry. A claim about the
+   * *process*, like `lease_expired`, never about the model; a SIGKILL or a crash is still
+   * `lease_expired`.
+   */
+  'shutdown',
 ]);
 
 export const questionStatusSchema = z.enum(['open', 'answered', 'expired', 'escalated']);

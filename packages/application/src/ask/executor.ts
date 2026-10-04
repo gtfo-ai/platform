@@ -105,7 +105,38 @@ export type AskExecutionOutcome =
   /** Admission said no; the ask row says why, and no run was created. */
   | { readonly kind: 'refused'; readonly askId: Id; readonly reason: string }
   /** A run happened and produced nothing usable; the ask row says so. */
-  | { readonly kind: 'failed'; readonly askId: Id; readonly reason: string };
+  | { readonly kind: 'failed'; readonly askId: Id; readonly reason: string }
+  /**
+   * The run was handed back by its process's stop (WP-144): ended `failed`/`shutdown`, the ask left
+   * `pending`, and the caller re-enqueues the ask's `task.ask` job with `hand_backs` = this count.
+   */
+  | {
+      readonly kind: 'handed_back';
+      readonly askId: Id;
+      readonly runId: Id;
+      readonly handBacks: number;
+    };
+
+/**
+ * How long a handed-back ask waits before it is run again (WP-144) — the stage's figure, for the
+ * stage's reason (`pipeline/jobs.ts`' `SHUTDOWN_HAND_BACK_DELAY_MS`). Restated rather than imported
+ * because `pipeline/jobs.ts` already imports this module's neighbours, and a 30 s literal cannot drift
+ * into a different meaning.
+ */
+export const ASK_HAND_BACK_DELAY_MS = 30_000;
+
+/**
+ * How many times one ask may be handed back by a `runner` stop (WP-144 ruling (b), the stage's
+ * bound). Counted in the job's payload (`hand_backs`) because an ask's row keeps one `run_id` and
+ * cannot list the runs it had; no column is added, as the ruling asks.
+ */
+export const MAX_ASK_HAND_BACKS = 2;
+
+/** `hand_backs` off a payload: a non-negative integer, or zero for anything else. */
+const handBacksOf = (data: AskExecuteData): number => {
+  const value = data.hand_backs;
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
+};
 
 export interface AskExecutorOptions {
   readonly unitOfWork: UnitOfWork;
@@ -577,11 +608,60 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
     readonly redactor: SecretRedactor;
     readonly knownRunIds: ReadonlySet<string>;
     readonly knownAuditIds: ReadonlySet<string>;
+    /** How many times this ask was handed back before this run (WP-144). */
+    readonly handBacks: number;
   }): Promise<AskExecutionOutcome> =>
     options.unitOfWork.transaction(async (scope) => {
       const { ask, run, outcome } = input;
       const context = options.context(ask.taskId);
       const spent = Number.isFinite(outcome.cost.usd) ? Math.max(0, outcome.cost.usd) : 0;
+
+      /**
+       * **Handed back by this process's stop** (WP-144): the run ends `failed`/`shutdown` with what
+       * it measured, the ask stays `pending`, and the caller re-enqueues it — unless this is the
+       * stop past {@link MAX_ASK_HAND_BACKS}, which ends the ask `failed` like any other run that
+       * produced nothing, naming the stops.
+       */
+      if (outcome.terminalReason === 'shutdown' && input.handBacks < MAX_ASK_HAND_BACKS) {
+        const failed = failRun(
+          run,
+          {
+            status: 'failed',
+            terminalReason: 'shutdown',
+            error: options.redactor.redactText(outcome.error ?? 'shutdown').value,
+            ...(outcome.costUnmeasured === true
+              ? {}
+              : { usage: outcome.usage, cost: outcome.cost }),
+          },
+          context,
+        );
+        const owned = await options.store.runs.finish(scope.tx, {
+          runId: run.id,
+          status: 'failed',
+          terminalReason: 'shutdown',
+          sessionId: outcome.sessionId,
+          numTurns: outcome.numTurns,
+          usage: outcome.usage,
+          cost: outcome.costUnmeasured === true ? null : outcome.cost,
+          wallMs: outcome.wallMs,
+          costIsFloor: input.stopReason === COST_UNREPORTED,
+        });
+        if (!owned) {
+          return { kind: 'skipped' as const, reason: 'another writer ended this run first' };
+        }
+        await options.store.tasks.addSpend(
+          scope.tx,
+          ask.taskId,
+          outcome.costUnmeasured === true ? 0 : spent,
+        );
+        await scope.events.append([...failed.events] as DomainEvent[]);
+        return {
+          kind: 'handed_back' as const,
+          askId: ask.id,
+          runId: run.id,
+          handBacks: input.handBacks + 1,
+        };
+      }
 
       const parsed =
         outcome.status === 'completed' && outcome.structuredOutput !== null
@@ -628,7 +708,9 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
               'reads as an identifier and therefore refuses to rewrite'
             : outcome.status === 'completed'
               ? 'the run produced no answer the AskAnswer contract accepts'
-              : `the run ended "${outcome.status}"${input.stopReason === null ? '' : ` (${input.stopReason})`}`;
+              : outcome.terminalReason === 'shutdown'
+                ? `the platform's runner was stopped while answering this question ${String(input.handBacks + 1)} times; it is not started again`
+                : `the run ended "${outcome.status}"${input.stopReason === null ? '' : ` (${input.stopReason})`}`;
         const failed = failRun(
           run,
           {
@@ -877,7 +959,30 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         redactor: started.redactor,
         knownRunIds: new Set(admitted.runs.map((line) => line.runId)),
         knownAuditIds: new Set(admitted.audit.map((line) => line.id)),
+        handBacks: handBacksOf(job),
       });
+      if (recorded.kind === 'handed_back') {
+        // WP-144: the same ask again, after the stopped process has had time to come back. This
+        // handler is inside the worker's drain and pg-boss stops after the pipeline's workers, so
+        // the enqueue lands. `stately` per ask admits it beside this still-active job.
+        await options.jobs.enqueue<AskExecuteData>({
+          queue: JOB_QUEUES.taskAsk,
+          singletonKey: `ask:${job.ask_id}`,
+          startAfter: new Date(
+            Date.parse(options.context(admitted.ask.taskId).clock.now()) + ASK_HAND_BACK_DELAY_MS,
+          ),
+          data: {
+            ask_id: job.ask_id,
+            task_id: job.task_id,
+            project_id: job.project_id,
+            hand_backs: recorded.handBacks,
+          },
+        });
+        logger.info(
+          { ask_id: job.ask_id, run_id: recorded.runId, hand_backs: recorded.handBacks },
+          'an ask run was handed back by this process’s stop; it is started again',
+        );
+      }
       if (recorded.kind === 'answered') {
         await options.jobs.enqueue({
           queue: JOB_QUEUES.pipelineOutbound,

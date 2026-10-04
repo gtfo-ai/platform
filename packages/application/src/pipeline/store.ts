@@ -1380,6 +1380,17 @@ export interface RunRepository {
   ): Promise<boolean>;
   load(tx: Transaction, runId: Id): Promise<StoredRun | null>;
   /**
+   * How many of this **stage entry's** runs ended `shutdown` — handed back by a `runner` stop
+   * (WP-144, PROGRESS backlog 432). The bound on the hand-back is counted from the runs' own end
+   * reasons rather than kept in a column: the third stop of one entry escalates
+   * (`MAX_SHUTDOWN_HAND_BACKS`). An entry is `(task, stage, attempt)`; a new attempt of the stage
+   * (a return, a hand-back by a person) starts a new count.
+   */
+  shutdownEndings(
+    tx: Transaction,
+    entry: { readonly taskId: Id; readonly stage: Slug; readonly attempt: number },
+  ): Promise<number>;
+  /**
    * What the task's runs add up to — the `totals` of `task.completed` / `task.cancelled`.
    *
    * `is_estimate` is true when **any** run's cost was priced by the platform (`usd_estimated`)

@@ -2275,6 +2275,83 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect((await store.runs.load(tx, runId))?.cost).toBeNull();
       });
 
+      /**
+       * WP-144's bound: a stage entry's runs a `runner` stop handed back, counted from their own end
+       * reasons. Per entry — `(task, stage, attempt)` — and nothing but `shutdown` counts.
+       */
+      it('counts the shutdown endings of one stage entry, and of nothing else (WP-144)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        for (const attempt of [1, 2]) {
+          await store.tasks.recordStageEntered(tx, {
+            taskId: stored.task.id,
+            stage: 'refinement' as Slug,
+            attempt,
+            causedByEventId: null,
+          });
+        }
+        const endedRun = async (attempt: number, terminalReason: 'shutdown' | 'crash') => {
+          const runId = nextId();
+          await store.runs.insert(tx, {
+            id: runId,
+            taskId: stored.task.id,
+            projectId,
+            stage: 'refinement' as Slug,
+            role: 'product_manager',
+            mode: 'normal',
+            attempt,
+            model: 'claude-opus-5',
+            effort: 'medium',
+            promptVersion: 'basic@1+product_manager',
+            systemPrompt: null,
+            userPrompt: null,
+            redactionCount: 0,
+            contextPack: null,
+            settings: null,
+            reserveUsd: null,
+            promptsWithheld: null,
+            status: 'running',
+            terminalReason: null,
+            sessionId: null,
+            numTurns: 0,
+            usage: null,
+            cost: null,
+            wallMs: 0,
+            createdAt: '2026-06-01T09:00:00.000Z',
+            startedAt: '2026-06-01T09:00:01.000Z',
+          });
+          await store.runs.finish(tx, {
+            runId,
+            status: 'failed',
+            terminalReason,
+            sessionId: null,
+            numTurns: 0,
+            usage: {
+              input_tokens: 0,
+              output_tokens: 0,
+              cache_write_5m_tokens: 0,
+              cache_write_1h_tokens: 0,
+              cache_read_tokens: 0,
+            },
+            cost: null,
+            wallMs: 10,
+          });
+        };
+        await endedRun(1, 'shutdown');
+        await endedRun(1, 'shutdown');
+        await endedRun(1, 'crash');
+        await endedRun(2, 'shutdown');
+        const count = async (stage: string, attempt: number) =>
+          store.runs.shutdownEndings(tx, {
+            taskId: stored.task.id,
+            stage: stage as Slug,
+            attempt,
+          });
+        expect(await count('refinement', 1)).toBe(2);
+        expect(await count('refinement', 2)).toBe(1);
+        expect(await count('implementation', 1)).toBe(0);
+      });
+
       it('keeps the estimate and the reported figure apart, in the two columns they belong to', async () => {
         const reported = await liveRun();
         await store.runs.finish(tx, {

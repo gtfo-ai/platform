@@ -147,6 +147,14 @@
  *    launcher's log and this process' own stdout and stderr, and every container the leg made is
  *    asked of the daemon after teardown.
  *
+ * ## What WP-144 added (PROGRESS backlog 432)
+ *
+ *  - **The runner's own stop on a live session**: a run of the fake CLI that never finishes is
+ *    stopped with `{ reason: 'shutdown' }` — what `LiveRuns.stopAll` sends on SIGTERM — and must end
+ *    `failed`/`shutdown` inside the row's 10 s budget **including** the launcher's removal of its
+ *    container and network. Measured at WP-144: 5.7 s (Docker Desktop, `linux/arm64`), most of it the
+ *    runner's 5 s interrupt grace, since this CLI never answers the interrupt with a result.
+ *
  * ## Environment
  *
  *     DOCKER_HOST=unix:///var/run/docker.sock node scripts/launcher-control-plane-check.mjs
@@ -216,6 +224,10 @@ const TIMEOUT_RUN_IDS = [
 const NETWORK_ONLY_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000286f';
 /** WP-118 review round 1: the CLI's git asks the shim for a credential through the helper. */
 const GIT_CREDENTIAL_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000342b';
+/** WP-144: a live run stopped by the runner's own `shutdown` stop (PROGRESS backlog 432). */
+const SHUTDOWN_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000432a';
+/** The row's budget for the hand-back, inside the runner's shutdown deadline (WP-144 ruling (c)). */
+const SHUTDOWN_BUDGET_MS = 10_000;
 /** WP-118's run of the image's real `claude` (PROGRESS backlog 342, consequence (a)). */
 const REAL_CLI_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000342a';
 /** WP-133's run of the real `claude` in BD-004 `local` mode (PROGRESS backlog 137). */
@@ -1409,6 +1421,39 @@ try {
     }),
   );
 
+  // WP-144: the runner's own stop on a live session, timed through the workspace's release.
+  const shutdown = lastJsonLine(
+    await runRunner(
+      { CHECK_PHASE: 'shutdown', CHECK_SHUTDOWN_RUN_ID: SHUTDOWN_RUN_ID },
+      { name: 'agentic-wp144-runner-shutdown' },
+    ),
+  );
+  const shutdownLeft = await runObjectsFull(SHUTDOWN_RUN_ID);
+  process.stdout.write(
+    `--- WP-144: a live run stopped for shutdown ---\n${JSON.stringify({ shutdown, shutdownLeft }, null, 2)}\n`,
+  );
+  record(
+    `WP-144: a live run stopped for shutdown ends failed/shutdown inside ${SHUTDOWN_BUDGET_MS / 1000} s, its workspace released`,
+    shutdown?.ok === true &&
+      shutdown.live === true &&
+      shutdown.status === 'failed' &&
+      shutdown.terminalReason === 'shutdown' &&
+      typeof shutdown.stopMs === 'number' &&
+      shutdown.stopMs < SHUTDOWN_BUDGET_MS &&
+      shutdownLeft.containers.length === 0 &&
+      shutdownLeft.networks.length === 0 &&
+      shutdownLeft.controlDirectory === false,
+    JSON.stringify({
+      stopMs: shutdown?.stopMs,
+      status: shutdown?.status,
+      terminalReason: shutdown?.terminalReason,
+      costUnmeasured: shutdown?.costUnmeasured,
+      releases: shutdown?.releases,
+      left: shutdownLeft,
+      error: shutdown?.error,
+    }),
+  );
+
   realCli = await measureRealCli();
   process.stdout.write(
     `--- backlog 342 (a): the real CLI ---\n${JSON.stringify(realCli, null, 2)}\n`,
@@ -1844,6 +1889,7 @@ try {
     LOCAL_CLI_RUN_ID,
     NO_ROUTE_RUN_ID,
     GIT_CREDENTIAL_RUN_ID,
+    SHUTDOWN_RUN_ID,
     ...ALL_286_RUN_IDS,
   ]) {
     await docker(['volume', 'rm', '-f', `ws-${runId}`], { allowFailure: true });

@@ -317,7 +317,10 @@ export const createFakeClaudeRunner = (options: FakeClaudeRunnerOptions): Claude
               'the run produced no output before the stall timeout',
               null,
             )
-          : outcomeOf('cancelled', 'cancelled', `the platform stopped the run: ${reason}`, null);
+          : reason === 'shutdown'
+            ? // WP-144: the hand-back is a `failed` run with its own reason, as the real runner's.
+              outcomeOf('failed', 'shutdown', `the platform stopped the run: ${reason}`, null)
+            : outcomeOf('cancelled', 'cancelled', `the platform stopped the run: ${reason}`, null);
       }
 
       stall.cancel?.();

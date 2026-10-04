@@ -270,4 +270,18 @@ describe('stopping', () => {
     expect(outcome.status).toBe('cancelled');
     expect(outcome.terminalReason).toBe('cancelled');
   });
+
+  it('reports the runner’s own stop as a failed run with the reason shutdown (WP-144)', async () => {
+    const clock = manualClock(FIXTURE_CLOCK_START);
+    const runner = createFakeClaudeRunner({
+      sink: recordingSink(),
+      clock,
+      select: () => ({ ...scenarioOf('happy-path'), stepDelayMs: 1_000 }),
+    });
+    const handle = runner.start(runSpecFixture());
+    await handle.stop({ reason: 'shutdown' });
+    const outcome = await handle.outcome;
+    expect(outcome.status).toBe('failed');
+    expect(outcome.terminalReason).toBe('shutdown');
+  });
 });

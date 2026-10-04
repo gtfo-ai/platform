@@ -1127,6 +1127,8 @@ export const composePipeline = async (
     store,
     settings,
     repositoryFiles,
+    // WP-144: the register the runner is wrapped in, so the runtime's stop hands its runs back.
+    ...(runsAgents ? { liveRuns: options.liveRuns } : {}),
     jobs,
     integrations,
     ids,

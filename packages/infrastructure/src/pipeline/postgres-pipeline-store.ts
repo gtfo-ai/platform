@@ -1574,6 +1574,22 @@ export const createPostgresPipelineStore = (
       return row === undefined ? null : toStoredRun(row);
     },
     /**
+     * WP-144's bound: the stage entry's runs a `runner` stop handed back. Joined through
+     * `task_stage_id`, the link `load` reads the stage by, so a run attached to no stage attempt is
+     * nobody's hand-back (it counts for no entry).
+     */
+    shutdownEndings: async (tx, entry) => {
+      const { rows } = await sqlOf(tx).query<{ n: number }>(
+        `select count(*)::int as n
+           from runs r
+           join task_stages s on s.id = r.task_stage_id
+          where r.task_id = $1 and s.stage = $2 and s.attempt = $3
+            and r.terminal_reason = 'shutdown'`,
+        [entry.taskId, entry.stage, entry.attempt],
+      );
+      return Number(rows[0]?.n ?? 0);
+    },
+    /**
      * `estimated` counts only the runs the platform **priced** (`usd_estimated` set) — until WP-131
      * it was `usd_reported is null`, which also counted a run nobody measured and published the
      * exclusion as *"an estimate"* (PROGRESS backlog 403). The runs nobody measured are counted by

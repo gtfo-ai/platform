@@ -5963,7 +5963,8 @@
         "stalled",
         "timed_out",
         "crash",
-        "lease_expired"
+        "lease_expired",
+        "shutdown"
       ]
     },
     "Sequence": {

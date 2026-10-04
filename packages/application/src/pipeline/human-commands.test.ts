@@ -1413,6 +1413,8 @@ const liveRunFor = (
       forTask: (asked) => (asked === taskId ? entry : null),
       forget: () => undefined,
       size: 1,
+      stopAll: () => 0,
+      closed: false,
     },
   };
 };

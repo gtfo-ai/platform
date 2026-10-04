@@ -695,15 +695,23 @@ a plain `create index`: each migration runs in one transaction, so it cannot be 
 blocks writes to that table until the build finishes — a writer waits rather than fails, because no
 `lock_timeout` or `statement_timeout` is set. WP-115 measured those builds at 38 ms and 71 ms on its
 largest data sets (PROGRESS backlog 307 and 312); a larger installation waits longer. Stopping the
-two processes that write turns that into a short outage you chose. An agent run in progress when you
-stop `runner` is interrupted — the recreate at the end of the block always did that — so upgrade with
-no agent run in progress where you can. What happens to it (WP-133): the runner's shutdown waits for
-the stage it is running and the run does not end on its own — measured, the shutdown of a runner
-holding a run was still waiting 60 s later — so the runner's own deadline (`APP_SHUTDOWN_TIMEOUT_MS`,
-30 s, read in `apps/server/src/main.ts`) is what ends the process. Nothing renews the run's lease after that, so once
-it lapses (it is five minutes long) the platform's lease sweep ends the run `lease_expired` and moves
-the task to `needs_human` — WP-47's recovery, which WP-133 did not re-measure. So a `stop runner` with
-a run in flight takes about 30 s, and the task waits for you afterwards rather than continuing.
+two processes that write turns that into a short outage you chose. **Stopping `runner` with an agent
+run in progress is safe** (WP-144): on the stop it stops taking new work, interrupts each run it holds,
+ends it `failed` with the reason `shutdown` and the cost it had measured (nothing measured is recorded
+as nothing, never as $0), charges that once, and queues the same stage (or the same ask) to start again
+30 s later — on whichever `runner` is up by then, here the one the block above starts. The task stays
+at its stage and never waits for you. What is lost is the interrupted run's work that it had not pushed:
+the new run starts from the task's branch. **Twice per stage**: the third time one stage entry is
+interrupted this way the task goes to *Needs human* with a brief naming the stops, so a runner that
+keeps being stopped under one stage is shown to a person rather than retried for ever. Measured: a live
+session in a real run container (the launcher check, a CLI that never answers the interrupt) was
+handed back in **5.7 s** including the launcher removing its container — the runner's 5 s grace for the
+interrupted turn's result is most of it, and the budget is 10 s inside the 30 s shutdown deadline;
+through two server processes on one database the whole stop returned in 16 ms with a CLI that answers
+at once. Before WP-144 the same stop was still waiting **60 s** later (WP-133) and again more than 80 s
+later when re-measured, until the deadline ended the process. A **`docker kill`, an OOM kill or a crash** is unchanged:
+nothing ends the run in that process, its lease (five minutes) lapses, and the lease sweep ends it
+`lease_expired` and moves the task to *Needs human* (WP-47).
 
 **`app`, `runner` and `db` stop gracefully as well** (WP-133). Each has a `stop_grace_period` in
 `compose.yml`: 45 s for `app` and `runner` (their own 30 s shutdown deadline plus a margin — if you

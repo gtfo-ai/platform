@@ -532,12 +532,14 @@ docker compose up -d     # run (as above); also how you apply an edited .env
 docker compose down      # not run: removes the containers and keeps every volume
 ```
 
-- **Stop with no agent run in progress** (Agents shows none). A `runner` stopped mid-run waits its
-  own 30 s deadline and exits; the run is then ended `lease_expired` by the lease sweep after its
-  lease lapses (five minutes) and the task waits for you *Needs human* (WP-133; nothing interrupts a
-  run on shutdown in this build). The graces in `compose.yml` — 45 s for `app` and `runner`, 60 s
-  for the `launcher`, 30 s for `db` — cost nothing when nothing is in flight; do not shorten them or
-  stop a container with `docker kill` (WP-132, WP-133).
+- **A stop with an agent run in progress is safe** (WP-144): the `runner` interrupts the run, ends it
+  `shutdown` with what it measured, and queues the same stage to start again 30 s later on the next
+  `runner` up; the task stays at its stage. Twice per stage — the third interruption of one stage
+  sends the task to *Needs human* with a brief naming the stops. Only `docker kill` or a crash still
+  leaves the run to the lease sweep (`lease_expired` after five minutes, then *Needs human*). The
+  graces in `compose.yml` — 45 s for `app` and `runner`, 60 s for the `launcher`, 30 s for `db` —
+  cost nothing when nothing is in flight; do not shorten them or stop a container with
+  `docker kill` (WP-132, WP-133).
 - **`.env` changes need `docker compose up -d`**, which recreates `app` and `runner`;
   `docker compose restart` keeps the old environment (measured, WP-132).
 - **`docker compose down -v` deletes the database and every credential in it.** Use it only to

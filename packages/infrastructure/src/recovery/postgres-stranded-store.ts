@@ -351,6 +351,12 @@ export const createPostgresStrandedWorkStore = (): StrandedWorkStore => {
           where a.status = 'pending'
             and r.ended_at is not null
             and r.ended_at < $1::timestamptz
+            -- WP-144: a run a runner stop handed back has its ask's task.ask job re-enqueued
+            -- (durable, 30 s later), so it is in flight until whichever process subscribes the queue
+            -- next takes it — which waits for the runner to come back. It is the question's ending
+            -- only after an hour (STRANDED_ENDING_AFTER_MS's figure), when no restart explains it.
+            and (r.terminal_reason is distinct from 'shutdown'
+                 or r.ended_at < $1::timestamptz - interval '1 hour')
           order by r.ended_at
           limit $2`,
         [query.olderThan, query.limit],

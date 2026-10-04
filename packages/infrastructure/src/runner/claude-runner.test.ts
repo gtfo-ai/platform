@@ -1194,3 +1194,32 @@ describe('local provider mode (BD-004)', () => {
     expect(result.cost).toEqual({ usd: 0.42, is_estimate: true, price_list_id: null });
   });
 });
+
+/**
+ * WP-144 (PROGRESS backlog 432): the process's own stop hands the run back. It is a `failed` run
+ * with the terminal reason `shutdown` — never `cancelled`, which says a person stopped it — and it
+ * carries the interrupted turn's measured cost like a person's stop, or says nothing was measured.
+ */
+describe('a hand-back on the runner’s own stop (WP-144)', () => {
+  it('ends the run failed/shutdown with the interrupted turn’s measured cost', async () => {
+    const script = loadScript('stall');
+    const harness = startScript(script, {
+      cli: { interruptedResult: { ...INTERRUPTED_RESULT } },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const result = await settleStop(harness, harness.handle.stop({ reason: 'shutdown' }));
+
+    expect(result.status).toBe('failed');
+    expect(result.terminalReason).toBe('shutdown');
+    expect(result.cost).toEqual({ usd: 0.13, is_estimate: false, price_list_id: null });
+    expect(result.costUnmeasured).toBeUndefined();
+  });
+
+  it('says nothing was measured when the interrupted turn sent no result (rule 16)', async () => {
+    const harness = start('stall');
+    const result = await settleStop(harness, harness.handle.stop({ reason: 'shutdown' }));
+    expect(result.status).toBe('failed');
+    expect(result.terminalReason).toBe('shutdown');
+    expect(result.costUnmeasured).toBe(true);
+  });
+});

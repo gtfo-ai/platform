@@ -93,11 +93,15 @@ const deferredRunner = (): {
   readonly runner: ClaudeRunner;
   readonly settle: (runId: Id, how: 'resolve' | 'reject') => void;
   readonly handles: readonly RunHandle[];
+  /** Every `stop` a handle was sent, in order (WP-144). */
+  readonly stops: readonly { readonly runId: Id; readonly reason: string }[];
 } => {
   const settlers = new Map<Id, { resolve: () => void; reject: () => void }>();
   const handles: RunHandle[] = [];
+  const stops: { runId: Id; reason: string }[] = [];
   return {
     handles,
+    stops,
     settle: (runId, how) => {
       const settler = settlers.get(runId);
       if (settler === undefined) {
@@ -120,7 +124,9 @@ const deferredRunner = (): {
           sessionId: `session-${spec.runId}`,
           outcome,
           steer: async () => {},
-          stop: async () => {},
+          stop: async (stop) => {
+            stops.push({ runId: spec.runId, reason: stop.reason });
+          },
         };
         handles.push(handle);
         return handle;
@@ -222,5 +228,55 @@ describe('the register of live runs', () => {
 
     expect(live.forRun(RUN)).toBeNull();
     expect(live.forTask(TASK)).toBeNull();
+  });
+});
+
+/**
+ * WP-144 (PROGRESS backlog 432): the process's stop hands its runs back through this register.
+ */
+describe('stopping every run this process holds (WP-144)', () => {
+  const second = '44444444-4444-4444-8444-444444444444' as Id;
+
+  it('sends `shutdown` to every live run, once, and answers how many it stopped', () => {
+    const live = createLiveRuns();
+    const inner = deferredRunner();
+    const runner = live.observe(inner.runner);
+    runner.start(specFixture());
+    runner.start(
+      specFixture({ runId: second, taskId: '99999999-9999-4999-8999-999999999999' as Id }),
+    );
+
+    expect(live.closed).toBe(false);
+    expect(live.stopAll({ reason: 'shutdown' })).toBe(2);
+    expect(live.closed).toBe(true);
+    expect(inner.stops).toEqual([
+      { runId: RUN, reason: 'shutdown' },
+      { runId: second, reason: 'shutdown' },
+    ]);
+  });
+
+  it('stops nothing for a run that finished on its own before the stop', async () => {
+    const live = createLiveRuns();
+    const inner = deferredRunner();
+    const handle = live.observe(inner.runner).start(specFixture());
+    inner.settle(RUN, 'resolve');
+    await handle.outcome;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(live.stopAll({ reason: 'shutdown' })).toBe(0);
+    expect(inner.stops).toEqual([]);
+  });
+
+  it('stops a run that registers after the stop, the instant it registers', () => {
+    // A job taken in the moment between the worker's stop and the hand-back: no session may outlive
+    // the process's stop, so the late run is handed back too rather than left running.
+    const live = createLiveRuns();
+    const inner = deferredRunner();
+    const runner = live.observe(inner.runner);
+    live.stopAll({ reason: 'shutdown' });
+    runner.start(specFixture());
+
+    expect(inner.stops).toEqual([{ runId: RUN, reason: 'shutdown' }]);
   });
 });

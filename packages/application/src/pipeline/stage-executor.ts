@@ -256,6 +256,20 @@ export type StageExecutionOutcome =
    * key, the delay) belongs to `pipeline/jobs.ts`, which already owns the same shape for a gate that
    * answers "not yet".
    */
+  /**
+   * **The run was handed back by its process's own stop** (WP-144, PROGRESS backlog 432): the run is
+   * ended `failed`/`shutdown`, the task is untouched — still at this stage, on this attempt, its
+   * stage row open — and the caller re-enqueues the **same stage entry** after
+   * `SHUTDOWN_HAND_BACK_DELAY_MS`. `handBacks` is this entry's count including this one, read off
+   * the runs' end reasons (`RunRepository.shutdownEndings`); the one past
+   * {@link MAX_SHUTDOWN_HAND_BACKS} is a `failed` escalation instead, never this kind.
+   */
+  | {
+      readonly kind: 'handed_back';
+      readonly runId: Id;
+      readonly reason: string;
+      readonly handBacks: number;
+    }
   | {
       readonly kind: 'retry';
       readonly runId: Id;
@@ -428,6 +442,15 @@ export interface StageExecutionJob {
  * that "what stops an unbounded retry" has one answer.
  */
 export const MAX_RUN_START_ATTEMPTS = 3;
+
+/**
+ * How many times one stage entry may be **handed back** by a `runner` stop before the next stop
+ * escalates it (WP-144 ruling (b)): two. An upgrade or a restart in the middle of a run is the
+ * ordinary case and costs nothing but the interrupted work; a third stop of the same entry is a
+ * process that keeps being stopped under one stage, and a person is told, with a brief naming the
+ * stops. Counted from the entry's runs' end reasons (`RunRepository.shutdownEndings`), not a column.
+ */
+export const MAX_SHUTDOWN_HAND_BACKS = 2;
 
 export interface StageExecutor {
   execute(job: StageExecutionJob): Promise<StageExecutionOutcome>;
@@ -1805,6 +1828,10 @@ const recordUnsuccessful = async (
   const { options, outcome, run } = input;
   const { store } = options;
 
+  if (outcome.terminalReason === 'shutdown') {
+    return recordHandBack(scope, input, stored, context);
+  }
+
   const costUnreported = input.stopReason === COST_UNREPORTED;
   const overspent = outcome.status === 'budget_exceeded' && !costUnreported;
 
@@ -1867,6 +1894,92 @@ const recordUnsuccessful = async (
 };
 
 /**
+ * **A run its own process stopped** (WP-144, PROGRESS backlog 432): end it `failed`/`shutdown` with
+ * whatever the session measured, and hand the stage entry back — or, past the bound, escalate.
+ *
+ * The run's ending and the decision are one transaction: the count is read **before** this run's
+ * row moves (so it is the entry's earlier hand-backs), `finish` is the arbiter with every other
+ * writer (a person's cancel that ended the row first wins, and this writes nothing but the late
+ * cost — `lostTheRun`), and the spend is added once, by the winner. The reservation is released by
+ * the row becoming terminal, as for every ending; a run that measured nothing keeps both cost
+ * columns null and is held at its reservation by the task cap (rule 16, WP-131) — never a `0`.
+ *
+ * **The task is not touched** on the hand-back: still `active` at this stage on this attempt with
+ * its stage row open, which is exactly what `revalidateOpen` admits when the re-enqueued job fires
+ * — the caller's enqueue, after this commits (`Jobs.enqueue` does not join a transaction; a process
+ * that dies between the two leaves the entry to the stranded-stage recovery, which escalates an
+ * attempt whose run ended, naming `shutdown`). A task a person moved meanwhile (paused, cancelled,
+ * sent elsewhere) is recorded onto and never re-run: the job re-validates on fire (TD-004).
+ */
+const recordHandBack = async (
+  scope: TransactionScope,
+  input: RecordInput,
+  stored: StoredTask,
+  context: CommandContext,
+): Promise<StageExecutionOutcome> => {
+  const { options, outcome, run, job } = input;
+  const { store } = options;
+  if (revalidate(stored, job).kind === 'skipped') {
+    return recordOntoStoppedTask(scope, input, stored, context);
+  }
+  const earlier = await store.runs.shutdownEndings(scope.tx, {
+    taskId: job.taskId,
+    stage: job.stage,
+    attempt: job.attempt,
+  });
+  const handBacks = earlier + 1;
+  const failed = failRun(
+    run,
+    {
+      status: 'failed',
+      terminalReason: 'shutdown',
+      error: outcome.error ?? 'shutdown',
+      ...failedSpendOf(outcome),
+    },
+    context,
+  );
+  const owned = await store.runs.finish(scope.tx, {
+    runId: run.id,
+    status: 'failed',
+    terminalReason: 'shutdown',
+    sessionId: outcome.sessionId,
+    numTurns: outcome.numTurns,
+    usage: outcome.usage,
+    cost: rowCostOf(outcome),
+    wallMs: outcome.wallMs,
+    costIsFloor: costIsFloorOf(input),
+  });
+  if (!owned) {
+    return lostTheRun({ ...input, scope });
+  }
+  await store.tasks.addSpend(scope.tx, job.taskId, spendOf(outcome));
+  if (handBacks > MAX_SHUTDOWN_HAND_BACKS) {
+    const reason = `the platform's runner was stopped during this stage ${String(handBacks)} times`;
+    return escalateOnRun(
+      scope,
+      input,
+      stored,
+      context,
+      reason,
+      failed.events,
+      `The "${job.stage}" stage of ${stored.task.ticket.key} was interrupted ${String(handBacks)} times ` +
+        `because the platform's runner process was stopped while it ran (attempt ${String(job.attempt)}; ` +
+        `the last run is ${run.id}). The first ${String(MAX_SHUTDOWN_HAND_BACKS)} were started again ` +
+        'automatically; this one is not. Work the interrupted runs had not pushed is lost. Find out ' +
+        'why the runner keeps stopping (an upgrade loop, a memory limit, a restart policy), then hand ' +
+        'the task back at this stage.',
+    );
+  }
+  await scope.events.append(failed.events);
+  return {
+    kind: 'handed_back',
+    runId: run.id,
+    handBacks,
+    reason: `the runner was stopped while the run was in flight; hand-back ${String(handBacks)} of ${String(MAX_SHUTDOWN_HAND_BACKS)}`,
+  };
+};
+
+/**
  * Ends the stage without a verdict. The pipeline's `run.failed` handler is *not* what escalates —
  * the task is parked here, in the same transaction that recorded the run, so there is no window in
  * which a task looks `active` at a stage that has already stopped.
@@ -1878,10 +1991,11 @@ const escalateOnRun = async (
   context: CommandContext,
   reason: string,
   runEvents: readonly DomainEvent[] = [],
+  blockerBrief?: string,
 ): Promise<StageExecutionOutcome> => {
   const { options, run } = input;
   const { job } = input;
-  const escalated = escalate(stored, context, job.stage, reason);
+  const escalated = escalate(stored, context, job.stage, reason, blockerBrief);
   await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
   await options.store.tasks.recordStageExited(scope.tx, {
     taskId: job.taskId,
@@ -1995,15 +2109,22 @@ const NO_USAGE = {
 /** `is_estimate: false` — "nothing" is a measurement, not a guess (BD-011). */
 const NO_COST = { usd: 0, is_estimate: false, price_list_id: null } as const;
 
-const escalate = (stored: StoredTask, context: CommandContext, stage: Slug, reason: string) =>
+const escalate = (
+  stored: StoredTask,
+  context: CommandContext,
+  stage: Slug,
+  reason: string,
+  blockerBrief?: string,
+) =>
   escalateTask(
     stored.task,
     {
       reason: `stage "${stage}": ${reason}`,
       blockerBrief:
+        blockerBrief ??
         `The "${stage}" stage of ${stored.task.ticket.key} stopped without a result: ${reason}. ` +
-        "Nothing is retried automatically. Open the run's transcript, decide what should change, " +
-        'and hand the task back at the stage you want it to resume from.',
+          "Nothing is retried automatically. Open the run's transcript, decide what should change, " +
+          'and hand the task back at the stage you want it to resume from.',
     },
     context,
   );

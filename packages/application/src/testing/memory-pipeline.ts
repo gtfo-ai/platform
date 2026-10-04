@@ -1045,6 +1045,15 @@ export const createMemoryPipelineStore = (
       const run = runs.get(runId);
       return run === undefined ? null : clone(run);
     },
+    /** WP-144's bound, over this store's rows with the SQL adapter's predicate. */
+    shutdownEndings: async (_tx, entry) =>
+      [...runs.values()].filter(
+        (run) =>
+          run.taskId === entry.taskId &&
+          run.stage === entry.stage &&
+          run.attempt === entry.attempt &&
+          run.terminalReason === 'shutdown',
+      ).length,
     totalsFor: async (_tx, taskId) => {
       const owned = [...runs.values()].filter((run: StoredRun) => run.taskId === taskId);
       return {

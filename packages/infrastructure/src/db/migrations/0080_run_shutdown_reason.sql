@@ -1,0 +1,15 @@
+-- 0080 — `run_terminal_reason` gains `shutdown` (WP-144, PROGRESS backlog 432).
+--
+-- A `runner` that receives SIGTERM with a run in flight now **hands the run back**: it interrupts the
+-- session, ends the run `failed` with this reason, and re-enqueues the same stage entry (or the same
+-- ask) so the task retries by itself — at most twice per stage entry, counted from these rows
+-- (`RunRepository.shutdownEndings`), never from a new column. The reason is a name of its own rather
+-- than `cancelled` (a claim that a person stopped it) or `crash` (a claim about the session): the
+-- platform stopped the run because the process holding it was asked to stop, and that is the only
+-- thing it knows. A SIGKILL or a crash is unchanged — the lease sweep ends that run `lease_expired`.
+--
+-- Appended, like 0035's `lease_expired`: a bare `add value` appends, and
+-- `test/integration/db/enums.integration.test.ts` compares the database's order with the zod enum's.
+-- Nothing in this migration writes the new label, which is what lets it run inside the migrator's
+-- transaction.
+alter type run_terminal_reason add value 'shutdown';
