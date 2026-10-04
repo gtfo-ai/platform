@@ -64,16 +64,25 @@ credential** (`run_credential: static`). With neither, every stage on a private 
 refused at start naming the binding and **both** settings; a read-only stage can only fetch a
 repository GitLab serves without authentication.
 
-**On gitlab.com Free — Autix's case — use the static run credential** (the setup guide's step 5a;
-TD-028 decision 13). Create a **dedicated** GitLab user, add it to the Autix project **only**, with
-the **Developer** role, and give it a personal access token with **`read_repository` +
-`write_repository`** and an expiry **at most 90 days** away. Put that token in `.env` as
-`GITLAB_RUN_TOKEN` and add the name to `APP_INTEGRATION_SECRET_ENV` (§3). **Weaker isolation,
-stated**: the token is not revoked when a run ends and lives to its expiry; code in a run can read it
-through the credential helper and could push it into the repository, where it would still work; a
-read-only stage holds it with its push scope. The platform's one added control is a search of every
-merge request's added lines for the exact token — a hit parks the task with *"rotate the run token"*.
-The protected default branch stays the push control.
+**On gitlab.com Free — Autix's case — use a static run credential** (the setup guide's step 5a;
+TD-028 decisions 13 and 13a). **You choose which of three forms**, each with its own loss:
+
+| | A. A dedicated user's token | B. Your own repository-only token | C. A project SSH deploy key |
+|---|---|---|---|
+| Set | `run_credential: static` | `run_credential: static`, `run_token_owner: operator` | **not in this build** (WP-146) |
+| You create | a **dedicated** GitLab user on the Autix project **only**, role **Developer**, and its token | a token of **your own** account | — |
+| Token scopes | `read_repository` + `write_repository`, expiry ≤ 90 days | `read_repository` + `write_repository` **only** (no `api`, `read_api`, `read_user`), expiry ≤ 90 days | — |
+| Costs | a seat | nothing | nothing |
+| **Test connection** checks | the user's role: Developer passes, Maintainer/Owner refused | the token **cannot call the API** (`GET /user` with it must answer `403 insufficient_scope`) **and** every rule matching `develop`, wildcards included, leaves push **No one**, force push off — the latter **re-checked before every run**; the scope is not, so test again after every re-seal | — |
+| **Lost** | the token lives to its expiry, is not revoked per run, a read-only stage holds it with its push scope, and a run could push it into the repository where it still works | all of A's, and **reach**: it reads **every repository you can access** and pushes to every unprotected branch of them; pipelines on the branches and tags a run pushes run **as you**, and a tag matching a protected-tag rule open to Maintainers gets protected CI variables — protect release tags with *No one* too | — |
+
+**Which today:** A if a seat is free, B otherwise — B needs no new user, and the checks are what stand
+in for the role limit, so protect the default branch (*Protect the default branch*, below — and leave **Allowed to force push** off) before testing. C is
+stronger than both (the key never enters the run's container) and lands later. Either way, put the
+token in `.env` as `GITLAB_RUN_TOKEN` and add the name to `APP_INTEGRATION_SECRET_ENV` (§3). The
+platform's one added control is a search of every merge request's added lines for the exact token —
+a hit parks the task with *"rotate the run token"*. The protected default branch stays the push
+control.
 
 | | gitlab.com | self-managed |
 |---|---|---|
@@ -94,7 +103,9 @@ default branch) with **Allowed to merge: Maintainers** and **Allowed to push and
 Merging stays a person's act on GitLab; nobody, the platform's tokens included, pushes to it
 directly. The platform checks that the branch is protected before it starts a task: a ticket on a
 project whose default branch is unprotected becomes a task that is immediately parked *Needs human*
-with the brief *"the default branch … is not protected"*.
+with the brief *"the default branch … is not protected"*. With **your own** run token (§ 1's form B)
+also leave **Allowed to force push** off: that rule is checked at **Test connection** and before every
+run, and a run is refused while it does not hold.
 
 **Autix's CI rules — required before the first feature ticket.** The platform's branches are
 `agentic/<ticket>` (fixed, Q114), and its merge requests are opened as drafts and **marked ready
@@ -320,13 +331,16 @@ no retry, and a second run is a second turn.
    optional fields: `project` = `<group>/<autix-project>` (GitLab's path with namespace),
    `poll_enabled` = true, and the run credential — on **gitlab.com Free**: `run_credential` =
    `static`, `run_token` → the variable name **`GITLAB_RUN_TOKEN`**, `run_token_username` = the
-   dedicated user's username, `run_token_expires_at` = its token's expiry date, `mint_credentials`
-   **off**; on Premium or a self-managed instance: `mint_credentials` = true instead. Leave both
-   webhook fields empty. Press **Test connection**: it calls `GET /version` and shows the version and
-   edition — and for a static run credential a second check, `run_credential`, that fails until the
-   integration is bound to the project (step 4) and then reads the dedicated user's role there:
-   Developer passes, Maintainer or Owner (or a role that cannot push) is refused, and it says it
-   cannot confirm the token is that user's. Test again after step 4. Not run: needs your tokens.
+   token owner's username, `run_token_expires_at` = its token's expiry date, `mint_credentials`
+   **off**, and — for your own token (§1's form B) — `run_token_owner` = `operator`; on Premium or a
+   self-managed instance: `mint_credentials` = true instead. Leave both webhook fields empty. Press
+   **Test connection**: it calls `GET /version` and shows the version and edition — and for a static
+   run credential the checks of §1, which fail until the integration is bound to the project (step
+   4). Form A: `run_credential` reads the dedicated user's role — Developer passes, Maintainer or
+   Owner (or a role that cannot push) is refused, and it says it cannot confirm the token is that
+   user's. Form B: `run_credential` is the scope proof (`403` passes, `200` is refused naming the two
+   scopes) and `default_branch_protection` reads `develop`'s rule. Test again after step 4. Not run:
+   needs your tokens.
 3. **Add integration → Jira Cloud** (not run): `site_url` `https://<your-site>.atlassian.net`,
    `user_email` the token's account, `api_token` → **`JIRA_API_TOKEN`**, optional `project_keys` =
    Autix's key, `poll_enabled` = true, `pickup_label` left at `agentic`. Leave `webhook_secret` empty.
@@ -431,6 +445,8 @@ is *Done*.
 | a stage fails at start: *"cannot give run … a credential: minting is off … and no static run credential is configured"* | the task page's brief and the run's error | gitlab.com Free: `run_credential: static` with a `run_token` (§1, the setup guide's step 5a); Premium or self-managed: `mint_credentials` on. Then **Hand back** |
 | a stage fails at start: *"… declares a static run credential this platform will not give run …"* | the task page's brief and the run's error — the reason is named: no run token, the API token in its place, `mint_credentials` also on, or *"expired on <date>"* | fix the named setting; for an expired one create a new token, re-seal `run_token`, set `run_token_expires_at`; then **Hand back** |
 | **Test connection**'s `run_credential` check is red | the integration's card | *not a member* or *no project is bound*: add the dedicated user to the project, bind the integration, test again; *Maintainer*/*Owner*: lower the user to Developer |
+| *(your own token, form B)* `run_credential` is red: *"this token can call the GitLab API …"* or *"did not accept the run token at all (401)"* | the integration's card | create a new token with **only** `read_repository` + `write_repository`, put it in `.env`, re-seal `run_token`; a 401 is a wrong, expired or revoked token |
+| *(form B)* `default_branch_protection` is red, or a stage fails at start: *"… the default branch develop of … is not protected / lets Maintainers push / allows force push …"* | the integration's card; the task page's brief | **Settings → Repository → Protected branches**: `develop` with push **No one** and force push off; test again, then **Hand back** |
 | saving the integration or binding it is refused: `run_credential_refused`, `static_run_credential_shared` | the form shows the server's refusal, naming the field | the field it names; a static integration may be bound by **one** project |
 | a task parks with *"the merge request adds the static run token to the repository"* | the task page's brief | **rotate the run token**: revoke it in GitLab, create a new one, re-seal it, declare its expiry; remove it from the branch before anything else |
 | a run fails with *"…the model API answered HTTP 401…"* | the run page's error (measured with a fake token, WP-133) | a wrong or expired token: replace it in `.env`, `docker compose up -d` |

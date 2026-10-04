@@ -1859,6 +1859,7 @@ describe('a minted run credential against a credentialled git server (WP-76)', (
         scope,
         branchPatterns: ['agentic/*'],
         ttlSeconds: 86_400,
+        defaultBranch: 'main',
       });
       if (answer.kind !== 'minted') {
         throw new Error(

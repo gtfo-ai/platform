@@ -88,7 +88,7 @@ export const GITLAB_CREDENTIAL_MINTING_HINTS = {
     'GitLab: an instance whose administrator changed the personal-access-token prefix declares it ' +
     'as `token_prefix` on the integration',
   static:
-    'GitLab: `run_credential: static` with a dedicated `run_token`; weaker isolation, operator guide § Integrations',
+    'GitLab: `run_credential: static` with a `run_token` — a dedicated user’s, or your own repository-only one (`run_token_owner: operator`); weaker isolation, operator guide § Integrations',
 } as const;
 
 /**
@@ -104,6 +104,10 @@ export const GITLAB_STATIC_RUN_CREDENTIAL: StaticRunCredentialSupport = {
   expiresAtField: 'run_token_expires_at',
   mintingField: 'mint_credentials',
   maxLifetimeDays: 90,
+  // WP-141: TD-028 decision 13a — the operator's own repository-only token.
+  ownerField: 'run_token_owner',
+  scopeProofHint:
+    'this token can call the GitLab API; create one with only `read_repository` and `write_repository`',
 };
 
 /**
@@ -148,7 +152,12 @@ export const gitlabProviderRegistration: ProviderRegistration<'git'> = {
   // WP-137: declared on the **integration** (decision 13 item 1), never by a project's binding — a
   // binding overlay could otherwise switch one project of a minted account to `static`, past the
   // one-binding rule, which reads the account's document.
-  accountOnlyFields: ['run_credential', 'run_token_username', 'run_token_expires_at'],
+  accountOnlyFields: [
+    'run_credential',
+    'run_token_owner',
+    'run_token_username',
+    'run_token_expires_at',
+  ],
   create: (input) => {
     const adapter = gitlabAdapterInput(input);
     return createGitLabProvider({

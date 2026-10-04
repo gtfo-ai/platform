@@ -52,6 +52,7 @@ import type {
   ThreadRef,
 } from '../ports/integrations/communication.js';
 import type {
+  BranchPushProtection,
   CodeownersRules,
   CommitAction,
   CommitRef,
@@ -140,6 +141,13 @@ export interface GitBinding {
  * must never become "no credential" silently (standing rule 18).
  */
 export interface StaticRunCredential {
+  /**
+   * Whose token it is (TD-028 decisions 13 and 13a): a dedicated low-privilege user's, or — WP-141
+   * — the operator's own repository-only token, which is handed to a run only while the default
+   * branch is protected with push **No one** and force push off, re-read before each run.
+   * Required, so no hand-built credential skips that check by omission.
+   */
+  readonly owner: 'dedicated_user' | 'operator';
   /** The username git sends beside the token (GitLab: `run_token_username`). */
   readonly username: string;
   /** The secret. `''` when the integration declares `static` and holds no run token. */
@@ -2305,6 +2313,11 @@ export interface RunCredentialRequest {
   /** BD-025's namespace; empty for a `read` credential, which pushes nothing. */
   readonly branchPatterns: readonly string[];
   readonly ttlSeconds: number;
+  /**
+   * `projects.default_branch` — whose protection an **operator's** static run token is handed only
+   * behind (TD-028 decision 13a item 2, WP-141). Read before each such run.
+   */
+  readonly defaultBranch: string;
 }
 
 /**
@@ -2384,6 +2397,71 @@ const staticCredentialRefusal = (fixed: StaticRunCredential, now: string | null)
   }
   if (Date.parse(fixed.expiresAt) <= Date.parse(now)) {
     return `its run token expired on ${fixed.declaredExpiry} (the declared expiry); create a new one and declare its expiry`;
+  }
+  return null;
+};
+
+/**
+ * The push control behind an **operator's own** run token (TD-028 decision 13a item 2, WP-141): the
+ * project's default branch must be protected with push **No one** and force push off. Read **with the
+ * API token**, through the executor (a read: audited, rate-limited), before every create of a run
+ * that would receive the token — so protection loosened after the probe refuses the next run by
+ * name, before any workspace exists. One read per run; the run holds the token for its lifetime and
+ * the answer is not asked again (decision 13a: *"cached for the run's lifetime"*).
+ *
+ * A provider that cannot answer refuses (rule 18): the token reaches every repository its owner can,
+ * and the protection is the only thing standing between a writing stage and the default branch.
+ */
+const operatorTokenProtectionRefusal = async (
+  integrations: PipelineIntegrations,
+  git: GitBinding,
+  request: RunCredentialRequest,
+): Promise<string | null> => {
+  const branch = request.defaultBranch;
+  if (branch.trim() === '') {
+    return 'it is the operator’s own token, and no default branch was given whose protection could be checked';
+  }
+  assertOutsideTransaction('the provider read "check_default_branch_protection"');
+  const protection = (
+    await integrations.executor.execute<BranchPushProtection>({
+      integration: git.ref,
+      action: 'check_default_branch_protection',
+      // Names only: the project and the branch, never a credential.
+      payload: { project: git.project, branch, run_id: request.runId },
+      projectId: request.projectId,
+      taskId: request.taskId,
+      mutating: false,
+      perform: async () => git.port.branchPushProtection(git.project, branch),
+      describeResult: (rule) => ({
+        protected: rule.protected,
+        nobody_pushes: rule.nobodyPushes,
+        force_push_allowed: rule.forcePushAllowed,
+      }),
+    })
+  ).result;
+  return operatorProtectionFault(git.project, branch, protection);
+};
+
+/**
+ * Why `branch`'s protection does not bound an operator's own run token, or `null` — one sentence an
+ * operator acts on, shared by the run's refusal and the probe (WP-141). Provider words (`pushers`)
+ * are names GitLab answers for access levels, users and groups.
+ */
+export const operatorProtectionFault = (
+  project: string,
+  branch: string,
+  protection: BranchPushProtection,
+): string | null => {
+  const fix = `protect ${branch} with push "No one" and force push off`;
+  if (!protection.protected) {
+    return `it is the operator’s own token, and the default branch ${branch} of ${project} is not protected, so the token could push to it — ${fix} (TD-028 decision 13a)`;
+  }
+  if (!protection.nobodyPushes) {
+    const who = protection.pushers.length === 0 ? 'someone' : protection.pushers.join(', ');
+    return `it is the operator’s own token, and the default branch ${branch} of ${project} lets ${who} push, which the token’s owner may be — ${fix} (TD-028 decision 13a)`;
+  }
+  if (protection.forcePushAllowed) {
+    return `it is the operator’s own token, and the default branch ${branch} of ${project} allows force push — ${fix} (TD-028 decision 13a)`;
   }
   return null;
 };
@@ -2473,7 +2551,11 @@ export const runCredentialWrites = (
           reason: `a shadow task is never given the static run credential of the git integration ${git.ref.integrationId}: it is push-capable and cannot be narrowed to the read scope Q98 (a) admits (TD-028 decision 13)`,
         };
       }
-      const refusal = staticCredentialRefusal(fixed, liveness.now?.() ?? null);
+      const refusal =
+        staticCredentialRefusal(fixed, liveness.now?.() ?? null) ??
+        (fixed.owner === 'operator'
+          ? await operatorTokenProtectionRefusal(integrations, git, request)
+          : null);
       if (refusal !== null) {
         throw new StaticRunCredentialRefusedError(
           git.ref.integrationId,

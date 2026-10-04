@@ -154,6 +154,13 @@ export interface GitLabRequestSpec {
   readonly action: string;
   /** 404 is an expected answer rather than a failure — used by "is it protected", "is there a file". */
   readonly notFoundIsNull?: boolean;
+  /**
+   * Statuses that are **answers** rather than failures (WP-141): the response is handed back — its
+   * body through the same redaction passes as a `2xx` — instead of an `IntegrationError`. Used by
+   * the one call whose question *is* the status, a run token's scope proof (`GET /user`: a `403` is
+   * the proof). A `429` is never an answer: the executor owns the backoff.
+   */
+  readonly answerStatuses?: readonly number[];
 }
 
 export interface GitLabResponse<TBody> {
@@ -342,7 +349,10 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
       return null;
     }
     const text = await response.text();
-    if (response.status >= 200 && response.status < 300) {
+    if (
+      (response.status >= 200 && response.status < 300) ||
+      (response.status !== 429 && spec.answerStatuses?.includes(response.status) === true)
+    ) {
       return { response, text };
     }
     if (response.status === 429) {

@@ -298,6 +298,17 @@ const gitlabScript = (): Script => ({
       commit: { id: SHA, title: `chore ${GITLAB_TOKEN}` },
     },
   },
+  // WP-141 review round 1: the operator-token check lists every rule; a wildcard's name is emitted.
+  [`GET /projects/${P}/protected_branches`]: {
+    body: [
+      {
+        name: `ma*-${GITLAB_TOKEN}`,
+        allow_force_push: false,
+        push_access_levels: [{ access_level: 30, access_level_description: GITLAB_TOKEN }],
+      },
+      { name: 'main', allow_force_push: false, push_access_levels: [{ access_level: 0 }] },
+    ],
+  },
   [`GET /projects/${P}/protected_branches/main`]: {
     body: {
       name: `main-${GITLAB_TOKEN}`,
@@ -452,7 +463,10 @@ interface StubbedCall {
   readonly method: string;
   readonly path: string;
   readonly body: string;
-  /** WP-137: every header and the query string, for the census that no request carries `run_token`. */
+  /**
+   * WP-137: every header and the query string, for the census that `run_token` is carried by no
+   * request but the scope proof's one `GET /user` (WP-141).
+   */
   readonly headers: string;
   readonly query: string;
 }
@@ -533,6 +547,8 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   find_open_merge_request: 'findOpenMergeRequest',
   authenticated_user: 'authenticatedUser',
   project_member_access: 'projectMemberAccess',
+  branch_push_protection: 'branchPushProtection',
+  run_token_api_access: 'runTokenApiAccess',
   create_merge_request_pipeline: 'createMergeRequestPipeline',
   get_merge_request_diff_stats: 'getMergeRequestDiffStats',
   list_discussions: 'listDiscussions',
@@ -640,6 +656,10 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
     emitted.authenticated_user = await port.authenticatedUser();
     // WP-137: the static run credential's probe, its username echoed in the provider's role text.
     emitted.project_member_access = await port.projectMemberAccess(PROJECT, `dana-${GITLAB_TOKEN}`);
+    // WP-141: the operator-token probe's two reads — the protection with the API token, and the
+    // scope proof, the one call that carries the run token (the census below holds it to one).
+    emitted.branch_push_protection = await port.branchPushProtection(PROJECT, 'main');
+    emitted.run_token_api_access = await port.runTokenApiAccess(GITLAB_RUN_TOKEN);
     emitted.create_merge_request_pipeline = await port.createMergeRequestPipeline(ref);
     emitted.list_discussions = await port.listDiscussions(ref);
     emitted.reply_to_discussion = await port.replyToDiscussion(
@@ -776,18 +796,27 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
   });
 
   /**
-   * WP-137 criterion (5), the census (TD-028 decision 13 item 3): every request the adapter made
-   * while every member of the port was driven — headers, query, path and body — and the static run
-   * credential, handed to `create` beside the API token, is in **none** of them. The API token is,
-   * which is what makes the negative mean something.
+   * WP-137 criterion (5), the census (TD-028 decision 13 item 3), narrowed by WP-141 criterion (4)
+   * (decision 13a item 1): every request the adapter made while every member of the port was driven
+   * — headers, query, path and body — and the static run credential, handed to `create` beside the
+   * API token, is in **exactly one** of them: the scope proof's `GET /user`, in its `PRIVATE-TOKEN`
+   * header, with the API token in nothing of that request. The API token is in the others, which is
+   * what makes the negative mean something.
    */
-  it('sends the static run token in no request: no header, no query, no path, no body (WP-137)', () => {
+  it('sends the static run token in exactly one request — the scope proof’s GET /user, and only in its header (WP-137, WP-141)', () => {
     const wire = calls.map((call) => `${call.headers} ${call.query} ${call.path} ${call.body}`);
     expect(
       wire.some((line) => line.includes(GITLAB_TOKEN)),
       'the API token is sent',
     ).toBe(true);
-    expect(wire.filter((line) => line.includes(GITLAB_RUN_TOKEN))).toEqual([]);
+    const carrying = calls.filter((call) =>
+      `${call.headers} ${call.query} ${call.path} ${call.body}`.includes(GITLAB_RUN_TOKEN),
+    );
+    expect(carrying.map((call) => `${call.method} ${call.path}`)).toEqual(['GET /user']);
+    const [proof] = carrying;
+    expect(`${proof?.query} ${proof?.path} ${proof?.body}`).not.toContain(GITLAB_RUN_TOKEN);
+    expect(proof?.headers).toContain(`["private-token","${GITLAB_RUN_TOKEN}"]`);
+    expect(proof?.headers, 'the scope proof carries no API token').not.toContain(GITLAB_TOKEN);
   });
 
   it('drove every member of the port, and the list is the port’s own', () => {

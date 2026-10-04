@@ -249,6 +249,8 @@ describe('a git provider’s static run credential declaration (WP-137)', () => 
     expiresAtField: 'run_token_expires_at',
     mintingField: 'mint_credentials',
     maxLifetimeDays: 90,
+    ownerField: 'run_token_owner',
+    scopeProofHint: 'this token can call the fake API; create one with repository scopes only',
   };
   const declaring = (
     staticRunCredential: unknown,
@@ -264,6 +266,7 @@ describe('a git provider’s static run credential declaration (WP-137)', () => 
         run_credential: z.enum(['minted', 'static']).default('minted'),
         run_token_username: z.string().nullish(),
         run_token_expires_at: z.string().nullish(),
+        run_token_owner: z.enum(['dedicated_user', 'operator']).default('dedicated_user'),
         mint_credentials: z.boolean().default(false),
       }),
       secretFields: ['token', 'run_token'],
@@ -294,6 +297,19 @@ describe('a git provider’s static run credential declaration (WP-137)', () => 
       /"run_token" is not in secretFields/,
     ],
     ['one field for both tokens', { ...SUPPORT, tokenField: 'token' }, {}, /declared as one field/],
+    // WP-141: the owner key is the schema's, and the scope proof's refusal has words.
+    [
+      'an owner key the schema lacks',
+      { ...SUPPORT, ownerField: 'owner' },
+      {},
+      /field "owner" does not exist/,
+    ],
+    [
+      'a blank scope-proof hint',
+      { ...SUPPORT, scopeProofHint: ' ' },
+      {},
+      /scopeProofHint is blank/,
+    ],
     [
       'a provider that is not git',
       SUPPORT,

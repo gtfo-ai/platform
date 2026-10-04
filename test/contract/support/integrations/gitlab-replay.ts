@@ -48,6 +48,13 @@ export interface ReplayInteraction {
    */
   readonly path: string;
   readonly status: number;
+  /**
+   * WP-141: when set, the interaction answers only a request whose `PRIVATE-TOKEN` header is this
+   * value — so one path (`GET /user`) can be recorded once per credential: the binding's API token
+   * (no `request_token`) and each run token of the scope proof. A request with another token falls
+   * back to the interaction recorded without one. Always an obviously fake value (BD-002).
+   */
+  readonly request_token?: string;
   readonly headers?: Readonly<Record<string, string>>;
   readonly body?: unknown;
   /** Raw body for the text endpoints (a job trace, a raw file). Wins over `body`. */
@@ -170,6 +177,10 @@ export const closeFixtureAssertionWindow = (): void => {
 
 const BASE = '/api/v4';
 
+/** WP-141: the queue key of an interaction recorded for one `PRIVATE-TOKEN` value. */
+const withToken = (key: string, token: string | undefined): string =>
+  token === undefined ? key : `${key} [private-token ${token}]`;
+
 /** `GET /projects/acme%2Fapi/merge_requests?order_by=updated_at&state=merged`, query sorted. */
 export const replayKey = (method: string, pathWithQuery: string): string => {
   const [path, query = ''] = pathWithQuery.split('?');
@@ -231,7 +242,10 @@ export const createGitLabReplay = (interactions: readonly ReplayInteraction[]): 
   const requests: RecordedRequest[] = [];
 
   const add = (interaction: ReplayInteraction, scripted: boolean): void => {
-    const key = replayKey(interaction.method, interaction.path);
+    const key = withToken(
+      replayKey(interaction.method, interaction.path),
+      interaction.request_token,
+    );
     const queue = queues.get(key) ?? [];
     // The label identifies the interaction, not the key, so the second entry of a queue is
     // reported on its own. A scripted response is the test's, so it is never held to the check.
@@ -253,7 +267,7 @@ export const createGitLabReplay = (interactions: readonly ReplayInteraction[]): 
       // then a 201) rather than the second entry overwriting the first.
       const replaced = new Set<string>();
       for (const one of Array.isArray(interaction) ? interaction : [interaction]) {
-        const key = replayKey(one.method, one.path);
+        const key = withToken(replayKey(one.method, one.path), one.request_token);
         if (!replaced.has(key)) {
           queues.set(key, []);
           replaced.add(key);
@@ -265,7 +279,9 @@ export const createGitLabReplay = (interactions: readonly ReplayInteraction[]): 
       requests.length = 0;
     },
     fetchImpl: async (url, init) => {
-      const key = keyOfUrl(init.method, url);
+      const plain = keyOfUrl(init.method, url);
+      const tokenKey = withToken(plain, init.headers['private-token']);
+      const key = queues.has(tokenKey) ? tokenKey : plain;
       requests.push({
         method: init.method,
         url,

@@ -21,6 +21,7 @@ import { SHIPPED_PROVIDERS } from '@platform/integrations';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { boundProjectReader } from '../../../apps/server/src/onboarding.js';
 import type { Database } from '../../../apps/server/src/queries/identity-queries.js';
 import {
   findIntegrationRow,
@@ -241,6 +242,39 @@ describe('declaring a static run credential (WP-137, TD-028 decision 13)', () =>
     });
     await replaceProjectBindings(db, autix, [], { egress: allowAnyIntegrationHost() });
     await replaceProjectBindings(db, other, [], { egress: allowAnyIntegrationHost() });
+  });
+
+  /**
+   * WP-141 (TD-028 decision 13a): an operator's own token is declared like decision 13's — refused
+   * beside a minted integration — and the probe reads the bound project's **stored** default branch,
+   * which is what `boundProjectReader`'s SQL returns beside the repository path.
+   */
+  it('declares an operator’s own token only as static, and reads the bound project’s stored default branch', async () => {
+    const [autix] = projects as [string, string];
+    const before = await integrationCount();
+    await expect(
+      create(
+        'operator minted',
+        { base_url: 'https://gitlab.example.test', run_token_owner: 'operator' },
+        { token: 'API_TOKEN', run_token: 'RUN_TOKEN' },
+      ),
+    ).rejects.toMatchObject({ statusCode: 400, code: 'invalid_integration_config' });
+    expect(await integrationCount()).toBe(before);
+
+    const id = await create(
+      'operator static',
+      { ...STATIC, run_token_owner: 'operator', run_token_username: 'acme-owner' },
+      { token: 'API_TOKEN', run_token: 'RUN_TOKEN' },
+    );
+    await pool.query("update projects set default_branch = 'develop' where id = $1", [autix]);
+    expect(await boundProjectReader(pool)(id), 'nothing bound yet').toBeNull();
+    await bind(autix, id);
+    expect(await boundProjectReader(pool)(id)).toEqual({
+      path: 'acme/autix',
+      defaultBranch: 'develop',
+    });
+    await replaceProjectBindings(db, autix, [], { egress: allowAnyIntegrationHost() });
+    await pool.query("update projects set default_branch = 'main' where id = $1", [autix]);
   });
 
   /** Review round 1: a project's binding cannot turn minting on under a static account. */

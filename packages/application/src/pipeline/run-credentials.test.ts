@@ -138,6 +138,7 @@ const request = (mode: TaskMode, scope: CredentialScope) => ({
   scope,
   branchPatterns: ['agentic/*'],
   ttlSeconds: 86_400,
+  defaultBranch: 'main',
 });
 
 /**
@@ -664,6 +665,7 @@ describe('a static run credential (WP-137, TD-028 decision 13)', () => {
   const NOW = '2026-10-03T12:00:00.000Z';
   const AT_NOW: MintingIntegrationLiveness = { isRetired: async () => false, now: () => NOW };
   const fixed = (overrides: Partial<StaticRunCredential> = {}): StaticRunCredential => ({
+    owner: 'dedicated_user',
     username: 'agentic-runner',
     value: STATIC_TOKEN,
     expiresAt: '2026-12-01T00:00:00.000Z',
@@ -751,5 +753,135 @@ describe('a static run credential (WP-137, TD-028 decision 13)', () => {
     await expect(
       runCredentialWrites(integrations, LIVE).mint(request('normal', 'push')),
     ).rejects.toThrow(/no clock was composed/);
+  });
+});
+
+/**
+ * WP-141 — TD-028 decision 13a item 2: an **operator's own** run token is handed to a run only while
+ * the project's default branch is protected with push **No one** and force push off, read with the API
+ * token through the executor before **each** run — so protection loosened after the probe refuses the
+ * next run by name, before anything is created. A dedicated user's token is not read (decision 13
+ * unchanged).
+ */
+describe('an operator’s own run token (WP-141, TD-028 decision 13a)', () => {
+  const OPERATOR_TOKEN = 'glpat-FAKE-operator-run-token-not-real-01';
+  const NOW = '2026-10-04T12:00:00.000Z';
+  const AT_NOW: MintingIntegrationLiveness = { isRetired: async () => false, now: () => NOW };
+  const NO_ONE = {
+    protected: true,
+    nobodyPushes: true,
+    forcePushAllowed: false,
+    pushers: ['No one'],
+  };
+  const operatorHarness = (
+    rules: readonly (typeof NO_ONE)[],
+    owner: 'operator' | 'dedicated_user' = 'operator',
+  ) => {
+    const built = harness({ minting: false, hints: HINTS });
+    const git = built.integrations.git as NonNullable<PipelineIntegrations['git']>;
+    const read: string[] = [];
+    let call = 0;
+    const port = Object.assign(Object.create(git.port) as GitProviderPort, {
+      branchPushProtection: async (project: string, branch: string) => {
+        read.push(`${project}@${branch}`);
+        const rule = rules[Math.min(call, rules.length - 1)] as typeof NO_ONE;
+        call += 1;
+        return rule;
+      },
+    });
+    const credential: StaticRunCredential = {
+      owner,
+      username: 'acme-owner',
+      value: OPERATOR_TOKEN,
+      expiresAt: '2026-12-01T00:00:00.000Z',
+      declaredExpiry: '2026-12-01',
+      sameAsApiToken: false,
+      refusal: null,
+    };
+    return {
+      ...built,
+      read,
+      integrations: {
+        ...built.integrations,
+        git: { ...git, port, staticRunCredential: credential },
+      } satisfies PipelineIntegrations,
+    };
+  };
+
+  it('hands it behind a No-one default branch, read once per run with the API token, audited', async () => {
+    const { integrations, auditLog, read } = operatorHarness([NO_ONE]);
+    const writes = runCredentialWrites(integrations, AT_NOW);
+    const answer = await writes.mint({ ...request('normal', 'push'), defaultBranch: 'develop' });
+    expect(answer.kind).toBe('static');
+    expect(read).toEqual(['acme/api@develop']);
+    const [row] = auditLog.entriesFor('check_default_branch_protection');
+    expect(row?.payload).toMatchObject({ project: 'acme/api', branch: 'develop' });
+    expect(JSON.stringify(auditLog.entries)).not.toContain(OPERATOR_TOKEN);
+  });
+
+  /** Criterion (3): the probe passed, then the operator loosened the rule; the next run is refused. */
+  it('refuses the next run by name once the protection is loosened after a run was given it', async () => {
+    const loosened = {
+      protected: true,
+      nobodyPushes: false,
+      forcePushAllowed: false,
+      pushers: ['Maintainers'],
+    };
+    const { integrations, read, minted } = operatorHarness([NO_ONE, loosened]);
+    const writes = runCredentialWrites(integrations, AT_NOW);
+    expect((await writes.mint(request('normal', 'push'))).kind).toBe('static');
+    const error = await writes.mint(request('normal', 'read')).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(StaticRunCredentialRefusedError);
+    expect((error as Error).message).toMatch(
+      /default branch main of acme\/api lets Maintainers push.*protect main with push "No one" and force push off/,
+    );
+    expect((error as Error).message).not.toContain(OPERATOR_TOKEN);
+    expect(read).toEqual(['acme/api@main', 'acme/api@main']);
+    expect(minted).toEqual([]);
+  });
+
+  it.each([
+    [
+      'unprotected',
+      { protected: false, nobodyPushes: false, forcePushAllowed: true, pushers: [] },
+      /is not protected/,
+    ],
+    ['force push on', { ...NO_ONE, forcePushAllowed: true }, /allows force push/],
+  ])('refuses a default branch that is %s', async (_case, rule, words) => {
+    const { integrations } = operatorHarness([rule]);
+    await expect(
+      runCredentialWrites(integrations, AT_NOW).mint(request('normal', 'push')),
+    ).rejects.toThrow(words);
+  });
+
+  it('refuses rather than reading no branch, and asks nothing for a shadow task', async () => {
+    const { integrations, read } = operatorHarness([NO_ONE]);
+    await expect(
+      runCredentialWrites(integrations, AT_NOW).mint({
+        ...request('normal', 'push'),
+        defaultBranch: ' ',
+      }),
+    ).rejects.toThrow(/no default branch was given/);
+    const shadow = await runCredentialWrites(integrations, AT_NOW).mint(request('shadow', 'read'));
+    expect(shadow.kind).toBe('unavailable');
+    expect(read).toEqual([]);
+  });
+
+  it('reads no protection for a dedicated user’s token (decision 13 unchanged)', async () => {
+    const { integrations, read, auditLog } = operatorHarness([NO_ONE], 'dedicated_user');
+    expect(
+      (await runCredentialWrites(integrations, AT_NOW).mint(request('normal', 'push'))).kind,
+    ).toBe('static');
+    expect(read).toEqual([]);
+    expect(auditLog.entries).toEqual([]);
+  });
+
+  it('reads the protection outside any transaction', async () => {
+    const { integrations } = operatorHarness([NO_ONE]);
+    await expect(
+      withOpenTransaction(() =>
+        runCredentialWrites(integrations, AT_NOW).mint(request('normal', 'push')),
+      ),
+    ).rejects.toBeInstanceOf(TransactionOpenError);
   });
 });

@@ -319,6 +319,7 @@ describe('a git binding that loads', () => {
       secrets: { token: BINDING_TOKEN, run_token: STATIC_TOKEN },
     }).forProject(PROJECT, outsideARun);
     expect(integrations.git?.staticRunCredential).toEqual({
+      owner: 'dedicated_user',
       username: 'agentic-runner',
       value: STATIC_TOKEN,
       expiresAt: '2026-12-01T00:00:00.000Z',

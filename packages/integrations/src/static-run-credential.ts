@@ -24,6 +24,13 @@
  * What it does **not** buy, stated rather than implied (decision 13 item 5): the token is not
  * run-lifetime, cannot be revoked per run and reaches read-only stages with its push scope; its reach
  * is the dedicated user's memberships, which the platform cannot see.
+ *
+ * **Whose token** (decision 13a, WP-141): {@link StaticRunCredentialSupport.ownerField} says
+ * `dedicated_user` (the default, decision 13) or `operator` — the operator's own token with
+ * repository scopes only. Everything above holds for both; what differs is the probe (a role check
+ * for the first, a scope proof and the default branch's protection for the second, the latter
+ * re-read before each run) and the stated loss: an operator's token reaches every repository its
+ * owner can.
  */
 import type { StaticRunCredential } from '@platform/application';
 
@@ -46,7 +53,31 @@ export interface StaticRunCredentialSupport {
   readonly mintingField: string;
   /** How far ahead the declared expiry may be at the write. Decision 13: 90 days. */
   readonly maxLifetimeDays: number;
+  /**
+   * `dedicated_user | operator` — whose token the run token is (TD-028 decision 13a, WP-141); the
+   * default (absent) is `dedicated_user`. GitLab: `run_token_owner`.
+   */
+  readonly ownerField: string;
+  /**
+   * The provider's words for the scope proof's refusal of a token that **can** call the API
+   * (decision 13a item 1). GitLab: *"this token can call the GitLab API; create one with only
+   * `read_repository` and `write_repository`"*.
+   */
+  readonly scopeProofHint: string;
 }
+
+/** Whose personal access token a static run credential is (TD-028 decisions 13 and 13a). */
+export type StaticRunTokenOwner = 'dedicated_user' | 'operator';
+
+/** The value of {@link StaticRunCredentialSupport.ownerField} that selects the operator's own token. */
+export const OPERATOR_RUN_TOKEN_OWNER = 'operator';
+
+/** The owner a document declares — `dedicated_user` unless it says `operator`. */
+export const runTokenOwnerOf = (
+  support: StaticRunCredentialSupport,
+  config: Readonly<Record<string, unknown>>,
+): StaticRunTokenOwner =>
+  config[support.ownerField] === OPERATOR_RUN_TOKEN_OWNER ? 'operator' : 'dedicated_user';
 
 /** The value of {@link StaticRunCredentialSupport.modeField} that selects a static credential. */
 export const STATIC_RUN_CREDENTIAL_MODE = 'static';
@@ -90,8 +121,20 @@ export const staticRunCredentialConfigIssues = (
   support: StaticRunCredentialSupport | undefined,
   config: Readonly<Record<string, unknown>>,
 ): readonly StaticRunCredentialIssue[] => {
-  if (support === undefined || !declaresStaticRunCredential(support, config)) {
+  if (support === undefined) {
     return [];
+  }
+  if (!declaresStaticRunCredential(support, config)) {
+    // WP-141: an owner says whose static token it is, so it means nothing for any other source —
+    // and a reader who sees `operator` beside `minted` would believe the wrong probe ran.
+    return runTokenOwnerOf(support, config) === 'operator'
+      ? [
+          {
+            path: support.ownerField,
+            message: `\`${support.ownerField}: operator\` applies only to \`${support.modeField}: static\`; it says whose run token is handed to runs, and this integration hands none (TD-028 decision 13a)`,
+          },
+        ]
+      : [];
   }
   const issues: StaticRunCredentialIssue[] = [];
   if (config[support.mintingField] === true) {
@@ -103,7 +146,9 @@ export const staticRunCredentialConfigIssues = (
   if (text(config[support.usernameField]).trim() === '') {
     issues.push({
       path: support.usernameField,
-      message: `\`${support.modeField}: static\` needs \`${support.usernameField}\`, the dedicated user the run token belongs to`,
+      message: `\`${support.modeField}: static\` needs \`${support.usernameField}\`, the ${
+        runTokenOwnerOf(support, config) === 'operator' ? 'operator' : 'dedicated user'
+      } the run token belongs to`,
     });
   }
   if (expiryInstantOf(text(config[support.expiresAtField])) === null) {
@@ -179,6 +224,7 @@ export const staticRunCredentialOf = (
   const value = text(merged[support.tokenField]);
   const issues = staticRunCredentialConfigIssues(support, merged);
   return {
+    owner: runTokenOwnerOf(support, merged),
     username: text(merged[support.usernameField]),
     value,
     expiresAt: expiryInstantOf(text(merged[support.expiresAtField])),

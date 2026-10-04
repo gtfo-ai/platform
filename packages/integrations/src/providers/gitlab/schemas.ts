@@ -338,6 +338,8 @@ export const gitlabAccessLevelEntrySchema = z.object({
   access_level_description: z.string().nullish(),
   user_id: z.int().nullish(),
   group_id: z.int().nullish(),
+  /** WP-141: a deploy key admitted to push (<https://docs.gitlab.com/api/protected_branches/>). */
+  deploy_key_id: z.int().nullish(),
 });
 
 export const gitlabProtectedBranchSchema = z.object({

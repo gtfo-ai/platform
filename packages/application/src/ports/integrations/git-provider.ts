@@ -517,6 +517,49 @@ export interface ProjectMemberAccess {
 }
 
 /**
+ * {@link GitProviderPort.branchPushProtection}'s answer (WP-141, TD-028 decision 13a item 2): who may
+ * push to one branch, read with the binding's **API** token. Neutral words; the provider's own names
+ * for the pushers are in {@link pushers}, for a refusal an operator reads.
+ */
+export interface BranchPushProtection {
+  /** The branch has a protection rule at all. */
+  readonly protected: boolean;
+  /**
+   * **Nobody** may push: the rule's only push entry is the provider's "No one" (GitLab:
+   * `push_access_levels` holding only access level `0`, with no user, group or deploy key). `false`
+   * for an unprotected branch.
+   */
+  readonly nobodyPushes: boolean;
+  /** A force push is allowed. `true` for an unprotected branch, which admits one from any pusher. */
+  readonly forcePushAllowed: boolean;
+  /** Who the rule lets push, in the provider's words (`Maintainers`, `user 42`); empty when unprotected. */
+  readonly pushers: readonly string[];
+}
+
+/**
+ * {@link GitProviderPort.runTokenApiAccess}'s answer (WP-141, TD-028 decision 13a item 1): what the
+ * provider said to **one** identity read made with a run token — the scope proof of a repository-only
+ * token.
+ */
+export interface RunTokenApiAccess {
+  /** The provider's HTTP status for the read. */
+  readonly status: number;
+  /**
+   * The provider refused the read **for the token's scope** (GitLab: `403` **with** `error:
+   * insufficient_scope`; a 403 without it — a proxy, a firewall, a terms-of-service block — is not
+   * a refusal for scope, WP-141 review round 1) — the one answer that
+   * proves the token cannot call the API. A `2xx` means it can; a `401` means the token itself was
+   * not accepted.
+   */
+  readonly refusedForScope: boolean;
+  /**
+   * The provider's error code from the answer (GitLab: `insufficient_scope`), when it sent one in
+   * the documented shape — a short identifier, never prose; `null` otherwise.
+   */
+  readonly error: string | null;
+}
+
+/**
  * Where a repository's CI configuration lives (WP-139) — {@link RepositorySettings.ciConfig}.
  *
  *  - `repository`: a file **in this repository**, at `path` on the default branch (GitLab: an empty
@@ -673,7 +716,8 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
 
   /**
    * What `username` may do in `project` — WP-137's probe of a **static run credential** (TD-028
-   * decision 13 item 3). The platform never uses the run token for an API call, so the probe asks
+   * decision 13 item 3). The platform never uses a dedicated user's run token for an API call (an
+   * operator's own is checked by {@link runTokenApiAccess} instead, WP-141), so the probe asks
    * with the binding's **API token** whether the token's declared user is a member and whether its
    * role is above the push role (GitLab: Maintainer or Owner, who can unprotect the default branch —
    * the push control, Q40). It cannot tell whether the token belongs to that user, and says so. A
@@ -685,6 +729,32 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * @throws {IntegrationError} `not_found` for a project that does not exist.
    */
   readonly projectMemberAccess: (project: string, username: string) => Promise<ProjectMemberAccess>;
+
+  /**
+   * Who may push to `branch` of `project`, with **every** rule that matches it combined the way the
+   * provider applies them (GitLab: the most permissive of the exact and wildcard rules) — WP-141's protection check of an **operator's own**
+   * repository-only run token (TD-028 decision 13a item 2), read **with the API token**. Such a token
+   * reaches every repository its owner can, so the default branch's protection — push **No one**,
+   * force push off — is the push control, and the platform reads it at the probe and again before
+   * each run that receives the token. A **read**, so it happens in every mode.
+   *
+   * A branch with no protection rule answers `{ protected: false }`, never an exception.
+   *
+   * @throws {IntegrationError} `not_found` for a project that does not exist.
+   */
+  readonly branchPushProtection: (project: string, branch: string) => Promise<BranchPushProtection>;
+
+  /**
+   * The **scope proof** of a run token (WP-141, TD-028 decision 13a item 1): exactly **one** identity
+   * read (GitLab: `GET /user`) made **with `runToken`**, never with the binding's API token, and the
+   * provider's answer as it came — a status is an answer here, not an error. It is the platform's only
+   * use of a run token against a provider API; every other member is built from the API token alone,
+   * and a census over the adapter's requests holds that (`emitted-secrets.test.ts`). A **read**.
+   *
+   * @throws {IntegrationError} for a transport failure or a status that is not a `2xx`, `401` or
+   * `403`; {@link IntegrationRateLimitedError} for a `429`, as every read.
+   */
+  readonly runTokenApiAccess: (runToken: string) => Promise<RunTokenApiAccess>;
 
   /**
    * Starts a new pipeline **for a merge request** at its current head (WP-138 ruling (g)) — GitLab's

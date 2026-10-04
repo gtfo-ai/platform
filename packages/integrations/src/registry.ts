@@ -372,6 +372,7 @@ export const createIntegrationRegistry = (
         fixed.usernameField,
         fixed.expiresAtField,
         fixed.mintingField,
+        fixed.ownerField,
       ]) {
         if (!(field in shape)) {
           throw new ProviderRegistrationError(
@@ -387,6 +388,12 @@ export const createIntegrationRegistry = (
             `static run credential field "${field}" is not in secretFields; a token would be stored and published as plain configuration (BD-002)`,
           );
         }
+      }
+      if (typeof fixed.scopeProofHint !== 'string' || fixed.scopeProofHint.trim() === '') {
+        throw new ProviderRegistrationError(
+          registration.id,
+          'declares a static run credential whose scopeProofHint is blank; the probe of an operator’s own run token would refuse an API-capable token without saying how to make one that is not (TD-028 decision 13a, WP-141)',
+        );
       }
       if (fixed.tokenField === fixed.apiTokenField) {
         throw new ProviderRegistrationError(

@@ -204,6 +204,7 @@ const mint = async (
     scope,
     branchPatterns: scope === 'push' ? ['agentic/*'] : [],
     ttlSeconds: RUN_CREDENTIAL_TTL_SECONDS,
+    defaultBranch: 'main',
   });
   if (answer.kind !== 'minted') {
     throw new Error(

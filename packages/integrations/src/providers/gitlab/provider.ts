@@ -115,7 +115,12 @@ import {
   type RevocationAddress,
   scopesFor,
 } from './credentials.js';
-import { createGitLabHttp, GITLAB_PROVIDER_ID, type GitLabFetch } from './http.js';
+import {
+  createGitLabHttp,
+  GITLAB_PROVIDER_ID,
+  type GitLabFetch,
+  type GitLabResponse,
+} from './http.js';
 import { normaliseGitLabDelivery } from './inbound.js';
 import {
   isDraftTitle,
@@ -209,6 +214,47 @@ const MAINTAINER_ACCESS_LEVEL = 40;
 
 /** GitLab's Developer access level: the lowest that pushes to an unprotected branch (WP-137). */
 const DEVELOPER_ACCESS_LEVEL = 30;
+
+/**
+ * The error GitLab answers a token whose scopes do not admit a request — the documented body
+ * (<https://docs.gitlab.com/api/rest/authentication/>, retrieved 2026-10-04): `"error":
+ * "insufficient_scope"`. The scope proof's only accepting answer (WP-141, review round 1).
+ */
+const INSUFFICIENT_SCOPE = 'insufficient_scope';
+
+/**
+ * Whether a protected-branch rule's name matches a branch — exact, or GitLab's wildcard: `*` matches
+ * any run of characters, `/` included (*"`*gitlab*` matches … `master/gitlab/production`"*), and
+ * matching is case-sensitive (the protected-branches page, retrieved 2026-10-04).
+ */
+export const gitlabBranchRuleMatches = (rule: string, branch: string): boolean => {
+  if (!rule.includes('*')) {
+    return rule === branch;
+  }
+  const pattern = rule
+    .split('*')
+    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+    .join('.*');
+  return new RegExp(`^${pattern}$`).test(branch);
+};
+
+/** GitLab's "No one" in a protected branch's push rule (WP-141; protected_branches § "Valid access levels"). */
+const NO_ONE_ACCESS_LEVEL = 0;
+
+/**
+ * A protected branch's push level as GitLab's settings page names it (WP-141) — `0` No one, `30`
+ * Developers + Maintainers, `40` Maintainers, `60` Administrators (<https://docs.gitlab.com/api/protected_branches/>
+ * § "Valid access levels", retrieved 2026-10-04).
+ */
+const gitlabPushLevelName = (level: number): string =>
+  (
+    ({
+      0: 'No one',
+      30: 'Developers + Maintainers',
+      40: 'Maintainers',
+      60: 'Administrators',
+    }) as Readonly<Record<number, string>>
+  )[level] ?? `access level ${level}`;
 
 /**
  * <https://docs.gitlab.com/api/members/> § "Roles" (retrieved 2026-10-03) — the number as the name an
@@ -817,6 +863,112 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
             pushes: member.access_level >= DEVELOPER_ACCESS_LEVEL,
             administers: member.access_level >= MAINTAINER_ACCESS_LEVEL,
           };
+    },
+
+    /**
+     * WP-141 (TD-028 decision 13a item 2) — **every** protection rule of the project
+     * (`GET /projects/:id/protected_branches`, paged), read with the API token, and the ones that
+     * match `branch` **combined the way GitLab combines them**: *"If more than one rule applies to a
+     * branch, the most permissive rule controls how the branch behaves"*
+     * (<https://docs.gitlab.com/user/project/repository/branches/protected/>, retrieved 2026-10-04).
+     * So a wildcard rule (`*`, `ma*`, `*-stable`) that admits a pusher or a force push loosens an
+     * exact `No one` rule, and reading the exact rule alone — review round 1's finding — would miss it.
+     * "Nobody pushes" holds when at least one rule matches and **every** push entry of **every**
+     * matching rule is GitLab's `0` with no user, group or deploy key; force push is allowed when
+     * **any** matching rule allows it. Group-level protected branches (Premium) are not on this
+     * endpoint and are not seen. The project is read first, so an unknown project is `not_found`.
+     */
+    branchPushProtection: async (project, branch) => {
+      await client.project(project);
+      const matching = (await client.protectedBranches(project)).filter((rule) =>
+        gitlabBranchRuleMatches(rule.name, branch),
+      );
+      if (matching.length === 0) {
+        return { protected: false, nobodyPushes: false, forcePushAllowed: true, pushers: [] };
+      }
+      type Entry = NonNullable<(typeof matching)[number]['push_access_levels']>[number];
+      const pusherOf = (entry: Entry): string => {
+        if (typeof entry.user_id === 'number') return `user ${entry.user_id}`;
+        if (typeof entry.group_id === 'number') return `group ${entry.group_id}`;
+        if (typeof entry.deploy_key_id === 'number') return `deploy key ${entry.deploy_key_id}`;
+        // GitLab's own words first (`access_level_description`: "Maintainers"), bounded — it is
+        // provider text an operator reads in a refusal.
+        const described = entry.access_level_description?.trim().slice(0, 64) ?? '';
+        if (described !== '') return described;
+        return typeof entry.access_level === 'number'
+          ? gitlabPushLevelName(entry.access_level)
+          : 'an unnamed rule';
+      };
+      const nobody = (entry: Entry): boolean =>
+        entry.access_level === NO_ONE_ACCESS_LEVEL &&
+        typeof entry.user_id !== 'number' &&
+        typeof entry.group_id !== 'number' &&
+        typeof entry.deploy_key_id !== 'number';
+      const pushers = matching.flatMap((rule) =>
+        (rule.push_access_levels ?? []).map((entry) =>
+          // A wildcard's pusher is named with its rule, so the operator knows which rule to fix.
+          rule.name === branch
+            ? pusherOf(entry)
+            : `${pusherOf(entry)} (rule ${rule.name.slice(0, 64)})`,
+        ),
+      );
+      return {
+        protected: true,
+        nobodyPushes: matching.every((rule) => {
+          const entries = rule.push_access_levels ?? [];
+          return entries.length > 0 && entries.every(nobody);
+        }),
+        forcePushAllowed: matching.some((rule) => rule.allow_force_push === true),
+        pushers: [...new Set(pushers)],
+      };
+    },
+
+    /**
+     * WP-141 (TD-028 decision 13a item 1) — the scope proof: **one** `GET /user` made with the run
+     * token, on a transport of its own built for this call alone and dropped after it, so the API
+     * token is not on the request and the run token is on no other. `401` and `403` are answers
+     * (`answerStatuses`); the body's `error` is kept only when it is a short identifier
+     * (`insufficient_scope` in GitLab's documented example), never as prose. The run token joins
+     * this transport's redactor, so nothing it hands back can quote it.
+     */
+    runTokenApiAccess: async (runToken) => {
+      if (runToken.trim() === '' || runToken === token) {
+        throw invalidRequest(
+          'run_token_api_access',
+          'the scope proof needs the run token, which must not be the binding’s API token',
+        );
+      }
+      const probe = createGitLabHttp({
+        baseUrl: config.base_url,
+        token: runToken,
+        fetchImpl: options.fetchImpl ?? ((url, init) => fetch(url, init as RequestInit)),
+        timeoutMs: config.request_timeout_ms,
+        maxPages: 1,
+        redactor: composeSecretRedactors(
+          redactor,
+          bindingSecretRedactor([{ name: 'gitlab_run_token', value: runToken }]),
+        ),
+        ...(options.onRedaction === undefined ? {} : { onRedaction: options.onRedaction }),
+      });
+      // Never `null`: `notFoundIsNull` is not set, so a 404 throws `not_found` like any other read.
+      const { status, body } = (await probe.request<unknown>({
+        method: 'GET',
+        path: '/user',
+        action: 'run_token_api_access',
+        answerStatuses: [401, 403],
+      })) as GitLabResponse<unknown>;
+      const code =
+        typeof body === 'object' && body !== null && 'error' in body
+          ? (body as { error: unknown }).error
+          : null;
+      return {
+        status,
+        // Review round 1: a 403 alone proves nothing — a proxy or WAF in front of gitlab.com, or
+        // GitLab's own terms-of-service refusal, answers 403 to a token that may well call the API.
+        // Only GitLab's documented `insufficient_scope` is the proof.
+        refusedForScope: status === 403 && code === INSUFFICIENT_SCOPE,
+        error: typeof code === 'string' && /^[a-z_]{1,64}$/.test(code) ? code : null,
+      };
     },
 
     /**

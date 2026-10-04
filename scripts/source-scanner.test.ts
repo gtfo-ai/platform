@@ -180,6 +180,8 @@ describe('a comment stripper is recognised by its shape', () => {
     'apps/web/src/routes/redirect.ts probe':
       "refuses a protocol-relative redirect, `startsWith('//')`",
     'packages/domain/src/knowledge/frontmatter.ts probe': "a YAML alias, `startsWith('*')`",
+    'packages/integrations/src/providers/gitlab/provider.ts probe':
+      "a GitLab protected-branch wildcard, `includes('*')` and `split('*')` (WP-141)",
     'packages/infrastructure/src/workspace/tracked.ts probe':
       "a path with an empty segment, `includes('//')`",
     'packages/application/src/pipeline/config-refusal-readers.test.ts probe':

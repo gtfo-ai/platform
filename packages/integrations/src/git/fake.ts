@@ -208,8 +208,17 @@
  *     `ci_config_path` is free text this fake does not parse: a seed states the `CiConfigLocation`
  *     the adapter would have derived (default: the repository's `.gitlab-ci.yml`), so the parsing
  *     is held by the GitLab adapter's own tests and the shared contract suite's replay.
+ * 26. **Kinder — `branchPushProtection` derives its answer from the protected set** (WP-141). A
+ *     protected branch answers push **No one** with force push off, and an unprotected one
+ *     `{ protected: false }`, unless a test installs another rule with `setBranchPushProtection`;
+ *     GitLab's rule has users, groups and deploy keys this fake states only as words in `pushers`.
+ * 27. **Stricter — `runTokenApiAccess` knows exactly the tokens a test declared** (WP-141). A token
+ *     installed with `setRunTokenApiAccess` answers what was installed; any other answers `401`, as
+ *     GitLab does for a token it does not know. No request is made, so there is no `PRIVATE-TOKEN`
+ *     header to census — the GitLab adapter's own census (`emitted-secrets.test.ts`) holds that.
  */
 import {
+  type BranchPushProtection,
   type CiConfigLocation,
   type CodeownersRules,
   type CommitFilesRequest,
@@ -240,6 +249,7 @@ import {
   type PipelineStatus,
   type PipelineStatusValue,
   type RepositoryCommit,
+  type RunTokenApiAccess,
   type WebhookDelivery,
 } from '@platform/application';
 import type { CiStatus, DiffStats, ExternalIdentity, Id } from '@platform/contracts';
@@ -494,6 +504,12 @@ export interface FakeGitProvider extends GitProviderPort {
   seedUser(handle: string, externalId: string): void;
   /** What `repositorySettings` answers for a seeded project's CI configuration (WP-139). */
   setCiConfig(project: string, location: CiConfigLocation): void;
+  /** Installs the push rule `branchPushProtection` answers for one branch (WP-141, divergence 26). */
+  setBranchPushProtection(project: string, branch: string, protection: BranchPushProtection): void;
+  /** Installs what `runTokenApiAccess` answers for one token (WP-141, divergence 27). */
+  setRunTokenApiAccess(runToken: string, answer: RunTokenApiAccess): void;
+  /** How many times `runTokenApiAccess` was asked, and with which tokens — never logged. */
+  readonly runTokenProbes: readonly string[];
   /** Makes `username` a member of `project` with a role — what `projectMemberAccess` answers (WP-137). */
   setProjectMember(input: {
     readonly project: string;
@@ -766,6 +782,9 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       administers: input.administers,
     });
   };
+  const pushRules = new Map<string, BranchPushProtection>();
+  const runTokenAnswers = new Map<string, RunTokenApiAccess>();
+  const runTokenProbes: string[] = [];
   const seedUser = (handle: string, externalId: string): void => {
     users.set(handle, externalId);
   };
@@ -1656,6 +1675,26 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       return users.get(handle) ?? null;
     },
 
+    /** Divergence 26: the installed rule, else derived from the protected set. */
+    branchPushProtection: async (project: string, branch: string) => {
+      core.enter('branch_push_protection');
+      const stored = requireProject('branch_push_protection', project);
+      const installed = pushRules.get(memberKey(project, branch));
+      if (installed !== undefined) {
+        return installed;
+      }
+      return stored.protectedBranches.has(branch)
+        ? { protected: true, nobodyPushes: true, forcePushAllowed: false, pushers: ['No one'] }
+        : { protected: false, nobodyPushes: false, forcePushAllowed: true, pushers: [] };
+    },
+
+    /** Divergence 27: exactly the tokens a test declared; any other is GitLab's `401`. */
+    runTokenApiAccess: async (runToken: string) => {
+      core.enter('run_token_api_access');
+      runTokenProbes.push(runToken);
+      return runTokenAnswers.get(runToken) ?? { status: 401, refusedForScope: false, error: null };
+    },
+
     /** Divergence 24: exactly the members a test set, on a project it seeded. */
     projectMemberAccess: async (project: string, username: string) => {
       core.enter('project_member_access');
@@ -1764,6 +1803,13 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       requireProject('set_ci_config', project).ciConfig = location;
     },
     setProjectMember,
+    setBranchPushProtection: (project, branch, protection) => {
+      pushRules.set(memberKey(project, branch), protection);
+    },
+    setRunTokenApiAccess: (runToken, answer) => {
+      runTokenAnswers.set(runToken, answer);
+    },
+    runTokenProbes,
     seedFile,
     commits,
     get credentials() {

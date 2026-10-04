@@ -92,6 +92,11 @@ export interface GitLabClient {
   project(project: string): Promise<z.output<typeof gitlabProjectSchema>>;
   /** <https://docs.gitlab.com/api/branches/> § "Retrieve a repository branch". */
   branch(project: string, branch: string): Promise<z.output<typeof gitlabBranchSchema>>;
+  /**
+   * <https://docs.gitlab.com/api/protected_branches/> § "List protected branches" — every rule,
+   * wildcards included, paged (WP-141 review round 1).
+   */
+  protectedBranches(project: string): Promise<z.output<typeof gitlabProtectedBranchSchema>[]>;
   /** <https://docs.gitlab.com/api/protected_branches/> § "Retrieve a protected branch …". */
   protectedBranch(
     project: string,
@@ -330,6 +335,20 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
           path: `/projects/${encodeProjectId(project)}/repository/branches/${encodeURIComponent(branch)}`,
           action: 'get_branch',
         }),
+      ),
+
+    protectedBranches: async (project) =>
+      parse(
+        z.array(gitlabProtectedBranchSchema),
+        await http.paginate(
+          {
+            method: 'GET',
+            path: `/projects/${encodeProjectId(project)}/protected_branches`,
+            action: 'list_protected_branches',
+          },
+          100,
+        ),
+        'list_protected_branches',
       ),
 
     protectedBranch: async (project, branch) => {

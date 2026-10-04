@@ -46,6 +46,18 @@ import {
 export const GITLAB_INTEGRATION_ID = '00000000-0000-4000-8000-0000000000a9';
 export const GITLAB_PROJECT_ID = '00000000-0000-4000-8000-0000000000b9';
 
+/**
+ * WP-141: obviously fake run tokens, shaped like nothing GitLab issues (BD-002) — the values
+ * `run-token-scope.json`'s `request_token` keys match, so the replay answers `GET /user` by the token
+ * it was sent with.
+ */
+export const GITLAB_FAKE_RUN_TOKENS = {
+  repositoryOnly: 'FAKE-run-token-repository-only-DO-NOT-USE',
+  apiCapable: 'FAKE-run-token-api-scope-DO-NOT-USE',
+  unknown: 'FAKE-run-token-revoked-DO-NOT-USE',
+  blockedElsewhere: 'FAKE-run-token-blocked-by-proxy-DO-NOT-USE',
+} as const;
+
 /** Obviously fake: the binding's API token, shaped like nothing GitLab issues (BD-002). */
 export const FAKE_BINDING_TOKEN = 'FAKE-binding-api-token-DO-NOT-USE';
 
@@ -198,6 +210,16 @@ export const gitlabReplayContext = (
       maintainer: 'agentic-maintainer',
       outsider: 'agentic-outsider',
     },
+    // WP-141: `instance.json` records `main` protected with push No one; `run-token-scope.json`
+    // records `develop` with no rule, `release` with Maintainers push and `stable` with force push
+    // on, and `GET /user` answered three ways by the run token it was sent with.
+    protection: {
+      noOne: 'main',
+      unprotected: 'develop',
+      maintainersPush: 'release',
+      forcePush: 'stable',
+    },
+    runTokens: GITLAB_FAKE_RUN_TOKENS,
     // WP-139: `repository-settings.json` records the three projects' `GET /projects/:id`.
     repositories: {
       plain: 'acme/plain-ci',

@@ -256,6 +256,28 @@ describe('a provider’s configuration fields and its account-config check', () 
     }
   });
 
+  /**
+   * WP-141 (TD-028 decision 13a): what every write of an integration's configuration reads — an
+   * owner of `operator` is a static form, refused beside a minted integration; with `static` it passes.
+   */
+  it('refuses run_token_owner: operator on a GitLab integration that is not static', () => {
+    const gitlab = findShippedProvider('gitlab') as ProviderCatalogueEntry;
+    const base = { base_url: 'https://gitlab.example.test', run_token_owner: 'operator' };
+    expect(configIssuesOf(gitlab, base).map((issue) => issue.path)).toEqual(['run_token_owner']);
+    expect(
+      configIssuesOf(gitlab, {
+        ...base,
+        run_credential: 'static',
+        run_token_username: 'acme-owner',
+        run_token_expires_at: '2026-12-01',
+      }),
+    ).toEqual([]);
+    expect(
+      configIssuesOf(gitlab, { ...base, run_token_owner: 'maintainer' }).map((issue) => issue.path),
+      'an owner outside the two is the schema’s refusal',
+    ).toEqual(['run_token_owner']);
+  });
+
   it('names an undeclared key by its name and a wrong value by its path, never the value', () => {
     const gitlab = findShippedProvider('gitlab') as ProviderCatalogueEntry;
     // The operator guide's old example (backlog 328): `host` instead of `base_url`.

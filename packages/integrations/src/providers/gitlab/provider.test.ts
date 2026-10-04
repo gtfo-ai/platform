@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 import { gitlabConfigSchema } from './config.js';
 import type { GitLabFetch } from './http.js';
 import { gitlabProviderRegistration } from './index.js';
-import { createGitLabProvider, type GitLabProvider } from './provider.js';
+import { createGitLabProvider, type GitLabProvider, gitlabBranchRuleMatches } from './provider.js';
 
 const AT = '2026-06-01T08:00:00.000Z';
 const HOST = 'https://gitlab.example.test';
@@ -327,7 +327,7 @@ describe('credential minting', () => {
           'declares it as `token_prefix` on the integration',
         // WP-137 (TD-028 decision 13 item 6): how a static run credential is declared instead.
         static:
-          'GitLab: `run_credential: static` with a dedicated `run_token`; weaker isolation, operator guide § Integrations',
+          'GitLab: `run_credential: static` with a `run_token` — a dedicated user’s, or your own repository-only one (`run_token_owner: operator`); weaker isolation, operator guide § Integrations',
       },
     });
   });
@@ -1048,5 +1048,27 @@ describe('construction', () => {
     for (const [name, value] of Object.entries(port.capabilities())) {
       expect(typeof value, `capability ${name}`).toBe('boolean');
     }
+  });
+});
+
+/**
+ * WP-141 review round 1: GitLab's protected-branch wildcard — `*` is any run of characters, `/`
+ * included, case-sensitive — so the operator-token check sees every rule that applies to a branch.
+ * Examples are the protected-branches page's own (retrieved 2026-10-04).
+ */
+describe('gitlabBranchRuleMatches (WP-141)', () => {
+  it.each([
+    ['main', 'main', true],
+    ['main', 'main-2', false],
+    ['*-stable', 'production-stable', true],
+    ['production/*', 'production/app-server', true],
+    ['*gitlab*', 'master/gitlab/production', true],
+    ['*', 'develop', true],
+    ['ma*', 'main', true],
+    ['Ma*', 'main', false],
+    ['rel.*', 'release', false],
+    ['rel(*)', 'rel(x)', true],
+  ])('%s against %s is %s', (rule, branch, expected) => {
+    expect(gitlabBranchRuleMatches(rule, branch)).toBe(expected);
   });
 });

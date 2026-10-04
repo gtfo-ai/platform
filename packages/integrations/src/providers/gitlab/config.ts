@@ -93,13 +93,34 @@ export const gitlabConfigSchema = z.strictObject({
    */
   run_credential: z.enum(['minted', 'static']).default('minted'),
   /**
-   * Secret. The static run credential: the **personal access token of a dedicated user** who is a
-   * member of only the bound project, with the Developer role, scopes `read_repository` and
-   * `write_repository`. Never the API `token` (refused when equal), never used for a platform API
-   * call — the adapter is built without it — and never given to a shadow task.
+   * **Whose** personal access token `run_token` is, with `run_credential: static` (TD-028 decision
+   * 13a, WP-141 — the founder's *"let the admin decide"*, 2026-10-04). The operator chooses, and
+   * each choice has its own probe and its own stated loss:
+   *
+   *  - `dedicated_user` (the default; decision 13 unchanged) — a dedicated user who is a member of
+   *    only the bound project, with the Developer role and no more. The probe reads that user's role
+   *    with the API token and refuses a Maintainer or Owner. Costs a seat on gitlab.com.
+   *  - `operator` — the operator's **own** token, created with **only** `read_repository` and
+   *    `write_repository`. Any role is accepted; instead the probe proves the token cannot call the
+   *    API (one `GET /user` with it must answer `403`), and the bound project's default branch must
+   *    be protected with push **No one** and force push off — checked at the probe and again before
+   *    every run that gets the token. No seat; **the loss is reach**: the token reads every
+   *    repository its owner can, and pushes to every unprotected branch of them.
+   *
+   * A third choice, a project SSH deploy key, is decision 13b (WP-146): another `run_credential`
+   * value, not an owner.
+   */
+  run_token_owner: z.enum(['dedicated_user', 'operator']).default('dedicated_user'),
+  /**
+   * Secret. The static run credential, scopes `read_repository` and `write_repository` only: the
+   * **personal access token of a dedicated user** who is a member of only the bound project with the
+   * Developer role, or — with `run_token_owner: operator` — the operator's own. Never the API
+   * `token` (refused when equal), never used for a platform API call — the adapter is built without
+   * it, and its one use against the API is `operator`'s scope proof — and never given to a shadow
+   * task.
    */
   run_token: z.string().nullish(),
-  /** The dedicated user's GitLab username: what git sends beside `run_token`, and what the probe checks. */
+  /** The run token's GitLab username: what git sends beside `run_token`, and what the probe checks. */
   run_token_username: z
     .string()
     .regex(/^[A-Za-z0-9_.-]{1,255}$/, 'expected a GitLab username')

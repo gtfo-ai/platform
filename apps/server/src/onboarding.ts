@@ -67,7 +67,7 @@ import {
   redaction as redactionAdapters,
   secrets as secretAdapters,
 } from '@platform/infrastructure';
-import type { IntegrationProber, IntegrationRegistry } from '@platform/integrations';
+import type { BoundProject, IntegrationProber, IntegrationRegistry } from '@platform/integrations';
 import { accountOnlyFieldsOf, createIntegrationProber } from '@platform/integrations';
 import type pg from 'pg';
 import { injectedSecretRedactorForEnvironment } from './agent.js';
@@ -163,19 +163,24 @@ export interface OnboardingCommandOptions {
 }
 
 /**
- * The repository path of the **one** project bound to an integration, or `null` when none is — or
- * when more than one is, which a static integration refuses at the binding write and which the probe
- * then reports as not checkable rather than choosing (WP-137, TD-028 decision 13 item 3).
+ * The **one** project bound to an integration — its repository path and its stored default branch —
+ * or `null` when none is, or when more than one is, which a static integration refuses at the binding
+ * write and which the probe then reports as not checkable rather than choosing (WP-137, TD-028
+ * decision 13 item 3). The default branch is the one an operator's own run token is checked behind
+ * (WP-141, decision 13a item 2): the platform's stored value, never the provider's.
  */
-export const boundProjectPathReader =
+export const boundProjectReader =
   (pool: Pick<pg.Pool, 'query'>) =>
-  async (integrationId: string): Promise<string | null> => {
-    const { rows } = await pool.query<{ repo_url: string }>(
-      `select p.repo_url from bindings b join projects p on p.id = b.project_id
+  async (integrationId: string): Promise<BoundProject | null> => {
+    const { rows } = await pool.query<{ repo_url: string; default_branch: string }>(
+      `select p.repo_url, p.default_branch from bindings b join projects p on p.id = b.project_id
         where b.integration_id = $1 order by b.created_at limit 2`,
       [integrationId],
     );
-    return rows.length === 1 && rows[0] !== undefined ? repositoryPathOf(rows[0].repo_url) : null;
+    const only = rows.length === 1 ? rows[0] : undefined;
+    return only === undefined
+      ? null
+      : { path: repositoryPathOf(only.repo_url), defaultBranch: only.default_branch };
   };
 
 export class OnboardingUnavailableError extends Error {
@@ -195,8 +200,9 @@ export const createOnboardingCommands = (options: OnboardingCommandOptions): Onb
     // TD-012 step 2 over the probe's detail, beside the account's own exact-match redactor.
     platformRedactor: redactionAdapters.patternRedactor(),
     // WP-137: where a static run credential's user is checked — the one project bound to the
-    // integration (a static integration may have one), as its repository path.
-    boundProjectPathOf: boundProjectPathReader(options.pool),
+    // integration (a static integration may have one), as its repository path; WP-141: and the
+    // default branch an operator's own run token is checked behind.
+    boundProjectOf: boundProjectReader(options.pool),
   });
   // TD-012 over interview answers: the run environment's credentials first, then the pattern rules.
   const interviewRedactor = composeSecretRedactors(

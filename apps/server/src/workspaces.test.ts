@@ -23,6 +23,7 @@ import {
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { fixedClock } from '@platform/domain';
+import { launcher as launcherAdapters, runner as runnerAdapters } from '@platform/infrastructure';
 import { createFakeGitProvider } from '@platform/integrations';
 import type pg from 'pg';
 import { describe, expect, it } from 'vitest';
@@ -310,6 +311,7 @@ describe('minting the run credential (WP-76)', () => {
   describe('a static run credential (WP-137)', () => {
     const STATIC_TOKEN = 'glpat-FAKE-static-run-token-not-real-0001';
     const STATIC: StaticRunCredential = {
+      owner: 'dedicated_user',
       username: 'agentic-runner',
       value: STATIC_TOKEN,
       expiresAt: '2026-12-01T00:00:00.000Z',
@@ -376,6 +378,72 @@ describe('minting the run credential (WP-76)', () => {
       });
       expect(runSecrets.size).toBe(0);
       expect(credentialSources()).toEqual([['none', GIT_INTEGRATION]]);
+    });
+  });
+
+  /**
+   * WP-141 criterion (3) — TD-028 decision 13a item 2, through the **real** provisioner over the
+   * production minter: an operator's own run token reaches the launcher's create request while the
+   * default branch is protected with push No one; once the operator loosens it (after the probe, after
+   * a run), the next provision is refused `invalid_spec` by name and the launcher is asked for nothing.
+   */
+  describe('an operator’s own run token (WP-141)', () => {
+    const OPERATOR_TOKEN = 'glpat-FAKE-operator-run-token-not-real-01';
+    const OPERATOR: StaticRunCredential = {
+      owner: 'operator',
+      username: 'acme-owner',
+      value: OPERATOR_TOKEN,
+      expiresAt: '2026-12-01T00:00:00.000Z',
+      declaredExpiry: '2026-12-01',
+      sameAsApiToken: false,
+      refusal: null,
+    };
+
+    it('is refused at the next create, before any workspace exists, once the protection is loosened', async () => {
+      const { git, auditLog, runSecrets, minter, project, credentialSources } = harness('normal', {
+        minting: false,
+        staticRunCredential: OPERATOR,
+      });
+      const creates: string[] = [];
+      const provisioner = launcherAdapters.createLauncherRunWorkspaceProvisioner({
+        client: {
+          createRun: async (payload: launcherAdapters.CreateRunRequestPayload) => {
+            creates.push(payload.spec.runId);
+            throw new Error('the launcher stops here: this case is about what reaches it');
+          },
+          endRun: async () => ({ exported: null, keepUntil: null, failures: [] }),
+        } as unknown as launcherAdapters.LauncherControlClient,
+        credentials: minter,
+        projects: { forRun: async () => project },
+        controlRoot: '/run/agentic/ctl',
+        modelEgressHosts: ['api.anthropic.com'],
+        runRegistryHosts: [],
+        credentialTtlSeconds: 86_400,
+        clock: runnerAdapters.manualClock(Date.parse('2026-10-04T00:00:00.000Z')),
+      });
+      const spec = runnerAdapters.runSpecFixture();
+
+      // Protected with push No one (the fake's default for `main`): the create request is reached.
+      await expect(provisioner.provision(spec)).rejects.toThrow(/the launcher stops here/);
+      expect(creates).toHaveLength(1);
+
+      git.setBranchPushProtection('acme/api', 'main', {
+        protected: true,
+        nobodyPushes: false,
+        forcePushAllowed: false,
+        pushers: ['Maintainers'],
+      });
+      await expect(provisioner.provision(spec)).rejects.toMatchObject({
+        code: 'invalid_spec',
+        message: expect.stringMatching(
+          /default branch main of acme\/api lets Maintainers push.*protect main with push "No one"/,
+        ),
+      });
+      expect(creates, 'the launcher was not asked a second time').toHaveLength(1);
+      expect(auditLog.entriesFor('check_default_branch_protection')).toHaveLength(2);
+      expect(JSON.stringify(auditLog.entries)).not.toContain(OPERATOR_TOKEN);
+      expect(credentialSources().at(-1)).toEqual(['none', GIT_INTEGRATION]);
+      expect(runSecrets.size).toBe(0);
     });
   });
 

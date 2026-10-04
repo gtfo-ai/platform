@@ -82,6 +82,7 @@ describe('the static run credential (WP-137, TD-028 decision 13)', () => {
       run_token: RUN_TOKEN,
     });
     expect(read).toEqual({
+      owner: 'dedicated_user',
       username: 'agentic-runner',
       value: RUN_TOKEN,
       expiresAt: '2026-12-01T00:00:00.000Z',
@@ -103,5 +104,53 @@ describe('the static run credential (WP-137, TD-028 decision 13)', () => {
     expect(expiryInstantOf('2026-02-30')).toBeNull();
     expect(expiryInstantOf('2026-12-01T00:00:00Z')).toBeNull();
     expect(expiryInstantOf('')).toBeNull();
+  });
+});
+
+/**
+ * WP-141 (TD-028 decision 13a): whose token it is. `dedicated_user` is the default and decision 13
+ * unchanged; `operator` is read through, applies only to `static`, and changes the username's words.
+ */
+describe('the run token’s owner (WP-141, TD-028 decision 13a)', () => {
+  it('reads dedicated_user by default and operator when declared', () => {
+    expect(staticRunCredentialOf(SUPPORT, { ...staticConfig(), run_token: RUN_TOKEN })?.owner).toBe(
+      'dedicated_user',
+    );
+    expect(
+      staticRunCredentialOf(SUPPORT, {
+        ...staticConfig({ run_token_owner: 'operator' }),
+        run_token: RUN_TOKEN,
+      })?.owner,
+    ).toBe('operator');
+    expect(
+      staticRunCredentialWriteIssues(
+        SUPPORT,
+        staticConfig({ run_token_owner: 'operator' }),
+        { token: API_TOKEN, run_token: RUN_TOKEN },
+        NOW,
+      ),
+      'every other rule of decision 13 holds for the operator’s token, and this one passes them',
+    ).toEqual([]);
+  });
+
+  it('refuses operator on an integration that hands runs no static token', () => {
+    const issues = staticRunCredentialConfigIssues(SUPPORT, {
+      run_credential: 'minted',
+      run_token_owner: 'operator',
+    });
+    expect(paths(issues)).toEqual(['run_token_owner']);
+    expect(issues[0]?.message).toMatch(/applies only to `run_credential: static`/);
+    expect(
+      staticRunCredentialConfigIssues(SUPPORT, { run_token_owner: 'dedicated_user' }),
+      'the default says nothing and is refused nowhere',
+    ).toEqual([]);
+  });
+
+  it('names whose username is missing', () => {
+    const [issue] = staticRunCredentialConfigIssues(
+      SUPPORT,
+      staticConfig({ run_token_owner: 'operator', run_token_username: undefined }),
+    );
+    expect(issue?.message).toMatch(/the operator the run token belongs to/);
   });
 });

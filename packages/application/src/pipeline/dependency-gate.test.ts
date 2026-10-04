@@ -237,6 +237,7 @@ const start = async (options: StartOptions = {}): Promise<PipelineHarness> => {
       ? {}
       : {
           gitStaticRunCredential: {
+            owner: 'dedicated_user',
             username: 'agentic-runner',
             value: options.staticRunToken,
             expiresAt: '2026-12-01T00:00:00.000Z',

@@ -35,6 +35,7 @@
  */
 import type {
   BindingRepository,
+  BranchPushProtection,
   GitProviderPort,
   HealthProbe,
   InjectedSecret,
@@ -42,6 +43,7 @@ import type {
   IntegrationActionExecutor,
   IntegrationRef,
   ProjectMemberAccess,
+  RunTokenApiAccess,
   SecretRedactor,
   SecretStore,
 } from '@platform/application';
@@ -49,6 +51,7 @@ import {
   bindingSecretRedactor,
   composeSecretRedactors,
   noSecretsRedactor,
+  operatorProtectionFault,
 } from '@platform/application';
 import type { Id, IntegrationType } from '@platform/contracts';
 import type { IntegrationRegistry } from '../registry.js';
@@ -76,11 +79,19 @@ export interface IntegrationProberOptions {
    */
   readonly platformRedactor?: SecretRedactor;
   /**
-   * The repository path of the one project bound to this integration (`acme/api`), or `null` when
-   * none is — where a **static run credential**'s user is checked (WP-137, TD-028 decision 13 item
-   * 3). Absent, the check reports that it could not be made, as a failed check, never a pass.
+   * The one project bound to this integration — its repository path (`acme/api`) and its stored
+   * `projects.default_branch` — or `null` when none is: where a **static run credential**'s user is
+   * checked (WP-137, TD-028 decision 13 item 3) and, for an operator's own token, whose default
+   * branch's protection is read (WP-141, decision 13a item 2). Absent, the check reports that it
+   * could not be made, as a failed check, never a pass.
    */
-  readonly boundProjectPathOf?: (integrationId: Id) => Promise<string | null>;
+  readonly boundProjectOf?: (integrationId: Id) => Promise<BoundProject | null>;
+}
+
+/** {@link IntegrationProberOptions.boundProjectOf}'s answer. */
+export interface BoundProject {
+  readonly path: string;
+  readonly defaultBranch: string;
 }
 
 /** One line of the probe's answer: the connection, and for a static run credential its user. */
@@ -261,17 +272,28 @@ export const createIntegrationProber = (options: IntegrationProberOptions): Inte
         parsed.data as Readonly<Record<string, unknown>>,
       );
       if (fixed !== undefined) {
-        checks.push(
-          await checkStaticRunCredential({
-            options,
-            integrationId,
-            ref,
-            port,
-            username: fixed.username,
-            connected: result.ok,
-            redact: (text) => redactor.redactText(text).value,
-          }),
-        );
+        const input = {
+          options,
+          integrationId,
+          ref,
+          port,
+          username: fixed.username,
+          connected: result.ok,
+          redact: (text: string) => redactor.redactText(text).value,
+        };
+        if (fixed.owner === 'operator') {
+          checks.push(
+            ...(await checkOperatorRunToken({
+              ...input,
+              runToken: fixed.value,
+              scopeProofHint:
+                registration.staticRunCredential?.scopeProofHint ??
+                'this token can call the provider’s API; create one with repository scopes only',
+            })),
+          );
+        } else {
+          checks.push(await checkStaticRunCredential(input));
+        }
       }
       return {
         ok: checks.every((check) => check.ok),
@@ -285,7 +307,7 @@ export const createIntegrationProber = (options: IntegrationProberOptions): Inte
 
 /** What the probe says it cannot do, on every static run credential check (decision 13 item 3). */
 const CANNOT_CONFIRM_OWNER =
-  'The platform never uses the run token for an API call, so it cannot confirm that the token belongs to this user — check that yourself in the user’s access tokens.';
+  'The platform never uses a dedicated user’s run token for an API call, so it cannot confirm that the token belongs to this user — check that yourself in the user’s access tokens.';
 
 /**
  * The static run credential's line of the probe (WP-137, TD-028 decision 13 item 3): the declared
@@ -313,10 +335,11 @@ const checkStaticRunCredential = async (input: {
   if (input.username.trim() === '') {
     return { name, ok: false, detail: `No run token user is declared. ${CANNOT_CONFIRM_OWNER}` };
   }
-  const project =
-    input.options.boundProjectPathOf === undefined
+  const bound =
+    input.options.boundProjectOf === undefined
       ? null
-      : await input.options.boundProjectPathOf(input.integrationId);
+      : await input.options.boundProjectOf(input.integrationId);
+  const project = bound?.path ?? null;
   if (project === null) {
     return {
       name,
@@ -373,4 +396,181 @@ const checkStaticRunCredential = async (input: {
     ok: true,
     detail: `${who} is ${role} on ${project}. ${CANNOT_CONFIRM_OWNER}`,
   };
+};
+
+/**
+ * What the probe of an **operator's own** run token says it cannot see (TD-028 decision 13a item 3):
+ * the token's reach is its owner's, not one project's.
+ */
+const OPERATOR_REACH =
+  'This is your own token: it reaches every repository you can access, not only this project, and the platform cannot see which.';
+
+/** {@link checkOperatorRunToken}'s input: the dedicated-user check's, plus the token and the hint. */
+interface OperatorRunTokenInput {
+  readonly options: IntegrationProberOptions;
+  readonly integrationId: Id;
+  readonly ref: IntegrationRef;
+  readonly port: object;
+  readonly username: string;
+  readonly connected: boolean;
+  readonly redact: (text: string) => string;
+  readonly runToken: string;
+  readonly scopeProofHint: string;
+}
+
+/**
+ * The probe of an **operator's own** repository-only run token (WP-141, TD-028 decision 13a): the
+ * dedicated-user role check is **replaced** by two checks, both through the executor as reads.
+ *
+ *  - `run_credential` — the **scope proof**: exactly one identity read made **with the run token**
+ *    (`GitProviderPort.runTokenApiAccess`), accepted only when the provider refuses it for scope
+ *    (GitLab `403`). A token that can call the API could change protection, membership and settings;
+ *    one that cannot is left with git, which the next check bounds. Any role is accepted — a
+ *    Maintainer's or an Owner's token included — because the role is not what the token can use.
+ *  - `default_branch_protection` — with the **API** token: the bound project's stored default branch
+ *    protected with push **No one** and force push off. Re-read before every run that gets the token
+ *    (`runCredentialWrites`), so this line is the operator's preview, not the only gate.
+ *
+ * The audit row of the scope proof names the project and the status; the token is in neither the
+ * payload nor the result (and the executor redacts both with the account's redactor, which knows it).
+ */
+const checkOperatorRunToken = async (
+  input: OperatorRunTokenInput,
+): Promise<readonly IntegrationProbeCheck[]> => {
+  const scope = 'run_credential';
+  const protection = 'default_branch_protection';
+  if (!input.connected) {
+    const detail = `Not checked: the API token's connection failed. ${OPERATOR_REACH}`;
+    return [
+      { name: scope, ok: false, detail },
+      { name: protection, ok: false, detail },
+    ];
+  }
+  const git = input.port as Partial<GitProviderPort>;
+  if (
+    typeof git.runTokenApiAccess !== 'function' ||
+    typeof git.branchPushProtection !== 'function'
+  ) {
+    const detail = 'This provider cannot prove a run token’s scope or read a branch’s protection.';
+    return [
+      { name: scope, ok: false, detail },
+      { name: protection, ok: false, detail },
+    ];
+  }
+  const bound =
+    input.options.boundProjectOf === undefined
+      ? null
+      : await input.options.boundProjectOf(input.integrationId);
+  return [
+    await scopeProof(input, git.runTokenApiAccess.bind(git), bound),
+    await protectionCheck(input, git.branchPushProtection.bind(git), bound),
+  ];
+};
+
+const scopeProof = async (
+  input: OperatorRunTokenInput,
+  access: GitProviderPort['runTokenApiAccess'],
+  bound: BoundProject | null,
+): Promise<IntegrationProbeCheck> => {
+  const name = 'run_credential';
+  if (input.runToken.trim() === '') {
+    return { name, ok: false, detail: `No run token is sealed. ${OPERATOR_REACH}` };
+  }
+  const answer = (
+    await input.options.executor.execute<RunTokenApiAccess>({
+      integration: input.ref,
+      action: 'check_run_token_scope',
+      // Names only — never the token, which is the one thing this call carries.
+      payload: { project: bound?.path ?? null, owner: 'operator' },
+      projectId: null,
+      taskId: null,
+      mutating: false,
+      perform: async () => access(input.runToken),
+      describeResult: (result) => ({
+        status: result.status,
+        refused_for_scope: result.refusedForScope,
+        error: result.error,
+      }),
+    })
+  ).result;
+  if (answer.refusedForScope) {
+    const code = answer.error === null ? '' : ` (${answer.error})`;
+    return {
+      name,
+      ok: true,
+      detail: `The run token cannot call the API: the provider refused it for its scope, ${answer.status}${code}. ${OPERATOR_REACH}`,
+    };
+  }
+  if (answer.status >= 200 && answer.status < 300) {
+    return {
+      name,
+      ok: false,
+      detail: `Refused: ${input.scopeProofHint} (the provider answered ${answer.status}). An operator’s own token is accepted only when it cannot change protection, membership or settings (TD-028 decision 13a).`,
+    };
+  }
+  if (answer.status === 403) {
+    // Review round 1: a 403 that is not a refusal *for scope* — a proxy or firewall in front of the
+    // provider, a terms-of-service block — says nothing about what the token could do elsewhere.
+    const code = answer.error === null ? 'no error code' : `error ${answer.error}`;
+    return {
+      name,
+      ok: false,
+      detail: `Refused: the provider answered 403 with ${code}, not a refusal for the token's scope (GitLab: insufficient_scope), so it proves nothing about whether the token can call the API. ${OPERATOR_REACH}`,
+    };
+  }
+  if (answer.status === 401) {
+    return {
+      name,
+      ok: false,
+      detail: `Refused: the provider did not accept the run token at all (401) — it is wrong, expired or revoked. ${OPERATOR_REACH}`,
+    };
+  }
+  return {
+    name,
+    ok: false,
+    detail: `Refused: the provider answered ${answer.status}, which proves nothing about the token's scope. ${OPERATOR_REACH}`,
+  };
+};
+
+const protectionCheck = async (
+  input: OperatorRunTokenInput,
+  read: GitProviderPort['branchPushProtection'],
+  bound: BoundProject | null,
+): Promise<IntegrationProbeCheck> => {
+  const name = 'default_branch_protection';
+  if (bound === null) {
+    return {
+      name,
+      ok: false,
+      detail:
+        'Not checked: no project is bound to this integration yet, so there is no default branch to read. Bind it and test again.',
+    };
+  }
+  const rule = (
+    await input.options.executor.execute<BranchPushProtection>({
+      integration: input.ref,
+      action: 'check_default_branch_protection',
+      payload: { project: bound.path, branch: bound.defaultBranch },
+      projectId: null,
+      taskId: null,
+      mutating: false,
+      perform: async () => read(bound.path, bound.defaultBranch),
+      describeResult: (result) => ({
+        protected: result.protected,
+        nobody_pushes: result.nobodyPushes,
+        force_push_allowed: result.forcePushAllowed,
+      }),
+    })
+  ).result;
+  const fault = operatorProtectionFault(bound.path, bound.defaultBranch, {
+    ...rule,
+    pushers: rule.pushers.map(input.redact),
+  });
+  return fault === null
+    ? {
+        name,
+        ok: true,
+        detail: `${bound.defaultBranch} of ${bound.path} is protected with push "No one" and force push off; it is read again before every run that gets the token.`,
+      }
+    : { name, ok: false, detail: `Refused: ${fault}.` };
 };

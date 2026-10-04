@@ -196,6 +196,8 @@ export const createRunGitCredentialMinter = (options: {
           scope: mode === 'shadow' ? 'read' : scope,
           branchPatterns: project.branchPatterns,
           ttlSeconds,
+          // WP-141: an operator's own run token is handed only behind this branch's protection.
+          defaultBranch: project.defaultBranch,
         });
       } catch (error) {
         if (error instanceof StaticRunCredentialRefusedError) {

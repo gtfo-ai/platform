@@ -1249,6 +1249,22 @@ Stated here so an operator meets them in a document rather than in production:
   the exact value, and a hit parks the task *Needs human* with *"rotate the run token"* — never
   printing it. The protected default branch remains the push control (Q40). The GitLab setup guide's
   step 5a is the procedure.
+- **Which static run credential — the administrator chooses** (WP-141; TD-028 decision 13a, BD-025's
+  amendment of 2026-10-04, the founder's *"let the admin decide"*). Three forms, side by side; each is
+  opt-in on the GitLab integration and none is ever the binding's API token:
+
+  | Form | Setting | Checked | What is lost |
+  |---|---|---|---|
+  | A dedicated user's token | `run_credential: static` (`run_token_owner: dedicated_user`, the default) | the user's role on the bound project, Developer and no more | decision 13 item 5, above; costs a gitlab.com seat |
+  | **Your own repository-only token** | `run_credential: static`, `run_token_owner: operator` | the **scope proof** — one `GET /user` with the run token must be refused for its scope (`403` with `insufficient_scope`; any other 403 is refused), so it cannot call the API — and the **default branch protected with push "No one" and force push off** by every matching rule, wildcards included (the most permissive wins), read with the API token at **Test connection** and again before **every** run that gets the token; the scope is not re-read, so test again after every re-seal | all of the above, and **reach**: the token reaches **every repository the user can access**, not one project — a read-only stage holds read access to all of them and a writing stage push access to every unprotected branch of all of them; a second integration holding the same value is not detected; pipelines on pushed `agentic/*` branches and tags run under the user's identity, and a tag matching a protected-tag rule open to Maintainers gets protected CI/CD variables — protect release tags with *No one* too |
+  | A project SSH deploy key | `run_credential: deploy_key` | — | **not in this build** (WP-146, TD-028 decision 13b) |
+
+  Your own token is accepted whatever your role — Maintainer and Owner included — because protection,
+  membership and settings are API operations a repository-only token cannot perform; what it can do
+  is git, which the protected default branch bounds. Loosen that protection and the next run is
+  refused before its workspace exists, naming the branch and the setting. The scope proof is the
+  platform's **only** use of a run token against the GitLab API (audited as `check_run_token_scope`,
+  the value in no row).
 - **`docker compose up` cannot pull the published images** without the retagging step in §2, because
   `compose.yml` names them without a registry.
 - **`compose.yml` passes the `app` service a fixed list of variables**, so `.env` is not the app's

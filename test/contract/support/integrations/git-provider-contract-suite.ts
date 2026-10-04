@@ -206,6 +206,26 @@ export interface GitProviderContractContext {
     readonly outsider: string;
   };
   /**
+   * WP-141 (TD-028 decision 13a): an operator's own run token. In `project`, `noOne` is protected
+   * with push **No one** and force push off, `unprotected` has no rule, `maintainersPush` lets
+   * Maintainers push (by an exact rule or, in GitLab's corpus, a wildcard over an exact No-one rule) and `forcePush` admits a force push. Of the run tokens, `repositoryOnly` is
+   * refused the identity read for its scope, `apiCapable` is answered, and `unknown` is a token the
+   * provider does not accept at all.
+   */
+  readonly protection: {
+    readonly noOne: string;
+    readonly unprotected: string;
+    readonly maintainersPush: string;
+    readonly forcePush: string;
+  };
+  readonly runTokens: {
+    readonly repositoryOnly: string;
+    readonly apiCapable: string;
+    readonly unknown: string;
+    /** Answered `403` for a reason that is not its scope (review round 1). */
+    readonly blockedElsewhere: string;
+  };
+  /**
    * WP-139: three projects whose repository settings differ the three ways the CI gate reads —
    * `plain` keeps its CI at the provider's default path with default branch `main`, `custom` keeps
    * it at `deploy/.gitlab-ci.yml` with default branch `dev` (GoParking), and `external` takes it
@@ -574,6 +594,62 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
           () => port.projectMemberAccess(context.missingProject, context.members.developer),
           'not_found',
         );
+      });
+
+      /**
+       * WP-141 (TD-028 decision 13a item 2): who may push to a branch, in neutral words — the four
+       * shapes the operator-token check reads, and an unknown project is `not_found`.
+       */
+      it('answers who may push to a branch: No one, nobody protected, Maintainers, and a force push', async () => {
+        expect(await port.branchPushProtection(context.project, context.protection.noOne)).toEqual({
+          protected: true,
+          nobodyPushes: true,
+          forcePushAllowed: false,
+          pushers: ['No one'],
+        });
+        expect(
+          await port.branchPushProtection(context.project, context.protection.unprotected),
+        ).toEqual({ protected: false, nobodyPushes: false, forcePushAllowed: true, pushers: [] });
+        const maintainers = await port.branchPushProtection(
+          context.project,
+          context.protection.maintainersPush,
+        );
+        expect(maintainers).toMatchObject({ protected: true, nobodyPushes: false });
+        expect(
+          maintainers.pushers.some((pusher) => pusher.includes('Maintainers')),
+          'the pushers name the Maintainers rule, exact or wildcard',
+        ).toBe(true);
+        expect(
+          await port.branchPushProtection(context.project, context.protection.forcePush),
+        ).toMatchObject({ protected: true, nobodyPushes: true, forcePushAllowed: true });
+        await expectIntegrationError(
+          () => port.branchPushProtection(context.missingProject, context.protection.noOne),
+          'not_found',
+        );
+      });
+
+      /**
+       * WP-141 (TD-028 decision 13a item 1): the scope proof answers the provider's status as it
+       * came — a refusal for scope is the one answer that proves a repository-only token.
+       */
+      it('answers the scope proof of a run token: refused for scope, answered, or not accepted', async () => {
+        const repositoryOnly = await port.runTokenApiAccess(context.runTokens.repositoryOnly);
+        expect(repositoryOnly).toMatchObject({ status: 403, refusedForScope: true });
+        expect(repositoryOnly.error).toBe('insufficient_scope');
+        expect(await port.runTokenApiAccess(context.runTokens.apiCapable)).toEqual({
+          status: 200,
+          refusedForScope: false,
+          error: null,
+        });
+        expect(await port.runTokenApiAccess(context.runTokens.unknown)).toMatchObject({
+          status: 401,
+          refusedForScope: false,
+        });
+        // Review round 1: a 403 that is not for the token's scope (a proxy, a firewall) proves nothing.
+        expect(await port.runTokenApiAccess(context.runTokens.blockedElsewhere)).toMatchObject({
+          status: 403,
+          refusedForScope: false,
+        });
       });
 
       /**

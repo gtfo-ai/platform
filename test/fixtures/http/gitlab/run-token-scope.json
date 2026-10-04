@@ -1,0 +1,205 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/user",
+      "request_token": "FAKE-run-token-repository-only-DO-NOT-USE",
+      "status": 403,
+      "body": {
+        "error": "insufficient_scope",
+        "error_description": "The request requires higher privileges than provided by the access token.",
+        "scope": "api read_api read_user"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/rest/authentication/",
+        "retrieved": "2026-10-04",
+        "kind": "documented-adapted",
+        "note": "The page's only insufficient-scope example is for a request that needs `sudo`: status 403 with {\"error\":\"insufficient_scope\",\"error_description\":\"The request requires higher privileges than provided by the access token.\",\"scope\":\"sudo\"}. Adapted to `GET /user` sent with a token holding only `read_repository` + `write_repository`, whose scopes the access-token-scopes page (https://docs.gitlab.com/security/tokens/access_token_scopes/) describes as Git-only; the `scope` value is this corpus's guess at the scopes `/user` accepts (`read_user` grants it, per that page). NOT measured on gitlab.com — docs/TODO.md's WP-141 row. WP-141's scope proof reads the status and the `error` identifier only."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/user",
+      "request_token": "FAKE-run-token-api-scope-DO-NOT-USE",
+      "status": 200,
+      "body": {
+        "id": 6161,
+        "username": "acme-operator",
+        "name": "Acme Operator",
+        "state": "active",
+        "avatar_url": null,
+        "web_url": "https://gitlab.example.test/acme-operator",
+        "bot": false
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/users/",
+        "retrieved": "2026-10-04",
+        "kind": "documented-adapted",
+        "note": "\"Retrieve the current user\" example response, as `merge-request-adoption.json` already uses it, for a fake operator whose run token was created with an API scope — the token WP-141's scope proof refuses because the read succeeded."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/user",
+      "request_token": "FAKE-run-token-revoked-DO-NOT-USE",
+      "status": 401,
+      "body": {
+        "message": "401 Unauthorized"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/rest/troubleshooting/",
+        "retrieved": "2026-10-04",
+        "kind": "inferred",
+        "note": "The status table: \"401 Unauthorized - The user isn't authenticated. A valid user token is necessary.\" The body is the shape this corpus's other GitLab errors carry; WP-141's scope proof reads only the status."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/user",
+      "request_token": "FAKE-run-token-blocked-by-proxy-DO-NOT-USE",
+      "status": 403,
+      "body": {
+        "message": "403 Forbidden"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/rest/troubleshooting/",
+        "retrieved": "2026-10-04",
+        "kind": "inferred",
+        "note": "A 403 that is NOT a refusal for scope. The status table documents \"403 Forbidden - The request isn't allowed\"; the body (no `error`) is this corpus's guess at what a proxy, a web application firewall in front of gitlab.com or a terms-of-service block answers — not a recording. It holds WP-141 review round 1's rule: only `error: insufficient_scope` proves a repository-only token."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/protected_branches?page=1&per_page=100",
+      "status": 200,
+      "body": [
+        {
+          "id": 101,
+          "name": "main",
+          "push_access_levels": [
+            {
+              "id": 1101,
+              "access_level": 0,
+              "access_level_description": "No one"
+            }
+          ],
+          "merge_access_levels": [
+            {
+              "id": 2101,
+              "access_level": 40,
+              "access_level_description": "Maintainers"
+            }
+          ],
+          "allow_force_push": false,
+          "code_owner_approval_required": false
+        },
+        {
+          "id": 102,
+          "name": "release",
+          "push_access_levels": [
+            {
+              "id": 1102,
+              "access_level": 0,
+              "access_level_description": "No one"
+            }
+          ],
+          "merge_access_levels": [
+            {
+              "id": 2102,
+              "access_level": 40,
+              "access_level_description": "Maintainers"
+            }
+          ],
+          "allow_force_push": false,
+          "code_owner_approval_required": false
+        },
+        {
+          "id": 103,
+          "name": "rel*",
+          "push_access_levels": [
+            {
+              "id": 1103,
+              "access_level": 40,
+              "access_level_description": "Maintainers"
+            }
+          ],
+          "merge_access_levels": [
+            {
+              "id": 2103,
+              "access_level": 40,
+              "access_level_description": "Maintainers"
+            }
+          ],
+          "allow_force_push": false,
+          "code_owner_approval_required": false
+        },
+        {
+          "id": 104,
+          "name": "stable",
+          "push_access_levels": [
+            {
+              "id": 1104,
+              "access_level": 0,
+              "access_level_description": "No one"
+            }
+          ],
+          "merge_access_levels": [
+            {
+              "id": 2104,
+              "access_level": 40,
+              "access_level_description": "Maintainers"
+            }
+          ],
+          "allow_force_push": false,
+          "code_owner_approval_required": false
+        },
+        {
+          "id": 106,
+          "name": "st*",
+          "push_access_levels": [
+            {
+              "id": 1106,
+              "access_level": 0,
+              "access_level_description": "No one"
+            }
+          ],
+          "merge_access_levels": [
+            {
+              "id": 2106,
+              "access_level": 40,
+              "access_level_description": "Maintainers"
+            }
+          ],
+          "allow_force_push": true,
+          "code_owner_approval_required": false
+        },
+        {
+          "id": 105,
+          "name": "*-hotfix",
+          "push_access_levels": [
+            {
+              "id": 1105,
+              "access_level": 0,
+              "access_level_description": "No one"
+            }
+          ],
+          "merge_access_levels": [
+            {
+              "id": 2105,
+              "access_level": 40,
+              "access_level_description": "Maintainers"
+            }
+          ],
+          "allow_force_push": true,
+          "code_owner_approval_required": false
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/protected_branches/",
+        "retrieved": "2026-10-04",
+        "kind": "documented-adapted",
+        "note": "The \"List protected branches\" response shape (the single-branch example's members, as an array), with this corpus's rules: `main` push No one; `release` exact No one but the wildcard `rel*` admitting Maintainers — GitLab applies the most permissive matching rule (https://docs.gitlab.com/user/project/repository/branches/protected/), so `release` is pushable; `stable` exact No one with force push off, but the wildcard `st*` (also No one) allows force push — the most permissive matching rule wins, so `stable` admits a force push; `*-hotfix` a wildcard admitting force push, matching nothing the suite reads but `main-hotfix`. `develop` matches no rule (unprotected). No `x-next-page`: one page."
+      }
+    }
+  ]
+}

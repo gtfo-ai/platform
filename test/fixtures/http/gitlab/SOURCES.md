@@ -192,6 +192,39 @@ instance.
   the project shape and these forms; GoParking's values (`dev`, `deploy/.gitlab-ci.yml`) are the
   product owner's report, not a recording.
 
+## Pages read for WP-141 (`run-token-scope.json`)
+
+Retrieved **2026-10-04** (UTC), without a gitlab.com credential, so nothing was recorded against a real
+instance; whether a repository-only token's `GET /user` answers exactly this is `docs/TODO.md`'s WP-141
+row.
+
+- `https://docs.gitlab.com/api/rest/authentication/` — the one documented `insufficient_scope` answer:
+  *"If an access token without the `sudo` scope is provided, an error message is returned with a status
+  code of `403`"*, with the body `{"error": "insufficient_scope", "error_description": "The request
+  requires higher privileges than provided by the access token.", "scope": "sudo"}`. Adapted to
+  `GET /user` sent with a repository-only token.
+- `https://docs.gitlab.com/security/tokens/access_token_scopes/` — `read_repository` *"Grants read
+  access (pull) to repositories"*, `write_repository` *"Grants read and write access (pull and push) to
+  repositories"*, and `read_user` *"Grants read-only access to the authenticated user's profile through
+  the `/user` API endpoint"* — why a token holding only the first two is expected to be refused the read.
+- `https://docs.gitlab.com/api/protected_branches/` — the valid access levels (`0` No access, `30`
+  Developer, `40` Maintainer, `60` Administrator, self-managed only), the single-branch example
+  (`push_access_levels`, `allow_force_push`), and that a push entry may instead name a `user_id`,
+  `group_id` (Premium/Ultimate) or `deploy_key_id`. The status for a branch with no rule is not
+  published; the 404 is inferred, as `instance.json`'s.
+- `https://docs.gitlab.com/api/rest/troubleshooting/` — the status table's `401 Unauthorized`, for a
+  run token GitLab does not accept.
+- `https://docs.gitlab.com/user/project/repository/branches/protected/` — *"If more than one rule
+  applies to a branch, the most permissive rule controls how the branch behaves"*, and the wildcard
+  examples (`*-stable`, `production/*`, `*gitlab*` matching `master/gitlab/production`): why the
+  protection check lists every rule (`GET /projects/:id/protected_branches`) rather than reading the
+  exact one (review round 1). The list fixture is the single-branch example's shape as an array.
+- The `403` with no `insufficient_scope` (`FAKE-run-token-blocked-by-proxy-…`) is **inferred** (the
+  status from the table, the body guessed): the shape a proxy or firewall could answer, so the probe's refusal of any other 403 is held.
+
+The replay keys these `GET /user` interactions by the `PRIVATE-TOKEN` they were sent with
+(`request_token`), so the binding's own `GET /user` (`merge-request-adoption.json`) is answered as before.
+
 ## Pages read for WP-59 that produced no fixture
 
 - `https://docs.gitlab.com/api/merge_requests/` § "Retrieve merge request changes" (retrieved

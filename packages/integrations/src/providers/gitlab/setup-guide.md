@@ -41,8 +41,9 @@ tokens, and **Developer** for everything else.
 | `webhook_tolerance_seconds` | no (300) | How old a signed delivery may be before it is treated as a replay. |
 | `mint_credentials` | no (off) | Whether the platform may mint short-lived project access tokens. A stage that writes, and any stage on a private repository, needs **this or** a static run credential (`run_credential: static`). See step 5. |
 | `run_credential` | no (`minted`) | Set on the integration, never on a project's binding (as are the two below). `minted` or `static`. `static` gives every run of the one bound project the dedicated `run_token` below instead of a minted token — for GitLab.com Free, which cannot mint. **Weaker isolation**: step 5a. Refused beside `mint_credentials: true`. |
-| `run_token` | with `static` | Secret. The personal access token of a **dedicated** user — never the `token` above (refused when equal). Step 5a. |
-| `run_token_username` | with `static` | That user's GitLab username: what git sends beside the token, and what **Test connection** checks. |
+| `run_token_owner` | no (`dedicated_user`) | Whose token `run_token` is: `dedicated_user` (step 5a, A) or `operator` — your own, with repository scopes only (step 5a, B; checked differently, and it reaches every repository you can). Only with `static`. |
+| `run_token` | with `static` | Secret. The personal access token of a **dedicated** user, or your own repository-only one — never the `token` above (refused when equal). Step 5a. |
+| `run_token_username` | with `static` | The token owner's GitLab username: what git sends beside the token, and — for a dedicated user — whose role **Test connection** checks. |
 | `run_token_expires_at` | with `static` | The token's expiry as a date (`YYYY-MM-DD`), **at most 90 days ahead** when written. The platform does not ask GitLab for it, and refuses a run once it has passed. |
 | `read_access_level` / `push_access_level` | no (20 / 30) | Role given to a minted credential: 20 Reporter, 30 Developer, 40 Maintainer. |
 | `poll_enabled` | no (off) | Poll GitLab for this project's merge requests instead of (or beside) the webhook — step 3a. Needs `project`. |
@@ -213,10 +214,24 @@ binding and **both** settings.
 ## 5a. Or: a static run credential (GitLab.com Free)
 
 GitLab.com Free cannot create project access tokens, so it cannot mint. The founder's answer for that
-case (TD-028 decision 13, BD-025's amendment of 2026-10-03) is an **opt-in, named** fallback: a
-dedicated, low-privilege token the platform hands to a run exactly where a minted one would go — on
-the create request to the launcher, answered to the run's git credential helper, never in an
-environment variable, the image, the prompt or a log.
+case (TD-028 decision 13, BD-025's amendments of 2026-10-03 and 2026-10-04) is an **opt-in, named**
+fallback the administrator chooses: a token the platform hands to a run exactly where a minted one
+would go — on the create request to the launcher, answered to the run's git credential helper, never
+in an environment variable, the image, the prompt or a log. **Three forms, side by side; you pick one:**
+
+| | A. A dedicated user's token | B. Your own repository-only token | C. A project SSH deploy key |
+|---|---|---|---|
+| Setting | `run_credential: static` (`run_token_owner: dedicated_user`, the default) | `run_credential: static`, `run_token_owner: operator` | `run_credential: deploy_key` — **not in this build** (WP-146) |
+| Costs | a seat on gitlab.com | nothing | nothing |
+| What **Test connection** checks | the user's role on the bound project: Developer passes, a higher role is refused | that the token **cannot call the API** (one `GET /user` with it must be refused, `403`), and that the default branch is protected with push **No one** and force push off | — |
+| Re-checked before each run | the declared expiry | the declared expiry **and** the default branch's protection — the token's scope is **not**: run **Test connection** again after every re-seal | — |
+| **What you lose** | the token lives to its expiry; a read-only stage holds a push-capable token; its reach is the user's memberships (one project), which the platform cannot see | all of A's, and **reach**: the token reaches **every repository you can access**, not one project — a read-only stage holds read access to all of them and a writing stage push access to every unprotected branch of all of them | no per-run revocation (removing the key is the revocation); a read-only stage can sign pushes |
+
+C keeps the private key out of the run's container entirely and is the strongest of the three; it
+lands after the first test (plan row WP-146). Until it does, choose A if a seat is available, B
+otherwise.
+
+### A. A dedicated user's token
 
 1. Create a **dedicated GitLab user** for it — not a person, and not the user whose `token` the
    integration already holds.
@@ -236,8 +251,50 @@ environment variable, the image, the prompt or a log.
 7. **Test connection** reports a second check, `run_credential`: the user's role on the bound
    project, read with the integration's API `token` — Developer passes; a role that cannot push
    (anything below Developer) or one above Developer is refused. It says it **cannot confirm the token
-   belongs to that user** — the platform never uses the run token for an API call — so check that
+   belongs to that user** — for this form the platform never uses the run token for an API call — so check that
    yourself.
+
+### B. Your own repository-only token
+
+TD-028 decision 13a. No dedicated user and no seat: the token is **yours**, so any role is accepted —
+Maintainer and Owner included — because what the platform checks instead is what the token **can
+use**. Protection, membership and settings are API operations, and a token with only repository
+scopes cannot perform them; what it can still do is git, and the default branch's protection bounds
+that.
+
+1. **Protect the default branch** as step 4 says — push **No one**, merge Maintainers — and leave
+   **Allowed to force push** off. This is the push control for this form, and it is **checked**: at
+   **Test connection** and again before **every** run that gets the token, so loosening it later
+   refuses the next run, by name, before its workspace exists.
+2. As yourself, create a **personal access token** with scopes **`read_repository`** and
+   **`write_repository`** — **and nothing else**: no `api`, no `read_api`, no `read_user`. An expiry
+   **at most 90 days** away.
+3. Steps 4–6 of A, with `run_token_owner` = `operator` and `run_token_username` = your username.
+4. **Test connection** reports two checks beside `connection`:
+   - `run_credential` — the **scope proof**: one `GET /user` made **with the run token** (the only API
+     call the platform ever makes with it, audited like every other). It passes only when GitLab
+     **refuses** it for its scope (`403` **with** `insufficient_scope` — a 403 for any other reason, a
+     proxy or a firewall, proves nothing and is refused naming its code); a `200` is refused — *"this token can call the GitLab API;
+     create one with only `read_repository` and `write_repository`"* — and a `401` is a token GitLab
+     does not accept.
+   - `default_branch_protection` — read with the integration's API `token`: **every** protection rule
+     that matches the project's default branch (the platform's stored one, the project's **Default
+     branch** setting), exact **and wildcard** (`*`, `ma*`), combined as GitLab combines them — the
+     most permissive wins — must leave push **No one** and force push off; anything else is refused
+     naming the branch, the rule and the setting. A **group-level** protected branch (Premium) is not
+     read.
+
+**What B costs beyond A** (TD-028 decision 13a item 3): the token reaches **every repository you can
+access**, not one project — a read-only stage holds read access to all of them, and a writing stage
+push access to every unprotected branch of all of them. A second binding of the integration is still
+refused, but nothing stops you binding **another** integration with the same token; the platform does
+not detect it. `read_repository` also grants the repository files API, a read the platform does not
+use. **CI runs as you**: a pipeline on a pushed `agentic/*` branch — or on a tag a run pushes — runs
+under your identity, with what your role may read; a tag matching a protected-tag rule open to
+Maintainers gets the project's **protected** CI/CD variables. **Protect your release tags with
+"Allowed to create: No one"** too (Settings → Repository → Protected tags).
+
+### Both A and B
 
 Refused at the write, by name: `static` without a `run_token`; a `run_token` equal to `token`;
 `static` with `mint_credentials: true`; no username or no expiry; an expiry passed or more than 90
@@ -253,8 +310,9 @@ its start, a read-only one at the fetch.
   egress admits `gitlab.com` — so it can be pushed **into the repository itself**, where, unlike a
   revoked minted token, it still works.
 - **Its reach is the user's memberships and scopes, not the platform's choice.** `read_repository` and
-  `write_repository` grant no REST API; the dedicated user's single Developer membership is what
-  bounds it. The platform cannot see that membership beyond the probe.
+  `write_repository` grant no REST API; for A the dedicated user's single Developer membership is what
+  bounds it, for B nothing does — it is every repository you can access. The platform cannot see
+  memberships beyond the probe.
 - **A read-only stage holds a push-capable token.** The protected default branch remains the
   enforcement for pushes.
 - **The one control the platform adds**: the gate that already reads a merge request's added lines
@@ -269,9 +327,11 @@ because a static token writes no mint row to the audit.
 
 Run **Test connection**. It calls `GET /version` — a read, never a mutation — and reports the
 version and edition, e.g. `GitLab 18.1.1-ee (Enterprise Edition) at gitlab.example.test`. For an
-integration with `run_credential: static` it adds the `run_credential` check of step 5a
-(`GET /users?username=` and `GET /projects/:id/members/all/:user_id`, both with `token`), which
-fails until a project is bound.
+integration with `run_credential: static` it adds the checks of step 5a — for a dedicated user's
+token the `run_credential` role check (`GET /users?username=` and `GET /projects/:id/members/all/:user_id`,
+both with `token`); for your own (`run_token_owner: operator`) the scope proof (`GET /user` with the run
+token) and `default_branch_protection` (`GET /projects/:id/protected_branches/:branch` with `token`) —
+which fail until a project is bound.
 
 Then, in GitLab, **Settings → Webhooks → Test → Merge request events** and check that the delivery
 was accepted.

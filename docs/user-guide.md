@@ -793,9 +793,10 @@ resolution, the librarian) also needs the GitLab integration to be allowed to mi
 tokens (`mint_credentials: true`): the platform gives each run its own token — read-only for a
 read-only stage, never one that pushes for a shadow task — and revokes it when the run ends. Where
 GitLab cannot mint (GitLab.com Free), an administrator may declare a **static run credential**
-instead (`run_credential: static`): one dedicated token every run of that project is given, which is
-not revoked when a run ends and is never given to a shadow task — weaker isolation, which the
-operator guide states. With neither, such a stage fails at start naming the binding and both
+instead (`run_credential: static`): one token every run of that project is given — a dedicated
+user's, or the administrator's own repository-only one (`run_token_owner: operator`, handed to a run
+only while the default branch is protected with push "No one") — which is not revoked when a run ends
+and is never given to a shadow task — weaker isolation, which the operator guide states. With neither, such a stage fails at start naming the binding and both
 settings, and a read-only stage can check out only a repository GitLab serves without
 authentication. The [operator guide](operator-guide.md) §1 and §10
 say the same thing from the other side.

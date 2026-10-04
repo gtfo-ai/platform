@@ -13,6 +13,13 @@ import {
 const INTEGRATION_ID = '00000000-0000-4000-8000-0000000000a2';
 const PROJECT_ID = '00000000-0000-4000-8000-0000000000b2';
 const PROJECT = 'acme/api';
+/** WP-141: obviously fake run tokens (BD-002), the same three the GitLab corpus records. */
+const FAKE_RUN_TOKENS = {
+  repositoryOnly: 'FAKE-run-token-repository-only-DO-NOT-USE',
+  apiCapable: 'FAKE-run-token-api-scope-DO-NOT-USE',
+  unknown: 'FAKE-run-token-revoked-DO-NOT-USE',
+  blockedElsewhere: 'FAKE-run-token-blocked-by-proxy-DO-NOT-USE',
+} as const;
 const FAILING_JOB = 'test:unit';
 /** WP-123: the person's note's instant, stated rather than the fake clock's, so the suite compares it. */
 const HUMAN_NOTE_AT = '2026-06-02T09:15:00.000Z';
@@ -153,6 +160,35 @@ runGitProviderContract({
       pushes: true,
       administers: true,
     });
+    // WP-141 (divergences 26 and 27): `main` is protected (the seed's default) and answers No one;
+    // `develop` has no rule; the other two rules are installed. The run tokens are declared.
+    port.setBranchPushProtection('acme/api', 'release', {
+      protected: true,
+      nobodyPushes: false,
+      forcePushAllowed: false,
+      pushers: ['Maintainers'],
+    });
+    port.setBranchPushProtection('acme/api', 'stable', {
+      protected: true,
+      nobodyPushes: true,
+      forcePushAllowed: true,
+      pushers: ['No one'],
+    });
+    port.setRunTokenApiAccess(FAKE_RUN_TOKENS.repositoryOnly, {
+      status: 403,
+      refusedForScope: true,
+      error: 'insufficient_scope',
+    });
+    port.setRunTokenApiAccess(FAKE_RUN_TOKENS.blockedElsewhere, {
+      status: 403,
+      refusedForScope: false,
+      error: null,
+    });
+    port.setRunTokenApiAccess(FAKE_RUN_TOKENS.apiCapable, {
+      status: 200,
+      refusedForScope: false,
+      error: null,
+    });
 
     // WP-37 round 2, divergence 12: a `CODEOWNERS` that exists only on the branch under review —
     // the file a contributor can write, and the one routing must never read.
@@ -267,6 +303,13 @@ runGitProviderContract({
         maintainer: 'agentic-maintainer',
         outsider: 'agentic-outsider',
       },
+      protection: {
+        noOne: 'main',
+        unprotected: 'develop',
+        maintainersPush: 'release',
+        forcePush: 'stable',
+      },
+      runTokens: FAKE_RUN_TOKENS,
       // WP-139, divergence 25: the fake answers the location a seed states.
       repositories: {
         plain: 'acme/plain-ci',
