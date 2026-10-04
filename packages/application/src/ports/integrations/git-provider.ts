@@ -893,8 +893,20 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
     options?: { readonly tailBytes?: number },
   ) => Promise<string>;
 
-  readonly getDefaultBranchHead: (
+  /**
+   * The head commit of **`branch`** — the platform names the branch, and it is always the stored
+   * `projects.default_branch` (WP-142, backlog 441). Before WP-142 this was
+   * `getDefaultBranchHead(project)`, which asked the provider *which* branch as well, so the
+   * protection check, the poll's default-branch move, coverage and risk routing followed the
+   * provider's default while checkout, the merge request's target and the mirror followed the
+   * stored one. The provider's own default is now read only by {@link repositorySettings}, and that
+   * only for the wizard's prefill and the mismatch notice (`default-branch-readers.test.ts`).
+   *
+   * @throws {IntegrationError} `not_found` when the project or the branch does not exist.
+   */
+  readonly getBranchHead: (
     project: string,
+    branch: string,
   ) => Promise<{ readonly branch: string; readonly sha: string }>;
 
   /**

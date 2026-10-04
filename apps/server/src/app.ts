@@ -54,7 +54,7 @@ import fastifySse from '@fastify/sse';
 import fastifySwagger from '@fastify/swagger';
 import underPressure from '@fastify/under-pressure';
 import type { DeadLetterCommands, WebhookIngress } from '@platform/application';
-import type { IsoDateTime } from '@platform/contracts';
+import type { Id, IsoDateTime } from '@platform/contracts';
 import { redaction as redactionAdapters } from '@platform/infrastructure';
 import { type FastifyBaseLogger, type FastifyInstance, fastify, LogController } from 'fastify';
 import {
@@ -592,6 +592,16 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         options.projectConfig === undefined || options.projectConfig === null
           ? null
           : options.projectConfig.repository,
+      // WP-142: a change asks for an index of the new branch once it has committed.
+      requestKnowledgeIndex:
+        options.projectConfig === undefined || options.projectConfig === null
+          ? null
+          : async (projectId) => {
+              const requested = await options.projectConfig?.requestKnowledgeIndex(projectId as Id);
+              if (requested !== true) {
+                throw new Error('this process holds no job client to request a knowledge index');
+              }
+            },
     });
     await registerOnboardingRoutes(app, {
       database: options.database,

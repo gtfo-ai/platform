@@ -225,6 +225,14 @@ row.
 The replay keys these `GET /user` interactions by the `PRIVATE-TOKEN` they were sent with
 (`request_token`), so the binding's own `GET /user` (`merge-request-adoption.json`) is answered as before.
 
+## WP-142 (`instance.json`)
+
+Retrieved **2026-10-04** (UTC), without a credential. `getDefaultBranchHead(project)` became
+`getBranchHead(project, branch)`, so the head read is one `GET /projects/:id/repository/branches/:branch`
+(`https://docs.gitlab.com/api/branches/`, already cited) and a missing project is met there: one
+interaction added, `GET /projects/acme%2Fnope/repository/branches/main` → 404, its status from the
+troubleshooting page's table and its message **inferred**.
+
 ## Pages read for WP-59 that produced no fixture
 
 - `https://docs.gitlab.com/api/merge_requests/` § "Retrieve merge request changes" (retrieved

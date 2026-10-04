@@ -281,10 +281,10 @@ const gitlabScript = (): Script => ({
     body: {
       id: 1,
       path_with_namespace: PROJECT,
-      // **Not** planted: this value is fed straight back into the next request's URL, so a
-      // credential here would be redacted and then *addressed* — the adapter would ask GitLab for
-      // `branches/[REDACTED:…]` and get a 404. Fail-closed, and left as it is, but it means the
-      // plant for `getDefaultBranchHead` has to sit on the branch's own `name` instead.
+      // **Not** planted. Until WP-142 this value was fed straight back into the next request's URL
+      // (`getDefaultBranchHead` read it, then `branches/<it>`); `getBranchHead` now takes the branch
+      // from its caller, so the plant for it sits on the branch's own `name`, and this field reaches
+      // a caller only through `repositorySettings`, whose plant is `ci_config_path` below.
       default_branch: 'main',
       web_url: `${HOST}/acme/api`,
       // WP-139: planted — `repositorySettings` hands the CI configuration path back to its caller.
@@ -557,7 +557,7 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   create_discussion: 'createDiscussion',
   get_pipeline_status: 'getPipelineStatus',
   get_job_log: 'getJobLog',
-  get_default_branch_head: 'getDefaultBranchHead',
+  get_branch_head: 'getBranchHead',
   repository_settings: 'repositorySettings',
   read_codeowners: 'readCodeowners',
   resolve_user_id: 'resolveUserId',
@@ -676,7 +676,7 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
     emitted.get_merge_request_diff = await port.getMergeRequestDiff(ref, { limit: 10 });
     emitted.get_pipeline_status = await port.getPipelineStatus(PROJECT, SHA);
     emitted.get_job_log = await port.getJobLog(PROJECT, '9002');
-    emitted.get_default_branch_head = await port.getDefaultBranchHead(PROJECT);
+    emitted.get_branch_head = await port.getBranchHead(PROJECT, 'main');
     emitted.repository_settings = await port.repositorySettings(PROJECT);
     emitted.read_codeowners = await port.readCodeowners(PROJECT, 'main');
     // The handle is the plant; the adapter compares it to what GitLab answered, so the id it
@@ -847,7 +847,7 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
     'list_discussions',
     'get_pipeline_status',
     'get_job_log',
-    'get_default_branch_head',
+    'get_branch_head',
     'read_codeowners',
     'normalise_delivery',
     'ignored_delivery',

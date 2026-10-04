@@ -96,7 +96,35 @@ control.
 **Know the default branch.** Autix's is **`develop`**, not `main` — and the platform uses the
 branch you give it in the wizard (§ 5): every run checks it out, every merge request targets it and
 the knowledge base is read from it. Before WP-139 the wizard sent none, so every project was `main`
-and a repository without a `main` failed at the first checkout. **Give the same branch GitLab calls its default** (Settings → Repository → Branch defaults): the protection check at intake, the rebase gate's default-branch head, the poll's `default_branch.moved` and coverage still read **GitLab's** default, so a stored branch that differs from it splits the platform between two branches.
+and a repository without a `main` failed at the first checkout. Since WP-142 the stored branch is the
+**only** answer: the protection check at intake, readiness R9, the poll's `default_branch.moved` (and so
+the rebase gate's re-check), coverage's baseline and the `CODEOWNERS` read all take it too. GitLab's own
+default (Settings → Repository → Branch defaults) is read only to prefill the wizard's field and for a
+**notice** on the project's settings page and beside the readiness panel — *"GitLab's default branch is
+X; this project uses Y"* — which refuses nothing. Keep the two the same anyway: GitLab's default is what
+people open merge requests against.
+
+**Moving the default branch** (Autix `develop` → `main`). In this order:
+
+1. **Finish or cancel every task of the project** — the board shows none outside *Done*/*Cancelled*. The
+   change is refused (`409 project_has_live_tasks`) while one is unfinished, because its branch, merge
+   request and gates were made against the old branch. A ticket the poll matches in the meantime starts a
+   new task and blocks the change again, so do steps 2 and 3 together (or set the project's autonomy dial
+   to *Observe* for the minutes it takes: Observe picks up no ticket).
+2. **On GitLab**: create `main` if it does not exist, **protect it** (Allowed to merge: Maintainers,
+   Allowed to push and merge: **No one**, force push off — the same rule as below), make sure its
+   `.gitlab-ci.yml` carries the CI rules below, and set it as the **default branch** (Settings →
+   Repository → Branch defaults). From here until step 3 the settings page shows the notice; nothing is
+   refused and nothing runs differently.
+3. **On the platform**: the project's settings page → **Default branch** → `main` → **Save default
+   branch**. In the same transaction the platform forgets the head its poll last saw, so the next poll
+   reads `main`'s head as a first reading and records **no** move (no rebase re-check, no index run from
+   it); after the change it asks for a knowledge index of `main`, which also re-reads `.agentic/config.yml`
+   there. With **your own** run token (§ 1's form B), press **Test connection** again: its protection
+   check reads the stored branch, now `main`. The notice disappears.
+
+Nothing of this was run against GitLab: the order is the code's, read off `writeProjectDefaultBranch`
+(`apps/server/src/queries/onboarding-queries.ts`) and the poll (`pipeline/mr-poll.ts`).
 
 **Protect the default branch** — **Settings → Repository → Protected branches**, `develop` (your
 default branch) with **Allowed to merge: Maintainers** and **Allowed to push and merge: No one**.
@@ -128,8 +156,8 @@ documentation, not measured on gitlab.com (`docs/TODO.md`).
 **poll-only** binding: set `poll_enabled: true` and `project`, and leave **both**
 `webhook_secret_token` and `webhook_signing_token` empty. A GitLab binding with no webhook secret is
 poll-only, and since WP-123 its polls read, besides the merge requests themselves (opened, updated,
-merged, closed), the **default branch's head** (so a task at Ready is re-checked for conflicts when
-`main` moves) and the **comments on merge requests waiting at Ready** (so a reviewer's comment
+merged, closed), the **default branch's head** — the stored branch's (so a task at Ready is
+re-checked for conflicts when it moves) and the **comments on merge requests waiting at Ready** (so a reviewer's comment
 returns the task to Implementation). Setting a webhook secret for a webhook GitLab cannot reach turns
 both reads off. What polling never sees: approvals and **finished pipelines** — which matters at the
 CI gate (§ 8, *the CI gate on a poll-only binding*).
@@ -357,8 +385,8 @@ no retry, and a second run is a second turn.
      is required, because the platform's fallback `main` is the wrong branch for both. Then tick
      both integrations, **Test connection**, **Bind**. Once the GitLab integration is bound, the step
      shows the default branch **GitLab** reports and where it says the CI configuration lives; if
-     the stored branch differs, the field is prefilled with GitLab's and **Save default branch**
-     changes it. The same control is on the project's settings page. A maintainer can change it
+     the stored branch differs, a notice says so (*"GitLab's default branch is X; this project uses
+     Y"*), the field is prefilled with GitLab's and **Save default branch** changes it. The same control is on the project's settings page. A maintainer can change it
      later, but **not while any of the project's tasks is unfinished** (`409
      project_has_live_tasks`): a live task's branch and merge request were made against the old one.
    - **Step 2 — Technical discovery** is the **first real model run**: a Discovery agent reads the

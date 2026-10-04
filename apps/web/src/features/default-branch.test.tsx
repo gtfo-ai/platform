@@ -83,6 +83,10 @@ const server = (world: {
     }
     if (method === 'PUT' && url.endsWith('/default-branch')) {
       const body = JSON.parse(String(init?.body)) as { default_branch: string };
+      // WP-142: the stored branch the next `GET …/repository` answers is the one just written.
+      if (world.repository !== null && typeof world.repository === 'object') {
+        world.repository = { ...world.repository, default_branch: body.default_branch };
+      }
       const {
         open_tasks: _open,
         spent_usd_30d: _spent,
@@ -162,7 +166,7 @@ describe('the default branch (WP-139)', () => {
     await screen.findByRole('button', { name: 'Save default branch' });
     const field = screen.getByLabelText('Default branch') as HTMLInputElement;
     expect(field.value).toBe('develop');
-    expect(screen.getByText(/The stored branch is not the provider’s/)).toBeTruthy();
+    expect(screen.getAllByTestId('default-branch-mismatch').length).toBeGreaterThan(0);
     expect(sent.filter((entry) => entry.url.endsWith('/default-branch'))).toEqual([]);
     fireEvent.click(screen.getByRole('button', { name: 'Save default branch' }));
     await waitFor(() =>
@@ -204,5 +208,59 @@ describe('the default branch (WP-139)', () => {
     expect(
       screen.getByText('this project has no git binding, so the platform cannot ask its provider'),
     ).toBeTruthy();
+  });
+});
+
+describe('the mismatch notice (WP-142, backlog 441)', () => {
+  const mismatched = () => ({
+    default_branch: 'develop',
+    provider: {
+      provider: 'gitlab',
+      default_branch: 'main',
+      ci_config: { kind: 'repository', path: '.gitlab-ci.yml' },
+    },
+    provider_unavailable: null,
+    live_tasks: 0,
+  });
+
+  it('says on the settings page and beside readiness that GitLab’s default is another branch, and goes when they agree', async () => {
+    window.history.pushState({}, '', '/projects/autix/settings');
+    const sent: Sent[] = [];
+    render(
+      createApp({
+        fetchImpl: server({ projects: [projectRow('develop')], repository: mismatched(), sent }),
+        realtime: false,
+      }).element,
+    );
+    await waitFor(() =>
+      // One inside the default-branch card, one beside the readiness panel.
+      expect(screen.getAllByTestId('default-branch-mismatch')).toHaveLength(2),
+    );
+    expect(screen.getAllByTestId('default-branch-mismatch')[0]?.textContent).toBe(
+      'GitLab’s default branch is main; this project uses develop. Runs check out, merge requests target and the platform protects, polls and measures develop.',
+    );
+
+    // The person moves the stored branch to the provider's; the notice disappears with the mismatch.
+    fireEvent.click(await screen.findByRole('button', { name: 'Save default branch' }));
+    await waitFor(() => expect(screen.queryAllByTestId('default-branch-mismatch')).toHaveLength(0));
+    expect(sent.filter((entry) => entry.url.endsWith('/default-branch'))[0]?.body).toEqual({
+      default_branch: 'main',
+    });
+  });
+
+  it('says nothing when the provider agrees, or was not asked', async () => {
+    window.history.pushState({}, '', '/projects/autix/settings');
+    render(
+      createApp({
+        fetchImpl: server({
+          projects: [projectRow('develop')],
+          repository: { ...mismatched(), provider: null, provider_unavailable: 'no git binding' },
+          sent: [],
+        }),
+        realtime: false,
+      }).element,
+    );
+    expect(await screen.findByRole('button', { name: 'Save default branch' })).toBeTruthy();
+    expect(screen.queryAllByTestId('default-branch-mismatch')).toHaveLength(0);
   });
 });

@@ -1300,15 +1300,15 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
 
   if (options.gitReadLatency !== undefined) {
     const { gitReadLatency } = options;
-    const head = git.getDefaultBranchHead.bind(git);
+    const head = git.getBranchHead.bind(git);
     const protectedBranch = git.isBranchProtected.bind(git);
     const slow = git as {
-      getDefaultBranchHead: typeof git.getDefaultBranchHead;
+      getBranchHead: typeof git.getBranchHead;
       isBranchProtected: typeof git.isBranchProtected;
     };
-    slow.getDefaultBranchHead = async (project) => {
+    slow.getBranchHead = async (project, branch) => {
       await gitReadLatency();
-      return head(project);
+      return head(project, branch);
     };
     slow.isBranchProtected = async (project, branch) => {
       await gitReadLatency();

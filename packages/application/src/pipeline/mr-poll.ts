@@ -80,8 +80,10 @@
  * can reach it (`receives_webhooks: false`; for GitLab, neither `webhook_secret_token` nor
  * `webhook_signing_token` is set, and every delivery is refused) — makes two more reads per poll:
  *
- *  - **(a) the default branch's head** (`getDefaultBranchHead`), compared with the last one this
- *    binding saw (`bindings.mr_poll_default_head`, migration 0074). A different head is recorded as
+ *  - **(a) the default branch's head** — the **stored** `projects.default_branch`'s, by name
+ *    (`getBranchHead`, WP-142) — compared with the last one this binding saw
+ *    (`bindings.mr_poll_default_head`, migration 0074; cleared by a change of the branch, so the
+ *    next poll takes a baseline and records no move). A different head is recorded as
  *    `default_branch.moved` through `recordNormalisedDelivery`, keyed
  *    `<provider>:poll:<project>:<path>@default:<old>..<new>` — so a poll that died after the record
  *    and before the head was written records the same key again and the `inbox` row collapses it,
@@ -183,12 +185,22 @@ export interface MergeRequestPollStore {
   /** Moves the cursor to `to` **only forward**; a binding that no longer exists is a no-op. */
   advanceCursor(binding: PolledBinding, to: IsoDateTime): Promise<void>;
   /**
-   * `bindings.mr_poll_default_head` (migration 0074, WP-123): the default branch's head the last
-   * poll-only poll read, or `null` for a binding that never read it (or no longer exists).
+   * The project's **stored** default branch (`projects.default_branch`, WP-142) beside
+   * `bindings.mr_poll_default_head` (migration 0074, WP-123) — the head of that branch the last
+   * poll-only poll read, `null` when none was read since the binding was made or the branch was
+   * changed (the change command clears it). `null` as a whole for a binding that no longer exists.
+   * One statement, so the branch and the head are one reading.
    */
-  defaultHeadOf(binding: PolledBinding): Promise<string | null>;
-  /** Writes the head this poll read; a binding that no longer exists is a no-op. */
-  recordDefaultHead(binding: PolledBinding, sha: string): Promise<void>;
+  defaultHeadOf(
+    binding: PolledBinding,
+  ): Promise<{ readonly branch: string; readonly head: string | null } | null>;
+  /**
+   * Writes the head this poll read of `branch` — **only while `branch` is still the project's stored
+   * default branch** (WP-142): a poll that read the old branch while a change committed writes
+   * nothing, so the next poll takes a baseline of the new one. A binding that no longer exists is a
+   * no-op.
+   */
+  recordDefaultHead(binding: PolledBinding, sha: string, branch: string): Promise<void>;
   /**
    * The binding's project's tasks **at `ready_for_merge`** that have a merge request, with the
    * instant their current Ready stage row was entered (`task_stages.entered_at`) — oldest entry
@@ -385,8 +397,10 @@ export type MergeRequestPollReport =
 /**
  * What the default-branch read did: `webhook` (a webhook reaches this binding, so it was not read),
  * `first_read` (no head was known; it is now, and nothing was recorded), `unchanged`, `moved` (a
- * `default_branch.moved` recorded), `duplicate` (an earlier poll already recorded this move), or
- * `failed` (the provider read failed; logged, retried next poll).
+ * `default_branch.moved` recorded), `duplicate` (an earlier poll already recorded this move),
+ * `branch_changed` (WP-142: the project's default branch was changed while this poll read it;
+ * nothing recorded, the next poll takes a baseline), or `failed` (the provider read failed, or the
+ * binding is gone; logged, retried next poll).
  */
 export type DefaultBranchPollOutcome =
   | 'webhook'
@@ -394,6 +408,7 @@ export type DefaultBranchPollOutcome =
   | 'unchanged'
   | 'moved'
   | 'duplicate'
+  | 'branch_changed'
   | 'failed';
 
 export interface ReviewNotePollReport {
@@ -510,9 +525,19 @@ const pollDefaultBranch = async (
   git: GitBinding,
 ): Promise<DefaultBranchPollOutcome> => {
   const logger = options.logger ?? silentLogger;
+  // WP-142 (backlog 441): the branch is the project's stored default branch, read with the head
+  // this binding last saw — never the provider's default, which differs during a move.
+  const before = await options.store.defaultHeadOf(binding);
+  if (before === null) {
+    logger.warn(
+      { project_id: binding.projectId, integration_id: binding.integrationId },
+      'the merge-request poll found no binding row to read the default branch for; nothing was read',
+    );
+    return 'failed';
+  }
   let read: { readonly branch: string; readonly sha: string } | null;
   try {
-    read = await gitReads(integrations).defaultBranch({
+    read = await gitReads(integrations).branchHead(before.branch, {
       projectId: binding.projectId,
       taskId: null,
     });
@@ -537,13 +562,20 @@ const pollDefaultBranch = async (
     head: { branch: read.branch, sha: read.sha },
   } as unknown as JsonObject);
   const head = (redacted.value as { head: { branch: string; sha: string } }).head;
-  const known = await options.store.defaultHeadOf(binding);
+  const known = before.head;
   if (known === head.sha) {
     return 'unchanged';
   }
   if (known === null) {
-    await options.store.recordDefaultHead(binding, head.sha);
+    await options.store.recordDefaultHead(binding, head.sha, before.branch);
     return 'first_read';
+  }
+  // WP-142: a change of the stored branch committed while the provider was asked clears the head;
+  // a move is then a comparison of two branches, so nothing is recorded and the next poll takes a
+  // baseline. Re-read rather than trusted (the residual window is stated under WP-142).
+  const now = await options.store.defaultHeadOf(binding);
+  if (now === null || now.branch !== before.branch || now.head === null) {
+    return 'branch_changed';
   }
   const deliveryId = git.redactor.redactText(
     `${git.ref.provider}:poll:${binding.projectId}:${git.project}@default:${known}..${head.sha}`,
@@ -571,7 +603,7 @@ const pollDefaultBranch = async (
       byProject: [{ projectId: binding.projectId, drafts }],
     },
   );
-  await options.store.recordDefaultHead(binding, head.sha);
+  await options.store.recordDefaultHead(binding, head.sha, before.branch);
   return outcome.kind === 'duplicate' ? 'duplicate' : 'moved';
 };
 

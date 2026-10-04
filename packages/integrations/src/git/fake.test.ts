@@ -330,14 +330,14 @@ describe('FakeGitProvider CI and CODEOWNERS', () => {
   it('moves the default branch and reports it', async () => {
     const port = build();
     port.moveDefaultBranch(PROJECT, 'e'.repeat(40));
-    expect((await port.getDefaultBranchHead(PROJECT)).sha).toBe('e'.repeat(40));
+    expect((await port.getBranchHead(PROJECT, 'main')).sha).toBe('e'.repeat(40));
 
     const result = await port.inbound.normalise(
       port.emitDefaultBranchMoved({ project: PROJECT, newHead: 'f'.repeat(40) }),
       context,
     );
     expect(result.events[0]?.type).toBe('default_branch.moved');
-    expect((await port.getDefaultBranchHead(PROJECT)).sha).toBe('f'.repeat(40));
+    expect((await port.getBranchHead(PROJECT, 'main')).sha).toBe('f'.repeat(40));
   });
 
   it('publishes the pipeline’s coverage on the delivery, which GitLab’s hook does not (divergence 13)', async () => {

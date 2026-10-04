@@ -431,12 +431,15 @@ describe('a poll-only binding’s rows (WP-123, migration 0074)', () => {
     const other = await bind({ bindingConfig: { poll_enabled: true } });
     await pool.query('update bindings set mr_poll_default_head = null');
 
-    expect(await store().defaultHeadOf(binding)).toBeNull();
-    await store().recordDefaultHead(binding, '1'.repeat(40));
-    await store().recordDefaultHead(binding, '2'.repeat(40));
+    expect(await store().defaultHeadOf(binding)).toEqual({ branch: 'main', head: null });
+    await store().recordDefaultHead(binding, '1'.repeat(40), 'main');
+    await store().recordDefaultHead(binding, '2'.repeat(40), 'main');
 
-    expect(await store().defaultHeadOf(binding)).toBe('2'.repeat(40));
-    expect(await store().defaultHeadOf(other)).toBeNull();
+    expect(await store().defaultHeadOf(binding)).toEqual({ branch: 'main', head: '2'.repeat(40) });
+    expect(await store().defaultHeadOf(other)).toEqual({ branch: 'main', head: null });
+    // WP-142: a head of a branch that is not the stored default branch is not written.
+    await store().recordDefaultHead(binding, '4'.repeat(40), 'develop');
+    expect(await store().defaultHeadOf(binding)).toEqual({ branch: 'main', head: '2'.repeat(40) });
     const row = await pool.query<{ poll_cursor: Date | null; mr_poll_cursor: Date | null }>(
       'select poll_cursor, mr_poll_cursor from bindings where project_id = $1',
       [projectId],
@@ -444,7 +447,7 @@ describe('a poll-only binding’s rows (WP-123, migration 0074)', () => {
     expect(row.rows[0]).toEqual({ poll_cursor: null, mr_poll_cursor: null });
     // A binding that no longer exists reads null and writes nothing.
     const gone = { projectId: randomUUID() as Id, integrationId };
-    await store().recordDefaultHead(gone, '3'.repeat(40));
+    await store().recordDefaultHead(gone, '3'.repeat(40), 'main');
     expect(await store().defaultHeadOf(gone)).toBeNull();
   });
 

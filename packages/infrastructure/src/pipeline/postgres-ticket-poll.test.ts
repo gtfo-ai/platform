@@ -28,29 +28,40 @@ const recording = (rows: readonly Record<string, unknown>[]) => {
 };
 
 describe('the poll-only binding’s statements (WP-123)', () => {
-  it('reads the last-seen head, or null for a binding that has none or does not exist', async () => {
-    const known = recording([{ head: '1'.repeat(40) }]);
+  it('reads the stored default branch beside the last-seen head, or null for a binding that does not exist (WP-142)', async () => {
+    const known = recording([{ branch: 'main', head: '1'.repeat(40) }]);
     expect(
       await createPostgresMergeRequestPollStore({ sql: known.sql }).defaultHeadOf(BINDING),
-    ).toBe('1'.repeat(40));
+    ).toEqual({ branch: 'main', head: '1'.repeat(40) });
     expect(known.calls[0]?.values).toEqual([BINDING.projectId, BINDING.integrationId]);
     expect(known.calls[0]?.text).toContain('mr_poll_default_head');
+    expect(known.calls[0]?.text).toContain('p.default_branch');
 
-    const none = recording([{ head: null }]);
+    const none = recording([{ branch: 'trunk', head: null }]);
     expect(
       await createPostgresMergeRequestPollStore({ sql: none.sql }).defaultHeadOf(BINDING),
-    ).toBeNull();
+    ).toEqual({ branch: 'trunk', head: null });
     const gone = recording([]);
     expect(
       await createPostgresMergeRequestPollStore({ sql: gone.sql }).defaultHeadOf(BINDING),
     ).toBeNull();
   });
 
-  it('writes the head on the binding’s own row', async () => {
+  it('writes the head on the binding’s own row only while its branch is still the stored one (WP-142)', async () => {
     const { sql, calls } = recording([]);
-    await createPostgresMergeRequestPollStore({ sql }).recordDefaultHead(BINDING, '2'.repeat(40));
-    expect(calls[0]?.text).toMatch(/update bindings set mr_poll_default_head = \$3/);
-    expect(calls[0]?.values).toEqual([BINDING.projectId, BINDING.integrationId, '2'.repeat(40)]);
+    await createPostgresMergeRequestPollStore({ sql }).recordDefaultHead(
+      BINDING,
+      '2'.repeat(40),
+      'main',
+    );
+    expect(calls[0]?.text).toMatch(/update bindings b set mr_poll_default_head = \$3/);
+    expect(calls[0]?.text).toMatch(/p\.default_branch = \$4/);
+    expect(calls[0]?.values).toEqual([
+      BINDING.projectId,
+      BINDING.integrationId,
+      '2'.repeat(40),
+      'main',
+    ]);
   });
 
   it('maps the waiting tasks, and leaves out a row whose mr_ref is not a merge-request ref', async () => {

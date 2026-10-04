@@ -219,7 +219,7 @@ const integrationsDouble = (): PipelineIntegrations => ({
   executor: refusingExecutor,
   git: {
     port: {
-      getDefaultBranchHead: async () => ({ branch: 'main', sha: 'a'.repeat(40) }),
+      getBranchHead: async () => ({ branch: 'main', sha: 'a'.repeat(40) }),
     } as unknown as GitProviderPort,
     ref: { integrationId: PROJECT, provider: 'fake-git', type: 'git', host: null },
     project: 'acme/api',
@@ -262,10 +262,10 @@ describe('the refusals that keep a provider call out of a transaction', () => {
     const integrations = await integrationsForProject(port, PROJECT, noRunScopedSecrets());
     const context = { projectId: PROJECT, taskId: null };
     await expect(
-      withOpenTransaction(async () => gitReads(integrations).defaultBranch(context)),
+      withOpenTransaction(async () => gitReads(integrations).branchHead('main', context)),
     ).rejects.toBeInstanceOf(TransactionOpenError);
     // Outside a transaction the same call reaches the executor, which is this double's refusal.
-    await expect(gitReads(integrations).defaultBranch(context)).rejects.toThrow(
+    await expect(gitReads(integrations).branchHead('main', context)).rejects.toThrow(
       'the executor was entered',
     );
   });

@@ -38,6 +38,9 @@ const scriptedPool = (rows: Readonly<Record<string, readonly Record<string, unkn
     },
   }) as never;
 
+/** Every branch R9 asked the provider about, by name (WP-142). */
+const askedBranches: string[] = [];
+
 /** A loader whose `forProject` either answers or throws — the two branches R9 has. */
 const integrationsOf = (outcome: 'protected' | 'unprotected' | 'throws' | 'no-git') =>
   ({
@@ -61,8 +64,11 @@ const integrationsOf = (outcome: 'protected' | 'unprotected' | 'throws' | 'no-gi
                 ref: { integrationId: PROJECT, provider: 'fake-git', type: 'git' as const },
                 project: 'acme/api',
                 port: {
-                  getDefaultBranchHead: async () => ({ branch: 'main', sha: 'a'.repeat(40) }),
-                  isBranchProtected: async () => outcome === 'protected',
+                  // WP-142: no `getBranchHead` and no `repositorySettings` — R9 needs neither.
+                  isBranchProtected: async (_project: string, branch: string) => {
+                    askedBranches.push(branch);
+                    return outcome === 'protected';
+                  },
                 },
               },
         taskManagement: null,
@@ -82,6 +88,8 @@ const probeFor = (
 
 const indexed = (paths: readonly string[], built: boolean) => ({
   'from bindings b': [{ type: 'errors' }],
+  // WP-142: the stored branch, which is not the one a provider would call its default here.
+  'select default_branch from projects': [{ default_branch: 'trunk' }],
   'select knowledge_dir from projects': [{ knowledge_dir: '.agentic/knowledge' }],
   'from kb_documents d': paths.map((path) => ({ path, built })),
   'from kb_index_state': built ? [{ built: true }] : [],
@@ -91,6 +99,12 @@ describe('createPlatformReadinessProbe', () => {
   it('reports a protected default branch as protected', async () => {
     const signals = await probeFor('protected', indexed([], true)).read(PROJECT);
     expect(signals.defaultBranchProtected).toBe(true);
+  });
+
+  it('asks about the stored default branch by name, never the provider’s (WP-142)', async () => {
+    askedBranches.length = 0;
+    await probeFor('protected', indexed([], true)).read(PROJECT);
+    expect(askedBranches).toEqual(['trunk']);
   });
 
   it('reports an unprotected branch as unprotected, which is not the same as unknown', async () => {

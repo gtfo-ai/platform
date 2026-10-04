@@ -51,6 +51,20 @@
     },
     {
       "method": "GET",
+      "path": "/projects/acme%2Fnope/repository/branches/main",
+      "status": 404,
+      "body": {
+        "message": "404 Project Not Found"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/rest/troubleshooting/",
+        "retrieved": "2026-10-04",
+        "kind": "inferred",
+        "note": "WP-142: getBranchHead names the branch, so a missing project is met at the branches endpoint. The status table gives the 404; that the message names the project rather than the branch is inferred from GitLab answering the project lookup first, not documented."
+      }
+    },
+    {
+      "method": "GET",
       "path": "/projects/acme%2Fapi/repository/branches/main",
       "status": 200,
       "body": {

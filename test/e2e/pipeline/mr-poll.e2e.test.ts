@@ -448,9 +448,8 @@ describe('a poll-only binding (WP-123)', () => {
     const reads = () =>
       pipeline
         .gitCalls()
-        .filter(
-          (call) => call.method === 'getDefaultBranchHead' || call.method === 'listDiscussions',
-        ).length;
+        .filter((call) => call.method === 'getBranchHead' || call.method === 'listDiscussions')
+        .length;
     // Backlog 419: the baseline only once the Ready entry's own duties have read what they read.
     const readsBefore = await quiesced(pipeline, reads);
 

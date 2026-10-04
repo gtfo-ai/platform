@@ -1625,9 +1625,14 @@ const countLiveTasks = async (
  * read under that lock: a task that is not `done` or `cancelled` refuses the write, because its
  * branch, merge request and gates were made against the old default branch.
  *
- * **Residual, stated**: task creation does not take this row's lock, so a task created by intake in
- * the same instant as this write is not seen by its count — it then starts on whichever branch its
- * first run reads. Closing it would put a project-row lock on every intake.
+ * **Task creation waits for this lock** (WP-142, backlog 442): the Postgres `tasks.insert` takes
+ * the project row `for share` before its insert, so a task is either committed before this
+ * statement's lock is granted — and counted — or created after this write commits, on the new
+ * branch. It was the residual of WP-139.
+ *
+ * **And it resets the poll's baseline** (WP-142): every git binding of the project has its
+ * `mr_poll_default_head` cleared in this transaction, so the next poll-only poll records the new
+ * branch's head as its first read rather than a move from the old branch's.
  */
 export const writeProjectDefaultBranch = async (
   database: Database,
@@ -1660,6 +1665,13 @@ export const writeProjectDefaultBranch = async (
     const row = updated[0];
     if (row === undefined) {
       return { status: 'not_found' } as const;
+    }
+    if (before !== branch) {
+      // WP-142: a head of the old branch is not a baseline for the new one.
+      await tx
+        .update(bindings)
+        .set({ mrPollDefaultHead: null })
+        .where(eq(bindings.projectId, projectId));
     }
     return { status: 'written', before, project: toProjectRecord(row) } as const;
   });

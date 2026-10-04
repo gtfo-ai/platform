@@ -113,9 +113,9 @@ const DECLARED: Readonly<Record<string, { readonly count: number; readonly reaso
       'the manual start (WP-122) asks only `picksUpNewTickets`, the predicate intake asks on the same settings, so the two answer alike; the match it records goes through intake, which parks a refused configuration at its first step',
   },
   'packages/application/src/pipeline/saga.ts': {
-    count: 4,
+    count: 5,
     reason:
-      'intake fails open (the task is created, marked, and parked by its first decided step); the plan and budget approval gates run only behind the stage-completion guard in `stageCompletedHandler`; the scheduler admits under the schema floor `REFUSED_CONFIGURATION_WIP_LIMITS`, and an admitted task meets the named refusal at its first step',
+      'intake fails open (the task is created, marked, and parked by its first decided step); the plan and budget approval gates run only behind the stage-completion guard in `stageCompletedHandler`; the scheduler admits under the schema floor `REFUSED_CONFIGURATION_WIP_LIMITS`, and an admitted task meets the named refusal at its first step; the default-branch handler (WP-142) reads only `defaultBranch`, the `projects.default_branch` column, which no configuration document carries',
   },
   'packages/application/src/pipeline/workpad.ts': {
     count: 2,

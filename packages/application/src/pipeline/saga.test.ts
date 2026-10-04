@@ -443,6 +443,33 @@ describe('intake', () => {
     expect(escalation.payload.blocker_brief).toContain('not protected');
   });
 
+  it('checks the protection of the stored default branch by name, never the provider’s (WP-142)', async () => {
+    // Stored `trunk`, provider `develop`: only `trunk` is unprotected, so the refusal names it.
+    const asked: string[] = [];
+    const harness = harnessWith({
+      settings: { defaultBranch: 'trunk' },
+      git: {
+        repositorySettings: async () => ({
+          defaultBranch: 'develop',
+          ciConfig: { kind: 'repository', path: '.gitlab-ci.yml' },
+        }),
+        isBranchProtected: async (_project: string, branch: string) => {
+          asked.push(branch);
+          return branch !== 'trunk';
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+
+    expect(asked).toEqual(['trunk']);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    const escalation = harness.events().find((entry) => entry.type === 'task.escalated') as Extract<
+      DomainEvent,
+      { type: 'task.escalated' }
+    >;
+    expect(escalation.payload.blocker_brief).toContain('"trunk" is not protected');
+  });
+
   it('queues a task the WIP limit will not admit', async () => {
     const harness = harnessWith({
       settings: { wip: { maxParallelTasks: 2, maxTasksInPipeline: 1, maxParallelRuns: 4 } },
@@ -3156,6 +3183,25 @@ describe('when the default branch moves under a waiting merge request', () => {
      */
     expect(taskOf(harness).task.iterationCounters.rebase_rechecks).toBe(1);
     expect(taskOf(harness).task.iterationCounters.human_rounds).toBeUndefined();
+  });
+
+  it('re-checks nothing when the branch that moved is not the stored default branch (WP-142)', async () => {
+    // Stored `main`; GitLab's push hook names its own default, `develop`, during a move.
+    const harness = harnessWith();
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+
+    await harness.publish([
+      event('default_branch.moved', {
+        project_id: PROJECT,
+        branch: 'develop',
+        new_head: 'd'.repeat(40),
+      }),
+    ]);
+
+    expect(taskOf(harness).task.stageAttempts.rebase_gate).toBe(1);
+    expect(taskOf(harness).task.iterationCounters.rebase_rechecks).toBeUndefined();
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
   });
 
   it('keeps re-checking past the human-round limit, and parks when its own loop is spent', async () => {

@@ -232,19 +232,25 @@ const startHarness = (options: {
   readonly existing?: readonly string[];
   /** The provider refuses the assignment — a revoked token, a 403, an outage. */
   readonly assignmentFails?: boolean;
+  /** The stored `projects.default_branch` (WP-142); the provider's own default is `develop`. */
+  readonly defaultBranch?: string;
+  /** `CODEOWNERS` at the provider's default branch, `develop` (WP-142). */
+  readonly providerDefaultCodeowners?: CodeownersRules | null;
   readonly harness?: HarnessOptions;
 }): RoutingHarness => {
   const lookups: string[] = [];
   const assigned: string[][] = [];
   const codeownersReads: string[] = [];
   const codeownersByRef: Readonly<Record<string, CodeownersRules | null | undefined>> = {
-    [DEFAULT_BRANCH]: options.codeowners,
+    [options.defaultBranch ?? DEFAULT_BRANCH]: options.codeowners,
     [TASK_BRANCH]: options.branchCodeowners,
+    develop: options.providerDefaultCodeowners,
   };
   let current = [...(options.existing ?? [])];
   const harness = createPipelineHarness({
     projectId: PROJECT,
     settings: {
+      ...(options.defaultBranch === undefined ? {} : { defaultBranch: options.defaultBranch }),
       config: {
         policies: {
           ...(options.classes === undefined ? {} : { risk_classes: options.classes }),
@@ -264,6 +270,11 @@ const startHarness = (options: {
       getPipelineStatus: async () => null,
       getMergeRequest: async () => mergeRequest(current),
       getMergeRequestDiff: async () => (options.paths ?? ['src/totals.ts']).map(fileDiff),
+      // WP-142: the provider calls `develop` its default; routing must not follow it.
+      repositorySettings: async () => ({
+        defaultBranch: 'develop',
+        ciConfig: { kind: 'repository', path: '.gitlab-ci.yml' },
+      }),
       readCodeowners: async (_project: string, ref: string) => {
         codeownersReads.push(ref);
         return codeownersByRef[ref] ?? null;
@@ -467,6 +478,21 @@ describe('reviewer routing (product/19:138, WP-37)', () => {
 
     expect(started.codeownersReads).toEqual([DEFAULT_BRANCH]);
     expect(started.lookups).toEqual(['@dana']);
+    expect(started.assigned).toEqual([['4242']]);
+  });
+
+  it('reads CODEOWNERS at the stored default branch while the provider’s default is another (WP-142)', async () => {
+    // Stored `trunk` (the merge request's target), provider `develop`: the two files name
+    // different owners, so a read of the provider's default would appoint @erin.
+    const started = startHarness({
+      defaultBranch: 'trunk',
+      codeowners: codeowners(['@dana']),
+      providerDefaultCodeowners: codeowners(['@erin']),
+      accounts: { '@dana': '4242', '@erin': '7777' },
+    });
+    await started.harness.publish([ticketMatched()]);
+
+    expect(started.codeownersReads).toEqual(['trunk']);
     expect(started.assigned).toEqual([['4242']]);
   });
 

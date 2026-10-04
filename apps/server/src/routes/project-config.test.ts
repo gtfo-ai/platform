@@ -149,6 +149,8 @@ beforeEach(async () => {
       },
       // WP-139's provider read, not exercised by these routes.
       repository: async () => ({ status: 'unavailable', reason: 'not composed in this test' }),
+      // WP-142's index request, not exercised by these routes either.
+      requestKnowledgeIndex: async () => false,
     },
     redactText: (value) => value.replaceAll('glpat-FAKE', '[REDACTED]'),
   });

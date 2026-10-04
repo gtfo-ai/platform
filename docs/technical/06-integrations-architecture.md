@@ -69,14 +69,14 @@ projectMemberAccess(project, username) -> {member, role, pushes, administers}   
 branchPushProtection(project, branch) -> {protected, nobodyPushes, forcePushAllowed, pushers}   # WP-141: who may push to a branch, read with the API token (GitLab `GET /projects/:id/protected_branches`, every rule matching the branch, exact or wildcard, combined most-permissive; none = unprotected); an operator's own run token needs push No one and force push off on the default branch
 runTokenApiAccess(runToken) -> {status, refusedForScope, error}   # WP-141: the scope proof — one identity read made WITH the run token (GitLab `GET /user`; only a 403 with `insufficient_scope` is refused for scope); the platform's only use of a run token against a provider API
 createMergeRequestPipeline(mr) -> {id, headSha, status, url?}   # WP-138: a mutation, the `mr_ready` duty's, when the head has no pipeline and the default branch has a CI file
-repositorySettings(project) -> {defaultBranch | null, ciConfig: repository{path} | external{location} | unknown{reason}}   # WP-139: GitLab `GET /projects/:id` — `default_branch` (the wizard's prefill) and `ci_config_path` (empty → `.gitlab-ci.yml`; `…@project` or a URL → external, counted as CI present; absent key → unknown). The CI gate and `mr_ready` look for that path on the default branch (by presence only, through the mirror) instead of a fixed `.gitlab-ci.yml`
+repositorySettings(project) -> {defaultBranch | null, ciConfig: repository{path} | external{location} | unknown{reason}}   # WP-139: GitLab `GET /projects/:id` — `default_branch` (the wizard's prefill and, since WP-142, the settings page's mismatch notice — its **only** readers; every pipeline reader takes the stored branch) and `ci_config_path` (empty → `.gitlab-ci.yml`; `…@project` or a URL → external, counted as CI present; absent key → unknown). The CI gate and `mr_ready` look for that path on the default branch (by presence only, through the mirror) instead of a fixed `.gitlab-ci.yml`
 getMergeRequestDiffStats(mr) -> {filesChanged, insertions, deletions} | null   # WP-59: GitLab answers from GraphQL `diffStatsSummary`; null = not computed
 listDiscussions(mr) ; replyToDiscussion(mr, discussionId, markdown) ; resolveDiscussion(mr, discussionId)
 createDiscussion(mr, {path?, line?, markdown})         # review findings; both absent = a thread on the MR (WP-24's neutral summary)
 getMergeRequestDiff(mr, {limit}) -> [{oldPath, newPath, diff?, newFile, renamedFile, deletedFile, omitted}]  # review-only mode (WP-24)
 getPipelineStatus(headSha) -> {status, url, jobs[{name, status, logRef}]}
 getJobLog(jobId, {tailBytes}) -> string
-getDefaultBranchHead(project) -> sha
+getBranchHead(project, branch) -> {branch, sha}   # WP-142: the branch is the caller's — always the stored `projects.default_branch` (was `getDefaultBranchHead(project)`, which also chose the branch). GitLab `GET /projects/:id/repository/branches/:branch`
 readCodeowners(project, ref) -> Rules
 listMergedMergeRequests(project, since, limit) -> [{ref, author, mergedAt, title, diffStats?, discussionCount}]   # history bootstrap, shadow comparison
 listCommits(project, {since, limit}) -> [{sha, message, author, committedAt, url?}]   # history bootstrap's commit messages (WP-35)
@@ -581,8 +581,8 @@ the existing suite (BD-017).
   > GitLab, neither `webhook_secret_token` nor `webhook_signing_token` is set, so every delivery is
   > refused — so a secret set for a webhook GitLab cannot actually reach turns **both** paths off for
   > that binding, as the setup guide warns) makes two more reads per `mr.poll`, both through the executor outside every
-  > transaction: **(a)** `getDefaultBranchHead`, compared with `bindings.mr_poll_default_head`
-  > (migration 0074) — a different head is recorded as `default_branch.moved` by
+  > transaction: **(a)** `getBranchHead` of the **stored** default branch (WP-142), compared with `bindings.mr_poll_default_head`
+  > (migration 0074; cleared by a change of the stored branch, so the next poll is a first read and records no move) — a different head is recorded as `default_branch.moved` by
   > `recordNormalisedDelivery` on the key `<provider>:poll:<project>:<path>@default:<old>..<new>`
   > and then written (a poll that dies between the two records the same key again and collides), and
   > the first read records nothing — the one move it cannot record is an exact repeat of an earlier

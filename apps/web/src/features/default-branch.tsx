@@ -40,6 +40,39 @@ const CiLocation = ({
     </>
   );
 
+/** A git provider's id as people write its name; an id this build does not know is shown as is. */
+const PROVIDER_LABEL: Readonly<Record<string, string>> = { gitlab: 'GitLab' };
+
+/**
+ * **The mismatch notice** (WP-142, backlog 441): the git provider calls another branch its default
+ * than the one this project stores. Rendered on the settings page (inside {@link DefaultBranch})
+ * and beside the readiness panel; it appears and disappears with the mismatch, and it refuses
+ * nothing — a move (`develop` → `main`) passes through a moment where the two differ, and every
+ * reader of the platform takes the stored branch (`default-branch-readers.test.ts`).
+ */
+export const DefaultBranchMismatch = ({
+  projectId,
+}: {
+  readonly projectId: string;
+}): ReactElement | null => {
+  const data = useProjectRepository(projectId).data;
+  const provider = data?.provider ?? null;
+  if (data === undefined || provider === null || provider.default_branch === null) {
+    return null;
+  }
+  if (provider.default_branch === data.default_branch) {
+    return null;
+  }
+  return (
+    <p className="text-xs" role="status" data-testid="default-branch-mismatch">
+      <UntrustedText value={PROVIDER_LABEL[provider.provider] ?? provider.provider} />
+      ’s default branch is <UntrustedText value={provider.default_branch} />; this project uses{' '}
+      <UntrustedText value={data.default_branch} />. Runs check out, merge requests target and the
+      platform protects, polls and measures <UntrustedText value={data.default_branch} />.
+    </p>
+  );
+};
+
 export const DefaultBranch = ({ projectId }: { readonly projectId: string }): ReactElement => {
   const repository = useProjectRepository(projectId);
   const commands = useSettingsCommands();
@@ -82,12 +115,7 @@ export const DefaultBranch = ({ projectId }: { readonly projectId: string }): Re
           <CiLocation ci={data.provider.ci_config} />
         </p>
       )}
-      {differs ? (
-        <p className="text-xs" role="status">
-          The stored branch is not the provider’s: runs would check out and merge requests would
-          target <UntrustedText value={data.default_branch} />.
-        </p>
-      ) : null}
+      <DefaultBranchMismatch projectId={projectId} />
       <form
         className="flex flex-col gap-2"
         onSubmit={(event) => {

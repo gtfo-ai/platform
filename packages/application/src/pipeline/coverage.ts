@@ -249,7 +249,9 @@ export const runCoverage = async (
     return;
   }
 
-  const target = await reads.defaultBranch(context);
+  // WP-142 (backlog 441): the stored default branch is the baseline — the branch the merge request
+  // targets — never the provider's default.
+  const target = await reads.branchHead(settings.defaultBranch, context);
   if (target === null) {
     // Unreachable behind the binding check above, and kept for the reason `gates.ts` keeps its
     // twin (standing rule 22): the type still admits `null`, and a `??`-shaped shortcut here would

@@ -1192,17 +1192,11 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       };
     },
 
-    getDefaultBranchHead: async (project) => {
-      const details = await client.project(project);
-      const branch = details.default_branch;
-      if (branch == null || branch === '') {
-        throw new IntegrationError(
-          'invalid_response',
-          GITLAB_PROVIDER_ID,
-          `project ${project} reports no default branch`,
-          { action: 'get_default_branch_head' },
-        );
-      }
+    /**
+     * WP-142: the named branch's head, one `GET /projects/:id/repository/branches/:branch`. The
+     * branch is the platform's stored default branch, never GitLab's `default_branch`.
+     */
+    getBranchHead: async (project, branch) => {
       const head = await client.branch(project, branch);
       return { branch: head.name, sha: head.commit.id };
     },

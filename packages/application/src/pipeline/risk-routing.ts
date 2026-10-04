@@ -289,6 +289,7 @@ export const runRiskRouting = async (
      */
     configured: (settings.config.policies?.reviewers ?? []).slice(0, MAX_ROUTED_REVIEWERS),
     reads,
+    defaultBranch: settings.defaultBranch,
     writes,
     redact,
     logger,
@@ -303,6 +304,8 @@ interface RoutingInput {
   readonly classes: Readonly<Record<string, RiskClass>> | undefined;
   readonly configured: readonly string[];
   readonly reads: ReturnType<typeof gitReads>;
+  /** `projects.default_branch`, through the settings (WP-142): where `CODEOWNERS` is read. */
+  readonly defaultBranch: string;
   readonly writes: ReturnType<typeof reviewWrites>;
   readonly redact: (value: string) => string;
   readonly logger: Logger;
@@ -336,8 +339,9 @@ const routeReviewers = async (options: RiskRoutingOptions, input: RoutingInput):
    * divergence 12) so the shared contract suite can hold every adapter to it, and the e2e plants a
    * hostile file on the branch under review and reads the production audit row's `ref` back.
    */
-  const target = await input.reads.defaultBranch(context);
-  const rules = target === null ? null : await input.reads.codeowners(target.branch, context);
+  // WP-142 (backlog 441): the stored default branch — the merge request's target — by name; the
+  // provider's default is not asked, so a move in progress cannot route by the other branch's file.
+  const rules = await input.reads.codeowners(input.defaultBranch, context);
   const requester =
     provider === null ? null : await requesterAccount(options, provider, stored.requestedByUserId);
   const routing = resolveReviewerRouting({

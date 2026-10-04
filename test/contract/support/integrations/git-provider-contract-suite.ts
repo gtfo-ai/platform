@@ -372,15 +372,22 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         expect((await port.testConnection()).ok).toBe(true);
       });
 
-      it('reports the default branch head', async () => {
-        const head = await port.getDefaultBranchHead(context.project);
-        expect(head.branch.length).toBeGreaterThan(0);
+      it('reports the head of a branch the platform names (WP-142)', async () => {
+        const head = await port.getBranchHead(context.project, context.branches.protected);
+        expect(head.branch).toBe(context.branches.protected);
         expect(head.sha).toMatch(/^[0-9a-f]{7,64}$/);
       });
 
       it('fails with not_found for a project that does not exist', async () => {
         await expectIntegrationError(
-          () => port.getDefaultBranchHead(context.missingProject),
+          () => port.getBranchHead(context.missingProject, context.branches.protected),
+          'not_found',
+        );
+      });
+
+      it('fails with not_found for a branch the project does not have (WP-142)', async () => {
+        await expectIntegrationError(
+          () => port.getBranchHead(context.project, context.branches.missing),
           'not_found',
         );
       });

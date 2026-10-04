@@ -32,6 +32,13 @@
  * **refused `409 project_has_live_tasks`** while any of the project's tasks is not `done` or
  * `cancelled`: a live task's branch, merge request, rebase gate and CI file were all made against
  * the old branch. The write and the check are one statement (`writeProjectDefaultBranch`).
+ *
+ * **What a change resets** (WP-142, backlog 441/442): in the same transaction it clears every git
+ * binding's `mr_poll_default_head`, so the next poll takes a baseline of the new branch and records
+ * no `default_branch.moved` comparing two branches; after the commit it asks for a knowledge index of
+ * the new branch, which also re-reads the repository configuration there. A task cannot be created
+ * at the instant of a change: task creation takes the project row `for share` (the Postgres
+ * `tasks.insert`), which this write's `for update` waits for, and the reverse.
  */
 import {
   apiErrorSchema,
@@ -87,6 +94,15 @@ export interface ProjectRepositoryRoutesOptions {
    * answers `provider: null` with that sentence, and the command still works.
    */
   readonly providerRepository: ((projectId: string) => Promise<ProviderRepositoryAnswer>) | null;
+  /**
+   * Asks for a knowledge index of the project's (new) default branch after a change commits
+   * (WP-142, backlog 442), or `null` on a process that composed no integration stack. The index run
+   * reads the stored branch when it fires and re-reads the repository configuration at the commit
+   * it indexed. **After** the commit, not inside it: `Jobs.enqueue` joins no transaction, so an
+   * enqueue made inside one would exist for a change that rolled back. A lost request is recovered
+   * by the next task start, which requests an index of its own (`knowledge.index.task-start`).
+   */
+  readonly requestKnowledgeIndex: ((projectId: string) => Promise<void>) | null;
 }
 
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -96,6 +112,32 @@ const projectParamsSchema = z.strictObject({ project_id: z.uuid() });
 /** The sentence a live task's refusal carries; the count is the read's `live_tasks`. */
 export const liveTasksRefusal = (count: number): string =>
   `this project has ${count} task${count === 1 ? '' : 's'} that ${count === 1 ? 'is' : 'are'} not finished; a live task's branch, merge request and gates were made against the current default branch, so finish or cancel ${count === 1 ? 'it' : 'them'} first`;
+
+/**
+ * WP-142: the index request that follows a committed change. A failure is logged and does not undo
+ * the change, which has committed and been recorded; the next task start requests one again.
+ */
+const requestIndexAfterChange = async (
+  options: ProjectRepositoryRoutesOptions,
+  request: FastifyRequest,
+  projectId: string,
+): Promise<void> => {
+  if (options.requestKnowledgeIndex === null) {
+    request.log.warn(
+      { project_id: projectId },
+      'the default branch changed on a process that composed no integrations; no knowledge index was requested, so the next task start will index the new branch',
+    );
+    return;
+  }
+  try {
+    await options.requestKnowledgeIndex(projectId);
+  } catch (error) {
+    request.log.error(
+      { project_id: projectId, err: error },
+      'the default branch changed but the knowledge index of the new branch could not be requested; the next task start requests one',
+    );
+  }
+};
 
 export const registerProjectRepositoryRoutes = async (
   app: FastifyInstance,
@@ -210,6 +252,7 @@ export const registerProjectRepositoryRoutes = async (
         });
         return written.project;
       });
+      await requestIndexAfterChange(options, request, projectId);
       return { project, performed: true };
     },
   );

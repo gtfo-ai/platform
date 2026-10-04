@@ -214,6 +214,8 @@ const ciFinished = (headSha: string): DomainEvent => {
 
 interface CoverageHarness {
   readonly harness: PipelineHarness;
+  /** Every branch `getBranchHead` was asked for, in order (WP-142). */
+  readonly asked: readonly string[];
   /** Moves the default branch, which is the one thing that invalidates the cached base. */
   moveDefaultBranch(sha: string): void;
   /** Installs (or replaces) the coverage a revision's pipeline reports. */
@@ -225,12 +227,16 @@ interface CoverageHarness {
 const startHarness = (options: {
   readonly coverage?: Readonly<Record<string, number | null>>;
   readonly source?: 'pipeline' | 'none';
+  /** The stored `projects.default_branch` (WP-142); the provider's default is always `develop`. */
+  readonly defaultBranch?: string;
 }): CoverageHarness => {
   const coverage = new Map<string, number | null>(Object.entries(options.coverage ?? {}));
   let base = BASE;
+  const asked: string[] = [];
   const harness = createPipelineHarness({
     projectId: PROJECT,
     settings: {
+      ...(options.defaultBranch === undefined ? {} : { defaultBranch: options.defaultBranch }),
       config: {
         policies: options.source === undefined ? {} : { coverage_source: options.source },
       },
@@ -244,7 +250,16 @@ const startHarness = (options: {
     },
     gitRedactor: exactSecretRedactor([]),
     git: {
-      getDefaultBranchHead: async () => ({ branch: 'main', sha: base }),
+      getBranchHead: async (_project: string, branch: string) => {
+        asked.push(branch);
+        return { branch, sha: base };
+      },
+      // WP-142: the provider's own default differs from the stored one in every case here, so a
+      // reader that followed it would read `develop`.
+      repositorySettings: async () => ({
+        defaultBranch: 'develop',
+        ciConfig: { kind: 'repository', path: '.gitlab-ci.yml' },
+      }),
       getMergeRequest: async () => mergeRequest(),
       getPipelineStatus: async (_project: string, headSha: string) =>
         coverage.has(headSha) ? pipelineStatus(headSha, coverage.get(headSha) ?? null) : null,
@@ -252,6 +267,7 @@ const startHarness = (options: {
   });
   return {
     harness,
+    asked,
     moveDefaultBranch: (sha) => {
       base = sha;
     },
@@ -313,6 +329,21 @@ describe('the coverage delta (product/18:38, WP-39)', () => {
     expect(record?.base_sha).toBe(BASE);
     expect(record?.head_sha).toBe(HEAD);
     expect(record?.measured_at).toBeTruthy();
+  });
+
+  it('measures against the stored default branch, never the provider’s (WP-142)', async () => {
+    // Stored `trunk`, provider `develop` (the stub's `repositorySettings`): the baseline is the
+    // branch the merge request targets.
+    const started = startHarness({
+      coverage: { [HEAD]: 81.5, [BASE]: 79 },
+      defaultBranch: 'trunk',
+    });
+    await started.harness.publish([ticketMatched()]);
+    await started.harness.publish([ciFinished(HEAD)]);
+
+    const record = await coverageOf(started.harness);
+    expect(record?.base_branch).toBe('trunk');
+    expect(started.asked).toEqual(['trunk']);
   });
 
   it('records a negative delta when the change lowers it', async () => {

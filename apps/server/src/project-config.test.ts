@@ -13,6 +13,8 @@ import {
   createMemoryAuditLog,
   createVirtualTimer,
   IntegrationError,
+  JOB_QUEUES,
+  type Jobs,
   noSecretsRedactor,
   type PipelineIntegrations,
   silentLogger,
@@ -30,6 +32,7 @@ const world = (
   options: {
     readonly git?: 'none' | 'fake' | 'refusing' | 'broken';
     readonly ciConfig?: CiConfigLocation;
+    readonly jobs?: Jobs | null;
   } = {},
 ) => {
   const fake = createFakeGitProvider({
@@ -80,6 +83,7 @@ const world = (
     files: {} as never,
     secretKey: 'not-a-real-secret-key-0000000000000000000000000000',
     logger: silentLogger,
+    jobs: options.jobs ?? null,
   });
   return { commands, auditLog };
 };
@@ -131,5 +135,30 @@ describe('the repository settings read (WP-139)', () => {
     await expect(world({ git: 'broken' }).commands.repository(PROJECT)).rejects.toThrow(
       'a defect, not a refusal',
     );
+  });
+});
+
+describe('the knowledge index a change of the default branch requests (WP-142)', () => {
+  it('enqueues one knowledge.index run of the project, keyed to the project, and says so', async () => {
+    const enqueued: unknown[] = [];
+    const jobs = {
+      enqueue: async (request: unknown) => {
+        enqueued.push(request);
+        return { status: 'enqueued', jobId: 'job-1' };
+      },
+    } as unknown as Jobs;
+    const { commands } = world({ jobs });
+    expect(await commands.requestKnowledgeIndex(PROJECT)).toBe(true);
+    expect(enqueued).toEqual([
+      {
+        queue: JOB_QUEUES.knowledgeIndex,
+        singletonKey: `project:${PROJECT}`,
+        data: { project_id: PROJECT, reason: 'default_branch_changed' },
+      },
+    ]);
+  });
+
+  it('answers false on a process that holds no job client', async () => {
+    expect(await world().commands.requestKnowledgeIndex(PROJECT)).toBe(false);
   });
 });

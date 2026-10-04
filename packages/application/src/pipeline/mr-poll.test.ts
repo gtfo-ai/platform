@@ -124,6 +124,10 @@ interface World {
   /** WP-123: the default branch as the provider says it is now, and how often it was read. */
   head: { branch: string; sha: string };
   headReads: number;
+  /** WP-142: every branch whose head the poller asked for, by name. */
+  branchesAsked: string[];
+  /** WP-142: run inside the next head read, then cleared — a change committing mid-poll. */
+  duringHeadRead: (() => void) | null;
   /** Thrown by the next head read, then cleared. */
   headFails: Error | null;
   /** WP-123: each merge request's threads, by iid, and every iid whose threads were read. */
@@ -159,15 +163,20 @@ const portFor = (world: World): GitProviderPort =>
       const listed = world.listings.findLast((entry) => entry.ref.iid === ref.iid);
       return { state: world.current.get(ref.iid) ?? listed?.state ?? 'opened' };
     }) as unknown as GitProviderPort['getMergeRequest'],
-    getDefaultBranchHead: (async () => {
+    // WP-142: the branch is the caller's; `world.head.branch` is only the provider's default name.
+    getBranchHead: (async (_project, branch) => {
       world.headReads += 1;
+      world.branchesAsked.push(branch);
+      const during = world.duringHeadRead;
+      world.duringHeadRead = null;
+      during?.();
       if (world.headFails !== null) {
         const error = world.headFails;
         world.headFails = null;
         throw error;
       }
-      return { ...world.head };
-    }) satisfies GitProviderPort['getDefaultBranchHead'],
+      return { branch, sha: world.head.sha };
+    }) satisfies GitProviderPort['getBranchHead'],
     listDiscussions: (async (ref) => {
       world.discussionReads.push(ref.iid);
       const failure = world.discussionFails.get(ref.iid);
@@ -214,7 +223,8 @@ interface Harness {
    */
   readonly afterPollerRead: { run: (() => void) | null };
   /** WP-123: `bindings.mr_poll_default_head`, and a write that fails once when armed. */
-  readonly defaultHead: { value: string | null; failNextWrite: boolean };
+  /** `branch` is the stored `projects.default_branch` (WP-142). */
+  readonly defaultHead: { branch: string; value: string | null; failNextWrite: boolean };
   /** WP-123: the tasks the store says wait at Ready, oldest entry first. */
   readonly ready: ReadyMergeRequest[];
   /** WP-123: the `limit` each `readyMergeRequests` call asked with. */
@@ -236,6 +246,8 @@ const harnessFor = (
     reread: [],
     rereadFails: null,
     head: { branch: 'main', sha: SHA_A },
+    branchesAsked: [],
+    duringHeadRead: null,
     headReads: 0,
     headFails: null,
     discussions: new Map(),
@@ -274,7 +286,8 @@ const harnessFor = (
         },
       } as unknown as TransactionScope),
   };
-  const defaultHead: { value: string | null; failNextWrite: boolean } = {
+  const defaultHead: { branch: string; value: string | null; failNextWrite: boolean } = {
+    branch: 'main',
     value: null,
     failNextWrite: false,
   };
@@ -288,13 +301,16 @@ const harnessFor = (
         cursor.value = to;
       }
     },
-    defaultHeadOf: async () => defaultHead.value,
-    recordDefaultHead: async (_binding, sha) => {
+    defaultHeadOf: async () => ({ branch: defaultHead.branch, head: defaultHead.value }),
+    recordDefaultHead: async (_binding, sha, branch) => {
       if (defaultHead.failNextWrite) {
         defaultHead.failNextWrite = false;
         throw new Error('the database went away before the head was written');
       }
-      defaultHead.value = sha;
+      // The adapter's compare-and-set: a head of a branch that is no longer stored is not written.
+      if (branch === defaultHead.branch) {
+        defaultHead.value = sha;
+      }
     },
     readyMergeRequests: async (_binding, limit) => {
       readyLimits.push(limit);
@@ -980,6 +996,60 @@ describe('a poll-only binding: the default branch (WP-123, backlog 373 (a))', ()
     const next = await pollMergeRequestBinding(harness.options, BINDING);
     expect(next).toMatchObject({ defaultBranch: 'moved' });
     expect(movedEvents(harness)).toHaveLength(1);
+  });
+});
+
+describe('a poll-only binding reads the stored default branch (WP-142, backlog 441)', () => {
+  const movedEvents = (harness: Harness) =>
+    harness.events.filter((event) => event.type === 'default_branch.moved');
+
+  it('asks for the stored branch’s head by name while the provider’s default is another branch', async () => {
+    const harness = harnessFor();
+    // Provider `develop`, stored `main`: the poll reads `main` and the move it records names it.
+    harness.defaultHead.value = SHA_A;
+    harness.world.head = { branch: 'develop', sha: SHA_B };
+
+    const polled = await pollMergeRequestBinding(harness.options, BINDING);
+    expect(polled).toMatchObject({ defaultBranch: 'moved' });
+    expect(harness.world.branchesAsked).toEqual(['main']);
+    expect(movedEvents(harness).map((event) => event.payload)).toEqual([
+      { project_id: PROJECT, branch: 'main', new_head: SHA_B },
+    ]);
+  });
+
+  it('records no move after a change of the branch: the change clears the head and the next poll takes a baseline', async () => {
+    const harness = harnessFor();
+    harness.defaultHead.value = SHA_A;
+    // The change command (`writeProjectDefaultBranch`): a new stored branch, the head cleared.
+    harness.defaultHead.branch = 'trunk';
+    harness.defaultHead.value = null;
+    harness.world.head = { branch: 'trunk', sha: SHA_B };
+
+    const polled = await pollMergeRequestBinding(harness.options, BINDING);
+    expect(polled).toMatchObject({ defaultBranch: 'first_read' });
+    expect(harness.world.branchesAsked).toEqual(['trunk']);
+    expect(movedEvents(harness)).toEqual([]);
+    expect(harness.defaultHead.value).toBe(SHA_B);
+  });
+
+  it('records nothing when the branch is changed while the provider is asked, and writes no head of the old branch', async () => {
+    const harness = harnessFor();
+    harness.defaultHead.value = SHA_A;
+    harness.world.head = { branch: 'main', sha: SHA_B };
+    harness.world.duringHeadRead = () => {
+      harness.defaultHead.branch = 'trunk';
+      harness.defaultHead.value = null;
+    };
+
+    const polled = await pollMergeRequestBinding(harness.options, BINDING);
+    expect(polled).toMatchObject({ defaultBranch: 'branch_changed' });
+    expect(movedEvents(harness)).toEqual([]);
+    expect(harness.defaultHead.value).toBeNull();
+
+    const next = await pollMergeRequestBinding(harness.options, BINDING);
+    expect(next).toMatchObject({ defaultBranch: 'first_read' });
+    expect(harness.world.branchesAsked).toEqual(['main', 'trunk']);
+    expect(movedEvents(harness)).toEqual([]);
   });
 });
 

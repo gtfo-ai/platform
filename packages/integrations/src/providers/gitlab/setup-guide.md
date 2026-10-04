@@ -72,7 +72,7 @@ Triggers to enable:
   it on an older commit's pipeline.
 - **Comments** (Note events) → `mr.review.comment`
 - **Pipeline events** → `ci.pipeline.finished`
-- **Push events** → `default_branch.moved` (only a push onto the default branch produces an event)
+- **Push events** → `default_branch.moved` (only a push onto GitLab's default branch produces an event, and since WP-142 a task waiting at Ready is re-checked only when that branch is also the project's stored **Default branch** — keep the two the same)
 
 Authentication — pick per your version:
 
@@ -117,8 +117,9 @@ of the two saw it first.
 with **neither** `webhook_secret_token` nor `webhook_signing_token` set receives no delivery at all
 (every one is refused, above), so it is **poll-only**, and each of its polls makes two more reads:
 
-- **The default branch's head** (the project's default branch, then that branch's commit — two
-  requests per poll), compared with the head the last poll saw. When it moved, the platform records
+- **The default branch's head** — the branch the project's **Default branch** setting stores, never
+  GitLab's own default (WP-142); one request per poll — compared with the head the last poll saw.
+  Changing the setting resets that comparison, so the next poll records no move. When it moved, the platform records
   `default_branch.moved` — so a task waiting at Ready re-enters the rebase gate and is re-checked
   for conflicts, exactly as a Push hook would make it. The first poll only learns the head; it
   records no move.

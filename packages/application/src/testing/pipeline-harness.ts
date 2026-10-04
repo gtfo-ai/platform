@@ -862,7 +862,10 @@ const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitPro
           type: 'git',
         },
         capabilities: () => ({}),
-        getDefaultBranchHead: async () => ({ branch: 'main', sha: 'a'.repeat(40) }),
+        getBranchHead: async (_project: string, branch: string) => ({
+          branch,
+          sha: 'a'.repeat(40),
+        }),
         // WP-139: the provider's CI location — GitLab's default file, read from the mirror.
         repositorySettings: async () => ({
           defaultBranch: 'main',

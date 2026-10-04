@@ -69,7 +69,13 @@ import { silentLogger } from '../ports/logger.js';
 import type { IndexReport, KnowledgeIndexer } from './indexer.js';
 
 /** Why a run was asked for — a log field, and the only thing that distinguishes two wake-ups. */
-export type KnowledgeIndexReason = 'task_started' | 'merged' | 'default_branch_moved' | 'requested';
+export type KnowledgeIndexReason =
+  | 'task_started'
+  | 'merged'
+  | 'default_branch_moved'
+  /** WP-142: a person changed `projects.default_branch`; the index reads the new branch. */
+  | 'default_branch_changed'
+  | 'requested';
 
 /** `knowledge.index` payload — snake_case, like every other payload on the wire. */
 export interface KnowledgeIndexData {

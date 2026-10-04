@@ -401,7 +401,11 @@ export const runIntakeCheck = async (
     projectId,
     noRunScopedSecrets(),
   );
-  const unprotected = await unprotectedDefaultBranch(integrations, projectId);
+  const unprotected = await unprotectedDefaultBranch(
+    integrations,
+    projectId,
+    settings.defaultBranch,
+  );
   /**
    * **The ticket's own words, read once, before the task exists** (WP-15f, Q61).
    *
@@ -598,6 +602,11 @@ export const runIntakeCheck = async (
 /**
  * `null` when the branch is protected, when there is no git binding, or when nobody can tell.
  *
+ * **The branch is the stored `projects.default_branch`** (WP-142, backlog 441) — the branch the
+ * task's runs will check out and its merge request will target — never the provider's default:
+ * during a move (`develop` → `main`) the two differ, and protecting the provider's while the
+ * platform delivers to the stored one checked the wrong branch.
+ *
  * Called from the job and never from a handler: `integrationsForProject` refuses inside a
  * transaction, so a future caller that tries gets an error rather than a held connection. The
  * bindings are resolved by the caller and passed in, because the intake check now makes two
@@ -607,17 +616,18 @@ export const runIntakeCheck = async (
 const unprotectedDefaultBranch = async (
   integrations: PipelineIntegrations,
   projectId: Id,
+  defaultBranch: string,
 ): Promise<string | null> => {
-  const reads = gitReads(integrations);
-  // No task exists yet — the row is written by the transaction this read precedes — so the audit
-  // row names the project and the action, and the ticket key is in the payload the caller passes.
-  const callContext = { projectId, taskId: null };
-  const head = await reads.defaultBranch(callContext);
-  if (head === null) {
+  if (integrations.git === null) {
     return null;
   }
-  const protectedBranch = await reads.branchProtected(head.branch, callContext);
-  return protectedBranch === false ? head.branch : null;
+  // No task exists yet — the row is written by the transaction this read precedes — so the audit
+  // row names the project and the action, and the ticket key is in the payload the caller passes.
+  const protectedBranch = await gitReads(integrations).branchProtected(defaultBranch, {
+    projectId,
+    taskId: null,
+  });
+  return protectedBranch === false ? defaultBranch : null;
 };
 
 /** Provider priority names, normalised for `orderQueue` (lower is more urgent, BD-010). */
@@ -1644,6 +1654,24 @@ const defaultBranchHandler = (options: PipelineSagaOptions): EventHandler => ({
   handle: async (context) => {
     const event = context.event.event;
     if (event.type !== 'default_branch.moved') {
+      return;
+    }
+    /**
+     * WP-142 (backlog 441): only a move of the **stored** default branch re-checks a waiting task.
+     * A webhook's `default_branch.moved` names the provider's default (GitLab's push hook), which
+     * during a move is not the branch the merge requests target, and re-entering the rebase gate on
+     * it would spend `rebase_rechecks` on a branch nothing merges into.
+     */
+    const settings = await options.settings.forProject(event.payload.project_id, context.scope.tx);
+    if (event.payload.branch !== settings.defaultBranch) {
+      (options.logger ?? silentLogger).info(
+        {
+          project_id: event.payload.project_id,
+          moved: event.payload.branch,
+          default_branch: settings.defaultBranch,
+        },
+        'a branch that is not this project’s default branch moved; no waiting task is re-checked',
+      );
       return;
     }
     const waiting = await options.store.tasks.listAtStage(

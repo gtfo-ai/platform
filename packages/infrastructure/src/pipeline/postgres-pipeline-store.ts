@@ -422,6 +422,18 @@ export const createPostgresPipelineStore = (
 
     insert: async (tx, stored) => {
       const { task } = stored;
+      /**
+       * **The project row, `for share`, before the insert** (WP-142, backlog 442). A change of the
+       * default branch (`writeProjectDefaultBranch`) locks the row `for update` and counts the live
+       * tasks under that lock; this lock makes every task creation — intake, the manual start,
+       * review-only, the ticket lint, discovery, maintenance, the bootstrap, shadow — wait for a
+       * change in progress, or the change wait for this transaction, so the count never misses a
+       * task created at the same instant. `for share` rather than the foreign key's own `for key
+       * share`, so the guarantee does not rest on the change taking the strongest lock: it holds
+       * against `for no key update` too (the canary in `test/integration/server/default-branch-change.integration.test.ts`).
+       * Two task creations share it and do not wait for each other.
+       */
+      await sqlOf(tx).query('select 1 from projects where id = $1 for share', [task.projectId]);
       await sqlOf(tx).query(
         `insert into tasks (id, project_id, ticket_provider, ticket_key, ticket_url, template, mode,
                             state, current_stage, priority, template_snapshot, branch, mr_ref,

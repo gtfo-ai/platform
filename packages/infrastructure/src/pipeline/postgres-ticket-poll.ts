@@ -121,19 +121,25 @@ export const createPostgresMergeRequestPollStore = (
   options: PostgresTicketPollStoreOptions,
 ): MergeRequestPollStore => ({
   ...bindingPollStatements(options.sql, 'git', 'mr_poll_cursor'),
+  /** WP-142: the stored default branch and the binding's head of it, in one statement. */
   defaultHeadOf: async (binding) => {
-    const { rows } = await options.sql.query<{ head: string | null }>(
-      `select mr_poll_default_head as head from bindings
-        where project_id = $1 and integration_id = $2`,
+    const { rows } = await options.sql.query<{ branch: string; head: string | null }>(
+      `select p.default_branch as branch, b.mr_poll_default_head as head
+         from bindings b join projects p on p.id = b.project_id
+        where b.project_id = $1 and b.integration_id = $2`,
       [binding.projectId, binding.integrationId],
     );
-    return rows[0]?.head ?? null;
+    const row = rows[0];
+    return row === undefined ? null : { branch: row.branch, head: row.head };
   },
-  recordDefaultHead: async (binding, sha) => {
+  /** WP-142: written only while `branch` is still the stored default branch (a compare-and-set). */
+  recordDefaultHead: async (binding, sha, branch) => {
     await options.sql.query(
-      `update bindings set mr_poll_default_head = $3
-        where project_id = $1 and integration_id = $2`,
-      [binding.projectId, binding.integrationId, sha],
+      `update bindings b set mr_poll_default_head = $3
+         from projects p
+        where b.project_id = $1 and b.integration_id = $2
+          and p.id = b.project_id and p.default_branch = $4`,
+      [binding.projectId, binding.integrationId, sha, branch],
     );
   },
   /**

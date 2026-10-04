@@ -709,12 +709,13 @@ export const createProjectSettingsPort = (
     const executor = tx === undefined ? pool : eventingAdapters.postgresTransaction(tx).client;
     const { rows } = await executor.query<
       {
+        default_branch: string;
         config: unknown;
         autonomy_policies: unknown;
         org_settings: unknown;
       } & Partial<RepositoryConfigColumns>
     >(
-      `select p.config, p.autonomy_policies, o.settings as org_settings, ${REPOSITORY_CONFIG_COLUMNS}
+      `select p.default_branch, p.config, p.autonomy_policies, o.settings as org_settings, ${REPOSITORY_CONFIG_COLUMNS}
          from projects p
          join organizations o on o.id = p.org_id
          left join project_repository_config r on r.project_id = p.id
@@ -741,6 +742,8 @@ export const createProjectSettingsPort = (
     );
     const layered = projectConfigWithRepository(projectRead.values, snapshot);
     return defaultProjectSettings(projectId, {
+      // WP-142: the stored branch is the one answer every pipeline reader takes.
+      defaultBranch: row.default_branch,
       templates: SHIPPED_TEMPLATES,
       config: layered.values,
       // WP-91 (backlog 224): `pipeline.wip` — the settings' value, a repository file's where it is

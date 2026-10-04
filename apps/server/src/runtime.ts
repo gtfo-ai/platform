@@ -956,6 +956,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             ).files,
             secretKey: config.secretKey,
             logger: loggerPort,
+            jobs,
           })
         : null;
 

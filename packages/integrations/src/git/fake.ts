@@ -216,6 +216,11 @@
  *     installed with `setRunTokenApiAccess` answers what was installed; any other answers `401`, as
  *     GitLab does for a token it does not know. No request is made, so there is no `PRIVATE-TOKEN`
  *     header to census — the GitLab adapter's own census (`emitted-secrets.test.ts`) holds that.
+ * 28. **Kinder — one head per branch, and the provider's default branch shares the project's**
+ *     (WP-142). `getBranchHead` answers the seeded head for the provider's default branch and a
+ *     branch's own head for any branch `seedFile`, `commitFiles` or `setBranchHead` made; there is
+ *     no commit graph. `setProviderDefaultBranch` renames which branch is the default without
+ *     moving a head, which GitLab's setting change also does not.
  */
 import {
   type BranchPushProtection,
@@ -616,6 +621,16 @@ export interface FakeGitProvider extends GitProviderPort {
   }): MergeRequest;
   /** Moves the default branch, as a merge on another MR would. */
   moveDefaultBranch(project: string, newHead: string): void;
+  /**
+   * Puts `branch`'s head at `sha`, creating the branch when it is new (WP-142) — a repository whose
+   * stored default branch is not the provider's (divergence 28).
+   */
+  setBranchHead(project: string, branch: string, sha: string): void;
+  /**
+   * Changes which branch the provider calls its default — a person changing GitLab's setting
+   * (WP-142). The branch's head is the project's seeded head; nothing else moves.
+   */
+  setProviderDefaultBranch(project: string, branch: string): void;
   /** Every commit `commitFiles` made, oldest first. */
   readonly commits: readonly FakeCommit[];
   /**
@@ -1640,10 +1655,18 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       return { defaultBranch: stored.defaultBranch, ciConfig: stored.ciConfig };
     },
 
-    getDefaultBranchHead: async (project) => {
-      core.enter('get_default_branch_head');
-      const stored = requireProject('get_default_branch_head', project);
-      return { branch: stored.defaultBranch, sha: stored.head };
+    /** Divergence 28: the provider's default answers its seeded head, any other branch its own. */
+    getBranchHead: async (project, branch) => {
+      core.enter('get_branch_head');
+      const stored = requireProject('get_branch_head', project);
+      if (branch === stored.defaultBranch) {
+        return { branch, sha: stored.head };
+      }
+      const known = branchOf(project, branch);
+      if (known === undefined) {
+        throw notFound(PROVIDER, 'get_branch_head', `branch ${branch}`);
+      }
+      return { branch, sha: known.head };
     },
 
     isBranchProtected: async (project, branch) => {
@@ -1656,6 +1679,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       const known =
         stored.protectedBranches.has(branch) ||
         branch === stored.defaultBranch ||
+        branchOf(project, branch) !== undefined ||
         mergeRequests.some((mr) => mr.project === project && mr.source_branch === branch);
       if (!known) {
         throw notFound(PROVIDER, 'is_branch_protected', `branch ${branch}`);
@@ -1971,6 +1995,29 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
 
     moveDefaultBranch: (project, newHead) => {
       requireProject('move_default_branch', project).head = newHead;
+    },
+
+    setBranchHead: (project, branch, sha) => {
+      const stored = requireProject('set_branch_head', project);
+      if (branch === stored.defaultBranch) {
+        stored.head = sha;
+        return;
+      }
+      const existing = branchOf(project, branch);
+      if (existing !== undefined) {
+        existing.head = sha;
+        return;
+      }
+      branches.set(branchKey(project, branch), {
+        project,
+        name: branch,
+        head: sha,
+        files: new Map<string, string>(),
+      });
+    },
+
+    setProviderDefaultBranch: (project, branch) => {
+      requireProject('set_provider_default_branch', project).defaultBranch = branch;
     },
 
     addHumanDiscussion: (input) => {

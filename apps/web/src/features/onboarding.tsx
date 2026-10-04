@@ -70,7 +70,7 @@ import {
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { BusinessInterview } from './business-interview.js';
-import { DefaultBranch } from './default-branch.js';
+import { DefaultBranch, DefaultBranchMismatch } from './default-branch.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 
@@ -304,6 +304,8 @@ export const OnboardingScreen = (): ReactElement => {
             <UntrustedText value={commands.startDiscovery.data.detail} />
           </p>
         ) : null}
+        {/* WP-142: beside the readiness panel, the provider's default when it is not the stored one. */}
+        {project === null ? null : <DefaultBranchMismatch projectId={project.id} />}
         {readiness.isSuccess ? (
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2">

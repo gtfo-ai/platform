@@ -529,14 +529,16 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
     expect(started.diffReads).toEqual([IID]);
   });
 
-  it('pays three provider reads for one gate entry on a project with no peer, and no diff read', async () => {
+  it('pays two provider reads for one gate entry on a project with no peer, and no diff read', async () => {
     /**
      * The per-gate-entry floor, pinned as a **count** (WP-59, backlog 64). The re-entry a
      * `default_branch.moved` causes is a gate entry and nothing else, so the audit rows it adds are
      * exactly what one entry costs: the rebase gate's own mergeability read (`get_merge_request`),
-     * and the classification's default branch and `CODEOWNERS`. Its diff read is answered by the
-     * coalescer — the revision has not moved — which is the one read WP-59 removed from this floor:
-     * it was **four**, measured by running this case with the coalescer bypassed (WP-59's notes).
+     * and the classification's `CODEOWNERS`. Its diff read is answered by the coalescer — the
+     * revision has not moved — which is the one read WP-59 removed from this floor: it was **four**,
+     * measured by running this case with the coalescer bypassed (WP-59's notes). **Two since
+     * WP-142**: the classification read the provider's default-branch head only to learn the
+     * branch's *name*, and the name is now the stored `projects.default_branch` — no read.
      */
     const started = startHarness({ ownPaths: ['src/totals.ts'] });
     await started.harness.publish([ticketMatched()]);
@@ -566,7 +568,7 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
       .filter((entry) => entry.integrationId === '00000000-0000-4000-8000-00000000a001')
       .map((entry) => entry.action)
       .sort();
-    expect(reads).toEqual(['get_default_branch_head', 'get_merge_request', 'read_codeowners']);
+    expect(reads).toEqual(['get_merge_request', 'read_codeowners']);
     expect(started.diffReads).toEqual([IID]);
   });
 

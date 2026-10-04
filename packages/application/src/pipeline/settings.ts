@@ -50,6 +50,13 @@ import type { Transaction } from '../ports/transaction.js';
 
 export interface ProjectSettings {
   readonly projectId: Id;
+  /**
+   * `projects.default_branch` — **the** default branch (WP-142, backlog 441): what a run checks out,
+   * a merge request targets and the mirror reads, and since WP-142 also the branch the intake
+   * protection check, coverage's baseline and risk routing's `CODEOWNERS` read. The provider's own
+   * default is never substituted for it; a difference is a notice for a person (the settings page).
+   */
+  readonly defaultBranch: string;
   /** The merged `.agentic/config.yml` values (`EffectiveConfig.values`). */
   readonly config: ConfigValues;
   /** Templates by id: the shipped three, plus anything `.agentic/pipeline.yml` defines. */
@@ -533,6 +540,9 @@ export const defaultProjectSettings = (
   overrides: Partial<Omit<ProjectSettings, 'projectId'>> = {},
 ): ProjectSettings => ({
   projectId,
+  // Migration 0003's column default: a harness that names no branch has the row the database
+  // would have written. The production port always reads the column.
+  defaultBranch: 'main',
   config: {},
   templates: SHIPPED_TEMPLATES,
   wip: DEFAULT_WIP_LIMITS,

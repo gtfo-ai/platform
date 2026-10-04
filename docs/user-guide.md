@@ -61,8 +61,11 @@ The default branch is required (WP-139): it is the branch every run checks out, 
 targets and the knowledge base is read from, and the platform's fallback — `main` — is the wrong one
 for a repository whose default is `develop` or `dev`. Once a git integration is bound, the step shows
 the default branch the git provider reports and where the provider says the CI configuration lives
-(GitLab's *CI/CD configuration file* setting); when the stored branch differs, the field is
-prefilled with the provider's and **Save default branch** changes it. The same control is on the
+(GitLab's *CI/CD configuration file* setting); when the stored branch differs, a notice says so —
+*"GitLab's default branch is X; this project uses Y"*, also beside the readiness panel — the field is
+prefilled with the provider's and **Save default branch** changes it. The notice refuses nothing:
+since WP-142 every check the platform makes (branch protection, readiness R9, the poll, coverage,
+`CODEOWNERS`) reads the stored branch. The same control is on the
 project's settings page; a maintainer may use it, and it is refused while any of the project's tasks
 is unfinished, because a live task's branch and merge request were made against the old one.
 

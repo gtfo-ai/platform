@@ -650,8 +650,9 @@ and a task learns that its merge request merged. A merge seen by the webhook and
 merge. Approvals, review comments, finished pipelines and default-branch moves are **not** in a
 merge-request listing. A GitLab binding with **no webhook secret at all** — neither
 `webhook_secret_token` nor `webhook_signing_token`, so no delivery can reach it — is **poll-only**, and
-its polls make two more reads (WP-123): the default branch's head, so a task waiting at Ready is
-re-checked for conflicts when `main` moves, and the comments on each merge request waiting at Ready
+its polls make two more reads (WP-123): the head of the project's stored **Default branch** (WP-142 —
+never GitLab's own default; changing the setting resets the comparison, so the next poll records no
+move), so a task waiting at Ready is re-checked for conflicts when it moves, and the comments on each merge request waiting at Ready
 (at most twenty per poll), so a reviewer's comment returns the task to Implementation. A binding
 with a webhook secret makes neither read: its webhook carries both. Approvals stay webhook-only
 (they count toward review time and change nothing else); the GitLab setup guide's step 3a lists the

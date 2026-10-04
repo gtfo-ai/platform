@@ -57,7 +57,7 @@ import {
 } from '../ui/kit.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { BusinessInterview } from './business-interview.js';
-import { DefaultBranch } from './default-branch.js';
+import { DefaultBranch, DefaultBranchMismatch } from './default-branch.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 import { ProjectPromptFiles } from './project-prompts.js';
@@ -234,6 +234,8 @@ export const ProjectSettingsScreen = ({
         ) : null}
         {/* WP-94, Q107 (a): discovery again, on a maintainer's click, with its ceiling shown. */}
         <Rediscovery projectId={project.id} />
+        {/* WP-142: R9 and every check read the stored branch; say when the provider's differs. */}
+        <DefaultBranchMismatch projectId={project.id} />
         {readiness.isSuccess ? (
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <Badge tone={readiness.data.level >= 2 ? 'success' : 'warning'}>

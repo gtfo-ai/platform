@@ -15,12 +15,14 @@
 import type {
   ConfigExportReport,
   ConfigExportRequest,
+  Jobs,
   Logger,
   PipelineIntegrationsPort,
   RepositoryConfigRefresh,
   RepositoryFileSource,
 } from '@platform/application';
 import {
+  enqueueKnowledgeIndex,
   exportProjectConfig,
   gitReads,
   IntegrationError,
@@ -42,6 +44,11 @@ export interface ProjectConfigCommands {
    * then asks the person.
    */
   repository(projectId: Id): Promise<ProviderRepositoryAnswer>;
+  /**
+   * Asks for one knowledge index run of the project (WP-142): what a change of the default branch
+   * requests after it commits. `false` when this process holds no job client.
+   */
+  requestKnowledgeIndex(projectId: Id): Promise<boolean>;
 }
 
 /** Bounds a provider string before it reaches a DTO (the schema's 255; BD-022). */
@@ -57,6 +64,8 @@ export const createProjectConfigCommands = (options: {
    */
   readonly secretKey: string;
   readonly logger: Logger;
+  /** The process's job client (WP-142), or `null` when it holds none. */
+  readonly jobs: Jobs | null;
 }): ProjectConfigCommands => {
   const refresh = createRepositoryConfigRefresher({
     pool: options.pool,
@@ -71,6 +80,13 @@ export const createProjectConfigCommands = (options: {
         request,
       ),
     refresh: async (projectId) => refresh({ projectId }),
+    requestKnowledgeIndex: async (projectId) => {
+      if (options.jobs === null) {
+        return false;
+      }
+      await enqueueKnowledgeIndex(options.jobs, { projectId, reason: 'default_branch_changed' });
+      return true;
+    },
     repository: async (projectId) => {
       try {
         const bindings = await integrationsForProject(

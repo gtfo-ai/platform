@@ -416,11 +416,18 @@ export const createPlatformReadinessProbe = (options: {
         // `runIntakeCheck` makes for its own two reads.
         noRunScopedSecrets(),
       );
-      const reads = gitReads(resolved);
-      const callContext = { projectId, taskId: null };
-      const head = await reads.defaultBranch(callContext);
-      if (head !== null) {
-        defaultBranchProtected = await reads.branchProtected(head.branch, callContext);
+      // WP-142 (backlog 441): R9 asks about the **stored** default branch — the one intake checks
+      // and every merge request targets — never the provider's default.
+      const stored = await options.pool.query<{ default_branch: string }>(
+        'select default_branch from projects where id = $1',
+        [projectId],
+      );
+      const branch = stored.rows[0]?.default_branch;
+      if (branch !== undefined) {
+        defaultBranchProtected = await gitReads(resolved).branchProtected(branch, {
+          projectId,
+          taskId: null,
+        });
       }
     } catch (error) {
       options.logger.warn(

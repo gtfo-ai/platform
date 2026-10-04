@@ -52,9 +52,10 @@ const harnessWith = (calls: ProviderCalls): PipelineHarness =>
       },
     },
     git: {
-      getDefaultBranchHead: (async () => {
+      // WP-142: intake's one git read is the protection of the stored branch, by name.
+      isBranchProtected: (async () => {
         calls.defaultBranch += 1;
-        return { branch: 'main', sha: 'a'.repeat(40) };
+        return true;
       }) as never,
     },
     taskManagement: {

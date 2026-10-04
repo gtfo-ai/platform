@@ -312,14 +312,15 @@ export const ciConfigOnDefaultBranch = async (
 ): Promise<CiConfigPresence> => {
   let location: CiConfigLocation;
   try {
-    const settings = await gitReads(integrations).repositorySettings(context);
-    if (settings === null) {
+    // WP-142: the location only — the provider's default branch is not the pipeline's to follow.
+    const answered = await gitReads(integrations).ciConfigLocation(context);
+    if (answered === null) {
       return {
         kind: 'unknown',
         reason: 'the project has no git binding to ask where its CI lives',
       };
     }
-    location = settings.ciConfig;
+    location = answered;
   } catch (error) {
     if (!(error instanceof IntegrationError)) {
       throw error;

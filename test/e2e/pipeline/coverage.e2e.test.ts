@@ -72,7 +72,7 @@ describe('the coverage delta from a real pipeline event', () => {
     });
     harness = pipeline;
 
-    const base = await pipeline.git.getDefaultBranchHead(GIT_PROJECT);
+    const base = await pipeline.git.getBranchHead(GIT_PROJECT, 'main');
     // The default branch has its own pipeline, which is what a delta is measured against and what
     // nothing in this platform stored before this work package.
     pipeline.git.setPipeline({

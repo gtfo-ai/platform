@@ -53,6 +53,7 @@ import type {
 } from '../ports/integrations/communication.js';
 import type {
   BranchPushProtection,
+  CiConfigLocation,
   CodeownersRules,
   CommitAction,
   CommitRef,
@@ -891,6 +892,12 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
   /**
    * The repository's default branch and CI configuration location, as the provider answers them
    * (WP-139). A **read**, in every mode; `null` for a project with no git binding.
+   *
+   * **The provider's default branch is for a person to read, never for the pipeline to follow**
+   * (WP-142, backlog 441): its one caller is the wizard's prefill and the mismatch notice
+   * (`apps/server/src/project-config.ts`). The pipeline asks {@link ciConfigLocation} and names
+   * the stored `projects.default_branch` to {@link branchHead}; `default-branch-readers.test.ts`
+   * holds both halves as a census.
    */
   repositorySettings: async (context: CallContext): Promise<RepositorySettings | null> => {
     const git = integrations.git;
@@ -907,7 +914,32 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
     );
   },
 
-  defaultBranch: async (
+  /**
+   * Where the provider says the CI configuration lives (WP-139) — {@link repositorySettings} with
+   * the provider's default branch **dropped**, so the CI gate cannot follow it (WP-142).
+   */
+  ciConfigLocation: async (context: CallContext): Promise<CiConfigLocation | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    const settings = await read(
+      integrations,
+      git.ref,
+      'get_repository_settings',
+      { project: git.project },
+      context,
+      async () => git.port.repositorySettings(git.project),
+    );
+    return settings.ciConfig;
+  },
+
+  /**
+   * The head of `branch` — which every caller passes as the project's **stored**
+   * `projects.default_branch` (WP-142, backlog 441), never the provider's default.
+   */
+  branchHead: async (
+    branch: string,
     context: CallContext,
   ): Promise<{ readonly branch: string; readonly sha: string } | null> => {
     const git = integrations.git;
@@ -917,10 +949,10 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
     return read(
       integrations,
       git.ref,
-      'get_default_branch_head',
-      { project: git.project },
+      'get_branch_head',
+      { project: git.project, branch },
       context,
-      async () => git.port.getDefaultBranchHead(git.project),
+      async () => git.port.getBranchHead(git.project, branch),
     );
   },
 });

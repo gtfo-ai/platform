@@ -50,11 +50,16 @@ let world: World;
 let writes: { projectId: string; branch: string }[];
 let actions: { action: string; params: JsonObject }[];
 let attempts: Map<string, { bodyDigest: string | null; params: JsonObject }>;
+/** WP-142: every knowledge index the route asked for, and whether the next request fails. */
+let indexRequests: string[];
+let indexFails: boolean;
 
 const build = async (): Promise<void> => {
   writes = [];
   actions = [];
   attempts = new Map();
+  indexRequests = [];
+  indexFails = false;
   world = {
     role: 'maintainer',
     branch: 'main',
@@ -119,6 +124,13 @@ const build = async (): Promise<void> => {
     },
     providerRepository: async () =>
       world.provider ?? { status: 'unavailable', reason: 'unreachable in this test' },
+    requestKnowledgeIndex: async (projectId) => {
+      if (indexFails) {
+        throw new Error('the queue went away');
+      }
+      // The request follows the write: the branch it will index is already the new one.
+      indexRequests.push(`${projectId}@${world.branch}`);
+    },
   });
   await app.ready();
 };
@@ -135,6 +147,27 @@ const put = (body: unknown, headers: Record<string, string> = {}) =>
 
 const errorCode = (raw: string): string =>
   (JSON.parse(raw) as { error?: { code?: string } }).error?.code ?? '';
+
+describe('what a change of the default branch asks for afterwards (WP-142, backlog 442)', () => {
+  it('requests one knowledge index of the new branch after the change, and none for a refused one', async () => {
+    const changed = await put({ default_branch: 'trunk' });
+    expect(changed.statusCode).toBe(200);
+    expect(indexRequests).toEqual([`${PROJECT}@trunk`]);
+
+    world.liveTasks = 1;
+    const refused = await put({ default_branch: 'release' });
+    expect(refused.statusCode).toBe(409);
+    expect(indexRequests).toEqual([`${PROJECT}@trunk`]);
+  });
+
+  it('keeps a committed change when the index request fails, because the next task start requests one', async () => {
+    indexFails = true;
+    const changed = await put({ default_branch: 'trunk' });
+    expect(changed.statusCode).toBe(200);
+    expect(world.branch).toBe('trunk');
+    expect(actions).toHaveLength(1);
+  });
+});
 
 describe('PUT /api/projects/:project_id/default-branch (WP-139)', () => {
   it('changes the branch and records one human action with the branch before and after', async () => {
