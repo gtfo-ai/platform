@@ -147,6 +147,8 @@ beforeEach(async () => {
         refreshes.push(projectId);
         return world.refresh;
       },
+      // WP-139's provider read, not exercised by these routes.
+      repository: async () => ({ status: 'unavailable', reason: 'not composed in this test' }),
     },
     redactText: (value) => value.replaceAll('glpat-FAKE', '[REDACTED]'),
   });

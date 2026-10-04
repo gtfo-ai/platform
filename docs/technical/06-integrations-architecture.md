@@ -67,6 +67,7 @@ findOpenMergeRequest(project, sourceBranch) -> MergeRequest | null   # WP-138: t
 authenticatedUser() -> ExternalIdentity               # WP-138: the account the binding's credential acts as (GitLab `GET /user`)
 projectMemberAccess(project, username) -> {member, role, pushes, administers}   # WP-137: a static run credential's user, read with the API token by the probe (GitLab `GET /users?username=` + `GET /projects/:id/members/all/:user_id`); `administers` = Maintainer and above
 createMergeRequestPipeline(mr) -> {id, headSha, status, url?}   # WP-138: a mutation, the `mr_ready` duty's, when the head has no pipeline and the default branch has a CI file
+repositorySettings(project) -> {defaultBranch | null, ciConfig: repository{path} | external{location} | unknown{reason}}   # WP-139: GitLab `GET /projects/:id` — `default_branch` (the wizard's prefill) and `ci_config_path` (empty → `.gitlab-ci.yml`; `…@project` or a URL → external, counted as CI present; absent key → unknown). The CI gate and `mr_ready` look for that path on the default branch (by presence only, through the mirror) instead of a fixed `.gitlab-ci.yml`
 getMergeRequestDiffStats(mr) -> {filesChanged, insertions, deletions} | null   # WP-59: GitLab answers from GraphQL `diffStatsSummary`; null = not computed
 listDiscussions(mr) ; replyToDiscussion(mr, discussionId, markdown) ; resolveDiscussion(mr, discussionId)
 createDiscussion(mr, {path?, line?, markdown})         # review findings; both absent = a thread on the MR (WP-24's neutral summary)

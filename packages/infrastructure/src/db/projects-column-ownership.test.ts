@@ -105,7 +105,9 @@ const COLUMN_WRITERS: Readonly<Record<string, readonly string[]>> = {
   key: [],
   name: [],
   repo_url: [],
-  default_branch: [],
+  // `writeProjectDefaultBranch` (`PUT …/default-branch`, WP-139): one column under the row's lock,
+  // refused while a task is live — the only writer after the insert.
+  default_branch: [ONBOARDING_QUERIES],
   agentic_dir: [],
   knowledge_dir: [],
   status: [],
@@ -136,7 +138,7 @@ const COLUMN_WRITERS: Readonly<Record<string, readonly string[]>> = {
   // `recordBlocker`'s compare-and-set (WP-113, migration 0069) — and WP-113's census holds it alone.
   maintenance_last_blocker: [BLOCKER_STORE],
   // The bookkeeping timestamp; shared, below.
-  updated_at: [ONBOARDING_QUERIES, ONBOARDING_QUERIES],
+  updated_at: [ONBOARDING_QUERIES, ONBOARDING_QUERIES, ONBOARDING_QUERIES],
 };
 
 /**

@@ -58,7 +58,7 @@ import {
   findShippedProvider,
   staticRunCredentialWriteIssues,
 } from '@platform/integrations';
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
 import { completeCommandAttempt, findCommandAttempt } from './idempotency-queries.js';
 import type { Database } from './identity-queries.js';
@@ -76,6 +76,7 @@ const {
   organizations,
   projects,
   secrets,
+  tasks,
 } = dbAdapters.schema;
 
 /** The organisation this deployment is (product/01: a self-hosted instance has one). */
@@ -1583,6 +1584,85 @@ export const writeProjectAutonomy = async (
     .returning({ id: projects.id });
   return updated.length === 0 ? { status: 'not_found' } : { status: 'written', autonomy };
 };
+
+/** The task states that are finished; every other state is a live task (`task-state-machine.ts`). */
+const FINISHED_TASK_STATES = ['done', 'cancelled'] as const;
+
+/** The stored default branch and the count of the project's unfinished tasks (WP-139's read). */
+export const findProjectRepository = async (
+  database: Database,
+  projectId: string,
+): Promise<{ readonly defaultBranch: string; readonly liveTasks: number } | null> => {
+  const rows = await database
+    .select({ defaultBranch: projects.defaultBranch })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1);
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  return { defaultBranch: row.defaultBranch, liveTasks: await countLiveTasks(database, projectId) };
+};
+
+const countLiveTasks = async (
+  executor: Pick<Database, 'select'>,
+  projectId: string,
+): Promise<number> => {
+  const counted = await executor
+    .select({ n: sql<number>`count(*)::int` })
+    .from(tasks)
+    .where(and(eq(tasks.projectId, projectId), notInArray(tasks.state, [...FINISHED_TASK_STATES])));
+  return counted[0]?.n ?? 0;
+};
+
+/**
+ * Changes `projects.default_branch` — WP-139's command, and the column's only writer after the
+ * create (`projects-column-ownership.test.ts` names it).
+ *
+ * **One column** (standing rule 79) plus the shared `updated_at`. The project row is locked first,
+ * so the `before` the audit records is the value this write replaced, and the live-task count is
+ * read under that lock: a task that is not `done` or `cancelled` refuses the write, because its
+ * branch, merge request and gates were made against the old default branch.
+ *
+ * **Residual, stated**: task creation does not take this row's lock, so a task created by intake in
+ * the same instant as this write is not seen by its count — it then starts on whichever branch its
+ * first run reads. Closing it would put a project-row lock on every intake.
+ */
+export const writeProjectDefaultBranch = async (
+  database: Database,
+  projectId: string,
+  branch: string,
+): Promise<
+  | { readonly status: 'written'; readonly before: string; readonly project: ProjectRecord }
+  | { readonly status: 'not_found' }
+  | { readonly status: 'live_tasks'; readonly count: number }
+> =>
+  database.transaction(async (tx) => {
+    const locked = await tx
+      .select({ defaultBranch: projects.defaultBranch })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .for('update');
+    const before = locked[0]?.defaultBranch;
+    if (before === undefined) {
+      return { status: 'not_found' } as const;
+    }
+    const live = await countLiveTasks(tx, projectId);
+    if (live > 0) {
+      return { status: 'live_tasks', count: live } as const;
+    }
+    const updated = await tx
+      .update(projects)
+      .set({ defaultBranch: branch, updatedAt: new Date() })
+      .where(eq(projects.id, projectId))
+      .returning(PROJECT_COLUMNS);
+    const row = updated[0];
+    if (row === undefined) {
+      return { status: 'not_found' } as const;
+    }
+    return { status: 'written', before, project: toProjectRecord(row) } as const;
+  });
 
 /**
  * Writes `integrations.health` — the column `GET /api/integrations` publishes and that nothing

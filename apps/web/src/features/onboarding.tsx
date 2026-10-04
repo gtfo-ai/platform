@@ -70,6 +70,7 @@ import {
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { BusinessInterview } from './business-interview.js';
+import { DefaultBranch } from './default-branch.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 
@@ -100,7 +101,7 @@ export const OnboardingScreen = (): ReactElement => {
   const commands = useOnboardingCommands();
 
   const [chosen, setChosen] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ key: '', name: '', repoUrl: '' });
+  const [draft, setDraft] = useState({ key: '', name: '', repoUrl: '', defaultBranch: '' });
   const [selected, setSelected] = useState<readonly string[]>([]);
 
   /**
@@ -159,7 +160,14 @@ export const OnboardingScreen = (): ReactElement => {
             onSubmit={(event) => {
               event.preventDefault();
               commands.createProject.mutate(
-                { key: draft.key, name: draft.name, repo_url: draft.repoUrl },
+                {
+                  key: draft.key,
+                  name: draft.name,
+                  repo_url: draft.repoUrl,
+                  // WP-139: always sent. The column's default is `main`, which is the wrong branch
+                  // for a repository whose default is `develop` or `dev`.
+                  default_branch: draft.defaultBranch.trim(),
+                },
                 { onSuccess: (created) => setChosen(created.id) },
               );
             }}
@@ -181,8 +189,19 @@ export const OnboardingScreen = (): ReactElement => {
               value={draft.repoUrl}
               onChange={(event) => setDraft({ ...draft, repoUrl: event.target.value })}
             />
+            <Field
+              label="Default branch"
+              hint="Required: the branch every run checks out and every merge request targets — the repository’s own (develop, dev, main…). Once a git integration is bound, the provider’s answer is shown below and the branch can be changed."
+              required
+              value={draft.defaultBranch}
+              onChange={(event) => setDraft({ ...draft, defaultBranch: event.target.value })}
+            />
             <div>
-              <Button type="submit" tone="primary" disabled={commands.createProject.isPending}>
+              <Button
+                type="submit"
+                tone="primary"
+                disabled={commands.createProject.isPending || draft.defaultBranch.trim() === ''}
+              >
                 Create project
               </Button>
             </div>
@@ -255,6 +274,9 @@ export const OnboardingScreen = (): ReactElement => {
                 Bound: {bindings.data.items.map((item) => item.provider).join(', ')}
               </p>
             ) : null}
+            {/* WP-139: the provider's default branch, once a git binding is known — the same
+                component as the settings page's (product/18:55). */}
+            <DefaultBranch projectId={project.id} />
           </div>
         )}
       </Step>

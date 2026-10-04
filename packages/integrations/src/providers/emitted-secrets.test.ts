@@ -287,6 +287,8 @@ const gitlabScript = (): Script => ({
       // plant for `getDefaultBranchHead` has to sit on the branch's own `name` instead.
       default_branch: 'main',
       web_url: `${HOST}/acme/api`,
+      // WP-139: planted — `repositorySettings` hands the CI configuration path back to its caller.
+      ci_config_path: `deploy/${GITLAB_TOKEN}/.gitlab-ci.yml`,
     },
   },
   [`GET /projects/${P}/repository/branches/main`]: {
@@ -540,6 +542,7 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   get_pipeline_status: 'getPipelineStatus',
   get_job_log: 'getJobLog',
   get_default_branch_head: 'getDefaultBranchHead',
+  repository_settings: 'repositorySettings',
   read_codeowners: 'readCodeowners',
   resolve_user_id: 'resolveUserId',
   list_merged_merge_requests: 'listMergedMergeRequests',
@@ -654,6 +657,7 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
     emitted.get_pipeline_status = await port.getPipelineStatus(PROJECT, SHA);
     emitted.get_job_log = await port.getJobLog(PROJECT, '9002');
     emitted.get_default_branch_head = await port.getDefaultBranchHead(PROJECT);
+    emitted.repository_settings = await port.repositorySettings(PROJECT);
     emitted.read_codeowners = await port.readCodeowners(PROJECT, 'main');
     // The handle is the plant; the adapter compares it to what GitLab answered, so the id it
     // returns is emitted only when the credential-bearing username matched.

@@ -78,6 +78,7 @@ import {
   projectAuditResponseSchema,
   projectBindingsResponseSchema,
   projectRecordSchema,
+  projectRepositoryResponseSchema,
   projectsResponseSchema,
   putBudgetsRequestSchema,
   putProjectBindingsRequestSchema,
@@ -101,6 +102,8 @@ import {
   runRecordSchema,
   runSettingsResponseSchema,
   setAutonomyRequestSchema,
+  setDefaultBranchRequestSchema,
+  setDefaultBranchResponseSchema,
   setupGuideResponseSchema,
   shadowBatchesResponseSchema,
   shadowBatchResponseSchema,
@@ -394,6 +397,19 @@ export interface Endpoints {
     body: z.input<typeof setAutonomyRequestSchema>,
     idempotencyKey: string,
   ) => Promise<void>;
+  /** `GET /api/projects/:id/repository` — the stored default branch and the provider's (WP-139). */
+  readonly projectRepository: (
+    projectId: string,
+  ) => Promise<z.output<typeof projectRepositoryResponseSchema>>;
+  /**
+   * `PUT /api/projects/:id/default-branch` — a maintainer changes the branch runs check out and
+   * merge requests target (WP-139); `409 project_has_live_tasks` while a task is not finished.
+   */
+  readonly setDefaultBranch: (
+    projectId: string,
+    body: z.input<typeof setDefaultBranchRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<z.output<typeof setDefaultBranchResponseSchema>>;
   readonly putProjectBudget: (
     projectId: string,
     body: z.input<typeof putBudgetsRequestSchema>,
@@ -805,6 +821,17 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         idempotencyKey,
       });
     },
+    projectRepository: (projectId) =>
+      client.get(`/api/projects/${seg(projectId)}/repository`, {
+        schema: projectRepositoryResponseSchema,
+      }),
+    setDefaultBranch: (projectId, body, idempotencyKey) =>
+      client.command(`/api/projects/${seg(projectId)}/default-branch`, {
+        method: 'PUT',
+        schema: setDefaultBranchResponseSchema,
+        body: setDefaultBranchRequestSchema.parse(body),
+        idempotencyKey,
+      }),
     putProjectBudget: async (projectId, body, idempotencyKey) => {
       await client.command(`/api/projects/${seg(projectId)}/budgets`, {
         method: 'PUT',

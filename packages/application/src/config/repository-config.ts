@@ -120,6 +120,27 @@ export const REPOSITORY_FILE_PATHS = [
 ] as const;
 export type RepositoryFilePath = (typeof REPOSITORY_FILE_PATHS)[number];
 
+export const isRepositoryFilePath = (value: string): value is RepositoryFilePath =>
+  (REPOSITORY_FILE_PATHS as readonly string[]).includes(value);
+
+/**
+ * How many paths one request may ask the **presence** of (WP-139) — the CI gate asks one.
+ */
+export const MAX_PRESENCE_PATHS = 4;
+
+/**
+ * A path whose presence a reader may be asked (WP-139): repository-relative, at most 255
+ * characters (GitLab's `ci_config_path` column), no empty, `.` or `..` segment, no control
+ * character. The path is provider text (BD-022) and reaches `git ls-tree` after `--`.
+ */
+export const isPresencePath = (value: string): boolean =>
+  value.length > 0 &&
+  value.length <= 255 &&
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the point is to refuse them.
+  !/[\u0000-\u001f\u007f]/.test(value) &&
+  !value.startsWith('/') &&
+  value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+
 /**
  * Bytes one repository file may have before it is refused unread.
  *
@@ -149,6 +170,12 @@ export type RepositoryFilesResult =
       readonly prompts?: ProjectPromptReading;
       /** `true` only when `recordedCommit` was asked and the commit read is strictly older. */
       readonly behindRecorded?: boolean;
+      /**
+       * Whether something is at each path the request asked the presence of (WP-139) — present
+       * exactly for those paths. `present` is anything at the path: a file, a symlink, a gitlink,
+       * a directory. No byte of it is read.
+       */
+      readonly presence?: Readonly<Record<string, 'absent' | 'present'>>;
     }
   /** No mirror, no git binding, a fetch that failed, a commit that is not on the default branch. */
   | { readonly status: 'unavailable'; readonly reason: string };
@@ -156,6 +183,15 @@ export type RepositoryFilesResult =
 export interface RepositoryFileRequest {
   readonly projectId: Id;
   readonly paths: readonly RepositoryFilePath[];
+  /**
+   * Paths whose **presence alone** is asked, at most {@link MAX_PRESENCE_PATHS}, each
+   * {@link isPresencePath} (WP-139). The one widening of the exact-path list that reads no byte:
+   * the CI gate asks whether the file the provider names as the project's CI configuration
+   * (GitLab's `ci_config_path`, e.g. `deploy/.gitlab-ci.yml`) exists on the default branch. A
+   * listing, never a read, so a path the provider chose cannot pull a file's contents into the
+   * platform.
+   */
+  readonly presence?: readonly string[];
   /**
    * Also list and read `.agentic/prompts/`'s direct `<name>.md` children at the same commit
    * (WP-92), bounded at `MAX_PROJECT_PROMPT_FILES` files of `MAX_PROJECT_PROMPT_FILE_BYTES` each.

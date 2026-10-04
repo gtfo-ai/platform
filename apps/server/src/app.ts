@@ -95,8 +95,10 @@ import {
 } from './queries/identity-queries.js';
 import {
   findProjectById,
+  findProjectRepository,
   recordHumanAction,
   writeProjectAutonomy,
+  writeProjectDefaultBranch,
 } from './queries/onboarding-queries.js';
 import {
   findOrganisationSettings,
@@ -137,6 +139,7 @@ import { registerOnboardingRoutes } from './routes/onboarding.js';
 import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
 import { registerOrgRoutes } from './routes/org.js';
 import { registerProjectConfigRoutes } from './routes/project-config.js';
+import { registerProjectRepositoryRoutes } from './routes/project-repository.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { type RediscoveryGateReader, registerRediscoveryRoutes } from './routes/rediscovery.js';
 import { databaseRunQueries, registerRunRoutes } from './routes/runs.js';
@@ -570,6 +573,25 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       },
       commands: options.projectConfig ?? null,
       redactText: (value) => redactionAdapters.patternRedactor().redactText(value).value,
+    });
+    // WP-139: the project's default branch — the provider's answer beside the stored one, and the
+    // maintainer's change command. The provider read rides the configuration commands' executor.
+    await registerProjectRepositoryRoutes(app, {
+      queries: {
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        projectRepository: async (projectId) => findProjectRepository(options.database, projectId),
+        project: async (projectId) => findProjectById(options.database, projectId),
+        writeDefaultBranch: async (projectId, branch) =>
+          writeProjectDefaultBranch(options.database, projectId, branch),
+        claimAttempt: async (query) => claimCommandAttempt(options.database, query),
+        releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
+        recordAction: async (input) => recordHumanAction(options.database, input),
+      },
+      providerRepository:
+        options.projectConfig === undefined || options.projectConfig === null
+          ? null
+          : options.projectConfig.repository,
     });
     await registerOnboardingRoutes(app, {
       database: options.database,

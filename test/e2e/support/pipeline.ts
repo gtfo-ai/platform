@@ -635,8 +635,14 @@ export interface StartPipelineOptions {
    * The seeded merge request is adopted only by the task of this ticket.
    */
   readonly seedTicketKey?: string;
-  /** The project's `default_branch` (WP-138). @default `main`. */
+  /** The project's `default_branch` (WP-138), and the fake git project's. @default `main`. */
   readonly defaultBranch?: string;
+  /**
+   * The `projects.default_branch` row value when it should **differ** from the provider's (WP-139):
+   * the world before WP-139, where every project was `main` whatever its repository's default was.
+   * @default {@link defaultBranch}.
+   */
+  readonly storedDefaultBranch?: string;
   /**
    * **Kinder than production, and why the case needs it** (WP-138). A shadow run's `open_mr`
    * records `would_have` and no merge request, so a shadow task never has `mr_ref`; a case about
@@ -1478,7 +1484,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
             options.config ?? {},
             options.slack === undefined ? 'fake' : 'slack',
             options.observability,
-            options.defaultBranch ?? 'main',
+            options.storedDefaultBranch ?? options.defaultBranch ?? 'main',
           )
         : { projectId: options.reuse.projectId, userId: options.reuse.projectId };
 

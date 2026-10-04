@@ -136,10 +136,15 @@ export const runMergeRequestReady = async (
   const head = ready.ref.head_sha ?? ready.head_sha;
   // The CI file first: a project known to have none is never asked for a pipeline, so its head is
   // not read. One the platform cannot read is asked (review round 1: at worst a refused request).
-  const ci = await ciConfigOnDefaultBranch(options.repositoryFiles, stored.task.projectId);
+  // Since WP-139 the file is the one the provider names (GitLab's `ci_config_path`), and a
+  // configuration outside the repository counts as present.
+  const ci = await ciConfigOnDefaultBranch(options.repositoryFiles, integrations, {
+    projectId: stored.task.projectId,
+    taskId,
+  });
   if (ci.kind === 'absent') {
     logger.info(
-      { task_id: taskId, iid: mr.iid },
+      { task_id: taskId, iid: mr.iid, ci_config_path: ci.path },
       'mr_ready: the default branch has no CI file; no pipeline is requested',
     );
     return { outcome, pipeline: false };

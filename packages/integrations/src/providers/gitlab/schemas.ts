@@ -321,6 +321,15 @@ export const gitlabProjectSchema = z.object({
   default_branch: z.string().nullish(),
   http_url_to_repo: z.string().nullish(),
   web_url: z.string(),
+  /**
+   * The CI/CD configuration path (WP-139). <https://docs.gitlab.com/api/projects/> § "Retrieve a
+   * project": *"Path to the CI/CD configuration file"*. **Absent** is not empty: the entity exposes
+   * it only `if: Ability.allowed?(current_user, :read_code, project)`
+   * (<https://gitlab.com/gitlab-org/gitlab/-/raw/master/lib/api/entities/project.rb>, read
+   * 2026-10-04), so a token that may not read the code gets no key — and the adapter answers
+   * `unknown` rather than the default file.
+   */
+  ci_config_path: z.string().nullish(),
 });
 
 export const gitlabAccessLevelEntrySchema = z.object({

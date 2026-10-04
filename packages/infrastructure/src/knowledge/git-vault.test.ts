@@ -665,6 +665,48 @@ describe('createGitRepositoryFileSource', () => {
     }
   });
 
+  /**
+   * WP-139: the CI gate asks whether the file the provider names as the project's CI configuration
+   * (GoParking's `deploy/.gitlab-ci.yml`) is on the default branch — its presence, never its bytes.
+   */
+  it('answers the presence of a provider-named path without reading it, and refuses a path it will not list (WP-139)', async () => {
+    await write(origin, 'deploy/.gitlab-ci.yml', 'secret-looking: body that is never read\n');
+    await git(['-C', origin, 'add', '-A']);
+    await commit(origin, 'a CI file at a custom path');
+    const read = expectFiles(
+      await createGitRepositoryFileSource({ mirrorRoot, target: async () => target() }).read({
+        projectId: PROJECT as Id,
+        paths: [],
+        presence: ['deploy/.gitlab-ci.yml', 'ci/missing.yml', 'deploy'],
+      }),
+    );
+    expect(read.presence).toEqual({
+      'deploy/.gitlab-ci.yml': 'present',
+      'ci/missing.yml': 'absent',
+      // A directory at the path is something at the path.
+      deploy: 'present',
+    });
+    expect(read.files).toEqual({});
+    expect(JSON.stringify(read)).not.toContain('never read');
+
+    for (const refused of [['../outside.yml'], ['/etc/passwd'], ['a//b'], ['x'.repeat(256)]]) {
+      const runner = recordingRunner();
+      const result = await createGitRepositoryFileSource({
+        mirrorRoot,
+        git: runner,
+        target: async () => target(),
+      }).read({ projectId: PROJECT as Id, paths: [], presence: refused });
+      expect(result.status, refused[0]).toBe('unavailable');
+      expect(runner.calls, refused[0]).toEqual([]);
+    }
+    // An empty request is still refused: nothing asked is not a reading.
+    const empty = await createGitRepositoryFileSource({
+      mirrorRoot,
+      target: async () => target(),
+    }).read({ projectId: PROJECT as Id, paths: [], presence: [] });
+    expect(empty.status).toBe('unavailable');
+  });
+
   it('reads the readiness re-check’s named paths in the same pass, nested ones included (WP-94)', async () => {
     await write(origin, '.gitlab/merge_request_templates/Default.md', '## What\n');
     await write(origin, '.gitlab/merge_request_templates/Bug.md', 'not a named path\n');

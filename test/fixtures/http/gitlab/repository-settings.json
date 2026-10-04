@@ -1,0 +1,67 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fplain-ci",
+      "status": 200,
+      "body": {
+        "id": 15513301,
+        "name": "plain-ci",
+        "path": "plain-ci",
+        "path_with_namespace": "acme/plain-ci",
+        "default_branch": "main",
+        "ci_config_path": "",
+        "http_url_to_repo": "https://gitlab.example.test/acme/plain-ci.git",
+        "web_url": "https://gitlab.example.test/acme/plain-ci"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/projects/",
+        "retrieved": "2026-10-04",
+        "kind": "documented-adapted",
+        "note": "\"Retrieve a project\": the response attributes list `default_branch` (\"Default branch of the project\") and `ci_config_path` (\"Path to the CI/CD configuration file\"); the page's own example is not reproduced, this is its shape trimmed to the fields the adapter parses, with an empty `ci_config_path` — the entity's documented example value is `''`. WP-139 reads it as GitLab's default `.gitlab-ci.yml`."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fcustom-ci",
+      "status": 200,
+      "body": {
+        "id": 15513302,
+        "name": "custom-ci",
+        "path": "custom-ci",
+        "path_with_namespace": "acme/custom-ci",
+        "default_branch": "dev",
+        "ci_config_path": "deploy/.gitlab-ci.yml",
+        "http_url_to_repo": "https://gitlab.example.test/acme/custom-ci.git",
+        "web_url": "https://gitlab.example.test/acme/custom-ci"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/ci/pipelines/settings/",
+        "retrieved": "2026-10-04",
+        "kind": "composed",
+        "note": "The project response shape of https://docs.gitlab.com/api/projects/ (\"Retrieve a project\") with a custom `ci_config_path`, which this page documents as a path relative to the repository root (its example `my/path/.gitlab-ci.yml`). The value is GoParking's (`deploy/.gitlab-ci.yml`) and the default branch `dev` is its too, as the product owner reported them; not recorded against an instance."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fexternal-ci",
+      "status": 200,
+      "body": {
+        "id": 15513303,
+        "name": "external-ci",
+        "path": "external-ci",
+        "path_with_namespace": "acme/external-ci",
+        "default_branch": "main",
+        "ci_config_path": ".gitlab-ci.yml@acme/ci-templates",
+        "http_url_to_repo": "https://gitlab.example.test/acme/external-ci.git",
+        "web_url": "https://gitlab.example.test/acme/external-ci"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/ci/pipelines/settings/",
+        "retrieved": "2026-10-04",
+        "kind": "composed",
+        "note": "The project response shape of https://docs.gitlab.com/api/projects/ with a `ci_config_path` naming a file in another project, the page's documented form `.gitlab-ci.yml@namespace/another-project`. WP-139 counts it as CI that is present without reading it."
+      }
+    }
+  ]
+}

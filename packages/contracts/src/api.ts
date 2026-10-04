@@ -22,6 +22,7 @@ import {
   artifactTypeSchema,
   autonomyLevelSchema,
   effortSchema,
+  gitBranchNameSchema,
   idSchema,
   integrationTypeSchema,
   isoDateSchema,
@@ -653,8 +654,13 @@ export const createProjectRequestSchema = z.strictObject({
   key: slugSchema,
   name: nonEmptyStringSchema,
   repo_url: urlSchema,
-  /** A branch name, bounded: it is concatenated into git arguments and into an audit row. */
-  default_branch: z.string().min(1).max(255).optional(),
+  /**
+   * The repository's default branch — what a run checks out, a merge request targets and the
+   * mirror reads. A git branch name (`gitBranchNameSchema`: it is concatenated into git arguments
+   * and into an audit row). Optional on the wire for an older client, and then the column's default
+   * (`main`) is stored; the wizard always sends it (WP-139), and `PUT …/default-branch` changes it.
+   */
+  default_branch: gitBranchNameSchema.optional(),
   /**
    * Where the vault lives inside the repository, **bounded and relative**.
    *
@@ -672,6 +678,49 @@ export const createProjectRequestSchema = z.strictObject({
       'must be a repository-relative directory with no "." or ".." segment',
     )
     .optional(),
+});
+
+/**
+ * `PUT /api/projects/:id/default-branch` — change the branch a project's runs check out, its merge
+ * requests target and its mirror reads (WP-139). A maintainer's command, audited, refused `409
+ * project_has_live_tasks` while any of the project's tasks is not finished: a live task's branch,
+ * merge request and gates were made against the old branch.
+ */
+export const setDefaultBranchRequestSchema = z.strictObject({
+  default_branch: gitBranchNameSchema,
+});
+
+/** Its answer: the project as written, and `performed: false` for a replay under the same key. */
+export const setDefaultBranchResponseSchema = z.strictObject({
+  project: projectRecordSchema,
+  performed: z.boolean(),
+});
+
+/** Where the provider says a repository's CI configuration lives (`GitProviderPort`, WP-139). */
+export const ciConfigLocationSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('repository'), path: z.string().max(255) }),
+  z.strictObject({ kind: z.literal('external'), location: z.string().max(255) }),
+  z.strictObject({ kind: z.literal('unknown'), reason: z.string().max(1024) }),
+]);
+
+/**
+ * `GET /api/projects/:id/repository` — the project's stored default branch beside what its git
+ * provider says (WP-139): the wizard prefills the default-branch field from `provider` and the
+ * settings screen shows a difference. `provider` is `null` when the project has no git binding or
+ * the read failed — `provider_unavailable` then says which, in a sentence — and every provider
+ * string is untrusted text (BD-022). `live_tasks` is what the change command would refuse on.
+ */
+export const projectRepositoryResponseSchema = z.strictObject({
+  default_branch: nonEmptyStringSchema,
+  provider: z
+    .strictObject({
+      provider: nonEmptyStringSchema,
+      default_branch: z.string().max(255).nullable(),
+      ci_config: ciConfigLocationSchema,
+    })
+    .nullable(),
+  provider_unavailable: z.string().max(1024).nullable(),
+  live_tasks: z.int().nonnegative(),
 });
 
 /**
@@ -2687,6 +2736,9 @@ export type ReadinessResponse = z.infer<typeof readinessResponseSchema>;
 export type CreateProjectRequest = z.infer<typeof createProjectRequestSchema>;
 export type ProjectBindingSummary = z.infer<typeof projectBindingSummarySchema>;
 export type ProjectBindingsResponse = z.infer<typeof projectBindingsResponseSchema>;
+export type SetDefaultBranchRequest = z.infer<typeof setDefaultBranchRequestSchema>;
+export type ProjectRepositoryResponse = z.infer<typeof projectRepositoryResponseSchema>;
+export type CiConfigLocationDto = z.infer<typeof ciConfigLocationSchema>;
 export type PutProjectBindingsRequest = z.infer<typeof putProjectBindingsRequestSchema>;
 export type StartDiscoveryResponse = z.infer<typeof startDiscoveryResponseSchema>;
 export type RediscoveryGateResponse = z.infer<typeof rediscoveryGateResponseSchema>;

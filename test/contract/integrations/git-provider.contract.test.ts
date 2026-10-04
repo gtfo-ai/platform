@@ -28,6 +28,18 @@ runGitProviderContract({
           defaultBranch: 'main',
           codeowners: '# owners\nsrc/billing/** @billing-team\n*.md @docs-team\n',
         },
+        // WP-139: the three repository-settings shapes the suite reads.
+        { path: 'acme/plain-ci', defaultBranch: 'main' },
+        {
+          path: 'acme/custom-ci',
+          defaultBranch: 'dev',
+          ciConfig: { kind: 'repository', path: 'deploy/.gitlab-ci.yml' },
+        },
+        {
+          path: 'acme/external-ci',
+          defaultBranch: 'main',
+          ciConfig: { kind: 'external', location: '.gitlab-ci.yml@acme/ci-templates' },
+        },
       ],
     });
 
@@ -254,6 +266,12 @@ runGitProviderContract({
         developer: 'agentic-runner',
         maintainer: 'agentic-maintainer',
         outsider: 'agentic-outsider',
+      },
+      // WP-139, divergence 25: the fake answers the location a seed states.
+      repositories: {
+        plain: 'acme/plain-ci',
+        custom: 'acme/custom-ci',
+        external: 'acme/external-ci',
       },
       pipelineSha: existing.head_sha,
       failingJobName: FAILING_JOB,

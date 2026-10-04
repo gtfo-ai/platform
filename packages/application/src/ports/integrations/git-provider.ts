@@ -516,7 +516,38 @@ export interface ProjectMemberAccess {
   readonly administers: boolean;
 }
 
+/**
+ * Where a repository's CI configuration lives (WP-139) — {@link RepositorySettings.ciConfig}.
+ *
+ *  - `repository`: a file **in this repository**, at `path` on the default branch (GitLab: an empty
+ *    `ci_config_path` is `.gitlab-ci.yml`). The platform reads its presence from its own mirror.
+ *  - `external`: configuration the provider takes from somewhere else — another project's file or
+ *    a URL (GitLab: `…@group/project`, `https://…`). The platform cannot read it and counts it as
+ *    **present**: a project that points its CI elsewhere has CI.
+ *  - `unknown`: the provider did not say (GitLab omits `ci_config_path` for a token that may not
+ *    read the code), or said something this platform will not use as a path. Never read as "no CI".
+ */
+export type CiConfigLocation =
+  | { readonly kind: 'repository'; readonly path: string }
+  | { readonly kind: 'external'; readonly location: string }
+  | { readonly kind: 'unknown'; readonly reason: string };
+
+/** {@link GitProviderPort.repositorySettings}'s answer (WP-139). Provider text: untrusted (BD-022). */
+export interface RepositorySettings {
+  /** The provider's default branch, or `null` when it reports none (an empty repository). */
+  readonly defaultBranch: string | null;
+  readonly ciConfig: CiConfigLocation;
+}
+
 export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities> {
+  /**
+   * The repository's own settings the platform must not assume (WP-139): its default branch and
+   * where its CI configuration lives. One read of the provider's project (GitLab: `GET
+   * /projects/:id`).
+   *
+   * @throws {IntegrationError} `not_found` when the project does not exist.
+   */
+  readonly repositorySettings: (project: string) => Promise<RepositorySettings>;
   /**
    * The URL the workspace manager clones from, with the credential embedded when the provider
    * needs it there. Secret-bearing: never logged, never stored (BD-025).

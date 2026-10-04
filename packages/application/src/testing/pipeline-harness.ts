@@ -863,6 +863,11 @@ const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitPro
         },
         capabilities: () => ({}),
         getDefaultBranchHead: async () => ({ branch: 'main', sha: 'a'.repeat(40) }),
+        // WP-139: the provider's CI location — GitLab's default file, read from the mirror.
+        repositorySettings: async () => ({
+          defaultBranch: 'main',
+          ciConfig: { kind: 'repository', path: '.gitlab-ci.yml' },
+        }),
         isBranchProtected: async () => true,
         getPipelineStatus: async () => null,
         // WP-136: no poll plan, so the CI gate keeps the five-check bound a webhook binding has.

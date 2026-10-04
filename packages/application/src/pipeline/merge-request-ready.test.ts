@@ -12,7 +12,11 @@ import { createIntegrationActionExecutor } from '../integrations/action-executor
 import { allowAnyIntegrationHost } from '../integrations/egress.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import { IntegrationError } from '../ports/integrations/common.js';
-import type { GitProviderPort, MergeRequestUpdate } from '../ports/integrations/git-provider.js';
+import type {
+  CiConfigLocation,
+  GitProviderPort,
+  MergeRequestUpdate,
+} from '../ports/integrations/git-provider.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import {
   createMemoryAuditLog,
@@ -37,9 +41,18 @@ const MR = {
   head_sha: HEAD,
 };
 
-const files = (ci: 'present' | 'absent' | 'unknown'): RepositoryFileSource => ({
-  read: async (request) =>
-    ci === 'unknown'
+/**
+ * The mirror's answer: a CI file at `at` (`present`), none (`absent`), or no reading (`unknown`).
+ * Since WP-139 a path outside the exact list is asked by **presence**; `reads` records each request.
+ */
+const files = (
+  ci: 'present' | 'absent' | 'unknown',
+  at = '.gitlab-ci.yml',
+  reads: { paths: readonly string[]; presence: readonly string[] }[] = [],
+): RepositoryFileSource => ({
+  read: async (request) => {
+    reads.push({ paths: request.paths, presence: request.presence ?? [] });
+    return ci === 'unknown'
       ? { status: 'unavailable', reason: 'no mirror' }
       : {
           status: 'ok',
@@ -47,12 +60,23 @@ const files = (ci: 'present' | 'absent' | 'unknown'): RepositoryFileSource => ({
           files: Object.fromEntries(
             request.paths.map((path) => [
               path,
-              ci === 'present' && path === '.gitlab-ci.yml'
+              ci === 'present' && path === at
                 ? { kind: 'file', text: 'test: {}', blobSha: 'e'.repeat(40) }
                 : { kind: 'absent' },
             ]),
           ),
-        },
+          ...(request.presence === undefined
+            ? {}
+            : {
+                presence: Object.fromEntries(
+                  request.presence.map((path) => [
+                    path,
+                    ci === 'present' && path === at ? 'present' : 'absent',
+                  ]),
+                ),
+              }),
+        };
+  },
 });
 
 const world = async (
@@ -61,8 +85,12 @@ const world = async (
     readonly pipeline?: boolean;
     readonly ci?: 'present' | 'absent' | 'unknown';
     readonly refusePipeline?: boolean;
+    /** WP-139: where the provider says the CI configuration lives. @default GitLab's default file. */
+    readonly ciConfig?: CiConfigLocation;
   } = {},
 ) => {
+  const mirrorReads: { paths: readonly string[]; presence: readonly string[] }[] = [];
+  const ciConfig = options.ciConfig ?? { kind: 'repository', path: '.gitlab-ci.yml' };
   const memory = new MemoryEventing();
   const store = createMemoryPipelineStore();
   await memory.transaction(async (scope) => {
@@ -127,6 +155,7 @@ const world = async (
       type: 'git',
     },
     capabilities: () => ({}),
+    repositorySettings: async () => ({ defaultBranch: 'develop', ciConfig }),
     updateMergeRequest: async (ref: typeof MR, update: MergeRequestUpdate) => {
       updates.push(update);
       return {
@@ -167,7 +196,11 @@ const world = async (
   const options_ = {
     unitOfWork: memory,
     store,
-    repositoryFiles: files(options.ci ?? 'present'),
+    repositoryFiles: files(
+      options.ci ?? 'present',
+      ciConfig.kind === 'repository' ? ciConfig.path : '.gitlab-ci.yml',
+      mirrorReads,
+    ),
     integrations: staticPipelineIntegrations({
       executor: createIntegrationActionExecutor({
         egress: allowAnyIntegrationHost(),
@@ -188,7 +221,13 @@ const world = async (
     task_id: TASK,
     cause_event_id: '00000000-0000-4000-9000-000000000001',
   };
-  return { run: () => runMergeRequestReady(options_, data), updates, pipelines, auditLog };
+  return {
+    run: () => runMergeRequestReady(options_, data),
+    updates,
+    pipelines,
+    auditLog,
+    mirrorReads,
+  };
 };
 
 describe('the mr_ready duty (WP-138 ruling (g))', () => {
@@ -234,6 +273,30 @@ describe('the mr_ready duty (WP-138 ruling (g))', () => {
     expect(auditLog.entriesFor('mark_merge_request_ready').map((entry) => entry.status)).toEqual([
       'would_have',
     ]);
+  });
+
+  it('looks for the CI file at the path the provider names, by presence, and counts an external configuration as CI (WP-139)', async () => {
+    const custom = { kind: 'repository', path: 'deploy/.gitlab-ci.yml' } as const;
+    // GoParking: the file is at deploy/.gitlab-ci.yml, so a head with no pipeline gets one.
+    const present = await world({ ciConfig: custom });
+    expect(await present.run()).toEqual({ outcome: 'marked_ready', pipeline: true });
+    expect(present.mirrorReads).toEqual([{ paths: [], presence: ['deploy/.gitlab-ci.yml'] }]);
+    // The provider names a path the default branch does not have: no CI, no pipeline asked for.
+    const absent = await world({ ciConfig: custom, ci: 'absent' });
+    expect(await absent.run()).toEqual({ outcome: 'marked_ready', pipeline: false });
+    // Another project's file: present without a mirror read, so a pipeline is asked for.
+    const external = await world({
+      ciConfig: { kind: 'external', location: '.gitlab-ci.yml@acme/ci-templates' },
+      ci: 'absent',
+    });
+    expect(await external.run()).toEqual({ outcome: 'marked_ready', pipeline: true });
+    expect(external.mirrorReads).toEqual([]);
+    // The provider would not say: never "no CI", so a pipeline is asked for.
+    const unknown = await world({
+      ciConfig: { kind: 'unknown', reason: 'GitLab did not report ci_config_path' },
+      ci: 'absent',
+    });
+    expect(await unknown.run()).toEqual({ outcome: 'marked_ready', pipeline: true });
   });
 
   it('leaves a provider refusal of the pipeline to the CI gate’s wait rather than failing the job', async () => {

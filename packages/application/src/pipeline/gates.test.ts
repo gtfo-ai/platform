@@ -84,6 +84,11 @@ const integrationsWith = (git: Partial<GitProviderPort> | null): PipelineIntegra
     capabilities: () => ({}),
     // WP-136: no poll plan unless a case says otherwise — the five-check bound of a webhook binding.
     pollPlan: () => null,
+    // WP-139: the CI configuration where GitLab keeps it by default, read from the mirror.
+    repositorySettings: async () => ({
+      defaultBranch: 'main',
+      ciConfig: { kind: 'repository', path: '.gitlab-ci.yml' },
+    }),
     getPipelineStatus: async () => {
       throw new Error('the test did not script getPipelineStatus');
     },
@@ -269,6 +274,17 @@ const repositoryWith = (
     files: Object.fromEntries(
       request.paths.map((path) => [path, files[path] ?? { kind: 'absent' }]),
     ),
+    // WP-139: a path outside the reader's exact list is asked by presence alone.
+    ...(request.presence === undefined
+      ? {}
+      : {
+          presence: Object.fromEntries(
+            request.presence.map((path) => [
+              path,
+              files[path] === undefined ? 'absent' : 'present',
+            ]),
+          ),
+        }),
   }),
 });
 const NO_CI_FILE = repositoryWith({});
@@ -591,6 +607,100 @@ describe('the CI gate', () => {
     );
     expect(unread).toMatchObject({ kind: 'pending' });
     expect(unread.detail).toContain('composed no reader of the repository');
+  });
+
+  /**
+   * WP-139 ruling (b): the CI file is the one the **provider** names (GitLab's `ci_config_path`),
+   * not `.gitlab-ci.yml` — GoParking keeps it at `deploy/.gitlab-ci.yml`, and reading the root path
+   * there read "no CI" and passed a head with no pipeline on no evidence.
+   */
+  it('waits on a head with no pipeline when the CI file is at the provider’s custom path, and passes when that path is absent (WP-139)', async () => {
+    const custom = {
+      getPipelineStatus: async () => null,
+      repositorySettings: async () => ({
+        defaultBranch: 'dev',
+        ciConfig: { kind: 'repository' as const, path: 'deploy/.gitlab-ci.yml' },
+      }),
+    };
+    const asked: (readonly string[])[] = [];
+    const deployOnly = repositoryWith({
+      'deploy/.gitlab-ci.yml': { kind: 'file', text: 'test: {}\n', blobSha: 'f'.repeat(40) },
+    });
+    const pending = await evaluate(templateStage('ci_gate'), storedTask(MR), custom, {
+      repositoryFiles: {
+        read: async (request) => {
+          asked.push(request.presence ?? []);
+          return deployOnly.read(request);
+        },
+      },
+    });
+    expect(pending.kind).toBe('pending');
+    expect(pending.detail).toContain('deploy/.gitlab-ci.yml');
+    expect(pending.detail).toContain('not a project without CI');
+    expect(asked).toEqual([['deploy/.gitlab-ci.yml']]);
+
+    // The root file exists but the provider's path does not: the project's CI is not there.
+    const rootOnly = await evaluate(templateStage('ci_gate'), storedTask(MR), custom, {
+      repositoryFiles: WITH_CI_FILE,
+    });
+    expect(rootOnly).toMatchObject({ kind: 'settled', passed: true });
+  });
+
+  it('waits on a head with no pipeline when the CI configuration is in another project or the provider will not say where it is (WP-139)', async () => {
+    let mirrorReads = 0;
+    const counting: RepositoryFileSource = {
+      read: async (request) => {
+        mirrorReads += 1;
+        return NO_CI_FILE.read(request);
+      },
+    };
+    const external = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      {
+        getPipelineStatus: async () => null,
+        repositorySettings: async () => ({
+          defaultBranch: 'main',
+          ciConfig: { kind: 'external' as const, location: '.gitlab-ci.yml@acme/ci-templates' },
+        }),
+      },
+      { repositoryFiles: counting },
+    );
+    expect(external.kind).toBe('pending');
+    expect(external.detail).toContain('.gitlab-ci.yml@acme/ci-templates');
+    expect(mirrorReads).toBe(0);
+
+    const unknown = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      {
+        getPipelineStatus: async () => null,
+        repositorySettings: async () => ({
+          defaultBranch: 'main',
+          ciConfig: { kind: 'unknown' as const, reason: 'GitLab did not report ci_config_path' },
+        }),
+      },
+      { repositoryFiles: counting },
+    );
+    expect(unknown.kind).toBe('pending');
+    expect(unknown.detail).toContain('GitLab did not report ci_config_path');
+
+    const refused = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      {
+        getPipelineStatus: async () => null,
+        repositorySettings: async () => {
+          throw new IntegrationError('rate_limited', 'fake-git', 'slow down', {
+            action: 'get_repository_settings',
+          });
+        },
+      },
+      { repositoryFiles: counting },
+    );
+    expect(refused.kind).toBe('pending');
+    expect(refused.detail).toContain('could not say where');
+    expect(mirrorReads).toBe(0);
   });
 
   it('waits while the pipeline is still running', async () => {

@@ -54,7 +54,17 @@ Close the tab at step 3 and come back to the same place.
 
 ### Step 1 — Connect
 
-Give the project a **key**, a name and a repository URL, then attach the integrations it uses.
+Give the project a **key**, a name, a repository URL and its **default branch**, then attach the
+integrations it uses.
+
+The default branch is required (WP-139): it is the branch every run checks out, every merge request
+targets and the knowledge base is read from, and the platform's fallback — `main` — is the wrong one
+for a repository whose default is `develop` or `dev`. Once a git integration is bound, the step shows
+the default branch the git provider reports and where the provider says the CI configuration lives
+(GitLab's *CI/CD configuration file* setting); when the stored branch differs, the field is
+prefilled with the provider's and **Save default branch** changes it. The same control is on the
+project's settings page; a maintainer may use it, and it is refused while any of the project's tasks
+is unfinished, because a live task's branch and merge request were made against the old one.
 
 The key is a lower `snake_case` slug — `^[a-z][a-z0-9_]*$`, so `acme_web` and not `Acme-Web`. It ends
 up in URLs and branch names, and it is checked in the browser before anything is sent: a key with a

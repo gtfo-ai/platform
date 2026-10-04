@@ -154,8 +154,10 @@ What polling does not see, so you can choose knowingly:
 
 ## 4. Protect the default branch
 
-**Settings → Repository → Protected branches**, protect `main` (or your default) with
-**Allowed to push and merge: No one**.
+**Settings → Repository → Protected branches**, protect your default branch (`main`, `develop`,
+`dev` — the one the project's **Default branch** setting names) with **Allowed to merge:
+Maintainers** and **Allowed to push and merge: No one**, so merging stays a person's act and nobody
+pushes to it directly.
 
 This is a prerequisite, not a suggestion. A GitLab access token carries scopes and a role but
 **no branch scoping**, so the platform's `push:agentic/*` constraint is enforced by the credential

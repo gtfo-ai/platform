@@ -173,6 +173,16 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
           );
     }
     if (url.includes('/api/projects/') && url.includes('/bindings')) return json({ items: [] });
+    // WP-139: the stored default branch beside the provider's — no git binding in this world.
+    if (url.includes('/api/projects/') && url.includes('/repository')) {
+      return json({
+        default_branch: 'main',
+        provider: null,
+        provider_unavailable:
+          'this project has no git binding, so the platform cannot ask its provider',
+        live_tasks: 0,
+      });
+    }
     if (url.includes('/api/projects/') && url.includes('/autonomy')) return json(AUTONOMY);
     if (url.includes('/api/projects/') && url.includes('/budgets')) return json({ items: [] });
     if (url.includes('/api/projects/') && url.includes('/audit')) return json({ items: [] });

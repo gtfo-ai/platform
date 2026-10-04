@@ -33,6 +33,34 @@ export const nonEmptyStringSchema = z.string().min(1);
 /** A repository-relative path or a glob (`protected_paths`, `risk_classes[].paths`). */
 export const pathPatternSchema = z.string().min(1).max(512);
 
+/**
+ * A branch name the platform will store as a project's default branch (WP-139).
+ *
+ * The value is concatenated into git arguments (the run's `git clone --branch`, the mirror's
+ * `refs/heads/<branch>`) and into an audit row, so it is the **intersection** of what git accepts
+ * (git-check-ref-format(1)) and what the platform's readers already build a ref from: the mirror's
+ * alphabet (`git-vault.ts` `isSafeBranchName`: a letter or digit first, then `A–Z a–z 0–9 . _ / -`,
+ * at most 200 characters, no `..`). On top of it, git's own rules that alphabet still admits: no
+ * empty, `.`-led or `.lock`-ended component (so no `//` and no trailing `/`), and no trailing `.`.
+ * Narrower than git on purpose — a name a person typed with a space or a `@{` is refused at the
+ * write, by name, rather than at the checkout an hour later.
+ */
+export const GIT_BRANCH_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
+
+export const isGitBranchName = (value: string): boolean =>
+  GIT_BRANCH_NAME_PATTERN.test(value) &&
+  value !== 'HEAD' &&
+  !value.includes('..') &&
+  !value.endsWith('.') &&
+  value.split('/').every((part) => part !== '' && !part.startsWith('.') && !part.endsWith('.lock'));
+
+export const gitBranchNameSchema = z
+  .string()
+  .refine(
+    isGitBranchName,
+    'expected a git branch name: a letter or digit first, then letters, digits, ".", "_", "/" or "-" (at most 200), with no "..", no empty or "."-led component, and no ".lock" or "." at the end, and not "HEAD"',
+  );
+
 /** BCP-47 subset used for `communication_language` and the artifact envelope's `language`. */
 export const languageTagSchema = z
   .string()

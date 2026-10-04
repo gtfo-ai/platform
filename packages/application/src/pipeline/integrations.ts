@@ -68,6 +68,7 @@ import type {
   MintedRunCredential,
   PipelineStatus,
   RepositoryCommit,
+  RepositorySettings,
 } from '../ports/integrations/git-provider.js';
 import {
   commitFilesRequestSchema,
@@ -876,6 +877,25 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
     }
     return read(integrations, git.ref, 'resolve_user_id', { handle }, context, async () =>
       git.port.resolveUserId(handle),
+    );
+  },
+
+  /**
+   * The repository's default branch and CI configuration location, as the provider answers them
+   * (WP-139). A **read**, in every mode; `null` for a project with no git binding.
+   */
+  repositorySettings: async (context: CallContext): Promise<RepositorySettings | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return read(
+      integrations,
+      git.ref,
+      'get_repository_settings',
+      { project: git.project },
+      context,
+      async () => git.port.repositorySettings(git.project),
     );
   },
 

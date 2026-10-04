@@ -330,9 +330,11 @@ export interface ComposePipelineOptions {
   readonly composition: PipelineComposition;
   readonly pool: pg.Pool;
   /**
-   * `APP_KNOWLEDGE_MIRROR_ROOT` — the platform's mirror, which the CI gate reads the default
-   * branch's `.gitlab-ci.yml` from before it reads a head with no pipeline as "no CI" (WP-138
-   * ruling (f)). Absent or `null`: the gate cannot tell, and such a head waits rather than passes.
+   * `APP_KNOWLEDGE_MIRROR_ROOT` — the platform's mirror, which the CI gate asks whether the default
+   * branch has the project's CI file before it reads a head with no pipeline as "no CI" (WP-138
+   * ruling (f)); which file is the provider's answer since WP-139 (`repositorySettings`, GitLab's
+   * `ci_config_path`). Absent or `null`: the gate cannot tell, and such a head waits rather than
+   * passes.
    */
   readonly knowledgeMirrorRoot?: string | null;
   readonly eventing: ReturnType<typeof eventingAdapters.createEventing>;

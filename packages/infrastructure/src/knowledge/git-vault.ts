@@ -69,8 +69,10 @@ import path from 'node:path';
 import process from 'node:process';
 import {
   isIndexedVaultPath,
+  isPresencePath,
   isProjectPromptPath,
   type Logger,
+  MAX_PRESENCE_PATHS,
   MAX_PROJECT_PROMPT_FILE_BYTES,
   MAX_PROJECT_PROMPT_FILES,
   MAX_REPOSITORY_FILE_BYTES,
@@ -898,9 +900,17 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
   return {
     read: async (request): Promise<RepositoryFilesResult> => {
       const refused = request.paths.filter((entry) => !permitted.includes(entry));
-      if (refused.length > 0 || request.paths.length === 0) {
+      const presence = request.presence ?? [];
+      if (refused.length > 0 || (request.paths.length === 0 && presence.length === 0)) {
         return unavailable(
           `this reader answers the ${permitted.length} exact paths REPOSITORY_FILE_PATHS names and nothing else; ${JSON.stringify(refused)} is outside what the platform reads from a repository`,
+        );
+      }
+      // WP-139: presence only, bounded and shaped before it reaches an argument vector.
+      const badPresence = presence.filter((entry) => !isPresencePath(entry));
+      if (presence.length > MAX_PRESENCE_PATHS || badPresence.length > 0) {
+        return unavailable(
+          `this reader answers the presence of at most ${MAX_PRESENCE_PATHS} repository-relative paths; ${JSON.stringify(badPresence.map((entry) => entry.slice(0, 80)))} is not one`,
         );
       }
       try {
@@ -919,6 +929,7 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
             commit,
             '--',
             ...request.paths,
+            ...presence,
             ...(request.promptDirectory === true ? [PROJECT_PROMPTS_DIR] : []),
           ],
           { maxStdoutBytes: 1_024 * 1_024 },
@@ -1013,6 +1024,21 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
           files,
           behindRecorded,
           ...(prompts === undefined ? {} : { prompts: promptReadingOf(prompts) }),
+          ...(presence.length === 0
+            ? {}
+            : {
+                presence: Object.fromEntries(
+                  presence.map((wantedPath) => [
+                    wantedPath,
+                    entries.some(
+                      (entry) =>
+                        entry.path === wantedPath || entry.path.startsWith(`${wantedPath}/`),
+                    )
+                      ? ('present' as const)
+                      : ('absent' as const),
+                  ]),
+                ),
+              }),
         };
       } catch (cause) {
         return unavailable(`the repository files could not be read: ${(cause as Error).message}`);

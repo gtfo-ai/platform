@@ -102,6 +102,7 @@ import {
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import type { Clock } from '@platform/domain';
+import { ciConfigLocationOf } from './ci-config.js';
 import { createGitLabClient, type DiffNotePosition, type GitLabClient } from './client.js';
 import { CODEOWNERS_PATHS, DEFAULT_CODEOWNERS_LIMITS, parseCodeowners } from './codeowners.js';
 import type { GitLabConfig } from './config.js';
@@ -1024,6 +1025,19 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       );
       const tail = trace.length <= tailBytes ? trace : trace.slice(trace.length - tailBytes);
       return redact('get_job_log', tail);
+    },
+
+    /**
+     * WP-139 — `GET /projects/:id` once: the default branch and `ci_config_path`
+     * (`ci-config.ts` reads the second). An empty default branch is `null`, an empty repository.
+     */
+    repositorySettings: async (project) => {
+      const details = await client.project(project);
+      const branch = details.default_branch;
+      return {
+        defaultBranch: branch == null || branch === '' ? null : branch,
+        ciConfig: ciConfigLocationOf(details.ci_config_path),
+      };
     },
 
     getDefaultBranchHead: async (project) => {

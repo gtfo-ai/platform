@@ -76,7 +76,13 @@ import {
 } from '@platform/contracts';
 import type { CompiledPipeline, PipelineStage } from '@platform/domain';
 import { stageOf } from '@platform/domain';
-import type { RepositoryFileSource } from '../config/repository-config.js';
+import {
+  isPresencePath,
+  isRepositoryFilePath,
+  type RepositoryFileSource,
+} from '../config/repository-config.js';
+import { IntegrationError } from '../ports/integrations/common.js';
+import type { CiConfigLocation } from '../ports/integrations/git-provider.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { failingJobWithLog, readFailingJobLog } from './ci-log.js';
 import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
@@ -270,35 +276,98 @@ export interface CiGateOptions {
   readonly repositoryFiles?: RepositoryFileSource;
 }
 
-/** The CI file whose presence on the default branch makes a head with no pipeline "not yet" (WP-138). */
+/**
+ * Where a repository's CI configuration lives when the provider has not said otherwise — GitLab's
+ * default (WP-138). Since WP-139 the gate and `mr_ready` ask the provider for the project's own
+ * path (`GitProviderPort.repositorySettings`), so this is only what an empty GitLab
+ * `ci_config_path` means, kept for the sentences that name it.
+ */
 export const CI_CONFIG_PATH = '.gitlab-ci.yml';
 
+/** {@link ciConfigOnDefaultBranch}'s answer: only `absent` reads as *"the project has no CI"*. */
+export type CiConfigPresence =
+  | { readonly kind: 'absent'; readonly path: string }
+  | { readonly kind: 'present'; readonly where: string }
+  | { readonly kind: 'unknown'; readonly reason: string };
+
 /**
- * Does the default branch carry a CI file? Read from the platform's mirror (TD-026), the reader the
- * configuration and the readiness re-check use. Three answers, and only `absent` lets the gate read
- * a head with no pipeline as *"the project has no CI"* (product/04 S4).
+ * Does the default branch carry the project's CI configuration? (WP-138, WP-139.)
+ *
+ * Two reads, and only `absent` lets the gate read a head with no pipeline as *"the project has no
+ * CI"* (product/04 S4):
+ *  1. **where** the configuration lives, from the provider through the executor
+ *     (`gitReads.repositorySettings`, GitLab's `ci_config_path`) — an `external` location (another
+ *     project's file, a URL) is **present** without a second read (the row's ruling (b)), and an
+ *     `unknown` one or a failed read is `unknown`;
+ *  2. whether that path exists on the default branch, from the platform's mirror (TD-026), the
+ *     reader the configuration and the readiness re-check use.
+ *
+ * A failed provider read is **not** an absent file: it answers `unknown` with the provider's error
+ * named, and the gate waits (fail closed), bounded by its own wait (WP-136).
  */
 export const ciConfigOnDefaultBranch = async (
   files: RepositoryFileSource | undefined,
-  projectId: Id,
-): Promise<
-  | { readonly kind: 'absent' }
-  | { readonly kind: 'present' }
-  | { readonly kind: 'unknown'; readonly reason: string }
-> => {
+  integrations: PipelineIntegrations,
+  context: { readonly projectId: Id; readonly taskId: Id },
+): Promise<CiConfigPresence> => {
+  let location: CiConfigLocation;
+  try {
+    const settings = await gitReads(integrations).repositorySettings(context);
+    if (settings === null) {
+      return {
+        kind: 'unknown',
+        reason: 'the project has no git binding to ask where its CI lives',
+      };
+    }
+    location = settings.ciConfig;
+  } catch (error) {
+    if (!(error instanceof IntegrationError)) {
+      throw error;
+    }
+    return {
+      kind: 'unknown',
+      reason: `the provider could not say where this project's CI configuration lives (${error.message})`,
+    };
+  }
+  if (location.kind === 'unknown') {
+    return { kind: 'unknown', reason: location.reason };
+  }
+  if (location.kind === 'external') {
+    return { kind: 'present', where: `outside the repository, at ${location.location}` };
+  }
   if (files === undefined) {
     return { kind: 'unknown', reason: 'this process composed no reader of the repository' };
   }
-  const read = await files.read({ projectId, paths: [CI_CONFIG_PATH] });
+  const path = location.path;
+  if (isRepositoryFilePath(path)) {
+    const read = await files.read({ projectId: context.projectId, paths: [path] });
+    if (read.status !== 'ok') {
+      return { kind: 'unknown', reason: read.reason };
+    }
+    const entry = read.files[path];
+    if (entry === undefined) {
+      return { kind: 'unknown', reason: `the reading did not answer ${path}` };
+    }
+    // A symlink, a gitlink or an oversized file is still a CI file somebody committed.
+    return entry.kind === 'absent' ? { kind: 'absent', path } : { kind: 'present', where: path };
+  }
+  // A path outside the reader's exact list (GoParking's `deploy/.gitlab-ci.yml`): its presence
+  // alone is asked, and no byte of it is read (`RepositoryFileRequest.presence`).
+  if (!isPresencePath(path)) {
+    return {
+      kind: 'unknown',
+      reason: `the CI configuration path ${JSON.stringify(path.slice(0, 80))} is not one the platform will look up`,
+    };
+  }
+  const read = await files.read({ projectId: context.projectId, paths: [], presence: [path] });
   if (read.status !== 'ok') {
     return { kind: 'unknown', reason: read.reason };
   }
-  const entry = read.files[CI_CONFIG_PATH];
-  if (entry === undefined) {
-    return { kind: 'unknown', reason: `the reading did not answer ${CI_CONFIG_PATH}` };
+  const found = read.presence?.[path];
+  if (found === undefined) {
+    return { kind: 'unknown', reason: `the reading did not answer ${path}` };
   }
-  // A symlink, a gitlink or an oversized file is still a CI file somebody committed.
-  return entry.kind === 'absent' ? { kind: 'absent' } : { kind: 'present' };
+  return found === 'absent' ? { kind: 'absent', path } : { kind: 'present', where: path };
 };
 
 /** The pipeline's own answer for the live head, before the tamper check is made. */
@@ -614,10 +683,7 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
              * evidence. Only a default branch with no CI file reads as no CI; the pipeline's half is
              * then skipped, the tamper check is not.
              */
-            const ci = await ciConfigOnDefaultBranch(
-              options.repositoryFiles,
-              stored.task.projectId,
-            );
+            const ci = await ciConfigOnDefaultBranch(options.repositoryFiles, bindings, context);
             if (ci.kind === 'absent') {
               return judgeCiSettlement(options, bindings, stored, headSha, { kind: 'no_pipeline' });
             }
@@ -625,8 +691,8 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
               kind: 'pending',
               detail:
                 ci.kind === 'present'
-                  ? `no pipeline has run for the head ${headSha.slice(0, 12)} yet, and the default branch has a CI file (${CI_CONFIG_PATH}), so this is not a project without CI`
-                  : `no pipeline has run for the head ${headSha.slice(0, 12)}, and whether the default branch has a CI file cannot be read (${ci.reason}), so the gate waits rather than passing`,
+                  ? `no pipeline has run for the head ${headSha.slice(0, 12)} yet, and the project has CI configuration (${ci.where}), so this is not a project without CI`
+                  : `no pipeline has run for the head ${headSha.slice(0, 12)}, and whether the project has CI configuration on its default branch cannot be read (${ci.reason}), so the gate waits rather than passing`,
             };
           }
           seenPipeline = { id: status.id, status: status.status };

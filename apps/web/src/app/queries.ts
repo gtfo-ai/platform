@@ -123,6 +123,17 @@ export const useProjectBindings = (projectId: string | null) => {
   });
 };
 
+/** `GET /api/projects/:id/repository` — the stored default branch and the provider's (WP-139). */
+export const useProjectRepository = (projectId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.projectRepository(projectId ?? ''),
+    queryFn: () => endpoints.projectRepository(projectId ?? ''),
+    enabled: projectId !== null,
+    ...FOREVER,
+  });
+};
+
 export const useProjectBudgets = (projectId: string | null) => {
   const { endpoints } = useServices();
   return useQuery({
@@ -976,8 +987,13 @@ export const useOnboardingCommands = (mint?: MintKey) => {
   const intents = useIntentKeys(mint);
   return {
     createProject: useMutation({
-      mutationFn: (input: { key: string; name: string; repo_url: string }) =>
-        endpoints.createProject(input, intents.keyFor(['project.create', input])),
+      mutationFn: (input: {
+        key: string;
+        name: string;
+        repo_url: string;
+        /** WP-139: always sent — the column's `main` default is the wrong branch for most teams. */
+        default_branch: string;
+      }) => endpoints.createProject(input, intents.keyFor(['project.create', input])),
       onSuccess: async (_result, input) => {
         intents.release(['project.create', input]);
         await queryClient.invalidateQueries({ queryKey: [...queryKeys.projects] });
@@ -1056,6 +1072,10 @@ export const useOnboardingCommands = (mint?: MintKey) => {
           })),
         }),
       onSuccess: async (_result, input) => {
+        // WP-139: a new git binding is what lets the provider's default branch be read.
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.projectRepository(input.projectId),
+        });
         await queryClient.invalidateQueries({
           queryKey: queryKeys.projectBindings(input.projectId),
         });
@@ -1183,6 +1203,23 @@ export const useSettingsCommands = (mint?: MintKey) => {
       onSuccess: async (_result, input) => {
         intents.release(['autonomy.write', input]);
         // The dial, the project list's badge and the audit feed all move with one write.
+        await queryClient.invalidateQueries({ queryKey: queryKeys.project(input.projectId) });
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.projects] });
+      },
+    }),
+    /**
+     * WP-139: the branch runs check out and merge requests target. A maintainer's; refused while a
+     * task of the project is live, which the read's `live_tasks` already says.
+     */
+    setDefaultBranch: useMutation({
+      mutationFn: (input: { projectId: string; default_branch: string }) =>
+        endpoints.setDefaultBranch(
+          input.projectId,
+          { default_branch: input.default_branch },
+          intents.keyFor(['default_branch.write', input]),
+        ),
+      onSuccess: async (_result, input) => {
+        intents.release(['default_branch.write', input]);
         await queryClient.invalidateQueries({ queryKey: queryKeys.project(input.projectId) });
         await queryClient.invalidateQueries({ queryKey: [...queryKeys.projects] });
       },

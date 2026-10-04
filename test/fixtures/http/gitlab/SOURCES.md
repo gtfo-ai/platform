@@ -173,6 +173,25 @@ instance; the gitlab.com Free run with a static run credential is the product ow
 - `https://docs.gitlab.com/api/users/` § "List users" — the `username` filter, already cited for
   `users.json`, resolving the declared run-token user to an id.
 
+## Pages read for WP-139 (`repository-settings.json`)
+
+Retrieved **2026-10-04** (UTC), without a gitlab.com credential, so nothing was recorded against a real
+instance.
+
+- `https://docs.gitlab.com/api/projects/` § "Retrieve a project" — the response attributes
+  `default_branch` (*"Default branch of the project"*) and `ci_config_path` (*"Path to the CI/CD
+  configuration file"*). The page states no visibility condition; the API entity
+  (`https://gitlab.com/gitlab-org/gitlab/-/raw/master/lib/api/entities/project.rb`, read the same day)
+  exposes `ci_config_path` only `if: Ability.allowed?(current_user, :read_code, project)` with the
+  documented example value `''` — so an **absent** key is read as *unknown*, never as the default
+  file (`packages/integrations/src/providers/gitlab/ci-config.ts`).
+- `https://docs.gitlab.com/ci/pipelines/settings/` § "Specify a custom CI/CD configuration file" —
+  the three forms: a repository-relative path (`my/path/.gitlab-ci.yml`), a file in another project
+  (`.gitlab-ci.yml@namespace/another-project`, optionally `:refname`), and a remote URL; with nothing
+  set, GitLab expects `.gitlab-ci.yml` at the root. The two non-default fixtures are **composed** from
+  the project shape and these forms; GoParking's values (`dev`, `deploy/.gitlab-ci.yml`) are the
+  product owner's report, not a recording.
+
 ## Pages read for WP-59 that produced no fixture
 
 - `https://docs.gitlab.com/api/merge_requests/` § "Retrieve merge request changes" (retrieved

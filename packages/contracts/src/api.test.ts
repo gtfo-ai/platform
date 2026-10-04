@@ -26,6 +26,7 @@ import {
   putProjectBindingsRequestSchema,
   readinessResponseSchema,
   runMessagesQuerySchema,
+  setDefaultBranchRequestSchema,
   sseFrameSchema,
   sseTopicSchema,
   startDiscoveryResponseSchema,
@@ -653,6 +654,57 @@ describe('the onboarding wizard’s DTOs (WP-21, product/06)', () => {
     // …and a branch name is bounded too: it reaches git arguments and an audit row.
     expect(
       createProjectRequestSchema.safeParse({ ...project, default_branch: 'x'.repeat(256) }).success,
+    ).toBe(false);
+  });
+
+  it('takes a default branch only as a git branch name the mirror and the checkout can use (WP-139)', () => {
+    const project = {
+      key: 'acme_api',
+      name: 'ACME API',
+      repo_url: 'https://git.example.test/acme/api.git',
+    };
+    for (const good of ['develop', 'dev', 'main', 'release/2.x', 'v1.0_rc-1', 'x'.repeat(200)]) {
+      expect(
+        createProjectRequestSchema.safeParse({ ...project, default_branch: good }).success,
+        good,
+      ).toBe(true);
+      expect(setDefaultBranchRequestSchema.safeParse({ default_branch: good }).success, good).toBe(
+        true,
+      );
+    }
+    for (const bad of [
+      '',
+      'x'.repeat(201),
+      '-develop',
+      '.hidden',
+      'a..b',
+      'a//b',
+      'feature/',
+      'feature/.x',
+      'main.lock',
+      'HEAD',
+      'a/b.lock/c',
+      'main.',
+      'has space',
+      'at@{1}',
+      'tilde~1',
+      'caret^',
+      'colon:x',
+      'star*',
+      'back\\slash',
+      'nul\u0000x',
+      'refs/heads/../../HEAD',
+    ]) {
+      expect(
+        createProjectRequestSchema.safeParse({ ...project, default_branch: bad }).success,
+        bad,
+      ).toBe(false);
+      expect(setDefaultBranchRequestSchema.safeParse({ default_branch: bad }).success, bad).toBe(
+        false,
+      );
+    }
+    expect(
+      setDefaultBranchRequestSchema.safeParse({ default_branch: 'dev', reason: 'x' }).success,
     ).toBe(false);
   });
 

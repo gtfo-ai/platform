@@ -205,6 +205,17 @@ export interface GitProviderContractContext {
     readonly maintainer: string;
     readonly outsider: string;
   };
+  /**
+   * WP-139: three projects whose repository settings differ the three ways the CI gate reads —
+   * `plain` keeps its CI at the provider's default path with default branch `main`, `custom` keeps
+   * it at `deploy/.gitlab-ci.yml` with default branch `dev` (GoParking), and `external` takes it
+   * from another project (`.gitlab-ci.yml@acme/ci-templates`).
+   */
+  readonly repositories: {
+    readonly plain: string;
+    readonly custom: string;
+    readonly external: string;
+  };
   /** Head sha of a pipeline the harness seeded, with one failing job that has a log. */
   readonly pipelineSha: string;
   readonly failingJobName: string;
@@ -561,6 +572,29 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         });
         await expectIntegrationError(
           () => port.projectMemberAccess(context.missingProject, context.members.developer),
+          'not_found',
+        );
+      });
+
+      /**
+       * WP-139 ruling (b): the repository's own default branch and CI configuration location —
+       * the default path, a custom path in the repository, and another project's file.
+       */
+      it("answers the repository's default branch and where its CI configuration lives", async () => {
+        expect(await port.repositorySettings(context.repositories.plain)).toEqual({
+          defaultBranch: 'main',
+          ciConfig: { kind: 'repository', path: '.gitlab-ci.yml' },
+        });
+        expect(await port.repositorySettings(context.repositories.custom)).toEqual({
+          defaultBranch: 'dev',
+          ciConfig: { kind: 'repository', path: 'deploy/.gitlab-ci.yml' },
+        });
+        expect(await port.repositorySettings(context.repositories.external)).toEqual({
+          defaultBranch: 'main',
+          ciConfig: { kind: 'external', location: '.gitlab-ci.yml@acme/ci-templates' },
+        });
+        await expectIntegrationError(
+          () => port.repositorySettings(context.missingProject),
           'not_found',
         );
       });

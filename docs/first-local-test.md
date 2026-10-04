@@ -84,10 +84,34 @@ The protected default branch stays the push control.
 | Reaching it from the containers | public internet | the launcher's helper containers clone it and the run's egress sidecar connects to it **from inside Docker Desktop's VM** — a host reachable only over a VPN, or with a certificate from a private CA, was **not tested** |
 | A webhook into your Mac | cannot reach `localhost` | would need your Mac reachable from the GitLab server — **not tested**; use polling |
 
-**Protect the default branch** — **Settings → Repository → Protected branches**, `main` (or your
-default) with **Allowed to push and merge: No one**. The platform checks it before it starts a task:
-a ticket on a project whose default branch is unprotected becomes a task that is immediately parked
-*Needs human* with the brief *"the default branch … is not protected"*.
+**Know the default branch.** Autix's is **`develop`**, not `main` — and the platform uses the
+branch you give it in the wizard (§ 5): every run checks it out, every merge request targets it and
+the knowledge base is read from it. Before WP-139 the wizard sent none, so every project was `main`
+and a repository without a `main` failed at the first checkout. **Give the same branch GitLab calls its default** (Settings → Repository → Branch defaults): the protection check at intake, the rebase gate's default-branch head, the poll's `default_branch.moved` and coverage still read **GitLab's** default, so a stored branch that differs from it splits the platform between two branches.
+
+**Protect the default branch** — **Settings → Repository → Protected branches**, `develop` (your
+default branch) with **Allowed to merge: Maintainers** and **Allowed to push and merge: No one**.
+Merging stays a person's act on GitLab; nobody, the platform's tokens included, pushes to it
+directly. The platform checks that the branch is protected before it starts a task: a ticket on a
+project whose default branch is unprotected becomes a task that is immediately parked *Needs human*
+with the brief *"the default branch … is not protected"*.
+
+**Autix's CI rules — required before the first feature ticket.** The platform's branches are
+`agentic/<ticket>` (fixed, Q114), and its merge requests are opened as drafts and **marked ready
+before CI is asked for** (§ 7). Autix runs its Composer jobs only for source branches matching
+`^(feature|bugfix)/`, so, in `.gitlab-ci.yml` on `develop`:
+
+- **admit `agentic/`** wherever `feature|bugfix` is matched — `^(feature|bugfix|agentic)/`;
+- **make the test jobs run on merge-request pipelines** (`$CI_PIPELINE_SOURCE == "merge_request_event"`
+  in their `rules:`): when the head of a ready merge request has no pipeline, the platform asks GitLab
+  for a **merge-request pipeline**, and a job whose rules do not admit one is not in it — GitLab may
+  then refuse the pipeline as having no jobs, and the CI gate waits until its timeout (§ 8);
+- the rule that **skips a `Draft:` title** needs no change: the platform removes `Draft:` when
+  Implementation completes, before the gate reads CI.
+
+Without the first two the merge request gets no pipeline and every task parks at the CI gate.
+Whether GitLab starts a pipeline on its own when a draft is marked ready was read off its
+documentation, not measured on gitlab.com (`docs/TODO.md`).
 
 **Webhook or polling.** On a Mac, GitLab cannot reach `http://localhost:8080`, so use a
 **poll-only** binding: set `poll_enabled: true` and `project`, and leave **both**
@@ -98,6 +122,34 @@ merged, closed), the **default branch's head** (so a task at Ready is re-checked
 returns the task to Implementation). Setting a webhook secret for a webhook GitLab cannot reach turns
 both reads off. What polling never sees: approvals and **finished pipelines** — which matters at the
 CI gate (§ 8, *the CI gate on a poll-only binding*).
+
+### GoParking — a self-managed GitLab
+
+GoParking is on **`https://gitlab.fontai.org`**, a self-managed instance, so it gets an integration
+of its own (a GitLab integration has one `base_url` and one polled `project`). What differs from
+Autix:
+
+- **`APP_INTEGRATION_HOSTS`** must name **`gitlab.fontai.org`** — exactly that host, no scheme, no
+  port — beside `gitlab.com` (§ 3). `base_url` is `https://gitlab.fontai.org`.
+- **Minting, not a static credential.** A self-managed instance has project access tokens on every
+  tier, so set **`mint_credentials: true`** and leave `run_credential` at `minted` with **no**
+  `run_token`: each run gets its own short-lived project access token, revoked when the run ends.
+  The integration's `token` must belong to a user with the **Maintainer** role (or above) on
+  GoParking — minting a project access token needs it. Put it in `.env` under a name of its own,
+  for example `GITLAB_FONTAI_TOKEN`, and add that name to `APP_INTEGRATION_SECRET_ENV`.
+- **Default branch `dev`.** Type `dev` in the wizard (§ 5); once the integration is bound the
+  wizard shows what GitLab says and offers it. Protect `dev` as above (merge: Maintainers, push and
+  merge: No one).
+- **CI configuration at `deploy/.gitlab-ci.yml`.** Nothing to configure: since WP-139 the platform
+  reads the project's **CI/CD configuration file** setting (GitLab's `ci_config_path`) from GitLab
+  and looks for that file on `dev` — before, it looked for `.gitlab-ci.yml` at the root, found none
+  and read GoParking as a project with no CI, so a merge request with no pipeline passed the CI gate
+  on no evidence. A configuration GitLab takes from another project (`…@group/project`) or a URL
+  counts as CI that is present. The project's settings page (**Default branch**) shows what GitLab
+  answered. The same CI rules as Autix's apply: `agentic/` admitted, test jobs on merge-request
+  pipelines.
+- **Reaching it from the containers** is the self-managed column of the table above: a host
+  reachable only over a VPN, or with a certificate from a private CA, was not tested.
 
 ## 2. The Jira side
 
@@ -152,9 +204,10 @@ CLAUDE_CODE_OAUTH_TOKEN=<the output of: claude setup-token>
 
 GITLAB_TOKEN=<the GitLab personal access token, scope api>
 GITLAB_RUN_TOKEN=<the dedicated Developer user's token, read_repository + write_repository (gitlab.com Free only)>
+GITLAB_FONTAI_TOKEN=<GoParking: a Maintainer's personal access token on gitlab.fontai.org, scope api>
 JIRA_API_TOKEN=<the Atlassian API token>
-APP_INTEGRATION_SECRET_ENV=GITLAB_TOKEN,GITLAB_RUN_TOKEN,JIRA_API_TOKEN
-APP_INTEGRATION_HOSTS=gitlab.com,<your-site>.atlassian.net
+APP_INTEGRATION_SECRET_ENV=GITLAB_TOKEN,GITLAB_RUN_TOKEN,GITLAB_FONTAI_TOKEN,JIRA_API_TOKEN
+APP_INTEGRATION_HOSTS=gitlab.com,gitlab.fontai.org,<your-site>.atlassian.net
 ```
 
 What each one is for:
@@ -178,7 +231,8 @@ What each one is for:
   is the allow-list of variable *names* the integration form may name. You never paste a token into
   the browser: the form names the variable and the server seals its value.
 - **`APP_INTEGRATION_HOSTS`** is the allow-list of hosts an integration may call, empty and therefore
-  closed by default. For a self-managed GitLab write its host instead of `gitlab.com`.
+  closed by default. A self-managed GitLab's host goes here exactly as in its `base_url` —
+  `gitlab.fontai.org` for GoParking (§ 1). Leave out the GoParking lines if you test Autix only.
 
 Two optional lines, only if you need them:
 
@@ -261,12 +315,31 @@ token in `.env` — **PASS**, run):
    - **Step 1 — Connect**: a project key in lower `snake_case` (`autix`; a capital or a hyphen is an
      inline error and sends no request), a name, the repository's **HTTPS** clone URL
      (`https://gitlab.com/<group>/<project>.git` — an SSH `git@…` address is not a URL and is
-     refused), then tick both integrations, **Test connection**, **Bind**.
+     refused), and the **Default branch** — **`develop`** for Autix, `dev` for GoParking; the field
+     is required, because the platform's fallback `main` is the wrong branch for both. Then tick
+     both integrations, **Test connection**, **Bind**. Once the GitLab integration is bound, the step
+     shows the default branch **GitLab** reports and where it says the CI configuration lives; if
+     the stored branch differs, the field is prefilled with GitLab's and **Save default branch**
+     changes it. The same control is on the project's settings page. A maintainer can change it
+     later, but **not while any of the project's tasks is unfinished** (`409
+     project_has_live_tasks`): a live task's branch and merge request were made against the old one.
    - **Step 2 — Technical discovery** is the **first real model run**: a Discovery agent reads the
      repository and runs its declared commands, and you get a readiness level and drafted knowledge
      pages as proposals. It spends your plan's usage. A ticket does not wait for it — nothing in
      intake reads readiness (read off the code) — so you may skip it for the first ticket and run it
-     later from the project's settings page.
+     later from the project's settings page. **For a large repository, run it first** (below).
+
+**A large repository: the first clone.** The first run of a project — whichever stage it is —
+makes the launcher clone the whole repository into its cache volume (`agentic-repo-cache`) before
+the run starts, and the knowledge index clones it a second time into the `knowledge` volume. A
+repository of the size reported for this setup (about **633 MB**; not measured here) therefore needs
+**at least twice that** on Docker Desktop's disk, plus a working tree per live run (runs clone from
+the cache with shared objects, so a run adds its checkout, not another history). The launcher's
+create is bounded at **10 minutes** (`packages/infrastructure/src/launcher/client.ts`, the control
+client's default timeout), and a first clone over a slow link can approach it; what happens to a
+create that exceeds it was **not measured**. Warm the cache with **Step 2 — Technical discovery**
+before the first ticket: it is one run, it pays the clone while you are watching, and every later
+run fetches only what changed. Watch `docker compose logs -f launcher` while it runs.
    - **Step 3** (the business interview, a form) and **3b** (history mining, which reads up to 200
      merge requests and costs several runs) are optional; skip them for now.
    - **Step 4 — Operating mode**: leave **Supervised** (the default). It asks for **plan approval on
@@ -308,16 +381,15 @@ is *Done*.
   (Autix: `develop` — the project's `default_branch`, never a branch the agent names), as a
   **draft**, with *"Opened by the agentic platform for <ticket>."* at the end of its description
   (and *"Requested by <name>"* when the ticket's reporter maps to a platform user). When Implementation completes, the platform **marks it ready** (removes
-  `Draft:`), and — when its head has no pipeline and the default branch has a `.gitlab-ci.yml`, or the platform
-  cannot read whether it has one — asks
+  `Draft:`), and — when its head has no pipeline and the default branch has the project's CI file
+  (GitLab's *CI/CD configuration file* setting, `.gitlab-ci.yml` unless the project set another, or
+  a configuration in another project), or the platform cannot read whether it has one — asks
   GitLab for a merge-request pipeline (the API behind the merge request's *Run pipeline* button),
   because GitLab does not start one when a draft is marked ready. Read off GitLab's documentation,
   not measured on gitlab.com (docs/TODO.md).
-- **Before the first feature ticket, admit `agentic/` in the project's CI rules.** Autix runs its
-  Composer jobs only for source branches matching `^(feature|bugfix)/` and skips merge-request
-  pipelines for a `Draft:` title: add `agentic` to that rule (`^(feature|bugfix|agentic)/`), or the
-  merge request gets no pipeline and the CI gate waits for one (the platform's branch namespace is
-  fixed, Q114).
+- **Autix's CI rules are required** (§ 1): `agentic/` admitted where `feature|bugfix` is matched,
+  and the test jobs run on merge-request pipelines — otherwise the merge request gets no pipeline
+  and the CI gate waits for one until its timeout (the platform's branch namespace is fixed, Q114).
 - **The runner's log** has a *"stage executed"* line per stage.
 
 ## 8. When something fails — where it is named
@@ -331,6 +403,7 @@ is *Done*.
 | **Test connection** is red | the integration's card, with the provider's error (already redacted) | check the token, its scopes, `base_url` / `site_url` |
 | a labelled ticket never appears | `docker compose logs app runner` (the poll runs as a job, in either worker); the Jira integration's card | is `poll_enabled` on; was the label added after it; is the key in `project_keys`; is the dial at Observe |
 | a task goes straight to *Needs human* | the task page's **brief** — e.g. *"the default branch … is not protected"* | fix the cause, then **Hand back** at the stage the brief names |
+| a run fails at its start because the clone could not check out the default branch, or a merge request targets the wrong branch | the run's error; the project's settings page, **Default branch**, which shows the stored branch beside GitLab's (not run: needs your repository) | change the default branch there — refused while a task is unfinished, so cancel or finish it first |
 | a stage fails at start: *"cannot give run … a credential: minting is off … and no static run credential is configured"* | the task page's brief and the run's error | gitlab.com Free: `run_credential: static` with a `run_token` (§1, the setup guide's step 5a); Premium or self-managed: `mint_credentials` on. Then **Hand back** |
 | a stage fails at start: *"… declares a static run credential this platform will not give run …"* | the task page's brief and the run's error — the reason is named: no run token, the API token in its place, `mint_credentials` also on, or *"expired on <date>"* | fix the named setting; for an expired one create a new token, re-seal `run_token`, set `run_token_expires_at`; then **Hand back** |
 | **Test connection**'s `run_credential` check is red | the integration's card | *not a member* or *no project is bound*: add the dedicated user to the project, bind the integration, test again; *Maintainer*/*Owner*: lower the user to Developer |
@@ -354,10 +427,14 @@ someone to start its manual job. When the pipeline has finished, **Hand back** a
 task page: that is a new entry with a fresh timeout. A **pause and resume** keeps the clock: a task resumed after its timeout is read once more and then parks; only a hand-back restarts it. (A binding with a webhook secret keeps the old
 five checks 30 seconds apart, because the pipeline's own event settles it.) A
 project with no CI at all passes the gate's pipeline half — but **only when the default branch has
-no `.gitlab-ci.yml`** (WP-138): a head with no pipeline on a project that has one is a pipeline that
-has not started, and the gate waits for it rather than passing. The file is read from the platform's
-own mirror (`APP_KNOWLEDGE_MIRROR_ROOT`); a process that has none cannot tell, and waits too — on a
-poll-only binding up to the same CI timeout.
+no CI file** (WP-138): a head with no pipeline on a project that has one is a pipeline that has not
+started, and the gate waits for it rather than passing. Which file is GitLab's answer (WP-139): the
+project's *CI/CD configuration file* setting (`ci_config_path`) — `.gitlab-ci.yml` when it is empty,
+`deploy/.gitlab-ci.yml` for GoParking — and a configuration in another project or at a URL counts as
+present without being read. GitLab omits the setting for a token that may not read the code; the
+gate then cannot tell and waits. The file's presence is read from the platform's own mirror
+(`APP_KNOWLEDGE_MIRROR_ROOT`); a process that has none cannot tell, and waits too — on a poll-only
+binding up to the same CI timeout.
 
 The logs are JSON, one line per entry, with `task_id` and `run_id` where they apply:
 `docker compose logs -f app runner launcher`.

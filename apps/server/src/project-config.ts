@@ -20,15 +20,32 @@ import type {
   RepositoryConfigRefresh,
   RepositoryFileSource,
 } from '@platform/application';
-import { exportProjectConfig } from '@platform/application';
+import {
+  exportProjectConfig,
+  gitReads,
+  IntegrationError,
+  integrationsForProject,
+  noRunScopedSecrets,
+} from '@platform/application';
 import type { Id } from '@platform/contracts';
 import type pg from 'pg';
 import { createRepositoryConfigRefresher } from './knowledge.js';
+import type { ProviderRepositoryAnswer } from './routes/project-repository.js';
 
 export interface ProjectConfigCommands {
   export(request: ConfigExportRequest): Promise<ConfigExportReport>;
   refresh(projectId: Id): Promise<RepositoryConfigRefresh>;
+  /**
+   * What the project's git provider says about its repository — the default branch and the CI
+   * configuration's location (WP-139), through the process's one executor. Never throws for a
+   * provider's refusal: it answers `unavailable` with the reason, because the caller is a form that
+   * then asks the person.
+   */
+  repository(projectId: Id): Promise<ProviderRepositoryAnswer>;
 }
+
+/** Bounds a provider string before it reaches a DTO (the schema's 255; BD-022). */
+const bounded = (value: string): string => value.slice(0, 255);
 
 export const createProjectConfigCommands = (options: {
   readonly pool: pg.Pool;
@@ -54,5 +71,56 @@ export const createProjectConfigCommands = (options: {
         request,
       ),
     refresh: async (projectId) => refresh({ projectId }),
+    repository: async (projectId) => {
+      try {
+        const bindings = await integrationsForProject(
+          options.integrations,
+          projectId,
+          noRunScopedSecrets(),
+        );
+        if (bindings.git === null) {
+          return {
+            status: 'unavailable',
+            reason: 'this project has no git binding, so the platform cannot ask its provider',
+          };
+        }
+        const settings = await gitReads(bindings).repositorySettings({ projectId, taskId: null });
+        if (settings === null) {
+          return { status: 'unavailable', reason: 'this project has no git binding' };
+        }
+        const ci = settings.ciConfig;
+        return {
+          status: 'ok',
+          provider: {
+            provider: bindings.git.ref.provider,
+            default_branch:
+              settings.defaultBranch === null ? null : bounded(settings.defaultBranch),
+            ci_config:
+              ci.kind === 'repository'
+                ? { kind: 'repository', path: bounded(ci.path) }
+                : ci.kind === 'external'
+                  ? { kind: 'external', location: bounded(ci.location) }
+                  : { kind: 'unknown', reason: ci.reason.slice(0, 1024) },
+          },
+        };
+      } catch (error) {
+        // A provider's refusal (or a binding that cannot load) is the form's question to the
+        // person, named; anything else is a fault and propagates (rule 20).
+        if (!(error instanceof IntegrationError)) {
+          throw error;
+        }
+        options.logger.warn(
+          { project_id: projectId, err: error },
+          'the git provider could not answer the repository settings read',
+        );
+        return {
+          status: 'unavailable',
+          reason: `the git provider could not answer (${error.code}): ${error.message}`.slice(
+            0,
+            1024,
+          ),
+        };
+      }
+    },
   };
 };

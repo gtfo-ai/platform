@@ -198,6 +198,12 @@ export const gitlabReplayContext = (
       maintainer: 'agentic-maintainer',
       outsider: 'agentic-outsider',
     },
+    // WP-139: `repository-settings.json` records the three projects' `GET /projects/:id`.
+    repositories: {
+      plain: 'acme/plain-ci',
+      custom: 'acme/custom-ci',
+      external: 'acme/external-ci',
+    },
     pipelineSha: SHA_MR7,
     failingJobName: FAILING_JOB,
     // Provider-shaped: GitLab's log handle is the numeric job id, not the fake's `log:<id>`.

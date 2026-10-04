@@ -17,9 +17,16 @@
  *    instance has no mirror, so it cannot tell whether `develop` has a CI file — ruling (f)'s
  *    fail-closed answer), and it passes once the pipeline succeeds;
  *  - the merge-request poll matches the merge to the task, which finishes.
+ *
+ * **WP-139: the branch arrives through the API, not the seed.** The project row starts at `main` —
+ * every project before WP-139, whatever its repository's default — while the provider's project is
+ * on `develop`. The settings read shows the difference, a maintainer's `PUT …/default-branch`
+ * changes it (one `human_actions` row), and only then is the ticket matched; the change is refused
+ * while the task is live. Everything above then follows from the stored `develop`.
  */
 import { FAKE_EPOCH } from '@platform/integrations';
 import { afterEach, describe, expect, it } from 'vitest';
+import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
 import {
   GIT_INTEGRATION_ID,
   GIT_PROJECT,
@@ -51,12 +58,52 @@ describe('the Developer’s merge request (WP-138)', () => {
       label: 'wp138-open-mr',
       tickets: TICKETS,
       defaultBranch: 'develop',
+      // WP-139: the row says `main` until the API changes it.
+      storedDefaultBranch: 'main',
       seedMergeRequest: false,
       // No pipeline for the seeded (unused) merge request; the opened one gets its own below.
       ciStatus: null,
       env: { APP_POLL_SWEEP_INTERVAL_MS: '500' },
     });
     harness = pipeline;
+
+    // ── WP-139: the stored branch, read beside the provider's and changed through the API ──
+    const client = new Client(pipeline.instance.baseUrl);
+    const signedIn = await client.post('/api/auth/sign-in/email', {
+      email: BOOTSTRAP_EMAIL,
+      password: BOOTSTRAP_PASSWORD,
+    });
+    expect(signedIn.status).toBe(200);
+    const repository = await client.json<{
+      default_branch: string;
+      provider: { default_branch: string | null; ci_config: { kind: string } } | null;
+      live_tasks: number;
+    }>(`/api/projects/${pipeline.projectId}/repository`);
+    expect(repository.status, JSON.stringify(repository.body)).toBe(200);
+    expect(repository.body).toMatchObject({
+      default_branch: 'main',
+      provider: { default_branch: 'develop', ci_config: { kind: 'repository' } },
+      live_tasks: 0,
+    });
+    const setBranch = (branch: string, key: string) =>
+      client.json<{ project?: { default_branch: string }; error?: { code: string } }>(
+        `/api/projects/${pipeline.projectId}/default-branch`,
+        {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json', 'idempotency-key': key },
+          body: JSON.stringify({ default_branch: branch }),
+        },
+      );
+    const changed = await setBranch('develop', 'wp139-develop');
+    expect(changed.status, JSON.stringify(changed.body)).toBe(200);
+    expect(changed.body.project?.default_branch).toBe('develop');
+    expect(
+      await pipeline.query<{ before: string; after: string }>(
+        `select params ->> 'before' as before, params ->> 'after' as after from human_actions
+          where action = 'project.default_branch.write' and params ->> 'project_id' = $1`,
+        [pipeline.projectId],
+      ),
+    ).toEqual([{ before: 'main', after: 'develop' }]);
 
     await pipeline.publish([
       inboundEvent('ticket.matched', {
@@ -98,6 +145,11 @@ describe('the Developer’s merge request (WP-138)', () => {
     });
     expect(opened.source_branch).toBe('agentic/ACME-1');
     expect(opened.target_branch).toBe('develop');
+
+    // WP-139: a live task refuses a change of the branch its merge request targets.
+    const refused = await setBranch('main', 'wp139-main');
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body.error?.code).toBe('project_has_live_tasks');
     expect(opened.description).toContain('Opened by the agentic platform for ACME-1');
 
     // The merge request's change and its pipeline: the gate waits for the pipeline, then reads it.

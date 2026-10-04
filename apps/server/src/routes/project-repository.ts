@@ -1,0 +1,216 @@
+/**
+ * A project's repository settings the platform must not assume — WP-139.
+ *
+ *   GET /api/projects/:project_id/repository       the stored default branch beside the provider's
+ *   PUT /api/projects/:project_id/default-branch   change the stored default branch
+ *
+ * `projects.default_branch` is what a run checks out (`apps/server/src/workspaces.ts`), what a merge
+ * request targets (`merge-request-tool.ts`) and what the mirror reads (`git-vault.ts`). Until this
+ * row nothing wrote it but the create, and the wizard never sent it, so every project was `main`
+ * (migration 0003's default) — Autix (`develop`) and GoParking (`dev`) would have failed at the
+ * checkout or opened a merge request against the wrong branch.
+ *
+ * ## The read
+ *
+ * `provider` is what the git binding's provider says (GitLab's project `default_branch` and
+ * `ci_config_path`), read **through `IntegrationActionExecutor`** outside any transaction, so it is
+ * audited and rate-limited like the wizard's probe. The wizard prefills the default-branch field
+ * from it; it is never written anywhere by this read. A project with no git binding, or a read the
+ * provider refused, answers `provider: null` and says which in `provider_unavailable` — the field
+ * is then required of the person rather than guessed (rule 16).
+ *
+ * ## The command
+ *
+ * A maintainer's (`project.pipeline.write`). The row's ruling names `project.settings.write` *and*
+ * "a maintainer can change it" *and* "403 below maintainer"; on this build that capability is
+ * **admin** (`permissions.ts`), so taking the name would have made the change an administrator's.
+ * The role is what the ruling decided — the same reading WP-94 made for the re-evaluate button
+ * (`routes/rediscovery.ts`). Recorded under WP-139.
+ *
+ * It is WP-15i's shape: an optional `Idempotency-Key`, claimed before the write; one
+ * `human_actions` row per accepted request (before and after); none for a refused one. It is
+ * **refused `409 project_has_live_tasks`** while any of the project's tasks is not `done` or
+ * `cancelled`: a live task's branch, merge request, rebase gate and CI file were all made against
+ * the old branch. The write and the check are one statement (`writeProjectDefaultBranch`).
+ */
+import {
+  apiErrorSchema,
+  type JsonObject,
+  type ProjectRecord,
+  type ProjectRepositoryResponse,
+  projectRepositoryResponseSchema,
+  setDefaultBranchRequestSchema,
+  setDefaultBranchResponseSchema,
+  type UserRole,
+} from '@platform/contracts';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import * as z from 'zod';
+import { requirePermission } from '../auth/rbac.js';
+import { HttpError, NotFoundError } from '../errors.js';
+import type { HumanActionInput } from '../queries/onboarding-queries.js';
+import {
+  claimIdempotentAttempt,
+  type IdempotencyRecords,
+  readIdempotencyKey,
+} from './idempotency.js';
+
+export const SET_DEFAULT_BRANCH_ACTION = 'project.default_branch.write';
+
+/** What the provider says about the project's repository, or why it cannot be asked. */
+export type ProviderRepositoryAnswer =
+  | { readonly status: 'ok'; readonly provider: NonNullable<ProjectRepositoryResponse['provider']> }
+  | { readonly status: 'unavailable'; readonly reason: string };
+
+export type DefaultBranchWrite =
+  | { readonly status: 'written'; readonly before: string; readonly project: ProjectRecord }
+  | { readonly status: 'not_found' }
+  | { readonly status: 'live_tasks'; readonly count: number };
+
+export interface ProjectRepositoryQueries {
+  readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The stored default branch and the count of tasks that are not finished, or `null`. */
+  readonly projectRepository: (
+    projectId: string,
+  ) => Promise<{ readonly defaultBranch: string; readonly liveTasks: number } | null>;
+  readonly project: (projectId: string) => Promise<ProjectRecord | null>;
+  readonly writeDefaultBranch: (projectId: string, branch: string) => Promise<DefaultBranchWrite>;
+  readonly claimAttempt: IdempotencyRecords['claimAttempt'];
+  readonly releaseAttempt: IdempotencyRecords['releaseAttempt'];
+  readonly recordAction: (input: HumanActionInput) => Promise<void>;
+}
+
+export interface ProjectRepositoryRoutesOptions {
+  readonly queries: ProjectRepositoryQueries;
+  /**
+   * The provider read, or `null` on a process that composed no integration stack: the read then
+   * answers `provider: null` with that sentence, and the command still works.
+   */
+  readonly providerRepository: ((projectId: string) => Promise<ProviderRepositoryAnswer>) | null;
+}
+
+const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+const projectParamsSchema = z.strictObject({ project_id: z.uuid() });
+
+/** The sentence a live task's refusal carries; the count is the read's `live_tasks`. */
+export const liveTasksRefusal = (count: number): string =>
+  `this project has ${count} task${count === 1 ? '' : 's'} that ${count === 1 ? 'is' : 'are'} not finished; a live task's branch, merge request and gates were made against the current default branch, so finish or cancel ${count === 1 ? 'it' : 'them'} first`;
+
+export const registerProjectRepositoryRoutes = async (
+  app: FastifyInstance,
+  options: ProjectRepositoryRoutesOptions,
+): Promise<void> => {
+  const typed = app.withTypeProvider<ZodTypeProvider>();
+  const guard = { projectRole: options.queries.projectRole };
+  /** The guards run before validation (`routes/settings.ts`): a non-uuid is organisation-scoped. */
+  const projectOf = (request: FastifyRequest): string | undefined => {
+    const value = (request.params as { project_id?: unknown }).project_id;
+    return typeof value === 'string' && UUID.test(value) ? value : undefined;
+  };
+
+  typed.get(
+    '/api/projects/:project_id/repository',
+    {
+      preValidation: requirePermission(guard, 'project.read', { project: projectOf }),
+      schema: {
+        summary: 'The project’s default branch, beside what its git provider says',
+        description:
+          '`default_branch` is the stored branch every run checks out, every merge request targets and the mirror reads. `provider` is the git binding’s provider’s own answer — its default branch and where its CI configuration lives (`repository` path, `external` for another project’s file or a URL, `unknown` when it does not say) — read through the integration executor; `null` with `provider_unavailable` when the project has no git binding or the read failed. Provider text is untrusted. `live_tasks` counts the tasks that would refuse a change of the default branch.',
+        tags: ['projects'],
+        params: projectParamsSchema,
+        response: { 200: projectRepositoryResponseSchema, 404: apiErrorSchema },
+      },
+    },
+    async (request) => {
+      const projectId = request.params.project_id;
+      const stored = await options.queries.projectRepository(projectId);
+      if (stored === null) {
+        throw new NotFoundError(`project ${projectId}`);
+      }
+      const answer: ProviderRepositoryAnswer =
+        options.providerRepository === null
+          ? {
+              status: 'unavailable',
+              reason:
+                'this process composed no integrations, so it cannot ask the git provider; type the branch',
+            }
+          : await options.providerRepository(projectId);
+      return projectRepositoryResponseSchema.parse({
+        default_branch: stored.defaultBranch,
+        provider: answer.status === 'ok' ? answer.provider : null,
+        provider_unavailable: answer.status === 'ok' ? null : answer.reason.slice(0, 1024),
+        live_tasks: stored.liveTasks,
+      });
+    },
+  );
+
+  typed.put(
+    '/api/projects/:project_id/default-branch',
+    {
+      preValidation: requirePermission(guard, 'project.pipeline.write', { project: projectOf }),
+      schema: {
+        summary: 'Change the project’s default branch',
+        description:
+          'Writes `projects.default_branch` — the branch runs check out, merge requests target and the mirror reads — and nothing else. Maintainer. Refused `409 project_has_live_tasks` while any of the project’s tasks is not done or cancelled. One `human_actions` row per accepted request, with the branch before and after; `Idempotency-Key` is optional and honoured, so a replay writes no second row. The branch is not checked against the provider: `GET …/repository` shows what the provider says.',
+        tags: ['projects'],
+        params: projectParamsSchema,
+        body: setDefaultBranchRequestSchema,
+        response: {
+          200: setDefaultBranchResponseSchema,
+          400: apiErrorSchema,
+          404: apiErrorSchema,
+          409: apiErrorSchema,
+        },
+      },
+    },
+    async (request) => {
+      const actor = request.actor;
+      if (actor === undefined) {
+        // Unreachable through `requirePermission`; the audit row's user is not optional.
+        throw new HttpError(401, 'unauthenticated', 'this endpoint needs an authenticated session');
+      }
+      const projectId = request.params.project_id;
+      const branch = request.body.default_branch;
+      const key = readIdempotencyKey(request);
+      const claim = await claimIdempotentAttempt(options.queries, {
+        userId: actor.userId,
+        action: SET_DEFAULT_BRANCH_ACTION,
+        key,
+        request: { project_id: projectId, body: request.body },
+      });
+      if (claim.replayed) {
+        // A replay performs nothing and answers with the project as it is now.
+        const current = await options.queries.project(projectId);
+        if (current === null) {
+          throw new NotFoundError(`project ${projectId}`);
+        }
+        return { project: current, performed: false };
+      }
+      const project = await claim.run(async (effectReturned) => {
+        const written = await options.queries.writeDefaultBranch(projectId, branch);
+        if (written.status === 'not_found') {
+          throw new NotFoundError(`project ${projectId}`);
+        }
+        if (written.status === 'live_tasks') {
+          throw new HttpError(409, 'project_has_live_tasks', liveTasksRefusal(written.count));
+        }
+        effectReturned();
+        const params: JsonObject = {
+          project_id: projectId,
+          before: written.before,
+          after: branch,
+          ...(key === null ? {} : { idempotency_key: key }),
+          ...(claim.digest === null ? {} : { body_digest: claim.digest }),
+        };
+        await options.queries.recordAction({
+          userId: actor.userId,
+          action: SET_DEFAULT_BRANCH_ACTION,
+          params,
+        });
+        return written.project;
+      });
+      return { project, performed: true };
+    },
+  );
+};

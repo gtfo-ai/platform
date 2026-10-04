@@ -204,8 +204,13 @@
  *     other username of a seeded project is not a member; GitLab also answers inherited (group)
  *     and invited members, which this fake has no notion of. A project nobody seeded is
  *     `not_found`, as GitLab's 404 is.
+ * 25. **Kinder — `repositorySettings` answers the seeded CI location as given** (WP-139). GitLab's
+ *     `ci_config_path` is free text this fake does not parse: a seed states the `CiConfigLocation`
+ *     the adapter would have derived (default: the repository's `.gitlab-ci.yml`), so the parsing
+ *     is held by the GitLab adapter's own tests and the shared contract suite's replay.
  */
 import {
+  type CiConfigLocation,
   type CodeownersRules,
   type CommitFilesRequest,
   type CommitRef,
@@ -273,6 +278,8 @@ export interface FakeProjectSeed {
    * test pass the pipeline's protection gate without meaning to.
    */
   readonly protectedBranches?: readonly string[];
+  /** What `repositorySettings` answers for the CI configuration (WP-139, divergence 25). */
+  readonly ciConfig?: CiConfigLocation;
 }
 
 export interface FakeGitOptions {
@@ -317,6 +324,7 @@ interface StoredProject {
   codeowners: string | null;
   protectedBranches: Set<string>;
   nextIid: number;
+  ciConfig: CiConfigLocation;
 }
 
 interface StoredNote {
@@ -484,6 +492,8 @@ export interface FakeGitProvider extends GitProviderPort {
   seedProject(seed: FakeProjectSeed): void;
   /** Maps a handle to the account id `resolveUserId` answers with (divergence 11). */
   seedUser(handle: string, externalId: string): void;
+  /** What `repositorySettings` answers for a seeded project's CI configuration (WP-139). */
+  setCiConfig(project: string, location: CiConfigLocation): void;
   /** Makes `username` a member of `project` with a role — what `projectMemberAccess` answers (WP-137). */
   setProjectMember(input: {
     readonly project: string;
@@ -768,6 +778,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       head: seed.head ?? nextSha(),
       codeowners: seed.codeowners ?? null,
       nextIid: 1,
+      ciConfig: seed.ciConfig ?? { kind: 'repository', path: '.gitlab-ci.yml' },
     });
   };
   for (const seed of options.projects ?? []) {
@@ -1604,6 +1615,12 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       return job.log.slice(Math.max(0, job.log.length - tailBytes));
     },
 
+    repositorySettings: async (project) => {
+      core.enter('repository_settings');
+      const stored = requireProject('repository_settings', project);
+      return { defaultBranch: stored.defaultBranch, ciConfig: stored.ciConfig };
+    },
+
     getDefaultBranchHead: async (project) => {
       core.enter('get_default_branch_head');
       const stored = requireProject('get_default_branch_head', project);
@@ -1743,6 +1760,9 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
 
     seedProject,
     seedUser,
+    setCiConfig: (project: string, location: CiConfigLocation) => {
+      requireProject('set_ci_config', project).ciConfig = location;
+    },
     setProjectMember,
     seedFile,
     commits,

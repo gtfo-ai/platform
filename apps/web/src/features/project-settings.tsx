@@ -57,6 +57,7 @@ import {
 } from '../ui/kit.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { BusinessInterview } from './business-interview.js';
+import { DefaultBranch } from './default-branch.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 import { ProjectPromptFiles } from './project-prompts.js';
@@ -199,6 +200,12 @@ export const ProjectSettingsScreen = ({
             detail={String(commands.putBindings.error)}
           />
         ) : null}
+      </Card>
+
+      {/* WP-139: the wizard's default branch, mirrored — the *same component* (product/18:55). */}
+      <Card className="flex flex-col gap-2">
+        <SectionHeading>Default branch</SectionHeading>
+        <DefaultBranch projectId={project.id} />
       </Card>
 
       <Card className="flex flex-col gap-2">
