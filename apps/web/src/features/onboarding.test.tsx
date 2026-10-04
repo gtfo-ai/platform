@@ -74,6 +74,15 @@ const READINESS: ReadinessResponse = {
   next_improvements: [
     { id: 'R5', title: 'Lint and formatter enforced in CI', unlocks: 'Reviewer skips style' },
   ],
+  // WP-143: the CI-rules warning, as the domain words it — the rule quoted from the CI file.
+  notices: [
+    {
+      code: 'ci_rules_skip_agent_branch',
+      severity: 'warning',
+      message:
+        '".gitlab-ci.yml" gives an agentic/ branch (agentic/X-1) no test job (stage test): a push pipeline runs no test job (stage test) — first, "codeception" rules[2] if: "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^(feature|bugfix)\\//"; a merge-request pipeline runs no test job (stage test). Fix: admit agentic/ in that rule.',
+    },
+  ],
 };
 
 /** `GET /api/projects/:id/autonomy` — the dial as WP-30's projection publishes it. */
@@ -333,6 +342,19 @@ describe('the onboarding wizard', () => {
     // Both criteria, with the platform's `unlocks` beside the agent's evidence.
     expect(screen.getByText(/Implementation self-check/)).toBeTruthy();
     expect(screen.getByText(/Human merge guarantee/)).toBeTruthy();
+  });
+
+  it('shows the CI-rules warning on the readiness panel, with the rule that kept agentic/ out (WP-143)', async () => {
+    render(createApp({ fetchImpl: fetchFor('recorded'), realtime: false }).element);
+    await screen.findByText('Readiness level 1');
+    const notices = screen.getByRole('list', { name: 'Readiness notices' });
+    expect(notices.textContent).toContain('Warning');
+    expect(notices.textContent).toContain('CI rules skip agentic/ branches');
+    // The rule that decided, and the fix — as text.
+    expect(notices.textContent).toContain('"codeception" rules[2]');
+    expect(notices.textContent).toContain('(feature|bugfix)');
+    expect(notices.textContent).toContain('admit agentic/');
+    expect(screen.getByRole('alert').textContent).toContain('CI rules skip agentic/ branches');
   });
 
   it('renders untrusted evidence as text, never as markup', async () => {

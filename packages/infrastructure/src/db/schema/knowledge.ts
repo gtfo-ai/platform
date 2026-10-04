@@ -158,6 +158,8 @@ export const readinessEvaluations = pgTable('readiness_evaluations', {
   criteria: jsonb('criteria').$type<JsonValue>().notNull().default([]),
   evaluatedAt: timestamp('evaluated_at', { withTimezone: true }).notNull().defaultNow(),
   source: text('source').notNull(),
+  /** Migration 0079 (WP-143): the platform's notices — the CI-rules warning or note. */
+  notices: jsonb('notices').$type<JsonValue>().notNull().default([]),
 });
 
 /**

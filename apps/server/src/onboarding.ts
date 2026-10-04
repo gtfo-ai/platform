@@ -49,6 +49,7 @@ import type {
 } from '@platform/application';
 import {
   composeSecretRedactors,
+  createCiRulesProbe,
   createOnboardingRuntime,
   gitReads,
   integrationsForProject,
@@ -61,6 +62,7 @@ import {
 import type { Id, IntegrationType, IsoDateTime, JsonObject } from '@platform/contracts';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import {
+  config as configAdapters,
   eventing as eventingAdapters,
   knowledge as knowledgeAdapters,
   pipeline as pipelineAdapters,
@@ -513,6 +515,20 @@ export const createReadinessCiEvents = (pool: pg.Pool): ReadinessCiEvents => ({
 export const composeOnboardingRecording = async (
   options: ComposeOnboardingOptions,
 ): Promise<ComposedOnboarding> => {
+  // WP-143: the CI-rules notice — where the CI lives (the provider, through the executor) and its
+  // rules at the read commit (the mirror), redacted with the git binding's redactor.
+  const ciRules = createCiRulesProbe({
+    integrations: options.integrations,
+    files: options.files,
+    parser: configAdapters.yamlCiParser,
+    defaultBranch: async (projectId) =>
+      (
+        await options.pool.query<{ default_branch: string }>(
+          'select default_branch from projects where id = $1',
+          [projectId],
+        )
+      ).rows[0]?.default_branch ?? null,
+  });
   const record: DiscoveryRecordOptions = {
     unitOfWork: options.eventing.unitOfWork,
     eventStore: options.eventing.store,
@@ -534,6 +550,7 @@ export const composeOnboardingRecording = async (
     ),
     project: async (projectId) => readProject(options.pool, projectId),
     artifact: async (input) => readArtifact(options.pool, input),
+    ciRules,
     logger: options.logger,
   };
 
@@ -548,6 +565,8 @@ export const composeOnboardingRecording = async (
     clock: { now: nowIso },
     ids: { next: (): Id => randomUUID() as Id },
     project: async (projectId) => readProject(options.pool, projectId),
+    // The same reads discovery's evaluation takes, pinned to the re-check's commit.
+    ciRules,
     logger: options.logger,
   };
 

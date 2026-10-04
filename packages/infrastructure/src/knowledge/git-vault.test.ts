@@ -707,6 +707,43 @@ describe('createGitRepositoryFileSource', () => {
     expect(empty.status).toBe('unavailable');
   });
 
+  it('reads the bytes of the one provider-named CI path, bounded, and refuses a path it will not list (WP-143)', async () => {
+    await write(origin, 'deploy/.gitlab-ci.yml', 'test:\n  script: [make test]\n');
+    await write(origin, 'deploy/other.yml', 'not asked for\n');
+    await git(['-C', origin, 'add', '-A']);
+    await commit(origin, 'a CI file at a custom path');
+    const read = expectFiles(
+      await createGitRepositoryFileSource({ mirrorRoot, target: async () => target() }).read({
+        projectId: PROJECT as Id,
+        paths: [],
+        ciConfigPath: 'deploy/.gitlab-ci.yml',
+      }),
+    );
+    expect(read.ciConfig).toMatchObject({ kind: 'file', text: 'test:\n  script: [make test]\n' });
+    expect(read.files).toEqual({});
+    expect(JSON.stringify(read)).not.toContain('not asked for');
+
+    const missing = expectFiles(
+      await createGitRepositoryFileSource({ mirrorRoot, target: async () => target() }).read({
+        projectId: PROJECT as Id,
+        paths: [],
+        ciConfigPath: 'ci/missing.yml',
+      }),
+    );
+    expect(missing.ciConfig).toEqual({ kind: 'absent' });
+
+    for (const refused of ['../outside.yml', '/etc/passwd', 'a//b', 'x'.repeat(256)]) {
+      const runner = recordingRunner();
+      const result = await createGitRepositoryFileSource({
+        mirrorRoot,
+        git: runner,
+        target: async () => target(),
+      }).read({ projectId: PROJECT as Id, paths: [], ciConfigPath: refused });
+      expect(result.status, refused).toBe('unavailable');
+      expect(runner.calls, refused).toEqual([]);
+    }
+  });
+
   it('reads the readiness re-check’s named paths in the same pass, nested ones included (WP-94)', async () => {
     await write(origin, '.gitlab/merge_request_templates/Default.md', '## What\n');
     await write(origin, '.gitlab/merge_request_templates/Bug.md', 'not a named path\n');

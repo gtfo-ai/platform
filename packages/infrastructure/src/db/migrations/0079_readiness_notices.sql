@@ -1,0 +1,13 @@
+-- 0079 — platform-computed notices on a readiness evaluation (WP-143, Q114).
+--
+-- product/17's fourteen criteria are unchanged; beside them an evaluation now carries **notices**
+-- the platform computed itself — today one: the CI-rules warning (`ci_rules_skip_agent_branch`) when
+-- the default branch's CI rules would give an `agentic/` branch's merge request no test job, or the
+-- quieter note (`ci_rules_not_seen`) that says what the evaluator could not read. A notice is never a
+-- criterion and never blocks anything (BD-026); it changes no level.
+--
+-- `[{code, severity, message}]`, snake_case like `criteria`. `message` quotes bounded job names and
+-- one rule out of the project's CI file, redacted before it was parsed (TD-012) — untrusted text
+-- (BD-022), rendered as text. Written by the two writers of the row (`PostgresReadinessStore.record`,
+-- from discovery and the re-check); every row before this migration reads as no notice.
+alter table readiness_evaluations add column notices jsonb not null default '[]'::jsonb;

@@ -152,6 +152,23 @@ Without the first two the merge request gets no pipeline and every task parks at
 Whether GitLab starts a pipeline on its own when a draft is marked ready was read off its
 documentation, not measured on gitlab.com (`docs/TODO.md`).
 
+**The readiness panel checks this for you, as far as it can (WP-143).** Discovery and every
+re-check after a merge evaluate the default branch's CI file — at the path GitLab names, read from
+the platform's mirror — for a **push** pipeline of `agentic/X-1` and a **merge-request** pipeline
+from it into the stored default branch (title not `Draft:`, commit message not `WIP`). It reads
+`workflow:rules`, each job's `rules:` (`if:` with `==`, `!=`, `=~`, `!~`, `&&`, `||`, parentheses,
+`null`) and `only`/`except`. When **no** job in stage `test` (or no job at all, for a file with no
+`test` stage) runs in **either** pipeline and it understood every rule that decided, the panel shows
+a **warning** — *CI rules skip agentic/ branches* — naming the first rule that kept the branch out
+and the fix (admit `agentic/`). It **cannot see** `include:` (any kind — the file is then not
+evaluated), `extends`, `!reference`, `changes:`, `exists:`, `trigger:`, project CI/CD variables or
+any variable it does not set, and a CI configuration outside the repository (`@` or a URL); for
+those it shows a quieter **note** listing what it did not see, never a warning. Autix's file today
+gets the note: its test jobs share `.default_rules` through `!reference`, filter merge requests by
+`changes:`, and the e2e jobs use `extends` — only `lint-documan` is decided (it runs in a
+merge-request pipeline). So the note is not a pass: check the two bullets above by hand. The notice
+never blocks anything and changes no readiness level.
+
 **Webhook or polling.** On a Mac, GitLab cannot reach `http://localhost:8080`, so use a
 **poll-only** binding: set `poll_enabled: true` and `project`, and leave **both**
 `webhook_secret_token` and `webhook_signing_token` empty. A GitLab binding with no webhook secret is

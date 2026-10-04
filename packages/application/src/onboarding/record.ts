@@ -94,6 +94,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import type { CiRulesProbe } from './ci-rules.js';
 import { evaluateReadiness } from './evaluate-readiness.js';
 import type { PlatformReadinessProbe, ReadinessStore } from './ports.js';
 import { readinessEvaluatedEventFor } from './readiness-event.js';
@@ -172,6 +173,8 @@ export interface DiscoveryRecordOptions {
    */
   readonly redactor: SecretRedactor;
   readonly project: (projectId: Id) => Promise<DiscoveryProject | null>;
+  /** The CI-rules notice's reads (WP-143). Omitted: the evaluation carries no notice. */
+  readonly ciRules?: CiRulesProbe;
   readonly artifact: (input: {
     readonly taskId: Id;
     readonly artifactId: Id;
@@ -458,6 +461,8 @@ export const recordDiscoveryFindings = async (
   // default branch is protected, and `integrationsForProject` refuses to run inside one.
   const signals = await options.signals.read(projectId);
   const indexed = await options.knowledge.readIndexedBlobs(projectId);
+  // WP-143: the CI-rules notice, read at the default branch's head (outside every transaction).
+  const ci = options.ciRules === undefined ? null : await options.ciRules.read(projectId);
 
   const tally = { count: 0 };
   const createdAt = options.clock.now();
@@ -470,6 +475,7 @@ export const recordDiscoveryFindings = async (
     agentClaims: draft.readiness,
     signals,
     redactor: options.redactor,
+    notices: ci?.notice == null ? [] : [ci.notice],
   });
   tally.count += redactions;
 

@@ -90,7 +90,12 @@ a budget, a transcript you can watch, a cost entry, and it escalates to a human 
 produces two things:
 
 - a **readiness evaluation**: fourteen criteria and a level from 0 to 4
-  ([product/17](product/17-repository-readiness.md)), with the three cheapest improvements named;
+  ([product/17](product/17-repository-readiness.md)), with the three cheapest improvements named —
+  and, since WP-143, a **CI-rules notice** when there is one: a *warning* that the default branch's
+  CI rules give an `agentic/` branch no test job in a push or a merge-request pipeline (naming the
+  rule and the fix), or a *note* naming what the platform could not read (`include:`, `extends`,
+  `!reference`, `changes:`, an external CI configuration). It changes no level and blocks nothing;
+  it is evaluated again at every re-check (`docs/first-local-test.md` § 1 has what it checks);
 - **drafted knowledge pages**, which arrive as proposals rather than as commits.
 
 Three of the criteria are the platform's own answer and are never taken from what the model claims,
@@ -114,7 +119,7 @@ discovery evaluation of …"*):
 | R9, R11, R12 | the platform's own answers, as at discovery (git provider, bindings, the index) |
 | R8 | `CLAUDE.md` and `AGENTS.md` read at the merged commit: present, at most 200 lines, naming `<knowledge dir>/index.md` |
 | R10 | passes when a merge request template (`.gitlab/merge_request_templates/Default.md`, or `pull_request_template.md` at the root, in `docs/` or in `.github/`) **and** a commitlint configuration file are both present at the merged commit; otherwise carried |
-| R13 | passes when `.pre-commit-config.yaml`, `lefthook.yml`, `.husky/pre-commit` or `.gitlab-ci.yml` **runs** a secret scanner (gitleaks, trufflehog, detect-secrets, ggshield, secretlint): a pre-commit hook of that scanner, or a command line that starts with it; or `.gitlab-ci.yml` includes GitLab's secret-detection template without switching it off. Merely mentioning a scanner does not count. Otherwise carried |
+| R13 | passes when `.pre-commit-config.yaml`, `lefthook.yml`, `.husky/pre-commit` or `.gitlab-ci.yml` **runs** a secret scanner (gitleaks, trufflehog, detect-secrets, ggshield, secretlint): a pre-commit hook of that scanner, or a command line that starts with it; or `.gitlab-ci.yml` includes GitLab's secret-detection template without switching it off. Since WP-143 the CI file is the one GitLab names (`ci_config_path`, e.g. `deploy/.gitlab-ci.yml`) in place of the root `.gitlab-ci.yml` when the two differ. Merely mentioning a scanner does not count. Otherwise carried |
 | R3 | passes when the platform has stored a pipeline event for a merge request in the last 30 days; otherwise carried |
 
 R10, R13 and R3 are never *failed* by a re-check: a template under another name, a scanner in a

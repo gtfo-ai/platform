@@ -122,6 +122,23 @@ export const runReadinessStoreContract = (harness: ReadinessStoreHarness): void 
       expect(read?.criteria).toEqual(CRITERIA);
     });
 
+    it('carries the platform’s notices through the round trip, and reads none as none (WP-143)', async () => {
+      const notices = [
+        {
+          code: 'ci_rules_skip_agent_branch' as const,
+          severity: 'warning' as const,
+          message: '".gitlab-ci.yml" gives an agentic/ branch (agentic/X-1) no test job',
+        },
+      ];
+      await context.store.record(context.tx, evaluation({ id: id(11), notices }));
+      expect((await context.store.latest(context.projectId))?.notices).toEqual(notices);
+      await context.store.record(
+        context.tx,
+        evaluation({ id: id(12), evaluatedAt: '2026-09-14T04:00:00.000Z' as IsoDateTime }),
+      );
+      expect((await context.store.latest(context.projectId))?.notices ?? []).toEqual([]);
+    });
+
     it('writes the project’s readiness level with the evaluation', async () => {
       // The second half of `record`, asserted on the **column** rather than on the port: a store
       // that dropped it would pass every other case in this file.

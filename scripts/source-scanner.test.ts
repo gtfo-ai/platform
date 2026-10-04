@@ -177,6 +177,8 @@ describe('a comment stripper is recognised by its shape', () => {
     'scripts/check-data-model.mjs chars':
       "a **SQL** stripper (`--`, block comments, `'…'` literals) for the migrations — another language than the scanner reads (WP-97)",
     'apps/web/src/app/shell.tsx chars': "a route comparison, `item.to === '/'`",
+    'packages/domain/src/readiness/ci-rules.ts chars':
+      'the opening `/` of a regular-expression literal in a GitLab `rules:if` expression (WP-143) — a tokenizer of another language, which has no comments',
     'apps/web/src/routes/redirect.ts probe':
       "refuses a protocol-relative redirect, `startsWith('//')`",
     'packages/domain/src/knowledge/frontmatter.ts probe': "a YAML alias, `startsWith('*')`",

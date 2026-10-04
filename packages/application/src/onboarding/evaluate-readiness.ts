@@ -40,6 +40,7 @@ import {
   KNOWLEDGE_COMPLETENESS_THRESHOLD,
   knowledgeCompleteness,
   READINESS_CRITERIA,
+  type ReadinessNotice,
   readinessLevelFor,
 } from '@platform/domain';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
@@ -66,6 +67,8 @@ export interface EvaluateReadinessInput {
   readonly signals: PlatformReadinessSignals;
   /** TD-012 over the agent's evidence, **required** (standing rule 31). */
   readonly redactor: SecretRedactor;
+  /** WP-143: the platform's notices (the CI-rules warning or note); none when omitted. */
+  readonly notices?: readonly ReadinessNotice[];
 }
 
 export interface EvaluateReadinessResult {
@@ -198,6 +201,7 @@ export const evaluateReadiness = (input: EvaluateReadinessInput): EvaluateReadin
       criteria,
       evaluatedAt: input.evaluatedAt,
       source: input.source,
+      notices: input.notices ?? [],
     },
     redactions: tally.count,
   };
@@ -236,6 +240,11 @@ export interface RecheckReadinessInput {
   readonly previous: ReadinessEvaluation;
   readonly signals: PlatformReadinessSignals;
   readonly observations: ReadinessObservations;
+  /**
+   * WP-143: the notices this re-check computed. Never carried: a notice is about the commit read,
+   * so a re-check that computed none (no reader composed) records none.
+   */
+  readonly notices?: readonly ReadinessNotice[];
 }
 
 /** The prefix a carried row's evidence starts with — also how a second re-check recognises one. */
@@ -357,6 +366,7 @@ export const recheckReadiness = (input: RecheckReadinessInput): ReadinessEvaluat
     criteria,
     evaluatedAt: input.evaluatedAt,
     source: READINESS_RECHECK_SOURCE,
+    notices: input.notices ?? [],
   };
 };
 

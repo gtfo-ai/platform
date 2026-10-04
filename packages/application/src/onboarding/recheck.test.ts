@@ -241,6 +241,74 @@ describe('recheckProjectReadiness', () => {
     }
   });
 
+  it('records the CI-rules notice read at the merged commit, beside a level it does not change (WP-143)', async () => {
+    const { readiness, recheck } = harness();
+    await seedDiscovery(readiness);
+    const asked: (string | undefined)[] = [];
+    const notice = {
+      code: 'ci_rules_skip_agent_branch' as const,
+      severity: 'warning' as const,
+      message: '".gitlab-ci.yml" gives an agentic/ branch (agentic/X-1) no test job',
+    };
+    await recheckProjectReadiness(
+      {
+        ...recheck,
+        ciRules: {
+          read: async (_projectId, commitSha) => {
+            asked.push(commitSha);
+            return { notice, ciFile: null };
+          },
+        },
+      },
+      data,
+    );
+    expect(asked).toEqual([COMMIT]);
+    expect(readiness.rows[1]?.notices).toEqual([notice]);
+    // A notice is not a criterion: the level is the one the same re-check records without it.
+    const without = harness();
+    await seedDiscovery(without.readiness);
+    await recheckProjectReadiness(without.recheck, data);
+    expect(readiness.rows[1]?.level).toBe(without.readiness.rows[1]?.level);
+    expect(without.readiness.rows[1]?.notices).toEqual([]);
+  });
+
+  it('reads R13 from the CI file at the provider’s custom path, in place of the root one (WP-143, backlog 442)', async () => {
+    const file = (text: string) => ({ kind: 'file' as const, text, blobSha: 'c'.repeat(40) });
+    const scanning = 'secrets:\n  script:\n    - gitleaks detect --redact\n';
+    const run = async (
+      root: string | null,
+      custom: { readonly path: string; readonly text: string } | null,
+    ) => {
+      const { readiness, recheck } = harness({
+        files: {
+          status: 'ok',
+          commitSha: COMMIT,
+          files: {
+            'CLAUDE.md': { kind: 'absent' },
+            'AGENTS.md': { kind: 'absent' },
+            ...(root === null ? {} : { '.gitlab-ci.yml': file(root) }),
+          },
+        },
+      });
+      await seedDiscovery(readiness);
+      await recheckProjectReadiness(
+        { ...recheck, ciRules: { read: async () => ({ notice: null, ciFile: custom }) } },
+        data,
+      );
+      return readiness.rows[1]?.criteria.find((criterion) => criterion.id === 'R13');
+    };
+    const atCustom = await run(null, { path: 'deploy/.gitlab-ci.yml', text: scanning });
+    expect(atCustom).toMatchObject({ passed: true, detectedBy: 'platform' });
+    expect(atCustom?.evidence).toBe(
+      `at ${COMMIT.slice(0, 12)}: "deploy/.gitlab-ci.yml" runs gitleaks`,
+    );
+    // GitLab does not run the root file when the project names another, so a scanner there is not
+    // the project's: R13 carries.
+    const rootOnly = await run(scanning, { path: 'deploy/.gitlab-ci.yml', text: 'test: {}\n' });
+    expect(rootOnly?.passed).toBe(false);
+    expect(rootOnly?.evidence).toContain('carried from the discovery evaluation');
+  });
+
   it('carries R8 when the mirror cannot be read, rather than failing it', async () => {
     const { readiness, recheck } = harness({
       files: { status: 'unavailable', reason: 'APP_KNOWLEDGE_MIRROR_ROOT is not set' },

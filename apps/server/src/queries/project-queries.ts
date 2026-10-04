@@ -224,6 +224,7 @@ export const findProjectReadiness = async (
       criteria: readinessEvaluations.criteria,
       evaluatedAt: readinessEvaluations.evaluatedAt,
       source: readinessEvaluations.source,
+      notices: readinessEvaluations.notices,
     })
     .from(readinessEvaluations)
     .where(eq(readinessEvaluations.projectId, projectId))
@@ -275,9 +276,24 @@ export const findProjectReadiness = async (
         title: criterion.title,
         unlocks: criterion.unlocks,
       })),
+      // WP-143: the platform's own notices, as stored; a shape this build does not know is dropped.
+      notices: noticesOf(newest.notices),
     }),
   };
 };
+
+/** One stored notice, or `null` for an entry this build does not know (it is dropped, WP-143). */
+const storedNoticeSchema = readinessResponseSchema.shape.notices
+  .unwrap()
+  .element.or(z.unknown().transform(() => null));
+
+/** The stored `notices` column, as published: a malformed or unknown entry is dropped (WP-143). */
+const noticesOf = (raw: unknown): ReadinessResponse['notices'] =>
+  storedNoticeSchema
+    .array()
+    .catch([])
+    .parse(raw)
+    .filter((entry): entry is ReadinessResponse['notices'][number] => entry !== null);
 
 /**
  * `GET /api/projects/:id/autonomy` — the dial as it is actually in force (WP-30, BD-027).

@@ -64,6 +64,7 @@ import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import type { CiRulesObservation, CiRulesProbe } from './ci-rules.js';
 import { type ReadinessObservations, recheckReadiness } from './evaluate-readiness.js';
 import type { PlatformReadinessProbe, ReadinessStore } from './ports.js';
 import { readinessEvaluatedEventFor } from './readiness-event.js';
@@ -100,6 +101,11 @@ export interface ReadinessRecheckOptions {
   readonly ids: IdSource;
   /** `projects.knowledge_dir`, or `null` when the project no longer has a row. */
   readonly project: (projectId: Id) => Promise<{ readonly knowledgeDir: string } | null>;
+  /**
+   * The CI-rules notice's reads (WP-143), at the same commit. Omitted: no notice is computed, and
+   * R13 reads the root `.gitlab-ci.yml` only.
+   */
+  readonly ciRules?: CiRulesProbe;
   readonly logger?: Logger;
 }
 
@@ -131,13 +137,21 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
 const treeObservations = (
   files: Readonly<Partial<Record<string, RepositoryFileEntry>>>,
   commitSha: string,
+  ciFile: CiRulesObservation['ciFile'],
 ): Pick<ReadinessObservations, 'mergeRequestConventions' | 'secretScanning'> => {
   const tree = Object.fromEntries(
     READINESS_TREE_PATHS.map((path) => [path, asInstructionsFile(files[path])]),
   );
   return {
     mergeRequestConventions: mergeRequestConventionReadiness({ files: tree, commitSha }),
-    secretScanning: secretScanningReadiness({ files: tree, commitSha }),
+    // WP-143 (backlog 442): R13 reads the CI file at the provider's path, not only the root one.
+    secretScanning: secretScanningReadiness({
+      files: tree,
+      commitSha,
+      ...(ciFile === null
+        ? {}
+        : { ciFile: { path: ciFile.path, file: { kind: 'file', text: ciFile.text } } }),
+    }),
   };
 };
 
@@ -173,6 +187,14 @@ export const recheckProjectReadiness = async (
     projectId,
     since as IsoDateTime,
   );
+  // WP-143: where the CI lives and what its rules give an agentic/ branch, at the same commit.
+  const ci =
+    options.ciRules === undefined
+      ? null
+      : await options.ciRules.read(
+          projectId,
+          read.status === 'ok' ? read.commitSha : data.commit_sha,
+        );
 
   const observations: ReadinessObservations = {
     agentInstructions:
@@ -187,7 +209,9 @@ export const recheckProjectReadiness = async (
           })
         : null,
     mergeRequestPipelines: mergeRequestPipelineReadiness(pipelines),
-    ...(read.status === 'ok' ? treeObservations(read.files, read.commitSha) : {}),
+    ...(read.status === 'ok'
+      ? treeObservations(read.files, read.commitSha, ci?.ciFile ?? null)
+      : {}),
   };
   if (read.status === 'unavailable') {
     (options.logger ?? silentLogger).warn(
@@ -221,6 +245,7 @@ export const recheckProjectReadiness = async (
         previous: current,
         signals,
         observations,
+        notices: ci?.notice == null ? [] : [ci.notice],
       });
       await options.readiness.record(scope.tx, evaluation);
       // One event per recorded row, in the row's transaction (backlog 228, `readiness-event.ts`).

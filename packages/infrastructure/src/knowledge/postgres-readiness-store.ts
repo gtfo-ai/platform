@@ -30,7 +30,12 @@
 
 import type { ReadinessEvaluation, ReadinessStore, Transaction } from '@platform/application';
 import type { Id, IsoDateTime, RiskClass } from '@platform/contracts';
-import type { ReadinessDetector } from '@platform/domain';
+import {
+  CI_RULES_NOTE_CODE,
+  CI_RULES_WARNING_CODE,
+  type ReadinessDetector,
+  type ReadinessNotice,
+} from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
 
@@ -43,6 +48,7 @@ interface EvaluationRow extends Record<string, unknown> {
   readonly criteria: unknown;
   readonly evaluated_at: Date;
   readonly source: string;
+  readonly notices: unknown;
 }
 
 /**
@@ -79,6 +85,25 @@ const toCriteria = (raw: unknown): ReadinessEvaluation['criteria'] => {
   return criteria;
 };
 
+/** `notices` (migration 0079, WP-143), read like `criteria`: a shape this build does not know is dropped. */
+const toNotices = (raw: unknown): readonly ReadinessNotice[] => {
+  if (!Array.isArray(raw)) return [];
+  const notices: ReadinessNotice[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    if (
+      (record.code !== CI_RULES_WARNING_CODE && record.code !== CI_RULES_NOTE_CODE) ||
+      (record.severity !== 'warning' && record.severity !== 'note') ||
+      typeof record.message !== 'string'
+    ) {
+      continue;
+    }
+    notices.push({ code: record.code, severity: record.severity, message: record.message });
+  }
+  return notices;
+};
+
 /** snake_case on the way in, because `criteria` is a jsonb payload like every other one. */
 const toJson = (evaluation: ReadinessEvaluation): string =>
   JSON.stringify(
@@ -101,8 +126,8 @@ export class PostgresReadinessStore implements ReadinessStore {
   async record(tx: Transaction, evaluation: ReadinessEvaluation): Promise<void> {
     const sql = sqlOf(tx);
     await sql.query(
-      `insert into readiness_evaluations (id, project_id, level, criteria, evaluated_at, source)
-       values ($1, $2, $3, $4::jsonb, $5, $6)`,
+      `insert into readiness_evaluations (id, project_id, level, criteria, evaluated_at, source, notices)
+       values ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb)`,
       [
         evaluation.id,
         evaluation.projectId,
@@ -110,6 +135,7 @@ export class PostgresReadinessStore implements ReadinessStore {
         toJson(evaluation),
         evaluation.evaluatedAt,
         evaluation.source,
+        JSON.stringify(evaluation.notices ?? []),
       ],
     );
     // One column. See the module docblock (standing rule 79).
@@ -140,7 +166,7 @@ export class PostgresReadinessStore implements ReadinessStore {
 
   async latest(projectId: Id): Promise<ReadinessEvaluation | null> {
     const { rows } = await this.#sql.query<EvaluationRow>(
-      `select id, project_id, level, criteria, evaluated_at, source
+      `select id, project_id, level, criteria, evaluated_at, source, notices
          from readiness_evaluations
         where project_id = $1
         order by evaluated_at desc, id desc
@@ -158,6 +184,7 @@ export class PostgresReadinessStore implements ReadinessStore {
       criteria: toCriteria(row.criteria),
       evaluatedAt: new Date(row.evaluated_at).toISOString() as IsoDateTime,
       source: row.source,
+      notices: toNotices(row.notices),
     };
   }
 }

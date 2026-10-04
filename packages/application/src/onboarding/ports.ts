@@ -7,7 +7,7 @@
  * keeps the ring rule intact.
  */
 import type { Id, IntegrationType, IsoDateTime, RiskClass } from '@platform/contracts';
-import type { ReadinessDetector } from '@platform/domain';
+import type { ReadinessDetector, ReadinessNotice } from '@platform/domain';
 import type { Transaction } from '../ports/transaction.js';
 
 /** One criterion of a stored evaluation — product/17's row, with who answered it. */
@@ -33,6 +33,11 @@ export interface ReadinessEvaluation {
   readonly evaluatedAt: IsoDateTime;
   /** `readiness_evaluations.source` — which producer wrote it (`discovery`, `rediscovery`, `recheck`). */
   readonly source: string;
+  /**
+   * Platform-computed notices beside the criteria (WP-143, migration 0079) — today only the CI-rules
+   * warning or note. Never a criterion and never a gate (BD-026). Absent reads as none.
+   */
+  readonly notices?: readonly ReadinessNotice[];
 }
 
 /**

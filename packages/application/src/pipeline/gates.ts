@@ -284,6 +284,19 @@ export interface CiGateOptions {
  */
 export const CI_CONFIG_PATH = '.gitlab-ci.yml';
 
+/**
+ * The effective protected paths plus the provider's CI path when it is a repository path the list
+ * does not already name (WP-143, backlog 442). An external or unknown location adds nothing: there
+ * is no file in this repository to protect.
+ */
+export const withCiConfigPath = (
+  protectedPaths: readonly string[],
+  location: CiConfigLocation | null,
+): readonly string[] =>
+  location?.kind === 'repository' && !protectedPaths.includes(location.path)
+    ? [...protectedPaths, location.path]
+    : protectedPaths;
+
 /** {@link ciConfigOnDefaultBranch}'s answer: only `absent` reads as *"the project has no CI"*. */
 export type CiConfigPresence =
   | { readonly kind: 'absent'; readonly path: string }
@@ -470,12 +483,28 @@ export const judgeCiSettlement = async (
      */
     return { kind: 'unsupported', detail: settings.configRefusal };
   }
+  /**
+   * **The CI file the project runs is protected wherever it lives** (WP-143, backlog 442): the
+   * default list names `.gitlab-ci.yml`, and a project whose provider names another path (GoParking's
+   * `deploy/.gitlab-ci.yml`) would otherwise leave its real CI file editable. One provider read; a
+   * refusal waits rather than judging the change without it (fail closed, bounded by the gate's wait).
+   */
+  let ciLocation: CiConfigLocation | null;
+  try {
+    ciLocation = await gitReads(bindings).ciConfigLocation(context);
+  } catch (error) {
+    if (!(error instanceof IntegrationError)) throw error;
+    return {
+      kind: 'pending',
+      detail: `the provider could not say where the CI configuration lives (${error.message}), so the tamper check (BD-024) cannot tell whether the change touches it`,
+    };
+  }
   const artifacts = await options.unitOfWork.transaction(async (scope) =>
     options.store.artifacts.listFor(scope.tx, stored.task.id),
   );
   const verdict = judgeTamper({
     changedPaths: changedExistingPaths(files),
-    protectedPaths: effectiveProtectedPaths(settings),
+    protectedPaths: withCiConfigPath(effectiveProtectedPaths(settings), ciLocation),
     ...exceptionsOf(artifacts),
   });
   const redact = (text: string): string => git.redactor.redactText(text).value;

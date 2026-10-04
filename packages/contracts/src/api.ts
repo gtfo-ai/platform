@@ -894,6 +894,13 @@ export const businessInterviewResponseSchema = z.strictObject({
   ),
 });
 
+/** The codes of {@link readinessResponseSchema}'s `notices` (WP-143); the domain names the same two. */
+export const readinessNoticeCodeSchema = z.enum([
+  'ci_rules_skip_agent_branch',
+  'ci_rules_not_seen',
+]);
+export type ReadinessNoticeCode = z.infer<typeof readinessNoticeCodeSchema>;
+
 /**
  * `GET /api/projects/:id/readiness` — the evaluation, since WP-21 wrote the first one.
  *
@@ -931,6 +938,23 @@ export const readinessResponseSchema = z.strictObject({
       unlocks: z.string(),
     }),
   ),
+  /**
+   * Platform-computed notices beside the criteria (WP-143, Q114) — never a criterion, never a gate
+   * (BD-026). `ci_rules_skip_agent_branch` is the **warning** that the default branch's CI rules
+   * give an `agentic/` branch no test job in a push or a merge-request pipeline;
+   * `ci_rules_not_seen` the quieter **note** that says what the evaluator could not read.
+   * `message` quotes bounded job names and one rule from the project's CI file, redacted:
+   * untrusted text (BD-022) — render it, never execute it. Empty for a row before migration 0079.
+   */
+  notices: z
+    .array(
+      z.strictObject({
+        code: readinessNoticeCodeSchema,
+        severity: z.enum(['warning', 'note']),
+        message: z.string(),
+      }),
+    )
+    .default([]),
 });
 
 // ── Shadow mode (product/10:20, product/18:24, WP-34) ────────────────────────

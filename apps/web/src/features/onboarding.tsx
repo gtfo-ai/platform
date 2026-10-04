@@ -73,6 +73,7 @@ import { BusinessInterview } from './business-interview.js';
 import { DefaultBranch, DefaultBranchMismatch } from './default-branch.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
+import { ReadinessNotices } from './readiness-notices.js';
 
 const LEVEL_TONE: readonly BadgeTone[] = ['danger', 'warning', 'accent', 'success', 'success'];
 
@@ -316,6 +317,8 @@ export const OnboardingScreen = (): ReactElement => {
                 evaluated {formatDateTime(readiness.data.evaluated_at)}
               </span>
             </div>
+            {/* WP-143: the CI-rules warning or note, beside the level it does not change. */}
+            <ReadinessNotices notices={readiness.data.notices} />
             {readiness.data.next_improvements.length > 0 ? (
               <div className="flex flex-col gap-1">
                 <p className="text-xs font-semibold">Cheapest improvements next</p>

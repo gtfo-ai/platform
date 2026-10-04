@@ -113,6 +113,7 @@ export * from './notify/question-settled.js';
 export * from './notify/render.js';
 export * from './notify/undelivered.js';
 // Onboarding: the wizard's discovery run and the readiness evaluation (WP-21)
+export * from './onboarding/ci-rules.js';
 export * from './onboarding/discovery.js';
 export * from './onboarding/evaluate-readiness.js';
 export * from './onboarding/interview.js';

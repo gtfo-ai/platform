@@ -176,6 +176,8 @@ export type RepositoryFilesResult =
        * a directory. No byte of it is read.
        */
       readonly presence?: Readonly<Record<string, 'absent' | 'present'>>;
+      /** The file at the request's `ciConfigPath` (WP-143) — present exactly when it was asked. */
+      readonly ciConfig?: RepositoryFileEntry;
     }
   /** No mirror, no git binding, a fetch that failed, a commit that is not on the default branch. */
   | { readonly status: 'unavailable'; readonly reason: string };
@@ -188,10 +190,19 @@ export interface RepositoryFileRequest {
    * {@link isPresencePath} (WP-139). The one widening of the exact-path list that reads no byte:
    * the CI gate asks whether the file the provider names as the project's CI configuration
    * (GitLab's `ci_config_path`, e.g. `deploy/.gitlab-ci.yml`) exists on the default branch. A
-   * listing, never a read, so a path the provider chose cannot pull a file's contents into the
-   * platform.
+   * listing, never a read. Since WP-143 one provider-named path **is** read — {@link ciConfigPath},
+   * the CI file itself, for the readiness CI-rules notice and R13 — and no other.
    */
   readonly presence?: readonly string[];
+  /**
+   * **The one provider-named path whose bytes are read** (WP-143, the second widening after
+   * {@link presence}): the CI configuration's path as the provider names it (GitLab's
+   * `ci_config_path`, e.g. `deploy/.gitlab-ci.yml`), {@link isPresencePath}, bounded by
+   * {@link MAX_REPOSITORY_FILE_BYTES} like every file. Read for the readiness CI-rules notice and
+   * R13; the caller redacts it, and nothing of it is stored but bounded job names and one rule.
+   * Answered as `ciConfig`.
+   */
+  readonly ciConfigPath?: string;
   /**
    * Also list and read `.agentic/prompts/`'s direct `<name>.md` children at the same commit
    * (WP-92), bounded at `MAX_PROJECT_PROMPT_FILES` files of `MAX_PROJECT_PROMPT_FILE_BYTES` each.

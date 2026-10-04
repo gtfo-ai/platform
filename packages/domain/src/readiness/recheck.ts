@@ -211,6 +211,9 @@ export const READINESS_TREE_PATHS = [
 
 export type ReadinessTreePath = (typeof READINESS_TREE_PATHS)[number];
 
+/** GitLab's default CI file — the entry of {@link SECRET_SCANNING_PATHS} a custom path replaces. */
+const GITLAB_CI_PATH = '.gitlab-ci.yml';
+
 /** The scanners R13 recognises by name — the only words its evidence can contain. */
 const SECRET_SCANNERS = [
   'gitleaks',
@@ -441,15 +444,31 @@ export const mergeRequestConventionReadiness = (input: {
 export const secretScanningReadiness = (input: {
   readonly files: Readonly<Partial<Record<string, ReadinessTreeFile>>>;
   readonly commitSha: string;
+  /**
+   * The CI file at the path the provider names (WP-143, backlog 442), when it is not the root
+   * `.gitlab-ci.yml`: it is read as the GitLab CI file **in place of** the root one, which GitLab
+   * then does not run. Its path in the evidence is the redacted provider path, bounded.
+   */
+  readonly ciFile?: { readonly path: string; readonly file: ReadinessTreeFile };
 }): ReadinessAnswer | null => {
-  for (const path of SECRET_SCANNING_PATHS) {
-    const file = input.files[path];
+  const custom =
+    input.ciFile !== undefined && input.ciFile.path !== GITLAB_CI_PATH ? input.ciFile : undefined;
+  const candidates: {
+    readonly path: string;
+    readonly shown: string;
+    readonly file: ReadinessTreeFile | undefined;
+  }[] = SECRET_SCANNING_PATHS.map((path) =>
+    path === GITLAB_CI_PATH && custom !== undefined
+      ? { path, shown: JSON.stringify(custom.path.slice(0, 120)), file: custom.file }
+      : { path, shown: path, file: input.files[path] },
+  );
+  for (const { path, shown, file } of candidates) {
     if (!hasText(file)) continue;
     const scanner = scannerRunIn(path, file.text);
     if (scanner !== null) {
       return {
         passed: true,
-        evidence: `at ${shortSha(input.commitSha)}: ${path} runs ${scanner}`,
+        evidence: `at ${shortSha(input.commitSha)}: ${shown} runs ${scanner}`,
       };
     }
   }

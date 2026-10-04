@@ -782,6 +782,56 @@ describe('the tamper check in the CI gate (WP-81)', () => {
     expect(detail).toContain('pipeline pipeline-1 succeeded');
   });
 
+  it('protects the CI file at the provider’s custom path, and waits when the provider will not say where it is (WP-143, backlog 442)', async () => {
+    const custom = {
+      repositorySettings: async () => ({
+        defaultBranch: 'dev',
+        ciConfig: { kind: 'repository' as const, path: 'deploy/.gitlab-ci.yml' },
+      }),
+    };
+    const touched = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      withDiff([ORDINARY_FILE, changed('deploy/.gitlab-ci.yml')], custom),
+      {
+        artifacts: [
+          artifact('ImplementationPlan', PLAN([])),
+          artifact('ImplementationNotes', NOTES),
+        ],
+      },
+    );
+    expect(touched).toMatchObject({ passed: false, outcome: 'protected_paths_changed' });
+    expect(touched.kind === 'settled' ? touched.detail : '').toContain('deploy/.gitlab-ci.yml');
+
+    // The same change where the provider says the CI file is the root one: not a protected path.
+    const root = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      withDiff([ORDINARY_FILE, changed('deploy/.gitlab-ci.yml')]),
+      {
+        artifacts: [
+          artifact('ImplementationPlan', PLAN([])),
+          artifact('ImplementationNotes', NOTES),
+        ],
+      },
+    );
+    expect(root).toMatchObject({ passed: true, outcome: 'protected_paths_clean' });
+
+    const refused = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      withDiff([ORDINARY_FILE], {
+        repositorySettings: async () => {
+          throw new IntegrationError('unavailable', 'fake-git', 'GitLab answered 503', {
+            action: 'get_repository_settings',
+          });
+        },
+      }),
+    );
+    expect(refused.kind).toBe('pending');
+    expect(refused.detail).toContain('cannot tell whether the change touches it');
+  });
+
   it('passes a protected path the plan declared and the code review confirmed', async () => {
     const result = await evaluate(
       templateStage('ci_gate'),

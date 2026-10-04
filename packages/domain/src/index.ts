@@ -78,7 +78,8 @@ export * from './policies/wip.js';
 export * from './prompt/assembly.js';
 export * from './prompt/data-block.js';
 export * from './prompt/read-data-blocks.js';
-// Repository readiness — product/17's criteria and its ladder (WP-21)
+// Repository readiness — product/17's criteria and its ladder (WP-21); WP-143's CI-rules notice
+export * from './readiness/ci-rules.js';
 export * from './readiness/criteria.js';
 // WP-64: the re-check after a merge, and the business interview (product/06 step 3)
 export * from './readiness/interview.js';

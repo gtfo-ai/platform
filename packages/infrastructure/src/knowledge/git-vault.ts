@@ -901,7 +901,17 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
     read: async (request): Promise<RepositoryFilesResult> => {
       const refused = request.paths.filter((entry) => !permitted.includes(entry));
       const presence = request.presence ?? [];
-      if (refused.length > 0 || (request.paths.length === 0 && presence.length === 0)) {
+      // WP-143: the one provider-named path whose bytes are read — the CI file, for its rules.
+      const ciConfigPath = request.ciConfigPath;
+      if (ciConfigPath !== undefined && !isPresencePath(ciConfigPath)) {
+        return unavailable(
+          `this reader reads a CI configuration only at a repository-relative path; ${JSON.stringify(ciConfigPath.slice(0, 80))} is not one`,
+        );
+      }
+      if (
+        refused.length > 0 ||
+        (request.paths.length === 0 && presence.length === 0 && ciConfigPath === undefined)
+      ) {
         return unavailable(
           `this reader answers the ${permitted.length} exact paths REPOSITORY_FILE_PATHS names and nothing else; ${JSON.stringify(refused)} is outside what the platform reads from a repository`,
         );
@@ -930,6 +940,7 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
             '--',
             ...request.paths,
             ...presence,
+            ...(ciConfigPath === undefined ? [] : [ciConfigPath]),
             ...(request.promptDirectory === true ? [PROJECT_PROMPTS_DIR] : []),
           ],
           { maxStdoutBytes: 1_024 * 1_024 },
@@ -941,26 +952,34 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
         }
         const entries = parseTreeEntries(listing.stdout.toString('utf8'));
         const files: Partial<Record<RepositoryFilePath, RepositoryFileEntry>> = {};
-        const wanted: { readonly path: RepositoryFilePath; readonly entry: TreeEntry }[] = [];
-        for (const wantedPath of request.paths) {
+        /** `path` is a `RepositoryFilePath`, or the CI path when `ci` (WP-143). */
+        const wanted: { readonly path: string; readonly entry: TreeEntry; readonly ci?: true }[] =
+          [];
+        let ciConfig: RepositoryFileEntry | undefined;
+        const classify = (wantedPath: string): RepositoryFileEntry | TreeEntry => {
           const exact = entries.find((entry) => entry.path === wantedPath);
           if (exact === undefined) {
             // A directory at the path lists its children under `-r`; it is not a file either.
             const nested = entries.some((entry) => entry.path.startsWith(`${wantedPath}/`));
-            files[wantedPath] = nested
-              ? { kind: 'not_a_file', mode: '040000' }
-              : { kind: 'absent' };
-            continue;
+            return nested ? { kind: 'not_a_file', mode: '040000' } : { kind: 'absent' };
           }
           if (exact.type !== 'blob' || !READABLE_MODES.includes(exact.mode)) {
-            files[wantedPath] = { kind: 'not_a_file', mode: exact.mode };
-            continue;
+            return { kind: 'not_a_file', mode: exact.mode };
           }
           if (exact.size > MAX_REPOSITORY_FILE_BYTES) {
-            files[wantedPath] = { kind: 'oversized', bytes: exact.size };
-            continue;
+            return { kind: 'oversized', bytes: exact.size };
           }
-          wanted.push({ path: wantedPath, entry: exact });
+          return exact;
+        };
+        for (const wantedPath of request.paths) {
+          const found = classify(wantedPath);
+          if ('kind' in found) files[wantedPath] = found;
+          else wanted.push({ path: wantedPath, entry: found });
+        }
+        if (ciConfigPath !== undefined) {
+          const found = classify(ciConfigPath);
+          if ('kind' in found) ciConfig = found;
+          else wanted.push({ path: ciConfigPath, entry: found, ci: true });
         }
         const prompts =
           request.promptDirectory === true ? promptDirectoryListing(entries) : undefined;
@@ -978,18 +997,20 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
             );
           }
           const objects = parseCatFileBatch(batch.stdout);
-          for (const [index, { path: wantedPath, entry }] of wanted.entries()) {
+          for (const [index, { path: wantedPath, entry, ci }] of wanted.entries()) {
             const object = objects[index];
             if (object === undefined || object.objectId !== entry.objectId) {
               return unavailable(
                 `git answered for ${String(object?.objectId)} where ${wantedPath} was asked for; the mirror changed under the read`,
               );
             }
-            files[wantedPath] = {
+            const read: RepositoryFileEntry = {
               kind: 'file',
               text: object.content.toString('utf8'),
               blobSha: entry.objectId,
             };
+            if (ci === true) ciConfig = read;
+            else files[wantedPath as RepositoryFilePath] = read;
           }
           for (const [offset, { path: promptPath, entry }] of promptBlobs.entries()) {
             const object = objects[wanted.length + offset];
@@ -1024,6 +1045,7 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
           files,
           behindRecorded,
           ...(prompts === undefined ? {} : { prompts: promptReadingOf(prompts) }),
+          ...(ciConfig === undefined ? {} : { ciConfig }),
           ...(presence.length === 0
             ? {}
             : {

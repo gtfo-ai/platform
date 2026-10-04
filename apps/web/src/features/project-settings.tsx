@@ -61,6 +61,7 @@ import { DefaultBranch, DefaultBranchMismatch } from './default-branch.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 import { ProjectPromptFiles } from './project-prompts.js';
+import { ReadinessNotices } from './readiness-notices.js';
 import { Rediscovery } from './rediscovery.js';
 
 /**
@@ -247,6 +248,8 @@ export const ProjectSettingsScreen = ({
                 value={READINESS_SOURCE_LABEL[readiness.data.source] ?? readiness.data.source}
               />
             </span>
+            {/* WP-143: the CI-rules warning or note — the wizard's own component. */}
+            <ReadinessNotices notices={readiness.data.notices} />
           </div>
         ) : (
           <p className="text-xs text-fg-muted">
