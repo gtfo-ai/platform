@@ -75,6 +75,7 @@ const {
   humanActions,
   integrations,
   organizations,
+  projectRepositoryConfig,
   projects,
   secrets,
   tasks,
@@ -1641,7 +1642,23 @@ const countLiveTasks = async (
  * **And it resets the poll's baseline** (WP-142): every git binding of the project has its
  * `mr_poll_default_head` cleared in this transaction, so the next poll-only poll records the new
  * branch's head as its first read rather than a move from the old branch's.
+ *
+ * **And it refuses the old branch's configuration reading** (WP-147, backlog 442, review round 1):
+ * the project's `project_repository_config` row described a commit of the old branch, so in the same
+ * transaction it becomes `invalid` with {@link branchChangedDetail} — every run of the project is
+ * refused until a reading of the new branch replaces it, which the route makes once this commits.
+ * Never deleted: no row is *no repository layer*, which would fail open.
  */
+/**
+ * The refusal a default-branch change leaves on the project's configuration reading (WP-147): read
+ * by `repositoryConfigRefusal` after *"does not parse:"*, bounded by the column's 600 characters.
+ */
+export const branchChangedDetail = (before: string, after: string): string =>
+  `it has not been read since the default branch changed from ${JSON.stringify(before)} to ${JSON.stringify(after)} (the commit above is the previous branch's); runs wait until the new branch's file is read — POST /api/projects/:project_id/config/refresh reads it now`.slice(
+    0,
+    600,
+  );
+
 export const writeProjectDefaultBranch = async (
   database: Database,
   projectId: string,
@@ -1680,6 +1697,22 @@ export const writeProjectDefaultBranch = async (
         .update(bindings)
         .set({ mrPollDefaultHead: null })
         .where(eq(bindings.projectId, projectId));
+      // WP-147 (backlog 442, review round 1): the last reading of `.agentic/config.yml` was of
+      // the old branch. It is not deleted — no row would mean no repository layer, and runs planned
+      // before the new branch is read would lose the file's narrowing (fail open). It is turned
+      // into a refusal instead: `invalid` refuses every run (`repositoryConfigRefusal`) until a
+      // reading of the new branch replaces it, which the route makes right after this commits.
+      await tx
+        .update(projectRepositoryConfig)
+        .set({
+          status: 'invalid',
+          config: null,
+          notApplied: [],
+          detail: branchChangedDetail(before, branch),
+          prompts: null,
+          promptsWithheld: null,
+        })
+        .where(eq(projectRepositoryConfig.projectId, projectId));
     }
     return { status: 'written', before, project: toProjectRecord(row) } as const;
   });

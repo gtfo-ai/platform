@@ -53,6 +53,8 @@ let attempts: Map<string, { bodyDigest: string | null; params: JsonObject }>;
 /** WP-142: every knowledge index the route asked for, and whether the next request fails. */
 let indexRequests: string[];
 let indexFails: boolean;
+let branchReads: string[];
+let branchReadFails: boolean;
 
 const build = async (): Promise<void> => {
   writes = [];
@@ -60,6 +62,8 @@ const build = async (): Promise<void> => {
   attempts = new Map();
   indexRequests = [];
   indexFails = false;
+  branchReads = [];
+  branchReadFails = false;
   world = {
     role: 'maintainer',
     branch: 'main',
@@ -131,6 +135,14 @@ const build = async (): Promise<void> => {
       // The request follows the write: the branch it will index is already the new one.
       indexRequests.push(`${projectId}@${world.branch}`);
     },
+    readNewDefaultBranch: async (projectId) => {
+      if (branchReadFails) {
+        throw new Error('the mirror is unreachable');
+      }
+      // WP-147: the reading follows the write, so it is of the new branch.
+      branchReads.push(`${projectId}@${world.branch}`);
+      return { config: 'recorded', commitSha: 'a'.repeat(40), recheckRequested: true };
+    },
   });
   await app.ready();
 };
@@ -157,6 +169,24 @@ describe('what a change of the default branch asks for afterwards (WP-142, backl
     world.liveTasks = 1;
     const refused = await put({ default_branch: 'release' });
     expect(refused.statusCode).toBe(409);
+    expect(indexRequests).toEqual([`${PROJECT}@trunk`]);
+  });
+
+  it('reads the new branch’s configuration and readiness at once after the change, and nothing for a refused one (WP-147)', async () => {
+    const changed = await put({ default_branch: 'trunk' });
+    expect(changed.statusCode).toBe(200);
+    expect(branchReads).toEqual([`${PROJECT}@trunk`]);
+
+    world.liveTasks = 1;
+    expect((await put({ default_branch: 'release' })).statusCode).toBe(409);
+    expect(branchReads).toEqual([`${PROJECT}@trunk`]);
+  });
+
+  it('keeps a committed change when the new branch cannot be read now (WP-147)', async () => {
+    branchReadFails = true;
+    const changed = await put({ default_branch: 'trunk' });
+    expect(changed.statusCode).toBe(200);
+    expect(world.branch).toBe('trunk');
     expect(indexRequests).toEqual([`${PROJECT}@trunk`]);
   });
 

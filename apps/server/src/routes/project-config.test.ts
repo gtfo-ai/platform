@@ -151,6 +151,12 @@ beforeEach(async () => {
       repository: async () => ({ status: 'unavailable', reason: 'not composed in this test' }),
       // WP-142's index request, not exercised by these routes either.
       requestKnowledgeIndex: async () => false,
+      // WP-147's after-change reading, not exercised by these routes either.
+      readNewDefaultBranch: async () => ({
+        config: 'unavailable',
+        commitSha: null,
+        recheckRequested: false,
+      }),
     },
     redactText: (value) => value.replaceAll('glpat-FAKE', '[REDACTED]'),
   });

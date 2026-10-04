@@ -77,6 +77,7 @@ import {
   costHandlers,
   createAskRunPlanner,
   createBudgetGuard,
+  createCiConfigLocationReader,
   createContextPackAssembler,
   createDeadLetterEscalation,
   createInboundDecisionApplier,
@@ -1300,6 +1301,13 @@ export const composePipeline = async (
           ),
           logger: options.logger,
         }),
+        /**
+         * Where the project's provider says its CI configuration lives (WP-147, backlog 442): the
+         * write-time path guard protects that file too. One `get_repository_settings` read through
+         * the executor per planned run, outside the executor's transactions; a provider refusal
+         * answers `unknown` and the CI gate's tamper check stays the backstop.
+         */
+        ciConfigLocation: createCiConfigLocationReader({ integrations }),
         /**
          * The data-block nonce (BD-022). `randomUUID` is a CSPRNG — 122 bits — rendered as the 32
          * hex characters `NONCE_PATTERN` requires; the delimiter contract rests on a document's

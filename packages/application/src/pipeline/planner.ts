@@ -73,6 +73,7 @@ import {
 import { projectPromptsForStage } from '../config/project-prompts.js';
 import type { ContextPackAssembler, ContextPackDocument } from '../knowledge/context-pack.js';
 import { NOT_SEARCHED } from '../knowledge/text-search-record.js';
+import type { CiConfigLocation } from '../ports/integrations/git-provider.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { PlatformToolName, RunContextDocument, RunLimits, RunSpec } from '../ports/runner.js';
@@ -81,7 +82,7 @@ import { qualifiedPlatformSkill, unlistedProtectedPaths } from '../ports/workspa
 import { CONFLICT_RESOLUTION_STAGE } from './rebase.js';
 import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { ProjectSettings } from './settings.js';
-import { effectiveProtectedPaths } from './settings.js';
+import { effectiveProtectedPaths, withCiConfigPath } from './settings.js';
 import type { StageRunPlan, StageRunPlanner, StageRunRequest } from './stage-executor.js';
 import type { StoredArtifact, StoredTask } from './store.js';
 import { exceptionsOf } from './tamper.js';
@@ -557,6 +558,26 @@ export interface StageRunPlannerOptions {
    * supplied this collaborator: the record has been visible in `run_context_pack` since WP-57.
    */
   readonly headPaths: (projectId: Id) => Promise<readonly string[] | null>;
+  /**
+   * **Where the project's provider says its CI configuration lives** (WP-147, backlog 442) — the
+   * git binding's `repositorySettings().ciConfig` (GitLab's `ci_config_path`), or `null` for a
+   * project with no git binding.
+   *
+   * The write-time path guard (BD-024 §2) protects the effective `protected_paths` **plus** this
+   * path when it is a repository path the list does not name ({@link withCiConfigPath}, the CI
+   * gate's own expression): GoParking's `deploy/.gitlab-ci.yml` is the file GitLab runs, and the
+   * default list names only `.gitlab-ci.yml`. It is a platform default the project cannot narrow
+   * away — added after the project's list replaced the default one. An `external` location (another
+   * project's file, a URL) and an `unknown` one add nothing, and the planner says so in its log;
+   * the CI gate's tamper check is then the only check.
+   *
+   * **Required** (standing rule 31): an absent collaborator would be a guard that silently protects
+   * less. A provider refusal **throws** (the production reader's `CiConfigLocationUnavailableError`,
+   * WP-147 review round 1) and the plan fails with it, so the `stage.execute` job is retried rather
+   * than a run started without the path. Read between the executor's two transactions, like the
+   * pack's queries.
+   */
+  readonly ciConfigLocation: (projectId: Id, taskId: Id) => Promise<CiConfigLocation | null>;
   /** `api` or `local` (BD-004); the composition root knows which one the instance runs. */
   readonly providerMode?: 'api' | 'local';
   /** Environment handed to the CLI. Never inherited (technical/04). */
@@ -1217,7 +1238,23 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           "the project's commands.allow names entries this run's role baseline does not grant; they were dropped, never widened (BD-025)",
         );
       }
-      const protectedPaths = effectiveProtectedPaths(settings);
+      // WP-147 (backlog 442): the provider's CI path joins the list after the project's own list
+      // replaced the default, so no project setting removes it.
+      const ciLocation = await options.ciConfigLocation(task.task.projectId, task.task.id);
+      if (ciLocation !== null && ciLocation.kind !== 'repository') {
+        logger.info(
+          {
+            project_id: task.task.projectId,
+            task_id: task.task.id,
+            run_id: request.runId,
+            ci_config: ciLocation.kind,
+          },
+          ciLocation.kind === 'external'
+            ? "the project's CI configuration lives outside this repository, so the write-time path guard adds no CI path (BD-024)"
+            : "the provider did not say where the project's CI configuration lives, so the write-time path guard adds no CI path; the CI gate's tamper check still asks (BD-024)",
+        );
+      }
+      const protectedPaths = withCiConfigPath(effectiveProtectedPaths(settings), ciLocation);
       const budgetTokens =
         settings.config.project?.context_budget_tokens ?? DEFAULT_CONTEXT_BUDGET_TOKENS;
 

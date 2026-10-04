@@ -15,6 +15,7 @@
 import type {
   ConfigExportReport,
   ConfigExportRequest,
+  DefaultBranchReading,
   Jobs,
   Logger,
   PipelineIntegrationsPort,
@@ -28,6 +29,7 @@ import {
   IntegrationError,
   integrationsForProject,
   noRunScopedSecrets,
+  readNewDefaultBranch,
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import type pg from 'pg';
@@ -49,6 +51,14 @@ export interface ProjectConfigCommands {
    * requests after it commits. `false` when this process holds no job client.
    */
   requestKnowledgeIndex(projectId: Id): Promise<boolean>;
+  /**
+   * **Reads the new default branch at once** (WP-147, backlog 442): what a change of the default
+   * branch does after it commits, beside the index request. The repository configuration is re-read
+   * from the stored (new) branch's head — the change already dropped the old branch's reading — and
+   * a readiness re-check is requested **pinned to the commit that read answered**, so neither the
+   * next configuration read nor the next re-check waits for an index run.
+   */
+  readNewDefaultBranch(projectId: Id): Promise<DefaultBranchReading>;
 }
 
 /** Bounds a provider string before it reaches a DTO (the schema's 255; BD-022). */
@@ -80,6 +90,8 @@ export const createProjectConfigCommands = (options: {
         request,
       ),
     refresh: async (projectId) => refresh({ projectId }),
+    readNewDefaultBranch: async (projectId) =>
+      readNewDefaultBranch({ refresh, jobs: options.jobs }, projectId),
     requestKnowledgeIndex: async (projectId) => {
       if (options.jobs === null) {
         return false;

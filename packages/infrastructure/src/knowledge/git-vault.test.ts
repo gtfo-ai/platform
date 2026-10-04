@@ -632,6 +632,47 @@ describe('createGitRepositoryFileSource', () => {
     expect(expectFiles(await read(newer, 'f'.repeat(40))).behindRecorded).toBe(false);
   });
 
+  /**
+   * WP-147 (backlog 442): after a change of the default branch `develop` → `main`, the recorded
+   * reading of `develop` is not a newer reading of `main` — even though `main`'s head is an
+   * ancestor of `develop`'s, which is Autix's shape — so `main`'s reading is recorded.
+   */
+  it('does not call a read of the new default branch older than a reading of the previous one', async () => {
+    const mainHead = await git(['-C', origin, 'rev-parse', 'HEAD']);
+    await git(['-C', origin, 'checkout', '-qb', 'develop']);
+    await write(origin, '.agentic/config.yml', 'version: 1\n');
+    await git(['-C', origin, 'add', '-A']);
+    await commit(origin, 'ahead on develop');
+    const developHead = await git(['-C', origin, 'rev-parse', 'HEAD']);
+    await git(['-C', origin, 'checkout', '-q', 'main']);
+    const source = (defaultBranch: string) =>
+      createGitRepositoryFileSource({ mirrorRoot, target: async () => target({ defaultBranch }) });
+    const onDevelop = expectFiles(
+      await source('develop').read({ projectId: PROJECT as Id, paths: ['.agentic/config.yml'] }),
+    );
+    expect(onDevelop.commitSha).toBe(developHead);
+    const onMain = expectFiles(
+      await source('main').read({
+        projectId: PROJECT as Id,
+        paths: ['.agentic/config.yml'],
+        recordedCommit: developHead,
+      }),
+    );
+    expect(onMain.commitSha).toBe(mainHead);
+    expect(onMain.behindRecorded).toBe(false);
+    // The old rule still holds on one branch: a pinned older commit of `main` is behind its head.
+    expect(
+      expectFiles(
+        await source('develop').read({
+          projectId: PROJECT as Id,
+          paths: ['.agentic/config.yml'],
+          commitSha: mainHead,
+          recordedCommit: developHead,
+        }),
+      ).behindRecorded,
+    ).toBe(true);
+  });
+
   it('never reads a branch other than the default one', async () => {
     await git(['-C', origin, 'checkout', '-qb', 'agentic/feature']);
     await write(origin, '.agentic/config.yml', 'version: 1\ncommands: { allow: ["curl *"] }\n');

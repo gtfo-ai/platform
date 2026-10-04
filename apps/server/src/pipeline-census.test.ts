@@ -329,7 +329,7 @@ const WRAPPED_JOBS_CALL_SITES: Readonly<Record<string, string>> = {
   createHistoryBootstrapCommands: 'the bootstrap start command (WP-35).',
   createKnowledgeCommands: 'the proposal decision, which asks for a commit (WP-18b).',
   createProjectConfigCommands:
-    'a change of the default branch asks for a knowledge index of the new branch (WP-142).',
+    'a change of the default branch asks for a knowledge index of the new branch (WP-142) and a readiness re-check pinned to the commit its configuration read answered (WP-147).',
 };
 
 /** The segments of the object literal at `open`, or `null` when the call takes no literal. */

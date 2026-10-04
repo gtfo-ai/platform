@@ -46,6 +46,7 @@ import {
 import type { ProjectPromptReading } from '../config/project-prompts.js';
 import type { PromptsWithheld } from '../config/repository-config.js';
 import { assertOutsideTransaction } from '../events/open-transaction.js';
+import type { CiConfigLocation } from '../ports/integrations/git-provider.js';
 import type { Transaction } from '../ports/transaction.js';
 
 export interface ProjectSettings {
@@ -469,6 +470,23 @@ export const effectiveProtectedPaths = (settings: ProjectSettings): readonly str
   settings.config.policies?.protected_paths ??
   PLATFORM_DEFAULT_CONFIG.policies?.protected_paths ??
   [];
+
+/**
+ * The effective protected paths plus the provider's CI path when it is a repository path the list
+ * does not already name (WP-143, backlog 442). An external or unknown location adds nothing: there
+ * is no file in this repository to protect.
+ *
+ * One expression for its two readers (WP-147): the CI gate's tamper check and the planner's
+ * write-time path guard. It is applied **after** {@link effectiveProtectedPaths}, so a project whose
+ * own `protected_paths` replaced the default list still has its CI file protected.
+ */
+export const withCiConfigPath = (
+  protectedPaths: readonly string[],
+  location: CiConfigLocation | null,
+): readonly string[] =>
+  location?.kind === 'repository' && !protectedPaths.includes(location.path)
+    ? [...protectedPaths, location.path]
+    : protectedPaths;
 
 export interface ProjectSettingsPort {
   forProject(projectId: Id, tx?: Transaction): Promise<ProjectSettings>;

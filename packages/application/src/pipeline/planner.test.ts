@@ -38,9 +38,11 @@ import {
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import { createContextPackAssembler } from '../knowledge/context-pack.js';
+import type { CiConfigLocation } from '../ports/integrations/git-provider.js';
 import { silentLogger } from '../ports/logger.js';
 import { FIXTURE_HOSTILE_PATH, FIXTURE_ZERO_WIDTH } from '../testing/fixture-vault.js';
 import { indexedFixtureVault } from '../testing/memory-knowledge.js';
+import { CiConfigLocationUnavailableError } from './ci-config-location.js';
 import {
   COMMAND_ALLOW_BY_SKILL,
   COMMAND_ALLOW_BY_STAGE,
@@ -133,6 +135,7 @@ const planWith = async (taskText: string, ticketSnapshot: TicketSnapshot | null 
     prompts: prompts as never,
     skills: testSkills,
     boundSkills: async () => [],
+    ciConfigLocation: async () => null,
     nonce: { next: () => NONCE },
     contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
     // The production shape (WP-58): the listing the index write stored for its commit.
@@ -179,6 +182,7 @@ describe('`paths:` pages in production shape (WP-58, PROGRESS backlog 170)', () 
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
       headPaths: (projectId) => store.readPathWitnesses(projectId),
@@ -255,6 +259,7 @@ describe('`paths:` pages in production shape (WP-58, PROGRESS backlog 170)', () 
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
       headPaths: async () => null,
@@ -864,6 +869,7 @@ describe('the platform skills a stage is planned with', () => {
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({
         store: (await indexedFixtureVault()).store,
@@ -948,6 +954,7 @@ describe('the platform skills a stage is planned with', () => {
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({
         store: (await indexedFixtureVault()).store,
@@ -1015,6 +1022,7 @@ describe('the platform skills a stage is planned with', () => {
         prompts: prompts as never,
         skills: { kb: testSkills['kb'] as SkillDefinition },
         boundSkills: async () => [],
+        ciConfigLocation: async () => null,
         nonce: { next: () => NONCE },
         contextPacks: { assemble: async () => ({}) as never },
         headPaths: async () => null,
@@ -1066,6 +1074,7 @@ describe('what the project decides about a run, within what the role allows', ()
         expect(projectId).toBe(PROJECT);
         return bound;
       },
+      ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({
         store: (await indexedFixtureVault()).store,
@@ -1329,6 +1338,7 @@ describe('the review checklists a run is given (WP-45)', () => {
         prompts: prompts as never,
         skills: testSkills,
         boundSkills: async () => [],
+        ciConfigLocation: async () => null,
         nonce: { next: () => NONCE },
         contextPacks: createContextPackAssembler({
           store: (await indexedFixtureVault()).store,
@@ -1466,6 +1476,7 @@ describe('the plan’s protected-path declarations in the run spec (WP-99)', () 
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
       headPaths: (projectId) => store.readPathWitnesses(projectId),
@@ -1504,6 +1515,97 @@ describe('the plan’s protected-path declarations in the run spec (WP-99)', () 
       reason: /not been provisioned/,
     });
     expect(plan.spec.protectedPaths.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * WP-147 (backlog 442): the write-time path guard protects the CI file the provider names, as a
+ * platform default the project cannot narrow away. GoParking's `deploy/.gitlab-ci.yml` is the shape.
+ */
+describe('the provider’s CI path in the write-time path guard (WP-147)', () => {
+  const planWithCi = async (
+    location: CiConfigLocation | null | (() => never),
+    config: Record<string, unknown> = {},
+  ) => {
+    const { store } = await indexedFixtureVault();
+    const asked: Array<readonly [string, string]> = [];
+    const logged: Array<{ readonly fields: unknown; readonly message: string }> = [];
+    const logger = {
+      ...silentLogger,
+      info: (fields: unknown, message: string) => {
+        logged.push({ fields, message });
+      },
+      child: () => logger,
+    } as unknown as typeof silentLogger;
+    const planner = createStageRunPlanner({
+      workspacePath: (taskId) => `/workspaces/${taskId}`,
+      prompts: prompts as never,
+      skills: testSkills,
+      boundSkills: async () => [],
+      ciConfigLocation: async (projectId, taskId) => {
+        asked.push([projectId, taskId]);
+        return typeof location === 'function' ? location() : location;
+      },
+      nonce: { next: () => NONCE },
+      contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
+      headPaths: (projectId) => store.readPathWitnesses(projectId),
+      clock: { now: () => NOW },
+      logger,
+    });
+    const base = implementationRequestNaming([]);
+    const plan = await planner.plan({
+      ...base,
+      settings: { ...base.settings, config },
+    } as unknown as StageRunRequest);
+    return { plan, asked, logged };
+  };
+
+  it('protects deploy/.gitlab-ci.yml when the provider names it, beside the default list', async () => {
+    const { plan, asked } = await planWithCi({ kind: 'repository', path: 'deploy/.gitlab-ci.yml' });
+    expect(plan.spec.protectedPaths).toContain('deploy/.gitlab-ci.yml');
+    expect(plan.spec.protectedPaths).toContain('.gitlab-ci.yml');
+    expect(asked).toEqual([[PROJECT, TASK]]);
+  });
+
+  it('keeps the CI path when the project’s own protected_paths replaced the default list', async () => {
+    const { plan } = await planWithCi(
+      { kind: 'repository', path: 'deploy/.gitlab-ci.yml' },
+      { policies: { protected_paths: ['src/billing/**'] } },
+    );
+    expect(plan.spec.protectedPaths).toEqual(['src/billing/**', 'deploy/.gitlab-ci.yml']);
+  });
+
+  it('adds nothing for the root path the list already names', async () => {
+    const withRoot = await planWithCi({ kind: 'repository', path: '.gitlab-ci.yml' });
+    const without = await planWithCi(null);
+    expect(withRoot.plan.spec.protectedPaths).toEqual(without.plan.spec.protectedPaths);
+  });
+
+  it('fails the plan when the location cannot be read, so the stage is retried rather than run without it (review round 1)', async () => {
+    await expect(
+      planWithCi(() => {
+        throw new CiConfigLocationUnavailableError('the git provider could not say');
+      }),
+    ).rejects.toThrow(CiConfigLocationUnavailableError);
+  });
+
+  it('adds nothing for an external or unknown location, and says so', async () => {
+    const without = await planWithCi(null);
+    for (const location of [
+      { kind: 'external', location: 'ci/shared.yml@group/ci-templates' },
+      { kind: 'unknown', reason: 'the provider refused the read' },
+    ] as const) {
+      const { plan, logged } = await planWithCi(location);
+      expect(plan.spec.protectedPaths).toEqual(without.plan.spec.protectedPaths);
+      expect(
+        logged.some(
+          (entry) =>
+            /adds no CI path/.test(entry.message) &&
+            (entry.fields as { ci_config?: string }).ci_config === location.kind,
+        ),
+        location.kind,
+      ).toBe(true);
+    }
   });
 });
 
@@ -1572,6 +1674,7 @@ describe('the verdicts a returned stage is shown (WP-83)', () => {
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
       headPaths: (projectId) => store.readPathWitnesses(projectId),
@@ -1667,6 +1770,7 @@ describe('an oversize merge request in a review run’s prompt (WP-83, Q54)', ()
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
       headPaths: (projectId) => store.readPathWitnesses(projectId),
@@ -1729,6 +1833,7 @@ describe('the observability excerpts a run is given (WP-89)', () => {
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
       headPaths: (projectId) => store.readPathWitnesses(projectId),
@@ -1789,6 +1894,7 @@ describe('the project prompt files a stage is given (WP-92)', () => {
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
       headPaths: (projectId) => store.readPathWitnesses(projectId),

@@ -123,8 +123,14 @@ people open merge requests against.
 3. **On the platform**: the project's settings page → **Default branch** → `main` → **Save default
    branch**. In the same transaction the platform forgets the head its poll last saw, so the next poll
    reads `main`'s head as a first reading and records **no** move (no rebase re-check, no index run from
-   it); after the change it asks for a knowledge index of `main`, which also re-reads `.agentic/config.yml`
-   there. With **your own** run token (§ 1's form B), press **Test connection** again: its protection
+   it) and marks its reading of `develop`'s `.agentic/config.yml` as no longer valid, so no run starts on
+   the project until `main`'s file is read; right after the change it reads
+   `main`'s `.agentic/config.yml` and asks for a readiness re-check pinned to `main`'s head (WP-147), so
+   the configuration and readiness are `main`'s **before** any index run — and it asks for a knowledge index
+   of `main`, which re-reads both again at the commit it indexes. Saving waits for that read (a fetch of the
+   platform's mirror). If the mirror could not be reached at that moment, runs stay refused — the task
+   page says *repository configuration invalid … default branch changed* — until the index run reads
+   `main`, or **Re-read the repository** on the settings page reads it on demand. With **your own** run token (§ 1's form B), press **Test connection** again: its protection
    check reads the stored branch, now `main`. The notice disappears.
 
 Nothing of this was run against GitLab: the order is the code's, read off `writeProjectDefaultBranch`
@@ -206,7 +212,14 @@ Autix:
   and read GoParking as a project with no CI, so a merge request with no pipeline passed the CI gate
   on no evidence. A configuration GitLab takes from another project (`…@group/project`) or a URL
   counts as CI that is present. The project's settings page (**Default branch**) shows what GitLab
-  answered. The same CI rules as Autix's apply: `agentic/` admitted, test jobs on merge-request
+  answered. **`deploy/.gitlab-ci.yml` is a protected path** (WP-147): an agent run may not edit it
+  unless the task's plan lists it, exactly like `.gitlab-ci.yml` — the run reads GitLab's setting when
+  it is planned and adds the path to the project's `protected_paths`, which no project setting can
+  remove; the CI gate's tamper check compares the merge request against the same list. An external
+  configuration adds nothing (there is no file in this repository to protect), and neither does a
+  token GitLab will not show the setting to — the run says so in its log, and the CI gate is then the
+  check. A GitLab that **refuses** the read (down, rate-limited) starts no run: the stage is retried,
+  and after its retries it is parked *Needs human*. The same CI rules as Autix's apply: `agentic/` admitted, test jobs on merge-request
   pipelines.
 - **Reaching it from the containers** is the self-managed column of the table above: a host
   reachable only over a VPN, or with a certificate from a private CA, was not tested.

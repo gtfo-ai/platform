@@ -89,7 +89,7 @@ import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.
 import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import type { ProjectSettings, ProjectSettingsPort } from './settings.js';
-import { effectiveProtectedPaths } from './settings.js';
+import { effectiveProtectedPaths, withCiConfigPath } from './settings.js';
 import type { PipelineStore, StoredTask } from './store.js';
 import { changedExistingPaths, exceptionsOf, judgeTamper, tamperFailureDetail } from './tamper.js';
 
@@ -283,19 +283,6 @@ export interface CiGateOptions {
  * `ci_config_path` means, kept for the sentences that name it.
  */
 export const CI_CONFIG_PATH = '.gitlab-ci.yml';
-
-/**
- * The effective protected paths plus the provider's CI path when it is a repository path the list
- * does not already name (WP-143, backlog 442). An external or unknown location adds nothing: there
- * is no file in this repository to protect.
- */
-export const withCiConfigPath = (
-  protectedPaths: readonly string[],
-  location: CiConfigLocation | null,
-): readonly string[] =>
-  location?.kind === 'repository' && !protectedPaths.includes(location.path)
-    ? [...protectedPaths, location.path]
-    : protectedPaths;
 
 /** {@link ciConfigOnDefaultBranch}'s answer: only `absent` reads as *"the project has no CI"*. */
 export type CiConfigPresence =

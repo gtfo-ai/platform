@@ -602,6 +602,17 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
                 throw new Error('this process holds no job client to request a knowledge index');
               }
             },
+      // WP-147: and reads the new branch's configuration and readiness at once.
+      readNewDefaultBranch:
+        options.projectConfig === undefined || options.projectConfig === null
+          ? null
+          : async (projectId) => {
+              const commands = options.projectConfig;
+              if (commands === undefined || commands === null) {
+                throw new Error('this process composed no configuration commands');
+              }
+              return commands.readNewDefaultBranch(projectId as Id);
+            },
     });
     await registerOnboardingRoutes(app, {
       database: options.database,

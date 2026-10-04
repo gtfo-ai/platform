@@ -20,6 +20,11 @@
  * `stately` per project and collapses a merge into a queued task-start run; and a merge into a
  * branch other than the default one reads the same commit (`unchanged`) and writes no row.
  *
+ * **Since WP-147 a change of the default branch is a second trigger** (`config/default-branch-reading.ts`):
+ * right after the change commits, the new branch's configuration is read and a re-check is enqueued
+ * pinned to the commit that reading answered, so readiness moves to the new branch before any index
+ * run. The index run that follows reads the same commit or a later one.
+ *
  * ## What it re-answers, and what it carries
  *
  * `READINESS_CRITERIA[].recheck` is the stated split: R9, R11 and R12 are the platform's and are

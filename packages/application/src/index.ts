@@ -43,6 +43,7 @@ export * from './bootstrap/record.js';
 export * from './bootstrap/runtime.js';
 export * from './bootstrap/sample.js';
 // The repository layer of the effective configuration and the configuration export (WP-63)
+export * from './config/default-branch-reading.js';
 export * from './config/export.js';
 export * from './config/project-prompts.js';
 export * from './config/prompt-reread.js';
@@ -125,6 +126,7 @@ export * from './onboarding/record.js';
 export * from './onboarding/rediscovery.js';
 export * from './onboarding/runtime.js';
 // The pipeline (WP-15): interpreter-driven sagas, the stage executor and their ports
+export * from './pipeline/ci-config-location.js';
 export * from './pipeline/commands.js';
 export * from './pipeline/dead-letter.js';
 export * from './pipeline/deadline-rules.js';

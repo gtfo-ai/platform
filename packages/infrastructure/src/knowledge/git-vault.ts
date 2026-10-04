@@ -487,6 +487,8 @@ type PreparedMirror =
       readonly commit: string;
       readonly refreshed: boolean;
       readonly inMirror: MirrorRunner;
+      /** `refs/heads/<projects.default_branch>` — the branch this read was made from (WP-147). */
+      readonly ref: string;
     };
 
 /**
@@ -726,7 +728,7 @@ const prepareMirrorRead = async (
     }
     // The second stamp (see `stamp` above): the one a fresh clone gets.
     await stamp();
-    return { status: 'ok', commit, refreshed, inMirror } as const;
+    return { status: 'ok', commit, refreshed, inMirror, ref } as const;
   });
 };
 
@@ -928,7 +930,7 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
         if (prepared.status === 'unavailable') {
           return prepared;
         }
-        const { commit, inMirror } = prepared;
+        const { commit, inMirror, ref } = prepared;
         const listing = await inMirror(
           [
             'ls-tree',
@@ -1033,11 +1035,16 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
         // WP-63 review round 1: is this commit strictly older than the reading already recorded?
         // Only a *strict ancestor* is older: a recorded commit this mirror no longer has (a
         // force-pushed default branch) answers "not an ancestor", so the new reading is recorded.
+        // WP-147 (backlog 442): and only a recorded commit **on the branch read now** is newer —
+        // a reading of the previous default branch (`develop`, whose head `main` is often an
+        // ancestor of) is not a newer reading of `main`, so a change of the default branch is
+        // never answered with the old branch's configuration.
         const recorded = request.recordedCommit;
         const behindRecorded =
           recorded !== undefined &&
           COMMIT_SHA.test(recorded) &&
           recorded !== commit &&
+          (await inMirror(['merge-base', '--is-ancestor', recorded, ref])).code === 0 &&
           (await inMirror(['merge-base', '--is-ancestor', commit, recorded])).code === 0;
         return {
           status: 'ok',

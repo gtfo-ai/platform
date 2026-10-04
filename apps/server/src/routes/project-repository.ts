@@ -36,7 +36,10 @@
  * **What a change resets** (WP-142, backlog 441/442): in the same transaction it clears every git
  * binding's `mr_poll_default_head`, so the next poll takes a baseline of the new branch and records
  * no `default_branch.moved` comparing two branches; after the commit it asks for a knowledge index of
- * the new branch, which also re-reads the repository configuration there. A task cannot be created
+ * the new branch. **It also marks the old branch's configuration reading `invalid` in that
+ * transaction (runs are refused until the new branch is read; WP-147 review round 1) and, after the
+ * commit, reads the new branch's `.agentic/config.yml` and asks for a readiness re-check
+ * pinned to the commit read** (WP-147), so neither waits for the index run. A task cannot be created
  * at the instant of a change: task creation takes the project row `for share` (the Postgres
  * `tasks.insert`), which this write's `for update` waits for, and the reverse.
  */
@@ -103,6 +106,21 @@ export interface ProjectRepositoryRoutesOptions {
    * by the next task start, which requests an index of its own (`knowledge.index.task-start`).
    */
   readonly requestKnowledgeIndex: ((projectId: string) => Promise<void>) | null;
+  /**
+   * Reads the new default branch **at once** after a change commits (WP-147, backlog 442): the
+   * repository configuration from the new branch's head, and a readiness re-check pinned to the
+   * commit that read answered — so neither waits for the index run. `null` on a process that
+   * composed no integration stack. A failure is logged and the change stands: the change already
+   * marked the old branch's reading `invalid`, so runs wait, and the index run re-reads both. The
+   * response waits on this read (a mirror fetch).
+   */
+  readonly readNewDefaultBranch:
+    | ((projectId: string) => Promise<{
+        readonly config: string;
+        readonly commitSha: string | null;
+        readonly recheckRequested: boolean;
+      }>)
+    | null;
 }
 
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -135,6 +153,42 @@ const requestIndexAfterChange = async (
     request.log.error(
       { project_id: projectId, err: error },
       'the default branch changed but the knowledge index of the new branch could not be requested; the next task start requests one',
+    );
+  }
+};
+
+/**
+ * WP-147: the new branch's configuration and readiness reads that follow a committed change. Like
+ * the index request, a failure is logged and does not undo the change.
+ */
+const readNewBranchAfterChange = async (
+  options: ProjectRepositoryRoutesOptions,
+  request: FastifyRequest,
+  projectId: string,
+): Promise<void> => {
+  if (options.readNewDefaultBranch === null) {
+    return;
+  }
+  try {
+    const reading = await options.readNewDefaultBranch(projectId);
+    const fields = {
+      project_id: projectId,
+      config: reading.config,
+      commit_sha: reading.commitSha,
+      recheck_requested: reading.recheckRequested,
+    };
+    if (reading.config === 'recorded') {
+      request.log.info(fields, 'the new default branch’s configuration was read');
+    } else {
+      request.log.warn(
+        fields,
+        'the new default branch’s configuration could not be read now; the knowledge index run reads it',
+      );
+    }
+  } catch (error) {
+    request.log.error(
+      { project_id: projectId, err: error },
+      'the default branch changed but its configuration could not be read now; the knowledge index run reads it',
     );
   }
 };
@@ -194,7 +248,7 @@ export const registerProjectRepositoryRoutes = async (
       schema: {
         summary: 'Change the project’s default branch',
         description:
-          'Writes `projects.default_branch` — the branch runs check out, merge requests target and the mirror reads — and nothing else. Maintainer. Refused `409 project_has_live_tasks` while any of the project’s tasks is not done or cancelled. One `human_actions` row per accepted request, with the branch before and after; `Idempotency-Key` is optional and honoured, so a replay writes no second row. The branch is not checked against the provider: `GET …/repository` shows what the provider says.',
+          'Writes `projects.default_branch` — the branch runs check out, merge requests target and the mirror reads — and, when it changes, forgets the poll’s last head and marks the old branch’s `.agentic/config.yml` reading `invalid` (runs are refused until the new branch is read) in the same transaction; once committed it requests a knowledge index of the new branch and reads the new branch’s file and a readiness re-check pinned to that commit — **the response waits on that read, which may fetch the platform’s mirror from the git host**; a failed read is logged and the change stands. Maintainer. Refused `409 project_has_live_tasks` while any of the project’s tasks is not done or cancelled. One `human_actions` row per accepted request, with the branch before and after; `Idempotency-Key` is optional and honoured, so a replay writes no second row. The branch is not checked against the provider: `GET …/repository` shows what the provider says.',
         tags: ['projects'],
         params: projectParamsSchema,
         body: setDefaultBranchRequestSchema,
@@ -253,6 +307,7 @@ export const registerProjectRepositoryRoutes = async (
         return written.project;
       });
       await requestIndexAfterChange(options, request, projectId);
+      await readNewBranchAfterChange(options, request, projectId);
       return { project, performed: true };
     },
   );

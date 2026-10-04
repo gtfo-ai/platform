@@ -41,10 +41,11 @@
  *
  * ## When it is read
  *
- * Refreshed from two places, both outside any transaction: the knowledge index job, after every
+ * Refreshed from three places, all outside any transaction: the knowledge index job, after every
  * index run, pinned to the commit that run read (so the configuration and the vault describe the
- * same commit, and the mirror is not fetched twice); and `POST /api/projects/:id/config/refresh`,
- * the explicit re-read. A read that cannot reach the repository records **nothing** — the previous
+ * same commit, and the mirror is not fetched twice); `POST /api/projects/:id/config/refresh`, the
+ * explicit re-read; and, since WP-147, a change of the default branch, right after it commits
+ * (`default-branch-reading.ts`) — the change marks the old branch's reading `invalid` in its transaction, so runs wait for it. A read that cannot reach the repository records **nothing** — the previous
  * snapshot stands, and the refusal to refresh is logged and returned rather than written as an
  * empty layer (TD-026 decision 4's rule, one module over).
  */
