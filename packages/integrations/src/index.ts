@@ -41,6 +41,7 @@ export * from './providers/loki/index.js';
 export * from './providers/sentry/index.js';
 export * from './providers/slack/index.js';
 export * from './registry.js';
+export * from './static-run-credential.js';
 export * from './support/fake-support.js';
 export * from './support/system-timer.js';
 export * from './task-management/fake.js';

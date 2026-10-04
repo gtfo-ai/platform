@@ -29,6 +29,11 @@
  * (Q98 (a)). The value is registered with the process's run-scoped secrets the moment it exists, so
  * the transcript, the artifact and every audit row this process writes redact it (decision 8).
  *
+ * **Or hands over a static one (WP-137, TD-028 decision 13).** An integration that declares
+ * `run_credential: static` gives a non-shadow run its dedicated run token on the same answer, with no
+ * provider call, no audit row and a no-op revoke; it joins the same registry. Which of the three a
+ * run had — `minted`, `static`, `none` — is written to `runs.credential_source` before the create.
+ *
  * ## It constructs no Docker client
  *
  * Everything here is a `fetch` and a Unix socket. `apps/launcher/src/docker-access.test.ts` reads
@@ -52,7 +57,9 @@ import {
   runCredentialRevocations,
   runCredentialWrites,
   runGitCredentialSecretName,
+  StaticRunCredentialRefusedError,
   startOrphanWorkspaceReaper,
+  WorkspaceError,
 } from '@platform/application';
 import { taskModeSchema } from '@platform/contracts';
 import {
@@ -143,6 +150,8 @@ export const createRunGitCredentialMinter = (options: {
   readonly pool: pg.Pool;
   readonly integrations: PipelineIntegrationsPort;
   readonly runSecrets: RunScopedSecrets;
+  /** What a static run credential's declared expiry is checked against (WP-137). */
+  readonly now: () => string;
 }): launcherAdapters.RunGitCredentialMinter => {
   /** `integrations.retired_at` as text, or `null` for a live (or absent) row — WP-114. */
   const retiredAtOf = async (integrationId: string): Promise<string | null> => {
@@ -171,19 +180,64 @@ export const createRunGitCredentialMinter = (options: {
         projectId: spec.projectId,
         mode,
       };
-      const minted = await runCredentialWrites(
-        await integrationsForProject(options.integrations, spec.projectId, noRunScopedSecrets()),
-        // WP-114, backlog 386: read after the mint's audit row committed, on the pool (no open
-        // transaction), so a retire that committed first is seen and the token is revoked in hand.
-        { isRetired: async (integrationId) => (await retiredAtOf(integrationId)) !== null },
-      ).mint({
-        ...context,
-        scope: mode === 'shadow' ? 'read' : scope,
-        branchPatterns: project.branchPatterns,
-        ttlSeconds,
-      });
+      let minted: Awaited<ReturnType<ReturnType<typeof runCredentialWrites>['mint']>>;
+      try {
+        minted = await runCredentialWrites(
+          await integrationsForProject(options.integrations, spec.projectId, noRunScopedSecrets()),
+          {
+            // WP-114, backlog 386: read after the mint's audit row committed, on the pool (no open
+            // transaction), so a retire that committed first is seen and the token is revoked in hand.
+            isRetired: async (integrationId) => (await retiredAtOf(integrationId)) !== null,
+            // WP-137: a static run credential's declared expiry is checked against this.
+            now: options.now,
+          },
+        ).mint({
+          ...context,
+          scope: mode === 'shadow' ? 'read' : scope,
+          branchPatterns: project.branchPatterns,
+          ttlSeconds,
+        });
+      } catch (error) {
+        if (error instanceof StaticRunCredentialRefusedError) {
+          // Terminal and before the create, by name (TD-028 decision 13): an operator's fault that
+          // no retry can repair. Nothing was sent anywhere.
+          await recordCredentialSource(options.pool, spec.runId, 'none', error.integrationId);
+          throw new WorkspaceError('invalid_spec', error.message, {
+            runId: spec.runId,
+            reason: 'run_credential_unavailable',
+          });
+        }
+        throw error;
+      }
       if (minted.kind === 'unavailable') {
+        await recordCredentialSource(options.pool, spec.runId, 'none', null);
         return minted;
+      }
+      if (minted.kind === 'static') {
+        const fixed = minted.credential;
+        // Decision 13 item 2: the run's redactors learn it exactly as they learn a minted value —
+        // before anything else can see it. It is also a declared secret field of the integration, so
+        // every process that loads the binding redacts it by exact value already.
+        options.runSecrets.add(spec.runId, fixed.value, fixed.expiresAt);
+        await recordCredentialSource(options.pool, spec.runId, 'static', minted.ref.integrationId);
+        return {
+          kind: 'minted',
+          credential: {
+            username: fixed.username,
+            password: fixed.value,
+            scope: fixed.scope,
+            expiresAt: fixed.expiresAt,
+            source: 'static',
+            // Nothing to revoke: no call was made, and the token lives to its declared expiry
+            // (decision 13 item 5). No `revoke_credential` row is written, so the recovery pass —
+            // which starts from `mint_credential` rows — never finds this run. The provisioner calls
+            // this once, at teardown, so the run's registry entry goes with it (review round 1);
+            // the integration's binding redactors still know the value as a sealed secret.
+            revoke: async () => {
+              options.runSecrets.forget(spec.runId);
+            },
+          },
+        };
       }
       const { credential, handle } = minted;
       const revoke = async (): Promise<void> => {
@@ -213,6 +267,15 @@ export const createRunGitCredentialMinter = (options: {
       // and `runCredentialWrites.mint` has already refused — and revoked — such a value before
       // returning (review round 2 deleted an untested revoke that this line could never reach).
       options.runSecrets.add(spec.runId, credential.value, credential.expiresAt);
+      try {
+        await recordCredentialSource(options.pool, spec.runId, 'minted', handle.integrationId);
+      } catch (error) {
+        // The token exists and the provisioner never sees it: revoke it here, once. A revoke that
+        // fails left a `revoke_credential` row the recovery pass reads (WP-77), so the recording's
+        // error is the one this run is refused with.
+        await revoke().catch(() => undefined);
+        throw error;
+      }
       return {
         kind: 'minted',
         credential: {
@@ -221,11 +284,31 @@ export const createRunGitCredentialMinter = (options: {
           password: credential.value,
           scope: credential.scope,
           expiresAt: credential.expiresAt,
+          source: 'minted',
           revoke,
         },
       };
     },
   };
+};
+
+/**
+ * `runs.credential_source` and `runs.credential_integration_id` (migration 0078, WP-137) — *which
+ * credential a run had* (TD-028 decision 13 item 2), answerable from the row because a static
+ * credential writes no `mint_credential` audit row. A **narrow** write of its own two columns, on
+ * the pool and outside any transaction (the run row was committed before the provision began), and
+ * written before the create so a run the launcher then refuses still says what it was given.
+ */
+export const recordCredentialSource = async (
+  pool: pg.Pool,
+  runId: string,
+  source: 'minted' | 'static' | 'none',
+  integrationId: string | null,
+): Promise<void> => {
+  await pool.query(
+    'update runs set credential_source = $2, credential_integration_id = $3 where id = $1',
+    [runId, source, integrationId],
+  );
 };
 
 export interface ComposeRunWorkspacesOptions {
@@ -298,6 +381,7 @@ export const composeRunWorkspaces = (
         stack: options.stack,
       }),
       runSecrets: options.stack.runSecrets,
+      now: () => new Date(runnerAdapters.systemClock.now()).toISOString(),
     }),
     controlRoot: options.controlRoot,
     modelEgressHosts: options.modelEgressHosts,

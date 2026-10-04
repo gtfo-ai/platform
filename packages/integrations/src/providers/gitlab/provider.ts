@@ -203,6 +203,31 @@ const identityOf = (user: {
 const invalidRequest = (action: string, detail: string): IntegrationError =>
   new IntegrationError('invalid_request', GITLAB_PROVIDER_ID, detail, { action });
 
+/** GitLab's Maintainer access level: the lowest that can change protected branches (Q40, WP-137). */
+const MAINTAINER_ACCESS_LEVEL = 40;
+
+/** GitLab's Developer access level: the lowest that pushes to an unprotected branch (WP-137). */
+const DEVELOPER_ACCESS_LEVEL = 30;
+
+/**
+ * <https://docs.gitlab.com/api/members/> § "Roles" (retrieved 2026-10-03) — the number as the name an
+ * operator reads.
+ */
+const gitlabRoleName = (level: number): string =>
+  (
+    ({
+      0: 'No access',
+      5: 'Minimal access',
+      10: 'Guest',
+      15: 'Planner',
+      20: 'Reporter',
+      25: 'Security Manager',
+      30: 'Developer',
+      40: 'Maintainer',
+      50: 'Owner',
+    }) as Readonly<Record<number, string>>
+  )[level] ?? `access level ${level}`;
+
 export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProvider => {
   const { config, clock } = options;
   const token = options.secrets.token ?? '';
@@ -764,6 +789,34 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
 
     /** WP-138 — `GET /user`: the account the binding's token acts as, as an identity. */
     authenticatedUser: async () => identityOf(await client.currentUser()),
+
+    /**
+     * WP-137 — the static run credential's user, asked **with the API token**: `GET /users?username=`
+     * for the id (an exact, case-insensitive match, as {@link resolveUserId} reads it), then
+     * `GET /projects/:id/members/all/:user_id`, which counts inherited and invited membership. A
+     * 404 is "not a member". `administers` is Maintainer (40) and above — a role that can unprotect
+     * the default branch, the push control (Q40).
+     */
+    projectMemberAccess: async (project, username) => {
+      // The project first, so an unknown project is `not_found` whatever the username is.
+      await client.project(project);
+      const found = (await client.usersByUsername(username)).filter(
+        (user) => user.username.toLowerCase() === username.toLowerCase(),
+      );
+      const user = found.length === 1 ? found[0] : undefined;
+      if (user === undefined) {
+        return { member: false, role: null, pushes: false, administers: false };
+      }
+      const member = await client.projectMember(project, user.id);
+      return member === null
+        ? { member: false, role: null, pushes: false, administers: false }
+        : {
+            member: true,
+            role: gitlabRoleName(member.access_level),
+            pushes: member.access_level >= DEVELOPER_ACCESS_LEVEL,
+            administers: member.access_level >= MAINTAINER_ACCESS_LEVEL,
+          };
+    },
 
     /**
      * WP-138 — `POST …/merge_requests/:iid/pipelines`. GitLab answers the pipeline it created; its

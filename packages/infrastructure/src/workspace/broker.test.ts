@@ -47,6 +47,18 @@ describe('run credential broker', () => {
     expect(broker.answer(RUN, HOST)).toBeNull();
   });
 
+  /** WP-137 (TD-028 decision 13): the one push credential a read-only run may hold. */
+  it('holds a static run credential for a read-only run with its push scope', () => {
+    const broker = new RunCredentialBroker();
+    broker.hold({
+      runId: RUN,
+      readOnly: true,
+      credential: carried({ scope: 'push', source: 'static' }),
+    });
+    expect(broker.scopeOf(RUN)).toBe('push');
+    expect(broker.answer(RUN, HOST)?.password).toBe(`${SECRET}-1`);
+  });
+
   it.each([
     ['an empty password', { password: '' }],
     ['a blank password', { password: '   ' }],

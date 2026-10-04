@@ -160,6 +160,19 @@ real project answers stay open in `docs/TODO.md`.
   pipeline**"*. Marking a draft ready is not among them, which is why the ready duty creates one when
   the head has none. Produced no fixture.
 
+## Pages read for WP-137 (`project-members.json`)
+
+Retrieved **2026-10-03** (UTC), without a gitlab.com credential, so nothing was recorded against a real
+instance; the gitlab.com Free run with a static run credential is the product owner's (`docs/TODO.md`).
+
+- `https://docs.gitlab.com/api/members/` § "Get a member of a group or project, including inherited
+  and invited members" — `GET /projects/:id/members/all/:user_id` (the page's example shows the
+  group form), whose `access_level` the probe of a static run credential reads; § "Roles" — the
+  value table (`0` No access … `30` Developer, `40` Maintainer, `50` Owner). The answer for a user
+  who is not a member is **not published**: the 404 is inferred from the REST status table.
+- `https://docs.gitlab.com/api/users/` § "List users" — the `username` filter, already cited for
+  `users.json`, resolving the declared run-token user to an id.
+
 ## Pages read for WP-59 that produced no fixture
 
 - `https://docs.gitlab.com/api/merge_requests/` § "Retrieve merge request changes" (retrieved

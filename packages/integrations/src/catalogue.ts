@@ -56,6 +56,10 @@ import {
 import { lokiProviderRegistration } from './providers/loki/index.js';
 import { sentryProviderRegistration } from './providers/sentry/index.js';
 import { slackProviderRegistration } from './providers/slack/index.js';
+import {
+  type StaticRunCredentialSupport,
+  staticRunCredentialConfigIssues,
+} from './static-run-credential.js';
 
 /**
  * One non-credential configuration field: its name, whether the schema requires it, and what its
@@ -126,6 +130,12 @@ export interface ProviderCatalogueEntry {
    * own document is judged without them; {@link configIssuesOf} is the one reader.
    */
   readonly accountConfigSchema: z.ZodObject;
+  /**
+   * Which config keys declare a static run credential (TD-028 decision 13, WP-137) — the
+   * registration's own declaration, `null` for a provider that offers none. The write paths and
+   * {@link configIssuesOf} read it, so no consumer names a provider's keys.
+   */
+  readonly staticRunCredential: StaticRunCredentialSupport | null;
 }
 
 /**
@@ -250,6 +260,7 @@ const entryOf = (
     readonly agentTooling: AgentTooling | null;
     readonly accountOnlyFields?: readonly string[];
     readonly configSchema: z.ZodObject;
+    readonly staticRunCredential?: StaticRunCredentialSupport;
   },
   inboundWebhook: boolean,
 ): ProviderCatalogueEntry => ({
@@ -264,6 +275,7 @@ const entryOf = (
   configDefaults: configDefaultsOf(registration.configSchema),
   configFields: configFieldsOf(registration.configSchema, registration.secretFields),
   accountConfigSchema: withoutCredentials(registration.configSchema, registration.secretFields),
+  staticRunCredential: registration.staticRunCredential ?? null,
 });
 
 /**
@@ -332,7 +344,9 @@ export const configIssuesOf = (
   const document = Object.fromEntries(Object.entries(config).filter(([key]) => !secret.has(key)));
   const parsed = entry.accountConfigSchema.safeParse(document);
   if (parsed.success) {
-    return [];
+    // WP-137: the cross-field rules of a static run credential (decision 13 item 1), which a zod
+    // refinement cannot carry here — `omit` refuses an object schema that has one.
+    return staticRunCredentialConfigIssues(entry.staticRunCredential ?? undefined, parsed.data);
   }
   return parsed.error.issues.flatMap((issue): ConfigIssue[] => {
     if (issue.code === 'unrecognized_keys') {

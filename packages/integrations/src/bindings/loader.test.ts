@@ -30,6 +30,7 @@ import {
   createVirtualTimer,
   exactSecretRedactor,
   SecretResolutionError,
+  staticRunTokenLeaks,
 } from '@platform/application';
 import type { Id, IsoDateTime, JsonObject } from '@platform/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -135,6 +136,71 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/**
+ * WP-137 review round 1: the dependency gate's leak search over a diff the **real** GitLab adapter
+ * returns, built by this loader with `run_token` sealed. The binding's redactor knows the run token,
+ * so the transport hands back its placeholder rather than the value — the search must still find it,
+ * or a token pushed into the repository never parks the task against GitLab.
+ */
+describe('the static run token in a merge request read through the real GitLab adapter (WP-137)', () => {
+  it('reaches the leak search as the binding’s placeholder, and the search finds it', async () => {
+    const STATIC_TOKEN = 'glpat-FAKE-static-run-token-not-real-0009';
+    vi.stubGlobal('fetch', async (input: unknown) => {
+      const url = String(input);
+      if (url.includes('/merge_requests/7/diffs')) {
+        return new Response(
+          JSON.stringify([
+            {
+              old_path: '.env',
+              new_path: '.env',
+              diff: `@@ -1 +1,2 @@\n APP=1\n+GITLAB_TOKEN=${STATIC_TOKEN}\n`,
+              new_file: false,
+              renamed_file: false,
+              deleted_file: false,
+            },
+          ]),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`the test did not script ${url}`);
+    });
+    const integrations = await loaderFor({
+      bindings: [
+        gitBinding({
+          config: {
+            base_url: 'https://git.example.test',
+            project: 'acme/api',
+            run_credential: 'static',
+            run_token_username: 'agentic-runner',
+            run_token_expires_at: '2026-12-01',
+          },
+        }),
+      ],
+      secrets: { token: BINDING_TOKEN, run_token: STATIC_TOKEN },
+    }).forProject(PROJECT, outsideARun);
+    const git = integrations.git;
+    if (git === null) throw new Error('expected the git binding');
+    const files = await git.port.getMergeRequestDiff(
+      {
+        provider: 'gitlab',
+        project_path: 'acme/api',
+        iid: 7,
+        url: 'https://git.example.test/acme/api/-/merge_requests/7',
+        branch: 'agentic/acme-1',
+        head_sha: null,
+      },
+      { limit: 10 },
+    );
+    // The transport redacted it: the exact value is gone, the placeholder is in its place.
+    expect(JSON.stringify(files)).not.toContain(STATIC_TOKEN);
+    expect(git.staticRunCredential?.redactedAs).toBe(
+      `[REDACTED:integration:gitlab:${GIT_INTEGRATION}:run_token]`,
+    );
+    expect(files[0]?.diff).toContain(git.staticRunCredential?.redactedAs);
+    expect(staticRunTokenLeaks(git.staticRunCredential, files)).toBe(1);
+  });
+});
+
 describe('a project with no bindings', () => {
   it('resolves to null for both, which is absent rather than broken', async () => {
     const integrations = await loaderFor({ bindings: [] }).forProject(PROJECT, outsideARun);
@@ -230,6 +296,45 @@ describe('a git binding that loads', () => {
   it('carries the minting hints its provider’s registration declares', async () => {
     const integrations = await loaderFor().forProject(PROJECT, outsideARun);
     expect(integrations.git?.mintingHints).toEqual(GITLAB_CREDENTIAL_MINTING_HINTS);
+    // WP-137: an integration that declares no static run credential carries none.
+    expect(integrations.git?.staticRunCredential).toBeUndefined();
+  });
+
+  /**
+   * WP-137 (TD-028 decision 13 items 1–3): an integration with `run_credential: static` carries its
+   * run token to the run-credential path — and only there: the binding's redactor knows it by exact
+   * value, and the comparison with the API token is made on the decrypted values.
+   */
+  it('carries a static run credential to the run-credential path, redacted like any secret', async () => {
+    const STATIC_TOKEN = 'glpat-FAKE-static-run-token-not-real-0003';
+    const config = {
+      base_url: 'https://git.example.test',
+      project: 'acme/api',
+      run_credential: 'static',
+      run_token_username: 'agentic-runner',
+      run_token_expires_at: '2026-12-01',
+    };
+    const integrations = await loaderFor({
+      bindings: [gitBinding({ config })],
+      secrets: { token: BINDING_TOKEN, run_token: STATIC_TOKEN },
+    }).forProject(PROJECT, outsideARun);
+    expect(integrations.git?.staticRunCredential).toEqual({
+      username: 'agentic-runner',
+      value: STATIC_TOKEN,
+      expiresAt: '2026-12-01T00:00:00.000Z',
+      declaredExpiry: '2026-12-01',
+      sameAsApiToken: false,
+      refusal: null,
+      redactedAs: `[REDACTED:integration:gitlab:${GIT_INTEGRATION}:run_token]`,
+    });
+    expect(integrations.git?.redactor.redactText(`push ${STATIC_TOKEN}`).value).not.toContain(
+      STATIC_TOKEN,
+    );
+    const same = await loaderFor({
+      bindings: [gitBinding({ config })],
+      secrets: { token: BINDING_TOKEN, run_token: BINDING_TOKEN },
+    }).forProject(PROJECT, outsideARun);
+    expect(same.git?.staticRunCredential?.sameAsApiToken).toBe(true);
   });
 
   /**

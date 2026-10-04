@@ -166,6 +166,7 @@ describe('createIntegrationProber', () => {
       ok: true,
       checkedAt: '2026-09-13T04:00:00.000Z',
       detail: 'fine',
+      checks: [{ name: 'connection', ok: true, detail: 'fine' }],
     });
   });
 
@@ -309,5 +310,148 @@ describe('createIntegrationProber', () => {
     // Every call still happened and every one is audited: a limit that dropped calls silently
     // would be worse than no limit.
     expect(auditLog.entries).toHaveLength(3);
+  });
+});
+
+/**
+ * WP-137 criterion (6) — TD-028 decision 13 item 3: for an integration that declares a static run
+ * credential the probe adds a `run_credential` check — the declared user's membership of the bound
+ * project, read with the **API token** through the executor — refuses a role above the push role,
+ * accepts a Developer, and always says it cannot confirm the token's owner. The run token itself
+ * is sent nowhere.
+ */
+describe('the probe of a static run credential (WP-137)', () => {
+  const RUN_TOKEN = 'glpat-FAKE-static-run-token-not-real-0001';
+  const staticRegistration = (access: {
+    member: boolean;
+    role: string | null;
+    pushes?: boolean;
+    administers: boolean;
+  }) => {
+    const asked: { project: string; username: string }[] = [];
+    const registration: AnyProviderRegistration = {
+      id: 'probe-git',
+      type: 'git',
+      displayName: 'Probe git',
+      configSchema: z.strictObject({
+        token: z.string().min(1),
+        run_token: z.string().nullish(),
+        run_credential: z.enum(['minted', 'static']).default('minted'),
+        run_token_username: z.string().nullish(),
+        run_token_expires_at: z.string().nullish(),
+        mint_credentials: z.boolean().default(false),
+      }),
+      secretFields: ['token', 'run_token'],
+      setupGuidePath: 'none',
+      agentTooling: null,
+      staticRunCredential: {
+        modeField: 'run_credential',
+        tokenField: 'run_token',
+        apiTokenField: 'token',
+        usernameField: 'run_token_username',
+        expiresAtField: 'run_token_expires_at',
+        mintingField: 'mint_credentials',
+        maxLifetimeDays: 90,
+      },
+      create: (input) => {
+        // The adapter must never be handed the run token; this registration does not strip it, so
+        // the assertion below is that the *probe* never sends it anywhere.
+        return {
+          ref: { integrationId: INTEGRATION, provider: 'probe-git', type: 'git', host: null },
+          capabilities: () => ({}),
+          testConnection: async () => ({
+            ok: true,
+            checked_at: '2026-09-13T04:00:00.000Z',
+            detail: `connected as ${String(input.secrets.token).length} characters`,
+          }),
+          projectMemberAccess: async (project: string, username: string) => {
+            asked.push({ project, username });
+            return { pushes: access.member, ...access };
+          },
+        } as never;
+      },
+    };
+    return { registration, asked };
+  };
+  const proberOver = (
+    registration: AnyProviderRegistration,
+    boundProjectPathOf?: (id: Id) => Promise<string | null>,
+  ) =>
+    createIntegrationProber({
+      repository: repositoryOf(
+        accountOf({
+          type: 'git',
+          provider: 'probe-git',
+          config: {
+            run_credential: 'static',
+            run_token_username: 'agentic-runner',
+            run_token_expires_at: '2026-12-01',
+          },
+        }),
+      ),
+      secrets: secretsOf({ token: PLANTED_TOKEN, run_token: RUN_TOKEN }),
+      registry: createIntegrationRegistry([registration]),
+      executor: executorFor(),
+      ...(boundProjectPathOf === undefined ? {} : { boundProjectPathOf }),
+    });
+
+  it('accepts a Developer, says it cannot confirm the owner, and audits the read', async () => {
+    const { registration, asked } = staticRegistration({
+      member: true,
+      role: 'Developer',
+      administers: false,
+    });
+    const result = await proberOver(registration, async () => 'acme/api').test(INTEGRATION);
+    expect(result?.ok).toBe(true);
+    const check = result?.checks.find((entry) => entry.name === 'run_credential');
+    expect(check?.ok).toBe(true);
+    expect(check?.detail).toMatch(/agentic-runner is Developer on acme\/api/);
+    expect(check?.detail).toMatch(/cannot confirm that the token belongs to this user/);
+    expect(asked).toEqual([{ project: 'acme/api', username: 'agentic-runner' }]);
+    expect(auditLog.entriesFor('check_run_credential_member')).toHaveLength(1);
+    expect(JSON.stringify([result, auditLog.entries])).not.toContain(RUN_TOKEN);
+  });
+
+  it('refuses a Maintainer: a role that can unprotect the default branch', async () => {
+    const { registration } = staticRegistration({
+      member: true,
+      role: 'Maintainer',
+      administers: true,
+    });
+    const result = await proberOver(registration, async () => 'acme/api').test(INTEGRATION);
+    expect(result?.ok).toBe(false);
+    const check = result?.checks.find((entry) => entry.name === 'run_credential');
+    expect(check?.ok).toBe(false);
+    expect(check?.detail).toMatch(/is Maintainer on acme\/api.*Developer.*unprotect/);
+    expect(check?.detail).toMatch(/cannot confirm that the token belongs to this user/);
+  });
+
+  it('fails the check, never passes it, when no project is bound or the user is no member', async () => {
+    const { registration } = staticRegistration({ member: false, role: null, administers: false });
+    const unbound = await proberOver(registration, async () => null).test(INTEGRATION);
+    expect(unbound?.checks.find((entry) => entry.name === 'run_credential')).toMatchObject({
+      ok: false,
+      detail: expect.stringMatching(/no project is bound/),
+    });
+    const outsider = await proberOver(registration, async () => 'acme/api').test(INTEGRATION);
+    expect(outsider?.checks.find((entry) => entry.name === 'run_credential')).toMatchObject({
+      ok: false,
+      detail: expect.stringMatching(/is not a member of acme\/api/),
+    });
+    const uncomposed = await proberOver(registration).test(INTEGRATION);
+    expect(uncomposed?.ok).toBe(false);
+    const reporter = staticRegistration({
+      member: true,
+      role: 'Reporter',
+      pushes: false,
+      administers: false,
+    });
+    const readOnly = await proberOver(reporter.registration, async () => 'acme/api').test(
+      INTEGRATION,
+    );
+    expect(readOnly?.checks.find((entry) => entry.name === 'run_credential')).toMatchObject({
+      ok: false,
+      detail: expect.stringMatching(/is Reporter on acme\/api, which cannot push/),
+    });
   });
 });

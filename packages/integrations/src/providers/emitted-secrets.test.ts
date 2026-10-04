@@ -82,6 +82,8 @@ const NOW = '2026-06-01T10:30:00.000Z' as const;
 const GITLAB_TOKEN = 'glpat-FAKE-PLANTED-binding-token-0123456789';
 const GITLAB_WEBHOOK_SECRET = 'FAKE-PLANTED-gitlab-webhook-secret-token-01';
 const GITLAB_SIGNING_TOKEN = 'whsec_FAKE-PLANTED-gitlab-signing-token-0123';
+/** WP-137: a static run credential planted beside the API token — no request may carry it. */
+const GITLAB_RUN_TOKEN = 'glpat-FAKE-PLANTED-static-run-token-0123456';
 const JIRA_TOKEN = 'FAKE-PLANTED-jira-api-token-0123456789';
 const JIRA_WEBHOOK_SECRET = 'FAKE-PLANTED-jira-webhook-secret-0123456789';
 const JIRA_EMAIL = 'agentic-bot@example.test';
@@ -411,6 +413,10 @@ const gitlabScript = (): Script => ({
   [`GET /projects/${P}/jobs/9002/trace`]: {
     text: `$ echo pushing\nremote: https://oauth2:${GITLAB_TOKEN}@gitlab.example.test/acme/api\nfatal\n`,
   },
+  // WP-137: a membership, the role the provider's own number (the project is scripted above).
+  [`GET /projects/${P}/members/all/4242`]: {
+    body: { id: 4242, username: `dana-${GITLAB_TOKEN}`, access_level: 30 },
+  },
   // WP-37: the username is echoed back by GitLab's own user object, so a handle carrying the plant
   // arrives in an emitted field — which is the point of driving this method here at all.
   'GET /users': {
@@ -440,13 +446,28 @@ const gitlabScript = (): Script => ({
 /** The credential the adapter *mints* is not the binding's, and must survive intact. */
 const MINTED = 'glpat-FAKE-minted-workspace-token-987654321';
 
-const stubFetch = (script: Script, calls: { method: string; path: string; body: string }[]) => {
+interface StubbedCall {
+  readonly method: string;
+  readonly path: string;
+  readonly body: string;
+  /** WP-137: every header and the query string, for the census that no request carries `run_token`. */
+  readonly headers: string;
+  readonly query: string;
+}
+
+const stubFetch = (script: Script, calls: StubbedCall[]) => {
   vi.stubGlobal('fetch', async (input: unknown, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(String(input), init);
     const url = new URL(request.url);
     const path = url.pathname.replace('/api/v4', '').replace('/rest/api/3', '');
     const body = request.method === 'GET' ? '' : await request.clone().text();
-    calls.push({ method: request.method, path, body });
+    calls.push({
+      method: request.method,
+      path,
+      body,
+      headers: JSON.stringify([...request.headers.entries()]),
+      query: url.search,
+    });
     // Jira's comment page past its offset is empty (WP-111 review round 1): the marker search now
     // reads until an empty page, so a stub that answered every offset with the same page would
     // never let it end.
@@ -509,6 +530,7 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   close_merge_request: 'closeMergeRequest',
   find_open_merge_request: 'findOpenMergeRequest',
   authenticated_user: 'authenticatedUser',
+  project_member_access: 'projectMemberAccess',
   create_merge_request_pipeline: 'createMergeRequestPipeline',
   get_merge_request_diff_stats: 'getMergeRequestDiffStats',
   list_discussions: 'listDiscussions',
@@ -536,7 +558,7 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
 
 describe('gitlab emits no string carrying its own credentials (rules 31, 35)', () => {
   const emitted: Record<string, unknown> = {};
-  const calls: { method: string; path: string; body: string }[] = [];
+  const calls: StubbedCall[] = [];
   let surface: string[] = [];
 
   beforeAll(async () => {
@@ -550,6 +572,9 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
         token: GITLAB_TOKEN,
         webhook_secret_token: GITLAB_WEBHOOK_SECRET,
         webhook_signing_token: GITLAB_SIGNING_TOKEN,
+        // WP-137: handed to `create` exactly as the binding loader merges it; the registration must
+        // build the adapter without it (TD-028 decision 13 item 3), which the census below holds.
+        run_token: GITLAB_RUN_TOKEN,
       },
       redactor: noSecretsRedactor(),
     });
@@ -610,6 +635,8 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
     // the census holds; the other two answer planted provider text.
     emitted.find_open_merge_request = await port.findOpenMergeRequest(PROJECT, 'agentic/task-1');
     emitted.authenticated_user = await port.authenticatedUser();
+    // WP-137: the static run credential's probe, its username echoed in the provider's role text.
+    emitted.project_member_access = await port.projectMemberAccess(PROJECT, `dana-${GITLAB_TOKEN}`);
     emitted.create_merge_request_pipeline = await port.createMergeRequestPipeline(ref);
     emitted.list_discussions = await port.listDiscussions(ref);
     emitted.reply_to_discussion = await port.replyToDiscussion(
@@ -742,6 +769,21 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
         resolveThread: async () => null,
       },
     );
+  });
+
+  /**
+   * WP-137 criterion (5), the census (TD-028 decision 13 item 3): every request the adapter made
+   * while every member of the port was driven — headers, query, path and body — and the static run
+   * credential, handed to `create` beside the API token, is in **none** of them. The API token is,
+   * which is what makes the negative mean something.
+   */
+  it('sends the static run token in no request: no header, no query, no path, no body (WP-137)', () => {
+    const wire = calls.map((call) => `${call.headers} ${call.query} ${call.path} ${call.body}`);
+    expect(
+      wire.some((line) => line.includes(GITLAB_TOKEN)),
+      'the API token is sent',
+    ).toBe(true);
+    expect(wire.filter((line) => line.includes(GITLAB_RUN_TOKEN))).toEqual([]);
   });
 
   it('drove every member of the port, and the list is the port’s own', () => {
@@ -974,7 +1016,7 @@ const JIRA_SCENARIOS: Readonly<Record<string, string>> = {
 
 describe('jira emits no string carrying its own credentials (rules 31, 35)', () => {
   const emitted: Record<string, unknown> = {};
-  const calls: { method: string; path: string; body: string }[] = [];
+  const calls: StubbedCall[] = [];
   let surface: string[] = [];
 
   beforeAll(async () => {

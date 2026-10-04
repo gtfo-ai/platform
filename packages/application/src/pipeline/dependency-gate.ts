@@ -83,6 +83,7 @@ import type {
   DetectedDependency,
 } from '@platform/domain';
 import {
+  addedLinesContain,
   askQuestion,
   boundReportedDependencies,
   compilePipeline,
@@ -100,6 +101,7 @@ import {
   toQuestionRecord,
 } from '@platform/domain';
 import type { EventHandler, HandlerContext } from '../events/handler.js';
+import { MIN_SECRET_LENGTH } from '../integrations/redaction.js';
 import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
 import {
   notCheckedMetadata,
@@ -111,7 +113,12 @@ import { silentLogger } from '../ports/logger.js';
 import { parkForConfigRefusal } from './config-refusal.js';
 import { questionDeadlineRule } from './deadline-rules.js';
 import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
-import { integrationsForProject, noRunScopedSecrets } from './integrations.js';
+import {
+  integrationsForProject,
+  noRunScopedSecrets,
+  type StaticRunCredential,
+} from './integrations.js';
+import { escalateTaskWithBrief } from './job-escalation.js';
 import { enqueueOutbound, enqueueStage, type PipelineOutboundData } from './jobs.js';
 import type { RebaseJobOptions } from './rebase.js';
 import type { PipelineSagaOptions } from './saga.js';
@@ -339,6 +346,16 @@ export const runDependencyGate = async (
     return;
   }
 
+  // WP-137 (TD-028 decision 13 item 5): the platform's one added control over a static run
+  // credential — a merge request whose added lines carry the token parks the task. Compared before
+  // the gate's own redaction below; the adapter's transport has already replaced the value with the
+  // binding redactor's placeholder, which is searched too (review round 1).
+  if (
+    await parkOnStaticRunTokenLeak(options, stored, integrations.git?.staticRunCredential, files)
+  ) {
+    return;
+  }
+
   // Redacted **before** anything parses, compares or stores them, for `changedPathsOf`'s stated
   // reason: an exact-match redactor cannot find a secret a later cut has already halved.
   const scan = detectDependencyChanges(
@@ -470,6 +487,73 @@ const describeAll = async (
     }
   }
   return answers;
+};
+
+/**
+ * How many files of a merge request's diff add the static run token on an added line (WP-137) —
+ * its exact value **or** the placeholder the binding's redactor writes in its place (review round 1):
+ * a real adapter's response has already been through that redactor, which knows the run token as a
+ * sealed secret of the integration, so against GitLab the diff carries the placeholder and never the
+ * value. The raw value covers a provider that did not redact. `0` for no static credential.
+ *
+ * Residual, stated: the placeholder is text, so an agent that writes it literally into an added line
+ * parks its own task — a self-inflicted stop, never a leak.
+ */
+export const staticRunTokenLeaks = (
+  fixed: StaticRunCredential | undefined,
+  files: readonly { readonly diff?: string | null }[],
+): number => {
+  const token = fixed?.value ?? '';
+  if (token.trim().length < MIN_SECRET_LENGTH) {
+    return 0;
+  }
+  const needles = [token, ...(fixed?.redactedAs === undefined ? [] : [fixed.redactedAs])];
+  return files.filter(
+    (file) =>
+      typeof file.diff === 'string' &&
+      needles.some((needle) => addedLinesContain(file.diff as string, needle)),
+  ).length;
+};
+
+/**
+ * **A merge request that adds the static run token parks its task** (WP-137, TD-028 decision 13
+ * item 5). A static run credential cannot be revoked per run and outlives the run, so a token the
+ * agent pushed into the repository still works — the one exposure the platform can see, because it
+ * already reads the merge request's added lines here. A hit escalates the task *Needs human* with a
+ * brief that says **rotate the run token** and never prints it; nothing else of this gate runs, so
+ * no record or question carries the line. Answers whether it parked.
+ *
+ * What it does not see, stated: an added line past the reader's per-file bound, a file past the
+ * diff's file bound, an encoded or split token, and every place other than this merge request.
+ */
+const parkOnStaticRunTokenLeak = async (
+  options: DependencyGateOptions,
+  stored: StoredTask,
+  fixed: StaticRunCredential | undefined,
+  files: readonly { readonly new_path: string; readonly diff?: string | null }[],
+): Promise<boolean> => {
+  const leaked = staticRunTokenLeaks(fixed, files);
+  if (leaked === 0) {
+    return false;
+  }
+  const logger = options.logger ?? silentLogger;
+  logger.error(
+    { task_id: stored.task.id, files: leaked },
+    'the merge request adds the static run token to the repository: the task is parked, and the token must be rotated (TD-028 decision 13)',
+  );
+  await escalateTaskWithBrief(options, {
+    taskId: stored.task.id,
+    projectId: stored.task.projectId,
+    causeEventId: null,
+    reason: 'the merge request adds the static run token to the repository',
+    brief: (ticketKey) =>
+      `The merge request for ${ticketKey} adds the project's static run token — the git integration's \`run_token\` — to the repository, in ${leaked} file${leaked === 1 ? '' : 's'}. ` +
+      'A static run token is not revoked when a run ends, so it works until its declared expiry. Rotate the run token now: revoke it at the provider, create a new one for the same dedicated user, ' +
+      're-seal it with POST /api/integrations/:id/secrets, and declare its new expiry. Then remove the value from the branch (and from its history) before this merge request goes anywhere. ' +
+      'The token is not printed here or anywhere the platform writes.',
+    what: 'dependency_gate',
+  });
+  return true;
 };
 
 interface EndingInput {

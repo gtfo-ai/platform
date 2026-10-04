@@ -528,6 +528,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
                     stack,
                   }),
                   runSecrets: stack.runSecrets,
+                  now: () => new Date().toISOString(),
                 }),
               )) ??
           composeRunWorkspaces({

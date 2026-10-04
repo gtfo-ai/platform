@@ -5,11 +5,17 @@
  * not exist in `configSchema` means the field is stored unencrypted and printed in a config diff —
  * so this file registers the provider for real instead of asserting the shape of an object literal.
  */
-import { agentToolingSchema } from '@platform/application';
+import { agentToolingSchema, noSecretsRedactor } from '@platform/application';
 import { describe, expect, it } from 'vitest';
 import { createIntegrationRegistry } from '../../registry.js';
 import { gitlabConfigSchema } from './config.js';
-import { gitlabAgentTooling, gitlabProviderRegistration, gitlabRateLimitPolicy } from './index.js';
+import {
+  GITLAB_STATIC_RUN_CREDENTIAL,
+  gitlabAdapterInput,
+  gitlabAgentTooling,
+  gitlabProviderRegistration,
+  gitlabRateLimitPolicy,
+} from './index.js';
 
 describe('gitlabProviderRegistration', () => {
   it('registers as a git provider and is retrievable by type', () => {
@@ -28,10 +34,37 @@ describe('gitlabProviderRegistration', () => {
 
   it('marks every credential-bearing field as a secret', () => {
     expect([...gitlabProviderRegistration.secretFields].sort()).toEqual([
+      'run_token',
       'token',
       'webhook_secret_token',
       'webhook_signing_token',
     ]);
+  });
+
+  /**
+   * WP-137 (TD-028 decision 13 item 3): the static run token is a declared secret — stripped from
+   * `GET /api/integrations`, sealed only through `secret_refs`, redacted by every loader — and the
+   * adapter is built **without** it, in the config and in the secrets alike.
+   */
+  it('declares the static run credential and builds the adapter without the run token', () => {
+    expect(gitlabProviderRegistration.staticRunCredential).toEqual(GITLAB_STATIC_RUN_CREDENTIAL);
+    const planted = 'glpat-FAKE-static-run-token-not-real-0001';
+    const input = gitlabAdapterInput({
+      integrationId: '00000000-0000-4000-8000-0000000000a9',
+      config: {
+        base_url: 'https://gitlab.example.test',
+        run_credential: 'static',
+        run_token: planted,
+      },
+      secrets: { token: 'FAKE-api-token-0000000000', run_token: planted },
+      redactor: noSecretsRedactor(),
+    });
+    expect(JSON.stringify(input)).not.toContain(planted);
+    expect(input.secrets).toEqual({ token: 'FAKE-api-token-0000000000' });
+    expect(input.config).toEqual({
+      base_url: 'https://gitlab.example.test',
+      run_credential: 'static',
+    });
   });
 
   it('cannot be fetched as another type', () => {

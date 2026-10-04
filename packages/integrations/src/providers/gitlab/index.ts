@@ -5,7 +5,11 @@
  * composition root registers it and the `git` type has a second implementation beside the fake.
  */
 import type { AgentTooling, RateLimitPolicy } from '@platform/application';
-import type { ProviderRegistration } from '../../registry.js';
+import type { ProviderCreateInput, ProviderRegistration } from '../../registry.js';
+import {
+  type StaticRunCredentialSupport,
+  withoutRunOnlyFields,
+} from '../../static-run-credential.js';
 import { gitlabConfigSchema, gitlabSecretFields } from './config.js';
 import { GITLAB_PROVIDER_ID } from './http.js';
 import { createGitLabProvider } from './provider.js';
@@ -83,7 +87,41 @@ export const GITLAB_CREDENTIAL_MINTING_HINTS = {
   shape:
     'GitLab: an instance whose administrator changed the personal-access-token prefix declares it ' +
     'as `token_prefix` on the integration',
+  static:
+    'GitLab: `run_credential: static` with a dedicated `run_token`; weaker isolation, operator guide § Integrations',
 } as const;
+
+/**
+ * GitLab's static run credential (TD-028 decision 13, WP-137): the keys of {@link gitlabConfigSchema}
+ * that declare it. `run_token` is read by the run-credential path only — {@link gitlabAdapterInput}
+ * removes it before the adapter is built.
+ */
+export const GITLAB_STATIC_RUN_CREDENTIAL: StaticRunCredentialSupport = {
+  modeField: 'run_credential',
+  tokenField: 'run_token',
+  apiTokenField: 'token',
+  usernameField: 'run_token_username',
+  expiresAtField: 'run_token_expires_at',
+  mintingField: 'mint_credentials',
+  maxLifetimeDays: 90,
+};
+
+/**
+ * What the adapter is built from: the create input **without `run_token`**, in the config and in
+ * the secrets. Every construction site (the binding loader, the prober, the inbound and organisation
+ * loaders) goes through the registration's `create`, so this is the one place that keeps the run
+ * token out of every platform API call (decision 13 item 3). `run_token` stays in the redactor the
+ * caller built, which is where it belongs.
+ */
+export const gitlabAdapterInput = (
+  input: ProviderCreateInput,
+): Pick<ProviderCreateInput, 'config' | 'secrets'> => ({
+  config: withoutRunOnlyFields(
+    GITLAB_STATIC_RUN_CREDENTIAL,
+    input.config as Readonly<Record<string, unknown>>,
+  ),
+  secrets: withoutRunOnlyFields(GITLAB_STATIC_RUN_CREDENTIAL, input.secrets),
+});
 
 export const gitlabProviderRegistration: ProviderRegistration<'git'> = {
   id: GITLAB_PROVIDER_ID,
@@ -105,18 +143,26 @@ export const gitlabProviderRegistration: ProviderRegistration<'git'> = {
     // ring renders without naming a provider. Pinned in `provider.test.ts`.
     hints: GITLAB_CREDENTIAL_MINTING_HINTS,
   },
-  create: (input) =>
-    createGitLabProvider({
+  // WP-137: TD-028 decision 13 — a static run credential where GitLab cannot mint.
+  staticRunCredential: GITLAB_STATIC_RUN_CREDENTIAL,
+  // WP-137: declared on the **integration** (decision 13 item 1), never by a project's binding — a
+  // binding overlay could otherwise switch one project of a minted account to `static`, past the
+  // one-binding rule, which reads the account's document.
+  accountOnlyFields: ['run_credential', 'run_token_username', 'run_token_expires_at'],
+  create: (input) => {
+    const adapter = gitlabAdapterInput(input);
+    return createGitLabProvider({
       integrationId: input.integrationId,
-      config: gitlabConfigSchema.parse(input.config),
-      secrets: input.secrets,
+      config: gitlabConfigSchema.parse(adapter.config),
+      secrets: adapter.secrets,
       // Standing rule 31: required on `ProviderCreateInput`, and passed here rather than left to a
       // default that redacts nothing.
       redactor: input.redactor,
       clock: {
         now: () => new Date().toISOString() as `${string}T${string}`,
       },
-    }),
+    });
+  },
 };
 
 export { CODEOWNERS_PATHS, parseCodeowners } from './codeowners.js';

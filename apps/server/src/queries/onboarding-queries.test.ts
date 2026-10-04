@@ -31,6 +31,7 @@ import {
   assertHostIsDeclared,
   assertNoAccountOnlyFields,
   assertNoCredentialInConfig,
+  assertStaticIntegrationBindable,
   createIntegration,
   environmentSecretSource,
   ForbiddenSecretNameError,
@@ -431,6 +432,16 @@ describe('assertNoAccountOnlyFields', () => {
       ),
     ).not.toThrow();
   });
+
+  /** WP-137 (TD-028 decision 13 item 1): a static run credential is the integration's, never a binding's. */
+  it('refuses run_credential on a GitLab binding, so no project switches its account to static', () => {
+    expect(() =>
+      assertNoAccountOnlyFields(
+        [{ integrationId: 'gitlab-1', config: { run_credential: 'static' } }],
+        [{ id: 'gitlab-1', provider: 'gitlab' }],
+      ),
+    ).toThrow(/run_credential is set on the gitlab integration .* never on a project's binding/);
+  });
 });
 
 /**
@@ -648,5 +659,113 @@ describe('storedConfigRefusal (WP-100, criterion 4)', () => {
   it('is null for a row that parses and for a provider this build does not ship', () => {
     expect(storedConfigRefusal(ID, VALID_CONFIG.sentry as JsonObject, sentry)).toBeNull();
     expect(storedConfigRefusal(ID, {}, undefined)).toBeNull();
+  });
+});
+
+/**
+ * WP-137 (TD-028 decision 13 item 1) at the unit tier: a create that declares a static run
+ * credential is refused, by name, **before** the database — which answers nothing here — when the
+ * run token is missing, is the API token, or has an expiry passed or too far ahead; a valid
+ * declaration gets past the check (and then fails on the absent database, a different error).
+ */
+describe('createIntegration and a static run credential (WP-137)', () => {
+  const gitlab = SHIPPED_PROVIDERS.find((entry) => entry.id === 'gitlab') as ProviderCatalogueEntry;
+  const VALUES: Readonly<Record<string, string>> = {
+    API: 'glpat-FAKE-unit-api-token-not-real-000',
+    RUN: 'glpat-FAKE-unit-run-token-not-real-000',
+  };
+  // The `(org, type, name)` lookup finds nothing; the transaction after the check does not exist.
+  const database = {
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+  } as never;
+  const create = (config: JsonObject, secretRefs: Readonly<Record<string, string>>) =>
+    createIntegration(database, {
+      orgId: 'org-1',
+      integration: { type: 'git', provider: 'gitlab', name: 'static', config, secretRefs },
+      provider: gitlab,
+      egress: createIntegrationEgressPolicy(['gitlab.example.test']),
+      secretSource: { read: async (name: string) => VALUES[name] ?? '' } as never,
+      secretKey: { keyId: 'k1', key: Buffer.alloc(32, 1) } as never,
+      newId: () => '00000000-0000-4000-8000-000000000001',
+      now: new Date('2026-10-03T12:00:00.000Z'),
+    }).catch((error: unknown) => error);
+  const STATIC: JsonObject = {
+    base_url: 'https://gitlab.example.test',
+    run_credential: 'static',
+    run_token_username: 'agentic-runner',
+    run_token_expires_at: '2026-12-01',
+  };
+
+  it.each([
+    ['no run token', STATIC, { token: 'API' }, /needs the run token itself/],
+    ['the API token as the run token', STATIC, { token: 'API', run_token: 'API' }, /own API token/],
+    [
+      'an expiry passed',
+      { ...STATIC, run_token_expires_at: '2026-10-02' },
+      { token: 'API', run_token: 'RUN' },
+      /has passed/,
+    ],
+    [
+      'an expiry too far',
+      { ...STATIC, run_token_expires_at: '2027-02-01' },
+      { token: 'API', run_token: 'RUN' },
+      /more than 90 days/,
+    ],
+  ])('refuses %s before the database, naming the field', async (_case, config, refs, message) => {
+    const failure = await create(config as JsonObject, refs);
+    expect(failure).toBeInstanceOf(HttpError);
+    expect((failure as HttpError).code).toBe('run_credential_refused');
+    expect((failure as HttpError).message).toMatch(message);
+    expect(JSON.stringify(failure)).not.toContain(VALUES.API);
+  });
+
+  it('lets a valid declaration past the check, and a minted one is never asked', async () => {
+    for (const config of [STATIC, { base_url: 'https://gitlab.example.test' }]) {
+      const failure = await create(config, { token: 'API', run_token: 'RUN' });
+      expect((failure as HttpError).code).not.toBe('run_credential_refused');
+    }
+  });
+});
+
+/**
+ * WP-137 (TD-028 decision 13 item 1): a static integration is bound by one project. The statement
+ * order is asserted — the advisory lock first, then the read — and the count decides.
+ */
+describe('assertStaticIntegrationBindable (WP-137)', () => {
+  const txWith = (bound: readonly string[]) => {
+    const statements: number[] = [];
+    const tx = {
+      execute: async () => {
+        statements.push(statements.length);
+        return { rows: statements.length === 1 ? [] : bound.map((project_id) => ({ project_id })) };
+      },
+    } as never;
+    return { tx, statements };
+  };
+
+  it('admits the first binding and a re-submission of the same project', async () => {
+    const { tx, statements } = txWith([]);
+    await expect(assertStaticIntegrationBindable(tx, 'i-1', 'p-1', 1)).resolves.toBeUndefined();
+    expect(statements).toHaveLength(2);
+  });
+
+  it('refuses a second project, naming the one that binds it', async () => {
+    const failure = await assertStaticIntegrationBindable(
+      txWith(['p-1']).tx,
+      'i-1',
+      'p-2',
+      1,
+    ).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ statusCode: 409, code: 'static_run_credential_shared' });
+    expect((failure as HttpError).message).toContain('p-1');
+  });
+
+  it('refuses a PATCH into static of an integration two projects bind, and admits one', async () => {
+    await expect(
+      assertStaticIntegrationBindable(txWith(['p-1', 'p-2']).tx, 'i-1', null, 0),
+    ).rejects.toMatchObject({ code: 'static_run_credential_shared' });
+    await expect(
+      assertStaticIntegrationBindable(txWith(['p-1']).tx, 'i-1', null, 0),
+    ).resolves.toBeUndefined();
   });
 });

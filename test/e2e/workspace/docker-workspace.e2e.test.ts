@@ -1861,7 +1861,9 @@ describe('a minted run credential against a credentialled git server (WP-76)', (
         ttlSeconds: 86_400,
       });
       if (answer.kind !== 'minted') {
-        throw new Error(`expected a credential, got ${answer.reason}`);
+        throw new Error(
+          `expected a credential, got ${answer.kind === 'unavailable' ? answer.reason : answer.kind}`,
+        );
       }
       return answer.credential;
     };

@@ -192,6 +192,12 @@ export const gitlabReplayContext = (
       emptyBranch: 'agentic/no-open',
       pipelineIid: MR_IID,
     },
+    // WP-137: `project-members.json` records a Developer, a Maintainer and a non-member.
+    members: {
+      developer: 'agentic-runner',
+      maintainer: 'agentic-maintainer',
+      outsider: 'agentic-outsider',
+    },
     pipelineSha: SHA_MR7,
     failingJobName: FAILING_JOB,
     // Provider-shaped: GitLab's log handle is the numeric job id, not the fake's `log:<id>`.

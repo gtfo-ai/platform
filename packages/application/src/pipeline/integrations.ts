@@ -123,6 +123,42 @@ export interface GitBinding {
    * for a binding a test builds by hand; a refusal then names no setting rather than guessing one.
    */
   readonly mintingHints?: CredentialMintingHints;
+  /**
+   * The integration's **static run credential** (TD-028 decision 13, WP-137) — present exactly when
+   * the integration declares one (GitLab: `run_credential: static`), absent when minting is the only
+   * source. Read by {@link runCredentialWrites} and by the dependency gate's exact-value search, and
+   * by nothing else: the adapter in {@link port} is built without it, so no platform API call can
+   * carry it (decision 13 item 3).
+   */
+  readonly staticRunCredential?: StaticRunCredential;
+}
+
+/**
+ * A static run credential as the loader read it (TD-028 decision 13, WP-137). Everything the
+ * run-credential path needs to **refuse** by name is here, because a declared-but-broken credential
+ * must never become "no credential" silently (standing rule 18).
+ */
+export interface StaticRunCredential {
+  /** The username git sends beside the token (GitLab: `run_token_username`). */
+  readonly username: string;
+  /** The secret. `''` when the integration declares `static` and holds no run token. */
+  readonly value: string;
+  /** The declared expiry as an instant (00:00 UTC on the date, GitLab's reading), or `null`. */
+  readonly expiresAt: string | null;
+  /** The declared expiry as the operator wrote it, for a refusal's words. */
+  readonly declaredExpiry: string;
+  /** The run token equals the integration's own API token — refused at use as at the write. */
+  readonly sameAsApiToken: boolean;
+  /** The configuration-level refusal (minting also on, no username, no expiry), or `null`. */
+  readonly refusal: string | null;
+  /**
+   * The placeholder the binding's own redactor writes in the token's place
+   * (`[REDACTED:integration:<provider>:<integration>:<field>]`, WP-137 review round 1). The run token
+   * is a sealed secret of the integration, so every provider response the adapter hands back — a
+   * merge request's diff included — already carries this instead of the value; the leak search
+   * matches both. Absent for a credential a test builds by hand.
+   */
+  readonly redactedAs?: string;
 }
 
 /**
@@ -135,6 +171,11 @@ export interface CredentialMintingHints {
   readonly enable: string;
   /** How a minted value that does not have the declared shape is fixed. */
   readonly shape: string;
+  /**
+   * How a static run credential is declared instead (TD-028 decision 13 item 6, WP-137) — absent
+   * for a provider that offers none, and the refusal then names only the minting setting.
+   */
+  readonly static?: string;
 }
 
 export interface TaskManagementBinding {
@@ -2262,7 +2303,70 @@ export type RunCredentialMint =
       /** What the teardown revoke takes: the address, and the binding that minted it (backlog 156). */
       readonly handle: RunCredentialHandle;
     }
+  | {
+      /**
+       * The integration's **static run credential** (TD-028 decision 13, WP-137): no provider call
+       * was made, so there is no audit row and nothing to revoke. Always `push` — a static token
+       * cannot be narrowed — and its expiry is the operator's declared date.
+       */
+      readonly kind: 'static';
+      readonly credential: StaticRunCredentialGrant;
+      readonly ref: IntegrationRef;
+    }
   | { readonly kind: 'unavailable'; readonly reason: string };
+
+/** What a run is handed from a static run credential (TD-028 decision 13 item 2). */
+export interface StaticRunCredentialGrant {
+  readonly username: string;
+  /** The secret. Joins the run's redactors exactly as a minted value does (decision 8). */
+  readonly value: string;
+  readonly scope: 'push';
+  /** The declared expiry, as an instant. */
+  readonly expiresAt: string;
+}
+
+/**
+ * A declared static run credential the platform will not use — terminal, before the create, and
+ * by name (TD-028 decision 13 items 1 and 2): no run token, the API token in its place, a
+ * configuration fault, or an expiry passed. Never a fallback to anything else (standing rule 18).
+ */
+export class StaticRunCredentialRefusedError extends Error {
+  override readonly name = 'StaticRunCredentialRefusedError';
+  readonly integrationId: Id;
+  constructor(integrationId: Id, message: string) {
+    super(message);
+    this.integrationId = integrationId;
+  }
+}
+
+/**
+ * Why a static credential is refused at use, or `null` — every check the write makes that the
+ * load can answer again (decision 13 item 1: *"at the write **and** again at use"*).
+ */
+const staticCredentialRefusal = (fixed: StaticRunCredential, now: string | null): string | null => {
+  if (fixed.refusal !== null) {
+    return fixed.refusal;
+  }
+  if (fixed.value.trim() === '') {
+    return 'the integration declares a static run credential and holds no run token';
+  }
+  if (fixed.value.trim().length < MIN_SECRET_LENGTH) {
+    return `its run token is shorter than ${MIN_SECRET_LENGTH} characters, so it could not be redacted`;
+  }
+  if (fixed.sameAsApiToken) {
+    return 'its run token is the integration’s own API token, which is never sent to a workspace (TD-028 decisions 6 and 13)';
+  }
+  if (fixed.expiresAt === null) {
+    return 'its run token has no declared expiry';
+  }
+  if (now === null) {
+    return 'no clock was composed to check the run token’s declared expiry against';
+  }
+  if (Date.parse(fixed.expiresAt) <= Date.parse(now)) {
+    return `its run token expired on ${fixed.declaredExpiry} (the declared expiry); create a new one and declare its expiry`;
+  }
+  return null;
+};
 
 /**
  * Minting the run-scoped git credential — **through the executor, keyed by the git binding, with
@@ -2310,6 +2414,11 @@ const describeRevokeFailure = (error: unknown, value: string): string => {
  */
 export interface MintingIntegrationLiveness {
   readonly isRetired: (integrationId: Id) => Promise<boolean>;
+  /**
+   * The time a static run credential's declared expiry is checked against (WP-137). Absent, a
+   * static credential is **refused** rather than used unchecked — the minted path never reads it.
+   */
+  readonly now?: () => string;
 }
 
 export class RunCredentialMintRetiredError extends Error {
@@ -2334,13 +2443,41 @@ export const runCredentialWrites = (
         reason: `project ${request.projectId} has no git binding, so no run credential can be minted for it`,
       };
     }
+    const fixed = git.staticRunCredential;
+    if (fixed !== undefined) {
+      // TD-028 decision 13 item 4: push-capable and impossible to narrow to the `read` Q98 (a)
+      // admits, so a shadow task gets **no** credential (rule 18) — never the static one.
+      if (request.mode === 'shadow') {
+        return {
+          kind: 'unavailable',
+          reason: `a shadow task is never given the static run credential of the git integration ${git.ref.integrationId}: it is push-capable and cannot be narrowed to the read scope Q98 (a) admits (TD-028 decision 13)`,
+        };
+      }
+      const refusal = staticCredentialRefusal(fixed, liveness.now?.() ?? null);
+      if (refusal !== null) {
+        throw new StaticRunCredentialRefusedError(
+          git.ref.integrationId,
+          `the git integration ${git.ref.integrationId} (${git.ref.provider}) declares a static run credential this platform will not give run ${request.runId}: ${refusal}. Nothing else is sent instead (TD-028 decision 13)`,
+        );
+      }
+      return {
+        kind: 'static',
+        credential: {
+          username: fixed.username,
+          value: fixed.value,
+          scope: 'push',
+          expiresAt: fixed.expiresAt as string,
+        },
+        ref: git.ref,
+      };
+    }
     if (!git.port.capabilities().credentialMinting) {
       return {
         kind: 'unavailable',
         reason:
-          `the git binding ${git.ref.integrationId} (${git.ref.provider}) cannot mint run credentials — ` +
-          `its minting setting is off${hintClause(git.mintingHints?.enable)}. The binding’s own ` +
-          'token is never sent instead (TD-028, WP-76 amendment decision 6)',
+          `the git binding ${git.ref.integrationId} (${git.ref.provider}) cannot give run ${request.runId} a credential: ` +
+          `minting is off${hintClause(git.mintingHints?.enable)} and no static run credential is configured${hintClause(git.mintingHints?.static)}. ` +
+          'The binding’s own token is never sent instead (TD-028 decisions 6 and 13)',
       };
     }
     assertOutsideTransaction('the provider mutation "mint_credential"');

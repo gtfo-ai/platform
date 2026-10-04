@@ -544,7 +544,8 @@ export const registerOnboardingRoutes = async (
       await writeIntegrationHealth(options.database, integrationId, {
         ok: probe.ok,
         checkedAt: probe.checkedAt,
-        detail: probe.detail,
+        // WP-137: a failed run-credential check is what the stored verdict says when it failed.
+        detail: probe.checks.find((check) => !check.ok)?.detail ?? probe.detail,
       });
       await recordHumanAction(options.database, {
         userId: actor.userId,
@@ -553,7 +554,8 @@ export const registerOnboardingRoutes = async (
       });
       return {
         ok: probe.ok,
-        checks: [{ name: 'connection', ok: probe.ok, detail: probe.detail }],
+        // `connection`, and since WP-137 `run_credential` for a static run credential.
+        checks: probe.checks.map((check) => ({ ...check })),
       };
     },
   );
@@ -600,6 +602,8 @@ export const registerOnboardingRoutes = async (
         set: (request.body.config ?? {}) as JsonObject,
         remove: request.body.remove ?? [],
         egress,
+        // WP-137: a PATCH into `run_credential: static` compares the sealed run token with the API token.
+        secretKey: secretAdapters.deriveSecretKey(options.secretKey),
         audit: {
           userId: actor.userId,
           action: 'integration.config.write',

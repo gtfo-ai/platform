@@ -126,6 +126,21 @@ runGitProviderContract({
 
     // WP-37: the one handle this fake resolves. Everything else answers `null` (divergence 11).
     port.seedUser('@dana-reviewer', '4242');
+    // WP-137 (divergence 24): the static run credential's probe reads exactly these.
+    port.setProjectMember({
+      project: 'acme/api',
+      username: 'agentic-runner',
+      role: 'Developer',
+      pushes: true,
+      administers: false,
+    });
+    port.setProjectMember({
+      project: 'acme/api',
+      username: 'agentic-maintainer',
+      role: 'Maintainer',
+      pushes: true,
+      administers: true,
+    });
 
     // WP-37 round 2, divergence 12: a `CODEOWNERS` that exists only on the branch under review —
     // the file a contributor can write, and the one routing must never read.
@@ -234,6 +249,11 @@ runGitProviderContract({
         openIid: existing.ref.iid,
         emptyBranch: 'agentic/no-open',
         pipelineIid: existing.ref.iid,
+      },
+      members: {
+        developer: 'agentic-runner',
+        maintainer: 'agentic-maintainer',
+        outsider: 'agentic-outsider',
       },
       pipelineSha: existing.head_sha,
       failingJobName: FAILING_JOB,

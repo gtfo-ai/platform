@@ -222,6 +222,13 @@ export const runCredentialSchema = z.strictObject({
   password: nonEmptyStringSchema.max(4_096),
   scope: z.enum(['read', 'push']),
   expiresAt: isoDateTimeSchema,
+  /**
+   * `minted` for a run-scoped token, `static` for an integration's declared run token (TD-028
+   * decision 13, WP-137) — the one credential a **read-only** spec may carry with `push` scope,
+   * because it cannot be narrowed. Absent is `minted`, so an absent field falls under the strict
+   * rule rather than the exception.
+   */
+  source: z.enum(['minted', 'static']).optional(),
 });
 export type RunCredentialPayload = z.infer<typeof runCredentialSchema>;
 
@@ -238,10 +245,14 @@ export type RunCredentialPayload = z.infer<typeof runCredentialSchema>;
  *
  *  - **no repository, no credential** (WP-74): a run with no checkout makes no mirror fetch and no
  *    push;
- *  - **a writing spec must carry one**: a binding that cannot mint refuses the run in the runner,
- *    before this request exists, and never substitutes its own token;
+ *  - **a writing spec must carry one**: a binding that cannot mint — and declares no static run
+ *    credential (TD-028 decision 13) — refuses the run in the runner, before this request exists,
+ *    and never substitutes its own token;
  *  - **a read-only spec carries a `read` credential or none** — none is an anonymous fetch, right
- *    for a public repository — and a **`push` credential on a read-only spec is refused** (BD-021);
+ *    for a public repository — and a **minted `push` credential on a read-only spec is refused**
+ *    (BD-021). The one exception is a **static** run credential (`source: 'static'`, WP-137), which
+ *    is push-scoped and cannot be narrowed, so a read-only run of a static integration holds it —
+ *    decision 13 item 5's stated loss;
  *  - **the credential names the spec's git host**, one of `spec.egress.hosts`, so the host the
  *    workspace's `cred.get` is answered for is a host the run may reach at all;
  *  - **the password is in no `spec.env` value** — the one carrier into the run container's
@@ -272,8 +283,10 @@ export const createRunRequestSchema = z
       }
       return;
     }
-    if (spec.readOnly && credential.scope === 'push') {
-      refuse('a read-only spec may carry a read credential or none, never a push one (BD-021)');
+    if (spec.readOnly && credential.scope === 'push' && credential.source !== 'static') {
+      refuse(
+        'a read-only spec may carry a read credential or none, never a minted push one (BD-021); only a static run credential, which cannot be narrowed, is push-scoped there (TD-028 decision 13)',
+      );
     }
     if (!spec.egress.hosts.includes(credential.host)) {
       refuse('the credential names a host that is not one of the spec’s egress hosts');

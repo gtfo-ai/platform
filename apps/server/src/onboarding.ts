@@ -71,7 +71,7 @@ import type { IntegrationProber, IntegrationRegistry } from '@platform/integrati
 import { accountOnlyFieldsOf, createIntegrationProber } from '@platform/integrations';
 import type pg from 'pg';
 import { injectedSecretRedactorForEnvironment } from './agent.js';
-import { createProjectSettingsPort } from './pipeline.js';
+import { createProjectSettingsPort, repositoryPathOf } from './pipeline.js';
 import { claimIdempotentAttemptInTransaction } from './queries/onboarding-queries.js';
 
 const nowIso = (): IsoDateTime => new Date().toISOString() as IsoDateTime;
@@ -114,6 +114,12 @@ export interface OnboardingCommands {
     readonly ok: boolean;
     readonly checkedAt: string;
     readonly detail: string;
+    /** `connection`, and `run_credential` for a static run credential (WP-137). */
+    readonly checks: readonly {
+      readonly name: string;
+      readonly ok: boolean;
+      readonly detail: string;
+    }[];
   } | null>;
 }
 
@@ -156,6 +162,22 @@ export interface OnboardingCommandOptions {
   readonly logger: Logger;
 }
 
+/**
+ * The repository path of the **one** project bound to an integration, or `null` when none is — or
+ * when more than one is, which a static integration refuses at the binding write and which the probe
+ * then reports as not checkable rather than choosing (WP-137, TD-028 decision 13 item 3).
+ */
+export const boundProjectPathReader =
+  (pool: Pick<pg.Pool, 'query'>) =>
+  async (integrationId: string): Promise<string | null> => {
+    const { rows } = await pool.query<{ repo_url: string }>(
+      `select p.repo_url from bindings b join projects p on p.id = b.project_id
+        where b.integration_id = $1 order by b.created_at limit 2`,
+      [integrationId],
+    );
+    return rows.length === 1 && rows[0] !== undefined ? repositoryPathOf(rows[0].repo_url) : null;
+  };
+
 export class OnboardingUnavailableError extends Error {
   override readonly name = 'OnboardingUnavailableError';
 }
@@ -172,6 +194,9 @@ export const createOnboardingCommands = (options: OnboardingCommandOptions): Onb
     executor: options.executor,
     // TD-012 step 2 over the probe's detail, beside the account's own exact-match redactor.
     platformRedactor: redactionAdapters.patternRedactor(),
+    // WP-137: where a static run credential's user is checked — the one project bound to the
+    // integration (a static integration may have one), as its repository path.
+    boundProjectPathOf: boundProjectPathReader(options.pool),
   });
   // TD-012 over interview answers: the run environment's credentials first, then the pattern rules.
   const interviewRedactor = composeSecretRedactors(

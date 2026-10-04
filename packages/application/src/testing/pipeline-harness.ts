@@ -58,6 +58,7 @@ import type { HumanCommandDependencies, TaskCommandDependencies } from '../pipel
 import type {
   OrganisationIntegrationsPort,
   PipelineIntegrations,
+  StaticRunCredential,
 } from '../pipeline/integrations.js';
 import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import type { StageExecuteData } from '../pipeline/jobs.js';
@@ -703,6 +704,8 @@ export interface HarnessOptions {
    * review finding (WP-24). Same default and same reasoning as {@link ticketRedactor}.
    */
   readonly gitRedactor?: SecretRedactor;
+  /** The git binding's static run credential (WP-137), as the binding loader reads it. */
+  readonly gitStaticRunCredential?: StaticRunCredential;
   readonly reviewCommentWindowMs?: number;
   /**
    * The knowledge index the planner's context pack is built from.
@@ -1406,6 +1409,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
             ref: gitPort.ref,
             project: 'acme/api',
             redactor: options.gitRedactor ?? exactSecretRedactor([]),
+            ...(options.gitStaticRunCredential === undefined
+              ? {}
+              : { staticRunCredential: options.gitStaticRunCredential }),
           },
     taskManagement:
       taskManagementPort === null

@@ -140,6 +140,14 @@ export interface RunScopedSecrets {
   add(runId: string, value: string, expiresAt: string): void;
   /** The values registered for one run, named — for `IntegrationCallScope.runScopedSecrets` (Q55). */
   secretsFor(runId: string): readonly InjectedSecret[];
+  /**
+   * Drops a run's entry before its expiry (WP-137 review round 1) — for a **static** run credential,
+   * whose declared expiry is weeks away and which every run of the project registers again under its
+   * own name. Safe there because the value is also a sealed secret of the integration, so every
+   * binding redactor in every process still knows it by exact value. A minted value keeps its entry
+   * to its expiry, for the reason above (a revoked token is still credential-shaped).
+   */
+  forget(runId: string): void;
   /** A redactor over every live value, read at call time. */
   readonly redactor: SecretRedactor;
   /** How many values are held. Diagnostics; never the values. */
@@ -187,6 +195,9 @@ export const createRunScopedSecrets = (clock: { readonly now: () => number }): R
         value,
         until: Number.isNaN(until) ? clock.now() + 7 * 24 * 60 * 60 * 1_000 : until,
       });
+    },
+    forget: (runId) => {
+      held.delete(runGitCredentialSecretName(runId));
     },
     secretsFor: (runId) => {
       prune();

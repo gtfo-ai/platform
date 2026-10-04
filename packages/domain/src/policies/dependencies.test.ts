@@ -12,6 +12,7 @@ import fc from 'fast-check';
 // The package's fixed fast-check seed (PROGRESS backlog 253) is set by importing this module.
 import { describe, expect, it } from 'vitest';
 import {
+  addedLinesContain,
   boundReportedDependencies,
   classifyDependencyFile,
   classifyUnreadManifest,
@@ -319,5 +320,28 @@ describe('the policy a package resolves to', () => {
     expect(gateDecisionFor(['allow', 'allow'])).toBe('allow');
     expect(gateDecisionFor(['allow', 'ask'])).toBe('ask');
     expect(gateDecisionFor(['ask', 'block', 'allow'])).toBe('block');
+  });
+});
+
+/** WP-137 (TD-028 decision 13 item 5): the exact-value search over a patch's added lines. */
+describe('addedLinesContain', () => {
+  const TOKEN = 'glpat-FAKE-static-run-token-not-real-0001';
+  const patch = (...lines: string[]): string =>
+    ['--- a/.env', '+++ b/.env', '@@ -1,2 +1,2 @@', ...lines].join('\n');
+
+  it('finds the value on an added line, and nowhere else', () => {
+    expect(addedLinesContain(patch(`+TOKEN=${TOKEN}`), TOKEN)).toBe(true);
+    expect(addedLinesContain(patch(`-TOKEN=${TOKEN}`, ` OTHER=${TOKEN}`), TOKEN)).toBe(false);
+    expect(addedLinesContain(patch('+TOKEN=glpat-FAKE-static-run-token'), TOKEN)).toBe(false);
+    expect(addedLinesContain(patch('+anything'), '')).toBe(false);
+  });
+
+  it('is true for any added line that embeds the value, wherever it sits (property)', () => {
+    fc.assert(
+      fc.property(fc.string(), fc.string(), (before, after) => {
+        const line = `+ ${before.replace(/\n/g, '')}${TOKEN}${after.replace(/\n/g, '')}`;
+        return addedLinesContain(patch(line), TOKEN);
+      }),
+    );
   });
 });

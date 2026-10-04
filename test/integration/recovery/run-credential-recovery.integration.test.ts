@@ -206,7 +206,9 @@ const mint = async (
     ttlSeconds: RUN_CREDENTIAL_TTL_SECONDS,
   });
   if (answer.kind !== 'minted') {
-    throw new Error(`expected a credential, got ${answer.reason}`);
+    throw new Error(
+      `expected a credential, got ${answer.kind === 'unavailable' ? answer.reason : answer.kind}`,
+    );
   }
   return { writes, credential: answer.credential, handle: answer.handle };
 };

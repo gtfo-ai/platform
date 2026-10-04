@@ -24,6 +24,7 @@
  *    TD-012's M5 amendment). Without one its minted values would be redacted only in the process
  *    that minted them, so the registration is refused by name.
  */
+
 import type {
   AgentTooling,
   CommunicationPort,
@@ -39,6 +40,7 @@ import type {
 } from '@platform/application';
 import type { Id, IntegrationType } from '@platform/contracts';
 import type * as z from 'zod';
+import type { StaticRunCredentialSupport } from './static-run-credential.js';
 
 /** Which port a type resolves to. The mapping the whole registry is generic over. */
 export interface IntegrationPortByType {
@@ -236,6 +238,15 @@ export interface ProviderRegistration<TType extends IntegrationType> {
    * mint, whatever its port says. Refused for any other type, and refused unless `shape: 'stable'`.
    */
   readonly credentialMinting?: CredentialMintingDeclaration;
+  /**
+   * For a `git` provider whose host may be unable to mint: which config keys declare a **static run
+   * credential** (TD-028 decision 13, WP-137; {@link StaticRunCredentialSupport}). Absent means the
+   * provider offers none. Every key must exist in `configSchema` and both token fields must be in
+   * `secretFields`, checked at registration; refused for any other type. The registration's `create`
+   * must build its adapter **without** the token field (`withoutRunOnlyFields`), and its own test
+   * holds it to that: no platform API call may carry the run token (decision 13 item 3).
+   */
+  readonly staticRunCredential?: StaticRunCredentialSupport;
   create(input: ProviderCreateInput): IntegrationPortByType[TType];
 }
 
@@ -343,6 +354,44 @@ export const createIntegrationRegistry = (
           registration.id,
           'declares credential minting without both hints (`enable` and `shape`); the mint ' +
             'refusals would tell an operator nothing about how to fix them (WP-107)',
+        );
+      }
+    }
+    const fixed = registration.staticRunCredential;
+    if (fixed !== undefined) {
+      if (registration.type !== 'git') {
+        throw new ProviderRegistrationError(
+          registration.id,
+          `declares a static run credential but is a "${registration.type}" provider; only a git binding gives a run a credential (TD-028 decision 13)`,
+        );
+      }
+      for (const field of [
+        fixed.modeField,
+        fixed.tokenField,
+        fixed.apiTokenField,
+        fixed.usernameField,
+        fixed.expiresAtField,
+        fixed.mintingField,
+      ]) {
+        if (!(field in shape)) {
+          throw new ProviderRegistrationError(
+            registration.id,
+            `static run credential field "${field}" does not exist in the config schema`,
+          );
+        }
+      }
+      for (const field of [fixed.tokenField, fixed.apiTokenField]) {
+        if (!registration.secretFields.includes(field)) {
+          throw new ProviderRegistrationError(
+            registration.id,
+            `static run credential field "${field}" is not in secretFields; a token would be stored and published as plain configuration (BD-002)`,
+          );
+        }
+      }
+      if (fixed.tokenField === fixed.apiTokenField) {
+        throw new ProviderRegistrationError(
+          registration.id,
+          'the static run token and the API token are declared as one field; the run token must be a separate secret (TD-028 decision 13)',
         );
       }
     }

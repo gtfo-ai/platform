@@ -23,9 +23,11 @@
  * follow, each discharged in {@link createLauncherRunWorkspaceProvisioner} and each with a test:
  *
  *  - **the scope is the spec's**: `push` for a writing spec, `read` for a read-only one; a binding
- *    that cannot mint **refuses a writing run** here, before the create (`invalid_spec`, terminal,
- *    naming the binding and the setting), and a read-only run proceeds with no credential — an
- *    anonymous fetch;
+ *    that cannot mint and declares no static run credential **refuses a writing run** here, before
+ *    the create (`invalid_spec`, terminal, naming the binding and both settings), and a read-only
+ *    run proceeds with no credential — an anonymous fetch. A **static** run credential (WP-137,
+ *    TD-028 decision 13) is the one answer wider than asked that is accepted: it is `push` and
+ *    cannot be narrowed, and its revoke is a no-op;
  *  - **the runner answers `cred.get`** — the agent's own `git push origin agentic/*` asks the shim,
  *    the shim asks this process, and `createRunletSpawn` had no responder here, so every answer was
  *    *"runlet has no credential responder; refusing"*. It answers from a {@link RunCredentialBroker}
@@ -76,7 +78,11 @@ import type {
   RunWorkspaceEnding,
   RunWorkspaceProvisioner,
 } from '../runner/workspace-runner.js';
-import { RunCredentialBroker, type RunCredentialScope } from '../workspace/broker.js';
+import {
+  RunCredentialBroker,
+  type RunCredentialScope,
+  type RunCredentialSource,
+} from '../workspace/broker.js';
 import { buildWorkspaceSpec } from '../workspace/spec.js';
 import type { LauncherControlClient } from './client.js';
 import type { CreateRunResponse, RunCredentialPayload } from './protocol.js';
@@ -114,7 +120,16 @@ export interface MintedRunGitCredential {
   readonly password: string;
   readonly scope: RunCredentialScope;
   readonly expiresAt: string;
-  /** Revokes it at the provider, through the executor. The provisioner calls it exactly once. */
+  /**
+   * `minted` — a run-scoped token the provider issued for this run — or `static`, the integration's
+   * declared run token (TD-028 decision 13, WP-137), which is always `push` and cannot be narrowed,
+   * so a read-only run is handed it too (the stated loss of decision 13 item 5). Absent is `minted`.
+   */
+  readonly source?: RunCredentialSource;
+  /**
+   * Revokes it at the provider, through the executor. The provisioner calls it exactly once. A
+   * static credential's is a no-op: nothing was minted, and it lives to its declared expiry.
+   */
   revoke(): Promise<void>;
 }
 
@@ -274,6 +289,7 @@ export const createLauncherRunWorkspaceProvisioner = (
               password: minted.password,
               scope: minted.scope,
               expiresAt: minted.expiresAt,
+              source: minted.source ?? 'minted',
             };
       if (carried !== null) {
         broker.hold({ runId: spec.runId, readOnly: workspaceSpec.readOnly, credential: carried });
@@ -308,6 +324,7 @@ export const createLauncherRunWorkspaceProvisioner = (
           checkout_commit: workspaceSpec.repo?.checkoutCommit ?? null,
           read_only: workspaceSpec.readOnly,
           credential_scope: carried?.scope ?? null,
+          credential_source: carried?.source ?? null,
           launcher_credential_scope: ready.credentialScope,
           replayed: ready.replayed,
         },
@@ -379,7 +396,7 @@ const mintFor = async (input: {
     if (!input.readOnly) {
       throw new WorkspaceError(
         'invalid_spec',
-        `run ${input.spec.runId} writes to its checkout and no git credential can be minted for it: ${answer.reason}`,
+        `run ${input.spec.runId} writes to its checkout and no git credential can be given to it: ${answer.reason}`,
         { runId: input.spec.runId, reason: 'run_credential_unavailable' },
       );
     }
@@ -389,7 +406,13 @@ const mintFor = async (input: {
     );
     return null;
   }
-  if (scope === 'read' && answer.credential.scope === 'push') {
+  // A static run credential is push-capable by construction and is handed to a read-only run as it
+  // is (TD-028 decision 13 items 2 and 5); only a *minted* push answer to a read question is a defect.
+  if (
+    scope === 'read' &&
+    answer.credential.scope === 'push' &&
+    answer.credential.source !== 'static'
+  ) {
     const revoked = await onceRevoker(input.spec.runId, answer.credential, input.logger)();
     throw new WorkspaceError(
       'invalid_spec',

@@ -21,7 +21,7 @@ import type { PipelineIntegrationsPort } from '@platform/application';
 import { silentLogger } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
-import { createPlatformReadinessProbe } from './onboarding.js';
+import { boundProjectPathReader, createPlatformReadinessProbe } from './onboarding.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1' as Id;
 
@@ -137,5 +137,26 @@ describe('createPlatformReadinessProbe', () => {
       'from bindings b': [{ type: 'errors' }, { type: 'git' }],
     }).read(PROJECT);
     expect(signals.boundIntegrationTypes).toEqual(['errors', 'git']);
+  });
+});
+
+/** WP-137: where the probe checks a static run credential's user — the one bound project, or none. */
+describe('boundProjectPathReader (WP-137)', () => {
+  const readerOver = (urls: readonly string[]) =>
+    boundProjectPathReader({
+      query: async () => ({ rows: urls.map((repo_url) => ({ repo_url })) }),
+    } as never);
+
+  it('answers the one bound project’s repository path, and null for none or more than one', async () => {
+    expect(await readerOver(['https://gitlab.example.test/acme/autix.git'])('i-1')).toBe(
+      'acme/autix',
+    );
+    expect(await readerOver([])('i-1')).toBeNull();
+    expect(
+      await readerOver([
+        'https://gitlab.example.test/acme/autix.git',
+        'https://gitlab.example.test/acme/other.git',
+      ])('i-1'),
+    ).toBeNull();
   });
 });

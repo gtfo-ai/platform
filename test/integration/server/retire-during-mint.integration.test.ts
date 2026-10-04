@@ -170,6 +170,7 @@ describe('a retire that commits while a mint’s call is open (backlog 386)', ()
       pool,
       integrations: portOver(git),
       runSecrets,
+      now: () => new Date().toISOString(),
     });
     const runId = randomUUID() as Id;
 

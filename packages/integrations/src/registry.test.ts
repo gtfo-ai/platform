@@ -236,6 +236,76 @@ describe('a git provider’s credential-minting declaration (WP-80)', () => {
 });
 
 /**
+ * WP-137 (TD-028 decision 13 item 1): a static run credential's declaration names keys of the
+ * provider's schema, its two token fields are secrets and distinct, and only a git provider has one —
+ * each refused at registration, by name. GitLab's own declaration is the control.
+ */
+describe('a git provider’s static run credential declaration (WP-137)', () => {
+  const SUPPORT = {
+    modeField: 'run_credential',
+    tokenField: 'run_token',
+    apiTokenField: 'token',
+    usernameField: 'run_token_username',
+    expiresAtField: 'run_token_expires_at',
+    mintingField: 'mint_credentials',
+    maxLifetimeDays: 90,
+  };
+  const declaring = (
+    staticRunCredential: unknown,
+    overrides: Record<string, unknown> = {},
+  ): AnyProviderRegistration =>
+    ({
+      ...registration(),
+      id: 'fake-static-git',
+      type: 'git',
+      configSchema: z.strictObject({
+        token: z.string(),
+        run_token: z.string().nullish(),
+        run_credential: z.enum(['minted', 'static']).default('minted'),
+        run_token_username: z.string().nullish(),
+        run_token_expires_at: z.string().nullish(),
+        mint_credentials: z.boolean().default(false),
+      }),
+      secretFields: ['token', 'run_token'],
+      create: () => {
+        throw new Error('not built in this test');
+      },
+      staticRunCredential,
+      ...overrides,
+    }) as AnyProviderRegistration;
+
+  it('accepts a declaration over the schema’s own keys, and GitLab ships one', async () => {
+    expect(() => createIntegrationRegistry([declaring(SUPPORT)])).not.toThrow();
+    const { gitlabProviderRegistration } = await import('./providers/gitlab/index.js');
+    expect(() => createIntegrationRegistry([gitlabProviderRegistration])).not.toThrow();
+  });
+
+  it.each([
+    [
+      'a key the schema lacks',
+      { ...SUPPORT, usernameField: 'nope' },
+      {},
+      /field "nope" does not exist/,
+    ],
+    [
+      'a run token that is not a secret',
+      SUPPORT,
+      { secretFields: ['token'] },
+      /"run_token" is not in secretFields/,
+    ],
+    ['one field for both tokens', { ...SUPPORT, tokenField: 'token' }, {}, /declared as one field/],
+    [
+      'a provider that is not git',
+      SUPPORT,
+      { type: 'task_management' },
+      /only a git binding gives a run a credential/,
+    ],
+  ])('refuses %s, naming the provider', (_case, support, overrides, message) => {
+    expect(() => createIntegrationRegistry([declaring(support, overrides)])).toThrow(message);
+  });
+});
+
+/**
  * The channel declaration WP-32 added, and the boot failure it exists to be.
  *
  * A `communication` provider that declared nothing would resolve to a binding with **no channel**,

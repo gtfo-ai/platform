@@ -35,11 +35,13 @@
  */
 import type {
   BindingRepository,
+  GitProviderPort,
   HealthProbe,
   InjectedSecret,
   IntegrationAccount,
   IntegrationActionExecutor,
   IntegrationRef,
+  ProjectMemberAccess,
   SecretRedactor,
   SecretStore,
 } from '@platform/application';
@@ -50,6 +52,7 @@ import {
 } from '@platform/application';
 import type { Id, IntegrationType } from '@platform/contracts';
 import type { IntegrationRegistry } from '../registry.js';
+import { staticRunCredentialOf } from '../static-run-credential.js';
 import { BindingLoadError } from './loader.js';
 
 export interface IntegrationProberOptions {
@@ -72,6 +75,20 @@ export interface IntegrationProberOptions {
    * row — a provider whose error message echoes the token it rejected is the ordinary case.
    */
   readonly platformRedactor?: SecretRedactor;
+  /**
+   * The repository path of the one project bound to this integration (`acme/api`), or `null` when
+   * none is — where a **static run credential**'s user is checked (WP-137, TD-028 decision 13 item
+   * 3). Absent, the check reports that it could not be made, as a failed check, never a pass.
+   */
+  readonly boundProjectPathOf?: (integrationId: Id) => Promise<string | null>;
+}
+
+/** One line of the probe's answer: the connection, and for a static run credential its user. */
+export interface IntegrationProbeCheck {
+  readonly name: string;
+  readonly ok: boolean;
+  /** Platform text, or provider text through the account's redactor. */
+  readonly detail: string;
 }
 
 /** `<provider>:<integrationId>:<field>` — the naming both other loaders use. */
@@ -106,10 +123,16 @@ const refOf = (port: object): IntegrationRef | null => {
 };
 
 export interface IntegrationProbeOutcome {
+  /** Every check passed. */
   readonly ok: boolean;
   readonly checkedAt: string;
   /** One line, already through the account's redactor. Never null — an empty string says so. */
   readonly detail: string;
+  /**
+   * `connection` always; `run_credential` beside it for an integration that declares a static run
+   * credential (WP-137). `detail` above is the connection's.
+   */
+  readonly checks: readonly IntegrationProbeCheck[];
 }
 
 export interface IntegrationProber {
@@ -226,16 +249,128 @@ export const createIntegrationProber = (options: IntegrationProberOptions): Inte
         describeResult: (result) => ({ ok: result.ok }),
       });
       const result = outcome.result;
+      // The provider's own words, through the account's redactor. Every `testConnection` already
+      // owes this (`healthProbeSchema.detail` says so) and it is applied **again** here rather
+      // than trusted: the obligation is on every provider, and this is the one place that can
+      // hold a provider that forgot to a promise the platform makes to the operator. Redaction is
+      // idempotent over an already-redacted string, so the cost is one pass.
+      const detail = redactor.redactText(result.detail ?? '').value;
+      const checks: IntegrationProbeCheck[] = [{ name: 'connection', ok: result.ok, detail }];
+      const fixed = staticRunCredentialOf(
+        registration.staticRunCredential,
+        parsed.data as Readonly<Record<string, unknown>>,
+      );
+      if (fixed !== undefined) {
+        checks.push(
+          await checkStaticRunCredential({
+            options,
+            integrationId,
+            ref,
+            port,
+            username: fixed.username,
+            connected: result.ok,
+            redact: (text) => redactor.redactText(text).value,
+          }),
+        );
+      }
       return {
-        ok: result.ok,
+        ok: checks.every((check) => check.ok),
         checkedAt: result.checked_at,
-        // The provider's own words, through the account's redactor. Every `testConnection` already
-        // owes this (`healthProbeSchema.detail` says so) and it is applied **again** here rather
-        // than trusted: the obligation is on every provider, and this is the one place that can
-        // hold a provider that forgot to a promise the platform makes to the operator. Redaction is
-        // idempotent over an already-redacted string, so the cost is one pass.
-        detail: redactor.redactText(result.detail ?? '').value,
+        detail,
+        checks,
       };
     },
+  };
+};
+
+/** What the probe says it cannot do, on every static run credential check (decision 13 item 3). */
+const CANNOT_CONFIRM_OWNER =
+  'The platform never uses the run token for an API call, so it cannot confirm that the token belongs to this user — check that yourself in the user’s access tokens.';
+
+/**
+ * The static run credential's line of the probe (WP-137, TD-028 decision 13 item 3): the declared
+ * user's membership of the bound project, read **with the API token** through the executor (a read,
+ * audited, rate-limited), refused when the role is above the push role, and always saying what it
+ * cannot confirm. The run token itself is never sent anywhere here.
+ */
+const checkStaticRunCredential = async (input: {
+  readonly options: IntegrationProberOptions;
+  readonly integrationId: Id;
+  readonly ref: IntegrationRef;
+  readonly port: object;
+  readonly username: string;
+  readonly connected: boolean;
+  readonly redact: (text: string) => string;
+}): Promise<IntegrationProbeCheck> => {
+  const name = 'run_credential';
+  if (!input.connected) {
+    return {
+      name,
+      ok: false,
+      detail: `Not checked: the API token's connection failed, and the run token's user is read with it. ${CANNOT_CONFIRM_OWNER}`,
+    };
+  }
+  if (input.username.trim() === '') {
+    return { name, ok: false, detail: `No run token user is declared. ${CANNOT_CONFIRM_OWNER}` };
+  }
+  const project =
+    input.options.boundProjectPathOf === undefined
+      ? null
+      : await input.options.boundProjectPathOf(input.integrationId);
+  if (project === null) {
+    return {
+      name,
+      ok: false,
+      detail: `Not checked: no project is bound to this integration yet, so there is no membership to read. Bind it and test again. ${CANNOT_CONFIRM_OWNER}`,
+    };
+  }
+  const git = input.port as Partial<GitProviderPort>;
+  if (typeof git.projectMemberAccess !== 'function') {
+    return { name, ok: false, detail: 'This provider cannot read a project membership.' };
+  }
+  const access = (
+    await input.options.executor.execute<ProjectMemberAccess>({
+      integration: input.ref,
+      action: 'check_run_credential_member',
+      // Names only: the user and the project, never a credential.
+      payload: { username: input.username, project },
+      projectId: null,
+      taskId: null,
+      mutating: false,
+      perform: async () =>
+        (git.projectMemberAccess as GitProviderPort['projectMemberAccess'])(
+          project,
+          input.username,
+        ),
+      describeResult: (result) => ({ member: result.member, administers: result.administers }),
+    })
+  ).result;
+  const who = input.redact(input.username);
+  if (!access.member) {
+    return {
+      name,
+      ok: false,
+      detail: `${who} is not a member of ${project}, so the run token cannot fetch it. ${CANNOT_CONFIRM_OWNER}`,
+    };
+  }
+  const role = input.redact(access.role ?? 'an unnamed role');
+  if (!access.pushes) {
+    return {
+      name,
+      ok: false,
+      detail: `${who} is ${role} on ${project}, which cannot push, so a stage that writes would fail; a static run credential's user needs the push role (GitLab: Developer). ${CANNOT_CONFIRM_OWNER}`,
+    };
+  }
+  if (access.administers) {
+    return {
+      name,
+      ok: false,
+      detail: `${who} is ${role} on ${project}; a static run credential must belong to a user with the push role and no more (GitLab: Developer), because a higher role can unprotect the default branch (TD-028 decision 13). Lower the role, or use another user. ${CANNOT_CONFIRM_OWNER}`,
+    };
+  }
+  return {
+    name,
+    ok: true,
+    detail: `${who} is ${role} on ${project}. ${CANNOT_CONFIRM_OWNER}`,
   };
 };

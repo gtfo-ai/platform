@@ -55,6 +55,17 @@ export const gitlabUserSchema = z.object({
   avatar_url: z.string().nullish(),
 });
 
+/**
+ * <https://docs.gitlab.com/api/members/> § "Get a member of a group or project, including inherited
+ * and invited members" — the members the adapter reads (WP-137). `access_level` is the role as a
+ * number (10 Guest, 15 Planner, 20 Reporter, 30 Developer, 40 Maintainer, 50 Owner).
+ */
+export const gitlabMemberSchema = z.object({
+  id: z.int(),
+  username: z.string(),
+  access_level: z.int(),
+});
+
 export const gitlabMergeStatusSchema = z.enum([
   'unchecked',
   'checking',

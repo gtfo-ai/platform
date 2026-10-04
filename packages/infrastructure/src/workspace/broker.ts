@@ -52,16 +52,27 @@ import { silentLogger, WorkspaceError } from '@platform/application';
 /** What a minted credential may be used for (`CredentialScope` on the provider port). */
 export type RunCredentialScope = 'read' | 'push';
 
+/**
+ * Where the run's credential came from: minted for the run, or the integration's declared static
+ * run token (TD-028 decision 13, WP-137), which is always `push` and cannot be narrowed.
+ */
+export type RunCredentialSource = 'minted' | 'static';
+
 /** The credential material the create request carries — never a `revokeId` (decision 3). */
 export interface CarriedRunCredential extends WorkspaceGitCredential {
   readonly scope: RunCredentialScope;
   /** When the provider stops honouring it. Diagnostics here; the provider is the enforcer. */
   readonly expiresAt: string;
+  /** Absent is `minted`: the strict rule, never the exception. */
+  readonly source?: RunCredentialSource;
 }
 
 export interface HoldRequest {
   readonly runId: string;
-  /** BD-021: a read-only stage may hold a `read` credential and never a `push` one. */
+  /**
+   * BD-021: a read-only stage may hold a `read` credential and never a minted `push` one — the one
+   * exception is a static run credential, which cannot be narrowed (TD-028 decision 13, WP-137).
+   */
   readonly readOnly: boolean;
   readonly credential: CarriedRunCredential;
 }
@@ -84,7 +95,9 @@ export class RunCredentialBroker {
    */
   hold(request: HoldRequest): WorkspaceGitCredential {
     const { credential } = request;
-    if (request.readOnly && credential.scope === 'push') {
+    // TD-028 decision 13: a static run credential cannot be narrowed, so a read-only run holds it
+    // with its push scope — the stated loss. A *minted* push credential there is still refused.
+    if (request.readOnly && credential.scope === 'push' && credential.source !== 'static') {
       throw new WorkspaceError(
         'invalid_spec',
         'a read-only run was sent a push credential; it may hold a read credential or none (BD-021)',

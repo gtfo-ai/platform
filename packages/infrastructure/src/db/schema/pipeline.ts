@@ -314,6 +314,13 @@ export const runs = pgTable('runs', {
    * was withheld"*, and every run created before 0073.
    */
   promptsWithheld: jsonb('prompts_withheld').$type<JsonObject>(),
+  /**
+   * Which credential the run had — `minted`, `static` or `none` — and the git integration it came
+   * from (migration 0078, WP-137, TD-028 decision 13): a static run credential writes no
+   * `mint_credential` audit row, so the run carries the answer. `null` is *"never asked"*.
+   */
+  credentialSource: text('credential_source'),
+  credentialIntegrationId: uuid('credential_integration_id'),
   priceListId: uuid('price_list_id'),
   wallMs: bigint('wall_ms', { mode: 'number' }).notNull().default(0),
   redactionCount: integer('redaction_count').notNull().default(0),

@@ -17,6 +17,7 @@ import {
   type PipelineIntegrations,
   type RunSpec,
   runGitCredentialSecretName,
+  type StaticRunCredential,
   silentLogger,
   staticPipelineIntegrations,
 } from '@platform/application';
@@ -168,7 +169,14 @@ describe('minting the run credential (WP-76)', () => {
 
   const harness = (
     mode: 'normal' | 'shadow',
-    options: { minting?: boolean; widen?: boolean } = {},
+    options: {
+      minting?: boolean;
+      widen?: boolean;
+      /** WP-137: the integration's static run credential, as the loader reads it. */
+      staticRunCredential?: StaticRunCredential;
+      /** WP-137: `runs.credential_source` cannot be written. */
+      failRecord?: boolean;
+    } = {},
   ) => {
     const fake = createFakeGitProvider({
       integrationId: GIT_INTEGRATION,
@@ -192,15 +200,35 @@ describe('minting the run credential (WP-76)', () => {
         timer: createVirtualTimer({ autoAdvance: true }),
         clock: fixedClock('2026-01-01T00:00:00.000Z', 1000),
       }),
-      git: { port: git, ref: fake.ref, project: 'acme/api', redactor: noSecretsRedactor() },
+      git: {
+        port: git,
+        ref: fake.ref,
+        project: 'acme/api',
+        redactor: noSecretsRedactor(),
+        ...(options.staticRunCredential === undefined
+          ? {}
+          : { staticRunCredential: options.staticRunCredential }),
+      },
       taskManagement: null,
       communication: null,
     };
     const runSecrets = createRunScopedSecrets({ now: () => Date.parse('2026-01-01T00:00:00Z') });
+    // Every statement the minter sent, with its parameters — WP-137's `runs.credential_source`.
+    const queries: { text: string; values: readonly unknown[] }[] = [];
+    const pool = {
+      query: async (text: string, values: readonly unknown[] = []) => {
+        if (options.failRecord === true && text.includes('credential_source')) {
+          throw new Error('the database is gone');
+        }
+        queries.push({ text, values });
+        return { rows: [{ mode }] };
+      },
+    } as unknown as pg.Pool;
     const minter = createRunGitCredentialMinter({
-      pool: poolWith([{ mode }]),
+      pool,
       integrations: staticPipelineIntegrations(integrations),
       runSecrets,
+      now: () => '2026-01-01T00:00:00.000Z',
     });
     const spec = { runId: RUN, taskId: TASK, projectId: PROJECT } as unknown as RunSpec;
     const project = {
@@ -211,7 +239,11 @@ describe('minting the run credential (WP-76)', () => {
       branchPatterns: ['agentic/*'],
       containerEnv: {},
     };
-    return { git: fake, auditLog, runSecrets, minter, spec, project };
+    const credentialSources = () =>
+      queries
+        .filter((query) => query.text.includes('credential_source'))
+        .map((query) => query.values.slice(1));
+    return { git: fake, auditLog, runSecrets, minter, spec, project, credentialSources };
   };
 
   it('mints once and revokes once through the executor, one audit row each, keyed by the binding', async () => {
@@ -266,6 +298,94 @@ describe('minting the run credential (WP-76)', () => {
     ]);
     expect(auditLog.entriesFor('revoke_credential').map((row) => row.status)).toEqual(['ok']);
     expect(runSecrets.size).toBe(0);
+  });
+
+  /**
+   * WP-137 — TD-028 decision 13, the production minter: a static run credential is handed on the
+   * minted path's own shape, joins the run's redactor (so a transcript line or an artifact that
+   * echoes it is redacted), writes no `mint_credential`/`revoke_credential` row — which is what keeps
+   * the orphan-revoke recovery, which starts from those rows, away from the run — and the run row
+   * says `static`.
+   */
+  describe('a static run credential (WP-137)', () => {
+    const STATIC_TOKEN = 'glpat-FAKE-static-run-token-not-real-0001';
+    const STATIC: StaticRunCredential = {
+      username: 'agentic-runner',
+      value: STATIC_TOKEN,
+      expiresAt: '2026-12-01T00:00:00.000Z',
+      declaredExpiry: '2026-12-01',
+      sameAsApiToken: false,
+      refusal: null,
+    };
+
+    it('hands it on the minted path, redacted, with no audit row, and records the source', async () => {
+      const { git, auditLog, runSecrets, minter, spec, project, credentialSources } = harness(
+        'normal',
+        { minting: false, staticRunCredential: STATIC },
+      );
+      const answer = await minter.mint({ spec, project, scope: 'read', ttlSeconds: 86_400 });
+      if (answer.kind !== 'minted') throw new Error('expected a credential');
+      expect(answer.credential).toMatchObject({
+        username: 'agentic-runner',
+        password: STATIC_TOKEN,
+        scope: 'push',
+        expiresAt: '2026-12-01T00:00:00.000Z',
+        source: 'static',
+      });
+      // The canary: a transcript line and an artifact field are redacted through this registry.
+      const line = `remote: https://agentic-runner:${STATIC_TOKEN}@gitlab.example.test/acme/api`;
+      const artifact = JSON.stringify({ commands_run: [`git push ${STATIC_TOKEN}`] });
+      expect(runSecrets.redactor.redactText(line).value).not.toContain(STATIC_TOKEN);
+      expect(runSecrets.redactor.redactText(artifact).value).toBe(
+        JSON.stringify({
+          commands_run: [`git push [REDACTED:integration:${runGitCredentialSecretName(RUN)}]`],
+        }),
+      );
+      await answer.credential.revoke();
+      // Review round 1: the teardown drops the run's entry; no provider call was made for it.
+      expect(runSecrets.size).toBe(0);
+      expect(auditLog.entries).toEqual([]);
+      expect(git.credentials).toEqual([]);
+      expect(credentialSources()).toEqual([['static', GIT_INTEGRATION]]);
+    });
+
+    it('gives a shadow task no credential, and records none (decision 13 item 4)', async () => {
+      const { runSecrets, minter, spec, project, credentialSources } = harness('shadow', {
+        staticRunCredential: STATIC,
+      });
+      const answer = await minter.mint({ spec, project, scope: 'push', ttlSeconds: 86_400 });
+      expect(answer.kind).toBe('unavailable');
+      expect(JSON.stringify(answer)).not.toContain(STATIC_TOKEN);
+      expect(runSecrets.size).toBe(0);
+      expect(credentialSources()).toEqual([['none', null]]);
+    });
+
+    it('refuses an expired one terminally, before the create, naming the date', async () => {
+      const { runSecrets, minter, spec, project, credentialSources } = harness('normal', {
+        staticRunCredential: {
+          ...STATIC,
+          expiresAt: '2025-12-01T00:00:00.000Z',
+          declaredExpiry: '2025-12-01',
+        },
+      });
+      await expect(
+        minter.mint({ spec, project, scope: 'push', ttlSeconds: 86_400 }),
+      ).rejects.toMatchObject({
+        code: 'invalid_spec',
+        message: expect.stringMatching(/expired on 2025-12-01/),
+      });
+      expect(runSecrets.size).toBe(0);
+      expect(credentialSources()).toEqual([['none', GIT_INTEGRATION]]);
+    });
+  });
+
+  it('revokes a minted token once when its run cannot record the source, and refuses the run', async () => {
+    const { git, auditLog, minter, spec, project } = harness('normal', { failRecord: true });
+    await expect(minter.mint({ spec, project, scope: 'push', ttlSeconds: 86_400 })).rejects.toThrow(
+      'the database is gone',
+    );
+    expect(git.credentials).toEqual([expect.objectContaining({ revoked: true, revocations: 1 })]);
+    expect(auditLog.entriesFor('revoke_credential')).toHaveLength(1);
   });
 
   it('answers unavailable for a binding that cannot mint, and never falls back to a token', async () => {

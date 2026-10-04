@@ -32,6 +32,8 @@ import {
   RunCredentialMintRetiredError,
   runCredentialRevocations,
   runCredentialWrites,
+  type StaticRunCredential,
+  StaticRunCredentialRefusedError,
 } from './integrations.js';
 
 /** The minting integration is live: the mint's post-record check passes (WP-114, backlog 386). */
@@ -60,6 +62,7 @@ const TOKEN_SHAPE = {
 const HINTS: CredentialMintingHints = {
   enable: 'fake-git: turn minting on for the account',
   shape: 'fake-git: declare the prefix your instance uses',
+  static: 'fake-git: declare a dedicated run token',
 };
 
 /** The revocation door, built from the binding that minted — what teardown and recovery use (WP-80). */
@@ -269,16 +272,17 @@ describe('runCredentialWrites (WP-76)', () => {
     ).mint(request('normal', 'push'));
     expect(off).toEqual({
       kind: 'unavailable',
+      // WP-137 (TD-028 decision 13 item 6): the binding, **both** settings, and the API token never sent.
       reason:
-        `the git binding ${GIT_REF.integrationId} (fake-git) cannot mint run credentials — its minting ` +
-        `setting is off (${HINTS.enable}). The binding’s own token is never sent instead (TD-028, ` +
-        'WP-76 amendment decision 6)',
+        `the git binding ${GIT_REF.integrationId} (fake-git) cannot give run ${IDS.runId} a credential: ` +
+        `minting is off (${HINTS.enable}) and no static run credential is configured ` +
+        `(${HINTS.static}). The binding’s own token is never sent instead (TD-028 decisions 6 and 13)`,
     });
     const bare = await runCredentialWrites(harness({ minting: false }).integrations, LIVE).mint(
       request('normal', 'push'),
     );
     expect(bare.kind === 'unavailable' ? bare.reason : '').toContain(
-      'its minting setting is off. The binding',
+      'minting is off and no static run credential is configured. The binding',
     );
 
     const misshapen = { prefix: 'glpat-', charset: 'token_dotted' as const, length: TOKEN.length };
@@ -648,5 +652,104 @@ describe('runCredentialRevocations().recover (WP-77)', () => {
     await revocationsOf(integrations).revoke(answer.handle, { ...IDS, mode: 'normal' });
 
     expect(revoked).toEqual([{ revokeId: 'acme/api#17' }]);
+  });
+});
+
+/**
+ * WP-137 — TD-028 decision 13: a static run credential, handed where a minted one would be, with no
+ * provider call and no audit row, never to a shadow task, and refused by name when it is broken.
+ */
+describe('a static run credential (WP-137, TD-028 decision 13)', () => {
+  const STATIC_TOKEN = 'glpat-FAKE-static-run-token-not-real-0001';
+  const NOW = '2026-10-03T12:00:00.000Z';
+  const AT_NOW: MintingIntegrationLiveness = { isRetired: async () => false, now: () => NOW };
+  const fixed = (overrides: Partial<StaticRunCredential> = {}): StaticRunCredential => ({
+    username: 'agentic-runner',
+    value: STATIC_TOKEN,
+    expiresAt: '2026-12-01T00:00:00.000Z',
+    declaredExpiry: '2026-12-01',
+    sameAsApiToken: false,
+    refusal: null,
+    ...overrides,
+  });
+  const staticHarness = (credential: StaticRunCredential, minting = false) => {
+    const built = harness({ minting, hints: HINTS });
+    const git = built.integrations.git as NonNullable<PipelineIntegrations['git']>;
+    return {
+      ...built,
+      integrations: { ...built.integrations, git: { ...git, staticRunCredential: credential } },
+    };
+  };
+
+  it('hands a writing run the static token as push, with the declared expiry, and calls no provider', async () => {
+    const { integrations, auditLog, minted } = staticHarness(fixed());
+    const answer = await runCredentialWrites(integrations, AT_NOW).mint(request('normal', 'push'));
+    expect(answer).toEqual({
+      kind: 'static',
+      credential: {
+        username: 'agentic-runner',
+        value: STATIC_TOKEN,
+        scope: 'push',
+        expiresAt: '2026-12-01T00:00:00.000Z',
+      },
+      ref: GIT_REF,
+    });
+    expect(minted).toEqual([]);
+    expect(auditLog.entries).toEqual([]);
+  });
+
+  it('hands a read-only run the same push-capable token: it cannot be narrowed (decision 13 item 5)', async () => {
+    const { integrations } = staticHarness(fixed());
+    const answer = await runCredentialWrites(integrations, AT_NOW).mint(request('normal', 'read'));
+    expect(answer.kind === 'static' ? answer.credential.scope : answer.kind).toBe('push');
+  });
+
+  it('gives a shadow task no credential at all, never the static one (decision 13 item 4)', async () => {
+    const { integrations, auditLog, minted } = staticHarness(fixed(), true);
+    const answer = await runCredentialWrites(integrations, AT_NOW).mint(request('shadow', 'read'));
+    expect(answer.kind).toBe('unavailable');
+    expect(JSON.stringify(answer)).not.toContain(STATIC_TOKEN);
+    expect(answer.kind === 'unavailable' ? answer.reason : '').toMatch(
+      /shadow task is never given the static run credential/,
+    );
+    expect(minted).toEqual([]);
+    expect(auditLog.entries).toEqual([]);
+  });
+
+  it.each([
+    ['no run token', { value: '' }, /holds no run token/],
+    ['the API token in its place', { sameAsApiToken: true }, /own API token/],
+    [
+      'minting also on',
+      { refusal: '`run_credential: static` and `mint_credentials: true`' },
+      /mint_credentials: true/,
+    ],
+    [
+      'an expiry passed',
+      { expiresAt: '2026-10-01T00:00:00.000Z', declaredExpiry: '2026-10-01' },
+      /expired on 2026-10-01/,
+    ],
+    ['an expiry that is no date', { expiresAt: null }, /no declared expiry/],
+  ])(
+    'refuses %s by name, before anything is sent, and never names the value',
+    async (_case, overrides, reason) => {
+      const { integrations, auditLog, minted } = staticHarness(fixed(overrides));
+      const error = await runCredentialWrites(integrations, AT_NOW)
+        .mint(request('normal', 'push'))
+        .catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(StaticRunCredentialRefusedError);
+      expect((error as Error).message).toMatch(reason);
+      expect((error as Error).message).toContain(GIT_REF.integrationId);
+      expect((error as Error).message).not.toContain(STATIC_TOKEN);
+      expect(minted).toEqual([]);
+      expect(auditLog.entries).toEqual([]);
+    },
+  );
+
+  it('refuses rather than skipping the expiry check when no clock was composed', async () => {
+    const { integrations } = staticHarness(fixed());
+    await expect(
+      runCredentialWrites(integrations, LIVE).mint(request('normal', 'push')),
+    ).rejects.toThrow(/no clock was composed/);
   });
 });

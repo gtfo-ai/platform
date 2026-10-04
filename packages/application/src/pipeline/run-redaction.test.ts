@@ -65,3 +65,18 @@ describe('createRunScopedSecrets (WP-76)', () => {
     expect(() => secrets.add(RUN, 'short', '2026-06-02T00:00:00.000Z')).toThrow(TypeError);
   });
 });
+
+/** WP-137 review round 1: a static run credential's entry is dropped at teardown, not at its expiry. */
+describe('createRunScopedSecrets.forget (WP-137)', () => {
+  it('drops exactly the named run’s entry, before its expiry', () => {
+    const secrets = createRunScopedSecrets({ now: () => Date.parse('2026-10-03T00:00:00Z') });
+    secrets.add('run-a', 'glpat-FAKE-static-run-token-0001', '2026-12-01T00:00:00.000Z');
+    secrets.add('run-b', 'glpat-FAKE-static-run-token-0002', '2026-12-01T00:00:00.000Z');
+    secrets.forget('run-a');
+    expect(secrets.size).toBe(1);
+    expect(secrets.secretsFor('run-a')).toEqual([]);
+    expect(secrets.redactor.redactText('glpat-FAKE-static-run-token-0002').value).not.toContain(
+      'glpat-FAKE',
+    );
+  });
+});

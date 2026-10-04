@@ -325,6 +325,9 @@ describe('credential minting', () => {
         shape:
           'GitLab: an instance whose administrator changed the personal-access-token prefix ' +
           'declares it as `token_prefix` on the integration',
+        // WP-137 (TD-028 decision 13 item 6): how a static run credential is declared instead.
+        static:
+          'GitLab: `run_credential: static` with a dedicated `run_token`; weaker isolation, operator guide § Integrations',
       },
     });
   });

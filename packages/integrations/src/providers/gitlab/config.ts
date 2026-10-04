@@ -77,9 +77,38 @@ export const gitlabConfigSchema = z.strictObject({
    * Whether this binding may mint project access tokens. **Off by default**: on GitLab.com a
    * project access token needs Premium or Ultimate, and the endpoint requires a *personal* access
    * token to authenticate. With it off, `capabilities().credentialMinting` is false and the port
-   * refuses to mint rather than failing inside a workspace provision.
+   * refuses to mint rather than failing inside a workspace provision — and a run gets a credential
+   * only from `run_credential: static` below (WP-137).
    */
   mint_credentials: z.boolean().default(false),
+  /**
+   * Where a run's git credential comes from (TD-028 decision 13, WP-137 — the founder's answer to
+   * Q98 (b)). `minted` (the default) is a project access token per run, which needs
+   * `mint_credentials: true` and, on GitLab.com, Premium or Ultimate. `static` hands every run of
+   * the one bound project the dedicated **`run_token`** below instead — for GitLab.com Free, which
+   * cannot mint. **Weaker isolation, stated** (decision 13 item 5): it is not run-lifetime, cannot
+   * be revoked per run, and reaches read-only stages with its push scope. One source per
+   * integration: `static` with `mint_credentials: true` is refused, and a static integration may be
+   * bound by one project only.
+   */
+  run_credential: z.enum(['minted', 'static']).default('minted'),
+  /**
+   * Secret. The static run credential: the **personal access token of a dedicated user** who is a
+   * member of only the bound project, with the Developer role, scopes `read_repository` and
+   * `write_repository`. Never the API `token` (refused when equal), never used for a platform API
+   * call — the adapter is built without it — and never given to a shadow task.
+   */
+  run_token: z.string().nullish(),
+  /** The dedicated user's GitLab username: what git sends beside `run_token`, and what the probe checks. */
+  run_token_username: z
+    .string()
+    .regex(/^[A-Za-z0-9_.-]{1,255}$/, 'expected a GitLab username')
+    .nullish(),
+  /**
+   * The run token's expiry as a date (`YYYY-MM-DD`), **required** with `static` and at most 90 days
+   * ahead when written. The platform does not ask GitLab for it, and refuses a run once it passes.
+   */
+  run_token_expires_at: z.iso.date().nullish(),
   /**
    * The prefix of every token this instance issues — GitLab's documented default `glpat-`, which an
    * administrator can change and project access tokens inherit
@@ -125,4 +154,5 @@ export const gitlabSecretFields = [
   'token',
   'webhook_secret_token',
   'webhook_signing_token',
+  'run_token',
 ] as const;

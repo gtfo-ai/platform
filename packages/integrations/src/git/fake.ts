@@ -200,6 +200,10 @@
  *     head, which the CI gate then reads as a pipeline in flight; a test that wants it to finish
  *     installs the outcome with `setPipeline`. GitLab runs the project's CI and may refuse the
  *     request when no job applies to such a pipeline (`invalid_request`), which this fake never does.
+ * 24. **Stricter — `projectMemberAccess` knows exactly the members a test set** (WP-137). Every
+ *     other username of a seeded project is not a member; GitLab also answers inherited (group)
+ *     and invited members, which this fake has no notion of. A project nobody seeded is
+ *     `not_found`, as GitLab's 404 is.
  */
 import {
   type CodeownersRules,
@@ -480,6 +484,14 @@ export interface FakeGitProvider extends GitProviderPort {
   seedProject(seed: FakeProjectSeed): void;
   /** Maps a handle to the account id `resolveUserId` answers with (divergence 11). */
   seedUser(handle: string, externalId: string): void;
+  /** Makes `username` a member of `project` with a role — what `projectMemberAccess` answers (WP-137). */
+  setProjectMember(input: {
+    readonly project: string;
+    readonly username: string;
+    readonly role: string;
+    readonly pushes: boolean;
+    readonly administers: boolean;
+  }): void;
   /**
    * Moves a merge request to another source branch — a harness's way of handing a merge request it
    * seeded before it knew the ticket to the task whose branch it turns out to be (WP-138). GitLab
@@ -732,6 +744,18 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
   };
 
   const users = new Map<string, string>(Object.entries(options.users ?? {}));
+  const members = new Map<
+    string,
+    { readonly role: string; readonly pushes: boolean; readonly administers: boolean }
+  >();
+  const memberKey = (project: string, username: string): string => `${project}\u0000${username}`;
+  const setProjectMember: FakeGitProvider['setProjectMember'] = (input) => {
+    members.set(memberKey(input.project, input.username), {
+      role: input.role,
+      pushes: input.pushes,
+      administers: input.administers,
+    });
+  };
   const seedUser = (handle: string, externalId: string): void => {
     users.set(handle, externalId);
   };
@@ -1615,6 +1639,16 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       return users.get(handle) ?? null;
     },
 
+    /** Divergence 24: exactly the members a test set, on a project it seeded. */
+    projectMemberAccess: async (project: string, username: string) => {
+      core.enter('project_member_access');
+      requireProject('project_member_access', project);
+      const found = members.get(memberKey(project, username));
+      return found === undefined
+        ? { member: false, role: null, pushes: false, administers: false }
+        : { member: true, ...found };
+    },
+
     readCodeowners: async (project, ref) => {
       core.enter('read_codeowners');
       if (!capabilities.codeowners) {
@@ -1709,6 +1743,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
 
     seedProject,
     seedUser,
+    setProjectMember,
     seedFile,
     commits,
     get credentials() {

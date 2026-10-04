@@ -212,6 +212,8 @@ interface StartOptions {
   readonly onDiff?: (harness: PipelineHarness) => Promise<void>;
   /** WP-106: the stored document each read parses, given the harness (`HarnessOptions.storedSettings`). */
   readonly storedSettings?: (harness: PipelineHarness | null, job: string | null) => unknown;
+  /** WP-137: the git binding's static run credential. */
+  readonly staticRunToken?: string;
 }
 
 const start = async (options: StartOptions = {}): Promise<PipelineHarness> => {
@@ -231,6 +233,19 @@ const start = async (options: StartOptions = {}): Promise<PipelineHarness> => {
       business_review: completedRun(ACCEPTANCE),
     },
     gitRedactor: exactSecretRedactor(options.secrets ?? []),
+    ...(options.staticRunToken === undefined
+      ? {}
+      : {
+          gitStaticRunCredential: {
+            username: 'agentic-runner',
+            value: options.staticRunToken,
+            expiresAt: '2026-12-01T00:00:00.000Z',
+            declaredExpiry: '2026-12-01',
+            sameAsApiToken: false,
+            refusal: null,
+            redactedAs: RUN_TOKEN_PLACEHOLDER,
+          },
+        }),
     ...(options.storedSettings === undefined
       ? {}
       : {
@@ -291,6 +306,59 @@ const checkedMetadata = (metadata: Partial<DependencyMetadata>): DependencyMetad
     source_url: 'https://www.npmjs.com/package/lodash',
     ...metadata,
   }),
+});
+
+/**
+ * WP-137 — TD-028 decision 13 item 5: the platform's one control over a static run credential. A
+ * merge request whose **added** lines carry the exact run token parks the task *Needs human* with a
+ * brief that says rotate the run token and never prints it; the same token on a removed or context
+ * line, or no static credential at all, changes nothing.
+ */
+/** What the binding's redactor writes in the run token's place (the loader's `redactedAs`). */
+const RUN_TOKEN_PLACEHOLDER = '[REDACTED:integration:fake-git:i-1:run_token]';
+
+describe('a static run token in the merge request (WP-137)', () => {
+  /** Review round 1: a real adapter hands the diff back redacted, so the placeholder is what arrives. */
+  it('parks the task when an added line carries the binding redactor’s placeholder for it', async () => {
+    const harness = await start({
+      staticRunToken: 'glpat-FAKE-static-run-token-not-real-0001',
+      files: [file('.env', ' APP=1', `+GITLAB_TOKEN=${RUN_TOKEN_PLACEHOLDER}`)],
+    });
+    expect((await storedTask(harness))?.task.state).toBe('needs_human');
+  });
+
+  const STATIC_TOKEN = 'glpat-FAKE-static-run-token-not-real-0001';
+
+  it('parks the task when an added line carries the static run token, and never prints it', async () => {
+    const harness = await start({
+      staticRunToken: STATIC_TOKEN,
+      // The binding's redactor knows the token, as the loader's does: the search reads the patch first.
+      secrets: [{ name: 'gitlab:run_token', value: STATIC_TOKEN }],
+      files: [file('.env', ' APP=1', `+GITLAB_TOKEN=${STATIC_TOKEN}`)],
+    });
+    const stored = await storedTask(harness);
+    expect(stored?.task.state).toBe('needs_human');
+    const escalated = harness
+      .events()
+      .filter((event) => event.type === 'task.escalated')
+      .map((event) => event.payload as { reason: string; blocker_brief: string });
+    expect(escalated).toHaveLength(1);
+    expect(escalated[0]?.reason).toMatch(/adds the static run token/);
+    expect(escalated[0]?.blocker_brief).toMatch(/Rotate the run token now/);
+    expect(questionsAsked(harness)).toEqual([]);
+    expect(stored?.dependencies ?? null).toBeNull();
+    expect(JSON.stringify(harness.events())).not.toContain(STATIC_TOKEN);
+  });
+
+  it('does not park for the token on a removed or a context line, or with no static credential', async () => {
+    const removed = await start({
+      staticRunToken: STATIC_TOKEN,
+      files: [file('.env', ` APP=${STATIC_TOKEN}`, `-GITLAB_TOKEN=${STATIC_TOKEN}`)],
+    });
+    expect((await storedTask(removed))?.task.state).not.toBe('needs_human');
+    const none = await start({ files: [file('.env', `+GITLAB_TOKEN=${STATIC_TOKEN}`)] });
+    expect((await storedTask(none))?.task.state).not.toBe('needs_human');
+  });
 });
 
 describe('the dependency gate (product/04:58, WP-38)', () => {

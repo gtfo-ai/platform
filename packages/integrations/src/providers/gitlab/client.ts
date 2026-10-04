@@ -21,6 +21,7 @@ import {
   gitlabDiffStatsSummaryResponseSchema,
   gitlabDiscussionSchema,
   gitlabJobSchema,
+  gitlabMemberSchema,
   gitlabMergeRequestDiffSchema,
   gitlabMergeRequestSchema,
   gitlabPipelineSchema,
@@ -248,6 +249,15 @@ export interface GitLabClient {
    * objects, which is why this returns a list and the caller decides what more than one means.
    */
   usersByUsername(username: string): Promise<z.output<typeof gitlabUserSchema>[]>;
+  /**
+   * <https://docs.gitlab.com/api/members/> § "Get a member of a group or project, including
+   * inherited and invited members" — `GET /projects/:id/members/all/:user_id` (WP-137). `null` for
+   * a 404: the user is not a member.
+   */
+  projectMember(
+    project: string,
+    userId: number,
+  ): Promise<z.output<typeof gitlabMemberSchema> | null>;
   /** <https://docs.gitlab.com/api/project_access_tokens/> § "Create a project access token". */
   createProjectAccessToken(
     project: string,
@@ -608,6 +618,18 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
         notFoundIsNull: true,
       });
       return response === null ? null : response.body;
+    },
+
+    projectMember: async (project, userId) => {
+      const response = await http.request({
+        method: 'GET',
+        path: `/projects/${encodeProjectId(project)}/members/all/${userId}`,
+        action: 'project_member_access',
+        notFoundIsNull: true,
+      });
+      return response === null
+        ? null
+        : parse(gitlabMemberSchema, response.body, 'project_member_access');
     },
 
     usersByUsername: async (username) =>

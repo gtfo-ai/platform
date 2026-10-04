@@ -1204,13 +1204,36 @@ Stated here so an operator meets them in a document rather than in production:
   token must be checked by hand in the project's access tokens (WP-77). So the GitLab integration
   needs **`mint_credentials: true`**, which needs a personal access token that may create project
   access tokens (GitLab Premium or Ultimate on GitLab.com; any self-managed tier) — the GitLab setup
-  guide's step 5. Without it, a stage that writes (implementation, conflict resolution, the
-  librarian) fails at start **naming the binding and the setting**, and a read-only stage fetches
+  guide's step 5 — **or**, where GitLab cannot mint (GitLab.com Free), a **static run credential**
+  (below). With neither, a stage that writes (implementation, conflict resolution, the librarian)
+  fails at start **naming the binding and both settings**, and a read-only stage fetches
   anonymously, which works only for a repository GitLab serves without authentication: **a private
-  repository needs `mint_credentials: true` for every stage.** The binding's own token is never
-  handed to a run instead. A token whose revocation fails (the `runner` logs it by name) or whose
-  `runner` died mid-run lives until GitLab expires it — up to two days, because GitLab grants whole
-  days. A **shadow** task's runs get a `read` token, never a push one.
+  repository needs a run credential, minted or static, for every stage.** The binding's own token is
+  never handed to a run instead. A token whose revocation fails (the `runner` logs it by name) or
+  whose `runner` died mid-run lives until GitLab expires it — up to two days, because GitLab grants
+  whole days. A **shadow** task's runs get a `read` token, never a push one.
+- **A static run credential** (WP-137; TD-028 decision 13, BD-025's amendment of 2026-10-03 — the
+  founder's answer to Q98 (b)). Opt-in and named on the GitLab integration: `run_credential: static`
+  plus a separate secret `run_token` — the personal access token of a **dedicated** user who is a
+  member of **only** the bound project, with the **Developer** role, scopes `read_repository` +
+  `write_repository` — its `run_token_username`, and `run_token_expires_at` (a date, at most 90 days
+  ahead when written). It reaches a run exactly where a minted token does (the create request, the
+  launcher's broker, the run's `cred.get`), joins the run's redactors, is never used for a platform
+  API call, is never given to a **shadow** task, and the run records `credential_source: static`.
+  The write refuses, by name: no `run_token`, a `run_token` equal to the API token, `static` beside
+  `mint_credentials: true`, a missing or out-of-range expiry, and a **second project's binding**
+  (`409`); the start refuses the equality again and a passed expiry. **Test connection** reads the
+  user's role on the bound project with the API token, refuses one that cannot push or one above
+  Developer, and says it
+  cannot confirm the token belongs to that user. **What is lost, stated** (decision 13 item 5): no
+  per-run revocation and no run-lifetime bound — the token lives to its declared expiry; code in the
+  container can read it through the helper and the run's egress admits the git host, so it can be
+  pushed **into the repository itself**, where it still works; its reach is the dedicated user's
+  memberships and scopes, not the platform's; and a read-only stage holds a push-capable token. The
+  platform's one added control: the dependency gate searches each merge request's added lines for
+  the exact value, and a hit parks the task *Needs human* with *"rotate the run token"* — never
+  printing it. The protected default branch remains the push control (Q40). The GitLab setup guide's
+  step 5a is the procedure.
 - **`docker compose up` cannot pull the published images** without the retagging step in §2, because
   `compose.yml` names them without a registry.
 - **`compose.yml` passes the `app` service a fixed list of variables**, so `.env` is not the app's

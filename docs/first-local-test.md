@@ -53,17 +53,31 @@ also served in the product at **Integrations → GitLab → Setup guide**. What 
 **The token.** A **personal access token** with scope **`api`**, from a user with the
 **Maintainer** (or Owner) role on the Autix project — a bot user if you have one, your own account
 if you do not (its name then appears on every comment the platform writes). A project or group
-access token works for reads but **cannot mint**, and minting is what every stage that writes needs.
+access token works for reads but **cannot mint** — and every stage that writes needs a minted token
+or, on gitlab.com Free where nothing can mint, the static run credential below.
 
-**Minting is not optional for a private repository.** Each agent run with a checkout gets its own
-short-lived project access token, minted through the binding's token, revoked when the run ends.
-Without `mint_credentials: true` on the integration, a stage that writes (implementation, conflict
-resolution, the librarian) is refused at start naming the setting, and a read-only stage can only
-fetch a repository GitLab serves without authentication.
+**A private repository needs a run credential, minted or static.** Each agent run with a checkout
+gets a git credential the platform hands it on the create request: either its own short-lived
+project access token, minted through the binding's token and revoked when the run ends
+(`mint_credentials: true`), or — where GitLab cannot mint — the integration's **static run
+credential** (`run_credential: static`). With neither, every stage on a private repository is
+refused at start naming the binding and **both** settings; a read-only stage can only fetch a
+repository GitLab serves without authentication.
+
+**On gitlab.com Free — Autix's case — use the static run credential** (the setup guide's step 5a;
+TD-028 decision 13). Create a **dedicated** GitLab user, add it to the Autix project **only**, with
+the **Developer** role, and give it a personal access token with **`read_repository` +
+`write_repository`** and an expiry **at most 90 days** away. Put that token in `.env` as
+`GITLAB_RUN_TOKEN` and add the name to `APP_INTEGRATION_SECRET_ENV` (§3). **Weaker isolation,
+stated**: the token is not revoked when a run ends and lives to its expiry; code in a run can read it
+through the credential helper and could push it into the repository, where it would still work; a
+read-only stage holds it with its push scope. The platform's one added control is a search of every
+merge request's added lines for the exact token — a hit parks the task with *"rotate the run token"*.
+The protected default branch stays the push control.
 
 | | gitlab.com | self-managed |
 |---|---|---|
-| Project access tokens (so `mint_credentials`) | **Premium or Ultimate only** — on Free, no stage can check out a private repository | every tier |
+| Project access tokens (so `mint_credentials`) | **Premium or Ultimate only** — on Free use `run_credential: static` instead (above) | every tier |
 | `APP_INTEGRATION_HOSTS` entry | `gitlab.com` | your host exactly as in `base_url`, no scheme, no port |
 | `base_url` | `https://gitlab.com` | `https://<your host>[/<path>]`, no `/api/v4`, no trailing slash, and not a URL that redirects |
 | Token prefix | `glpat-` (default) | set `token_prefix` if an administrator changed it (Admin → Settings → General → Account and limit) |
@@ -137,8 +151,9 @@ APP_LAUNCHER_TOKEN=<the output of: openssl rand -hex 32>
 CLAUDE_CODE_OAUTH_TOKEN=<the output of: claude setup-token>
 
 GITLAB_TOKEN=<the GitLab personal access token, scope api>
+GITLAB_RUN_TOKEN=<the dedicated Developer user's token, read_repository + write_repository (gitlab.com Free only)>
 JIRA_API_TOKEN=<the Atlassian API token>
-APP_INTEGRATION_SECRET_ENV=GITLAB_TOKEN,JIRA_API_TOKEN
+APP_INTEGRATION_SECRET_ENV=GITLAB_TOKEN,GITLAB_RUN_TOKEN,JIRA_API_TOKEN
 APP_INTEGRATION_HOSTS=gitlab.com,<your-site>.atlassian.net
 ```
 
@@ -158,7 +173,8 @@ What each one is for:
   stage queues and nothing runs (operator guide § 1).
 - **`CLAUDE_CODE_OAUTH_TOKEN`** is the subscription token. Leave `ANTHROPIC_API_KEY` empty:
   `compose.local.yml` blanks it, because the CLI prefers an API key when both are present.
-- **`GITLAB_TOKEN`, `JIRA_API_TOKEN`** are the provider credentials, and **`APP_INTEGRATION_SECRET_ENV`**
+- **`GITLAB_TOKEN`, `JIRA_API_TOKEN`** are the provider credentials (and **`GITLAB_RUN_TOKEN`** the
+  static run credential of §1, on gitlab.com Free only), and **`APP_INTEGRATION_SECRET_ENV`**
   is the allow-list of variable *names* the integration form may name. You never paste a token into
   the browser: the form names the variable and the server seals its value.
 - **`APP_INTEGRATION_HOSTS`** is the allow-list of hosts an integration may call, empty and therefore
@@ -224,8 +240,15 @@ token in `.env` — **PASS**, run):
 2. **Integrations → Add integration → GitLab** (not run: needs your token). Name it; `base_url`
    `https://gitlab.com` (or yours); `token` → the variable name **`GITLAB_TOKEN`**; and among the
    optional fields: `project` = `<group>/<autix-project>` (GitLab's path with namespace),
-   `mint_credentials` = true, `poll_enabled` = true. Leave both webhook fields empty. Press **Test
-   connection**: it calls `GET /version` and shows the version and edition.
+   `poll_enabled` = true, and the run credential — on **gitlab.com Free**: `run_credential` =
+   `static`, `run_token` → the variable name **`GITLAB_RUN_TOKEN`**, `run_token_username` = the
+   dedicated user's username, `run_token_expires_at` = its token's expiry date, `mint_credentials`
+   **off**; on Premium or a self-managed instance: `mint_credentials` = true instead. Leave both
+   webhook fields empty. Press **Test connection**: it calls `GET /version` and shows the version and
+   edition — and for a static run credential a second check, `run_credential`, that fails until the
+   integration is bound to the project (step 4) and then reads the dedicated user's role there:
+   Developer passes, Maintainer or Owner (or a role that cannot push) is refused, and it says it
+   cannot confirm the token is that user's. Test again after step 4. Not run: needs your tokens.
 3. **Add integration → Jira Cloud** (not run): `site_url` `https://<your-site>.atlassian.net`,
    `user_email` the token's account, `api_token` → **`JIRA_API_TOKEN`**, optional `project_keys` =
    Autix's key, `poll_enabled` = true, `pickup_label` left at `agentic`. Leave `webhook_secret` empty.
@@ -308,7 +331,11 @@ is *Done*.
 | **Test connection** is red | the integration's card, with the provider's error (already redacted) | check the token, its scopes, `base_url` / `site_url` |
 | a labelled ticket never appears | `docker compose logs app runner` (the poll runs as a job, in either worker); the Jira integration's card | is `poll_enabled` on; was the label added after it; is the key in `project_keys`; is the dial at Observe |
 | a task goes straight to *Needs human* | the task page's **brief** — e.g. *"the default branch … is not protected"* | fix the cause, then **Hand back** at the stage the brief names |
-| a stage that writes fails at start naming `mint_credentials` | the task page's brief and the run's error | turn `mint_credentials` on (gitlab.com: Premium or Ultimate) |
+| a stage fails at start: *"cannot give run … a credential: minting is off … and no static run credential is configured"* | the task page's brief and the run's error | gitlab.com Free: `run_credential: static` with a `run_token` (§1, the setup guide's step 5a); Premium or self-managed: `mint_credentials` on. Then **Hand back** |
+| a stage fails at start: *"… declares a static run credential this platform will not give run …"* | the task page's brief and the run's error — the reason is named: no run token, the API token in its place, `mint_credentials` also on, or *"expired on <date>"* | fix the named setting; for an expired one create a new token, re-seal `run_token`, set `run_token_expires_at`; then **Hand back** |
+| **Test connection**'s `run_credential` check is red | the integration's card | *not a member* or *no project is bound*: add the dedicated user to the project, bind the integration, test again; *Maintainer*/*Owner*: lower the user to Developer |
+| saving the integration or binding it is refused: `run_credential_refused`, `static_run_credential_shared` | the form shows the server's refusal, naming the field | the field it names; a static integration may be bound by **one** project |
+| a task parks with *"the merge request adds the static run token to the repository"* | the task page's brief | **rotate the run token**: revoke it in GitLab, create a new one, re-seal it, declare its expiry; remove it from the branch before anything else |
 | a run fails with *"…the model API answered HTTP 401…"* | the run page's error (measured with a fake token, WP-133) | a wrong or expired token: replace it in `.env`, `docker compose up -d` |
 | an agent cannot install a package or reach a host | the run's egress sidecar: `docker ps --filter label=com.agentic.run` lists `egress-<run id>` while the run lives, and `docker logs egress-<run id>` has *"Proxying refused on filtered domain …"* (not run here) | add a registry to `APP_RUN_REGISTRY_HOSTS`, or a model-side host to `APP_MODEL_EGRESS_HOSTS` |
 | **the CI gate on a poll-only binding**: the task parks with *"the "ci_gate" gate could not be decided after 5 attempts …"* | the task page's brief | see below |

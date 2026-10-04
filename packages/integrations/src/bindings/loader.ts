@@ -98,6 +98,7 @@ import type {
   ProjectBindingSecrets,
   SecretRedactor,
   SecretStore,
+  StaticRunCredential,
   UnreadableIntegration,
 } from '@platform/application';
 import {
@@ -105,9 +106,11 @@ import {
   composeSecretRedactors,
   IntegrationUnsupportedError,
   noSecretsRedactor,
+  secretPlaceholder,
 } from '@platform/application';
 import type { Id, IntegrationType, JsonObject } from '@platform/contracts';
 import type { IntegrationPortByType, IntegrationRegistry } from '../registry.js';
+import { staticRunCredentialOf } from '../static-run-credential.js';
 
 export class BindingLoadError extends Error {
   override readonly name = 'BindingLoadError';
@@ -316,6 +319,8 @@ interface Built<TType extends IntegrationType> {
   readonly digestChannel: string;
   /** The registration's credential-minting hints (WP-107); absent for a provider that mints nothing. */
   readonly mintingHints?: CredentialMintingHints;
+  /** The integration's static run credential (WP-137); absent unless it declares one. */
+  readonly staticRunCredential?: StaticRunCredential;
 }
 
 /**
@@ -499,9 +504,28 @@ export const createPipelineIntegrationsLoader = (
 
     try {
       const mintingHints = registration.credentialMinting?.hints;
+      // WP-137 (TD-028 decision 13): read out of the validated document with its secrets merged in,
+      // for the run-credential path alone — `create` below builds the adapter without the token.
+      const declared = staticRunCredentialOf(
+        registration.staticRunCredential,
+        parsed.data as Readonly<Record<string, unknown>>,
+      );
+      // Review round 1: the binding's redactor (built above from every sealed field, the run token
+      // included) replaces the value in every provider response with this placeholder, so the
+      // dependency gate's leak search must know it too.
+      const staticRunCredential =
+        declared === undefined || registration.staticRunCredential === undefined
+          ? undefined
+          : {
+              ...declared,
+              redactedAs: secretPlaceholder(
+                secretName(binding, registration.staticRunCredential.tokenField),
+              ),
+            };
       return {
         ...channels,
         ...(mintingHints === undefined ? {} : { mintingHints }),
+        ...(staticRunCredential === undefined ? {} : { staticRunCredential }),
         port: declineUndeclaredMinting(
           registration,
           type,
@@ -654,6 +678,10 @@ export const createPipelineIntegrationsLoader = (
                 ...(git.built.mintingHints === undefined
                   ? {}
                   : { mintingHints: git.built.mintingHints }),
+                // WP-137: TD-028 decision 13's static run credential, when the integration declares one.
+                ...(git.built.staticRunCredential === undefined
+                  ? {}
+                  : { staticRunCredential: git.built.staticRunCredential }),
               },
         taskManagement:
           taskManagement === null

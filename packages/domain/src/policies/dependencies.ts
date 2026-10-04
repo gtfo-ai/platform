@@ -243,6 +243,15 @@ const patchLines = (patch: string): readonly PatchLine[] => {
   return lines;
 };
 
+/**
+ * Whether one of the patch's **added** lines contains `value`, exactly — WP-137's search for a
+ * static run token pushed into the repository (TD-028 decision 13 item 5). The same reader the
+ * dependency parsers use, so the same bound: past {@link MAX_PATCH_BYTES} of a file's patch nothing
+ * is read. An empty value matches nothing.
+ */
+export const addedLinesContain = (patch: string, value: string): boolean =>
+  value !== '' && patchLines(patch).some((line) => line.added && line.text.includes(value));
+
 /** A name the ecosystem's own pattern accepts, or `null`. */
 const validName = (ecosystem: DependencyEcosystem, name: string): string | null => {
   const trimmed = name.trim();

@@ -12,7 +12,7 @@ job logs, repository files). GitLab accepts it in the `PRIVATE-TOKEN` header.
 | Token kind | Can the binding mint workspace credentials with it? | Notes |
 |---|---|---|
 | Personal access token of a bot user | **Yes** | The only kind that can create project access tokens: *"You must use a personal access token with this endpoint. You cannot authenticate with a project access token."* |
-| Project or group access token | No | Everything else works; leave `mint_credentials` off — and no stage that writes can run. |
+| Project or group access token | No | Everything else works; leave `mint_credentials` off — and a stage can then only run with a **static run credential** (step 5a). |
 
 Scopes: `api` (the platform reads and writes merge requests, discussions and notes). The same
 token is also sent to GitLab's **GraphQL** endpoint, `/api/graphql`, for one read — a merge
@@ -39,7 +39,11 @@ tokens, and **Developer** for everything else.
 | `webhook_secret_token` | see step 3 | Secret. Legacy `X-Gitlab-Token` value. |
 | `webhook_signing_token` | see step 3 | Secret. `whsec_…` signing token (GitLab 19.0+). |
 | `webhook_tolerance_seconds` | no (300) | How old a signed delivery may be before it is treated as a replay. |
-| `mint_credentials` | no (off) | Whether the platform may mint short-lived project access tokens. **Required for any stage that writes**, and for a private repository. See step 5. |
+| `mint_credentials` | no (off) | Whether the platform may mint short-lived project access tokens. A stage that writes, and any stage on a private repository, needs **this or** a static run credential (`run_credential: static`). See step 5. |
+| `run_credential` | no (`minted`) | Set on the integration, never on a project's binding (as are the two below). `minted` or `static`. `static` gives every run of the one bound project the dedicated `run_token` below instead of a minted token — for GitLab.com Free, which cannot mint. **Weaker isolation**: step 5a. Refused beside `mint_credentials: true`. |
+| `run_token` | with `static` | Secret. The personal access token of a **dedicated** user — never the `token` above (refused when equal). Step 5a. |
+| `run_token_username` | with `static` | That user's GitLab username: what git sends beside the token, and what **Test connection** checks. |
+| `run_token_expires_at` | with `static` | The token's expiry as a date (`YYYY-MM-DD`), **at most 90 days ahead** when written. The platform does not ask GitLab for it, and refuses a run once it has passed. |
 | `read_access_level` / `push_access_level` | no (20 / 30) | Role given to a minted credential: 20 Reporter, 30 Developer, 40 Maintainer. |
 | `poll_enabled` | no (off) | Poll GitLab for this project's merge requests instead of (or beside) the webhook — step 3a. Needs `project`. |
 | `poll_interval_seconds` | no (60) | Seconds between two polls of this binding; 30 to 86400. |
@@ -197,12 +201,72 @@ and for a feature you may not see.
 
 The binding's own token is **never** handed to a workspace instead: it is the token that *mints*,
 the most powerful secret an instance holds, and a run's container is the one place the platform does
-not trust. With `mint_credentials` off, a private repository cannot be checked out by any stage.
+not trust. With `mint_credentials` off and no static run credential (step 5a), a private repository
+cannot be checked out by any stage — the run is refused before its workspace is created, naming the
+binding and **both** settings.
+
+## 5a. Or: a static run credential (GitLab.com Free)
+
+GitLab.com Free cannot create project access tokens, so it cannot mint. The founder's answer for that
+case (TD-028 decision 13, BD-025's amendment of 2026-10-03) is an **opt-in, named** fallback: a
+dedicated, low-privilege token the platform hands to a run exactly where a minted one would go — on
+the create request to the launcher, answered to the run's git credential helper, never in an
+environment variable, the image, the prompt or a log.
+
+1. Create a **dedicated GitLab user** for it — not a person, and not the user whose `token` the
+   integration already holds.
+2. Add it to the **one** project you bind, and to nothing else, with the **Developer** role. A
+   Maintainer or Owner can unprotect the default branch, which is the push control; **Test
+   connection** refuses one.
+3. As that user, create a **personal access token** with scopes **`read_repository`** and
+   **`write_repository`** only, and an expiry **at most 90 days** away.
+4. Put it in the platform's environment under a name of your choice (for example
+   `GITLAB_RUN_TOKEN`), add that name to `APP_INTEGRATION_SECRET_ENV`, and `docker compose up -d`.
+5. On the integration: `run_credential` = `static`, `run_token_username` = the user's username,
+   `run_token_expires_at` = the token's expiry date, `mint_credentials` off, and `run_token` → the
+   variable's **name** (on an existing integration: re-seal it, `POST /api/integrations/:id/secrets`,
+   then set the three fields).
+6. Bind it to **one** project — a second project's binding is refused (`409
+   static_run_credential_shared`), because the token reaches every project its user is a member of.
+7. **Test connection** reports a second check, `run_credential`: the user's role on the bound
+   project, read with the integration's API `token` — Developer passes; a role that cannot push
+   (anything below Developer) or one above Developer is refused. It says it **cannot confirm the token
+   belongs to that user** — the platform never uses the run token for an API call — so check that
+   yourself.
+
+Refused at the write, by name: `static` without a `run_token`; a `run_token` equal to `token`;
+`static` with `mint_credentials: true`; no username or no expiry; an expiry passed or more than 90
+days away. Refused at the run's start, before its workspace exists: the same token equality again,
+and an expiry that has passed. A **shadow** task is never given the static token: it can push and
+cannot be narrowed to read-only, so a shadow run on a private repository fails — a writing one at
+its start, a read-only one at the fetch.
+
+**What you give up, stated** (TD-028 decision 13 item 5):
+
+- **No per-run revocation, no run-lifetime bound.** The token lives to the expiry you set. Code in a
+  run's container can read it through the credential helper (as it can a minted one), and the run's
+  egress admits `gitlab.com` — so it can be pushed **into the repository itself**, where, unlike a
+  revoked minted token, it still works.
+- **Its reach is the user's memberships and scopes, not the platform's choice.** `read_repository` and
+  `write_repository` grant no REST API; the dedicated user's single Developer membership is what
+  bounds it. The platform cannot see that membership beyond the probe.
+- **A read-only stage holds a push-capable token.** The protected default branch remains the
+  enforcement for pushes.
+- **The one control the platform adds**: the gate that already reads a merge request's added lines
+  searches them for the exact token, and a hit parks the task *Needs human* with a brief that says
+  **rotate the run token** (revoke it in GitLab, create a new one, re-seal it, declare its expiry)
+  and never prints it.
+
+Each run records which credential it had (`runs.credential_source`: `minted`, `static` or `none`),
+because a static token writes no mint row to the audit.
 
 ## 6. Verify
 
 Run **Test connection**. It calls `GET /version` — a read, never a mutation — and reports the
-version and edition, e.g. `GitLab 18.1.1-ee (Enterprise Edition) at gitlab.example.test`.
+version and edition, e.g. `GitLab 18.1.1-ee (Enterprise Edition) at gitlab.example.test`. For an
+integration with `run_credential: static` it adds the `run_credential` check of step 5a
+(`GET /users?username=` and `GET /projects/:id/members/all/:user_id`, both with `token`), which
+fails until a project is bound.
 
 Then, in GitLab, **Settings → Webhooks → Test → Merge request events** and check that the delivery
 was accepted.

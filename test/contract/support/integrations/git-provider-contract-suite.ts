@@ -195,6 +195,16 @@ export interface GitProviderContractContext {
     readonly emptyBranch: string;
     readonly pipelineIid: number;
   };
+  /**
+   * WP-137: the probe of a static run credential. In `project`, `developer` is a member with the
+   * push role, `maintainer` one with a role above it, and `outsider` an existing user who is not a
+   * member; `unknown` is a username nobody has.
+   */
+  readonly members: {
+    readonly developer: string;
+    readonly maintainer: string;
+    readonly outsider: string;
+  };
   /** Head sha of a pipeline the harness seeded, with one failing job that has a log. */
   readonly pipelineSha: string;
   readonly failingJobName: string;
@@ -523,6 +533,35 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         const mine = await port.findOpenMergeRequest(context.project, context.adoption.openBranch);
         expect(mine?.author?.external_id, 'the open merge request is the binding’s own').toBe(
           me.external_id,
+        );
+      });
+
+      /**
+       * WP-137 (TD-028 decision 13 item 3): the static run credential's user, asked with the API
+       * token — a Developer is a member that does not administer, a Maintainer administers, an
+       * outsider is no member, and an unknown project is `not_found`.
+       */
+      it("answers a user's membership of the project and whether its role is above the push role", async () => {
+        const developer = await port.projectMemberAccess(
+          context.project,
+          context.members.developer,
+        );
+        expect(developer).toMatchObject({ member: true, pushes: true, administers: false });
+        expect(developer.role).not.toBeNull();
+        const maintainer = await port.projectMemberAccess(
+          context.project,
+          context.members.maintainer,
+        );
+        expect(maintainer).toMatchObject({ member: true, pushes: true, administers: true });
+        expect(await port.projectMemberAccess(context.project, context.members.outsider)).toEqual({
+          member: false,
+          role: null,
+          pushes: false,
+          administers: false,
+        });
+        await expectIntegrationError(
+          () => port.projectMemberAccess(context.missingProject, context.members.developer),
+          'not_found',
         );
       });
 

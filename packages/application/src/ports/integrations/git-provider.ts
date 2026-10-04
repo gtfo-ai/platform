@@ -501,6 +501,21 @@ export type GitProviderInboundEvent =
 
 // ── The port ─────────────────────────────────────────────────────────────────
 
+/** {@link GitProviderPort.projectMemberAccess}'s answer (WP-137). */
+export interface ProjectMemberAccess {
+  /** Whether the user is a member of the project, directly or through a group. */
+  readonly member: boolean;
+  /** The provider's own name for the role (`Developer`), or `null` when not a member. */
+  readonly role: string | null;
+  /** The role may push to an unprotected branch (GitLab: Developer and above). */
+  readonly pushes: boolean;
+  /**
+   * The role is **above** the one that pushes: it can change which branches are protected, so a
+   * token of this user can unprotect the default branch (GitLab: Maintainer, Owner).
+   */
+  readonly administers: boolean;
+}
+
 export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities> {
   /**
    * The URL the workspace manager clones from, with the credential embedded when the provider
@@ -624,6 +639,21 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * `external_id` is the same identifier {@link MergeRequest.author} carries. A **read**.
    */
   readonly authenticatedUser: () => Promise<ExternalIdentity>;
+
+  /**
+   * What `username` may do in `project` — WP-137's probe of a **static run credential** (TD-028
+   * decision 13 item 3). The platform never uses the run token for an API call, so the probe asks
+   * with the binding's **API token** whether the token's declared user is a member and whether its
+   * role is above the push role (GitLab: Maintainer or Owner, who can unprotect the default branch —
+   * the push control, Q40). It cannot tell whether the token belongs to that user, and says so. A
+   * **read**, so it happens in every mode.
+   *
+   * An unknown username is `{ member: false }`, never an exception: it is an operator's typo, and
+   * the probe reports it as one.
+   *
+   * @throws {IntegrationError} `not_found` for a project that does not exist.
+   */
+  readonly projectMemberAccess: (project: string, username: string) => Promise<ProjectMemberAccess>;
 
   /**
    * Starts a new pipeline **for a merge request** at its current head (WP-138 ruling (g)) — GitLab's

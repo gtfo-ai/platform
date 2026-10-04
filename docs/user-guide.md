@@ -781,7 +781,11 @@ Everything around it — intake from a webhook, the board, the commands, the kno
 and the cost ledger — works either way. A stage that **writes** (implementation, conflict
 resolution, the librarian) also needs the GitLab integration to be allowed to mint short-lived
 tokens (`mint_credentials: true`): the platform gives each run its own token — read-only for a
-read-only stage, never one that pushes for a shadow task — and revokes it when the run ends. Without
-it such a stage fails at start naming the setting, and a read-only stage can check out only a
-repository GitLab serves without authentication. The [operator guide](operator-guide.md) §1 and §10
+read-only stage, never one that pushes for a shadow task — and revokes it when the run ends. Where
+GitLab cannot mint (GitLab.com Free), an administrator may declare a **static run credential**
+instead (`run_credential: static`): one dedicated token every run of that project is given, which is
+not revoked when a run ends and is never given to a shadow task — weaker isolation, which the
+operator guide states. With neither, such a stage fails at start naming the binding and both
+settings, and a read-only stage can check out only a repository GitLab serves without
+authentication. The [operator guide](operator-guide.md) §1 and §10
 say the same thing from the other side.

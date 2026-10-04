@@ -326,6 +326,7 @@ describe('the workspace spec a run gets', () => {
       password: 'fake_run_credential_push_0001',
       scope: 'push',
       expiresAt: '2026-01-03T00:00:00.000Z',
+      source: 'minted',
     });
     expect(createRunRequestSchema.safeParse(recorded.creates[0]).success).toBe(true);
   });
@@ -358,10 +359,62 @@ describe('the workspace spec a run gets', () => {
     await expect(refused).rejects.toMatchObject({
       code: 'invalid_spec',
       message:
-        /writes to its checkout and no git credential can be minted.*mint_credentials is off/,
+        /writes to its checkout and no git credential can be given to it.*mint_credentials is off/,
     });
     expect(recorded.creates).toEqual([]);
   });
+
+  /**
+   * WP-137 criterion (4) — TD-028 decision 13 item 2: a static run credential travels the **same**
+   * path a minted one does (the create request, the broker, `cred.get`), as `push` with the declared
+   * expiry, to a writing run **and** to a read-only one — it cannot be narrowed (item 5) — and the
+   * provisioner's one revoke is the credential's own no-op.
+   */
+  it.each([
+    ['a writing run', ['Read', 'Edit', 'Bash']],
+    ['a read-only run', ['Read', 'Grep']],
+  ])(
+    'carries a static run credential to %s as push, with the declared expiry',
+    async (_case, tools) => {
+      const STATIC_TOKEN = 'glpat-FAKE-static-run-token-not-real-0001';
+      let revoked = 0;
+      const fixed: RunGitCredentialMinter = {
+        mint: async () => ({
+          kind: 'minted',
+          credential: {
+            username: 'agentic-runner',
+            password: STATIC_TOKEN,
+            scope: 'push',
+            expiresAt: '2026-12-01T00:00:00.000Z',
+            source: 'static',
+            revoke: async () => {
+              revoked += 1;
+            },
+          },
+        }),
+      };
+      const { client, recorded } = clientWith();
+      const workspace = await provisionerWith(client, fixed).provision(runSpecFixture({ tools }));
+      expect(recorded.creates[0]?.credential).toEqual({
+        host: 'git.example.com',
+        username: 'agentic-runner',
+        password: STATIC_TOKEN,
+        scope: 'push',
+        expiresAt: '2026-12-01T00:00:00.000Z',
+        source: 'static',
+      });
+      const request = recorded.creates[0];
+      expect(createRunRequestSchema.safeParse(request).success).toBe(true);
+      // Rule 42's pair: the same request with the credential called minted is refused for a
+      // read-only spec at the wire — the exception is the static source's alone.
+      const asMinted = { ...request, credential: { ...request?.credential, source: 'minted' } };
+      expect(createRunRequestSchema.safeParse(asMinted).success).toBe(
+        request?.spec.readOnly !== true,
+      );
+      await workspace.release({ kind: 'not_started' });
+      expect(revoked).toBe(1);
+    },
+  );
 
   it('accepts a narrower read credential for a writing run (a shadow task, Q98 (a))', async () => {
     const minting = minterWith(() => 'minted');

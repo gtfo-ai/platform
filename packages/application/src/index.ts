@@ -126,6 +126,8 @@ export * from './pipeline/commands.js';
 export * from './pipeline/dead-letter.js';
 export * from './pipeline/deadline-rules.js';
 export * from './pipeline/deadlines.js';
+// WP-137 review round 1: the leak search, so the loader's composition can be held to it.
+export { staticRunTokenLeaks } from './pipeline/dependency-gate.js';
 export * from './pipeline/epic-split.js';
 export * from './pipeline/gates.js';
 export * from './pipeline/intake-reconcile.js';

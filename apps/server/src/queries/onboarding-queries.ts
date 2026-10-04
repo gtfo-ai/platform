@@ -52,7 +52,12 @@ import { projectRecordSchema } from '@platform/contracts';
 import { DEFAULT_AUTONOMY_LEVEL, materialiseAutonomy } from '@platform/domain';
 import { db as dbAdapters, secrets as secretAdapters } from '@platform/infrastructure';
 import type { ProviderCatalogueEntry } from '@platform/integrations';
-import { configIssuesOf, findShippedProvider } from '@platform/integrations';
+import {
+  configIssuesOf,
+  declaresStaticRunCredential,
+  findShippedProvider,
+  staticRunCredentialWriteIssues,
+} from '@platform/integrations';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
 import { completeCommandAttempt, findCommandAttempt } from './idempotency-queries.js';
@@ -525,6 +530,97 @@ export const assertConfigParses = (config: JsonObject, provider: ProviderCatalog
   }
 };
 
+/**
+ * **A static run credential is refused at every write, by name** (TD-028 decision 13 item 1,
+ * WP-137): `static` with no run token, a run token equal to the API token (the two decrypted values
+ * compared), and an expiry passed or more than the provider's bound ahead — the configuration-only
+ * rules (`static` beside minting, no username, no expiry) are {@link assertConfigParses}' already.
+ * `secrets` is the integration's whole credential set as it will be **after** the write. Paths and
+ * the rule's words only, never a value.
+ */
+export const assertStaticRunCredentialWrite = (
+  provider: ProviderCatalogueEntry,
+  config: Readonly<Record<string, unknown>>,
+  secretValues: Readonly<Record<string, string>>,
+  now: Date,
+): void => {
+  const issues = staticRunCredentialWriteIssues(
+    provider.staticRunCredential ?? undefined,
+    config,
+    secretValues,
+    now,
+  );
+  if (issues.length > 0) {
+    throw new HttpError(
+      400,
+      'run_credential_refused',
+      `the static run credential is refused: ${issues.map((issue) => `${issue.path} — ${issue.message}`).join('; ')}`,
+      issues.map((issue) => ({ path: issue.path, message: issue.message })),
+    );
+  }
+};
+
+/**
+ * The integration's sealed credentials, opened — field to value — for the static run credential's
+ * write checks only (WP-137). A row that cannot be opened is skipped: it already fails every load,
+ * and the check then reads its field as absent, which refuses rather than admits.
+ */
+const openSealedValues = async (
+  tx: Pick<Database, 'select'>,
+  key: secretAdapters.SecretKey,
+  secretIds: readonly string[],
+): Promise<Record<string, string>> => {
+  if (secretIds.length === 0) {
+    return {};
+  }
+  const rows = await tx
+    .select({ id: secrets.id, ciphertext: secrets.ciphertext })
+    .from(secrets)
+    .where(inArray(secrets.id, [...secretIds]));
+  const values: Record<string, string> = {};
+  for (const row of rows) {
+    try {
+      const document = secretAdapters.secretDocumentSchema.parse(
+        JSON.parse(secretAdapters.openSecret(key, row.ciphertext, row.id)),
+      );
+      values[document.field] = document.value;
+    } catch {
+      // Never the plaintext and never the error's text: the field reads as absent.
+    }
+  }
+  return values;
+};
+
+/**
+ * **A static integration is bound by one project** (TD-028 decision 13 item 1): the run token's
+ * reach is a membership the platform cannot see, and a second project would share it. Asked under
+ * a transaction-scoped advisory lock on the integration, so two binding writes of two projects —
+ * which both hold the integration row only `for share` — cannot both pass. `exceptProject` is the
+ * project being written (its own rows are replaced); `null` counts every binding.
+ */
+export const assertStaticIntegrationBindable = async (
+  tx: Pick<Database, 'execute'>,
+  integrationId: string,
+  exceptProject: string | null,
+  bindingsAfter: number,
+): Promise<void> => {
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtextextended(${`static-run-credential:${integrationId}`}, 0))`,
+  );
+  const { rows } = await tx.execute<{ project_id: string }>(sql`
+    select project_id from bindings
+     where integration_id = ${integrationId}
+       and (${exceptProject}::uuid is null or project_id <> ${exceptProject}::uuid)
+     order by project_id`);
+  if (rows.length + bindingsAfter > 1) {
+    throw new HttpError(
+      409,
+      'static_run_credential_shared',
+      `integration ${integrationId} gives its runs a static run credential, and a static integration may be bound by one project only — its run token reaches every project its user is a member of, which the platform cannot see (TD-028 decision 13); it is bound by ${rows.map((row) => row.project_id).join(', ') || 'no other project'}. Create a second integration with its own dedicated run token instead`,
+    );
+  }
+};
+
 export interface UpdateIntegrationConfigInput {
   readonly integrationId: string;
   /** Keys to set. */
@@ -533,6 +629,13 @@ export interface UpdateIntegrationConfigInput {
   readonly remove: readonly string[];
   /** `APP_INTEGRATION_HOSTS`, required for the reason `createIntegration` gives. */
   readonly egress: IntegrationEgressPolicy;
+  /**
+   * Opens the sealed credentials a static run credential's write check compares (WP-137). Absent,
+   * a write into `static` reads no run token and is refused — never admitted unchecked.
+   */
+  readonly secretKey?: secretAdapters.SecretKey;
+  /** The time a declared expiry is judged at; the process clock when absent. */
+  readonly now?: Date;
   readonly audit: HumanActionInput;
 }
 
@@ -573,6 +676,7 @@ export const updateIntegrationConfig = async (
       .select({
         provider: integrations.provider,
         config: integrations.config,
+        secretIds: integrations.secretIds,
         retiredAt: integrations.retiredAt,
       })
       .from(integrations)
@@ -601,6 +705,19 @@ export const updateIntegrationConfig = async (
     Object.assign(next, input.set);
     assertHostIsDeclared({ ...provider.configDefaults, ...next }, input.egress);
     assertConfigParses(next, provider);
+    if (declaresStaticRunCredential(provider.staticRunCredential ?? undefined, next)) {
+      // WP-137: the run token must already be sealed (and not be the API token), and a static
+      // integration may be bound by one project — a PATCH is the other door into `static`.
+      assertStaticRunCredentialWrite(
+        provider,
+        next,
+        input.secretKey === undefined
+          ? {}
+          : await openSealedValues(tx, input.secretKey, row.secretIds),
+        input.now ?? new Date(),
+      );
+      await assertStaticIntegrationBindable(tx, input.integrationId, null, 0);
+    }
     const changed = [...new Set([...Object.keys(stored), ...Object.keys(next)])]
       .filter((key) => JSON.stringify(stored[key]) !== JSON.stringify(next[key]))
       .sort();
@@ -854,6 +971,8 @@ export const resealIntegrationSecrets = async (
     readonly newId: () => string;
     /** The caller's key and the request's digest — the claim's identity. */
     readonly idempotency: { readonly key: string; readonly digest: string };
+    /** A static run credential's declared expiry is judged at it (WP-137); the process clock when absent. */
+    readonly now?: Date;
     readonly audit: HumanActionInput;
   },
 ): Promise<ResealIntegrationSecretsResult> => {
@@ -888,8 +1007,10 @@ export const resealIntegrationSecrets = async (
 
   // Read and sealed before the transaction, for `createIntegration`'s reason.
   const sealed: { readonly id: string; readonly ciphertext: Buffer }[] = [];
+  const resealedValues: Record<string, string> = {};
   for (const field of fields) {
     const value = await input.secretSource.read(input.secretRefs[field] as string);
+    resealedValues[field] = value;
     const secretId = input.newId();
     sealed.push({
       id: secretId,
@@ -903,7 +1024,11 @@ export const resealIntegrationSecrets = async (
 
   return database.transaction(async (tx) => {
     const rows = await tx
-      .select({ secretIds: integrations.secretIds, retiredAt: integrations.retiredAt })
+      .select({
+        secretIds: integrations.secretIds,
+        config: integrations.config,
+        retiredAt: integrations.retiredAt,
+      })
       .from(integrations)
       .where(eq(integrations.id, input.integrationId))
       .for('update');
@@ -912,6 +1037,19 @@ export const resealIntegrationSecrets = async (
       return { status: 'not_found' } as const;
     }
     assertNotRetired(input.integrationId, row.retiredAt);
+    if (declaresStaticRunCredential(provider.staticRunCredential ?? undefined, row.config)) {
+      // WP-137: the credential set after this write — the sealed ones it keeps, the ones it seals —
+      // still holds a run token that is not the API token, before anything is claimed or written.
+      assertStaticRunCredentialWrite(
+        provider,
+        row.config,
+        {
+          ...(await openSealedValues(tx, input.secretKey, row.secretIds)),
+          ...resealedValues,
+        },
+        input.now ?? new Date(),
+      );
+    }
     const claimed = await tx
       .insert(commandIdempotency)
       .values({
@@ -1023,6 +1161,8 @@ export const createIntegration = async (
     readonly secretSource: SecretSource;
     readonly secretKey: secretAdapters.SecretKey;
     readonly newId: () => string;
+    /** A static run credential's declared expiry is judged at it (WP-137); the process clock when absent. */
+    readonly now?: Date;
     /** The audit row, written in the same transaction — see {@link createProject}'s. */
     readonly audit?: HumanActionInput;
   },
@@ -1092,8 +1232,19 @@ export const createIntegration = async (
    * Everything after it is database work.
    */
   const sealed: { readonly id: string; readonly ciphertext: Buffer }[] = [];
+  const createdValues: Record<string, string> = {};
   for (const [field, ref] of Object.entries(input.integration.secretRefs)) {
-    const value = await input.secretSource.read(ref);
+    createdValues[field] = await input.secretSource.read(ref);
+  }
+  // WP-137 (TD-028 decision 13 item 1): a static run credential's run token is compared with the
+  // API token as the two values just read, before anything is sealed or any row exists.
+  assertStaticRunCredentialWrite(
+    input.provider,
+    input.integration.config,
+    createdValues,
+    input.now ?? new Date(),
+  );
+  for (const [field, value] of Object.entries(createdValues)) {
     const secretId = input.newId();
     sealed.push({
       id: secretId,
@@ -1297,6 +1448,13 @@ export const replaceProjectBindings = async (
       }
       assertNoAccountOnlyFields(items, known);
       assertBindingConfigsParse(items, known, options.egress);
+      // WP-137 (TD-028 decision 13 item 1): a static integration is bound by this project alone.
+      for (const row of known) {
+        const provider = findShippedProvider(row.provider);
+        if (declaresStaticRunCredential(provider?.staticRunCredential ?? undefined, row.config)) {
+          await assertStaticIntegrationBindable(tx, row.id, projectId, 1);
+        }
+      }
     }
     await tx.delete(bindings).where(eq(bindings.projectId, projectId));
     for (const item of items) {

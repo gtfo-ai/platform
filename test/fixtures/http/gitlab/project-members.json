@@ -1,0 +1,116 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/users?username=agentic-runner",
+      "status": 200,
+      "body": [
+        {
+          "id": 5151,
+          "username": "agentic-runner",
+          "name": "Agentic Runner",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-runner"
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/users/",
+        "retrieved": "2026-10-03",
+        "kind": "documented-adapted",
+        "note": "The \"As a regular user\" list response for GET /users?username=:username (the shape `users.json` already uses), with this corpus's own obviously fake dedicated run-token user. WP-137's probe resolves the static run credential's declared username to an id with it."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/members/all/5151",
+      "status": 200,
+      "body": {
+        "id": 5151,
+        "username": "agentic-runner",
+        "name": "Agentic Runner",
+        "state": "active",
+        "web_url": "https://gitlab.example.test/agentic-runner",
+        "access_level": 30,
+        "expires_at": null
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/members/",
+        "retrieved": "2026-10-03",
+        "kind": "documented-adapted",
+        "note": "The page's \"Get a member of a group or project, including inherited and invited members\" example response (`access_level: 30`, Developer), with this corpus's run-token user and the members the adapter never reads removed. The page shows the group form of the path; the project form is the same endpoint under /projects/:id."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/users?username=agentic-maintainer",
+      "status": 200,
+      "body": [
+        {
+          "id": 5252,
+          "username": "agentic-maintainer",
+          "name": "Agentic Maintainer",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-maintainer"
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/users/",
+        "retrieved": "2026-10-03",
+        "kind": "documented-adapted",
+        "note": "As the first interaction, for a second fake user whose role is above Developer — the run-token user the probe refuses."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/members/all/5252",
+      "status": 200,
+      "body": {
+        "id": 5252,
+        "username": "agentic-maintainer",
+        "name": "Agentic Maintainer",
+        "state": "active",
+        "web_url": "https://gitlab.example.test/agentic-maintainer",
+        "access_level": 40,
+        "expires_at": null
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/members/",
+        "retrieved": "2026-10-03",
+        "kind": "documented-adapted",
+        "note": "The same example response with `access_level` 40 — Maintainer in the page's \"Roles\" table, the lowest role that can change protected branches."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/users?username=agentic-outsider",
+      "status": 200,
+      "body": [
+        {
+          "id": 5353,
+          "username": "agentic-outsider",
+          "name": "Agentic Outsider",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-outsider"
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/users/",
+        "retrieved": "2026-10-03",
+        "kind": "documented-adapted",
+        "note": "As the first interaction, for a fake user who is not a member of acme/api."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/members/all/5353",
+      "status": 404,
+      "body": { "message": "404 Not found" },
+      "source": {
+        "url": "https://docs.gitlab.com/api/rest/troubleshooting/",
+        "retrieved": "2026-10-03",
+        "kind": "inferred",
+        "note": "The members page does not publish the answer for a user who is not a member; a 404 is inferred from the REST status table (\"an ID for a resource couldn't be found\"). The adapter reads it as \"not a member\". Not measured on gitlab.com."
+      }
+    }
+  ]
+}
