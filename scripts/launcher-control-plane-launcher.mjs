@@ -64,6 +64,12 @@ const runtime = await startLauncher({
   /** Q51: the uid the *run container* runs as. This container runs as root so it can reach `0600`. */
   uid: 1000,
   logger,
+  // WP-140: the real-model leg's launcher renders every sidecar at `LogLevel Connect`, so the
+  // sidecar's log names the hosts it allowed and not only the ones it refused. A check-only option
+  // of `startLauncher` that no environment variable of the product sets.
+  ...(process.env['CHECK_EGRESS_LOG_ALLOWED_CONNECTS'] === '1'
+    ? { egressLogAllowedConnects: true }
+    : {}),
 });
 
 process.stdout.write(`${JSON.stringify({ listening: runtime.controlPlane?.port ?? null })}\n`);

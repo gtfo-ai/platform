@@ -131,14 +131,58 @@
  *    run over in 2.3 s, and **no host refused** — so the shipped list is enough to authenticate. The
  *    token's value is asserted absent from the runner's record, the sidecar's log and the launcher's.
  *
+ * ## What WP-140 added (PROGRESS backlog 137's post-login half, Q115)
+ *
+ *  - **`--real-model`, and then only that leg** ({@link runRealModelLeg}): the image's real `claude`
+ *    for one turn with the product owner's subscription token, read from `CLAUDE_CODE_OAUTH_TOKEN` in
+ *    this process' environment and passed to the runner container **by name**. The flag without the
+ *    variable and the variable without the flag are refused before anything is imported
+ *    (`real-model-preflight.mjs`), so the other legs never run with a credential in the environment.
+ *  - **The allowed hosts, visible.** Measured first, with a fake token: a sidecar rendered at
+ *    `LogLevel Connect` logs every request line, allowed or not — `Request (file descriptor 4):
+ *    CONNECT api.anthropic.com:443 HTTP/1.1` — so the leg's launcher asks for it through a check-only
+ *    option of `startLauncher` that no configuration of the product can set
+ *    (`packages/infrastructure/src/workspace/egress-log-level.test.ts`).
+ *  - **Canaries**: the token's value is looked for in the runner's record, the sidecar's log, the
+ *    launcher's log and this process' own stdout and stderr, and every container the leg made is
+ *    asked of the daemon after teardown.
+ *
  * ## Environment
  *
  *     DOCKER_HOST=unix:///var/run/docker.sock node scripts/launcher-control-plane-check.mjs
+ *     CLAUDE_CODE_OAUTH_TOKEN exported in the shell, then:
+ *     DOCKER_HOST=unix:///var/run/docker.sock node scripts/launcher-control-plane-check.mjs --real-model
  *     DOCKER_HOST=unix:///var/run/docker.sock node scripts/launcher-control-plane-check.mjs --runner-image platform:dev
  */
 import { readFileSync } from 'node:fs';
 import process from 'node:process';
+import {
+  captureOutput,
+  containsValue,
+  hostsSeenBySidecar,
+  REAL_MODEL_FLAG,
+  REAL_MODEL_PROMPT,
+  REAL_MODEL_TOKEN_VARIABLE,
+  REAL_MODEL_WALL_CLOCK_MS,
+  realModelGate,
+} from './real-model-preflight.mjs';
 import './ts-source-resolver.mjs';
+
+/**
+ * WP-140's gate, **first**, before anything is imported or the daemon is asked anything: the
+ * `--real-model` flag and `CLAUDE_CODE_OAUTH_TOKEN` go together, and either alone is a refusal naming
+ * the other (`real-model-preflight.mjs`). Under the flag only the real-model leg runs
+ * ({@link runRealModelLeg}); without it, the check's other legs run with no model credential in
+ * this process' environment at all.
+ */
+const REAL_MODEL = realModelGate(process.argv.slice(2), process.env);
+if (REAL_MODEL.kind === 'refused') {
+  process.stderr.write(`${REAL_MODEL.message}\n`);
+  process.exit(2);
+}
+/** Everything this process writes, kept from here on, so the leg can scan it for the token. */
+const OWN_OUTPUT =
+  REAL_MODEL.kind === 'on' ? captureOutput([process.stdout, process.stderr]) : null;
 
 const { startDockerFixture, RUNTIME_IMAGE, EGRESS_IMAGE, GIT_IMAGE, REPO_ROOT, docker } =
   await import(new URL('../test/e2e/support/docker-workspace.ts', import.meta.url).href);
@@ -200,7 +244,7 @@ const BAD_LAUNCHER_NAME = 'agentic-wp53-launcher-badcli';
  * checkout mounted. `platform:dev` is what `compose.yml`'s `runner` service is, so this is the form
  * that says whether the product image needs the Agent SDK's per-platform binary package.
  */
-const cliArgs = process.argv.slice(2);
+const cliArgs = process.argv.slice(2).filter((arg) => arg !== REAL_MODEL_FLAG);
 const FLAGS = [
   '--runner-image',
   '--observe-shim-ms',
@@ -269,7 +313,7 @@ if (
   LAUNCHER_STOP_GRACE_S <= 0
 ) {
   process.stderr.write(
-    `usage: launcher-control-plane-check.mjs [--runner-image <ref>] [--observe-shim-ms <n>] [--no-route-stall-ms <n>] [--no-route-wall-ms <n>] [--launcher-stop-grace-s <n>] (got ${cliArgs.join(' ')}; compose.yml's launcher stop_grace_period: ${String(composeLauncherStopGraceS())})\n`,
+    `usage: launcher-control-plane-check.mjs [--real-model] [--runner-image <ref>] [--observe-shim-ms <n>] [--no-route-stall-ms <n>] [--no-route-wall-ms <n>] [--launcher-stop-grace-s <n>] (got ${cliArgs.join(' ')}; compose.yml's launcher stop_grace_period: ${String(composeLauncherStopGraceS())})\n`,
   );
   process.exit(2);
 }
@@ -411,6 +455,8 @@ const runRunner = async (extraEnv, options = {}) => {
       : [
           '-v',
           `${REPO_ROOT}/scripts/launcher-control-plane-runner.mjs:/app/scripts/launcher-control-plane-runner.mjs:ro`,
+          '-v',
+          `${REPO_ROOT}/scripts/real-model-preflight.mjs:/app/scripts/real-model-preflight.mjs:ro`,
           '-w',
           '/app',
         ];
@@ -431,6 +477,9 @@ const runRunner = async (extraEnv, options = {}) => {
       '--network',
       fixture.network,
       ...Object.entries(env).flatMap(([name, value]) => ['-e', `${name}=${value}`]),
+      // WP-140: a variable passed **by name**, so the daemon copies its value out of this process'
+      // environment and the value is never on a command line (`ps`, an error message, a log).
+      ...(options.passEnvNames ?? []).flatMap((name) => ['-e', name]),
       ...source,
       // TD-025 §2's static mount, on the runner side. This is the data plane.
       '-v',
@@ -835,7 +884,8 @@ const reapThroughTheVerbs = async () => {
  * with an obviously fake model key and **no model host allowed** — so a CLI that uses the proxy is
  * refused by the sidecar, which logs the host at tinyproxy's `Notice` level (*"Proxying refused on
  * filtered domain"*), and nothing reaches Anthropic. An allowed `CONNECT` would not be in the log
- * at all: the sidecar's `LogLevel Notice` is above tinyproxy's `Connect` level (`egress.ts`).
+ * at all: the sidecar's `LogLevel Notice` is above tinyproxy's `Connect` level (`egress.ts`) — except
+ * in the WP-140 leg, whose launcher asks for `Connect` ({@link runRealModelLeg}).
  *
  * The sidecar's log is followed from the moment its container exists, because `release` removes
  * it: `docker logs -f` returns when the container is gone, with everything it wrote.
@@ -845,7 +895,7 @@ const measureRealCli = async (leg = {}) => {
   const sidecar = `egress-${runId}`;
   const runner = runRunner(
     {
-      CHECK_PHASE: 'real-cli',
+      CHECK_PHASE: leg.phase ?? 'real-cli',
       CHECK_REAL_CLI_RUN_ID: runId,
       CHECK_REAL_CLI_WALL_CLOCK_MS: String(REAL_CLI_WALL_CLOCK_MS),
       ...(leg.mode === undefined ? {} : { CHECK_REAL_CLI_MODE: leg.mode }),
@@ -853,7 +903,10 @@ const measureRealCli = async (leg = {}) => {
         ? {}
         : { CHECK_REAL_CLI_MODEL_HOSTS: leg.modelHosts.join(',') }),
     },
-    { name: leg.name ?? 'agentic-wp118-runner-real-cli' },
+    {
+      name: leg.name ?? 'agentic-wp118-runner-real-cli',
+      ...(leg.passEnvNames === undefined ? {} : { passEnvNames: leg.passEnvNames }),
+    },
   );
   let following = null;
   let lastInspect = null;
@@ -866,7 +919,8 @@ const measureRealCli = async (leg = {}) => {
     lastInspect = exists.stderr.slice(0, 200);
     await sleep(500);
   }
-  const told = lastJsonLine(await runner);
+  const ran = await runner;
+  const told = lastJsonLine(ran);
   const logged = following === null ? null : await following;
   if (following === null) {
     process.stdout.write(`the sidecar ${sidecar} was never seen: ${lastInspect}\n`);
@@ -878,7 +932,15 @@ const measureRealCli = async (leg = {}) => {
           .split('\n')
           .filter((line) => line.trim().length > 0)
           .map((line) => line.slice(0, 300));
-  return { told, sidecarLog, refusedHosts: refusedHostsOf(sidecarLog) };
+  return {
+    told,
+    sidecarLog,
+    refusedHosts: refusedHostsOf(sidecarLog),
+    // The runner container's whole output, unparsed — what WP-140 scans for the token.
+    runnerOutput: `${ran.stdout}\n${ran.stderr}`,
+    // The sidecar's whole log, uncut — `sidecarLog` trims each line to 300 characters.
+    sidecarText: logged === null ? null : `${logged.stdout}\n${logged.stderr}`,
+  };
 };
 
 /**
@@ -886,7 +948,8 @@ const measureRealCli = async (leg = {}) => {
  * filtered domain "<host>""* at `Notice` for each refused request, which is the level the rendered
  * configuration logs at (`egress.ts`). An **allowed** `CONNECT` is logged at `Connect`, below that,
  * so a host on the run's list never appears here — the leg that allows the model host proves it
- * reached it by the model's own refusal of the fake credential instead.
+ * reached it by the model's own refusal of the fake credential instead. The WP-140 leg renders its
+ * sidecar at `Connect` and reads both halves with `hostsSeenBySidecar` (`real-model-preflight.mjs`).
  */
 const refusedHostsOf = (sidecarLog) =>
   sidecarLog === null
@@ -963,6 +1026,205 @@ const environFindings = (environ) => {
   };
 };
 
+/** WP-140's run, and the runner container that drives it. */
+const REAL_MODEL_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000140a';
+const REAL_MODEL_RUNNER_NAME = 'agentic-wp140-runner-real-model';
+
+/**
+ * **WP-140 — the real-model pre-flight** (PROGRESS backlog 137's post-login half, Q115): the run
+ * image's real `claude`, one turn, with the subscription token from this process' environment.
+ *
+ * Only under `--real-model`, and then **only this leg**: the other legs need no credential and run
+ * without the flag, so the window in which this process holds a token is one run long. It uses the
+ * check's own disposable fixture — no server database, no binding, no provider — so nothing it does
+ * can write to GitLab or Jira, and it asserts the run's egress list is the stock model hosts alone.
+ * The launcher renders the run's sidecar at `LogLevel Connect` (a check-only option, `egress.ts`),
+ * so the sidecar's log names every host the logged-in CLI asked for, allowed and refused.
+ *
+ * One run, no retry: whatever the turn answers is the reading. The token's value is looked for in
+ * the runner's record, the sidecar's log, the launcher's log and this process' own stdout and
+ * stderr (captured from the gate on), and everything this leg prints from a container is masked
+ * first — the scans are the canary, and the mask is so a failing scan does not print what it found.
+ * Every container the leg created is asked of the daemon after teardown.
+ */
+const runRealModelLeg = async () => {
+  const value = process.env[REAL_MODEL_TOKEN_VARIABLE] ?? '';
+  const mask = (text) =>
+    value.length > 0 ? String(text).split(value).join(`[${REAL_MODEL_TOKEN_VARIABLE}]`) : text;
+  process.stdout.write(
+    `real-model leg (WP-140): ${REAL_MODEL_TOKEN_VARIABLE} set (length ${String(value.length)}); one turn, prompt ${JSON.stringify(REAL_MODEL_PROMPT)}, wall clock ${String(REAL_MODEL_WALL_CLOCK_MS)} ms, model hosts ${JSON.stringify(STOCK_MODEL_EGRESS_HOSTS)}\n`,
+  );
+  await assertDaemon();
+  let leg = null;
+  let launcherText = '';
+  let repoContainer = null;
+  const started = Date.now();
+  try {
+    if (INNER_SOCKET === null) {
+      throw new Error(
+        `this check bind-mounts the daemon socket, so DOCKER_HOST must be a unix:// path (got ${DOCKER_HOST})`,
+      );
+    }
+    fixture = await startDockerFixture({ controlVolumeBind: false });
+    repoContainer = fixture.repoContainer;
+    await docker(['rm', '-f', LAUNCHER_NAME, REAL_MODEL_RUNNER_NAME], { allowFailure: true });
+    await docker(
+      launcherArgs(LAUNCHER_NAME, fixture, ['-e', 'CHECK_EGRESS_LOG_ALLOWED_CONNECTS=1']),
+    );
+    const up = await waitForListening(LAUNCHER_NAME);
+    record('the launcher container exposes the control plane', up, `${LAUNCHER_NAME}:${PORT}`);
+    if (!up) {
+      throw new Error('the launcher never listened, so no run was started');
+    }
+    leg = await measureRealCli({
+      runId: REAL_MODEL_RUN_ID,
+      phase: 'real-model',
+      modelHosts: STOCK_MODEL_EGRESS_HOSTS,
+      name: REAL_MODEL_RUNNER_NAME,
+      passEnvNames: [REAL_MODEL_TOKEN_VARIABLE],
+    });
+    const launcher = await docker(['logs', LAUNCHER_NAME], { allowFailure: true });
+    launcherText = `${launcher.stdout}\n${launcher.stderr}`;
+    const told = leg.told ?? {};
+    const hosts = hostsSeenBySidecar(leg.sidecarLog);
+    process.stdout.write(
+      `--- backlog 137 (post-login): the real-model leg ---\n${mask(
+        JSON.stringify(
+          {
+            elapsedMs: told.elapsedMs ?? null,
+            model: told.model,
+            effort: told.effort,
+            status: told.status,
+            terminalReason: told.terminalReason,
+            outcomeError: told.outcomeError ?? null,
+            error: told.error ?? null,
+            result: told.result ?? null,
+            outcome: told.outcome ?? null,
+            init: told.init ?? null,
+            apiRetries: told.apiRetries ?? null,
+            reply: told.reply ?? null,
+            egressHosts: told.egressHosts,
+            checkout: told.checkout,
+            hosts,
+            sidecarLog: leg.sidecarLog,
+          },
+          null,
+          2,
+        ),
+      )}\n`,
+    );
+    if (told.status !== 'completed') {
+      process.stdout.write(
+        `--- the run did not complete: the CLI's stderr and the transcript's tail ---\n${mask(
+          `${told.stderr ?? ''}\n${told.transcript ?? ''}\n${(told.notes ?? []).join('\n')}`,
+        )}\n`,
+      );
+    }
+    record(
+      'the run carries the server’s local-mode environment — CLAUDE_CODE_OAUTH_TOKEN by name, and nothing else (WP-140)',
+      JSON.stringify(told.envNames) === '["CLAUDE_CODE_OAUTH_TOKEN"]' &&
+        JSON.stringify(told.secretEnvNames) === '["CLAUDE_CODE_OAUTH_TOKEN"]',
+      JSON.stringify({ env: told.envNames, secretEnvNames: told.secretEnvNames }),
+    );
+    record(
+      'the run’s egress list is the stock model hosts alone: no checkout, no git or integration host (WP-140 (b))',
+      told.checkout === false &&
+        JSON.stringify([...(told.egressHosts ?? [])].sort()) ===
+          JSON.stringify([...STOCK_MODEL_EGRESS_HOSTS].sort()),
+      JSON.stringify({ egress: told.egressHosts, checkout: told.checkout }),
+    );
+    record(
+      'the CLI was given no tool: its init lists none (WP-140 (c))',
+      Array.isArray(told.init?.tools) && told.init.tools.length === 0,
+      JSON.stringify(told.init ?? null),
+    );
+    record(
+      'the sidecar logged at Connect, so its log names the hosts it allowed — the model host among them (WP-140 (d))',
+      hosts.allowed.some((host) => STOCK_MODEL_EGRESS_HOSTS.includes(host)),
+      JSON.stringify(hosts),
+    );
+    record(
+      'the hosts the sidecar saw, allowed and refused (observation; backlog 137)',
+      leg.sidecarLog !== null,
+      JSON.stringify(hosts),
+    );
+    record(
+      'authentication succeeded: one turn, a success result (WP-140 criterion 2)',
+      told.status === 'completed' &&
+        told.result?.subtype === 'success' &&
+        Number(told.result?.num_turns) <= 1,
+      mask(
+        JSON.stringify({
+          status: told.status,
+          terminalReason: told.terminalReason,
+          subtype: told.result?.subtype ?? null,
+          num_turns: told.result?.num_turns ?? null,
+          api_retry_statuses: (told.apiRetries ?? []).map((retry) => retry?.error_status ?? null),
+        }),
+      ),
+    );
+    record(
+      'what the turn cost, as the CLI reported it — reported, not billed (observation)',
+      told.result !== null && told.result !== undefined,
+      JSON.stringify({
+        total_cost_usd_reported: told.result?.total_cost_usd_reported ?? null,
+        usage: told.result?.usage ?? null,
+      }),
+    );
+  } catch (error) {
+    record('the real-model leg ran to completion', false, mask(String(error?.stack ?? error)));
+  } finally {
+    await docker(['rm', '-f', REAL_MODEL_RUNNER_NAME, LAUNCHER_NAME], { allowFailure: true });
+    await fixture?.cleanup();
+    // The run's workspace volume retention keeps; this is a check, not an instance.
+    await docker(['volume', 'rm', '-f', `ws-${REAL_MODEL_RUN_ID}`], { allowFailure: true });
+  }
+  const tokenSeen = [
+    [
+      'the runner’s record',
+      leg?.told?.leaked === true || containsValue(leg?.runnerOutput ?? '', value),
+    ],
+    ['the sidecar’s log', containsValue(leg?.sidecarText ?? '', value)],
+    ['the launcher’s log', containsValue(launcherText, value)],
+  ];
+  record(
+    'the token’s value is in no record and no log line: runner, sidecar, launcher (WP-140 canary)',
+    leg !== null && tokenSeen.every(([, seen]) => !seen),
+    JSON.stringify(
+      Object.fromEntries(tokenSeen.map(([where, seen]) => [where, seen ? 'FOUND' : 'absent'])),
+    ),
+  );
+  const left = await runObjects(REAL_MODEL_RUN_ID);
+  const named = [];
+  for (const name of [LAUNCHER_NAME, REAL_MODEL_RUNNER_NAME, repoContainer]) {
+    if (name !== null) {
+      const inspect = await docker(['container', 'inspect', name], { allowFailure: true });
+      if (inspect.ok) {
+        named.push(name);
+      }
+    }
+  }
+  record(
+    'every container the leg created is gone at exit (WP-140 canary)',
+    left.containers.length === 0 && left.networks.length === 0 && named.length === 0,
+    JSON.stringify({ run: left, named }),
+  );
+  process.stdout.write(
+    `real-model leg: ${String(Math.round((Date.now() - started) / 1000))} s from the fixture to teardown\n`,
+  );
+  // Last, so it covers every line above it: this process' own stdout and stderr.
+  record(
+    'the token’s value is in neither this check’s stdout nor its stderr (WP-140 canary)',
+    OWN_OUTPUT !== null && !containsValue(OWN_OUTPUT.text(), value),
+    OWN_OUTPUT === null ? 'not captured' : `${String(OWN_OUTPUT.text().length)} characters scanned`,
+  );
+  const failed = results.filter((result) => !result.ok);
+  process.stdout.write(
+    `\n${failed.length === 0 ? 'PASS' : 'FAIL'}: launcher-control-plane-check ${REAL_MODEL_FLAG} (${String(results.length - failed.length)}/${String(results.length)} checks)\n`,
+  );
+  process.exit(failed.length === 0 ? 0 : 1);
+};
+
 let fixture;
 let replay = null;
 let realCli = null;
@@ -971,6 +1233,9 @@ let noRoute = null;
 let orphans = null;
 let report = null;
 let driven = null;
+if (REAL_MODEL.kind === 'on') {
+  await runRealModelLeg();
+}
 await assertDaemon();
 try {
   if (INNER_SOCKET === null) {

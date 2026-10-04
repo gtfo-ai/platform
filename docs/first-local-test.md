@@ -287,6 +287,30 @@ token in `.env` — **PASS**, run):
   is by design, the `runner` runs agents.
 - `docker compose logs launcher` says *"the launcher control plane is listening"*.
 
+### The pre-flight: one turn with your token (optional, before § 5)
+
+Before you connect anything, you can ask whether your token authenticates **from a run container**
+and which hosts the logged-in CLI contacts (WP-140). It runs the pinned `claude` for **one** turn —
+the prompt *"Reply with the single word OK."*, no tools, at most two minutes — on the check's own
+throwaway containers: no database, no GitLab, no Jira, nothing of the stack above. It needs Node 24,
+`pnpm install` once in the checkout, and the `platform-runtime:dev` and `platform-egress:dev` images
+from the first three lines of § 4. With `CLAUDE_CODE_OAUTH_TOKEN` exported in your shell (the same
+value as in `.env`; **never** put it on the command line):
+
+```bash
+DOCKER_HOST=unix:///var/run/docker.sock node scripts/launcher-control-plane-check.mjs --real-model   # run with a fake token: FAIL on authentication only, as expected
+```
+
+It ends with one line, `PASS: launcher-control-plane-check --real-model (11/11 checks)` when the turn
+succeeded. Above it: the run's result (`success`, turns, token usage, and the cost the CLI
+*reports* — your plan is not billed per token, but the turn counts toward its usage limits), and the
+hosts the run's egress proxy **saw**, allowed and refused. A refused host is one the shipped list
+lacks; add it to `APP_MODEL_EGRESS_HOSTS` only if the run failed for it. A wrong or expired token
+fails the record *"authentication succeeded"* with `api_retry_statuses: [401, …]`. The flag without
+the variable, or the variable without the flag, is refused before anything starts, and the check
+asserts your token's value appears in nothing it printed, nor in the runner's record, the launcher's log or the proxy's log. Run it **once**: there is
+no retry, and a second run is a second turn.
+
 ## 5. Sign in, connect, onboard
 
 1. Open <http://localhost:8080/> and sign in with `APP_BOOTSTRAP_ADMIN_EMAIL` and its password

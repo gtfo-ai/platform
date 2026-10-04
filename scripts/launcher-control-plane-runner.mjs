@@ -555,6 +555,209 @@ if (PHASE === 'real-cli') {
 }
 
 /**
+ * WP-140 (PROGRESS backlog 137's post-login half, Q115): the run image's **real** `claude` for **one
+ * turn** with the product owner's subscription token, the way `compose.local.yml` runs it.
+ *
+ * The token is this container's `CLAUDE_CODE_OAUTH_TOKEN`, which the host passes **by name**
+ * (`docker run -e CLAUDE_CODE_OAUTH_TOKEN`, so the value is never on a command line) and only under
+ * `--real-model`. The spec is the smallest a run can be: no tool, no platform tool, no skill, no
+ * MCP server, no artifact, `maxTurns: 1`, the fixed prompt, a two-minute wall clock — and the model
+ * and effort of the shipped `intake` stage, the cheapest a pipeline runs. No tool means no checkout
+ * (WP-74), so the run's egress list is the model hosts alone and no git or integration host is on it.
+ * The run's redactor is production's (`injectedSecretRedactorFor`), and the record is checked for
+ * the value **before** it is printed, then printed with the value replaced by the variable's name.
+ */
+if (PHASE === 'real-model') {
+  const runId = required('CHECK_REAL_CLI_RUN_ID');
+  const value = process.env['CLAUDE_CODE_OAUTH_TOKEN'] ?? '';
+  const { REAL_MODEL_PROMPT, REAL_MODEL_WALL_CLOCK_MS } = await import(
+    new URL('./real-model-preflight.mjs', import.meta.url).href
+  );
+  const { STAGE_AGENT_DEFAULTS } = await import(
+    new URL('../packages/domain/src/index.ts', import.meta.url).href
+  );
+  const { injectedSecretRedactorFor } = await import(
+    new URL('../packages/application/src/index.ts', import.meta.url).href
+  );
+  const { agentRunEnvironment } = await import(
+    new URL('../apps/server/src/agent.ts', import.meta.url).href
+  );
+  const modelHosts = (process.env['CHECK_REAL_CLI_MODEL_HOSTS'] ?? '')
+    .split(',')
+    .map((host) => host.trim())
+    .filter((host) => host.length > 0);
+  const runEnvironment = agentRunEnvironment({
+    providerMode: 'local',
+    modelApiKey: null,
+    modelOauthToken: value.length > 0 ? value : null,
+  });
+  const runProvisioner = launcherAdapters.createLauncherRunWorkspaceProvisioner({
+    client,
+    credentials,
+    projects: projectSource,
+    controlRoot: CONTROL_ROOT,
+    modelEgressHosts: modelHosts,
+    runRegistryHosts: [],
+    credentialTtlSeconds: 3_600,
+    clock: runnerAdapters.systemClock,
+    logger,
+  });
+  const intake = STAGE_AGENT_DEFAULTS.intake;
+  const transcript = [];
+  const phase = {
+    phase: PHASE,
+    mode: 'local',
+    ok: false,
+    tokenLength: value.length,
+    model: intake.model,
+    effort: intake.effort,
+    prompt: REAL_MODEL_PROMPT,
+    claudeCodePath: null,
+    status: null,
+    envNames: Object.keys(runEnvironment.env),
+    secretEnvNames: runEnvironment.secretEnvNames,
+    egressHosts: null,
+    checkout: null,
+    notes,
+  };
+  const started = Date.now();
+  try {
+    const spec = runnerAdapters.runSpecFixture({
+      ...specFor(runId),
+      stage: 'intake',
+      model: intake.model,
+      effort: intake.effort,
+      providerMode: 'local',
+      systemPromptAppend:
+        'This is a connectivity pre-flight of the platform. Use no tools. Answer in one word.',
+      userPrompt: REAL_MODEL_PROMPT,
+      contextPack: [],
+      tools: [],
+      disallowedTools: [],
+      platformTools: [],
+      protectedPaths: [],
+      agents: {},
+      mcpServers: {},
+      skills: [],
+      artifactType: null,
+      env: runEnvironment.env,
+      secretEnvNames: runEnvironment.secretEnvNames,
+      limits: {
+        ...runnerAdapters.runSpecFixture().limits,
+        maxTurns: 1,
+        maxBudgetUsd: 1,
+        wallClockMs: REAL_MODEL_WALL_CLOCK_MS,
+        stallTimeoutMs: REAL_MODEL_WALL_CLOCK_MS,
+      },
+    });
+    const runner = runnerAdapters.createWorkspaceClaudeRunner({
+      provisioner: {
+        provision: async (provisioned) => {
+          const workspace = await runProvisioner.provision(provisioned);
+          const created = creates.filter((entry) => entry.spec.runId === provisioned.runId).at(-1);
+          phase.egressHosts = created?.spec.egress?.hosts ?? null;
+          phase.checkout = created === undefined ? null : created.spec.repo !== null;
+          phase.claudeCodePath = workspace.claudeCodePath ?? null;
+          return workspace;
+        },
+      },
+      logger,
+      build: (transport) =>
+        runnerAdapters.createClaudeRunner({
+          sink: { append: async (event) => transcript.push(event) },
+          approvals: {
+            requestApproval: async () => ({
+              decision: 'deny',
+              reason: 'unattended',
+              questionId: null,
+            }),
+          },
+          tools: runnerAdapters.recordingTools(),
+          clock: runnerAdapters.systemClock,
+          logger,
+          injectedSecretRedactorFor: (run) => injectedSecretRedactorFor(run, logger),
+          spawnClaudeCodeProcess: transport.spawn,
+          ...(transport.cliEnvironment === undefined
+            ? {}
+            : { workspaceEnvironment: transport.cliEnvironment }),
+        }),
+    });
+    const outcome = await runner.start(spec).outcome;
+    phase.ok = true;
+    phase.status = outcome.status;
+    phase.terminalReason = outcome.terminalReason;
+    phase.outcomeError = outcome.error ?? null;
+    phase.outcome = {
+      numTurns: outcome.numTurns,
+      usage: outcome.usage,
+      modelUsage: outcome.modelUsage,
+      cost: outcome.cost,
+      costUnmeasured: outcome.costUnmeasured === true,
+      wallMs: outcome.wallMs,
+      redactionCount: outcome.redactionCount,
+    };
+  } catch (error) {
+    // Redacted before it is cut, so a token straddling the cut cannot print as a partial prefix.
+    phase.error = (
+      value.length > 0
+        ? String(error?.message ?? error)
+            .split(value)
+            .join('[CLAUDE_CODE_OAUTH_TOKEN]')
+        : String(error?.message ?? error)
+    ).slice(0, 600);
+  }
+  phase.elapsedMs = Date.now() - started;
+  // What the CLI's own `result` said — subtype (as the platform reads it), turns, usage, the cost
+  // it **reported** (a subscription is not billed per token, so this is not money spent).
+  const result = transcript.filter((entry) => entry?.kind === 'result').at(-1) ?? null;
+  phase.result =
+    result === null
+      ? null
+      : {
+          subtype: result.terminal_reason,
+          num_turns: result.num_turns,
+          duration_ms: result.duration_ms,
+          usage: result.usage,
+          model_usage: result.model_usage,
+          total_cost_usd_reported: result.cost?.usd ?? null,
+        };
+  // What the CLI says it was given: its `init` lists the tools the model may call.
+  const init =
+    transcript.find((entry) => entry?.kind === 'system' && entry?.subtype === 'init') ?? null;
+  phase.init =
+    init === null
+      ? null
+      : {
+          tools: init.data?.tools ?? null,
+          model: init.model ?? null,
+          api_key_source: init.data?.api_key_source ?? null,
+          claude_code_version: init.data?.claude_code_version ?? null,
+        };
+  phase.apiRetries = transcript
+    .filter((entry) => entry?.kind === 'system' && entry?.subtype === 'api_retry')
+    .map((entry) => entry.data ?? null);
+  // The model's answer, text blocks only — model output, so it is data and is only printed.
+  phase.reply = transcript
+    .filter((entry) => entry?.kind === 'assistant')
+    .flatMap((entry) => entry.content ?? [])
+    .filter((block) => block?.type === 'text')
+    .map((block) => String(block.text))
+    .join(' ')
+    .slice(0, 400);
+  // `leaked` on the **raw** record, before anything is replaced, so a value that reached any field
+  // is a failure rather than a mask; then the value is replaced by its name for printing.
+  const raw = JSON.stringify({ phase, stderr: cliStderr, transcript });
+  phase.leaked = value.length > 0 && raw.includes(value);
+  const redact = (text) =>
+    value.length > 0 ? text.split(value).join('[CLAUDE_CODE_OAUTH_TOKEN]') : text;
+  phase.stderr = redact(cliStderr.join('')).slice(-4_000);
+  phase.transcript = redact(JSON.stringify(transcript)).slice(-6_000);
+  phase.notes = notes.map(redact);
+  process.stdout.write(`${redact(JSON.stringify(phase))}\n`);
+  process.exit(0);
+}
+
+/**
  * WP-127, PROGRESS backlog 346: the image's **real** `claude` with **no route to the model** — its
  * run's egress sidecar stopped after the workspace is provisioned and before the CLI starts, so its
  * `HTTPS_PROXY` names a container that is gone. The run allows no model host either, so nothing it

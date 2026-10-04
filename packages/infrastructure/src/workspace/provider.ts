@@ -402,6 +402,12 @@ export interface DockerWorkspaceProviderOptions {
   readonly now?: () => Date;
   /** Ceiling on an export archive read into memory. */
   readonly maxExportBytes?: number;
+  /**
+   * Check-only (WP-140): render every run's sidecar at `LogLevel Connect`, so its log names the
+   * hosts it **allowed** as well as the ones it refused. Never set by a server or launcher
+   * configuration — `RenderEgressOptions` in `egress.ts` has the reason and the census that holds it.
+   */
+  readonly egressLogAllowedConnects?: boolean;
 }
 
 interface CreatedObjects {
@@ -510,6 +516,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   readonly #controlSocketTimeoutMs: number;
   readonly #now: () => Date;
   readonly #maxExportBytes: number;
+  readonly #egressLogAllowedConnects: boolean;
   /** One mirror is one directory; two fetches into it race. Serialised per project. */
   readonly #mirrorLocks = new Map<string, Promise<unknown>>();
   /** The memoised verdict of {@link assertRuntimeCli}; one helper container per process. */
@@ -535,6 +542,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     this.#controlSocketTimeoutMs = options.controlSocketTimeoutMs ?? CONTROL_SOCKET_TIMEOUT_MS;
     this.#now = options.now ?? (() => new Date());
     this.#maxExportBytes = options.maxExportBytes ?? 128 * MIB;
+    this.#egressLogAllowedConnects = options.egressLogAllowedConnects === true;
   }
 
   /** Where the run image keeps its `claude` binary (PROGRESS backlog 34). */
@@ -1264,7 +1272,9 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       this.#logger.info({ run_id: spec.runId }, 'no egress hosts allowed: no sidecar');
       return null;
     }
-    const rendered = renderEgressConfig(spec.egress);
+    const rendered = renderEgressConfig(spec.egress, {
+      logAllowedConnects: this.#egressLogAllowedConnects,
+    });
     const configVolume = `egress-${spec.runId}`;
     made.configVolume = await this.#engine.createVolume({
       name: configVolume,

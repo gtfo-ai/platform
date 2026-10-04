@@ -7868,6 +7868,7 @@ would make it visible), **0b** (the sweep itself, closed at WP-53), rule **31**,
 ### 137. **A run's egress allow-list is `api.anthropic.com` and the git host, nothing sets the CLI's own opt-outs, and what else the pinned binary reaches has never been measured — so a run that needs one more host fails closed with a 403 from a proxy** **local-mode half measured** at `11a17ae`, WP-133, session 11 (pre-login: every host the CLI asked for is on the run's list, none refused; post-login hosts unmeasured, no credential) — (**premise corrected** at `3785beb`, WP-82, session 9 (the opt-out is set on the container and the shim replaces the child's environment — backlog **285**; the host measurement handed to WP-33 in `docs/TODO.md`) — TODO, nit-to-small — **working as designed and fail-closed**, which is the right direction; **needs measurement**, which needs a model credential and a daemon and so is not run here; one residual false sentence rides with it; **no work package owns it**; reported by WP-53 as a stated assumption, established off the tree by the refiner, session 7)
 
 > **M8 round 3 (architect, 2026-10-04): the post-login half → WP-140** (the founder allowed one bounded real-model turn).
+> **WP-140 (implementer, 2026-10-04): the leg is built; run with a fake token only.** A sidecar rendered at `LogLevel Connect` (check-only) logs every request line, so allowed hosts are now visible: with the fake token the CLI's requests were `CONNECT api.anthropic.com:443` (three), allowed, nothing refused, then 401. **The post-login host list is owed by the real-token run** (`node scripts/launcher-control-plane-check.mjs --real-model`, WP-140 notes) and is pasted here when it is made.
 > **M7 (architect, session 11): stays open, unscheduled — the CLI host measurement is WP-33's (a model credential).**
 > **M6 (architect, session 9): no row — the correction is done at WP-82 and the one-line gap is backlog 285, folded into **WP-104**; the host measurement stays with WP-33 (a model credential).**
 
@@ -42408,3 +42409,93 @@ Verification, round 1 (each started at load < 12 and after the coordinator's 40-
 **Residuals.**
 - Nothing was measured on a GitLab instance: `ci_config_path`'s shape on gitlab.com or `gitlab.fontai.org`, whether a Maintainer's token sees it (it should: `read_code`), and the 633 MB first clone against the 10-minute create bound (the figure is the review's, not measured).
 - `GET …/repository` answers 500 when the binding fails to **load** (a decryption fault), as every other binding read does (rule 20); only a provider `IntegrationError` becomes `provider_unavailable`.
+
+#### WP-140
+
+**The real-model pre-flight, built and run with a fake token; the real-token run is the orchestrator's
+(or the product owner's).** Implementer, session 11, on `3fb837a1`. No real token was read: every
+shell that ran a test or check had `CLAUDE_CODE_OAUTH_TOKEN` unset, or set to the obviously fake
+`FAKE-wp140-oauth-token-not-a-credential`. Docker Desktop 29.8.1, `claude` 2.1.267, images as built at
+WP-133.
+
+**Measure first (ruling (d)): an allowed `CONNECT` is visible at `LogLevel Connect`.** With the fake
+token, the leg's sidecar logged `Connect (file descriptor 4): 172.28.0.3`, `Request (file descriptor
+4): CONNECT api.anthropic.com:443 HTTP/1.1` and `Established connection to host "api.anthropic.com"`
+(three requests), then the CLI's two `api_retry` with `error_status` 401 and *"Failed to authenticate.
+API Error: 401 Invalid bearer token"*. So the renderer takes the check-only option
+(`renderEgressConfig(…, { logAllowedConnects })` → `DockerWorkspaceProviderOptions.egressLogAllowedConnects`
+→ `BuildLauncherOptions.egressLogAllowedConnects`, which no environment variable fills; the check's
+launcher asks for it with `CHECK_EGRESS_LOG_ALLOWED_CONNECTS=1`). Pre-login hosts: `api.anthropic.com`
+alone, allowed; none refused.
+
+**Built.** `scripts/launcher-control-plane-check.mjs --real-model` runs only the new leg
+(`runRealModelLeg`): the check's disposable fixture, one launcher, one runner container given
+`-e CLAUDE_CODE_OAUTH_TOKEN` **by name**, the runner's new `real-model` phase
+(`launcher-control-plane-runner.mjs`): `agentRunEnvironment` for `local` mode, `providerMode: 'local'`,
+the stock `modelEgressHosts`, `tools: []` (so no checkout and no git host, WP-74), no platform tool,
+skill, MCP server or artifact, `maxTurns: 1`, wall clock and stall 120 s, the fixed prompt, the
+`intake` stage's model and effort (`claude-haiku-4-5`, `low` — the cheapest a pipeline runs), and
+production's `injectedSecretRedactorFor`. One run, no retry. It records the result's subtype,
+`num_turns`, usage, the **reported** cost, the `api_retry` statuses, the reply, and the hosts
+seen/allowed/refused (`hostsSeenBySidecar`). The gate, scans and host parser are
+`scripts/real-model-preflight.mjs` (+ `.d.mts`).
+
+**Criteria → tests.**
+- (1) `scripts/real-model-preflight.test.ts` › "launcher-control-plane-check.mjs refuses before it touches anything (WP-140 criterion 1)" › "the flag without the variable: exit 2, the variable named, nothing on stdout" and › "the variable without the flag: exit 2, the flag named, the value nowhere" (a real child process; `DOCKER_HOST` withheld so a gate that let either through would fail on the other message); plus the gate's unit cases in › "the gate: the flag and the variable go together".
+- (2) **owed by the real run**: the record *"authentication succeeded: one turn, a success result (WP-140 criterion 2)"* — FAIL with the fake token, as expected (`error_during_execution`, `api_retry_statuses: [401, 401]`); the host list goes into backlog 137.
+- (3) canaries, as records of the leg: *"the token’s value is in no record and no log line: runner, sidecar, launcher"*, *"… in neither this check’s stdout nor its stderr"* (captured from the gate on, scanned last), *"every container the leg created is gone at exit"*. The census: `packages/infrastructure/src/workspace/egress-log-level.test.ts` › "the check-only egress log level (WP-140)" › "is spelled only by the renderer, the provider, the launcher’s forwarder and the check" and › "is read from no environment variable of the product: the launcher’s config, its entrypoint and every compose file are silent"; the rendering: `packages/infrastructure/src/workspace/egress.test.ts` › "rendered tinyproxy configuration" › "logs at Notice unless a check asks for Connect, and changes nothing else (WP-140)".
+- (4) one run, measured — owed by the real run (the leg prints elapsed, turns, reported cost; it has no retry).
+
+**Canaries run** (files copied aside, mutated, restored, md5 equal): the runner printing the value
+unredacted → *"the runner’s record": "FOUND"*, FAIL; the check writing the value to stderr inside the
+leg → *"… stdout nor its stderr"* FAIL (a first attempt put the write in the `catch`, where it never
+ran — caught because the record stayed green, then moved). The container record was **not**
+canaried (a launcher left behind would block the fixture's network teardown).
+
+**Decisions and assumptions.**
+- Under `--real-model` **only** this leg runs: the other 54 checks need no credential, so the token is
+  in this process' environment for one run's length. The ruling says "a leg of"; stated here.
+- A token shorter than 8 characters is refused too (the production redactor ignores shorter values).
+- The model is the `intake` stage's (Haiku 4.5, effort `low`), read off `STAGE_AGENT_DEFAULTS`: the
+  cheapest turn against the plan's limits, and the model the first stage of every task runs.
+- No tool still connects the platform MCP server (init's `mcp_servers: [platform]`) with **no** tool
+  exposed — init's `tools: []`, asserted as a record.
+- The runner container holds the value in its environment for the run (as production's `runner`
+  does); it is `--rm`.
+
+**Sentences falsified, grepped and judged** ("below the sidecar's log level", "allowed hosts", "not
+measured" near 137): technical/05 § Network policy — **extended**; operator-guide § 8 bullet —
+**extended** with the leg and its command; `.env.example` `APP_MODEL_EGRESS_HOSTS` — **extended**;
+docs/TODO.md 137 row (b) and the WP-140 row — **extended**; the check's `measureRealCli` and
+`refusedHostsOf` docblocks — **extended**; `compose.local.yml:37` and the runner's WP-133 comment —
+still true (production sidecars stay at `Notice`), left; `docs/first-local-test.md` gains § 4's
+*pre-flight* subsection with the one command.
+
+**Verification.** `pnpm run -s verify` **PASS**. `pnpm run -s verify:e2e` **PASS** (64 files, 277
+tests, load ~6–11). `node scripts/launcher-control-plane-check.mjs` (no flag) **PASS 54/54** —
+**load-gate breach, stated**: it was started on a reading of 22.2 (one-minute) instead of waiting.
+`--real-model` with the fake token: **FAIL 10/11**, the one failure authentication, every other record
+ok, 13 s fixture to teardown. Docker: no `com.agentic.run` object and no `agentic-wp*` container left;
+`agentic` volumes 9 before and after. Scratch under `/private/tmp/claude-501/wp140-impl/`.
+
+**For the orchestrator — the one command** (from the repository root, in a shell where
+`CLAUDE_CODE_OAUTH_TOKEN` is exported; `zsh -ic '…'` if only the interactive profile exports it):
+`DOCKER_HOST=unix:///var/run/docker.sock node scripts/launcher-control-plane-check.mjs --real-model`.
+
+**Discovered work** (no numbers claimed).
+- `CLAUDE.md` still says the control-plane check is *"45/45 since WP-118"*; it is 54/54 (and the new
+  leg is 11 checks of its own).
+- The runner logs *"runlet transport failed"* (`protocol_error`) after the run's `result` on this leg
+  (seen with the fake token); the outcome is unaffected, the cause was not read.
+
+
+**The real-token run (orchestrator, 2026-10-04, with the product owner's consent, Q115).** One run of
+`node scripts/launcher-control-plane-check.mjs --real-model` on images rebuilt from this tree:
+**`PASS: launcher-control-plane-check --real-model (11/11 checks)`**. The token (length 108) was read from the
+product owner's profile for that command only; the check's own canaries and a separate scan of its output found
+it in no record, log or output line. Authentication in the run container **succeeded**: one turn,
+`terminalReason: success`, `api_key_source: none` (the OAuth token, not an API key), CLI 2.1.267,
+`claude-haiku-4-5`, no `api_retry`. **Backlog 137's post-login half, measured**: the sidecar saw and allowed
+`api.anthropic.com` only and refused nothing. The CLI reported `total_cost_usd` 0.0037 (3 416 input, 61 output
+tokens) — a figure, not a charge, on a subscription token. Every container the leg created was gone at exit;
+the `agentic` volume count was nine before and after.

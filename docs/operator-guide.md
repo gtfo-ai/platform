@@ -1086,7 +1086,16 @@ used; every reading below took an obviously fake `CLAUDE_CODE_OAUTH_TOKEN`.
   sidecar logs a refused host but not an allowed one, so this shows nothing was refused, not which
   allowed hosts were used (the 401 shows `api.anthropic.com` was). So the shipped list is enough to
   **authenticate**. What the CLI contacts *after* a successful
-  authentication could not be measured without a real token; if your first run fails, the sidecar's
+  authentication could not be measured without a real token. **WP-140's pre-flight measures it**: with
+  `CLAUDE_CODE_OAUTH_TOKEN` exported in your shell, `DOCKER_HOST=unix:///var/run/docker.sock node
+  scripts/launcher-control-plane-check.mjs --real-model` runs the pinned `claude` for **one** turn
+  (*"Reply with the single word OK."*, no tools, two minutes) on the check's own throwaway fixture — no
+  database, no GitLab, no Jira — and its sidecar alone logs at `LogLevel Connect`, so it lists the
+  hosts it **allowed** as well as the ones it refused (with a fake token it saw `api.anthropic.com`
+  alone). The turn counts toward your plan's usage limits; the cost it prints is what the CLI
+  *reports*, not what you are billed. The flag without the variable, or the variable without the
+  flag, is refused before anything starts, and the token's value is asserted absent from the check's
+  own output, the runner's record and the launcher's and proxy's logs. If your first run fails, the sidecar's
   log names any host it refused (`Proxying refused on filtered domain "<host>"`), and
   `APP_MODEL_EGRESS_HOSTS` is where you would add it.
 - **A wrong or expired token fails the run, named.** The run ends with *"the CLI gave up after

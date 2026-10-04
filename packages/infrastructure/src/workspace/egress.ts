@@ -95,7 +95,31 @@ export interface RenderedEgressConfig {
  *    HTTPS allow-list into a general TCP relay for the allowed hosts.
  *  - `DisableViaHeader Yes` and no `XTinyproxy` — the workspace learns nothing about the platform.
  */
-export const renderEgressConfig = (egress: WorkspaceEgress): RenderedEgressConfig => {
+/**
+ * Options a **check** may pass, never the server (WP-140).
+ *
+ * `logAllowedConnects` renders `LogLevel Connect` instead of `Notice`, so the sidecar's log names
+ * every host a run asked for — allowed ones included — and not only the refusals. tinyproxy logs
+ * the request line of every request at `Connect` (measured at WP-140 against the pinned 1.11.2:
+ * the PROGRESS notes under WP-140 carry the lines), which is the whole of the reason it exists:
+ * backlog 137 asks *which hosts a logged-in CLI contacts*, and `Notice` shows only the refused ones.
+ *
+ * **No configuration can set it.** It reaches the renderer through
+ * `DockerWorkspaceProviderOptions.egressLogAllowedConnects` and `BuildLauncherOptions`, which no
+ * environment variable fills: `apps/launcher/src/config.ts` does not read one, `index.ts` does not
+ * pass one, and `scripts/launcher-control-plane-launcher.mjs` is the only caller that sets it. The
+ * census in `egress-log-level.test.ts` holds that set of files. A production sidecar logs at
+ * `Notice` because a request line is a URL, and a URL is the one place a run could write a value
+ * into the platform's logs at will.
+ */
+export interface RenderEgressOptions {
+  readonly logAllowedConnects?: boolean;
+}
+
+export const renderEgressConfig = (
+  egress: WorkspaceEgress,
+  options: RenderEgressOptions = {},
+): RenderedEgressConfig => {
   const hosts = [...new Set(egress.hosts)].sort();
   const ports = [...new Set(egress.connectPorts)].sort((a, b) => a - b);
   if (ports.length === 0) {
@@ -109,7 +133,7 @@ export const renderEgressConfig = (egress: WorkspaceEgress): RenderedEgressConfi
     `Port ${EGRESS_PORT}`,
     'Timeout 600',
     'MaxClients 32',
-    'LogLevel Notice',
+    options.logAllowedConnects === true ? 'LogLevel Connect' : 'LogLevel Notice',
     'DisableViaHeader Yes',
     `Filter "${EGRESS_CONFIG_MOUNT}/filter"`,
     'FilterURLs Off',

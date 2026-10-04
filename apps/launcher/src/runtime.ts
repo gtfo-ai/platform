@@ -26,6 +26,13 @@ export interface BuildLauncherOptions {
   /** `process.getuid()` in production. Q51: the runner and the run container share uid 1000. */
   readonly uid: number;
   readonly logger?: Logger;
+  /**
+   * Check-only (WP-140): every run's egress sidecar logs at `LogLevel Connect`, naming the hosts it
+   * allowed. **No environment variable sets it** — `index.ts` passes `env` and `uid` alone, and
+   * `scripts/launcher-control-plane-launcher.mjs` is the one caller that sets it
+   * (`packages/infrastructure/src/workspace/egress-log-level.test.ts`).
+   */
+  readonly egressLogAllowedConnects?: boolean;
 }
 
 /**
@@ -104,6 +111,7 @@ export const buildLauncher = (options: BuildLauncherOptions): LauncherRuntime =>
     skills: PLATFORM_SKILLS,
     runnerUid: options.uid,
     maxExportBytes: config.maxExportBytes,
+    ...(options.egressLogAllowedConnects === true ? { egressLogAllowedConnects: true } : {}),
   });
   const service = new LauncherService({
     provider,

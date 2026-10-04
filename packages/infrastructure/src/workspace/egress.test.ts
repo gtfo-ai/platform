@@ -104,6 +104,25 @@ describe('rendered tinyproxy configuration', () => {
     ]);
   });
 
+  /**
+   * WP-140: the log level is the one line a check may change. `Notice` logs refusals only; `Connect`
+   * adds every request line, which is how the real-model pre-flight names the hosts it allowed. The
+   * census of who may ask for it is `egress-log-level.test.ts`.
+   */
+  it('logs at Notice unless a check asks for Connect, and changes nothing else (WP-140)', () => {
+    expect(rendered.config.match(/^LogLevel .*$/gm)).toEqual(['LogLevel Notice']);
+    const connects = renderEgressConfig(
+      { hosts: ['registry.npmjs.org', 'api.anthropic.com'], connectPorts: [443] },
+      { logAllowedConnects: true },
+    );
+    expect(connects.config.match(/^LogLevel .*$/gm)).toEqual(['LogLevel Connect']);
+    expect(connects.config.replace('LogLevel Connect', 'LogLevel Notice')).toBe(rendered.config);
+    expect(connects.filter).toBe(rendered.filter);
+    expect(
+      renderEgressConfig({ hosts: [], connectPorts: [443] }, { logAllowedConnects: false }).config,
+    ).toContain('LogLevel Notice');
+  });
+
   it('renders an empty filter for a spec that allows nothing, which denies everything', () => {
     const empty = renderEgressConfig({ hosts: [], connectPorts: [443] });
     expect(empty.filter).toBe('\n');
