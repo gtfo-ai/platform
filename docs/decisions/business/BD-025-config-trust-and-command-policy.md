@@ -83,3 +83,16 @@ token would be and nowhere else. §3 is read with this exception:
   and the first-test runbook say so beside the setting.
 
 The mechanism is TD-028's amendment of the same date; the work is plan row WP-137.
+
+## Amendment (2026-10-04 — the founder's follow-up to Q98 (b)) — the operator chooses which static run credential, including their own
+
+The founder: *support either option and let the admin decide.* §3's exception of 2026-10-03 now admits
+three operator-chosen forms, each opt-in and named on the git integration, none ever the binding's own
+API token: **(i)** a dedicated low-privilege user's token (as amended 2026-10-03); **(ii)** the
+**operator's own** personal access token, provided it carries **repository scopes only** — the platform
+proves it cannot call the API and refuses it otherwise, and the **protected default branch with push "No
+one"** is the push control the platform checks, because such a token reaches every repository its owner
+can; **(iii)** a **project SSH deploy key with write access**, whose private key the platform keeps and
+never places in a run container (the run asks the platform to sign). The losses of each are stated beside
+the setting in the operator guide and the first-test runbook. The mechanism is TD-028's amendment of the
+same date; the work is plan rows WP-141 and WP-146.

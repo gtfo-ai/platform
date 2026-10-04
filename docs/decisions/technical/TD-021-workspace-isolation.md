@@ -151,3 +151,13 @@ that token instead of a minted one, through the **same** path — carried on the
 request, held in the launcher's broker map only, answered to `cred.get` by the runner, never in the
 container's environment or image, redacted like a minted value. What it loses against this record's
 design (per-run revocation, a run-lifetime bound) is stated in TD-028's amendment of the same date.
+
+## Amendment (2026-10-04 — the founder's follow-up to Q98 (b)) — two more static variants, one of which keeps the key out of the container
+
+TD-028 decision 13a (the operator's own repository-only token) uses the static path of 2026-10-03
+unchanged. Decision 13b (a write deploy key) adds to the run's isolation: a second socket on the
+control volume (`/ctl/ssh-agent.sock`, sign requests relayed to the runner — the key itself never
+enters the workspace), `altssh.gitlab.com` in that run's egress list reached by `CONNECT` on port 443,
+and **no** new port on the sidecar (tinyproxy's `ConnectPort` is global), so self-managed SSH is refused
+by name. The launcher's mirror helper holds the key on tmpfs for its lifetime, the same exposure class as
+its `GIT_PASS` today; the platform's vault mirror (TD-026) keeps the binding's API token over HTTPS.

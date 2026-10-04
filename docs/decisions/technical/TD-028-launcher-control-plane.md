@@ -502,3 +502,96 @@ access token (Premium on GitLab.com too).
 *Consequences.* A migration (`runs.credential_source`); the GitLab config schema, catalogue and setup
 guide; `docs/operator-guide.md`'s integrations section and `docs/first-local-test.md`'s GitLab step and
 failure table (rule 83); technical/05's credentials paragraph and technical/06's GitLab section.
+
+## Amendment (2026-10-04 — the founder's follow-up to Q98 (b)) — decision 13 gains two operator-chosen variants: the operator's own repository-only token, and a project SSH deploy key
+
+Recorded by the architect (M8 round 3, PROGRESS § "Architect ruling (M8 round 3, session 11)"; plan rows
+**WP-141** and **WP-146**). The founder: *support either option and let the admin decide*, alongside
+decision 13's dedicated-user token. A dedicated user costs a seat on gitlab.com; the two variants do not.
+Nothing here was run. Sources: research/10's 2026-10-04 addendum.
+
+**13a. The operator's own token, repository-only** (`run_credential: static`, `run_token_owner:
+operator`; the default `run_token_owner: dedicated_user` is decision 13 unchanged). Everything in
+decision 13 items 1, 2, 4 and 6 holds (separate secret field, refusals at write and use, one binding per
+static integration, the same create-request → broker map → `cred.get` path, redaction, no shadow
+credential, `credential_source = static`). Item 3 changes for this owner only:
+1. **The role check is replaced by a scope proof.** The probe does **not** refuse a Maintainer or Owner;
+   instead it makes exactly **one** call with `run_token` — `GET /api/v4/user` — through
+   `IntegrationActionExecutor` as a read (audited, rate-limited; the value redacted from the row) and
+   **refuses unless the answer is `403`** (the body's `insufficient_scope` recorded when present; the
+   exact shape is measured first, docs/TODO.md). A `2xx` is refused by name: *"this token can call the
+   GitLab API; create one with only `read_repository` and `write_repository`"*. This is the platform's
+   only use of `run_token` against the API, and the census decision 13 item 3 asks for admits that one
+   probe call and nothing else. Why the role may be high: a token with no API scope cannot change
+   protection, membership or settings — those are API operations — so what a Maintainer could do through
+   the API is out of the token's reach; what it can still do is git, and git is bounded by item 2.
+2. **The default branch's protection is the push control, and the probe checks it.** With the
+   **API** token, the probe reads the bound project's protected branches and **refuses** unless
+   `projects.default_branch` is protected with push access **No one** (`push_access_levels` holding only
+   access level 0) and force-push off. A Maintainer's git push to an unprotected or Maintainer-push
+   default branch would otherwise succeed. The check is repeated before each create of a run that
+   receives this credential (one read, cached for the run's lifetime), so an operator who loosens
+   protection after the probe is refused at the next run, by name.
+3. **Lost, stated** (in addition to decision 13 item 5): the token reaches **every repository the user
+   can access**, not one project — a read-only stage holds read access to all of them and a writing stage
+   push access to every unprotected branch of all of them. A second binding is still refused on the
+   integration (the audit stays one-integration-one-project), but nothing stops the operator binding
+   another integration with the same value; the platform does not detect it. `read_repository` also
+   grants the repository files API (research/10), which is a read the platform does not use.
+
+**13b. A project SSH deploy key with write access** (`run_credential: deploy_key`). Free on every tier,
+scoped by GitLab to the projects it is enabled on, no user and no seat (the seat half is `[unverified]`).
+1. **Declared** on the git integration: a secret field `run_ssh_private_key` (an **unencrypted OpenSSH
+   Ed25519** private key; any other type or a passphrase is refused at the write, because the signer
+   below implements Ed25519 only) and a non-secret `run_ssh_public_key`. Refused like decision 13:
+   `deploy_key` with `mint_credentials: true`, a second binding, a public key that is not the private
+   key's (checked at the write by deriving it). `run_token` and the key are mutually exclusive.
+2. **The key never enters a run container.** The run's `/ctl` volume carries a second socket,
+   `/ctl/ssh-agent.sock`, served by the run shim, which speaks the **ssh-agent protocol's two requests a
+   git client needs** (list identities, sign) and relays each sign request over the existing frame
+   channel to the **runner**, which holds the key (from the create path, as decision 13 item 2) and signs
+   with Ed25519. Every other agent request is refused. The container therefore holds a *signing oracle
+   for the run's lifetime* — the same reach as a credential helper — and never the key: when the run ends
+   there is nothing to exfiltrate, which is strictly better than decision 13's token. Each sign is
+   counted on the run (not logged with content).
+3. **Git uses it through configuration, not files the agent writes.** The launcher's
+   `cliEnvironment` (WP-118's one function) adds `GIT_SSH_COMMAND` = `ssh -F /dev/null -o
+   IdentityAgent=/ctl/ssh-agent.sock -o IdentitiesOnly=no -o StrictHostKeyChecking=yes -o
+   UserKnownHostsFile=<platform-written file> -o HostKeyAlias=gitlab.com -o ProxyCommand=<the shim's
+   CONNECT helper> -p 443` and one `GIT_CONFIG_*` pair `url.ssh://git@altssh.gitlab.com:443/.insteadOf =
+   https://gitlab.com/`, so fetch and push of the repository's ordinary URL go over SSH; the HTTPS
+   credential helper is not configured for such a run. `known_hosts` is written by the platform from the
+   **documented** gitlab.com host keys (a constant with its source, research/10), never from a first
+   connection. The run image gains `openssh-client` (pinned, the size measured).
+4. **Egress stays HTTP `CONNECT` on port 443.** The sidecar is tinyproxy; SSH reaches gitlab.com through
+   it as a `CONNECT altssh.gitlab.com:443` from the shim's helper (the shim already holds the proxy
+   address; no `nc`/`socat` is added), and `altssh.gitlab.com` joins the run's egress list for such a
+   run only. **No `ConnectPort 22`** is opened: tinyproxy's `ConnectPort` is global, so admitting 22 would
+   admit it for every allowed host. Therefore a **self-managed** GitLab (no `altssh` endpoint) is
+   **refused by name** for `deploy_key` on this build — *"SSH deploy-key runs reach gitlab.com through
+   altssh.gitlab.com:443 only; a self-managed host needs its SSH port admitted by the egress sidecar,
+   which this build does not do"* — and filed, not built.
+5. **The launcher's mirror** (`updateMirror`'s helper container, TD-021) fetches over the same SSH
+   route with the key written to a `0600` file on the helper's tmpfs for the helper's lifetime — the same
+   exposure class as today's `GIT_PASS` in that helper's environment, stated rather than improved. **The
+   platform's own vault mirror (TD-026) is unchanged: HTTPS with the binding's API token**, because it is
+   the platform's read path and the binding token is the platform's credential.
+6. **The probe**, with the API token: `GET /projects/:id/deploy_keys` must list the declared public key
+   with `can_push: true`; the default branch must be protected with push **No one** and the key must not
+   be in its push access levels (a deploy key can be admitted to a protected branch); the probe states
+   it cannot see whether the key is also enabled on other projects.
+7. **Shadow**: no key (it cannot be narrowed to `read`), as decision 13 item 4. `credential_source`
+   gains `deploy_key`. The added-lines exact-value search covers the private key's base64 body.
+8. **Lost, stated**: no per-run revocation (removing the key from the project is the revocation); a
+   read-only stage can sign pushes; the oracle can be asked to authenticate to any SSH server the
+   egress admits (only `altssh.gitlab.com`), so its reach is every project the key is enabled on.
+
+*Alternatives rejected.* A key file in the run container (exfiltrable, outlives the run).
+`ConnectPort 22` (global in tinyproxy). An SSH-capable second sidecar (a new service for one provider
+variant; revisit if self-managed SSH is asked for). Using the deploy key for the platform's own vault
+mirror (it is a run credential; the vault mirror needs no write).
+
+*Consequences.* A migration (`runs.credential_source` gains `deploy_key`; no column for 13a); the GitLab
+config schema, catalogue, setup guide and `CredentialMintingHints`; the run shim's frame protocol (a
+`ssh.sign` request/answer pair, `@platform/contracts`); the run image; the egress renderer's per-run
+host; operator guide, `docs/first-local-test.md`, technical/05 and /06 (rule 83).
