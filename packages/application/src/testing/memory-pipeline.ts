@@ -70,6 +70,7 @@ import type {
   TaskRepository,
 } from '../pipeline/store.js';
 import {
+  DefaultBranchChangedError,
   STOPPING_RUN_COMMAND_KINDS,
   TAKE_OVER_BOUNDARY_EVENTS,
   TaskConcurrentModificationError,
@@ -201,6 +202,12 @@ export interface MemoryRunCommandRow {
 
 export interface MemoryPipelineStoreOptions {
   /**
+   * `projects.default_branch` as the SQL insert re-reads it under the project lock (WP-149,
+   * backlog 443) — `undefined` for a project this answers nothing about. Unwired, a guarded insert
+   * compares nothing.
+   */
+  readonly defaultBranch?: (projectId: Id) => string | undefined;
+  /**
    * The next `stream_seq` of a task's event stream, read from the harness's own event log — the
    * number PostgreSQL derives in `TASK_COLUMNS` (WP-26, divergence 7).
    *
@@ -257,6 +264,8 @@ export const createMemoryPipelineStore = (
   const stages: StageRow[] = [];
   const artifacts: StoredArtifact[] = [];
   const runs = new Map<Id, StoredRun>();
+  /** `runs.ask_id` (migration 0082, WP-149): the ask a run answered, for the ask's bound. */
+  const askOfRun = new Map<Id, Id>();
   /** `tasks.budget_cap_usd` (WP-131 review round 1): not on `StoredTask`, as `save` never names it. */
   const budgetCaps = new Map<Id, number>();
   /** `runs.reserve_usd` (WP-131): write-only on `NewRun`, so kept beside the row, as the SQL keeps it. */
@@ -352,7 +361,15 @@ export const createMemoryPipelineStore = (
       [...tasks.values()].filter(
         (stored) => stored.task.projectId === projectId && stored.task.state === 'done',
       ).length,
-    insert: async (_tx, stored) => {
+    insert: async (_tx, stored, guard) => {
+      // WP-149: the SQL adapter's re-read of `projects.default_branch` under its lock, against
+      // {@link MemoryPipelineStoreOptions.defaultBranch}; unwired (or a project it does not know),
+      // nothing is compared — this store keeps no projects.
+      const current =
+        guard === undefined ? undefined : options.defaultBranch?.(stored.task.projectId);
+      if (guard !== undefined && current !== undefined && current !== guard.defaultBranch) {
+        throw new DefaultBranchChangedError(stored.task.projectId, guard.defaultBranch, current);
+      }
       const duplicate = [...tasks.values()].some(
         (existing) =>
           existing.task.projectId === stored.task.projectId &&
@@ -1036,9 +1053,14 @@ export const createMemoryPipelineStore = (
         // WP-121: write-only too — the API projection reads `runs.prompts_withheld`, `load` does not.
         promptsWithheld: _w,
         reserveUsd,
+        // WP-149: kept beside the row rather than on it — `load` does not select `ask_id` either.
+        askId,
         ...stored
       } = run;
       runs.set(run.id, clone({ ...stored, stage: linked ? run.stage : null }));
+      if (askId !== undefined) {
+        askOfRun.set(run.id, askId);
+      }
       // The SQL adapter's `nullif(…, 0)`: the column refuses a zero, so a stage admitted at no cap
       // records none, and is held at the admitting reserve (WP-131).
       reserves.set(run.id, reserveUsd === null || reserveUsd === 0 ? null : reserveUsd);
@@ -1121,6 +1143,11 @@ export const createMemoryPipelineStore = (
       const run = runs.get(runId);
       return run === undefined ? null : clone(run);
     },
+    /** WP-149's ask bound, over this store's rows with the SQL adapter's predicate. */
+    askShutdownEndings: async (_tx, askId) =>
+      [...runs.values()].filter(
+        (run) => askOfRun.get(run.id) === askId && run.terminalReason === 'shutdown',
+      ).length,
     /** WP-144's bound, over this store's rows with the SQL adapter's predicate. */
     shutdownEndings: async (_tx, entry) =>
       [...runs.values()].filter(

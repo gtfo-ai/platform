@@ -34,7 +34,7 @@ import {
   stageOf,
 } from '@platform/domain';
 import { jobQueueDefinition } from '../ports/job-queues.js';
-import type { JobHandler, Jobs } from '../ports/jobs.js';
+import type { EnqueueResult, JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -521,8 +521,8 @@ export const SHUTDOWN_HAND_BACK_DELAY_MS = 30_000;
 export const enqueueStage = async (
   jobs: Jobs,
   job: StageExecutionJob & { readonly gateChecks?: number; readonly startAfter?: Date },
-): Promise<void> => {
-  await jobs.enqueue<StageExecuteData>({
+): Promise<EnqueueResult> =>
+  jobs.enqueue<StageExecuteData>({
     queue: JOB_QUEUES.stageExecute,
     singletonKey: `task:${job.taskId}`,
     ...(job.startAfter === undefined ? {} : { startAfter: job.startAfter }),
@@ -537,7 +537,6 @@ export const enqueueStage = async (
       ...(job.overrides?.effort === undefined ? {} : { effort: job.overrides.effort }),
     },
   });
-};
 
 export const enqueueReviewCommentWindow = async (
   jobs: Jobs,
@@ -742,7 +741,15 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
        * a hand-back is not a start failure.
        */
       if (outcome.kind === 'handed_back') {
-        await enqueueStage(options.jobs, {
+        /**
+         * **A dropped re-enqueue is stated, not silent** (WP-149, PROGRESS backlog 445): the queue
+         * is `stately` per task, so when another job for the task is already queued the enqueue is
+         * `coalesced` and this entry's wake-up does not exist. Nothing is lost that the bound needs
+         * — it is read off the runs, not a payload — and the queued job re-validates against the
+         * task; if it is for something else and the entry is left with an ended run and no job,
+         * the stranded-stage recovery (`recovery/stranded-stage.ts`, WP-108) finds it and escalates.
+         */
+        const requeued = await enqueueStage(options.jobs, {
           taskId: request.taskId,
           projectId: request.projectId,
           stage: request.stage,
@@ -750,6 +757,12 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
           ...(request.overrides === undefined ? {} : { overrides: request.overrides }),
           startAfter: new Date(Date.parse(options.clock.now()) + SHUTDOWN_HAND_BACK_DELAY_MS),
         });
+        if (requeued.status === 'coalesced') {
+          logger.warn(
+            { task_id: request.taskId, stage: request.stage, attempt: request.attempt },
+            'a handed-back stage was not re-enqueued: another job for the task is already queued; the stranded-stage recovery escalates the entry if that job does not run it',
+          );
+        }
       }
       logger.info(
         {
@@ -992,9 +1005,23 @@ export const settleGate = async (
   signal: GateSettlement,
 ): Promise<void> => settle(options, request, signal);
 
+/**
+ * **The attempt the settlement is for** (WP-149, backlog 438): every settlement `stage.execute`
+ * makes carries its job's attempt, and the transaction below refuses one whose `task_stages` row is
+ * **closed** — a hand-back at the same gate between the job's reads and this transaction closed it
+ * and opened the next attempt, whose own job carries its own clock and checks. Without it the stage
+ * and the state both still matched, so a poll-only wait's timeout read of attempt N parked attempt
+ * N + 1. An **absent** row (a task entered before every entry opened one) settles, the fail-open
+ * direction `stageAttemptState` documents. `ci-settle.ts` names no attempt: a finished pipeline is
+ * judged against whatever attempt is open, which its own head check already re-validates.
+ */
+type SettlementRequest = Pick<StageExecutionJob, 'taskId' | 'stage'> & {
+  readonly attempt?: number;
+};
+
 const settle = async (
   options: TaskTransactionOptions,
-  request: Pick<StageExecutionJob, 'taskId' | 'stage'>,
+  request: SettlementRequest,
   signal: GateSettlement,
 ): Promise<void> => {
   const work = await inTaskTransaction(
@@ -1025,6 +1052,21 @@ const settle = async (
         stored.task.currentStage !== request.stage ||
         !isRunnableTaskState(stored.task.state)
       ) {
+        return null;
+      }
+      if (
+        request.attempt !== undefined &&
+        (await options.store.tasks.stageAttemptState(
+          scope.tx,
+          request.taskId,
+          request.stage,
+          request.attempt,
+        )) === 'closed'
+      ) {
+        options.logger?.info(
+          { task_id: request.taskId, stage: request.stage, attempt: request.attempt },
+          'a gate settlement for an attempt that is no longer open does nothing',
+        );
         return null;
       }
       const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);

@@ -1561,7 +1561,9 @@ describe('an ask run handed back by its runner’s stop (WP-144)', () => {
     expect(run?.terminalReason).toBe('shutdown');
     const queued = askJobs(harness);
     expect(queued).toHaveLength(1);
-    expect(queued[0]?.data).toMatchObject({ ask_id: pending?.id, hand_backs: 1 });
+    expect(queued[0]?.data).toMatchObject({ ask_id: pending?.id });
+    // WP-149: the bound is the ask's runs, so nothing rides the payload.
+    expect(queued[0]?.data).not.toHaveProperty('hand_backs');
     expect(queued[0]?.startAfter?.getTime()).toBe(harness.clock.epochMs + ASK_HAND_BACK_DELAY_MS);
 
     harness.script(`ask:${QUESTION}`, {
@@ -1594,5 +1596,56 @@ describe('an ask run handed back by its runner’s stop (WP-144)', () => {
     expect(askJobs(harness)).toHaveLength(0);
     // The task an ask is about is never moved by it (WP-31), the hand-back included.
     expect(harness.store.snapshot()[0]?.task.state).toBe('waiting_answers');
+  });
+
+  /**
+   * WP-149 (backlog 445): the interleaving driven. After two hand-backs the queued wake-up is
+   * replaced by a job whose payload knows of none — an old payload retried, or the payload of a
+   * job a deduplicated enqueue kept — and the third stop must still end the question, because the
+   * count is the ask's `shutdown` runs in the store, not the payload.
+   */
+  it('ends the question at its third stop even when the job that runs it carries a reset payload (WP-149)', async () => {
+    const harness = harnessWith();
+    await seedTask(harness);
+    harness.script(`ask:${QUESTION}`, SHUTDOWN);
+    await askThroughHttp(harness);
+    harness.clock.advance(ASK_HAND_BACK_DELAY_MS);
+    await harness.drain();
+    const [pending] = harness.asks.all();
+    expect(pending?.status).toBe('pending');
+    const [queued] = harness.jobs.take(JOB_QUEUES.taskAsk);
+    expect(queued?.data).toMatchObject({ ask_id: pending?.id });
+    await harness.jobs.enqueue({
+      queue: JOB_QUEUES.taskAsk,
+      singletonKey: `ask:${pending?.id as string}`,
+      data: { ...(queued?.data ?? {}), hand_backs: 0 },
+    });
+    await harness.drain();
+
+    const [ask] = harness.asks.all();
+    expect(ask?.status).toBe('failed');
+    expect(ask?.refusalReason).toContain('stopped while answering this question 3 times');
+    expect(askJobs(harness)).toHaveLength(0);
+    const shutdowns = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.askShutdownEndings(scope.tx, pending?.id as Id),
+    );
+    // Three stopped runs: the third is ended `failed` with the same reason, and starts no fourth.
+    expect(shutdowns).toBe(3);
+  });
+
+  it('counts only this ask’s runs: another ask on the same task is not charged its stops (WP-149)', async () => {
+    const harness = harnessWith();
+    await seedTask(harness);
+    harness.script(`ask:${QUESTION}`, SHUTDOWN);
+    await askThroughHttp(harness);
+    const [first] = harness.asks.all();
+    const counted = await harness.memory.transaction(async (scope) => ({
+      first: await harness.store.runs.askShutdownEndings(scope.tx, first?.id as Id),
+      other: await harness.store.runs.askShutdownEndings(
+        scope.tx,
+        '00000000-0000-4000-8000-00000000f149' as Id,
+      ),
+    }));
+    expect(counted).toEqual({ first: 1, other: 0 });
   });
 });

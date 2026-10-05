@@ -10,7 +10,8 @@
  * without a database per case.
  */
 import type { Transaction } from '@platform/application';
-import { ask } from '@platform/infrastructure';
+import { SHIPPED_TEMPLATES } from '@platform/domain';
+import { ask, pipeline } from '@platform/infrastructure';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runAskStoreContract } from '../../contract/support/ask-store-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
@@ -128,6 +129,108 @@ describe('the ask’s run projection (WP-119)', () => {
       expect(lines.find((line) => line.runId === unmeasured)?.costUsd).toBeNull();
       expect(lines.find((line) => line.runId === priced)?.costUsd).toBe(0.07);
       expect(lines.find((line) => line.runId === runId)?.costUsd).toBe(0.12);
+    } finally {
+      await client.query('rollback');
+      await client.end();
+    }
+  });
+});
+
+/**
+ * WP-149 (PROGRESS backlog 445): an ask's hand-back bound is counted from its runs —
+ * `runs.ask_id` (migration 0082), written by the ask executor's `runs.insert` — never from the
+ * `task.ask` payload. Per ask, and nothing but `shutdown` counts.
+ */
+describe('an ask’s shutdown endings, counted from its runs (WP-149)', () => {
+  it('counts the runs the insert linked to one ask that ended shutdown, and nothing else', async () => {
+    const client = createTestClient(database.connectionString);
+    await client.connect();
+    await client.query('begin');
+    try {
+      const tx = { adapter: 'postgres', client } as unknown as Transaction;
+      const asks = ask.createPostgresAskStore();
+      const store = pipeline.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+      const askIds: string[] = [];
+      for (const question of ['why a column?', 'why not a table?']) {
+        const { rows } = await client.query<{ id: string }>('select gen_random_uuid() as id');
+        const id = rows[0]?.id as string;
+        await asks.insert(tx, {
+          id: id as never,
+          taskId: taskId as never,
+          projectId: projectId as never,
+          source: 'ui',
+          askedByUserId: userId as never,
+          askedByIdentity: null,
+          ticketCommentId: null,
+          question,
+          redactionCount: 0,
+          createdAt: '2026-06-01T09:00:00.000Z' as never,
+        });
+        askIds.push(id);
+      }
+      const endedRun = async (askId: string | null, reason: 'shutdown' | 'crash') => {
+        const { rows } = await client.query<{ id: string }>('select gen_random_uuid() as id');
+        const id = rows[0]?.id as never;
+        await store.runs.insert(tx, {
+          id,
+          taskId: taskId as never,
+          projectId: projectId as never,
+          ...(askId === null ? {} : { askId: askId as never }),
+          stage: null,
+          role: 'ask',
+          mode: 'ask',
+          attempt: 1,
+          model: 'claude-sonnet-5',
+          effort: 'medium',
+          promptVersion: 'ask@1',
+          systemPrompt: null,
+          userPrompt: null,
+          redactionCount: 0,
+          contextPack: null,
+          settings: null,
+          reserveUsd: null,
+          promptsWithheld: null,
+          status: 'running',
+          terminalReason: null,
+          sessionId: null,
+          numTurns: 0,
+          usage: null,
+          cost: null,
+          wallMs: 0,
+          createdAt: '2026-06-01T09:00:00.000Z' as never,
+          startedAt: '2026-06-01T09:00:01.000Z' as never,
+        });
+        await store.runs.finish(tx, {
+          runId: id,
+          status: 'failed',
+          terminalReason: reason,
+          sessionId: null,
+          numTurns: 0,
+          usage: {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 0,
+            cache_read_tokens: 0,
+          },
+          cost: null,
+          wallMs: 10,
+        });
+      };
+      const [first, second] = askIds as [string, string];
+      await endedRun(first, 'shutdown');
+      await endedRun(first, 'shutdown');
+      await endedRun(first, 'crash');
+      await endedRun(second, 'shutdown');
+      // A run that names no ask — every stage run, and every run before 0082 — counts for none.
+      await endedRun(null, 'shutdown');
+      expect(await store.runs.askShutdownEndings(tx, first as never)).toBe(2);
+      expect(await store.runs.askShutdownEndings(tx, second as never)).toBe(1);
+      const { rows } = await client.query<{ n: number }>(
+        'select count(*)::int as n from runs where ask_id = $1',
+        [first],
+      );
+      expect(rows[0]?.n).toBe(3);
     } finally {
       await client.query('rollback');
       await client.end();

@@ -322,6 +322,12 @@ export const runs = pgTable('runs', {
    */
   credentialSource: text('credential_source'),
   credentialIntegrationId: uuid('credential_integration_id'),
+  /**
+   * The ask this run answered (migration 0082, WP-149, backlog 445) — written by the ask executor's
+   * insert, null for a stage run and for every run before 0082. An ask's hand-back bound is counted
+   * from these rows (`RunRepository.askShutdownEndings`).
+   */
+  askId: uuid('ask_id'),
   priceListId: uuid('price_list_id'),
   wallMs: bigint('wall_ms', { mode: 'number' }).notNull().default(0),
   redactionCount: integer('redaction_count').notNull().default(0),

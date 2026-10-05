@@ -53,6 +53,7 @@ import {
 } from './saga.js';
 import { staticProjectSettings } from './settings.js';
 import type { NewRun } from './store.js';
+import { DefaultBranchChangedError } from './store.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
 
@@ -468,6 +469,52 @@ describe('intake', () => {
       { type: 'task.escalated' }
     >;
     expect(escalation.payload.blocker_brief).toContain('"trunk" is not protected');
+  });
+
+  /**
+   * WP-149 (backlog 443): the interleaving driven, not slept for. Intake reads the stored branch
+   * (`develop`) and asks the provider whether it is protected; **during that call** the branch is
+   * changed to `main`, which is unprotected. The insert re-reads the branch under the project lock
+   * and refuses — nothing created — and the intake job's retry asks about `main` and parks the task
+   * on the branch it will actually run against.
+   */
+  it('refuses the task when the default branch changes during the protection check, and the retry checks the new branch (WP-149)', async () => {
+    let stored = 'develop';
+    const asked: string[] = [];
+    const harness = harnessWith({
+      storedDefaultBranch: () => stored,
+      git: {
+        isBranchProtected: async (_project: string, branch: string) => {
+          asked.push(branch);
+          // The change commits while the provider is being asked about the old branch.
+          if (asked.length === 1) stored = 'main';
+          return branch === 'develop';
+        },
+      },
+    });
+    await expect(harness.publish([ticketMatched()])).rejects.toThrow(DefaultBranchChangedError);
+    expect(asked).toEqual(['develop']);
+    expect(harness.store.snapshot()).toEqual([]);
+    expect(harness.events().filter((entry) => entry.type === 'task.created')).toEqual([]);
+
+    // pg-boss's retry of the same `intake_check` job (PIPELINE_OUTBOUND_RETRY).
+    const intake = harness.jobs.history.find(
+      (request) =>
+        request.queue === JOB_QUEUES.pipelineOutbound &&
+        (request.data as { duty?: string }).duty === 'intake_check',
+    );
+    expect(intake).toBeDefined();
+    await harness.jobs.enqueue({ queue: JOB_QUEUES.pipelineOutbound, data: intake?.data ?? {} });
+    await harness.drain();
+
+    expect(asked).toEqual(['develop', 'main']);
+    expect(harness.store.snapshot()).toHaveLength(1);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    const escalation = harness.events().find((entry) => entry.type === 'task.escalated') as Extract<
+      DomainEvent,
+      { type: 'task.escalated' }
+    >;
+    expect(escalation.payload.blocker_brief).toContain('"main" is not protected');
   });
 
   it('queues a task the WIP limit will not admit', async () => {
@@ -2930,6 +2977,54 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
     expect(ciRows(harness)).toEqual([
       [1, 'failed', 'undecided'],
       [2, 'failed', 'undecided'],
+    ]);
+  });
+
+  /**
+   * WP-149 (backlog 438): the interleaving driven, not slept for. The wait's read of attempt 1 is
+   * answered from the row as it stood (open, its clock spent), and **before** the escalation's own
+   * transaction a person takes the task over and hands it back at `ci_gate` — attempt 1 closed,
+   * attempt 2 open, the stage and the state both still matching. The escalation is for attempt 1
+   * and must not park attempt 2.
+   */
+  it('does not park the attempt a hand-back opened between the wait’s read and its escalation (WP-149)', async () => {
+    const harness = waiting(() => pipeline('running'), { timeoutMinutes: 10 });
+    await harness.publish([ticketMatched()]);
+    const entered = harness.clock.epochMs;
+    while (harness.clock.epochMs - entered < 9 * MINUTE) {
+      await nextCheck(harness);
+    }
+    const tasks = harness.store.tasks;
+    const read = tasks.stageAttemptEntry;
+    let interleaved = 0;
+    (tasks as { stageAttemptEntry: typeof read }).stageAttemptEntry = async (...args) => {
+      const answer = await read(...args);
+      if (interleaved === 0 && args[3] === 1) {
+        interleaved += 1;
+        await takeOverTaskCommand(harness.humanCommands, {
+          taskId: taskOf(harness).task.id,
+          userId: USER,
+          authorName: 'Ada',
+          tarball: false,
+        });
+        await handBackTaskCommand(harness.humanCommands, {
+          taskId: taskOf(harness).task.id,
+          userId: USER,
+          stage: 'ci_gate' as Slug,
+          summary: 'pushed a fix, look again',
+        });
+      }
+      return answer;
+    };
+    // The fire at ten minutes: attempt 1 read open and timed out, then the hand-back lands.
+    harness.clock.advance(MINUTE);
+    await harness.drain();
+    expect(interleaved).toBe(1);
+    expect(taskOf(harness).task.state).toBe('active');
+    expect(lastEscalation(harness)).toBeUndefined();
+    expect(ciRows(harness)).toEqual([
+      [1, 'failed', 'superseded'],
+      [2, 'running', null],
     ]);
   });
 

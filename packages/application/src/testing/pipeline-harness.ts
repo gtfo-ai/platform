@@ -591,6 +591,12 @@ export interface HarnessOptions {
    */
   readonly storedAutonomy?: () => MaterialisedAutonomy | null;
   /**
+   * `projects.default_branch` at each read, when a case needs it to move (WP-149): the settings
+   * port answers it as `defaultBranch`, and the store's guarded insert re-reads it as the SQL insert
+   * does under the project lock. Absent, both answer {@link HarnessOptions.settings}' branch.
+   */
+  readonly storedDefaultBranch?: () => string;
+  /**
    * One scripted run per key. A run the walk reaches with no script fails the test through
    * `drain` ({@link UnscriptedRunError}, PROGRESS backlog 249), and so does a script production
    * could not have produced ({@link ScriptedRunRefusedError}). A case that means a run not to start
@@ -1256,6 +1262,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   // the *next* aggregate write clashes in production while this tier stays green.
   const humanActions: { taskId: Id; userId: Id; at: IsoDateTime }[] = [];
   const store = createMemoryPipelineStore({
+    // WP-149: the branch the guarded insert re-reads; the harness's one project only.
+    defaultBranch: (id) =>
+      id === projectId ? (options.storedDefaultBranch?.() ?? settings.defaultBranch) : undefined,
     // WP-136: the database's clock is the test's, so `task_stages.entered_at` — which the CI gate's
     // wait on a poll-only binding is timed from — moves when the test moves the clock.
     now: () => clock.epochMs,
@@ -1573,10 +1582,14 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       forProject: async (id, tx) => {
         const stored = options.storedSettings;
         const base = await staticProjectSettings(() => settings).forProject(id, tx);
-        const read =
+        const dialled =
           options.storedAutonomy === undefined
             ? base
             : { ...base, autonomy: options.storedAutonomy() };
+        const read =
+          options.storedDefaultBranch === undefined
+            ? dialled
+            : { ...dialled, defaultBranch: options.storedDefaultBranch() };
         if (stored === undefined) {
           return read;
         }

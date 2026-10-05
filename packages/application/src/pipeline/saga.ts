@@ -98,7 +98,7 @@ import {
   templateForIssueType,
 } from './settings.js';
 import type { PipelineStore, StoredTask } from './store.js';
-import { INITIAL_TASK_VERSION, PIPELINE_ACTOR } from './store.js';
+import { DefaultBranchChangedError, INITIAL_TASK_VERSION, PIPELINE_ACTOR } from './store.js';
 import { type RequesterOptions, readTicketForTask, resolveRequester } from './ticket-snapshot.js';
 import { applyDecision, closeParkedStageRow, ESCALATED_OUTCOME } from './transitions.js';
 import { reviewFindingSignature, verdictReturnReason } from './verdicts.js';
@@ -475,7 +475,7 @@ export const runIntakeCheck = async (
     );
   }
 
-  const work = await options.unitOfWork.transaction(async (scope) => {
+  const creation = options.unitOfWork.transaction(async (scope) => {
     const existing = await options.store.tasks.findByTicket(scope.tx, {
       projectId,
       provider: ticket.provider,
@@ -547,7 +547,15 @@ export const runIntakeCheck = async (
       // email match (WP-79, backlog 92's half (b)); `null` when nobody mapped the account.
       requestedByUserId,
     };
-    await options.store.tasks.insert(scope.tx, stored);
+    /**
+     * **The branch checked is the branch stored** (WP-149, PROGRESS backlog 443): the insert
+     * re-reads `projects.default_branch` under the project-row lock it takes and refuses — nothing
+     * written, `DefaultBranchChangedError` — when a change committed after `settings` was read and
+     * the protection above was asked of the old branch. The throw fails this job, and its retry
+     * (`PIPELINE_OUTBOUND_RETRY`) reads the new branch and asks again; past the retries the intake
+     * reconciler re-matches the ticket.
+     */
+    await options.store.tasks.insert(scope.tx, stored, { defaultBranch: settings.defaultBranch });
 
     if (unprotected !== null) {
       const escalated = escalateTask(
@@ -592,6 +600,20 @@ export const runIntakeCheck = async (
     });
     await scope.events.append([...created.events, ...applied.events]);
     return applied.work;
+  });
+  const work = await creation.catch((error: unknown) => {
+    if (error instanceof DefaultBranchChangedError) {
+      (options.logger ?? silentLogger).warn(
+        {
+          project_id: projectId,
+          ticket_key: ticket.key,
+          checked_branch: error.checked,
+          stored_branch: error.stored,
+        },
+        'the default branch changed while the task was being created; nothing was created and the intake is retried against the new branch',
+      );
+    }
+    throw error;
   });
 
   if (work !== null) {

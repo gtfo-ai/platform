@@ -38,6 +38,7 @@ import type {
   Transaction,
 } from '@platform/application';
 import {
+  DefaultBranchChangedError,
   silentLogger,
   TAKE_OVER_BOUNDARY_EVENTS,
   TaskConcurrentModificationError,
@@ -437,7 +438,7 @@ export const createPostgresPipelineStore = (
       return Number(rows[0]?.n ?? 0);
     },
 
-    insert: async (tx, stored) => {
+    insert: async (tx, stored, guard) => {
       const { task } = stored;
       /**
        * **The project row, `for share`, before the insert** (WP-142, backlog 442). A change of the
@@ -449,8 +450,22 @@ export const createPostgresPipelineStore = (
        * share`, so the guarantee does not rest on the change taking the strongest lock: it holds
        * against `for no key update` too (the canary in `test/integration/server/default-branch-change.integration.test.ts`).
        * Two task creations share it and do not wait for each other.
+       *
+       * **And the branch is re-read under it** (WP-149, backlog 443): a caller that checked a
+       * branch's protection before this transaction passes that branch, and a change that committed
+       * in between — the lock orders only what happens after it is taken — is refused here
+       * (`DefaultBranchChangedError`, retryable) rather than leaving a task on an unchecked branch.
        */
-      await sqlOf(tx).query('select 1 from projects where id = $1 for share', [task.projectId]);
+      const { rows: projectRows } = await sqlOf(tx).query<{ default_branch: string }>(
+        'select default_branch from projects where id = $1 for share',
+        [task.projectId],
+      );
+      if (guard !== undefined) {
+        const current = projectRows[0]?.default_branch ?? null;
+        if (current !== guard.defaultBranch) {
+          throw new DefaultBranchChangedError(task.projectId, guard.defaultBranch, current);
+        }
+      }
       await sqlOf(tx).query(
         `insert into tasks (id, project_id, ticket_provider, ticket_key, ticket_url, template, mode,
                             state, current_stage, priority, template_snapshot, branch, mr_ref,
@@ -1439,12 +1454,13 @@ export const createPostgresPipelineStore = (
                            system_prompt, user_prompt, redaction_count,
                            context_budget_tokens, context_total_tokens, context_kb_commit,
                            context_text_search, settings_snapshot, settings_hash, reserve_usd,
-                           prompts_withheld)
+                           prompts_withheld, ask_id)
          values ($1, $2, $3,
                  (select id from task_stages
                    where task_id = $2 and stage = $11 and attempt = $6),
                  $4, $5, $6, $7, $8, $9, $10, $12, $13, $14, $15, $16, $17, $18, $19::jsonb,
-                 coalesce($20::jsonb, '{}'::jsonb), $21, nullif($22::numeric, 0), $23::jsonb)`,
+                 coalesce($20::jsonb, '{}'::jsonb), $21, nullif($22::numeric, 0), $23::jsonb,
+                 $24)`,
         [
           run.id,
           run.taskId,
@@ -1487,6 +1503,8 @@ export const createPostgresPipelineStore = (
           // WP-121 (migration 0073, backlog 363): why the project's prompt files were withheld
           // from this run, or null when nothing was.
           run.promptsWithheld === null ? null : JSON.stringify(run.promptsWithheld),
+          // WP-149 (migration 0082, backlog 445): the ask this run answers; null for a stage run.
+          run.askId ?? null,
         ],
       );
       if (run.contextPack !== null) {
@@ -1632,6 +1650,16 @@ export const createPostgresPipelineStore = (
      * `task_stage_id`, the link `load` reads the stage by, so a run attached to no stage attempt is
      * nobody's hand-back (it counts for no entry).
      */
+    /** WP-149: the ask's hand-back bound, counted from its runs through `runs.ask_id` (0082). */
+    askShutdownEndings: async (tx, askId) => {
+      const { rows } = await sqlOf(tx).query<{ n: number }>(
+        `select count(*)::int as n
+           from runs
+          where ask_id = $1 and terminal_reason = 'shutdown'`,
+        [askId],
+      );
+      return Number(rows[0]?.n ?? 0);
+    },
     shutdownEndings: async (tx, entry) => {
       const { rows } = await sqlOf(tx).query<{ n: number }>(
         `select count(*)::int as n

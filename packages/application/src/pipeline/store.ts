@@ -357,6 +357,31 @@ export class TaskConcurrentModificationError extends Error implements Concurrenc
   }
 }
 
+/**
+ * A task insert refused because the project's default branch is no longer the branch the caller
+ * checked (WP-149, PROGRESS backlog 443): a change of `projects.default_branch` committed between
+ * intake's protection check and the insert's transaction. **Retryable** — nothing was written, and
+ * the intake job's retry reads the new branch and checks its protection.
+ */
+export class DefaultBranchChangedError extends Error {
+  override readonly name = 'DefaultBranchChangedError';
+  readonly projectId: Id;
+  readonly checked: string;
+  readonly stored: string | null;
+
+  // Fields, not parameter properties: see TaskConcurrentModificationError's constructor.
+  constructor(projectId: Id, checked: string, stored: string | null) {
+    super(
+      `the default branch of project ${projectId} changed from "${checked}" to ` +
+        `${stored === null ? 'no row' : `"${stored}"`} while the task was being created; ` +
+        'the protection of the new branch has not been checked, so the creation is refused and retried',
+    );
+    this.projectId = projectId;
+    this.checked = checked;
+    this.stored = stored;
+  }
+}
+
 /** What {@link TaskRepository.recordMergeRequest} did (WP-138). */
 export type MergeRequestRecording =
   | { readonly kind: 'recorded' }
@@ -437,7 +462,20 @@ export interface TaskRepository {
    * comparison is `<`, so a project past the threshold costs the same query as one inside it.
    */
   countCompleted(tx: Transaction, projectId: Id): Promise<number>;
-  insert(tx: Transaction, stored: StoredTask): Promise<void>;
+  /**
+   * Inserts the task, after taking its project row `for share` (WP-142).
+   *
+   * `guard.defaultBranch` (WP-149, PROGRESS backlog 443) is the branch whose protection the caller
+   * checked before this transaction: the insert re-reads `projects.default_branch` **under that
+   * lock** and throws {@link DefaultBranchChangedError} when it differs, so a change that committed
+   * between the check and the insert cannot leave a task on a branch nobody checked. Intake passes
+   * it; a caller that checked no branch passes none.
+   */
+  insert(
+    tx: Transaction,
+    stored: StoredTask,
+    guard?: { readonly defaultBranch: string },
+  ): Promise<void>;
   /**
    * Writes the aggregate's own columns, and only if the row is still at `stored.version`.
    *
@@ -1264,6 +1302,11 @@ export interface StoredRun {
  */
 export type NewRun = StoredRun & {
   /**
+   * The ask this run answers (`runs.ask_id`, migration 0082, WP-149) — set by the ask executor's
+   * insert alone, absent for a stage run. What {@link RunRepository.askShutdownEndings} counts by.
+   */
+  readonly askId?: Id;
+  /**
    * `RunSpec.systemPromptAppend` — layers 1-3 — redacted at the write (TD-012).
    *
    * `null` is *"this run was created without an assembled prompt"*, which no production path
@@ -1448,6 +1491,14 @@ export interface RunRepository {
     tx: Transaction,
     entry: { readonly taskId: Id; readonly stage: Slug; readonly attempt: number },
   ): Promise<number>;
+  /**
+   * How many of this **ask's** runs ended `shutdown` (WP-149, PROGRESS backlog 445) — the ask's
+   * hand-back bound (`MAX_ASK_HAND_BACKS`), counted from the runs' own end reasons through
+   * `runs.ask_id` rather than carried in the `task.ask` payload, which a deduplicated enqueue or a
+   * retried old payload could reset. A run written before migration 0082 names no ask and counts for
+   * none.
+   */
+  askShutdownEndings(tx: Transaction, askId: Id): Promise<number>;
   /**
    * What the task's runs add up to — the `totals` of `task.completed` / `task.cancelled`.
    *

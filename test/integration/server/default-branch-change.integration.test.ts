@@ -19,7 +19,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { StoredTask, Transaction } from '@platform/application';
-import { INITIAL_TASK_VERSION } from '@platform/application';
+import { DefaultBranchChangedError, INITIAL_TASK_VERSION } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import { pipeline as pipelineAdapters } from '@platform/infrastructure';
@@ -234,6 +234,66 @@ describe('a task created at the instant of a default-branch change (WP-142, back
       [projectId],
     );
     expect(counted.rows[0]?.n).toBe('2');
+  });
+});
+
+/**
+ * **Intake's check and its insert against a change in between** (WP-149, backlog 443). The lock
+ * orders a change with an *open* creation; a change that committed **between** intake's protection
+ * check (outside any transaction) and the insert's transaction is invisible to it. The guarded insert
+ * re-reads `projects.default_branch` under its `for share` lock and refuses when it is not the branch
+ * intake checked. The interleaving is driven: the branch is read, the change commits, the insert runs.
+ */
+describe('intake’s insert re-reads the branch it checked, under the project lock (WP-149, backlog 443)', () => {
+  it('refuses a task whose checked branch was changed before its transaction, and writes nothing', async () => {
+    const projectId = await newProject();
+    // Intake's read and check: the stored branch is `develop`.
+    const checked = (
+      await pool.query<{ default_branch: string }>(
+        'select default_branch from projects where id = $1',
+        [projectId],
+      )
+    ).rows[0]?.default_branch as string;
+    expect(checked).toBe('develop');
+    // The change commits while the provider is being asked (no task is live, so it is allowed).
+    expect((await writeProjectDefaultBranch(db, projectId, 'main')).status).toBe('written');
+
+    const intake = await openTransaction();
+    try {
+      const refused = await store.tasks
+        .insert(intake.tx, storedTask(projectId), { defaultBranch: checked })
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
+      expect(refused).toBeInstanceOf(DefaultBranchChangedError);
+      expect(refused).toMatchObject({ checked: 'develop', stored: 'main' });
+    } finally {
+      await intake.end('rollback');
+    }
+    const counted = await pool.query<{ n: string }>(
+      'select count(*)::text as n from tasks where project_id = $1',
+      [projectId],
+    );
+    expect(counted.rows[0]?.n).toBe('0');
+  });
+
+  it('inserts when the branch it checked is still the stored one, and a change then waits and counts it', async () => {
+    const projectId = await newProject();
+    const intake = await openTransaction();
+    try {
+      await store.tasks.insert(intake.tx, storedTask(projectId), { defaultBranch: 'develop' });
+      let settled = false;
+      const change = writeProjectDefaultBranch(db, projectId, 'main').finally(() => {
+        settled = true;
+      });
+      expect(await waitsOnLock('from "projects"')).toBe(true);
+      expect(settled).toBe(false);
+      await intake.end('commit');
+      expect(await change).toEqual({ status: 'live_tasks', count: 1 });
+    } finally {
+      await intake.end('rollback');
+    }
   });
 });
 
