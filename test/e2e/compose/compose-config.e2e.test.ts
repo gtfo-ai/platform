@@ -624,6 +624,8 @@ describe('compose.yml gives the app service the environment the server reads (WP
     // `required: false`: a checkout, a teardown and CI all run `docker compose config` without one.
     const app = appEnvironment(NO_ENV_PROJECT);
     expect(Object.keys(app).sort()).toEqual([
+      // Computed from `APP_PORT` when unset, so the origin follows the published port.
+      'APP_BASE_URL',
       'APP_KNOWLEDGE_MIRROR_ROOT',
       // The three WP-53 pins **empty** on this service, which is what keeps the API container out
       // of the `stage.execute` queue even when `.env` carries a launcher token (TD-028 decision 5).
@@ -641,6 +643,43 @@ describe('compose.yml gives the app service the environment the server reads (WP
     expect(app['APP_LAUNCHER_URL']).toBe('');
     expect(app['APP_LAUNCHER_TOKEN']).toBe('');
     expect(app['APP_LAUNCHER_TOKEN_FILE']).toBe('');
+  });
+
+  /**
+   * The origin follows the published port. The server refuses a mutating request whose `Origin`
+   * is not `APP_BASE_URL`'s, so `APP_PORT=8090 docker compose up` with the origin left at 8080
+   * signs in and refuses every write. A shell value beats `.env` for both, and an explicit
+   * `APP_BASE_URL` (a real host name) wins over the derived one.
+   */
+  it('derives APP_BASE_URL from APP_PORT, and an explicit one wins', () => {
+    const origin = (
+      shell: Record<string, string>,
+      envFile: string,
+    ): Record<string, string | undefined> => {
+      const result = config(['compose.yml'], shell, projectWith(envFile)) as unknown as {
+        services: Record<string, { environment: Record<string, string> }>;
+      };
+      return {
+        app: result.services['app']?.environment['APP_BASE_URL'],
+        runner: result.services['runner']?.environment['APP_BASE_URL'],
+      };
+    };
+    expect(origin({}, 'APP_BASE_URL=\n')).toEqual({
+      app: 'http://localhost:8080',
+      runner: 'http://localhost:8080',
+    });
+    expect(origin({}, 'APP_BASE_URL=\nAPP_PORT=9001\n')).toEqual({
+      app: 'http://localhost:9001',
+      runner: 'http://localhost:9001',
+    });
+    expect(origin({ APP_PORT: '8090' }, 'APP_BASE_URL=\nAPP_PORT=9001\n')).toEqual({
+      app: 'http://localhost:8090',
+      runner: 'http://localhost:8090',
+    });
+    expect(origin({ APP_PORT: '8090' }, 'APP_BASE_URL=https://agentic.example\n')).toEqual({
+      app: 'https://agentic.example',
+      runner: 'https://agentic.example',
+    });
   });
 
   /**

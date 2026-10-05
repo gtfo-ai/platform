@@ -23,7 +23,7 @@
   stack itself uses was **not measured**. Disk: the images are about **3.3 GB** unpacked (operator
   guide § 1), plus the build cache.
 - **Port 8080** free on the Mac. Nothing else is published: the database and the launcher are on
-  internal networks. If 8080 is taken, set `APP_PORT` and `APP_BASE_URL` (§ 3) to another port.
+  internal networks. If 8080 is taken, set `APP_PORT` (§ 3) or run `APP_PORT=8090 docker compose up -d`; the origin follows the port unless `APP_BASE_URL` is set.
 - **A build at or after commit `11a17ae`.** Before it, an instance in `local` mode composed **no
   agent runner** at all — the `runner` logged your token as missing while its environment carried it,
   and every agent stage queued forever (WP-133). This page's commands build from your checkout, so
@@ -270,7 +270,7 @@ COMPOSE_FILE=compose.yml:compose.local.yml
 APP_SECRET_KEY=<the output of: openssl rand -base64 48>
 APP_BOOTSTRAP_ADMIN_EMAIL=<you@your-domain>
 APP_BOOTSTRAP_ADMIN_PASSWORD=<at least 12 characters>
-APP_BASE_URL=http://localhost:8080
+APP_PORT=8080
 
 APP_LAUNCHER_URL=http://launcher:7780
 APP_LAUNCHER_TOKEN=<the output of: openssl rand -hex 32>
@@ -315,7 +315,7 @@ Two optional lines, only if you need them:
   a run installs nothing. The run image carries **Node 24 and npm, and no PHP, Composer, Python or
   pnpm** (run: `command -v` in `platform-runtime:dev`), so a project in another language cannot run
   its own test suite inside a run: the agent edits and reads, and your **CI** is the evidence.
-- **`APP_PORT`** (and `APP_BASE_URL` with it) if 8080 is taken.
+- **`APP_PORT`** if 8080 is taken (or `APP_PORT=8090 docker compose up -d` from the shell, which wins over `.env`). Leave `APP_BASE_URL` empty and compose sets it to `http://localhost:<APP_PORT>`; set it only for another host name. Open the app at exactly that address: writes from `127.0.0.1` when it says `localhost` are refused.
 
 ## 4. Build, start, check
 

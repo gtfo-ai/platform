@@ -231,8 +231,9 @@ APP_BOOTSTRAP_ADMIN_EMAIL=you@example.com
 APP_BOOTSTRAP_ADMIN_PASSWORD=       # at least 12 characters; change it after first sign-in
 
 # The origin this instance is reached on. It is what webhook URLs are built from,
-# so it has to be the URL a provider can actually POST to.
-APP_BASE_URL=http://localhost:8080
+# so it has to be the URL a provider can actually POST to. Empty under compose means
+# http://localhost:<APP_PORT>; set it for a real host name.
+APP_BASE_URL=
 ```
 
 `APP_SECRET_KEY` has no default and never will: a development default is a real secret in a public

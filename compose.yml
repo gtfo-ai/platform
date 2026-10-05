@@ -191,6 +191,12 @@ services:
       # kept publishing `->8080`, and the instance would be unreachable with no error anywhere.
       HOST: 0.0.0.0
       PORT: 8080
+      # **The origin follows the published port** unless one is set. The server refuses a mutating
+      # request whose `Origin` is not `APP_BASE_URL`'s, so `APP_PORT=8090 docker compose up` with
+      # the origin still saying 8080 signs in and then refuses every write. Interpolated rather
+      # than passed through `.env`, so a shell value overrides `.env` here the way it does for
+      # `APP_PORT`. `APP_PORT=0` (the checks') needs `APP_BASE_URL` set: the port is unknown here.
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:${APP_PORT:-8080}}
       # TD-026: the knowledge indexer's per-project bare mirrors live on a volume this container
       # owns and fetches into itself with `git`, never the launcher's `repo-cache`. Pinned because
       # it names a path inside this container, on the volume mounted below.
@@ -289,6 +295,9 @@ services:
       # operator sets it beside the token. `${…:-}` rather than nothing at all, because a service
       # that names the variable it needs is a service an operator can read.
       APP_LAUNCHER_URL: ${APP_LAUNCHER_URL:-}
+      # The same origin as `app`'s (above): links this process writes into merge requests and
+      # tickets must name the address the browser uses.
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:${APP_PORT:-8080}}
       # Where *this* process mounts the control volume. It must equal the launcher's
       # `APP_WORKSPACE_CONTROL_ROOT`: the socket path the launcher answers with is computed from its
       # own root, and a mismatch is refused by name before a run starts rather than becoming an
