@@ -1,6 +1,17 @@
+import { type ArtifactType, artifactDataSchemas } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import * as z from 'zod';
 import { rootCauseAnalysisFixture } from './fixtures.js';
-import { artifactJsonSchema, validateStructuredOutput } from './structured-output.js';
+import {
+  artifactJsonSchema,
+  inlineDefinitions,
+  validateStructuredOutput,
+} from './structured-output.js';
+
+const ARTIFACT_TYPES = Object.keys(artifactDataSchemas) as ArtifactType[];
+
+/** Keywords that apply to one JSON type, and so need a `type` beside them under ajv's strict mode. */
+const TYPED_KEYWORDS = ['maxLength', 'minLength', 'pattern', 'format', 'maxItems', 'minItems'];
 
 describe('artifactJsonSchema', () => {
   it('renders a self-contained object schema for the CLI, with no $schema declaration', () => {
@@ -9,14 +20,69 @@ describe('artifactJsonSchema', () => {
     // The pinned CLI refuses a document that declares the draft 2020-12 meta-schema.
     expect(schema).not.toHaveProperty('$schema');
     expect(Object.keys(schema['properties'] as object)).toContain('root_cause');
-    // `@platform/contracts` registers its shared value objects in zod's global registry, so the
-    // named ones are hoisted into `$defs` exactly as the published `schemas/artifacts/*.json`
-    // documents have them. Self-contained means every `$ref` stays inside this document.
-    const refs = [...JSON.stringify(schema).matchAll(/"\$ref":"([^"]+)"/g)].map(
-      (match) => match[1] ?? '',
-    );
-    expect(refs.length).toBeGreaterThan(0);
-    expect(refs.every((ref) => ref.startsWith('#/$defs/'))).toBe(true);
+  });
+
+  /**
+   * Backlog 471: `@platform/contracts` registers its shared value objects in zod's global registry,
+   * so zod hoists them into `$defs` — and a check added on top of one (`.max(200)`) came out as a
+   * `maxLength` beside a `$ref`, which the CLI's validator reports in strict mode as *"missing type
+   * "string" for keyword "maxLength""*. Asserted over every artifact type (rule 68).
+   */
+  it.each(ARTIFACT_TYPES)(
+    'inlines every definition of %s: no $ref, no $defs, no untyped keyword',
+    (type) => {
+      const text = JSON.stringify(artifactJsonSchema(type));
+      expect(text).not.toContain('$ref');
+      expect(text).not.toContain('$defs');
+      const untyped: string[] = [];
+      const walk = (node: unknown, at: string): void => {
+        if (Array.isArray(node)) {
+          for (const [index, entry] of node.entries()) walk(entry, `${at}/${index}`);
+          return;
+        }
+        if (node === null || typeof node !== 'object') return;
+        const record = node as Record<string, unknown>;
+        const typed =
+          'type' in record || 'anyOf' in record || 'enum' in record || 'const' in record;
+        if (TYPED_KEYWORDS.some((keyword) => keyword in record) && !typed) untyped.push(at);
+        for (const [key, value] of Object.entries(record)) walk(value, `${at}/${key}`);
+      };
+      walk(JSON.parse(text), '');
+      expect(untyped).toEqual([]);
+    },
+  );
+
+  it.each(ARTIFACT_TYPES)(
+    'loses nothing for %s: it equals zod’s own inlining with no registry',
+    (type) => {
+      // An independent inliner: zod with an empty metadata registry hoists nothing. The two agreeing
+      // shows the resolver dropped no keyword and no description the global registry carried.
+      const { $schema: _metaSchema, ...reference } = z.toJSONSchema(artifactDataSchemas[type], {
+        target: 'draft-2020-12',
+        io: 'output',
+        unrepresentable: 'throw',
+        metadata: z.registry(),
+      });
+      expect(artifactJsonSchema(type)).toEqual(reference);
+    },
+  );
+
+  it('keeps the stricter bound when a $ref and its sibling both set one', () => {
+    const definitions = { Short: { type: 'string', minLength: 1, maxLength: 512 } };
+    expect(
+      inlineDefinitions({ $ref: '#/$defs/Short', maxLength: 200, minLength: 0 }, definitions, []),
+    ).toEqual({ type: 'string', minLength: 1, maxLength: 200 });
+    expect(inlineDefinitions({ $ref: '#/$defs/Short', maxLength: 900 }, definitions, [])).toEqual({
+      type: 'string',
+      minLength: 1,
+      maxLength: 512,
+    });
+  });
+
+  it('refuses a reference it cannot resolve and a recursive definition, naming them', () => {
+    expect(() => inlineDefinitions({ $ref: '#/$defs/Missing' }, {}, [])).toThrow(/Missing/);
+    const loop = { Node: { type: 'array', items: { $ref: '#/$defs/Node' } } };
+    expect(() => inlineDefinitions({ $ref: '#/$defs/Node' }, loop, [])).toThrow(/recursive/);
   });
 
   it('is derived from the same declaration the platform validates against', () => {
