@@ -105,7 +105,14 @@ commands (including an executable `.agentic/workspace/setup`, run as `./.agentic
 and the lockfile install they need — so R1, R2 and R6 are answered by running them. The install
 can fetch only from a package registry your operator declared (`APP_RUN_REGISTRY_HOSTS`, empty by
 default). On an instance that declared none, the egress proxy refuses the install's requests, so a
-repository whose tests need dependencies cannot run them. It cannot
+repository whose tests need dependencies cannot run them. **A criterion the run could not run is
+*not checked*, not failed**: the run image is built for Node.js projects and has no PHP, Composer,
+Python or JVM, so on such a project R1, R2 and R6 show *not checked* with the reason. A not-checked
+criterion does not hold the level down (each rung is reached when its criteria passed or were not
+checked) and is not listed among the improvements; when the project has CI, the panel adds a note
+suggesting `verification.mode: ci` (project settings), under which discovery reads the three from the
+CI configuration — press *Re-evaluate readiness* afterwards. An evaluation recorded before this rule
+keeps its level until it is re-evaluated. It cannot
 commit, push or add a dependency, and nothing it writes is kept. It drafts **technical** pages only;
 the business pages are step 3's.
 

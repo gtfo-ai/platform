@@ -29,6 +29,8 @@ Binary criteria, detected automatically by the Discovery agent at onboarding and
 
 **A project that verifies on CI** (`verification.mode: ci`, BD-025's 2026-10-05 amendment) does not let agents run its suite, its installs or its setup, so R1, R2 and R6 are **read, not run**: R1 from a CI job that runs the test suite, R2 from a job timeout or a documented duration, R6 from the documented setup command. The evidence says so in the platform's words; the criteria and the levels are unchanged.
 
+**"Could not check" is not "failed"** (BD-026's 2026-10-06 amendment). R1, R2 and R6 are the three criteria discovery answers by **running** a command, and in a project that verifies locally the run workspace may be unable to run it at all: the platform's run image has no interpreter for the project's language (a PHP project's `php` and `composer` are absent), or the platform's command policy refused the command or its install. Such a criterion is recorded **not checked**, with the reason as its evidence — never as a fail, because the workspace's limits are a fact about the platform, not about the repository. A criterion that is read rather than run cannot be "not checked": a report saying so is recorded as a fail. A command that **ran and failed** is a fail. What "not checked" does to the level is the ladder rule below, and when the project has a CI configuration the readiness report carries a note suggesting `verification.mode: ci`, under which discovery reads the three from it instead.
+
 ## Levels (what the score means)
 
 | Level | Requires | Platform behaviour |
@@ -39,11 +41,13 @@ Binary criteria, detected automatically by the Discovery agent at onboarding and
 | **3 — Agent-ready** | 2 + R6, R8, R10, R12 | Suggested: lower plan-approval threshold to XL only; Business review may run the app. |
 | **4 — Autonomous-capable** | 3 + R7, R11, R13, R14 | Eligible for future auto-merge policies for `chore` (not in v1). |
 
+A level is reached when every rung below it is (a repository with R1 and R3 but none of level 2's criteria is level 1 whatever else it passes). **A criterion recorded *not checked* does not block its rung**: a rung is reached when each of its criteria passed or was not checked. It does not count as a pass either — it is shown as *not checked* with its reason, it is not among the cheapest improvements (the improvement is the workspace's, not the repository's), and every rung also has criteria that are read rather than run (R3 beside R1, R4, R5 and R9 beside R2, R8, R10 and R12 beside R6), so no level is reached on unchecked criteria alone. The alternative — failing them — put Autix, a PHP project whose CI runs its suite on every merge request, at level 0 (chore and spike only) because the run image has no PHP (first local test, 2026-10-05).
+
 Levels only *suggest* stricter or looser defaults; maintainers can override any default, and the override is shown next to the readiness badge so the trade-off is visible.
 
 ## Where it shows up
 
-- **Project page:** level badge, criteria checklist with pass/fail and "what this unlocks", trend over time.
+- **Project page:** level badge, criteria checklist with pass/fail/not checked and "what this unlocks", trend over time.
 - **Board:** badge on the project header; tooltip with the top two missing criteria.
 - **Retrospectives:** each return or escalation is tagged with the readiness criterion that would have prevented it ("2 of 3 CI returns were flaky reruns → R4"). Aggregated in statistics: *returns attributable to readiness gaps* per month, which turns readiness into a cost argument ("R4 cost $41 last month").
 - **Onboarding wizard:** after technical discovery, the wizard shows the initial level and the three cheapest criteria to improve next, with a short how-to for each (no automated fixes).
