@@ -19,7 +19,12 @@ import {
   injectedSecretRedactorFixture,
   runSpecFixture,
 } from './fixtures.js';
-import { buildHooks, type HookRecord, type HookRuntime } from './hooks.js';
+import {
+  buildHooks,
+  type HookRecord,
+  type HookRuntime,
+  PLATFORM_TOOL_OUTPUT_MAX_CHARS,
+} from './hooks.js';
 
 interface Harness {
   readonly hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>>;
@@ -317,6 +322,30 @@ describe('PostToolUse — truncation and redaction of what the model reads', () 
     expect(updated).toBeDefined();
     expect(updated?.length).toBe(200);
     expect(test.records[0]?.reason).toContain('truncated 5000 characters to 200');
+  });
+
+  it('leaves a platform tool’s answer whole past the command cap, and still cuts it at its own ceiling (backlog 464)', async () => {
+    const spec = runSpecFixture({
+      limits: { ...runSpecFixture().limits, toolOutputMaxChars: 200 },
+    });
+    const test = harness({ spec }, spec);
+    const whole = await test.fire('PostToolUse', {
+      tool_name: 'mcp__platform__get_task_context',
+      tool_input: {},
+      tool_response: 'x'.repeat(22_082),
+    });
+    // Nothing changed, so no rewrite and no transcript row: the model reads the answer as sent.
+    expect(whole).toEqual({});
+    expect(test.records).toEqual([]);
+    const huge = await test.fire('PostToolUse', {
+      tool_name: 'mcp__platform__get_task_context',
+      tool_input: {},
+      tool_response: 'x'.repeat(PLATFORM_TOOL_OUTPUT_MAX_CHARS + 1),
+    });
+    const updated = (
+      (huge as SyncHookJSONOutput).hookSpecificOutput as { updatedToolOutput?: string }
+    ).updatedToolOutput;
+    expect(updated?.length).toBe(PLATFORM_TOOL_OUTPUT_MAX_CHARS);
   });
 
   it('removes a credential a tool printed before the model ever sees it', async () => {

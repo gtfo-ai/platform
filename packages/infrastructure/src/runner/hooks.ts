@@ -189,6 +189,19 @@ const writeHook =
 /** The tool-name prefix the CLI gives the in-process `platform` MCP server's tools. */
 export const PLATFORM_TOOL_PREFIX = 'mcp__platform__';
 
+/**
+ * The ceiling on a **platform** tool's answer the model reads — above every cap the tools apply
+ * themselves (`get_task_context`'s is 160 000 characters, `TASK_CONTEXT_MAX_CHARS` in
+ * `apps/server`), so this cut is a backstop rather than a second, blind one.
+ *
+ * `toolOutputMaxChars` (10 000) exists for what a *command* prints — test logs, a `cat` of a large
+ * file — whose size nobody chose. A platform tool's answer is platform text the platform already
+ * bounded, and cutting it head-and-tail removed the middle of the architect's own task context —
+ * the refined spec (22 082 characters cut to 10 000, first local test, 2026-10-05). Redaction
+ * applies to it exactly as before.
+ */
+export const PLATFORM_TOOL_OUTPUT_MAX_CHARS = 200_000;
+
 /** Every tool of the platform's own MCP server, as the CLI names it. */
 export const PLATFORM_TOOL_MATCHER = `${PLATFORM_TOOL_PREFIX}.*`;
 
@@ -240,16 +253,17 @@ const postToolUseHook =
   async (input: unknown, toolUseId: string | undefined): Promise<HookJSONOutput> => {
     const hookInput = input as PostToolUseHookInput;
     const rendered = renderToolResponse(hookInput.tool_response);
-    const truncated = truncateHeadTail(rendered, runtime.spec.limits.toolOutputMaxChars);
+    const cap = hookInput.tool_name.startsWith(PLATFORM_TOOL_PREFIX)
+      ? Math.max(runtime.spec.limits.toolOutputMaxChars, PLATFORM_TOOL_OUTPUT_MAX_CHARS)
+      : runtime.spec.limits.toolOutputMaxChars;
+    const truncated = truncateHeadTail(rendered, cap);
     const redacted = runtime.redactor.redactText(truncated.text);
     if (!truncated.truncated && redacted.count === 0) {
       return {};
     }
     const parts: string[] = [];
     if (truncated.truncated) {
-      parts.push(
-        `truncated ${truncated.originalLength} characters to ${runtime.spec.limits.toolOutputMaxChars}`,
-      );
+      parts.push(`truncated ${truncated.originalLength} characters to ${cap}`);
     }
     if (redacted.count > 0) {
       parts.push(`redacted ${redacted.count} secret-shaped value(s) (TD-012)`);
