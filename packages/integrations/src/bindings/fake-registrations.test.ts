@@ -30,6 +30,7 @@ const PLANTED = 'FAKE0planted0value0in0a0comment0';
 const context = {
   projectId: PROJECT_ID,
   integrationId: INTEGRATION_ID,
+  defaultBranch: 'main',
   resolveUser: () => null,
   resolveThread: async () => null,
 };

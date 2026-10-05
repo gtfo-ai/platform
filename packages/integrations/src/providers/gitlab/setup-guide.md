@@ -74,7 +74,7 @@ Triggers to enable:
   it on an older commit's pipeline.
 - **Comments** (Note events) → `mr.review.comment`
 - **Pipeline events** → `ci.pipeline.finished`
-- **Push events** → `default_branch.moved` (only a push onto GitLab's default branch produces an event, and since WP-142 a task waiting at Ready is re-checked only when that branch is also the project's stored **Default branch** — keep the two the same)
+- **Push events** → `default_branch.moved` (only a push onto the project's stored **Default branch** produces an event — since WP-148 whatever GitLab's own default is, because the push names its branch; a push onto GitLab's default that is not the stored branch produces none — keep the two the same anyway, outside a move)
 
 Authentication — pick per your version:
 

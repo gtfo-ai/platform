@@ -383,6 +383,26 @@ export interface TaskRepository {
       readonly mode: TaskMode;
     },
   ): Promise<StoredTask | null>;
+  /**
+   * The task a **signal about** a ticket belongs to — WP-145's rule, for a reader rather than a
+   * writer (WP-148: a ticket comment that asks the task). With a `ticketId`, a task matches when it
+   * carries that id, or when it carries **no** id and has the signal's key; without one, the key
+   * alone decides. So a comment on a moved issue reaches its task by the id before any
+   * `ticket.updated` has re-keyed it, and an unrelated issue that now holds the old key reaches no
+   * task that knows its own id — the collision {@link findByTicket}'s *key or id* would allow,
+   * which is right for intake (one task per key) and wrong here. Any state; oldest first, a task
+   * matched by its id before one matched by its key.
+   */
+  findByTicketSignal(
+    tx: Transaction,
+    query: {
+      readonly projectId: Id;
+      readonly provider: string;
+      readonly ticketKey: string;
+      readonly ticketId: string | null;
+      readonly mode: TaskMode;
+    },
+  ): Promise<StoredTask | null>;
   findByMergeRequest(
     tx: Transaction,
     query: { readonly projectId: Id; readonly iid: number },

@@ -654,7 +654,10 @@ its polls make two more reads (WP-123): the head of the project's stored **Defau
 never GitLab's own default; changing the setting resets the comparison, so the next poll records no
 move), so a task waiting at Ready is re-checked for conflicts when it moves, and the comments on each merge request waiting at Ready
 (at most twenty per poll), so a reviewer's comment returns the task to Implementation. A binding
-with a webhook secret makes neither read: its webhook carries both. Approvals stay webhook-only
+with a webhook secret makes neither read: its webhook carries both — and since WP-148 its push hook
+is judged against the stored **Default branch** too, whatever GitLab's own default says. Saving a
+project's bindings again keeps each unchanged binding's poll position (its cursors and the last head
+read, WP-148); a binding to a different integration starts fresh. Approvals stay webhook-only
 (they count toward review time and change nothing else); the GitLab setup guide's step 3a lists the
 rest. One setting, `APP_POLL_SWEEP_INTERVAL_MS`, bounds how long a lost poll of either kind waits.
 **A finished pipeline is not polled either, so the CI gate waits for it itself** (WP-136): on a

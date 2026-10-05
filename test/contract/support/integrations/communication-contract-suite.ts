@@ -162,6 +162,7 @@ export const runCommunicationContract = (harness: CommunicationContractHarness):
     ): InboundContext => ({
       projectId: context.projectId,
       integrationId: context.integrationId,
+      defaultBranch: 'main',
       resolveUser: (identity: ExternalIdentity) =>
         identity.external_id === context.mappedAuthor.providerUserId ? userId : null,
       resolveThread: async (thread) =>

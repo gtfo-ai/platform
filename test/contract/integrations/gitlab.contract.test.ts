@@ -272,9 +272,13 @@ describe('GitLab in replay: revocation, and the Q40 compensating control', () =>
  * harness.
  */
 describe('GitLab inbound, through the port, in replay', () => {
-  const inboundContext = (context: ReturnType<typeof gitlabReplayContext>) => ({
+  const inboundContext = (
+    context: ReturnType<typeof gitlabReplayContext>,
+    defaultBranch = 'main',
+  ) => ({
     projectId: context.projectId,
     integrationId: context.integrationId,
+    defaultBranch,
     resolveUser: () => null,
     resolveThread: async () => null,
   });
@@ -320,6 +324,40 @@ describe('GitLab inbound, through the port, in replay', () => {
     const event = result.events[0];
     expect(event?.type).toBe('default_branch.moved');
     expect((event?.payload as { new_head: string } | undefined)?.new_head).toBe(SHA_MAIN);
+  });
+
+  /**
+   * WP-148 (backlog 444): a webhook binding hears a push to the project's **stored** default branch
+   * while GitLab's own default is another one — the moment Autix's default moves from `develop` to
+   * `main`, when the project already says `main` and GitLab still says `develop`. The push hook
+   * names its branch (`ref`); the hook's `project.default_branch` is GitLab's and is not read. The
+   * other direction is the canary: a push to GitLab's default that is not the stored branch is not
+   * the project's move.
+   */
+  it('records a push to the stored default branch while GitLab’s own default differs (WP-148)', async () => {
+    const context = gitlabReplayContext();
+    const pushTo = (ref: string): string => {
+      const body = JSON.parse(pushHookBody(ref, SHA_MAIN)) as {
+        project: Record<string, unknown>;
+      };
+      body.project = { ...body.project, default_branch: 'develop' };
+      return JSON.stringify(body);
+    };
+
+    const toStored = signedDelivery('Push Hook', pushTo('refs/heads/main'));
+    expect(context.port.inbound.verify(toStored)).toBe(true);
+    const moved = await context.port.inbound.normalise(toStored, inboundContext(context, 'main'));
+    expect(moved.ignored).toEqual([]);
+    expect(moved.events.map((event) => event.type)).toEqual(['default_branch.moved']);
+    expect(moved.events[0]?.payload).toMatchObject({ branch: 'main', new_head: SHA_MAIN });
+
+    const toGitLabsDefault = signedDelivery('Push Hook', pushTo('refs/heads/develop'));
+    const dropped = await context.port.inbound.normalise(
+      toGitLabsDefault,
+      inboundContext(context, 'main'),
+    );
+    expect(dropped.events).toEqual([]);
+    expect(dropped.ignored[0]?.reason).toBe('unsupported_event');
   });
 
   it('drops a push onto a feature branch and says why', async () => {

@@ -1035,6 +1035,19 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       } as const;
 
       if (body.event === 'default_branch.moved') {
+        // GitLab's rule (WP-148): the push names its branch, and the project's **stored** default
+        // branch decides whether it is the default branch's move — not the provider's own default.
+        if (body.branch !== context.defaultBranch) {
+          return {
+            events: [],
+            ignored: [
+              {
+                reason: 'unsupported_event',
+                detail: `push to ${body.branch}, not the project's default branch`,
+              },
+            ],
+          };
+        }
         const event: NormalisedEvent<'default_branch.moved'> = {
           type: 'default_branch.moved',
           payload: {

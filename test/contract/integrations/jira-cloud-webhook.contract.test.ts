@@ -44,6 +44,7 @@ describe('jira-cloud webhooks', () => {
   ): InboundContext => ({
     projectId: JIRA_PROJECT_ID,
     integrationId: JIRA_INTEGRATION_ID,
+    defaultBranch: 'main',
     resolveUser: resolve,
     resolveThread: async () => null,
   });
@@ -706,6 +707,7 @@ describe('jira-cloud: a moved issue (WP-134)', () => {
       {
         projectId: JIRA_PROJECT_ID,
         integrationId: JIRA_INTEGRATION_ID,
+        defaultBranch: 'main',
         resolveUser: () => null,
         resolveThread: async () => null,
       },
@@ -734,6 +736,7 @@ describe('jira-cloud: a moved issue (WP-134)', () => {
       {
         projectId: JIRA_PROJECT_ID,
         integrationId: JIRA_INTEGRATION_ID,
+        defaultBranch: 'main',
         resolveUser: () => null,
         resolveThread: async () => null,
       },
@@ -762,6 +765,7 @@ describe('jira-cloud: a moved issue (WP-134)', () => {
       {
         projectId: JIRA_PROJECT_ID,
         integrationId: JIRA_INTEGRATION_ID,
+        defaultBranch: 'main',
         resolveUser: () => null,
         resolveThread: async () => null,
       },

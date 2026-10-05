@@ -1409,7 +1409,8 @@ export const assertBindingConfigsParse = (
 };
 
 /**
- * Replaces a project's bindings with exactly the set given.
+ * Replaces a project's bindings with exactly the set given — a binding left out is deleted, one
+ * already present is updated in place (keeping its poll state, WP-148), a new one is inserted.
  *
  * One transaction: a wizard that removed every binding and then failed to add the new ones would
  * leave a project the pipeline cannot run at all.
@@ -1422,6 +1423,16 @@ export const replaceProjectBindings = async (
   options: { readonly egress: IntegrationEgressPolicy },
 ): Promise<void> => {
   const ids = items.map((item) => item.integrationId);
+  const repeated = ids.filter((id, index) => ids.indexOf(id) !== index);
+  if (repeated.length > 0) {
+    // One binding per (project, integration) — the table's unique key. Refused by name rather than
+    // left to the upsert below, which would let the last overlay win silently.
+    throw new HttpError(
+      400,
+      'invalid_request',
+      `integration ${[...new Set(repeated)].join(', ')} is named more than once; a project binds an integration once`,
+    );
+  }
   await database.transaction(async (tx) => {
     if (ids.length > 0) {
       /**
@@ -1466,13 +1477,28 @@ export const replaceProjectBindings = async (
         }
       }
     }
-    await tx.delete(bindings).where(eq(bindings.projectId, projectId));
+    // WP-148 (backlog 444): a binding whose identity — this project and that integration — is
+    // unchanged is **updated in place**, so its poll state survives a re-save: `poll_cursor`,
+    // `mr_poll_cursor` and `mr_poll_default_head`, which a delete and re-insert reset to "never
+    // polled" (the next ticket poll read only its last interval, the next merge-request poll took a
+    // fresh baseline and recorded no default-branch move). A binding to an integration that was not
+    // bound before is a new row and starts fresh, as does one removed and later added back — a
+    // changed identity is a different binding. The config overlay is not part of the identity.
+    // `notInArray` over an empty list is `true` in drizzle, so an empty set deletes every binding.
+    await tx
+      .delete(bindings)
+      .where(and(eq(bindings.projectId, projectId), notInArray(bindings.integrationId, ids)));
     for (const item of items) {
-      await tx.insert(bindings).values({
-        projectId,
-        integrationId: item.integrationId,
-        config: item.config ?? {},
-      });
+      const config = item.config ?? {};
+      await tx
+        .insert(bindings)
+        .values({ projectId, integrationId: item.integrationId, config })
+        .onConflictDoUpdate({
+          target: [bindings.projectId, bindings.integrationId],
+          // Narrow: the overlay and its instant, never the three poll columns (their writers are
+          // the pollers and the default-branch change).
+          set: { config, updatedAt: sql`now()` },
+        });
     }
   });
 };

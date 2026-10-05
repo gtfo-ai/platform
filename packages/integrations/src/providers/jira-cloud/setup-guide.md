@@ -154,7 +154,10 @@ Make sure the integration reads **both** projects (`project_keys`) if tickets mo
 Edits made **after** the move reach the task too: an update under the new key carries the same id,
 so the task's ticket text is read again before its next stage, and the task itself follows the move —
 the board and the workpad name the new key, and the task's history records the change. The poll asks
-for a task's ticket by that id rather than by its key, so the poll finds a moved ticket as well. Two
+for a task's ticket by that id rather than by its key, so the poll finds a moved ticket as well. A
+comment that asks the task (`@agentic ask …`) on the moved ticket reaches it by the id too, even
+before an edit has moved the task's key, and a comment on an unrelated ticket that now holds the old
+key asks nothing of it. Two
 things keep the old key, by design: the task's branch (`agentic/<old key>`) and the merge request's
 title, because renaming either would break work already pushed. A task created before this release
 has no id and does not follow a move.

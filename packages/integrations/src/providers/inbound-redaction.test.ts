@@ -363,7 +363,7 @@ const deliverThrough = async (testCase: InboundCase): Promise<Delivered> => {
       host: null,
     },
     inbound,
-    bindings: [{ bindingId: INTEGRATION, projectId: PROJECT, inbound }],
+    bindings: [{ bindingId: INTEGRATION, projectId: PROJECT, defaultBranch: 'main', inbound }],
     // What `createInboundIntegrationLoader` composes from the account's own resolved credentials.
     redactor: bindingSecretRedactor(
       Object.entries(testCase.secrets).map(([field, value]) => ({

@@ -149,6 +149,7 @@ describe('FakeTaskManagement', () => {
     const result = await other.inbound.normalise(delivery, {
       projectId: PROJECT_ID,
       integrationId: INTEGRATION_ID,
+      defaultBranch: 'main',
       resolveUser: () => null,
       resolveThread: async () => null,
     });
@@ -161,6 +162,7 @@ describe('FakeTaskManagement', () => {
     const context = {
       projectId: PROJECT_ID,
       integrationId: INTEGRATION_ID,
+      defaultBranch: 'main',
       resolveUser: () => null,
       resolveThread: async () => null,
     };
@@ -191,6 +193,7 @@ describe('FakeTaskManagement', () => {
     const context = {
       projectId: PROJECT_ID,
       integrationId: INTEGRATION_ID,
+      defaultBranch: 'main',
       resolveUser: () => null,
       resolveThread: async () => null,
     };

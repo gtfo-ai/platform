@@ -260,7 +260,7 @@ export const askHandlers = (options: AskHandlerOptions): readonly EventHandler[]
       handle: async (context: HandlerContext): Promise<void> => {
         const payload = context.event.event.payload as {
           project_id: string;
-          ticket: { provider: string; key: string; url: string };
+          ticket: { provider: string; key: string; url: string; id?: string | null };
           comment_id: string;
           author: {
             external_id: string;
@@ -300,10 +300,15 @@ export const askHandlers = (options: AskHandlerOptions): readonly EventHandler[]
           done('unverified_identity');
           return;
         }
-        const task = await options.store.tasks.findByTicket(context.scope.tx, {
+        // WP-148 (WP-145's discovered item): by the issue's stable id first, by the key only for a
+        // task that recorded none — a comment on a moved issue reaches its task before any
+        // `ticket.updated` re-keyed it, and an unrelated issue now holding the old key reaches no
+        // task that knows its own id (`findByTicketSignal`).
+        const task = await options.store.tasks.findByTicketSignal(context.scope.tx, {
           projectId: payload.project_id as Id,
           provider: payload.ticket.provider,
           ticketKey: payload.ticket.key,
+          ticketId: payload.ticket.id ?? null,
           // An ask is about the real task. A shadow run of the same ticket is a different task and
           // is not what somebody commenting on the ticket is asking about.
           mode: 'normal',

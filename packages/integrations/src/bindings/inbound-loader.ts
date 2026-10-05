@@ -217,6 +217,7 @@ export const createInboundIntegrationLoader = (
         bindings.push({
           bindingId: binding.bindingId,
           projectId: binding.projectId,
+          defaultBranch: binding.defaultBranch,
           inbound: bound,
         });
       }

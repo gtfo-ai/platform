@@ -1283,6 +1283,79 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect((await store.tasks.load(tx, plain.task.id))?.ticketSignalAt).toBe(at);
       });
 
+      /**
+       * WP-148: the same rule as a read, for a signal that asks a task (a ticket comment). Both
+       * stores, so a memory store that matched by key or id would not certify a Postgres one that
+       * does otherwise (rule 23).
+       */
+      it('finds a task for a ticket signal by the stable id first, and by the key only for a task with no id (WP-148)', async () => {
+        const base = task({}, 'ASKOLD-1');
+        const moved: StoredTask = {
+          ...base,
+          task: { ...base.task, ticket: { ...base.task.ticket, id: '50001' } },
+        };
+        const plain = task({}, 'ASKPLAIN-1');
+        await store.tasks.insert(tx, moved);
+        await store.tasks.insert(tx, plain);
+        const query = { projectId, provider: 'fake-jira', mode: 'normal' as const };
+
+        // The moved issue's comment, under its new key: its task, by id.
+        expect(
+          (
+            await store.tasks.findByTicketSignal(tx, {
+              ...query,
+              ticketKey: 'ASKNEW-5',
+              ticketId: '50001',
+            })
+          )?.task.id,
+        ).toBe(moved.task.id);
+        // Canary: an unrelated issue holding the old key finds no task that knows its own id —
+        // where `findByTicket`'s *key or id* answers it.
+        expect(
+          await store.tasks.findByTicketSignal(tx, {
+            ...query,
+            ticketKey: 'ASKOLD-1',
+            ticketId: '50999',
+          }),
+        ).toBeNull();
+        expect(
+          (
+            await store.tasks.findByTicket(tx, {
+              ...query,
+              ticketKey: 'ASKOLD-1',
+              ticketId: '50999',
+            })
+          )?.task.id,
+        ).toBe(moved.task.id);
+        // A task with no id answers by key, whatever id the signal carries; no id answers by key.
+        expect(
+          (
+            await store.tasks.findByTicketSignal(tx, {
+              ...query,
+              ticketKey: 'ASKPLAIN-1',
+              ticketId: '50002',
+            })
+          )?.task.id,
+        ).toBe(plain.task.id);
+        expect(
+          (
+            await store.tasks.findByTicketSignal(tx, {
+              ...query,
+              ticketKey: 'ASKOLD-1',
+              ticketId: null,
+            })
+          )?.task.id,
+        ).toBe(moved.task.id);
+        expect(
+          await store.tasks.findByTicketSignal(tx, {
+            ...query,
+            ticketKey: 'ASKOLD-1',
+            ticketId: '50001',
+            mode: 'shadow',
+          }),
+        ).toBeNull();
+      });
+
       it('lists the live tasks of an issue id, and re-keys one compare-and-set, pinning a missing branch (WP-145)', async () => {
         const base = task({}, 'MOVOLD-1');
         const moved: StoredTask = {

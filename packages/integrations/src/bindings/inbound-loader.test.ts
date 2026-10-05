@@ -39,6 +39,7 @@ const accountOf = (overrides: Partial<IntegrationAccount> = {}): IntegrationAcco
     {
       bindingId: '00000000-0000-4000-8000-0000000000f1' as Id,
       projectId: PROJECT_A,
+      defaultBranch: 'main',
       config: { pickup_label: 'agentic' },
     },
   ],
@@ -158,11 +159,13 @@ describe('the two adapters', () => {
         {
           bindingId: '00000000-0000-4000-8000-0000000000f1' as Id,
           projectId: PROJECT_A,
+          defaultBranch: 'main',
           config: { pickup_label: 'agentic-a' },
         },
         {
           bindingId: '00000000-0000-4000-8000-0000000000f2' as Id,
           projectId: PROJECT_B,
+          defaultBranch: 'main',
           config: { pickup_label: 'agentic-b' },
         },
       ],
@@ -248,7 +251,9 @@ describe('an integration whose adapter cannot be built', () => {
   it('names the binding’s project and id and the integration, never the integration as a project (WP-121)', async () => {
     const bindingId = '00000000-0000-4000-8000-0000000000f1' as Id;
     const ofBinding = await loaderFor(
-      accountOf({ bindings: [{ bindingId, projectId: PROJECT_A, config: {} }] }),
+      accountOf({
+        bindings: [{ bindingId, projectId: PROJECT_A, defaultBranch: 'main', config: {} }],
+      }),
     )
       .forIntegration(INTEGRATION)
       .catch((error: unknown) => error);

@@ -84,7 +84,7 @@ listCommits(project, {since, limit}) -> [{sha, message, author, committedAt, url
 listMergeRequests(project, {updatedAfter, limit}) -> [{ref, state, draft, headSha?, createdAt, updatedAt, mergedAt?, closedAt?, mergeCommitSha?}]   # the merge-request poller's read, every state, oldest update first (WP-110)
 pollPlan() -> {interval_seconds} | null             # WP-110: the binding's own switch and interval; null without a single project
 revokeCredential({revokeId})                          # by address (WP-77): when the workspace is destroyed, and by the recovery pass for a run whose revoke never happened
-inbound: InboundNormaliser -> mr.* | ci.pipeline.finished | default_branch.moved
+inbound: InboundNormaliser -> mr.* | ci.pipeline.finished | default_branch.moved   # WP-148: a push to InboundContext.defaultBranch (the project's stored branch), never to the provider's own default
 capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArtifacts, draftPipelines, discussionResolution, credentialMinting}
 ```
 > **Amended at WP-35 (rule 8: docs win, so the doc moves first).** This line used to read

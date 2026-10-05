@@ -839,6 +839,7 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
         const result = await binding.inbound.normalise(delivery, {
           projectId: binding.projectId,
           integrationId: resolved.ref.integrationId,
+          defaultBranch: binding.defaultBranch,
           resolveUser,
           resolveThread: resolveThreadFor(binding.projectId),
         });

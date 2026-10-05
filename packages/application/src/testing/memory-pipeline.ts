@@ -310,6 +310,19 @@ export const createMemoryPipelineStore = (
       );
       return found === undefined ? null : readTask(found);
     },
+    findByTicketSignal: async (_tx, query) => {
+      const matching = [...tasks.values()].filter(
+        (stored) =>
+          stored.task.projectId === query.projectId &&
+          stored.task.ticket.provider === query.provider &&
+          stored.task.mode === query.mode &&
+          ticketSignalReaches(stored, query),
+      );
+      // Insertion order is creation order here; a task matched by its id comes first.
+      const found =
+        matching.find((stored) => (stored.task.ticket.id ?? null) !== null) ?? matching[0];
+      return found === undefined ? null : readTask(found);
+    },
     findByMergeRequest: async (_tx, query) => {
       const found = [...tasks.values()].find(
         (stored) => stored.task.projectId === query.projectId && stored.mr?.iid === query.iid,

@@ -114,6 +114,7 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
     ): InboundContext => ({
       projectId: context.projectId,
       integrationId: context.integrationId,
+      defaultBranch: 'main',
       resolveUser: resolve,
       resolveThread: async () => null,
     });

@@ -46,6 +46,8 @@ export interface ProjectBinding {
 export interface IntegrationBinding {
   readonly bindingId: Id;
   readonly projectId: Id;
+  /** The project's stored `projects.default_branch` — what its deliveries are normalised against (WP-148). */
+  readonly defaultBranch: string;
   /** `integrations.config` with this binding's `bindings.config` merged over it. */
   readonly config: JsonObject;
 }

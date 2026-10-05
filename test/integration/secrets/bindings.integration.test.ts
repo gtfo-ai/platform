@@ -226,6 +226,32 @@ describe('the binding repository on a real database', () => {
     expect(read?.bindings[0]?.config).toEqual({ channel: '#api-only', socket_mode: false });
   });
 
+  /**
+   * WP-148 (backlog 444): the account's bindings carry each project's **stored** default branch,
+   * which the webhook ingress hands the normaliser (`InboundContext.defaultBranch`), so a push hook
+   * is judged against `projects.default_branch` and never against the provider's own default.
+   */
+  it('answers each binding with its project’s stored default branch (WP-148)', async () => {
+    const moved = await pool.query<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url, default_branch)
+       values ($1, 'moved', 'Moved', 'https://git.example.test/acme/moved.git', 'trunk') returning id`,
+      [orgId],
+    );
+    const account = await pool.query<{ id: string }>(
+      `insert into integrations (org_id, type, provider, name, config, secret_ids)
+       values ($1, 'communication'::integration_type, 'slack', 'branch slack', $2::jsonb, '{}')
+       returning id`,
+      [orgId, JSON.stringify({ channel: '#branch' })],
+    );
+    await pool.query('insert into bindings (project_id, integration_id) values ($1, $2)', [
+      moved.rows[0]?.id,
+      account.rows[0]?.id,
+    ]);
+    const repository = secretAdapters.createPostgresBindingRepository(pool, accountOnlyFieldsOf);
+    const read = await repository.forIntegration(account.rows[0]?.id as never);
+    expect(read?.bindings.map((binding) => binding.defaultBranch)).toEqual(['trunk']);
+  });
+
   it('answers nothing for a project with no bindings, rather than every binding', async () => {
     const other = await pool.query<{ id: string }>(
       `insert into projects (org_id, key, name, repo_url)

@@ -149,6 +149,8 @@ export interface InboundAuditLog {
 export interface InboundBinding {
   readonly bindingId: Id;
   readonly projectId: Id;
+  /** `projects.default_branch` of {@link projectId}, handed to the normaliser (WP-148). */
+  readonly defaultBranch: string;
   /** Built from `integrations.config` with this binding's `bindings.config` merged over it. */
   readonly inbound: InboundNormaliser;
 }

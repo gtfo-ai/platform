@@ -800,6 +800,7 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
       {
         integrationId: '00000000-0000-4000-8000-0000000000a9',
         projectId: '00000000-0000-4000-8000-0000000000b9',
+        defaultBranch: 'main',
         resolveUser: () => null,
         resolveThread: async () => null,
       },
@@ -811,6 +812,7 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
       {
         integrationId: '00000000-0000-4000-8000-0000000000a9',
         projectId: '00000000-0000-4000-8000-0000000000b9',
+        defaultBranch: 'main',
         resolveUser: () => null,
         resolveThread: async () => null,
       },
@@ -1178,6 +1180,7 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
       {
         integrationId: '00000000-0000-4000-8000-0000000000a8',
         projectId: '00000000-0000-4000-8000-0000000000b8',
+        defaultBranch: 'main',
         resolveUser: () => null,
         resolveThread: async () => null,
       },
@@ -1194,6 +1197,7 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
       {
         integrationId: '00000000-0000-4000-8000-0000000000a8',
         projectId: '00000000-0000-4000-8000-0000000000b8',
+        defaultBranch: 'main',
         resolveUser: () => null,
         resolveThread: async () => null,
       },

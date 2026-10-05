@@ -73,6 +73,7 @@ const resolveThread: InboundContext['resolveThread'] = async (thread) =>
 const context = (mapped: boolean): InboundContext => ({
   projectId: PROJECT_ID,
   integrationId: INTEGRATION_ID,
+  defaultBranch: 'main',
   resolveUser: (identity: ExternalIdentity) =>
     mapped && identity.external_id === MAPPED ? USER_ID : null,
   resolveThread,
@@ -199,6 +200,7 @@ describe('button answers (BD-006, Q10)', () => {
       {
         projectId: PROJECT_ID,
         integrationId: INTEGRATION_ID,
+        defaultBranch: 'main',
         resolveUser: (identity) => {
           seen.push(identity);
           return USER_ID;

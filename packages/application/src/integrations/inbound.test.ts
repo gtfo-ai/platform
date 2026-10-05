@@ -404,12 +404,47 @@ const resolvedWith = (
   bindings: bindings.map((binding, index) => ({
     bindingId: `00000000-0000-4000-8000-00000000d00${index}` as Id,
     projectId: binding.projectId,
+    defaultBranch: 'main',
     inbound: normaliserDouble(binding.script ?? script),
   })),
   redactor: redactorDouble(),
 });
 
 // ── The thread lookup a normaliser is handed (WP-88) ─────────────────────────
+
+/**
+ * WP-148 (backlog 444): each binding's normaliser is handed **its project's** stored default branch,
+ * so a push hook is judged against `projects.default_branch` rather than the provider's own default.
+ */
+describe('the default branch a normaliser is handed (WP-148)', () => {
+  it('hands each binding’s normaliser its own project’s stored default branch', async () => {
+    const seen: [string, string][] = [];
+    const recording: InboundNormaliser = {
+      ...normaliserDouble(),
+      normalise: async (_delivery, context) => {
+        seen.push([context.projectId, context.defaultBranch]);
+        return { events: [], ignored: [] };
+      },
+    };
+    const harness = harnessFor({
+      ...resolvedWith(),
+      bindings: [
+        { bindingId: PROJECT, projectId: PROJECT, defaultBranch: 'main', inbound: recording },
+        {
+          bindingId: OTHER_PROJECT,
+          projectId: OTHER_PROJECT,
+          defaultBranch: 'trunk',
+          inbound: recording,
+        },
+      ],
+    });
+    await harness.deliver();
+    expect(seen).toEqual([
+      [PROJECT, 'main'],
+      [OTHER_PROJECT, 'trunk'],
+    ]);
+  });
+});
 
 describe('the thread lookup a normaliser is handed (WP-88, PROGRESS backlog 195)', () => {
   it('is scoped to the binding’s project and the account, and bounded before it asks', async () => {
@@ -444,8 +479,13 @@ describe('the thread lookup a normaliser is handed (WP-88, PROGRESS backlog 195)
       {
         ...resolved,
         bindings: [
-          { bindingId: PROJECT, projectId: PROJECT, inbound: asking },
-          { bindingId: OTHER_PROJECT, projectId: OTHER_PROJECT, inbound: asking },
+          { bindingId: PROJECT, projectId: PROJECT, defaultBranch: 'main', inbound: asking },
+          {
+            bindingId: OTHER_PROJECT,
+            projectId: OTHER_PROJECT,
+            defaultBranch: 'main',
+            inbound: asking,
+          },
         ],
       },
       { threads },
@@ -731,7 +771,7 @@ describe('a merge-request transition the log already holds (WP-110)', () => {
     return {
       ...resolvedWith(),
       inbound,
-      bindings: [{ bindingId: PROJECT, projectId: PROJECT, inbound }],
+      bindings: [{ bindingId: PROJECT, projectId: PROJECT, defaultBranch: 'main', inbound }],
     };
   };
   const delivery = (id: string, ...types: string[]): WebhookDelivery => ({

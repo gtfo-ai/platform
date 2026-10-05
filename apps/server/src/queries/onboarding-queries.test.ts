@@ -36,6 +36,7 @@ import {
   environmentSecretSource,
   ForbiddenSecretNameError,
   MissingSecretError,
+  replaceProjectBindings,
 } from './onboarding-queries.js';
 
 /** Obviously fake (BD-002). */
@@ -767,5 +768,35 @@ describe('assertStaticIntegrationBindable (WP-137)', () => {
     await expect(
       assertStaticIntegrationBindable(txWith(['p-1']).tx, 'i-1', null, 0),
     ).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * WP-148: one binding per (project, integration). The write upserts on that key, so a request that
+ * names an integration twice would let the last overlay win silently; it is refused by name before
+ * any database work. The stub database proves the order: a single naming reaches the transaction.
+ */
+describe('replaceProjectBindings refuses an integration named twice (WP-148)', () => {
+  const egress = createIntegrationEgressPolicy([]);
+  const reached = new Error('the transaction was reached');
+  const database = {
+    transaction: async () => {
+      throw reached;
+    },
+  } as unknown as Parameters<typeof replaceProjectBindings>[0];
+  const A = '00000000-0000-4000-8000-0000000000a1';
+
+  it('refuses a repeated integration id with 400, before the transaction', async () => {
+    await expect(
+      replaceProjectBindings(database, 'p', [{ integrationId: A }, { integrationId: A }], {
+        egress,
+      }),
+    ).rejects.toMatchObject({ statusCode: 400, code: 'invalid_request' });
+  });
+
+  it('reaches the transaction for a set that names each integration once', async () => {
+    await expect(
+      replaceProjectBindings(database, 'p', [{ integrationId: A }], { egress }),
+    ).rejects.toBe(reached);
   });
 });

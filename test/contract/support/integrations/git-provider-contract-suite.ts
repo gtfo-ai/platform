@@ -354,6 +354,7 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
     ): InboundContext => ({
       projectId: context.projectId,
       integrationId: context.integrationId,
+      defaultBranch: 'main',
       resolveUser: resolve,
       resolveThread: async () => null,
     });

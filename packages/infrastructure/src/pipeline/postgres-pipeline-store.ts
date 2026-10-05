@@ -372,6 +372,23 @@ export const createPostgresPipelineStore = (
       return row === undefined ? null : toStoredTask(row, templateFor(row));
     },
 
+    findByTicketSignal: async (tx, query) => {
+      // WP-148: WP-145's predicate (`recordTicketSignal`'s), as a read — by the stable id when both
+      // the signal and the row carry one, by the key otherwise. An id match before a key match.
+      const { rows } = await sqlOf(tx).query<TaskRow>(
+        `select ${TASK_COLUMNS} from tasks t
+          where t.project_id = $1 and t.ticket_provider = $2 and t.mode = $4
+            and (case when $5::text is not null and t.ticket_id is not null
+                      then t.ticket_id = $5::text
+                      else t.ticket_key = $3 end)
+          order by (t.ticket_id is null), t.created_at
+          limit 1`,
+        [query.projectId, query.provider, query.ticketKey, query.mode, query.ticketId],
+      );
+      const row = rows[0];
+      return row === undefined ? null : toStoredTask(row, templateFor(row));
+    },
+
     findByMergeRequest: async (tx, query) => {
       const { rows } = await sqlOf(tx).query<TaskRow>(
         `select ${TASK_COLUMNS} from tasks t

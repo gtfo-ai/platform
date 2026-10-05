@@ -56,6 +56,7 @@ interface AccountRow extends Record<string, unknown> {
   readonly binding_id: string | null;
   readonly project_id: string | null;
   readonly binding_config: unknown;
+  readonly default_branch: string | null;
 }
 
 const asObject = (value: unknown): JsonObject =>
@@ -153,9 +154,11 @@ export const createPostgresBindingRepository = (
               i.secret_ids  as secret_ids,
               b.id          as binding_id,
               b.project_id  as project_id,
-              b.config      as binding_config
+              b.config      as binding_config,
+              p.default_branch as default_branch
          from integrations i
          left join bindings b on b.integration_id = i.id
+         left join projects p on p.id = b.project_id
         where i.id = $1
           and i.retired_at is null
         order by b.project_id`,
@@ -172,6 +175,8 @@ export const createPostgresBindingRepository = (
       .map((row) => ({
         bindingId: row.binding_id as Id,
         projectId: row.project_id as Id,
+        // `projects.default_branch` is `not null`, and `bindings.project_id` references it.
+        defaultBranch: row.default_branch as string,
         config: overlayBindingConfig(account, asObject(row.binding_config), accountOnly),
       }));
 

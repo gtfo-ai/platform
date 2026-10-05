@@ -14043,6 +14043,8 @@ container's old environment (WP-130 changed the operator guide to say recreate, 
 
 ### 446. **WP-144's criterion (3) — a real `docker compose stop runner` mid-run on a compose stack — is not built** (TODO, **minor — its two halves are covered by the launcher check's new record and the two-process e2e; the whole needs fake providers reachable from a compose stack, which do not exist**. Found by WP-144's implementer; unowned)
 
+### 447. **A bindings re-save whose overlay points a git binding at another repository keeps the old repository's `mr_poll_default_head`, so the next poll records one spurious `default_branch.moved` (a rebase re-check and a re-index)** (TODO, **minor — benign, the re-index is arguably wanted after a repository change**. Found by WP-148's implementer; the reviewer proposed the fix: in the upsert's `set`, `mrPollDefaultHead: case when bindings.config = excluded.config then bindings.mr_poll_default_head else null end` — jsonb `=` keeps the identical re-save of backlog 444 intact — and flip the integration test's assertion for a changed overlay. Unowned)
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -42900,3 +42902,30 @@ Canaries (`canary.py`, copy aside / mutate / run / restore, md5 asserted): accep
 
 Proposed BD-024 sentence, amended — append to it: *and a provider refusal to say where the CI file is fails the plan, retryably (WP-147).*
 3. **[nit]** The PUT's OpenAPI description says the response waits on the new branch's read (a mirror fetch).
+
+#### WP-148
+
+**Re-saving bindings keeps the poll state, a webhook binding hears a push to the stored default branch, and a ticket comment finds its task by issue id** — rulings (a)/(b)/(c) of the row; backlog **444** and WP-145's discovered `ask/commands.ts` item. Implementer, session 11, on `3bd76fcd`. No migration, no contract (wire) change.
+
+- **(a)** `replaceProjectBindings` (`apps/server/src/queries/onboarding-queries.ts`) deletes only the bindings left out (`notInArray`, which drizzle 0.45 renders `true` for an empty list — read in its source) and upserts the rest on the table's unique key `(project_id, integration_id)`, setting `config` and `updated_at` only — so an unchanged identity keeps its row id, `poll_cursor`, `mr_poll_cursor` and `mr_poll_default_head`. A new integration, or one removed and added back, is a new row with all three `null` (stated). A request naming an integration twice is refused `400 invalid_request` before the transaction (it was a 500 unique violation; with an upsert it would have been last-overlay-wins).
+- **(b)** `InboundContext.defaultBranch` (required, rule 31) carries the bound project's `projects.default_branch`: `PostgresBindingRepository.forIntegration` joins `projects`, `IntegrationBinding`/`InboundBinding` carry it, and the ingress hands it per binding. GitLab's `normalisePush` compares `ref` with it and no longer reads the hook's `project.default_branch` (a push with none is no longer `malformed_payload`); the fake git normaliser applies the same rule.
+- **(c)** new `TaskRepository.findByTicketSignal` (memory + Postgres): WP-145's `recordTicketSignal` predicate as a read, any state, id match before key match; the ask handler passes `ticket.id`. `findByTicket` (intake's key-or-id) is unchanged.
+
+**Criteria → tests** (canaries scripted with md5 restore, `/private/tmp/claude-501/wp148/canary.py` and `canary2.py`; each failed its test):
+- (1) `test/integration/server/onboarding.integration.test.ts` › "keeps every poll field of a binding re-saved unchanged, and starts a new identity fresh (WP-148)" (canary: the old delete-and-re-insert → fails). `apps/server/src/queries/onboarding-queries.test.ts` › "refuses a repeated integration id with 400, before the transaction", › "reaches the transaction for a set that names each integration once".
+- (2) `test/contract/integrations/gitlab.contract.test.ts` › "records a push to the stored default branch while GitLab’s own default differs (WP-148)" and `packages/integrations/src/providers/gitlab/inbound.test.ts` › "reads the stored default branch, never GitLab’s own default (WP-148)" (canary: `hook.project?.default_branch ?? context.defaultBranch` → both fail); `packages/application/src/integrations/inbound.test.ts` › "hands each binding’s normaliser its own project’s stored default branch" (canary: a fixed `'main'` → fails); `test/integration/secrets/bindings.integration.test.ts` › "answers each binding with its project’s stored default branch (WP-148)".
+- (3) `packages/application/src/ask/ask-pipeline.test.ts` › "asks the task by its id when the comment names the issue’s new key", › "canary: an unrelated issue that now holds the old key asks no task that knows its own id", › "still asks a task that recorded no id by its key" (canaries: `findByTicket` → the canary fails; `ticketId: null` → two fail); `test/contract/support/pipeline-store-suite.ts` (memory + Postgres) › "finds a task for a ticket signal by the stable id first, and by the key only for a task with no id (WP-148)" (canaries: memory key-or-id → fails; Postgres key-or-id → fails).
+- (4) Docs below.
+
+**Sentences falsified** (grep: `re-insert`, `resets the cursor`, `push hook`, `onto GitLab's default`, `old key`, `keep the two the same`):
+- **Fixed**: GitLab `setup-guide.md` (*"only a push onto GitLab's default branch produces an event"*); technical/03 `bindings` (amendment: the PUT updates in place); technical/08 (the bindings PUT); technical/06 (the inbound line); operator guide § polling (webhook push judged against the stored branch; a re-save keeps poll position); Jira `setup-guide.md`, user guide § 3 and `first-local-test.md`'s moved-ticket item (an `@agentic ask` comment reaches the moved task).
+- **Judged and left**: migrations 0061, 0068, 0074's comments (*"The PUT … deletes and re-inserts the rows"* — never edited; technical/03's amendment names them as of their time); `first-local-test.md:108` (*"Keep the two the same anyway"* — still advice); `onboarding-queries.ts:34` (*"A binding missing from the request is deleted"* — still true).
+
+**Decisions and assumptions.**
+- The binding's identity is `(project, integration)` as ruled; the overlay is not part of it. **Residual**: an overlay that changes a git binding's `project` path keeps `mr_poll_default_head` read of the old repository, so the next poll of a poll-only binding records one spurious `default_branch.moved` (a rebase re-check and an index request); the cursors are instants and only shift a window.
+- `defaultBranch` is required on `InboundContext`, so every normaliser test context names one; only GitLab and the git fake read it.
+- A push to GitLab's own default that is not the stored branch is now dropped (`unsupported_event`) — WP-142's one-answer rule, and the canary of (2).
+
+**Discovered work**: none new beyond the residual above (for the refiner: reset `mr_poll_default_head` when a git binding's overlay changes its `project`).
+
+**Verification** (each tier after a load reading under 12, except one): `PASS: verify` (530 files, 10 700 tests, coverage ratchet PASS — the first run failed only `apps/server`'s branch floor, 56.93 % against 57 %, on the new uncovered branches; one removed, the refusal unit-tested); `PASS: verify:integration` (83 files, 822); `PASS: verify:e2e` (64 files, 278, 740 s). No `apps/web` or `@platform/contracts` change, so no `verify:ui`. **Machine rule breach, recorded**: the first `verify` was started in the same command as a load reading of 13.25.

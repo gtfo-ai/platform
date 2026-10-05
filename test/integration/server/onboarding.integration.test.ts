@@ -514,6 +514,102 @@ describe('bindings and configuration', () => {
   });
 
   /**
+   * WP-148 (backlog 444): re-saving a project's bindings keeps each unchanged binding's poll state —
+   * the ticket cursor, the merge-request cursor and the default-branch head — because the row is
+   * updated in place. A binding to an integration not bound before starts fresh, and so does one
+   * removed and added back (a changed identity). The canary is the delete-and-re-insert this
+   * replaced: it would null all three on the first re-save.
+   */
+  it('keeps every poll field of a binding re-saved unchanged, and starts a new identity fresh (WP-148)', async () => {
+    const created = await pool.query<{ id: string }>(
+      `insert into integrations (org_id, type, provider, name)
+       values ($1, 'task_management', 'jira_cloud', 'wiz poll a'),
+              ($1, 'task_management', 'jira_cloud', 'wiz poll b')
+       returning id`,
+      [orgId],
+    );
+    const [first, second] = created.rows.map((row) => row.id) as [string, string];
+    const pollState = async () =>
+      (
+        await pool.query<{
+          integration_id: string;
+          id: string;
+          poll_cursor: Date | null;
+          mr_poll_cursor: Date | null;
+          mr_poll_default_head: string | null;
+          config: unknown;
+        }>(
+          `select integration_id, id, poll_cursor, mr_poll_cursor, mr_poll_default_head, config
+             from bindings where project_id = $1 order by integration_id`,
+          [projectId],
+        )
+      ).rows;
+
+    await replaceProjectBindings(db, projectId, [{ integrationId: first }], { egress });
+    await pool.query(
+      `update bindings set poll_cursor = '2026-10-04T10:00:00Z', mr_poll_cursor = '2026-10-04T11:00:00Z',
+              mr_poll_default_head = 'b5f4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6'
+        where project_id = $1 and integration_id = $2`,
+      [projectId, first],
+    );
+    const [before] = await pollState();
+
+    // The wizard's re-submission: the identical set.
+    await replaceProjectBindings(db, projectId, [{ integrationId: first }], { egress });
+    const [kept] = await pollState();
+    expect(kept?.id, 'the same row, updated in place').toBe(before?.id);
+    expect(kept?.poll_cursor?.toISOString()).toBe('2026-10-04T10:00:00.000Z');
+    expect(kept?.mr_poll_cursor?.toISOString()).toBe('2026-10-04T11:00:00.000Z');
+    expect(kept?.mr_poll_default_head).toBe('b5f4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6');
+
+    // A changed overlay is the same identity: the config moves, the poll state stays.
+    await replaceProjectBindings(
+      db,
+      projectId,
+      [{ integrationId: first, config: { poll_interval_seconds: 120 } }, { integrationId: second }],
+      { egress },
+    );
+    const both = await pollState();
+    const overlaid = both.find((row) => row.integration_id === first);
+    const added = both.find((row) => row.integration_id === second);
+    expect(overlaid?.config).toEqual({ poll_interval_seconds: 120 });
+    expect(overlaid?.poll_cursor?.toISOString()).toBe('2026-10-04T10:00:00.000Z');
+    expect(overlaid?.mr_poll_default_head).toBe('b5f4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6');
+    expect(added, 'a new identity is a new row').toMatchObject({
+      poll_cursor: null,
+      mr_poll_cursor: null,
+      mr_poll_default_head: null,
+    });
+
+    // Removed, then added back: a changed identity starts fresh, stated.
+    await replaceProjectBindings(db, projectId, [{ integrationId: second }], { egress });
+    await replaceProjectBindings(
+      db,
+      projectId,
+      [{ integrationId: first }, { integrationId: second }],
+      {
+        egress,
+      },
+    );
+    expect((await pollState()).find((row) => row.integration_id === first)).toMatchObject({
+      poll_cursor: null,
+      mr_poll_cursor: null,
+      mr_poll_default_head: null,
+    });
+
+    // One binding per integration: a repeated id is refused by name and writes nothing.
+    await expect(
+      replaceProjectBindings(db, projectId, [{ integrationId: first }, { integrationId: first }], {
+        egress,
+      }),
+    ).rejects.toMatchObject({ statusCode: 400, code: 'invalid_request' });
+    expect(await pollState()).toHaveLength(2);
+
+    await replaceProjectBindings(db, projectId, [], { egress });
+    await pool.query('delete from integrations where id = any($1::uuid[])', [[first, second]]);
+  });
+
+  /**
    * WP-100 review round 1, backlog 330: a binding overlay carrying a credential field is refused at
    * the write and writes nothing, and a binding row stored before that refusal — written here the
    * way `psql` or a pre-WP-100 `PUT` wrote it — is served without the credential. The canary for

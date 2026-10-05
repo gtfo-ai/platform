@@ -597,7 +597,8 @@ docker compose up -d                              # run
 - **The business interview is a form**, not a conversation (Q102); **editing a knowledge page or the
   pipeline in the browser** is not built (user guide § 13).
 - **A Jira ticket moved to another project keeps its old key on the branch and the merge request**
-  (WP-145): edits made after the move reach its task by the issue id, by webhook and by poll, and
+  (WP-145): edits made after the move reach its task by the issue id, by webhook and by poll (and
+  since WP-148 so does an `@agentic ask` comment, even before an edit has re-keyed the task), and
   the task shows the new key, but the branch stays `agentic/<old key>` and the merge request is not
   retitled. Whether Jira's search resolves the old key was not measured; the poll asks by id.
 - **Jira Data Center** is not supported; this is Jira Cloud only.

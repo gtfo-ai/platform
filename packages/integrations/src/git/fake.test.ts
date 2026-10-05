@@ -22,6 +22,7 @@ const build = (options: Partial<Options> = {}) =>
 const context = {
   projectId: PROJECT_ID,
   integrationId: INTEGRATION_ID,
+  defaultBranch: 'main',
   resolveUser: () => null,
   resolveThread: async () => null,
 };

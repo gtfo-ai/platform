@@ -72,10 +72,10 @@ const event = <T extends DomainEvent['type']>(type: T, payload: unknown): Domain
   }) as DomainEvent;
 };
 
-const ticketMatched = () =>
+const ticketMatched = (ticket: Record<string, unknown> = TICKET) =>
   event('ticket.matched', {
     project_id: PROJECT,
-    ticket: TICKET,
+    ticket,
     rule: 'label:agentic',
     priority: 'High',
     issue_type: 'Story',
@@ -83,11 +83,16 @@ const ticketMatched = () =>
     links: [],
   });
 
-const comment = (text: string, verified: boolean, commentId = 'c-1') =>
+const comment = (
+  text: string,
+  verified: boolean,
+  commentId = 'c-1',
+  ticket: Record<string, unknown> = TICKET,
+) =>
   event('ticket.comment.added', {
     project_id: PROJECT,
     task_id: null,
-    ticket: TICKET,
+    ticket,
     comment_id: commentId,
     author: {
       provider: 'fake-jira',
@@ -805,6 +810,50 @@ describe('a ticket comment is classified in both directions (criterion 5)', () =
     await seedTask(harness);
     await harness.publish([comment(`@agentic ask ${QUESTION}`, true, 'c-9')]);
     await harness.publish([comment(`@agentic ask ${QUESTION}`, true, 'c-9')]);
+    expect(harness.asks.all()).toHaveLength(1);
+  });
+});
+
+/**
+ * WP-148 (WP-145's discovered item): a ticket comment finds its task by the issue's stable id first,
+ * and by the key only for a task that recorded none — so a comment on a moved issue that arrives
+ * before any `ticket.updated` re-keyed the task still reaches it, and an unrelated issue that now
+ * holds the old key reaches no task that knows its own id. Both directions, on one harness each.
+ */
+describe('a ticket comment reaches its task by the issue id after a move (WP-148)', () => {
+  const mapped = { 'fake-jira': { 'acct-ada': ASKER } };
+  const BEFORE = { ...TICKET, id: '10001' };
+  const MOVED = {
+    provider: 'fake-jira',
+    key: 'NEW-5',
+    url: 'https://jira.example.test/browse/NEW-5',
+    id: '10001',
+  };
+
+  it('asks the task by its id when the comment names the issue’s new key', async () => {
+    const harness = harnessWith({ identities: mapped });
+    await harness.publish([ticketMatched(BEFORE)]);
+    const [task] = harness.store.snapshot();
+    expect(task?.task.ticket).toMatchObject({ key: 'ACME-1', id: '10001' });
+    await harness.publish([comment(`@agentic ask ${QUESTION}`, true, 'c-moved', MOVED)]);
+    expect(harness.asks.all()).toHaveLength(1);
+    expect(harness.asks.all()[0]?.taskId).toBe(task?.task.id);
+  });
+
+  it('canary: an unrelated issue that now holds the old key asks no task that knows its own id', async () => {
+    const harness = harnessWith({ identities: mapped });
+    await harness.publish([ticketMatched(BEFORE)]);
+    const stranger = { ...TICKET, id: '20002' };
+    await harness.publish([comment(`@agentic ask ${QUESTION}`, true, 'c-stranger', stranger)]);
+    expect(harness.asks.all()).toHaveLength(0);
+  });
+
+  it('still asks a task that recorded no id by its key', async () => {
+    const harness = harnessWith({ identities: mapped });
+    await seedTask(harness);
+    await harness.publish([
+      comment(`@agentic ask ${QUESTION}`, true, 'c-keyed', { ...TICKET, id: '30003' }),
+    ]);
     expect(harness.asks.all()).toHaveLength(1);
   });
 });

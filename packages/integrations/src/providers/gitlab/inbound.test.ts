@@ -47,6 +47,7 @@ const user = {
 const context = (resolve: InboundContext['resolveUser'] = () => null): InboundContext => ({
   projectId: PROJECT_ID,
   integrationId: INTEGRATION_ID,
+  defaultBranch: 'main',
   resolveUser: resolve,
   resolveThread: async () => null,
 });
@@ -502,11 +503,37 @@ describe('push hooks', () => {
     expect(result.ignored[0]).toEqual({ reason: 'unsupported_event', detail: 'branch deletion' });
   });
 
-  it('reports a push with no default_branch as malformed', async () => {
-    const result = await normalise(
-      pushHook({ project: { ...projectBlock, default_branch: null } }),
+  /**
+   * WP-148 (backlog 444): the project's **stored** default branch decides, not GitLab's
+   * `project.default_branch` — they differ while a project's default is being moved. Both
+   * directions: a push to the stored branch is the move whatever GitLab's default says (or when the
+   * block carries none), and a push to GitLab's default that is not the stored branch is dropped.
+   */
+  it('reads the stored default branch, never GitLab’s own default (WP-148)', async () => {
+    const stored: InboundContext = { ...context(), defaultBranch: 'main' };
+    const gitlabSaysDevelop = { project: { ...projectBlock, default_branch: 'develop' } };
+    const moved = catalogued(
+      await normalise(pushHook(gitlabSaysDevelop), { ctx: stored }),
+      'default_branch.moved',
     );
-    expect(result.ignored[0]?.reason).toBe('malformed_payload');
+    expect(moved.branch).toBe('main');
+    expect(moved.new_head).toBe(MAIN_SHA);
+
+    const noBlockDefault = await normalise(
+      pushHook({ project: { ...projectBlock, default_branch: null } }),
+      { ctx: stored },
+    );
+    expect(noBlockDefault.events.map((event) => event.type)).toEqual(['default_branch.moved']);
+
+    const toGitLabsDefault = await normalise(
+      pushHook({ ...gitlabSaysDevelop, ref: 'refs/heads/develop' }),
+      { ctx: stored },
+    );
+    expect(toGitLabsDefault.events).toEqual([]);
+    expect(toGitLabsDefault.ignored[0]).toEqual({
+      reason: 'unsupported_event',
+      detail: "push to refs/heads/develop, not the project's default branch",
+    });
   });
 });
 

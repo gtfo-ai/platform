@@ -324,6 +324,16 @@ export interface WebhookDelivery {
 export interface InboundContext {
   readonly projectId: Id;
   readonly integrationId: Id;
+  /**
+   * The bound project's **stored** default branch, `projects.default_branch` (WP-148, backlog 444).
+   *
+   * Since WP-142 it is the one default branch every reader takes; a git provider's push hook names
+   * the branch it moved, so a push to this branch is `default_branch.moved` even while the
+   * provider's own default is another branch (the moment a project's default is being moved).
+   * Required (standing rule 31): a context without it would fall back to the provider's default,
+   * which is the defect this closes. A provider whose deliveries carry no branch never reads it.
+   */
+  readonly defaultBranch: string;
   /** Platform user for a verified provider identity, or `null` when the identity is unmapped. */
   readonly resolveUser: (identity: ExternalIdentity) => Id | null;
   /**

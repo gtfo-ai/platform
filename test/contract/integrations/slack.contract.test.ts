@@ -841,6 +841,7 @@ describe('Slack in replay: every string it emits comes through the redactor', ()
     const result = await context.port.inbound.normalise(delivery, {
       projectId: context.projectId,
       integrationId: context.integrationId,
+      defaultBranch: 'main',
       resolveUser: () => null,
       // The reply is in the harness's task thread, which has no open question (WP-88).
       resolveThread: async () => ({ taskId: context.taskId, openQuestions: 0, questionId: null }),
@@ -935,6 +936,7 @@ describe("the binding composes its own three credentials on top of the caller's 
     const result = await context.port.inbound.normalise(delivery, {
       projectId: context.projectId,
       integrationId: context.integrationId,
+      defaultBranch: 'main',
       resolveUser: () => null,
       // The reply is in the harness's task thread, which has no open question (WP-88).
       resolveThread: async () => ({ taskId: context.taskId, openQuestions: 0, questionId: null }),

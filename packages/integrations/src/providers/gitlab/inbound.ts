@@ -405,12 +405,13 @@ const normalisePush = (
   context: InboundContext,
   actor: Actor,
 ): NormalisedDelivery<GitProviderInboundEvent> => {
-  const defaultBranch = hook.project?.default_branch ?? null;
-  if (defaultBranch === null) {
-    return ignored('malformed_payload', 'push delivery carries no project.default_branch');
-  }
+  // WP-148 (backlog 444): the **stored** default branch decides, never the hook's
+  // `project.default_branch` — GitLab's own default, which differs from the project's while its
+  // default is being moved (WP-142: the stored branch is the one answer). The push names its branch
+  // in `ref`, so the comparison needs nothing from GitLab's project block.
+  const defaultBranch = context.defaultBranch;
   if (hook.ref !== `refs/heads/${defaultBranch}`) {
-    return ignored('unsupported_event', `push to ${hook.ref}, not the default branch`);
+    return ignored('unsupported_event', `push to ${hook.ref}, not the project's default branch`);
   }
   if (ZERO_SHA.test(hook.after)) {
     return ignored('unsupported_event', 'branch deletion');
