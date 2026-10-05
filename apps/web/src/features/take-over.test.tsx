@@ -425,7 +425,7 @@ describe('the run screen’s context pack (backlog 168 and 172)', () => {
  * Backlog 462: a run that delivered its artifact in the turn that crossed its cap ends `completed`
  * with `error_max_budget_usd`. The header says so beside the status.
  */
-describe('the run screen’s budget cap badge (backlog 462)', () => {
+describe('the run screen’s budget cap badge (backlog 466)', () => {
   const renderRun = async (record: RunRecord) => {
     window.history.pushState({}, '', `/runs/${RUN}`);
     const view = render(

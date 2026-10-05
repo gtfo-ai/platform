@@ -104,7 +104,7 @@ export const textSearchText = (pack: ContextPackRecord): string | null => {
 };
 
 /**
- * A run that completed **past its budget cap** (PROGRESS backlog 462, BD-010's 2026-10-05
+ * A run that completed **past its budget cap** (PROGRESS backlog 466, BD-010's 2026-10-05
  * amendment). The CLI acknowledged a valid artifact in the turn that crossed the cap, so the platform
  * kept the artifact. The run's terminal reason, `error_max_budget_usd`, is the record of the overrun,
  * and its cost is counted like any other run's.

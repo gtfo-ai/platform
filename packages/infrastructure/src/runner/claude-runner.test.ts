@@ -1227,7 +1227,7 @@ describe('a hand-back on the runner’s own stop (WP-144)', () => {
 
 /**
  * **An artifact delivered in the turn that crossed the cap is kept** (product owner, 2026-10-05,
- * BD-010's amendment, PROGRESS backlog 462). The golden is the Autix ending in miniature. The model
+ * BD-010's amendment, PROGRESS backlog 466). The golden is the Autix ending in miniature. The model
  * hands its answer to the CLI's `StructuredOutput` tool. The CLI acknowledges it. The same turn's
  * spend crosses the $5 ceiling. The CLI ends with `error_max_budget_usd` and `structured_output`
  * absent.
@@ -1236,7 +1236,7 @@ describe('a hand-back on the runner’s own stop (WP-144)', () => {
  * keep depends on (rule 10). The cost is asserted on every kept outcome, because counting the
  * overrun is half of the decision.
  */
-describe('an artifact delivered in the turn that crossed the cap (backlog 462)', () => {
+describe('an artifact delivered in the turn that crossed the cap (backlog 466)', () => {
   const FIVE_DOLLAR_CAP: Partial<RunSpec> = {
     limits: { ...runSpecFixture().limits, maxBudgetUsd: 5 },
   };

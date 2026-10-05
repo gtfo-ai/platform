@@ -519,7 +519,7 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > which of the two happened. `runs.usd_reported` is `0` in that case and is not a claim that the run
 > was free; the number that is a claim is the estimate the price table produces (BD-011).
 
-> **Amended 2026-10-05 (product-owner decision, BD-010's amendment, PROGRESS backlog 462): an
+> **Amended 2026-10-05 (product-owner decision, BD-010's amendment, PROGRESS backlog 466): an
 > artifact delivered in the turn that crosses the cap is kept.** Until this amendment, no structured
 > output was accepted from a budget ending. On the first local test, an architect run (Opus, `local`
 > mode) called the CLI's `StructuredOutput` tool with its plan on its 90th turn, and the CLI answered

@@ -283,7 +283,7 @@ describe('the prompt a run was started with', () => {
 
 /**
  * **A run that delivered its artifact in the turn that crossed its cap** (product owner,
- * 2026-10-05, BD-010's amendment, PROGRESS backlog 462). The runner reports it as `completed` with
+ * 2026-10-05, BD-010's amendment, PROGRESS backlog 466). The runner reports it as `completed` with
  * the terminal reason `error_max_budget_usd`. The executor's job is the ordinary completed path:
  * store the artifact, complete the stage, and count every dollar, all with no pause. The contrast
  * case is the overspend just below, which carries no artifact and pauses.

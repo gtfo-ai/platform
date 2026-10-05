@@ -293,7 +293,7 @@ export interface RunOutcome {
   /**
    * Why the run ended. `completed` with `error_max_budget_usd` is a run that delivered a valid
    * artifact in the turn that crossed its cap (product owner, 2026-10-05, BD-010's amendment,
-   * PROGRESS backlog 462). The artifact is kept, and the terminal reason is the record of the
+   * PROGRESS backlog 466). The artifact is kept, and the terminal reason is the record of the
    * overrun. Its `cost` is counted like any other ending's.
    */
   readonly terminalReason: RunTerminalReason;

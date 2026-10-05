@@ -45,7 +45,7 @@
  * platform's price table (WP-19) is where that comes from if it is ever wanted.
  *
  * **An artifact delivered in the turn that crossed the cap is kept** (product owner, 2026-10-05,
- * BD-010's amendment, PROGRESS backlog 462). Until then no structured output was accepted from either
+ * BD-010's amendment, PROGRESS backlog 466). Until then no structured output was accepted from either
  * budget ending, and an architect run lost the plan the CLI had already acknowledged. Both budget
  * endings — the CLI's `error_max_budget_usd` and the relabel above — now read
  * {@link DeliveredArtifact}: the last top-level `StructuredOutput` `tool_use` whose `tool_result` was
@@ -328,7 +328,7 @@ const STRUCTURED_OUTPUT_TOOL = 'StructuredOutput';
 
 /**
  * An artifact the CLI acknowledged: the `input` of a top-level `StructuredOutput` `tool_use` whose
- * `tool_result`, matched by `tool_use_id`, was not an error (backlog 462). It is untrusted model
+ * `tool_result`, matched by `tool_use_id`, was not an error (backlog 466). It is untrusted model
  * output, exactly as `result.structured_output` is, so it is re-validated before anything keeps it.
  */
 interface DeliveredArtifact {
@@ -848,7 +848,7 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
   };
 
   /**
-   * The artifact a budget ending keeps (backlog 462). This is the delivered input, re-validated
+   * The artifact a budget ending keeps (backlog 466). This is the delivered input, re-validated
    * against the run's artifact type with the same validator `structured_output` goes through.
    * It is `null` when the run has no artifact type, delivered nothing, crashed, or delivered
    * something the schema refuses. That last case is logged with paths only, never values.
