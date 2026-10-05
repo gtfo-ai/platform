@@ -23,6 +23,9 @@
  *     block-list is generous — being generous with `allow` is how a policy becomes decoration.
  *     `env`-style wrappers are peeled for them; a leading `VAR=value`, `sh -c`, `eval` and `xargs`
  *     are not, because each of those decides what actually runs and the policy has not read it.
+ *     **One kind of allow entry is not a glob**: a precise entry (`PRECISE_ALLOW_ENTRIES`, today
+ *     only `sed`'s print-range form, backlog 462) is a token grammar for a verb whose argument is
+ *     a program, so no glob over it could be safe; it never admits a line with a substitution.
  *  4. **An unmatched command is `ask`, never `allow`** (product/19 §3: "everything else → ask").
  *     Two things floor an otherwise allowed line at `ask`: a redirection that writes to a path,
  *     and an argument on `HAZARDOUS_ARGUMENTS` — the flag that hands an allow-listed verb an
@@ -160,7 +163,137 @@ export const UNPATTERNABLE_BLOCK_ITEMS = [
   },
 ] as const;
 
-/** product/19 §3, read-only stages: exploration commands, nothing that writes. */
+/**
+ * An allow entry that is **not a glob**: a named grammar the policy checks token by token (PROGRESS
+ * backlog 462). A glob over a verb whose script is a program — `sed -n *` — admits
+ * `sed -n '1e rm -rf /' f` and `sed -n 1p f -i`, so a verb like that reaches `allow` only through a
+ * precise matcher, and anything its grammar does not spell falls through to the `ask` fallback.
+ *
+ * The entry's `entry` string is what sits in an allow list (and in the effective-configuration
+ * DTO), so a project or organisation narrows it like any other entry: listing it verbatim in `ask`
+ * or `block` removes it from `allow`, and an organisation `allow` that does not list it verbatim
+ * removes it from every run. It is never matched as a glob.
+ */
+export interface PreciseAllowEntry {
+  /** The name the entry has in an allow list. Never matched as a glob. */
+  readonly entry: string;
+  /**
+   * A glob every line the grammar admits also matches. Only its specificity is used, so the entry
+   * ties with an ask entry exactly as the glob would — never more specific than its envelope.
+   */
+  readonly envelope: string;
+  /** Decides on the line's **written** tokens (`tokenise`, quoting still on). */
+  readonly admits: (tokens: readonly string[]) => boolean;
+}
+
+/** One sed address: a line number, or `$` (the last line) — the second only inside single quotes. */
+const SED_PRINT_SCRIPT_UNQUOTED = /^\d+(?:,\d+)?p$/;
+const SED_PRINT_SCRIPT_DOUBLE_QUOTED = /^"\d+(?:,\d+)?p"$/;
+const SED_PRINT_SCRIPT_SINGLE_QUOTED = /^'(?:\d+|\$)(?:,(?:\d+|\$))?p'$/;
+
+/**
+ * An input file the sed grammar accepts: a plain word the shell hands on unchanged, and never one
+ * that reads as an option. No quote, `$`, backtick, backslash, glob (`* ? [`), brace or tilde, so
+ * nothing the shell expands can put a word in front of sed that the policy did not read.
+ */
+const SED_PLAIN_FILE = /^[A-Za-z0-9_./@%+=:,][A-Za-z0-9_./@%+=:,-]*$/;
+
+/** A redirection that sends output nowhere: to `/dev/null`, or a descriptor duplicated or closed. */
+const SED_NOWHERE_REDIRECTION = /^(?:(?:\d*>>?|&>>?|\d*>\|)\/dev\/null|\d*>&(?:\d+-?|-))$/;
+const SED_NOWHERE_OPERATOR = /^(?:\d*>>?|&>>?|\d*>\|)$/;
+
+const sedOperandsAreReadOnly = (operands: readonly string[]): boolean => {
+  for (let index = 0; index < operands.length; index += 1) {
+    const token = operands[index] as string;
+    if (SED_NOWHERE_OPERATOR.test(token) && operands[index + 1] === '/dev/null') {
+      index += 1;
+    } else if (!SED_NOWHERE_REDIRECTION.test(token) && !SED_PLAIN_FILE.test(token)) {
+      return false;
+    }
+  }
+  return true;
+};
+
+/**
+ * `sed -n '<N>p' [<file>…]` and `sed -n '<N>,<M>p' [<file>…]` — sed's print-range form, which is
+ * the `head`/`tail` of a line range and nothing else (PROGRESS backlog 462, the product owner's
+ * decision of 2026-10-05). GNU sed 4.9 is what the run image ships (`platform-runtime:dev`,
+ * Debian 13, measured 2026-10-05).
+ *
+ * **The grammar, token by token — anything else falls to `ask`:**
+ *
+ *  1. argv[0] is exactly `sed` (an environment wrapper is peeled first, like every allow entry).
+ *  2. argv[1] is exactly `-n`. Not `--quiet`, `--silent`, `-ne`, `-n1p` or a quoted `"-n"`.
+ *  3. argv[2] is the whole script: an address `N` or `N,M` followed by `p`, where `N`/`M` are
+ *     decimal line numbers — written bare (`10,20p`), in double quotes (`"10,20p"`) or in single
+ *     quotes (`'10,20p'`). `$` (the last line) is accepted **only inside single quotes**
+ *     (`'$p'`, `'10,$p'`): bare or double-quoted, `$p` is the shell's parameter expansion of `p`,
+ *     not an address. No other command, no second command, no regular-expression address, no
+ *     `-e`/`-f`/`--expression`.
+ *  4. Every further token is an input file matching {@link SED_PLAIN_FILE}, or a redirection to
+ *     `/dev/null` or a descriptor (`2>/dev/null`, `2> /dev/null`, `2>&1`). Zero files is
+ *     accepted: sed reads standard input, which is the pipeline form `… | sed -n 1,5p`.
+ *
+ * **What the grammar is shaped to exclude, each measured or read off `sed --help`:**
+ *
+ *  - **a script that is a program** — `e` executes a command (`sed -n '1e echo EXECUTED' f`
+ *    printed `EXECUTED`, measured in the run image), `w`/`W` write a file, `r`/`R` read one into
+ *    the output, `s///e` and `s///w` do both. Rule 3 admits one command, `p`, after a numeric
+ *    address, so none of them can be spelled.
+ *  - **an option after the script** — GNU getopt permutes, so `sed -n 1p f -i` edits `f` in place
+ *    (measured: `f` was cut to its first line). Rule 4 refuses any operand starting with `-`:
+ *    `-i`, `--in-place`, `-s`, `-z`, `-E`, `-u`, `-l`, `--debug`, `--posix`, `--follow-symlinks`,
+ *    `--`, and `-` (standard input by name — over-asked, stated).
+ *  - **an option the shell writes in** — `sed -n 1p *` with a file named `-i` in the directory
+ *    edited every file in place (measured). Rule 4 refuses a glob, a brace, a tilde, a quote, a
+ *    backslash and any `$`, and the policy refuses this entry on **any line that carries a command
+ *    or process substitution** (`evaluateCommand`), because the scanner lifts a substitution's
+ *    body out of the line and `sed -n 1p f $(ls)` would otherwise be judged as `sed -n 1p f`.
+ *
+ * **Left out deliberately:** a regular-expression address (`sed -n '/re/p'`) — `grep` and `rg` are
+ * already allowed and say the same thing, while GNU sed's address syntax (`\cREc` delimiters, the
+ * `I`/`M` flags, `addr1,+N`, `first~step`) is more grammar to prove for no new capability; `-e`
+ * with the allowed script; and `sed --sandbox`, which disables `e`/`r`/`w` but would admit every
+ * other option above. They ask.
+ */
+export const SED_PRINT_RANGE_ALLOW: PreciseAllowEntry = {
+  entry: "sed -n '<N>[,<M>]p' [<file>…]",
+  envelope: 'sed -n *',
+  admits: (tokens) => {
+    const [name, quiet, script, ...operands] = tokens;
+    return (
+      name === 'sed' &&
+      quiet === '-n' &&
+      script !== undefined &&
+      (SED_PRINT_SCRIPT_UNQUOTED.test(script) ||
+        SED_PRINT_SCRIPT_DOUBLE_QUOTED.test(script) ||
+        SED_PRINT_SCRIPT_SINGLE_QUOTED.test(script)) &&
+      sedOperandsAreReadOnly(operands)
+    );
+  },
+};
+
+/** Every precise allow entry the platform ships, by the name it has in an allow list. */
+export const PRECISE_ALLOW_ENTRIES: ReadonlyMap<string, PreciseAllowEntry> = new Map(
+  [SED_PRINT_RANGE_ALLOW].map((entry) => [entry.entry, entry]),
+);
+
+/**
+ * product/19 §3, read-only stages: exploration commands, nothing that writes.
+ *
+ * **`head`, `tail`, `wc` and `pwd`** joined at the product owner's decision of 2026-10-05 (PROGRESS
+ * backlog 462: the first local test's runs had `head -60 <file>`, `ls <dir> | tail -25` and
+ * `wc -l <file>` denied as `ask`, a model round-trip each). The run image ships GNU coreutils 9.7
+ * (Debian 13; `readlink -f` of each is `/usr/bin/<name>`, no busybox — measured 2026-10-05), and
+ * every option of all four was read off `--help` there: **none writes a file or runs a command**.
+ * The three that do more than print are decided, not missed: `wc --files0-from=F` reads the file
+ * names to count from `F` (a read, the class `cat *` already allows); `tail --pid=PID` only watches
+ * a process; and `tail -f`/`-F`/`--follow` blocks until the Bash tool's own timeout ends it —
+ * read-only, so allowed. That is also why a bare entry and a `*` entry are safe for these four and
+ * are not for `sed`: no argument the shell or a file name can put in front of them changes what
+ * they do, so a glob is enough. `sed` is a program interpreter and reaches `allow` only through
+ * {@link SED_PRINT_RANGE_ALLOW}'s grammar.
+ */
 export const DEFAULT_READ_ONLY_ALLOW: readonly string[] = [
   // Two entries per verb — `git log` and `git log <args>` — never `git log*`. A trailing `*` with
   // no space allows every command whose *name merely starts with* the verb, which is not what
@@ -183,6 +316,15 @@ export const DEFAULT_READ_ONLY_ALLOW: readonly string[] = [
   'grep *',
   'rg *',
   'find *',
+  'head',
+  'head *',
+  'tail',
+  'tail *',
+  'wc',
+  'wc *',
+  'pwd',
+  'pwd *',
+  SED_PRINT_RANGE_ALLOW.entry,
 ];
 
 /**
@@ -1020,7 +1162,8 @@ export const matchesCommandPattern = (pattern: string, command: string): boolean
  * to an `agentic/` branch — which is exactly the split product/19 §3 describes.
  */
 const specificity = (pattern: string): number =>
-  normaliseCommand(pattern).replace(/\*/g, '').length;
+  normaliseCommand(PRECISE_ALLOW_ENTRIES.get(pattern)?.envelope ?? pattern).replace(/\*/g, '')
+    .length;
 
 /** The most specific pattern in `patterns` that matches under `matches`. */
 const bestMatch = (
@@ -1421,7 +1564,19 @@ const findAnsiCEnd = (text: string, openIndex: number): number => {
   return -1;
 };
 
-/** Whether a redirection target is a real file rather than a descriptor or the bit bucket. */
+/** What follows `>&` when it names a descriptor: `2>&1`, `1>&2`, `2>&-`, `3>&1-` (a move). */
+const DESCRIPTOR_WORD = /^(?:\d+-?|-)$/;
+
+/**
+ * Whether a redirection target is a real file rather than a descriptor or the bit bucket.
+ *
+ * `/dev/null` is compared **as written, unquoted** — `2>/dev/null`, `>/dev/null`, `&>/dev/null`,
+ * `>>/dev/null`, `2>>/dev/null`, `>|/dev/null`, `>&/dev/null` — and every other spelling is a
+ * write target (backlog 462, decided and tested): `/dev/nullx` and `/dev/null/../x` are other
+ * paths, and a quoted `"/dev/null"` or `'/dev/null'` floors too, because taking quotes off here
+ * would be `unquoteToken`'s reading and not bash's (`"/dev/nul\l"` is `/dev/null` to the one and
+ * `/dev/nul\l` to the other). Over-asking a quoted bit bucket is the safe direction.
+ */
 const isWriteTarget = (target: string): boolean =>
   target.length > 0 && !target.startsWith('&') && target !== '/dev/null';
 
@@ -1574,12 +1729,22 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
         cursor += 1;
       }
       if (target === '' && command[cursor] === '&') {
-        target = '&';
+        // `>&word`: a word of digits (optionally `N-`) or a lone `-` duplicates or closes a
+        // descriptor; **any other word is a file** — bash reads `>&out` and `>& out` as `&>out`
+        // (measured, bash 3.2 and 5.2: `ls >&out1.txt`, `ls 1>&out2`, `ls >& out3` and
+        // `ls >&"out11"` each wrote that file). Until backlog 462 every `>&…` was taken for a
+        // descriptor and `ls >&out.txt` was `allow`. A word that is not plainly a descriptor —
+        // quoted, a variable, empty — is a write target, which can only over-ask.
         cursor += 1;
-        while (cursor < command.length && /[\d-]/.test(command[cursor] as string)) {
-          target += command[cursor];
+        while (command[cursor] === ' ') {
           cursor += 1;
         }
+        let word = '';
+        while (cursor < command.length && !/[\s;&|()<>]/.test(command[cursor] as string)) {
+          word += command[cursor];
+          cursor += 1;
+        }
+        target = DESCRIPTOR_WORD.test(word) ? `&${word}` : word === '' ? '>&' : word;
       }
       if (isWriteTarget(target)) {
         writeTargets.push(target);
@@ -1652,6 +1817,8 @@ interface Parsed {
   readonly fragments: readonly string[];
   readonly writeTargets: readonly string[];
   readonly uncertainty: readonly UncertaintyReason[];
+  /** Whether the line, at any depth, carries a command or process substitution. */
+  readonly substitutes: boolean;
 }
 
 /**
@@ -1667,6 +1834,7 @@ const parseCommand = (command: string, depth = 0): Parsed => {
     uncertainty.add(reason);
   }
   const writeTargets = [...outer.writeTargets];
+  let substitutes = outer.substitutions.length > 0;
 
   for (const segment of outer.segments) {
     fragments.push(segment);
@@ -1691,6 +1859,7 @@ const parseCommand = (command: string, depth = 0): Parsed => {
       const nested = parseCommand(script, depth + 1);
       fragments.push(script, ...nested.fragments);
       writeTargets.push(...nested.writeTargets);
+      substitutes ||= nested.substitutes;
       for (const reason of nested.uncertainty) {
         uncertainty.add(reason);
       }
@@ -1709,7 +1878,12 @@ const parseCommand = (command: string, depth = 0): Parsed => {
     }
   }
 
-  return { fragments: [...new Set(fragments)], writeTargets, uncertainty: [...uncertainty] };
+  return {
+    fragments: [...new Set(fragments)],
+    writeTargets,
+    uncertainty: [...uncertainty],
+    substitutes,
+  };
 };
 
 /**
@@ -1754,6 +1928,19 @@ export interface CommandEvaluation {
 }
 
 /**
+ * Does an allow entry admit this piece of command line? A precise entry
+ * ({@link PRECISE_ALLOW_ENTRIES}) decides by its grammar, and only when the line carries no command
+ * or process substitution (`admitPrecise`); every other entry is a glob.
+ */
+const matchesAllowEntry = (entry: string, text: string, admitPrecise: boolean): boolean => {
+  const precise = PRECISE_ALLOW_ENTRIES.get(entry);
+  if (precise === undefined) {
+    return matchesCommandPattern(entry, text);
+  }
+  return admitPrecise && precise.admits(tokenise(text));
+};
+
+/**
  * Verdict for one piece of command line.
  *
  * `block` always wins. Between `allow` and `ask` the more specific pattern wins, and a tie goes to
@@ -1764,6 +1951,7 @@ const evaluateOne = (
   text: string,
   policy: ResolvedCommandPolicy,
   fallback: CommandVerdict,
+  admitPrecise: boolean,
 ): Omit<CommandEvaluation, 'uncertainty'> => {
   const blocked = bestMatch(policy.block, text, matchesBlockPattern);
   if (blocked !== undefined) {
@@ -1778,13 +1966,16 @@ const evaluateOne = (
   const mostSpecific = (
     patterns: readonly string[],
     against: readonly string[],
+    matches: (pattern: string, command: string) => boolean,
   ): string | undefined =>
     against
-      .map((form) => bestMatch(patterns, form, matchesCommandPattern))
+      .map((form) => bestMatch(patterns, form, matches))
       .filter((match): match is string => match !== undefined)
       .sort((a, b) => specificity(b) - specificity(a))[0];
-  const asked = mostSpecific(policy.ask, askForms);
-  const allowed = mostSpecific(policy.allow, forms);
+  const asked = mostSpecific(policy.ask, askForms, matchesCommandPattern);
+  const allowed = mostSpecific(policy.allow, forms, (entry, form) =>
+    matchesAllowEntry(entry, form, admitPrecise),
+  );
   if (allowed !== undefined && (asked === undefined || specificity(allowed) > specificity(asked))) {
     return { verdict: 'allow', matched: allowed, segment: text };
   }
@@ -1857,9 +2048,13 @@ export const evaluateCommand = (
 
   // The whole command is evaluated with no fallback: only an explicit match may speak for it,
   // otherwise a single unmatched fragment would be masked by the whole line's fallback.
-  let result = evaluateOne(request.command, policy, 'allow');
+  // A precise allow entry reads the tokens of a fragment, and the scanner lifts a substitution's
+  // body out of the fragment it sat in — so on a line with one, a precise entry would judge
+  // `sed -n 1p f $(ls)` as `sed -n 1p f`. It is not consulted there at all.
+  const admitPrecise = !parsed.substitutes;
+  let result = evaluateOne(request.command, policy, 'allow', admitPrecise);
   for (const candidate of candidates.slice(1)) {
-    const evaluation = evaluateOne(candidate, policy, fallback);
+    const evaluation = evaluateOne(candidate, policy, fallback, admitPrecise);
     if (mostRestrictive(result.verdict, evaluation.verdict) !== result.verdict) {
       result = evaluation;
     }
@@ -1926,8 +2121,12 @@ export interface NarrowedCommandPolicy {
 
 const unique = (values: readonly string[]): readonly string[] => [...new Set(values)];
 
-/** An allow entry with no glob metacharacter names exactly one command line. */
-const isLiteralCommand = (entry: string): boolean => !/[*?]/.test(entry);
+/**
+ * An allow entry with no glob metacharacter names exactly one command line — unless it is the name
+ * of a precise entry, which names a grammar and is granted only verbatim.
+ */
+const isLiteralCommand = (entry: string): boolean =>
+  !/[*?]/.test(entry) && !PRECISE_ALLOW_ENTRIES.has(entry);
 
 /**
  * Whether the maximum grants a layer's allow entry.

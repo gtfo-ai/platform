@@ -29,9 +29,11 @@ import {
   matchesCommandPattern,
   narrowCommandPolicy,
   normaliseCommand,
+  PRECISE_ALLOW_ENTRIES,
   PROJECT_COMMAND_ALLOW,
   type ResolvedCommandPolicy,
   runCommandPolicy,
+  SED_PRINT_RANGE_ALLOW,
   splitCommandSegments,
   UNCERTAINTY,
   UNPATTERNABLE_BLOCK_ITEMS,
@@ -49,6 +51,11 @@ const DEFAULT_ALLOWED_EXAMPLES = [
   'grep -rn needle src',
   'rg --json needle src',
   'find . -name "*.ts"',
+  'head -60 src/x.ts',
+  'tail -25 CHANGELOG.md',
+  'wc -l src/x.ts',
+  'pwd',
+  "sed -n '900,960p' src/x.ts",
   'git status',
   'git log --oneline -20',
   'git diff --cached',
@@ -1727,5 +1734,311 @@ describe('verification on CI (BD-025, 2026-10-05; PROGRESS backlog 460)', () => 
     expect(evaluateCommand({ command: 'make test' }, run.policy).verdict).toBe('block');
     expect(evaluateCommand({ command: 'npm test' }, run.policy).verdict).toBe('block');
     expect(evaluateCommand({ command: 'git log' }, run.policy).verdict).toBe('allow');
+  });
+});
+
+/**
+ * PROGRESS backlog 462 — the product owner's decision of 2026-10-05: `head`, `tail`, `wc`, `pwd`
+ * and sed's print-range form join the read-only baseline, and a redirection to nowhere does not
+ * floor a line. Every new `allow` here comes with the spellings that try to break it.
+ */
+describe('backlog 462 — the read verbs the first local test was denied', () => {
+  const READ_ONLY: ResolvedCommandPolicy = {
+    allow: DEFAULT_READ_ONLY_ALLOW,
+    ask: [],
+    block: DEFAULT_BLOCKED_COMMANDS,
+  };
+  const BASELINES: Readonly<Record<string, ResolvedCommandPolicy>> = {
+    read_only: READ_ONLY,
+    verification: { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_VERIFICATION_ALLOW },
+    implementation: DEFAULT_COMMAND_POLICY,
+  };
+
+  it('puts every new entry in every baseline, since each one builds on the read-only list', () => {
+    const added = ['head', 'head *', 'tail', 'tail *', 'wc', 'wc *', 'pwd', 'pwd *'];
+    for (const allow of [
+      DEFAULT_READ_ONLY_ALLOW,
+      DEFAULT_VERIFICATION_ALLOW,
+      DEFAULT_IMPLEMENTATION_ALLOW,
+    ]) {
+      expect(allow).toEqual(expect.arrayContaining([...added, SED_PRINT_RANGE_ALLOW.entry]));
+    }
+    // Two entries per verb, never a bare-prefix glob (`head*` would admit `headless`).
+    expect(
+      DEFAULT_READ_ONLY_ALLOW.filter((entry) => /^(head|tail|wc|pwd|sed)\S*\*/.test(entry)),
+    ).toEqual([]);
+    expect(PRECISE_ALLOW_ENTRIES.get(SED_PRINT_RANGE_ALLOW.entry)).toBe(SED_PRINT_RANGE_ALLOW);
+  });
+
+  // The denied lines from the first local test (Autix, 2026-10-05), and their neighbours.
+  const ALLOWED = [
+    'head -60 tests/Generated/Builder/BuilderFactory.php',
+    'head -n 100 composer.json',
+    'head -c 512 x.bin',
+    'head',
+    'ls migrations/doctrine/ | tail -25',
+    'tail -n +10 src/x.ts',
+    'tail -f var/log/dev.log',
+    'tail --pid=1 -f x.log',
+    'wc -l src/x.ts',
+    'wc -l src/*.ts',
+    'wc --files0-from=names.txt',
+    'pwd',
+    'pwd -P',
+    'find . -name "*.php" | wc -l',
+    "sed -n '900,960p' src/Kernel.php",
+    'sed -n 900,960p src/Kernel.php',
+    'sed -n "900,960p" src/Kernel.php',
+    "sed -n '12p' a.txt b.txt",
+    "sed -n '$p' a.txt",
+    "sed -n '10,$p' a.txt",
+    "sed -n '$,10p' a.txt",
+    'cat a.txt | sed -n 1,5p',
+    'env sed -n 1p a.txt',
+    "sed -n '1,5p' a.txt 2>/dev/null",
+    "sed -n '1,5p' a.txt 2> /dev/null",
+    "sed -n '1,5p' a.txt 2>&1",
+    'ls -la && cat composer.json 2>/dev/null | head -100',
+    'cat composer.json 2>/dev/null | head -100',
+    'ls -la; wc -l composer.json; pwd',
+  ] as const;
+
+  for (const [name, policy] of Object.entries(BASELINES)) {
+    it.each(ALLOWED)(`${name}: %s is allow`, (command) => {
+      expect(verdict(command, policy)).toBe('allow');
+    });
+  }
+
+  it.each([
+    // A verb matched by prefix would have admitted these.
+    'headless-chrome --dump-dom',
+    'tailscale up',
+    'wcx',
+    'pwdx 1',
+    'sedx -n 1p f',
+    // `echo`/`printf` were not in the decision's scope, so the evidence line that uses one still asks.
+    'echo "---" && cat Makefile',
+    'ls -la && echo "---" && cat composer.json 2>/dev/null | head -100',
+    'printf x',
+    // A new verb is still floored by a redirection to a path.
+    'head -5 a.txt > b.txt',
+    'tail -5 a.txt >> /etc/motd',
+    'wc -l a.txt >&out.txt',
+  ])('%s stays ask', (command) => {
+    expect(verdict(command, READ_ONLY)).toBe('ask');
+    expect(verdict(command)).toBe('ask');
+  });
+
+  describe("sed's print-range grammar", () => {
+    it.each([
+      // a script that is a program: e executes, w/W write, r/R read, s///e and s///w do both
+      ["sed -n '1e rm -rf /' f", 'e'],
+      ["sed -n '1e echo pwned' f", 'e'],
+      ["sed -n '1w out' f", 'w'],
+      ["sed -n '1W out' f", 'W'],
+      ["sed -n '1r /etc/passwd' f", 'r'],
+      ["sed -n '1R /etc/passwd' f", 'R'],
+      ["sed -n 's/x/id/e' f", 's///e'],
+      ["sed -n 's/x/y/w out' f", 's///w'],
+      ["sed -n '1p;1e id' f", 'a second command'],
+      ["sed -n '1p\n1e id' f", 'a second command on a new line'],
+      ["sed -n '1{p}' f", 'a block'],
+      ["sed -n '1,5p;w out' f", 'a second command'],
+      ["sed -n '1,5pw' f", 'a flag after p'],
+      ["sed -n '/re/p' f", 'a regular-expression address (left out)'],
+      ["sed -n '0,/re/p' f", 'a GNU address form'],
+      ["sed -n '1~2p' f", 'a step address'],
+      ["sed -n '1,+2p' f", 'a relative address'],
+      ["sed -n '1l' f", 'a command other than p'],
+      ["sed -n '1=' f", 'a command other than p'],
+      ["sed -n '1,5P' f", 'a command other than p'],
+      // `$` outside single quotes is the shell's parameter expansion, not an address
+      ['sed -n $p f', 'an unquoted $'],
+      ['sed -n "$p" f', 'a double-quoted $'],
+      ['sed -n "1,$p" f', 'a double-quoted $'],
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the shell's `${x}`, not a template
+      ['sed -n 1,${x}p f', 'a parameter expansion'],
+      // options, wherever they sit — GNU getopt permutes
+      ['sed -i 1p f', '-i'],
+      ['sed -n -i 1p f', '-i'],
+      ['sed -n 1p f -i', '-i after the file'],
+      ['sed -n 1p -i f', '-i after the script'],
+      ['sed -n 1p f -i.bak', '-i with a suffix'],
+      ['sed -n 1p f --in-place', '--in-place'],
+      ['sed -n 1p f --in-place=.bak', '--in-place with a suffix'],
+      ['sed -n -e 1p f', '-e'],
+      ['sed -n --expression=1p f', '--expression'],
+      ['sed -n -f script.sed f', '-f'],
+      ['sed -n --file=script.sed f', '--file'],
+      ['sed -n 1p -s f g', '-s'],
+      ['sed -n 1p -z f', '-z'],
+      ['sed -n 1p --debug f', '--debug'],
+      ['sed -n 1p -E f', '-E'],
+      ['sed -n 1p -u f', '-u'],
+      ['sed -n 1p --posix f', '--posix'],
+      ['sed -n 1p --follow-symlinks f', '--follow-symlinks'],
+      ['sed -n 1p --sandbox f', '--sandbox (left out)'],
+      ['sed -n 1p -- f', '--'],
+      ['sed -n 1p -', 'stdin by name (over-asked)'],
+      ['sed -n 1p -e 1e\\ id f', 'a second expression'],
+      // the spellings of -n that are not `-n`
+      ['sed --quiet 1p f', '--quiet'],
+      ['sed --silent 1p f', '--silent'],
+      ['sed -ne 1p f', '-ne'],
+      ['sed -n1p f', '-n1p'],
+      ['sed "-n" 1p f', 'a quoted -n'],
+      ['sed 1p f', 'no -n'],
+      ['sed -n f', 'no script'],
+      ['sed -n', 'no script'],
+      ["'sed' -n 1p f", 'a quoted argv[0]'],
+      ['/bin/sed -n 1p f', 'a path as argv[0]'],
+      // operands the shell rewrites before sed sees them — a file named `-i` edits in place
+      ['sed -n 1p *', 'a glob (measured: a file named -i edited every file)'],
+      ['sed -n 1p *.php', 'a glob'],
+      ['sed -n 1p f?', 'a glob'],
+      ['sed -n 1p [a-z]', 'a glob'],
+      ['sed -n 1p {a,-i}', 'a brace expansion'],
+      ['sed -n 1p ~/x', 'a tilde'],
+      ['sed -n 1p $F', 'a parameter'],
+      ['sed -n 1p "$F"', 'a quoted parameter'],
+      ["sed -n 1p '-i'", 'a quoted option'],
+      ['sed -n 1p \\-i', 'an escaped option'],
+      ['sed -n 1p f $(ls)', 'a command substitution'],
+      ['sed -n 1p $(ls)', 'a command substitution as the only operand'],
+      ['sed -n 1p f `ls`', 'a backtick substitution'],
+      ['sed -n 1p <(ls)', 'a process substitution'],
+      ['sed -n 1p "$(ls)"', 'a quoted substitution'],
+      ['ls -la $(pwd) && sed -n 1p f', 'a substitution anywhere on the line'],
+      // redirections that are not to nowhere
+      ['sed -n 1p f > out', 'a write'],
+      ['sed -n 1p f >out', 'a write'],
+      ['sed -n 1p f >&out', 'a write spelled as a descriptor'],
+      ['sed -n 1p f 2>/dev/nullx', 'another path'],
+      ['sed -n 1p f <in', 'an input redirection (over-asked)'],
+      ['sed -n 1p <<EOF', 'a here-document (over-asked)'],
+      // wrappers that are not environment wrappers
+      ["sh -c 'sed -n 1p f'", 'a shell wrapper'],
+      ['xargs sed -n 1p', 'xargs (its operands come from stdin)'],
+      ['FOO=1 sed -n 1p f', 'a leading assignment'],
+      ['env -i sed -n 1p f', 'a wrapper flag'],
+    ])('%s is ask (%s)', (command) => {
+      for (const policy of Object.values(BASELINES)) {
+        expect(verdict(command, policy), command).not.toBe('allow');
+      }
+    });
+
+    it(
+      'never admits anything but a numeric or single-quoted `$` address and `p`',
+      () => {
+        const script = fc.stringMatching(/^[0-9,$pPwWeErRsl;/'"{}=~+ -]{1,10}$/);
+        const operand = fc.stringMatching(/^[a-zA-Z0-9./*?$`'"(){}~\\>&-]{0,8}$/);
+        const ADMITTED_SCRIPT = /^(?:\d+(?:,\d+)?p|"\d+(?:,\d+)?p"|'(?:\d+|\$)(?:,(?:\d+|\$))?p')$/;
+        fc.assert(
+          fc.property(script, operand, (body, file) => {
+            const command = `sed -n ${body} ${file}`;
+            if (verdict(command, READ_ONLY) !== 'allow') {
+              return;
+            }
+            const [, , written, ...operands] = normaliseCommand(command).split(' ');
+            expect(written, command).toMatch(ADMITTED_SCRIPT);
+            for (const word of operands) {
+              expect(word, command).not.toMatch(/^-|[`$'"*?~{}\\]/);
+            }
+          }),
+          { numRuns: 2000 },
+        );
+      },
+      PROPERTY_TEST_TIMEOUT_MS,
+    );
+
+    it('loses to the block list and to a project that moves it', () => {
+      expect(verdict('sed -n 1p f && sudo id', READ_ONLY)).toBe('block');
+      expect(verdict('head -1 f; docker ps', READ_ONLY)).toBe('block');
+      expect(verdict('wc -l f | sudo tee x', READ_ONLY)).toBe('block');
+      const blocked = narrowCommandPolicy(READ_ONLY, { block: ['sed *', 'head *'] }).policy;
+      expect(verdict('sed -n 1p f', blocked)).toBe('block');
+      expect(verdict('head -5 f', blocked)).toBe('block');
+      // An ask entry of the same specificity as the entry's envelope wins the tie, as for a glob.
+      const asked = narrowCommandPolicy(READ_ONLY, { ask: ['sed -n *'] }).policy;
+      expect(verdict('sed -n 1p f', asked)).toBe('ask');
+      // Listed verbatim in `ask`, the entry leaves `allow`.
+      const moved = narrowCommandPolicy(READ_ONLY, { ask: [SED_PRINT_RANGE_ALLOW.entry] }).policy;
+      expect(moved.allow).not.toContain(SED_PRINT_RANGE_ALLOW.entry);
+      expect(verdict('sed -n 1p f', moved)).toBe('ask');
+    });
+
+    it('is granted by an organisation only verbatim, and grants an organisation literal it admits', () => {
+      const without = intersectWithOrganisationMaximum(READ_ONLY, { allow: ['sed -n *', 'ls'] });
+      expect(without.removed).toContain(SED_PRINT_RANGE_ALLOW.entry);
+      expect(verdict('sed -n 1p f', without.policy)).toBe('ask');
+      const literal = intersectWithOrganisationMaximum(READ_ONLY, {
+        allow: ['sed -n 1,5p README.md', "sed -n '1e id' f"],
+      });
+      expect(literal.policy.allow).toContain('sed -n 1,5p README.md');
+      expect(literal.policy.allow).not.toContain("sed -n '1e id' f");
+      expect(verdict('sed -n 1,5p README.md', literal.policy)).toBe('allow');
+      expect(verdict('sed -n 1,6p README.md', literal.policy)).toBe('ask');
+      const verbatim = intersectWithOrganisationMaximum(READ_ONLY, {
+        allow: [SED_PRINT_RANGE_ALLOW.entry],
+      });
+      expect(verdict('sed -n 1,6p README.md', verbatim.policy)).toBe('allow');
+    });
+
+    it('never matches its own name as a glob', () => {
+      expect(verdict(SED_PRINT_RANGE_ALLOW.entry, READ_ONLY)).toBe('ask');
+      expect(isProjectCommandEntry(SED_PRINT_RANGE_ALLOW.entry)).toBe(false);
+    });
+  });
+
+  describe('a redirection to nowhere', () => {
+    it.each([
+      'ls 2>/dev/null',
+      'ls >/dev/null',
+      'ls &>/dev/null',
+      'ls >>/dev/null',
+      'ls 2>>/dev/null',
+      'ls &>>/dev/null',
+      'ls >|/dev/null',
+      'ls 2> /dev/null',
+      'ls >&/dev/null',
+      'ls 2>&1',
+      'ls 1>&2',
+      'ls >&2',
+      'ls >& 2',
+      'ls 2>&-',
+      'ls 3>&1-',
+      'ls 2>/dev/null >/dev/null 2>&1',
+    ])('%s does not floor', (command) => {
+      expect(hasOutputRedirection(command)).toBe(false);
+      expect(verdict(command, READ_ONLY)).toBe('allow');
+    });
+
+    it.each([
+      // other paths
+      'ls > /dev/nullx',
+      'ls >/dev/null/../x',
+      'ls >/dev/null.d/x',
+      'ls >/dev/null"x"',
+      'ls >/dev/nul?',
+      'ls >/dev/{null,x}',
+      // quoted spellings of the bit bucket: decided to floor (see `isWriteTarget`)
+      'ls >"/dev/null"',
+      "ls >'/dev/null'",
+      'ls >/dev/nul\\l',
+      // `>&word` that is not a descriptor writes the file (measured, bash 3.2 and 5.2)
+      'ls >&out.txt',
+      'ls 1>&out.txt',
+      'ls >& out.txt',
+      'ls >&"out.txt"',
+      'ls >&$OUT',
+      'ls >&1x',
+      'ls >&',
+      'ls 2>&1 >out.txt',
+      'ls 2>&1>out.txt',
+      'ls <>out.txt',
+    ])('%s floors', (command) => {
+      expect(hasOutputRedirection(command)).toBe(true);
+      expect(verdict(command, READ_ONLY)).toBe('ask');
+    });
   });
 });
