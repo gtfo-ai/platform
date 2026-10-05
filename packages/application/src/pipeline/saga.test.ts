@@ -315,7 +315,7 @@ describe('the merge request the platform recorded, not the one the run reported 
     expect(taskOf(harness).task.state).toBe('ready_for_merge');
   });
 
-  it('records nothing from a report the tool never opened, and the CI gate has no merge request', async () => {
+  it('records nothing from a report the tool never opened, and escalates at the developer stage rather than walking into the CI gate (backlog 472)', async () => {
     const harness = harnessWith({
       runs: {
         ...happyRuns(),
@@ -326,6 +326,19 @@ describe('the merge request the platform recorded, not the one the run reported 
 
     expect(taskOf(harness).mr).toBeNull();
     expect(taskOf(harness).task.state).toBe('needs_human');
+    // First local test: the run reported a "create merge request" link as its MR and the stage
+    // completed into `ci_gate`. The stage never completes without the platform's record.
+    expect(taskOf(harness).task.currentStage).toBe('implementation');
+    const escalated = harness.events().find((entry) => entry.type === 'task.escalated');
+    expect((escalated?.payload as { reason: string } | undefined)?.reason).toContain(
+      'no merge request was opened through open_mr',
+    );
+    expect(
+      harness
+        .events()
+        .filter((entry) => entry.type === 'task.stage.completed')
+        .map((entry) => (entry.payload as { stage: string }).stage),
+    ).not.toContain('implementation');
   });
 });
 

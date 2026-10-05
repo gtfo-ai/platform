@@ -1582,6 +1582,36 @@ const record = async (
       ]);
     }
     /**
+     * **A developer stage is not done without a merge request the platform recorded** (first local
+     * test, 2026-10-06, backlog 472).
+     *
+     * `ImplementationNotes.mr` is required by the schema, so a run whose `open_mr` failed still has
+     * to put *something* there — AUT-6820's second developer attempt could not commit (backlog 468),
+     * `open_mr` answered GitLab's 400, and the run reported the ticket number as the iid and a
+     * "create merge request" link as the URL. `withPlatformMergeRequestRecord` keeps a report as
+     * written when the task holds no record, so the stage completed and the task walked into
+     * `ci_gate` with no merge request at all. The record is the platform's (`open_mr` writes it,
+     * WP-138), so its absence here means the stage did not do the one thing the rest of the
+     * pipeline reads: the task escalates instead, with the run recorded as finished. A shadow task
+     * opens nothing by design and is left alone.
+     */
+    if (
+      stage.produces === 'ImplementationNotes' &&
+      stored.mr === null &&
+      stored.task.mode !== 'shadow'
+    ) {
+      return escalateOnRun(
+        scope,
+        input,
+        withCost,
+        context,
+        'the developer stage reported its work done, but no merge request was opened through ' +
+          'open_mr, so there is nothing for the CI gate or a review to read; the work is in the ' +
+          "run's workspace only if it was committed and pushed to the task's branch",
+        [...finished.events],
+      );
+    }
+    /**
      * TD-012 **at the write**, which this line did not do until WP-52 (PROGRESS backlog 35).
      *
      * `data = outcome.structuredOutput` stored the model's answer verbatim, so a credential the
