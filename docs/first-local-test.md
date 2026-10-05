@@ -497,7 +497,7 @@ is *Done*.
 
 | What you see | Where it is named | What to do |
 |---|---|---|
-| `docker compose` stops with *"required variable CLAUDE_CODE_OAUTH_TOKEN is missing a value: set CLAUDE_CODE_OAUTH_TOKEN for local mode"* | the terminal (run, with the variable unset) | put the token in `.env` |
+| `docker compose` stops with *"required variable AGENTIC_CLAUDE_CODE_OAUTH_TOKEN is missing a value: set CLAUDE_CODE_OAUTH_TOKEN (or AGENTIC_CLAUDE_CODE_OAUTH_TOKEN) for local mode"* | the terminal (run, with both variables unset, 2026-10-06) | put the token in `.env` as `CLAUDE_CODE_OAUTH_TOKEN`, or export it in your shell as `AGENTIC_CLAUDE_CODE_OAUTH_TOKEN` — **not** as `CLAUDE_CODE_OAUTH_TOKEN` in a shell profile, which every other Claude Code session started from that shell would then use as its own login |
 | `app` exits at start | `docker compose logs app` — *"invalid server configuration: …"* names the variable | fix it in `.env`, `docker compose up -d` |
 | tasks stay at their first stage; nothing runs | `docker compose logs runner`: *"composed without an agent runner"* with the `missing` list; after five minutes `/readyz` says `agent_runs: degraded`, `details.agent_runs: unserved` | set the launcher pair and the token; `docker compose up -d` |
 | an integration cannot be created | the form shows the server's refusal: `integration_host_not_permitted` or `secret_name_not_permitted` naming the setting, or `400 missing_secret` (the variable is not in the container) | add it to `.env`, **`docker compose up -d`** (not `restart`) |

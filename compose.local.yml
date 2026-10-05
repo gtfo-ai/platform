@@ -53,7 +53,11 @@
 
 x-local-model: &local-model
   APP_PROVIDER_MODE: local
-  CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?set CLAUDE_CODE_OAUTH_TOKEN for local mode}
+  # `AGENTIC_CLAUDE_CODE_OAUTH_TOKEN` is read when `CLAUDE_CODE_OAUTH_TOKEN` is not set (first local
+  # test, 2026-10-06): exported under its own name in a shell profile, the token is also picked up
+  # by every *other* Claude Code session started from that shell. A namespaced name keeps it to
+  # this instance; inside the containers the CLI still receives `CLAUDE_CODE_OAUTH_TOKEN`.
+  CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-${AGENTIC_CLAUDE_CODE_OAUTH_TOKEN:?set CLAUDE_CODE_OAUTH_TOKEN (or AGENTIC_CLAUDE_CODE_OAUTH_TOKEN) for local mode}}
   # `api` mode's credential is meaningless here and would be a second secret in the container
   # for nothing; blanking it is what makes "which mode is this instance in" answerable from the
   # environment rather than from two variables that disagree.

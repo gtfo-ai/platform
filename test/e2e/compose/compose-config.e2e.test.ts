@@ -210,6 +210,27 @@ describe('compose.yml', () => {
     expect(publishers(result)).toEqual(['app 8080']);
   });
 
+  it('takes the token from AGENTIC_CLAUDE_CODE_OAUTH_TOKEN when CLAUDE_CODE_OAUTH_TOKEN is not set (first local test)', () => {
+    // A token exported as `CLAUDE_CODE_OAUTH_TOKEN` in a shell profile is also every other Claude
+    // Code session's login; the namespaced name keeps it to this instance. Empty counts as unset.
+    const local = config(['compose.yml', 'compose.local.yml'], {
+      CLAUDE_CODE_OAUTH_TOKEN: '',
+      AGENTIC_CLAUDE_CODE_OAUTH_TOKEN: 'compose-config-test-namespaced-token',
+    }) as unknown as { services: Record<string, { environment: Record<string, string> }> };
+    for (const service of ['app', 'runner']) {
+      expect(local.services[service]?.environment['CLAUDE_CODE_OAUTH_TOKEN'], service).toBe(
+        'compose-config-test-namespaced-token',
+      );
+    }
+    // Neither set: compose still refuses to resolve the file, and says which names it reads.
+    expect(() =>
+      config(['compose.yml', 'compose.local.yml'], {
+        CLAUDE_CODE_OAUTH_TOKEN: '',
+        AGENTIC_CLAUDE_CODE_OAUTH_TOKEN: '',
+      }),
+    ).toThrow(/AGENTIC_CLAUDE_CODE_OAUTH_TOKEN/);
+  });
+
   it('switches the provider mode rather than adding a process', () => {
     // The positive that makes the assertion above mean something (standing rule 42): the override
     // does change something, and it changes it on the service that already exists.
