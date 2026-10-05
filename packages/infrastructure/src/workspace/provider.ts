@@ -1154,6 +1154,14 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       image: this.#images.git,
       script: [
         'set -e',
+        // The control volume's root must be root's before the `mkdir` below: this helper has no
+        // `DAC_OVERRIDE`, so it creates in `/ctl` only as its owner. Under compose the volume is
+        // first mounted by the launcher at `/run/agentic/ctl`, which its image owns as uid 1000, and
+        // Docker copies that ownership onto a new named volume — so every run's prepare failed with
+        // *"mkdir: can't create directory '/ctl/<run>': Permission denied"* (measured, first local
+        // test). `CHOWN` is all this needs; the launcher only reads inside the per-run directory,
+        // which is handed to uid 1000 below.
+        'chown 0:0 /ctl',
         `mkdir -p ${dir} /work`,
         // Before `/work` is handed to uid 1000: root here has no `DAC_OVERRIDE`, so it can create
         // inside `/work` only while it still owns it (measured — after the chown, `mkdir` answers

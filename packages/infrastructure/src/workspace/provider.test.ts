@@ -705,6 +705,19 @@ describe('a spec with no checkout (WP-74)', () => {
     expect(helperRoles()).toEqual(['prep', 'clone', 'skills', 'egresscfg', 'egress', 'ws']);
   });
 
+  /**
+   * A control volume compose initialised from the launcher image is uid 1000's, and this helper
+   * has no `DAC_OVERRIDE`: it must take the root back before it creates the run's directory.
+   */
+  it('takes the control volume’s root before it creates the run’s directory there', async () => {
+    await provider.create(workspaceSpecFixture());
+    const lines = daemon.byName(`prep-${FIXTURE_RUN_ID}`)?.body.Cmd?.join('\n').split('\n') ?? [];
+    const chown = lines.indexOf('chown 0:0 /ctl');
+    const mkdir = lines.findIndex((line) => line.startsWith('mkdir -p /ctl/'));
+    expect(chown).toBeGreaterThanOrEqual(0);
+    expect(mkdir).toBeGreaterThan(chown);
+  });
+
   it('makes the working directory the runner will spawn in, owned by the shim’s uid', async () => {
     await provider.create(repoLessWorkspaceSpecFixture({ skills: [] }));
     const script = (daemon.byName(`prep-${FIXTURE_RUN_ID}`)?.body.Cmd ?? []).join('\n');
