@@ -719,13 +719,16 @@ describe('a spec with no checkout (WP-74)', () => {
    * A control volume compose initialised from the launcher image is uid 1000's, and this helper
    * has no `DAC_OVERRIDE`: it must take the root back before it creates the run's directory.
    */
-  it('takes the control volume’s root before it creates the run’s directory there', async () => {
+  it('takes the control volume’s root only when it cannot create the run’s directory there', async () => {
     await provider.create(workspaceSpecFixture());
     const lines = daemon.byName(`prep-${FIXTURE_RUN_ID}`)?.body.Cmd?.join('\n').split('\n') ?? [];
-    const chown = lines.indexOf('chown 0:0 /ctl');
-    const mkdir = lines.findIndex((line) => line.startsWith('mkdir -p /ctl/'));
-    expect(chown).toBeGreaterThanOrEqual(0);
-    expect(mkdir).toBeGreaterThan(chown);
+    const mkdir = lines.find((line) => line.startsWith('mkdir -p /ctl/')) ?? '';
+    // The first `mkdir` is tried as-is; the `chown` is its fallback, never a step of its own, so a
+    // host directory somebody owns and made writable is left theirs.
+    expect(mkdir).toMatch(
+      /^mkdir -p \/ctl\/\S+ \/work 2>\/dev\/null \|\| \{ chown 0:0 \/ctl && mkdir -p /,
+    );
+    expect(lines).not.toContain('chown 0:0 /ctl');
   });
 
   it('makes the working directory the runner will spawn in, owned by the shim’s uid', async () => {
