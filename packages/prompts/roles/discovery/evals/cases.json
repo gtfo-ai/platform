@@ -317,6 +317,124 @@
           "value": "JSON.parse(output).commands.every((c) => c.verified === false)"
         }
       ]
+    },
+    {
+      "id": "disc-missing-toolchain-is-not-checked",
+      "description": "a PHP project in a workspace with no PHP: R1, R2 and R6 are not_checked (not failed), with the reason, and the CI job read instead (BD-026's 2026-10-06 amendment)",
+      "vars": {
+        "repo": "composer.json and composer.lock; composer.json has \"scripts\": {\"test\": \"codecept run\"}\nMakefile has targets install and test\n.gitlab-ci.yml has a codeception job (stage test) with rules for merge_request_event\nIn this workspace `php -v` and `composer --version` print `command not found`; `composer install` is refused by the platform"
+      },
+      "expect_fields": ["readiness"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/discovery-draft.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "['R1','R2','R6'].every((id) => JSON.parse(output).readiness.some((r) => r.id === id && r.not_checked === true && r.passed === false && r.evidence.length > 0))"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).readiness.some((r) => r.id === 'R1' && /codeception|gitlab-ci/i.test(r.evidence))"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).readiness.some((r) => r.id === 'R3' && r.passed === true && r.not_checked !== true)"
+        }
+      ]
+    },
+    {
+      "id": "disc-suite-that-ran-and-failed-is-checked",
+      "description": "a test command that ran and failed is a fail, never not_checked: the workspace could run it, so the result is about the project",
+      "vars": {
+        "repo": "package.json has \"test\": \"vitest run\" and a package-lock.json\n`npm ci` succeeds here\n`npm test` runs and exits 1: 3 of 120 tests fail (src/date.test.ts)\n.github/workflows/ci.yml runs npm test on pull requests"
+      },
+      "expect_fields": ["readiness", "commands"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/discovery-draft.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).readiness.some((r) => r.id === 'R1' && r.passed === false && r.not_checked !== true)"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).commands.some((c) => c.purpose === 'test' && c.verified === true)"
+        }
+      ]
+    },
+    {
+      "id": "disc-pages-carry-no-workspace-limits",
+      "description": "what the workspace could not do (a refused install, a missing interpreter, the refusal's wording) stays out of the drafted pages; it belongs in readiness evidence",
+      "vars": {
+        "repo": "composer.json, composer.lock, frontend-vue/package.json with \"typecheck\": \"vue-tsc --noEmit\"\nIn this workspace `php` is not found, `npm ci --prefix frontend-vue` is refused with \"this instance cannot ask a human for approval yet\", and `npm run typecheck --prefix frontend-vue` exits 127 with `vue-tsc: not found`\ndocs/onboarding/project-setup.md says `make install` sets the project up with Docker"
+      },
+      "expect_fields": ["documents", "readiness"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/discovery-draft.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).documents.length >= 1"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).documents.every((d) => !/sandbox|this workspace|refused|cannot ask a human|approval gate|command not found|no network/i.test(d.markdown))"
+        },
+        {
+          "type": "javascript",
+          "value": "!JSON.parse(output).documents.some((d) => /no node(\\.js)? toolchain/i.test(d.markdown))"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).readiness.some((r) => ['R1','R2','R6'].includes(r.id) && r.not_checked === true)"
+        }
+      ]
+    },
+    {
+      "id": "disc-lists-are-arrays-not-strings",
+      "description": "every list in the draft is handed in as a JSON array of objects, never as a string that contains JSON (the first local test's rejected draft, backlog 471)",
+      "vars": {
+        "repo": "A Node.js service: package.json with test, lint and build scripts, a package-lock.json, a 300-line README describing the architecture, docs/ with twelve pages, .gitlab-ci.yml with test and lint jobs"
+      },
+      "expect_fields": ["documents", "commands", "linked_documents", "questions", "readiness"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/discovery-draft.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "['documents','commands','linked_documents','questions','readiness'].every((k) => Array.isArray(JSON.parse(output)[k]))"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).documents.every((d) => typeof d === 'object' && typeof d.markdown === 'string')"
+        }
+      ]
+    },
+    {
+      "id": "disc-no-ticket-language",
+      "description": "discovery has no ticket: with the auto language it writes in the language of the repository's own documentation",
+      "vars": {
+        "repo": "README.md and docs/*.md are written in Czech (\"Projekt AUTiX je systém pro správu autoservisu…\")\npackage.json has \"test\": \"vitest run\""
+      },
+      "expect_fields": ["documents"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/discovery-draft.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).documents.some((d) => /[áčďéěíňóřšťúůýž]/i.test(d.markdown))"
+        }
+      ]
     }
   ]
 }

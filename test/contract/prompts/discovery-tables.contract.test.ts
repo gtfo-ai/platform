@@ -69,6 +69,26 @@ describe('the Discovery prompt’s tables', () => {
     }
   });
 
+  it('offers not_checked for exactly the criteria the platform lets be not checked (BD-026, 2026-10-06)', () => {
+    // The sentence the model is held to names the same three ids as `runInWorkspace`, and the field
+    // it is told to set is the artifact's own spelling.
+    const run = READINESS_CRITERIA.filter((criterion) => criterion.runInWorkspace).map(
+      ({ id }) => id,
+    );
+    expect(run).toEqual(['R1', 'R2', 'R6']);
+    expect(prompt).toContain(
+      `\`not_checked\` is for ${run.slice(0, -1).join(', ')} and ${run.at(-1)} only`,
+    );
+    expect(prompt).toContain('`not_checked: true`');
+  });
+
+  it('keeps what the workspace could not do out of the pages, and says the image is not every toolchain', () => {
+    expect(prompt).toContain('## Keep the workspace out of the pages');
+    expect(prompt).toContain('PHP and Composer');
+    // Backlog 470: discovery has no ticket, so the platform's "language of the ticket" is answered.
+    expect(prompt).toContain('*the language of the ticket*');
+  });
+
   it('drafts technical pages only, and says where business pages come from', () => {
     expect(prompt).toContain('Do not draft a page under `business/`');
   });

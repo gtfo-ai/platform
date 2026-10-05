@@ -79,7 +79,10 @@ export const ROLE_PROMPT_VERSIONS = {
   // WP-54: runs the project's declared commands; R1, R2 and R6 are run rather than read.
   // WP-64: `public_api` in the risk-class table (backlog 216), `./.agentic/workspace/setup` as a
   // named verb for R6 (backlog 144), and technical pages only — business pages are step 3's.
-  discovery: '5',
+  // Backlogs 469–471 (first local test): `not_checked` for R1/R2/R6 the workspace could not run
+  // (BD-026's 2026-10-06 amendment), the run image's languages, the workspace kept out of the pages,
+  // the language with no ticket, and the draft's lists handed in as arrays.
+  discovery: '6',
   ask: '1',
   historian: '1',
 } as const satisfies Record<AgentRole, string>;
