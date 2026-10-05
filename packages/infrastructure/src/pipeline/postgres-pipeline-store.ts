@@ -70,6 +70,7 @@ import {
   mergeRequestRefSchema,
   pausedBudgetScopeSchema,
   runSavedWorkSchema,
+  runStatusSchema,
   runTerminalReasonSchema,
   taskCoverageSchema,
   taskDependenciesSchema,
@@ -1704,6 +1705,39 @@ export const createPostgresPipelineStore = (
         terminalReason: reason.data,
         numTurns: Number(row.num_turns),
         savedWork: saved.data,
+      };
+    },
+    /** Backlog 476: `lastSavedWork`'s query, however the run ended. */
+    lastEnded: async (tx, query) => {
+      const { rows } = await sqlOf(tx).query<{
+        id: string;
+        status: string;
+        terminal_reason: string | null;
+        num_turns: number;
+      }>(
+        `select r.id, r.status, r.terminal_reason, r.num_turns
+           from runs r
+           join task_stages s on s.id = r.task_stage_id
+          where r.task_id = $1 and s.stage = $2 and r.status <> all($3::run_status[])
+          order by r.created_at desc, r.id desc
+          limit 1`,
+        [query.taskId, query.stage, [...ACTIVE_RUN_STATUSES]],
+      );
+      const row = rows[0];
+      if (row === undefined) {
+        return null;
+      }
+      const status = runStatusSchema.safeParse(row.status);
+      const reason = runTerminalReasonSchema.nullable().safeParse(row.terminal_reason);
+      // A value outside the schemas is not quoted into a prompt: the caller then says nothing.
+      if (!status.success || !reason.success) {
+        return null;
+      }
+      return {
+        runId: row.id as Id,
+        status: status.data,
+        terminalReason: reason.data,
+        numTurns: Number(row.num_turns),
       };
     },
     shutdownEndings: async (tx, entry) => {

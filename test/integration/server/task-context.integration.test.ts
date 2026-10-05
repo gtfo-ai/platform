@@ -374,7 +374,9 @@ describe('get_task_context, scoped to the run’s own task', () => {
     expect(artifacts).toContain(
       '"artifact_type":"ImplementationPlan","version":1,"status":"refused"',
     );
-    expect(artifacts).toContain('/api/artifacts/');
+    // Backlog 474: never an `/api/…` URL — what to do instead. This one is larger than any answer.
+    expect(artifacts).not.toContain('/api/');
+    expect(artifacts).toContain('more than one answer carries');
     // …and the small artifact beside it is still served whole (rule 42).
     expect(artifacts).toContain('goal BIG');
     // A single value asked for alone gets the whole budget, so the same audit keeps more of it.
@@ -382,5 +384,58 @@ describe('get_task_context, scoped to the run’s own task', () => {
     expect(
       (alone.sections.audit as unknown as { actions: unknown[] }).actions.length,
     ).toBeGreaterThan((answer.sections.audit as unknown as { actions: unknown[] }).actions.length);
+  });
+
+  /**
+   * Backlog 474: what the run's prompt already holds whole is not sent again, `artifact_types`
+   * narrows the artifacts to what a model asks for, and the runs carry no audit fields.
+   */
+  it('answers what the prompt holds as in_prompt, narrows by artifact type, and slims the runs', async () => {
+    const full = await readTaskContext(drizzled, ['ticket', 'artifacts', 'runs'], mine);
+    const latest = (
+      full.sections.artifacts as unknown as {
+        latest_per_type: { artifact_type: string; version: number; status: string }[];
+      }
+    ).latest_per_type;
+    expect(latest.length).toBeGreaterThan(0);
+    const [held, ...rest] = latest;
+    const answer = await readTaskContext(drizzled, ['ticket', 'artifacts'], mine, {
+      promptHolds: {
+        ticket: true,
+        artifacts: [
+          { artifact_type: held?.artifact_type as never, version: held?.version as number },
+        ],
+      },
+    });
+    expect(answer.sections.ticket).toMatchObject({ status: 'in_prompt' });
+    expect(JSON.stringify(answer.sections.ticket)).not.toContain('MINE');
+    const again = (
+      answer.sections.artifacts as unknown as {
+        latest_per_type: { artifact_type: string; status: string }[];
+      }
+    ).latest_per_type;
+    expect(again.find((entry) => entry.artifact_type === held?.artifact_type)?.status).toBe(
+      'in_prompt',
+    );
+    // An artifact the prompt does not hold is still served (rule 42).
+    for (const other of rest) {
+      expect(again.find((entry) => entry.artifact_type === other.artifact_type)?.status).toBe('ok');
+    }
+
+    const narrowed = await readTaskContext(drizzled, ['artifacts'], mine, {
+      artifactTypes: [held?.artifact_type as never],
+    });
+    const only = (
+      narrowed.sections.artifacts as unknown as {
+        latest_per_type: { artifact_type: string }[];
+      }
+    ).latest_per_type;
+    expect(only.map((entry) => entry.artifact_type)).toEqual([held?.artifact_type]);
+
+    const runsText = JSON.stringify(full.sections.runs);
+    expect(runsText).toContain('model-MINE');
+    for (const internal of ['settings_hash', 'prompt_version', 'model_usage', '"usage"']) {
+      expect(runsText, internal).not.toContain(internal);
+    }
   });
 });

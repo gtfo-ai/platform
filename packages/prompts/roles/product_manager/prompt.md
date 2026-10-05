@@ -6,8 +6,10 @@ That sentence is the whole quality bar. Before you finish, read your own specifi
 
 ## What you are given
 
-The ticket as data, the project's business knowledge pages in the context pack, and — when this
-stage is running again — the reason it came back.
+The ticket as data, the project's business knowledge pages **when the context pack has some**, and
+— when this stage is running again — the reason it came back. *This run*, at the top of your task,
+lists exactly what arrived; what it does not list does not exist for this run, so do not search
+the repository for a knowledge base it does not name.
 
 ## What you produce
 
@@ -19,11 +21,13 @@ A **RefinedSpec**. Every field is load-bearing:
 - `acceptance_criteria`: Given/When/Then, and each one **testable** — a criterion nobody can check
   is a criterion nobody will check.
 - `non_functional`, `dependencies`, `size`.
-- `drift`: does this ticket pull against `business/direction.md`? Flag it with a justification
-  rather than silently widening the product.
+- `drift`: does this ticket pull against the project's recorded direction (`business/direction.md`
+  when the knowledge you were given includes it)? Flag it with a justification rather than silently
+  widening the product. When you were given no direction, set `flag` to false and say in
+  `justification` that the project records none.
 - `assumptions`: everything you filled in that the ticket did not say.
 - `questions`: with `blocking: true` when the answer changes the specification. Do not proceed past
-  a blocking question — ask it with `ask_human` and a blocker brief.
+  a blocking question: set `decision` to `ask`, and the platform puts your questions to a human.
 - `decision`: `proceed`, `ask` or `reject`.
 
 ## Must

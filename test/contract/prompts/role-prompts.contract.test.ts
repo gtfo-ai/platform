@@ -14,6 +14,7 @@
 import { agentRoleSchema, artifactTypeSchema } from '@platform/contracts';
 import {
   assemblePrompt,
+  ENVIRONMENT_PROMPT,
   HOSTILE_CONSTRUCTS,
   HOSTILE_TEXT,
   PLATFORM_PROMPT,
@@ -34,7 +35,7 @@ const assembleFor = (role: (typeof agentRoleSchema.options)[number], text: strin
         {
           tier: 1,
           path: '.agentic/knowledge/technical/hostile-document.md',
-          workspacePath: '.agentic-run/context/1_hostile.md',
+          workspacePath: '1_hostile.md',
           reason: 'trigger',
           tokens: 100,
           text,
@@ -68,7 +69,36 @@ const assembleFor = (role: (typeof agentRoleSchema.options)[number], text: strin
     ask: null,
     // No project prompt files: those are data blocks in the user prompt (WP-92), not a role's text.
     projectPrompts: [],
+    // Backlogs 475 and 476: the workspace statement and the run's frame are platform text beside
+    // every role, so the hostile checks below cover them too.
+    environment: ENVIRONMENT_PROMPT.local,
+    run: {
+      maxTurns: 200,
+      maxBudgetUsd: 40,
+      platformTools: ['get_task_context', 'kb_search'],
+      repository: true,
+    },
   });
+
+/**
+ * A sentence of a role prompt that names a platform tool this build refuses — and so no run is
+ * given (PROGRESS backlog 476, `availablePlatformTools`) — must say *when your tools include it*:
+ * an unconditional "use `ask_human`" sends every run to a tool its list does not have.
+ */
+const UNBUILT_TOOLS = [
+  'ask_human',
+  'notify_human',
+  'report_progress',
+  'add_ticket_comment',
+  'create_followup_ticket',
+];
+const HEDGE = /\b(when|if) your (platform )?tool(s| list)\b/i;
+const unhedgedToolSentences = (text: string): readonly string[] =>
+  text
+    .replaceAll(/\s+/g, ' ')
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => UNBUILT_TOOLS.some((tool) => sentence.includes(`\`${tool}\``)))
+    .filter((sentence) => !HEDGE.test(sentence));
 
 describe.each(agentRoleSchema.options.map((role) => [role] as const))(
   'the shipped %s prompt',
@@ -78,6 +108,11 @@ describe.each(agentRoleSchema.options.map((role) => [role] as const))(
       expect(assembled.systemPrompt.indexOf(PLATFORM_PROMPT)).toBe(0);
       expect(assembled.systemPrompt).toContain(ROLE_PROMPTS[role].text.trim());
       expect(assembled.promptVersion).toContain(`${role}@${ROLE_PROMPTS[role].version}`);
+    });
+
+    it('promises no unbuilt platform tool unconditionally, and no `.agentic-run/` directory', () => {
+      expect(unhedgedToolSentences(ROLE_PROMPTS[role].text)).toEqual([]);
+      expect(ROLE_PROMPTS[role].text).not.toContain('.agentic-run/');
     });
 
     it('never itself contains a data-block marker, which would make the platform a spoofer', () => {
@@ -110,3 +145,12 @@ describe.each(agentRoleSchema.options.map((role) => [role] as const))(
     });
   },
 );
+
+describe('the unbuilt-tool check', () => {
+  it('fails an unconditional sentence and passes a hedged one', () => {
+    expect(unhedgedToolSentences('Ask it with `ask_human` and a blocker brief.')).toHaveLength(1);
+    expect(
+      unhedgedToolSentences('When your platform tools include `ask_human`, ask it there.'),
+    ).toEqual([]);
+  });
+});

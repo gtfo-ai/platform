@@ -165,7 +165,7 @@ import {
   repositorySnapshotFrom,
 } from './config-layers.js';
 import { composeKnowledgeMirror } from './knowledge.js';
-import { composePlatformTools } from './platform-tools.js';
+import { composePlatformTools, IMPLEMENTED_PLATFORM_TOOLS } from './platform-tools.js';
 
 /**
  * Who this process is, for the run lease it holds while a stage executes (WP-47, `lease.ts`).
@@ -1273,6 +1273,9 @@ export const composePipeline = async (
          * audit row — still says which task it belonged to.
          */
         workspacePath: (taskId: Id) => `/workspaces/${taskId}`,
+        // PROGRESS backlog 476: a run is registered only with the tools this process performs, so
+        // none is offered to be refused (and a skill about a withheld tool is withheld with it).
+        availablePlatformTools: IMPLEMENTED_PLATFORM_TOOLS,
         // BD-004 and TD-021 phase 1: the mode decides whether `claudeCodePath` is honoured at all,
         // and the key travels as a named secret so TD-012 step 1 covers it in this run's transcript.
         providerMode: options.agent.providerMode,

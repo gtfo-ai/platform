@@ -1250,6 +1250,17 @@ export interface ArtifactRepository {
   listFor(tx: Transaction, taskId: Id): Promise<readonly StoredArtifact[]>;
 }
 
+/**
+ * {@link RunRepository.lastEnded}'s answer: how the stage's latest ended run ended (PROGRESS
+ * backlog 476) — the platform's own record, in closed vocabularies, for the next attempt's prompt.
+ */
+export interface EndedRun {
+  readonly runId: Id;
+  readonly status: RunStatus;
+  readonly terminalReason: RunTerminalReason | null;
+  readonly numTurns: number;
+}
+
 /** {@link RunRepository.lastSavedWork}'s answer: the run, how it ended, and what it saved. */
 export interface SavedAttempt {
   readonly runId: Id;
@@ -1535,6 +1546,17 @@ export interface RunRepository {
     tx: Transaction,
     query: { readonly taskId: Id; readonly stage: Slug },
   ): Promise<SavedAttempt | null>;
+  /**
+   * The **latest ended run** of this task at this stage, however it ended, or `null` when the stage
+   * has none (PROGRESS backlog 476) — {@link lastSavedWork}'s row without its condition. Asked at
+   * admission for the same reason, so "latest" is the previous run of the stage. Its answer becomes
+   * one sentence of the next attempt's prompt: *attempt 2* with no reason sent an agent looking for
+   * return feedback that did not exist.
+   */
+  lastEnded(
+    tx: Transaction,
+    query: { readonly taskId: Id; readonly stage: Slug },
+  ): Promise<EndedRun | null>;
   /**
    * How many of this **ask's** runs ended `shutdown` (WP-149, PROGRESS backlog 445) — the ask's
    * hand-back bound (`MAX_ASK_HAND_BACKS`), counted from the runs' own end reasons through

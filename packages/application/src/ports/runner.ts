@@ -165,6 +165,24 @@ export const MUTATING_PLATFORM_TOOLS = [
   'create_followup_ticket',
 ] as const satisfies readonly PlatformToolName[];
 
+/**
+ * What a run's prompt already carries **whole**, so `get_task_context` need not send it again
+ * (PROGRESS backlog 474): on Autix the tool re-sent the ticket and the RefinedSpec the user prompt
+ * held — about 22 KB of a run's context, twice.
+ *
+ * Written by the planner from the same cut the assembler applies (`artifactShownWhole`), never
+ * re-derived by the tool. Absent for a run whose prompt the tool knows nothing about (the ask, a
+ * test's hand-built spec), and then every value is served as before — the safe direction.
+ */
+export const promptHoldsSchema = z.strictObject({
+  ticket: z.boolean(),
+  artifacts: z.array(
+    z.strictObject({ artifact_type: artifactTypeSchema, version: z.int().positive() }),
+  ),
+});
+
+export type PromptHolds = z.infer<typeof promptHoldsSchema>;
+
 export const runSpecSchema = z.strictObject({
   runId: idSchema,
   taskId: idSchema,
@@ -293,6 +311,8 @@ export const runSpecSchema = z.strictObject({
   claudeCodePath: nonEmptyStringSchema.nullable(),
   /** Session to resume after a platform restart (technical/04 § "Resume and take-over"). */
   resumeSessionId: nonEmptyStringSchema.nullable(),
+  /** {@link promptHoldsSchema}: what `get_task_context` need not send again. Optional. */
+  promptHolds: promptHoldsSchema.optional(),
 });
 
 export type RunSpec = z.infer<typeof runSpecSchema>;
@@ -450,6 +470,8 @@ export interface PlatformToolContext {
    * (`open_mr`, `update_mr_description`) **refuses** a call that carries none (standing rule 31).
    */
   readonly redactor?: SecretRedactor;
+  /** What the run's prompt already carries whole — `RunSpec.promptHolds` (PROGRESS backlog 474). */
+  readonly promptHolds?: PromptHolds;
 }
 
 // ── Platform tool inputs (BD-022: everything the model writes is untrusted) ───
@@ -489,6 +511,11 @@ export const TASK_CONTEXT_INCLUDES = [
 
 export const getTaskContextInputSchema = z.strictObject({
   include: z.array(z.enum(TASK_CONTEXT_INCLUDES)).min(1),
+  /**
+   * Narrows `artifacts` to these types (PROGRESS backlog 474): what the tool tells a model to ask
+   * for when one artifact did not fit beside the rest, instead of the `/api/…` URL it used to name.
+   */
+  artifact_types: z.array(artifactTypeSchema).min(1).optional(),
 });
 
 export const kbSearchInputSchema = z.strictObject({

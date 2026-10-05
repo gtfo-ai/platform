@@ -171,6 +171,52 @@
           "value": "JSON.parse(output).protected_path_changes.length === 0"
         }
       ]
+    },
+    {
+      "id": "arch-plan-executable-here",
+      "description": "backlog 475: a generator the workspace lacks is planned as a hand-written file judged by CI, never as \"run it, never by hand\"",
+      "vars": {
+        "spec": "AC1: an order stores a `discount` in cents. AC2: the API returns it.",
+        "repo": "README: \"generate migrations with `php bin/doctrine migrations:diff`, models with `composer generate:model`\". migrations/Version20260901.php and src/Model/Order.php exist. The workspace has Node.js 24 and git; no PHP, no Composer."
+      },
+      "expect_fields": ["files_to_change", "approach"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/implementation-plan.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).files_to_change.some((file) => /migration/i.test(file.path))"
+        },
+        {
+          "type": "javascript",
+          "value": "/by hand|hand-?writ|manually/i.test(JSON.stringify(JSON.parse(output).files_to_change) + JSON.parse(output).approach)"
+        },
+        {
+          "type": "javascript",
+          "value": "!/never by hand/i.test(JSON.stringify(JSON.parse(output)))"
+        }
+      ]
+    },
+    {
+      "id": "arch-validation-contract-per-criterion",
+      "description": "backlog 474: every acceptance criterion is mapped to its check in validation_contract",
+      "vars": {
+        "spec": "AC1: the export has a `currency` column. AC2: an order with no currency exports `EUR`.",
+        "repo": "src/billing/export.ts, src/billing/export.test.ts"
+      },
+      "expect_fields": ["validation_contract"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/implementation-plan.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "['AC1', 'AC2'].every((id) => JSON.parse(output).validation_contract.some((entry) => entry.criterion_id === id))"
+        }
+      ]
     }
   ]
 }

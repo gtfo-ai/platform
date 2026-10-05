@@ -45,6 +45,8 @@ import type {
 import { communicationLanguageSchema } from '@platform/contracts';
 import {
   type AppliedReviewChecklist,
+  artifactJsonForPrompt,
+  artifactShownWhole,
   assemblePrompt,
   boundReviewChecklists,
   CONFLICT_RESOLUTION_EXTRA_ALLOW,
@@ -54,9 +56,12 @@ import {
   DEFAULT_READ_ONLY_ALLOW,
   DEFAULT_VERIFICATION_ALLOW,
   DISCOVERY_TEMPLATE_ID,
+  ENVIRONMENT_PROMPT,
+  type EnvironmentPrompt,
   HISTORY_BOOTSTRAP_TEMPLATE_ID,
   InvariantViolationError,
   isPromptExcludedArtifact,
+  type PromptArtifact,
   type PromptContextPack,
   type PromptNonceSource,
   type PromptPreviousAttempt,
@@ -82,7 +87,13 @@ import { NOT_SEARCHED } from '../knowledge/text-search-record.js';
 import type { CiConfigLocation } from '../ports/integrations/git-provider.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import type { PlatformToolName, RunContextDocument, RunLimits, RunSpec } from '../ports/runner.js';
+import type {
+  PlatformToolName,
+  PromptHolds,
+  RunContextDocument,
+  RunLimits,
+  RunSpec,
+} from '../ports/runner.js';
 import { runLimitsDefaults } from '../ports/runner.js';
 import { qualifiedPlatformSkill, unlistedProtectedPaths } from '../ports/workspace.js';
 import { CONFLICT_RESOLUTION_STAGE } from './rebase.js';
@@ -509,6 +520,18 @@ export interface StageRunPlannerOptions {
   /** Absolute path of the task's workspace; WP-14's `WorkspaceProvider` supplies the real one. */
   readonly workspacePath: (taskId: Id) => string;
   /**
+   * The platform tools this **build** performs (PROGRESS backlog 476) — the composition root's
+   * answer, because the implementations are its (`IMPLEMENTED_PLATFORM_TOOLS` in `apps/server`).
+   *
+   * A run is registered with the role's tools **intersected** with these, so a tool that would
+   * refuse by name is absent from the run rather than offered and refused: on Autix every stage was
+   * offered `report_progress` and `ask_human`, called them, and read a paragraph of internal jargon
+   * back. Absent means every tool in the role's row, which is what the harness and the unit tests
+   * compose (their tool ports answer all nine). A skill that exists to drive a hidden tool is
+   * withheld with it ({@link SKILL_REQUIRES_PLATFORM_TOOL}).
+   */
+  readonly availablePlatformTools?: readonly PlatformToolName[];
+  /**
    * The shipped role prompts (`@platform/prompts`). Required: a planner with no prompts is the
    * placeholder this work package replaced.
    *
@@ -607,10 +630,67 @@ export interface StageRunPlannerOptions {
  * A subtraction, never a union — see {@link PLATFORM_TOOLS_DENIED_BY_STAGE}. A stage that is not in
  * that table gets the role's list unchanged, which is every stage but one.
  */
-export const platformToolsFor = (role: AgentRole, stage: string): readonly PlatformToolName[] => {
+export const platformToolsFor = (
+  role: AgentRole,
+  stage: string,
+  available?: readonly PlatformToolName[],
+): readonly PlatformToolName[] => {
   const denied = PLATFORM_TOOLS_DENIED_BY_STAGE[stage] ?? [];
-  return (PLATFORM_TOOLS_BY_ROLE[role] ?? []).filter((tool) => !denied.includes(tool));
+  return (PLATFORM_TOOLS_BY_ROLE[role] ?? []).filter(
+    (tool) => !denied.includes(tool) && (available === undefined || available.includes(tool)),
+  );
 };
+
+/**
+ * The skills whose whole job is one platform tool — withheld from a run that is not given the tool
+ * (PROGRESS backlog 476), for the reason `SKILLS_BY_ROLE`'s rule 2 gives: a skill goes to a role
+ * that has the tool it is about. `test/contract/prompts/platform-skills.contract.test.ts` holds the
+ * role table to the same pairs.
+ */
+export const SKILL_REQUIRES_PLATFORM_TOOL: Readonly<Record<string, PlatformToolName>> = {
+  'ask-human': 'ask_human',
+  kb: 'kb_search',
+  'gitlab-mr': 'open_mr',
+  'mr-description': 'update_mr_description',
+  'file-followup-ticket': 'create_followup_ticket',
+};
+
+/** {@link skillsFor}, minus every skill whose tool this run is not given. */
+export const skillsForTools = (
+  names: readonly string[],
+  tools: readonly PlatformToolName[],
+): readonly string[] =>
+  names.filter((name) => {
+    const tool = SKILL_REQUIRES_PLATFORM_TOOL[name];
+    return tool === undefined || tools.includes(tool);
+  });
+
+/**
+ * Which artifact a role's stage exists to carry out — its **primary input**, cut at
+ * `MAX_PRIMARY_ARTIFACT_CHARS` rather than `MAX_ARTIFACT_CHARS` (PROGRESS backlog 474). The
+ * Developer executes the plan, so a cut there is a cut in the work order; the Architect designs
+ * from the specification or the root-cause analysis. Every other artifact keeps the ordinary cap.
+ */
+export const PRIMARY_ARTIFACT_BY_ROLE: Readonly<
+  Partial<Record<AgentRole, readonly ArtifactType[]>>
+> = {
+  developer: ['ImplementationPlan'],
+  architect: ['RefinedSpec', 'RootCauseAnalysis'],
+};
+
+/**
+ * The platform's statement of what the run's shell can execute (`ENVIRONMENT_PROMPT`, PROGRESS
+ * backlog 475), by the project's verification mode — `null` for a role with no `Bash`, for
+ * {@link verificationPromptFor}'s reason: a role that runs nothing would read it as noise.
+ */
+export const environmentPromptFor = (
+  role: AgentRole,
+  mode: VerificationMode,
+): EnvironmentPrompt | null =>
+  (TOOLS_BY_ROLE[role] ?? []).includes('Bash') ? ENVIRONMENT_PROMPT[mode] : null;
+
+/** The SDK tools that let a run read the repository checkout it was given. */
+const CHECKOUT_TOOLS: readonly string[] = ['Read', 'Glob', 'Grep', 'Bash', 'Edit', 'Write'];
 
 /**
  * The maximum this run starts from, before the project narrows it: the role's baseline, plus what
@@ -1162,6 +1242,41 @@ export const previousAttemptFor = (
 };
 
 /**
+ * How the stage's latest ended run ended (PROGRESS backlog 476), for the prompt's stage line — or
+ * `null` when the stage has none. Every value is the platform's own record in a closed vocabulary.
+ */
+export const previousRunFor = (
+  request: Pick<StageRunRequest, 'previousRun'>,
+): { status: string; terminalReason: string | null; numTurns: number } | null => {
+  const previous = request.previousRun ?? null;
+  return previous === null
+    ? null
+    : {
+        status: previous.status,
+        terminalReason: previous.terminalReason,
+        numTurns: previous.numTurns,
+      };
+};
+
+/** Whether a role's run is given the repository: any tool that reads or writes a checkout. */
+const runHasCheckout = (role: AgentRole): boolean =>
+  (TOOLS_BY_ROLE[role] ?? []).some((tool) => CHECKOUT_TOOLS.includes(tool));
+
+/**
+ * What the prompt carries whole (PROGRESS backlog 474): the ticket when the platform read it — the
+ * ticket block is the stored snapshot, uncut — and every artifact the assembler did not cut.
+ */
+export const promptHoldsOf = (
+  task: StoredTask,
+  artifacts: readonly PromptArtifact[],
+): PromptHolds => ({
+  ticket: task.ticketSnapshot !== null,
+  artifacts: artifacts
+    .filter((artifact) => artifactShownWhole(artifact))
+    .map((artifact) => ({ artifact_type: artifact.type, version: artifact.version })),
+});
+
+/**
  * `runs.mode` — technical/04's mode table, which is about the **run** and not about the task.
  *
  * Three questions in one order, and the order is the rule. `shadow` comes from `tasks.mode`, which
@@ -1259,7 +1374,13 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
       // Which skills this run is provisioned with: the role's row, minus every provider skill the
       // project's bindings do not name (WP-54). Read first, because the skills also bring their
       // own command patterns.
-      const skillNames = skillsFor(role, await options.boundSkills(task.task.projectId));
+      // Backlog 476: the tools this build performs, so none is offered only to be refused — and a
+      // skill about a tool the run is not given is withheld with it.
+      const platformTools = platformToolsFor(role, stage.id, options.availablePlatformTools);
+      const skillNames = skillsForTools(
+        skillsFor(role, await options.boundSkills(task.task.projectId)),
+        platformTools,
+      );
       // Role baseline, then the stage's and the skills' extra `allow` patterns, then the
       // organisation maximum over all of it (backlog 146), then the project's narrowing — in that
       // order, so a project still narrows what the layers added (TD-027) and can never re-grant
@@ -1389,6 +1510,17 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
       const checkout = checkoutOf(request, role);
       const mode = runModeFor(task, stage.id);
       const previousAttempt = previousAttemptFor(request, checkout.checkoutRef);
+      const limits = limitsFor(settings, stage.id, role);
+      // Backlog 474: in the order a stage reads them, and the stage's own input under its own cap.
+      const primary = PRIMARY_ARTIFACT_BY_ROLE[role] ?? [];
+      const promptArtifacts: readonly PromptArtifact[] = artifactsShownTo(request).map(
+        (artifact) => ({
+          type: artifact.type,
+          version: artifact.version,
+          json: artifactJsonForPrompt(artifact.type, artifact.data),
+          primary: primary.includes(artifact.type),
+        }),
+      );
       const prompt = assemblePrompt({
         nonce: options.nonce,
         role: options.prompts[role],
@@ -1408,11 +1540,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           // off the row for the same reason as the two above — the collection happened in a job,
           // outside every transaction, before this task existed.
           historySample: task.historySample ?? null,
-          artifacts: artifactsShownTo(request).map((artifact) => ({
-            type: artifact.type,
-            version: artifact.version,
-            json: JSON.stringify(artifact.data),
-          })),
+          artifacts: promptArtifacts,
           returnFeedback: request.returnFeedback,
           // WP-81: a cut the CI gate made to a failing job's log, announced in the marker.
           returnFeedbackOriginalChars: request.returnFeedbackOriginalChars ?? null,
@@ -1427,6 +1555,8 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           observability: request.observability ?? [],
           // Backlog 467: the previous attempt's saved work is on the branch this run checks out.
           previousAttempt,
+          // Backlog 476: how the stage's last run ended, so "attempt 2" says why it exists.
+          previousRun: previousRunFor(request),
         },
         artifactType: stage.produces,
         // The stage's narrower instruction, when it has one: platform text, typed as a closed set
@@ -1434,6 +1564,16 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         focus: STAGE_PROMPT_FOCUS[stage.id as keyof typeof STAGE_PROMPT_FOCUS] ?? null,
         // The platform's CI instruction for a project that verifies on CI, to a role with a shell.
         verification: verificationPromptFor(role, verification),
+        // Backlog 475: what the shell can run, to every role that has one.
+        environment: environmentPromptFor(role, verification),
+        // Backlogs 473 and 476: the caps the CLI enforces, the tools the run is registered with
+        // and what it was given — the user prompt's first section.
+        run: {
+          maxTurns: limits.maxTurns,
+          maxBudgetUsd: limits.maxBudgetUsd,
+          platformTools: platformTools,
+          repository: runHasCheckout(role),
+        },
         /**
          * The language the project's humans read (WP-32, PROGRESS backlog **60**).
          *
@@ -1480,10 +1620,10 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           checkoutRef: checkout.checkoutRef,
         }),
         contextPack: [...pack.runContextPack],
-        limits: limitsFor(settings, stage.id, role),
+        limits,
         tools: [...(TOOLS_BY_ROLE[role] ?? [])],
         disallowedTools: [],
-        platformTools: [...platformToolsFor(role, stage.id)],
+        platformTools: [...platformTools],
         commandPolicy: {
           allow: [...policy.policy.allow],
           ask: [...policy.policy.ask],
@@ -1511,6 +1651,8 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         secretEnvNames: [...(options.secretEnvNames ?? [])],
         claudeCodePath: options.claudeCodePath ?? null,
         resumeSessionId: null,
+        // Backlog 474: what `get_task_context` need not send again, from the assembler's own cut.
+        promptHolds: promptHoldsOf(task, promptArtifacts),
       };
       return {
         spec,

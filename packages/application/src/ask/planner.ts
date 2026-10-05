@@ -24,6 +24,7 @@ import type { AgentRole, ContextPackRecord, Id, IsoDate, IsoDateTime } from '@pl
 import {
   ASK_ROLE,
   ASK_RUN_MODE,
+  artifactJsonForPrompt,
   assemblePrompt,
   DEFAULT_ASK_BUDGET_USD,
   DEFAULT_ASK_MODEL,
@@ -244,7 +245,8 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
             .map((artifact) => ({
               type: artifact.type,
               version: artifact.version,
-              json: JSON.stringify(artifact.data),
+              // Backlog 474: the order a reader takes the fields in, not jsonb's.
+              json: artifactJsonForPrompt(artifact.type, artifact.data),
             })),
           returnFeedback: null,
           record: [
@@ -262,6 +264,10 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
         artifactType: 'AskAnswer',
         focus: null,
         verification: verificationPromptFor(role, verification),
+        // Backlogs 475 and 476: the ask has no shell, so no workspace statement, and its frame is
+        // one turn over its own record — the stage runs' *This run* section is not written for it.
+        environment: null,
+        run: null,
         language: 'auto',
         ask: { question: ask.question, askedBy: request.askedByLabel },
         // WP-92: a project prompt file is written for a **stage**, and an ask belongs to none.

@@ -133,6 +133,29 @@
           "value": "JSON.parse(output).children.every((c) => c.acceptance_criteria.length >= 1)"
         }
       ]
+    },
+    {
+      "id": "pm-no-direction-page",
+      "description": "backlog 476: a project with no recorded direction gets drift false with a reason, not a search for business/direction.md",
+      "vars": {
+        "ticket": "title: Export invoices as CSV\ndescription: Finance wants the monthly invoices as a CSV download.",
+        "knowledge": "(no knowledge documents: this project's knowledge base has not been indexed)"
+      },
+      "expect_fields": ["drift", "kb_citations"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/refined-spec.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).drift.flag === false && JSON.parse(output).drift.justification.length > 0"
+        },
+        {
+          "type": "javascript",
+          "value": "!JSON.parse(output).kb_citations.some((c) => /direction\\.md/.test(c.path))"
+        }
+      ]
     }
   ]
 }

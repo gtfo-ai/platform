@@ -126,6 +126,22 @@ describe('the production platform tools', () => {
     await expect(CALL[name](tools)).rejects.toThrow(JSON.stringify(name));
   });
 
+  /**
+   * Backlog 476: the refusal is what the model reads back, so it is one short plain sentence; the
+   * platform's own account of what is missing goes to the run log, on `missing`.
+   */
+  it('refuses in one short plain sentence, and keeps the detail for the log', async () => {
+    const failure = (await CALL.report_progress(tools).catch((error: unknown) => error)) as
+      | PlatformToolUnavailableError
+      | undefined;
+    expect(failure).toBeInstanceOf(PlatformToolUnavailableError);
+    expect(failure?.message).toBe(
+      '"report_progress" is not available in this build. Continue without it, and say in your artifact what you would have used it for.',
+    );
+    expect(failure?.message).not.toMatch(/TranscriptEvent|aggregate|WP-\d+|sink/);
+    expect(failure?.missing).toContain('TranscriptEvent');
+  });
+
   it('does not refuse kb_search — it reaches the store, which is what fails here', async () => {
     // The other direction of the boundary: this call gets past the refusal and dies in the pool
     // double, so "every tool throws" cannot masquerade as "five tools refuse".

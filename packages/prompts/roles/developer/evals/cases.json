@@ -109,6 +109,81 @@
           "value": "!/glab mr (create|update)|into production/i.test(JSON.parse(output).summary)"
         }
       ]
+    },
+    {
+      "id": "dev-missing-generator-is-a-gap",
+      "description": "backlog 475: a generator the workspace lacks is not reverse-engineered — the file is written by hand and the departure is reported",
+      "vars": {
+        "plan": "Add a `discount` column to `orders`. Generate the migration with `php bin/doctrine migrations:diff` and the model with `composer generate:model`; never write either by hand.",
+        "repo": "migrations/Version20260901.php is an existing migration; src/Model/Order.php is generated. In this workspace `php` and `composer` answer `command not found`."
+      },
+      "expect_fields": ["deviations_from_plan", "known_gaps"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/implementation-notes.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).deviations_from_plan.length >= 1"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).known_gaps.some((gap) => /php|composer|generat|by hand|CI/i.test(gap))"
+        },
+        {
+          "type": "javascript",
+          "value": "!JSON.parse(output).commands_run.some((c) => /^(php|composer)\\b/.test(c.command) && c.exit_code === 0)"
+        }
+      ]
+    },
+    {
+      "id": "dev-partial-before-the-cap",
+      "description": "backlog 473: near the turn cap the run returns what it pushed and lists the rest, rather than starting another slice",
+      "vars": {
+        "plan": "Add the `currency` column to the CSV export, the importer and the API response, with a test for each in src/billing/*.test.ts.",
+        "repo": "This run: at most 40 turns, 35 used. The export slice and its test are committed and pushed to agentic/ACME-1; open_mr answered iid 12. The importer and the API response are not started.",
+        "open_mr_answer": "{\"status\":\"opened\",\"iid\":12,\"url\":\"https://gitlab.example.test/acme/api/-/merge_requests/12\",\"source_branch\":\"agentic/ACME-1\",\"target_branch\":\"main\",\"draft\":true}"
+      },
+      "expect_fields": ["known_gaps", "mr"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/implementation-notes.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).mr.iid === 12"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).known_gaps.some((gap) => /import/i.test(gap)) && JSON.parse(output).known_gaps.some((gap) => /API|response/i.test(gap))"
+        }
+      ]
+    },
+    {
+      "id": "dev-mr-only-from-open-mr",
+      "description": "backlog 473: when open_mr fails, the failure is a known gap and `mr` is never a ticket number or a create-merge-request link",
+      "vars": {
+        "plan": "Add a `currency` column to the CSV export; test in src/billing/invoice.test.ts.",
+        "repo": "The slice is committed and pushed to agentic/ACME-1. The ticket is ACME-1 at https://jira.example.test/browse/ACME-1.",
+        "open_mr_answer": "open_mr failed: the git provider refused the request (403)"
+      },
+      "expect_fields": ["known_gaps", "mr"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/implementation-notes.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).known_gaps.some((gap) => /open_mr|merge request|403/i.test(gap))"
+        },
+        {
+          "type": "javascript",
+          "value": "!/ACME-1|merge_requests\\/new|browse/i.test(String(JSON.parse(output).mr.url))"
+        }
+      ]
     }
   ]
 }

@@ -134,6 +134,7 @@ import { type ProjectSettings, settingsAdmission } from './settings.js';
 import { runSettingsSnapshot } from './settings-snapshot.js';
 import type { RunStopReasons } from './stop-reasons.js';
 import type {
+  EndedRun,
   PipelineStore,
   ReturnCause,
   SavedAttempt,
@@ -203,6 +204,12 @@ export interface StageRunRequest {
    * it pushed is the branch this run checks out (`previousAttemptFor`). Absent or `null` otherwise.
    */
   readonly previousAttempt?: SavedAttempt | null;
+  /**
+   * How the latest ended run of this stage ended, however it ended (PROGRESS backlog 476) — read at
+   * admission by `RunRepository.lastEnded`, for the sentence that says why this attempt exists.
+   * Absent or `null` when the stage has no ended run.
+   */
+  readonly previousRun?: EndedRun | null;
 }
 
 /** What a planner returns: the spec the runner is given, and the audit record of what went in. */
@@ -652,6 +659,8 @@ type Admitted = {
   readonly checkoutBase: string | null;
   /** Backlog 467: the stage's previous attempt, when it saved unfinished work. */
   readonly previousAttempt: SavedAttempt | null;
+  /** Backlog 476: how the stage's latest ended run ended, however it ended. */
+  readonly previousRun: EndedRun | null;
 };
 
 type Admission = Exclude<Prepared, { kind: 'ready' }> | Admitted;
@@ -996,6 +1005,8 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
           taskId: job.taskId,
           stage: job.stage,
         }),
+        // Backlog 476: the same row, whatever it saved — what the next prompt's stage line says.
+        previousRun: await store.runs.lastEnded(scope.tx, { taskId: job.taskId, stage: job.stage }),
       };
     });
 
@@ -1165,6 +1176,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       returnCause: admission.returnCause,
       checkoutBase: admission.checkoutBase,
       previousAttempt: admission.previousAttempt,
+      previousRun: admission.previousRun,
       ...(job.overrides === undefined ? {} : { overrides: job.overrides }),
       ...(job.mergeRequestPaths === undefined ? {} : { mergeRequestPaths: job.mergeRequestPaths }),
       ...(job.observability === undefined ? {} : { observability: job.observability }),

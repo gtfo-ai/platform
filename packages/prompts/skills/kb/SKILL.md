@@ -13,9 +13,10 @@ the KB says what was decided.
 ## Order of work
 
 1. **The context pack you were given.** The most relevant items are already in your prompt, in
-   data blocks with their paths — read those first; they cost nothing. The same documents are
-   written into `.agentic-run/context/` in your workspace **when the platform provisioned one**;
-   if that directory is not there, the prompt is the whole pack and nothing is missing.
+   data blocks with their paths — read those first; they cost nothing. The prompt is the whole
+   pack: the documents are not copied anywhere in your workspace, so there is no directory to look
+   for. *This run*, at the top of your task, says how many there are — none, when the project has
+   no knowledge base indexed, and then the repository's own files are where to look.
 2. **The index.** It is the map: entries carry a title, a path and a one-line summary. Start there
    rather than searching for a word you hope exists.
 3. **`kb_search`.** The platform tool. Give it the terms of the problem, not a sentence. It returns

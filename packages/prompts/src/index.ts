@@ -61,14 +61,21 @@ export const ROLE_PROMPT_VERSIONS = {
   // `get_task_context` value — no `include` serves configuration.
   triager: '2',
   // WP-40: the epic-split variant's `TicketBreakdown` section.
-  product_manager: '2',
-  investigator: '1',
+  // Backlog 476: questions go in the artifact (`decision: ask`), not to `ask_human`; the direction
+  // page and the business pages are named only when the pack has them.
+  product_manager: '3',
+  // Backlog 476: a low-confidence analysis asks through `questions`, not `ask_human`.
+  investigator: '2',
   // WP-40: the spike template's `ResearchReport` section.
   // WP-81: `protected_path_changes` — declare every existing test / CI-lint file changed (BD-024).
-  architect: '3',
+  // Backlogs 475 and 476: plans only what the workspace can carry out (a missing generator's file is
+  // written by hand and judged by CI), `validation_contract` named, knowledge "when the project has it".
+  architect: '4',
   // WP-138: `open_mr` takes a title and a description; the branch and the target are the
   // platform's, the platform marks the merge request ready, and the record is the tool's.
-  developer: '2',
+  // Backlogs 473, 475 and 476: work in slices — commit, push and `open_mr` after the first, notes
+  // before the cap — a check the workspace cannot run is a known gap, and no tool is reverse-engineered.
+  developer: '3',
   // WP-45: the project's `review_checklist` blocks, and `criteria` when a human's merge request is
   // compared against a RefinedSpec (the shadow report's review of the human MR).
   // WP-81: judge the plan's `protected_path_changes` into `protected_path_changes_confirmed`.

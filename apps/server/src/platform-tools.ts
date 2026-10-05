@@ -69,16 +69,28 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { readTaskContext } from './queries/task-context-queries.js';
 
-/** Thrown by every platform tool this build cannot perform. Names the tool and what is missing. */
+/**
+ * Thrown by every platform tool this build cannot perform.
+ *
+ * **One short plain sentence** (PROGRESS backlog 476), because this message is what the model reads
+ * back: on Autix it was a paragraph about aggregates, sinks and `TranscriptEvent` kinds, and agents
+ * spent turns on it. What is missing, in the platform's terms, is {@link MISSING}'s and goes to the
+ * run log (`missing`), never to the model. Since the same work package a run is not *given* a tool
+ * this build refuses (`availablePlatformTools`, composed from {@link IMPLEMENTED_PLATFORM_TOOLS}), so
+ * this is reached only by a composition that registers one anyway.
+ */
 export class PlatformToolUnavailableError extends Error {
   override readonly name = 'PlatformToolUnavailableError';
   readonly tool: PlatformToolName;
+  /** What the build lacks, for the operator's log. */
+  readonly missing: string;
 
   constructor(tool: PlatformToolName, missing: string) {
     super(
-      `the platform tool ${JSON.stringify(tool)} is not composed in this build: ${missing}. The run may continue without it; report in your artifact that you could not use it.`,
+      `${JSON.stringify(tool)} is not available in this build. Continue without it, and say in your artifact what you would have used it for.`,
     );
     this.tool = tool;
+    this.missing = missing;
   }
 }
 
@@ -212,10 +224,16 @@ export const composePlatformTools = (options: PlatformToolsOptions): PlatformToo
       input: GetTaskContextInput,
       context: PlatformToolContext,
     ): Promise<JsonValue> =>
-      (await readTaskContext(database, input.include, {
-        taskId: context.taskId,
-        projectId: context.projectId,
-      })) as unknown as JsonValue,
+      (await readTaskContext(
+        database,
+        input.include,
+        { taskId: context.taskId, projectId: context.projectId },
+        {
+          // Backlog 474: what the run's prompt already holds whole is not sent again.
+          ...(context.promptHolds === undefined ? {} : { promptHolds: context.promptHolds }),
+          ...(input.artifact_types === undefined ? {} : { artifactTypes: input.artifact_types }),
+        },
+      )) as unknown as JsonValue,
     addTicketComment: async () => refuse('add_ticket_comment', options.logger),
     /**
      * The run's own task and project, never ones the model named (WP-138): the branch and the

@@ -44,7 +44,7 @@
         },
         {
           "type": "javascript",
-          "value": "JSON.parse(output).confidence <= 0.5"
+          "value": "JSON.parse(output).confidence === 'low'"
         },
         {
           "type": "javascript",
@@ -68,6 +68,29 @@
         {
           "type": "javascript",
           "value": "!/not a bug/i.test(JSON.parse(output).root_cause)"
+        }
+      ]
+    },
+    {
+      "id": "inv-asks-through-questions",
+      "description": "backlog 476: a low-confidence analysis names the evidence it needs in questions, with no ask_human in its tool list",
+      "vars": {
+        "ticket": "Checkout fails for some users since Tuesday.",
+        "evidence": "One Sentry event, no stack trace, no request id. Your platform tools: get_task_context, kb_search."
+      },
+      "expect_fields": ["confidence", "questions"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/root-cause-analysis.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).confidence === 'low'"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).questions.some((q) => /request|trace|event|reproduc|log/i.test(q.text))"
         }
       ]
     }

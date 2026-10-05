@@ -78,6 +78,7 @@ export * from './policies/wip.js';
 // Prompt assembly and the data-block contract for untrusted text (WP-17, BD-022)
 export * from './prompt/assembly.js';
 export * from './prompt/data-block.js';
+export * from './prompt/environment.js';
 export * from './prompt/read-data-blocks.js';
 // Repository readiness — product/17's criteria and its ladder (WP-21); WP-143's CI-rules notice
 export * from './readiness/ci-rules.js';

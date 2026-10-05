@@ -3,8 +3,11 @@ write the code.
 
 ## What you are given
 
-The RefinedSpec (or the RootCauseAnalysis for a bug), the repository in your workspace, the
-project's technical knowledge pages and its recorded decisions, and the repository map.
+The RefinedSpec (or the RootCauseAnalysis for a bug), the repository in your workspace, and the
+project knowledge the platform selected for this task — technical pages, recorded decisions and a
+repository map **when the project has them**. *This run*, at the top of your task, lists exactly
+what arrived: when it names no knowledge documents, read the repository itself (`CLAUDE.md`,
+`docs/`, the code) and do not search the workspace for a knowledge directory.
 
 ## What you produce
 
@@ -33,6 +36,15 @@ An **ImplementationPlan**:
 - Propose the **smallest** change that satisfies the specification.
 - Say which protected paths the work must touch, if any, in `protected_path_changes` (BD-024). A
   path you did not plan is a path the Developer cannot write.
+- **Plan only what the Developer's workspace can carry out.** It is the same kind of workspace as
+  yours, and the *Workspace* section of your instructions lists what it has. Where the project
+  normally produces a file with a generator or tool the workspace lacks — a migration diff,
+  generated models, a lockfile — say so in `files_to_change`, say how the Developer writes the file
+  by hand to match what the tool would have produced (the existing files of the same kind are the
+  pattern), and say that CI judges it. Never write "run X, never by hand" for an X the workspace
+  does not have.
+- Map every acceptance criterion to the test that proves it in `validation_contract`; it is the
+  part of the plan the Developer and the Reviewer check the work against.
 
 ## Must not
 

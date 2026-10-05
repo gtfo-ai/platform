@@ -30,16 +30,25 @@
  * | `feedback` | `task_stages` rows with `state = 'returned'`: the stage, its target (`returned_to`), the reason and — since WP-105 — its `cause` ({@link returnCauseOf}) — escalations excluded (WP-55) | never; an empty list is an answer |
  * | `mr` | `tasks.mr_ref` and `tasks.branch` | the task has no merge request yet |
  * | `ci` | `tasks.coverage` — the one per-task CI figure the platform stores | no coverage was recorded; pipeline runs themselves are **not** projected per task |
- * | `runs` | `findTaskDetail`'s runs, newest {@link TASK_CONTEXT_RUN_LIMIT} | never |
+ * | `runs` | `findTaskDetail`'s runs, newest {@link TASK_CONTEXT_RUN_LIMIT}, as {@link RUN_FIELDS_FOR_AGENTS} | never |
  * | `audit` | `human_actions` for this task, newest {@link TASK_CONTEXT_AUDIT_LIMIT} | never |
+ *
+ * ## What the prompt already holds is not sent again (PROGRESS backlog 474)
+ *
+ * A stage run's prompt carries the ticket and every artifact the assembler did not cut, and on
+ * Autix the tool re-sent both — about 22 KB, twice in one context. The planner records what the
+ * prompt holds whole (`RunSpec.promptHolds`, from the assembler's own cut) and this read answers
+ * those with `status: 'in_prompt'` and a sentence saying where they are. A run whose spec carries
+ * no record (the ask) is served everything, the direction that wastes context rather than hides it.
  *
  * `ci` is narrow on purpose: `ci.pipeline.finished` is stored on the **project** stream and its
  * `task_id` is often absent (the gate resolves a pipeline to a task by merge request when it reads
  * it), so a per-task list of pipelines would be a second resolution of that join written here.
  */
-import type { Id, JsonObject, TicketSnapshot } from '@platform/contracts';
+import type { PromptHolds } from '@platform/application';
+import type { ArtifactType, Id, JsonObject, TicketSnapshot } from '@platform/contracts';
 import { isBuiltinGateStageId } from '@platform/contracts';
-import { isPromptExcludedArtifact } from '@platform/domain';
+import { isPromptExcludedArtifact, orderArtifactData } from '@platform/domain';
 import { ask as askAdapters, db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import { type Database, findArtifactBody, findTaskDetail } from './pipeline-queries.js';
@@ -92,6 +101,15 @@ const LIST_OF: Readonly<Partial<Record<TaskContextInclude, string>>> = {
 const sizeOf = (value: unknown): number => JSON.stringify(value).length;
 
 /**
+ * What an artifact that does not fit is answered with (PROGRESS backlog 474): what to call instead,
+ * never a URL — the `/api/artifacts/…` path this used to name is one no agent tool can reach.
+ */
+const artifactStubReason = (size: number): string =>
+  size < TASK_CONTEXT_MAX_CHARS
+    ? `this artifact is ${String(size)} characters and did not fit beside the rest of this answer; call get_task_context again with include ["artifacts"] and artifact_types naming only this type`
+    : `this artifact is ${String(size)} characters, more than one answer carries (${String(TASK_CONTEXT_MAX_CHARS)}); work from the copy in your prompt and say in your artifact that you could not read it whole`;
+
+/**
  * Fits one value into its share of {@link TASK_CONTEXT_MAX_CHARS}.
  *
  * Two list shapes, two rules. **Artifacts** are independent documents, so one that does not fit is
@@ -137,7 +155,7 @@ export const boundTaskContextSection = (
       artifact_type: item['artifact_type'],
       version: item['version'],
       status: 'refused',
-      reason: `does not fit this call's share (${String(sizeOf(item))} characters); read it at ${String(item['url'])}`,
+      reason: artifactStubReason(sizeOf(item)),
     };
     if (sizeOf(withList([...kept, stub], omitted)) <= budget) {
       kept.push(stub);
@@ -152,18 +170,71 @@ export const boundTaskContextSection = (
  * Each requested value's share. The **ticket** is guaranteed {@link TASK_CONTEXT_TICKET_SHARE},
  * because a full-size snapshot is one document that can only be served whole or refused, and seven
  * equal shares (22 857 characters each) refused it whenever four or more values were asked for.
+ *
+ * **Given the sections' sizes, what a small value does not use goes to the large ones** (PROGRESS
+ * backlog 474): on Autix the tool refused a 26 415-character plan as over *"this call's share"*
+ * while the whole answer used 25.6 k of its 160 k. So the shares are filled like water — the
+ * smallest section first, each given its size or an equal part of what is left, whichever is less —
+ * and whatever the ticket's guarantee reserved and the ticket did not need joins the rest. Without
+ * sizes (the old call) the shares are the equal split, ticket guarantee included.
  */
 export const taskContextShares = (
   values: readonly TaskContextInclude[],
+  sizes?: Readonly<Partial<Record<TaskContextInclude, number>>>,
 ): Readonly<Partial<Record<TaskContextInclude, number>>> => {
   const equal = Math.floor(TASK_CONTEXT_MAX_CHARS / values.length);
-  if (!values.includes('ticket') || values.length === 1) {
-    return Object.fromEntries(values.map((value) => [value, equal]));
+  const withTicket = values.includes('ticket') && values.length > 1;
+  if (sizes === undefined) {
+    if (!withTicket) {
+      return Object.fromEntries(values.map((value) => [value, equal]));
+    }
+    const ticket = Math.max(equal, TASK_CONTEXT_TICKET_SHARE);
+    const rest = Math.floor((TASK_CONTEXT_MAX_CHARS - ticket) / (values.length - 1));
+    return Object.fromEntries(values.map((value) => [value, value === 'ticket' ? ticket : rest]));
   }
-  const ticket = Math.max(equal, TASK_CONTEXT_TICKET_SHARE);
-  const rest = Math.floor((TASK_CONTEXT_MAX_CHARS - ticket) / (values.length - 1));
-  return Object.fromEntries(values.map((value) => [value, value === 'ticket' ? ticket : rest]));
+  const sizeOfValue = (value: TaskContextInclude): number => sizes[value] ?? 0;
+  // The ticket's guarantee, reserved first — only as much of it as the ticket needs.
+  const reserved = withTicket ? Math.min(sizeOfValue('ticket'), TASK_CONTEXT_TICKET_SHARE) : 0;
+  const filled = withTicket ? values.filter((value) => value !== 'ticket') : [...values];
+  const shares: Partial<Record<TaskContextInclude, number>> = {};
+  let left = TASK_CONTEXT_MAX_CHARS - reserved;
+  const ascending = [...filled].sort((a, b) => sizeOfValue(a) - sizeOfValue(b));
+  ascending.forEach((value, index) => {
+    const fair = Math.floor(left / (ascending.length - index));
+    const share = Math.min(sizeOfValue(value), fair);
+    shares[value] = index === ascending.length - 1 ? Math.max(share, fair) : share;
+    left -= shares[value] ?? 0;
+  });
+  if (withTicket) {
+    shares.ticket = reserved + Math.max(0, left);
+  }
+  return shares;
 };
+
+/**
+ * What an agent is told about each of its task's runs (PROGRESS backlog 474): what happened, not
+ * how the platform recorded it. `settings_hash`, `prompt_version`, the token counts, the session id
+ * and the redaction count are audit material for a human; in a model's context they were noise it
+ * read every time it asked.
+ */
+export const RUN_FIELDS_FOR_AGENTS = [
+  'id',
+  'stage',
+  'role',
+  'attempt',
+  'model',
+  'status',
+  'terminal_reason',
+  'started_at',
+  'ended_at',
+  'num_turns',
+  'cost',
+] as const;
+
+const runForAgents = (run: Readonly<Record<string, unknown>>): Record<string, unknown> =>
+  Object.fromEntries(
+    RUN_FIELDS_FOR_AGENTS.filter((key) => Object.hasOwn(run, key)).map((key) => [key, run[key]]),
+  );
 
 /** How many of the task's runs and audit rows one call returns — the ask's own bounds. */
 export const TASK_CONTEXT_RUN_LIMIT = 50;
@@ -171,7 +242,16 @@ export const TASK_CONTEXT_AUDIT_LIMIT = 100;
 
 export type TaskContextSection =
   | ({ readonly status: 'ok' } & Record<string, unknown>)
-  | { readonly status: 'refused'; readonly reason: string };
+  | { readonly status: 'refused'; readonly reason: string }
+  | { readonly status: 'in_prompt'; readonly note: string };
+
+/** What a stage run's prompt carries whole, and which artifact types a call narrowed to. */
+export interface TaskContextOptions {
+  /** `RunSpec.promptHolds` — absent serves everything, as before backlog 474. */
+  readonly promptHolds?: PromptHolds;
+  /** `get_task_context`'s `artifact_types`: serve only these types' latest versions. */
+  readonly artifactTypes?: readonly ArtifactType[];
+}
 
 export interface TaskContextAnswer {
   readonly task_id: Id;
@@ -358,7 +438,12 @@ export const readTaskContext = async (
   database: Database,
   include: readonly TaskContextInclude[],
   scope: { readonly taskId: Id; readonly projectId: Id },
+  options: TaskContextOptions = {},
 ): Promise<TaskContextAnswer> => {
+  const holds = options.promptHolds;
+  const heldArtifact = (type: string, version: number): boolean =>
+    holds?.artifacts.some((entry) => entry.artifact_type === type && entry.version === version) ??
+    false;
   const detail = await findTaskDetail(database, scope.taskId);
   if (detail === null) {
     throw new TaskContextRefusedError(`task ${scope.taskId} does not exist`);
@@ -374,6 +459,12 @@ export const readTaskContext = async (
   const section = async (value: TaskContextInclude): Promise<TaskContextSection> => {
     switch (value) {
       case 'ticket': {
+        if (holds?.ticket === true) {
+          return {
+            status: 'in_prompt',
+            note: 'your prompt carries the ticket whole, in its `ticket` block; it is not sent again',
+          };
+        }
         const { snapshot, readAt } = await findTicketSnapshot(database, scope.taskId);
         return snapshot === null
           ? refused(
@@ -384,7 +475,11 @@ export const readTaskContext = async (
       case 'artifacts': {
         const latest = new Map<string, (typeof detail.artifacts)[number]>();
         for (const entry of detail.artifacts) {
-          if (isPromptExcludedArtifact(entry.artifact_type)) {
+          if (
+            isPromptExcludedArtifact(entry.artifact_type) ||
+            (options.artifactTypes !== undefined &&
+              !options.artifactTypes.includes(entry.artifact_type))
+          ) {
             continue;
           }
           const current = latest.get(entry.artifact_type);
@@ -394,6 +489,14 @@ export const readTaskContext = async (
         }
         const bodies = await Promise.all(
           [...latest.values()].map(async (entry) => {
+            if (heldArtifact(entry.artifact_type, entry.version)) {
+              return {
+                artifact_type: entry.artifact_type,
+                version: entry.version,
+                status: 'in_prompt',
+                note: 'your prompt carries this version whole, in an `artifact` block; it is not sent again',
+              };
+            }
             const body = await findArtifactBody(database, entry.id);
             if (!body.found) {
               return {
@@ -411,12 +514,12 @@ export const readTaskContext = async (
                 reason: `stored at ${body.createdAt}, before artifacts were redacted at the write, so it is not served`,
               };
             }
+            // No `url` (backlog 474): an `/api/…` path is one no agent tool can reach.
             return {
               artifact_type: entry.artifact_type,
               version: entry.version,
               status: 'ok',
-              url: entry.url,
-              data: body.body.data,
+              data: orderArtifactData(entry.artifact_type, body.body.data),
               markdown: body.body.markdown,
             };
           }),
@@ -456,7 +559,9 @@ export const readTaskContext = async (
           status: 'ok',
           total: newestFirst.length,
           truncated: newestFirst.length > TASK_CONTEXT_RUN_LIMIT,
-          runs: newestFirst.slice(0, TASK_CONTEXT_RUN_LIMIT),
+          runs: newestFirst
+            .slice(0, TASK_CONTEXT_RUN_LIMIT)
+            .map((run) => runForAgents(run as unknown as Record<string, unknown>)),
         };
       }
       case 'audit': {
@@ -477,10 +582,22 @@ export const readTaskContext = async (
   };
 
   const values = [...new Set(include)];
-  const shares = taskContextShares(values);
+  // Read every section first, so the shares can follow their sizes (backlog 474).
+  const read: Partial<Record<TaskContextInclude, TaskContextSection>> = {};
+  for (const value of values) {
+    read[value] = await section(value);
+  }
+  const shares = taskContextShares(
+    values,
+    Object.fromEntries(values.map((value) => [value, sizeOf(read[value])])),
+  );
   const sections: Partial<Record<TaskContextInclude, TaskContextSection>> = {};
   for (const value of values) {
-    sections[value] = boundTaskContextSection(value, await section(value), shares[value] ?? 0);
+    sections[value] = boundTaskContextSection(
+      value,
+      read[value] as TaskContextSection,
+      shares[value] ?? 0,
+    );
   }
   return { task_id: detail.task.id, project_id: detail.task.project_id, sections };
 };

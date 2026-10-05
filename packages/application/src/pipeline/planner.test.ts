@@ -23,6 +23,7 @@ import {
   DEFAULT_IMPLEMENTATION_ALLOW,
   DEFAULT_READ_ONLY_ALLOW,
   DEFAULT_VERIFICATION_ALLOW,
+  ENVIRONMENT_PROMPT,
   evaluateCommand,
   extractQueryTerms,
   HOSTILE_CONSTRUCTS,
@@ -52,16 +53,19 @@ import {
   checkoutOf,
   commandBaselineFor,
   createStageRunPlanner,
+  environmentPromptFor,
   ignoredProjectAllow,
   PLATFORM_TOOLS_BY_ROLE,
   PROVIDER_SKILLS,
   platformToolsFor,
   previousAttemptFor,
+  previousRunFor,
   RUN_MODE_BY_STAGE,
   RUN_MODE_BY_TEMPLATE,
   reviewChecklistsOf,
   SKILLS_BY_ROLE,
   skillsFor,
+  skillsForTools,
   TOOLS_BY_ROLE,
   taskTextOf,
   touchedPathsOf,
@@ -2364,5 +2368,156 @@ describe('an unsuccessful attempt’s saved work (backlog 467)', () => {
     expect(previousAttemptFor({ previousAttempt: SAVED }, null)).toBeNull();
     expect(previousAttemptFor({ previousAttempt: null }, 'agentic/ACME-1')).toBeNull();
     expect(previousAttemptFor({}, 'agentic/ACME-1')).toBeNull();
+  });
+});
+
+/**
+ * Backlogs 473–476 (the first local test on Autix): the run's caps and tools in its prompt, the
+ * plan whole and in a deliberate order, the workspace statement, and no tool offered to be refused.
+ */
+describe('what a run is told about itself (backlogs 473–476)', () => {
+  const developer = {
+    id: 'implementation',
+    kind: 'agent',
+    role: 'developer',
+    produces: 'ImplementationNotes',
+  };
+  const PLAN = {
+    id: '00000000-0000-4000-8000-0000000000a1' as Id,
+    type: 'ImplementationPlan' as const,
+    version: 1,
+    // jsonb's order — shortest key first — with the longest keys past 20 000 characters.
+    data: {
+      risks: ['r'],
+      approach: 'a'.repeat(21_000),
+      test_plan: ['the test for AC1'],
+      validation_contract: [{ check: { kind: 'test', ref: 't.test.ts' }, criterion_id: 'AC1' }],
+    },
+  };
+
+  const planAt = async (
+    stage: Record<string, unknown>,
+    extra: Record<string, unknown> = {},
+    options: Record<string, unknown> = {},
+  ) => {
+    const planner = createStageRunPlanner({
+      workspacePath: (taskId) => `/workspaces/${taskId}`,
+      prompts: prompts as never,
+      skills: testSkills,
+      boundSkills: async () => [],
+      ciConfigLocation: async () => null,
+      nonce: { next: () => NONCE },
+      contextPacks: createContextPackAssembler({
+        store: (await indexedFixtureVault()).store,
+        logger: silentLogger,
+      }),
+      headPaths: async () => null,
+      clock: { now: () => NOW },
+      ...options,
+    });
+    return (
+      await planner.plan({
+        ...requestWith('ACME-1'),
+        stage: stage as never,
+        ...extra,
+      } as unknown as StageRunRequest)
+    ).spec;
+  };
+
+  it('states the caps the CLI enforces and the tools the run is registered with', async () => {
+    const spec = await planAt(developer);
+    expect(spec.userPrompt.startsWith('## This run\n')).toBe(true);
+    expect(spec.userPrompt).toContain(
+      `At most ${String(spec.limits.maxTurns)} turns and ${spec.limits.maxBudgetUsd.toFixed(2)} USD.`,
+    );
+    expect(spec.userPrompt).toContain(
+      `${spec.platformTools.map((tool) => `\`${tool}\``).join(', ')}. No other platform tool exists for this run.`,
+    );
+  });
+
+  it('registers only the tools this build performs, and withholds the skills about the others', async () => {
+    const available = [
+      'kb_search',
+      'get_task_context',
+      'open_mr',
+      'update_mr_description',
+    ] as const;
+    const spec = await planAt(developer, {}, { availablePlatformTools: available });
+    expect(spec.platformTools).toEqual([
+      'get_task_context',
+      'kb_search',
+      'open_mr',
+      'update_mr_description',
+    ]);
+    expect(spec.skills).not.toContain('agentic:ask-human');
+    expect(spec.skills).not.toContain('agentic:file-followup-ticket');
+    expect(spec.skills).toEqual(expect.arrayContaining(['agentic:kb', 'agentic:mr-description']));
+    expect(spec.userPrompt).not.toContain('`ask_human`');
+    // Without the option every tool in the role's row is registered, as before.
+    expect((await planAt(developer)).platformTools).toEqual(PLATFORM_TOOLS_BY_ROLE.developer);
+    expect(skillsForTools(['ask-human', 'kb', 'verify-work'], ['kb_search'])).toEqual([
+      'kb',
+      'verify-work',
+    ]);
+  });
+
+  it('gives the Developer its plan whole, approach first, validation contract before the rest', async () => {
+    const spec = await planAt(developer, { artifacts: [PLAN] });
+    const block = readDataBlocks(spec.userPrompt).blocks.find(
+      (entry) => entry.attributes.artifact_type === 'ImplementationPlan',
+    );
+    expect(block?.attributes.truncated).toBeUndefined();
+    expect(Object.keys(JSON.parse(block?.body ?? '{}') as object)).toEqual([
+      'approach',
+      'validation_contract',
+      'test_plan',
+      'risks',
+    ]);
+    expect(spec.promptHolds?.artifacts).toEqual([
+      { artifact_type: 'ImplementationPlan', version: 1 },
+    ]);
+    expect(spec.promptHolds?.ticket).toBe(false);
+    // A reviewer is not the plan's executor: the ordinary cap, so the prompt does not hold it whole.
+    const review = await planAt(
+      { id: 'code_review', kind: 'agent', role: 'reviewer', produces: 'ReviewVerdict' },
+      { artifacts: [PLAN] },
+    );
+    expect(review.promptHolds?.artifacts).toEqual([]);
+    expect(review.userPrompt).toContain('version 1, cut at 20000 of');
+  });
+
+  it('describes the workspace to every role with a shell, and to no other', async () => {
+    for (const role of agentRoleSchema.options) {
+      const hasShell = TOOLS_BY_ROLE[role].includes('Bash');
+      expect(environmentPromptFor(role, 'local'), role).toBe(
+        hasShell ? ENVIRONMENT_PROMPT.local : null,
+      );
+      expect(environmentPromptFor(role, 'ci'), role).toBe(hasShell ? ENVIRONMENT_PROMPT.ci : null);
+    }
+    const spec = await planAt(developer);
+    expect(spec.systemPromptAppend).toContain(`## Workspace\n\n${ENVIRONMENT_PROMPT.local}`);
+    const ci = await planAt(developer, {
+      settings: { projectId: PROJECT, config: { verification: { mode: 'ci' } } },
+    });
+    expect(ci.systemPromptAppend).toContain(`## Workspace\n\n${ENVIRONMENT_PROMPT.ci}`);
+    expect((await planAt(requestWith('ACME-1').stage as never)).systemPromptAppend).not.toContain(
+      '## Workspace',
+    );
+  });
+
+  it('says how the stage’s last run ended, and that a retry has no return feedback', async () => {
+    const spec = await planAt(developer, {
+      attempt: 2,
+      previousRun: {
+        runId: '00000000-0000-4000-8000-0000000000d2' as Id,
+        status: 'failed',
+        terminalReason: 'crash',
+        numTurns: 0,
+      },
+    });
+    expect(spec.userPrompt).toContain(
+      'Stage `implementation`, attempt 2. The previous run of this stage ended `failed` (`crash`) with no turn recorded. There is no return feedback',
+    );
+    expect(previousRunFor({})).toBeNull();
   });
 });

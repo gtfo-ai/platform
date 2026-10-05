@@ -2629,6 +2629,84 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await lastAt('implementation')).toBeNull();
       });
 
+      /**
+       * Backlog 476: `lastEnded` is the same row however it ended — what the next attempt's stage
+       * line says — and a live run is not an ending.
+       */
+      it('answers the stage’s latest ended run however it ended, and nothing before one', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        for (const attempt of [1, 2]) {
+          await store.tasks.recordStageEntered(tx, {
+            taskId: stored.task.id,
+            stage: 'implementation' as Slug,
+            attempt,
+            causedByEventId: null,
+          });
+        }
+        const startedRun = async (attempt: number): Promise<Id> => {
+          const runId = nextId();
+          await store.runs.insert(tx, {
+            id: runId,
+            taskId: stored.task.id,
+            projectId,
+            stage: 'implementation' as Slug,
+            role: 'developer',
+            mode: 'normal',
+            attempt,
+            model: 'claude-opus-5',
+            effort: 'medium',
+            promptVersion: 'basic@1+developer',
+            systemPrompt: null,
+            userPrompt: null,
+            redactionCount: 0,
+            contextPack: null,
+            settings: null,
+            reserveUsd: null,
+            promptsWithheld: null,
+            providerMode: 'api',
+            status: 'running',
+            terminalReason: null,
+            sessionId: null,
+            numTurns: 0,
+            usage: null,
+            cost: null,
+            wallMs: 0,
+            createdAt: '2026-06-01T09:00:00.000Z',
+            startedAt: '2026-06-01T09:00:01.000Z',
+          });
+          return runId;
+        };
+        const lastAt = () =>
+          store.runs.lastEnded(tx, { taskId: stored.task.id, stage: 'implementation' as Slug });
+        expect(await lastAt()).toBeNull();
+        const first = await startedRun(1);
+        expect(await lastAt()).toBeNull();
+        await store.runs.finish(tx, {
+          runId: first,
+          status: 'failed',
+          terminalReason: 'crash',
+          sessionId: null,
+          numTurns: 0,
+          usage: MEASURED.usage,
+          cost: null,
+          wallMs: 10,
+        });
+        expect(await lastAt()).toEqual({
+          runId: first,
+          status: 'failed',
+          terminalReason: 'crash',
+          numTurns: 0,
+        });
+        // A second attempt that is still running does not replace the ending.
+        await startedRun(2);
+        expect((await lastAt())?.runId).toBe(first);
+        // Another stage has no ending.
+        expect(
+          await store.runs.lastEnded(tx, { taskId: stored.task.id, stage: 'refinement' as Slug }),
+        ).toBeNull();
+      });
+
       it('keeps the estimate and the reported figure apart, in the two columns they belong to', async () => {
         const reported = await liveRun();
         await store.runs.finish(tx, {

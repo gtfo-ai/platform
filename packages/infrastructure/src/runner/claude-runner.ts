@@ -582,6 +582,8 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
           projectId: spec.projectId,
           mode: spec.mode,
           signal: abortController.signal,
+          // Backlog 474: what the prompt holds whole, so `get_task_context` does not re-send it.
+          ...(spec.promptHolds === undefined ? {} : { promptHolds: spec.promptHolds }),
         },
         onCall: (toolName, outcome) => {
           logger.debug({ run_id: spec.runId, tool: toolName, outcome }, 'platform tool called');

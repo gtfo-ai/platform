@@ -1195,6 +1195,25 @@ export const createMemoryPipelineStore = (
         savedWork: clone(saved),
       };
     },
+    /** Backlog 476: {@link lastSavedWork}'s row, however it ended. */
+    lastEnded: async (_tx, query) => {
+      const latest = [...runs.values()]
+        .filter(
+          (run) =>
+            run.taskId === query.taskId &&
+            run.stage === query.stage &&
+            !isActiveRunStatus(run.status),
+        )
+        .at(-1);
+      return latest === undefined
+        ? null
+        : {
+            runId: latest.id,
+            status: latest.status,
+            terminalReason: latest.terminalReason,
+            numTurns: latest.numTurns,
+          };
+    },
     /** WP-144's bound, over this store's rows with the SQL adapter's predicate. */
     shutdownEndings: async (_tx, entry) =>
       [...runs.values()].filter(

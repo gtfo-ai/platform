@@ -62,7 +62,8 @@ export const PLATFORM_SKILL_VERSIONS = {
   // WP-138: `open_mr` takes a title and a description; the platform chooses both branches.
   'gitlab-mr': '3',
   'jira-ticket': '2',
-  kb: '1',
+  // Backlog 476: no `.agentic-run/context/` — nothing writes it; the prompt is the whole pack.
+  kb: '2',
   'loki-logs': '2',
   // WP-138: the platform marks the merge request ready at the Developer stage's completion.
   'mr-description': '2',

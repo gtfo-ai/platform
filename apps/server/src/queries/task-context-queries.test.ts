@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   boundTaskContextSection,
+  RUN_FIELDS_FOR_AGENTS,
   returnCauseOf,
   TASK_CONTEXT_MAX_CHARS,
   TASK_CONTEXT_TICKET_SHARE,
@@ -17,7 +18,6 @@ const artifact = (type: string, chars: number) => ({
   artifact_type: type,
   version: 1,
   status: 'ok',
-  url: `/api/artifacts/${type}`,
   data: { text: 'x'.repeat(chars) },
 });
 
@@ -38,7 +38,11 @@ describe('the task-context bound', () => {
     const text = JSON.stringify(bounded);
     expect(text.length).toBeLessThanOrEqual(1_000);
     expect(text).toContain('"artifact_type":"ImplementationPlan","version":1,"status":"refused"');
-    expect(text).toContain('/api/artifacts/ImplementationPlan');
+    // Backlog 474: what to call instead, never an `/api/…` URL no agent tool can reach.
+    expect(text).not.toContain('/api/');
+    expect(text).toContain(
+      'call get_task_context again with include [\\"artifacts\\"] and artifact_types',
+    );
     // Skip-and-continue: the small one after the large one is served whole.
     expect(text).toContain('"artifact_type":"ReviewVerdict","version":1,"status":"ok"');
     expect(bounded).toMatchObject({ truncated: false, omitted: 0 });
@@ -89,6 +93,84 @@ describe('the task-context bound', () => {
     expect(total).toBeLessThanOrEqual(TASK_CONTEXT_MAX_CHARS);
     // Without the ticket the shares are equal.
     expect(new Set(Object.values(taskContextShares(['runs', 'audit']))).size).toBe(1);
+  });
+
+  /**
+   * Backlog 474: on Autix a 26 415-character plan was refused as over *"this call's share"* while
+   * the whole answer used 25.6 k of 160 k. Given the sizes, what the small values do not use goes
+   * to the large ones.
+   */
+  it('gives what the small values leave to the large ones, and never more than the cap', () => {
+    const all: TaskContextInclude[] = [
+      'ticket',
+      'artifacts',
+      'feedback',
+      'mr',
+      'ci',
+      'runs',
+      'audit',
+    ];
+    const sizes = {
+      ticket: 9_000,
+      artifacts: 60_000,
+      feedback: 300,
+      mr: 200,
+      ci: 150,
+      runs: 4_000,
+      audit: 900,
+    };
+    const shares = taskContextShares(all, sizes);
+    for (const value of ['ticket', 'feedback', 'mr', 'ci', 'runs', 'audit'] as const) {
+      expect(shares[value], value).toBeGreaterThanOrEqual(sizes[value]);
+    }
+    expect(shares.artifacts).toBeGreaterThanOrEqual(sizes.artifacts);
+    const total = Object.values(shares).reduce((sum, share) => sum + (share ?? 0), 0);
+    expect(total).toBeLessThanOrEqual(TASK_CONTEXT_MAX_CHARS);
+    // The old equal split refused that artifact list.
+    expect(taskContextShares(all).artifacts).toBeLessThan(sizes.artifacts);
+  });
+
+  it('still guarantees a large ticket its share, and splits the rest fairly between two large values', () => {
+    const shares = taskContextShares(['ticket', 'artifacts', 'audit'], {
+      ticket: 45_000,
+      artifacts: 200_000,
+      audit: 200_000,
+    });
+    expect(shares.ticket).toBe(45_000);
+    expect(shares.artifacts).toBe(Math.floor((TASK_CONTEXT_MAX_CHARS - 45_000) / 2));
+    const total = Object.values(shares).reduce((sum, share) => sum + (share ?? 0), 0);
+    expect(total).toBeLessThanOrEqual(TASK_CONTEXT_MAX_CHARS);
+    // A ticket that needs less than its guarantee leaves the rest to the others.
+    const small = taskContextShares(['ticket', 'artifacts'], { ticket: 1_000, artifacts: 200_000 });
+    expect(small.artifacts).toBe(TASK_CONTEXT_MAX_CHARS - 1_000);
+  });
+
+  it('says an artifact larger than any answer cannot be served, and to use the prompt’s copy', () => {
+    const bounded = boundTaskContextSection(
+      'artifacts',
+      { status: 'ok', latest_per_type: [artifact('ImplementationPlan', TASK_CONTEXT_MAX_CHARS)] },
+      TASK_CONTEXT_MAX_CHARS,
+    );
+    expect(JSON.stringify(bounded)).toContain('more than one answer carries');
+    expect(JSON.stringify(bounded)).not.toContain('/api/');
+  });
+});
+
+describe('what an agent is told about its runs (backlog 474)', () => {
+  it('names what happened and none of the platform’s audit fields', () => {
+    for (const internal of [
+      'settings_hash',
+      'prompt_version',
+      'usage',
+      'model_usage',
+      'session_id',
+      'redaction_count',
+    ]) {
+      expect(RUN_FIELDS_FOR_AGENTS as readonly string[], internal).not.toContain(internal);
+    }
+    for (const kept of ['status', 'terminal_reason', 'num_turns', 'stage', 'attempt']) {
+      expect(RUN_FIELDS_FOR_AGENTS as readonly string[], kept).toContain(kept);
+    }
   });
 });
 

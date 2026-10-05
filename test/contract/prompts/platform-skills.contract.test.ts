@@ -300,9 +300,16 @@ describe('what a skill claims about credentials and CLIs', () => {
   it('fails a copy that sends an agent to a run directory, and one that mounts a server', () => {
     const kb = PLATFORM_SKILLS['kb']?.text ?? '';
     expect(unbackedClaimsIn(kb).unhedgedPaths).toEqual([]);
-    expect(unbackedClaimsIn(kb.replaceAll(PROVISIONED_HEDGE, 'always')).unhedgedPaths).toEqual([
-      '.agentic-run/context',
-    ]);
+    // Backlog 476: `kb` no longer names the directory at all, so the defect is planted — the
+    // sentence it carried until then, with its hedge removed.
+    expect(kb).not.toContain('.agentic-run/');
+    const planted = `${kb}\n\nThe same documents are written into \`.agentic-run/context/\` in your workspace.\n`;
+    expect(unbackedClaimsIn(planted).unhedgedPaths).toEqual(['.agentic-run/context']);
+    expect(
+      unbackedClaimsIn(
+        planted.replace('in your workspace.', `in your workspace ${PROVISIONED_HEDGE}.`),
+      ).unhedgedPaths,
+    ).toEqual([]);
 
     const sentry = PLATFORM_SKILLS['sentry-issue']?.text ?? '';
     expect(declaredMcpServers()).toEqual([]);
