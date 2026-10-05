@@ -14095,7 +14095,7 @@ container's old environment (WP-130 changed the operator guide to say recreate, 
 
 **Never kept.** `cost_unreported`, a crash, a stall, a timeout, a cancel or take-over (even when the interrupted turn's result says `error_max_budget_usd`), a hand-back, a run with no artifact type, a subagent's call, a call answered with an error, an unanswered call, a different tool name or `tool_use_id`, and an input the artifact schema refuses (logged with paths only).
 
-**Tests.** The new golden `test/fixtures/claude/budget-exceeded-delivered.{script.jsonl,transcript.json}`, plus fourteen cases in `claude-runner.test.ts` › *"an artifact delivered in the turn that crossed the cap (backlog 462)"*:
+**Tests.** The new golden `test/fixtures/claude/budget-exceeded-delivered.{script.jsonl,transcript.json}`, plus fourteen cases in `claude-runner.test.ts` › *"an artifact delivered in the turn that crossed the cap (backlog 466)"*:
 - kept: the relabel, the CLI's ending alone, and a relabelled `success` with no `structured_output`;
 - not kept: invalid input, error result, unanswered call, other id or tool, subagent, nothing delivered, no artifact type, crash, `cost_unreported`, stall, cancel.
 
