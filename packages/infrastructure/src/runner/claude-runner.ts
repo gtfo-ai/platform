@@ -39,11 +39,18 @@
  * Say exactly what it is, because WP-15 will plan around this paragraph. `maxBudgetUsd` is passed
  * to the CLI, which is the only party that can stop a turn while it is running and ends it with
  * `error_max_budget_usd`. The platform's own check reads {@link reportedCostUsd} off the `result`
- * **after the turn is over**: it changes the outcome (`budget_exceeded`, and no structured output
- * is accepted from it) and it stops the session, but it cannot claw back money already spent, and a
- * stage run is one turn so there is no second turn for it to prevent. The mid-turn stop would need
- * a running cost the SDK does not publish; the platform's price table (WP-19) is where that comes
- * from if it is ever wanted.
+ * **after the turn is over**: it changes the outcome (`budget_exceeded`) and it stops the session,
+ * but it cannot claw back money already spent, and a stage run is one turn so there is no second
+ * turn for it to prevent. The mid-turn stop would need a running cost the SDK does not publish; the
+ * platform's price table (WP-19) is where that comes from if it is ever wanted.
+ *
+ * **An artifact delivered in the turn that crossed the cap is kept** (product owner, 2026-10-05,
+ * BD-010's amendment, PROGRESS backlog 462). Until then no structured output was accepted from either
+ * budget ending, and an architect run lost the plan the CLI had already acknowledged. Both budget
+ * endings — the CLI's `error_max_budget_usd` and the relabel above — now read
+ * {@link DeliveredArtifact}: the last top-level `StructuredOutput` `tool_use` whose `tool_result` was
+ * not an error. When it validates against `spec.artifactType`, the outcome is `completed` with
+ * `error_max_budget_usd`, and the cost is unchanged. No other ending reads it.
  *
  * Two things it *does* do, and both matter because "the vendor enforces it" is a claim about a
  * binary the platform ships but does not control — and, from WP-13 on, about a stream produced by
@@ -104,6 +111,7 @@ import type {
 import { runSpecSchema, silentLogger } from '@platform/application';
 import type {
   JsonObject,
+  JsonValue,
   ModelUsage,
   RunTerminalReason,
   TokenUsage,
@@ -311,6 +319,75 @@ const progressOf = (message: SDKMessage): Progress => {
   return 'progress';
 };
 
+/**
+ * The tool the CLI gives a run whose `outputFormat` is `json_schema`. The name was read from the
+ * pinned 2.1.267 binary (`di="StructuredOutput"`), whose `call` answers *"Structured output provided
+ * successfully"* only after the input passed the schema, and answers an error otherwise.
+ */
+const STRUCTURED_OUTPUT_TOOL = 'StructuredOutput';
+
+/**
+ * An artifact the CLI acknowledged: the `input` of a top-level `StructuredOutput` `tool_use` whose
+ * `tool_result`, matched by `tool_use_id`, was not an error (backlog 462). It is untrusted model
+ * output, exactly as `result.structured_output` is, so it is re-validated before anything keeps it.
+ */
+interface DeliveredArtifact {
+  readonly input: unknown;
+}
+
+type Block = Readonly<Record<string, unknown>>;
+
+/** The content blocks of a message off the wire, read defensively: the stream is untrusted. */
+const contentBlocks = (content: unknown): readonly Block[] =>
+  Array.isArray(content)
+    ? content.filter(
+        (block): block is Block =>
+          typeof block === 'object' && block !== null && !Array.isArray(block),
+      )
+    : [];
+
+/**
+ * Follows the `StructuredOutput` calls through the stream. An offer is the assistant's `tool_use`
+ * block. A delivery is the CLI's successful `tool_result` for that offer. A subagent's messages
+ * (`parent_tool_use_id` set) are not the run's answer and are ignored.
+ */
+const createDeliveryTracker = () => {
+  const offered = new Map<string, unknown>();
+  let delivered: DeliveredArtifact | null = null;
+  return {
+    accept: (message: SDKMessage): void => {
+      if (message.type === 'assistant' && message.parent_tool_use_id === null) {
+        for (const block of contentBlocks(message.message.content)) {
+          if (
+            block['type'] === 'tool_use' &&
+            block['name'] === STRUCTURED_OUTPUT_TOOL &&
+            typeof block['id'] === 'string'
+          ) {
+            offered.set(block['id'], block['input']);
+          }
+        }
+        return;
+      }
+      if (message.type === 'user' && message.parent_tool_use_id === null) {
+        for (const block of contentBlocks(message.message.content)) {
+          const id = block['tool_use_id'];
+          if (block['type'] !== 'tool_result' || typeof id !== 'string' || !offered.has(id)) {
+            continue;
+          }
+          const input = offered.get(id);
+          offered.delete(id);
+          // The Messages API reads an absent `is_error` as success. Only the CLI's explicit error
+          // (the schema mismatch) refuses.
+          if (block['is_error'] !== true) {
+            delivered = { input };
+          }
+        }
+      }
+    },
+    delivered: (): DeliveredArtifact | null => delivered,
+  };
+};
+
 const resultStatus = (reason: RunTerminalReason): TerminalRunStatus => {
   if (reason === 'success') {
     return 'completed';
@@ -335,6 +412,7 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
   const abortController = new AbortController();
   const inputs = createAsyncQueue<SDKUserMessage>();
   const coalescer = createStreamBlockCoalescer();
+  const deliveries = createDeliveryTracker();
   const stopSignal = deferred<StopCause>();
   const startedAt = deps.clock.now();
   // WP-127 (backlog 344): the CLI's stderr, redacted with this run's redactor, at `warn` for a run
@@ -590,6 +668,7 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
       gaveUpDetail = retriedWithoutModel('gave_up', retriesSinceProgress, [...retryStatuses]);
     }
     await append((envelope) => normaliseMessage(message, envelope), progress);
+    deliveries.accept(message);
     if (message.type === 'result') {
       result = message;
       const cost = reportedCostUsd(message.total_cost_usd);
@@ -768,6 +847,28 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
     }
   };
 
+  /**
+   * The artifact a budget ending keeps (backlog 462). This is the delivered input, re-validated
+   * against the run's artifact type with the same validator `structured_output` goes through.
+   * It is `null` when the run has no artifact type, delivered nothing, crashed, or delivered
+   * something the schema refuses. That last case is logged with paths only, never values.
+   */
+  const deliveredArtifactOf = (failure: string | null): JsonValue | null => {
+    const delivered = deliveries.delivered();
+    if (failure !== null || spec.artifactType === null || delivered === null) {
+      return null;
+    }
+    const validated = validateStructuredOutput(spec.artifactType, delivered.input);
+    if (!validated.ok) {
+      logger.warn(
+        { run_id: spec.runId, issues: validated.issues },
+        'the artifact delivered in the turn that crossed the budget cap failed validation; not kept',
+      );
+      return null;
+    }
+    return validated.data;
+  };
+
   const outcomeOf = (failure: string | null): RunOutcome => {
     const wallMs = Math.max(0, deps.clock.now() - startedAt);
     const finished = result;
@@ -786,6 +887,36 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
       is_estimate: spec.providerMode === 'local',
       price_list_id: null,
     };
+
+    const keptOverCap = (): RunOutcome | null => {
+      const artifact = deliveredArtifactOf(failure);
+      return finished === null || artifact === null
+        ? null
+        : {
+            runId: spec.runId,
+            // Backlog 462: the CLI acknowledged a valid artifact in the turn that crossed the cap.
+            // `completed` keeps the artifact, and `error_max_budget_usd` records the overrun. The
+            // cost is the `result`'s figure, which every other ending also carries.
+            status: 'completed',
+            terminalReason: 'error_max_budget_usd',
+            sessionId,
+            numTurns: reportedCount(finished.num_turns),
+            usage,
+            modelUsage,
+            cost,
+            wallMs,
+            structuredOutput: artifact,
+            error: null,
+            redactionCount,
+          };
+    };
+
+    if (stopCause === 'budget_exceeded') {
+      const kept = keptOverCap();
+      if (kept !== null) {
+        return kept;
+      }
+    }
 
     if (stopCause !== null) {
       return {
@@ -831,6 +962,12 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
     }
 
     const reason = terminalReasonOf(finished);
+    if (reason === 'error_max_budget_usd') {
+      const kept = keptOverCap();
+      if (kept !== null) {
+        return kept;
+      }
+    }
     if (reason !== 'success') {
       return {
         runId: spec.runId,

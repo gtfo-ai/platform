@@ -19,7 +19,7 @@
  * not paid for it.
  */
 
-import type { ContextPackRecord } from '@platform/contracts';
+import type { ContextPackRecord, RunRecord } from '@platform/contracts';
 import { type ReactElement, useState, useSyncExternalStore } from 'react';
 import { transcriptDownloadPath } from '../api/endpoints.js';
 import {
@@ -104,6 +104,15 @@ export const textSearchText = (pack: ContextPackRecord): string | null => {
 };
 
 /**
+ * A run that completed **past its budget cap** (PROGRESS backlog 462, BD-010's 2026-10-05
+ * amendment). The CLI acknowledged a valid artifact in the turn that crossed the cap, so the platform
+ * kept the artifact. The run's terminal reason, `error_max_budget_usd`, is the record of the overrun,
+ * and its cost is counted like any other run's.
+ */
+export const crossedBudgetCap = (run: Pick<RunRecord, 'status' | 'terminal_reason'>): boolean =>
+  run.status === 'completed' && run.terminal_reason === 'error_max_budget_usd';
+
+/**
  * The run page's tabs, in order. `docs/user-guide.md` § 5 names each one in bold and says how many
  * there are; `user-guide-census.test.ts` holds the two together (WP-129).
  */
@@ -169,6 +178,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
           >
             {record.status}
           </Badge>
+          {crossedBudgetCap(record) ? <Badge tone="warning">budget cap crossed</Badge> : null}
           <Badge>{record.mode}</Badge>
           <span className="font-mono text-xs text-fg-muted">
             <UntrustedText value={record.model} />

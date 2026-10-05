@@ -38,6 +38,7 @@ import {
   injectedSecretRedactorFixture,
   recordingSink,
   recordingTools,
+  rootCauseAnalysisFixture,
   runSpecFixture,
   scriptedApprovals,
 } from './fixtures.js';
@@ -1221,5 +1222,251 @@ describe('a hand-back on the runner’s own stop (WP-144)', () => {
     expect(result.status).toBe('failed');
     expect(result.terminalReason).toBe('shutdown');
     expect(result.costUnmeasured).toBe(true);
+  });
+});
+
+/**
+ * **An artifact delivered in the turn that crossed the cap is kept** (product owner, 2026-10-05,
+ * BD-010's amendment, PROGRESS backlog 462). The golden is the Autix ending in miniature. The model
+ * hands its answer to the CLI's `StructuredOutput` tool. The CLI acknowledges it. The same turn's
+ * spend crosses the $5 ceiling. The CLI ends with `error_max_budget_usd` and `structured_output`
+ * absent.
+ *
+ * Every case below edits that golden by one step, so each assertion names the one condition the
+ * keep depends on (rule 10). The cost is asserted on every kept outcome, because counting the
+ * overrun is half of the decision.
+ */
+describe('an artifact delivered in the turn that crossed the cap (backlog 462)', () => {
+  const FIVE_DOLLAR_CAP: Partial<RunSpec> = {
+    limits: { ...runSpecFixture().limits, maxBudgetUsd: 5 },
+  };
+  const DELIVERED = 'budget-exceeded-delivered';
+
+  type Message = Record<string, unknown>;
+  type Edit = (message: Message) => Message | null;
+
+  const isResult = (message: Message): boolean => message['type'] === 'result';
+  const isToolResult = (message: Message): boolean => message['type'] === 'user';
+  const isOffer = (message: Message): boolean => message['type'] === 'assistant';
+
+  /** The golden script with each emitted message passed through `edit`; `null` drops the step. */
+  const edited = (edit: Edit): FakeCliScript =>
+    loadScript(DELIVERED).flatMap((step): FakeCliScript[number][] => {
+      if (step.step !== 'emit') {
+        return [step];
+      }
+      const message = edit(step.message);
+      return message === null ? [] : [{ ...step, message }];
+    });
+
+  /** The same script, cut before its `result`, and left silent rather than exiting. */
+  const silentAfterDelivery = (): FakeCliScript => [
+    ...edited((message) => (isResult(message) ? null : message)).filter(
+      (step) => step.step !== 'exit',
+    ),
+    { step: 'stall' },
+  ];
+
+  /** Rewrites the `StructuredOutput` call's tool_use block (the assistant message's second block). */
+  const withOffer =
+    (change: (block: Message) => Message): Edit =>
+    (message) => {
+      if (!isOffer(message)) {
+        return message;
+      }
+      const inner = message['message'] as Message;
+      const [text, offer] = inner['content'] as Message[];
+      return { ...message, message: { ...inner, content: [text, change(offer as Message)] } };
+    };
+
+  /** Rewrites the CLI's `tool_result` block for that call. */
+  const withToolResult =
+    (change: (block: Message) => Message): Edit =>
+    (message) => {
+      if (!isToolResult(message)) {
+        return message;
+      }
+      const inner = message['message'] as Message;
+      const [block] = inner['content'] as Message[];
+      return { ...message, message: { ...inner, content: [change(block as Message)] } };
+    };
+
+  /** Lets the scripted messages before a silent step reach the transcript. */
+  const awaitEntries = async (harness: Harness, count: number): Promise<void> => {
+    for (let round = 0; round < 200 && harness.events.length < count; round += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    expect(harness.events.length).toBeGreaterThanOrEqual(count);
+  };
+
+  const expectBudgetEnding = (result: RunOutcome): void => {
+    expect(result.status).toBe('budget_exceeded');
+    expect(result.terminalReason).toBe('error_max_budget_usd');
+    expect(result.structuredOutput).toBeNull();
+    expect(result.cost.usd).toBe(5.4);
+  };
+
+  it('keeps the acknowledged artifact, completes the run and still reports what it spent', async () => {
+    const { result, events } = await run(DELIVERED, { spec: FIVE_DOLLAR_CAP });
+    expect(result.status).toBe('completed');
+    expect(result.terminalReason).toBe('error_max_budget_usd');
+    expect(result.structuredOutput).toEqual(rootCauseAnalysisFixture);
+    expect(result.error).toBeNull();
+    // The overrun is counted: the CLI's figure, over the $5 ceiling, measured rather than a floor.
+    expect(result.cost).toEqual({ usd: 5.4, is_estimate: false, price_list_id: null });
+    expect(result.costUnmeasured).toBeUndefined();
+    expect(result.modelUsage.map((entry) => [entry.model, entry.usd])).toEqual([
+      ['claude-opus-5', 5.4],
+    ]);
+    expect(result.numTurns).toBe(90);
+    // 5.4 > 5, so the platform's own relabel fired too, and the transcript says so.
+    expect(events.at(-1)).toMatchObject({
+      kind: 'system',
+      subtype: 'run_stopped',
+      data: { reason: 'budget_exceeded' },
+    });
+  });
+
+  it('keeps it when only the CLI’s own `error_max_budget_usd` ended the run', async () => {
+    // The default $10 ceiling: the platform's watchdog stays silent, so this is the `result` branch.
+    const harness = startScript(loadScript(DELIVERED));
+    const result = await harness.outcome;
+    expect(result.status).toBe('completed');
+    expect(result.terminalReason).toBe('error_max_budget_usd');
+    expect(result.structuredOutput).toEqual(rootCauseAnalysisFixture);
+    expect(result.cost.usd).toBe(5.4);
+    expect(
+      harness.events.some((event) => event.kind === 'system' && event.subtype === 'run_stopped'),
+    ).toBe(false);
+  });
+
+  it('keeps it when the platform relabels a `success` the CLI reported over the ceiling', async () => {
+    // The CLI said success with no `structured_output` of its own, so the artifact can only come
+    // from the acknowledged delivery.
+    const script = edited((message) =>
+      isResult(message)
+        ? {
+            ...message,
+            subtype: 'success',
+            is_error: false,
+            result: 'Done.',
+            stop_reason: 'end_turn',
+          }
+        : message,
+    );
+    const result = await startScript(script, { spec: FIVE_DOLLAR_CAP }).outcome;
+    expect(result.status).toBe('completed');
+    expect(result.terminalReason).toBe('error_max_budget_usd');
+    expect(result.structuredOutput).toEqual(rootCauseAnalysisFixture);
+    expect(result.cost.usd).toBe(5.4);
+  });
+
+  it('does not keep a delivered input the artifact schema refuses', async () => {
+    const script = edited(
+      withOffer((offer) => ({
+        ...offer,
+        input: { ...(offer['input'] as Message), confidence: 'certain' },
+      })),
+    );
+    expectBudgetEnding(await startScript(script, { spec: FIVE_DOLLAR_CAP }).outcome);
+  });
+
+  it('does not keep a call the CLI answered with an error', async () => {
+    const script = edited(
+      withToolResult((block) => ({
+        ...block,
+        is_error: true,
+        content: 'Output does not match required schema',
+      })),
+    );
+    expectBudgetEnding(await startScript(script, { spec: FIVE_DOLLAR_CAP }).outcome);
+  });
+
+  it('does not keep an offer the CLI never answered', async () => {
+    const script = edited((message) => (isToolResult(message) ? null : message));
+    expectBudgetEnding(await startScript(script, { spec: FIVE_DOLLAR_CAP }).outcome);
+  });
+
+  it('does not keep a result for a different tool use, nor a tool of another name', async () => {
+    const otherId = edited(withToolResult((block) => ({ ...block, tool_use_id: 'toolu_other' })));
+    expectBudgetEnding(await startScript(otherId, { spec: FIVE_DOLLAR_CAP }).outcome);
+    const otherTool = edited(withOffer((offer) => ({ ...offer, name: 'Write' })));
+    expectBudgetEnding(await startScript(otherTool, { spec: FIVE_DOLLAR_CAP }).outcome);
+  });
+
+  it('does not keep a subagent’s StructuredOutput call', async () => {
+    const script = edited((message) =>
+      isOffer(message) || isToolResult(message)
+        ? { ...message, parent_tool_use_id: 'toolu_task_01' }
+        : message,
+    );
+    expectBudgetEnding(await startScript(script, { spec: FIVE_DOLLAR_CAP }).outcome);
+  });
+
+  it('leaves an over-cap run that delivered nothing unchanged', async () => {
+    const script = edited((message) =>
+      isToolResult(message)
+        ? null
+        : withOffer(() => ({ type: 'text', text: 'still going' }))(message),
+    );
+    expectBudgetEnding(await startScript(script, { spec: FIVE_DOLLAR_CAP }).outcome);
+  });
+
+  it('does not keep it for a run with no artifact type', async () => {
+    const result = await startScript(loadScript(DELIVERED), {
+      spec: { ...FIVE_DOLLAR_CAP, artifactType: null },
+    }).outcome;
+    expectBudgetEnding(result);
+  });
+
+  it('keeps nothing from a crash after the delivery', async () => {
+    const script = edited((message) => (isResult(message) ? null : message));
+    const result = await startScript(script, { spec: FIVE_DOLLAR_CAP }).outcome;
+    expect(result.status).toBe('failed');
+    expect(result.terminalReason).toBe('crash');
+    expect(result.structuredOutput).toBeNull();
+    expect(result.costUnmeasured).toBe(true);
+  });
+
+  it('keeps nothing when the result reported no usable cost (`cost_unreported`)', async () => {
+    const script = edited((message) => {
+      if (!isResult(message)) {
+        return message;
+      }
+      const { total_cost_usd: _dropped, ...rest } = message;
+      return rest;
+    });
+    const result = await startScript(script, { spec: FIVE_DOLLAR_CAP }).outcome;
+    expect(result.status).toBe('budget_exceeded');
+    expect(result.error).toContain('cost_unreported');
+    expect(result.structuredOutput).toBeNull();
+  });
+
+  it('keeps nothing from a stall after the delivery', async () => {
+    const harness = startScript(silentAfterDelivery(), {
+      spec: { limits: { ...runSpecFixture().limits, maxBudgetUsd: 5, stallTimeoutMs: 1_000 } },
+    });
+    await awaitEntries(harness, 3);
+    harness.clock.advance(1_000);
+    const result = await releaseByGrace(harness);
+    expect(result.status).toBe('stalled');
+    expect(result.structuredOutput).toBeNull();
+  });
+
+  it('keeps nothing from a cancel, even when the interrupted turn reports the budget ending', async () => {
+    const budgetResult = loadScript(DELIVERED).find(
+      (step) => step.step === 'emit' && isResult(step.message),
+    );
+    const harness = startScript(silentAfterDelivery(), {
+      spec: FIVE_DOLLAR_CAP,
+      cli: { interruptedResult: { ...(budgetResult as { message: Message }).message } },
+    });
+    await awaitEntries(harness, 3);
+    const result = await settleStop(harness, harness.handle.stop({ reason: 'cancelled' }));
+    expect(result.status).toBe('cancelled');
+    expect(result.terminalReason).toBe('cancelled');
+    expect(result.structuredOutput).toBeNull();
+    // The interrupted turn's figure is still the run's cost (WP-101).
+    expect(result.cost.usd).toBe(5.4);
   });
 });

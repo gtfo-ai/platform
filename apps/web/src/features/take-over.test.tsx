@@ -17,7 +17,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { admittedDocuments, textSearchText } from './run-detail.js';
+import { admittedDocuments, crossedBudgetCap, textSearchText } from './run-detail.js';
 import { interruptedRunOf, workspaceExportText } from './take-over.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
@@ -418,6 +418,52 @@ describe('the run screen’s context pack (backlog 168 and 172)', () => {
     const { container } = await renderRun(pack([true, true]));
     expect(container.querySelectorAll('[data-not-admitted]')).toHaveLength(0);
     expect(screen.getByText('Documents').nextElementSibling?.textContent).toBe('3');
+  });
+});
+
+/**
+ * Backlog 462: a run that delivered its artifact in the turn that crossed its cap ends `completed`
+ * with `error_max_budget_usd`. The header says so beside the status.
+ */
+describe('the run screen’s budget cap badge (backlog 462)', () => {
+  const renderRun = async (record: RunRecord) => {
+    window.history.pushState({}, '', `/runs/${RUN}`);
+    const view = render(
+      createApp({
+        fetchImpl: fetchFor(detail(), [], (url) => {
+          if (url.includes(`/api/runs/${RUN}/messages`)) return json({ items: [], next_seq: null });
+          if (url.endsWith(`/api/runs/${RUN}`)) return json(record);
+          return null;
+        }),
+        realtime: false,
+      }).element,
+    );
+    await screen.findByRole('tab', { name: 'Transcript' });
+    return view;
+  };
+
+  const completed = (terminalReason: RunRecord['terminal_reason']): RunRecord => ({
+    ...run(RUN, '2026-09-13T05:00:00.000Z'),
+    status: 'completed',
+    terminal_reason: terminalReason,
+    cost: { usd: 5.4, is_estimate: true, price_list_id: null },
+  });
+
+  it('marks a completed run whose terminal reason is the budget cap', async () => {
+    await renderRun(completed('error_max_budget_usd'));
+    expect(screen.getByText('budget cap crossed')).toBeDefined();
+    expect(screen.getByText('completed')).toBeDefined();
+  });
+
+  it('marks neither an ordinary completed run nor a run the cap stopped', async () => {
+    await renderRun(completed('success'));
+    expect(screen.queryByText('budget cap crossed')).toBeNull();
+    expect(
+      crossedBudgetCap({ status: 'budget_exceeded', terminal_reason: 'error_max_budget_usd' }),
+    ).toBe(false);
+    expect(crossedBudgetCap({ status: 'completed', terminal_reason: 'error_max_budget_usd' })).toBe(
+      true,
+    );
   });
 });
 

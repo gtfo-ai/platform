@@ -681,6 +681,14 @@ the platform labels each run's cost an estimate and prices its token usage from 
 keeping the figure the CLI reported beside it — so budgets count list-price dollars for tokens a
 subscription does not bill per token (operator guide § 8).
 
+**A run that hands over its result in the turn that crosses its per-run cap keeps that result.** It
+is shown as **completed** with a **budget cap crossed** badge on its page, and the stage moves on
+instead of pausing the task. Its whole cost is still counted: the run's figure, the ledger, the
+task's spend and every budget window include the overrun. The task's own cap is still checked before
+its next run starts. The result is kept only if the Claude Code CLI accepted it and the platform's
+own validation agrees. A run that stopped at its cap with nothing handed over still pauses the task,
+as before.
+
 A run that ended with **nobody measuring it** — the platform stopped it, or it crashed, or a cancel
 or a lost process ended it before it reported — has no cost at all, and is shown as *not measured*.
 Its spend is unknown, so every budget **holds** it at the per-run cap it was started under: a held

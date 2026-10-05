@@ -37,6 +37,12 @@
  * `data.reason` from the transcript — the structured field — rather than on the status, or on a
  * substring of the human-readable `error`. The runner takes one sink for every run it drives, so
  * the reason arrives through {@link RunStopReasons} rather than through a sink this module wraps.
+ *
+ * A third reading of `error_max_budget_usd` is not a budget ending here at all. Its status is
+ * `completed`: the run delivered a valid artifact in the turn that crossed its cap (product owner,
+ * 2026-10-05, PROGRESS backlog 462). It takes the ordinary completed path. The artifact is stored,
+ * the stage completes, the run row and `run.finished` carry the reason and the cost, and the spend is
+ * added to the task. Nothing pauses the task. The next run's admission still reads the task cap.
  */
 import type {
   AgentRole,

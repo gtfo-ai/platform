@@ -281,6 +281,85 @@ describe('the prompt a run was started with', () => {
   });
 });
 
+/**
+ * **A run that delivered its artifact in the turn that crossed its cap** (product owner,
+ * 2026-10-05, BD-010's amendment, PROGRESS backlog 462). The runner reports it as `completed` with
+ * the terminal reason `error_max_budget_usd`. The executor's job is the ordinary completed path:
+ * store the artifact, complete the stage, and count every dollar, all with no pause. The contrast
+ * case is the overspend just below, which carries no artifact and pauses.
+ */
+describe('a run that delivered its artifact in the turn that crossed its cap', () => {
+  const OVER_CAP_USD = 5.4;
+
+  const deliveredOverCap = (): PipelineHarness =>
+    harnessWith({
+      cost: true,
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'error_max_budget_usd',
+          costUsd: OVER_CAP_USD,
+          structuredOutput: askingRefinedSpec(undefined, { goal: 'ship the footer' }),
+        },
+      },
+    });
+
+  it('stores the artifact and completes the stage, and does not pause the task', async () => {
+    const harness = deliveredOverCap();
+    await harness.publish([ticketMatched()]);
+
+    const task = taskOf(harness);
+    expect(harness.types()).not.toContain('task.paused');
+    expect(task.task.state).not.toBe('paused');
+    expect(escalationOf(harness)).toBeUndefined();
+    const stored = await harness.memory.transaction(async (scope) =>
+      harness.store.artifacts.listFor(scope.tx, task.task.id),
+    );
+    expect(stored.map((artifact) => artifact.type)).toEqual(['RefinedSpec']);
+    expect(stored[0]?.data).toMatchObject({ goal: 'ship the footer' });
+    expect(
+      harness
+        .events()
+        .filter((entry) => entry.type === 'task.stage.completed')
+        .map((entry) => (entry.payload as { stage: string }).stage),
+    ).toContain('refinement');
+  });
+
+  it('records the overrun on the run and counts its whole cost', async () => {
+    const harness = deliveredOverCap();
+    const ledger = harness.cost;
+    if (ledger === null) {
+      throw new Error('the harness was asked for the ledger and composed none');
+    }
+    ledger.seedBudget({
+      id: '00000000-0000-4000-8000-0000000000c9' as Id,
+      scope: 'project',
+      scopeId: PROJECT,
+      projectId: PROJECT,
+      window: 'day',
+      limitUsd: 100,
+    });
+    await harness.publish([ticketMatched()]);
+
+    const finished = harness.events().find((entry) => entry.type === 'run.finished') as
+      | Extract<DomainEvent, { type: 'run.finished' }>
+      | undefined;
+    expect(finished?.payload).toMatchObject({
+      status: 'completed',
+      terminal_reason: 'error_max_budget_usd',
+      cost: { usd: OVER_CAP_USD },
+    });
+    // The task's spend, the ledger's rows and the budget window all carry the figure: nothing is
+    // forgiven because the artifact was kept.
+    expect(taskOf(harness).costActualUsd).toBeCloseTo(OVER_CAP_USD, 6);
+    expect(ledger.entries.reduce((sum, entry) => sum + entry.usd, 0)).toBeCloseTo(OVER_CAP_USD, 6);
+    expect(ledger.windows.reduce((sum, window) => sum + window.spentUsd, 0)).toBeCloseTo(
+      OVER_CAP_USD,
+      6,
+    );
+  });
+});
+
 describe('a run the platform stopped', () => {
   it('pauses the task when the run really did overspend', async () => {
     const harness = harnessWith({

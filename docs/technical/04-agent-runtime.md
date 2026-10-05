@@ -502,7 +502,7 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 
 ## Budgets and limits
 
-`maxBudgetUsd` and `maxTurns` from effective config; `error_max_budget_usd` → run `budget_exceeded`; pipeline policy: one retry with a "summarise progress and finish" instruction under a small extra budget, else escalate (BD-010). Wall-clock timeout kills the process tree (05).
+`maxBudgetUsd` and `maxTurns` from effective config; `error_max_budget_usd` → run `budget_exceeded` (or `completed` with the artifact, when one was delivered in the turn that crossed the cap — the 2026-10-05 amendment below); pipeline policy: one retry with a "summarise progress and finish" instruction under a small extra budget, else escalate (BD-010). Wall-clock timeout kills the process tree (05).
 
 > **What the platform's own budget check is, and is not (WP-12).** The CLI is the only party that
 > can stop a turn while it is running; it is given `maxBudgetUsd` and ends the turn itself. The
@@ -518,6 +518,36 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > row, so the pipeline branches as it does for any budget stop while a human reading the run sees
 > which of the two happened. `runs.usd_reported` is `0` in that case and is not a claim that the run
 > was free; the number that is a claim is the estimate the price table produces (BD-011).
+
+> **Amended 2026-10-05 (product-owner decision, BD-010's amendment, PROGRESS backlog 462): an
+> artifact delivered in the turn that crosses the cap is kept.** Until this amendment, no structured
+> output was accepted from a budget ending. On the first local test, an architect run (Opus, `local`
+> mode) called the CLI's `StructuredOutput` tool with its plan on its 90th turn, and the CLI answered
+> *"Structured output provided successfully"*. The same turn took the CLI's cost past `maxBudgetUsd`,
+> so the CLI ended the session `error_max_budget_usd` with `structured_output: null` and the platform
+> discarded the plan. Since this amendment:
+>
+> - **Evidence of delivery.** The runner remembers the `input` of the last top-level
+>   (`parent_tool_use_id: null`) `StructuredOutput` `tool_use` whose `tool_result`, matched by
+>   `tool_use_id`, is not `is_error: true`. The pinned CLI's tool validates the input against the
+>   `--json-schema` document before it answers success, and answers a mismatch with an error. An
+>   assistant block with no successful result is not evidence. The input is untrusted model output,
+>   treated exactly as `structured_output` is: re-validated against `RunSpec.artifactType` by
+>   `validateStructuredOutput`, then redacted at the artifact write by the stage executor (TD-012).
+>   The transcript row that carries it was already redacted on the way in.
+> - **When it applies.** Only when the session ends with the CLI's own `error_max_budget_usd`, or
+>   with the platform's post-`result` `budget_exceeded` relabel above. It also needs a run with an
+>   artifact type and a delivered input that validates. Without one, the budget ending is unchanged
+>   (`budget_exceeded`, the task paused). `cost_unreported`, a crash, a timeout, a stall, a cancel, a
+>   take-over and a hand-back never keep a delivered input.
+> - **The outcome.** `status: 'completed'`, `terminal_reason: 'error_max_budget_usd'`, the artifact
+>   in `structuredOutput`. That pairing records the overrun, so no new enum value and no migration
+>   were needed. The run row and `run.finished` carry it, and the cost is the `result`'s figure, as
+>   for every ending. The ledger charges that figure, the task's spend counts it, and the terminal
+>   row releases the reservation. The relabel also leaves its `run_stopped` row in the transcript.
+>   The stage executor takes its ordinary completed path: the artifact is stored and the stage
+>   completes instead of pausing the task. The run page shows a "budget cap crossed" badge beside
+>   `completed`, and the next stage's admission still reads the task cap.
 
 ## Result handling
 
