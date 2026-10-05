@@ -469,6 +469,11 @@ export interface DockerWorkspaceProviderOptions {
   /** Ceiling on an export archive read into memory. */
   readonly maxExportBytes?: number;
   /**
+   * The memory limit of the **mirror** helper, the one helper that receives a pack from the git
+   * host. Defaults to {@link DEFAULT_MIRROR_MEMORY_MB}; `APP_WORKSPACE_MIRROR_MEMORY_MB` sets it.
+   */
+  readonly mirrorMemoryMb?: number;
+  /**
    * Check-only (WP-140): render every run's sidecar at `LogLevel Connect`, so its log names the
    * hosts it **allowed** as well as the ones it refused. Never set by a server or launcher
    * configuration — `RenderEgressOptions` in `egress.ts` has the reason and the census that holds it.
@@ -511,9 +516,33 @@ interface HelperRun {
    * silently truncates a real instance's sweep into a partial one.
    */
   readonly logTail?: number;
+  /** The container's memory limit, and its swap limit with it. Defaults to {@link HELPER_MEMORY_MB}. */
+  readonly memoryMb?: number;
 }
 
 const MIB = 1024 * 1024;
+
+/**
+ * Every helper's memory limit but the mirror's: they clone from the local mirror (`--shared`, no
+ * pack is indexed), list, chown or archive, and none of them came near it.
+ */
+const HELPER_MEMORY_MB = 512;
+
+/**
+ * The mirror helper's default memory limit: **2 GiB**.
+ *
+ * It is the one helper that indexes a pack received from the git host, and `index-pack` holds the
+ * pack's object table and its delta bases in memory while it resolves them. At the 512 MiB every
+ * other helper has, the first clone of the first local test's repository (Autix, a 644 MB mirror)
+ * was OOM-killed after 17 s — *"fatal: fetch-pack: invalid index-pack output"*, `OOMKilled=true`
+ * (measured 2026-10-05 with `alpine/git:v2.49.1` and this helper's own limits). Lowering git's own
+ * budgets did not save it (`pack.threads=1`, `core.deltaBaseCacheLimit=32m`,
+ * `core.packedGitLimit=128m`: OOM-killed again after 47 s). Unlimited, the same clone peaked at
+ * **934 MiB** in 55 s, and under a 1 GiB limit at 954 MiB, page cache included — too close to call
+ * a margin. Twice the measured peak is the default; a larger repository raises it through the
+ * launcher's `APP_WORKSPACE_MIRROR_MEMORY_MB`.
+ */
+export const DEFAULT_MIRROR_MEMORY_MB = 2_048;
 
 /**
  * How old a control directory must be before the sweep will consider it an orphan.
@@ -582,6 +611,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   readonly #controlSocketTimeoutMs: number;
   readonly #now: () => Date;
   readonly #maxExportBytes: number;
+  readonly #mirrorMemoryMb: number;
   readonly #egressLogAllowedConnects: boolean;
   /** One mirror is one directory; two fetches into it race. Serialised per project. */
   readonly #mirrorLocks = new Map<string, Promise<unknown>>();
@@ -608,6 +638,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     this.#controlSocketTimeoutMs = options.controlSocketTimeoutMs ?? CONTROL_SOCKET_TIMEOUT_MS;
     this.#now = options.now ?? (() => new Date());
     this.#maxExportBytes = options.maxExportBytes ?? 128 * MIB;
+    this.#mirrorMemoryMb = options.mirrorMemoryMb ?? DEFAULT_MIRROR_MEMORY_MB;
     this.#egressLogAllowedConnects = options.egressLogAllowedConnects === true;
   }
 
@@ -797,8 +828,8 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         SecurityOpt: ['no-new-privileges:true'],
         ReadonlyRootfs: true,
         Tmpfs: { '/tmp': 'size=64m,mode=1777,nosuid,nodev' },
-        Memory: 512 * MIB,
-        MemorySwap: 512 * MIB,
+        Memory: (run.memoryMb ?? HELPER_MEMORY_MB) * MIB,
+        MemorySwap: (run.memoryMb ?? HELPER_MEMORY_MB) * MIB,
         NanoCpus: 2e9,
         PidsLimit: 256,
         Init: true,
@@ -910,6 +941,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
           // with `could not lock config file config: Permission denied`.
           user: '0:0',
           network: this.#helperNetwork,
+          memoryMb: this.#mirrorMemoryMb,
           labels: {
             [WORKSPACE_LABELS.project]: input.projectId,
             [WORKSPACE_LABELS.role]: 'mirror',

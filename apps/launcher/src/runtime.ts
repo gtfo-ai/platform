@@ -111,6 +111,7 @@ export const buildLauncher = (options: BuildLauncherOptions): LauncherRuntime =>
     skills: PLATFORM_SKILLS,
     runnerUid: options.uid,
     maxExportBytes: config.maxExportBytes,
+    mirrorMemoryMb: config.mirrorMemoryMb,
     ...(options.egressLogAllowedConnects === true ? { egressLogAllowedConnects: true } : {}),
   });
   const service = new LauncherService({

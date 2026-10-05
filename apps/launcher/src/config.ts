@@ -31,6 +31,7 @@ export const launcherEnvSchema = z.strictObject({
   APP_WORKSPACE_EXPORT_DIR: z.string().min(1).optional(),
   APP_WORKSPACE_RETENTION_SWEEP_MS: positiveInt.optional(),
   APP_WORKSPACE_MAX_EXPORT_BYTES: positiveInt.optional(),
+  APP_WORKSPACE_MIRROR_MEMORY_MB: positiveInt.min(256).optional(),
   APP_WORKSPACE_RUNTIME_CLI_PATH: z.string().min(1).optional(),
   APP_LAUNCHER_TOKEN: z.string().min(1).optional(),
   APP_LAUNCHER_HOST: z.string().min(1).optional(),
@@ -76,6 +77,8 @@ export interface LauncherConfig {
   readonly exportDir: string;
   readonly retentionSweepMs: number;
   readonly maxExportBytes: number;
+  /** The mirror helper's memory limit (`DEFAULT_MIRROR_MEMORY_MB` has the measurement). */
+  readonly mirrorMemoryMb: number;
   readonly logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent';
 }
 
@@ -227,6 +230,7 @@ export const readLauncherConfig = (env: Record<string, string | undefined>): Lau
     exportDir: parsed.APP_WORKSPACE_EXPORT_DIR ?? '/var/lib/app/exports',
     retentionSweepMs: parsed.APP_WORKSPACE_RETENTION_SWEEP_MS ?? HOUR_MS,
     maxExportBytes: parsed.APP_WORKSPACE_MAX_EXPORT_BYTES ?? 128 * 1024 * 1024,
+    mirrorMemoryMb: parsed.APP_WORKSPACE_MIRROR_MEMORY_MB ?? workspace.DEFAULT_MIRROR_MEMORY_MB,
     logLevel: parsed.LOG_LEVEL ?? 'info',
   };
 };

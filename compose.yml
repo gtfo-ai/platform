@@ -398,6 +398,7 @@ services:
       APP_WORKSPACE_RUNTIME_IMAGE: platform-runtime:${PLATFORM_TAG:-dev}
       APP_WORKSPACE_EGRESS_IMAGE: platform-egress:${PLATFORM_TAG:-dev}
       APP_WORKSPACE_GIT_IMAGE: ${APP_WORKSPACE_GIT_IMAGE:-alpine/git:v2.49.1}
+      APP_WORKSPACE_MIRROR_MEMORY_MB: ${APP_WORKSPACE_MIRROR_MEMORY_MB:-2048}
       # The two networks the launcher attaches run objects to: the helpers that must reach the git
       # host, and the sidecar's route out. Both are `agentic-run-egress` below, which is a normal
       # bridge network — the run container itself is on a per-run `internal: true` network with no

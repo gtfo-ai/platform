@@ -16,6 +16,7 @@ import {
   assertHasCheckout,
   assertProjectEnv,
   assertRunnerUid,
+  DEFAULT_MIRROR_MEMORY_MB,
   DockerWorkspaceProvider,
   exportScript,
   SSH_HELPER_SETUP,
@@ -1151,6 +1152,24 @@ describe('one mirror, not the volume (WP-75)', () => {
     ).rejects.toMatchObject({
       code: 'workspace_failed',
       message: /refusing to export: the checkout’s \.git is not the directory the platform cloned/,
+    });
+  });
+
+  it('gives the mirror helper its own memory limit, and every other helper 512 MiB', async () => {
+    // The first local test's repository was OOM-killed indexing its first pack at 512 MiB.
+    await daemon.stop();
+    await startDaemon(undefined, { seedMirror: false });
+    const spec = workspaceSpecFixture();
+    await provider.updateMirror({ projectId: spec.projectId, repo: spec.repo, credential: null });
+    const mirror = daemon.byName(`mirror-${spec.repo.cacheKey}`);
+    expect(mirror?.body.HostConfig).toMatchObject({
+      Memory: DEFAULT_MIRROR_MEMORY_MB * 1024 * 1024,
+      MemorySwap: DEFAULT_MIRROR_MEMORY_MB * 1024 * 1024,
+    });
+    await provider.create(spec);
+    expect(daemon.byName(`clone-${FIXTURE_RUN_ID}`)?.body.HostConfig).toMatchObject({
+      Memory: 512 * 1024 * 1024,
+      MemorySwap: 512 * 1024 * 1024,
     });
   });
 
