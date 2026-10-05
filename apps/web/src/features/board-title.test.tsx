@@ -169,3 +169,13 @@ describe('the board card’s cost (WP-134, backlog 408)', () => {
     expect(totals[0]?.parentElement?.querySelector('[data-unmeasured-runs]')).toBeNull();
   });
 });
+
+describe('a project link written with the project’s id (first local test, 2026-10-05)', () => {
+  it('opens the same board as the key, rather than "No such project"', async () => {
+    // A platform-issued task's `ticket_url` is `/projects/<uuid>` (discovery, rediscovery, …).
+    window.history.pushState({}, '', `/projects/${PROJECT}`);
+    render(createApp({ fetchImpl, realtime: false }).element);
+    await screen.findByText('ACME-22');
+    expect(screen.queryByText('No such project')).toBeNull();
+  });
+});

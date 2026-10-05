@@ -58,10 +58,20 @@ export const useProjects = () => {
  * technical/09 fixes the route as `/projects/$key` — the human-readable slug, which is what someone
  * pastes into Slack — while every API path is keyed by uuid. The projects list is the mapping, and
  * it is one small request the shell needs anyway.
+ *
+ * **The project's id is accepted too.** The platform-issued tasks (discovery, rediscovery, the
+ * history bootstrap, a maintenance chore) have no ticket of their own, so their `ticket_url` is the
+ * project's page, and the server writes it as `/projects/<uuid>` because those writers hold only the
+ * id. Until this lookup accepted it, the task page's "Open ticket" link answered *"No such
+ * project"* (first local test, 2026-10-05) — for every such row already stored. A key is a slug and
+ * an id is a uuid, so the two never name different projects.
  */
 export const useProjectByKey = (key: string) => {
   const projects = useProjects();
-  const project = projects.data?.items.find((item) => item.key === key) ?? null;
+  const project =
+    projects.data?.items.find((item) => item.key === key) ??
+    projects.data?.items.find((item) => item.id === key) ??
+    null;
   return { ...projects, project };
 };
 
