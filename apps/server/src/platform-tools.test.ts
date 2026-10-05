@@ -176,6 +176,32 @@ describe('the production platform tools', () => {
     ).toEqual(['open_mr', 'update_mr_description']);
   });
 
+  /**
+   * The optional halves of the two composed reads reach their callee too (backlog 474): what the
+   * prompt already holds and the artifact types asked for are passed to the projection, and an
+   * explicit `draft` to the merge-request tool. Each still dies where the doubles refuse, which is
+   * the proof the call got past the composition with the field in hand.
+   */
+  it('passes get_task_context’s prompt holdings and artifact types, and open_mr’s draft flag, through', async () => {
+    const context: PlatformToolContext = {
+      ...CONTEXT,
+      promptHolds: {
+        ticket: true,
+        artifacts: [{ artifact_type: 'ImplementationPlan', version: 2 }],
+      },
+    };
+    const failure = await tools
+      .getTaskContext({ include: ['artifacts'], artifact_types: ['ImplementationPlan'] }, context)
+      .catch((error: unknown) => error);
+    expect(((failure as Error).cause as Error).message).toContain('must not query at wiring time');
+    await expect(
+      tools.openMergeRequest(
+        { title: 'x', description: 'y', draft: false },
+        { ...CONTEXT, redactor: exactSecretRedactor([]) },
+      ),
+    ).rejects.toThrow('the merge-request tool reached its task read');
+  });
+
   it.each(['open_mr', 'update_mr_description'] as const)(
     'does not refuse %s — it reaches its task read',
     async (name) => {
