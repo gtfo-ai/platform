@@ -706,6 +706,16 @@ describe('a spec with no checkout (WP-74)', () => {
   });
 
   /**
+   * The clone has no network, and the git image's LFS filter downloads on checkout: a repository
+   * with `filter=lfs` failed every create until the smudge was skipped (first local test).
+   */
+  it('clones with Git LFS left as pointer files', async () => {
+    await provider.create(workspaceSpecFixture());
+    const env = daemon.byName(`clone-${FIXTURE_RUN_ID}`)?.body.Env ?? [];
+    expect(env).toContain('GIT_LFS_SKIP_SMUDGE=1');
+  });
+
+  /**
    * A control volume compose initialised from the launcher image is uid 1000's, and this helper
    * has no `DAC_OVERRIDE`: it must take the root back before it creates the run's directory.
    */

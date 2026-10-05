@@ -1240,6 +1240,12 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         .join('\n'),
       env: {
         HOME: '/tmp',
+        // **Git LFS stays pointers.** The git image ships `git-lfs` with its filter configured, so a
+        // checkout of a repository whose `.gitattributes` names `filter=lfs` runs the smudge, which
+        // downloads — and this container has no network, so the clone failed *"Smudge error: Error
+        // downloading DB/autix_clean.sql.gz"* (exit 128, the first local test). An agent works on
+        // code; the binaries stay pointer files, which is also what keeps them out of its context.
+        GIT_LFS_SKIP_SMUDGE: '1',
         REPO_URL: repo.url,
         DEFAULT_BRANCH: repo.defaultBranch,
         ...(repo.checkoutBranch === null ? {} : { CHECKOUT_BRANCH: repo.checkoutBranch }),
@@ -1249,7 +1255,8 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       // above, and a sub-path mount of a mirror that is not there would turn "no mirror" into the
       // daemon's refusal of the mount — an error naming a path under `/var/lib/docker`, not the
       // project. Nothing the agent wrote exists yet: the script is the platform's, the tree it
-      // makes is a fresh `--shared` clone (a clone runs no hook and no filter it did not bring),
+      // makes is a fresh `--shared` clone (a clone runs no hook, and the image's one filter, LFS,
+      // is told to skip above),
       // and the container has no network. The run container and the export helper, which **do**
       // hold agent content, mount one mirror each.
       mounts: [
