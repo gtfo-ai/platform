@@ -62,6 +62,16 @@ const READINESS: ReadinessResponse = {
       evidence: HOSTILE_EVIDENCE,
       unlocks: 'Implementation self-check',
       detected_by: 'agent',
+      not_checked: false,
+    },
+    // BD-026's 2026-10-06 amendment: the workspace could not run it — shown, but not as a fail.
+    {
+      id: 'R2',
+      passed: false,
+      evidence: 'not checked — the run workspace could not run it: no PHP in the run image',
+      unlocks: 'Fast inner loop; fewer per-run timeouts',
+      detected_by: 'agent',
+      not_checked: true,
     },
     {
       id: 'R9',
@@ -69,6 +79,7 @@ const READINESS: ReadinessResponse = {
       evidence: 'the git provider reports the default branch as unprotected',
       unlocks: 'Human merge guarantee (BD-007)',
       detected_by: 'platform',
+      not_checked: false,
     },
   ],
   next_improvements: [
@@ -81,6 +92,12 @@ const READINESS: ReadinessResponse = {
       severity: 'warning',
       message:
         '".gitlab-ci.yml" gives an agentic/ branch (agentic/X-1) no test job (stage test): a push pipeline runs no test job (stage test) — first, "codeception" rules[2] if: "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^(feature|bugfix)\\//"; a merge-request pipeline runs no test job (stage test). Fix: admit agentic/ in that rule.',
+    },
+    {
+      code: 'verification_mode_ci_suggested',
+      severity: 'note',
+      message:
+        'R2 could not be checked: the run workspace could not run it. This project has a CI configuration: with verification.mode: ci, discovery reads it from the CI configuration instead of running it.',
     },
   ],
 };
@@ -355,6 +372,18 @@ describe('the onboarding wizard', () => {
     expect(notices.textContent).toContain('(feature|bugfix)');
     expect(notices.textContent).toContain('admit agentic/');
     expect(screen.getByRole('alert').textContent).toContain('CI rules skip agentic/ branches');
+  });
+
+  it('marks a criterion the workspace could not run as not checked, and suggests verifying on CI (BD-026)', async () => {
+    render(createApp({ fetchImpl: fetchFor('recorded'), realtime: false }).element);
+    await screen.findByText('Readiness level 1');
+    const r2 = screen.getByText(/Fast inner loop/).closest('li');
+    expect(r2?.textContent).toContain('not checked');
+    // Only R2 carries the badge: R1 passed and R9 failed, and neither says "not checked".
+    expect(screen.getAllByText('not checked')).toHaveLength(1);
+    const notices = screen.getByRole('list', { name: 'Readiness notices' });
+    expect(notices.textContent).toContain('Verify on CI?');
+    expect(notices.textContent).toContain('verification.mode: ci');
   });
 
   it('renders untrusted evidence as text, never as markup', async () => {

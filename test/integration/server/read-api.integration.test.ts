@@ -1574,6 +1574,59 @@ describe('the list projections', () => {
     });
   });
 
+  /** BD-026's 2026-10-06 amendment: a criterion the run workspace could not run is published as such. */
+  it('publishes a not-checked criterion as not checked and never as an improvement', async () => {
+    await pool.query(
+      `insert into readiness_evaluations (project_id, level, criteria, source)
+       values ($1, 2, $2::jsonb, 'discovery')`,
+      [
+        projectId,
+        JSON.stringify([
+          {
+            id: 'R1',
+            passed: false,
+            not_checked: true,
+            evidence: 'e',
+            detected_by: 'agent',
+            unlocks: '',
+          },
+          {
+            id: 'R2',
+            passed: false,
+            not_checked: true,
+            evidence: 'e',
+            detected_by: 'agent',
+            unlocks: '',
+          },
+          { id: 'R3', passed: true, evidence: 'e', detected_by: 'agent', unlocks: '' },
+          // A contradictory row reads as what `passed` says, never as not checked.
+          {
+            id: 'R4',
+            passed: true,
+            not_checked: true,
+            evidence: 'e',
+            detected_by: 'agent',
+            unlocks: '',
+          },
+        ]),
+      ],
+    );
+    try {
+      const answered = await findProjectReadiness(drizzled, projectId);
+      const response = answered.found && answered.recorded ? answered.response : null;
+      expect(response?.criteria.map((entry) => [entry.id, entry.not_checked])).toEqual([
+        ['R1', true],
+        ['R2', true],
+        ['R3', false],
+        ['R4', false],
+      ]);
+      // R2 was not checked, so the advice is the rest of level 2's rung — not R2.
+      expect(response?.next_improvements.map((entry) => entry.id)).toEqual(['R5', 'R9', 'R6']);
+    } finally {
+      await pool.query('delete from readiness_evaluations where project_id = $1', [projectId]);
+    }
+  });
+
   it('publishes an integration without its credentials, and withholds a config it cannot read', async () => {
     const planted = 'FAKE-gitlab-token-DO-NOT-USE-integration-tier';
     await pool.query(

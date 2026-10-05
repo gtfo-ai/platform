@@ -10,17 +10,21 @@
  * **42** — each threshold is asserted from both sides: the exact passing set reaches the level, and
  * the same set minus one criterion does not.
  */
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { VERIFICATION_MODE_SUGGESTION_CODE } from './ci-rules.js';
 import {
   findReadinessCriterion,
   KNOWLEDGE_COMPLETENESS_SECTIONS,
   KNOWLEDGE_COMPLETENESS_THRESHOLD,
   knowledgeCompleteness,
+  mayBeNotChecked,
   nextReadinessImprovements,
   READINESS_CRITERIA,
   READINESS_CRITERION_IDS,
   READINESS_LEVEL_REQUIREMENTS,
   readinessLevelFor,
+  verificationModeSuggestion,
 } from './criteria.js';
 
 /** Every criterion up to and including rung `level` (1-based, as product/17 numbers them). */
@@ -174,6 +178,104 @@ describe('readinessLevelFor', () => {
     passed.delete('R1');
     passed.delete('R3');
     expect(readinessLevelFor(passed)).toBe(0);
+  });
+});
+
+/**
+ * BD-026's 2026-10-06 amendment: a criterion the run workspace could not run is *not checked*, not
+ * failed. Autix (a PHP project, first local test) is the case that made it: level 0 for a fact
+ * about the run image.
+ */
+describe('a criterion the workspace could not run (not checked)', () => {
+  const runInWorkspace = READINESS_CRITERIA.filter((criterion) => criterion.runInWorkspace).map(
+    ({ id }) => id,
+  );
+  const ids = fc.subarray([...READINESS_CRITERION_IDS]);
+
+  it('may be claimed for exactly the three criteria discovery runs — the ones CI mode reads instead', () => {
+    expect(runInWorkspace).toEqual(['R1', 'R2', 'R6']);
+    expect(runInWorkspace).toEqual(
+      READINESS_CRITERIA.filter((criterion) => criterion.detectionOnCi !== undefined).map(
+        ({ id }) => id,
+      ),
+    );
+  });
+
+  it('may be claimed only in a project that verifies locally', () => {
+    for (const criterion of READINESS_CRITERIA) {
+      expect(mayBeNotChecked(criterion, 'local'), criterion.id).toBe(
+        runInWorkspace.includes(criterion.id),
+      );
+      expect(mayBeNotChecked(criterion), criterion.id).toBe(runInWorkspace.includes(criterion.id));
+      // Under CI the three are read from the CI configuration, and a read can always be answered.
+      expect(mayBeNotChecked(criterion, 'ci'), criterion.id).toBe(false);
+    }
+  });
+
+  it('never carries a rung on its own: every rung has a criterion that is read, not run', () => {
+    for (const [index, requirement] of READINESS_LEVEL_REQUIREMENTS.entries()) {
+      expect(
+        requirement.some((id) => !runInWorkspace.includes(id)),
+        `level ${index + 1}`,
+      ).toBe(true);
+    }
+  });
+
+  // Both sides of every rung that holds one (rule 42 and 68).
+  for (const [index, requirement] of READINESS_LEVEL_REQUIREMENTS.entries()) {
+    const level = index + 1;
+    for (const id of requirement.filter((entry) => runInWorkspace.includes(entry))) {
+      it(`lets level ${level} through when ${id} was not checked, and not when it failed`, () => {
+        const passed = passingSetFor(level);
+        passed.delete(id);
+        expect(readinessLevelFor(passed, new Set([id]))).toBe(level);
+        expect(readinessLevelFor(passed)).toBe(level - 1);
+      });
+    }
+  }
+
+  it('reads Autix’s stored answers as level 2 rather than 0', () => {
+    // The evaluation of 2026-10-05, criterion by criterion: R3, R4, R5, R7, R9 and R14 passed; R1,
+    // R2 and R6 failed only because the run image has no PHP; R8, R10, R11, R12, R13 failed.
+    const passed = new Set(['R3', 'R4', 'R5', 'R7', 'R9', 'R14']);
+    expect(readinessLevelFor(passed)).toBe(0);
+    expect(readinessLevelFor(passed, new Set(['R1', 'R2', 'R6']))).toBe(2);
+  });
+
+  it('counts, for the level, as a pass would — and only for the level (property)', () => {
+    fc.assert(
+      fc.property(ids, ids, (passedIds, notCheckedIds) => {
+        const passed = new Set(passedIds);
+        const notChecked = new Set(notCheckedIds);
+        const union = new Set([...passedIds, ...notCheckedIds]);
+        expect(readinessLevelFor(passed, notChecked)).toBe(readinessLevelFor(union));
+        expect(readinessLevelFor(passed, notChecked)).toBeGreaterThanOrEqual(
+          readinessLevelFor(passed),
+        );
+        // …and never an improvement to suggest: the workspace stopped it, not the repository.
+        for (const criterion of nextReadinessImprovements(passed, 14, notChecked)) {
+          expect(notChecked.has(criterion.id), criterion.id).toBe(false);
+          expect(passed.has(criterion.id), criterion.id).toBe(false);
+        }
+      }),
+    );
+  });
+
+  it('suggests verification.mode: ci only when something was not checked and there is CI to read', () => {
+    expect(verificationModeSuggestion({ notChecked: [], ciConfigured: true })).toBeNull();
+    expect(verificationModeSuggestion({ notChecked: ['R1'], ciConfigured: false })).toBeNull();
+    const one = verificationModeSuggestion({ notChecked: ['R2'], ciConfigured: true });
+    expect(one?.code).toBe(VERIFICATION_MODE_SUGGESTION_CODE);
+    expect(one?.severity).toBe('note');
+    expect(one?.message).toMatch(/^R2 could not be checked: the run workspace could not run it /);
+    // The table's order and its own ids — an id outside the table is not quoted (platform text only).
+    const three = verificationModeSuggestion({
+      notChecked: ['R6', 'R1', 'R99', 'R2'],
+      ciConfigured: true,
+    });
+    expect(three?.message).toMatch(/^R1, R2 and R6 could not be checked: .* run them /);
+    expect(three?.message).toContain('verification.mode: ci');
+    expect(three?.message).not.toContain('R99');
   });
 });
 

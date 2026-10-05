@@ -24,6 +24,7 @@ import {
   findReadinessCriterion,
   READINESS_CRITERIA,
   READINESS_CRITERION_IDS,
+  VERIFICATION_MODE_SUGGESTION_CODE,
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor, noSecretsRedactor } from '../integrations/redaction.js';
@@ -31,6 +32,8 @@ import {
   CARRIED_EVIDENCE_PREFIX,
   evaluateReadiness,
   MAX_READINESS_EVIDENCE_CHARS,
+  NOT_CHECKABLE_EVIDENCE_PREFIX,
+  NOT_CHECKED_EVIDENCE_PREFIX,
   type ReadinessObservations,
   recheckReadiness,
 } from './evaluate-readiness.js';
@@ -64,13 +67,15 @@ const signals = (overrides: Partial<PlatformReadinessSignals> = {}): PlatformRea
 });
 
 const evaluate = (input: {
-  readonly claims?: { id: string; passed: boolean; evidence: string }[];
+  readonly claims?: { id: string; passed: boolean; evidence: string; not_checked?: boolean }[];
   readonly signals?: Partial<PlatformReadinessSignals>;
   readonly secrets?: boolean;
   readonly verificationMode?: 'local' | 'ci';
+  readonly ciConfigured?: boolean;
 }) =>
   evaluateReadiness({
     ...(input.verificationMode === undefined ? {} : { verificationMode: input.verificationMode }),
+    ...(input.ciConfigured === undefined ? {} : { ciConfigured: input.ciConfigured }),
     id: EVALUATION,
     projectId: PROJECT,
     evaluatedAt: AT,
@@ -255,6 +260,122 @@ describe('evaluateReadiness', () => {
       verificationMode: 'ci',
     });
     expect(criterion(long, 'R1')?.evidence).toHaveLength(MAX_READINESS_EVIDENCE_CHARS + 1);
+  });
+
+  /**
+   * BD-026's 2026-10-06 amendment — Autix's evaluation of 2026-10-05, as the model would report it
+   * under the rule: R1, R2 and R6 not run because the run image has no PHP.
+   */
+  const AUTIX: { id: string; passed: boolean; evidence: string; not_checked?: boolean }[] = [
+    ...['R1', 'R2', 'R6'].map((id) => ({
+      id,
+      passed: false,
+      not_checked: true,
+      evidence: `no PHP in the run image, so ${id} could not run`,
+    })),
+    ...['R3', 'R4', 'R5', 'R7', 'R14'].map((id) => ({ id, passed: true, evidence: `${id} ok` })),
+    ...['R8', 'R10', 'R13'].map((id) => ({ id, passed: false, evidence: `${id} missing` })),
+  ];
+  const AUTIX_PLATFORM = { defaultBranchProtected: true, indexedKnowledgePaths: [] };
+
+  it('records R1, R2 and R6 not checked in a local project, and lets the level through (Autix: 2, not 0)', () => {
+    const result = evaluate({ claims: AUTIX, signals: AUTIX_PLATFORM });
+    expect(result.evaluation.level).toBe(2);
+    for (const id of ['R1', 'R2', 'R6']) {
+      const row = criterion(result, id);
+      // Not a pass: the row says not checked, with the platform's sentence before the model's.
+      expect(row?.passed, id).toBe(false);
+      expect(row?.notChecked, id).toBe(true);
+      expect(row?.evidence, id).toBe(
+        `${NOT_CHECKED_EVIDENCE_PREFIX}no PHP in the run image, so ${id} could not run`,
+      );
+    }
+    // A checked criterion carries no flag at all.
+    expect(criterion(result, 'R3')).not.toHaveProperty('notChecked');
+    expect(criterion(result, 'R8')).not.toHaveProperty('notChecked');
+    // The same answers reported as fails — the old reading — are level 0.
+    const failed = AUTIX.map(({ not_checked: _flag, ...claim }) => claim);
+    expect(evaluate({ claims: failed, signals: AUTIX_PLATFORM }).evaluation.level).toBe(0);
+  });
+
+  it('records "not checked" on a criterion that is read as a fail, saying so', () => {
+    const claims = ['R3', 'R8', 'R14'].map((id) => ({
+      id,
+      passed: true,
+      not_checked: true,
+      evidence: `${id} could not be checked`,
+    }));
+    const result = evaluate({ claims, signals: AUTIX_PLATFORM });
+    for (const id of ['R3', 'R8', 'R14']) {
+      expect(criterion(result, id)?.passed, id).toBe(false);
+      expect(criterion(result, id), id).not.toHaveProperty('notChecked');
+      expect(criterion(result, id)?.evidence, id).toBe(
+        `${NOT_CHECKABLE_EVIDENCE_PREFIX}${id} could not be checked`,
+      );
+    }
+    // Without R3 nothing rises: the flag cannot lift a criterion it may not be claimed for.
+    expect(result.evaluation.level).toBe(0);
+  });
+
+  it('records "not checked" on R1, R2 and R6 as a fail when the project verifies on CI, where they are read', () => {
+    const result = evaluate({ claims: AUTIX, signals: AUTIX_PLATFORM, verificationMode: 'ci' });
+    for (const id of ['R1', 'R2', 'R6']) {
+      const row = criterion(result, id);
+      expect(row?.passed, id).toBe(false);
+      expect(row, id).not.toHaveProperty('notChecked');
+      // Both platform sentences, in order: how it is detected under CI, then the refusal.
+      expect(row?.evidence, id).toBe(
+        `${findReadinessCriterion(id)?.detectionOnCi} — ${NOT_CHECKABLE_EVIDENCE_PREFIX}no PHP in the run image, so ${id} could not run`,
+      );
+    }
+    expect(result.evaluation.level).toBe(0);
+    expect(result.evaluation.notices).toEqual([]);
+  });
+
+  it('lets "not checked" win over a pass claimed beside it, and leaves an unreported R1 a fail', () => {
+    const both = evaluate({
+      claims: [{ id: 'R1', passed: true, not_checked: true, evidence: 'both' }],
+    });
+    expect(criterion(both, 'R1')?.passed).toBe(false);
+    expect(criterion(both, 'R1')?.notChecked).toBe(true);
+    const silent = evaluate({});
+    expect(criterion(silent, 'R1')).not.toHaveProperty('notChecked');
+    expect(criterion(silent, 'R1')?.evidence).toContain('did not report');
+  });
+
+  it('suggests verification.mode: ci when a criterion was not checked and there is CI to read, after the CI-rules notice', () => {
+    const suggested = evaluate({ claims: AUTIX, signals: AUTIX_PLATFORM });
+    expect(suggested.evaluation.notices).toHaveLength(1);
+    expect(suggested.evaluation.notices?.[0]?.code).toBe(VERIFICATION_MODE_SUGGESTION_CODE);
+    expect(suggested.evaluation.notices?.[0]?.message).toMatch(
+      /^R1, R2 and R6 could not be checked/,
+    );
+    // No R3 pass, but the platform read a CI file: still suggested.
+    const noR3 = AUTIX.filter((claim) => claim.id !== 'R3');
+    expect(
+      evaluate({ claims: noR3, ciConfigured: true }).evaluation.notices?.map(({ code }) => code),
+    ).toEqual([VERIFICATION_MODE_SUGGESTION_CODE]);
+    // No CI anywhere: nothing to read the criteria from, so nothing is suggested.
+    expect(evaluate({ claims: noR3 }).evaluation.notices).toEqual([]);
+    // Nothing not checked: nothing to suggest, CI or not.
+    const checked = AUTIX.map(({ not_checked: _flag, ...claim }) => claim);
+    expect(evaluate({ claims: checked, ciConfigured: true }).evaluation.notices).toEqual([]);
+    // The CI-rules notice the caller computed comes first.
+    const note = { code: 'ci_rules_not_seen' as const, severity: 'note' as const, message: 'm' };
+    const withNote = evaluateReadiness({
+      id: EVALUATION,
+      projectId: PROJECT,
+      evaluatedAt: AT,
+      source: 'discovery',
+      agentClaims: AUTIX,
+      signals: signals(AUTIX_PLATFORM),
+      redactor: noSecretsRedactor(),
+      notices: [note],
+    });
+    expect(withNote.evaluation.notices?.map(({ code }) => code)).toEqual([
+      'ci_rules_not_seen',
+      VERIFICATION_MODE_SUGGESTION_CODE,
+    ]);
   });
 
   it('does not redact platform-written evidence, because no untrusted byte is in it', () => {
@@ -450,6 +571,32 @@ describe('recheckReadiness', () => {
     const evaluation = recheck({ previous: partial });
     expect(row(evaluation, 'R1')?.passed).toBe(false);
     expect(row(evaluation, 'R1')?.evidence).toContain('did not report');
+  });
+
+  it('carries a not-checked criterion as not checked, with the level and the suggestion it supports', () => {
+    const claims = [
+      ...['R1', 'R2', 'R6'].map((id) => ({
+        id,
+        passed: false,
+        not_checked: true,
+        evidence: `${id} could not run here`,
+      })),
+      ...['R3', 'R4', 'R5'].map((id) => ({ id, passed: true, evidence: `${id} ok` })),
+    ];
+    const platform = { defaultBranchProtected: true, indexedKnowledgePaths: [] };
+    const before = evaluate({ claims, signals: platform }).evaluation;
+    expect(before.level).toBe(2);
+    const after = recheck({ previous: before, signals: platform });
+    for (const id of ['R1', 'R2', 'R6']) {
+      expect(row(after, id)?.notChecked, id).toBe(true);
+      expect(row(after, id)?.passed, id).toBe(false);
+      expect(row(after, id)?.evidence.startsWith(CARRIED_EVIDENCE_PREFIX), id).toBe(true);
+    }
+    expect(after.level).toBe(2);
+    // R3 was carried as a pass, so the note is recomputed rather than carried.
+    expect(after.notices?.map(({ code }) => code)).toEqual([VERIFICATION_MODE_SUGGESTION_CODE]);
+    // A previous evaluation without the flag is carried without it.
+    expect(row(recheck({}), 'R1')).not.toHaveProperty('notChecked');
   });
 
   it('moves the level when the repository gains the missing criterion', () => {

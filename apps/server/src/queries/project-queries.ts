@@ -237,11 +237,14 @@ export const findProjectReadiness = async (
   const stored = Array.isArray(newest.criteria) ? newest.criteria : [];
   const criteria: ReadinessResponse['criteria'] = [];
   const passed = new Set<string>();
+  const notChecked = new Set<string>();
   for (const entry of stored) {
     if (typeof entry !== 'object' || entry === null) continue;
     const record = entry as Record<string, unknown>;
     const criterion = typeof record.id === 'string' ? findReadinessCriterion(record.id) : undefined;
     if (criterion === undefined || typeof record.passed !== 'boolean') continue;
+    // BD-026's 2026-10-06 amendment: the store's reading — a literal `true` beside `passed: false`.
+    const notCheckedHere = record.not_checked === true && !record.passed;
     criteria.push({
       id: criterion.id,
       passed: record.passed,
@@ -254,9 +257,13 @@ export const findProjectReadiness = async (
         criterion.detectedBy === 'platform' || record.detected_by === 'platform'
           ? 'platform'
           : 'agent',
+      not_checked: notCheckedHere,
     });
     if (record.passed) {
       passed.add(criterion.id);
+    }
+    if (notCheckedHere) {
+      notChecked.add(criterion.id);
     }
   }
 
@@ -271,7 +278,8 @@ export const findProjectReadiness = async (
       // product/17 § "Onboarding wizard": "the initial level and the three cheapest criteria to
       // improve next". Derived here rather than stored, so a release that reorders the ladder
       // changes the advice without a re-evaluation.
-      next_improvements: nextReadinessImprovements(passed).map((criterion) => ({
+      // A not-checked criterion is not an improvement (BD-026's 2026-10-06 amendment).
+      next_improvements: nextReadinessImprovements(passed, 3, notChecked).map((criterion) => ({
         id: criterion.id,
         title: criterion.title,
         unlocks: criterion.unlocks,

@@ -24,6 +24,16 @@
  *    is not"), so failing closed costs a suggestion and passing open costs autonomy the repository
  *    cannot support.
  *
+ * **"Not checked" is an answer, and a narrow one** (BD-026's 2026-10-06 amendment). A claim with
+ * `not_checked: true` is honoured only where `mayBeNotChecked` says so — R1, R2 and R6 of a run
+ * planned `local` — and is then stored `passed: false, notChecked: true` with the platform's
+ * {@link NOT_CHECKED_EVIDENCE_PREFIX}; it lets its rung through and suggests `verification.mode: ci`
+ * when the project has CI. On any other criterion the same claim is a **fail** with
+ * {@link NOT_CHECKABLE_EVIDENCE_PREFIX}, because a criterion that is read can always be answered — so
+ * a model cannot use the flag to lift a criterion it was asked to read. What it can still do is
+ * claim it on R1, R2 or R6 when the command did run; that is the same trust BD-022's residual
+ * already extends to `passed`, and it is stated in BD-026's amendment rather than closed here.
+ *
  * ## The byte budget, stated (standing rule 63)
  *
  * `evidence` is model prose for eleven of the fourteen criteria, and the row it lands in is read
@@ -39,9 +49,11 @@ import type { ReadinessCriterion } from '@platform/domain';
 import {
   KNOWLEDGE_COMPLETENESS_THRESHOLD,
   knowledgeCompleteness,
+  mayBeNotChecked,
   READINESS_CRITERIA,
   type ReadinessNotice,
   readinessLevelFor,
+  verificationModeSuggestion,
 } from '@platform/domain';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type {
@@ -76,6 +88,12 @@ export interface EvaluateReadinessInput {
    * with that platform sentence. Omitted: `local`, the mode every run before the key had.
    */
   readonly verificationMode?: VerificationMode;
+  /**
+   * Whether the platform read a CI configuration file for this project (the CI-rules probe's
+   * `ciFile`). With R3's pass, what decides the `verification_mode_ci_suggested` note. Omitted:
+   * only R3 says so.
+   */
+  readonly ciConfigured?: boolean;
 }
 
 export interface EvaluateReadinessResult {
@@ -83,6 +101,36 @@ export interface EvaluateReadinessResult {
   /** Replacements the redactor made across this evaluation's evidence, for the log. */
   readonly redactions: number;
 }
+
+/** Platform text before the model's evidence on a criterion recorded not checked. */
+export const NOT_CHECKED_EVIDENCE_PREFIX = 'not checked — the run workspace could not run it: ';
+
+/** Platform text before the model's evidence when it claimed "not checked" where it may not. */
+export const NOT_CHECKABLE_EVIDENCE_PREFIX =
+  'reported as not checked, which this criterion cannot be (it is read, not run), so it fails: ';
+
+/**
+ * The level and the notices of a set of criteria — the one place both producers derive them, so a
+ * not-checked criterion counts the same way after discovery and after a re-check.
+ */
+const levelAndNotices = (
+  criteria: readonly StoredReadinessCriterion[],
+  notices: readonly ReadinessNotice[],
+  ciConfigured: boolean,
+): { readonly level: number; readonly notices: readonly ReadinessNotice[] } => {
+  const passed = new Set(criteria.filter((criterion) => criterion.passed).map(({ id }) => id));
+  const notChecked = criteria
+    .filter((criterion) => criterion.notChecked === true)
+    .map(({ id }) => id);
+  const suggestion = verificationModeSuggestion({
+    notChecked,
+    ciConfigured: ciConfigured || passed.has('R3'),
+  });
+  return {
+    level: readinessLevelFor(passed, new Set(notChecked)),
+    notices: suggestion === null ? notices : [...notices, suggestion],
+  };
+};
 
 /** Redact, then cut — never the other way round (see the module docblock). */
 const evidenceOf = (raw: string, redactor: SecretRedactor, tally: { count: number }): string => {
@@ -168,13 +216,18 @@ export const evaluateReadiness = (input: EvaluateReadinessInput): EvaluateReadin
       (criterion) => criterion.id,
     ),
   );
-  const claims = new Map<string, { passed: boolean; evidence: string }>();
+  const claims = new Map<string, { passed: boolean; evidence: string; notChecked: boolean }>();
   for (const claim of input.agentClaims ?? []) {
     if (!agentAnswerable.has(claim.id) || claims.has(claim.id)) {
       continue;
     }
-    claims.set(claim.id, { passed: claim.passed, evidence: claim.evidence });
+    claims.set(claim.id, {
+      passed: claim.passed,
+      evidence: claim.evidence,
+      notChecked: claim.not_checked === true,
+    });
   }
+  const mode = input.verificationMode ?? 'local';
 
   const criteria: StoredReadinessCriterion[] = READINESS_CRITERIA.map((criterion) => {
     if (criterion.detectedBy === 'platform') {
@@ -193,31 +246,49 @@ export const evaluateReadiness = (input: EvaluateReadinessInput): EvaluateReadin
     // was detected whatever the model wrote. The prefix holds no untrusted byte; it is redacted with
     // the rest only because it is one string.
     const prefix =
-      input.verificationMode === 'ci' && criterion.detectionOnCi !== undefined
-        ? `${criterion.detectionOnCi} — `
+      mode === 'ci' && criterion.detectionOnCi !== undefined ? `${criterion.detectionOnCi} — ` : '';
+    if (claim === undefined) {
+      return {
+        id: criterion.id,
+        passed: false,
+        evidence: NOT_REPORTED,
+        unlocks: criterion.unlocks,
+        detectedBy: criterion.detectedBy,
+      };
+    }
+    // BD-026's 2026-10-06 amendment: "not checked" wins over `passed` where it may be claimed, and
+    // is a fail where it may not (the module docblock).
+    const notChecked = claim.notChecked && mayBeNotChecked(criterion, mode);
+    const notCheckable = claim.notChecked && !notChecked;
+    const stance = notChecked
+      ? NOT_CHECKED_EVIDENCE_PREFIX
+      : notCheckable
+        ? NOT_CHECKABLE_EVIDENCE_PREFIX
         : '';
     return {
       id: criterion.id,
-      passed: claim?.passed ?? false,
-      evidence:
-        claim === undefined
-          ? NOT_REPORTED
-          : evidenceOf(`${prefix}${claim.evidence}`, input.redactor, tally),
+      passed: claim.notChecked ? false : claim.passed,
+      evidence: evidenceOf(`${prefix}${stance}${claim.evidence}`, input.redactor, tally),
       unlocks: criterion.unlocks,
       detectedBy: criterion.detectedBy,
+      ...(notChecked ? { notChecked: true } : {}),
     };
   });
 
-  const passed = new Set(criteria.filter((criterion) => criterion.passed).map(({ id }) => id));
+  const { level, notices } = levelAndNotices(
+    criteria,
+    input.notices ?? [],
+    input.ciConfigured === true,
+  );
   return {
     evaluation: {
       id: input.id,
       projectId: input.projectId,
-      level: readinessLevelFor(passed),
+      level,
       criteria,
       evaluatedAt: input.evaluatedAt,
       source: input.source,
-      notices: input.notices ?? [],
+      notices,
     },
     redactions: tally.count,
   };
@@ -261,6 +332,8 @@ export interface RecheckReadinessInput {
    * so a re-check that computed none (no reader composed) records none.
    */
   readonly notices?: readonly ReadinessNotice[];
+  /** As {@link EvaluateReadinessInput.ciConfigured}, read at the re-checked commit. */
+  readonly ciConfigured?: boolean;
 }
 
 /** The prefix a carried row's evidence starts with — also how a second re-check recognises one. */
@@ -326,6 +399,9 @@ export const recheckReadiness = (input: RecheckReadinessInput): ReadinessEvaluat
         criterion.detectedBy === 'platform'
           ? 'platform'
           : (stored?.detectedBy ?? criterion.detectedBy),
+      // A not-checked answer is carried as one (BD-026's 2026-10-06 amendment): only R1, R2 and R6
+      // could have been recorded so, and all three are `carried`.
+      ...(stored?.notChecked === true ? { notChecked: true } : {}),
     };
   };
   /**
@@ -374,15 +450,19 @@ export const recheckReadiness = (input: RecheckReadinessInput): ReadinessEvaluat
     }
   });
 
-  const passed = new Set(criteria.filter((criterion) => criterion.passed).map(({ id }) => id));
+  const { level, notices } = levelAndNotices(
+    criteria,
+    input.notices ?? [],
+    input.ciConfigured === true,
+  );
   return {
     id: input.id,
     projectId: input.projectId,
-    level: readinessLevelFor(passed),
+    level,
     criteria,
     evaluatedAt: input.evaluatedAt,
     source: READINESS_RECHECK_SOURCE,
-    notices: input.notices ?? [],
+    notices,
   };
 };
 

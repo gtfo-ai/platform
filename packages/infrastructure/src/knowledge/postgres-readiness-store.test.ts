@@ -94,6 +94,74 @@ describe('PostgresReadinessStore.latest', () => {
     ]);
   });
 
+  it('reads not_checked only as a literal true beside passed: false (BD-026, 2026-10-06)', async () => {
+    const store = new PostgresReadinessStore(
+      scripted([
+        row([
+          criterion({ id: 'R1', passed: false, not_checked: true }),
+          // Contradictory: never read as not checked, and never as anything but what `passed` says.
+          criterion({ id: 'R2', passed: true, not_checked: true }),
+          criterion({ id: 'R6', passed: false, not_checked: 'yes' }),
+          criterion({ id: 'R3' }),
+        ]),
+      ]),
+    );
+    const criteria = (await store.latest(PROJECT as never))?.criteria ?? [];
+    expect(criteria.map((entry) => [entry.id, entry.passed, entry.notChecked ?? null])).toEqual([
+      ['R1', false, true],
+      ['R2', true, null],
+      ['R6', false, null],
+      ['R3', true, null],
+    ]);
+  });
+
+  it('writes not_checked only on a criterion that was not checked', async () => {
+    const queries: unknown[][] = [];
+    const sql = {
+      query: async (_text: string, values: unknown[]) => {
+        queries.push(values);
+        return { rows: [], rowCount: 1 };
+      },
+    } as unknown as SqlExecutor;
+    await new PostgresReadinessStore(sql).record({ adapter: 'postgres', client: sql } as never, {
+      id: '00000000-0000-4000-8000-0000000000c3' as never,
+      projectId: PROJECT as never,
+      level: 2,
+      criteria: [
+        {
+          id: 'R1',
+          passed: false,
+          evidence: 'e',
+          unlocks: 'u',
+          detectedBy: 'agent',
+          notChecked: true,
+        },
+        { id: 'R3', passed: true, evidence: 'e', unlocks: 'u', detectedBy: 'agent' },
+      ],
+      evaluatedAt: '2026-10-06T00:00:00.000Z' as never,
+      source: 'discovery',
+      notices: [],
+    });
+    const written = JSON.parse(String(queries[0]?.[3])) as Record<string, unknown>[];
+    expect(written[0]).toMatchObject({ id: 'R1', passed: false, not_checked: true });
+    expect(written[1]).not.toHaveProperty('not_checked');
+  });
+
+  it('reads every notice code this build writes, the verification-mode suggestion included', async () => {
+    const notices = [
+      { code: 'ci_rules_skip_agent_branch', severity: 'warning', message: 'w' },
+      { code: 'ci_rules_not_seen', severity: 'note', message: 'n' },
+      { code: 'verification_mode_ci_suggested', severity: 'note', message: 's' },
+      { code: 'a_later_code', severity: 'note', message: 'dropped' },
+    ];
+    const store = new PostgresReadinessStore(scripted([{ ...row([]), notices }]));
+    expect((await store.latest(PROJECT as never))?.notices?.map(({ code }) => code)).toEqual([
+      'ci_rules_skip_agent_branch',
+      'ci_rules_not_seen',
+      'verification_mode_ci_suggested',
+    ]);
+  });
+
   it('reads a criteria column that is not an array as no criteria at all', async () => {
     for (const value of [null, {}, 'nonsense', 3]) {
       const store = new PostgresReadinessStore(scripted([row(value)]));

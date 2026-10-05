@@ -52,8 +52,23 @@
  * not a gate, except level 0 restricting to chore/spike, which a maintainer can override). So an
  * unanswered criterion fails: the cost of a false negative is a suggestion that is stricter than
  * necessary, and the cost of a false positive is autonomy the repository cannot support.
+ *
+ * ## A criterion the workspace could not run is *not checked* (BD-026's 2026-10-06 amendment)
+ *
+ * The rule above assumed a criterion fails for a reason about the repository. R1, R2 and R6 — the
+ * ones discovery answers by **running** a command ({@link ReadinessCriterion.runInWorkspace}) — can
+ * also fail for a reason about the **platform**: the run image has no interpreter for the project's
+ * language, or the command policy refused the command or its install. Autix, a PHP project whose CI
+ * runs its suite on every merge request, was recorded at level 0 for exactly that (first local test,
+ * 2026-10-05). So those three, in a project that verifies locally ({@link mayBeNotChecked}), may be
+ * recorded *not checked*: **not a pass and not a fail** — the ladder lets it through its rung
+ * ({@link readinessLevelFor}), the improvements list leaves it out ({@link nextReadinessImprovements}),
+ * and the evaluation suggests `verification.mode: ci` when there is a CI configuration to read
+ * ({@link verificationModeSuggestion}). Every rung also holds a criterion that is read, never run, so
+ * no level rests on unchecked criteria alone — asserted in `criteria.test.ts`.
  */
-import type { Slug } from '@platform/contracts';
+import type { Slug, VerificationMode } from '@platform/contracts';
+import { type ReadinessNotice, VERIFICATION_MODE_SUGGESTION_CODE } from './ci-rules.js';
 
 /** Who can answer a criterion — see the module docblock. */
 export type ReadinessDetector = 'agent' | 'platform';
@@ -111,6 +126,12 @@ export interface ReadinessCriterion {
    * read rather than run whatever the model wrote.
    */
   readonly detectionOnCi?: string;
+  /**
+   * `true` for the criteria discovery answers by **running** a command in the workspace — R1, R2 and
+   * R6, product/17's *"executed in the workspace"* and *"measured"*. Exactly those may be recorded
+   * *not checked* when the workspace could not run the command ({@link mayBeNotChecked}).
+   */
+  readonly runInWorkspace?: true;
 }
 
 /** product/17 § "What it measures", transcribed. Order is the document's. */
@@ -128,6 +149,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     recheckReason: 'it needs the test command run in a workspace',
     detectionOnCi:
       'read, not run (verification.mode: ci): a CI job that runs the test suite on merge requests or the default branch',
+    runInWorkspace: true,
   },
   {
     id: 'R2',
@@ -141,6 +163,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     recheckReason: 'it needs the test command run and timed in a workspace',
     detectionOnCi:
       'read, not measured (verification.mode: ci): a job timeout or a documented duration under 15 minutes',
+    runInWorkspace: true,
   },
   {
     id: 'R3',
@@ -185,6 +208,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     recheckReason: 'it needs the setup command run in a workspace',
     detectionOnCi:
       'read, not run (verification.mode: ci): one documented setup command, devcontainer or compose file',
+    runInWorkspace: true,
   },
   {
     id: 'R7',
@@ -275,6 +299,20 @@ export const findReadinessCriterion = (id: string): ReadinessCriterion | undefin
   READINESS_CRITERIA.find((criterion) => criterion.id === id);
 
 /**
+ * Whether a criterion may be recorded *not checked* in a run planned with `mode` — BD-026's
+ * 2026-10-06 amendment. Only a criterion answered by running a command, and only when the project
+ * verifies locally: under `verification.mode: ci` R1, R2 and R6 are **read** from the CI
+ * configuration (`detectionOnCi`), and a criterion that is read can always be answered.
+ */
+export const mayBeNotChecked = (
+  criterion: ReadinessCriterion,
+  mode: VerificationMode = 'local',
+): boolean => criterion.runInWorkspace === true && mode !== 'ci';
+
+/** The empty set, for a caller with no not-checked criteria. */
+const NONE: ReadonlySet<string> = new Set();
+
+/**
  * product/17 § "Levels", as the **incremental** requirement of each rung.
  *
  * Level 0 has no entry: it is "did not reach level 1", which is what the document's *"Requires:
@@ -290,11 +328,20 @@ export const READINESS_LEVEL_REQUIREMENTS: readonly (readonly string[])[] = [
   /** 4 — Autonomous-capable */ ['R7', 'R11', 'R13', 'R14'],
 ];
 
-/** The highest readiness level the passing set supports (product/17 § "Levels"). */
-export const readinessLevelFor = (passed: ReadonlySet<string>): number => {
+/**
+ * The highest readiness level the passing set supports (product/17 § "Levels").
+ *
+ * A criterion in `notChecked` does not block its rung (BD-026's 2026-10-06 amendment): a rung is
+ * reached when each of its criteria passed **or** was not checked. It is still not a pass — the
+ * caller shows it as not checked and {@link nextReadinessImprovements} leaves it out.
+ */
+export const readinessLevelFor = (
+  passed: ReadonlySet<string>,
+  notChecked: ReadonlySet<string> = NONE,
+): number => {
   let level = 0;
   for (const requirement of READINESS_LEVEL_REQUIREMENTS) {
-    if (!requirement.every((id) => passed.has(id))) {
+    if (!requirement.every((id) => passed.has(id) || notChecked.has(id))) {
       return level;
     }
     level += 1;
@@ -309,21 +356,47 @@ export const readinessLevelFor = (passed: ReadonlySet<string>): number => {
  * "Cheapest" is read as *nearest*: the failing criteria of the next rung, in the table's order,
  * because those are the ones that actually move the level. Criteria from higher rungs are appended
  * afterwards so the list is still three long on a repository whose next rung is nearly complete.
+ *
+ * A criterion in `notChecked` is **not** an improvement: what stopped it is the run workspace, not
+ * the repository, and the evaluation's `verification_mode_ci_suggested` note names the fix.
  */
 export const nextReadinessImprovements = (
   passed: ReadonlySet<string>,
   count = 3,
+  notChecked: ReadonlySet<string> = NONE,
 ): readonly ReadinessCriterion[] => {
   const missing: ReadinessCriterion[] = [];
   for (const requirement of READINESS_LEVEL_REQUIREMENTS) {
     for (const id of requirement) {
       const criterion = findReadinessCriterion(id);
-      if (!passed.has(id) && criterion !== undefined) {
+      if (!passed.has(id) && !notChecked.has(id) && criterion !== undefined) {
         missing.push(criterion);
       }
     }
   }
   return missing.slice(0, count);
+};
+
+/**
+ * The `verification_mode_ci_suggested` note (BD-026's 2026-10-06 amendment, product/17): some
+ * criteria were not checked because the run workspace could not run them, and the project has a CI
+ * configuration — R3 passed, or the platform read its CI file — from which `verification.mode: ci`
+ * would have discovery read them instead. `null` when nothing was not checked or there is no CI to
+ * read. Platform text only: the ids are `READINESS_CRITERIA`'s own.
+ */
+export const verificationModeSuggestion = (input: {
+  readonly notChecked: readonly string[];
+  readonly ciConfigured: boolean;
+}): ReadinessNotice | null => {
+  const ids = READINESS_CRITERION_IDS.filter((id) => input.notChecked.includes(id));
+  if (ids.length === 0 || !input.ciConfigured) return null;
+  const list =
+    ids.length === 1 ? ids[0] : `${ids.slice(0, -1).join(', ')} and ${ids[ids.length - 1]}`;
+  return {
+    code: VERIFICATION_MODE_SUGGESTION_CODE,
+    severity: 'note',
+    message: `${list} could not be checked: the run workspace could not run ${ids.length === 1 ? 'it' : 'them'} (each criterion's evidence says why), so ${ids.length === 1 ? 'it neither passes nor holds' : 'they neither pass nor hold'} the level down. This project has a CI configuration: with verification.mode: ci, discovery reads ${ids.length === 1 ? 'it' : 'them'} from the CI configuration instead of running ${ids.length === 1 ? 'it' : 'them'}. Set it in the project settings, then re-evaluate readiness.`,
+  };
 };
 
 // ── Knowledge completeness (R12, and product/06 § "Completeness score") ──────

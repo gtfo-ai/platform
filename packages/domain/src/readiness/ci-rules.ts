@@ -59,13 +59,30 @@ export const CI_RULES_WARNING_CODE = 'ci_rules_skip_agent_branch';
 /** The quieter note's code: something the evaluator could not see. */
 export const CI_RULES_NOTE_CODE = 'ci_rules_not_seen';
 
+/**
+ * The note that suggests `verification.mode: ci` (BD-026's 2026-10-06 amendment): an evaluation has
+ * a criterion the run workspace could not run, and the project has a CI configuration to read it
+ * from. Built by `verificationModeSuggestion` in `./criteria.ts`; its message is platform text only.
+ */
+export const VERIFICATION_MODE_SUGGESTION_CODE = 'verification_mode_ci_suggested';
+
 /** One platform-computed notice on a readiness evaluation (WP-143) — never a criterion. */
 export interface ReadinessNotice {
-  readonly code: typeof CI_RULES_WARNING_CODE | typeof CI_RULES_NOTE_CODE;
+  readonly code:
+    | typeof CI_RULES_WARNING_CODE
+    | typeof CI_RULES_NOTE_CODE
+    | typeof VERIFICATION_MODE_SUGGESTION_CODE;
   readonly severity: 'warning' | 'note';
   /** Platform sentences around bounded, redacted repository text (job names, one expression). */
   readonly message: string;
 }
+
+/** Every notice code this build writes and reads — a stored code outside it is dropped on read. */
+export const READINESS_NOTICE_CODES: readonly ReadinessNotice['code'][] = [
+  CI_RULES_WARNING_CODE,
+  CI_RULES_NOTE_CODE,
+  VERIFICATION_MODE_SUGGESTION_CODE,
+];
 
 /**
  * How the YAML parser hands a `!reference [a, b]` tag to the domain: a mapping with this one key.

@@ -31,8 +31,7 @@
 import type { ReadinessEvaluation, ReadinessStore, Transaction } from '@platform/application';
 import type { Id, IsoDateTime, RiskClass } from '@platform/contracts';
 import {
-  CI_RULES_NOTE_CODE,
-  CI_RULES_WARNING_CODE,
+  READINESS_NOTICE_CODES,
   type ReadinessDetector,
   type ReadinessNotice,
 } from '@platform/domain';
@@ -80,6 +79,9 @@ const toCriteria = (raw: unknown): ReadinessEvaluation['criteria'] => {
       evidence: record.evidence,
       unlocks: record.unlocks,
       detectedBy: record.detected_by as ReadinessDetector,
+      // BD-026's 2026-10-06 amendment. Only a literal `true` with `passed: false` is not checked: a
+      // row before the key, or one that says both, reads as checked — never as a pass.
+      ...(record.not_checked === true && record.passed === false ? { notChecked: true } : {}),
     });
   }
   return criteria;
@@ -92,14 +94,15 @@ const toNotices = (raw: unknown): readonly ReadinessNotice[] => {
   for (const entry of raw) {
     if (typeof entry !== 'object' || entry === null) continue;
     const record = entry as Record<string, unknown>;
+    const code = READINESS_NOTICE_CODES.find((known) => known === record.code);
     if (
-      (record.code !== CI_RULES_WARNING_CODE && record.code !== CI_RULES_NOTE_CODE) ||
+      code === undefined ||
       (record.severity !== 'warning' && record.severity !== 'note') ||
       typeof record.message !== 'string'
     ) {
       continue;
     }
-    notices.push({ code: record.code, severity: record.severity, message: record.message });
+    notices.push({ code, severity: record.severity, message: record.message });
   }
   return notices;
 };
@@ -113,6 +116,7 @@ const toJson = (evaluation: ReadinessEvaluation): string =>
       evidence: criterion.evidence,
       unlocks: criterion.unlocks,
       detected_by: criterion.detectedBy,
+      ...(criterion.notChecked === true ? { not_checked: true } : {}),
     })),
   );
 

@@ -112,6 +112,9 @@
           },
           "evidence": {
             "type": "string"
+          },
+          "not_checked": {
+            "type": "boolean"
           }
         },
         "required": [

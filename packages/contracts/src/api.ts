@@ -898,6 +898,8 @@ export const businessInterviewResponseSchema = z.strictObject({
 export const readinessNoticeCodeSchema = z.enum([
   'ci_rules_skip_agent_branch',
   'ci_rules_not_seen',
+  // BD-026's 2026-10-06 amendment: a criterion was not checked and the project has CI to read it from.
+  'verification_mode_ci_suggested',
 ]);
 export type ReadinessNoticeCode = z.infer<typeof readinessNoticeCodeSchema>;
 
@@ -923,6 +925,12 @@ export const readinessResponseSchema = z.strictObject({
        * `recheck` row also `platform` for R8 and an observed R3, which the platform read itself.
        */
       detected_by: z.enum(['agent', 'platform']),
+      /**
+       * `true` when the run workspace could not run the criterion's command (R1, R2 or R6 of a
+       * `local` project; BD-026's 2026-10-06 amendment): `passed` is then `false`, but the criterion
+       * does not hold its rung of the level down and is never in `next_improvements`.
+       */
+      not_checked: z.boolean().default(false),
     }),
   ),
   /**
@@ -942,7 +950,9 @@ export const readinessResponseSchema = z.strictObject({
    * Platform-computed notices beside the criteria (WP-143, Q114) — never a criterion, never a gate
    * (BD-026). `ci_rules_skip_agent_branch` is the **warning** that the default branch's CI rules
    * give an `agentic/` branch no test job in a push or a merge-request pipeline;
-   * `ci_rules_not_seen` the quieter **note** that says what the evaluator could not read.
+   * `ci_rules_not_seen` the quieter **note** that says what the evaluator could not read;
+   * `verification_mode_ci_suggested` the **note** that a criterion was not checked and the project
+   * has a CI configuration `verification.mode: ci` would read it from (platform text only).
    * `message` quotes bounded job names and one rule from the project's CI file, redacted:
    * untrusted text (BD-022) — render it, never execute it. Empty for a row before migration 0079.
    */

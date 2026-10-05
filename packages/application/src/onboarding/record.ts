@@ -484,6 +484,8 @@ export const recordDiscoveryFindings = async (
     redactor: options.redactor,
     notices: ci?.notice == null ? [] : [ci.notice],
     verificationMode: artifact.verificationMode ?? 'local',
+    // BD-026's 2026-10-06 amendment: a CI file the platform read is CI to suggest reading from.
+    ciConfigured: ci?.ciFile != null,
   });
   tally.count += redactions;
 

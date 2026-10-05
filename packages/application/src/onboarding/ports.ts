@@ -23,6 +23,11 @@ export interface StoredReadinessCriterion {
   /** Platform text from `READINESS_CRITERIA`, copied at write time so a read needs no join. */
   readonly unlocks: string;
   readonly detectedBy: ReadinessDetector;
+  /**
+   * `true` when the run workspace could not run the criterion's command (BD-026's 2026-10-06
+   * amendment) — always with `passed: false`, and it does not hold the level down. Absent: checked.
+   */
+  readonly notChecked?: boolean;
 }
 
 export interface ReadinessEvaluation {

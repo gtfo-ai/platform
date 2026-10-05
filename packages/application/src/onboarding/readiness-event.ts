@@ -57,6 +57,7 @@ export const readinessEvaluatedEventFor = (input: {
         id: criterion.id,
         passed: criterion.passed,
         evidence: criterion.evidence,
+        ...(criterion.notChecked === true ? { not_checked: true as const } : {}),
       })),
       source: eventSourceOf(input.evaluation.source),
     },

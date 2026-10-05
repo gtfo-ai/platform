@@ -251,6 +251,7 @@ export const recheckProjectReadiness = async (
         signals,
         observations,
         notices: ci?.notice == null ? [] : [ci.notice],
+        ciConfigured: ci?.ciFile != null,
       });
       await options.readiness.record(scope.tx, evaluation);
       // One event per recorded row, in the row's transaction (backlog 228, `readiness-event.ts`).

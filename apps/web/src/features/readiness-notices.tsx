@@ -1,7 +1,9 @@
 /**
  * The platform's notices on a readiness evaluation (WP-143, Q114) — today the **CI-rules warning**
  * (`ci_rules_skip_agent_branch`: the default branch's CI rules give an `agentic/` branch no test
- * job) or the quieter **note** (`ci_rules_not_seen`: what the evaluator could not read).
+ * job) or the quieter **note** (`ci_rules_not_seen`: what the evaluator could not read), and the
+ * note that suggests `verification.mode: ci` when a criterion was not checked and the project has
+ * CI (`verification_mode_ci_suggested`, BD-026's 2026-10-06 amendment).
  *
  * One component for the three places product names — the readiness panel of the wizard's
  * discovery step and the project settings page — so the two cannot drift. A notice is never a
@@ -16,6 +18,7 @@ import { UntrustedText } from '../ui/untrusted.js';
 const LABEL: Record<ReadinessResponse['notices'][number]['code'], string> = {
   ci_rules_skip_agent_branch: 'CI rules skip agentic/ branches',
   ci_rules_not_seen: 'CI rules read in part',
+  verification_mode_ci_suggested: 'Verify on CI?',
 };
 
 export const ReadinessNotices = ({

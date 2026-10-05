@@ -533,6 +533,14 @@ export const discoveryDraftDataSchema = z.strictObject({
         id: nonEmptyStringSchema,
         passed: z.boolean(),
         evidence: z.string(),
+        /**
+         * `true` when the run could not run the criterion's command at all — its interpreter is not
+         * in the run image, or the platform refused it or its install (BD-026's 2026-10-06
+         * amendment). Honoured for R1, R2 and R6 of a `local` project only, where it wins over
+         * `passed`; on any other criterion it is recorded as a fail. Optional, so every draft
+         * written before it still parses as "checked".
+         */
+        not_checked: z.boolean().optional(),
       }),
     )
     .optional(),

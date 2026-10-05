@@ -333,6 +333,9 @@ export const OnboardingScreen = (): ReactElement => {
               {readiness.data.criteria.map((criterion) => (
                 <li key={criterion.id} className="text-xs">
                   <Badge tone={criterion.passed ? 'success' : 'neutral'}>{criterion.id}</Badge>{' '}
+                  {/* BD-026's 2026-10-06 amendment: the workspace could not run it — not a fail. */}
+                  {criterion.not_checked ? <Badge tone="warning">not checked</Badge> : null}
+                  {criterion.not_checked ? ' ' : null}
                   {criterion.unlocks} —{' '}
                   {/* The agent's own words about someone else's repository (BD-022). */}
                   <UntrustedText value={criterion.evidence} />

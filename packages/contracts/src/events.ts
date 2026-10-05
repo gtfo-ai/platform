@@ -868,6 +868,8 @@ export const readinessEvaluatedEvent = defineEvent('readiness.evaluated', {
       id: nonEmptyStringSchema,
       passed: z.boolean(),
       evidence: z.string(),
+      /** BD-026's 2026-10-06 amendment: present, `true`, only on a criterion recorded not checked. */
+      not_checked: z.literal(true).optional(),
     }),
   ),
   /**
