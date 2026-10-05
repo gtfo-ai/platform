@@ -48,6 +48,15 @@ export interface EngineOptions extends EngineAddress {
   readonly logger?: Logger;
   /** How long a single request may take. A hung daemon must not hang a run for ever. */
   readonly timeoutMs?: number;
+  /**
+   * How long `waitContainer` may stay silent. Not `timeoutMs`: the daemon answers `/wait` only when
+   * the container exits, so the socket is idle for the helper's whole life, and a mirror's first
+   * clone of a large repository is minutes of that — at 120 s every create of such a project failed
+   * with "Docker engine request timed out" (measured on the first local test, a ~633 MB repository).
+   * Default ten minutes: the runner's own bound on a create (`launcher/client.ts`), past which
+   * nobody is waiting for the answer.
+   */
+  readonly waitTimeoutMs?: number;
   /** Ceiling on a buffered response body (an export archive, a log tail). */
   readonly maxResponseBytes?: number;
 }
@@ -130,6 +139,7 @@ export class DockerEngine {
   readonly #address: EngineAddress;
   readonly #logger: Logger;
   readonly #timeoutMs: number;
+  readonly #waitTimeoutMs: number;
   readonly #maxResponseBytes: number;
 
   constructor(options: EngineOptions) {
@@ -145,6 +155,7 @@ export class DockerEngine {
         : { socketPath: options.socketPath };
     this.#logger = options.logger ?? silentLogger;
     this.#timeoutMs = options.timeoutMs ?? 120_000;
+    this.#waitTimeoutMs = options.waitTimeoutMs ?? 600_000;
     this.#maxResponseBytes = options.maxResponseBytes ?? 128 * 1024 * 1024;
   }
 
@@ -152,6 +163,7 @@ export class DockerEngine {
     method: string,
     path: string,
     body?: { readonly json: unknown } | { readonly raw: Buffer },
+    timeoutMs: number = this.#timeoutMs,
   ): Promise<EngineResponse> {
     const payload =
       body === undefined
@@ -193,7 +205,7 @@ export class DockerEngine {
           res.on('error', reject);
         },
       );
-      req.setTimeout(this.#timeoutMs, () => {
+      req.setTimeout(timeoutMs, () => {
         req.destroy(
           new WorkspaceError('engine_unavailable', 'Docker engine request timed out', {
             detail: `${method} ${path}`,
@@ -229,8 +241,9 @@ export class DockerEngine {
     path: string,
     ok: readonly number[],
     body?: { readonly json: unknown } | { readonly raw: Buffer },
+    timeoutMs?: number,
   ): Promise<EngineResponse> {
-    const response = await this.#send(method, path, body);
+    const response = await this.#send(method, path, body, timeoutMs);
     if (ok.includes(response.status)) {
       return response;
     }
@@ -359,6 +372,8 @@ export class DockerEngine {
       'POST',
       `/containers/${encodeURIComponent(id)}/wait`,
       [200],
+      undefined,
+      this.#waitTimeoutMs,
     );
     return this.#json(response, waitSchema).StatusCode;
   }

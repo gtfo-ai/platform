@@ -96,6 +96,11 @@ export interface FakeDaemonOptions {
   /** Epoch milliseconds the double stamps a created container with (WP-103). Default: `Date.now`. */
   readonly now?: () => number;
   /**
+   * How long `POST /containers/<id>/wait` stays silent before answering, as a real daemon does
+   * while the container runs — a first clone of a large repository is minutes of it. Default: 0.
+   */
+  readonly waitDelayMs?: number;
+  /**
    * `Config.Env` per image, as `GET /images/<name>/json` answers it (WP-118). An image not named
    * here declares {@link FAKE_IMAGE_PATH}, the way every `node:*` base image does; `null` declares
    * no environment at all.
@@ -405,8 +410,16 @@ export class FakeDockerDaemon {
         send(404, { message: 'no such container' });
         return;
       }
-      container.state = 'exited';
-      send(200, { StatusCode: container.exitCode });
+      const answer = (): void => {
+        container.state = 'exited';
+        send(200, { StatusCode: container.exitCode });
+      };
+      const delay = this.#options.waitDelayMs ?? 0;
+      if (delay > 0) {
+        setTimeout(answer, delay);
+      } else {
+        answer();
+      }
       return;
     }
     if (method === 'POST' && /^\/containers\/[^/]+\/stop$/.test(pathname)) {

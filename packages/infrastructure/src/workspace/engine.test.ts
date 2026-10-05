@@ -59,6 +59,27 @@ describe('Docker engine client', () => {
   });
 
   /**
+   * `/wait` is silent for the container's whole life, so it has its own bound. At the request
+   * timeout a mirror's first clone of a large repository failed every create (first local test).
+   */
+  it('waits on a container past the request timeout, up to its own bound', async () => {
+    const slow = new FakeDockerDaemon({ waitDelayMs: 300 });
+    try {
+      const socketPath = await slow.start();
+      const patient = new DockerEngine({ socketPath, timeoutMs: 100, waitTimeoutMs: 5_000 });
+      const id = await patient.createContainer('clone', { Image: 'x' });
+      await patient.startContainer(id);
+      expect(await patient.waitContainer(id)).toBe(0);
+      const hasty = new DockerEngine({ socketPath, timeoutMs: 5_000, waitTimeoutMs: 100 });
+      const other = await hasty.createContainer('clone-2', { Image: 'x' });
+      await hasty.startContainer(other);
+      await expect(hasty.waitContainer(other)).rejects.toThrow(/timed out/);
+    } finally {
+      await slow.stop();
+    }
+  });
+
+  /**
    * The query string, both halves (WP-22).
    *
    * `v=false` leaked: `alpine/git` declares `VOLUME /git`, so every helper container the provider
