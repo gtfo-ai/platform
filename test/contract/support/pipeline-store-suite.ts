@@ -2540,6 +2540,95 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await count('implementation', 1)).toBe(0);
       });
 
+      /**
+       * Backlog 467: `finish` stores the saved work, and `lastSavedWork` answers for the **latest
+       * ended** run of the stage only — a live run is not an ending, and a later ending that saved
+       * nothing means the branch no longer holds a previous attempt's unfinished work.
+       */
+      it('stores the saved work with the ending, and answers it for the stage’s latest ended run only', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        for (const [stage, attempt] of [
+          ['implementation', 1],
+          ['implementation', 2],
+          ['refinement', 1],
+        ] as const) {
+          await store.tasks.recordStageEntered(tx, {
+            taskId: stored.task.id,
+            stage: stage as Slug,
+            attempt,
+            causedByEventId: null,
+          });
+        }
+        const startedRun = async (stage: string, attempt: number): Promise<Id> => {
+          const runId = nextId();
+          await store.runs.insert(tx, {
+            id: runId,
+            taskId: stored.task.id,
+            projectId,
+            stage: stage as Slug,
+            role: 'developer',
+            mode: 'normal',
+            attempt,
+            model: 'claude-opus-5',
+            effort: 'medium',
+            promptVersion: 'basic@1+developer',
+            systemPrompt: null,
+            userPrompt: null,
+            redactionCount: 0,
+            contextPack: null,
+            settings: null,
+            reserveUsd: null,
+            promptsWithheld: null,
+            providerMode: 'api',
+            status: 'running',
+            terminalReason: null,
+            sessionId: null,
+            numTurns: 0,
+            usage: null,
+            cost: null,
+            wallMs: 0,
+            createdAt: '2026-06-01T09:00:00.000Z',
+            startedAt: '2026-06-01T09:00:01.000Z',
+          });
+          return runId;
+        };
+        const ended = (runId: Id, outcome: Partial<Parameters<typeof store.runs.finish>[1]>) =>
+          store.runs.finish(tx, {
+            runId,
+            status: 'failed',
+            terminalReason: 'error_max_turns',
+            sessionId: null,
+            numTurns: 201,
+            usage: MEASURED.usage,
+            cost: null,
+            wallMs: 10,
+            ...outcome,
+          });
+        const saved = { branch: 'agentic/ACME-1', commit_sha: 'abc1234def', pushed: true };
+        const lastAt = (stage: string) =>
+          store.runs.lastSavedWork(tx, { taskId: stored.task.id, stage: stage as Slug });
+
+        expect(await lastAt('implementation')).toBeNull();
+        const first = await startedRun('implementation', 1);
+        await ended(first, { savedWork: saved });
+        expect(await lastAt('implementation')).toEqual({
+          runId: first,
+          terminalReason: 'error_max_turns',
+          numTurns: 201,
+          savedWork: saved,
+        });
+        // Another stage's runs are not this stage's attempts.
+        expect(await lastAt('refinement')).toBeNull();
+
+        // A live run is not an ending: the previous attempt still answers.
+        const retry = await startedRun('implementation', 2);
+        expect((await lastAt('implementation'))?.runId).toBe(first);
+        // It ends having saved nothing, and from then on nothing is said.
+        await ended(retry, { terminalReason: 'error_during_execution' });
+        expect(await lastAt('implementation')).toBeNull();
+      });
+
       it('keeps the estimate and the reported figure apart, in the two columns they belong to', async () => {
         const reported = await liveRun();
         await store.runs.finish(tx, {

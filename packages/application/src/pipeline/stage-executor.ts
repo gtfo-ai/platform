@@ -55,6 +55,7 @@ import type {
   JsonValue,
   MergeRequestRef,
   RunCost,
+  RunSavedWork,
   RunStartFailure,
   Slug,
   TokenUsage,
@@ -132,13 +133,20 @@ import { injectedSecretRedactorFor } from './run-redaction.js';
 import { type ProjectSettings, settingsAdmission } from './settings.js';
 import { runSettingsSnapshot } from './settings-snapshot.js';
 import type { RunStopReasons } from './stop-reasons.js';
-import type { PipelineStore, ReturnCause, StoredArtifact, StoredTask } from './store.js';
+import type {
+  PipelineStore,
+  ReturnCause,
+  SavedAttempt,
+  StoredArtifact,
+  StoredTask,
+} from './store.js';
 import {
   escalateTaskAfterConflict,
   retryOnTaskConflict,
   TaskConflictExhaustedError,
 } from './task-conflict.js';
 import { closeParkedStageRow } from './transitions.js';
+import { savedWorkSentence } from './unfinished-work.js';
 import { artifactQuestions, rawVerdict, stageVerdict } from './verdicts.js';
 
 export interface StageRunRequest {
@@ -189,6 +197,12 @@ export interface StageRunRequest {
    * no observability block at all.
    */
   readonly observability?: readonly PromptObservabilityExcerpt[];
+  /**
+   * The latest ended run of this stage, when it saved unfinished work (PROGRESS backlog 467) — read
+   * at admission by `RunRepository.lastSavedWork`. The planner tells the run about it when the branch
+   * it pushed is the branch this run checks out (`previousAttemptFor`). Absent or `null` otherwise.
+   */
+  readonly previousAttempt?: SavedAttempt | null;
 }
 
 /** What a planner returns: the spec the runner is given, and the audit record of what went in. */
@@ -636,6 +650,8 @@ type Admitted = {
   readonly returnCause: ReturnCause | null;
   /** WP-34 / backlog 71: a shadow task's comparison base, `null` for every other task. */
   readonly checkoutBase: string | null;
+  /** Backlog 467: the stage's previous attempt, when it saved unfinished work. */
+  readonly previousAttempt: SavedAttempt | null;
 };
 
 type Admission = Exclude<Prepared, { kind: 'ready' }> | Admitted;
@@ -975,6 +991,11 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
           task.mode === 'shadow' && options.shadow !== undefined
             ? await options.shadow.checkoutBaseFor(scope.tx, task.id)
             : null,
+        // Backlog 467: read here for `checkoutBase`'s reason — the planner has no transaction.
+        previousAttempt: await store.runs.lastSavedWork(scope.tx, {
+          taskId: job.taskId,
+          stage: job.stage,
+        }),
       };
     });
 
@@ -1143,6 +1164,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       returnFeedbackOriginalChars: admission.returnFeedbackOriginalChars,
       returnCause: admission.returnCause,
       checkoutBase: admission.checkoutBase,
+      previousAttempt: admission.previousAttempt,
       ...(job.overrides === undefined ? {} : { overrides: job.overrides }),
       ...(job.mergeRequestPaths === undefined ? {} : { mergeRequestPaths: job.mergeRequestPaths }),
       ...(job.observability === undefined ? {} : { observability: job.observability }),
@@ -1796,6 +1818,7 @@ const recordOntoStoppedTask = async (
             terminalReason: outcome.terminalReason,
             error: outcome.error ?? outcome.terminalReason,
             ...failedSpendOf(outcome),
+            ...savedWorkOf(outcome),
           },
           context,
         )
@@ -1808,6 +1831,7 @@ const recordOntoStoppedTask = async (
             modelUsage: outcome.modelUsage,
             cost: rowCostOf(outcome),
             numTurns: outcome.numTurns,
+            ...savedWorkOf(outcome),
           },
           context,
         );
@@ -1821,6 +1845,7 @@ const recordOntoStoppedTask = async (
     cost: rowCostOf(outcome),
     wallMs: outcome.wallMs,
     costIsFloor: costIsFloorOf(input),
+    ...savedWorkOf(outcome),
   });
   if (!owned) {
     return lostTheRun({ ...input, scope });
@@ -1862,6 +1887,7 @@ const recordUnsuccessful = async (
             terminalReason: outcome.terminalReason,
             error: outcome.error ?? outcome.terminalReason,
             ...failedSpendOf(outcome),
+            ...savedWorkOf(outcome),
           },
           context,
         )
@@ -1874,6 +1900,7 @@ const recordUnsuccessful = async (
             modelUsage: outcome.modelUsage,
             cost: rowCostOf(outcome),
             numTurns: outcome.numTurns,
+            ...savedWorkOf(outcome),
           },
           context,
         );
@@ -1888,16 +1915,19 @@ const recordUnsuccessful = async (
     cost: rowCostOf(outcome),
     wallMs: outcome.wallMs,
     costIsFloor: costIsFloorOf(input),
+    ...savedWorkOf(outcome),
   });
   if (!owned) {
     return lostTheRun({ ...input, scope });
   }
   await store.tasks.addSpend(scope.tx, input.job.taskId, spendOf(outcome));
+  // Backlog 467: the branch the run's unfinished work was pushed to is the task's from now on.
+  const withBranch = withSavedBranch(stored, outcome);
 
   if (overspent) {
     // BD-010: a task budget pauses the task; a human may raise the cap and resume it.
-    const paused = pauseTask(stored.task, { reason: 'budget', budgetScope: 'run' }, context);
-    await store.tasks.save(scope.tx, { ...stored, task: paused.aggregate });
+    const paused = pauseTask(withBranch.task, { reason: 'budget', budgetScope: 'run' }, context);
+    await store.tasks.save(scope.tx, { ...withBranch, task: paused.aggregate });
     await scope.events.append([...decision.events, ...paused.events]);
     return {
       kind: 'paused',
@@ -1908,8 +1938,39 @@ const recordUnsuccessful = async (
   const reason = costUnreported
     ? 'the platform could not tell what the run cost, so it stopped it without verifying the budget'
     : `the run ended as ${outcome.status} (${outcome.terminalReason})`;
-  return escalateOnRun(scope, input, stored, context, reason, decision.events);
+  return escalateOnRun(
+    scope,
+    input,
+    withBranch,
+    context,
+    reason,
+    decision.events,
+    outcome.savedWork === undefined
+      ? undefined
+      : `${defaultBlockerBrief(input.job.stage, withBranch.task.ticket.key, reason)} ${savedWorkSentence(outcome.savedWork)}`,
+  );
 };
+
+/**
+ * `outcome.savedWork` as the optional input `failRun`, `finishRun` and `runs.finish` take — absent
+ * when the workspace attempted no export (PROGRESS backlog 467).
+ */
+const savedWorkOf = (outcome: RunOutcome): { readonly savedWork?: RunSavedWork } =>
+  outcome.savedWork === undefined ? {} : { savedWork: outcome.savedWork };
+
+/**
+ * The task with the branch its run's unfinished work was **pushed** to (PROGRESS backlog 467).
+ *
+ * `tasks.branch` is `save`'s column (the aggregate's, `tasks-column-ownership.test.ts`), and both
+ * callers save the task in this same transaction, so the branch rides that write rather than a
+ * narrow one of its own. Filled only while it is `null` — a recorded branch is the merge request's
+ * or a rework's, and the export pushed to the spec's checkout, which is that same branch — and only
+ * for a push that succeeded: a branch the remote does not hold is not the task's.
+ */
+const withSavedBranch = (stored: StoredTask, outcome: RunOutcome): StoredTask =>
+  outcome.savedWork?.pushed === true && stored.branch === null
+    ? { ...stored, branch: outcome.savedWork.branch }
+    : stored;
 
 /**
  * **A run its own process stopped** (WP-144, PROGRESS backlog 432): end it `failed`/`shutdown` with
@@ -2171,6 +2232,12 @@ const NO_USAGE = {
 /** `is_estimate: false` — "nothing" is a measurement, not a guess (BD-011). */
 const NO_COST = { usd: 0, is_estimate: false, price_list_id: null } as const;
 
+/** The blocker brief a stage that stopped without a result gets when its caller wrote none. */
+const defaultBlockerBrief = (stage: Slug, ticketKey: string, reason: string): string =>
+  `The "${stage}" stage of ${ticketKey} stopped without a result: ${reason}. ` +
+  "Nothing is retried automatically. Open the run's transcript, decide what should change, " +
+  'and hand the task back at the stage you want it to resume from.';
+
 const escalate = (
   stored: StoredTask,
   context: CommandContext,
@@ -2182,11 +2249,7 @@ const escalate = (
     stored.task,
     {
       reason: `stage "${stage}": ${reason}`,
-      blockerBrief:
-        blockerBrief ??
-        `The "${stage}" stage of ${stored.task.ticket.key} stopped without a result: ${reason}. ` +
-          "Nothing is retried automatically. Open the run's transcript, decide what should change, " +
-          'and hand the task back at the stage you want it to resume from.',
+      blockerBrief: blockerBrief ?? defaultBlockerBrief(stage, stored.task.ticket.key, reason),
     },
     context,
   );

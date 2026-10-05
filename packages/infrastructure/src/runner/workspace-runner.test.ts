@@ -343,6 +343,146 @@ describe('a stop that arrives before the run has started', () => {
   });
 });
 
+/**
+ * Backlog 467 — the product owner's 2026-10-05 decision: an unsuccessful Developer run's unfinished
+ * work is exported on the way out, and the workspace's answer reaches the outcome the executor
+ * records. The decision of *when* is `unfinished-work.ts`'s (its own tests); what is asserted here is
+ * that this runner asks at the one moment the tree exists, with the spec's branch, and folds the
+ * answer back without changing the run's ending.
+ */
+describe('an unsuccessful run’s unfinished work (backlog 467)', () => {
+  const BRANCH = 'agentic/ACME-1';
+  const SAVED = { branch: BRANCH, commit_sha: 'abc1234def', pushed: true } as const;
+
+  const world = (options: {
+    readonly spec: RunSpec;
+    readonly outcome: RunOutcome;
+    readonly answer?: () => Promise<unknown>;
+    readonly stopFirst?: Parameters<RunHandle['stop']>[0];
+  }) => {
+    const released: RunWorkspaceEnding[] = [];
+    let releases = 0;
+    const runner = createWorkspaceClaudeRunner({
+      provisioner: {
+        provision: async () => ({
+          workdir: WORKDIR,
+          spawn: () => ({}) as SpawnedProcess,
+          release: async (ending) => {
+            releases += 1;
+            released.push(ending);
+            return (await options.answer?.()) as never;
+          },
+        }),
+      },
+      build: () => ({
+        start: (spec) => ({
+          runId: spec.runId,
+          sessionId: 'session-1',
+          outcome: Promise.resolve(options.outcome),
+          steer: async () => {},
+          stop: async () => {},
+        }),
+      }),
+    });
+    const handle = runner.start(options.spec);
+    return {
+      handle,
+      released,
+      get releases() {
+        return releases;
+      },
+    };
+  };
+
+  const failed = (spec: RunSpec, reason: RunOutcome['terminalReason']): RunOutcome => ({
+    ...outcomeWith(spec, 'failed'),
+    terminalReason: reason,
+    numTurns: 201,
+  });
+
+  it('asks the workspace for the export with the spec’s branch and a `wip:` message, and records its answer', async () => {
+    const spec = runSpecFixture({ unfinishedWorkBranch: BRANCH, attempt: 2 });
+    const run = world({
+      spec,
+      outcome: failed(spec, 'error_max_turns'),
+      answer: async () => ({ savedWork: SAVED }),
+    });
+    const result = await run.handle.outcome;
+
+    expect(run.releases).toBe(1);
+    expect(run.released[0]).toEqual({
+      kind: 'ended',
+      status: 'failed',
+      unfinishedWork: {
+        branch: BRANCH,
+        commitMessage: 'wip: unfinished attempt 2 of implementation (error_max_turns)',
+      },
+    });
+    // The ending is the run's own; only the saved work is added.
+    expect(result.status).toBe('failed');
+    expect(result.terminalReason).toBe('error_max_turns');
+    expect(result.savedWork).toEqual(SAVED);
+  });
+
+  it('asks nothing of a run whose spec names no branch, or whose ending is not saved', async () => {
+    const noBranch = runSpecFixture({ unfinishedWorkBranch: null });
+    const first = world({ spec: noBranch, outcome: failed(noBranch, 'error_max_turns') });
+    expect((await first.handle.outcome).savedWork).toBeUndefined();
+    expect(first.released[0]).toEqual({ kind: 'ended', status: 'failed' });
+
+    const withBranch = runSpecFixture({ unfinishedWorkBranch: BRANCH });
+    const completed = world({
+      spec: withBranch,
+      outcome: outcomeWith(withBranch, 'completed'),
+      answer: async () => ({ savedWork: SAVED }),
+    });
+    expect((await completed.handle.outcome).savedWork).toBeUndefined();
+    expect(completed.released[0]).toEqual({ kind: 'ended', status: 'completed' });
+
+    const cancelled = world({
+      spec: withBranch,
+      outcome: { ...outcomeWith(withBranch, 'cancelled'), terminalReason: 'cancelled' },
+    });
+    await cancelled.handle.outcome;
+    expect(cancelled.released[0]).toEqual({ kind: 'ended', status: 'cancelled' });
+  });
+
+  it('sends a take-over’s export instead, never both', async () => {
+    const spec = runSpecFixture({ unfinishedWorkBranch: BRANCH });
+    const takeOver = {
+      branch: BRANCH,
+      commitMessage: 'wip: hand-over to Ada',
+      tarball: false,
+      keepUntil: '2026-10-19T00:00:00.000Z',
+    };
+    const run = world({ spec, outcome: failed(spec, 'error_max_turns') });
+    await run.handle.stop({ reason: 'taken_over', workspaceExport: takeOver });
+    await run.handle.outcome;
+    expect(run.released[0]).toEqual({ kind: 'ended', status: 'failed', takeOver });
+  });
+
+  it('keeps the outcome as it was when the release answers nothing or throws', async () => {
+    const spec = runSpecFixture({ unfinishedWorkBranch: BRANCH });
+    const silent = world({ spec, outcome: failed(spec, 'timed_out') });
+    const quiet = await silent.handle.outcome;
+    expect(quiet.savedWork).toBeUndefined();
+    expect(quiet.terminalReason).toBe('timed_out');
+
+    const throwing = world({
+      spec,
+      outcome: failed(spec, 'stalled'),
+      answer: async () => {
+        throw new Error('the launcher is gone');
+      },
+    });
+    const thrown = await throwing.handle.outcome;
+    // Released once — the ended path's release is the one, the `finally` does not repeat it.
+    expect(throwing.releases).toBe(1);
+    expect(thrown.savedWork).toBeUndefined();
+    expect(thrown.status).toBe('failed');
+  });
+});
+
 describe('classifyProvisionFailure', () => {
   it('retries a transport failure and refuses to retry a spec the launcher rejected', () => {
     expect(classifyProvisionFailure(new WorkspaceError('engine_unavailable', 'x')).retryable).toBe(

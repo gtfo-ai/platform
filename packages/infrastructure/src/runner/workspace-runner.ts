@@ -29,6 +29,18 @@
  * called" once, because a behaviour parameterised over a set needs a test parameterised over the
  * same set or the set is decoration (standing rule 68).
  *
+ * ## An unsuccessful run's work is saved on the way out (PROGRESS backlog 467)
+ *
+ * The product owner's 2026-10-05 decision: when a run whose spec names an
+ * `unfinishedWorkBranch` ends in one of `savesUnfinishedWork`'s endings, the `ended` arm carries
+ * `unfinishedWork` — the branch and the `wip:` commit message — and the workspace commits and pushes
+ * the tree on release, exactly as a take-over's does, **only if it changed**. This is the one place
+ * that can ask: the tree exists until `release`, and the outcome is known only after the session.
+ * So the ended path releases **before** it returns, folds the workspace's answer into the outcome as
+ * `savedWork`, and the stage executor records it. A take-over wins over it (the person's export is
+ * the one asked for); a release that throws or answers nothing leaves the outcome as it was — the
+ * run's terminal status is never changed by what happened to its work.
+ *
  * ## What it does to the spec, and why
  *
  * `spec.workspacePath` is replaced by the provisioned `workdir`. The planner builds that field from
@@ -59,7 +71,14 @@ import type {
   TerminalRunStatus,
   WorkspaceCliEnvironment,
 } from '@platform/application';
-import { RunStartError, silentLogger, WorkspaceError } from '@platform/application';
+import {
+  RunStartError,
+  silentLogger,
+  type UnfinishedWorkExport,
+  unfinishedWorkExportFor,
+  WorkspaceError,
+} from '@platform/application';
+import type { RunSavedWork } from '@platform/contracts';
 import type { ClaudeCodeSpawn } from './claude-runner.js';
 
 /**
@@ -78,6 +97,12 @@ export type RunWorkspaceEnding =
       readonly status: TerminalRunStatus;
       /** Present exactly when a `stop({reason:'taken_over'})` ended this run. */
       readonly takeOver?: RunTakeOverExport;
+      /**
+       * Present exactly when the run ended without a result and its spec names where its unfinished
+       * work goes (PROGRESS backlog 467), and no take-over asked for an export of its own: the
+       * workspace commits it as this `wip:` commit and pushes the branch **if the tree changed**.
+       */
+      readonly unfinishedWork?: UnfinishedWorkExport;
     }
   /** There was never a run: provisioning or `start` threw. */
   | { readonly kind: 'not_started' }
@@ -125,8 +150,23 @@ export interface ProvisionedRunWorkspace {
    * runlet one carries `setStderrSink`, which the runner built over it sets (WP-127).
    */
   readonly spawn: ClaudeCodeSpawn;
-  /** Called exactly once, whichever way the run ended. Must tolerate being called after a failure. */
-  release(ending: RunWorkspaceEnding): Promise<void>;
+  /**
+   * Called exactly once, whichever way the run ended. Must tolerate being called after a failure.
+   *
+   * May answer what it did with `ending.unfinishedWork` (backlog 467); answering nothing — as every
+   * workspace with no launcher behind it does — means no export was made.
+   */
+  // biome-ignore lint/suspicious/noConfusingVoidType: a release that answers nothing (every test workspace, and every one before backlog 467) stays a valid implementation.
+  release(ending: RunWorkspaceEnding): Promise<RunWorkspaceReleased | undefined | void>;
+}
+
+/** What a release reports back to the runner — today, only the unfinished work's export. */
+export interface RunWorkspaceReleased {
+  /**
+   * The export `ending.unfinishedWork` asked for: pushed, or attempted and not pushed. Absent when
+   * none was asked for or the tree had not changed, so nothing was committed (backlog 467).
+   */
+  readonly savedWork?: RunSavedWork;
 }
 
 /**
@@ -252,6 +292,20 @@ export const createWorkspaceClaudeRunner = (
         }
 
         let ending: RunWorkspaceEnding = { kind: 'not_started' };
+        let released = false;
+        /** The one release, on whichever path gets there first; a throw is logged, never raised. */
+        const release = async (): Promise<RunWorkspaceReleased | undefined> => {
+          released = true;
+          try {
+            return (await workspace.release(ending)) ?? undefined;
+          } catch (error) {
+            logger.error(
+              { err: error, run_id: spec.runId, ending: ending.kind },
+              'the run workspace could not be released; a container may still be running',
+            );
+            return undefined;
+          }
+        };
         try {
           if (workspace.workdir !== spec.workspacePath) {
             logger.debug(
@@ -300,12 +354,36 @@ export const createWorkspaceClaudeRunner = (
             await handle.stop(pendingStop);
           }
           const result = await handle.outcome;
+          // Backlog 467: a take-over's own export wins; otherwise the spec and the ending decide.
+          const unfinishedWork =
+            takeOver === null ? unfinishedWorkExportFor(provisioned, result) : null;
           ending = {
             kind: 'ended',
             status: result.status,
             ...(takeOver === null ? {} : { takeOver }),
+            ...(unfinishedWork === null ? {} : { unfinishedWork }),
           };
-          return result;
+          // Released here rather than in the `finally`, because the export's answer belongs on the
+          // outcome the caller records.
+          const answer = await release();
+          if (unfinishedWork !== null) {
+            logger.info(
+              {
+                run_id: spec.runId,
+                terminal_reason: result.terminalReason,
+                branch: unfinishedWork.branch,
+                saved: answer?.savedWork ?? null,
+              },
+              answer?.savedWork === undefined
+                ? 'the run ended without a result and its workspace had no changes to save'
+                : 'the run ended without a result; the workspace was asked to save its unfinished work',
+            );
+          }
+          // Only an answer to a question this runner asked: a workspace cannot attach saved work to
+          // a run whose ending saves none.
+          return unfinishedWork === null || answer?.savedWork === undefined
+            ? result
+            : { ...result, savedWork: answer.savedWork };
         } catch (error) {
           // `build().start()` throwing is a fault in the composition or a spec the runner refuses:
           // terminal, because the same spec would be refused again. A rejected `outcome` is the
@@ -319,14 +397,9 @@ export const createWorkspaceClaudeRunner = (
           }
           throw error;
         } finally {
-          // The one line that must run on all eight paths.
-          try {
-            await workspace.release(ending);
-          } catch (error) {
-            logger.error(
-              { err: error, run_id: spec.runId, ending: ending.kind },
-              'the run workspace could not be released; a container may still be running',
-            );
+          // The one line that must run on all eight paths — the ended path has already run it.
+          if (!released) {
+            await release();
           }
         }
       })();

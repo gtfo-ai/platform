@@ -27,6 +27,7 @@ import type {
   Id,
   IsoDateTime,
   ProviderMode,
+  RunSavedWork,
   RunStartFailure,
   Size,
   Slug,
@@ -186,6 +187,8 @@ export interface MemoryPipelineStore extends PipelineStore {
   providerModeOf(runId: Id): ProviderMode | null;
   /** `runs.exit_detail` as `finish` wrote it — why a run never started (backlog 453). */
   startFailureOf(runId: Id): RunStartFailure | null;
+  /** `runs.saved_work` as `finish` wrote it (backlog 467), or `null`. */
+  savedWorkOf(runId: Id): RunSavedWork | null;
   /** The lease a run currently holds, for a test that asserts the heartbeat wrote one (WP-47). */
   leaseOf(runId: Id): { readonly owner: string; readonly expiresAt: IsoDateTime } | null;
   /** Every `run_commands` row, for a test that asserts what the holder stamped (WP-85). */
@@ -280,6 +283,8 @@ export const createMemoryPipelineStore = (
   const providerModes = new Map<Id, ProviderMode>();
   /** `runs.exit_detail`, write-only on the port; read by {@link MemoryPipelineStore.startFailureOf}. */
   const startFailures = new Map<Id, RunStartFailure>();
+  /** `runs.saved_work` (backlog 467); read by `lastSavedWork` and {@link MemoryPipelineStore.savedWorkOf}. */
+  const savedWorks = new Map<Id, RunSavedWork>();
   /** `runs.figure_is_floor` (WP-131 pre-review round, backlog 407): the runs whose cost is a floor. */
   const floors = new Set<Id>();
   const questions = new Map<Id, Question>();
@@ -1103,6 +1108,9 @@ export const createMemoryPipelineStore = (
       if (outcome.startFailure !== undefined) {
         startFailures.set(outcome.runId, clone(outcome.startFailure));
       }
+      if (outcome.savedWork !== undefined) {
+        savedWorks.set(outcome.runId, clone(outcome.savedWork));
+      }
       // The winner closes the run's pending commands, as the SQL adapter does in the same
       // transaction (WP-85).
       for (const row of runCommandRows.values()) {
@@ -1164,6 +1172,29 @@ export const createMemoryPipelineStore = (
       [...runs.values()].filter(
         (run) => askOfRun.get(run.id) === askId && run.terminalReason === 'shutdown',
       ).length,
+    /**
+     * Backlog 467: the latest ended run of the stage, in insertion order — the order `runs` rows
+     * are created in here, which is the SQL adapter's `created_at, id` (uuidv7).
+     */
+    lastSavedWork: async (_tx, query) => {
+      const ended = [...runs.values()].filter(
+        (run) =>
+          run.taskId === query.taskId &&
+          run.stage === query.stage &&
+          !isActiveRunStatus(run.status),
+      );
+      const latest = ended.at(-1);
+      const saved = latest === undefined ? undefined : savedWorks.get(latest.id);
+      if (latest === undefined || saved === undefined || latest.terminalReason === null) {
+        return null;
+      }
+      return {
+        runId: latest.id,
+        terminalReason: latest.terminalReason,
+        numTurns: latest.numTurns,
+        savedWork: clone(saved),
+      };
+    },
     /** WP-144's bound, over this store's rows with the SQL adapter's predicate. */
     shutdownEndings: async (_tx, entry) =>
       [...runs.values()].filter(
@@ -1705,6 +1736,10 @@ export const createMemoryPipelineStore = (
     },
     chargedRuns,
     providerModeOf: (runId) => providerModes.get(runId) ?? null,
+    savedWorkOf: (runId) => {
+      const saved = savedWorks.get(runId);
+      return saved === undefined ? null : clone(saved);
+    },
     startFailureOf: (runId) => {
       const failure = startFailures.get(runId);
       return failure === undefined ? null : clone(failure);

@@ -38,6 +38,7 @@ import type {
   PipelineTemplate,
   ProviderMode,
   RunCost,
+  RunSavedWork,
   RunStartFailure,
   RunStatus,
   RunTerminalReason,
@@ -1249,6 +1250,14 @@ export interface ArtifactRepository {
   listFor(tx: Transaction, taskId: Id): Promise<readonly StoredArtifact[]>;
 }
 
+/** {@link RunRepository.lastSavedWork}'s answer: the run, how it ended, and what it saved. */
+export interface SavedAttempt {
+  readonly runId: Id;
+  readonly terminalReason: RunTerminalReason;
+  readonly numTurns: number;
+  readonly savedWork: RunSavedWork;
+}
+
 export interface StoredRun {
   readonly id: Id;
   readonly taskId: Id;
@@ -1435,6 +1444,11 @@ export interface RunRepository {
        * started, which leaves the column null.
        */
       readonly startFailure?: RunStartFailure;
+      /**
+       * What the workspace did with the run's unfinished work — `runs.saved_work` (migration 0083,
+       * PROGRESS backlog 467). Absent when no export was attempted, which leaves the column null.
+       */
+      readonly savedWork?: RunSavedWork;
     },
   ): Promise<boolean>;
   /**
@@ -1506,6 +1520,21 @@ export interface RunRepository {
     tx: Transaction,
     entry: { readonly taskId: Id; readonly stage: Slug; readonly attempt: number },
   ): Promise<number>;
+  /**
+   * The **latest ended run** of this task at this stage, when it saved unfinished work — the
+   * product owner's 2026-10-05 decision (PROGRESS backlog 467) — or `null` when that run saved none,
+   * or the stage has no ended run.
+   *
+   * Asked at admission, before the new run's row exists, so "latest" is the previous attempt of the
+   * stage (a retry, a return, a hand-back — any of them). Only the latest counts: a later run that
+   * completed, or one that saved nothing, means the branch is no longer *a previous attempt's
+   * unfinished work*, and the planner must not say it is. Ordered by `created_at`, then `id`
+   * (uuidv7), over terminal runs only.
+   */
+  lastSavedWork(
+    tx: Transaction,
+    query: { readonly taskId: Id; readonly stage: Slug },
+  ): Promise<SavedAttempt | null>;
   /**
    * How many of this **ask's** runs ended `shutdown` (WP-149, PROGRESS backlog 445) — the ask's
    * hand-back bound (`MAX_ASK_HAND_BACKS`), counted from the runs' own end reasons through

@@ -98,6 +98,12 @@ interface FakeRun {
   running: boolean;
   destroyed: boolean;
   volumeRemoved: boolean;
+  /**
+   * Whether anything was planted after `create` — the fake's answer to `onlyIfChanged` (backlog
+   * 467). It has no index to compare with, so *a planted entry* stands for *the tree changed*; a
+   * run nothing was planted in exports nothing under `onlyIfChanged`, as the helper does.
+   */
+  planted: boolean;
   /** When `create` made it, on the injected clock — what the listing verb dates a run by (WP-103). */
   readonly createdAt: string;
   /**
@@ -311,6 +317,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       running: true,
       destroyed: false,
       volumeRemoved: false,
+      planted: false,
       createdAt: this.#now().toISOString(),
       hold: null,
     });
@@ -445,9 +452,12 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       await writeFile(request.tarballPath, filtered.bytes, { mode: 0o600 });
     }
     this.#record('export', handle.runId);
+    // Backlog 467: an unchanged tree commits and pushes nothing, as the helper's `CHANGED=no` does.
+    const changed = request.onlyIfChanged === true ? run.planted : undefined;
     return {
       branch: request.branch,
-      pushed: credential !== null,
+      pushed: credential !== null && changed !== false,
+      ...(changed === undefined ? {} : { changed }),
       commitSha: 'f'.repeat(40),
       tarballPath: request.tarballPath,
       tarballBytes: filtered.bytes.length,
@@ -551,7 +561,9 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
 
   /** Plants a file, a directory or a symlink in the workspace, for the export cases. */
   plant(runId: string, entry: TarInput): void {
-    this.#run(runId).files.set(entry.name, entry);
+    const run = this.#run(runId);
+    run.files.set(entry.name, entry);
+    run.planted = true;
   }
 
   /**

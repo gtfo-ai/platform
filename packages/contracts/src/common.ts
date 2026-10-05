@@ -1003,6 +1003,32 @@ export const runStartFailureSchema = z.strictObject({
   retryable: z.boolean(),
 });
 
+/**
+ * What the platform did with an unsuccessful run's **unfinished work** (the product owner's
+ * 2026-10-05 decision, BD-025's amendment of that date, PROGRESS backlog 467) — `runs.saved_work`,
+ * `run.finished`/`run.failed`'s `saved_work` and `RunRecord.saved_work`, one shape in all three.
+ *
+ * A Developer run that ends without a result (out of turns, out of budget with no artifact, out of
+ * time, stalled, a crash, a structured-output failure) leaves its tree in a workspace the platform is
+ * about to free. When that tree differs from what the run was given, the process holding the
+ * workspace commits it as a `wip:` commit and pushes it to the task's `agentic/*` branch with the
+ * run's own credential — the take-over export's machinery — so the next attempt starts from it.
+ *
+ * Present exactly when the platform **attempted** that export: absent (or `null`) for a run of a role
+ * whose work is not saved, an ending that is not saved, and a workspace that had no changes. `pushed`
+ * is the push's own answer; `false` means the work did not reach the remote and stays only in the
+ * run's workspace volume until its retention ends. `commit_sha` is the head the helper reported, or
+ * `null` when it reported none. Every field is platform-written: the branch is held to BD-025's
+ * namespace and the sha to hexadecimal.
+ */
+export const runSavedWorkSchema = z.strictObject({
+  branch: z
+    .string()
+    .regex(/^agentic\/[A-Za-z0-9._\-/]{1,200}$/, 'expected a branch inside agentic/'),
+  commit_sha: shaSchema.nullable(),
+  pushed: z.boolean(),
+});
+
 // ── Inferred types ───────────────────────────────────────────────────────────
 
 export type Id = z.infer<typeof idSchema>;
@@ -1052,3 +1078,4 @@ export type TokenUsage = z.infer<typeof tokenUsageSchema>;
 export type ModelUsage = z.infer<typeof modelUsageSchema>;
 export type RunCost = z.infer<typeof runCostSchema>;
 export type RunStartFailure = z.infer<typeof runStartFailureSchema>;
+export type RunSavedWork = z.infer<typeof runSavedWorkSchema>;

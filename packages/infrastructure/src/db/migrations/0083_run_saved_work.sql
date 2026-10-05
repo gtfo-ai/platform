@@ -1,0 +1,18 @@
+-- 0083 — `runs.saved_work`: what the platform did with an unsuccessful run's unfinished work
+-- (the product owner's 2026-10-05 decision, BD-025's amendment of that date, PROGRESS backlog 467).
+--
+-- A Developer run that ends without a result — out of turns, out of budget with no artifact kept, out
+-- of time, stalled, a crash, a structured-output failure — used to leave its tree in a workspace the
+-- platform then freed, so the next attempt started again from the default branch. The process holding
+-- the workspace now commits that tree as a `wip:` commit and pushes it to `agentic/<key>` with the
+-- run's own credential, through the take-over export's helper, when the tree differs from what the
+-- run was given. This column records the attempt, written once by `RunRepository.finish` in the run's
+-- ending transaction: `{branch, commit_sha, pushed}` (`runSavedWorkSchema`). Null for every other run
+-- — a success, a role whose work is not saved, an ending that is not saved, a workspace with no
+-- changes, and every run that ended before this migration.
+--
+-- The next attempt of the same stage reads the latest ended run's value (`RunRepository.
+-- lastSavedWork`) to tell its prompt that the branch it checks out carries a previous attempt's work.
+-- That read is ordered over the task's few runs, which `runs_task_id_idx` (migration 0004)
+-- already serves, so no index is added.
+alter table runs add column saved_work jsonb;

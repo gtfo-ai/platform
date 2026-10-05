@@ -56,6 +56,7 @@ import {
   PLATFORM_TOOLS_BY_ROLE,
   PROVIDER_SKILLS,
   platformToolsFor,
+  previousAttemptFor,
   RUN_MODE_BY_STAGE,
   RUN_MODE_BY_TEMPLATE,
   reviewChecklistsOf,
@@ -2216,5 +2217,125 @@ describe('a project that verifies on CI (BD-025, 2026-10-05; PROGRESS backlog 46
     expect(spec.systemPromptAppend).toContain(
       'A red pipeline returns the task to the Developer stage',
     );
+  });
+});
+
+/**
+ * Backlog 467 — the product owner's 2026-10-05 decision: a Developer run says where its unfinished
+ * work goes, and the next attempt is told that the branch it checks out carries it.
+ *
+ * The checkout itself is not new: a Developer run of an ordinary task is on `agentic/<key>` from its
+ * first turn (WP-138), so the retry checks out the branch the previous attempt pushed to through the
+ * same `checkoutOf` — asserted here, beside the two things that are new.
+ */
+describe('an unsuccessful attempt’s saved work (backlog 467)', () => {
+  const developer = {
+    id: 'implementation',
+    kind: 'agent',
+    role: 'developer',
+    produces: 'ImplementationNotes',
+  };
+  const SAVED = {
+    runId: '00000000-0000-4000-8000-0000000000d1' as Id,
+    terminalReason: 'error_max_turns' as const,
+    numTurns: 201,
+    savedWork: { branch: 'agentic/ACME-1', commit_sha: 'abc1234def', pushed: true },
+  };
+
+  const planAt = async (stage: Record<string, unknown>, extra: Record<string, unknown> = {}) => {
+    const planner = createStageRunPlanner({
+      workspacePath: (taskId) => `/workspaces/${taskId}`,
+      prompts: prompts as never,
+      skills: testSkills,
+      boundSkills: async () => [],
+      ciConfigLocation: async () => null,
+      nonce: { next: () => NONCE },
+      contextPacks: createContextPackAssembler({
+        store: (await indexedFixtureVault()).store,
+        logger: silentLogger,
+      }),
+      headPaths: async () => null,
+      clock: { now: () => NOW },
+    });
+    return (
+      await planner.plan({
+        ...requestWith('ACME-1'),
+        stage: stage as never,
+        attempt: 2,
+        ...extra,
+      } as unknown as StageRunRequest)
+    ).spec;
+  };
+
+  it('names the Developer run’s own checkout as where its unfinished work goes', async () => {
+    const spec = await planAt(developer);
+    expect(spec.checkoutRef).toBe('agentic/ACME-1');
+    expect(spec.unfinishedWorkBranch).toBe('agentic/ACME-1');
+  });
+
+  it('names nowhere for a conflict resolution, a review or a refinement', async () => {
+    expect(
+      (await planAt({ ...developer, id: CONFLICT_RESOLUTION_STAGE })).unfinishedWorkBranch,
+    ).toBeNull();
+    expect(
+      (
+        await planAt({
+          id: 'code_review',
+          kind: 'agent',
+          role: 'reviewer',
+          produces: 'ReviewVerdict',
+        })
+      ).unfinishedWorkBranch,
+    ).toBeNull();
+    expect(
+      (await planAt(requestWith('ACME-1').stage as unknown as Record<string, unknown>))
+        .unfinishedWorkBranch,
+    ).toBeNull();
+  });
+
+  it('tells the retry, after the stage line, that the branch it checks out holds the saved work', async () => {
+    const spec = await planAt(developer, { previousAttempt: SAVED });
+    expect(spec.checkoutRef).toBe('agentic/ACME-1');
+    const stageLine = spec.userPrompt.indexOf('Stage `implementation`, attempt 2.');
+    const told = spec.userPrompt.indexOf(
+      'A previous attempt of this stage ended `error_max_turns` after 201 turns without finishing.',
+    );
+    expect(stageLine).toBeGreaterThan(-1);
+    expect(told).toBeGreaterThan(stageLine);
+    expect(spec.userPrompt).toContain('Leave the `wip:` commit as it is');
+    // Platform text only: neither the branch (derived from the ticket key) nor the commit is quoted.
+    expect(spec.userPrompt.slice(told, told + 600)).not.toContain('abc1234def');
+  });
+
+  it('tells it nothing when the push failed, the branch differs, or nothing was saved', async () => {
+    const said = 'A previous attempt of this stage ended';
+    expect((await planAt(developer)).userPrompt).not.toContain(said);
+    expect(
+      (
+        await planAt(developer, {
+          previousAttempt: { ...SAVED, savedWork: { ...SAVED.savedWork, pushed: false } },
+        })
+      ).userPrompt,
+    ).not.toContain(said);
+    expect(
+      (
+        await planAt(developer, {
+          previousAttempt: {
+            ...SAVED,
+            savedWork: { ...SAVED.savedWork, branch: 'agentic/ACME-1-r2' },
+          },
+        })
+      ).userPrompt,
+    ).not.toContain(said);
+  });
+
+  it('answers only for a pushed attempt on the branch the run checks out', () => {
+    expect(previousAttemptFor({ previousAttempt: SAVED }, 'agentic/ACME-1')).toEqual({
+      terminalReason: 'error_max_turns',
+      numTurns: 201,
+    });
+    expect(previousAttemptFor({ previousAttempt: SAVED }, null)).toBeNull();
+    expect(previousAttemptFor({ previousAttempt: null }, 'agentic/ACME-1')).toBeNull();
+    expect(previousAttemptFor({}, 'agentic/ACME-1')).toBeNull();
   });
 });

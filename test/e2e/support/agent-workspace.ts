@@ -84,7 +84,21 @@ export interface WorkspaceRelease {
     readonly tarball: boolean;
     readonly keepUntil: string;
   } | null;
+  /**
+   * What an unsuccessful run's ending asked of this workspace (backlog 467), or `null`: the branch
+   * and the `wip:` message the launcher would commit and push with, if the tree changed. Like the
+   * take-over, the commit and the push are past this seam — this tier answers as a launcher whose
+   * push succeeded ({@link SAVED_WORK_SHA}), and `LauncherService.endRun` and the Docker provider's
+   * own tests are where the export itself is exercised.
+   */
+  readonly unfinishedWork: {
+    readonly branch: string;
+    readonly commitMessage: string;
+  } | null;
 }
+
+/** The commit a scripted workspace reports for an unsuccessful run's saved work (backlog 467). */
+export const SAVED_WORK_SHA = 'feedc0de'.repeat(5);
 
 const SESSION = 'fake-session-e2e';
 
@@ -209,6 +223,9 @@ export const interruptedResultFor = (spec: RunSpec): Record<string, unknown> => 
   uuid: '00000004-0000-4000-8000-000000000000',
   session_id: SESSION,
 });
+/** The turn count a scripted `error_max_turns` ending reports — the first local test's (backlog 467). */
+export const MAX_TURNS_SCRIPTED = 201;
+
 export const fakeCliScriptFor = (
   spec: RunSpec,
   scenario: {
@@ -228,6 +245,12 @@ export const fakeCliScriptFor = (
     readonly bash?: ScenarioBash;
     /** Write/Edit calls this run makes after its Bash calls (WP-99) — see {@link ScenarioWrites}. */
     readonly writes?: ScenarioWrites;
+    /**
+     * The session ends with the CLI's `error_max_turns` result instead of a success (backlog 467):
+     * no structured output, `is_error`, and {@link MAX_TURNS_SCRIPTED} turns — the ending of the
+     * first local test's Developer run.
+     */
+    readonly endsWith?: 'error_max_turns';
   },
 ): runnerAdapters.FakeCliScript => {
   const stage = spec.stage ?? 'stage';
@@ -298,12 +321,21 @@ export const fakeCliScriptFor = (
       step: 'emit',
       message: {
         type: 'result',
-        subtype: 'success',
+        ...(scenario.endsWith === 'error_max_turns'
+          ? {
+              subtype: 'error_max_turns',
+              is_error: true,
+              num_turns: MAX_TURNS_SCRIPTED,
+              errors: [],
+            }
+          : {
+              subtype: 'success',
+              is_error: false,
+              num_turns: 1,
+              result: `${stage} finished`,
+            }),
         duration_ms: 1200,
         duration_api_ms: 1000,
-        is_error: false,
-        num_turns: 1,
-        result: `${stage} finished`,
         stop_reason: 'end_turn',
         total_cost_usd: cost,
         usage: {
@@ -336,7 +368,9 @@ export const fakeCliScriptFor = (
           },
         },
         permission_denials: [],
-        structured_output: scenario.structuredOutput,
+        ...(scenario.endsWith === undefined
+          ? { structured_output: scenario.structuredOutput }
+          : {}),
         uuid: '00000003-0000-4000-8000-000000000000',
         session_id: SESSION,
       },
@@ -373,6 +407,7 @@ export const scriptedWorkspaces = (
     readonly awaitSteers?: number;
     readonly bash?: ScenarioBash;
     readonly writes?: ScenarioWrites;
+    readonly endsWith?: 'error_max_turns';
   },
   /**
    * Called — and **awaited** — inside `provision`, before the CLI exists.
@@ -412,11 +447,23 @@ export const scriptedWorkspaces = (
           workdir: workspaceAdapters.WORKSPACE_WORKDIR,
           spawn: cli.spawn,
           release: async (ending) => {
+            const unfinishedWork = ending.kind === 'ended' ? (ending.unfinishedWork ?? null) : null;
             releases.push({
               stage,
               ending: ending.kind === 'ended' ? ending.status : ending.kind,
               takeOver: ending.kind === 'ended' ? (ending.takeOver ?? null) : null,
+              unfinishedWork,
             });
+            // Backlog 467: answered as a launcher whose export pushed — see `WorkspaceRelease`.
+            return unfinishedWork === null
+              ? undefined
+              : {
+                  savedWork: {
+                    branch: unfinishedWork.branch,
+                    commit_sha: SAVED_WORK_SHA,
+                    pushed: true,
+                  },
+                };
           },
         };
       },

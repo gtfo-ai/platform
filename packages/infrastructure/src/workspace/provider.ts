@@ -298,6 +298,20 @@ const EXPORT_WALK_ERRORS = '/tmp/agentic-export-walk.err';
 const EXPORT_GLOBAL_CONFIG = '/tmp/agentic-export.gitconfig';
 
 /**
+ * The `onlyIfChanged` half of {@link exportScript} (PROGRESS backlog 467): decide whether the tree
+ * changed, say so, and stop before the commit and the push when it did not. `$MIRROR` and `g` are the
+ * script's own; `^<sha>` lines on `rev-list --stdin` exclude every commit a mirror branch reaches,
+ * so what is left is a commit the run made.
+ */
+const ONLY_IF_CHANGED_LINES: readonly string[] = [
+  'CHANGED=no',
+  'if [ -n "$(g status --porcelain)" ]; then CHANGED=yes; fi',
+  'if [ "$CHANGED" = no ] && [ -n "$(g --git-dir="$MIRROR" for-each-ref --format=\'^%(objectname)\' refs/heads | g rev-list -n 1 --stdin HEAD)" ]; then CHANGED=yes; fi',
+  'echo "CHANGED=$CHANGED"',
+  'if [ "$CHANGED" = no ]; then echo "SHA=$(g rev-parse HEAD)"; echo "PUSHED=no"; exit 0; fi',
+];
+
+/**
  * The export helper's script (WP-75, PROGRESS backlogs 148 and 152).
  *
  * **The checkout is the agent's, and so is everything under `.git/`** — hooks, `config`,
@@ -339,6 +353,14 @@ const EXPORT_GLOBAL_CONFIG = '/tmp/agentic-export.gitconfig';
  * "nothing the run wrote executes": the platform's own `git` still reads the run's index, objects
  * and attributes, and an attribute naming an undefined driver is inert (measured, not assumed).
  *
+ * **`onlyIfChanged`** (PROGRESS backlog 467) is the one difference between the take-over's export
+ * and an unsuccessful run's, and it comes after every check above: the tree counts as changed when
+ * `status --porcelain` prints anything (an edit, a deletion, an untracked file) **or** when `HEAD`
+ * reaches a commit no branch of the platform-written mirror holds (a commit the run made itself).
+ * The second question is asked of the mirror's own refs, read with `--git-dir` so the run's
+ * `refs/remotes` cannot answer it; an unchanged tree prints `CHANGED=no`, commits nothing and pushes
+ * nothing. The take-over keeps pushing whatever the branch holds, because a person asked for it.
+ *
  * The objects are unaffected: a `--shared` clone's alternates are `objects/info/alternates`, a file
  * rather than configuration (the e2e decodes a pre-run object after the replacement).
  */
@@ -348,6 +370,8 @@ export const exportScript = (input: {
   readonly tarball: boolean;
   /** WP-146: the push goes over SSH with a deploy key written to the helper's tmpfs. */
   readonly ssh?: boolean;
+  /** Backlog 467: commit and push only a tree that changed; print `CHANGED=yes|no`. */
+  readonly onlyIfChanged?: boolean;
 }): string =>
   [
     'set -e',
@@ -407,6 +431,7 @@ export const exportScript = (input: {
     `if ! NESTED="$(find . -path ./.git -prune -o -name .git -print 2>${EXPORT_WALK_ERRORS})" || ` +
       `[ -s ${EXPORT_WALK_ERRORS} ]; then echo "${UNREADABLE_TREE_SENTINEL}"; exit 6; fi`,
     `if [ -n "$NESTED" ]; then echo "${NESTED_REPOSITORY_SENTINEL}"; exit 5; fi`,
+    ...(input.onlyIfChanged === true ? ONLY_IF_CHANGED_LINES : []),
     'if [ -n "$(g status --porcelain)" ]; then g add -A; g commit -q -m "$COMMIT_MESSAGE"; fi',
     'echo "SHA=$(g rev-parse HEAD)"',
     input.push
@@ -2176,6 +2201,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         push: credential !== null,
         tarball: wantsTarball,
         ssh: credential?.ssh !== undefined,
+        onlyIfChanged: request.onlyIfChanged === true,
       }),
       ...this.#gitCredentialEnv(credential, {
         BRANCH: request.branch,
@@ -2240,7 +2266,11 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
 
     const commitSha = /SHA=([0-9a-f]{7,64})/.exec(helper.output)?.[1] ?? null;
     const pushed = /PUSHED=yes/.test(helper.output);
-    if (!pushed && credential !== null) {
+    // Backlog 467: answered only when asked, and `no` only when the helper said so — a helper that
+    // printed neither (it never reached the question) is read as changed, the fail-loud direction.
+    const changed =
+      request.onlyIfChanged === true ? !/(?:^|\n)CHANGED=no\b/.test(helper.output) : undefined;
+    if (!pushed && credential !== null && changed !== false) {
       // A refused push is the one failure this helper reports by exiting 0 — the branch is the
       // agent's work and the export must still produce a tarball. Reporting `pushed: false` and
       // nothing else would leave an operator with no way to find out why, so the helper's own
@@ -2266,6 +2296,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     return {
       branch: request.branch,
       pushed,
+      ...(changed === undefined ? {} : { changed }),
       commitSha,
       tarballPath: request.tarballPath,
       tarballBytes,

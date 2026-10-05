@@ -250,6 +250,48 @@ describe('run lifecycle', () => {
   });
 });
 
+describe('the unfinished work an ending saved (backlog 467)', () => {
+  const saved = { branch: 'agentic/ACME-1', commit_sha: 'abc1234def', pushed: true };
+
+  it('carries it on `run.failed` and `run.finished` when given, and omits the key when not', () => {
+    const failed = failRun(
+      runningRun(),
+      {
+        status: 'failed',
+        terminalReason: 'error_max_turns',
+        error: 'out of turns',
+        savedWork: saved,
+      },
+      context(world()),
+    );
+    expect(failed.events[0]?.payload).toMatchObject({ saved_work: saved });
+
+    const finished = finishRun(
+      runningRun(),
+      {
+        status: 'timed_out',
+        terminalReason: 'timed_out',
+        usage,
+        modelUsage: [],
+        cost: null,
+        numTurns: 12,
+        savedWork: { ...saved, pushed: false, commit_sha: null },
+      },
+      context(world()),
+    );
+    expect(finished.events[0]?.payload).toMatchObject({
+      saved_work: { ...saved, pushed: false, commit_sha: null },
+    });
+
+    const plain = failRun(
+      runningRun(),
+      { status: 'failed', terminalReason: 'crash', error: 'crashed' },
+      context(world()),
+    );
+    expect(plain.events[0]?.payload).not.toHaveProperty('saved_work');
+  });
+});
+
 describe('output and stalls', () => {
   it('resets the stall clock on output', () => {
     const shared = world();

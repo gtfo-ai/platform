@@ -94,7 +94,7 @@ export interface StartedRun {
 }
 
 export interface EndRunRequest {
-  /** Take-over export, or `null` for an ordinary end of run. */
+  /** A take-over export, an unsuccessful run's export (backlog 467), or `null` for neither. */
   readonly export:
     | (Omit<WorkspaceExportRequest, 'tarballPath'> & {
         /** `true` writes a tarball under the launcher's export directory. */
@@ -294,6 +294,8 @@ export class LauncherService {
             tarballPath: request.export.tarball
               ? path.join(this.#options.exportDir, `${handle.runId}.tar`)
               : null,
+            // Backlog 467: an unsuccessful run's export, which pushes nothing for an unchanged tree.
+            ...(request.export.onlyIfChanged === true ? { onlyIfChanged: true } : {}),
           },
           broker.credentialFor(handle.runId),
         );

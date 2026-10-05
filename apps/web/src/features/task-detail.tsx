@@ -1531,6 +1531,10 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
                     >
                       {run.status}
                     </Badge>
+                    {/* Backlog 467: the run's unfinished work is on the task's branch. */}
+                    {run.saved_work?.pushed === true ? (
+                      <Badge tone="warning">work saved to branch</Badge>
+                    ) : null}
                     <span className="text-xs text-fg-muted">
                       <UntrustedText value={run.model} />
                     </span>

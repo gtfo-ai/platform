@@ -268,6 +268,26 @@ export interface PromptTask {
    * project has no error tracker.
    */
   readonly observability: readonly PromptObservabilityExcerpt[];
+  /**
+   * The previous attempt of this stage whose **unfinished work** the platform saved to the branch
+   * this run checks out (the product owner's 2026-10-05 decision, PROGRESS backlog 467), or
+   * `null`/absent for every other run.
+   *
+   * It produces one sentence in the platform's voice, after the stage line, and no data block: both
+   * values are the platform's own record of a run — a closed-vocabulary terminal reason and a turn
+   * count — and neither the branch name (derived from the ticket key) nor the commit is quoted, so
+   * nothing untrusted reaches it. Optional rather than required-and-nullable, unlike its neighbours,
+   * because it is a statement the platform adds on top of a task block that is complete without it.
+   */
+  readonly previousAttempt?: PromptPreviousAttempt | null;
+}
+
+/** {@link PromptTask.previousAttempt}: what the platform recorded about the attempt it saved. */
+export interface PromptPreviousAttempt {
+  /** `runs.terminal_reason` — `runTerminalReasonSchema`, a closed set. */
+  readonly terminalReason: string;
+  /** `runs.num_turns`; a count of `0` (nothing measured it) is left out of the sentence. */
+  readonly numTurns: number;
 }
 
 /**
@@ -1420,6 +1440,32 @@ provisioned one.`;
 };
 
 /**
+ * The sentence a run is told when the branch it checks out carries a previous attempt's unfinished
+ * work (PROGRESS backlog 467).
+ *
+ * **Leave the `wip:` commit** is the decision, not a hedge: the Developer's command policy has no
+ * `git rebase` or `git commit --amend` to squash it with, product/19 §7's amendment permits the
+ * platform's own `wip:` commit on an `agentic/*` branch, and a merge request is reviewed as a diff.
+ * The platform's voice holds here exactly as for the stage line: the terminal reason is checked
+ * against the marker alphabet (defence in depth over `runTerminalReasonSchema`, which already admits
+ * only snake_case words) and the count is printed only as a positive integer.
+ */
+export const previousAttemptLine = (previous: PromptPreviousAttempt): string => {
+  assertPlatformVoice('a terminal reason', previous.terminalReason);
+  const turns =
+    Number.isSafeInteger(previous.numTurns) && previous.numTurns > 0
+      ? ` after ${String(previous.numTurns)} turns`
+      : '';
+  return (
+    `A previous attempt of this stage ended \`${previous.terminalReason}\`${turns} without finishing. ` +
+    'The platform saved its unfinished work as a `wip:` commit on the branch this workspace has ' +
+    'checked out, so that work is already here. Read it first — `git log`, and `git diff` against ' +
+    'the default branch — and continue from it rather than starting over. Leave the `wip:` commit ' +
+    'as it is and add your own commits on top of it.'
+  );
+};
+
+/**
  * Assemble one prompt.
  *
  * Throws {@link NonceInBodyError} after {@link MAX_NONCE_ATTEMPTS} — the fail-closed direction, and
@@ -1507,6 +1553,10 @@ export const assemblePrompt = (input: AssemblePromptInput): AssembledPrompt => {
     input.task.stage === null
       ? stagelessLine(input.ask)
       : `Stage \`${input.task.stage}\`, attempt ${input.task.attempt}.`,
+    // Backlog 467: only a stage run is told, and only when the planner found a saved attempt.
+    ...(input.task.stage === null || input.task.previousAttempt == null
+      ? []
+      : ['', previousAttemptLine(input.task.previousAttempt)]),
     '',
     ...taskBlocks.map(render),
     '',

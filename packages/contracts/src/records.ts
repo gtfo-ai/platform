@@ -31,6 +31,7 @@ import {
   questionStatusSchema,
   runCostSchema,
   runModeSchema,
+  runSavedWorkSchema,
   runStartFailureSchema,
   runStatusSchema,
   runTerminalReasonSchema,
@@ -805,6 +806,13 @@ export const runRecordSchema = z.strictObject({
    * before backlog 453 gave the column a writer. `detail` inside it is untrusted text (BD-022).
    */
   start_failure: runStartFailureSchema.nullable(),
+  /**
+   * `runs.saved_work` (PROGRESS backlog 467): the unfinished work an unsuccessful run left, committed
+   * as a `wip:` commit and pushed to the task's branch — or the attempt that failed to push. `null`
+   * for a run whose work was not saved: it succeeded, its role's work is not saved, its workspace
+   * had no changes, or it ended before the column had a writer.
+   */
+  saved_work: runSavedWorkSchema.nullable(),
 });
 
 /** Precedence chain for the effective configuration (technical/12). */

@@ -4421,3 +4421,123 @@ describe('the requester, from the ticket reporter (WP-79)', () => {
     expect(taskOf(harness).requestedByUserId).toBe(REQUESTER);
   });
 });
+
+/**
+ * Backlog 467 — the product owner's 2026-10-05 decision, through the stage executor: an unsuccessful
+ * Developer run whose workspace saved its unfinished work has that recorded on the run, on its
+ * terminal event and on the task, the brief says so, and the retry continues from the branch.
+ *
+ * The workspace's half (the export, `onlyIfChanged`, the push) is the workspace runner's and the
+ * launcher's, tested there; here the runner's outcome carries `savedWork` as the workspace runner
+ * folds it in, and the harness refuses to script it for a run the runner would not have asked.
+ */
+describe('an unsuccessful Developer run’s unfinished work (backlog 467)', () => {
+  const USER = '00000000-0000-4000-8000-0000000000c3';
+  const SAVED = { branch: 'agentic/ACME-1', commit_sha: 'abc1234def', pushed: true } as const;
+  const outOfTurns = (savedWork: typeof SAVED | { [K in keyof typeof SAVED]: unknown }) =>
+    ({
+      status: 'failed',
+      terminalReason: 'error_max_turns',
+      error: 'the session ran out of turns',
+      numTurns: 201,
+      savedWork,
+    }) as never;
+  const escalationOf = (harness: PipelineHarness) =>
+    harness.events().filter((entry) => entry.type === 'task.escalated') as Extract<
+      DomainEvent,
+      { type: 'task.escalated' }
+    >[];
+  const implementationSpecs = (harness: PipelineHarness) =>
+    harness.specs.filter((spec) => spec.stage === 'implementation');
+
+  it('records the work on the run, its event and the task, and the brief says a retry continues from it', async () => {
+    const harness = harnessWith({ runs: { ...happyRuns(), implementation: outOfTurns(SAVED) } });
+    await harness.publish([ticketMatched()]);
+
+    const task = taskOf(harness);
+    expect(task.task.state).toBe('needs_human');
+    expect(task.branch).toBe('agentic/ACME-1');
+    const [spec] = implementationSpecs(harness);
+    expect(spec?.unfinishedWorkBranch).toBe('agentic/ACME-1');
+    expect(harness.store.savedWorkOf(spec?.runId as never)).toEqual(SAVED);
+    const failed = harness.events().find((entry) => entry.type === 'run.failed');
+    expect(failed?.payload).toMatchObject({
+      terminal_reason: 'error_max_turns',
+      saved_work: SAVED,
+    });
+    const brief = escalationOf(harness)[0]?.payload.blocker_brief ?? '';
+    expect(brief).toContain('stopped without a result: the run ended as failed (error_max_turns)');
+    expect(brief).toContain('pushed it to agentic/ACME-1');
+    expect(brief).toContain('a retry of this stage continues from that branch');
+  });
+
+  it('starts the retry on that branch and tells it the previous attempt’s work is there', async () => {
+    const harness = harnessWith({ runs: { ...happyRuns(), implementation: outOfTurns(SAVED) } });
+    await harness.publish([ticketMatched()]);
+    // The retry ends too, without saving anything, so the walk stops at a second escalation.
+    harness.script('implementation', {
+      status: 'failed',
+      terminalReason: 'error_during_execution',
+      error: 'the CLI exited with 1',
+    });
+    await retryStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'implementation' as Slug,
+    });
+    await harness.drain();
+
+    const [first, retry] = implementationSpecs(harness);
+    expect(retry?.checkoutRef).toBe('agentic/ACME-1');
+    expect(retry?.userPrompt).toContain(
+      'A previous attempt of this stage ended `error_max_turns` after 201 turns without finishing.',
+    );
+    expect(first?.userPrompt).not.toContain('A previous attempt');
+    // The second ending saved nothing, so a third attempt would not be told anything.
+    expect(harness.store.savedWorkOf(retry?.runId as never)).toBeNull();
+    expect(escalationOf(harness)[1]?.payload.blocker_brief).not.toContain('unfinished work');
+  });
+
+  it('records a push that failed on the run, and leaves the task’s branch and the retry’s prompt alone', async () => {
+    const notPushed = { ...SAVED, commit_sha: null, pushed: false };
+    const harness = harnessWith({
+      runs: { ...happyRuns(), implementation: outOfTurns(notPushed) },
+    });
+    await harness.publish([ticketMatched()]);
+
+    expect(taskOf(harness).branch).toBeNull();
+    const [spec] = implementationSpecs(harness);
+    expect(harness.store.savedWorkOf(spec?.runId as never)).toEqual(notPushed);
+    expect(escalationOf(harness)[0]?.payload.blocker_brief).toContain('the push did not succeed');
+
+    harness.script('implementation', {
+      status: 'failed',
+      terminalReason: 'error_during_execution',
+      error: 'the CLI exited with 1',
+    });
+    await retryStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'implementation' as Slug,
+    });
+    await harness.drain();
+    expect(implementationSpecs(harness)[1]?.userPrompt).not.toContain('A previous attempt');
+  });
+
+  it('records the branch on a task its overspent run paused', async () => {
+    const harness = harnessWith({
+      runs: {
+        ...happyRuns(),
+        implementation: {
+          status: 'budget_exceeded',
+          terminalReason: 'error_max_budget_usd',
+          costUsd: 2,
+          savedWork: SAVED,
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('paused');
+    expect(taskOf(harness).branch).toBe('agentic/ACME-1');
+  });
+});

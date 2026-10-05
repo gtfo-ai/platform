@@ -11,6 +11,12 @@
  * its workspace for the export"*, which expects `wip: hand-over to Ada Lovelace`); what that case cannot see is a
  * **second** writer somewhere else, and this is that half.
  *
+ * **Two writers since 2026-10-05** (the product owner's decision, BD-025's amendment of that date,
+ * PROGRESS backlog 467): an unsuccessful Developer run's unfinished work is exported the same way, as
+ * `wip: unfinished attempt <n> of <stage> (<terminal reason>)`, and product/19 §7 was amended to name
+ * both. The second writer was a decision, made in the documents first — which is exactly what this
+ * census exists to force — and it is declared below with its role, so a **third** still fails here.
+ *
  * ## Two censuses, because the rule has two ways to break
  *
  * 1. **A `wip:` string anywhere in production.** A second commit path — a librarian commit, a rebase
@@ -58,6 +64,12 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const EXPECTED_WIP_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/commands.ts', 1],
   ['apps/server/src/routes/commands.ts', 1],
+  // Backlog 467's **writer**: `unfinishedWorkCommitMessage` builds the second permitted message, and
+  // `savedWorkSentence` quotes the word in the platform's brief about it — two literals, one writer.
+  ['packages/application/src/pipeline/unfinished-work.ts', 2],
+  // Prose, not a commit: `previousAttemptLine` tells the next run that a `wip:` commit holds the
+  // previous attempt's work, and to leave it as it is.
+  ['packages/domain/src/prompt/assembly.ts', 2],
 ]);
 
 /**
@@ -95,9 +107,13 @@ const EXPECTED_COMMIT_MESSAGE_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/commands.ts', 1],
   ['packages/infrastructure/src/pipeline/postgres-run-commands.ts', 1],
   ['packages/application/src/pipeline/run-commands.ts', 1],
-  ['packages/infrastructure/src/launcher/provisioner.ts', 1],
+  // Two forwards since backlog 467: the take-over's export and the unfinished work's.
+  ['packages/infrastructure/src/launcher/provisioner.ts', 2],
   ['apps/launcher/src/control-plane.ts', 1],
   ['apps/launcher/src/service.ts', 1],
+  // Backlog 467: one declaration (`UnfinishedWorkExport.commitMessage`) and the second **writer**
+  // (`unfinishedWorkExportFor`, which takes its value from `unfinishedWorkCommitMessage`).
+  ['packages/application/src/pipeline/unfinished-work.ts', 2],
 ]);
 
 /** Tracked *and* committable-but-untracked, which is the tree the pre-push hook sees (rule 85). */
@@ -140,17 +156,20 @@ const census = (pattern: RegExp): Map<string, number> => {
 const asObject = (entries: ReadonlyMap<string, number>): Record<string, number> =>
   Object.fromEntries([...entries].sort());
 
-describe('product/19:84 — the take-over export is the only `wip:` commit (WP-27)', () => {
-  it('finds the one writer and the one place that quotes it, and nothing else', () => {
+describe('product/19 §7 — the take-over and an unsuccessful run are the only `wip:` commits (WP-27, backlog 467)', () => {
+  it('finds the two writers and the places that quote them, and nothing else', () => {
     expect(asObject(census(WIP_LITERAL))).toEqual(asObject(EXPECTED_WIP_SITES));
   });
 
-  it('has one production site that decides a commit message, and it is the take-over', () => {
-    expect(asObject(census(COMMIT_MESSAGE_KEY))).toEqual(asObject(EXPECTED_COMMIT_MESSAGE_SITES));
-    // Stated as the number the rule rests on, rather than left to be counted off the map: four
-    // declarations and five forwarders are not writers, so the writers are the total minus nine.
-    const sites = [...census(COMMIT_MESSAGE_KEY).values()].reduce((sum, count) => sum + count, 0);
-    expect(sites - 9).toBe(1);
+  it('has two production sites that decide a commit message: the take-over and the unfinished work', () => {
+    // One walk of the tree, read twice: the census is the slow half, and under load two walks
+    // crossed the default five seconds (backlog 467's verify run).
+    const found = census(COMMIT_MESSAGE_KEY);
+    expect(asObject(found)).toEqual(asObject(EXPECTED_COMMIT_MESSAGE_SITES));
+    // Stated as the number the rule rests on, rather than left to be counted off the map: five
+    // declarations and six forwards are not writers, so the writers are the total minus eleven.
+    const sites = [...found.values()].reduce((sum, count) => sum + count, 0);
+    expect(sites - 11).toBe(2);
   });
 
   it('sees a writer after a `//` inside a string on the same line (backlog 269)', () => {

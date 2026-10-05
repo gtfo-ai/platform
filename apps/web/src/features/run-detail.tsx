@@ -51,6 +51,7 @@ import { CodeText, DownloadLink, UntrustedText } from '../ui/untrusted.js';
 import { FeedbackForm } from './feedback.js';
 import { RunCommandLog } from './run-command-log.js';
 import { RunNotStartedPanel } from './run-not-started.js';
+import { RunSavedWorkLine } from './run-saved-work.js';
 import { RunSettingsLine, RunSettingsPanel } from './run-settings.js';
 import { TakeOverPanel } from './take-over.js';
 
@@ -216,6 +217,10 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
             the task's previous one is answered here, before anybody opens the Settings tab. */}
         <div className="pt-3">
           <RunSettingsLine run={record} runs={task.data?.runs} />
+        </div>
+        {/* Backlog 467: what the platform did with an unsuccessful run's unfinished work. */}
+        <div className="pt-1">
+          <RunSavedWorkLine saved={record.saved_work} />
         </div>
       </Card>
 

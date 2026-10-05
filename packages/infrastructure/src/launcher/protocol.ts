@@ -136,6 +136,8 @@ export const workspaceAttachmentSchema: z.ZodType<WorkspaceAttachment> = z.stric
 const workspaceExportSchema: z.ZodType<WorkspaceExport> = z.strictObject({
   branch: nonEmptyStringSchema.max(255),
   pushed: z.boolean(),
+  // Backlog 467: answered for an `onlyIfChanged` export only; optional so either build parses.
+  changed: z.boolean().optional(),
   commitSha: nonEmptyStringSchema.max(64).nullable(),
   tarballPath: nonEmptyStringSchema.max(4_096).nullable(),
   tarballBytes: z.int().min(0),
@@ -362,6 +364,12 @@ export const endRunRequestSchema = z.strictObject({
       commitMessage: nonEmptyStringSchema.max(1_000),
       tarball: z.boolean(),
       keepUntil: isoDateTimeSchema.optional(),
+      /**
+       * `WorkspaceExportRequest.onlyIfChanged` (PROGRESS backlog 467): an unsuccessful run's export,
+       * which pushes nothing for a tree that did not change. Sent only when `true`, so a take-over's
+       * end request is byte-for-byte what it was.
+       */
+      onlyIfChanged: z.boolean().optional(),
     })
     .nullable(),
 });

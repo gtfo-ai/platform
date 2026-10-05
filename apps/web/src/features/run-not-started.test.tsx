@@ -69,6 +69,7 @@ const runWith = (startFailure: RunStartFailure | null): RunRecord => ({
   redaction_count: 0,
   settings_hash: null,
   start_failure: startFailure,
+  saved_work: null,
 });
 
 const json = (body: unknown, status = 200): Response =>

@@ -74,6 +74,7 @@ import type {
   WorkspaceSpec,
 } from '@platform/application';
 import { silentLogger, WorkspaceError } from '@platform/application';
+import { type RunSavedWork, shaSchema } from '@platform/contracts';
 import { createRunletSpawn } from '../runlet/spawn-adapter.js';
 import type {
   ProvisionedRunWorkspace,
@@ -88,7 +89,7 @@ import {
 import { buildWorkspaceSpec } from '../workspace/spec.js';
 import type { LauncherControlClient } from './client.js';
 import { createDeployKeySigner, type DeployKeySigner } from './deploy-key-signer.js';
-import type { CreateRunResponse, RunCredentialPayload } from './protocol.js';
+import type { CreateRunResponse, EndRunResponse, RunCredentialPayload } from './protocol.js';
 
 /**
  * What the platform knows about a run's project that the launcher does not.
@@ -415,7 +416,7 @@ export const createLauncherRunWorkspaceProvisioner = (
               'the run’s deploy-key signatures, counted at release',
             );
           }
-          await releaseRun({
+          const savedWork = await releaseRun({
             client: options.client,
             handle: ready.handle,
             ending,
@@ -424,6 +425,7 @@ export const createLauncherRunWorkspaceProvisioner = (
           // After `endRun` returns, on every ending: a take-over export pushes with the launcher's
           // copy first, and only then is the token destroyed.
           await revokeOnce();
+          return savedWork === undefined ? undefined : { savedWork };
         },
       };
     },
@@ -543,20 +545,35 @@ const releaseRun = async (input: {
   readonly handle: WorkspaceHandle;
   readonly ending: RunWorkspaceEnding;
   readonly logger: Logger;
-}): Promise<void> => {
+}): Promise<RunSavedWork | undefined> => {
   const takeOver = input.ending.kind === 'ended' ? (input.ending.takeOver ?? null) : null;
+  // Backlog 467: never both — the workspace runner asks for the unfinished work only without a
+  // take-over, and a take-over's export is the one sent if both were ever set.
+  const unfinished =
+    takeOver === null && input.ending.kind === 'ended'
+      ? (input.ending.unfinishedWork ?? null)
+      : null;
   try {
     const ended = await input.client.endRun(input.handle.runId, {
       handle: input.handle,
       export:
-        takeOver === null
-          ? null
-          : {
+        takeOver !== null
+          ? {
               branch: takeOver.branch,
               commitMessage: takeOver.commitMessage,
               tarball: takeOver.tarball,
               keepUntil: takeOver.keepUntil,
-            },
+            }
+          : unfinished !== null
+            ? {
+                branch: unfinished.branch,
+                commitMessage: unfinished.commitMessage,
+                // No tarball and no longer retention: the branch is where the work goes, and the
+                // volume keeps its ordinary window as the copy of last resort when the push fails.
+                tarball: false,
+                onlyIfChanged: true,
+              }
+            : null,
     });
     if (ended.failures.length > 0) {
       input.logger.warn(
@@ -564,12 +581,43 @@ const releaseRun = async (input: {
         'the run ended with failures after its container was stopped',
       );
     }
+    return unfinished === null ? undefined : savedWorkOf(unfinished, ended.exported);
   } catch (error) {
     input.logger.error(
       { err: error, run_id: input.handle.runId, ending: input.ending.kind },
       'the launcher could not be told that this run ended; its container may still be running',
     );
+    // Asked and unanswered: whether anything was pushed is unknown, so nothing is claimed.
+    return unfinished === null
+      ? undefined
+      : { branch: unfinished.branch, commit_sha: null, pushed: false };
   }
+};
+
+/**
+ * The launcher's answer to an unfinished-work export, as the run records it (backlog 467).
+ *
+ * `null` from the launcher is an export that **failed** (its failure is in `failures`, logged above)
+ * — recorded as attempted and not pushed. `changed: false` is a tree with nothing to save — recorded
+ * as nothing. A commit is kept only when it is a hexadecimal sha, which is what the record's schema
+ * holds it to.
+ */
+export const savedWorkOf = (
+  asked: { readonly branch: string },
+  exported: EndRunResponse['exported'],
+): RunSavedWork | undefined => {
+  if (exported === null) {
+    return { branch: asked.branch, commit_sha: null, pushed: false };
+  }
+  if (exported.changed === false) {
+    return undefined;
+  }
+  const sha = shaSchema.safeParse(exported.commitSha);
+  return {
+    branch: asked.branch,
+    commit_sha: sha.success ? sha.data : null,
+    pushed: exported.pushed,
+  };
 };
 
 /** The spec's SSH half of a deploy key — its public key without a comment, and the provider's route. */

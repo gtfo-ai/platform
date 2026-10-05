@@ -373,6 +373,8 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
               ...(request.export.keepUntil === undefined
                 ? {}
                 : { keepUntil: request.export.keepUntil }),
+              // Backlog 467: an unsuccessful run's export pushes nothing for an unchanged tree.
+              ...(request.export.onlyIfChanged === true ? { onlyIfChanged: true } : {}),
             },
     });
     ends.set(runId, ending);

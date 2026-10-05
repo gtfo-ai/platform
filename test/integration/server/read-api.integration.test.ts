@@ -2137,6 +2137,78 @@ describe('the run settings and the task export’s events against PostgreSQL (WP
   });
 
   /**
+   * Backlog 467: an unsuccessful Developer run's saved work reaches `runs.saved_work` through
+   * `finish` (migration 0083), and `GET /api/runs/:id` publishes it — `null` for a run that saved
+   * nothing, and a refusal for a value this release cannot read rather than "nothing was saved".
+   */
+  it('writes saved work to saved_work through finish, and the record publishes it', async () => {
+    const store = pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+    const own = await pool.query<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                          current_stage)
+       values ($1, 'fake-jira', 'ACME-467', 'https://jira.example.test/browse/ACME-467',
+               'feature', 'needs_human', 'implementation') returning id`,
+      [projectId],
+    );
+    const ownTaskId = own.rows[0]?.id as string;
+    const stage = await pool.query<{ id: string }>(
+      `insert into task_stages (task_id, stage, attempt, state)
+       values ($1, 'implementation', 1, 'running') returning id`,
+      [ownTaskId],
+    );
+    const runFor = async () =>
+      (
+        await pool.query<{ id: string }>(
+          `insert into runs (task_id, task_stage_id, project_id, role, model, prompt_version,
+                             status, started_at)
+           values ($1, $2, $3, 'developer', 'claude-opus-5', 'feature@1+dev', 'running', now())
+           returning id`,
+          [ownTaskId, stage.rows[0]?.id, projectId],
+        )
+      ).rows[0]?.id as string;
+    const savedRun = await runFor();
+    const plainRun = await runFor();
+    const saved = { branch: 'agentic/ACME-467', commit_sha: 'abc1234def', pushed: true };
+    const finish = async (runId: string, savedWork?: typeof saved) => {
+      const client = await pool.connect();
+      try {
+        const tx = { adapter: 'postgres', client } as unknown as Transaction;
+        return await store.runs.finish(tx, {
+          runId: runId as Id,
+          status: 'failed',
+          terminalReason: 'error_max_turns',
+          sessionId: null,
+          numTurns: 201,
+          usage: {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 0,
+            cache_read_tokens: 0,
+          },
+          cost: { usd: 1, is_estimate: false, price_list_id: null },
+          wallMs: 0,
+          ...(savedWork === undefined ? {} : { savedWork }),
+        });
+      } finally {
+        client.release();
+      }
+    };
+    expect(await finish(savedRun, saved)).toBe(true);
+    expect(await finish(plainRun)).toBe(true);
+
+    expect((await findRun(drizzled, savedRun))?.saved_work).toEqual(saved);
+    expect((await findRun(drizzled, plainRun))?.saved_work).toBeNull();
+    await pool.query(`update runs set saved_work = '{"branch":"main"}'::jsonb where id = $1`, [
+      plainRun,
+    ]);
+    await expect(findRun(drizzled, plainRun)).rejects.toMatchObject({
+      code: 'row_not_projectable',
+    });
+    await pool.query('delete from tasks where id = $1', [ownTaskId]);
+  });
+
+  /**
    * Backlog 454: `runs.provider_mode` had no writer, so every row kept 0004's `default 'api'` and a
    * `local`-mode instance's runs read as API-billed. `RunRepository.insert` writes the planned mode;
    * both values, so a writer that ignored its input would fail one of them.

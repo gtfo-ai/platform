@@ -59,6 +59,7 @@ import {
   isPromptExcludedArtifact,
   type PromptContextPack,
   type PromptNonceSource,
+  type PromptPreviousAttempt,
   type ResolvedCommandPolicy,
   type RolePromptDefinition,
   resolveRunCapUsd,
@@ -92,6 +93,7 @@ import type { StageRunPlan, StageRunPlanner, StageRunRequest } from './stage-exe
 import type { StoredArtifact, StoredTask } from './store.js';
 import { exceptionsOf } from './tamper.js';
 import { TICKET_LINT_STAGE, TICKET_LINT_TEMPLATE_ID } from './ticket-lint.js';
+import { unfinishedWorkBranchFor } from './unfinished-work.js';
 
 /**
  * Which platform tools a role may call (technical/04: "a run is given the subset its role needs:
@@ -1136,6 +1138,30 @@ export const checkoutOf = (
 };
 
 /**
+ * The previous attempt the prompt tells this run about (PROGRESS backlog 467), or `null`.
+ *
+ * Said only when it is true of **this** workspace: the latest ended run of the stage saved its work,
+ * the push succeeded, and the branch it pushed is the branch this run checks out. A push that failed
+ * left nothing on the remote, and a run on another branch (a rework moved the task) would be told
+ * about work it cannot see — so both are silent, and the run starts as any attempt does.
+ */
+export const previousAttemptFor = (
+  request: Pick<StageRunRequest, 'previousAttempt'>,
+  checkoutRef: string | null,
+): PromptPreviousAttempt | null => {
+  const previous = request.previousAttempt ?? null;
+  if (
+    previous === null ||
+    !previous.savedWork.pushed ||
+    checkoutRef === null ||
+    previous.savedWork.branch !== checkoutRef
+  ) {
+    return null;
+  }
+  return { terminalReason: previous.terminalReason, numTurns: previous.numTurns };
+};
+
+/**
  * `runs.mode` — technical/04's mode table, which is about the **run** and not about the task.
  *
  * Three questions in one order, and the order is the rule. `shadow` comes from `tasks.mode`, which
@@ -1360,6 +1386,9 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         items: entry.items,
         requiredBy: entry.requiredBy,
       }));
+      const checkout = checkoutOf(request, role);
+      const mode = runModeFor(task, stage.id);
+      const previousAttempt = previousAttemptFor(request, checkout.checkoutRef);
       const prompt = assemblePrompt({
         nonce: options.nonce,
         role: options.prompts[role],
@@ -1396,6 +1425,8 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           // transaction before this plan — `[]` for every run it did not read for, so a project with
           // neither observability binding plans the prompt it always did.
           observability: request.observability ?? [],
+          // Backlog 467: the previous attempt's saved work is on the branch this run checks out.
+          previousAttempt,
         },
         artifactType: stage.produces,
         // The stage's narrower instruction, when it has one: platform text, typed as a closed set
@@ -1425,7 +1456,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         projectId: task.task.projectId,
         stage: stage.id,
         role,
-        mode: runModeFor(task, stage.id),
+        mode,
         attempt: request.attempt,
         // The human's override for this attempt first (WP-15i), then the project's stage
         // configuration, then the template's default. One attempt only: the override rides the
@@ -1440,7 +1471,14 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         systemPromptAppend: prompt.systemPrompt,
         userPrompt: prompt.userPrompt,
         workspacePath: options.workspacePath(task.task.id),
-        ...checkoutOf(request, role),
+        ...checkout,
+        // Backlog 467: where this run's unfinished work goes if it ends without a result.
+        unfinishedWorkBranch: unfinishedWorkBranchFor({
+          role,
+          stage: stage.id,
+          mode,
+          checkoutRef: checkout.checkoutRef,
+        }),
         contextPack: [...pack.runContextPack],
         limits: limitsFor(settings, stage.id, role),
         tools: [...(TOOLS_BY_ROLE[role] ?? [])],

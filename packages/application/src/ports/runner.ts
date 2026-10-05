@@ -22,6 +22,7 @@ import type {
   ModelUsage,
   RunCost,
   RunMode,
+  RunSavedWork,
   RunStartFailure,
   RunStatus,
   RunTerminalReason,
@@ -41,6 +42,7 @@ import {
   RUN_START_FAILURE_MESSAGE_MAX_CHARS,
   RUN_START_FAILURE_OUTPUT_MAX_CHARS,
   runModeSchema,
+  runSavedWorkSchema,
   shaSchema,
   stageIdSchema,
   usdSchema,
@@ -212,6 +214,19 @@ export const runSpecSchema = z.strictObject({
    * two is set; the planner is the one producer.
    */
   checkoutCommit: shaSchema.nullable(),
+  /**
+   * Where this run's **unfinished work** goes if it ends without a result — the product owner's
+   * 2026-10-05 decision (BD-025's amendment of that date, PROGRESS backlog 467) — or `null` for a
+   * run whose work is not saved.
+   *
+   * One producer, the planner (`unfinishedWorkBranchFor` in `pipeline/unfinished-work.ts`): a
+   * Developer run of an ordinary task at any stage but `conflict_resolution`, whose checkout is an
+   * `agentic/*` branch — the same value as {@link checkoutRef}, so the work goes back to the branch
+   * the run was given. One reader, the workspace runner, which asks the workspace for the export when
+   * the outcome is one `savesUnfinishedWork` names. A field rather than a rule the runner re-derives
+   * because the runner must not grow a second opinion about roles, stages and task modes.
+   */
+  unfinishedWorkBranch: runSavedWorkSchema.shape.branch.nullable(),
   contextPack: z.array(runContextDocumentSchema),
   limits: runLimitsSchema,
   /**
@@ -324,6 +339,14 @@ export interface RunOutcome {
   readonly error: string | null;
   /** Total replacements the redaction path made across the run's transcript (TD-012). */
   readonly redactionCount: number;
+  /**
+   * What the workspace did with this run's unfinished work (PROGRESS backlog 467), set by the
+   * workspace runner after the outcome and before the workspace is freed — absent when no export was
+   * attempted (a success, a run with no {@link RunSpec.unfinishedWorkBranch}, an ending that is not
+   * saved, a take-over, or a workspace with no changes). The stage executor writes it to
+   * `runs.saved_work` and the terminal event, and records the branch on the task.
+   */
+  readonly savedWork?: RunSavedWork;
 }
 
 // ── Collaborators ────────────────────────────────────────────────────────────

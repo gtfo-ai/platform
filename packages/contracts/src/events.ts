@@ -30,6 +30,7 @@ import {
   pathPatternSchema,
   runCostSchema,
   runModeSchema,
+  runSavedWorkSchema,
   runStartFailureSchema,
   runStatusSchema,
   runTerminalReasonSchema,
@@ -628,6 +629,12 @@ export const runFinishedEvent = defineEvent('run.finished', {
   cost: runCostSchema.nullish(),
   num_turns: z.int().nonnegative(),
   wall_ms: z.int().nonnegative(),
+  /**
+   * What the platform did with the run's unfinished work (PROGRESS backlog 467) — present when it
+   * attempted the export, so a budget or wall-clock ending that saved its work says so. Nullish, so
+   * every `run.finished` appended before it still parses unchanged on replay.
+   */
+  saved_work: runSavedWorkSchema.nullish(),
 });
 
 export const runFailedEvent = defineEvent('run.failed', {
@@ -644,6 +651,8 @@ export const runFailedEvent = defineEvent('run.failed', {
    * Nullish, so every `run.failed` appended before it still parses unchanged on replay.
    */
   start_failure: runStartFailureSchema.nullish(),
+  /** {@link runFinishedEvent}'s `saved_work`, for the failed endings (PROGRESS backlog 467). */
+  saved_work: runSavedWorkSchema.nullish(),
 });
 
 export const runSteeredEvent = defineEvent('run.steered', {

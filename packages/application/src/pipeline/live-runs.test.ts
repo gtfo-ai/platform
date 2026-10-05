@@ -42,6 +42,7 @@ const specFixture = (overrides: Partial<RunSpec> = {}): RunSpec =>
     userPrompt: 'Fix the flaky login test.',
     checkoutRef: null,
     checkoutCommit: null,
+    unfinishedWorkBranch: null,
     workspacePath: '/workspace/task',
     contextPack: [],
     limits: runLimitsDefaults,

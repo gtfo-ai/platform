@@ -275,6 +275,11 @@ export const runs = pgTable('runs', {
   status: runStatusEnum('status').notNull().default('created'),
   terminalReason: runTerminalReasonEnum('terminal_reason'),
   exitDetail: jsonb('exit_detail').$type<JsonObject>(),
+  /**
+   * What the platform did with an unsuccessful run's unfinished work (migration 0083, PROGRESS
+   * backlog 467): `runSavedWorkSchema`, written once by `RunRepository.finish`; null otherwise.
+   */
+  savedWork: jsonb('saved_work').$type<JsonObject>(),
   startedAt: timestamp('started_at', { withTimezone: true }),
   endedAt: timestamp('ended_at', { withTimezone: true }),
   lastOutputAt: timestamp('last_output_at', { withTimezone: true }),

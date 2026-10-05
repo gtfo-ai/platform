@@ -434,6 +434,24 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
     expect(ended.exported?.tarballBytes).toBeGreaterThan(0);
   });
 
+  it('passes an only-if-changed export through, and extends no retention (backlog 467)', async () => {
+    const { started } = await start();
+    const exported = vi.spyOn(provider, 'export');
+    const unchanged = await service.endRun(started.handle, {
+      export: { ...exportRequest, tarball: false, onlyIfChanged: true },
+    });
+    expect(exported.mock.calls[0]?.[1]).toMatchObject({ onlyIfChanged: true, tarballPath: null });
+    expect(unchanged.exported).toMatchObject({ changed: false, pushed: false });
+    expect(unchanged.keepUntil).toBeNull();
+
+    const { started: written } = await start();
+    provider.plant(written.handle.runId, { name: 'repo/src/new.ts', type: 'file', content: 'x\n' });
+    const changed = await service.endRun(written.handle, {
+      export: { ...exportRequest, tarball: false, onlyIfChanged: true },
+    });
+    expect(changed.exported).toMatchObject({ changed: true, pushed: true });
+  });
+
   it('ends a run with no export at all', async () => {
     const { started } = await start();
     const ended = await service.endRun(started.handle, { export: null });

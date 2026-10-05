@@ -426,6 +426,36 @@ export const runWorkspaceProviderContractSuite = (
       });
     });
 
+    /**
+     * Backlog 467: an unsuccessful run's export commits and pushes only a tree that changed. With no
+     * credential nothing is pushed in either case, so the observable is `changed` — answered `false`
+     * for the untouched clone (the platform's own skills are excluded from it), `true` once the
+     * workspace holds a file the clone did not have.
+     */
+    it('answers an only-if-changed export of an untouched workspace as unchanged, and of a written one as changed', async () => {
+      await withRun(async ({ provider, handle }) => {
+        const untouched = await provider.export(
+          handle,
+          { ...exportRequest(null), onlyIfChanged: true },
+          null,
+        );
+        expect(untouched.changed).toBe(false);
+        expect(untouched.pushed).toBe(false);
+      });
+      await withRun(async ({ provider, handle, plantEscapingLink }) => {
+        await plantEscapingLink(handle);
+        const written = await provider.export(
+          handle,
+          { ...exportRequest(null), onlyIfChanged: true },
+          null,
+        );
+        expect(written.changed).toBe(true);
+        // The take-over's request is unchanged: it answers no `changed` at all.
+        const takeOver = await provider.export(handle, exportRequest(null), null);
+        expect(takeOver.changed).toBeUndefined();
+      });
+    });
+
     it('keeps a workspace whose retention window has not closed', async () => {
       await withRun(async ({ provider, handle }) => {
         await provider.destroy(handle);

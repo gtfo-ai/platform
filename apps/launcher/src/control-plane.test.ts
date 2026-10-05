@@ -395,6 +395,26 @@ describe('end', () => {
       clientFor().endRun(runId, { handle: created.handle, export: null }),
     ).resolves.toMatchObject({ failures: [] });
   });
+
+  it('carries an only-if-changed export to the workspace and its answer back (backlog 467)', async () => {
+    const runId = randomUUID();
+    const created = await clientFor().createRun({
+      spec: specFor(runId),
+      credential: credentialRequest,
+    });
+    const ended = await clientFor().endRun(runId, {
+      handle: created.handle,
+      export: {
+        branch: 'agentic/task-1',
+        commitMessage: 'wip: unfinished attempt 1 of implementation (error_max_turns)',
+        tarball: false,
+        onlyIfChanged: true,
+      },
+    });
+    // Answered at all only because the flag crossed both hops; untouched, so nothing was pushed.
+    expect(ended.exported).toMatchObject({ changed: false, pushed: false });
+    expect(ended.keepUntil).toBeNull();
+  });
 });
 
 /**

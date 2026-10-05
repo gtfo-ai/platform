@@ -31,8 +31,10 @@
 import type { RunRecord, TaskDetailResponse } from '@platform/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  MAX_TURNS_SCRIPTED,
   PLANTED_MODEL_KEY,
   PLANTED_MODEL_KEY_PLACEHOLDER,
+  SAVED_WORK_SHA,
   TRANSCRIPT_CONTROL_TEXT,
 } from '../support/agent-workspace.js';
 import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
@@ -445,4 +447,110 @@ describe('taking a task over and handing it back', () => {
     const handedBack = afterEvents.find((event) => event.type === 'task.handed_back');
     expect(JSON.stringify(handedBack?.payload)).toContain('rounded the footer by hand');
   }, 300_000);
+});
+
+/**
+ * **The take-over's export, for an attempt nobody took over** — the product owner's 2026-10-05
+ * decision (PROGRESS backlog 467), through a whole instance and the production runner over a
+ * scripted CLI.
+ *
+ * The first Developer attempt ends as the first local test's did — the CLI's `error_max_turns` after
+ * 201 turns — and the workspace runner asks its workspace for the `wip:` export on the way out. This
+ * tier's workspace answers as a launcher whose push succeeded (`agent-workspace.ts`
+ * `WorkspaceRelease.unfinishedWork`), so what is proven here is the platform's half end to end: the
+ * request reaches the workspace with the branch and the message, the answer reaches the run row, the
+ * terminal event, the task's branch and the brief, and the retry a person asks for checks out that
+ * branch and its CLI is told so. The commit and the push themselves are past the seam, as they are
+ * for the take-over: `LauncherService.endRun`'s tests and the Docker provider's are where they run.
+ */
+describe('an unsuccessful Developer run’s unfinished work (backlog 467)', () => {
+  const TOLD = 'A previous attempt of this stage ended `error_max_turns`';
+
+  it('is saved to the task’s branch, said on the run and in the brief, and the retry continues from it', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      // Picked off the prompt the planner built (standing rule 82): an attempt that was not told
+      // about a previous one runs out of turns; the retry, which is, completes as usual.
+      scenarioFor: (spec, world) =>
+        spec.stage === 'implementation' && !spec.userPrompt.includes(TOLD)
+          ? { ...featureScenarios(world).implementation, endsWith: 'error_max_turns' }
+          : undefined,
+      label: 'unfinished-work',
+      tickets: TICKETS,
+      agent: 'real-over-fake-cli',
+    });
+    harness = pipeline;
+    const client = await signIn(pipeline.instance.baseUrl);
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await pipeline.settle(
+      'the Developer attempt to escalate',
+      (snapshot) => snapshot.state === 'needs_human',
+    );
+
+    // ── the workspace was asked for the export, with the branch and the `wip:` message ──
+    const release = pipeline.workspaceReleases.find((entry) => entry.stage === 'implementation');
+    expect(release).toEqual({
+      stage: 'implementation',
+      ending: 'failed',
+      takeOver: null,
+      unfinishedWork: {
+        branch: 'agentic/ACME-1',
+        commitMessage: 'wip: unfinished attempt 1 of implementation (error_max_turns)',
+      },
+    });
+
+    // ── its answer is on the run, the terminal event, the task and the brief ──
+    const [first] = pipeline.agentRuns.filter((entry) => entry.stage === 'implementation');
+    const saved = { branch: 'agentic/ACME-1', commit_sha: SAVED_WORK_SHA, pushed: true };
+    const run = await client.json<RunRecord>(`/api/runs/${first?.spec.runId}`);
+    expect(run.status, JSON.stringify(run.body)).toBe(200);
+    expect(run.body).toMatchObject({
+      status: 'failed',
+      terminal_reason: 'error_max_turns',
+      num_turns: MAX_TURNS_SCRIPTED,
+      saved_work: saved,
+    });
+    const events = await pipeline.events();
+    const failed = events.find(
+      (event) => event.type === 'run.failed' && event.payload.run_id === first?.spec.runId,
+    );
+    expect(failed?.payload).toMatchObject({ saved_work: saved });
+    const escalated = events.find((event) => event.type === 'task.escalated');
+    expect(escalated?.type === 'task.escalated' ? escalated.payload.blocker_brief : '').toContain(
+      'pushed it to agentic/ACME-1, so a retry of this stage continues from that branch',
+    );
+    const task = await pipeline.task();
+    expect(
+      await pipeline.query<{ branch: string | null }>('select branch from tasks where id = $1', [
+        task.id,
+      ]),
+    ).toEqual([{ branch: 'agentic/ACME-1' }]);
+
+    // ── a person retries, and the retry starts on the branch and is told why ──
+    const retried = await send(
+      client,
+      `/api/tasks/${task.id}/retry-stage`,
+      { stage: 'implementation' },
+      'retry-unfinished-467',
+    );
+    expect(retried.status, JSON.stringify(retried.body)).toBe(200);
+    await pipeline.waitFor('the retry to have run', async () => {
+      return (
+        pipeline.agentRuns.filter((entry) => entry.stage === 'implementation').length === 2 &&
+        pipeline.workspaceReleases.filter((entry) => entry.stage === 'implementation').length === 2
+      );
+    });
+    const [, retry] = pipeline.agentRuns.filter((entry) => entry.stage === 'implementation');
+    expect(retry?.spec.checkoutRef).toBe('agentic/ACME-1');
+    // The CLI's own stdin — the bytes the session received, not the spec the planner built.
+    expect(JSON.stringify(retry?.cli.stdin)).toContain(
+      `${TOLD} after ${MAX_TURNS_SCRIPTED} turns without finishing.`,
+    );
+    expect(JSON.stringify(first?.cli.stdin)).not.toContain(TOLD);
+    // The retry completed, so it saved nothing and asked for nothing.
+    const second = pipeline.workspaceReleases.filter(
+      (entry) => entry.stage === 'implementation',
+    )[1];
+    expect(second).toMatchObject({ ending: 'completed', unfinishedWork: null });
+  });
 });

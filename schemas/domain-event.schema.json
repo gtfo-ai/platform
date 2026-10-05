@@ -2743,6 +2743,16 @@
               "type": "integer",
               "minimum": 0,
               "maximum": 9007199254740991
+            },
+            "saved_work": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/anon_c983d978"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -2888,6 +2898,16 @@
                     "retryable"
                   ],
                   "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "saved_work": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/anon_c983d978"
                 },
                 {
                   "type": "null"
@@ -6337,6 +6357,34 @@
     "anon_3adc8ad5": {
       "maxLength": 128,
       "$ref": "#/$defs/NonEmptyString"
+    },
+    "anon_c983d978": {
+      "type": "object",
+      "properties": {
+        "branch": {
+          "type": "string",
+          "pattern": "^agentic\\/[A-Za-z0-9._\\-/]{1,200}$"
+        },
+        "commit_sha": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pushed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "branch",
+        "commit_sha",
+        "pushed"
+      ],
+      "additionalProperties": false
     },
     "anon_def33f2f": {
       "type": "boolean"

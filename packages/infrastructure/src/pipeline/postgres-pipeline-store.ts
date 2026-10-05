@@ -69,6 +69,8 @@ import {
   artifactTypeSchema,
   mergeRequestRefSchema,
   pausedBudgetScopeSchema,
+  runSavedWorkSchema,
+  runTerminalReasonSchema,
   taskCoverageSchema,
   taskDependenciesSchema,
   taskPipelineDialSchema,
@@ -1526,7 +1528,7 @@ export const createPostgresPipelineStore = (
                 input_tokens = $6, output_tokens = $7, cache_write_5m_tokens = $8,
                 cache_write_1h_tokens = $9, cache_read_tokens = $10, usd_reported = $11,
                 usd_estimated = $12, wall_ms = $13, ended_at = now(), figure_is_floor = $15,
-                exit_detail = $16::jsonb
+                exit_detail = $16::jsonb, saved_work = $17::jsonb
           where id = $1 and status = any($14::run_status[])`,
         [
           outcome.runId,
@@ -1547,6 +1549,8 @@ export const createPostgresPipelineStore = (
           outcome.costIsFloor === true,
           // Backlog 453: the column's first writer — why a run never started; null otherwise.
           outcome.startFailure === undefined ? null : JSON.stringify(outcome.startFailure),
+          // Backlog 467: what the workspace did with the run's unfinished work; null otherwise.
+          outcome.savedWork === undefined ? null : JSON.stringify(outcome.savedWork),
         ],
       );
       if (result.rowCount !== 0) {
@@ -1665,6 +1669,42 @@ export const createPostgresPipelineStore = (
         [askId],
       );
       return Number(rows[0]?.n ?? 0);
+    },
+    /**
+     * Backlog 467 — the port's docblock has the rule. The stage is the joined `task_stages` row's,
+     * as `shutdownEndings` reads it; a value this release cannot parse is answered `null` and
+     * logged by nobody, because the only reader is a prompt sentence that is then simply not said.
+     */
+    lastSavedWork: async (tx, query) => {
+      const { rows } = await sqlOf(tx).query<{
+        id: string;
+        terminal_reason: string | null;
+        num_turns: number;
+        saved_work: unknown;
+      }>(
+        `select r.id, r.terminal_reason, r.num_turns, r.saved_work
+           from runs r
+           join task_stages s on s.id = r.task_stage_id
+          where r.task_id = $1 and s.stage = $2 and r.status <> all($3::run_status[])
+          order by r.created_at desc, r.id desc
+          limit 1`,
+        [query.taskId, query.stage, [...ACTIVE_RUN_STATUSES]],
+      );
+      const row = rows[0];
+      if (row === undefined || row.saved_work === null || row.terminal_reason === null) {
+        return null;
+      }
+      const saved = runSavedWorkSchema.safeParse(row.saved_work);
+      const reason = runTerminalReasonSchema.safeParse(row.terminal_reason);
+      if (!saved.success || !reason.success) {
+        return null;
+      }
+      return {
+        runId: row.id as Id,
+        terminalReason: reason.data,
+        numTurns: Number(row.num_turns),
+        savedWork: saved.data,
+      };
     },
     shutdownEndings: async (tx, entry) => {
       const { rows } = await sqlOf(tx).query<{ n: number }>(

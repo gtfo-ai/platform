@@ -65,6 +65,7 @@ import type {
   RunCommandRecord,
   RunModelUsageRecord,
   RunRecord,
+  RunSavedWork,
   RunStartFailure,
   RunStatus,
   TaskConflict,
@@ -81,6 +82,7 @@ import {
   MAX_RUN_COMMANDS,
   pausedBudgetScopeSchema,
   promptsWithheldSchema,
+  runSavedWorkSchema,
   runStartFailureSchema,
   taskPipelineDialSchema,
   taskStageOutcomeSchema,
@@ -176,6 +178,8 @@ interface RunProjectionRow {
   readonly settingsHash: string | null;
   /** `runs.exit_detail`; its first writer is a start failure (PROGRESS backlog 453). */
   readonly exitDetail: JsonObject | null;
+  /** `runs.saved_work`; its writer is an unsuccessful run's export (PROGRESS backlog 467). */
+  readonly savedWork: JsonObject | null;
 }
 
 const runColumns = {
@@ -209,6 +213,7 @@ const runColumns = {
   redactionCount: runs.redactionCount,
   settingsHash: runs.settingsHash,
   exitDetail: runs.exitDetail,
+  savedWork: runs.savedWork,
 } as const;
 
 /**
@@ -230,6 +235,29 @@ export const startFailureOf = (
     throw new UnprojectableRowError(
       `run ${row.id}`,
       'its `exit_detail` records a start failure in a shape this release does not read',
+    );
+  }
+  return parsed.data;
+};
+
+/**
+ * `runs.saved_work` → `RunRecord.saved_work` (PROGRESS backlog 467).
+ *
+ * `null` for a null column — a run whose unfinished work was not saved, or one that ended before the
+ * column had a writer. A value this release cannot read is **refused** by name rather than published
+ * as `null`, which would say no work was saved.
+ */
+export const savedWorkOf = (
+  row: Pick<RunProjectionRow, 'id' | 'savedWork'>,
+): RunSavedWork | null => {
+  if (row.savedWork === null) {
+    return null;
+  }
+  const parsed = runSavedWorkSchema.safeParse(row.savedWork);
+  if (!parsed.success) {
+    throw new UnprojectableRowError(
+      `run ${row.id}`,
+      'its `saved_work` records the unfinished work in a shape this release does not read',
     );
   }
   return parsed.data;
@@ -299,6 +327,7 @@ const toRunRecord = (
     // project's settings today, which would answer "what were the settings?" with what they are now.
     settings_hash: row.settingsHash,
     start_failure: startFailureOf(row),
+    saved_work: savedWorkOf(row),
   };
 };
 

@@ -519,6 +519,13 @@ export const workspaceExportRequestSchema = z.strictObject({
   tarballPath: nonEmptyStringSchema.max(4_096).nullable(),
   /** A `wip:` commit for work in progress, when the workspace has uncommitted changes. */
   commitMessage: nonEmptyStringSchema.max(1_000),
+  /**
+   * Commit and push **only when the tree changed** — uncommitted changes, untracked files, or a head
+   * the project's mirror does not hold — and otherwise push nothing (PROGRESS backlog 467: an
+   * unsuccessful run's unfinished work). Absent is `false`, the take-over's export, which pushes the
+   * branch whatever it holds because a person asked for it.
+   */
+  onlyIfChanged: z.boolean().optional(),
 });
 export type WorkspaceExportRequest = z.infer<typeof workspaceExportRequestSchema>;
 
@@ -533,6 +540,11 @@ export type WorkspaceExportRequest = z.infer<typeof workspaceExportRequestSchema
 export interface WorkspaceExport {
   readonly branch: string;
   readonly pushed: boolean;
+  /**
+   * Whether the tree differed from what the run was given — answered only for a request with
+   * `onlyIfChanged` (absent otherwise). `false` means nothing was committed and nothing pushed.
+   */
+  readonly changed?: boolean;
   readonly commitSha: string | null;
   readonly tarballPath: string | null;
   readonly tarballBytes: number;

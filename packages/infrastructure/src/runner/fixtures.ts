@@ -52,6 +52,7 @@ export const runSpecFixture = (overrides: Partial<RunSpec> = {}): RunSpec =>
     // comparison base, and `null` — this fixture's case — for the default branch.
     checkoutRef: null,
     checkoutCommit: null,
+    unfinishedWorkBranch: null,
     contextPack: [{ tier: 0, path: '.agentic/knowledge/index.md', reason: 'tier 0 index' }],
     limits: runLimitsDefaults,
     tools: ['Bash', 'Read', 'Edit', 'Write', 'Grep', 'Glob'],

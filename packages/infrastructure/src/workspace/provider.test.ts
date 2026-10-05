@@ -857,6 +857,79 @@ describe('export', () => {
   });
 });
 
+/**
+ * Backlog 467: an unsuccessful run's unfinished work is exported by the take-over's helper with one
+ * flag. The flag's lines are measured against a real git in the scratch script recorded in PROGRESS
+ * (an untouched clone, an existing and a new `agentic/*` branch: unchanged; an edit, an untracked file,
+ * a local commit: changed; deleted `refs/remotes`: unchanged, because the mirror's refs answer); here
+ * is where they sit in the script, what the provider makes of the answer, and that the take-over's
+ * script is byte-for-byte what it was.
+ */
+describe('an only-if-changed export (backlog 467)', () => {
+  const UNFINISHED = {
+    branch: 'agentic/task-1',
+    tarballPath: null,
+    commitMessage: 'wip: unfinished attempt 1 of implementation (error_max_turns)',
+    onlyIfChanged: true,
+  } as const;
+  const CREDENTIAL = { host: 'git.example.com', username: 'agentic', password: SECRET };
+
+  it('decides after every guard and before the commit, from the mirror’s own refs', () => {
+    const lines = exportScript({
+      mirror: '/cache/acme.git',
+      push: true,
+      tarball: false,
+      onlyIfChanged: true,
+    }).split('\n');
+    const nested = lines.findIndex((line) => line.includes('AGENTIC_NESTED_REPOSITORY'));
+    const decided = lines.indexOf('CHANGED=no');
+    const stop = lines.findIndex((line) => line.startsWith('if [ "$CHANGED" = no ]; then echo'));
+    const commit = lines.findIndex((line) => line.includes('g commit -q -m "$COMMIT_MESSAGE"'));
+    expect(nested).toBeGreaterThan(-1);
+    expect(decided).toBeGreaterThan(nested);
+    expect(stop).toBeGreaterThan(decided);
+    expect(commit).toBeGreaterThan(stop);
+    expect(lines.join('\n')).toContain(
+      'g --git-dir="$MIRROR" for-each-ref --format=\'^%(objectname)\' refs/heads | g rev-list -n 1 --stdin HEAD',
+    );
+  });
+
+  it('leaves the take-over’s script exactly as it was', () => {
+    const takeOver = { mirror: '/cache/acme.git', push: true, tarball: true } as const;
+    expect(exportScript({ ...takeOver, onlyIfChanged: false })).toBe(exportScript(takeOver));
+    expect(exportScript(takeOver)).not.toContain('CHANGED');
+  });
+
+  it('answers an unchanged tree as unchanged and not pushed', async () => {
+    await daemon.stop();
+    await startDaemon(() => ({ exitCode: 0, logs: 'CHANGED=no\nSHA=abc1234def\nPUSHED=no\n' }));
+    const handle = await created();
+    const result = await provider.export(handle, UNFINISHED, CREDENTIAL);
+    expect(result).toMatchObject({ changed: false, pushed: false, commitSha: 'abc1234def' });
+    const script = (daemon.byName(`export-${FIXTURE_RUN_ID}`)?.body.Cmd ?? []).join('\n');
+    expect(script).toContain('echo "CHANGED=$CHANGED"');
+  });
+
+  it('answers a changed tree as changed, with the push the helper reported', async () => {
+    await daemon.stop();
+    await startDaemon(() => ({ exitCode: 0, logs: 'CHANGED=yes\nSHA=abc1234def\nPUSHED=yes\n' }));
+    const handle = await created();
+    expect(await provider.export(handle, UNFINISHED, CREDENTIAL)).toMatchObject({
+      changed: true,
+      pushed: true,
+    });
+  });
+
+  it('reads a helper that never answered the question as changed, and the take-over as not asked', async () => {
+    await daemon.stop();
+    await startDaemon(() => ({ exitCode: 0, logs: 'SHA=abc1234def\nPUSHED=no\n' }));
+    const handle = await created();
+    expect((await provider.export(handle, UNFINISHED, CREDENTIAL)).changed).toBe(true);
+    const { onlyIfChanged: _flag, ...takeOver } = UNFINISHED;
+    expect((await provider.export(handle, takeOver, CREDENTIAL)).changed).toBeUndefined();
+  });
+});
+
 describe('retention', () => {
   const expired = '2020-01-01T00:00:00.000Z';
 

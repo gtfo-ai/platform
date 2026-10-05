@@ -32,6 +32,7 @@ import type {
   MergeRequestRef,
   OrganisationSettings,
   PipelineTemplate,
+  RunSavedWork,
 } from '@platform/contracts';
 import {
   agentRoleSchema,
@@ -74,6 +75,7 @@ import {
   staticProjectSettings,
 } from '../pipeline/settings.js';
 import { createRunStopReasons } from '../pipeline/stop-reasons.js';
+import { unfinishedWorkExportFor } from '../pipeline/unfinished-work.js';
 import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import { IntegrationError } from '../ports/integrations/common.js';
@@ -279,6 +281,14 @@ export interface ScriptedRun {
   /** Written to the transcript as the `run_stopped` row's reason (WP-12). */
   readonly stopReason?: string;
   /**
+   * What the workspace did with this run's unfinished work (backlog 467) — the workspace runner's
+   * `RunOutcome.savedWork`. Refused for a run whose spec and ending would not have asked for the
+   * export (`unfinishedWorkExportFor`), because the real runner never attaches one then.
+   */
+  readonly savedWork?: RunSavedWork;
+  /** `RunOutcome.numTurns`; @default 1. */
+  readonly numTurns?: number;
+  /**
    * The runner **throws** instead of returning a handle (WP-15c).
    *
    * A configured instance's runner does exactly this when the start fails — the launcher
@@ -478,6 +488,14 @@ const checkScripted = (
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly reason: string } => {
   const value = scripted.structuredOutput ?? null;
+  if (scripted.savedWork !== undefined && unfinishedWorkExportFor(spec, scripted) === null) {
+    return {
+      ok: false,
+      reason:
+        `it carries saved work, and a ${spec.role} run at "${spec.stage ?? 'no stage'}" ending ` +
+        `"${scripted.status}" (${scripted.terminalReason}) is one the workspace runner asks no export of`,
+    };
+  }
   if (scripted.status !== 'completed') {
     return value === null
       ? { ok: true, value: null }
@@ -532,7 +550,7 @@ const outcomeFor = (runId: Id, scripted: ScriptedRun, structuredOutput: unknown)
   status: scripted.status,
   terminalReason: scripted.terminalReason,
   sessionId: `session-${runId}`,
-  numTurns: 1,
+  numTurns: scripted.numTurns ?? 1,
   // An unmeasured stop read no `result`, so it has no usage either — what the real runner reports.
   usage: {
     input_tokens: scripted.costUnmeasured === true ? 0 : 100,
@@ -554,6 +572,7 @@ const outcomeFor = (runId: Id, scripted: ScriptedRun, structuredOutput: unknown)
   structuredOutput: structuredOutput as RunOutcome['structuredOutput'],
   error: scripted.error ?? null,
   redactionCount: 0,
+  ...(scripted.savedWork === undefined ? {} : { savedWork: scripted.savedWork }),
 });
 
 export interface HarnessOptions {

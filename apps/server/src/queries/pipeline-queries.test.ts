@@ -21,6 +21,7 @@ import { runStatusSchema, taskStageStateSchema, taskStateSchema } from '@platfor
 import { describe, expect, it } from 'vitest';
 import {
   CLOSED_TASK_STATES,
+  savedWorkOf,
   stageStateOf,
   startFailureOf,
   TERMINAL_RUN_STATUSES,
@@ -134,6 +135,26 @@ describe('the start failure a run record publishes', () => {
   it('publishes a start failure it reads, and refuses one it cannot', () => {
     expect(startFailureOf({ id: ID, exitDetail: failure })).toEqual(failure);
     expect(() => startFailureOf({ id: ID, exitDetail: { ...failure, unexpected: true } })).toThrow(
+      `run ${ID} cannot be returned`,
+    );
+  });
+});
+
+/**
+ * `runs.saved_work` → `RunRecord.saved_work` (PROGRESS backlog 467): the column null, a value this
+ * release reads, and one it cannot — refused by name, because `null` would say no work was saved.
+ */
+describe('the saved work a run record publishes', () => {
+  const ID = '00000000-0000-4000-8000-000000000467';
+  const saved = { branch: 'agentic/ACME-1', commit_sha: 'abc1234def', pushed: true };
+
+  it('publishes null for a run that saved nothing, and the record it reads', () => {
+    expect(savedWorkOf({ id: ID, savedWork: null })).toBeNull();
+    expect(savedWorkOf({ id: ID, savedWork: saved })).toEqual(saved);
+  });
+
+  it('refuses a value it cannot read rather than saying nothing was saved', () => {
+    expect(() => savedWorkOf({ id: ID, savedWork: { ...saved, branch: 'main' } })).toThrow(
       `run ${ID} cannot be returned`,
     );
   });

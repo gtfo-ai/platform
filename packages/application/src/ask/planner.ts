@@ -307,6 +307,8 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
         // so the default branch is the only sensible tree (PROGRESS backlog 71's field, WP-34).
         checkoutRef: null,
         checkoutCommit: null,
+        // Backlog 467: an ask writes nothing, so it has no unfinished work to save.
+        unfinishedWorkBranch: null,
         contextPack: [...runContextPack],
         limits: {
           ...runLimitsDefaults,

@@ -35,6 +35,7 @@ import {
   type CreateRunRequestPayload,
   createRunRequestSchema,
   type EndRunRequestPayload,
+  type EndRunResponse,
 } from './protocol.js';
 import {
   assertControlSocketUnderRoot,
@@ -43,6 +44,7 @@ import {
   type RunGitCredentialMinter,
   type RunWorkspaceProject,
   runWorkspaceSpecFor,
+  savedWorkOf,
 } from './provisioner.js';
 
 const CONTROL_ROOT = '/run/agentic/ctl';
@@ -853,6 +855,116 @@ describe('release', () => {
     };
     const workspace = await provisionerWith(failing).provision(runSpecFixture({ runId: RUN_ID }));
     await expect(workspace.release({ kind: 'ended', status: 'failed' })).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Backlog 467: an unsuccessful run's unfinished work goes through the take-over's verb — the same end
+ * request, the same export helper, the run's own credential (revoked only after the end request,
+ * asserted above for every ending) — with `onlyIfChanged`, no tarball and no longer retention. And the
+ * launcher's answer is what the run records.
+ */
+describe('release, for an unsuccessful run’s unfinished work (backlog 467)', () => {
+  const UNFINISHED = {
+    branch: 'agentic/task-7',
+    commitMessage: 'wip: unfinished attempt 1 of implementation (error_max_turns)',
+  };
+  const EXPORTED = {
+    branch: 'agentic/task-7',
+    pushed: true,
+    changed: true,
+    commitSha: 'abc1234def',
+    tarballPath: null,
+    tarballBytes: 0,
+    droppedLinks: 0,
+  };
+  const answering = (
+    exported: EndRunResponse['exported'],
+    failures: readonly string[] = [],
+  ): { client: LauncherControlClient; recorded: ReturnType<typeof clientWith>['recorded'] } => {
+    const base = clientWith();
+    return {
+      recorded: base.recorded,
+      client: {
+        ...base.client,
+        endRun: async (runId, payload) => {
+          await base.client.endRun(runId, payload);
+          return { exported, keepUntil: null, failures: [...failures] };
+        },
+      },
+    };
+  };
+  const released = async (client: LauncherControlClient) => {
+    const workspace = await provisionerWith(client).provision(runSpecFixture({ runId: RUN_ID }));
+    return workspace.release({ kind: 'ended', status: 'failed', unfinishedWork: UNFINISHED });
+  };
+
+  it('asks for the export only if the tree changed, with no tarball and no retention', async () => {
+    const { client, recorded } = answering(EXPORTED);
+    expect(await released(client)).toEqual({
+      savedWork: { branch: 'agentic/task-7', commit_sha: 'abc1234def', pushed: true },
+    });
+    expect(recorded.ends[0]?.payload.export).toEqual({
+      branch: 'agentic/task-7',
+      commitMessage: 'wip: unfinished attempt 1 of implementation (error_max_turns)',
+      tarball: false,
+      onlyIfChanged: true,
+    });
+  });
+
+  it('records nothing for an unchanged tree, and an attempt that did not push for every failure', async () => {
+    expect(await released(answering({ ...EXPORTED, changed: false, pushed: false }).client)).toBe(
+      undefined,
+    );
+    // The helper refused (a nested repository, say): the launcher answers no export and a failure.
+    expect(await released(answering(null, ['export: refusing to export']).client)).toEqual({
+      savedWork: { branch: 'agentic/task-7', commit_sha: null, pushed: false },
+    });
+    // The push was refused by the remote.
+    expect(await released(answering({ ...EXPORTED, pushed: false }).client)).toEqual({
+      savedWork: { branch: 'agentic/task-7', commit_sha: 'abc1234def', pushed: false },
+    });
+    // The launcher could not be told at all: nothing is claimed about the push.
+    const failing: LauncherControlClient = {
+      ...clientWith().client,
+      endRun: async () => {
+        throw new WorkspaceError('engine_unavailable', 'the launcher is gone');
+      },
+    };
+    expect(await released(failing)).toEqual({
+      savedWork: { branch: 'agentic/task-7', commit_sha: null, pushed: false },
+    });
+  });
+
+  it('keeps a commit only when it is a sha', () => {
+    expect(savedWorkOf(UNFINISHED, { ...EXPORTED, commitSha: 'not-a-sha' })).toEqual({
+      branch: 'agentic/task-7',
+      commit_sha: null,
+      pushed: true,
+    });
+    // An earlier launcher answers no `changed`: the export happened, so it is read as changed.
+    const { changed: _changed, ...withoutChanged } = EXPORTED;
+    expect(savedWorkOf(UNFINISHED, withoutChanged)?.pushed).toBe(true);
+  });
+
+  it('sends a take-over’s export rather than the unfinished work’s if both were ever set', async () => {
+    const { client, recorded } = answering(EXPORTED);
+    const workspace = await provisionerWith(client).provision(runSpecFixture({ runId: RUN_ID }));
+    const takeOver = {
+      branch: 'agentic/task-7',
+      commitMessage: 'wip: hand-over to Ada Lovelace',
+      tarball: false,
+      keepUntil: '2026-01-15T00:00:00.000Z',
+    };
+    expect(
+      await workspace.release({
+        kind: 'ended',
+        status: 'cancelled',
+        takeOver,
+        unfinishedWork: UNFINISHED,
+      }),
+    ).toBeUndefined();
+    expect(recorded.ends[0]?.payload.export).toEqual(takeOver);
   });
 });
 

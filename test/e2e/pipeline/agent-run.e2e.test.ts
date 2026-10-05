@@ -152,10 +152,16 @@ describe('the production runner, over a scripted CLI', () => {
     //
     // One release per run, each carrying the terminal status — and `takeOver: null`, because none
     // of these runs was taken over (WP-27; `take-over.e2e.test.ts` is where that field is not
-    // null). The per-ending enumeration is `workspace-runner.test.ts`; this is the same obligation
-    // discharged by the **composed** instance, which is the half a unit test cannot state.
+    // null), and `unfinishedWork: null`, because every one of them completed (backlog 467). The
+    // per-ending enumeration is `workspace-runner.test.ts`; this is the same obligation discharged by
+    // the **composed** instance, which is the half a unit test cannot state.
     expect(pipeline.workspaceReleases).toEqual(
-      pipeline.agentRuns.map((run) => ({ stage: run.stage, ending: 'completed', takeOver: null })),
+      pipeline.agentRuns.map((run) => ({
+        stage: run.stage,
+        ending: 'completed',
+        takeOver: null,
+        unfinishedWork: null,
+      })),
     );
   }, 240_000);
 

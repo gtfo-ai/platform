@@ -23,6 +23,7 @@ import type {
   ModelUsage,
   RunCost,
   RunMode,
+  RunSavedWork,
   RunStartFailure,
   RunStatus,
   RunTerminalReason,
@@ -261,6 +262,11 @@ export interface FinishRunInput {
   /** `null` when nothing measured the run's spend — never `{ usd: 0 }` for that (WP-119, rule 16). */
   readonly cost: RunCost | null;
   readonly numTurns: number;
+  /**
+   * What the platform did with the run's unfinished work (PROGRESS backlog 467), carried onto
+   * `run.finished.saved_work` as given; absent when it attempted no export.
+   */
+  readonly savedWork?: RunSavedWork;
 }
 
 /** A terminal outcome the platform counts as a completed attempt (`run.finished`). */
@@ -283,6 +289,7 @@ export const finishRun = (
     cost: input.cost,
     num_turns: input.numTurns,
     wall_ms: run.startedAt === null ? 0 : Math.max(0, differenceMs(run.startedAt, endedAt)),
+    ...(input.savedWork === undefined ? {} : { saved_work: input.savedWork }),
   });
   return {
     aggregate: {
@@ -308,6 +315,8 @@ export interface FailRunInput {
    * `run.failed.start_failure` as given — the caller redacted and bounded it.
    */
   readonly startFailure?: RunStartFailure;
+  /** {@link FinishRunInput.savedWork}, onto `run.failed.saved_work` (PROGRESS backlog 467). */
+  readonly savedWork?: RunSavedWork;
 }
 
 export const failRun = (run: Run, input: FailRunInput, context: CommandContext): RunDecision => {
@@ -324,6 +333,7 @@ export const failRun = (run: Run, input: FailRunInput, context: CommandContext):
     usage: input.usage ?? null,
     cost: input.cost ?? null,
     ...(input.startFailure === undefined ? {} : { start_failure: input.startFailure }),
+    ...(input.savedWork === undefined ? {} : { saved_work: input.savedWork }),
   });
   return {
     aggregate: {

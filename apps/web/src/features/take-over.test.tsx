@@ -67,6 +67,7 @@ const run = (id: string, startedAt: string): RunRecord => ({
   redaction_count: 0,
   settings_hash: null,
   start_failure: null,
+  saved_work: null,
 });
 
 const TAKEN_OVER: TakenOver = {
@@ -464,6 +465,32 @@ describe('the run screen’s budget cap badge (backlog 466)', () => {
     expect(crossedBudgetCap({ status: 'completed', terminal_reason: 'error_max_budget_usd' })).toBe(
       true,
     );
+  });
+});
+
+describe('the task screen’s runs list marks saved work (backlog 467)', () => {
+  it('marks the run whose unfinished work was pushed, and no other', async () => {
+    const saved: RunRecord = {
+      ...run(RUN, '2026-09-13T05:00:00.000Z'),
+      status: 'failed',
+      terminal_reason: 'error_max_turns',
+      saved_work: { branch: 'agentic/acme-1', commit_sha: 'abc1234', pushed: true },
+    };
+    const notPushed: RunRecord = {
+      ...run(LATER_RUN, '2026-09-13T07:00:00.000Z'),
+      status: 'failed',
+      terminal_reason: 'timed_out',
+      saved_work: { branch: 'agentic/acme-1', commit_sha: null, pushed: false },
+    };
+    render(
+      createApp({
+        fetchImpl: fetchFor(detail({ runs: [saved, notPushed] }), []),
+        realtime: false,
+      }).element,
+    );
+    await screen.findByText('Stage commands');
+    // One badge: a push that did not succeed left nothing on the branch to mark.
+    expect(screen.getAllByText('work saved to branch')).toHaveLength(1);
   });
 });
 

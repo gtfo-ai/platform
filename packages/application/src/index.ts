@@ -161,6 +161,7 @@ export * from './pipeline/task-conflict.js';
 export * from './pipeline/ticket-poll.js';
 export * from './pipeline/ticket-snapshot.js';
 export * from './pipeline/transitions.js';
+export * from './pipeline/unfinished-work.js';
 export * from './pipeline/verdicts.js';
 export * from './pipeline/workpad.js';
 // Ports
