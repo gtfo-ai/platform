@@ -494,7 +494,7 @@ describe('the command policy through the SDK', () => {
     expect(hook?.response).toMatchObject({
       hookSpecificOutput: {
         permissionDecision: 'deny',
-        permissionDecisionReason: expect.stringContaining('command policy: block'),
+        permissionDecisionReason: expect.stringContaining('matches the block-list entry'),
       },
     });
     const recorded = events.find((event) => event.kind === 'hook');

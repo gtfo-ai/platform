@@ -324,6 +324,7 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
           allow: [...policy.policy.allow],
           ask: [...policy.policy.ask],
           block: [...policy.policy.block],
+          unattended: policy.unattended,
         },
         protectedPaths: [],
         plannedProtectedPaths: [],

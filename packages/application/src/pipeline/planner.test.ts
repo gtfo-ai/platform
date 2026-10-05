@@ -1223,6 +1223,33 @@ describe('what the project decides about a run, within what the role allows', ()
   });
 
   /**
+   * BD-025's 2026-10-06 amendment: the run carries the unattended mode, `auto` unless any layer —
+   * the organisation, the settings, the repository file — says `deny`, and a later `auto` never
+   * undoes an earlier `deny`.
+   */
+  it('plans `auto` by default, and `deny` when any layer says so', async () => {
+    expect((await planFor(developerStage, [])).commandPolicy.unattended).toBe('auto');
+    expect(
+      (await planFor(developerStage, [], {}, { organisationCommands: { unattended: 'deny' } }))
+        .commandPolicy.unattended,
+    ).toBe('deny');
+    expect(
+      (
+        await planFor(
+          developerStage,
+          [],
+          { commands: { unattended: 'deny' } },
+          { repositoryCommands: { unattended: 'auto' } },
+        )
+      ).commandPolicy.unattended,
+    ).toBe('deny');
+    expect(
+      (await planFor(developerStage, [], {}, { repositoryCommands: { unattended: 'deny' } }))
+        .commandPolicy.unattended,
+    ).toBe('deny');
+  });
+
+  /**
    * WP-63 review round 2: the repository file's commands (`ProjectSettings.repositoryCommands`) are
    * the planner's fourth argument, and nothing else carries them to a run — so a planner that
    * dropped it would show `make deploy*` blocked on the pipeline screen and let every run run it.

@@ -192,6 +192,8 @@ describe('a comment stripper is recognised by its shape', () => {
       'whether the one line holding a SQL match opens with a comment marker — a context check on a statement, not a stripper',
     'packages/domain/src/knowledge/globs.ts slashStar': 'a trailing `/**` glob',
     'packages/domain/src/policies/path-patterns.ts slashStar': 'a trailing `/**` glob',
+    'packages/domain/src/policies/unattended-commands.ts probe':
+      "a branch name with an empty path segment, `includes('//')` (BD-025's 2026-10-06 amendment)",
     'scripts/release.test.ts slashStar': 'a trailing `/**` in a CODEOWNERS row',
     'scripts/citations.ts slashSlash':
       'the decoration of a comment line a citation may sit on — it reads prose in comments on purpose',

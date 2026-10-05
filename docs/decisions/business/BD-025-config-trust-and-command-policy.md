@@ -206,3 +206,90 @@ provider's and the launcher's own tiers, and the `onlyIfChanged` lines were meas
 git (PROGRESS backlog 467). A launcher of an earlier build refuses the new `onlyIfChanged` field on
 its strict end-request schema, so a mixed-version pair would fail that run's end request and leave
 its container to the orphan pass (TD-028 decision 12); the shipped images are built together.
+
+## Amendment (2026-10-06 — the product owner's decision from the first local test) — an unattended run runs its `ask` commands in the sandbox
+
+The product owner: *"it always runs in automode because of unattended … we will never wait for
+permissions so it runs in sandbox/automode."* The design was left to the orchestrator. Until this
+amendment §2's `ask` list reached `canUseTool`, which in this build has nobody to ask and denied every
+call with *"this instance cannot ask a human for approval yet (no Question surface is bound to a live
+run)"* — and the first local test's discovery run read that as *"no network"* and wrote it into its
+knowledge pages. PROGRESS backlog 480.
+
+**Decision.**
+
+1. **An unattended run treats a command-policy `ask` as `allow`**, because the run is sandboxed: a
+   container per run, the workspace its only writable mount, egress only to the model host, the
+   project's git host and the registries an operator declared, a run-scoped credential answered for
+   the project's git host only, the block list, the write tools' path guard (workspace, `.git`,
+   protected paths) and the write-content secret scan all still apply, and the CI gate's tamper check
+   judges a protected path the branch changed whichever tool changed it (BD-024). Every `ask` that ran
+   this way leaves a transcript `hook` row, `decision: allow`, reason
+   *`unattended: ask allowed in the sandbox (matched "<entry>")`* (or *`(no list matches it)`*, or
+   *`(a redirection writes <path>)`*), so the audit shows exactly what ran under the rule.
+2. **Never loosened.** `block` stays `deny`. A line the scanner is **uncertain** about stays `deny`
+   (§2's rule 5 is not weakened into allow). A **hazardous argument** of the `command` kind (it hands
+   a verb a program or configuration the policy has not read — `--upload-pack`, `make --eval`,
+   `npm --script-shell`, `pytest -c`) or the `trust` kind (it widens what a verb trusts — a refspec to
+   a ref of its own choosing, `--no-verify`, `git merge -s ours`/`-X`, an unread package index) stays
+   `deny`. A `path` hazard (a flag that writes a path — `--junitxml`, `go test -coverprofile`) runs,
+   like any other write in the workspace.
+3. **The git boundary is a hard carve-out, `deny` in every mode and applied to `allow` as well as to
+   `ask`**, because the git host is the one place the sandbox can reach that holds other people's
+   data. Refused: a `git push` that is not `git push [-u] origin agentic/<branch>…` with every branch
+   named literally (no bare push, no `HEAD`, no `src:dst`, no `--tags`/`--all`/`--mirror`/
+   `--follow-tags`, no `-o`/`--push-option` — `ci.skip` would skip the CI gate's pipeline — no
+   `--force-with-lease`, no `--repo` other than `origin`); a fetch, pull or `ls-remote` naming a URL
+   or a remote other than `origin`, `--multiple`, `--recurse-submodules`; `git clone` of anything but
+   a local path, or with `--template`, a guarded `-c` or `--recurse-submodules`; `git remote add|
+   set-url|rename`; `git config` **writing** a remote, a URL rewrite (`url.*.insteadOf`), a credential,
+   an HTTP header or proxy (`http.*`), a transport (`protocol.*`), an SSH command, a proxy or askpass
+   command, `core.fsmonitor`, a hook path, an alias, `push.*`, an include, a submodule source or a
+   branch's remote — or `--edit`; the same keys through `git -c`/`--config-env` and through the
+   environment (`GIT_CONFIG_*`, `GIT_SSH*`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_PROXY_COMMAND`,
+   `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, `GIT_DIR`, `GIT_WORK_TREE`); `--exec-path=`, `--git-dir`/
+   `--work-tree` on a remote verb; `git credential*`, git's remote plumbing (`send-pack`, `fetch-pack`,
+   `remote-*`, …), `archive --remote`, `submodule` other than `status`/`summary`; anything naming the
+   control mount `/ctl` (the credential and ssh-agent sockets, the shim's socket and token) or the
+   `agentic-runlet` helper; a write into `.git`, `~/.gitconfig` or `.git-credentials` by anything
+   other than git; and a command whose **name** is computed when it runs (`$X …`, `$(…) …`). Every
+   fragment is judged through every wrapper the scanner knows (`env`, `sh -c`, `eval`, `xargs`, lists,
+   pipes, subshells, substitutions, quoting, `git -C`/`-c`).
+4. **The setting has a safe shape**: `commands.unattended: auto | deny`, default `auto`, in the
+   organisation settings, the project settings and `.agentic/config.yml`. It only tightens: `deny` from
+   any layer wins (the organisation can force it; a repository file may choose it and never undo it,
+   which is reported in `not_applied`). Under `deny` every `ask` is refused, which is how every run
+   behaved before this amendment. **Under `auto` an `ask` entry a layer writes is no longer a way to
+   stop a command**: a project that wants a command not to run writes it in `block` (§2's
+   *"projects can only narrow it"* holds for `block`; a narrowed `allow` now only decides what is
+   audited as an `ask`).
+5. **The refusal says what failed and where to go.** A deny names the fragment and the rule (the
+   block-list entry, the hazard, the git boundary's reason, the construct the scanner could not follow,
+   or the `deny` mode), says it is the platform's command policy and not a network or sandbox failure,
+   and points at the Read tool with offset/limit, Grep and Glob, and one command per call. A block
+   still reads `command policy: block — …`.
+
+**What changes for `verification.mode: ci`** (the 2026-10-05 amendment): its blocks are unchanged and
+match through every wrapper, but a runner no shipped list names (`vendor/bin/phpunit`, `npx jest`) was
+refused as an `ask` and now **runs** under `auto`; the `## Verification` prompt section is what keeps
+the model from it, and a project that must stop it writes it into `commands.block`.
+
+**Dependency additions** (`npm install <pkg>`, `pnpm add`, `pip install <pkg>`, `composer require`) now
+run under `auto`. product/04:58's dependency policy is still applied — **to the diff, afterwards**: the
+dependency gate (`packages/application/src/pipeline/dependency-gate.ts`, WP-38) fires when the
+Developer stage completes, reads the merge request's manifest changes and allows, asks (a question
+with licence and maintenance status) or returns the task. What it does not see is a package installed
+without a manifest change (`npm install --no-save`, a bare `pip install`) or by a role that pushes no
+diff; that package lives and dies in the run's container. A registry is reachable at all only when an
+operator declared it and the run may install from a lockfile (`runMayInstallFromLockfile`).
+
+**What the git boundary is not, stated.** It reads the command line, and under `auto` an unmatched
+command runs — so an interpreter (`python3 -c '…subprocess…'`) or a script the run wrote can spell any
+refused git command where no pattern sees it. The control that holds whatever the spelling is the
+credential: the run's credential helper asks the shim, and the runner answers **only for the project's
+git host, by exact comparison** (`RunCredentialBroker.answer`), only while the run is live. It does
+**not** compare the repository **path** — git sends none to the helper unless `credential.useHttpPath`
+is set — so a credential that reaches other repositories on the same host (a dedicated user's or the
+operator's own static token, this decision's 2026-10-03/04 amendments) reaches them from a spelling
+the boundary does not read. A minted project access token and a deploy key are scoped to the project
+by the provider. Path-scoping the helper is PROGRESS backlog 481.

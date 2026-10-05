@@ -53,6 +53,7 @@ const specFixture = (overrides: Partial<RunSpec> = {}): RunSpec =>
       allow: [...DEFAULT_COMMAND_POLICY.allow],
       ask: [...DEFAULT_COMMAND_POLICY.ask],
       block: [...DEFAULT_COMMAND_POLICY.block],
+      unattended: 'auto',
     },
     protectedPaths: [],
     plannedProtectedPaths: [],

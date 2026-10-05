@@ -274,3 +274,33 @@ describe('the verification mode a file may state', () => {
     expect(tightened.notApplied).toEqual([]);
   });
 });
+
+describe('the unattended command mode a file may state (BD-025, 2026-10-06)', () => {
+  const reading = (values: Record<string, unknown>) => ({
+    status: 'valid' as const,
+    commitSha: 'c'.repeat(40),
+    readAt: '2026-10-06T10:00:00.000Z' as never,
+    ...withoutNotAppliedKeys(values),
+  });
+
+  it('carries a file’s `deny` to the run’s narrowing, over an `auto` or silent setting', () => {
+    for (const settings of [{}, { commands: { unattended: 'auto' as const } }]) {
+      const merged = projectConfigWithRepository(
+        settings,
+        reading({ commands: { unattended: 'deny' } }),
+      );
+      expect(merged.repositoryCommands?.unattended).toBe('deny');
+      expect(merged.notApplied).toEqual([]);
+    }
+  });
+
+  it('drops a file’s `auto` over a `deny` setting, and reports it', () => {
+    const merged = projectConfigWithRepository(
+      { commands: { unattended: 'deny' } },
+      reading({ commands: { unattended: 'auto', block: ['docker *'] } }),
+    );
+    expect(merged.repositoryCommands).toEqual({ block: ['docker *'] });
+    expect(merged.notApplied.map((item) => item.key)).toEqual(['commands.unattended']);
+    expect(merged.notApplied[0]?.reason).toContain('deny is still in force');
+  });
+});

@@ -282,7 +282,7 @@ describe('the workspace spec a run gets', () => {
         runId: '00000000-0000-4000-8000-0000000082a1',
         role: 'developer',
         tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'],
-        commandPolicy: { allow: ['npm ci', 'npm test'], ask: [], block: [] },
+        commandPolicy: { allow: ['npm ci', 'npm test'], ask: [], block: [], unattended: 'auto' },
       }),
     );
     await provisioner.provision(
@@ -290,7 +290,7 @@ describe('the workspace spec a run gets', () => {
         runId: '00000000-0000-4000-8000-0000000082a2',
         role: 'architect',
         tools: ['Read', 'Grep', 'Glob', 'Bash'],
-        commandPolicy: { allow: ['git log', 'ls *'], ask: [], block: [] },
+        commandPolicy: { allow: ['git log', 'ls *'], ask: [], block: [], unattended: 'auto' },
       }),
     );
     expect(recorded.creates.map((create) => create.spec.egress.hosts)).toEqual([

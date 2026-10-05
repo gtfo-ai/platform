@@ -84,7 +84,7 @@
       "tool_name": "Bash",
       "tool_use_id": "toolu_03",
       "decision": "deny",
-      "reason": "command policy: block (matched \"sudo *\")",
+      "reason": "command policy: block — the command `sudo rm -rf /var` matches the block-list entry \"sudo *\", which no run may execute. Do not retry it under another spelling. This is the platform’s command policy, not a network or sandbox failure. To read a file use the Read tool (with offset/limit for a range); to search use Grep or Glob; if only one part of a compound line was refused, run the other parts one command per call.",
       "question_id": null
     },
     {

@@ -466,7 +466,12 @@ describe('the approvals port', () => {
       signal: new AbortController().signal,
     } as unknown as ToolApprovalRequest);
     expect(decision).toMatchObject({ decision: 'deny', questionId: null });
-    expect(decision.reason).toContain('cannot ask a human');
+    // The reason the model reads names the tool, says it is policy and not the network, and
+    // where to go instead — never the old *"no Question surface"*, read as *"no network"*.
+    expect(decision.reason).toContain('nobody can approve a Bash call');
+    expect(decision.reason).toContain('not a network or sandbox failure');
+    expect(decision.reason).toContain('Read tool (with offset/limit');
+    expect(decision.reason).not.toContain('Question surface');
     expect(lines).toHaveLength(1);
   });
 });

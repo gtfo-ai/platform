@@ -94,6 +94,14 @@ const decisionOf = (output: HookJSONOutput): string | undefined =>
   ((output as SyncHookJSONOutput).hookSpecificOutput as PreToolUseHookSpecificOutput | undefined)
     ?.permissionDecision;
 
+const reasonOf = (output: HookJSONOutput): string | undefined =>
+  ((output as SyncHookJSONOutput).hookSpecificOutput as PreToolUseHookSpecificOutput | undefined)
+    ?.permissionDecisionReason;
+
+const updatedOf = (output: HookJSONOutput): unknown =>
+  ((output as SyncHookJSONOutput).hookSpecificOutput as { updatedToolOutput?: unknown } | undefined)
+    ?.updatedToolOutput;
+
 describe('PreToolUse(Bash) — the command policy hook', () => {
   it('allows an allow-listed command and says which pattern decided', async () => {
     const test = harness();
@@ -115,35 +123,104 @@ describe('PreToolUse(Bash) — the command policy hook', () => {
     expect(test.records[0]?.decision).toBe('deny');
   });
 
-  it('asks for an unmatched command, so `canUseTool` decides (technical/04)', async () => {
+  it('runs an unmatched command under `auto`, and records that it ran under that rule (BD-025, 2026-10-06)', async () => {
+    const test = harness();
+    const output = await test.fire(
+      'PreToolUse',
+      { tool_name: 'Bash', tool_input: { command: 'terraform plan' } },
+      'toolu_1',
+    );
+    // `allow`, never `ask`: an `ask` would reach `canUseTool`, which has nobody to ask.
+    expect(decisionOf(output)).toBe('allow');
+    expect(test.records).toEqual([
+      expect.objectContaining({
+        hook: 'PreToolUse',
+        toolName: 'Bash',
+        toolUseId: 'toolu_1',
+        decision: 'allow',
+        reason: 'unattended: ask allowed in the sandbox (no list matches it)',
+      }),
+    ]);
+  });
+
+  it('runs an ask-list match under `auto`, naming the entry it matched', async () => {
     const test = harness();
     const output = await test.fire('PreToolUse', {
       tool_name: 'Bash',
-      tool_input: { command: 'terraform plan' },
+      tool_input: { command: 'composer require monolog/monolog' },
     });
-    expect(decisionOf(output)).toBe('ask');
+    expect(decisionOf(output)).toBe('allow');
+    expect(test.records[0]?.reason).toBe(
+      'unattended: ask allowed in the sandbox (matched "composer require *")',
+    );
   });
 
-  it('asks when it cannot read a command at all, rather than allowing', async () => {
+  it('refuses the same command under `deny`, saying which fragment and what to do instead', async () => {
+    const spec = runSpecFixture({
+      commandPolicy: { ...runSpecFixture().commandPolicy, unattended: 'deny' },
+    });
+    const test = harness({}, spec);
+    const output = await test.fire('PreToolUse', {
+      tool_name: 'Bash',
+      tool_input: { command: 'ls && composer require monolog/monolog' },
+    });
+    expect(decisionOf(output)).toBe('deny');
+    const reason = reasonOf(output);
+    expect(reason).toContain('the fragment `composer require monolog/monolog`');
+    expect(reason).toContain('matched "composer require *"');
+    expect(reason).toContain('`deny` mode');
+    expect(reason).toContain('not a network or sandbox failure');
+    expect(reason).toContain('Read tool (with offset/limit');
+    expect(test.records[0]).toMatchObject({ decision: 'deny', reason });
+  });
+
+  it('refuses a push that is not `origin agentic/…` under `auto`, and says how to push', async () => {
+    const test = harness();
+    const output = await test.fire('PreToolUse', {
+      tool_name: 'Bash',
+      tool_input: { command: 'git push https://gitlab.example.test/other/repo.git agentic/x' },
+    });
+    expect(decisionOf(output)).toBe('deny');
+    expect(reasonOf(output)).toContain('`git push origin agentic/<key>`');
+    expect(test.records[0]?.decision).toBe('deny');
+  });
+
+  it('refuses when it cannot read a command at all, rather than allowing', async () => {
     const test = harness();
     const output = await test.fire('PreToolUse', { tool_name: 'Bash', tool_input: { cmd: 7 } });
-    expect(decisionOf(output)).toBe('ask');
+    expect(decisionOf(output)).toBe('deny');
     expect(test.records[0]?.reason).toContain('could not read a command');
   });
 
-  it('reports what the command scanner could not follow', async () => {
+  it('refuses a line the scanner cannot follow, under `auto` too (rule 5)', async () => {
     const test = harness();
     const output = await test.fire('PreToolUse', {
       tool_name: 'Bash',
       tool_input: { command: 'echo "unterminated' },
     });
-    expect(decisionOf(output)).toBe('ask');
-    expect(test.records[0]?.reason).toContain('could not follow');
+    expect(decisionOf(output)).toBe('deny');
+    expect(test.records[0]?.reason).toContain('cannot follow');
+  });
+
+  it('never answers `ask`, whatever the command and the mode', async () => {
+    for (const unattended of ['auto', 'deny'] as const) {
+      const spec = runSpecFixture({
+        commandPolicy: { ...runSpecFixture().commandPolicy, unattended },
+      });
+      const test = harness({}, spec);
+      for (const command of ['terraform plan', 'npm install x', 'sudo id', 'echo $((1))', 'ls']) {
+        const output = await test.fire('PreToolUse', {
+          tool_name: 'Bash',
+          tool_input: { command },
+        });
+        expect(['allow', 'deny']).toContain(decisionOf(output));
+      }
+    }
   });
 
   it('uses the run’s own policy, not the shipped default', async () => {
     const spec = runSpecFixture({
-      commandPolicy: { allow: [], ask: [], block: ['git status'] },
+      commandPolicy: { allow: [], ask: [], block: ['git status'], unattended: 'auto' },
     });
     const test = harness({ policy: spec.commandPolicy }, spec);
     expect(
@@ -361,6 +438,164 @@ describe('PostToolUse — truncation and redaction of what the model reads', () 
     expect(updated).not.toContain(FIXTURE_INJECTED_SECRET);
     expect(updated).toContain('[REDACTED:integration:gitlab_token]');
     expect(test.records[0]?.reason).toContain('redacted 1 secret-shaped value(s)');
+  });
+
+  it('cuts a Bash output in its own shape — stdout and stderr together under the cap, every other key kept', async () => {
+    const spec = runSpecFixture({
+      limits: { ...runSpecFixture().limits, toolOutputMaxChars: 400 },
+    });
+    const test = harness({ spec }, spec);
+    const response = {
+      stdout: 'o'.repeat(5_000),
+      stderr: 'e'.repeat(5_000),
+      interrupted: false,
+      isImage: false,
+      noOutputExpected: false,
+    };
+    const output = await test.fire('PostToolUse', {
+      tool_name: 'Bash',
+      tool_input: { command: 'pnpm test' },
+      tool_response: response,
+    });
+    // An object, never a string: CLI 2.1.267 ignores a replacement that does not parse as the
+    // tool's output (measured 2026-10-06), so a string would leave the model the whole output.
+    const updated = updatedOf(output) as typeof response;
+    expect(Object.keys(updated).sort()).toEqual(Object.keys(response).sort());
+    expect(updated.interrupted).toBe(false);
+    expect(updated.stdout.length + updated.stderr.length).toBeLessThanOrEqual(400);
+    expect(updated.stdout).toContain('characters truncated by the platform');
+    expect(updated.stderr).toContain('characters truncated by the platform');
+    expect(test.records[0]?.reason).toBe('truncated 10000 characters to 400');
+  });
+
+  it('gives stderr what a short stdout leaves, and cuts nothing that fits', async () => {
+    const spec = runSpecFixture({
+      limits: { ...runSpecFixture().limits, toolOutputMaxChars: 400 },
+    });
+    const test = harness({ spec }, spec);
+    const fits = await test.fire('PostToolUse', {
+      tool_name: 'Bash',
+      tool_input: { command: 'make' },
+      tool_response: { stdout: 'ok', stderr: 'w'.repeat(390), interrupted: false },
+    });
+    expect(fits).toEqual({});
+    expect(test.records).toEqual([]);
+  });
+
+  it('redacts a credential a command printed, in the output’s own shape', async () => {
+    const test = harness();
+    const output = await test.fire('PostToolUse', {
+      tool_name: 'Bash',
+      tool_input: { command: 'env' },
+      tool_response: {
+        stdout: `GITLAB_TOKEN=${FIXTURE_INJECTED_SECRET}`,
+        stderr: '',
+        interrupted: false,
+      },
+    });
+    const updated = updatedOf(output) as { stdout: string; stderr: string; interrupted: boolean };
+    expect(updated).toEqual({
+      stdout: 'GITLAB_TOKEN=[REDACTED:integration:gitlab_token]',
+      stderr: '',
+      interrupted: false,
+    });
+    expect(test.records[0]?.reason).toBe('redacted 1 secret-shaped value(s) (TD-012)');
+  });
+
+  it.each([
+    [
+      'Read',
+      {
+        type: 'text',
+        file: {
+          filePath: '/w/big.php',
+          content: 'x'.repeat(45_863),
+          numLines: 1,
+          startLine: 1,
+          totalLines: 1,
+        },
+      },
+    ],
+    [
+      'Edit',
+      {
+        filePath: '/w/a.ts',
+        oldString: 'a',
+        newString: 'b',
+        originalFile: 'y'.repeat(80_000),
+        structuredPatch: [],
+        userModified: false,
+        replaceAll: false,
+      },
+    ],
+    [
+      'Write',
+      { type: 'create', filePath: '/w/n.ts', content: 'z'.repeat(30_000), structuredPatch: [] },
+    ],
+    [
+      'Glob',
+      {
+        filenames: Array.from({ length: 3_000 }, (_, i) => `src/file-${i}.ts`),
+        numFiles: 3_000,
+        truncated: false,
+        durationMs: 4,
+      },
+    ],
+    [
+      'Grep',
+      { mode: 'content', numFiles: 1, filenames: [], content: 'g'.repeat(20_000), numLines: 1 },
+    ],
+  ])(
+    'never caps %s, and writes no row for it (first local test: 37 false rows on Edits)',
+    async (tool, response) => {
+      const test = harness();
+      const output = await test.fire('PostToolUse', {
+        tool_name: tool,
+        tool_input: {},
+        tool_response: response,
+      });
+      expect(output).toEqual({});
+      expect(test.records).toEqual([]);
+    },
+  );
+
+  it('still redacts a Read, in the Read’s own shape — the redaction does not depend on the cap', async () => {
+    const test = harness();
+    const response = {
+      type: 'text',
+      file: {
+        filePath: '/w/.env',
+        content: `TOKEN=${FIXTURE_INJECTED_SECRET}\n${'x'.repeat(45_000)}`,
+        numLines: 2,
+        startLine: 1,
+        totalLines: 2,
+      },
+    };
+    const output = await test.fire('PostToolUse', {
+      tool_name: 'Read',
+      tool_input: { file_path: '/w/.env' },
+      tool_response: response,
+    });
+    const updated = updatedOf(output) as typeof response;
+    expect(updated.type).toBe('text');
+    expect(updated.file.numLines).toBe(2);
+    expect(updated.file.content).not.toContain(FIXTURE_INJECTED_SECRET);
+    expect(updated.file.content.length).toBeGreaterThan(45_000);
+    expect(test.records[0]?.reason).toBe('redacted 1 secret-shaped value(s) (TD-012)');
+  });
+
+  it('caps another server’s MCP tool at the command cap, as text', async () => {
+    const spec = runSpecFixture({
+      limits: { ...runSpecFixture().limits, toolOutputMaxChars: 200 },
+    });
+    const test = harness({ spec }, spec);
+    const output = await test.fire('PostToolUse', {
+      tool_name: 'mcp__sentry__get_issue',
+      tool_input: {},
+      tool_response: [{ type: 'text', text: 's'.repeat(5_000) }],
+    });
+    expect(typeof updatedOf(output)).toBe('string');
+    expect((updatedOf(output) as string).length).toBe(200);
   });
 
   it('writes no transcript row when it changed nothing', async () => {

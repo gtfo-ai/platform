@@ -8,9 +8,10 @@
  * fake ran nothing (standing rule 82). This file cannot be green that way:
  *
  *  - the instance composes the **production** runner over a scripted CLI (`real-over-fake-cli`), so
- *    each Bash call goes through the production `PreToolUse(Bash)` hook — `evaluateCommand` over the
- *    policy the planner built from the role's baseline narrowed by the project — and, on `ask`,
- *    through the production unattended `canUseTool`, which denies;
+ *    each Bash call goes through the production `PreToolUse(Bash)` hook — `decideUnattendedCommand`
+ *    over the policy the planner built from the role's baseline narrowed by the project — which,
+ *    since BD-025's 2026-10-06 amendment, runs an `ask` under the default `auto` and refuses it under
+ *    `deny`, and never sends one to `canUseTool`;
  *  - the scripted CLI **executes** a command only when the platform allowed it
  *    (`fake-spawn.ts`, divergence 4), in a fixture repository this file writes;
  *  - the assertions are on what the **command** produced — a file it wrote, its exit status and its
@@ -87,69 +88,90 @@ const ticketMatched = (pipeline: PipelineE2E) =>
     links: [],
   });
 
+/**
+ * One pipeline run to `ready_for_merge` whose implementation stage runs `npm test` (declared) and
+ * `npm run build` (in the developer's baseline, narrowed away by the project's `commands.allow`, so
+ * an `ask`), under the given `commands` layer. Returns what the assertions read.
+ */
+const runImplementation = async (commands: Record<string, unknown>) => {
+  const workdir = await writeFixtureRepository();
+  repository = workdir;
+  const pipeline = await startPipeline({
+    scenarios: (world) => ({
+      ...featureScenarios(world),
+      implementation: {
+        ...featureScenarios(world).implementation,
+        bash: { commands: ['npm test', 'npm run build'], workdir },
+      },
+    }),
+    label: 'project-commands',
+    tickets: TICKETS,
+    agent: 'real-over-fake-cli',
+    config: { version: 1, commands },
+  });
+  harness = pipeline;
+
+  await pipeline.publish([ticketMatched(pipeline)]);
+  const waiting = await pipeline.settle(
+    'ready_for_merge',
+    (task) => task.state === 'ready_for_merge',
+  );
+  expect(waiting.current_stage).toBe('ready_for_merge');
+
+  const implementation = pipeline.agentRuns.find((run) => run.stage === 'implementation');
+  expect(implementation, 'the implementation stage ran').toBeDefined();
+  const runId = implementation?.spec.runId as string;
+
+  /**
+   * The last row the platform writes about the commands is the transcript (rule 87), so the wait
+   * binds it: the `tool_result` the model read, carrying the command's own output.
+   */
+  await pipeline.waitFor('the test command’s output in the stored transcript', async () =>
+    (await pipeline.transcript()).some(
+      (row) => row.run_id === runId && JSON.stringify(row.payload).includes('3 passing'),
+    ),
+  );
+  const rows = (await pipeline.transcript()).filter((row) => row.run_id === runId);
+  return {
+    pipeline,
+    workdir,
+    implementation,
+    stored: JSON.stringify(rows.map((row) => row.payload)),
+  };
+};
+
 describe("the project's declared commands, run by a stage", () => {
-  it('executes the declared test command, refuses the undeclared one, and reports what it dropped', async () => {
-    const workdir = await writeFixtureRepository();
-    repository = workdir;
-    const pipeline = await startPipeline({
-      scenarios: (world) => ({
-        ...featureScenarios(world),
-        implementation: {
-          ...featureScenarios(world).implementation,
-          bash: { commands: ['npm test', 'npm run build'], workdir },
-        },
-      }),
-      label: 'project-commands',
-      tickets: TICKETS,
-      agent: 'real-over-fake-cli',
-      // technical/12's `commands.allow`, narrowed to the one command this project declares — and
-      // one entry no role's baseline grants, which must be reported rather than dropped in silence.
-      config: { version: 1, commands: { allow: ['npm test', 'curl https://example.test'] } },
+  it('executes the declared test command, runs the asked one under `auto`, and reports what it dropped', async () => {
+    // technical/12's `commands.allow`, narrowed to the one command this project declares — and
+    // one entry no role's baseline grants, which must be reported rather than dropped in silence.
+    const { pipeline, workdir, implementation, stored } = await runImplementation({
+      allow: ['npm test', 'curl https://example.test'],
     });
-    harness = pipeline;
-
-    await pipeline.publish([ticketMatched(pipeline)]);
-    const waiting = await pipeline.settle(
-      'ready_for_merge',
-      (task) => task.state === 'ready_for_merge',
-    );
-    expect(waiting.current_stage).toBe('ready_for_merge');
-
-    const implementation = pipeline.agentRuns.find((run) => run.stage === 'implementation');
-    expect(implementation, 'the implementation stage ran').toBeDefined();
-    const runId = implementation?.spec.runId as string;
-
-    /**
-     * The last row the platform writes about the commands is the transcript (rule 87), so the wait
-     * binds it: the `tool_result` the model read, carrying the command's own output.
-     */
-    await pipeline.waitFor('the test command’s output in the stored transcript', async () =>
-      (await pipeline.transcript()).some(
-        (row) => row.run_id === runId && JSON.stringify(row.payload).includes('3 passing'),
-      ),
-    );
 
     // ── criterion 1: the declared command ran, and what it produced exists ────────────
     expect(existsSync(join(workdir, TEST_MARKER))).toBe(true);
     expect(await readFile(join(workdir, TEST_MARKER), 'utf8')).toBe(
       'the declared test command ran\n',
     );
-    const rows = (await pipeline.transcript()).filter((row) => row.run_id === runId);
-    const stored = JSON.stringify(rows.map((row) => row.payload));
     expect(stored).toContain('exit code 0');
     expect(stored).toContain('3 passing');
 
-    // ── criterion 3: the undeclared one did not, and the refusal names it ─────────────
+    // ── BD-025's 2026-10-06 amendment: the `ask` ran, and the audit says under which rule ──
     // `npm run build` is in the developer's baseline (`npm run *`) and the project's own `allow`
-    // does not list it, so the narrowed policy leaves it to `ask` and the unattended `canUseTool`
-    // denies — and the command never runs, which the absent file shows rather than a verdict.
-    expect(existsSync(join(workdir, BUILD_MARKER))).toBe(false);
+    // does not list it, so the narrowed policy leaves it to `ask` — which the unattended `auto`
+    // default runs in the sandbox instead of sending it to `canUseTool`. The file it wrote is the
+    // evidence, not the verdict string.
+    await pipeline.waitFor('the build marker on disk', async () =>
+      existsSync(join(workdir, BUILD_MARKER)),
+    );
+    expect(await readFile(join(workdir, BUILD_MARKER), 'utf8')).toBe('the undeclared build ran\n');
     expect(implementation?.cli.executions.map((entry) => [entry.command, entry.ran])).toEqual([
       ['npm test', true],
-      ['npm run build', false],
+      ['npm run build', true],
     ]);
-    expect(stored).toContain('npm run build');
-    expect(stored).toContain('canUseTool');
+    expect(stored).toContain('unattended: ask allowed in the sandbox (no list matches it)');
+    expect(stored).not.toContain('canUseTool');
+    expect(implementation?.spec.commandPolicy.unattended).toBe('auto');
     // The policy the run was planned with is the narrowing, seen from the spec: of the project
     // commands, exactly the one the project declared, and no `curl` — while the developer keeps
     // the git verbs it delivers with (Q97, WP-54 review round 1: a declared `allow` narrows the
@@ -168,10 +190,32 @@ describe("the project's declared commands, run by a stage", () => {
       password: BOOTSTRAP_PASSWORD,
     });
     expect(signedIn.status).toBe(200);
-    const effective = await client.json<{ ignored_allow_commands: string[] }>(
-      `/api/projects/${pipeline.projectId}/config`,
-    );
+    const effective = await client.json<{
+      ignored_allow_commands: string[];
+      effective: { commands?: { unattended?: string } };
+    }>(`/api/projects/${pipeline.projectId}/config`);
     expect(effective.status, JSON.stringify(effective.body)).toBe(200);
     expect(effective.body.ignored_allow_commands).toEqual(['curl https://example.test']);
+    expect(effective.body.effective.commands?.unattended).toBe('auto');
+  });
+
+  it('refuses the asked command under `deny`, and the refusal names it and says what to do instead', async () => {
+    const { workdir, implementation, stored } = await runImplementation({
+      allow: ['npm test'],
+      unattended: 'deny',
+    });
+    expect(existsSync(join(workdir, TEST_MARKER))).toBe(true);
+    // The command never ran: the absent file shows it, rather than a verdict.
+    expect(existsSync(join(workdir, BUILD_MARKER))).toBe(false);
+    expect(implementation?.cli.executions.map((entry) => [entry.command, entry.ran])).toEqual([
+      ['npm test', true],
+      ['npm run build', false],
+    ]);
+    expect(implementation?.spec.commandPolicy.unattended).toBe('deny');
+    expect(stored).toContain('the command `npm run build` is not on this run’s allow list');
+    expect(stored).toContain('`deny` mode');
+    expect(stored).toContain('not a network or sandbox failure');
+    // Decided at the hook, so nothing reached `canUseTool`.
+    expect(stored).not.toContain('canUseTool');
   });
 });

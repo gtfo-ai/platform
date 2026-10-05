@@ -154,7 +154,7 @@ describe('the strictnesses the divergence register claims', () => {
       ) as TranscriptEvent[],
     };
     await expect(runFake(withBlockedCommand)).rejects.toThrow(
-      /which this run's command policy blocks/,
+      /which this run's command policy refuses/,
     );
   });
 
@@ -182,6 +182,38 @@ describe('the strictnesses the divergence register claims', () => {
     await expect(runFake(withAskCommand)).resolves.toMatchObject({
       outcome: { status: 'completed' },
     });
+    // …which is production's `auto`; under `deny` the same `ask` is refused, so a fixture may not
+    // show it running (BD-025's 2026-10-06 amendment).
+    await expect(
+      runFake(withAskCommand, {
+        commandPolicy: { ...runSpecFixture().commandPolicy, unattended: 'deny' },
+      }),
+    ).rejects.toThrow(/`deny` mode/);
+  });
+
+  it('refuses a scenario that pushes past the git boundary, whatever the lists say', async () => {
+    const scenario = scenarioOf('happy-path');
+    const pushingElsewhere: FakeRunScenario = {
+      ...scenario,
+      events: scenario.events.map((event) =>
+        event.kind === 'assistant'
+          ? {
+              ...event,
+              content: [
+                {
+                  type: 'tool_use',
+                  tool_use_id: 'toolu_x',
+                  tool_name: 'Bash',
+                  input: {
+                    command: 'git push https://gitlab.example.test/other/repo.git agentic/x',
+                  },
+                },
+              ],
+            }
+          : event,
+      ) as TranscriptEvent[],
+    };
+    await expect(runFake(pushingElsewhere)).rejects.toThrow(/refused at the git boundary/);
   });
 
   /** Divergence 5. */

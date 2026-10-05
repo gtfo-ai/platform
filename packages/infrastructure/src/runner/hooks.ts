@@ -3,9 +3,9 @@
  *
  * | Hook | What it does here |
  * |---|---|
- * | `PreToolUse(Bash)` | asks `@platform/domain`'s three-list command policy and returns its verdict |
+ * | `PreToolUse(Bash)` | `decideUnattendedCommand` in `@platform/domain`: the three lists, then the unattended mode (`auto`/`deny`) and the git boundary — `allow` or `deny`, never `ask` |
  * | `PreToolUse(Edit\|Write\|…)` | path guard: workspace only, protected paths, flagged config, secret-shaped content |
- * | `PostToolUse(*)` | head/tail truncation then redaction of the tool output the model is about to read |
+ * | `PostToolUse(*)` | head/tail truncation of `Bash` and MCP output, redaction of every tool's, in the tool's own output shape |
  * | `SubagentStart/Stop` | nests the subagent in the transcript |
  * | `PreCompact` | writes the `compaction` marker; `PostCompact` writes a `hook` entry (see below) |
  * | `Stop` | records, and never returns `continue: true` |
@@ -28,7 +28,7 @@
  * the token counts come from the only place that has them. technical/04 is amended to say so.
  *
  * **Fail closed.** Every branch that cannot read what it needs to judge returns the *restrictive*
- * answer: a `Bash` call whose `command` is not a string is `ask`, a write with no readable path is
+ * answer: a `Bash` call whose `command` is not a string is `deny`, a write with no readable path is
  * `deny`. A hook that cannot see the thing it guards has not found it safe.
  */
 import type {
@@ -42,9 +42,9 @@ import type {
   SubagentStopHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { Logger, RunSpec, SecretRedactor } from '@platform/application';
-import type { HookName, ToolDecision } from '@platform/contracts';
-import type { CommandVerdict, ResolvedCommandPolicy } from '@platform/domain';
-import { evaluateCommand } from '@platform/domain';
+import type { HookName, JsonObject, ToolDecision } from '@platform/contracts';
+import type { ResolvedCommandPolicy } from '@platform/domain';
+import { decideUnattendedCommand } from '@platform/domain';
 import { guardWriteContent, guardWritePath, writeContentsOf, writeTargetOf } from './path-guard.js';
 import { renderToolResponse, truncateHeadTail } from './truncation.js';
 
@@ -75,10 +75,6 @@ export interface HookRuntime {
   takeSteerProvenance(): string | null;
 }
 
-/** The SDK's `PreToolUse` decision vocabulary; `block` is spelled `deny`. */
-const toPermissionDecision = (verdict: CommandVerdict): 'allow' | 'deny' | 'ask' =>
-  verdict === 'block' ? 'deny' : verdict;
-
 const preToolUseOutput = (decision: 'allow' | 'deny' | 'ask', reason: string): HookJSONOutput => ({
   hookSpecificOutput: {
     hookEventName: 'PreToolUse',
@@ -98,6 +94,20 @@ const commandOf = (input: unknown): string | null => {
   return typeof command === 'string' ? command : null;
 };
 
+/**
+ * **An unattended run's command decision** (BD-025's 2026-10-06 amendment). The hook answers
+ * `allow` or `deny` and never `ask`: an `ask` reached `canUseTool`, which has nobody to ask in an
+ * unattended run and denied every one with a reason the model misread as *"no network"* (the first
+ * local test's discovery run wrote that into its knowledge pages). `decideUnattendedCommand` in
+ * `@platform/domain` decides — under the run's `commandPolicy.unattended`, `auto` runs an `ask` in
+ * the sandbox and `deny` refuses it — and every decision, an `ask` run under `auto` included, leaves
+ * a `hook` row whose reason says which rule decided, so the audit shows exactly what ran under it.
+ *
+ * A `PreToolUse` `allow` is final for the CLI: it does not reach `canUseTool` (measured against CLI
+ * 2.1.267 through the SDK with a stub Messages API, 2026-10-06 — `echo hi > out.txt`, `cd / && ls`
+ * and `rm -rf /tmp/…` answered `allow` ran with no `canUseTool` call, while an `ask` reached it),
+ * and a `deny`'s reason is the text the model reads, verbatim.
+ */
 const bashHook =
   (runtime: HookRuntime) =>
   async (input: unknown, toolUseId: string | undefined): Promise<HookJSONOutput> => {
@@ -105,36 +115,32 @@ const bashHook =
     const command = commandOf(hookInput.tool_input);
     if (command === null) {
       const reason =
-        'the platform could not read a command out of this tool call, so it cannot be judged ' +
-        'against the command policy (BD-025) and is escalated to a human.';
+        'command policy: refused (unattended run) — the platform could not read a command out of this tool ' +
+        'call, so it cannot be judged against the command policy (BD-025) and is refused. Send ' +
+        'the command as the `command` string of the Bash tool.';
       await runtime.recordHook({
         hook: 'PreToolUse',
         toolName: hookInput.tool_name,
         toolUseId: toolUseId ?? null,
-        decision: 'ask',
+        decision: 'deny',
         reason,
       });
-      return preToolUseOutput('ask', reason);
+      return preToolUseOutput('deny', reason);
     }
 
-    const evaluation = evaluateCommand({ command }, runtime.policy);
-    const decision = toPermissionDecision(evaluation.verdict);
-    const matched =
-      evaluation.matched === null ? 'no list matches it' : `matched "${evaluation.matched}"`;
-    const uncertainty =
-      evaluation.uncertainty.length === 0
-        ? ''
-        : `; the command scanner could not follow: ${evaluation.uncertainty.join(', ')}`;
-    const reason = `command policy: ${evaluation.verdict} (${matched})${uncertainty}`;
-
+    const decision = decideUnattendedCommand(
+      { command },
+      runtime.policy,
+      runtime.spec.commandPolicy.unattended,
+    );
     await runtime.recordHook({
       hook: 'PreToolUse',
       toolName: hookInput.tool_name,
       toolUseId: toolUseId ?? null,
-      decision,
-      reason,
+      decision: decision.decision,
+      reason: decision.reason,
     });
-    return preToolUseOutput(decision, reason);
+    return preToolUseOutput(decision.decision, decision.reason);
   };
 
 const writeHook =
@@ -239,8 +245,125 @@ const platformToolHook =
     return preToolUseOutput('deny', reason);
   };
 
+/** The prefix the CLI gives every MCP tool, the platform's own and a provider's alike. */
+export const MCP_TOOL_PREFIX = 'mcp__';
+
+/** What the hook did to one tool output: the replacement, and what the transcript says about it. */
+interface RewrittenOutput {
+  readonly output: unknown;
+  readonly truncated: { readonly from: number; readonly to: number } | null;
+  readonly redactions: number;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
 /**
- * Truncate, then redact, then hand the result back to the model.
+ * Redacts every string in a tool's own output object and keeps its shape: keys and every
+ * non-string value untouched, so the replacement still parses as the tool's output.
+ */
+const redactShaped = (
+  runtime: HookRuntime,
+  response: Record<string, unknown>,
+): { readonly value: Record<string, unknown>; readonly count: number } => {
+  const redacted = runtime.redactor.redactJson(response as JsonObject);
+  return { value: redacted.value as Record<string, unknown>, count: redacted.count };
+};
+
+/**
+ * An MCP tool's output (the platform's `mcp__platform__*` or a provider's): rendered to text,
+ * capped and redacted, and returned as a **string**, which the CLI accepts for an MCP tool (measured,
+ * below). A platform tool's cap is {@link PLATFORM_TOOL_OUTPUT_MAX_CHARS} (backlog 464).
+ */
+const rewriteMcpOutput = (
+  runtime: HookRuntime,
+  name: string,
+  response: unknown,
+): RewrittenOutput => {
+  const cap = name.startsWith(PLATFORM_TOOL_PREFIX)
+    ? Math.max(runtime.spec.limits.toolOutputMaxChars, PLATFORM_TOOL_OUTPUT_MAX_CHARS)
+    : runtime.spec.limits.toolOutputMaxChars;
+  const truncated = truncateHeadTail(renderToolResponse(response), cap);
+  const redacted = runtime.redactor.redactText(truncated.text);
+  return {
+    output: redacted.value,
+    truncated: truncated.truncated ? { from: truncated.originalLength, to: cap } : null,
+    redactions: redacted.count,
+  };
+};
+
+/**
+ * `Bash`'s output — `{stdout, stderr, interrupted, …}` in CLI 2.1.267 — with `stdout` and `stderr`
+ * cut head-and-tail so that together they fit the cap (stderr gets at most half when both are
+ * long, and whatever stdout leaves when it is short), then every string redacted, the object's
+ * shape kept. A string `tool_response` (an older CLI, or a fake) is capped and redacted as text.
+ */
+const rewriteBashOutput = (runtime: HookRuntime, response: unknown): RewrittenOutput => {
+  const cap = runtime.spec.limits.toolOutputMaxChars;
+  if (
+    !isRecord(response) ||
+    typeof response['stdout'] !== 'string' ||
+    typeof response['stderr'] !== 'string'
+  ) {
+    const truncated = truncateHeadTail(renderToolResponse(response), cap);
+    const redacted = runtime.redactor.redactText(truncated.text);
+    return {
+      output: redacted.value,
+      truncated: truncated.truncated ? { from: truncated.originalLength, to: cap } : null,
+      redactions: redacted.count,
+    };
+  }
+  const stdout = response['stdout'];
+  const stderr = response['stderr'];
+  const stderrCap = Math.min(stderr.length, Math.max(Math.floor(cap / 2), cap - stdout.length));
+  const cutOut = truncateHeadTail(stdout, cap - stderrCap);
+  const cutErr = truncateHeadTail(stderr, Math.max(stderrCap, 0));
+  const cut = cutOut.truncated || cutErr.truncated;
+  const redacted = redactShaped(runtime, { ...response, stdout: cutOut.text, stderr: cutErr.text });
+  return {
+    output: redacted.value,
+    truncated: cut ? { from: stdout.length + stderr.length, to: cap } : null,
+    redactions: redacted.count,
+  };
+};
+
+/**
+ * Every other tool — `Read`, `Edit`, `Write`, `Glob`, `Grep`, `NotebookEdit`, … — is **redacted and
+ * never capped**: its output is a file the model chose to read (with `offset`/`limit` for a range),
+ * a listing, or an edit's own record, and the CLI bounds those itself.
+ */
+const rewriteBuiltInOutput = (runtime: HookRuntime, response: unknown): RewrittenOutput => {
+  if (typeof response === 'string') {
+    const redacted = runtime.redactor.redactText(response);
+    return { output: redacted.value, truncated: null, redactions: redacted.count };
+  }
+  if (!isRecord(response)) {
+    return { output: response, truncated: null, redactions: 0 };
+  }
+  const redacted = redactShaped(runtime, response);
+  return { output: redacted.value, truncated: null, redactions: redacted.count };
+};
+
+/**
+ * Cap where a cap means something, redact everywhere, and hand the result back to the model.
+ *
+ * **Which tools are capped** (first local test, 2026-10-06): `Bash` and MCP tools only. The cap
+ * (`toolOutputMaxChars`) exists for what a command prints, whose size nobody chose. Applied to every
+ * tool, it serialised an `Edit`'s whole response — `originalFile` included — and logged 37 false
+ * *truncated* rows in one run, and a `Read` logged *"45863 to 10000"* while the model read the whole
+ * file. **Redaction does not depend on the cap**: every tool's output is redacted, capped or not.
+ *
+ * **Why the model read the whole file — measured, not assumed** (CLI 2.1.267 / SDK 0.3.267, the SDK
+ * driven against a stub Messages API that recorded the `tool_result` the CLI sent back, 2026-10-06):
+ * the CLI validates `updatedToolOutput` against the **tool's own output schema** and, when it does
+ * not parse, logs *"PostToolUse hook returned updatedToolOutput that does not match <tool>'s output
+ * shape; using original output"* and sends the original. A **string** for `Bash` (whose output is
+ * `{stdout, stderr, interrupted, …}`) or for `Read` (`{type, file: {…}}`) was ignored — the model
+ * received `ORIGINAL-STDOUT` and the original file — while a same-shaped object (`stdout` replaced,
+ * `file.content` replaced) was honoured, and a string for an MCP tool was honoured. So until this
+ * change **neither the cap nor the redaction of this hook reached the model for any built-in tool,
+ * `Bash` included**; the transcript was redacted regardless, at write (TD-012). Since this change a
+ * built-in tool's replacement is always its own output object with strings replaced.
  *
  * A transcript entry is written only when the hook actually changed something. A `hook` row per
  * tool call would roughly double a transcript whose rows are already the platform's largest table
@@ -252,31 +375,31 @@ const postToolUseHook =
   (runtime: HookRuntime) =>
   async (input: unknown, toolUseId: string | undefined): Promise<HookJSONOutput> => {
     const hookInput = input as PostToolUseHookInput;
-    const rendered = renderToolResponse(hookInput.tool_response);
-    const cap = hookInput.tool_name.startsWith(PLATFORM_TOOL_PREFIX)
-      ? Math.max(runtime.spec.limits.toolOutputMaxChars, PLATFORM_TOOL_OUTPUT_MAX_CHARS)
-      : runtime.spec.limits.toolOutputMaxChars;
-    const truncated = truncateHeadTail(rendered, cap);
-    const redacted = runtime.redactor.redactText(truncated.text);
-    if (!truncated.truncated && redacted.count === 0) {
+    const name = hookInput.tool_name;
+    const rewritten = name.startsWith(MCP_TOOL_PREFIX)
+      ? rewriteMcpOutput(runtime, name, hookInput.tool_response)
+      : name === 'Bash'
+        ? rewriteBashOutput(runtime, hookInput.tool_response)
+        : rewriteBuiltInOutput(runtime, hookInput.tool_response);
+    if (rewritten.truncated === null && rewritten.redactions === 0) {
       return {};
     }
     const parts: string[] = [];
-    if (truncated.truncated) {
-      parts.push(`truncated ${truncated.originalLength} characters to ${cap}`);
+    if (rewritten.truncated !== null) {
+      parts.push(`truncated ${rewritten.truncated.from} characters to ${rewritten.truncated.to}`);
     }
-    if (redacted.count > 0) {
-      parts.push(`redacted ${redacted.count} secret-shaped value(s) (TD-012)`);
+    if (rewritten.redactions > 0) {
+      parts.push(`redacted ${rewritten.redactions} secret-shaped value(s) (TD-012)`);
     }
     await runtime.recordHook({
       hook: 'PostToolUse',
-      toolName: hookInput.tool_name,
+      toolName: name,
       toolUseId: toolUseId ?? null,
       decision: null,
       reason: parts.join('; '),
     });
     return {
-      hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: redacted.value },
+      hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: rewritten.output },
     };
   };
 

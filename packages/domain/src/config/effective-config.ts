@@ -43,6 +43,7 @@ import {
   evaluateCommand,
   narrowCommandPolicy,
   type ResolvedCommandPolicy,
+  unattendedCommandModeOf,
 } from '../policies/command-policy.js';
 import { DEFAULT_COVERAGE_SOURCE } from '../policies/coverage.js';
 import {
@@ -369,7 +370,23 @@ export const mergeProjectConfig = (
     allow: [...commands.allow],
     ask: [...commands.ask],
     block: [...commands.block],
+    // BD-025's 2026-10-06 amendment: `deny` from any layer wins, so the published value is what a
+    // run of this project is given (`runCommandPolicy`'s `unattended`).
+    unattended: unattendedCommandModeOf(
+      bySource.get('org')?.commands,
+      bySource.get('project')?.commands,
+      bySource.get('repo')?.commands,
+    ),
   };
+  // The layer that decided it: the first that says `deny`, else the last that states a value.
+  const unattendedSource =
+    LAYER_ORDER.find((source) => bySource.get(source)?.commands?.unattended === 'deny') ??
+    [...LAYER_ORDER]
+      .reverse()
+      .find((source) => bySource.get(source)?.commands?.unattended !== undefined);
+  if (unattendedSource !== undefined) {
+    sources['commands.unattended'] = unattendedSource;
+  }
   for (const source of LAYER_ORDER) {
     const declared = bySource.get(source)?.commands;
     if (declared?.allow !== undefined) {

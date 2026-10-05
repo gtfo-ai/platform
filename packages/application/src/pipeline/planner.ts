@@ -1488,6 +1488,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           allow: [...policy.policy.allow],
           ask: [...policy.policy.ask],
           block: [...policy.policy.block],
+          unattended: policy.unattended,
         },
         protectedPaths: [...protectedPaths],
         // BD-024 §2 (WP-99): the latest ImplementationPlan's `protected_path_changes[].path`, read

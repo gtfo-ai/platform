@@ -69,6 +69,18 @@ import { runner as runnerAdapters } from '@platform/infrastructure';
 import type pg from 'pg';
 
 /**
+ * What the model reads when the CLI itself asked about a tool call and nobody can answer.
+ *
+ * Since BD-025's 2026-10-06 amendment a `Bash` command never gets here — the `PreToolUse(Bash)`
+ * hook answers `allow` or `deny` with its own reason — so what reaches this port is the CLI's own
+ * question about some other tool. The old text, *"this instance cannot ask a human for approval yet
+ * (no Question surface is bound to a live run)"*, was read by a discovery run as *"no network"* and
+ * written into its knowledge pages; this one says it is a policy decision and where to go instead.
+ */
+export const UNATTENDED_APPROVAL_DENIAL = (toolName: string): string =>
+  `this run is unattended, so nobody can approve a ${toolName} call that the platform's policy did not already allow, and it was denied. This is a policy decision, not a network or sandbox failure. Use the tools this run was given — the Read tool (with offset/limit for a range), Grep and Glob to read and search, Edit and Write to change files in the workspace, Bash for commands — and report in your artifact anything you could not do.`;
+
+/**
  * BD-025's unattended default: **deny**, with a reason the model can act on.
  *
  * technical/05 § "Command and tool policy" ends an `ask` decision with "timeout = question timeout;
@@ -94,8 +106,7 @@ export const unattendedToolApprovals = (logger: Logger): ToolApprovalPort => ({
     );
     return {
       decision: 'deny',
-      reason:
-        'this instance cannot ask a human for approval yet (no Question surface is bound to a live run), so an `ask` decision is denied. Do the work another way, or report in your artifact that you needed approval.',
+      reason: UNATTENDED_APPROVAL_DENIAL(request.toolName),
       questionId: null,
     };
   },

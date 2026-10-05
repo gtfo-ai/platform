@@ -21,7 +21,7 @@
  * | 1 | No scenario for a spec is an error; production would happily run any spec. | **stricter** | A missing fixture must not look like a run that did nothing. Asserted by `throws when no scenario matches the spec`. |
  * | 2 | Every scripted entry is parsed against `transcriptEventSchema` and a failure **throws**; the real adapter downgrades it to a `system` row and carries on. | **stricter** | The adapter's leniency exists so a normaliser bug cannot kill a live run. A fixture has no such excuse. Asserted by `throws on a scripted entry that is not a transcript event`. |
  * | 3 | A scenario claiming `completed` whose `structuredOutput` the artifact schema rejects **throws**; production returns `failed(schema)`. | **stricter** | This is the one that matters most: a fixture with a plausible-looking artifact that no real run could produce would make WP-15's pipeline tests green against an impossible world. Asserted by `refuses a completed scenario whose artifact does not validate`. |
- * | 4 | A scenario whose `assistant` entries run a `Bash` command the spec's own command policy **blocks** throws. | **stricter** | Same class, and the sharpest: the fake does not evaluate the policy during a run (see 6), so without this a fixture could show the agent running `sudo rm -rf /` and every downstream test would accept it. Asserted by `refuses a scenario whose Bash command the run’s policy blocks`. |
+ * | 4 | A scenario whose `assistant` entries run a `Bash` command the spec's own command policy **refuses** — `decideUnattendedCommand`'s `deny`, a block or the git boundary since BD-025's 2026-10-06 amendment — throws. | **stricter** | Same class, and the sharpest: the fake does not evaluate the policy during a run (see 6), so without this a fixture could show the agent running `sudo rm -rf /` and every downstream test would accept it. Asserted by `refuses a scenario whose Bash command the run’s policy blocks`. |
  * | 5 | A scenario whose reported cost exceeds `RunSpec.limits.maxBudgetUsd` without ending in `budget_exceeded` throws. | **stricter** | Keeps budget fixtures honest about the guard they are exercising. Asserted by `refuses an over-budget scenario that does not end in budget_exceeded`. |
  * | 5b | A scenario whose `cost.usd` is not a finite, non-negative number throws; production stops such a run as `cost_unreported` and reports a zero cost. | **stricter** | `NaN > budget` is `false`, so without this the fake would wave through the exact stream the adapter's watchdog was blind to until WP-12's review — a fake kinder than production in the one place the budget is decided. Asserted by `refuses a scenario whose cost is not a number`. |
  * | 6 | Hooks, `canUseTool` and the platform MCP tools are **not** executed. Scripted `hook` entries are replayed verbatim. | **different** | This fake stands in for the model *and* the SDK; the hooks are the adapter's own code and are driven by the real SDK in `claude-runner.test.ts` — `runs the command policy hook against the real SDK dispatch and allows `git status`` and `records the deny the command policy returned` are the two that watch a verdict travel through `query()` to the CLI and back. (The name this register carried until WP-12's review, `claude-runner.sdk.test.ts`, never existed: a justification is a claim about the suite, so it is checkable, and this one was false.) Divergence 4 is what stops the difference becoming a kindness. |
@@ -52,7 +52,7 @@ import type {
   TranscriptEvent,
 } from '@platform/contracts';
 import { transcriptEventSchema } from '@platform/contracts';
-import { evaluateCommand, readDataBlocks } from '@platform/domain';
+import { decideUnattendedCommand, readDataBlocks } from '@platform/domain';
 import { deferred } from './async-queue.js';
 import { validateStructuredOutput } from './structured-output.js';
 
@@ -146,7 +146,7 @@ export const scenarioByStageOrAsk =
     return scenario;
   };
 
-/** Divergence 4: the scripted agent may not run a command the run's own policy blocks. */
+/** Divergence 4: the scripted agent may not run a command the run's own policy refuses. */
 const assertCommandsAllowed = (spec: RunSpec, scenario: FakeRunScenario): void => {
   for (const event of scenario.events) {
     if (event.kind !== 'assistant') {
@@ -160,11 +160,18 @@ const assertCommandsAllowed = (spec: RunSpec, scenario: FakeRunScenario): void =
       if (typeof command !== 'string') {
         continue;
       }
-      const verdict = evaluateCommand({ command }, spec.commandPolicy).verdict;
-      if (verdict === 'block') {
+      // Production's own decision (BD-025's 2026-10-06 amendment): what the unattended hook would
+      // refuse — a block, an uncertain line, a refused hazard, the git boundary, or an `ask` under
+      // `deny` — a fixture may not show running.
+      const decision = decideUnattendedCommand(
+        { command },
+        spec.commandPolicy,
+        spec.commandPolicy.unattended,
+      );
+      if (decision.decision === 'deny') {
         throw new FakeScenarioError(
-          `the scenario runs "${command}", which this run's command policy blocks (BD-025). ` +
-            'A fixture may not show an agent doing something production would refuse.',
+          `the scenario runs "${command}", which this run's command policy refuses (BD-025): ` +
+            `${decision.reason} A fixture may not show an agent doing something production would refuse.`,
         );
       }
     }

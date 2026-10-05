@@ -289,6 +289,23 @@ describe('BD-025 — the command policy only narrows', () => {
     expect(effective.sources['commands.ask']).toBe('default');
   });
 
+  it('publishes the unattended mode a run gets: `auto` by default, `deny` from any layer (BD-025, 2026-10-06)', () => {
+    expect(mergeProjectConfig([]).values.commands?.unattended).toBe('auto');
+    expect(mergeProjectConfig([]).sources['commands.unattended']).toBeUndefined();
+    const forced = mergeProjectConfig([
+      layer('org', { commands: { unattended: 'deny' } }),
+      layer('repo', { commands: { unattended: 'auto' } }),
+    ]);
+    expect(forced.values.commands?.unattended).toBe('deny');
+    expect(forced.sources['commands.unattended']).toBe('org');
+    const chosen = mergeProjectConfig([
+      layer('org', { commands: { unattended: 'auto' } }),
+      layer('project', { commands: { unattended: 'auto' } }),
+    ]);
+    expect(chosen.values.commands?.unattended).toBe('auto');
+    expect(chosen.sources['commands.unattended']).toBe('project');
+  });
+
   it('resolves a command through the effective policy, resolved binary included', () => {
     const effective = mergeProjectConfig([]);
     expect(commandVerdictFor(effective, 'npm ci')).toBe('allow');

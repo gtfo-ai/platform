@@ -29,7 +29,12 @@ const NOW = new Date('2026-09-12T10:00:00.000Z');
 /** A role's shipped command baseline, in the mutable shape `RunSpec.commandPolicy` has. */
 const policyOf = (role: AgentRole, stage = 'implementation') => {
   const policy = commandBaselineFor(role, stage, []);
-  return { allow: [...policy.allow], ask: [...policy.ask], block: [...policy.block] };
+  return {
+    allow: [...policy.allow],
+    ask: [...policy.ask],
+    block: [...policy.block],
+    unattended: 'auto' as const,
+  };
 };
 
 const build = (overrides: Partial<Parameters<typeof buildWorkspaceSpec>[0]> = {}) =>
@@ -163,7 +168,7 @@ describe('the registry hosts a run gets', () => {
   it('is withheld from a run with no shell, whatever its policy lists', () => {
     const spec = runSpecFixture({
       tools: ['Read', 'Grep', 'Glob'],
-      commandPolicy: { allow: ['npm ci'], ask: [], block: [] },
+      commandPolicy: { allow: ['npm ci'], ask: [], block: [], unattended: 'auto' },
     });
     expect(runMayInstallFromLockfile(spec)).toBe(false);
   });

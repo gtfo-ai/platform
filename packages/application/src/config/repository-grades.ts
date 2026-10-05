@@ -209,7 +209,11 @@ export const tightenRepositoryLayer = (
   const wip = tightenWip(project, repo, notApplied);
   const withWipOnly: ConfigValues =
     wip === undefined ? repo : { ...repo, pipeline: { ...repo.pipeline, wip } };
-  const withWip = tightenVerification(project, withWipOnly, notApplied);
+  const withWip = tightenUnattended(
+    project,
+    tightenVerification(project, withWipOnly, notApplied),
+    notApplied,
+  );
   const policies = repo.policies;
   if (policies === undefined) {
     return { values: withWip, notApplied };
@@ -330,6 +334,26 @@ const tightenWip = (
     });
   }
   return next;
+};
+
+/**
+ * `commands.unattended` from the file, **never back to `auto`** once the settings chose `deny`
+ * (BD-025's 2026-10-06 amendment). The command narrowing already ignores it (`deny` from any layer
+ * wins, `unattendedCommandModeOf`); this is the half that **says so** in `not_applied`, as the
+ * verification mode does, rather than leaving the file's `auto` looking applied.
+ */
+const tightenUnattended = (
+  project: ConfigValues,
+  repo: ConfigValues,
+  notApplied: RepositoryConfigNotApplied[],
+): ConfigValues => {
+  if (repo.commands?.unattended !== 'auto' || project.commands?.unattended !== 'deny') return repo;
+  const { unattended: _dropped, ...commands } = repo.commands;
+  notApplied.push({
+    key: 'commands.unattended',
+    reason: `${LOOSENING_REASON}; a repository file may refuse unattended asks (deny), never run them over a deny — deny is still in force`,
+  });
+  return { ...repo, commands };
 };
 
 /**

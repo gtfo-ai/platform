@@ -396,9 +396,14 @@ export const fakeSpawnClaudeCodeProcess = (
         },
         toolUseId,
       )) as { hookSpecificOutput?: { updatedToolOutput?: unknown } } | undefined;
-      const updated = post?.hookSpecificOutput?.updatedToolOutput;
-      if (typeof updated === 'string') {
-        content = updated;
+      // As the real CLI does (2.1.267, measured 2026-10-06): a replacement is used only when it
+      // parses as the tool's own output — `{stdout, …}` for Bash — and a bare string is ignored.
+      const updated = post?.hookSpecificOutput?.updatedToolOutput as
+        | { stdout?: unknown }
+        | null
+        | undefined;
+      if (typeof updated === 'object' && updated !== null && typeof updated.stdout === 'string') {
+        content = updated.stdout;
       }
     }
     write({

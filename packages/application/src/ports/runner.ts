@@ -45,6 +45,7 @@ import {
   runSavedWorkSchema,
   shaSchema,
   stageIdSchema,
+  unattendedCommandModeSchema,
   usdSchema,
 } from '@platform/contracts';
 import * as z from 'zod';
@@ -113,6 +114,12 @@ export const runCommandPolicySchema = z.strictObject({
   allow: z.array(nonEmptyStringSchema),
   ask: z.array(nonEmptyStringSchema),
   block: z.array(nonEmptyStringSchema),
+  /**
+   * What the `PreToolUse(Bash)` hook does with an `ask` (BD-025's 2026-10-06 amendment): `auto`
+   * runs it in the sandbox, `deny` refuses it — `unattendedCommandModeOf` over the organisation,
+   * the settings and the repository file. Required, so no planner can leave a run to a default.
+   */
+  unattended: unattendedCommandModeSchema,
 });
 
 /** One subagent definition (technical/04 `agents`). */

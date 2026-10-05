@@ -535,6 +535,27 @@ export const policiesConfigSchema = z
 export const quietHoursSchema = z.strictObject({ from: timeOfDaySchema, to: timeOfDaySchema });
 
 // ── commands (BD-025) ────────────────────────────────────────────────────────
+/**
+ * What an **unattended** run does with a command the three lists answer `ask` (BD-025's 2026-10-06
+ * amendment, the product owner's decision from the first local test).
+ *
+ *  - `auto` (the default): the run is sandboxed — its container, its workspace-only writable mount,
+ *    its egress allow-list and its run-scoped credential — so an `ask` runs, and the transcript
+ *    records that it ran under this rule. A line the scanner is uncertain about, a hazardous
+ *    argument and the git boundary (a push that is not `origin agentic/…`, a remote other than
+ *    `origin`, git configuration of a remote, a credential or a hook, the credential helper) are
+ *    refused in this mode too.
+ *  - `deny`: every `ask` is refused, which is how every run behaved before the amendment.
+ *
+ * **Only tightens across layers**: the organisation may force `deny`, a project's settings and its
+ * repository file may choose `deny`, and an `auto` stated below a `deny` changes nothing
+ * (`unattendedCommandModeOf`). An `ask` entry a layer writes is therefore an approval only under
+ * `deny`; under `auto` a command a layer wants refused belongs in `block`.
+ */
+export const UNATTENDED_COMMAND_MODES = ['auto', 'deny'] as const;
+export const unattendedCommandModeSchema = z.enum(UNATTENDED_COMMAND_MODES);
+export type UnattendedCommandMode = z.infer<typeof unattendedCommandModeSchema>;
+export const DEFAULT_UNATTENDED_COMMAND_MODE: UnattendedCommandMode = 'auto';
 
 /**
  * The three-list command policy. A project may only *narrow* what its runs start from — each role's
@@ -548,6 +569,7 @@ export const commandPolicySchema = z.strictObject({
   allow: z.array(nonEmptyStringSchema).optional(),
   ask: z.array(nonEmptyStringSchema).optional(),
   block: z.array(nonEmptyStringSchema).optional(),
+  unattended: unattendedCommandModeSchema.optional(),
 });
 
 // ── verification (BD-025's 2026-10-05 amendment) ─────────────────────────────

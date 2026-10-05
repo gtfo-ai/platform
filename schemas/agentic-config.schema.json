@@ -239,6 +239,13 @@
           "items": {
             "$ref": "#/$defs/NonEmptyString"
           }
+        },
+        "unattended": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "deny"
+          ]
         }
       },
       "additionalProperties": false

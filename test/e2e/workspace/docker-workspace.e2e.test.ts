@@ -2453,6 +2453,7 @@ describe('registry egress follows the command baseline (WP-82)', () => {
             allow: [...allow],
             ask: [...ask],
             block: [...block],
+            unattended: 'auto' as const,
           }))(commandBaselineFor(role, stage, [])),
         }),
         repoUrl: fixture.repoUrl,

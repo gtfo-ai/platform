@@ -55,7 +55,8 @@
  * passes the resolved path as `resolvedBinary`; its *basename* is checked against the block-list's
  * whole-binary bans and substituted for argv[0]. The enforcing hook lives in the runner (WP-12).
  */
-import type { CommandPolicy, VerificationMode } from '@platform/contracts';
+import type { CommandPolicy, UnattendedCommandMode, VerificationMode } from '@platform/contracts';
+import { DEFAULT_UNATTENDED_COMMAND_MODE } from '@platform/contracts';
 import { PolicyViolationError } from '../errors.js';
 
 export type CommandVerdict = 'allow' | 'ask' | 'block';
@@ -137,12 +138,14 @@ export const DECLINED_BLOCK_VARIANTS = [
   {
     hazard: 'recursive delete with the flags spelled differently — `rm -fr /`, `rm -r -f /`',
     stated: 'rm -rf /*',
-    verdict: 'ask (nothing on the allow-list matches `rm`), never allow',
+    verdict:
+      'ask (nothing on the allow-list matches `rm`), never allow from the lists; an unattended `auto` run runs an ask in its sandbox, whose only writable mount is the workspace (BD-025, 2026-10-06)',
   },
   {
     hazard: 'branch deletion in long form — `git branch --delete --force main`',
     stated: 'git branch -D *',
-    verdict: 'ask, never allow',
+    verdict:
+      'ask, never allow from the lists; an unattended `auto` run runs an ask in its sandbox, and a push of the deletion is refused by the git boundary (BD-025, 2026-10-06)',
   },
 ] as const;
 
@@ -504,10 +507,11 @@ export const DEFAULT_VERIFICATION_ALLOW: readonly string[] = [
  * The entries move to **`block`**, not merely out of `allow` (which would leave them to the `ask`
  * fallback). Two reasons, both measured against this build rather than preferred:
  *
- *  - **The refusal the model reads.** An `ask` is denied by the unattended approval port with *"do
- *    the work another way"* (`apps/server/src/agent.ts`), which invites the model to find another
- *    spelling of the same test run; a `block` is denied at the `PreToolUse` hook with
- *    `command policy: block (matched "<pattern>")`, which names the pattern, and the run's system
+ *  - **The refusal the model reads.** An `ask` was denied by the unattended approval port with *"do
+ *    the work another way"*, which invites the model to find another spelling of the same test run
+ *    — and since BD-025's 2026-10-06 amendment an `ask` **runs** under the default `auto`; a `block`
+ *    is denied at the `PreToolUse` hook with `command policy: block — … matches the block-list entry
+ *    "<pattern>"`, which names the pattern, and the run's system
  *    prompt says why that pattern is blocked ({@link withVerificationMode}'s caller passes the
  *    platform's CI instruction to `assemblePrompt`).
  *  - **The block-list matches generously** (module rule 2): a `make test` handed to `sh -c` or
@@ -518,8 +522,9 @@ export const DEFAULT_VERIFICATION_ALLOW: readonly string[] = [
  * test"]` cannot re-grant a run what the mode took: the narrowing reports it in `ignoredAllow`.
  * **What this list does not cover, stated:** a runner the shipped lists never allowed —
  * `vendor/bin/phpunit`, `npx jest`, `./gradlew test` — was already outside every `allow` and stays
- * on the `ask` fallback, which an unattended run denies; the CI instruction in the prompt is what
- * keeps the model from trying it.
+ * on the `ask` fallback, which an unattended run **runs** under the default `auto` since BD-025's
+ * 2026-10-06 amendment (and refuses under `deny`); the CI instruction in the prompt is what keeps
+ * the model from trying it, and a project that must stop it writes it into `commands.block`.
  */
 export const CI_VERIFICATION_BLOCK: readonly string[] = [
   ...LOCKFILE_INSTALL_ALLOW,
@@ -569,7 +574,8 @@ export const withVerificationMode = (
  * the merge is always that of the current branch head"* — a branch that claims commits it does not
  * contain), `git merge -X theirs …` (*"forces conflicting hunks to be auto-resolved"* by deleting a
  * side) and `git merge --no-verify …` (skips the hooks where a repository runs its secret scan,
- * BD-002) match nothing here and fall to the `ask` fallback, which an unattended run denies.
+ * BD-002) match nothing here and fall to the `ask` fallback — and carry a `trust` hazard, which an
+ * unattended run refuses in either mode (`decideUnattendedCommand`, BD-025's 2026-10-06 amendment).
  * **The same flags written *after* the ref are a different matter and are floored, not excluded**:
  * `*` matches a run of characters including spaces, so `git merge origin/main --no-verify` *does*
  * match `git merge origin/*` — measured with `evaluateCommand` — and what refuses it is
@@ -619,6 +625,9 @@ export const DEFAULT_IMPLEMENTATION_ASK: readonly string[] = [
   'find * -ok*',
 ];
 
+/** {@link HazardousArgument.kind}'s three values. */
+export type HazardKind = 'command' | 'trust' | 'path';
+
 export interface HazardousArgument {
   /**
    * Matched exactly like a block pattern: tokens (flag anywhere) or the whole line as a glob —
@@ -626,6 +635,23 @@ export interface HazardousArgument {
    * decides.
    */
   readonly pattern: string;
+  /**
+   * What the argument does, which decides what an **unattended `auto`** run makes of it (BD-025's
+   * 2026-10-06 amendment, `decideUnattendedCommand`):
+   *
+   *  - `command` — hands the verb a program or configuration the policy has not read
+   *    (`--upload-pack`, `make --eval`, `npm --script-shell`, `pytest -c`). **Refused** under `auto`.
+   *  - `trust` — widens what the verb trusts: a refspec to a ref of its own choosing, a skipped
+   *    hook, a merge strategy that discards a side, an unread package index. **Refused** under
+   *    `auto`; each is product/19 §3's *"never allow"* or BD-002's/BD-030's.
+   *  - `path` — writes a path the command line chose (`--junitxml`, `go test -coverprofile`).
+   *    **Runs** under `auto`, like any other write in the workspace: the container's only writable
+   *    mount is the workspace, and the CI gate's tamper check judges a protected path the branch
+   *    changed whichever tool changed it (BD-024).
+   *
+   * Under `deny`, and for an attended run, every kind floors at `ask` exactly as before.
+   */
+  readonly kind: HazardKind;
   /** What the argument hands the verb that the policy has not read. */
   readonly hazard: string;
   /**
@@ -716,6 +742,7 @@ const goPathWritingFloor =
     const spelled = new RegExp(`^--?${GO_TEST_PREFIX[prefix]}${flagName}(?:=|$)`);
     return {
       pattern: `go -${prefix === 'required' ? 'test.' : ''}${flagName} (one or two dashes, ${GO_PREFIX_WORDING[prefix]}= or a space)`,
+      kind: 'path',
       hazard: `go test -${flagName} writes to a path the command line chose, which the path guard never sees (BD-024)`,
       tokens: ({ name, flags }) =>
         name.startsWith('go') && flags.some((flag) => spelled.test(flag)),
@@ -787,65 +814,94 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   // ── hands the verb an arbitrary command ──
   {
     pattern: 'git * --upload-pack*',
+    kind: 'command',
     hazard:
       'git runs the --upload-pack value as a shell command on the far end, and with a local path as the remote that far end is this machine',
   },
   {
     pattern: 'git * --receive-pack*',
+    kind: 'command',
     hazard: 'the push-side twin of --upload-pack, and equally a shell command',
   },
   {
     pattern: 'git * --exec*',
+    kind: 'command',
     hazard:
       "--exec is git push's synonym for --receive-pack, and git fetch-pack's for --upload-pack; it is not scoped to a subcommand because the next verb to grow one would be missed",
   },
   {
     pattern: 'git * --extcmd*',
+    kind: 'command',
     hazard: 'git difftool and mergetool run --extcmd (-x) once per changed file',
   },
   {
     pattern: 'git * --ext-diff*',
+    kind: 'command',
     hazard:
       "--ext-diff turns on the external diff driver the *repository's own* config names, and a repository is untrusted input (BD-022)",
   },
   {
     pattern: 'git * --textconv*',
+    kind: 'command',
     hazard: "--textconv runs the textconv filter the repository's config names (BD-022)",
   },
   {
     pattern: 'git * ext::*',
+    kind: 'command',
     hazard:
       "git's ext:: transport runs its argument as a shell command; it is refused unless protocol.ext.allow is set, which is the workspace's configuration and not this module's to promise",
   },
   {
     pattern: 'rg * --pre*',
+    kind: 'command',
     hazard: 'ripgrep runs the --pre command over every file it searches',
   },
   {
     pattern: 'rg * --hostname-bin*',
+    kind: 'command',
     hazard: 'ripgrep runs the --hostname-bin command to label hyperlinks',
   },
   // ── writes a path that the `> file` rule never sees ──
   {
     pattern: 'git * --output*',
+    kind: 'path',
     hazard: "git's diff family writes --output to any path, redirection-free",
   },
   {
     pattern: 'find * -fprint*',
+    kind: 'path',
     hazard: 'GNU find writes -fprint/-fprintf/-fprint0 to any path, redirection-free',
   },
-  { pattern: 'find * -fls*', hazard: 'GNU find -fls writes a listing to any path' },
+  { pattern: 'find * -fls*', kind: 'path', hazard: 'GNU find -fls writes a listing to any path' },
   {
     pattern: 'pip install* --target*',
+    kind: 'path',
     hazard: 'installs into any directory, redirection-free',
   },
-  { pattern: 'pip install* --root*', hazard: 'installs under any root, redirection-free' },
-  { pattern: 'pip install* --prefix*', hazard: 'installs under any prefix, redirection-free' },
-  { pattern: 'pip install* --log*', hazard: 'writes a log to any path, redirection-free' },
-  { pattern: 'pip install* --report*', hazard: 'writes a report to any path, redirection-free' },
+  {
+    pattern: 'pip install* --root*',
+    kind: 'path',
+    hazard: 'installs under any root, redirection-free',
+  },
+  {
+    pattern: 'pip install* --prefix*',
+    kind: 'path',
+    hazard: 'installs under any prefix, redirection-free',
+  },
+  {
+    pattern: 'pip install* --log*',
+    kind: 'path',
+    hazard: 'writes a log to any path, redirection-free',
+  },
+  {
+    pattern: 'pip install* --report*',
+    kind: 'path',
+    hazard: 'writes a report to any path, redirection-free',
+  },
   // ── widens what the verb trusts ──
   {
     pattern: 'git push* *:*',
+    kind: 'trust',
     hazard:
       'a refspec pushes to a destination ref of its own choosing, so `git push origin agentic/x:main` writes main under an allow entry that names only agentic/*; a remote spelled as a URL is caught by the same colon',
   },
@@ -857,10 +913,11 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     // before this entry existed (measured with `evaluateCommand`). The next verb to grow the flag
     // would be missed the same way.
     pattern: 'git * --no-verify*',
+    kind: 'trust',
     hazard:
       'skips the pre-commit, pre-merge and commit-msg hooks, which is where a repository runs its secret scan (BD-002) and its formatter',
   },
-  { pattern: 'git commit* -n*', hazard: 'the short spelling of --no-verify' },
+  { pattern: 'git commit* -n*', kind: 'trust', hazard: 'the short spelling of --no-verify' },
   /**
    * The two merge strategy flags, floored because product/19 §3's conflict-resolution bullet says
    * they are `ask` *"never allow"* and the closed allow set only answers for the position before
@@ -876,27 +933,33 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
    */
   {
     pattern: 'git merge* -s*',
+    kind: 'trust',
     hazard:
       'the `ours` merge strategy records the other branch as merged while discarding its tree, so the human merge that follows silently reverts it',
   },
   {
     pattern: 'git merge* --strategy*',
+    kind: 'trust',
     hazard: 'the long spelling of -s, and --strategy-option is the long spelling of -X',
   },
   {
     pattern: 'git merge* -X*',
+    kind: 'trust',
     hazard: 'resolves every conflicting hunk by deleting one side of it',
   },
   {
     pattern: 'pip install* --index-url*',
+    kind: 'trust',
     hazard: 'installs from a package index nobody has read (BD-030)',
   },
   {
     pattern: 'pip install* --extra-index-url*',
+    kind: 'trust',
     hazard: 'adds a package index nobody has read (BD-030)',
   },
   {
     pattern: 'pip install* --find-links*',
+    kind: 'trust',
     hazard: 'adds a package source nobody has read (BD-030)',
   },
   // ── hands a project-command verb a command string the model chose (WP-54) ──
@@ -908,6 +971,7 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   // is not covered. They narrow what the model can author; they are not the boundary.
   {
     pattern: 'make VAR=value (a positional containing `=`)',
+    kind: 'command',
     hazard:
       'a make argument with `=` that is not a flag is a command-line variable assignment — `X:=$(shell …)`, `SHELL=`, `.SHELLFLAGS=`, or an ordinary `V=1`, which can equally override a recipe variable such as `CC` — so every one is floored, while `--jobs=4` (a flag) is not',
     tokens: ({ name, positional }) =>
@@ -915,66 +979,95 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   },
   {
     pattern: 'make* --e*',
+    kind: 'command',
     hazard:
       'make --eval, spelled in full or by the prefixes GNU getopt accepts (`--ev`, `--eva`), evaluates the text as makefile source; `--environment-overrides` lets the environment replace the makefile’s variables',
   },
   {
     pattern: 'make -…E… (a single-dash short-option cluster containing E)',
+    kind: 'command',
     hazard: 'the short spelling of make --eval, alone (`-E`) or inside a clustered flag (`-sE`)',
     tokens: ({ name, flags }) => name === 'make' && flags.some((flag) => /^-[^-]*E/.test(flag)),
   },
   {
     pattern: 'go* -exec*',
+    kind: 'command',
     hazard: 'go test -exec runs the test binary under an arbitrary program',
   },
-  { pattern: 'go* --exec*', hazard: 'the double-dash spelling of go -exec' },
+  { pattern: 'go* --exec*', kind: 'command', hazard: 'the double-dash spelling of go -exec' },
   {
     pattern: 'go* -toolexec*',
+    kind: 'command',
     hazard: 'go -toolexec runs an arbitrary program in front of every toolchain invocation',
   },
-  { pattern: 'go* --toolexec*', hazard: 'the double-dash spelling of go -toolexec' },
+  {
+    pattern: 'go* --toolexec*',
+    kind: 'command',
+    hazard: 'the double-dash spelling of go -toolexec',
+  },
   {
     pattern: 'go* -ldflags*extld*',
+    kind: 'command',
     hazard:
       '`-ldflags=-extld=…` names the external linker, which is a program the command line chose',
   },
-  { pattern: 'go* --ldflags*extld*', hazard: 'the double-dash spelling of go -ldflags … -extld' },
+  {
+    pattern: 'go* --ldflags*extld*',
+    kind: 'command',
+    hazard: 'the double-dash spelling of go -ldflags … -extld',
+  },
   {
     pattern: 'cargo* --config*',
+    kind: 'command',
     hazard: 'cargo --config can set a target runner, which is an arbitrary command',
   },
   {
     pattern: '* --script-shell*',
+    kind: 'command',
     hazard: 'npm and pnpm run the package script under the --script-shell binary instead of sh',
   },
   {
     pattern: 'npm* --scr*',
+    kind: 'command',
     hazard:
       'npm accepts any unique prefix of a long option; `--scr` is the shortest unique to --script-shell in the option set this is written against',
   },
-  { pattern: 'pnpm* --scr*', hazard: 'the same prefixes of --script-shell, for pnpm' },
+  {
+    pattern: 'pnpm* --scr*',
+    kind: 'command',
+    hazard: 'the same prefixes of --script-shell, for pnpm',
+  },
   {
     pattern: '* --node-options*',
+    kind: 'command',
     hazard:
       'npm turns --node-options into NODE_OPTIONS, so `--import=data:…` runs model-written code',
   },
   {
     pattern: 'npm* --node*',
+    kind: 'command',
     hazard: 'the prefixes of --node-options npm accepts (`--node-o…`), floored from `--node`',
   },
-  { pattern: 'pnpm* --node*', hazard: 'the same prefixes of --node-options, for pnpm' },
+  {
+    pattern: 'pnpm* --node*',
+    kind: 'command',
+    hazard: 'the same prefixes of --node-options, for pnpm',
+  },
   {
     pattern: 'pnpm* --config.*',
+    kind: 'command',
     hazard:
       'pnpm `--config.<key>=` sets any configuration key, including `node-options` and `script-shell`',
   },
   {
     pattern: 'npm* --config.*',
+    kind: 'command',
     hazard:
       'the pnpm spelling on npm — floored as a precaution; whether npm accepts it is not measured',
   },
   {
     pattern: 'pip install -r http*',
+    kind: 'trust',
     hazard:
       'the allow entry `pip install -r *` is meant to be a lockfile install; a requirements file fetched over the network is not one',
   },
@@ -999,27 +1092,36 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   // A later CLI version that starts accepting prefixes moves these, like npm's (above).
   {
     pattern: 'pytest* --basetemp*',
+    kind: 'path',
     hazard:
       'pytest --basetemp clears the directory it is given before the run and writes under it, and the path guard never sees that write (BD-024)',
   },
   {
     pattern: 'pytest* --junitxml*',
+    kind: 'path',
     hazard: 'pytest --junitxml writes the report to any path the path guard never sees (BD-024)',
   },
   {
     pattern: 'pytest* --junit-xml*',
+    kind: 'path',
     hazard: 'the other spelling pytest accepts for --junitxml',
   },
   {
     pattern: 'go* -o',
+    kind: 'path',
     hazard:
       'go test -o (with or without -c) writes the compiled test binary to any path the path guard never sees (BD-024)',
   },
-  { pattern: 'go* -o=*', hazard: 'go test -o with its value attached' },
-  { pattern: 'go* --o', hazard: 'the double-dash spelling of go test -o' },
-  { pattern: 'go* --o=*', hazard: 'the double-dash spelling of go test -o=, value attached' },
+  { pattern: 'go* -o=*', kind: 'path', hazard: 'go test -o with its value attached' },
+  { pattern: 'go* --o', kind: 'path', hazard: 'the double-dash spelling of go test -o' },
+  {
+    pattern: 'go* --o=*',
+    kind: 'path',
+    hazard: 'the double-dash spelling of go test -o=, value attached',
+  },
   {
     pattern: 'cargo* --target-dir*',
+    kind: 'path',
     hazard:
       'cargo test --target-dir writes the whole build tree under any directory the path guard never sees (BD-024), in either `--target-dir x` or `--target-dir=x`',
   },
@@ -1059,6 +1161,7 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   ...GO_PATH_WRITING_BINARY_FLAGS.map(goPathWritingFloor('required')),
   {
     pattern: 'pytest -o / --override-ini (any key, any spelling argparse accepts)',
+    kind: 'command',
     hazard:
       'pytest -o sets any configuration key from the command line: `cache_dir` moves the cache (pytest writes under it, and `--cache-clear` deletes its `d` and `v` subdirectories), `log_file` writes a log, and `addopts` is read from the overridden configuration, so it re-adds any flag floored here — floored for every key, like pnpm --config.<key>',
     tokens: ({ name, flags }) =>
@@ -1070,11 +1173,13 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   },
   {
     pattern: 'pytest* --debug*',
+    kind: 'path',
     hazard:
       'pytest --debug truncates and writes its debug log to the path it is given — `--debug=<path>` or `--debug <path>`, since the value is optional and argparse takes the next word — and the path guard never sees that write (BD-024)',
   },
   {
     pattern: 'pytest --cov-report=<kind>:<dest> (either spelling)',
+    kind: 'path',
     hazard:
       'pytest-cov writes an annotate, html, xml, json, markdown, markdown-append or lcov report to the destination after the colon, which the path guard never sees (BD-024)',
     tokens: ({ name, flags, positional }) =>
@@ -1095,6 +1200,7 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   ...GO_PATH_WRITING_BUILD_FLAGS.map(goPathWritingFloor('none')),
   {
     pattern: 'pytest @<file> (an argument read from a file)',
+    kind: 'command',
     hazard:
       'pytest 9.0.2 builds its parser with `fromfile_prefix_chars="@"` (`src/_pytest/config/argparsing.py:463`), so any argument starting with `@` is replaced by the lines of a file the agent may have written — which can carry every flag floored here, and no pattern sees them',
     tokens: ({ name, flags, positional }) =>
@@ -1102,6 +1208,7 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   },
   {
     pattern: 'pytest -c / --config-file (any spelling argparse accepts)',
+    kind: 'command',
     hazard:
       'pytest -c <file> loads its configuration — `addopts`, `cache_dir`, `log_file` — from a file the agent may have written, so it re-adds any flag floored here (`src/_pytest/main.py`, `dest="inifilename"`; `config/findpaths.py` `determine_setup` reads it)',
     tokens: ({ name, flags }) =>
@@ -1113,6 +1220,7 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   },
   {
     pattern: 'pytest --log-file (exact name, = or a space)',
+    kind: 'path',
     hazard:
       'pytest --log-file writes the run’s log to the path it is given, opened with `--log-file-mode`, whose default `w` truncates it (`src/_pytest/logging.py`) — the path guard never sees that write (BD-024); `--log-file-mode`, `--log-file-level` and the format options are other flags and are not floored',
     tokens: ({ name, flags }) =>
@@ -1120,6 +1228,7 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   },
   {
     pattern: 'pytest --rootdir (exact name, = or a space)',
+    kind: 'path',
     hazard:
       'pytest --rootdir decides where the cache is written — `cache_dir` (default `.pytest_cache`) is resolved against it (`src/_pytest/cacheprovider.py`) — so `--rootdir=tests` writes new files under a protected tree the path guard never sees; it does not change which configuration file is read (`determine_setup` locates that from the arguments)',
     tokens: ({ name, flags }) =>
@@ -1454,12 +1563,10 @@ export const matchesBlockPattern = (pattern: string, command: string): boolean =
   );
 };
 
-/**
- * The first `HAZARDOUS_ARGUMENTS` entry this piece of command line carries, if any. Its only
- * effect is to floor the verdict at `ask` (see `evaluateCommand`).
- */
-export const hazardousArgument = (command: string): HazardousArgument | undefined =>
-  HAZARDOUS_ARGUMENTS.find((entry) =>
+/** Does this piece of command line carry `entry` — by its glob, or by its token predicate? */
+const carriesHazard =
+  (command: string) =>
+  (entry: HazardousArgument): boolean =>
     entry.tokens === undefined
       ? matchesBlockPattern(entry.pattern, command)
       : argv0Candidates(tokenise(command)).some((candidate) => {
@@ -1473,8 +1580,22 @@ export const hazardousArgument = (command: string): HazardousArgument | undefine
             flags,
             positional,
           });
-        }),
-  );
+        });
+
+/**
+ * The first `HAZARDOUS_ARGUMENTS` entry this piece of command line carries, if any. Its only
+ * effect is to floor the verdict at `ask` (see `evaluateCommand`).
+ */
+export const hazardousArgument = (command: string): HazardousArgument | undefined =>
+  HAZARDOUS_ARGUMENTS.find(carriesHazard(command));
+
+/**
+ * **Every** `HAZARDOUS_ARGUMENTS` entry this piece of command line carries, in list order — for the
+ * unattended decision, which refuses a `command` or `trust` hazard and runs a `path` one, and so
+ * must not stop at the first entry (`pytest --junitxml=x -c evil.ini` carries one of each).
+ */
+export const hazardousArguments = (command: string): readonly HazardousArgument[] =>
+  HAZARDOUS_ARGUMENTS.filter(carriesHazard(command));
 
 /**
  * Block patterns that ban a binary outright — `docker *`, `sudo *`, `kubectl *` — as opposed to
@@ -1904,6 +2025,31 @@ export const hasOutputRedirection = (command: string): boolean =>
 export const commandUncertainty = (command: string): readonly UncertaintyReason[] =>
   parseCommand(command).uncertainty;
 
+/**
+ * The redirection targets in this command that write a path (rule 4's floor), as written — for the
+ * unattended git boundary, which refuses a write into `.git` or the control mount.
+ */
+export const commandWriteTargets = (command: string): readonly string[] =>
+  parseCommand(command).writeTargets;
+
+/**
+ * One fragment's words as the program receives them: split as `tokenise` splits, each word's
+ * quoting and escaping taken off (`unquoteToken`). The unattended git boundary reads these.
+ */
+export const commandWords = (fragment: string): readonly string[] =>
+  tokenise(fragment).map(unquoteToken);
+
+/**
+ * The argv lists one fragment could really run as — the **block** list's generous reading (rule 2):
+ * every leading wrapper and assignment peeled in turn, argv[0] reduced to its basename, every word
+ * dequoted. The unattended git boundary judges each, so `env git push …`, `nice -n 5 git push …` and
+ * `GIT_TRACE=1 git push …` are all a `git push`.
+ */
+export const commandArgvCandidates = (fragment: string): readonly (readonly string[])[] =>
+  argv0Candidates(tokenise(fragment))
+    .filter((candidate) => candidate.length > 0)
+    .map(([name, ...rest]) => [name as string, ...rest.map(unquoteToken)]);
+
 // ── evaluation ───────────────────────────────────────────────────────────────
 
 export interface CommandRequest {
@@ -2282,7 +2428,20 @@ export const intersectWithOrganisationMaximum = (
 export interface RunCommandPolicy extends NarrowedCommandPolicy {
   /** {@link OrganisationNarrowing.removed}: what the organisation took from this run's baseline. */
   readonly removedByOrganisation: readonly string[];
+  /** {@link unattendedCommandModeOf} over the organisation and every layer (BD-025, 2026-10-06). */
+  readonly unattended: UnattendedCommandMode;
 }
+
+/**
+ * What an unattended run does with an `ask` — `deny` when **any** layer says so (the organisation,
+ * the project's settings, the repository file), otherwise the platform default `auto` (BD-025's
+ * 2026-10-06 amendment). Only tightens: an `auto` stated below a `deny` changes nothing, so a
+ * repository file can choose `deny` and never undo one.
+ */
+export const unattendedCommandModeOf = (
+  ...layers: readonly (CommandPolicy | undefined)[]
+): UnattendedCommandMode =>
+  layers.some((layer) => layer?.unattended === 'deny') ? 'deny' : DEFAULT_UNATTENDED_COMMAND_MODE;
 
 /**
  * The policy a run is given: its baseline, intersected with the organisation maximum, then narrowed
@@ -2307,5 +2466,10 @@ export const runCommandPolicy = (
     policy = narrowed.policy;
     ignored.push(...narrowed.ignoredAllow);
   }
-  return { policy, ignoredAllow: unique(ignored), removedByOrganisation: bounded.removed };
+  return {
+    policy,
+    ignoredAllow: unique(ignored),
+    removedByOrganisation: bounded.removed,
+    unattended: unattendedCommandModeOf(organisation, ...layers),
+  };
 };
