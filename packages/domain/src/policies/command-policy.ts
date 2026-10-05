@@ -1335,7 +1335,8 @@ const ARGV0_WRAPPERS: ReadonlySet<string> = new Set([
   'runuser',
   'su',
   'doas',
-  'sudo',
+  // Not `sudo`: the block list bans it by name (`sudo *`), and peeling it would report the inner
+  // command's match instead of that one (the `denied-tool` golden pins the reason a run reads).
   'builtin',
   'sh',
   'bash',
