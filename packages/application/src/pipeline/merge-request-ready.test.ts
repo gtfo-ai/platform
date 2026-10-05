@@ -87,6 +87,8 @@ const world = async (
     readonly refusePipeline?: boolean;
     /** WP-139: where the provider says the CI configuration lives. @default GitLab's default file. */
     readonly ciConfig?: CiConfigLocation;
+    /** Whether the merge request is a draft before the duty marks it ready. @default false */
+    readonly draft?: boolean;
   } = {},
 ) => {
   const mirrorReads: { paths: readonly string[]; presence: readonly string[] }[] = [];
@@ -156,6 +158,19 @@ const world = async (
     },
     capabilities: () => ({}),
     repositorySettings: async () => ({ defaultBranch: 'develop', ciConfig }),
+    getMergeRequest: async (ref: typeof MR) => ({
+      ref,
+      state: 'opened',
+      draft: options.draft === true && updates.length === 0,
+      title: 'Sum the footer',
+      description: '',
+      source_branch: ref.branch,
+      target_branch: 'develop',
+      head_sha: HEAD,
+      labels: [],
+      reviewers: [],
+      web_url: ref.url,
+    }),
     updateMergeRequest: async (ref: typeof MR, update: MergeRequestUpdate) => {
       updates.push(update);
       return {
@@ -256,6 +271,18 @@ describe('the mr_ready duty (WP-138 ruling (g))', () => {
       expect(updates).toHaveLength(1);
       expect(pipelines).toEqual([]);
     }
+  });
+
+  it('asks for a pipeline when it took the draft off, although the head already has one (first local test)', async () => {
+    // Autix: the draft's pipeline exists (its `Draft:` rule held two jobs as manual), and GitLab
+    // starts none when the draft is marked ready.
+    const { run, pipelines } = await world({ draft: true, pipeline: true });
+    expect(await run()).toEqual({ outcome: 'marked_ready', pipeline: true });
+    expect(pipelines).toEqual([7]);
+    // …and the redelivered wake-up, which now reads a ready merge request with a pipeline, asks
+    // for nothing more.
+    await run();
+    expect(pipelines).toEqual([7]);
   });
 
   it('asks once per head: a redelivered wake-up replays rather than starting a second pipeline', async () => {
