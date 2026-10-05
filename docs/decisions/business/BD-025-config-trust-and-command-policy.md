@@ -145,3 +145,64 @@ back to `local` over a `ci` setting, which is reported in the reading's `not_app
 patterns (it changes the prompt and the readiness detection too), not a policy a reviewer is held to,
 and not a BD-028 feature (it turns on no agent work). `verification.mode` names the subject — where the
 project's checks run — and leaves room for a later key beside it without overloading `commands`.
+
+## Amendment (2026-10-05 — the product owner's decision from the first local test) — an unsuccessful Developer run's unfinished work is saved to its branch, and the retry continues from it
+
+On the first local test (Autix, ticket AUT-6820) the Developer stage's run ended `failed` /
+`error_max_turns` after 201 turns and 26 minutes, having made about forty-five edits and written four
+new files. Nothing was committed or pushed, `tasks.branch` stayed `null`, the task went to
+`needs_human`, and a retry provisioned a fresh checkout of the default branch: the work was lost and
+the next attempt paid for the same exploration again. PROGRESS backlog 467.
+
+**Decision — "save WIP, retry continues".**
+
+1. **Whose work.** A Developer run of an ordinary task (`runs.mode = normal`) at any stage but
+   `conflict_resolution`, whose checkout is a branch inside this decision's `agentic/*` namespace
+   (`unfinishedWorkBranchFor`). `conflict_resolution` is excluded: its branch already carries an open
+   merge request, and a `wip:` commit of a half-resolved merge would put conflict markers on the
+   merge request under review, while what it loses is one `git merge` the next attempt repeats.
+2. **Which endings.** `error_max_turns`, `error_max_budget_usd` that did not keep an artifact (one that
+   did is `completed`, BD-010's 2026-10-05 amendment), `error_max_structured_output_retries`,
+   `error_during_execution`, `timed_out`, `stalled` and `crash` (`SAVED_UNFINISHED_WORK_REASONS`). Not
+   saved: a success; a person's cancel (a cancel is *throw it away* — the take-over is *keep it*); a
+   take-over (exported by its own request); `shutdown` (the runner hands the stage back to start again
+   by itself, and an export would lengthen a SIGTERM — discovered work in backlog 467); `permission_denied`
+   (a person reads the refusal before the tree goes anywhere); `lease_expired` (no process holds a
+   workspace to ask).
+3. **How.** Exactly as the take-over exports: the process holding the workspace commits the tree and
+   pushes the task's `agentic/<key>` branch with the **run's own** minted credential, never the
+   platform's, through the same launcher verb (`POST /v1/runs/<id>/end` with an export) and the same
+   helper (`exportScript`) with every guard it applies — the run container stopped first; a `.git`
+   that is not the directory the platform cloned, a nested repository or an unreadable tree refused by
+   name; no git configuration the run wrote read; no hook run. One flag differs, `onlyIfChanged`: the
+   helper commits and pushes **only when the tree changed** — uncommitted edits, untracked files, or
+   a head the project's mirror does not hold — so an attempt that changed nothing pushes nothing. No
+   tarball and no longer retention: the branch is where the work goes, and the volume keeps its
+   ordinary three days as the copy of last resort when the push fails.
+4. **The commit message** is product/19 §7's second permitted `wip:` commit:
+   `wip: unfinished attempt <n> of <stage> (<terminal reason>)` — platform text over a closed
+   vocabulary. The content the run wrote passed the write-time path guard (protected paths and
+   secret-shaped content) when it was written, as a take-over's does; the CI gate's tamper check judges
+   the branch afterwards as it judges any push.
+5. **What is recorded.** The workspace's answer — `{branch, commit_sha, pushed}` — goes to
+   `runs.saved_work` (migration 0083), to `run.failed`/`run.finished`'s `saved_work`, and, for a push
+   that succeeded, to `tasks.branch` when it was `null` (through `save`, the column's owner). **A push
+   failure never changes the run's terminal outcome**: it is logged, and recorded as `pushed: false`.
+6. **The retry continues.** A Developer run of the same stage is planned on the task's branch (it
+   always was, WP-138), and when the latest ended run of that stage saved work that reached that
+   branch, its prompt gets one platform-written sentence after the stage line (`previousAttemptLine`):
+   the previous attempt ended `<reason>` after N turns, its unfinished work is a `wip:` commit on the
+   checked-out branch, read it (`git log`, `git diff` against the default branch) and continue from it.
+   **The `wip:` commit is left as it is** — the Developer's command policy has no `git rebase` or
+   `git commit --amend` to squash it with, and a merge request is reviewed as a diff.
+7. **What a person sees.** The run page says *Unfinished work saved: pushed to `<branch>` at
+   `<sha>`* (or that the push did not succeed and where the work still is); the task page's run list
+   marks the run *work saved to branch*; and the escalation's blocker brief says the work was saved
+   and that a retry of the stage continues from that branch.
+
+**Residuals, stated.** The fake-Claude e2e proves the platform's half end to end with a launcher seam
+that answers as a successful push; the commit and the push over a real daemon are the Docker
+provider's and the launcher's own tiers, and the `onlyIfChanged` lines were measured against a real
+git (PROGRESS backlog 467). A launcher of an earlier build refuses the new `onlyIfChanged` field on
+its strict end-request schema, so a mixed-version pair would fail that run's end request and leave
+its container to the orphan pass (TD-028 decision 12); the shipped images are built together.

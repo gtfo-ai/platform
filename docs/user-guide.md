@@ -516,6 +516,18 @@ CLI refuses any other.
 You can **cancel** the run (member), **retry** it with a different model or effort (member — this
 creates a *new* run rather than changing this one), and leave **feedback** scoped to the stage.
 
+**A Developer run that stops without finishing keeps its work.** When it runs out of turns, out of
+budget, out of time, stalls or crashes, the platform commits what it had changed as one
+`wip: unfinished attempt <n> of implementation (<reason>)` commit and pushes it to the task's
+`agentic/<ticket>` branch, with the run's own credential — the same export a take-over makes. The run
+page says so under the header (*Unfinished work saved: pushed to … at …*), the task's run list marks
+the run *work saved to branch*, and the escalation's brief tells you a retry continues from that
+branch. **Retry the stage** and the new run starts on that branch and is told to read the previous
+attempt's work and carry on rather than start over; the `wip:` commit stays in the branch's history.
+A run that changed nothing pushes nothing. If the push fails the run page says so, and the work is
+only in the run's workspace volume, which is kept for three days. A run you **cancel** is not saved —
+take the task over instead if you want its work.
+
 **Steering a live run is accepted, then applied or refused** (WP-85). It pushes a turn into a
 session that is already running, which only the process running that session can do — on a stock
 instance the `runner` container, never the process serving this application. So the message is
