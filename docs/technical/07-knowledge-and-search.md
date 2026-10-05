@@ -102,7 +102,7 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
    > witnesses with the same predicate the pack uses — **not** read back from `run_context_pack`,
    > because a page no run happened to retrieve would then never be flagged and a month-old row
    > would flag a glob somebody has since fixed. Nothing stored, no finding.
-4. Fill the token budget (default 12 k for tiers 0–1): tier 0 always (index, rules, repo map for code stages), then tier 1 by score until the budget is reached; write files into the workspace `.agentic-run/context/` and list them in the prompt with 2–3-line summaries.
+4. Fill the token budget (default 12 k for tiers 0–1): tier 0 always (index, rules, repo map for code stages), then tier 1 by score until the budget is reached; inline them whole in the prompt as data blocks. (**Amended 2026-10-06**, PROGRESS backlog 476: this step said the files are also written into the workspace `.agentic-run/context/`; no writer exists, and the prompt says the pack is the prompt.)
 5. `kb_search` MCP tool exposes the same query for tier 2 (returns `path#heading` + snippet + score; never whole documents unless asked by path).
 
 > **A pack must render provider text as provider text — including the platform's own truncation

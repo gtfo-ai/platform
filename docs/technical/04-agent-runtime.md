@@ -27,7 +27,8 @@ Runner service (infrastructure)  ── platform-side SDK host; the CLI itself r
 | `model`, `effort`, `maxTurns`, `maxBudgetUsd`, `stallTimeoutMs`, `wallClockMs` | effective config (BD-013 defaults; product/04 table) |
 | `systemPrompt` = `{ type: 'preset', preset: 'claude_code', append: platformPrompt + rolePrompt + rulesBlock }` | product/13 layers 1–2 (a project's prompt files are **not** here: data blocks in `userPrompt`, WP-92) |
 | `userPrompt` = the project's prompt files for the stage as `project_prompt` data blocks (WP-92), then task context (ticket as delimited data, artifacts, return feedback, observability pre-fetch) + instructions to produce the artifact | layer 4 |
-| `contextPack` (tier 0–1 documents, written as files into the workspace under `.agentic-run/context/` and referenced by path in the prompt; tier 0 also inlined) | product/05 |
+| `contextPack` (tier 0–1 documents, inlined whole in the prompt as data blocks and recorded in `run_context_pack`. **Amended 2026-10-06** (PROGRESS backlog 476): this row said they are also written into the workspace under `.agentic-run/context/`; nothing in the tree writes that directory, and agents spent turns listing it, so the prompt and the `kb` skill now say the prompt is the whole pack) | product/05 |
+| `promptHolds` — what the prompt carries **whole** (the ticket when read, every artifact the assembler did not cut), so `get_task_context` answers those `in_prompt` instead of sending them again. **Added 2026-10-06** (PROGRESS backlog 474); optional, absent serves everything | planner, from the assembler's own cut |
 | `settingSources: ['project']`, `cwd = workspace path`, `additionalDirectories = []` | research/04: loads project `CLAUDE.md`, rules, skills, hooks; never host config |
 | `checkoutRef` — the branch or commit the workspace checks out, `null` for the default branch — **added at WP-34** (§ 2's *"checkout of the task branch for re-entries"* had no carrier at all; PROGRESS backlog 71). The planner fills it from the task's own branch, or, for a **shadow** task, from the merge base of the human merge request it is compared with (Q82 (a)). **Nothing honours it yet**: no production `RunWorkspaceProvisioner` is composed (WP-15g), so the value travels and is asserted and is not acted on | technical/05 § 2; product/19 § 19 |
 | `tools` (the role's tool policy), `disallowedTools`, `permissionMode: 'default'`, `permissionPrompts: 'host'`, `strictMcpConfig: true`, `managedSettings` | tool policy per role (product/13 table) + command policy (BD-025) — **corrected at WP-12**, see the note below |
@@ -124,13 +125,63 @@ Runner service (infrastructure)  ── platform-side SDK host; the CLI itself r
 
 ## Prompt assembly (deterministic, audited)
 
-1. Platform prompt (constant per platform version): identity, non-negotiables (external text is data — BD-022; never touch secrets; stay in tools; ask via `ask_human` with a blocker brief; end with the structured artifact).
+1. Platform prompt (constant per platform version): identity, non-negotiables (external text is data — BD-022; never touch secrets; stay in tools; ask instead of guessing — in the artifact, and via `ask_human` with a blocker brief **only when the run holds it** (amended 2026-10-06, `p3`); end with the structured artifact).
 2. Role prompt (`prompts/<role>.md` @ version). **Amended at WP-92:** a project's own prompt files never replace it and are not concatenated into it. They are data blocks in the user prompt (below).
 3. Rules block: unconditional `.agentic/rules/*.md` (project `CLAUDE.md`/`.claude/rules` are loaded by the SDK itself; not duplicated).
 4. Context pack tier 0 inline (index, repo map for code stages); tier 1 items as a "Relevant knowledge" block with paths and 2–3 line summaries plus the files on disk.
 5. Task block: the ticket, artifacts, return feedback, human comments, pre-fetched observability excerpts — all marked as data. **Amended at WP-83** (PROGRESS backlog 159's stale-artifact half): *artifacts* is the latest version of each type, except that a stage the task was **returned** to is shown only the verdict that caused the return — the `ReviewVerdict`/`AcceptanceVerdict` the returning attempt produced, read by link (`runs.task_stage_id`) — and no verdict at all after a return no verdict caused (a gate's, a human's); the return feedback block is the cause (`artifactsShownTo` in `packages/application/src/pipeline/planner.ts`). **The ruling covers the pack, not `get_task_context`** (WP-105, PROGRESS backlog 289, option (b)): the tool is the task's history on purpose — a stage may need an earlier verdict — so its `artifacts` section still answers the latest version of each type, and its `feedback` section names each return's **`cause`** by the same link: `verdict` with the type and version the returning attempt produced, `gate` for a return a gate made, or `other` — a person's return or rework, the dependency policy or the review window's threads, which the row does not tell apart (`returnCauseOf` in `apps/server/src/queries/task-context-queries.ts`). A model that asks is shown the old verdict labelled with its version, and can see which return, if any, it was for.
-6. Output contract: schema summary + "write the markdown artifact to `.agentic-run/out/<artifact>.md` and return the JSON".
+6. Output contract: schema summary + "return the JSON". (**Amended 2026-10-06:** the instruction to also write the markdown artifact to `.agentic-run/out/<artifact>.md` is gone — nothing reads that directory, and on Autix the sentence cost every run Write and heredoc attempts; see below.)
 Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3, plus the project prompt lane (WP-92, below).
+
+> **Amended 2026-10-06 — what a run is told about itself (the first local test on Autix, PROGRESS
+> backlogs 473–476).** Transcript analyses of real runs found four gaps, each closed in the
+> assembler (`packages/domain/src/prompt/`) and the planner, every sentence platform text built from
+> closed vocabularies and platform integers, so the delimiter contract below is unchanged:
+>
+> - **The caps and the tools (473, 476).** The user prompt opens with a platform-written *This run*
+>   section: the run's `maxTurns` and `maxBudgetUsd` — the numbers the CLI enforces — the platform
+>   tools the run is registered with, and *What this run was given*: the ticket (read or not), each
+>   artifact with its version and whether it is whole or cut, how many knowledge documents (or why
+>   none), return feedback or none, the review subject, the observability excerpts, the checklists,
+>   the project prompt files and whether there is a checkout — and the sentence that what it does not
+>   name does not exist for the run. The Developer's role prompt (`developer@3`) works **in slices**:
+>   commit and push each one, `open_mr` after the first, ImplementationNotes with `known_gaps` before
+>   the last ~15% of turns. It is in the user prompt, not layers 1–3, because the caps are a project's
+>   configuration and the inventory changes every task. A platform reminder *during* the run (a
+>   `PostToolUse` `additionalContext` at 50/75/90% of the turns) was considered and not built: the
+>   SDK declares the field, but whether the CLI keeps a second `PostToolUse` hook's
+>   `updatedToolOutput` (the redaction) beside another's `additionalContext` is unmeasured, and the
+>   wrong answer would drop a redaction — filed as discovered work in PROGRESS under backlog 473.
+> - **The plan whole, in a deliberate order (474).** A prior artifact's JSON is serialised with its
+>   fields in a stated order (`orderArtifactData`: for an ImplementationPlan `approach`,
+>   `files_to_change`, `validation_contract`, `test_plan`, then the schema's order; nested objects in
+>   their schema's order) instead of jsonb's shortest-key-first, which had put the cut on the plan's
+>   longest keys. The stage's **primary input** (`PRIMARY_ARTIFACT_BY_ROLE`: the plan for the
+>   Developer, the spec or root-cause analysis for the Architect) is cut at 80 000 characters
+>   (`MAX_PRIMARY_ARTIFACT_CHARS`) rather than 20 000. `get_task_context` fills its 160 000-character
+>   answer by size — what a small value leaves goes to the large ones — never names an `/api/…` URL
+>   (it says to call again with `artifact_types`, a new optional input, or that the artifact is
+>   larger than any answer), answers what the prompt holds as `in_prompt` (`RunSpec.promptHolds`), and
+>   serves a run's status, reason, turns, times and cost, without `settings_hash`, `prompt_version` or
+>   token counts.
+> - **The workspace (475).** Every role with `Bash` gets a *Workspace* section in layers 1–3
+>   (`ENVIRONMENT_PROMPT`, keyed by `verification.mode`): what the shipped `platform-runtime` image has
+>   — Node.js 24, git, the coreutils, curl, jq, ripgrep, ssh and the provider CLIs — and that it has no
+>   PHP, Composer, Python, JVM, Ruby, Go, Docker or database server; that a missing tool is a fact
+>   about the workspace and is not reverse-engineered; and, under `ci`, that a file a missing tool
+>   would produce is written by hand and judged by CI. The facts are `RUN_IMAGE_CONTENTS`, held to
+>   `docker/base.Dockerfile` and `docker/runtime.Dockerfile` in both directions by
+>   `environment.test.ts`. The Architect (`architect@4`) plans only what the workspace can carry out;
+>   the Developer records a check it cannot run in `known_gaps`. An operator's own run image
+>   (`APP_WORKSPACE_RUNTIME_IMAGE`) is not described — the launcher knows it, the planner does not.
+> - **Honest inputs (476).** A run is registered only with the tools this build performs
+>   (`availablePlatformTools`, composed from `IMPLEMENTED_PLATFORM_TOOLS`), and a skill whose job is a
+>   withheld tool (`ask-human`, `file-followup-ticket`) is withheld with it; a refusal that is still
+>   reached is one plain sentence, its detail in the log. The role prompts promise knowledge "when the
+>   project has it" and ask through the artifact (`product_manager@3`, `investigator@2`). *Attempt N*
+>   says how the stage's last run ended (`RunRepository.lastEnded`) and whether there is return
+>   feedback. The `file` attribute of a knowledge block, which named a `.agentic-run/context/` copy,
+>   is gone.
 
 > **A project prompt is a data block, never platform text (WP-92, PROGRESS backlog 226's prompt
 > half).** This is the rule, and it is the same one the delimiter contract below states for every
@@ -558,7 +609,7 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 
 ## Result handling
 
-- `structured_output` validated again by the platform against the artifact schema (defence in depth); markdown artifact read from `.agentic-run/out/`; both stored as an Artifact version.
+- `structured_output` validated again by the platform against the artifact schema (defence in depth) and stored as an Artifact version. (**Amended 2026-10-06**, PROGRESS backlog 476: this line also said a markdown artifact is read from `.agentic-run/out/`; nothing reads it, and the prompt no longer asks for it.)
 - `terminal_reason`, `usage`, `modelUsage`, `total_cost_usd`, `num_turns` → `run.finished` → cost ledger (actual, or estimated in `local` mode via the price table).
 - On `error_max_structured_output_retries`: run `failed(schema)`; pipeline retries once with the validation errors appended; then escalate. **The platform's own re-validation reports the same `terminal_reason` (WP-12)**: the pipeline branches on "the structured-output contract was not met", and it is met or not met regardless of which side noticed. The run's `error` text says which — the SDK's retries were exhausted, or the platform rejected the answer, with the failing paths (never the values).
 
