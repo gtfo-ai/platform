@@ -260,6 +260,46 @@ describe('PreToolUse(Edit|Write) — the path guard', () => {
   });
 });
 
+describe('PreToolUse(mcp__platform__*) — the platform’s own tools (first local test)', () => {
+  it('allows a platform tool the run was granted, so the CLI never asks about it', async () => {
+    // Without this, every granted platform tool went to `canUseTool` and an unattended run denied it.
+    const test = harness();
+    for (const name of ['get_task_context', 'kb_search', 'report_progress', 'ask_human']) {
+      const output = await test.fire(
+        'PreToolUse',
+        { tool_name: `mcp__platform__${name}`, tool_input: {} },
+        `tool-${name}`,
+      );
+      expect(decisionOf(output), name).toBe('allow');
+    }
+    expect(test.records).toEqual([]);
+  });
+
+  it('denies a platform tool the run was not granted, and records why', async () => {
+    const test = harness();
+    const output = await test.fire(
+      'PreToolUse',
+      { tool_name: 'mcp__platform__open_mr', tool_input: { title: 'x' } },
+      'tool-1',
+    );
+    expect(decisionOf(output)).toBe('deny');
+    expect(test.records).toEqual([
+      expect.objectContaining({
+        toolName: 'mcp__platform__open_mr',
+        decision: 'deny',
+        reason: 'mcp__platform__open_mr is not a platform tool this run was granted',
+      }),
+    ]);
+  });
+
+  it('does not reach another server’s tools', () => {
+    const matcher = new RegExp(`^(?:${String(harness().hooks.PreToolUse?.[2]?.matcher)})$`);
+    expect(matcher.test('mcp__platform__kb_search')).toBe(true);
+    expect(matcher.test('mcp__evil__kb_search')).toBe(false);
+    expect(matcher.test('mcp__platformx__kb_search')).toBe(false);
+  });
+});
+
 describe('PostToolUse — truncation and redaction of what the model reads', () => {
   it('rewrites the model’s copy when the output is over the cap', async () => {
     const spec = runSpecFixture({
@@ -356,11 +396,12 @@ describe('the rest of the table', () => {
 });
 
 describe('registration', () => {
-  it('registers a separate matcher for Bash and for the write tools', () => {
+  it('registers a separate matcher for Bash, the write tools and the platform tools', () => {
     const test = harness();
     expect(test.hooks.PreToolUse?.map((matcher) => matcher.matcher)).toEqual([
       'Bash',
       'Edit|Write|MultiEdit|NotebookEdit',
+      'mcp__platform__.*',
     ]);
   });
 

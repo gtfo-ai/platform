@@ -186,6 +186,46 @@ const writeHook =
     return preToolUseOutput('allow', '');
   };
 
+/** The tool-name prefix the CLI gives the in-process `platform` MCP server's tools. */
+export const PLATFORM_TOOL_PREFIX = 'mcp__platform__';
+
+/** Every tool of the platform's own MCP server, as the CLI names it. */
+export const PLATFORM_TOOL_MATCHER = `${PLATFORM_TOOL_PREFIX}.*`;
+
+/**
+ * **The platform's own tools are approved by the platform** (first local test, 2026-10-05).
+ *
+ * The run passes nothing as pre-approved (divergence 3 in `options.ts`), and the CLI treats an MCP
+ * tool as one it must ask about. With no hook answering for them, every `mcp__platform__*` call
+ * went to `canUseTool`, which has no human to ask in an unattended run and denies — so
+ * `get_task_context`, `kb_search`, `report_progress` and `open_mr` were refused in every run
+ * (AUT-6820's refinement: three denials in its first minute, then a refinement written without
+ * them). These tools are not commands the policy reads: the role's grant is
+ * `PLATFORM_TOOLS_BY_ROLE`, the server registers exactly `spec.platformTools`, and each tool's
+ * effect goes through `IntegrationActionExecutor`. So this hook allows a name the spec grants and
+ * denies, with a reason, anything else under the prefix.
+ */
+const platformToolHook =
+  (runtime: HookRuntime) =>
+  async (input: unknown, toolUseId: string | undefined): Promise<HookJSONOutput> => {
+    const hookInput = input as PreToolUseHookInput;
+    const name = hookInput.tool_name.startsWith(PLATFORM_TOOL_PREFIX)
+      ? hookInput.tool_name.slice(PLATFORM_TOOL_PREFIX.length)
+      : null;
+    if (name !== null && (runtime.spec.platformTools as readonly string[]).includes(name)) {
+      return preToolUseOutput('allow', `platform tool granted to this run: ${name}`);
+    }
+    const reason = `${hookInput.tool_name} is not a platform tool this run was granted`;
+    await runtime.recordHook({
+      hook: 'PreToolUse',
+      toolName: hookInput.tool_name,
+      toolUseId: toolUseId ?? null,
+      decision: 'deny',
+      reason,
+    });
+    return preToolUseOutput('deny', reason);
+  };
+
 /**
  * Truncate, then redact, then hand the result back to the model.
  *
@@ -244,6 +284,7 @@ export const buildHooks = (
   PreToolUse: [
     { matcher: 'Bash', hooks: [bashHook(runtime)] },
     { matcher: WRITE_TOOL_MATCHER, hooks: [writeHook(runtime)] },
+    { matcher: PLATFORM_TOOL_MATCHER, hooks: [platformToolHook(runtime)] },
   ],
   PostToolUse: [{ hooks: [postToolUseHook(runtime)] }],
   SubagentStart: [{ hooks: [subagentHook(runtime, 'SubagentStart')] }],
