@@ -14,8 +14,8 @@
  *     duty after its commit — it decides, the job calls (WP-15d);
  *  2. the duty marks the merge request ready (the provider's own draft-prefix rewrite; an update of
  *     a merge request that is already ready changes nothing), and — when the head the answer names
- *     has **no** pipeline — or the merge request *was* a draft, whatever pipeline its head has (the
- *     draft's pipeline ran under the draft's rules) — and the default branch has a CI file **or the platform cannot tell**
+ *     has **no** pipeline — or a pipeline held at a `manual` job, which a draft's rules can leave
+ *     behind — and the default branch has a CI file **or the platform cannot tell**
  *     (no mirror, a fetch that failed) — asks the provider for a merge-request pipeline (the *Run
  *     pipeline* button's API), keyed per head sha. Asking when unsure costs at worst one refused
  *     request; not asking leaves the CI gate waiting on a pipeline nobody started (review round 1).
@@ -125,10 +125,6 @@ export const runMergeRequestReady = async (
     mode: stored.task.mode,
   };
   const writes = codeMergeRequestWrites(integrations);
-  // Read **before** the mark: whether the merge request was a draft is the one fact the mark
-  // erases, and it decides below whether the head's pipeline is evidence at all.
-  const before = await gitReads(integrations).mergeRequest(mr, context);
-  const wasDraft = before?.draft === true;
   const ready = await writes.markReady(
     { ref: mr, idempotencyKey: `mr_ready:${taskId}:${mr.iid}:${String(data.cause_event_id)}` },
     context,
@@ -155,18 +151,23 @@ export const runMergeRequestReady = async (
     return { outcome, pipeline: false };
   }
   /**
-   * **A pipeline that ran while the merge request was a draft is not the evidence** (first local
-   * test, 2026-10-05). A project may run *some* jobs for a draft and hold the rest: Autix's
-   * `Draft:` rule makes `build_composer` and `codeception` manual, so the draft's pipeline is
-   * created, runs phpstan, and ends `manual` — and GitLab starts no new one when the draft is
-   * marked ready (the module docblock). Asking only when the head had *no* pipeline left the CI
-   * gate waiting on that `manual` pipeline until its timeout. So when this duty is the one that
-   * took the draft off, a merge-request pipeline is asked for whatever the head already has,
-   * still once per head (the key). A merge request that was already ready keeps the old rule: its
-   * pipeline ran under the rules a reviewer will see.
+   * **A pipeline held at a manual job is not evidence either** (first local test, 2026-10-06,
+   * backlog 459). A project may hold jobs for a draft: Autix's `Draft:` rule makes `build_composer`
+   * manual, and `phpstan`, `codesniffer` and `codeception` all need it, so the draft's pipeline is
+   * created and ends `manual` — and GitLab starts no new one when the draft is marked ready (the
+   * module docblock). Asking only when the head had *no* pipeline left the CI gate waiting on that
+   * pipeline until its timeout. So a pipeline whose status is `manual`, or which holds a job waiting
+   * at `manual`, gets a fresh merge-request pipeline asked for, still once per head (the key).
+   *
+   * The first version of this fix asked whenever the duty took a draft off, which re-ran every
+   * project's pipeline and left the fake-Claude tier's scripted pipelines waiting on one nobody
+   * finished (eight e2e cases stuck at `ci_gate`); a held job is the evidence the rules mattered.
    */
-  const status = wasDraft ? null : await gitReads(integrations).pipelineStatus(head, context);
-  if (status !== null) {
+  const status = await gitReads(integrations).pipelineStatus(head, context);
+  const heldAtManual =
+    status !== null &&
+    (status.status === 'manual' || status.jobs.some((job) => job.status === 'manual'));
+  if (status !== null && !heldAtManual) {
     return { outcome, pipeline: false };
   }
   try {
