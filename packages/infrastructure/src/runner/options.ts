@@ -49,7 +49,24 @@ export const platformEnvironment = (spec: RunSpec): Record<string, string> => ({
   // (PROGRESS backlog 285). What it changes about the hosts the pinned CLI contacts is WP-33's
   // measurement (backlog 137); setting an opt-out cannot widen egress, so it does not wait for it.
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+  // **A commit needs an identity, and the run had none** (first local test, 2026-10-05): the run
+  // image sets no `user.name`/`user.email`, so every `git commit` of a developer run failed with
+  // *"Author identity unknown … unable to auto-detect email address (got 'agentic@<container>.(none)')"*,
+  // and the run's ways around it — `git config user.name`, `git -c user.name=…` — are `ask` and
+  // were denied. No developer run could commit, push or open its merge request. The same identity
+  // the export helper commits a `wip:` with (`exportScript` in `../workspace/provider.ts`), as
+  // environment rather than configuration: it outranks every config file, so a repository's own
+  // `.git/config` cannot sign the platform's commits as somebody else.
+  ...PLATFORM_GIT_IDENTITY,
 });
+
+/** Who the platform's commits are by — the export helper's `user.name`/`user.email`, as git's environment. */
+export const PLATFORM_GIT_IDENTITY: Readonly<Record<string, string>> = {
+  GIT_AUTHOR_NAME: 'agentic',
+  GIT_AUTHOR_EMAIL: 'agentic@localhost',
+  GIT_COMMITTER_NAME: 'agentic',
+  GIT_COMMITTER_EMAIL: 'agentic@localhost',
+};
 
 /**
  * The platform's git configuration for every git the CLI starts — numbered together with the

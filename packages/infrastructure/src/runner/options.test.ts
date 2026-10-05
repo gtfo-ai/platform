@@ -81,6 +81,20 @@ describe('buildQueryOptions', () => {
     });
   });
 
+  it('gives every git the CLI starts a commit identity, the export helper’s, which a spec cannot change (first local test)', () => {
+    // Without it every developer commit failed: "Author identity unknown".
+    const spec = runSpecFixture({
+      env: { GIT_AUTHOR_NAME: 'someone else', GIT_COMMITTER_EMAIL: 'x@example.invalid' },
+      secretEnvNames: [],
+    });
+    expect(buildQueryOptions(spec, parts()).env).toMatchObject({
+      GIT_AUTHOR_NAME: 'agentic',
+      GIT_AUTHOR_EMAIL: 'agentic@localhost',
+      GIT_COMMITTER_NAME: 'agentic',
+      GIT_COMMITTER_EMAIL: 'agentic@localhost',
+    });
+  });
+
   it('turns off a run-written core.fsmonitor for every git the CLI starts, and a spec cannot undo it (backlog 282)', () => {
     const spec = runSpecFixture({
       env: {
