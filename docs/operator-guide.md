@@ -1034,6 +1034,19 @@ read-only stage, and is revoked when the run ends. Integration secrets are encry
 under `APP_SECRET_KEY`, and the read API strips every provider-declared credential field from what it
 publishes.
 
+**Agents run their commands without asking** ([BD-025](decisions/business/BD-025-config-trust-and-command-policy.md)'s
+2026-10-06 amendment). Nobody watches a run, so a command the policy would have asked about runs in
+the sandbox above, and the run's transcript records each one as *unattended: ask allowed in the
+sandbox*. Still refused: the block list, a command line the platform cannot parse, arguments that hand
+a command another program, and the git boundary — a push anywhere but `origin agentic/<branch>`, a
+remote other than `origin`, git configuration of a remote, credential, hook or SSH command, and the
+credential helper itself. To refuse every unlisted command instead, set `commands.unattended: deny`
+in the organisation settings (`PATCH /api/org`) or a project's. The git boundary reads command lines;
+what bounds a run that spells git another way is that its credential is answered for the project's
+git host only — **not** for the repository path on that host, so a static run token that can reach
+other repositories there can reach them from a run (PROGRESS backlog 481). Prefer a minted token or a
+deploy key, which the provider scopes to the project.
+
 **All external text is untrusted.** Ticket bodies, merge-request comments, model output, log lines
 and knowledge documents are rendered as text — the browser application has no
 markdown-to-HTML step at all — and are put into a prompt only inside a delimited data block with a
