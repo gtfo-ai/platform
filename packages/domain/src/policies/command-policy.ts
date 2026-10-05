@@ -52,7 +52,7 @@
  * passes the resolved path as `resolvedBinary`; its *basename* is checked against the block-list's
  * whole-binary bans and substituted for argv[0]. The enforcing hook lives in the runner (WP-12).
  */
-import type { CommandPolicy } from '@platform/contracts';
+import type { CommandPolicy, VerificationMode } from '@platform/contracts';
 import { PolicyViolationError } from '../errors.js';
 
 export type CommandVerdict = 'allow' | 'ask' | 'block';
@@ -352,6 +352,61 @@ export const DEFAULT_VERIFICATION_ALLOW: readonly string[] = [
   ...PROJECT_COMMAND_ALLOW,
   ...WORKSPACE_SETUP_ALLOW,
 ];
+
+/**
+ * What `verification.mode: ci` takes away from every run (BD-025's 2026-10-05 amendment, PROGRESS
+ * backlog 460): the project's declared commands, the lockfile installs that exist to serve them and
+ * the platform's documented setup script — the three lists that carry *running the project* into a
+ * baseline. Nothing else: the read verbs, the git verbs and a stage's or a skill's additions stay.
+ *
+ * The entries move to **`block`**, not merely out of `allow` (which would leave them to the `ask`
+ * fallback). Two reasons, both measured against this build rather than preferred:
+ *
+ *  - **The refusal the model reads.** An `ask` is denied by the unattended approval port with *"do
+ *    the work another way"* (`apps/server/src/agent.ts`), which invites the model to find another
+ *    spelling of the same test run; a `block` is denied at the `PreToolUse` hook with
+ *    `command policy: block (matched "<pattern>")`, which names the pattern, and the run's system
+ *    prompt says why that pattern is blocked ({@link withVerificationMode}'s caller passes the
+ *    platform's CI instruction to `assemblePrompt`).
+ *  - **The block-list matches generously** (module rule 2): a `make test` handed to `sh -c` or
+ *    `env` is still a `make` command, and an extra argument never escapes a ban. An allow-list
+ *    removal only stops the spellings that matched it.
+ *
+ * Block is also the one list a later layer cannot shrink, so a project's `commands.allow: ["npm
+ * test"]` cannot re-grant a run what the mode took: the narrowing reports it in `ignoredAllow`.
+ * **What this list does not cover, stated:** a runner the shipped lists never allowed —
+ * `vendor/bin/phpunit`, `npx jest`, `./gradlew test` — was already outside every `allow` and stays
+ * on the `ask` fallback, which an unattended run denies; the CI instruction in the prompt is what
+ * keeps the model from trying it.
+ */
+export const CI_VERIFICATION_BLOCK: readonly string[] = [
+  ...LOCKFILE_INSTALL_ALLOW,
+  ...PROJECT_COMMAND_ALLOW,
+  ...WORKSPACE_SETUP_ALLOW,
+];
+
+/**
+ * A run's starting policy under the project's verification mode — the identity for `local`, and for
+ * `ci` the same policy with {@link CI_VERIFICATION_BLOCK} removed from `allow` and added to `block`.
+ *
+ * Applied to the **baseline**, before the organisation maximum and the project layers narrow it, so
+ * every later layer judges its own entries against a policy that already blocks these: an
+ * organisation literal `make test` and a project's `npm test` are then not granted (the project's
+ * is reported in `ignoredAllow`). It only ever narrows: `allow` loses entries, `ask` loses
+ * only an entry that moved to `block` (the shape `narrowCommandPolicy` keeps: no entry is on two
+ * lists), `block` grows — asserted over every shipped baseline in the tests.
+ */
+export const withVerificationMode = (
+  baseline: ResolvedCommandPolicy,
+  mode: VerificationMode,
+): ResolvedCommandPolicy =>
+  mode === 'local'
+    ? baseline
+    : {
+        allow: baseline.allow.filter((entry) => !CI_VERIFICATION_BLOCK.includes(entry)),
+        ask: baseline.ask.filter((entry) => !CI_VERIFICATION_BLOCK.includes(entry)),
+        block: [...new Set([...baseline.block, ...CI_VERIFICATION_BLOCK])],
+      };
 
 /**
  * product/19 §3, Conflict resolution: the four merge spellings the rebase gate's resolution stage

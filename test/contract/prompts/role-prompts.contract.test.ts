@@ -60,6 +60,8 @@ const assembleFor = (role: (typeof agentRoleSchema.options)[number], text: strin
     // The role prompt is the whole brief here: this suite is about what a *role* puts in the
     // system prompt, and a stage's narrower instruction is another layer's subject.
     focus: null,
+    // A `local` project: the CI instruction is a platform layer, not a role's text.
+    verification: null,
     // `auto` is the shipped default (BD-016): follow the ticket's own language.
     language: 'auto',
     // Not an ask: this suite is about what a *role* puts in the system prompt (WP-31).

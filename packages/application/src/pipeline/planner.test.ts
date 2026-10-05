@@ -27,6 +27,7 @@ import {
   extractQueryTerms,
   HOSTILE_CONSTRUCTS,
   isProjectCommandEntry,
+  LOCKFILE_INSTALL_ALLOW,
   PROJECT_COMMAND_ALLOW,
   queryKeywords,
   type RolePromptDefinition,
@@ -34,6 +35,7 @@ import {
   SANITISED_MARKER,
   SHIPPED_TEMPLATES,
   type SkillDefinition,
+  VERIFICATION_PROMPT,
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
@@ -62,6 +64,7 @@ import {
   TOOLS_BY_ROLE,
   taskTextOf,
   touchedPathsOf,
+  verificationPromptFor,
 } from './planner.js';
 import { CONFLICT_RESOLUTION_STAGE } from './rebase.js';
 import {
@@ -2041,6 +2044,177 @@ describe('what a run checks out', () => {
     );
     expect(checkoutOf({ checkoutBase: null, task: task('normal') }, 'reviewer').checkoutRef).toBe(
       null,
+    );
+  });
+});
+
+describe('a project that verifies on CI (BD-025, 2026-10-05; PROGRESS backlog 460)', () => {
+  const stageOf = (role: string, id: string, produces: string) => ({
+    id,
+    kind: 'agent',
+    role,
+    produces,
+  });
+  const STAGES = {
+    developer: stageOf('developer', 'implementation', 'ImplementationNotes'),
+    reviewer: stageOf('reviewer', 'code_review', 'ReviewVerdict'),
+    acceptance_tester: stageOf('acceptance_tester', 'business_review', 'AcceptanceVerdict'),
+    discovery: stageOf('discovery', 'discovery', 'DiscoveryDraft'),
+    product_manager: stageOf('product_manager', 'refinement', 'RefinedSpec'),
+  } as const;
+  const SHELL_ROLES = ['developer', 'reviewer', 'acceptance_tester', 'discovery'] as const;
+
+  const planIn = async (
+    stage: Record<string, unknown>,
+    config: Record<string, unknown>,
+    extra: Record<string, unknown> = {},
+  ) => {
+    const planner = createStageRunPlanner({
+      workspacePath: (taskId) => `/workspaces/${taskId}`,
+      prompts: prompts as never,
+      skills: testSkills,
+      boundSkills: async () => [],
+      ciConfigLocation: async () => null,
+      nonce: { next: () => NONCE },
+      contextPacks: createContextPackAssembler({
+        store: (await indexedFixtureVault()).store,
+        logger: silentLogger,
+      }),
+      headPaths: async () => null,
+      clock: { now: () => NOW },
+    });
+    return (
+      await planner.plan({
+        ...requestWith('a ticket about refunds'),
+        stage: stage as never,
+        settings: { projectId: PROJECT, config },
+        ...extra,
+      } as unknown as StageRunRequest)
+    ).spec;
+  };
+  const CI = { verification: { mode: 'ci' } };
+  const verdict = (spec: { readonly commandPolicy: unknown }, command: string) =>
+    evaluateCommand({ command }, spec.commandPolicy as never, 'ask').verdict;
+
+  it('blocks the project commands, the lockfile installs and the setup script for every role with a shell', async () => {
+    for (const role of SHELL_ROLES) {
+      const spec = await planIn(STAGES[role], CI);
+      for (const command of [
+        'npm test',
+        'pnpm run lint',
+        'make phpstan',
+        'make',
+        'pytest tests/',
+        'go test ./...',
+        'cargo test',
+        'npm ci',
+        'pnpm install --frozen-lockfile',
+        'pip install -r requirements.txt',
+        './.agentic/workspace/setup',
+        // The block list matches generously: a wrapper does not get a test run past it.
+        "sh -c 'make test'",
+        'env CI=1 npm test',
+      ]) {
+        expect(verdict(spec, command), `${role}: ${command}`).toBe('block');
+      }
+      // Nothing else moved: reading is still allowed.
+      expect(verdict(spec, 'git log --oneline'), role).toBe('allow');
+      expect(verdict(spec, 'cat composer.json'), role).toBe('allow');
+      // The allow list keeps no project command at all.
+      expect(spec.commandPolicy.allow.filter(isProjectCommandEntry), role).toEqual([]);
+      // …and no lockfile install, which is `runMayInstallFromLockfile`'s whole predicate: the run
+      // is given no package-registry egress either (`workspace/spec.ts`, WP-82).
+      expect(
+        spec.commandPolicy.allow.some((entry) => LOCKFILE_INSTALL_ALLOW.includes(entry)),
+        role,
+      ).toBe(false);
+    }
+  });
+
+  it('leaves the developer able to deliver: commit and push still run', async () => {
+    const spec = await planIn(STAGES.developer, CI);
+    expect(verdict(spec, 'git commit -m "fix totals"')).toBe('allow');
+    expect(verdict(spec, 'git push origin agentic/ACME-1')).toBe('allow');
+  });
+
+  it('only narrows: against the same run in `local`, allow shrinks and block grows', async () => {
+    for (const role of SHELL_ROLES) {
+      const local = await planIn(STAGES[role], {});
+      const ci = await planIn(STAGES[role], CI);
+      expect(
+        ci.commandPolicy.allow.every((entry) => local.commandPolicy.allow.includes(entry)),
+        role,
+      ).toBe(true);
+      expect(
+        local.commandPolicy.block.every((entry) => ci.commandPolicy.block.includes(entry)),
+        role,
+      ).toBe(true);
+      expect(ci.commandPolicy.allow.length, role).toBeLessThan(local.commandPolicy.allow.length);
+    }
+  });
+
+  it("does not let the project's commands.allow re-grant what the mode blocked, and reports it", async () => {
+    const spec = await planIn(STAGES.developer, {
+      ...CI,
+      commands: { allow: ['npm test', 'make test'] },
+    });
+    expect(verdict(spec, 'npm test')).toBe('block');
+    expect(verdict(spec, 'make test')).toBe('block');
+    // The effective-configuration DTO's half: no role is granted either entry.
+    expect(
+      ignoredProjectAllow({ allow: ['npm test', 'make test'] }, undefined, undefined, 'ci'),
+    ).toEqual(['npm test', 'make test']);
+    expect(ignoredProjectAllow({ allow: ['npm test'] }, undefined, undefined, 'local')).toEqual([]);
+  });
+
+  it('keeps `local` (and a silent setting) exactly as before: the declared commands run', async () => {
+    for (const config of [{}, { verification: { mode: 'local' } }]) {
+      const spec = await planIn(STAGES.developer, config);
+      expect(verdict(spec, 'npm test')).toBe('allow');
+      expect(spec.systemPromptAppend).not.toContain('## Verification');
+    }
+  });
+
+  it("tells every role with a shell, in the platform's voice, and no role without one", async () => {
+    for (const role of ['developer', 'reviewer', 'acceptance_tester'] as const) {
+      const spec = await planIn(STAGES[role], CI);
+      expect(spec.systemPromptAppend, role).toContain(
+        `## Verification\n\n${VERIFICATION_PROMPT.ci.trim()}`,
+      );
+      // Platform text, so it is in layers 1–3 and never in the user prompt.
+      expect(spec.userPrompt, role).not.toContain('This project verifies on CI');
+    }
+    const discovery = await planIn(STAGES.discovery, CI);
+    expect(discovery.systemPromptAppend).toContain(VERIFICATION_PROMPT.discovery.trim());
+    expect(discovery.systemPromptAppend).not.toContain(VERIFICATION_PROMPT.ci.trim());
+    // No `Bash`, no sentence: the product manager cannot run a suite.
+    const pm = await planIn(STAGES.product_manager, CI);
+    expect(pm.systemPromptAppend).not.toContain('## Verification');
+    for (const role of agentRoleSchema.options) {
+      const hasShell = (TOOLS_BY_ROLE[role] ?? []).includes('Bash');
+      expect(verificationPromptFor(role, 'ci') !== null, role).toBe(hasShell);
+      expect(verificationPromptFor(role, 'local'), role).toBeNull();
+    }
+  });
+
+  it('moves the recorded prompt version, so the audit tells a CI-verified run from a local one', async () => {
+    const local = await planIn(STAGES.developer, {});
+    const ci = await planIn(STAGES.developer, CI);
+    expect(ci.promptVersion).not.toBe(local.promptVersion);
+  });
+
+  it("hands a red pipeline's failing job log to the developer's next run (the CI gate is the verification)", async () => {
+    // What the CI gate's return carries (`ci-log.ts`, WP-81) reaches the next implementation run in
+    // a `return_feedback` block — in `ci` mode exactly as in `local`, beside the CI instruction.
+    const log =
+      'pipeline p-7 failed: phpstan\nLog of the failing job phpstan, redacted:\nLine 12: Call to an undefined method';
+    const spec = await planIn(STAGES.developer, CI, { attempt: 2, returnFeedback: log });
+    const [feedback] = readDataBlocks(spec.userPrompt).blocks.filter(
+      (block) => block.kind === 'return_feedback',
+    );
+    expect(feedback?.body).toBe(log);
+    expect(spec.systemPromptAppend).toContain(
+      'A red pipeline returns the task to the Developer stage',
     );
   });
 });

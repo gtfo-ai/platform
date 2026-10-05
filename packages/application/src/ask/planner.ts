@@ -33,6 +33,8 @@ import {
   runCommandPolicy,
   type SkillDefinition,
   skillSetVersionOf,
+  verificationModeOf,
+  withVerificationMode,
 } from '@platform/domain';
 import type { ContextPackAssembler } from '../knowledge/context-pack.js';
 import { NOT_SEARCHED } from '../knowledge/text-search-record.js';
@@ -42,6 +44,7 @@ import {
   type StageRunPlannerOptions,
   skillsFor,
   TOOLS_BY_ROLE,
+  verificationPromptFor,
 } from '../pipeline/planner.js';
 import type { ProjectSettings } from '../pipeline/settings.js';
 import type { StoredArtifact, StoredTask } from '../pipeline/store.js';
@@ -216,6 +219,10 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
       // somebody adds one (it would be withheld rather than provisioned unasked, WP-54).
       const skillNames = skillsFor(role, []);
       const skills = skillNames.map((name) => options.skills[name] as SkillDefinition);
+      // BD-025's 2026-10-05 amendment, the stage planner's reading: the ask role has no shell, so
+      // the instruction is `null` and the narrowing removes nothing it holds — applied anyway, so
+      // the day the role gains `Bash` it inherits the project's mode rather than escaping it.
+      const verification = verificationModeOf(settings.config);
 
       const prompt = assemblePrompt({
         nonce: options.nonce,
@@ -254,6 +261,7 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
         },
         artifactType: 'AskAnswer',
         focus: null,
+        verification: verificationPromptFor(role, verification),
         language: 'auto',
         ask: { question: ask.question, askedBy: request.askedByLabel },
         // WP-92: a project prompt file is written for a **stage**, and an ask belongs to none.
@@ -262,7 +270,7 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
 
       // The stage planner's order (backlog 146): baseline, organisation maximum, project.
       const policy = runCommandPolicy(
-        commandBaselineFor(role, ASK_PSEUDO_STAGE, skillNames),
+        withVerificationMode(commandBaselineFor(role, ASK_PSEUDO_STAGE, skillNames), verification),
         settings.organisationCommands,
         settings.config.commands,
         settings.repositoryCommands,

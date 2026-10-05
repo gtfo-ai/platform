@@ -569,6 +569,39 @@ describe('the effective configuration’s layers (WP-63)', () => {
     ]);
   });
 
+  it('publishes the verification mode with its layer, and the project commands it leaves no role (backlog 460)', () => {
+    const of = (config: Record<string, unknown>, layers: Parameters<typeof repo>[1] = null) =>
+      effectiveConfigResponseSchema.parse(
+        effectiveConfigResponseOf({
+          projectId: ID,
+          row: row({ version: 1, ...config }),
+          layers: layers === null ? null : repo('valid', layers),
+          redactText,
+        }),
+      );
+    const silent = of({ commands: { allow: ['npm test'] } });
+    expect(silent.effective.verification?.mode).toBe('local');
+    expect(silent.sources['verification.mode']).toBe('default');
+    expect(silent.ignored_allow_commands).toEqual([]);
+
+    const ci = of({ verification: { mode: 'ci' }, commands: { allow: ['npm test', 'git log'] } });
+    expect(ci.effective.verification?.mode).toBe('ci');
+    expect(ci.sources['verification.mode']).toBe('project');
+    // The settings layer the screens round-trip keeps exactly what was written.
+    expect(ci.config.verification).toEqual({ mode: 'ci' });
+    // Under `ci` no role is granted a declared project command, and the DTO says so.
+    expect(ci.ignored_allow_commands).toEqual(['npm test']);
+
+    // The repository file may move the project to CI, and the source says it did.
+    const fromRepo = of({}, { verification: { mode: 'ci' } });
+    expect(fromRepo.effective.verification?.mode).toBe('ci');
+    expect(fromRepo.sources['verification.mode']).toBe('repo');
+    // …and may not move it back: `ci` from the settings stays, and the reading reports the attempt.
+    const back = of({ verification: { mode: 'ci' } }, { verification: { mode: 'local' } });
+    expect(back.effective.verification?.mode).toBe('ci');
+    expect(back.repository.not_applied.map((item) => item.key)).toEqual(['verification.mode']);
+  });
+
   it('publishes the dial the project runs, not a cap nobody set', () => {
     const response = effectiveConfigResponseSchema.parse(
       effectiveConfigResponseOf({

@@ -20,7 +20,11 @@
  * the boundary.
  */
 import type { Id } from '@platform/contracts';
-import { READINESS_CRITERIA, READINESS_CRITERION_IDS } from '@platform/domain';
+import {
+  findReadinessCriterion,
+  READINESS_CRITERIA,
+  READINESS_CRITERION_IDS,
+} from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor, noSecretsRedactor } from '../integrations/redaction.js';
 import {
@@ -63,8 +67,10 @@ const evaluate = (input: {
   readonly claims?: { id: string; passed: boolean; evidence: string }[];
   readonly signals?: Partial<PlatformReadinessSignals>;
   readonly secrets?: boolean;
+  readonly verificationMode?: 'local' | 'ci';
 }) =>
   evaluateReadiness({
+    ...(input.verificationMode === undefined ? {} : { verificationMode: input.verificationMode }),
     id: EVALUATION,
     projectId: PROJECT,
     evaluatedAt: AT,
@@ -216,6 +222,39 @@ describe('evaluateReadiness', () => {
     expect(evidence).not.toContain(PLANTED_SECRET.slice(0, 12));
     expect(evidence).toContain('[REDACTED');
     expect(result.redactions).toBe(1);
+  });
+
+  it('says R1, R2 and R6 were read, not run, when the run was planned with verification on CI (backlog 460)', () => {
+    const claims = ['R1', 'R2', 'R3', 'R6'].map((id) => ({
+      id,
+      passed: true,
+      evidence: `.gitlab-ci.yml job for ${id}`,
+    }));
+    const ci = evaluate({ claims, verificationMode: 'ci' });
+    for (const id of ['R1', 'R2', 'R6']) {
+      const evidence = criterion(ci, id)?.evidence ?? '';
+      // The platform's sentence first, then the model's — so the reader is told whatever it wrote.
+      expect(evidence.startsWith(findReadinessCriterion(id)?.detectionOnCi ?? '?'), id).toBe(true);
+      expect(evidence.endsWith(`.gitlab-ci.yml job for ${id}`), id).toBe(true);
+      // The verdict is still the model's: the prefix labels the evidence, it decides nothing.
+      expect(criterion(ci, id)?.passed, id).toBe(true);
+    }
+    // A criterion that is not run under either mode is unchanged.
+    expect(criterion(ci, 'R3')?.evidence).toBe('.gitlab-ci.yml job for R3');
+    // `local`, and a caller that says nothing, label nothing.
+    for (const local of [evaluate({ claims, verificationMode: 'local' }), evaluate({ claims })]) {
+      expect(criterion(local, 'R1')?.evidence).toBe('.gitlab-ci.yml job for R1');
+    }
+    // An unreported criterion stays unreported rather than gaining a label it did not earn.
+    expect(criterion(evaluate({ verificationMode: 'ci' }), 'R1')?.evidence).toContain(
+      'did not report',
+    );
+    // The prefix is inside the per-criterion cap, not on top of it.
+    const long = evaluate({
+      claims: [{ id: 'R1', passed: true, evidence: 'x'.repeat(MAX_READINESS_EVIDENCE_CHARS) }],
+      verificationMode: 'ci',
+    });
+    expect(criterion(long, 'R1')?.evidence).toHaveLength(MAX_READINESS_EVIDENCE_CHARS + 1);
   });
 
   it('does not redact platform-written evidence, because no untrusted byte is in it', () => {

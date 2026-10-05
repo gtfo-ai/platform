@@ -96,3 +96,52 @@ can; **(iii)** a **project SSH deploy key with write access**, whose private key
 never places in a run container (the run asks the platform to sign). The losses of each are stated beside
 the setting in the operator guide and the first-test runbook. The mechanism is TD-028's amendment of the
 same date; the work is plan rows WP-141 and WP-146.
+
+## Amendment (2026-10-05 — the product owner's request from the first local test) — a project may hand its verification to CI
+
+The product owner, after the first local test on a PHP project: *"we should be able to configure [the
+project to] rely on and check CI status only, instead of the agent trying to run tests."* Measured on
+that test: a run container is 2 CPUs and 4 GiB (`packages/infrastructure/src/workspace/spec.ts`), the
+project's static analysis was OOM-killed after 36 s inside it, and the project's own CI already runs
+its tests and static analysis on every merge request, which the CI gate waits for (WP-136). PROGRESS
+backlog 460.
+
+**Decision.** A project setting, `verification.mode`, `local` (the default — every build before this
+amendment) or `ci`. Under `ci`:
+
+1. **Commands only narrow.** The three lists that carry *running the project* into a run's baseline —
+   the project's declared commands (`PROJECT_COMMAND_ALLOW`), the lockfile installs that serve them
+   (`LOCKFILE_INSTALL_ALLOW`) and the documented setup script (`WORKSPACE_SETUP_ALLOW`) — move from
+   `allow` to **`block`** in every role's baseline (`CI_VERIFICATION_BLOCK`, `withVerificationMode`),
+   before the organisation maximum and the project layers narrow it. Nothing is allowed that `local`
+   did not allow; the read and git verbs and a stage's or a skill's additions are untouched.
+   **`block`, not the `ask` fallback**, for two measured reasons: the unattended approval port denies an
+   `ask` with *"do the work another way"*, which invites another spelling of the same test run, while a
+   block is refused at the hook naming the pattern; and the block list matches generously, so a
+   `make test` handed to `sh -c` or `env` is still refused. It is also the one list no later layer can
+   shrink, so a project's `commands.allow: ["npm test"]` cannot re-grant what the mode took — it is
+   reported in `ignored_allow_commands` instead. A runner no shipped list ever allowed
+   (`vendor/bin/phpunit`, `npx jest`) stays on the `ask` fallback, which an unattended run denies.
+2. **The platform says so.** Every run whose role holds `Bash` gets one platform-written section,
+   `## Verification`, in layers 1–3 (`VERIFICATION_PROMPT`, a closed set of literals like
+   `STAGE_PROMPT_FOCUS`): do not run the suite, static analysis, linters or builds; the CI gate runs them
+   on the merge request, and a red pipeline returns the task to the Developer with the failing job's log.
+   It states that it **replaces** the steps of a role prompt or a skill that say *run the project's
+   checks*, so no role prompt changes and `ROLE_PROMPT_VERSIONS` does not move; `promptVersion` does,
+   for exactly the runs it changes. Discovery gets its own text (below).
+3. **Discovery reads R1, R2 and R6.** They are answered from the CI configuration and the documentation
+   (a CI job that runs the suite; a job timeout or documented duration under 15 minutes; one documented
+   setup command), and the readiness record prefixes the model's evidence with the platform's own
+   sentence (`detectionOnCi` on each row), keyed on the mode the run was **planned** with (its settings
+   snapshot) — so the record says *read, not run* whatever the model wrote.
+4. **The CI gate is unchanged.** It runs in both modes; under `ci` it is the verification.
+
+**Where the key may be written.** `PUT /api/projects/:id/config` (the settings page has a control) and
+`.agentic/config.yml`. The repository file is graded **tighten-only** for this key: it may move a
+project to `ci` — merge rights could already block the same commands with `commands.block` — and never
+back to `local` over a `ci` setting, which is reported in the reading's `not_applied`.
+
+**Why a top-level `verification` and not a `commands` or `policies` key.** It is not a list of command
+patterns (it changes the prompt and the readiness detection too), not a policy a reviewer is held to,
+and not a BD-028 feature (it turns on no agent work). `verification.mode` names the subject — where the
+project's checks run — and leaves room for a later key beside it without overloading `commands`.

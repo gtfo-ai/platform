@@ -32,6 +32,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   BusinessInterviewAnswers,
   BusinessInterviewResult,
+  DiscoveryArtifact,
   DiscoveryRecordOptions,
   IntegrationActionExecutor,
   Jobs,
@@ -59,7 +60,13 @@ import {
   startProjectDiscovery,
   startProjectRediscovery,
 } from '@platform/application';
-import type { Id, IntegrationType, IsoDateTime, JsonObject } from '@platform/contracts';
+import type {
+  Id,
+  IntegrationType,
+  IsoDateTime,
+  JsonObject,
+  VerificationMode,
+} from '@platform/contracts';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import {
   config as configAdapters,
@@ -335,14 +342,23 @@ const readProject = async (
 const readArtifact = async (
   pool: pg.Pool,
   input: { readonly taskId: Id; readonly artifactId: Id },
-): Promise<{ data: never; runId: Id | null; ticketKey: string } | null> => {
+): Promise<DiscoveryArtifact | null> => {
   const { rows } = await pool.query<{
     data: unknown;
     produced_by_run_id: string | null;
     ticket_key: string;
+    verification_mode: VerificationMode;
   }>(
-    `select a.data, a.produced_by_run_id, t.ticket_key
-       from artifacts a join tasks t on t.id = a.task_id
+    // BD-025's 2026-10-05 amendment: the mode the producing run was planned with, off its own
+    // settings snapshot (WP-91) — never the project's current setting, which may have moved since.
+    // Decided in the query: only a snapshot that says `ci` is `ci`; no run row, no snapshot (a run
+    // before WP-91) or a truncated one reads as `local`, the mode every such run had.
+    `select a.data, a.produced_by_run_id, t.ticket_key,
+            case when r.settings_snapshot #>> '{effective,verification,mode}' = 'ci'
+                 then 'ci' else 'local' end as verification_mode
+       from artifacts a
+       join tasks t on t.id = a.task_id
+       left join runs r on r.id = a.produced_by_run_id
       where a.id = $1 and a.task_id = $2`,
     [input.artifactId, input.taskId],
   );
@@ -353,6 +369,7 @@ const readArtifact = async (
         data: row.data as never,
         runId: (row.produced_by_run_id as Id | null) ?? null,
         ticketKey: row.ticket_key,
+        verificationMode: row.verification_mode,
       };
 };
 

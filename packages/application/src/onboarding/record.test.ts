@@ -384,6 +384,23 @@ describe('recordDiscoveryFindings', () => {
     expect((await recordDiscoveryFindings(atCap.options, job)).overCap).toBe(0);
   });
 
+  it('labels R1’s evidence read-not-run when the producing run was planned with verification on CI (backlog 460)', async () => {
+    const data = draft({
+      readiness: [{ id: 'R1', passed: true, evidence: '.gitlab-ci.yml: codeception job' }],
+    });
+    const recordFor = async (verificationMode: 'ci' | 'local' | null) => {
+      const { options, readiness } = harness({
+        artifact: { data, runId: RUN, ticketKey: DISCOVERY_TICKET_KEY, verificationMode } as never,
+      });
+      await recordDiscoveryFindings(options, job);
+      return readiness.rows[0]?.criteria.find((entry) => entry.id === 'R1')?.evidence ?? '';
+    };
+    expect(await recordFor('ci')).toMatch(/^read, not run \(verification\.mode: ci\)/);
+    expect(await recordFor('local')).toBe('.gitlab-ci.yml: codeception job');
+    // A run with no snapshot (before WP-91) reads as the mode every such run had.
+    expect(await recordFor(null)).toBe('.gitlab-ci.yml: codeception job');
+  });
+
   it('records a re-evaluation’s evaluation as a rediscovery, and the first as discovery (WP-94)', async () => {
     const first = harness();
     await recordDiscoveryFindings(first.options, job);

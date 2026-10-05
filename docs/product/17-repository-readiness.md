@@ -27,6 +27,8 @@ Binary criteria, detected automatically by the Discovery agent at onboarding and
 | R13 | Secret scanning in CI or pre-commit | config | Lower risk from agent commits |
 | R14 | Dependency lockfile present and installable offline from allow-listed registries | workspace build | Deterministic builds inside the network allow-list |
 
+**A project that verifies on CI** (`verification.mode: ci`, BD-025's 2026-10-05 amendment) does not let agents run its suite, its installs or its setup, so R1, R2 and R6 are **read, not run**: R1 from a CI job that runs the test suite, R2 from a job timeout or a documented duration, R6 from the documented setup command. The evidence says so in the platform's words; the criteria and the levels are unchanged.
+
 ## Levels (what the score means)
 
 | Level | Requires | Platform behaviour |

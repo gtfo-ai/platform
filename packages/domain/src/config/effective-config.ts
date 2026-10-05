@@ -30,6 +30,9 @@ import {
   DEFAULT_BOOTSTRAP_DAYS,
   DEFAULT_BOOTSTRAP_MERGE_REQUESTS,
   DEFAULT_CI_TIMEOUT_MINUTES,
+  DEFAULT_VERIFICATION_MODE,
+  type VerificationMode,
+  verificationModeSchema,
 } from '@platform/contracts';
 import { DEFAULT_ASK_BUDGET_USD, DEFAULT_ASK_MODEL } from '../ask/ask.js';
 import { DEFAULT_CONTEXT_BUDGET_TOKENS } from '../knowledge/retrieval.js';
@@ -137,6 +140,9 @@ export const PLATFORM_DEFAULT_CONFIG: ConfigValues = {
     ask: [...DEFAULT_COMMAND_POLICY.ask],
     block: [...DEFAULT_COMMAND_POLICY.block],
   },
+  // BD-025's 2026-10-05 amendment: `local` is every build before the key, so a project that never
+  // chose keeps running its declared commands. Present so the effective configuration shows it.
+  verification: { mode: DEFAULT_VERIFICATION_MODE },
   features: {
     // WP-25: `issue_types` is technical/12's own example list and `label` is product/19 § 17's
     // offer line. Both are defaults for a project that turns the feature on and names neither; an
@@ -203,6 +209,19 @@ export const PLATFORM_DEFAULT_CONFIG: ConfigValues = {
       mirror_to_ticket: false,
     },
   },
+};
+
+/**
+ * The project's verification mode — `verification.mode`, or the platform default (`local`).
+ *
+ * Parsed rather than read, for the reason the planner parses the communication language: the value
+ * selects a platform-written instruction and a command narrowing, and `ConfigValues` is typed from a
+ * schema a repository wrote. A value that somehow failed the schema reads as the default, which is
+ * the mode every project ran in before the key existed.
+ */
+export const verificationModeOf = (values: ConfigValues | undefined): VerificationMode => {
+  const parsed = verificationModeSchema.safeParse(values?.verification?.mode);
+  return parsed.success ? parsed.data : DEFAULT_VERIFICATION_MODE;
 };
 
 // ── deep merge with provenance ───────────────────────────────────────────────

@@ -70,6 +70,7 @@ import {
   PROPOSED_RISK_CLASSES,
   resolveWipLimits,
   SHIPPED_TEMPLATES,
+  verificationModeOf,
 } from '@platform/domain';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -407,7 +408,13 @@ export const effectiveConfigResponseOf = (input: {
     // the organisation maximum, and the repository file's entries after the settings' — so a file
     // trying to re-grant what the settings removed is listed here too.
     ignored_allow_commands: [
-      ...ignoredProjectAllow(project.commands, organisationCommands, repo?.commands),
+      ...ignoredProjectAllow(
+        project.commands,
+        organisationCommands,
+        repo?.commands,
+        // BD-025's 2026-10-05 amendment: under `ci` a declared project command is granted to no role.
+        verificationModeOf(effectiveValues),
+      ),
     ],
     risk_class_proposal: riskClassProposalOf(row.proposedRiskClasses, stored),
   };

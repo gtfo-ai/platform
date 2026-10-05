@@ -179,6 +179,8 @@ commands:                        # BD-025 three-list policy: `allow` narrows the
   allow: ["npm test", "npm run lint", "make test", "pytest *"]
   ask: ["npm install *", "pip install *"]
   block: ["rm -rf /", "git push --force*", "docker *"]
+verification:                    # BD-025's 2026-10-05 amendment: where the project's checks run
+  mode: local                    # local (default) | ci — ci blocks the project commands, installs and setup for every role, tells every run with a shell that CI verifies, and has discovery read R1/R2/R6 from the CI configuration
 features:
   ticket_linter: { enabled: false, issue_types: [Story, Task, Bug], label: agentic }   # WP-25
   review_only: { enabled: false, trigger: label, label: agentic-review, paths: [], severity_floor: major, max_findings: 10 }
@@ -201,7 +203,7 @@ Secrets are never accepted from the repo. Unknown keys are errors (fail loudly, 
 
 | Grade | Keys | Why |
 |---|---|---|
-| **tighten-only** | `policies.protected_paths`, `policies.reviewers` (unions with the settings, or the platform default when the settings are silent); `policies.risk_classes` (adds classes; adds paths and requirements to a class the settings define, never removes one); `policies.review_checklists` (adds items); `commands` (narrow again after the settings: `ask`/`block` grow, `allow` shrinks); `pipeline.wip` (may lower a limit below the settings' — or BD-010's default — never raise it, WP-91) | the result is never weaker than the settings; a higher WIP limit buys concurrency — spend and review load — that merge rights did not grant |
+| **tighten-only** | `policies.protected_paths`, `policies.reviewers` (unions with the settings, or the platform default when the settings are silent); `policies.risk_classes` (adds classes; adds paths and requirements to a class the settings define, never removes one); `policies.review_checklists` (adds items); `commands` (narrow again after the settings: `ask`/`block` grow, `allow` shrinks); `pipeline.wip` (may lower a limit below the settings' — or BD-010's default — never raise it, WP-91); `verification.mode` (may move the project to `ci`, never back to `local` over a `ci` setting — BD-025's 2026-10-05 amendment) | the result is never weaker than the settings; a higher WIP limit buys concurrency — spend and review load — that merge rights did not grant |
 | **not applied** | `policies.autonomy` and every key `AUTONOMY_POLICY_OVERRIDE_KEYS` names (`policies.probation_tasks`, `policies.knowledge_apply`, `pipeline.limits.human_rounds`, `pipeline.limits.question_timeout`); `policies.dependency_policy`, `policies.coverage_source`, `policies.drift_without_direction`; `pipeline.template_overrides`, `pipeline.custom_stages`; all of `features`; `project.default_branch`; a `stages.*.prompt`/`prompt_append` whose value names a file outside `.agentic/prompts/` | each can switch a check off, move the dial (BD-027:14), turn on agent work, set a spending cap or a per-person read — settings decisions; custom stages have no reader, and a prompt path outside the directory names nothing the platform reads (it is dropped, so it cannot shadow a settings value); the trusted branch is `projects.default_branch`, never a key in a file on it (BD-025 §1) |
 | **operational** | `stages.*.model`, `effort`, `max_turns`, `budget_usd`; `pipeline.limits.code_review_iterations`, `business_review_iterations`, `ci_fix_iterations`, `rebase_attempts`, `rebase_rechecks`, `ci_timeout_minutes` (WP-136); `project.knowledge_dir`, `context_budget_tokens`, `communication_language`, `commit_convention`; `status_mapping`; `stages.*.prompt`, `stages.*.prompt_append` naming a file under `.agentic/prompts/` (WP-92) | none widens what an agent may *do*: every run is admitted against the task cap (`taskBudgetExhausted` — a stage budget above it parks the task rather than spending; the cap is not a file key) and the organisation and project budgets (`BudgetGuard`); an extra iteration is still a return a reviewer made and still budgeted; a prompt carries knowledge as data blocks whichever directory it comes from (and the directory is held to the API's rule — relative, no `.`/`..` — or the file is refused); `status_mapping` can map an early stage to a tracker's "Done", which misleads the people reading the ticket and changes no authority — no gate, check or permission reads a ticket status; a project prompt is a data block that adds to the role prompt and grants no tool, command or path, and merge rights could already write the file it names; `ci_timeout_minutes` only lengthens a read-only wait at `ci_gate` (at most sixty provider reads an hour per waiting task) and passes nothing the pipeline did not pass |
 
@@ -224,6 +226,31 @@ read; `settingsNotApplied`, `packages/application/src/config/settings-grades.ts`
   project's `.agentic/pipeline.yml` is not read either (next section).
 - **`stages.<id>.prompt`** and **`stages.<id>.prompt_append`** **are read since WP-92** (next paragraph); what
   is still reported is a value naming a file outside `.agentic/prompts/`.
+
+**Verification on CI: `verification.mode` (BD-025's 2026-10-05 amendment, PROGRESS backlog 460).** `local`
+(the default, and every build before the key) keeps the shipped behaviour: the Developer, Reviewer, Acceptance
+Tester and Discovery baselines carry the project's declared commands and the lockfile installs, and discovery
+runs R1, R2 and R6. `ci` is the project saying its CI pipeline verifies every merge request and agents do not:
+
+- **Commands.** `PROJECT_COMMAND_ALLOW`, `LOCKFILE_INSTALL_ALLOW` and `WORKSPACE_SETUP_ALLOW` move from `allow`
+  to `block` on every role's baseline (`withVerificationMode`, before the organisation maximum and the project
+  layers), so a refused `make test` reads `command policy: block (matched "make *")` and a project's
+  `commands.allow: ["npm test"]` is granted to no role and listed in `ignored_allow_commands`. A run that no
+  longer holds a lockfile install also gets no package-registry egress (`APP_RUN_REGISTRY_HOSTS` is joined only
+  when one is in `allow`).
+- **Prompt.** Every run whose role holds `Bash` gets the platform's `## Verification` section in layers 1–3
+  (`VERIFICATION_PROMPT`; discovery has its own), which replaces the role prompt's and the skills' *run the
+  checks* steps; `promptVersion` moves for those runs, no role prompt changes.
+- **Readiness.** Discovery reads R1, R2 and R6 from the CI configuration and the documentation, and the stored
+  evidence of the three starts with the platform's `detectionOnCi` sentence when the run's settings snapshot
+  says `ci`.
+- **The CI gate** is the same in both modes; under `ci` a red pipeline is how the Developer learns a check
+  failed (the failing job's log in the next run's `return_feedback` block, WP-81).
+
+`GET …/config` publishes the mode under `effective.verification.mode` with its layer in `sources`; the project
+settings page has a control that writes it (the whole document with the hash it read). To turn it on:
+`PUT /api/projects/:project_id/config` with the current document plus `"verification": {"mode": "ci"}` and its
+`base_hash`, or `verification: { mode: ci }` in `.agentic/config.yml` on the default branch and a re-read.
 
 **Per-stage prompt files: a project prompt is a data block, never platform text (WP-92, PROGRESS backlog 226's
 prompt half).** A stage's own instructions come from `stages.<id>.prompt` and `stages.<id>.prompt_append` —

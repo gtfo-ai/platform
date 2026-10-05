@@ -34,7 +34,7 @@
  * `ticket-snapshot.ts` states at its own: an exact-match redactor cannot find a secret that a cut
  * has already halved.
  */
-import type { DiscoveryDraftData, Id, IsoDateTime } from '@platform/contracts';
+import type { DiscoveryDraftData, Id, IsoDateTime, VerificationMode } from '@platform/contracts';
 import type { ReadinessCriterion } from '@platform/domain';
 import {
   KNOWLEDGE_COMPLETENESS_THRESHOLD,
@@ -69,6 +69,13 @@ export interface EvaluateReadinessInput {
   readonly redactor: SecretRedactor;
   /** WP-143: the platform's notices (the CI-rules warning or note); none when omitted. */
   readonly notices?: readonly ReadinessNotice[];
+  /**
+   * The verification mode the discovery run was **planned** with (BD-025's 2026-10-05 amendment) —
+   * read off the run's own settings snapshot, so a setting changed after the run cannot relabel its
+   * evidence. Under `ci` a criterion with a `detectionOnCi` (R1, R2, R6) has its evidence prefixed
+   * with that platform sentence. Omitted: `local`, the mode every run before the key had.
+   */
+  readonly verificationMode?: VerificationMode;
 }
 
 export interface EvaluateReadinessResult {
@@ -182,11 +189,20 @@ export const evaluateReadiness = (input: EvaluateReadinessInput): EvaluateReadin
       };
     }
     const claim = claims.get(criterion.id);
+    // Platform text before the model's, inside the same cap: the reader is told how the criterion
+    // was detected whatever the model wrote. The prefix holds no untrusted byte; it is redacted with
+    // the rest only because it is one string.
+    const prefix =
+      input.verificationMode === 'ci' && criterion.detectionOnCi !== undefined
+        ? `${criterion.detectionOnCi} — `
+        : '';
     return {
       id: criterion.id,
       passed: claim?.passed ?? false,
       evidence:
-        claim === undefined ? NOT_REPORTED : evidenceOf(claim.evidence, input.redactor, tally),
+        claim === undefined
+          ? NOT_REPORTED
+          : evidenceOf(`${prefix}${claim.evidence}`, input.redactor, tally),
       unlocks: criterion.unlocks,
       detectedBy: criterion.detectedBy,
     };

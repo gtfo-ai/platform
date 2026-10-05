@@ -92,6 +92,7 @@ const DOC_EXAMPLE = {
     ask: ['npm install *', 'pip install *'],
     block: ['rm -rf /', 'git push --force*', 'docker *'],
   },
+  verification: { mode: 'local' },
   features: {
     ticket_linter: { enabled: false, issue_types: ['Story', 'Task', 'Bug'] },
     review_only: {
@@ -150,6 +151,22 @@ describe('.agentic/config.yml', () => {
     const issue = result.error?.issues[0];
     expect(issue?.code).toBe('unrecognized_keys');
     expect(JSON.stringify(issue)).toContain('polices');
+  });
+
+  it('takes `verification.mode` as local or ci, and refuses anything else by path (backlog 460)', () => {
+    for (const mode of ['local', 'ci'] as const) {
+      expect(
+        agenticConfigSchema.parse({ version: 1, verification: { mode } }).verification,
+      ).toEqual({
+        mode,
+      });
+    }
+    const wrong = agenticConfigSchema.safeParse({ version: 1, verification: { mode: 'remote' } });
+    expect(wrong.error?.issues[0]?.path).toEqual(['verification', 'mode']);
+    // Strict, like every section: a typo is an error, never a silently local project.
+    expect(
+      agenticConfigSchema.safeParse({ version: 1, verification: { mdoe: 'ci' } }).success,
+    ).toBe(false);
   });
 
   it('points at the path of a nested error', () => {

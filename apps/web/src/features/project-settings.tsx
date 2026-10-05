@@ -25,6 +25,10 @@
  * beside it (`project-prompts.tsx`): what that same reading holds under `.agentic/prompts/`, what
  * each stage would be given, and *Re-read now*.
  *
+ * **Verification** (`verification.mode`, BD-025's 2026-10-05 amendment) is one key with a control of
+ * its own (`verification-mode.tsx`): whether agents run the project's checks or CI does. It writes the
+ * whole document with the hash it read, like the feature toggles.
+ *
  * product/10:21 also lists **WIP limits** and **policies** on this page. They are read-only here and
  * say so: the WIP limits are `pipeline.wip` (WP-91, BD-010's defaults when nothing sets them),
  * shown as the effective configuration answers them — with the layer that set each and the
@@ -63,6 +67,7 @@ import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 import { ProjectPromptFiles } from './project-prompts.js';
 import { ReadinessNotices } from './readiness-notices.js';
 import { Rediscovery } from './rediscovery.js';
+import { VerificationMode } from './verification-mode.js';
 
 /**
  * What the export's answer — or the last recorded export — says, in one sentence.
@@ -279,6 +284,9 @@ export const ProjectSettingsScreen = ({
       </Card>
 
       <OperatingMode projectId={project.id} audit />
+
+      {/* BD-025's 2026-10-05 amendment (backlog 460): whether agents or CI run the checks. */}
+      <VerificationMode projectId={project.id} />
 
       <Card className="flex flex-col gap-1">
         <SectionHeading>WIP limits and policies</SectionHeading>

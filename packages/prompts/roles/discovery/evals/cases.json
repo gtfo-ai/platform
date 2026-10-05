@@ -295,6 +295,28 @@
           "value": "JSON.parse(output).questions.length >= 1"
         }
       ]
+    },
+    {
+      "id": "disc-ci-mode-reads-r1-from-ci-config",
+      "description": "a project that verifies on CI (verification.mode: ci, BD-025's 2026-10-05 amendment): the platform's Verification section is in the system prompt, so R1 is answered from the CI job that runs the suite, its evidence says it was read rather than run, and no command claims a run",
+      "vars": {
+        "repo": "verification.mode: ci (the run's system prompt carries the platform's CI instruction; make, the test runners and the installs are blocked)\ncomposer.json has \"scripts\": {\"test\": \"codecept run\", \"phpstan\": \"phpstan analyse\"}\nMakefile has targets test, phpstan, setup\n.gitlab-ci.yml has jobs codeception (stage test) and phpstan (stage lint) with rules for merge_request_event"
+      },
+      "expect_fields": ["readiness", "commands"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/discovery-draft.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).readiness.some((r) => r.id === 'R1' && /gitlab-ci|codeception/i.test(r.evidence) && /read|not run|CI/i.test(r.evidence))"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).commands.every((c) => c.verified === false)"
+        }
+      ]
     }
   ]
 }

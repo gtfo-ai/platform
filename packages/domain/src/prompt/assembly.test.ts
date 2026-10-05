@@ -30,6 +30,7 @@ import {
   projectPromptVersionOf,
   STAGE_PROMPT_FOCUS,
   skillSetVersionOf,
+  VERIFICATION_PROMPT,
 } from './assembly.js';
 import {
   DATA_BLOCK_TAG,
@@ -87,6 +88,8 @@ const inputWith = (
   // Required-and-nullable on the input, so the default here is the explicit "this stage has no
   // narrower instruction" rather than a forgotten key (WP-25 round 2).
   focus: null,
+  // The same shape (BD-025's 2026-10-05 amendment): a project that does not verify on CI says so.
+  verification: null,
   // The same shape again (WP-31): a stage run is not an ask, and the assembler makes the caller
   // say so rather than infer it from an absent key.
   ask: null,
@@ -168,6 +171,34 @@ describe('the assembled prompt', () => {
     expect(czech.promptVersion).not.toBe(auto.promptVersion);
     // And it is *not* in the user prompt, which is where a value outside the digest would have hidden.
     expect(czech.userPrompt).not.toContain('BCP-47');
+  });
+
+  it('says a project verifies on CI in layers 1–3, after the stage and before the language (backlog 460)', () => {
+    const without = assemblePrompt(inputWith(BENIGN_TEXT));
+    expect(without.systemPrompt).not.toContain('## Verification');
+    for (const instruction of Object.values(VERIFICATION_PROMPT)) {
+      const with_ = assemblePrompt(
+        inputWith(BENIGN_TEXT, {
+          verification: instruction,
+          focus: STAGE_PROMPT_FOCUS.conflict_resolution,
+        }),
+      );
+      const at = (heading: string) => with_.systemPrompt.indexOf(heading);
+      expect(at('## Verification')).toBeGreaterThan(at('## This stage'));
+      expect(at('## Language')).toBeGreaterThan(at('## Verification'));
+      expect(with_.systemPrompt).toContain(instruction.trim());
+      // It replaces the role's "run the checks" steps, and it says so in the platform's voice.
+      expect(with_.systemPrompt).toContain('This project verifies on CI');
+      // Not repeated in the user prompt, and the audit can tell the two runs apart.
+      expect(with_.userPrompt).not.toContain('verifies on CI');
+      expect(with_.promptVersion).not.toBe(
+        assemblePrompt(inputWith(BENIGN_TEXT, { focus: STAGE_PROMPT_FOCUS.conflict_resolution }))
+          .promptVersion,
+      );
+    }
+    // Two instructions, two versions: discovery's is its own text, not a copy of the general one.
+    expect(VERIFICATION_PROMPT.discovery).not.toBe(VERIFICATION_PROMPT.ci);
+    expect(VERIFICATION_PROMPT.discovery).toContain('R1');
   });
 
   it('names the artifact type and its fields from the one schema', () => {

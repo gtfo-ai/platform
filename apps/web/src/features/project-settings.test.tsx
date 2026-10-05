@@ -889,3 +889,75 @@ describe('the maintenance card and the dial (Q100)', () => {
     expect(screen.queryByText(/Paused at Observe/)).toBeNull();
   });
 });
+
+/**
+ * BD-025's 2026-10-05 amendment (PROGRESS backlog 460): a project may hand its verification to CI.
+ * The control shows the mode **in force** with its layer, and writes the whole settings document
+ * with the hash it read — never a fragment that would drop every other key.
+ */
+describe('the verification mode', () => {
+  /** `fetchFor`'s world, with `PUT …/config` recorded and answered as the server does. */
+  const recording =
+    (puts: { url: string; body: unknown }[], base: typeof fetch): typeof fetch =>
+    async (input, init) => {
+      const url = String(input);
+      if (init?.method === 'PUT' && url.endsWith('/config')) {
+        puts.push({ url, body: JSON.parse(String(init.body)) });
+        return json({ hash: 'cafebabe', autonomy_level: 'supervised', not_applied: [] });
+      }
+      return base(input, init);
+    };
+
+  it('switches a local project to CI by writing the whole document with the hash it read', async () => {
+    const puts: { url: string; body: unknown }[] = [];
+    const user = userEvent.setup();
+    render(
+      createApp({
+        fetchImpl: recording(
+          puts,
+          fetchFor(
+            {},
+            {
+              config: {
+                config: { version: 1, commands: { block: ['make deploy'] } },
+                effective: { version: 1, verification: { mode: 'local' } },
+                sources: { 'verification.mode': 'default' },
+              },
+            },
+          ),
+        ),
+        realtime: false,
+      }).element,
+    );
+    expect(await screen.findByText('Verification')).toBeTruthy();
+    expect((await screen.findByTestId('verification-mode-effective')).textContent).toBe('local');
+    await user.click(screen.getByRole('radio', { name: /CI runs the checks/ }));
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]?.url).toContain(`/api/projects/${PROJECT}/config`);
+    expect(puts[0]?.body).toEqual({
+      config: { version: 1, commands: { block: ['make deploy'] }, verification: { mode: 'ci' } },
+      base_hash: 'deadbeef',
+    });
+  });
+
+  it('shows CI set by the repository file, and says the settings cannot undo it', async () => {
+    render(
+      createApp({
+        fetchImpl: fetchFor(
+          {},
+          {
+            config: {
+              effective: { version: 1, verification: { mode: 'ci' } },
+              sources: { 'verification.mode': 'repo' },
+            },
+          },
+        ),
+        realtime: false,
+      }).element,
+    );
+    expect((await screen.findByTestId('verification-mode-effective')).textContent).toBe('ci');
+    const ci = screen.getByRole('radio', { name: /CI runs the checks/ }) as HTMLInputElement;
+    expect(ci.checked).toBe(true);
+    expect(screen.getByText(/choosing local here is not applied/)).toBeTruthy();
+  });
+});

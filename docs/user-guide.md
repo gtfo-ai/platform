@@ -768,6 +768,15 @@ again restores it. The provider
 mode (an environment setting) and feature flags (a project's own) are not organisation settings. A
 project's features are switched on its own settings page.
 
+**Verification** is a project's own setting, on its settings page: *Agents run the checks* (the
+default) or *CI runs the checks*. Choose CI when the project's pipeline already runs the tests and
+static analysis on every merge request and the agents' workspace (2 CPUs, 4 GiB) is too small for
+them — no agent then runs the test suite, a linter, a build or a dependency install (they are
+refused as `command policy: block`), every agent with a shell is told the CI gate runs them, a red
+pipeline comes back to the Developer with the failing job's log, and Discovery answers R1, R2 and R6
+by reading the CI configuration rather than running anything (the evidence says so). The same key is
+`verification.mode: ci` in `.agentic/config.yml`, which may switch a project to CI but never back.
+
 ## 12. Statistics
 
 The organisation's delivery numbers over a range you choose (7, 30, 90 or 365 days) and a bucket

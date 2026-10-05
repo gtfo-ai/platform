@@ -5,6 +5,7 @@ import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   assertCommandAllowed,
   basename,
+  CI_VERIFICATION_BLOCK,
   CONFLICT_RESOLUTION_EXTRA_ALLOW,
   commandUncertainty,
   DECLINED_BLOCK_VARIANTS,
@@ -23,6 +24,7 @@ import {
   hazardousArgument,
   intersectWithOrganisationMaximum,
   isProjectCommandEntry,
+  LOCKFILE_INSTALL_ALLOW,
   matchesBlockPattern,
   matchesCommandPattern,
   narrowCommandPolicy,
@@ -34,6 +36,7 @@ import {
   UNCERTAINTY,
   UNPATTERNABLE_BLOCK_ITEMS,
   WORKSPACE_SETUP_ALLOW,
+  withVerificationMode,
 } from './command-policy.js';
 
 const verdict = (command: string, policy?: ResolvedCommandPolicy): string =>
@@ -1639,5 +1642,90 @@ describe('the go path-writing flag lists, as literals (WP-120)', () => {
     expect([...GO_PATH_WRITING_BINARY_FLAGS].sort()).toEqual(
       ['fuzzcachedir', 'gocoverdir', 'testlogfile'].sort(),
     );
+  });
+});
+
+describe('verification on CI (BD-025, 2026-10-05; PROGRESS backlog 460)', () => {
+  const RANK = { allow: 0, ask: 1, block: 2 } as const;
+  const BASELINES: readonly ResolvedCommandPolicy[] = [
+    { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_READ_ONLY_ALLOW },
+    { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_VERIFICATION_ALLOW },
+    { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_IMPLEMENTATION_ALLOW },
+  ];
+
+  it('is the three lists that carry running the project into a baseline, and nothing else', () => {
+    expect([...CI_VERIFICATION_BLOCK].sort()).toEqual(
+      [...LOCKFILE_INSTALL_ALLOW, ...PROJECT_COMMAND_ALLOW, ...WORKSPACE_SETUP_ALLOW].sort(),
+    );
+  });
+
+  it('is the identity in `local`', () => {
+    for (const baseline of BASELINES) {
+      expect(withVerificationMode(baseline, 'local')).toBe(baseline);
+    }
+  });
+
+  it('moves every entry from allow to block in `ci`, and touches nothing else', () => {
+    for (const baseline of BASELINES) {
+      const ci = withVerificationMode(baseline, 'ci');
+      expect(ci.allow).toEqual(
+        baseline.allow.filter((entry) => !CI_VERIFICATION_BLOCK.includes(entry)),
+      );
+      expect(ci.ask).toEqual(baseline.ask);
+      for (const entry of [...baseline.block, ...CI_VERIFICATION_BLOCK]) {
+        expect(ci.block).toContain(entry);
+      }
+    }
+  });
+
+  it(
+    'never makes any command line less restricted than `local` does',
+    () => {
+      const line = fc.oneof(
+        fc.constantFrom(
+          ...DEFAULT_ALLOWED_EXAMPLES,
+          'npm test',
+          'make phpstan',
+          'vendor/bin/phpstan analyse',
+          'composer install',
+          "bash -c 'pnpm run lint'",
+          'pytest -k totals',
+          './.agentic/workspace/setup',
+          'npm ci --ignore-scripts',
+        ),
+        fc
+          .array(
+            fc.constantFrom('make', 'npm', 'test', 'run', 'git', 'log', 'ci', '-x', '&&', 'ls'),
+            {
+              minLength: 1,
+              maxLength: 5,
+            },
+          )
+          .map((words) => words.join(' ')),
+      );
+      const baseline = fc.constantFrom(...BASELINES);
+      fc.assert(
+        fc.property(baseline, line, (policy, command) => {
+          const local = evaluateCommand({ command }, policy).verdict;
+          const ci = evaluateCommand({ command }, withVerificationMode(policy, 'ci')).verdict;
+          expect(RANK[ci], command).toBeGreaterThanOrEqual(RANK[local]);
+        }),
+        { numRuns: 300 },
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
+
+  it('blocks a project command an organisation or a project lists as a literal', () => {
+    const ci = withVerificationMode(
+      { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_IMPLEMENTATION_ALLOW },
+      'ci',
+    );
+    const run = runCommandPolicy(ci, { allow: ['make test', 'git log'] }, { allow: ['npm test'] });
+    expect(run.policy.allow).not.toContain('make test');
+    expect(run.ignoredAllow).toEqual(['npm test']);
+    expect(evaluateCommand({ command: 'make test' }, run.policy).verdict).toBe('block');
+    expect(evaluateCommand({ command: 'npm test' }, run.policy).verdict).toBe('block');
+    expect(evaluateCommand({ command: 'git log' }, run.policy).verdict).toBe('allow');
   });
 });

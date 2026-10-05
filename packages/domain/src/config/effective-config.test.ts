@@ -11,6 +11,7 @@ import {
   mergeProjectConfig,
   organisationCommandMaximum,
   PLATFORM_DEFAULT_CONFIG,
+  verificationModeOf,
 } from './effective-config.js';
 
 const layer = (source: ConfigLayer['source'], values: ConfigLayer['values']): ConfigLayer => ({
@@ -36,6 +37,21 @@ describe('the shipped defaults', () => {
     expect(PLATFORM_DEFAULT_CONFIG.pipeline?.limits?.question_timeout).toBe('1 working day');
     expect(PLATFORM_DEFAULT_CONFIG.policies?.protected_paths).toContain('.agentic/**');
     expect(PLATFORM_DEFAULT_CONFIG.features?.digest?.at).toBe('09:00');
+    // BD-025's 2026-10-05 amendment: every project runs its own commands until it says otherwise.
+    expect(PLATFORM_DEFAULT_CONFIG.verification?.mode).toBe('local');
+  });
+
+  it('read the verification mode, and anything the schema refuses as the default (backlog 460)', () => {
+    expect(verificationModeOf(undefined)).toBe('local');
+    expect(verificationModeOf({})).toBe('local');
+    expect(verificationModeOf({ verification: {} })).toBe('local');
+    expect(verificationModeOf({ verification: { mode: 'local' } })).toBe('local');
+    expect(verificationModeOf({ verification: { mode: 'ci' } })).toBe('ci');
+    expect(verificationModeOf({ verification: { mode: 'CI' as never } })).toBe('local');
+    // The merge carries it with its source, so the settings screen can say where it came from.
+    const merged = mergeProjectConfig([layer('project', { verification: { mode: 'ci' } })]);
+    expect(merged.values.verification?.mode).toBe('ci');
+    expect(merged.sources['verification.mode']).toBe('project');
   });
 });
 

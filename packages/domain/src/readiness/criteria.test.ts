@@ -114,6 +114,17 @@ describe('the criteria table', () => {
     }
   });
 
+  it('says how the three run criteria are read when a project verifies on CI, and only those (backlog 460)', () => {
+    const read = READINESS_CRITERIA.filter((criterion) => criterion.detectionOnCi !== undefined);
+    expect(read.map((criterion) => criterion.id)).toEqual(['R1', 'R2', 'R6']);
+    for (const criterion of read) {
+      expect(criterion.detectedBy, criterion.id).toBe('agent');
+      expect(criterion.detectionOnCi, criterion.id).toMatch(
+        /^read, not (run|measured) \(verification\.mode: ci\)/,
+      );
+    }
+  });
+
   it('names the documented workspace setup script as an executed form of R6 (backlog 144)', () => {
     expect(findReadinessCriterion('R6')?.detection).toContain('./.agentic/workspace/setup');
   });

@@ -70,6 +70,7 @@ import type {
   JsonValue,
   LibrarianProposal,
   RiskClass,
+  VerificationMode,
 } from '@platform/contracts';
 import {
   discoveryDraftDataSchema,
@@ -150,6 +151,12 @@ export interface DiscoveryProject {
 export interface DiscoveryArtifact {
   readonly data: JsonValue;
   readonly runId: Id | null;
+  /**
+   * `verification.mode` from the producing run's settings snapshot (BD-025's 2026-10-05
+   * amendment): what the run was planned with, so the evidence of R1, R2 and R6 says they were read
+   * rather than run. Omitted, or `null` for a run with no snapshot: `local`.
+   */
+  readonly verificationMode?: VerificationMode | null;
   /**
    * `tasks.ticket_key` — what tells a maintainer's re-evaluation (WP-94) from the first discovery,
    * so the evaluation is recorded with `source: 'rediscovery'` rather than `discovery`.
@@ -476,6 +483,7 @@ export const recordDiscoveryFindings = async (
     signals,
     redactor: options.redactor,
     notices: ci?.notice == null ? [] : [ci.notice],
+    verificationMode: artifact.verificationMode ?? 'local',
   });
   tally.count += redactions;
 

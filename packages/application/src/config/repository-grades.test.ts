@@ -235,3 +235,42 @@ describe('the WIP limits a file may state', () => {
     ]);
   });
 });
+
+/** BD-025's 2026-10-05 amendment: a file may move verification to CI, never back (backlog 460). */
+describe('the verification mode a file may state', () => {
+  const reading = (values: Record<string, unknown>) => ({
+    status: 'valid' as const,
+    commitSha: 'b'.repeat(40),
+    readAt: '2026-10-05T10:00:00.000Z' as never,
+    ...withoutNotAppliedKeys(values),
+  });
+
+  it('applies `ci` over a local or silent setting, through the settings port', () => {
+    for (const settings of [{}, { verification: { mode: 'local' as const } }]) {
+      const merged = projectConfigWithRepository(
+        settings,
+        reading({ verification: { mode: 'ci' } }),
+      );
+      expect(merged.values.verification?.mode).toBe('ci');
+      expect(merged.sources['verification.mode']).toBe('repo');
+      expect(merged.notApplied).toEqual([]);
+    }
+  });
+
+  it('keeps `ci` from the settings over a file that says `local`, and reports it', () => {
+    const merged = projectConfigWithRepository(
+      { verification: { mode: 'ci' } },
+      reading({ verification: { mode: 'local' } }),
+    );
+    expect(merged.values.verification?.mode).toBe('ci');
+    expect(merged.sources['verification.mode']).toBe('project');
+    expect(merged.notApplied.map((item) => item.key)).toEqual(['verification.mode']);
+    expect(merged.notApplied[0]?.reason).toContain('never back to local');
+  });
+
+  it('lets a file restate `local` over a silent setting, which changes nothing', () => {
+    const tightened = tightenRepositoryLayer({}, { verification: { mode: 'local' } });
+    expect(tightened.values.verification?.mode).toBe('local');
+    expect(tightened.notApplied).toEqual([]);
+  });
+});

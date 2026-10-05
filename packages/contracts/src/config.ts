@@ -550,6 +550,29 @@ export const commandPolicySchema = z.strictObject({
   block: z.array(nonEmptyStringSchema).optional(),
 });
 
+// ── verification (BD-025's 2026-10-05 amendment) ─────────────────────────────
+
+/**
+ * Where a project's verification runs — `local` (the default, every build before this key) or `ci`.
+ *
+ * `ci` is the project saying *"our test suite, static analysis, linters and builds run in our CI
+ * pipeline on the merge request; agents do not run them in the workspace"* (PROGRESS backlog 460,
+ * the first local test: a 2 CPU / 4 GiB run container OOM-killed a PHP project's static analysis
+ * that its own CI already runs on every merge request). It moves the declared project commands, the
+ * lockfile installs and the workspace setup script from every role's `allow` to `block`, tells every
+ * run that holds `Bash` so in the platform's own voice, and makes discovery answer R1, R2 and R6 from
+ * the CI configuration instead of a run. It **only narrows**: nothing is allowed that `local` did
+ * not allow. The CI gate runs the same in both modes.
+ */
+export const VERIFICATION_MODES = ['local', 'ci'] as const;
+export const verificationModeSchema = z.enum(VERIFICATION_MODES);
+export type VerificationMode = z.infer<typeof verificationModeSchema>;
+export const DEFAULT_VERIFICATION_MODE: VerificationMode = 'local';
+
+export const verificationConfigSchema = z.strictObject({
+  mode: verificationModeSchema.optional(),
+});
+
 // ── features (BD-028) ────────────────────────────────────────────────────────
 
 /**
@@ -908,6 +931,7 @@ export const agenticConfigSchema = z.strictObject({
   stages: z.record(stageIdSchema, stageAgentSettingsSchema).optional(),
   policies: policiesConfigSchema.optional(),
   commands: commandPolicySchema.optional(),
+  verification: verificationConfigSchema.optional(),
   features: featuresConfigSchema.optional(),
   status_mapping: statusMappingSchema.optional(),
 });
@@ -923,6 +947,7 @@ export type KnowledgeApplyPolicy = z.infer<typeof knowledgeApplyPolicySchema>;
 export type RiskClass = z.infer<typeof riskClassSchema>;
 export type CommandPolicy = z.infer<typeof commandPolicySchema>;
 export type FeaturesConfig = z.infer<typeof featuresConfigSchema>;
+export type VerificationConfig = z.infer<typeof verificationConfigSchema>;
 export type StatusMapping = z.infer<typeof statusMappingSchema>;
 
 // ── the organisation settings document (WP-93) ───────────────────────────────

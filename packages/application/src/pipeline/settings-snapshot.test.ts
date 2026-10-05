@@ -65,6 +65,19 @@ describe('runSettingsSnapshot', () => {
     expect(document.repository).toBeNull();
   });
 
+  it('records the verification mode at the path the discovery recorder reads it from (backlog 460)', () => {
+    // `apps/server/src/onboarding.ts` reads `settings_snapshot #>> '{effective,verification,mode}'`
+    // to label R1, R2 and R6 by how the run was planned; this pins that path from the writer's side.
+    const modeAt = (config: ProjectSettings['config']) =>
+      (
+        runSettingsSnapshot(settingsWith({ config }), nothing).snapshot as unknown as {
+          effective: { verification?: { mode?: string } };
+        }
+      ).effective.verification?.mode;
+    expect(modeAt({ verification: { mode: 'ci' } })).toBe('ci');
+    expect(modeAt({})).toBe('local');
+  });
+
   it('narrows the commands layer by layer, as the run policy is', () => {
     const { snapshot } = runSettingsSnapshot(
       settingsWith({

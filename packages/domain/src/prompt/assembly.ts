@@ -531,6 +531,68 @@ and do nothing else.
 /** The platform's own stage instructions; see {@link STAGE_PROMPT_FOCUS}. */
 export type StagePromptFocus = (typeof STAGE_PROMPT_FOCUS)[keyof typeof STAGE_PROMPT_FOCUS];
 
+/**
+ * What a run is told when its project verifies on CI — `verification.mode: ci` (BD-025's
+ * 2026-10-05 amendment, PROGRESS backlog 460).
+ *
+ * **A conditional platform block instead of an edit to every role prompt**, for the reason
+ * {@link STAGE_PROMPT_FOCUS} gives: the Developer's step 3, the Acceptance Tester's *"prefer running
+ * something"*, discovery's R1/R2/R6 and the `verify-work` skill all say *run the project's checks*,
+ * and they stay true for a `local` project. Editing each would make every role prompt carry both
+ * modes; one block in the platform's voice, which says outright that it **replaces** those steps,
+ * keeps one statement of the rule and moves `promptVersion` for exactly the runs it changes. It is
+ * a closed set of literals for the same reason the focus is: nothing assembled from configuration
+ * can reach the platform's voice.
+ *
+ * The planner passes it only to a run whose role holds `Bash` — a role with no shell cannot run a
+ * suite, and telling it not to would be noise in its prompt.
+ *
+ * `discovery` is its own entry because discovery's brief is the one that *measures* by running
+ * (product/17 R1, R2, R6); the readiness record prefixes those three criteria's evidence with the
+ * platform's own statement that they were read, not run (`evaluateReadiness`), so the model's
+ * compliance is not the only thing that says so.
+ */
+export const VERIFICATION_PROMPT = {
+  ci: `**This project verifies on CI.** Its maintainers set \`verification.mode: ci\`: the test
+suite, static analysis, linters, formatters and builds run in the project's CI pipeline on the merge
+request, never in your workspace, which is not sized for them. This section replaces every step of
+your role's brief or of a skill that tells you to run the project's checks.
+
+1. **Do not run them here** — not through \`make\`, a package script, a test runner, a static
+   analyser, a build tool, a dependency install or the workspace setup script, and not through any
+   other spelling. The declared ones are refused as \`command policy: block\`; a refusal is this
+   setting, not a fault to work around.
+2. **The CI gate runs them.** After the Developer pushes, the platform waits for the merge request's
+   pipeline. A red pipeline returns the task to the Developer stage with the failing job's log in a
+   \`return_feedback\` block; in a delivery task, code review and business review start only after
+   the pipeline has passed.
+3. **Say what you did not run.** Evidence is what you read — a test named by its file, the code path
+   it covers. Never write that tests pass or that a check is green because you ran it; where your
+   artifact lists commands, list the ones you ran and state that verification is left to CI.`,
+  discovery: `**This project verifies on CI.** Its maintainers set \`verification.mode: ci\`: the
+test suite, static analysis and builds run in the project's CI pipeline, never in your workspace.
+This section replaces *What you may run* and the instruction to run R1, R2 and R6 in your brief.
+
+1. **Do not run the test suite, a linter, a build, a dependency install or the setup script** — they
+   are refused as \`command policy: block\`, and a refusal is this setting, not evidence about the
+   project. Read; do not run.
+2. **Answer R1, R2 and R6 from the CI configuration and the documentation**, and say so in each
+   \`evidence\`:
+   - **R1** passes when the CI configuration has a job that runs the test suite on merge requests or
+     on the default branch; \`evidence\` names the file and the job and says it was read, not run.
+   - **R2** passes only when the configuration or the documentation bounds that job under 15
+     minutes (a job timeout, a documented duration); otherwise it fails with \`evidence\` saying the
+     duration was not measured because verification is on CI.
+   - **R6** passes when one documented command sets the project up (a \`make\` target, a package
+     script, \`.agentic/workspace/setup\`, a devcontainer or compose file); \`evidence\` says it was
+     read, not run.
+3. **Every command you document is \`verified: false\`**, with \`evidence\` naming where it is
+   written — you ran none of them.`,
+} as const;
+
+/** The platform's verification instructions; see {@link VERIFICATION_PROMPT}. */
+export type VerificationPrompt = (typeof VERIFICATION_PROMPT)[keyof typeof VERIFICATION_PROMPT];
+
 export interface AssemblePromptInput {
   readonly nonce: PromptNonceSource;
   readonly role: RolePromptDefinition;
@@ -566,6 +628,15 @@ export interface AssemblePromptInput {
    * the reader.
    */
   readonly language: CommunicationLanguage;
+  /**
+   * The platform's instruction for a project that verifies on CI ({@link VERIFICATION_PROMPT}), or
+   * `null` for a `local` project and for a role with no shell.
+   *
+   * Required-and-nullable for {@link AssemblePromptInput.focus}' reason, and in layers 1–3 for the
+   * same one: a project that moves its verification to CI has changed what the platform tells the
+   * model, and `promptVersion` shows it.
+   */
+  readonly verification: VerificationPrompt | null;
   /**
    * The question an **ask-the-task** run is answering, or `null` for every other run (WP-31).
    *
@@ -828,13 +899,17 @@ const languageInstruction = (language: CommunicationLanguage): string => {
 const systemPromptOf = (
   role: RolePromptDefinition,
   focus: StagePromptFocus | null,
+  verification: VerificationPrompt | null,
   language: CommunicationLanguage,
 ): string => {
   assertPlatformVoice('a role name', role.role);
   assertPlatformVoice('a role prompt version', role.version);
   const base = `${PLATFORM_PROMPT}\n\n## Your role: ${role.role}\n\n${role.text.trim()}\n`;
   const withFocus = focus === null ? base : `${base}\n## This stage\n\n${focus.trim()}\n`;
-  return `${withFocus}\n## Language\n\n${languageInstruction(language)}\n`;
+  // After the role and the stage, so it is read as replacing the steps they describe.
+  const withVerification =
+    verification === null ? withFocus : `${withFocus}\n## Verification\n\n${verification.trim()}\n`;
+  return `${withVerification}\n## Language\n\n${languageInstruction(language)}\n`;
 };
 
 /**
@@ -1414,7 +1489,12 @@ export const assemblePrompt = (input: AssemblePromptInput): AssembledPrompt => {
     // `renderDataBlock` would refuse it anyway, and refusing here names the field.
     assertPlatformVoice('an asker label', input.ask.askedBy);
   }
-  const systemPrompt = systemPromptOf(input.role, input.focus ?? null, input.language ?? 'auto');
+  const systemPrompt = systemPromptOf(
+    input.role,
+    input.focus ?? null,
+    input.verification ?? null,
+    input.language ?? 'auto',
+  );
   const userPrompt = [
     ...(projectBlocks.length === 0
       ? []

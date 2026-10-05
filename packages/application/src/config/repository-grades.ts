@@ -12,8 +12,10 @@
  *    default when the settings are silent): `policies.protected_paths` and `policies.reviewers` are
  *    **unions**, `policies.risk_classes` adds classes and adds paths and requirements to a class the
  *    settings define, `policies.review_checklists` adds items, `commands` narrow again after the
- *    settings (`runCommandPolicy`'s layers), and `pipeline.wip` may lower a WIP limit and never
- *    raise it (WP-91). Whatever the file tried to remove or raise is **reported**.
+ *    settings (`runCommandPolicy`'s layers), `pipeline.wip` may lower a WIP limit and never
+ *    raise it (WP-91), and `verification.mode` may move a project to `ci` and never back to `local`
+ *    (BD-025's 2026-10-05 amendment: `ci` only removes commands, which the file's own
+ *    `commands.block` could already do). Whatever the file tried to remove or raise is **reported**.
  *  - **not applied** — dropped and **reported** in the reading's `not_applied`: the dial and every
  *    key that overrides one of its policies (`AUTONOMY_POLICY_OVERRIDE_KEYS`, Q78 — a test holds the
  *    two lists together), the other policies whose loosening turns a check off (the dependency
@@ -88,6 +90,7 @@ export const REPOSITORY_KEY_GRADES: Readonly<Record<string, RepositoryKeyGrade>>
   'policies.review_checklists': 'tighten_only',
   'policies.reviewers': 'tighten_only',
   commands: 'tighten_only',
+  verification: 'tighten_only',
   features: 'not_applied',
   status_mapping: 'operational',
 };
@@ -204,8 +207,9 @@ export const tightenRepositoryLayer = (
 } => {
   const notApplied: RepositoryConfigNotApplied[] = [];
   const wip = tightenWip(project, repo, notApplied);
-  const withWip: ConfigValues =
+  const withWipOnly: ConfigValues =
     wip === undefined ? repo : { ...repo, pipeline: { ...repo.pipeline, wip } };
+  const withWip = tightenVerification(project, withWipOnly, notApplied);
   const policies = repo.policies;
   if (policies === undefined) {
     return { values: withWip, notApplied };
@@ -326,4 +330,25 @@ const tightenWip = (
     });
   }
   return next;
+};
+
+/**
+ * `verification.mode` from the file, **never back to `local`** once the settings chose `ci` (BD-025's
+ * 2026-10-05 amendment). `ci` takes the project's commands away from every run — the file's own
+ * `commands.block` could already do that — so a file may choose it; `local` hands them back, which
+ * is a loosening merge rights did not buy. A `local` the file stated over a `ci` setting is dropped
+ * and reported; a `local` over a silent setting is the default restated and changes nothing.
+ */
+const tightenVerification = (
+  project: ConfigValues,
+  repo: ConfigValues,
+  notApplied: RepositoryConfigNotApplied[],
+): ConfigValues => {
+  if (repo.verification?.mode !== 'local' || project.verification?.mode !== 'ci') return repo;
+  const { verification: _dropped, ...rest } = repo;
+  notApplied.push({
+    key: 'verification.mode',
+    reason: `${LOOSENING_REASON}; a repository file may move verification to CI, never back to local runs — ci is still in force`,
+  });
+  return rest;
 };

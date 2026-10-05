@@ -243,6 +243,19 @@
       },
       "additionalProperties": false
     },
+    "verification": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "local",
+            "ci"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "features": {
       "type": "object",
       "properties": {

@@ -37,6 +37,11 @@
  * `verification` baseline, which carries the project's declared commands (`PROJECT_COMMAND_ALLOW`)
  * and the lockfile installs they need, so the three are detected the way product/17 words them.
  *
+ * **A project that verifies on CI is the exception** (`verification.mode: ci`, BD-025's 2026-10-05
+ * amendment): its discovery run may not run the suite, the installs or the setup script, so the
+ * three are read from the CI configuration and the documentation — `detectionOnCi` on each row says
+ * how, and the readiness record prefixes the model's evidence with that platform sentence.
+ *
  * **One residual, stated at R6**: a devcontainer or a compose file cannot be *executed* by a run —
  * `docker *` is blocked for every stage (product/19 §3) and the run container has no daemon — so for
  * those two forms of R6 the detection is still a read, and the line says so.
@@ -98,6 +103,14 @@ export interface ReadinessCriterion {
   readonly recheck: ReadinessRecheckSource;
   /** Platform text: why the re-check answers it that way. Quoted in a carried row's evidence. */
   readonly recheckReason: string;
+  /**
+   * How the criterion is detected when the project verifies on CI (`verification.mode: ci`, BD-025's
+   * 2026-10-05 amendment) — present exactly for the criteria product/17 detects by **running** a
+   * command (R1, R2, R6), which a CI-verified project's discovery run may not do. Platform text: it
+   * is what the readiness record's evidence is prefixed with, so a reader is told the criterion was
+   * read rather than run whatever the model wrote.
+   */
+  readonly detectionOnCi?: string;
 }
 
 /** product/17 § "What it measures", transcribed. Order is the document's. */
@@ -113,6 +126,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detectedBy: 'agent',
     recheck: 'carried',
     recheckReason: 'it needs the test command run in a workspace',
+    detectionOnCi:
+      'read, not run (verification.mode: ci): a CI job that runs the test suite on merge requests or the default branch',
   },
   {
     id: 'R2',
@@ -124,6 +139,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detectedBy: 'agent',
     recheck: 'carried',
     recheckReason: 'it needs the test command run and timed in a workspace',
+    detectionOnCi:
+      'read, not measured (verification.mode: ci): a job timeout or a documented duration under 15 minutes',
   },
   {
     id: 'R3',
@@ -166,6 +183,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detectedBy: 'agent',
     recheck: 'carried',
     recheckReason: 'it needs the setup command run in a workspace',
+    detectionOnCi:
+      'read, not run (verification.mode: ci): one documented setup command, devcontainer or compose file',
   },
   {
     id: 'R7',

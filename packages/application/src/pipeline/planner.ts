@@ -40,6 +40,7 @@ import type {
   IsoDateTime,
   RiskClass,
   Slug,
+  VerificationMode,
 } from '@platform/contracts';
 import { communicationLanguageSchema } from '@platform/contracts';
 import {
@@ -69,6 +70,10 @@ import {
   skillSetVersionOf,
   stageAgentDefaults,
   taskBranchName,
+  VERIFICATION_PROMPT,
+  type VerificationPrompt,
+  verificationModeOf,
+  withVerificationMode,
 } from '@platform/domain';
 import { projectPromptsForStage } from '../config/project-prompts.js';
 import type { ContextPackAssembler, ContextPackDocument } from '../knowledge/context-pack.js';
@@ -633,20 +638,42 @@ export const commandBaselineFor = (
 };
 
 /**
- * The widest policy any run of this build can start from: the implementation baseline plus every
- * stage's and every skill's additions. What a project's `allow` entry is judged against when the
- * question is "will **any** run be granted this?" ({@link ignoredProjectAllow}).
+ * The platform's verification instruction for a run of `role` in a project whose verification mode
+ * is `mode` (BD-025's 2026-10-05 amendment) — `null` for a `local` project, and for a role whose
+ * tool set has no `Bash`: a role with no shell cannot run a suite, and a sentence telling it not to
+ * is noise in its prompt. Discovery gets its own instruction, because its brief is the one that
+ * measures readiness by running (product/17 R1, R2, R6).
  */
-const widestShippedPolicy = (): ResolvedCommandPolicy => ({
-  ...DEFAULT_COMMAND_POLICY,
-  allow: [
-    ...new Set([
-      ...BASELINE_ALLOW.implementation,
-      ...Object.values(COMMAND_ALLOW_BY_STAGE).flat(),
-      ...Object.values(COMMAND_ALLOW_BY_SKILL).flat(),
-    ]),
-  ],
-});
+export const verificationPromptFor = (
+  role: AgentRole,
+  mode: VerificationMode,
+): VerificationPrompt | null => {
+  if (mode === 'local' || !(TOOLS_BY_ROLE[role] ?? []).includes('Bash')) {
+    return null;
+  }
+  return role === 'discovery' ? VERIFICATION_PROMPT.discovery : VERIFICATION_PROMPT.ci;
+};
+
+/**
+ * The widest policy any run of this build can start from: the implementation baseline plus every
+ * stage's and every skill's additions, under the project's verification mode. What a project's
+ * `allow` entry is judged against when the question is "will **any** run be granted this?"
+ * ({@link ignoredProjectAllow}).
+ */
+const widestShippedPolicy = (verification: VerificationMode): ResolvedCommandPolicy =>
+  withVerificationMode(
+    {
+      ...DEFAULT_COMMAND_POLICY,
+      allow: [
+        ...new Set([
+          ...BASELINE_ALLOW.implementation,
+          ...Object.values(COMMAND_ALLOW_BY_STAGE).flat(),
+          ...Object.values(COMMAND_ALLOW_BY_SKILL).flat(),
+        ]),
+      ],
+    },
+    verification,
+  );
 
 /**
  * The project's declared `allow` entries that **no** run of **any** role would be granted — the
@@ -668,8 +695,15 @@ export const ignoredProjectAllow = (
   organisation?: CommandPolicy,
   /** The repository file's lists, which narrow again after the settings' (WP-63). */
   repository?: CommandPolicy,
+  /**
+   * The project's effective verification mode: under `ci` every project command is blocked for
+   * every role, so a declared `npm test` is granted to none and is listed (BD-025's 2026-10-05
+   * amendment).
+   */
+  verification: VerificationMode = 'local',
 ): readonly string[] =>
-  runCommandPolicy(widestShippedPolicy(), organisation, commands, repository).ignoredAllow;
+  runCommandPolicy(widestShippedPolicy(verification), organisation, commands, repository)
+    .ignoredAllow;
 
 /**
  * The language the project's agents write to humans in — `project.communication_language`.
@@ -1205,8 +1239,12 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
       // order, so a project still narrows what the layers added (TD-027) and can never re-grant
       // what the organisation took away. The settings' lists narrow first and the repository
       // file's narrow again (WP-63): the file may tighten, never loosen.
+      // BD-025's 2026-10-05 amendment: a project that verifies on CI has its declared commands, the
+      // lockfile installs and the setup script moved to `block` on the baseline itself, so every
+      // layer below judges its entries against a policy that already refuses them.
+      const verification = verificationModeOf(settings.config);
       const policy = runCommandPolicy(
-        commandBaselineFor(role, stage.id, skillNames),
+        withVerificationMode(commandBaselineFor(role, stage.id, skillNames), verification),
         settings.organisationCommands,
         settings.config.commands,
         settings.repositoryCommands,
@@ -1363,6 +1401,8 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         // The stage's narrower instruction, when it has one: platform text, typed as a closed set
         // so nothing else can reach the platform's own voice (`STAGE_PROMPT_FOCUS`).
         focus: STAGE_PROMPT_FOCUS[stage.id as keyof typeof STAGE_PROMPT_FOCUS] ?? null,
+        // The platform's CI instruction for a project that verifies on CI, to a role with a shell.
+        verification: verificationPromptFor(role, verification),
         /**
          * The language the project's humans read (WP-32, PROGRESS backlog **60**).
          *
