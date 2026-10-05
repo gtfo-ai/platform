@@ -3,10 +3,11 @@ import { rootCauseAnalysisFixture } from './fixtures.js';
 import { artifactJsonSchema, validateStructuredOutput } from './structured-output.js';
 
 describe('artifactJsonSchema', () => {
-  it('renders a self-contained draft 2020-12 object schema for the CLI', () => {
+  it('renders a self-contained object schema for the CLI, with no $schema declaration', () => {
     const schema = artifactJsonSchema('RootCauseAnalysis') as Record<string, unknown>;
     expect(schema['type']).toBe('object');
-    expect(schema['$schema']).toBe('https://json-schema.org/draft/2020-12/schema');
+    // The pinned CLI refuses a document that declares the draft 2020-12 meta-schema.
+    expect(schema).not.toHaveProperty('$schema');
     expect(Object.keys(schema['properties'] as object)).toContain('root_cause');
     // `@platform/contracts` registers its shared value objects in zod's global registry, so the
     // named ones are hoisted into `$defs` exactly as the published `schemas/artifacts/*.json`

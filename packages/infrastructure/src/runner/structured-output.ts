@@ -33,13 +33,23 @@ export type StructuredOutputResult =
  * the published documents are for editors and external consumers, where a shared `$defs` keeps the
  * file readable, and this one goes to a model, where a `$ref` is one more indirection between the
  * instruction and the shape.
+ *
+ * **No `$schema` key.** The pinned CLI compiles the flag's value with a validator that has no
+ * draft 2020-12 meta-schema registered, and a document naming it is refused before the model is
+ * called: *"--json-schema is not a valid JSON Schema: no schema with key or ref
+ * "https://json-schema.org/draft/2020-12/schema""* — every agent run exited 1 on it (CLI 2.1.267,
+ * measured against `platform-runtime`, 2026-10-05, first local test). Without the key the same
+ * document is accepted, `$defs` and `$ref` included, so the declaration is dropped and the keywords
+ * zod emits are left as they are.
  */
-export const artifactJsonSchema = (artifactType: ArtifactType): JsonObject =>
-  z.toJSONSchema(artifactDataSchemas[artifactType], {
+export const artifactJsonSchema = (artifactType: ArtifactType): JsonObject => {
+  const { $schema: _metaSchema, ...schema } = z.toJSONSchema(artifactDataSchemas[artifactType], {
     target: 'draft-2020-12',
     io: 'output',
     unrepresentable: 'throw',
   }) as JsonObject;
+  return schema;
+};
 
 /** `path.to.field: message`, with the value deliberately absent. */
 const describeIssue = (issue: z.core.$ZodIssue): string => {
