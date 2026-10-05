@@ -1315,6 +1315,27 @@ const ARGV0_WRAPPERS: ReadonlySet<string> = new Set([
   'nice',
   'ionice',
   'xargs',
+  // Commands that run the rest of their line as a program (first local test, 2026-10-06): a
+  // developer run wrapped its pushes as `timeout 180 git push …`, and with `timeout` unknown here
+  // the git boundary never saw a `git push`, so `timeout 180 git push --no-verify …` and a refspec
+  // push were allowed. Every one of these takes options or an argument before the command, which
+  // the suffix walk below skips by trying each start position.
+  'timeout',
+  'stdbuf',
+  'setsid',
+  'flock',
+  'chrt',
+  'taskset',
+  'unbuffer',
+  'watch',
+  'strace',
+  'ltrace',
+  'nsenter',
+  'unshare',
+  'runuser',
+  'su',
+  'doas',
+  'sudo',
   'builtin',
   'sh',
   'bash',
