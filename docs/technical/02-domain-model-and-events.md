@@ -49,6 +49,31 @@ queued ─► active(stage=…) ─► … ─► ready_for_merge ─► merged 
 ```
 Guards: WIP limits on `queued → active`; iteration limits on any `returned`; budget on every `active` entry; readiness/autonomy policies on approvals.
 
+> **A person may send an escalated task back** (amended 2026-10-06, PROGRESS backlog 483). The
+> diagram's `needs_human ─► active | cancelled` let a person resume a parked task only *at the
+> stage it stopped at*, so `return-to-stage` and `rework` answered `409 illegal_transition:
+> needs_human -> returned` and the only way to an earlier stage was `resume` followed by a return
+> raced against the stage re-escalating (AUT-6820, escalated at `ci_gate` with no merge request).
+> The fix **adds no edge**: the Task aggregate's `returnEscalatedTask` takes the two edges the
+> table already has — `needs_human → active` (emitting `task.resumed`, as every way out of a stop
+> does) and `active → returned` (`task.stage.returned`) — in **one** decision, so nothing runs at
+> the stopped stage in between, and the target is then entered as for any return. Keeping the
+> table unchanged is the point: `needs_human → returned` as an edge would let any caller of
+> `returnToStage` take it — a provider's review comment interpreted for an escalated task included
+> — where `returnEscalatedTask` is called only from the two human commands. `task.resumed` is
+> load-bearing as well: an ending the dependency gate deferred to the resume is performed on it,
+> and a take-over ends on it. The aggregate refuses, rather than escalates: any state but
+> `needs_human`; a spent loop (`needs_human → needs_human` is not an edge — the command refuses
+> first with `iteration_limit_reached`); and a task that entered `merged_gate`, because a merged
+> task never goes back to work. The command adds the rule both returns now share, from `active`
+> too: the target is a stage the task's compiled template runs and has enabled
+> (`stage_not_in_template`), that the task has entered, at or before the stage it is at
+> (`stage_not_reached`) — before backlog 483 a return checked none of it and an unknown stage id
+> left the task `active` at a stage nothing would run. The parked attempt's `task_stages` row is
+> closed `returned` with outcome `escalated` (it ended in the escalation, not in a verdict), and
+> the person's note is its `return_reason`, so the target stage is handed it. `retry-stage` and
+> `resume` out of `needs_human` are unchanged: they re-enter the stopped stage and spend no round.
+
 *Which* limit a `returned` spends is decided by the transition and not only by the stage it leaves (WP-26). `ready_for_merge` has two outgoing returns — a human's comment, which is BD-008's `human_rounds`, and the default branch moving, which re-enters the rebase gate — and attributing the second to the first escalated a task with *"human_rounds iteration limit of 3 reached: main moved to …"* after three merges to `main` under a waiting merge request. The edges that need their own loop are enumerated in `RETURN_LOOPS_BY_EDGE` (`packages/domain/src/pipeline/interpreter.ts`); everything else is attributed by the stage, and an edge in neither table cannot return at all.
 
 > **`paused → ready_for_merge` and `paused → merged` were added at WP-73** (PROGRESS backlog 244,

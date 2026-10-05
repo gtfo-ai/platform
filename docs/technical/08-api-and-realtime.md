@@ -143,7 +143,10 @@
 > `POST /api/tasks/:id/approvals/:aid/decide` and `POST /api/runs/:id/{retry,cancel}`. Each loads
 > the aggregate and lets it decide: a move the state machine does not have is **409** naming the
 > transition (`illegal_transition`, plus `stage_not_current`, `iteration_limit_reached`,
-> `run_not_live` and `task_conflict` for the refusals that are not edges), and each accepted command
+> `run_not_live` and `task_conflict` for the refusals that are not edges — and, since PROGRESS
+> backlog 483, `stage_not_in_template` and `stage_not_reached` for a return or a rework aimed at a
+> stage the task's template does not run, or one the task has not been through at or before its
+> own; both are accepted from `needs_human` too, technical/02), and each accepted command
 > writes one `human_actions` row — **none** for a refused one — carrying the acting user, the
 > command's shape, the `Idempotency-Key` and — for `pause` and `take-over` only — the reason the
 > person typed, redacted, and naming the **task** in

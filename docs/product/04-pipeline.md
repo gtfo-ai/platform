@@ -14,6 +14,7 @@ Decisions: [BD-005 stage set](../decisions/business/BD-005-pipeline-stages.md), 
 - **Return** — a transition backwards with a reason and structured feedback. Returns are normal.
 - **Question** — a stage's request for human input. Pauses the task until answered (or timed out → escalation).
 - **Escalation** — the task is parked in `Needs human` with a reason; no agent runs until a human acts. Every escalation and question carries a **blocker brief**: what is missing, why it blocks, the exact human action needed (research/01: Symphony, no_human).
+  *Amended 2026-10-06 (PROGRESS backlog 483).* The human who acts may **retry** the stage the task stopped at, **resume** it, or send it **back to an earlier stage** — *Return to stage* with a note, or *Rework* with instructions — under the same rules as from a running task: a stage the task has already run, at or before the one it stopped at; one human round spent (BD-008); the note handed to that stage, redacted. The person handling an escalation is the one who knows which earlier stage should run again (found on the first local test: a task escalated at the CI gate because its developer stage opened no merge request could not be sent back to implementation). A merged task is not sent back.
 - **Workpad** — the single sticky comment on the ticket (and MR) that the platform edits in place with state, checklist, cost and links (BD-023).
 
 ## Default stages (feature template)
