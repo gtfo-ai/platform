@@ -691,6 +691,7 @@ describe('the prompt and context-pack reads, and the rows that predate their wri
           settings: null,
           reserveUsd: null,
           promptsWithheld: null,
+          providerMode: 'api',
         });
       }
       await client.query('commit');
@@ -776,6 +777,7 @@ describe('the prompt and context-pack reads, and the rows that predate their wri
           settings: null,
           reserveUsd: null,
           promptsWithheld: record,
+          providerMode: 'api',
         });
       }
       await client.query('commit');
@@ -2131,6 +2133,77 @@ describe('the run settings and the task export’s events against PostgreSQL (WP
     await expect(findRun(drizzled, started)).rejects.toMatchObject({
       code: 'row_not_projectable',
     });
+    await pool.query('delete from tasks where id = $1', [ownTaskId]);
+  });
+
+  /**
+   * Backlog 454: `runs.provider_mode` had no writer, so every row kept 0004's `default 'api'` and a
+   * `local`-mode instance's runs read as API-billed. `RunRepository.insert` writes the planned mode;
+   * both values, so a writer that ignored its input would fail one of them.
+   */
+  it('writes the planned provider mode in the insert, and the record publishes it', async () => {
+    const store = pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+    const own = await pool.query<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                          current_stage)
+       values ($1, 'fake-jira', 'ACME-454', 'https://jira.example.test/browse/ACME-454',
+               'feature', 'active', 'refinement') returning id`,
+      [projectId],
+    );
+    const ownTaskId = own.rows[0]?.id as string;
+    await pool.query(
+      `insert into task_stages (task_id, stage, attempt, state)
+       values ($1, 'refinement', 1, 'running')`,
+      [ownTaskId],
+    );
+    const ids = ['00000000-0000-4000-8000-000000454001', '00000000-0000-4000-8000-000000454002'];
+    const modes = ['local', 'api'] as const;
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      const tx = { adapter: 'postgres', client } as unknown as Transaction;
+      for (const [index, providerMode] of modes.entries()) {
+        await store.runs.insert(tx, {
+          id: ids[index] as Id,
+          taskId: ownTaskId as Id,
+          projectId: projectId as Id,
+          stage: 'refinement',
+          role: 'product_manager',
+          mode: 'normal',
+          attempt: 1,
+          model: 'claude-opus-5',
+          effort: 'high',
+          promptVersion: 'test',
+          status: 'running',
+          terminalReason: null,
+          sessionId: null,
+          numTurns: 0,
+          usage: null,
+          cost: null,
+          wallMs: 0,
+          createdAt: AT as IsoDateTime,
+          startedAt: AT as IsoDateTime,
+          systemPrompt: null,
+          userPrompt: null,
+          redactionCount: 0,
+          contextPack: null,
+          settings: null,
+          reserveUsd: null,
+          promptsWithheld: null,
+          providerMode,
+        });
+      }
+      await client.query('commit');
+    } finally {
+      client.release();
+    }
+    const { rows } = await pool.query<{ id: string; provider_mode: string }>(
+      'select id, provider_mode from runs where id = any($1::uuid[]) order by id',
+      [ids],
+    );
+    expect(rows.map((row) => row.provider_mode)).toEqual(['local', 'api']);
+    expect((await findRun(drizzled, ids[0] as string))?.provider_mode).toBe('local');
+    expect((await findRun(drizzled, ids[1] as string))?.provider_mode).toBe('api');
     await pool.query('delete from tasks where id = $1', [ownTaskId]);
   });
 

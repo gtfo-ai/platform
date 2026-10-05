@@ -139,6 +139,8 @@ const harnessWith = (
     readonly whileAskPlans?: () => Promise<void>;
     /** WP-106: the stored settings document the **ask's** read parses (`HarnessOptions.storedSettings`). */
     readonly storedForAsk?: unknown;
+    /** Backlog 454: the instance's provider mode, which both planners are composed with. */
+    readonly providerMode?: 'api' | 'local';
   } = {},
 ): PipelineHarness =>
   createPipelineHarness({
@@ -150,6 +152,7 @@ const harnessWith = (
             job === JOB_QUEUES.taskAsk ? options.storedForAsk : { version: 1 },
         }),
     ...(options.cost === true ? { cost: true } : {}),
+    ...(options.providerMode === undefined ? {} : { providerMode: options.providerMode }),
     ...(options.whileAskPlans === undefined ? {} : { whileAskPlans: options.whileAskPlans }),
     settings: {
       config: (options.settings ?? {}) as never,
@@ -230,6 +233,17 @@ describe('an ask is a run with a task and no stage (criterion 1)', () => {
     expect(ask?.status).toBe('answered');
     expect(ask?.answer).toBe(ANSWER.answer);
     expect(ask?.runId).not.toBeNull();
+  });
+
+  it('records the provider mode the ask was planned with on its run row (backlog 454)', async () => {
+    for (const providerMode of ['local', 'api'] as const) {
+      const harness = harnessWith({ providerMode });
+      await seedTask(harness);
+      await askThroughHttp(harness);
+      const [ask] = harness.asks.all();
+      expect(ask?.runId).not.toBeNull();
+      expect(harness.store.providerModeOf(ask?.runId as Id)).toBe(providerMode);
+    }
   });
 
   it('hands runs.insert the context pack its run.started carries (WP-57, standing rule 49)', async () => {

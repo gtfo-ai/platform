@@ -743,6 +743,12 @@ export interface HarnessOptions {
    * nobody wired in.
    */
   readonly commandSecrets?: readonly InjectedSecret[];
+  /**
+   * The provider mode both planners are composed with (BD-004) — production's
+   * `APP_PROVIDER_MODE`. Absent is the planners' own default, `api`. A test of a `local` instance
+   * sets it, which is how backlog 454's "the row says `local`" is asserted end to end.
+   */
+  readonly providerMode?: 'api' | 'local';
 }
 
 export interface PipelineHarness {
@@ -1654,6 +1660,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
           contextPacks: createContextPackAssembler({ store: knowledge, logger: silentLogger }),
           headPaths: (projectId: Id) => knowledge.readPathWitnesses(projectId),
           clock: { now: () => clock.now() },
+          ...(options.providerMode === undefined ? {} : { providerMode: options.providerMode }),
         }),
         options.whileAskPlans,
       ),
@@ -1681,6 +1688,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         // The production shape (WP-58): the listing the index write stored for its commit.
         headPaths: (projectId: Id) => knowledge.readPathWitnesses(projectId),
         clock: { now: () => clock.now() },
+        ...(options.providerMode === undefined ? {} : { providerMode: options.providerMode }),
       }),
       stopReasons,
       ...(cost === null ? {} : { budgets: createBudgetGuard({ store: cost }) }),

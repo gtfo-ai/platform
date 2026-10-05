@@ -26,6 +26,7 @@ import type {
   EstimateBasis,
   Id,
   IsoDateTime,
+  ProviderMode,
   RunStartFailure,
   Size,
   Slug,
@@ -181,6 +182,8 @@ export interface MemoryPipelineStore extends PipelineStore {
   readonly supersededRecovery: SupersededMergeRequestRecoveryStore;
   /** Every `superseded_merge_requests` row, for a test that asserts what the duty settled. */
   supersededRows(): readonly MemorySupersededRow[];
+  /** `runs.provider_mode` as `insert` wrote it (backlog 454), or `null` for a run never inserted. */
+  providerModeOf(runId: Id): ProviderMode | null;
   /** `runs.exit_detail` as `finish` wrote it — why a run never started (backlog 453). */
   startFailureOf(runId: Id): RunStartFailure | null;
   /** The lease a run currently holds, for a test that asserts the heartbeat wrote one (WP-47). */
@@ -273,6 +276,8 @@ export const createMemoryPipelineStore = (
   const budgetCaps = new Map<Id, number>();
   /** `runs.reserve_usd` (WP-131): write-only on `NewRun`, so kept beside the row, as the SQL keeps it. */
   const reserves = new Map<Id, number | null>();
+  /** `runs.provider_mode`, write-only on the port; read by {@link MemoryPipelineStore.providerModeOf}. */
+  const providerModes = new Map<Id, ProviderMode>();
   /** `runs.exit_detail`, write-only on the port; read by {@link MemoryPipelineStore.startFailureOf}. */
   const startFailures = new Map<Id, RunStartFailure>();
   /** `runs.figure_is_floor` (WP-131 pre-review round, backlog 407): the runs whose cost is a floor. */
@@ -1060,8 +1065,11 @@ export const createMemoryPipelineStore = (
         reserveUsd,
         // WP-149: kept beside the row rather than on it — `load` does not select `ask_id` either.
         askId,
+        // Backlog 454: write-only too; read back through `providerModeOf`.
+        providerMode,
         ...stored
       } = run;
+      providerModes.set(run.id, providerMode);
       runs.set(run.id, clone({ ...stored, stage: linked ? run.stage : null }));
       if (askId !== undefined) {
         askOfRun.set(run.id, askId);
@@ -1696,6 +1704,7 @@ export const createMemoryPipelineStore = (
       );
     },
     chargedRuns,
+    providerModeOf: (runId) => providerModes.get(runId) ?? null,
     startFailureOf: (runId) => {
       const failure = startFailures.get(runId);
       return failure === undefined ? null : clone(failure);

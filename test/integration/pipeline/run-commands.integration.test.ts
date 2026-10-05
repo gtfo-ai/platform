@@ -204,6 +204,7 @@ const liveRun = async (): Promise<{ runId: Id; taskId: Id }> => {
     settings: null,
     reserveUsd: null,
     promptsWithheld: null,
+    providerMode: 'api',
     status: 'running',
     terminalReason: null,
     sessionId: null,

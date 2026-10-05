@@ -36,6 +36,7 @@ import type {
   MergeRequestSnapshot,
   PausedBudgetScope,
   PipelineTemplate,
+  ProviderMode,
   RunCost,
   RunStartFailure,
   RunStatus,
@@ -1365,6 +1366,13 @@ export type NewRun = StoredRun & {
    * withheld"* — and an ask, which is given no prompt file. Write-only, for the prompt columns' reason.
    */
   readonly promptsWithheld: PromptsWithheld | null;
+  /**
+   * The provider mode the run was **planned** with — `RunSpec.providerMode`, `runs.provider_mode`
+   * (PROGRESS backlog 454). Required, because the column's `default 'api'` is exactly what made
+   * every `local`-mode run read as API-billed before this had a writer. Write-only, for the prompt
+   * columns' reason: the API projection reads it, `load` does not.
+   */
+  readonly providerMode: ProviderMode;
 };
 
 export interface RunRepository {

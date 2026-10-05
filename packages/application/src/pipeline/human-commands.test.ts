@@ -1163,6 +1163,7 @@ const seedLiveRun = async (harness: PipelineHarness, stage: Slug): Promise<Id> =
       settings: null,
       reserveUsd: null,
       promptsWithheld: null,
+      providerMode: 'api',
       status: 'running',
       terminalReason: null,
       sessionId: 'session-live',

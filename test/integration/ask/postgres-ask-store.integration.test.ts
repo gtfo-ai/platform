@@ -190,6 +190,7 @@ describe('an ask’s shutdown endings, counted from its runs (WP-149)', () => {
           settings: null,
           reserveUsd: null,
           promptsWithheld: null,
+          providerMode: 'api',
           status: 'running',
           terminalReason: null,
           sessionId: null,

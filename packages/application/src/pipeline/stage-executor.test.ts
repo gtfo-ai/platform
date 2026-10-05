@@ -921,6 +921,45 @@ describe('a run refused by its workspace names the kind and the reason (WP-127)'
  * diagnosis in all three places, through the run's redactor and bounded, and the brief says the run
  * did not start.
  */
+/**
+ * **The run row says which provider mode paid for it** — PROGRESS backlog 454.
+ *
+ * `runs.provider_mode` had no writer, so its `default 'api'` stood on every row and a `local`-mode
+ * instance's runs read as API-billed while the runs themselves were planned `local`. The planner's
+ * mode now reaches the insert; both directions are asserted, because a writer that always wrote
+ * `local` would pass a test of `local` alone.
+ */
+describe('the run row records the provider mode it was planned with (backlog 454)', () => {
+  const modesOf = async (providerMode?: 'api' | 'local') => {
+    const harness = harnessWith({
+      ...(providerMode === undefined ? {} : { providerMode }),
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          structuredOutput: askingRefinedSpec(),
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    const created = harness
+      .events()
+      .filter((entry) => entry.type === 'run.created')
+      .map((entry) => (entry as Extract<DomainEvent, { type: 'run.created' }>).payload.run_id);
+    expect(created).toHaveLength(1);
+    return created.map((runId) => harness.store.providerModeOf(runId));
+  };
+
+  it('writes local for a local-mode instance', async () => {
+    expect(await modesOf('local')).toEqual(['local']);
+  });
+
+  it('writes api for an api-mode instance, and for the planner’s default', async () => {
+    expect(await modesOf('api')).toEqual(['api']);
+    expect(await modesOf()).toEqual(['api']);
+  });
+});
+
 describe('a run that never started records the launcher’s reason (backlog 453)', () => {
   const SECRET = 'FAKE-PLANTED-secret-453-0123456789';
   const helperFailure = (output: string) =>

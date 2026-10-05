@@ -1080,6 +1080,8 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         // WP-121 (backlog 363): why the plan carried no project prompt file, frozen with the run
         // through its own redactor — so a missing convention-append file says why on `/prompt`.
         promptsWithheld: redactedPromptsWithheld(settings.repositoryPromptsWithheld, redactor),
+        // Backlog 454: the mode the planner planned this run with, not the column's default.
+        providerMode: spec.providerMode,
       });
       /**
        * The lease, claimed in the **same transaction as the row** (WP-47).

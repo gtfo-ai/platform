@@ -1454,13 +1454,13 @@ export const createPostgresPipelineStore = (
                            system_prompt, user_prompt, redaction_count,
                            context_budget_tokens, context_total_tokens, context_kb_commit,
                            context_text_search, settings_snapshot, settings_hash, reserve_usd,
-                           prompts_withheld, ask_id)
+                           prompts_withheld, ask_id, provider_mode)
          values ($1, $2, $3,
                  (select id from task_stages
                    where task_id = $2 and stage = $11 and attempt = $6),
                  $4, $5, $6, $7, $8, $9, $10, $12, $13, $14, $15, $16, $17, $18, $19::jsonb,
                  coalesce($20::jsonb, '{}'::jsonb), $21, nullif($22::numeric, 0), $23::jsonb,
-                 $24)`,
+                 $24, $25::provider_mode)`,
         [
           run.id,
           run.taskId,
@@ -1505,6 +1505,9 @@ export const createPostgresPipelineStore = (
           run.promptsWithheld === null ? null : JSON.stringify(run.promptsWithheld),
           // WP-149 (migration 0082, backlog 445): the ask this run answers; null for a stage run.
           run.askId ?? null,
+          // Backlog 454: the mode the run was planned with. Until this the column kept 0004's
+          // `default 'api'`, so a `local`-mode instance's runs all read as API-billed.
+          run.providerMode,
         ],
       );
       if (run.contextPack !== null) {

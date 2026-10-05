@@ -580,6 +580,8 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         reserveUsd: askFeature(verdict.settings).budgetUsd,
         // WP-121: an ask is given no project prompt file, so nothing of one was withheld from it.
         promptsWithheld: null,
+        // Backlog 454: the second insert writes the planned mode too (standing rule 49).
+        providerMode: plan.spec.providerMode,
       });
       /**
        * The lease, claimed in the **same transaction as the row** — the stage executor's rule and
