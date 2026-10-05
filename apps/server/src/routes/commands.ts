@@ -574,7 +574,7 @@ export const registerCommandRoutes = async (
     body: returnToStageRequestSchema,
     summary: 'Send the task back to an earlier stage with a reason',
     description:
-      'Spends one of BD-008’s human rounds; when they are spent the command is refused (409) rather than the task being escalated — no HTTP request parks a task for a human. The reason reaches the stage the task returns to, so it is redacted where it is stored (TD-012).',
+      'Spends one of BD-008’s human rounds; when they are spent the command is refused (409) rather than the task being escalated — no HTTP request parks a task for a human. The reason reaches the stage the task returns to, so it is redacted where it is stored (TD-012). The stage must be one the task’s template runs (409 `stage_not_in_template`) and one the task has been through at or before the stage it is at (409 `stage_not_reached`). A task in `needs_human` may be returned too: it leaves the escalation (`task.resumed`) and goes back in one step (PROGRESS backlog 483).',
     params: (body) => ({ stage: body.stage }),
     perform: async ({ deps, body, taskId, userId }) =>
       deps.returnToStage({ taskId, userId, stage: body.stage, reason: body.reason }),
@@ -588,7 +588,7 @@ export const registerCommandRoutes = async (
     body: reworkRequestSchema,
     summary: 'Reject the approach and restart from a stage',
     description:
-      'product/04’s "human rejection = reset, not patching": the instructions travel as the return’s reason and the **agent-to-agent** iteration counters are reset, while the human rounds are not. Closing the old merge request is not done here.',
+      'product/04’s "human rejection = reset, not patching": the instructions travel as the return’s reason and the **agent-to-agent** iteration counters are reset, while the human rounds are not. The old merge request is let go here and closed by a duty after the commit. The stage rules and the way out of `needs_human` are `return-to-stage`’s (PROGRESS backlog 483).',
     params: (body) => ({ stage: body.stage }),
     perform: async ({ deps, body, taskId, userId }) =>
       deps.rework({ taskId, userId, stage: body.stage, instructions: body.instructions }),

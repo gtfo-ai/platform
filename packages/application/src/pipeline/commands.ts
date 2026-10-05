@@ -83,7 +83,13 @@ import type {
   StoredTask,
 } from './store.js';
 import { retryOnTaskConflict } from './task-conflict.js';
-import { applyDecision, CANCELLED_OUTCOME, closeCurrentStageRow } from './transitions.js';
+import {
+  type ApplyOptions,
+  applyDecision,
+  CANCELLED_OUTCOME,
+  closeCurrentStageRow,
+  ESCALATED_OUTCOME,
+} from './transitions.js';
 
 export interface TaskCommandDependencies {
   readonly unitOfWork: UnitOfWork;
@@ -605,9 +611,10 @@ const applyHumanDecisionRecorded = async (
   stored: StoredTask,
   context: CommandContext,
   decision: PipelineDecision,
+  extra: Pick<ApplyOptions, 'returnFromEscalation' | 'stageOutcome'> = {},
 ): Promise<{
   readonly work: StageExecutionJob | null;
-  readonly events: readonly { readonly id: string }[];
+  readonly events: readonly { readonly id: string; readonly type: string }[];
 }> => {
   if (decision.kind === 'enter' && decision.stage === READY_FOR_MERGE_STAGE) {
     // WP-79 review round 1: the census of human ways into Ready, enforced here rather than listed.
@@ -628,6 +635,7 @@ const applyHumanDecisionRecorded = async (
     // human command writes, which is how the audit tells the two apart.
     causedByEventId: null,
     onIllegalTransition: 'throw',
+    ...extra,
     ...(deps.logger === undefined ? {} : { logger: deps.logger }),
   });
   if (applied.events.length > 0) {
@@ -927,6 +935,71 @@ const returnBrief = (stored: StoredTask, to: Slug): string =>
   `${HUMAN_RETURN_LOOP} limit allows. Read what they asked for, then either finish it by hand or ` +
   'cancel the task.';
 
+/**
+ * The return named a stage this task has not been through **at or before** the one it is at
+ * (PROGRESS backlog 483). A 409 at the route, `stage_not_reached`.
+ */
+export class StageNotReachedError extends Error {
+  override readonly name = 'StageNotReachedError';
+  readonly stage: Slug;
+
+  constructor(stage: Slug, current: Slug) {
+    super(
+      `this task has not been through "${stage}" on its way to "${current}", so it cannot be sent ` +
+        'back there: a return goes to a stage the task has already run, at or before the one it is at',
+    );
+    this.stage = stage;
+  }
+}
+
+/**
+ * **Where a human return may go** (PROGRESS backlog 483): a stage the task's own compiled template
+ * runs and has enabled ({@link StageNotInTemplateError}), that the task has **entered** at least
+ * once, and that sits **at or before** the stage it is at in the template's order
+ * ({@link StageNotReachedError}).
+ *
+ * Until backlog 483 `return-to-stage` and `rework` checked none of it — the product's own wording
+ * (user guide: *"sends the task back to an earlier stage"*) was a promise the command did not keep,
+ * and a stage id the template does not run left the task `active` at a stage nothing would ever
+ * run, which is the defect `StageNotInTemplateError` was written for the hand-back. It matters more
+ * once an **escalated** task can be returned, because the person choosing the stage is reading a
+ * blocker brief, not the template. The current stage itself is admitted — a return to it, or a
+ * rework of it, is a new attempt with the person's words, which `retry-stage` does not carry — and
+ * so is any earlier stage the task ran, whichever loop brought it there.
+ */
+const assertReturnTarget = (stored: StoredTask, from: Slug, to: Slug): void => {
+  const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+  const enabled = pipeline.stages.filter((entry) => entry.enabled);
+  const target = enabled.findIndex((entry) => entry.id === to);
+  if (target === -1) {
+    throw new StageNotInTemplateError(
+      to,
+      stored.task.template,
+      enabled.map((entry) => entry.id),
+    );
+  }
+  const current = pipeline.stages.findIndex((entry) => entry.id === from);
+  const targetPosition = pipeline.stages.findIndex((entry) => entry.id === to);
+  if (stored.task.stageAttempts[to] === undefined || (current !== -1 && targetPosition > current)) {
+    throw new StageNotReachedError(to, from);
+  }
+};
+
+/**
+ * What applies a human return to an **escalated** task differently (PROGRESS backlog 483):
+ * through `returnEscalatedTask` — out of `needs_human` and back in one aggregate decision — and
+ * with the parked attempt's row closed `escalated` rather than `returned`, because that attempt
+ * ended in the escalation, not in a verdict a person is now acting on: a Checks-panel item reading
+ * the row must not call a gate the platform could not decide a *failure*. Empty for every other
+ * state, so a return from `active` or `ready_for_merge` is applied exactly as before.
+ */
+const escalationReturn = (
+  stored: StoredTask,
+): Pick<ApplyOptions, 'returnFromEscalation' | 'stageOutcome'> =>
+  stored.task.state === 'needs_human'
+    ? { returnFromEscalation: true, stageOutcome: ESCALATED_OUTCOME }
+    : {};
+
 /** Refuses before the aggregate can escalate; see the module note on why that is the ending here. */
 const assertLoopHasRoom = (stored: StoredTask): void => {
   const iteration = evaluateIteration(
@@ -946,6 +1019,14 @@ const assertLoopHasRoom = (stored: StoredTask): void => {
  * `task_stages.return_reason`, the `task.stage.returned` event and, through
  * `StageRunRequest.returnFeedback`, the prompt. So it is redacted here (TD-012) — the one place it
  * is written — rather than at the transport that happened to carry it.
+ *
+ * **From `needs_human` too** (PROGRESS backlog 483): the person handling an escalation is the one
+ * who knows which earlier stage should run again, so the same command, under the same rules — the
+ * target ({@link assertReturnTarget}), a human round spent (BD-008), the reason redacted and handed
+ * to the target stage — leaves the escalation and goes back in one aggregate decision
+ * (`returnEscalatedTask`; {@link escalationReturn}). The parked stage's job, if one is still
+ * queued, is superseded the way every return supersedes it: the task is no longer at that stage
+ * and attempt, and the stage executor's re-validation skips it.
  */
 export const returnToStageCommand = async (
   deps: HumanCommandDependencies,
@@ -962,16 +1043,24 @@ export const returnToStageCommand = async (
     { ...input, what: 'returning the task to a stage' },
     async (scope, stored, context) => {
       const from = currentStageOrThrow(stored, 'return');
+      assertReturnTarget(stored, from, input.stage);
       assertLoopHasRoom(stored);
-      const work = await applyHumanDecision(deps, scope, stored, context, {
-        kind: 'return',
-        from,
-        to: input.stage,
-        loop: HUMAN_RETURN_LOOP,
-        reason: deps.redactor.redactText(input.reason).value,
-        escalationBrief: returnBrief(stored, input.stage),
-      });
-      return { result: undefined, work: work === null ? null : { job: work } };
+      const applied = await applyHumanDecisionRecorded(
+        deps,
+        scope,
+        stored,
+        context,
+        {
+          kind: 'return',
+          from,
+          to: input.stage,
+          loop: HUMAN_RETURN_LOOP,
+          reason: deps.redactor.redactText(input.reason).value,
+          escalationBrief: returnBrief(stored, input.stage),
+        },
+        escalationReturn(stored),
+      );
+      return { result: undefined, work: applied.work === null ? null : { job: applied.work } };
     },
   );
 };
@@ -1025,6 +1114,7 @@ export const reworkStageCommand = async (
     { ...input, what: 'reworking a stage' },
     async (scope, stored, context) => {
       const from = currentStageOrThrow(stored, 'rework');
+      assertReturnTarget(stored, from, input.stage);
       assertLoopHasRoom(stored);
       const fresh = stored.mr === null && stored.branch === null ? null : reworkBranchName(stored);
       const reset: StoredTask = {
@@ -1037,15 +1127,25 @@ export const reworkStageCommand = async (
           iterationCounters: resetAgentIterations(stored.task.iterationCounters),
         },
       };
-      const applied = await applyHumanDecisionRecorded(deps, scope, reset, context, {
-        kind: 'return',
-        from,
-        to: input.stage,
-        loop: HUMAN_RETURN_LOOP,
-        reason: deps.redactor.redactText(input.instructions).value,
-        escalationBrief: returnBrief(stored, input.stage),
-      });
-      const cause = applied.events[0]?.id;
+      const applied = await applyHumanDecisionRecorded(
+        deps,
+        scope,
+        reset,
+        context,
+        {
+          kind: 'return',
+          from,
+          to: input.stage,
+          loop: HUMAN_RETURN_LOOP,
+          reason: deps.redactor.redactText(input.instructions).value,
+          escalationBrief: returnBrief(stored, input.stage),
+        },
+        // From `needs_human` too (backlog 483), where the return is preceded by `task.resumed`.
+        escalationReturn(stored),
+      );
+      // The return, by type rather than by position: out of an escalation the first event is the
+      // `task.resumed` that precedes it (backlog 483), and the cause of the close is the return.
+      const cause = applied.events.find((event) => event.type === 'task.stage.returned')?.id;
       if (stored.mr !== null) {
         // `mr_ref` left `save`'s columns at WP-138, so the let-go is its own narrow write, in
         // this transaction beside the new branch the save above wrote.

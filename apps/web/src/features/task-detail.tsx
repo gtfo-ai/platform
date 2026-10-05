@@ -492,10 +492,13 @@ export const gateValueText = (
     case 'returned':
       // WP-81: the CI gate's tamper check sent the task back, whatever the pipeline said — so the
       // CI item does not call it red; since WP-102 the rebase gate's settlement can too, and the
-      // rebase item does not call that a conflict.
+      // rebase item does not call that a conflict. PROGRESS backlog 483: a person who sends a task
+      // back out of an escalation closes the parked attempt `escalated` — the gate did not fail.
       return row.outcome === 'protected_paths_changed'
         ? 'sent back by the tamper check'
-        : `${words.fail}, sent back`;
+        : row.outcome === 'escalated'
+          ? 'escalated, then sent back by a person'
+          : `${words.fail}, sent back`;
     case 'failed':
       return `escalated${row.outcome === null ? '' : ` (${row.outcome})`}`;
     default:
@@ -1085,9 +1088,11 @@ const ApprovalCard = ({
  * satisfiable, rather than sending a request the server will answer with a 400.
  */
 const StageCommands = ({
+  state,
   stages,
   commands,
 }: {
+  readonly state: string;
   readonly stages: readonly { readonly stage: string }[];
   readonly commands: ReturnType<typeof useTaskCommands>;
 }): ReactElement => {
@@ -1109,6 +1114,17 @@ const StageCommands = ({
 
   return (
     <Card className="flex flex-col gap-2">
+      {/*
+        PROGRESS backlog 483: the person handling an escalation is the one who knows which stage
+        should run again, and since then the server accepts a return and a rework out of
+        `needs_human`. The controls were never hidden for it; this says they are the way out.
+      */}
+      {state === 'needs_human' ? (
+        <p className="text-sm text-fg-muted">
+          This task is waiting for a person. Send it back to a stage it has run, with a note the
+          stage is given, rework it from there, or retry the stage it stopped at.
+        </p>
+      ) : null}
       <label className="flex items-center gap-2 text-xs text-fg-muted" htmlFor="stage-command">
         Stage
         <select
@@ -1404,7 +1420,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
 
         <div>
           <SectionHeading>Stage commands</SectionHeading>
-          <StageCommands stages={stages} commands={commands} />
+          <StageCommands state={task.state} stages={stages} commands={commands} />
         </div>
 
         <TakeOverPanel taskId={task.id} state={task.state} takenOver={takenOver} runs={runs} />

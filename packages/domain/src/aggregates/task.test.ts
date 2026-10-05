@@ -26,6 +26,7 @@ import {
   queueTask,
   recordMerge,
   requestApproval,
+  returnEscalatedTask,
   returnToStage,
   startRetrospective,
   steerRun,
@@ -284,6 +285,82 @@ describe('returnToStage', () => {
     );
     expect(aggregate.state).toBe('returned');
     expect(aggregate.iterationCounters.human_rounds).toBe(1);
+  });
+});
+
+/**
+ * PROGRESS backlog 483: a person sends a task parked in `needs_human` back to an earlier stage.
+ * Both directions — what it admits, and what must still be refused from `needs_human` and to it.
+ */
+describe('returnEscalatedTask', () => {
+  const input = {
+    fromStage: 'ci_gate',
+    toStage: 'implementation',
+    loop: 'human_rounds' as const,
+    reason: 'no merge request was opened; open one',
+    escalationBrief: 'a person sent it back as many times as allowed',
+  };
+  const parked = (overrides: Partial<Task> = {}): Task =>
+    escalateTask(
+      activeTask('ci_gate', { stageAttempts: { implementation: 1, ci_gate: 2 }, ...overrides }),
+      { reason: 'ci_fix iteration limit reached', blockerBrief: 'look at the pipeline' },
+      context(),
+    ).aggregate;
+
+  it('leaves the escalation and goes back in one decision, spending a human round', () => {
+    const task = parked();
+    const { aggregate, events } = returnEscalatedTask(task, input, context());
+    expect(aggregate.state).toBe('returned');
+    expect(aggregate.iterationCounters.human_rounds).toBe(1);
+    // Out of the stop and back, in that order, chained on the task's own stream.
+    expect(types(events)).toEqual(['task.resumed', 'task.stage.returned']);
+    expect(events.map((event) => event.stream_seq)).toEqual([task.sequence, task.sequence + 1]);
+    expect(aggregate.sequence).toBe(task.sequence + 2);
+    expect(events[1]?.payload).toMatchObject({
+      from_stage: 'ci_gate',
+      to_stage: 'implementation',
+      reason: input.reason,
+      iteration: 1,
+    });
+    // The stage is the target's to set: entering it is `enterStage`'s, one call later.
+    expect(aggregate.currentStage).toBe('ci_gate');
+    expect(enterStage(aggregate, { stage: 'implementation' }, context()).aggregate.state).toBe(
+      'active',
+    );
+  });
+
+  it('refuses every state but needs_human, naming the transition', () => {
+    const states = [
+      activeTask('ci_gate'),
+      { ...activeTask('ci_gate'), state: 'paused' as const },
+      { ...activeTask('ci_gate'), state: 'returned' as const },
+      { ...activeTask('refinement'), state: 'waiting_answers' as const },
+      { ...activeTask('architecture'), state: 'waiting_approval' as const },
+      newTask({ state: 'ready_for_merge', currentStage: 'ready_for_merge' }),
+      newTask({ state: 'cancelled', currentStage: 'ci_gate' }),
+      newTask({ state: 'done', currentStage: 'librarian' }),
+    ];
+    for (const task of states) {
+      expect(() => returnEscalatedTask(task, input, context()), task.state).toThrow(
+        IllegalTransitionError,
+      );
+    }
+  });
+
+  it('refuses a task that was merged: a merged task never goes back to work', () => {
+    const task = parked({ stageAttempts: { implementation: 1, merged_gate: 1, retrospective: 1 } });
+    expect(() => returnEscalatedTask(task, input, context())).toThrow(IllegalTransitionError);
+  });
+
+  it('refuses a spent loop rather than escalating a task that is already parked (BD-008)', () => {
+    const limits = resolveIterationLimits({ human_rounds: 1 });
+    const task = parked({ limits, iterationCounters: { human_rounds: 1 } });
+    expect(() => returnEscalatedTask(task, input, context())).toThrow(InvariantViolationError);
+  });
+
+  it('leaves the pipeline’s own return refused from needs_human: the state table did not change', () => {
+    // A provider's review comment interpreted for an escalated task still cannot un-park it.
+    expect(() => returnToStage(parked(), input, context())).toThrow(IllegalTransitionError);
   });
 });
 

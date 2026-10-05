@@ -50,6 +50,7 @@ import {
   READY_FOR_MERGE_STAGE,
   RETROSPECTIVE_STAGE,
   recordMerge,
+  returnEscalatedTask,
   returnToStage,
   stageOf,
   startLibrarianCuration,
@@ -187,6 +188,14 @@ export interface ApplyOptions {
     readonly reason: string;
     readonly spentBrief: string;
   };
+  /**
+   * A `return` decision taken by a **person** for a task parked in `needs_human` (PROGRESS backlog
+   * 483): applied through `returnEscalatedTask`, which leaves the escalation and goes back in one
+   * aggregate decision, instead of `returnToStage`, which has no edge out of `needs_human`. Only the
+   * human commands set it — a decision the pipeline interprets for an escalated task is still
+   * refused by the state table, so no signal can un-park a task a person was told to look at.
+   */
+  readonly returnFromEscalation?: true;
 }
 
 /**
@@ -274,17 +283,17 @@ const apply = async (options: ApplyOptions): Promise<AppliedDecision> => {
     }
 
     case 'return': {
-      const returned = returnToStage(
-        stored.task,
-        {
-          fromStage: decision.from,
-          toStage: decision.to,
-          loop: decision.loop,
-          reason: decision.reason,
-          escalationBrief: decision.escalationBrief,
-        },
-        context,
-      );
+      const input = {
+        fromStage: decision.from,
+        toStage: decision.to,
+        loop: decision.loop,
+        reason: decision.reason,
+        escalationBrief: decision.escalationBrief,
+      };
+      const returned =
+        options.returnFromEscalation === true
+          ? returnEscalatedTask(stored.task, input, context)
+          : returnToStage(stored.task, input, context);
       // The reason stays on the attempt that produced it, and `returned_to` names the stage it is
       // for — which is what `lastReturnReason` reads the next run's feedback by (WP-55, backlog
       // 67). Written even when `returnToStage` escalates below: the return was the stage's

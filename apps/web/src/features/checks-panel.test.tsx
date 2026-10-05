@@ -519,6 +519,17 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
     }
   });
 
+  it('does not call an escalated gate a person sent the task back from red (backlog 483)', async () => {
+    const view = await render$(
+      detailWith({ stages: [stage('ci_gate', 1, 'returned', 'escalated')], artifacts: [] }),
+    );
+    await waitFor(() => expect(view.text()).toContain('CI status'));
+    expect(view.text()).toContain('CI statusescalated, then sent back by a person');
+    expect(view.text()).not.toContain('red, sent back');
+    // Nothing settled the gate, so the tamper check was not recorded — never *clean*.
+    expect(view.text()).toContain(`Tamper check${'not recorded'}`);
+  });
+
   it('does not call a tamper return red CI, nor a provisional pass anything but green', async () => {
     const returned = await render$(
       detailWith({

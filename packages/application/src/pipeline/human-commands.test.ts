@@ -16,13 +16,14 @@
  *
  * Three states are **seeded** through the store instead, and each is seeded because the harness
  * cannot produce it rather than because seeding was easier: an iteration counter that has already
- * been spent (the loop that would produce it escalates the task first, and `needs_human` refuses a
- * return by design), and a run that is still `running` (the harness's runner completes
+ * been spent (the loop that would produce it escalates the task first, and a spent counter on a
+ * task that is *not* parked is the shape a return from `active` meets), and a run that is still
+ * `running` (the harness's runner completes
  * synchronously, so no live run exists at any moment a test can observe). The e2e tier drives both
  * against a real instance, where a run really can be held open.
  */
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
-import { IllegalTransitionError, InvariantViolationError } from '@platform/domain';
+import { IllegalTransitionError, InvariantViolationError, readDataBlocks } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 import { IntegrationError } from '../ports/integrations/common.js';
@@ -54,6 +55,7 @@ import {
   reworkStageCommand,
   StageNotCurrentError,
   StageNotInTemplateError,
+  StageNotReachedError,
   steerRunCommand,
   submitFeedbackCommand,
   TAKEN_OVER_WORKSPACE_KEEP_DAYS,
@@ -574,7 +576,7 @@ describe('rework', () => {
     const harness = await walked();
     const stored = taskOf(harness);
     // Seeded, because the loop that produces a spent counter escalates the task to `needs_human`
-    // first — and a return from `needs_human` is refused by design (it is a hand-back, WP-27).
+    // first; the rework out of an escalation is its own case (backlog 483), below.
     await harness.memory.transaction(async (scope) => {
       await harness.store.tasks.save(scope.tx, {
         ...stored,
@@ -1019,6 +1021,228 @@ describe('rework', () => {
       }),
     ).rejects.toThrow(IterationLimitReachedError);
     expect(countOf(harness, 'task.escalated')).toBe(0);
+  });
+});
+
+/**
+ * PROGRESS backlog 483 — found on the first local test (AUT-6820): a task parked in `needs_human`
+ * at `ci_gate` could not be sent back to `implementation`. `return-to-stage` and `rework` answered
+ * `illegal_transition: needs_human -> returned`, and `resume` then a return raced the stage
+ * re-escalating. The task here is parked by the real loop: a red pipeline on a `ci_fix` bound of
+ * one sends it back once and escalates it at the gate on the second red.
+ */
+describe('a return out of needs_human (backlog 483)', () => {
+  const redCi = {
+    getPipelineStatus: async () => ({
+      id: 'pipeline-red',
+      head_sha: 'b'.repeat(40),
+      status: 'failed' as const,
+      url: null,
+      jobs: [{ id: 'job-1', name: 'test:unit', stage: 'test', status: 'failed' as const }],
+      coverage_pct: null,
+      finished_at: '2026-06-01T09:30:00.000Z',
+    }),
+  };
+
+  const escalated = async (limits: Record<string, number> = {}) => {
+    const harness = harnessWith({
+      git: redCi as never,
+      settings: { config: { pipeline: { limits: { ci_fix_iterations: 1, ...limits } } } },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(taskOf(harness).task.currentStage).toBe('ci_gate');
+    return harness;
+  };
+
+  const implementationRuns = (harness: PipelineHarness) =>
+    harness.specs.filter((spec) => spec.stage === 'implementation');
+
+  it('leaves the escalation and goes back in one decision, with the person’s words, redacted', async () => {
+    const harness = await escalated();
+    const task = taskOf(harness).task.id;
+    const since = harness.events().length;
+    const runsBefore = implementationRuns(harness).length;
+    const attempt = taskOf(harness).task.stageAttempts.ci_gate;
+
+    await returnToStageCommand(harness.humanCommands, {
+      taskId: task,
+      userId: USER,
+      stage: 'implementation' as Slug,
+      reason: `no merge request was opened; open one (token ${PLANTED_SECRET})`,
+    });
+
+    // The countable effects, in the order they happened: out of the stop, back, and in.
+    const appended = harness.events().slice(since);
+    expect(appended.map((event) => event.type)).toEqual([
+      'task.resumed',
+      'task.stage.returned',
+      'task.stage.entered',
+    ]);
+    // The person, not the pipeline, on every one of them.
+    expect(appended.every((event) => event.actor.kind === 'user')).toBe(true);
+    const returned = appended[1]?.payload as {
+      from_stage: string;
+      to_stage: string;
+      reason: string;
+    };
+    expect(returned).toMatchObject({ from_stage: 'ci_gate', to_stage: 'implementation' });
+    expect(returned.reason).not.toContain(PLANTED_SECRET);
+    expect(returned.reason).toContain('no merge request was opened');
+    expect(taskOf(harness).task.iterationCounters.human_rounds).toBe(1);
+    expect(taskOf(harness).task.state).toBe('active');
+    expect(taskOf(harness).task.currentStage).toBe('implementation');
+
+    // The parked attempt ended in the escalation, not in a red pipeline a person is acting on.
+    expect(
+      harness.store.stageRows.find((row) => row.stage === 'ci_gate' && row.attempt === attempt),
+    ).toMatchObject({ state: 'returned', outcome: 'escalated', returnedTo: 'implementation' });
+
+    // The stage runs again and is handed the person's words — and no credential.
+    await harness.drain();
+    const runs = implementationRuns(harness);
+    expect(runs).toHaveLength(runsBefore + 1);
+    const [feedback] = readDataBlocks(runs.at(-1)?.userPrompt ?? '').blocks.filter(
+      (block) => block.kind === 'return_feedback',
+    );
+    expect(feedback?.body).toContain('no merge request was opened');
+    expect(feedback?.body).not.toContain(PLANTED_SECRET);
+    // CI is still red and `ci_fix` is spent, so the gate parks it again — BD-008's ending, with the
+    // counter at its limit and not past it.
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(taskOf(harness).task.iterationCounters.ci_fix).toBe(1);
+    expect(countOf(harness, 'task.escalated')).toBe(2);
+  });
+
+  it('reworks out of the escalation: agent loops reset, a new branch, the old MR closed by a duty', async () => {
+    const harness = await escalated();
+    const before = taskOf(harness);
+    expect(before.task.iterationCounters.ci_fix).toBe(1);
+
+    await reworkStageCommand(harness.humanCommands, {
+      taskId: before.task.id,
+      userId: USER,
+      stage: 'architecture' as Slug,
+      instructions: 'open the merge request from the tool, not by hand',
+    });
+
+    const after = taskOf(harness);
+    expect(after.task.state).toBe('active');
+    expect(after.task.currentStage).toBe('architecture');
+    expect(after.task.iterationCounters.ci_fix).toBe(0);
+    expect(after.task.iterationCounters.human_rounds).toBe(1);
+    expect(after.mr).toBeNull();
+    expect(after.branch).toBe('agentic/ACME-1-r2');
+    // The close's cause is the **return**, not the `task.resumed` that now precedes it.
+    // (The last one: the CI loop's own return precedes the person's.)
+    const returnedId = harness
+      .events()
+      .filter((event) => event.type === 'task.stage.returned')
+      .at(-1)?.id;
+    const wakeUps = harness.jobs.enqueued.filter(
+      (request) => (request.data as { duty?: string }).duty === 'close_superseded_mr',
+    );
+    expect(
+      wakeUps.map((request) => (request.data as { cause_event_id: string }).cause_event_id),
+    ).toEqual([returnedId]);
+  });
+
+  it('refuses what it refuses from `active`, and leaves the parked task exactly where it was', async () => {
+    const harness = await escalated({ human_rounds: 1 });
+    const task = taskOf(harness).task.id;
+    const since = harness.events().length;
+    const attempt = (stage: string) =>
+      returnToStageCommand(harness.humanCommands, {
+        taskId: task,
+        userId: USER,
+        stage: stage as Slug,
+        reason: 'go back',
+      });
+
+    // A stage the template does not run…
+    await expect(attempt('nowhere')).rejects.toThrow(StageNotInTemplateError);
+    // …one it runs that this task never reached (it stopped at the CI gate)…
+    await expect(attempt('code_review')).rejects.toThrow(StageNotReachedError);
+    // …and Ready, which no return enters (WP-79), and which this task has not reached either.
+    await expect(
+      reworkStageCommand(harness.humanCommands, {
+        taskId: task,
+        userId: USER,
+        stage: 'ready_for_merge' as Slug,
+        instructions: 'skip the gates',
+      }),
+    ).rejects.toThrow(StageNotReachedError);
+    expect(harness.events().length).toBe(since);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+
+    // One human round, spent by an accepted return; the next is refused, never re-escalated.
+    await attempt('implementation');
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    const escalations = countOf(harness, 'task.escalated');
+    await expect(attempt('implementation')).rejects.toThrow(IterationLimitReachedError);
+    expect(countOf(harness, 'task.escalated')).toBe(escalations);
+    expect(taskOf(harness).task.iterationCounters.human_rounds).toBe(1);
+  });
+
+  it('still lets retry-stage re-enter the stopped stage, spending no round', async () => {
+    // The way out of `needs_human` before backlog 483, unchanged by it.
+    const harness = await escalated();
+    await retryStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'ci_gate' as Slug,
+    });
+    expect(countOf(harness, 'task.resumed')).toBe(1);
+    expect(taskOf(harness).task.stageAttempts.ci_gate).toBe(3);
+    expect(taskOf(harness).task.iterationCounters.human_rounds ?? 0).toBe(0);
+  });
+});
+
+/** The guard {@link StageNotReachedError} adds applies to a return from `active` too (backlog 483). */
+describe('where a return may go (backlog 483)', () => {
+  it('refuses a stage the task has not reached, and one after the stage it is at', async () => {
+    const harness = await walked();
+    // `conflict_resolution` is in the template, and only the rebase gate's failure enters it.
+    await expect(
+      returnToStageCommand(harness.humanCommands, {
+        taskId: taskOf(harness).task.id,
+        userId: USER,
+        stage: 'conflict_resolution' as Slug,
+        reason: 'resolve it',
+      }),
+    ).rejects.toThrow(StageNotReachedError);
+
+    const parked = await asking();
+    const task = taskOf(parked).task.id;
+    await pauseTaskCommand(parked.humanCommands, { taskId: task, userId: USER });
+    await resumeTaskCommand(parked.humanCommands, { taskId: task, userId: USER });
+    expect(taskOf(parked).task.state).toBe('active');
+    // At refinement, `implementation` is later in the template and has never run.
+    await expect(
+      returnToStageCommand(parked.humanCommands, {
+        taskId: task,
+        userId: USER,
+        stage: 'implementation' as Slug,
+        reason: 'jump ahead',
+      }),
+    ).rejects.toThrow(StageNotReachedError);
+    expect(taskOf(parked).task.iterationCounters.human_rounds ?? 0).toBe(0);
+  });
+
+  it('still refuses a return from a pause, the one stop with no way back by return', async () => {
+    const harness = await walked();
+    const task = taskOf(harness).task.id;
+    await pauseTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
+    await expect(
+      returnToStageCommand(harness.humanCommands, {
+        taskId: task,
+        userId: USER,
+        stage: 'implementation' as Slug,
+        reason: 'from a pause',
+      }),
+    ).rejects.toThrow(IllegalTransitionError);
+    expect(taskOf(harness).task.state).toBe('paused');
   });
 });
 

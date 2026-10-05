@@ -1260,9 +1260,9 @@ const questionHandler = (options: PipelineSagaOptions): EventHandler => ({
           // backlog 163): the question is `escalated`, whose transitions are `[]`, so answering it
           // is refused — the old sentence ("answer it … and the task will carry on") promised the
           // one thing that cannot happen. The task is `needs_human` at the asking stage, which
-          // `retryStageCommand` accepts; `returnToStageCommand` does **not** (`needs_human →
-          // returned` is not an edge — measured, it was this sentence's first draft), so it is not
-          // offered. `deadlines.test.ts` performs the retry on an expired question's task.
+          // `retryStageCommand` accepts. A return was refused here until PROGRESS backlog 483 and
+          // is accepted since (`returnEscalatedTask`); it is still not offered, because the retry
+          // is the command that asks afresh. `deadlines.test.ts` performs both.
           blockerBrief:
             `${stored.task.ticket.key} was waiting for an answer to: ${question.text}\n\n` +
             'Nobody answered in time, and an expired question can no longer be answered. To go on, ' +
@@ -1409,8 +1409,8 @@ const approvalHandler = (options: PipelineSagaOptions): EventHandler => ({
       {
         reason: 'the approval expired',
         // Names only what is accepted now (WP-56 round 2, backlog 163): an `expired` approval has
-        // no transitions, so "approve or reject it" was refused, and `needs_human → returned` is not
-        // an edge either, so a return is not offered. Retrying the stage the approval interrupted
+        // no transitions, so "approve or reject it" was refused. A return is accepted since backlog
+        // 483 but is not offered: the approval is the question here. Retrying the stage the approval interrupted
         // is accepted on the `needs_human` task; for a **budget** approval it carries
         // on without asking again (`latestOfKind` finds the expired one), which the sentence says,
         // because a maintainer who retries is making the spend decision.

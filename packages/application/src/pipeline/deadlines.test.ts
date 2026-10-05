@@ -1364,8 +1364,10 @@ describe('what an escalated wait tells a person to do, and that it works (backlo
     expect(brief).not.toContain('carry on from where it stopped');
     expect(brief).toContain('can no longer be answered');
     expect(brief).toContain('retry "refinement"');
-    // A return is not offered, because the state machine refuses it on a `needs_human` task.
-    // Any wording of a return, not one phrase (WP-56 review round 2: "…or return to a stage…" passed).
+    // The brief names the retry and no return: since backlog 483 a return out of `needs_human` is
+    // accepted (the case below), but the retry is the command that asks afresh, and a brief that
+    // offered both would have to explain the difference. Any wording of a return, not one phrase
+    // (WP-56 review round 2: "…or return to a stage…" passed).
     expect(brief).not.toMatch(/\breturn\b/i);
 
     // The promise the old sentence made is refused by the aggregate…
@@ -1378,15 +1380,6 @@ describe('what an escalated wait tells a person to do, and that it works (backlo
         channel: 'ticket',
       }),
     ).rejects.toThrow(IllegalTransitionError);
-    // …and so is the return a reader might reach for, which is why the brief does not name it.
-    await expect(
-      returnToStageCommand(harness.humanCommands, {
-        taskId: taskOf(harness).task.id,
-        userId: USER,
-        stage: 'refinement' as Slug,
-        reason: 'EUR',
-      }),
-    ).rejects.toThrow(IllegalTransitionError);
     // The one the brief does name is accepted, and it asks afresh — a question that can be answered.
     await retryStageCommand(harness.humanCommands, {
       taskId: taskOf(harness).task.id,
@@ -1396,6 +1389,29 @@ describe('what an escalated wait tells a person to do, and that it works (backlo
     await harness.drain();
     expect(taskOf(harness).task.state).toBe('waiting_answers');
     expect(eventsOf(harness, 'task.question.asked')).toHaveLength(2);
+  });
+
+  it('accepts a return out of the expired question’s escalation too, with the person’s words (backlog 483)', async () => {
+    // Until backlog 483 this was refused (`needs_human → returned` is not an edge) and the case
+    // above pinned the refusal. The edge is still not in the table: the return leaves the
+    // escalation through `task.resumed` and goes back in one aggregate decision.
+    const { harness } = await askedOnFriday();
+    moveTo(harness, MONDAY_1600);
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('needs_human');
+
+    await returnToStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'refinement' as Slug,
+      reason: 'The provider is EUR; ask nothing else.',
+    });
+    expect(taskOf(harness).task.iterationCounters.human_rounds).toBe(1);
+    await harness.drain();
+    // Refinement ran again — and, scripted to ask, asked a question that can be answered.
+    expect(taskOf(harness).task.state).toBe('waiting_answers');
+    expect(eventsOf(harness, 'task.question.asked')).toHaveLength(2);
+    expect(eventsOf(harness, 'task.escalated')).toHaveLength(1);
   });
 
   it('names a retry for an expired plan approval, which is accepted and asks for the plan again', async () => {

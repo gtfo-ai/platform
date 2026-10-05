@@ -365,6 +365,79 @@ export const resumeStage = (
   };
 };
 
+/**
+ * A person sends a task parked in `needs_human` back to an earlier stage (PROGRESS backlog 483).
+ *
+ * The person handling an escalation is the one who knows which stage should run again — AUT-6820
+ * escalated at `ci_gate` because its developer stage opened no merge request, and the stage to
+ * re-run was `implementation`. Before this, `return-to-stage` and `rework` from `needs_human` were
+ * `409 illegal_transition` and the only way there was `resume` followed by a return raced against
+ * the stage re-escalating.
+ *
+ * **One operation, two existing edges, no new one.** The task leaves the escalation
+ * (`needs_human → active`, the edge `resume` takes, with the `task.resumed` every way out of a stop
+ * emits) and goes back (`active → returned`, `task.stage.returned`), in one decision — so nothing
+ * runs at the stopped stage in between and the log reads what happened: the person resumed the
+ * task *by* sending it back. The state table is unchanged on purpose. `needs_human → returned` as
+ * an edge would let **any** caller of {@link returnToStage} take it — a provider's review comment
+ * arriving for an escalated task included — where this function is the one way and only a human
+ * command calls it. `task.resumed` is load-bearing too: an ending the dependency gate deferred to
+ * the resume (`dependency-gate.ts`, WP-67) is performed on it, and a take-over ends on it.
+ *
+ * It refuses, rather than escalates, where {@link returnToStage} would escalate:
+ *  - **any state but `needs_human`** — every other state has its own way back, or none;
+ *  - **a spent loop** (BD-008): the task is already parked, and `needs_human → needs_human` is not
+ *    an edge. The command refuses first with its own typed error; this is the aggregate's guard,
+ *    so the counter can never pass its limit whoever calls it;
+ *  - **a task that was merged** — it entered `merged_gate`. A merged task never goes back to
+ *    work (`retro` has no edge to `returned`), and leaving `needs_human` through `active` would
+ *    otherwise be a side door past that rule for a task escalated during its retrospective.
+ */
+export const returnEscalatedTask = (
+  task: Task,
+  input: ReturnToStageInput,
+  context: CommandContext,
+): TaskDecision => {
+  if (task.state !== 'needs_human') {
+    throw new IllegalTransitionError('Task', task.state, 'returned (out of an escalation)');
+  }
+  if (task.stageAttempts[MERGED_GATE_STAGE] !== undefined) {
+    throw new IllegalTransitionError('Task', task.state, 'returned (the task was merged)');
+  }
+  const iteration = evaluateIteration(task.iterationCounters, input.loop, task.limits);
+  if (!iteration.allowed) {
+    throw new InvariantViolationError(
+      'task.stage.return',
+      `${input.loop} iteration limit of ${iteration.limit} reached; a task already waiting for a human is not sent back again`,
+    );
+  }
+  const resumed = withState(task, 'active');
+  const next = withState(resumed, 'returned');
+  const recorder = recorderFor(task, context);
+  recorder.emit('task.resumed', {
+    project_id: task.projectId,
+    task_id: task.id,
+    reason: `sent back to "${input.toStage}" from the escalation at "${input.fromStage}"`,
+  });
+  recorder.emit('task.stage.returned', {
+    project_id: task.projectId,
+    task_id: task.id,
+    from_stage: input.fromStage,
+    to_stage: input.toStage,
+    reason: input.reason,
+    feedback_ref: input.feedbackRef ?? null,
+    iteration: iteration.next,
+  });
+  return {
+    aggregate: {
+      ...next,
+      iterationCounters: incrementIteration(task.iterationCounters, input.loop),
+      sequence: recorder.sequence,
+    },
+    events: recorder.events,
+  };
+};
+
 // ── waits ────────────────────────────────────────────────────────────────────
 
 /**

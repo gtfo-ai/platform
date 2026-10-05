@@ -21,6 +21,7 @@ import { readDataBlocks } from '@platform/domain';
 import { FAKE_EPOCH } from '@platform/integrations';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTestClient } from '../../integration/support/postgres.js';
+import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
 import {
   ERRORS_INTEGRATION_ID,
   GIT_BINDING_TOKEN,
@@ -363,6 +364,72 @@ describe('when the merge request’s pipeline is red', () => {
     } finally {
       await client.end();
     }
+  });
+
+  /**
+   * PROGRESS backlog 483, on the real path (AUT-6820's shape): the task parked at `ci_gate` is sent
+   * back to `implementation` by a person through `POST /api/tasks/:id/return-to-stage`, the route
+   * the task page calls. Until backlog 483 it answered `409 illegal_transition`. What is asserted
+   * is the effect, not the answer: the next Developer run is given the person's words inside its
+   * `return_feedback` block, a human round is spent, one `human_actions` row is written — and,
+   * because CI is still red and `ci_fix` is spent, BD-008 parks the task again rather than looping.
+   */
+  it('lets a person send the parked task back to implementation, with a note the run is given', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'feature-ci-red-return',
+      tickets: TICKETS,
+      ciStatus: 'failed',
+    });
+    harness = pipeline;
+    await pipeline.publish([ticketMatched(pipeline, 'ACME-1', 'Story')]);
+    const parked = await pipeline.settle('needs_human', (task) => task.state === 'needs_human');
+    expect(parked.current_stage).toBe('ci_gate');
+    const runsBefore = pipeline.specs.filter((spec) => spec.stage === 'implementation').length;
+
+    const admin = new Client(pipeline.instance.baseUrl);
+    const signedIn = await admin.post('/api/auth/sign-in/email', {
+      email: BOOTSTRAP_EMAIL,
+      password: BOOTSTRAP_PASSWORD,
+    });
+    expect(signedIn.status, JSON.stringify(signedIn.body)).toBe(200);
+    const note = 'The pipeline is red on the totals test; fix the rounding, not the test.';
+    const reply = await admin.json<{ state?: string; current_stage?: string; performed?: boolean }>(
+      `/api/tasks/${parked.id}/return-to-stage`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': 'return-escalated-1' },
+        body: JSON.stringify({ stage: 'implementation', reason: note }),
+      },
+    );
+    expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+    expect(reply.body.performed).toBe(true);
+
+    const reparked = await pipeline.settle(
+      'needs_human after the person’s return',
+      (task) => task.state === 'needs_human' && task.iteration_counters.human_rounds === 1,
+    );
+    expect(reparked.current_stage).toBe('ci_gate');
+    expect(reparked.iteration_counters.ci_fix).toBe(3);
+    const implementation = pipeline.specs.filter((spec) => spec.stage === 'implementation');
+    expect(implementation).toHaveLength(runsBefore + 1);
+    const [feedback] = readDataBlocks(implementation.at(-1)?.userPrompt ?? '').blocks.filter(
+      (block) => block.kind === 'return_feedback',
+    );
+    expect(feedback?.body).toContain(note);
+
+    const events = await pipeline.events();
+    const humanEvents = events.filter((event) => event.actor.kind === 'user');
+    expect(humanEvents.map((event) => event.type)).toEqual([
+      'task.resumed',
+      'task.stage.returned',
+      'task.stage.entered',
+    ]);
+    const actions = await pipeline.query<{ action: string }>(
+      "select action from human_actions where task_id = $1 and action like 'task.%'",
+      [parked.id],
+    );
+    expect(actions.map((row) => row.action)).toEqual(['task.return_to_stage']);
   });
 });
 

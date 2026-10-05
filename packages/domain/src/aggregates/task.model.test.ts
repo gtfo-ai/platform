@@ -48,6 +48,7 @@ import {
   queueTask,
   recordMerge,
   requestApproval,
+  returnEscalatedTask,
   returnToStage,
   startRetrospective,
   steerRun,
@@ -100,6 +101,8 @@ interface TaskModel {
   limits: IterationLimits;
   returns: number;
   escalations: number;
+  /** The task entered `merged_gate` — what {@link ReturnEscalated} refuses on (backlog 483). */
+  merged: boolean;
 }
 
 interface TaskReal {
@@ -142,6 +145,7 @@ const setup = (): { model: TaskModel; real: TaskReal } => {
       limits: LIMITS,
       returns: 0,
       escalations: 0,
+      merged: false,
     },
     real: { task: created.aggregate, events: [...created.events], ids, clock },
   };
@@ -296,6 +300,54 @@ class ReturnToStage implements TaskCommand {
   }
   toString(): string {
     return `returnToStage(${this.loop})`;
+  }
+}
+
+/**
+ * A person sends a task parked in `needs_human` back (PROGRESS backlog 483), from **every** state the
+ * sequence reaches: accepted only from `needs_human`, for a task never merged, with a human round
+ * left — where it is one counted return and the task is `returned`; refused everywhere else, with
+ * nothing appended and no counter moved. It takes no edge the table lacks, so invariant 1 holds
+ * through it: the model's state is `returned`, which `active` reaches.
+ */
+class ReturnEscalated implements TaskCommand {
+  check(): boolean {
+    return true;
+  }
+  run(model: TaskModel, real: TaskReal): void {
+    const command = (): TaskDecision =>
+      returnEscalatedTask(
+        real.task,
+        {
+          fromStage: model.currentStage ?? 'ci_gate',
+          toStage: 'implementation',
+          loop: 'human_rounds',
+          reason: 'a person sent it back',
+          escalationBrief: 'a human must look at this',
+        },
+        context(real),
+      );
+    if (model.state !== 'needs_human' || model.merged) {
+      expect(command).toThrow(IllegalTransitionError);
+      return;
+    }
+    if (model.counters.human_rounds >= model.limits.human_rounds) {
+      expect(command).toThrow(InvariantViolationError);
+      return;
+    }
+    const decision = command();
+    real.task = decision.aggregate;
+    real.events.push(...decision.events);
+    expect(decision.events.map((event) => event.type)).toEqual([
+      'task.resumed',
+      'task.stage.returned',
+    ]);
+    model.state = 'returned';
+    model.counters.human_rounds += 1;
+    model.returns += 1;
+  }
+  toString(): string {
+    return 'returnEscalated()';
   }
 }
 
@@ -516,6 +568,7 @@ class Merge implements TaskCommand {
     const decision = transition(model, real, 'merged', () => recordMerge(real.task, context(real)));
     if (decision !== null) {
       model.currentStage = 'merged_gate';
+      model.merged = true;
     }
   }
   toString(): string {
@@ -609,6 +662,7 @@ const rawCommandArbitraries: fc.Arbitrary<TaskCommand>[] = [
   fc.constantFrom(...STAGES).map((stage) => new EnterStage(stage)),
   fc.constant(new CompleteStage()),
   fc.constantFrom(...ITERATION_LOOPS).map((loop) => new ReturnToStage(loop)),
+  fc.constant(new ReturnEscalated()),
   fc.boolean().map((blocking) => new AskQuestion(blocking)),
   fc.constant(new RequestApproval()),
   fc.constant(new Pause()),

@@ -24,6 +24,7 @@ import {
   RunNotLiveError,
   StageNotCurrentError,
   StageNotInTemplateError,
+  StageNotReachedError,
   SteerWindowClosedError,
   TaskBudgetNotRaisedError,
   TaskConflictExhaustedError,
@@ -529,6 +530,82 @@ describe('the steer window (technical/08: one message per five seconds per user)
   });
 });
 
+/**
+ * PROGRESS backlog 483 — AUT-6820, through the real router: a task parked in `needs_human` at
+ * `ci_gate` is sent back to `implementation` by `return-to-stage` and by `rework`. Nothing at this
+ * tier decides the state (the aggregate does, `human-commands.test.ts`), so what is held here is the
+ * route's half: it reaches the command for an escalated task, answers where the task is **after**
+ * it, writes one `human_actions` row per accepted command, and none for the refusal the command
+ * raises for a stage the task never reached.
+ */
+describe('a return out of needs_human (backlog 483)', () => {
+  /** A task at `needs_human`, which reads `active` at `implementation` once a command performed. */
+  const escalatedWorld = async (): Promise<World> => {
+    const holder: { world?: World } = {};
+    const parked = await build({
+      taskPosition: async () =>
+        (holder.world?.calls.length ?? 0) > 0
+          ? { state: 'active', currentStage: 'implementation' }
+          : { state: 'needs_human', currentStage: 'ci_gate' },
+    });
+    holder.world = parked;
+    return parked;
+  };
+
+  for (const route of [
+    {
+      name: 'return-to-stage',
+      action: 'task.return_to_stage',
+      body: { stage: 'implementation', reason: 'no merge request was opened; open one' },
+    },
+    {
+      name: 'rework',
+      action: 'task.rework',
+      body: { stage: 'implementation', instructions: 'open the merge request from the tool' },
+    },
+  ]) {
+    it(`performs ${route.name} on an escalated task and audits it once`, async () => {
+      const parked = await escalatedWorld();
+      parked.role = 'maintainer';
+      const path = `/api/tasks/${TASK}/${route.name}`;
+
+      const reply = await post(parked, path, route.body, `${route.name}-escalated-1`);
+      expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+      expect(reply.body).toMatchObject({
+        performed: true,
+        state: 'active',
+        current_stage: 'implementation',
+      });
+      expect(parked.calls.map((call) => call.name)).toEqual([route.name]);
+      expect(parked.calls[0]?.input).toMatchObject({
+        taskId: TASK,
+        userId: parked.userId,
+        stage: 'implementation',
+      });
+      expect(parked.actions).toHaveLength(1);
+      expect(parked.actions[0]).toMatchObject({
+        action: route.action,
+        taskId: TASK,
+        params: { task_id: TASK, stage: 'implementation' },
+      });
+    });
+  }
+
+  it('answers 409 stage_not_reached for a stage the escalated task never ran, and audits nothing', async () => {
+    const parked = await escalatedWorld();
+    parked.throws = new StageNotReachedError('code_review' as never, 'ci_gate' as never);
+    const reply = await post(
+      parked,
+      `/api/tasks/${TASK}/return-to-stage`,
+      { stage: 'code_review', reason: 'review it' },
+      'return-unreached-1',
+    );
+    expect(`${reply.status} ${reply.body.error?.code ?? ''}`).toBe('409 stage_not_reached');
+    expect(reply.body.error?.message).toContain('has not been through "code_review"');
+    expect(parked.actions).toEqual([]);
+  });
+});
+
 describe('what each refusal maps to', () => {
   const cases: readonly {
     readonly error: Error;
@@ -566,6 +643,12 @@ describe('what each refusal maps to', () => {
       ]),
       status: 409,
       code: 'stage_not_in_template',
+    },
+    {
+      // PROGRESS backlog 483: a return goes to a stage the task has run, at or before its own.
+      error: new StageNotReachedError('code_review' as never, 'ci_gate' as never),
+      status: 409,
+      code: 'stage_not_reached',
     },
     {
       error: new TaskConflictExhaustedError(TASK as never, 3, 'pausing the task'),

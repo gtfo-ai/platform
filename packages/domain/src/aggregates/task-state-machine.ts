@@ -34,6 +34,10 @@ import { IllegalTransitionError } from '../errors.js';
  *    would either have to move the task back to `active` (which `retro` has no edge to, by design:
  *    a merged task never goes back to work) or run outside the pipeline entirely.
  *  - `ready_for_merge → returned` is the human-MR-comment path (BD-007).
+ *  - **`needs_human → returned` is deliberately not an edge** (PROGRESS backlog 483). A person
+ *    sends an escalated task back through `returnEscalatedTask` in `task.ts`, which takes
+ *    `needs_human → active → returned` in one decision; an edge here would let any caller of
+ *    `returnToStage` — a provider signal interpreted for a parked task included — un-park it.
  *  - **`paused → ready_for_merge` and `paused → merged` were added at WP-73** (PROGRESS backlog
  *    244, Q104): *a task paused while waiting for a merge resumes waiting for it*, and a merge made
  *    on the provider while it is paused ends the pause (Q104's answer (a)) — the saga takes that

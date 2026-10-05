@@ -25,6 +25,7 @@ import {
   RunNotLiveError,
   StageNotCurrentError,
   StageNotInTemplateError,
+  StageNotReachedError,
   SteerWindowClosedError,
   StreamConflictError,
   TaskBudgetNotRaisedError,
@@ -172,6 +173,10 @@ export const commandRefusal = (error: unknown): HttpError | null => {
   }
   if (error instanceof StageNotInTemplateError) {
     return new HttpError(409, 'stage_not_in_template', error.message);
+  }
+  if (error instanceof StageNotReachedError) {
+    // PROGRESS backlog 483: a return goes to a stage the task has run, at or before its own.
+    return new HttpError(409, 'stage_not_reached', error.message);
   }
   if (error instanceof TaskConflictExhaustedError) {
     return new HttpError(409, 'task_conflict', error.message);
