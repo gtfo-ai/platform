@@ -14061,6 +14061,9 @@ container's old environment (WP-130 changed the operator guide to say recreate, 
 
 ### 454. **`runs.provider_mode` has no writer: every run row carries the column default `api`, so a `local`-mode instance's runs read as API-billed** (TODO, **minor — the run itself is planned with the configured mode (`planner.ts`'s `providerMode`), so only the record lies; but it is the field an operator reads to see whose credential paid**. **Done when** the run row is written with the spec's `providerMode` and a test asserts a `local` instance's row says `local`. Found on the first local test, 2026-10-05)
 
+
+### 455. **The task page gives no sense of progress: no spinner or live indicator on a running stage, the stage timeline lists oldest first and its entries are not clickable, and the running stage's output is not shown live on the task page** (TODO, **major — UX; the operator's first question during a run is "is anything happening?", and the answer today is a static "running" badge**. **Done when** (1) a running stage shows a live indicator and its elapsed time; (2) the timeline is newest first; (3) each timeline entry links to its run (the transcript, or the start failure of backlog 453); (4) the running stage's transcript streams on the task page, from the existing `run:<id>` SSE topic. Product owner's feedback, first local test, 2026-10-05)
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
