@@ -22,6 +22,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CLOSED_TASK_STATES,
   stageStateOf,
+  startFailureOf,
   TERMINAL_RUN_STATUSES,
   ticketTitleOf,
   UnknownStageStateError,
@@ -105,5 +106,35 @@ describe('ticketTitleOf', () => {
     expect(ticketTitleOf({ description: 'no title key' })).toBeNull();
     expect(ticketTitleOf({ title: 42 })).toBeNull();
     expect(ticketTitleOf('a string')).toBeNull();
+  });
+});
+
+/**
+ * `runs.exit_detail` → `RunRecord.start_failure` (PROGRESS backlog 453), every branch: the column
+ * null, a detail of another kind, a start failure this release reads, and one it cannot — which is
+ * refused by name rather than published as `null`, because `null` says the run started. The column
+ * and the record against PostgreSQL are `read-api.integration.test.ts`'s.
+ */
+describe('the start failure a run record publishes', () => {
+  const ID = '00000000-0000-4000-8000-000000000453';
+  const failure = {
+    kind: 'not_started',
+    diagnosis: 'RunStartError: workspace_failed',
+    detail: "mkdir: can't create directory '/ctl/run': Permission denied",
+    truncated: false,
+    attempt: 1,
+    retryable: false,
+  };
+
+  it('publishes null for a run that started and for a detail of another kind', () => {
+    expect(startFailureOf({ id: ID, exitDetail: null })).toBeNull();
+    expect(startFailureOf({ id: ID, exitDetail: { kind: 'other' } })).toBeNull();
+  });
+
+  it('publishes a start failure it reads, and refuses one it cannot', () => {
+    expect(startFailureOf({ id: ID, exitDetail: failure })).toEqual(failure);
+    expect(() => startFailureOf({ id: ID, exitDetail: { ...failure, unexpected: true } })).toThrow(
+      `run ${ID} cannot be returned`,
+    );
   });
 });

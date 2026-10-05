@@ -219,7 +219,9 @@ const runColumns = {
  * failure. A `not_started` detail this release cannot read is **refused** by name rather than
  * published as `null`, which would say the run started.
  */
-const startFailureOf = (row: RunProjectionRow): RunStartFailure | null => {
+export const startFailureOf = (
+  row: Pick<RunProjectionRow, 'id' | 'exitDetail'>,
+): RunStartFailure | null => {
   if (row.exitDetail === null || row.exitDetail.kind !== 'not_started') {
     return null;
   }
