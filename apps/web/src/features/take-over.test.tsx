@@ -66,6 +66,7 @@ const run = (id: string, startedAt: string): RunRecord => ({
   wall_ms: 1_000,
   redaction_count: 0,
   settings_hash: null,
+  start_failure: null,
 });
 
 const TAKEN_OVER: TakenOver = {

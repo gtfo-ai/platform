@@ -31,6 +31,7 @@ import {
   questionStatusSchema,
   runCostSchema,
   runModeSchema,
+  runStartFailureSchema,
   runStatusSchema,
   runTerminalReasonSchema,
   shaSchema,
@@ -797,6 +798,13 @@ export const runRecordSchema = z.strictObject({
    * `transcript.read` because it carries text an operator typed.
    */
   settings_hash: sha256HexSchema.nullable(),
+  /**
+   * `runs.exit_detail` when the run **never started** (PROGRESS backlog 453): the platform's
+   * diagnosis and the launcher's redacted, bounded reason — the panel the run page shows instead
+   * of an empty transcript. `null` for every run that started, and for a run that failed to start
+   * before backlog 453 gave the column a writer. `detail` inside it is untrusted text (BD-022).
+   */
+  start_failure: runStartFailureSchema.nullable(),
 });
 
 /** Precedence chain for the effective configuration (technical/12). */

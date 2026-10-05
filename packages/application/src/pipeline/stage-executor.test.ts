@@ -6,13 +6,17 @@
  * could not read, a run that produced no artifact, and a job that arrives after the task has moved.
  */
 import type { DomainEvent, Id, IsoDateTime, Slug } from '@platform/contracts';
-import { domainEventSchemasByType, MAX_CONTEXT_BUDGET_TOKENS } from '@platform/contracts';
+import {
+  domainEventSchemasByType,
+  MAX_CONTEXT_BUDGET_TOKENS,
+  RUN_START_FAILURE_DETAIL_MAX_CHARS,
+} from '@platform/contracts';
 import { materialiseAutonomy, resolveIterationLimits } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { NO_HOLD } from '../cost/pending.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { describeStartFailure, RunStartError } from '../ports/runner.js';
-import { WorkspaceError } from '../ports/workspace.js';
+import { WORKSPACE_ERROR_OUTPUT_MAX_CHARS, WorkspaceError } from '../ports/workspace.js';
 import { askingRefinedSpec, PROCEEDING_REFINED_SPEC } from '../testing/artifact-fixtures.js';
 import {
   createPipelineHarness,
@@ -831,8 +835,11 @@ describe('a run refused by its workspace names the kind and the reason (WP-127)'
       ),
     });
 
+  // Backlog 453: the run's redactor is armed with the planted value, because the workspace's
+  // message now reaches `start_failure.detail` — through that redactor — and nothing else.
   const harnessRefusedWith = (error: Error): PipelineHarness =>
     harnessWith({
+      commandSecrets: [{ name: 'PLANTED_TOKEN', value: PLANTED }],
       runs: {
         refinement: { status: 'completed', terminalReason: 'success', throwsOnStart: error },
       },
@@ -862,7 +869,15 @@ describe('a run refused by its workspace names the kind and the reason (WP-127)'
     const serialised = JSON.stringify(harness.events());
     expect(serialised).toContain('checkout_commit_missing');
     expect(serialised).not.toContain(PLANTED);
-    expect(serialised).not.toContain('must start from');
+    // The closed-vocabulary fields stay closed: the sentence is only in `start_failure.detail`
+    // (backlog 453) and the brief's quote of it, never in `error` or the escalation's reason.
+    const failed = harness.events().find((entry) => entry.type === 'run.failed') as
+      | Extract<DomainEvent, { type: 'run.failed' }>
+      | undefined;
+    expect(failed?.payload.error).not.toContain('must start from');
+    expect(escalationOf(harness)?.payload.reason).not.toContain('must start from');
+    expect(failed?.payload.start_failure?.detail).toContain('must start from');
+    expect(failed?.payload.start_failure?.detail).toContain('[REDACTED');
   });
 
   /**
@@ -894,6 +909,155 @@ describe('a run refused by its workspace names the kind and the reason (WP-127)'
     );
     expect(describeStartFailure(new Error(PLANTED))).toBe('Error');
     expect(describeStartFailure(PLANTED)).toBe('unknown error');
+  });
+});
+
+/**
+ * **A run that never started says why** — PROGRESS backlog 453.
+ *
+ * Until it, a start failure recorded only a code: `runs.exit_detail` stayed empty, `run.failed`
+ * said `RunStartError: workspace_failed`, and the brief sent the operator to a transcript that does
+ * not exist. The launcher's words — a helper's redacted output tail — are now recorded beside the
+ * diagnosis in all three places, through the run's redactor and bounded, and the brief says the run
+ * did not start.
+ */
+describe('a run that never started records the launcher’s reason (backlog 453)', () => {
+  const SECRET = 'FAKE-PLANTED-secret-453-0123456789';
+  const helperFailure = (output: string) =>
+    new RunStartError('the run workspace could not be provisioned: WorkspaceError: helper', {
+      retryable: false,
+      cause: new WorkspaceError('workspace_failed', 'helper prep-run exited 1', {
+        detail: output,
+        output,
+      }),
+    });
+  const harnessFailingWith = (error: Error): PipelineHarness =>
+    harnessWith({
+      commandSecrets: [{ name: 'PLANTED_TOKEN', value: SECRET }],
+      runs: {
+        refinement: { status: 'completed', terminalReason: 'success', throwsOnStart: error },
+      },
+    });
+  const failedOf = (harness: PipelineHarness) =>
+    harness.events().find((entry) => entry.type === 'run.failed') as
+      | Extract<DomainEvent, { type: 'run.failed' }>
+      | undefined;
+
+  it('writes the reason to the run row and to run.failed, and the brief says the run did not start', async () => {
+    const output = `mkdir: can't create directory '/ctl/run': Permission denied (token ${SECRET})`;
+    const harness = harnessFailingWith(helperFailure(output));
+    await harness.publish([ticketMatched()]);
+
+    const failed = failedOf(harness);
+    const expected = {
+      kind: 'not_started',
+      diagnosis: 'RunStartError: workspace_failed',
+      detail: `helper prep-run exited 1\nmkdir: can't create directory '/ctl/run': Permission denied (token [REDACTED:integration:PLANTED_TOKEN])`,
+      truncated: false,
+      attempt: 1,
+      retryable: false,
+    };
+    expect(failed?.payload.start_failure).toEqual(expected);
+    // The run row says the same thing (`runs.exit_detail`), and the event still parses.
+    expect(harness.store.startFailureOf(failed?.payload.run_id as Id)).toEqual(expected);
+    expect(domainEventSchemasByType['run.failed'].safeParse(failed).success).toBe(true);
+
+    const brief = escalationOf(harness)?.payload.blocker_brief ?? '';
+    expect(brief).toContain('did not start');
+    expect(brief).toContain('Permission denied');
+    expect(brief).toContain('There is no transcript');
+    expect(brief).not.toContain("Open the run's transcript");
+    expect(JSON.stringify(harness.events())).not.toContain(SECRET);
+  });
+
+  it('drops the partial token a cut leaves, so half a secret is never stored, and announces the cut', async () => {
+    // The secret straddles the start of the kept tail: the cut keeps all of it but its first five
+    // characters, which is a string no redactor recognises — so the partial token is dropped.
+    const kept = WORKSPACE_ERROR_OUTPUT_MAX_CHARS;
+    const filler = ` ${'word '.repeat(kept)}`.slice(0, kept - SECRET.length + 5);
+    const output = `${'line of output\n'.repeat(300)}token ${SECRET}${filler}`;
+    const harness = harnessFailingWith(helperFailure(output));
+    await harness.publish([ticketMatched()]);
+
+    const failure = failedOf(harness)?.payload.start_failure;
+    expect(failure?.truncated).toBe(true);
+    expect(failure?.detail).toContain('word word');
+    expect(failure?.detail?.length).toBeLessThanOrEqual(RUN_START_FAILURE_DETAIL_MAX_CHARS);
+    expect(JSON.stringify(harness.events())).not.toContain(SECRET.slice(-12));
+    expect(escalationOf(harness)?.payload.blocker_brief).toContain('(the end of it)');
+  });
+
+  it('redacts over all the output it is given before its own cut', async () => {
+    // A placeholder is longer than the value it replaces, so the runner cuts again after its
+    // redactor — and a secret just inside the launcher's bound is replaced whole, never split.
+    // One character under the launcher's bound; the placeholder (two characters longer than the
+    // value) takes it over, so the runner cuts — after it redacted.
+    const output = `${'word '.repeat(393)}${SECRET}`;
+    expect(output.length).toBe(WORKSPACE_ERROR_OUTPUT_MAX_CHARS - 1);
+    const harness = harnessFailingWith(helperFailure(output));
+    await harness.publish([ticketMatched()]);
+
+    const failure = failedOf(harness)?.payload.start_failure;
+    expect(failure?.detail?.endsWith('[REDACTED:integration:PLANTED_TOKEN]')).toBe(true);
+    expect(failure?.truncated).toBe(true);
+    expect(JSON.stringify(harness.events())).not.toContain(SECRET.slice(-12));
+  });
+
+  it('records the diagnosis alone for a failure that carried no workspace words', async () => {
+    const harness = harnessFailingWith(
+      new RunStartError('the launcher refused this spec — FAKE-PLANTED-not-a-workspace', {
+        retryable: false,
+      }),
+    );
+    await harness.publish([ticketMatched()]);
+
+    expect(failedOf(harness)?.payload.start_failure).toEqual({
+      kind: 'not_started',
+      diagnosis: 'RunStartError',
+      detail: null,
+      truncated: false,
+      attempt: 1,
+      retryable: false,
+    });
+    expect(escalationOf(harness)?.payload.blocker_brief).toContain(
+      'The launcher gave no reason of its own',
+    );
+    expect(JSON.stringify(harness.events())).not.toContain('FAKE-PLANTED-not-a-workspace');
+  });
+
+  it('records each retried attempt as retryable, and only the last escalates', async () => {
+    const harness = harnessWith({
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          throwsOnStart: new RunStartError('transport', {
+            retryable: true,
+            cause: new WorkspaceError('engine_unavailable', 'Docker engine request timed out', {
+              detail: 'POST /containers/create',
+            }),
+          }),
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    for (let round = 1; round < MAX_RUN_START_ATTEMPTS; round += 1) {
+      harness.clock.advance(RUN_START_RETRY_MS);
+      await harness.drain();
+    }
+    const failures = harness
+      .events()
+      .filter((entry) => entry.type === 'run.failed')
+      .map(
+        (entry) => (entry as Extract<DomainEvent, { type: 'run.failed' }>).payload.start_failure,
+      );
+    expect(failures.map((failure) => [failure?.attempt, failure?.retryable])).toEqual([
+      [1, true],
+      [2, true],
+      [3, false],
+    ]);
+    // A message is carried; the log-only `detail` is not.
+    expect(failures[0]?.detail).toBe('Docker engine request timed out');
   });
 });
 

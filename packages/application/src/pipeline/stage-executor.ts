@@ -49,6 +49,7 @@ import type {
   JsonValue,
   MergeRequestRef,
   RunCost,
+  RunStartFailure,
   Slug,
   TokenUsage,
 } from '@platform/contracts';
@@ -108,6 +109,7 @@ import {
   isRetryableStartFailure,
   type RunOutcome,
   type RunSpec,
+  runStartFailureOf,
 } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
@@ -1268,6 +1270,14 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
           // a commit through `shaSchema` (WP-127, backlog 351, `describeStartFailure`). The message
           // is in the log line above.
           startFailure: describeStartFailure(error),
+          // Backlog 453: the workspace's own words, beside that sentence and never in it — through
+          // this run's redactor, over the whole text before the cut, then bounded. They go to
+          // `runs.exit_detail`, `run.failed.start_failure`, the run page and the brief.
+          notStarted: runStartFailureOf(error, {
+            redactor: prepared.redactor,
+            attempt: startAttempts,
+            retryable,
+          }),
           startAttempts,
           retryable,
         }),
@@ -2033,6 +2043,8 @@ const recordUnstarted = async (
     readonly run: Run;
     readonly options: StageExecutorOptions;
     readonly startFailure: string;
+    /** What `runs.exit_detail` and `run.failed.start_failure` record (backlog 453). */
+    readonly notStarted: RunStartFailure;
     readonly startAttempts: number;
     /** `true` leaves the task where it is; the caller re-enqueues the stage. */
     readonly retryable: boolean;
@@ -2055,6 +2067,7 @@ const recordUnstarted = async (
       error: reason,
       usage: NO_USAGE,
       cost: NO_COST,
+      startFailure: input.notStarted,
     },
     context,
   );
@@ -2067,6 +2080,7 @@ const recordUnstarted = async (
     usage: NO_USAGE,
     cost: NO_COST,
     wallMs: 0,
+    startFailure: input.notStarted,
   });
   if (!owned) {
     // A human cancelled the run between its insert and this failure (WP-15i), or the lease sweep
@@ -2082,7 +2096,13 @@ const recordUnstarted = async (
     await scope.events.append(failed.events);
     return { kind: 'retry', runId: run.id, reason, startAttempts: input.startAttempts };
   }
-  const escalated = escalate(stored, context, job.stage, reason);
+  const escalated = escalate(
+    stored,
+    context,
+    job.stage,
+    reason,
+    notStartedBrief(stored.task.ticket.key, job.stage, reason, input.notStarted),
+  );
   await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
   await options.store.tasks.recordStageExited(scope.tx, {
     taskId: job.taskId,
@@ -2095,6 +2115,40 @@ const recordUnstarted = async (
   });
   await scope.events.append([...failed.events, ...escalated.events]);
   return { kind: 'failed', runId: run.id, reason };
+};
+
+/** How much of the launcher's words the brief quotes; the run page has all of them (backlog 453). */
+export const NOT_STARTED_BRIEF_QUOTE_CHARS = 600;
+
+/**
+ * The blocker brief of a run that **never started** (PROGRESS backlog 453).
+ *
+ * The default brief sends the reader to *"the run's transcript"*, and a run that never started has
+ * none — so this one says the run did not start, gives the platform's diagnosis, and quotes the tail
+ * of the launcher's own words, bounded to {@link NOT_STARTED_BRIEF_QUOTE_CHARS}. The quote is marked
+ * as the launcher's: the brief also reaches the workpad and chat, and the text is untrusted
+ * (BD-022) — redacted twice already, bounded here, and rendered as text by every reader that shows
+ * it. With no words to quote the brief says so rather than inventing a reason.
+ */
+export const notStartedBrief = (
+  ticketKey: string,
+  stage: Slug,
+  reason: string,
+  notStarted: RunStartFailure,
+): string => {
+  const detail = notStarted.detail;
+  const cut =
+    detail !== null && (detail.length > NOT_STARTED_BRIEF_QUOTE_CHARS || notStarted.truncated);
+  const quote =
+    detail === null
+      ? "The launcher gave no reason of its own; the runner's log has the error under this run's id."
+      : `The launcher said${cut ? ' (the end of it)' : ''}: «${detail.slice(-NOT_STARTED_BRIEF_QUOTE_CHARS)}»`;
+  return (
+    `The "${stage}" stage of ${ticketKey} did not start: ${reason}. ${quote} ` +
+    'There is no transcript, because no agent ran; the run page shows the whole reason. ' +
+    'Nothing is retried automatically. Fix what stopped the workspace from starting, then hand the ' +
+    'task back at this stage.'
+  );
 };
 
 /** Nothing was spent, because nothing ran. Written out so no caller invents a different zero. */

@@ -1522,7 +1522,8 @@ export const createPostgresPipelineStore = (
             set status = $2, terminal_reason = $3, session_id = $4, num_turns = $5,
                 input_tokens = $6, output_tokens = $7, cache_write_5m_tokens = $8,
                 cache_write_1h_tokens = $9, cache_read_tokens = $10, usd_reported = $11,
-                usd_estimated = $12, wall_ms = $13, ended_at = now(), figure_is_floor = $15
+                usd_estimated = $12, wall_ms = $13, ended_at = now(), figure_is_floor = $15,
+                exit_detail = $16::jsonb
           where id = $1 and status = any($14::run_status[])`,
         [
           outcome.runId,
@@ -1541,6 +1542,8 @@ export const createPostgresPipelineStore = (
           [...ACTIVE_RUN_STATUSES],
           // WP-131 pre-review round (backlog 407): the cost above is a floor, not a figure.
           outcome.costIsFloor === true,
+          // Backlog 453: the column's first writer — why a run never started; null otherwise.
+          outcome.startFailure === undefined ? null : JSON.stringify(outcome.startFailure),
         ],
       );
       if (result.rowCount !== 0) {

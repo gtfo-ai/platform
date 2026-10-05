@@ -279,6 +279,7 @@ describe('records', () => {
       wall_ms: 60_000,
       redaction_count: 2,
       settings_hash: null,
+      start_failure: null,
     };
     expect(runRecordSchema.parse(run)).toEqual(run);
     expect(runRecordSchema.safeParse({ ...run, attempt: 0 }).success).toBe(false);

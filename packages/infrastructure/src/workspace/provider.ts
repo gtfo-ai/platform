@@ -856,8 +856,11 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
           { helper: run.name, exit_code: exitCode, detail: output.slice(-2000) },
           'workspace helper container failed',
         );
+        // `output` as well (backlog 453): the same redacted tail, and the one field the runner may
+        // publish — on the run page and in the brief, as untrusted text.
         throw new WorkspaceError('workspace_failed', `helper ${run.name} exited ${exitCode}`, {
           detail: output.slice(-2000),
+          output,
         });
       }
     } finally {
@@ -1315,8 +1318,9 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         // task escalates at once instead of spending its start retries. What reaches the task is
         // the kind and the reason code below, with the commit through `shaSchema` (WP-127, backlog
         // 351): `the run could not be started (RunStartError: invalid_spec,
-        // checkout_commit_missing, commit <sha>)`. This sentence reaches the launcher's and the
-        // runner's logs, never the task — it is a message, and the escalation carries none.
+        // checkout_commit_missing, commit <sha>)`. This sentence reaches the logs and, since backlog
+        // 453, the run's `start_failure.detail` — redacted again by the run's redactor and shown
+        // as untrusted text — beside that closed-vocabulary diagnosis, never in place of it.
         throw new WorkspaceError(
           'invalid_spec',
           `the commit ${repo.checkoutCommit ?? ''} this run must start from is not in the project's mirror after a fetch, so the run is refused rather than started on another tree (Q82 (a))`,

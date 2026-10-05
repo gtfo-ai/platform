@@ -48,6 +48,7 @@ import type {
 import {
   existingProtectedPathsSchema,
   MAX_LABELLED_RUNS,
+  WORKSPACE_ERROR_OUTPUT_MAX_CHARS,
   workspaceErrorReasonSchema,
   workspaceGitSshSchema,
   workspaceSpecSchema,
@@ -480,6 +481,15 @@ export const errorResponseSchema = z.strictObject({
      */
     reason: workspaceErrorReasonSchema.nullable().optional(),
     commit: shaSchema.nullable().optional(),
+    /**
+     * The failing step's own words — a helper container's log tail, redacted by the launcher against
+     * the secrets that helper was given (`WorkspaceError.output`, PROGRESS backlog 453). The one
+     * field of this body the runner publishes beside its diagnosis, as **untrusted** text, after its
+     * own redactor; `detail` stays a log field. Optional, for a launcher one build behind.
+     */
+    output: z.string().max(WORKSPACE_ERROR_OUTPUT_MAX_CHARS).nullable().optional(),
+    /** `true` when `output` is the tail of something longer: the launcher's cut, announced. */
+    outputTruncated: z.boolean().optional(),
   }),
 });
 export type ErrorResponse = z.infer<typeof errorResponseSchema>;

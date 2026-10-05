@@ -26,6 +26,7 @@ import type {
   EstimateBasis,
   Id,
   IsoDateTime,
+  RunStartFailure,
   Size,
   Slug,
   TaskStageState,
@@ -180,6 +181,8 @@ export interface MemoryPipelineStore extends PipelineStore {
   readonly supersededRecovery: SupersededMergeRequestRecoveryStore;
   /** Every `superseded_merge_requests` row, for a test that asserts what the duty settled. */
   supersededRows(): readonly MemorySupersededRow[];
+  /** `runs.exit_detail` as `finish` wrote it — why a run never started (backlog 453). */
+  startFailureOf(runId: Id): RunStartFailure | null;
   /** The lease a run currently holds, for a test that asserts the heartbeat wrote one (WP-47). */
   leaseOf(runId: Id): { readonly owner: string; readonly expiresAt: IsoDateTime } | null;
   /** Every `run_commands` row, for a test that asserts what the holder stamped (WP-85). */
@@ -270,6 +273,8 @@ export const createMemoryPipelineStore = (
   const budgetCaps = new Map<Id, number>();
   /** `runs.reserve_usd` (WP-131): write-only on `NewRun`, so kept beside the row, as the SQL keeps it. */
   const reserves = new Map<Id, number | null>();
+  /** `runs.exit_detail`, write-only on the port; read by {@link MemoryPipelineStore.startFailureOf}. */
+  const startFailures = new Map<Id, RunStartFailure>();
   /** `runs.figure_is_floor` (WP-131 pre-review round, backlog 407): the runs whose cost is a floor. */
   const floors = new Set<Id>();
   const questions = new Map<Id, Question>();
@@ -1087,6 +1092,9 @@ export const createMemoryPipelineStore = (
       if (outcome.costIsFloor === true) {
         floors.add(outcome.runId);
       }
+      if (outcome.startFailure !== undefined) {
+        startFailures.set(outcome.runId, clone(outcome.startFailure));
+      }
       // The winner closes the run's pending commands, as the SQL adapter does in the same
       // transaction (WP-85).
       for (const row of runCommandRows.values()) {
@@ -1688,6 +1696,10 @@ export const createMemoryPipelineStore = (
       );
     },
     chargedRuns,
+    startFailureOf: (runId) => {
+      const failure = startFailures.get(runId);
+      return failure === undefined ? null : clone(failure);
+    },
     leaseOf: (runId) => {
       const held = leases.get(runId);
       return held === undefined ? null : { ...held };

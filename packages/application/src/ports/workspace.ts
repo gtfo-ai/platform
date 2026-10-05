@@ -666,6 +666,26 @@ export const WORKSPACE_ERROR_REASONS = [
 export type WorkspaceErrorReason = (typeof WORKSPACE_ERROR_REASONS)[number];
 export const workspaceErrorReasonSchema = z.enum(WORKSPACE_ERROR_REASONS);
 
+/** The bound on {@link WorkspaceError.output}: the tail a helper's failure keeps (backlog 453). */
+export const WORKSPACE_ERROR_OUTPUT_MAX_CHARS = 2_000;
+
+/**
+ * The last `max` characters of `text`, trimmed — and, when that cut anything, without the partial
+ * token the cut left at the front (backlog 453). Half a credential at the head of a tail is a string
+ * no later redactor recognises, so it is dropped rather than carried. `cut` says whether anything
+ * was removed.
+ */
+export const boundOutputTail = (
+  text: string,
+  max: number = WORKSPACE_ERROR_OUTPUT_MAX_CHARS,
+): { readonly text: string; readonly cut: boolean } => {
+  const trimmed = text.trim();
+  if (trimmed.length <= max) {
+    return { text: trimmed, cut: false };
+  }
+  return { text: trimmed.slice(-max).replace(/^\S*\s*/, ''), cut: true };
+};
+
 export class WorkspaceError extends Error {
   readonly code: WorkspaceErrorCode;
   readonly runId: string | null;
@@ -679,6 +699,21 @@ export class WorkspaceError extends Error {
    * the reason into stored state.
    */
   readonly commit: string | null;
+  /**
+   * What the failing step **itself said** — a helper container's log tail — or `null` (PROGRESS
+   * backlog 453). Unlike {@link detail}, which is for a log line, this is meant for the product: the
+   * run page's "this run did not start" panel and the blocker brief. So it is set only where the
+   * text was **redacted against the secrets that step was given** (`#helper` does both), and it is
+   * bounded here to its last {@link WORKSPACE_ERROR_OUTPUT_MAX_CHARS} characters whatever the
+   * caller passed. It stays **untrusted** (BD-022): a clone's stderr quotes text the repository
+   * controls.
+   *
+   * A cut here also drops the **partial token** it leaves at the start: the next reader runs its
+   * own redactor over this text, and half a credential is a string no redactor recognises.
+   */
+  readonly output: string | null;
+  /** `true` when {@link output} is a tail of something longer — the platform's cut, announced. */
+  readonly outputTruncated: boolean;
 
   constructor(
     code: WorkspaceErrorCode,
@@ -689,6 +724,9 @@ export class WorkspaceError extends Error {
       readonly cause?: unknown;
       readonly reason?: WorkspaceErrorReason | null;
       readonly commit?: string | null;
+      readonly output?: string | null;
+      /** The caller already cut {@link output} (a launcher one hop back, across the wire). */
+      readonly outputTruncated?: boolean;
     } = {},
   ) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
@@ -698,6 +736,10 @@ export class WorkspaceError extends Error {
     this.detail = options.detail ?? null;
     this.reason = workspaceErrorReasonSchema.safeParse(options.reason).data ?? null;
     this.commit = shaSchema.safeParse(options.commit).data ?? null;
+    const bounded = boundOutputTail(options.output ?? '');
+    this.output = bounded.text === '' ? null : bounded.text;
+    this.outputTruncated =
+      this.output !== null && (bounded.cut || options.outputTruncated === true);
   }
 }
 

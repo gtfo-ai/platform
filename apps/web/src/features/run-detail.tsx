@@ -50,6 +50,7 @@ import {
 import { CodeText, DownloadLink, UntrustedText } from '../ui/untrusted.js';
 import { FeedbackForm } from './feedback.js';
 import { RunCommandLog } from './run-command-log.js';
+import { RunNotStartedPanel } from './run-not-started.js';
 import { RunSettingsLine, RunSettingsPanel } from './run-settings.js';
 import { TakeOverPanel } from './take-over.js';
 
@@ -306,7 +307,13 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
         </p>
       ) : null}
 
-      {tab === 'transcript' ? (
+      {/* Backlog 453: a run whose workspace never started has no transcript to show, and an empty
+          one read as "nothing happened yet". The reason is shown in its place. */}
+      {tab === 'transcript' && record.start_failure !== null ? (
+        <RunNotStartedPanel failure={record.start_failure} />
+      ) : null}
+
+      {tab === 'transcript' && record.start_failure === null ? (
         <div className="flex min-h-0 flex-col gap-3">
           {messages.isError ? (
             <ErrorNotice

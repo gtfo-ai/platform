@@ -311,6 +311,30 @@ describe('create (TD-028 decision 4: idempotent on the run id)', () => {
     }
   });
 
+  it('carries a failed helper’s redacted output tail to the runner (backlog 453)', async () => {
+    const output = "mkdir: can't create directory '/ctl/run': Permission denied";
+    mirrorFails = true;
+    mirrorFailure = new WorkspaceError('workspace_failed', 'helper mirror-run exited 1', {
+      detail: output,
+      output: `${'line '.repeat(500)}${output}`,
+    });
+    try {
+      const failure = await clientFor()
+        .createRun({ spec: specFor(randomUUID()), credential: credentialRequest })
+        .then(() => null)
+        .catch((error: unknown) => error as WorkspaceError);
+      expect(failure).toMatchObject({
+        code: 'workspace_failed',
+        message: 'helper mirror-run exited 1',
+        outputTruncated: true,
+      });
+      expect(failure?.output?.endsWith(output)).toBe(true);
+    } finally {
+      mirrorFails = false;
+      mirrorFailure = null;
+    }
+  });
+
   it('refuses a spec that does not validate, by name and as a terminal failure', async () => {
     const response = await fetch(`http://127.0.0.1:${String(plane.port)}/v1/runs`, {
       method: 'POST',

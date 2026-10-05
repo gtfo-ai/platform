@@ -60,6 +60,7 @@ const RUNNING: RunRecord = {
   wall_ms: 0,
   redaction_count: 0,
   settings_hash: null,
+  start_failure: null,
 };
 
 const json = (body: unknown, status = 200): Response =>

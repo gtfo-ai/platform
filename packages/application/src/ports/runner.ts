@@ -22,6 +22,7 @@ import type {
   ModelUsage,
   RunCost,
   RunMode,
+  RunStartFailure,
   RunStatus,
   RunTerminalReason,
   TokenUsage,
@@ -36,6 +37,9 @@ import {
   nonEmptyStringSchema,
   pathPatternSchema,
   providerModeSchema,
+  RUN_START_FAILURE_DETAIL_MAX_CHARS,
+  RUN_START_FAILURE_MESSAGE_MAX_CHARS,
+  RUN_START_FAILURE_OUTPUT_MAX_CHARS,
   runModeSchema,
   shaSchema,
   stageIdSchema,
@@ -44,6 +48,7 @@ import {
 import * as z from 'zod';
 import type { SecretRedactor } from './integrations/audit.js';
 import {
+  boundOutputTail,
   existingProtectedPathsSchema,
   WorkspaceError,
   type WorkspaceErrorCode,
@@ -618,12 +623,14 @@ export interface ClaudeRunner {
  * that is not a `RunStartError` — a programming error, a bad spec, a refusal — is terminal, which
  * is the fail-closed default: a new failure shape escalates to a human rather than spinning.
  *
- * **The message never reaches stored state.** A runner's error may quote a provider, a URL or a
- * credential and the executor holds no redactor, so only the class name, the retry count and the
- * {@link RunStartDiagnosis} are written (`events.payload`, the blocker brief); the message goes to
- * the log line beside them. The diagnosis is the part a human can act on (WP-127, PROGRESS backlog
- * 351): the workspace's error kind and its platform-chosen reason code, both closed vocabularies,
- * and a commit only through `shaSchema`.
+ * **This error's own message never reaches stored state.** A runner's error may quote a provider,
+ * a URL or a credential, so `run.failed.error` carries only the class name, the retry count and the
+ * {@link RunStartDiagnosis}; the message goes to the log line beside them. The diagnosis is the part
+ * a human can act on (WP-127, PROGRESS backlog 351): the workspace's error kind and its
+ * platform-chosen reason code, both closed vocabularies, and a commit only through `shaSchema`.
+ * Since backlog 453 the **workspace's** words — the launcher's sentence and the failing helper's
+ * output tail — are stored too, beside the diagnosis and never in it: through the run's own
+ * redactor, bounded, as untrusted text ({@link runStartFailureOf}).
  */
 export class RunStartError extends Error {
   override readonly name = 'RunStartError';
@@ -707,6 +714,82 @@ export const describeStartFailure = (error: unknown): string => {
     parts.push(`commit ${commit}`);
   }
   return parts.length === 0 ? error.name : `${error.name}: ${parts.join(', ')}`;
+};
+
+/**
+ * The workspace failure under a start failure, or `null` — the one source of words a
+ * {@link RunStartFailure} may carry (backlog 453).
+ */
+const workspaceErrorOf = (error: unknown): WorkspaceError | null => {
+  if (error instanceof WorkspaceError) {
+    return error;
+  }
+  if (error instanceof RunStartError && error.cause instanceof WorkspaceError) {
+    return error.cause;
+  }
+  return null;
+};
+
+/**
+ * What the run row and `run.failed` record about a run that **never started** (PROGRESS backlog
+ * 453): {@link describeStartFailure}'s closed-vocabulary sentence, and the launcher's own words.
+ *
+ * ## Which words, and why these
+ *
+ * Only a **workspace** failure contributes any: its message (the launcher's sentence — *"Docker
+ * engine request timed out"*, *"helper prep-… exited 1"*) and its `output` (the failing helper's log
+ * tail, already redacted by the launcher against the secrets that helper held). A runner that
+ * refused the spec, or a process with no launcher, contributes nothing but the diagnosis: their
+ * messages were never written to be published. Until backlog 453 a workspace failure contributed
+ * nothing either — the class name went to the task and the words went to the runner's log only,
+ * which is where the first local test's three failed discovery attempts had to be diagnosed from.
+ *
+ * ## Why it is safe to store now
+ *
+ * The old rule was *"the executor holds no redactor"*. It holds one: the run's own TD-012 redactor
+ * (`composeSecretRedactors` over the pattern redactor and the run's injected secrets), so the text
+ * is redacted **here, over all of what arrived, before** it is cut again — a bound applied first
+ * could split a secret and hide it from the redactor. The launcher's own cut came earlier (it
+ * redacted against the helper's secrets first) and dropped the partial token it left at the front
+ * (`boundOutputTail`), so what reaches this redactor is whole tokens. It is then bounded (the
+ * message's head, the output's tail) and every cut, the launcher's included, is announced in
+ * `truncated`, never inside the text. It stays untrusted (BD-022): a clone's stderr quotes text
+ * the repository controls, and every reader renders it as text.
+ */
+export const runStartFailureOf = (
+  error: unknown,
+  input: {
+    readonly redactor: SecretRedactor;
+    readonly attempt: number;
+    readonly retryable: boolean;
+  },
+): RunStartFailure => {
+  const diagnosis = describeStartFailure(error).slice(0, RUN_START_FAILURE_MESSAGE_MAX_CHARS);
+  const workspace = workspaceErrorOf(error);
+  const base = {
+    kind: 'not_started' as const,
+    diagnosis: diagnosis === '' ? 'unknown error' : diagnosis,
+    attempt: input.attempt,
+    retryable: input.retryable,
+  };
+  if (workspace === null) {
+    return { ...base, detail: null, truncated: false };
+  }
+  const message = input.redactor.redactText(workspace.message.trim()).value;
+  const output = workspace.output === null ? '' : input.redactor.redactText(workspace.output).value;
+  const head = message.slice(0, RUN_START_FAILURE_MESSAGE_MAX_CHARS);
+  // A placeholder can lengthen the text past the launcher's bound, so it is cut again here, after
+  // the redactor, with the same rule: the tail, without a partial token at its front.
+  const tail = boundOutputTail(output, RUN_START_FAILURE_OUTPUT_MAX_CHARS);
+  const detail = [head, tail.text]
+    .filter((part) => part !== '')
+    .join('\n')
+    .slice(0, RUN_START_FAILURE_DETAIL_MAX_CHARS);
+  return {
+    ...base,
+    detail: detail === '' ? null : detail,
+    truncated: head.length < message.length || tail.cut || workspace.outputTruncated,
+  };
 };
 
 /**

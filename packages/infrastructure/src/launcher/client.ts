@@ -226,6 +226,12 @@ export const createLauncherControlClient = (
       // the control-plane code — both closed vocabularies, so the task can be told which.
       reason: (failure.success ? failure.data.error.reason : null) ?? transportReasonOf(code),
       commit: failure.success ? (failure.data.error.commit ?? null) : null,
+      // Backlog 453: the launcher's redacted output tail, the one part of a refusal the runner may
+      // publish. Before it, the helper's tail crossed the wire as `detail` and was replaced on the
+      // line above by the code and the status, so a start failure reached the task as
+      // `RunStartError: workspace_failed` alone. `detail` stays the log field it was.
+      output: failure.success ? (failure.data.error.output ?? null) : null,
+      outputTruncated: failure.success && failure.data.error.outputTruncated === true,
     });
   };
 

@@ -1120,15 +1120,17 @@ describe('an ask that never runs', () => {
   /**
    * **An ask refused by its workspace says why, in platform words** — WP-132, PROGRESS backlog 424,
    * mirroring `stage-executor.test.ts` › "a run refused by its workspace names the kind and the
-   * reason (WP-127)". The ask row and `run.failed` carry the workspace's error kind, its reason code
-   * and the commit through `shaSchema`; the message and the detail, each carrying a planted secret,
-   * stay in the log.
+   * reason (WP-127)". The ask row and `run.failed.error` carry the workspace's error kind, its
+   * reason code and the commit through `shaSchema`, and no word of the message. Since backlog 453
+   * the workspace's message reaches `run.failed.start_failure.detail` — through the run's redactor,
+   * which is armed with the planted secret here, so it is replaced there and absent everywhere.
    */
   it('names the workspace kind, reason code and commit of a refused start, and no word of its message (WP-132)', async () => {
     const SHA = '0123456789abcdef0123456789abcdef01234567';
     const PLANTED = 'FAKE-PLANTED-secret-wp132-0123456789';
     const harness = createPipelineHarness({
       projectId: PROJECT,
+      askRedactor: exactSecretRedactor([{ name: 'PLANTED_TOKEN', value: PLANTED }]),
       runs: {
         refinement: {
           status: 'completed',
@@ -1166,10 +1168,20 @@ describe('an ask that never runs', () => {
           entry.type === 'run.failed' && entry.payload.run_id === ask?.runId,
       );
     expect(failed?.payload.error).toBe(`the runner could not start this ask: ${cause}`);
+    expect(ask?.refusalReason).not.toContain('must start from');
+    // Backlog 453: the launcher's sentence is recorded beside the diagnosis, redacted.
+    expect(failed?.payload.start_failure).toMatchObject({
+      kind: 'not_started',
+      diagnosis: cause,
+      attempt: 1,
+      retryable: false,
+    });
+    expect(failed?.payload.start_failure?.detail).toContain('must start from');
+    expect(failed?.payload.start_failure?.detail).toContain('[REDACTED');
+    expect(harness.store.startFailureOf(ask?.runId as Id)).toEqual(failed?.payload.start_failure);
     const serialised = JSON.stringify([harness.events(), harness.asks.all()]);
     expect(serialised).toContain('checkout_commit_missing');
     expect(serialised).not.toContain(PLANTED);
-    expect(serialised).not.toContain('must start from');
   });
 
   it('fails rather than storing an answer the contract rejects', async () => {

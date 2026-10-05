@@ -30,6 +30,7 @@ import {
   pathPatternSchema,
   runCostSchema,
   runModeSchema,
+  runStartFailureSchema,
   runStatusSchema,
   runTerminalReasonSchema,
   sequenceSchema,
@@ -637,6 +638,12 @@ export const runFailedEvent = defineEvent('run.failed', {
   error: nonEmptyStringSchema,
   usage: tokenUsageSchema.nullish(),
   cost: runCostSchema.nullish(),
+  /**
+   * Present exactly when the run **never started** (PROGRESS backlog 453): the launcher's redacted,
+   * bounded reason beside the platform's diagnosis — the same object `runs.exit_detail` holds.
+   * Nullish, so every `run.failed` appended before it still parses unchanged on replay.
+   */
+  start_failure: runStartFailureSchema.nullish(),
 });
 
 export const runSteeredEvent = defineEvent('run.steered', {

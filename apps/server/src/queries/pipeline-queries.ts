@@ -65,6 +65,7 @@ import type {
   RunCommandRecord,
   RunModelUsageRecord,
   RunRecord,
+  RunStartFailure,
   RunStatus,
   TaskConflict,
   TaskDetailResponse,
@@ -80,6 +81,7 @@ import {
   MAX_RUN_COMMANDS,
   pausedBudgetScopeSchema,
   promptsWithheldSchema,
+  runStartFailureSchema,
   taskPipelineDialSchema,
   taskStageOutcomeSchema,
   taskStageStateSchema,
@@ -172,6 +174,8 @@ interface RunProjectionRow {
   readonly redactionCount: number;
   /** `runs.settings_hash`; null for a run created before WP-91 gave it a writer. */
   readonly settingsHash: string | null;
+  /** `runs.exit_detail`; its first writer is a start failure (PROGRESS backlog 453). */
+  readonly exitDetail: JsonObject | null;
 }
 
 const runColumns = {
@@ -204,7 +208,30 @@ const runColumns = {
   wallMs: runs.wallMs,
   redactionCount: runs.redactionCount,
   settingsHash: runs.settingsHash,
+  exitDetail: runs.exitDetail,
 } as const;
+
+/**
+ * `runs.exit_detail` → `RunRecord.start_failure` (PROGRESS backlog 453).
+ *
+ * `null` is published for a column that is null — a run that started, or one that failed to start
+ * before the column had a writer — and for a detail of another `kind`, which is not a start
+ * failure. A `not_started` detail this release cannot read is **refused** by name rather than
+ * published as `null`, which would say the run started.
+ */
+const startFailureOf = (row: RunProjectionRow): RunStartFailure | null => {
+  if (row.exitDetail === null || row.exitDetail.kind !== 'not_started') {
+    return null;
+  }
+  const parsed = runStartFailureSchema.safeParse(row.exitDetail);
+  if (!parsed.success) {
+    throw new UnprojectableRowError(
+      `run ${row.id}`,
+      'its `exit_detail` records a start failure in a shape this release does not read',
+    );
+  }
+  return parsed.data;
+};
 
 /**
  * `runs` + the joined stage + its per-model usage → `RunRecord`.
@@ -269,6 +296,7 @@ const toRunRecord = (
     // `null` is published as `null` — the run predates the writer — and never re-derived from the
     // project's settings today, which would answer "what were the settings?" with what they are now.
     settings_hash: row.settingsHash,
+    start_failure: startFailureOf(row),
   };
 };
 

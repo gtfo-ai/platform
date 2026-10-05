@@ -160,6 +160,9 @@ class ControlPlaneError extends Error {
   /** The workspace's platform-written cause, carried across so the runner can name it (WP-127). */
   readonly reason: WorkspaceErrorReason | null;
   readonly commit: string | null;
+  /** The failing step's own redacted words, for the run page (backlog 453, `WorkspaceError.output`). */
+  readonly output: string | null;
+  readonly outputTruncated: boolean;
 
   constructor(
     code: ControlPlaneErrorCode,
@@ -169,6 +172,8 @@ class ControlPlaneError extends Error {
       readonly detail?: string | null;
       readonly reason?: WorkspaceErrorReason | null;
       readonly commit?: string | null;
+      readonly output?: string | null;
+      readonly outputTruncated?: boolean;
     } = {},
   ) {
     super(message);
@@ -178,6 +183,8 @@ class ControlPlaneError extends Error {
     this.detail = options.detail ?? null;
     this.reason = options.reason ?? null;
     this.commit = options.commit ?? null;
+    this.output = options.output ?? null;
+    this.outputTruncated = options.outputTruncated ?? false;
   }
 }
 
@@ -254,6 +261,8 @@ const errorOf = (error: unknown): ControlPlaneError => {
       detail: error.detail,
       reason: error.reason,
       commit: error.commit,
+      output: error.output,
+      outputTruncated: error.outputTruncated,
     });
   }
   // Deliberately **not** the thrown message: an unclassified failure from inside the launcher may
@@ -467,6 +476,8 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
             detail: failure.detail,
             reason: failure.reason,
             commit: failure.commit,
+            output: failure.output,
+            outputTruncated: failure.outputTruncated,
           },
         });
       }

@@ -2035,6 +2035,105 @@ describe('the run settings and the task export’s events against PostgreSQL (WP
     });
   });
 
+  /**
+   * Backlog 453: `runs.exit_detail` had no writer, so a run whose workspace never started read as a
+   * run with an empty transcript. `RunRepository.finish` now writes the start failure there and
+   * `GET /api/runs/:id` publishes it — and refuses one it cannot read rather than saying the run
+   * started. Its own task, so the list projections the other cases count are untouched.
+   */
+  it('writes a start failure to exit_detail through finish, and the record publishes it', async () => {
+    const store = pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+    const own = await pool.query<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                          current_stage)
+       values ($1, 'fake-jira', 'ACME-453', 'https://jira.example.test/browse/ACME-453',
+               'feature', 'needs_human', 'refinement') returning id`,
+      [projectId],
+    );
+    const ownTaskId = own.rows[0]?.id as string;
+    const stage = await pool.query<{ id: string }>(
+      `insert into task_stages (task_id, stage, attempt, state)
+       values ($1, 'refinement', 1, 'running') returning id`,
+      [ownTaskId],
+    );
+    const runFor = async () =>
+      (
+        await pool.query<{ id: string }>(
+          `insert into runs (task_id, task_stage_id, project_id, role, model, prompt_version,
+                             status, started_at)
+           values ($1, $2, $3, 'product_manager', 'claude-opus-5', 'feature@1+pm', 'running', now())
+           returning id`,
+          [ownTaskId, stage.rows[0]?.id, projectId],
+        )
+      ).rows[0]?.id as string;
+    const notStarted = await runFor();
+    const started = await runFor();
+    const failure = {
+      kind: 'not_started' as const,
+      diagnosis: 'RunStartError: workspace_failed',
+      detail:
+        "helper prep-run exited 1\nmkdir: can't create directory '/ctl/run': Permission denied",
+      truncated: false,
+      attempt: 3,
+      retryable: false,
+    };
+    const finish = async (runId: string, startFailure?: typeof failure) => {
+      const client = await pool.connect();
+      try {
+        const tx = { adapter: 'postgres', client } as unknown as Transaction;
+        return await store.runs.finish(tx, {
+          runId: runId as Id,
+          status: 'failed',
+          terminalReason: 'error_during_execution',
+          sessionId: null,
+          numTurns: 0,
+          usage: {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 0,
+            cache_read_tokens: 0,
+          },
+          cost: { usd: 0, is_estimate: false, price_list_id: null },
+          wallMs: 0,
+          ...(startFailure === undefined ? {} : { startFailure }),
+        });
+      } finally {
+        client.release();
+      }
+    };
+    expect(await finish(notStarted, failure)).toBe(true);
+    expect(await finish(started)).toBe(true);
+
+    const column = await pool.query<{ id: string; exit_detail: unknown }>(
+      'select id, exit_detail from runs where id = any($1::uuid[])',
+      [[notStarted, started]],
+    );
+    expect(new Map(column.rows.map((row) => [row.id, row.exit_detail]))).toEqual(
+      new Map<string, unknown>([
+        [notStarted, failure],
+        [started, null],
+      ]),
+    );
+    expect((await findRun(drizzled, notStarted))?.start_failure).toEqual(failure);
+    expect((await findRun(drizzled, started))?.start_failure).toBeNull();
+
+    // A detail of another kind is not a start failure; a `not_started` one this release cannot
+    // read is refused by name, never published as "the run started".
+    await pool.query(`update runs set exit_detail = '{"kind":"other"}'::jsonb where id = $1`, [
+      started,
+    ]);
+    expect((await findRun(drizzled, started))?.start_failure).toBeNull();
+    await pool.query(
+      `update runs set exit_detail = '{"kind":"not_started","diagnosis":""}'::jsonb where id = $1`,
+      [started],
+    );
+    await expect(findRun(drizzled, started)).rejects.toMatchObject({
+      code: 'row_not_projectable',
+    });
+    await pool.query('delete from tasks where id = $1', [ownTaskId]);
+  });
+
   it('reads the task’s own stream and every event correlated to it, oldest first, bounded', async () => {
     const task = await pool.query<{ id: string }>(
       `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state)

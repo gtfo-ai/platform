@@ -23,6 +23,7 @@ import type {
   ModelUsage,
   RunCost,
   RunMode,
+  RunStartFailure,
   RunStatus,
   RunTerminalReason,
   Slug,
@@ -302,6 +303,11 @@ export interface FailRunInput {
   readonly error: string;
   readonly usage?: TokenUsage;
   readonly cost?: RunCost;
+  /**
+   * Present exactly when the run **never started** (PROGRESS backlog 453): carried onto
+   * `run.failed.start_failure` as given — the caller redacted and bounded it.
+   */
+  readonly startFailure?: RunStartFailure;
 }
 
 export const failRun = (run: Run, input: FailRunInput, context: CommandContext): RunDecision => {
@@ -317,6 +323,7 @@ export const failRun = (run: Run, input: FailRunInput, context: CommandContext):
     error: input.error,
     usage: input.usage ?? null,
     cost: input.cost ?? null,
+    ...(input.startFailure === undefined ? {} : { start_failure: input.startFailure }),
   });
   return {
     aggregate: {

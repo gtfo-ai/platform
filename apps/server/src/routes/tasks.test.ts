@@ -335,6 +335,7 @@ const RUN_RECORD = (settingsHash: string | null): RunRecord => ({
   wall_ms: 1_000,
   redaction_count: 0,
   settings_hash: settingsHash,
+  start_failure: null,
 });
 
 const DETAIL: TaskDetailResponse = taskDetailResponseSchema.parse({

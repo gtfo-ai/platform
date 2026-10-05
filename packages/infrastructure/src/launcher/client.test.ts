@@ -181,6 +181,48 @@ describe('the client', () => {
     });
   });
 
+  /**
+   * Backlog 453: the helper's own words were on the wire as `detail` and were replaced here by the
+   * code and the status, so a start failure reached the task with no reason at all. `output` is the
+   * field the launcher publishes them in; `detail` stays a log field.
+   */
+  it('carries the launcher’s output tail and its cut across, and reads a launcher that sends none', async () => {
+    const answering = (extra: Record<string, unknown>) =>
+      clientWith(() => ({
+        status: 500,
+        body: JSON.stringify({
+          error: {
+            code: 'workspace_failed',
+            message: 'helper prep-run exited 1',
+            runId: null,
+            detail: 'log-only words',
+            ...extra,
+          },
+        }),
+      })).client;
+    const output = "mkdir: can't create directory '/ctl/run': Permission denied";
+    const carried = await answering({ output, outputTruncated: true })
+      .health()
+      .catch((error: unknown) => error as WorkspaceError);
+    expect(carried).toMatchObject({
+      code: 'workspace_failed',
+      message: 'helper prep-run exited 1',
+      output,
+      outputTruncated: true,
+    });
+    // A launcher one build behind sends neither field, and its refusal still reads.
+    await expect(answering({}).health()).rejects.toMatchObject({
+      code: 'workspace_failed',
+      output: null,
+      outputTruncated: false,
+    });
+    // The protocol stays strict: a tail past the bound is not a body this client reads.
+    await expect(answering({ output: 'x'.repeat(2_001) }).health()).rejects.toMatchObject({
+      code: 'workspace_failed',
+      output: null,
+    });
+  });
+
   it('names the transport’s own reason when the launcher sent none (WP-127)', async () => {
     const reasonOf = async (status: number, body: string) =>
       clientWith(() => ({ status, body }))

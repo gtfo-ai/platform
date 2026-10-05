@@ -78,7 +78,12 @@ import type { Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import { type ClaudeRunner, describeStartFailure, type RunOutcome } from '../ports/runner.js';
+import {
+  type ClaudeRunner,
+  describeStartFailure,
+  type RunOutcome,
+  runStartFailureOf,
+} from '../ports/runner.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import {
   ASK_RECORD_AUDIT_LIMIT,
@@ -923,10 +928,23 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         // The message is in the log line below.
         const reason = `the runner could not start this ask: ${describeStartFailure(error)}`;
         logger.error({ err: error, ask_id: admitted.ask.id, run_id: runId }, reason);
+        // Backlog 453: the workspace's own words, through this run's redactor and bounded — the
+        // stage executor's record, at the second place a run can fail to start (standing rule 49).
+        // An ask is not retried on a start failure, so it is attempt 1 and not retryable.
+        const notStarted = runStartFailureOf(error, {
+          redactor: started.redactor,
+          attempt: 1,
+          retryable: false,
+        });
         return await options.unitOfWork.transaction(async (scope) => {
           const failed = failRun(
             started.run,
-            { status: 'failed', terminalReason: 'error_during_execution', error: reason },
+            {
+              status: 'failed',
+              terminalReason: 'error_during_execution',
+              error: reason,
+              startFailure: notStarted,
+            },
             options.context(admitted.ask.taskId),
           );
           await options.store.runs.finish(scope.tx, {
@@ -944,6 +962,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
             },
             cost: { usd: 0, is_estimate: false },
             wallMs: 0,
+            startFailure: notStarted,
           });
           await options.asks.recordRefusal(scope.tx, {
             askId: admitted.ask.id,

@@ -369,12 +369,15 @@ describe('create', () => {
         credential: { host: 'vcs.example.com', username: 'agentic', password: SECRET },
       })
       .then(() => null)
-      .catch((error: unknown) => error as { detail: string | null });
+      .catch((error: unknown) => error as { detail: string | null; output: string | null });
     expect(failure?.detail).not.toContain(SECRET);
     // And the rest of the message survives: a redactor that returned an empty string would pass
     // the assertion above and destroy the only diagnostic an operator gets.
     expect(failure?.detail).toContain('vcs.example.com');
     expect(failure?.detail).toContain('[REDACTED:integration:run_credential_0]');
+    // Backlog 453: the same redacted words are the publishable `output` the run page shows.
+    expect(failure?.output).not.toContain(SECRET);
+    expect(failure?.output).toContain('[REDACTED:integration:run_credential_0]');
   });
 
   /**

@@ -450,6 +450,7 @@ export const run = runRecordSchema.parse({
   wall_ms: 61_000,
   redaction_count: 0,
   settings_hash: '5f1c0e5a3d9b7c2e4f6a8b0c1d3e5f7a9b2c4d6e8f0a1b3c5d7e9f1a2b4c6d8e',
+  start_failure: null,
 });
 
 export const taskDetail = taskDetailResponseSchema.parse({

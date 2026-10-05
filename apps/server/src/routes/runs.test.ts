@@ -71,6 +71,7 @@ const record = (settingsHash: string | null): RunRecord => ({
   wall_ms: 0,
   redaction_count: 0,
   settings_hash: settingsHash,
+  start_failure: null,
 });
 
 const SNAPSHOT = {

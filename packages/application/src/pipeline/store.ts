@@ -37,6 +37,7 @@ import type {
   PausedBudgetScope,
   PipelineTemplate,
   RunCost,
+  RunStartFailure,
   RunStatus,
   RunTerminalReason,
   Size,
@@ -1420,6 +1421,12 @@ export interface RunRepository {
        * and the totals count it as unmeasured. Absent is `false`.
        */
       readonly costIsFloor?: boolean;
+      /**
+       * Why the run never started — `runs.exit_detail`, the column's first writer (PROGRESS backlog
+       * 453). Redacted and bounded by the caller (`runStartFailureOf`); absent for every run that
+       * started, which leaves the column null.
+       */
+      readonly startFailure?: RunStartFailure;
     },
   ): Promise<boolean>;
   /**

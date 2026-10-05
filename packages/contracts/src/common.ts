@@ -964,6 +964,45 @@ export const runCostSchema = z.strictObject({
   price_list_id: idSchema.nullish(),
 });
 
+/** The launcher's sentence about a start failure, at most this many characters (backlog 453). */
+export const RUN_START_FAILURE_MESSAGE_MAX_CHARS = 500;
+/** The failing step's own output, at most this many characters — the tail, as `#helper` keeps it. */
+export const RUN_START_FAILURE_OUTPUT_MAX_CHARS = 2_000;
+/**
+ * The bound on {@link runStartFailureSchema}'s `detail`: the two parts above, a newline between them,
+ * and room for a redaction placeholder or two that the runner's redactor may add after the cut.
+ */
+export const RUN_START_FAILURE_DETAIL_MAX_CHARS = 3_000;
+
+/**
+ * Why a run **never started** (PROGRESS backlog 453) — `runs.exit_detail`, `run.failed`'s
+ * `start_failure` and `RunRecord.start_failure`, one shape in all three.
+ *
+ * A run whose workspace could not be created (a helper container that exited non-zero, a Docker
+ * timeout, a permissions error on the control volume) has no transcript at all, so before this the
+ * only record of *why* was the runner's log. Two halves, and they are different kinds of text:
+ *
+ *  - `diagnosis` is **platform text** — `describeStartFailure`'s closed-vocabulary sentence, the
+ *    one `run.failed.error` and the blocker brief already carry.
+ *  - `detail` is **untrusted** (BD-022): the launcher's message and the failing step's own output
+ *    tail (a `git clone`'s stderr quotes repository-controlled text). It was redacted by the launcher
+ *    against the secrets that step was given and again by the run's own TD-012 redactor before it was
+ *    stored, and it is bounded; a screen renders it as text and never as markup. `null` when the
+ *    failure carried no words of its own (a runner that refused the spec, a missing launcher).
+ *
+ * `truncated` is the platform announcing its own cut, never a line inside `detail`.
+ */
+export const runStartFailureSchema = z.strictObject({
+  kind: z.literal('not_started'),
+  diagnosis: nonEmptyStringSchema.max(RUN_START_FAILURE_MESSAGE_MAX_CHARS),
+  detail: nonEmptyStringSchema.max(RUN_START_FAILURE_DETAIL_MAX_CHARS).nullable(),
+  truncated: z.boolean(),
+  /** Which start attempt of the stage this was (`MAX_RUN_START_ATTEMPTS`); 1 for an ask. */
+  attempt: z.int().positive(),
+  /** `true` when the stage was re-enqueued after this failure rather than escalated. */
+  retryable: z.boolean(),
+});
+
 // ── Inferred types ───────────────────────────────────────────────────────────
 
 export type Id = z.infer<typeof idSchema>;
@@ -1012,3 +1051,4 @@ export type HistorySample = z.infer<typeof historySampleSchema>;
 export type TokenUsage = z.infer<typeof tokenUsageSchema>;
 export type ModelUsage = z.infer<typeof modelUsageSchema>;
 export type RunCost = z.infer<typeof runCostSchema>;
+export type RunStartFailure = z.infer<typeof runStartFailureSchema>;
