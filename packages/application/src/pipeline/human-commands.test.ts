@@ -274,6 +274,31 @@ const taskOf = (harness: PipelineHarness): StoredTask => {
   return stored;
 };
 
+/**
+ * `stage.execute`'s admission as pg-boss's `stately` policy answers it (backlog 494): one job per
+ * task **waiting** — a second enqueue while one waits is `coalesced` and dropped — and one running.
+ * The recorder accepts everything, so without this a case about a lost wake-up cannot lose one.
+ * The job `drain` is running has already been taken off `enqueued`, which is the freed slot.
+ * Answers the attempts it dropped.
+ */
+const statelyStageQueue = (harness: PipelineHarness): (() => readonly number[]) => {
+  const dropped: number[] = [];
+  const jobs = harness.jobs as { enqueue: PipelineHarness['jobs']['enqueue'] };
+  const real = jobs.enqueue.bind(harness.jobs);
+  jobs.enqueue = async (request) => {
+    const waiting = harness.jobs.enqueued.some(
+      (queued) =>
+        queued.queue === JOB_QUEUES.stageExecute && queued.singletonKey === request.singletonKey,
+    );
+    if (request.queue === JOB_QUEUES.stageExecute && waiting) {
+      dropped.push((request.data as unknown as { attempt: number }).attempt);
+      return { status: 'coalesced', jobId: null };
+    }
+    return real(request);
+  };
+  return () => [...dropped];
+};
+
 const countOf = (harness: PipelineHarness, type: string): number =>
   harness.events().filter((event) => event.type === type).length;
 
@@ -485,6 +510,186 @@ describe('retry-stage', () => {
     expect(taskOf(harness).task.stageAttempts.refinement).toBe(2);
     await harness.drain();
     expect(harness.specs.at(-1)?.attempt).toBe(2);
+  });
+
+  /**
+   * **A retry pressed while the stage's run is still in flight** (first local test, 2026-10-06,
+   * PROGRESS backlog 494: *"retry během běžícího pokusu se tiše přeskočí"*).
+   *
+   * The window is the one `whileRunning` opens: the run row and its lease are committed, the
+   * session has not reported. Before backlog 494 the command moved the attempt counter and enqueued
+   * attempt 2 — and then the attempt-1 run finished, its recording transaction completed the stage
+   * on the task's **new** attempt (it never asked which attempt it was), the saga walked on, and
+   * attempt 2's job was skipped as "not running at refinement". The person was answered 200 and no
+   * second run ever started.
+   */
+  it('stops the run in flight and runs the new attempt — the old run never completes the stage', async () => {
+    let retried: Awaited<ReturnType<typeof retryStageCommand>> | null = null;
+    const harness = harnessWith({
+      whileRunning: async (spec) => {
+        if (spec.stage !== 'refinement' || retried !== null) {
+          return;
+        }
+        retried = await retryStageCommand(harness.humanCommands, {
+          taskId: spec.taskId,
+          userId: USER,
+          stage: 'refinement' as Slug,
+        });
+      },
+    });
+    await harness.publish([ticketMatched()]);
+
+    const refinementRuns = harness.specs.filter((spec) => spec.stage === 'refinement');
+    // The countable effect the person asked for: a second run, of attempt 2 (standing rule 79).
+    expect(refinementRuns.map((spec) => spec.attempt)).toEqual([1, 2]);
+    const [first, second] = refinementRuns;
+    // The first run is recorded — its money is the platform's own record — and it completed nothing.
+    const completions = harness
+      .events()
+      .filter(
+        (event) =>
+          event.type === 'task.stage.completed' &&
+          (event.payload as { stage: string }).stage === 'refinement',
+      );
+    expect(completions).toHaveLength(1);
+    const refinedSpecs = await harness.memory.transaction(async (scope) =>
+      harness.store.artifacts.listFor(scope.tx, taskOf(harness).task.id),
+    );
+    expect(
+      refinedSpecs
+        .filter((artifact) => artifact.type === 'RefinedSpec')
+        .map((artifact) => artifact.producedByRunId),
+    ).toEqual([second?.runId]);
+    expect(
+      harness
+        .events()
+        .filter((event) => event.type === 'run.finished' && event.stream_id === first?.runId),
+    ).toHaveLength(1);
+    // The stop was asked of the process holding the run, through the cancel's own path (WP-101).
+    expect(retried).toEqual({
+      attempt: 2,
+      stoppedRun: { runId: first?.runId, commandId: expect.any(String) },
+    });
+    expect(harness.store.runCommandRows()).toMatchObject([
+      { runId: first?.runId, instruction: { kind: 'cancel' } },
+    ]);
+    // …and the task was not paused by it: a retry is not a cancel of the task.
+    expect(countOf(harness, 'task.paused')).toBe(0);
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+  });
+
+  /**
+   * The double press, under the queue's real admission (backlog 494). `stage.execute` is `stately`
+   * per task: one job waiting, one running. The second retry's enqueue is therefore coalesced onto
+   * the first retry's job, which then fires for attempt 2 of a task on attempt 3 — and, before the
+   * forward, skipped and left attempt 3 with no job at all.
+   */
+  it('runs the newest attempt when a second retry’s job was coalesced onto the first', async () => {
+    let pressed = 0;
+    const harness = harnessWith({
+      whileRunning: async (spec) => {
+        if (spec.stage !== 'refinement' || pressed > 0) {
+          return;
+        }
+        for (const _ of [1, 2]) {
+          pressed += 1;
+          await retryStageCommand(harness.humanCommands, {
+            taskId: spec.taskId,
+            userId: USER,
+            stage: 'refinement' as Slug,
+          });
+        }
+      },
+    });
+    const coalesced = statelyStageQueue(harness);
+    await harness.publish([ticketMatched()]);
+
+    expect(coalesced()).toEqual([3]);
+    expect(
+      harness.specs.filter((spec) => spec.stage === 'refinement').map((spec) => spec.attempt),
+    ).toEqual([1, 3]);
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+  });
+
+  it('ends the record in place when no process holds the run, without pausing the task', async () => {
+    const harness = await asking();
+    const task = taskOf(harness).task.id;
+    // The task is waiting on its question with a run of the stage still `running` and no lease —
+    // a holder that died, or a row from before leases.
+    const runId = await seedLiveRun(harness, 'refinement' as Slug);
+
+    const outcome = await retryStageCommand(harness.humanCommands, {
+      taskId: task,
+      userId: USER,
+      stage: 'refinement' as Slug,
+    });
+
+    expect(outcome).toEqual({ attempt: 2, stoppedRun: { runId, commandId: null } });
+    const run = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.load(scope.tx, runId),
+    );
+    expect(run?.status).toBe('cancelled');
+    // No figure: nothing in this request measured the run (WP-47, rule 16).
+    expect(run?.cost).toBeNull();
+    expect(
+      harness
+        .events()
+        .filter((event) => event.type === 'run.finished' && event.stream_id === runId),
+    ).toHaveLength(1);
+    expect(harness.store.runCommandRows()).toEqual([]);
+    expect(countOf(harness, 'task.paused')).toBe(0);
+    await harness.drain();
+    expect(harness.specs.at(-1)?.attempt).toBe(2);
+  });
+
+  it('records the stop for the holder of a live lease, which stops the session as a cancel', async () => {
+    const harness = await asking();
+    const task = taskOf(harness).task.id;
+    const runId = await seedLiveRun(harness, 'refinement' as Slug);
+    await leaseTo(harness, runId);
+    const recorder = liveRunFor(runId, task);
+    const holder = holderFor(harness, recorder.live);
+
+    const outcome = await retryStageCommand(harness.humanCommands, {
+      taskId: task,
+      userId: USER,
+      stage: 'refinement' as Slug,
+      stopCommandId: '00000000-0000-4000-8000-0000000004b1' as Id,
+    });
+    expect(outcome).toEqual({
+      attempt: 2,
+      stoppedRun: { runId, commandId: '00000000-0000-4000-8000-0000000004b1' },
+    });
+    // The holder's to end, with what its session measured: the row still reads running.
+    const run = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.load(scope.tx, runId),
+    );
+    expect(run?.status).toBe('running');
+    await holder.drain();
+    expect(recorder.stops).toEqual([{ reason: 'cancelled' }]);
+    expect(harness.store.runCommandRows()).toMatchObject([
+      { id: '00000000-0000-4000-8000-0000000004b1', applied: true, refusedReason: null },
+    ]);
+    expect(countOf(harness, 'task.paused')).toBe(0);
+    await holder.stop();
+  });
+
+  it('stops the stage’s run and never an ask beside it', async () => {
+    const harness = await asking();
+    const task = taskOf(harness).task.id;
+    const ask = await seedLiveRun(harness, null as unknown as Slug);
+
+    const outcome = await retryStageCommand(harness.humanCommands, {
+      taskId: task,
+      userId: USER,
+      stage: 'refinement' as Slug,
+    });
+
+    expect(outcome).toEqual({ attempt: 2, stoppedRun: null });
+    const run = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.load(scope.tx, ask),
+    );
+    expect(run?.status).toBe('running');
   });
 
   it('refuses a stage the task is not at, because that would be a return', async () => {

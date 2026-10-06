@@ -184,6 +184,32 @@
 > And **no HTTP request escalates a task**: a spent iteration loop and an exhausted write-conflict
 > bound are both answered to the caller rather than parking the task in `needs_human`.
 >
+> **Amended 2026-10-06 (PROGRESS backlog 494, the product owner's first local test: *"retry během
+> běžícího pokusu se tiše přeskočí"*) — `POST /api/tasks/:id/retry-stage` stops the stage's run in
+> flight.** The route used to say the moved attempt counter *supersedes* a run still in flight; it
+> did not. The stage executor's re-validation skips a **job** whose attempt has passed, but the old
+> run was already past it: it ran on, its recording transaction completed the stage on the task's
+> new attempt (it never asked which attempt it was recording), and the new attempt's job — queued
+> behind it, because `stage.execute` is `stately` per task — found the task at the next stage and
+> did nothing. The person was answered `200` and no second run started. Three things are now true.
+> **The retry stops the live run of that stage** in its own transaction, through the run cancel's
+> two branches above without the cancel's pause: a process holds the run's lease → a `cancel` row is
+> recorded for it (its id derived from the `Idempotency-Key`, as the run cancel's is) and that process
+> interrupts the session and ends the run `cancelled` with what it measured; nobody holds it → the
+> record is ended in place. An ask beside the stage is never stopped. **A run whose attempt the task
+> has left completes nothing**: the executor asks `isCurrentStageAttempt` before writing a verdict,
+> records the run and its spend exactly as for a run that ended into a stopped task, and the lease
+> sweep ends such a run without escalating the task that is on the new attempt. **The new attempt's
+> wake-up is not lost to the queue**: it waits behind the old job and runs once that job ends, and a
+> wake-up that fires for an attempt the task has left forwards itself to the current one, so a second
+> retry whose enqueue was coalesced onto the first's still runs. The answer says what was done —
+> `retryStageResponseSchema` adds `attempt` (the attempt entered, `null` at `ready_for_merge`, which
+> the head check re-enters) and `stopped_run` (`{run_id, command_id}`, `command_id` `null` when the
+> record was ended here; `null` when no run of the stage was live), recorded in the audit row so a
+> replay answers the same — and the task screen's *Retry stage* shows it. `POST /api/runs/:id/retry`
+> is unchanged: it still refuses a run that has not ended (`run_not_live`), which is the honest
+> answer to "retry this run" while it runs.
+>
 > What is still unbuilt on those rows: `PATCH /api/projects/:id`. **WP-100 removed
 > `PATCH /api/integrations/:id`**: the create parses `config` with the provider's schema, and a row
 > written before it — whose configuration every binding load would refuse — publishes a

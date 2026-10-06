@@ -1273,9 +1273,12 @@ export const createMemoryPipelineStore = (
       const run = runs.get(runId);
       return run === undefined ? null : lockedRunOf(run);
     },
-    lockLiveRunOf: async (_tx, taskId) => {
+    lockLiveRunOf: async (_tx, taskId, options) => {
       const live = [...runs.values()].filter(
-        (run) => run.taskId === taskId && isActiveRunStatus(run.status),
+        (run) =>
+          run.taskId === taskId &&
+          isActiveRunStatus(run.status) &&
+          (options?.stage === undefined || run.stage === options.stage),
       );
       const newest = live.at(-1);
       return newest === undefined ? null : lockedRunOf(newest);

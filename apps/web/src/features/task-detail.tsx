@@ -44,6 +44,7 @@ import type {
   HumanTimeKind,
   HumanTimeSummary,
   QuestionRecord,
+  RetryStageResponse,
   ReviewVerdictData,
   TaskCoverage,
   TaskDependencies,
@@ -1199,11 +1200,38 @@ const StageCommands = ({
         </Button>
       </form>
 
+      {commands.retryStage.data === undefined ? null : (
+        <p role="status" className="text-sm text-fg-muted">
+          {retryOutcomeText(commands.retryStage.data)}
+        </p>
+      )}
       {commands.retryStage.isError || commands.returnToStage.isError || commands.rework.isError ? (
         <ErrorNotice title="That stage command was refused." />
       ) : null}
     </Card>
   );
+};
+
+/**
+ * What a retry did, in one sentence (PROGRESS backlog 494).
+ *
+ * The control used to say nothing on success, which is half of how *"retry během běžícího pokusu
+ * se tiše přeskočí"* went unnoticed: the server answered 200 and the screen looked the same. Now
+ * the answer names the attempt it entered and, when a run of the stage was still in flight, that
+ * the run is being stopped first — the new attempt starts once it has ended.
+ */
+export const retryOutcomeText = (answer: RetryStageResponse): string => {
+  const stage = answer.current_stage ?? 'the stage';
+  if (answer.attempt === null) {
+    return 'Nothing was re-entered here: the platform re-checks the branch head and re-enters the gate it needs.';
+  }
+  const queued = `Attempt ${answer.attempt} of ${stage} is queued.`;
+  if (answer.stopped_run === null) {
+    return queued;
+  }
+  return answer.stopped_run.command_id === null
+    ? `${queued} The run that was still in flight had no live process, so its record was ended.`
+    : `${queued} The run still in flight is being stopped; the new attempt starts once it has ended.`;
 };
 
 /**

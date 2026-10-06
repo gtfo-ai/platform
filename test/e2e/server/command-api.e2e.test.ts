@@ -746,6 +746,133 @@ const stateOf = async (pipeline: PipelineE2E, taskId: string): Promise<string | 
   (await pipeline.query<{ state: string }>('select state from tasks where id = $1', [taskId]))[0]
     ?.state;
 
+/**
+ * **A retry pressed while the stage's run is still in flight** — PROGRESS backlog 494, from the
+ * product owner's first local test: *"retry během běžícího pokusu se tiše přeskočí"*.
+ *
+ * This is the tier where the queue is real: `stage.execute` is pg-boss `stately` per task, so the
+ * new attempt's job waits behind the job still running the old attempt. Before backlog 494 that
+ * old run then completed the stage on the task's new attempt and the waiting job found nothing to
+ * do — a 200 and no second run. Now the retry records a stop for the run's lease holder (the cancel's
+ * own path, without the pause), the old run ends `cancelled` and completes nothing, and attempt 2
+ * runs and walks the task on.
+ */
+describe('retry-stage while the stage is running', () => {
+  it('stops the run in flight, runs the new attempt, and the old run completes nothing', async () => {
+    const held = gate();
+    const started = gate();
+    let firstRunId: string | null = null;
+
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'command-retry-live',
+      tickets: TICKETS,
+      agent: 'real-over-fake-cli',
+      onAgentSpec: async (spec) => {
+        if (firstRunId !== null) {
+          return;
+        }
+        firstRunId = spec.runId;
+        started.open();
+        await held.opened;
+      },
+    });
+    harness = pipeline;
+    const client = await signIn(pipeline.instance.baseUrl);
+
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await started.opened;
+    const runId = firstRunId as unknown as string;
+    const task = await pipeline.task();
+
+    const retried = (await send(
+      client,
+      `/api/tasks/${task.id}/retry-stage`,
+      { stage: 'refinement' },
+      'retry-live-1',
+    )) as CommandReply & {
+      body: {
+        attempt?: number | null;
+        stopped_run?: { run_id: string; command_id: string | null };
+      };
+    };
+    expect(retried.status, JSON.stringify(retried.body)).toBe(200);
+    expect(retried.body.performed).toBe(true);
+    expect(retried.body.state).toBe('active');
+    expect(retried.body.attempt).toBe(2);
+    expect(retried.body.stopped_run?.run_id).toBe(runId);
+    const commandId = retried.body.stopped_run?.command_id;
+    expect(commandId).toEqual(expect.any(String));
+
+    // The holder applies the stop before the hold is released (the cancel case's order, WP-119).
+    await pipeline.waitFor('the lease holder to apply the retry’s stop', async () => {
+      const rows = await pipeline.query<{ applied: boolean; kind: string }>(
+        'select applied_at is not null as applied, kind from run_commands where id = $1',
+        [commandId],
+      );
+      return rows[0]?.applied === true && rows[0]?.kind === 'cancel';
+    });
+    held.open();
+
+    // The countable effect the person asked for: a run of attempt 2, after the first one ended.
+    await pipeline.waitFor('attempt 2 of refinement to run', async () => {
+      const rows = await pipeline.query<{ attempt: number }>(
+        `select r.attempt from runs r join task_stages s on s.id = r.task_stage_id
+          where r.task_id = $1 and s.stage = 'refinement' and r.attempt = 2`,
+        [task.id],
+      );
+      return rows.length > 0;
+    });
+    await pipeline.settle('ready_for_merge', (snapshot) => snapshot.state === 'ready_for_merge');
+
+    const [first] = await pipeline.query<{ status: string }>(
+      'select status::text as status from runs where id = $1',
+      [runId],
+    );
+    expect(first?.status).toBe('cancelled');
+    // The stage was completed once, by attempt 2; attempt 1's row was closed by the retry's entry.
+    const rows = await pipeline.query<{ attempt: number; outcome: string | null }>(
+      `select attempt, outcome from task_stages
+        where task_id = $1 and stage = 'refinement' order by attempt`,
+      [task.id],
+    );
+    expect(rows.map((row) => row.attempt)).toEqual([1, 2]);
+    expect(rows[0]?.outcome).toBe('superseded');
+    const specs = await pipeline.query<{ produced_by_run_id: string }>(
+      `select produced_by_run_id from artifacts where task_id = $1 and type = 'RefinedSpec'`,
+      [task.id],
+    );
+    expect(specs).toHaveLength(1);
+    expect(specs[0]?.produced_by_run_id).not.toBe(runId);
+    // Not a cancel of the task: nothing paused it.
+    const paused = await pipeline.query(
+      `select 1 from events where type = 'task.paused' and stream_id = $1`,
+      [task.id],
+    );
+    expect(paused).toEqual([]);
+
+    // One `human_actions` row, naming what the retry did; a replay performs nothing and says the same.
+    const audit = await humanActions(pipeline);
+    expect(audit.map((row) => row.action)).toEqual(['task.retry_stage']);
+    expect(audit[0]?.params).toMatchObject({
+      stage: 'refinement',
+      attempt: 2,
+      stopped_run_id: runId,
+      stop_command_id: commandId,
+    });
+    const replay = (await send(
+      client,
+      `/api/tasks/${task.id}/retry-stage`,
+      { stage: 'refinement' },
+      'retry-live-1',
+    )) as typeof retried;
+    expect(replay.status).toBe(200);
+    expect(replay.body.performed).toBe(false);
+    expect(replay.body.stopped_run).toEqual({ run_id: runId, command_id: commandId });
+    expect(await humanActions(pipeline)).toHaveLength(1);
+  }, 300_000);
+});
+
 describe('the run command surface', () => {
   it('cancels a run that is running, and retries a finished one on another model', async () => {
     const held = gate();

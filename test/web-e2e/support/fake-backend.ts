@@ -75,8 +75,9 @@ const TASK_COMMAND_SCHEMAS = {
 } as const;
 
 /**
- * What the two WP-44 commands answer — the client parses both (`takeOverResponseSchema`,
- * `taskCommandResponseSchema`), so the fake's usual `{}` would be refused as a malformed answer.
+ * What the two WP-44 commands and retry-stage answer — the client parses all three
+ * (`takeOverResponseSchema`, `taskCommandResponseSchema`, `retryStageResponseSchema`, backlog 494),
+ * so the fake's usual `{}` would be refused as a malformed answer.
  */
 const commandAnswer = (path: string, command: string | undefined): unknown => {
   const taskId = /^\/api\/tasks\/([^/]+)\//.exec(path)?.[1] ?? '';
@@ -94,6 +95,17 @@ const commandAnswer = (path: string, command: string | undefined): unknown => {
   }
   if (command === 'hand-back') {
     return { task_id: taskId, state: 'active', current_stage: 'code_review', performed: true };
+  }
+  if (command === 'retry-stage') {
+    // Backlog 494: the client parses `retryStageResponseSchema` and shows what the retry did.
+    return {
+      task_id: taskId,
+      state: 'active',
+      current_stage: 'refinement',
+      performed: true,
+      attempt: 2,
+      stopped_run: null,
+    };
   }
   return {};
 };

@@ -191,17 +191,21 @@ export const createPostgresRunCommandRepository = (): RunCommandRepository => ({
     const row = rows[0];
     return row === undefined ? null : lockedOf(row);
   },
-  lockLiveRunOf: async (tx, taskId) => {
+  lockLiveRunOf: async (tx, taskId, options) => {
     // Newest first: technical/02 allows a task one active run, so more than one row here is a
     // defect elsewhere — and the newest is the one a person looking at the task is looking at.
+    // `stage` (backlog 494) joins the run's stage attempt, so an ask run — no stage — never matches.
+    const strength = options?.forUpdate === true ? 'update' : 'share';
+    const byStage = options?.stage === undefined ? '' : 'and s.stage = $3';
     const { rows } = await sqlOf(tx).query<LockedRow>(
       `select r.id, r.task_id, r.status, r.lease_owner, r.lease_expires_at, ${SESSION_OF_RUN}
          from runs r
-        where r.task_id = $1 and r.status = any($2::run_status[])
+         left join task_stages s on s.id = r.task_stage_id
+        where r.task_id = $1 and r.status = any($2::run_status[]) ${byStage}
         order by r.created_at desc, r.id desc
         limit 1
-        for share of r`,
-      [taskId, ACTIVE],
+        for ${strength} of r`,
+      options?.stage === undefined ? [taskId, ACTIVE] : [taskId, ACTIVE, options.stage],
     );
     const row = rows[0];
     return row === undefined ? null : lockedOf(row);

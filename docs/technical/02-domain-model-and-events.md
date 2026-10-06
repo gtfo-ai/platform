@@ -73,6 +73,15 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > closed `returned` with outcome `escalated` (it ended in the escalation, not in a verdict), and
 > the person's note is its `return_reason`, so the target stage is handed it. `retry-stage` and
 > `resume` out of `needs_human` are unchanged: they re-enter the stopped stage and spend no round.
+>
+> **A run speaks only for its own attempt** (amended 2026-10-06, PROGRESS backlog 494). Every way
+> back into a stage is a new attempt, so a run started for an attempt the task has since left —
+> a `retry-stage` pressed while it ran, a return, a hand-back — is recorded with its spend and
+> **completes nothing**: the stage executor asks the task aggregate's `isCurrentStageAttempt(task,
+> stage, attempt)` before it writes a verdict, and the lease sweep does not escalate a task that is
+> on a newer attempt of the swept run's stage. `retry-stage` also stops the stage's live run itself
+> (technical/08's amendment of the same date), so the new attempt is not queued behind a run whose
+> result would otherwise have won.
 
 *Which* limit a `returned` spends is decided by the transition and not only by the stage it leaves (WP-26). `ready_for_merge` has two outgoing returns — a human's comment, which is BD-008's `human_rounds`, and the default branch moving, which re-enters the rebase gate — and attributing the second to the first escalated a task with *"human_rounds iteration limit of 3 reached: main moved to …"* after three merges to `main` under a waiting merge request. The edges that need their own loop are enumerated in `RETURN_LOOPS_BY_EDGE` (`packages/domain/src/pipeline/interpreter.ts`); everything else is attributed by the stage, and an edge in neither table cannot return at all.
 

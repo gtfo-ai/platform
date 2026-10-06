@@ -3113,6 +3113,63 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           expect(await store.runCommands.lockLiveRunOf(tx, target.taskId)).toBeNull();
         });
 
+        it('narrows the live run to a stage, for a retry that stops the stage’s run and no ask (backlog 494)', async () => {
+          const target = await leased();
+          // An ask on the same task: a live run attached to no stage.
+          const ask = nextId();
+          await store.runs.insert(tx, {
+            id: ask,
+            taskId: target.taskId,
+            projectId,
+            stage: null,
+            role: 'product_manager',
+            mode: 'normal',
+            attempt: 1,
+            model: 'claude-opus-5',
+            effort: 'medium',
+            promptVersion: 'basic@1+product_manager',
+            systemPrompt: null,
+            userPrompt: null,
+            redactionCount: 0,
+            contextPack: null,
+            settings: null,
+            reserveUsd: null,
+            promptsWithheld: null,
+            providerMode: 'api',
+            status: 'running',
+            terminalReason: null,
+            sessionId: null,
+            numTurns: 0,
+            usage: null,
+            cost: null,
+            wallMs: 0,
+            createdAt: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+            startedAt: null,
+          });
+          const atRefinement = { stage: 'refinement' as Slug };
+          expect(
+            (await store.runCommands.lockLiveRunOf(tx, target.taskId, atRefinement))?.runId,
+          ).toBe(target.runId);
+          // The exclusive read answers the same row.
+          expect(
+            (
+              await store.runCommands.lockLiveRunOf(tx, target.taskId, {
+                ...atRefinement,
+                forUpdate: true,
+              })
+            )?.runId,
+          ).toBe(target.runId);
+          expect(
+            await store.runCommands.lockLiveRunOf(tx, target.taskId, {
+              stage: 'architecture' as Slug,
+            }),
+          ).toBeNull();
+          await end(target.runId);
+          // Only the ask is live now, and it is no stage's run.
+          expect(await store.runCommands.lockLiveRunOf(tx, target.taskId, atRefinement)).toBeNull();
+          expect((await store.runCommands.lockLiveRunOf(tx, target.taskId))?.runId).toBe(ask);
+        });
+
         it('lists the pending commands of the live runs this owner leases, oldest first, bounded', async () => {
           const mine = await leased();
           const mineToo = await leased();

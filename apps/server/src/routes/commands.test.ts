@@ -142,6 +142,9 @@ const build = async (overrides: Partial<CommandQueries> = {}): Promise<World> =>
         // reads `null` — a fake kinder than the adapter (standing rule 1). A case that wants the
         // words back sets `world.result`.
         reason: null,
+        // Backlog 494: retry-stage answers the attempt it entered and the run it stopped.
+        attempt: 2,
+        stoppedRun: null,
       } as never;
     };
 
@@ -892,6 +895,53 @@ describe('the routes’ own answers', () => {
     // No key, no derived id: the command is told so rather than handed an empty string.
     await post(world, `/api/runs/${RUN}/cancel`, {});
     expect(world.calls.map((call) => call.input.idempotencyKey)).toEqual(['cancel-in-place', null]);
+  });
+
+  it('answers a retry-stage with the attempt it entered and the run it stopped, and a replay the same (backlog 494)', async () => {
+    world.result = {
+      attempt: 3,
+      stoppedRun: { runId: RUN, commandId: '00000000-0000-4000-8000-0000000000c2' },
+    };
+    const path = `/api/tasks/${TASK}/retry-stage`;
+    const reply = await post(world, path, { stage: 'refinement' }, 'retry-live');
+    expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+    expect(reply.body).toEqual({
+      task_id: TASK,
+      state: 'active',
+      current_stage: 'refinement',
+      performed: true,
+      attempt: 3,
+      stopped_run: { run_id: RUN, command_id: '00000000-0000-4000-8000-0000000000c2' },
+    });
+    // The key reaches the command, which derives the stop's id from it, as the run cancel's does.
+    expect(world.calls[0]?.input).toMatchObject({ idempotencyKey: 'retry-live' });
+    expect(world.actions).toHaveLength(1);
+    expect(world.actions[0]?.params).toMatchObject({
+      stage: 'refinement',
+      attempt: 3,
+      stopped_run_id: RUN,
+      stop_command_id: '00000000-0000-4000-8000-0000000000c2',
+    });
+    const replay = await post(world, path, { stage: 'refinement' }, 'retry-live');
+    expect(`${replay.status} ${String(replay.body.performed)}`).toBe('200 false');
+    expect(replay.body.attempt).toBe(3);
+    expect(replay.body.stopped_run).toEqual({
+      run_id: RUN,
+      command_id: '00000000-0000-4000-8000-0000000000c2',
+    });
+    expect(world.calls).toHaveLength(1);
+  });
+
+  it('answers a retry-stage that stopped nothing, and one at Ready that entered nothing (backlog 494)', async () => {
+    const path = `/api/tasks/${TASK}/retry-stage`;
+    world.result = { attempt: 2, stoppedRun: null };
+    const plain = await post(world, path, { stage: 'refinement' }, 'retry-plain');
+    expect(plain.body).toMatchObject({ performed: true, attempt: 2, stopped_run: null });
+    world.result = { attempt: null, stoppedRun: null };
+    const ready = await post(world, path, { stage: 'refinement' }, 'retry-ready');
+    expect(ready.body).toMatchObject({ performed: true, attempt: null, stopped_run: null });
+    const replayed = await post(world, path, { stage: 'refinement' }, 'retry-ready');
+    expect(replayed.body).toMatchObject({ performed: false, attempt: null, stopped_run: null });
   });
 
   it('gives the key back when the command refuses, and performs a retry of it', async () => {

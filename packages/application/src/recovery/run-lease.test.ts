@@ -31,7 +31,10 @@ const LEASE_GONE = '2026-09-15T09:50:00.000Z' as IsoDateTime;
 const GRACE_MS = 60_000;
 const WALL_CLOCK_MS = 60 * 60_000;
 
-const task = (state: StoredTask['task']['state'] = 'active'): StoredTask => ({
+const task = (
+  state: StoredTask['task']['state'] = 'active',
+  implementationAttempt = 1,
+): StoredTask => ({
   task: {
     id: TASK,
     projectId: PROJECT,
@@ -40,7 +43,7 @@ const task = (state: StoredTask['task']['state'] = 'active'): StoredTask => ({
     mode: 'normal',
     state,
     currentStage: 'implementation',
-    stageAttempts: { implementation: 1 },
+    stageAttempts: { implementation: implementationAttempt },
     iterationCounters: {},
     limits: {
       code_review: 3,
@@ -97,13 +100,15 @@ const expired: ExpiredRunLease = {
 const sweep = async (options: {
   readonly claim: boolean;
   readonly taskState?: 'active' | 'done';
+  /** The task's attempt at the run's stage; the run is attempt 1 (backlog 494). */
+  readonly taskAttempt?: number;
 }) => {
   const store = createMemoryPipelineStore();
   const eventing = new MemoryEventing();
   const asked: ExpiredRunQuery[] = [];
 
   await eventing.transaction(async (scope) => {
-    await store.tasks.insert(scope.tx, task(options.taskState ?? 'active'));
+    await store.tasks.insert(scope.tx, task(options.taskState ?? 'active', options.taskAttempt));
     await store.tasks.recordStageEntered(scope.tx, {
       taskId: TASK,
       stage: 'implementation',
@@ -221,6 +226,19 @@ describe('the run-lease sweep', () => {
     expect(run?.status).toBe('running');
     expect(stored?.task.state).toBe('active');
     expect(eventing.log.filter((row) => row.event.stream_type === 'run')).toHaveLength(0);
+  });
+
+  it('ends a run a retry superseded without escalating the task that is on the new attempt (backlog 494)', async () => {
+    // `retry-stage` recorded a stop for this run and entered attempt 2; the holder died before it
+    // applied the stop. Parking the task now would undo the person's retry.
+    const { report, run, stored, eventing } = await sweep({ claim: true, taskAttempt: 2 });
+
+    expect(report.ended).toBe(1);
+    expect(run?.status).toBe('failed');
+    expect(run?.terminalReason).toBe('lease_expired');
+    expect(stored?.task.state).toBe('active');
+    expect(stored?.task.stageAttempts.implementation).toBe(2);
+    expect(eventing.log.filter((row) => row.event.type === 'task.escalated')).toHaveLength(0);
   });
 
   it('still ends the run when its task cannot be escalated, because the reservation is the point', async () => {

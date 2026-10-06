@@ -656,6 +656,16 @@ export interface HarnessOptions {
    */
   readonly whileAskPlans?: () => Promise<void>;
   /**
+   * Something that commits **while a stage's run is in flight** (PROGRESS backlog 494).
+   *
+   * The stage executor's shape is transaction / run / transaction, and a human command answered in
+   * the middle — a retry, a return, a pause — is exactly the window this harness otherwise cannot
+   * reach: a scripted run settles in the same tick it starts. Awaited inside the run's `outcome`,
+   * after the run row and its lease were committed and before the executor's recording
+   * transaction; it is handed the run's spec. Absent, it changes nothing.
+   */
+  readonly whileRunning?: (spec: RunSpec) => Promise<void>;
+  /**
    * What this project's maintenance chores have already spent this month (WP-36).
    *
    * The stage executor asks it at the admission of a chore **the scheduler created** and of nothing
@@ -1570,7 +1580,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
               store.tasks.recordMergeRequest(scope.tx, spec.taskId, reported),
             )
           : Promise.resolve()
-        ).then(() => outcomeFor(spec.runId, scripted, checked.value)),
+        )
+          .then(async () => options.whileRunning?.(spec))
+          .then(() => outcomeFor(spec.runId, scripted, checked.value)),
         steer: async () => {},
         stop: async () => {},
       };

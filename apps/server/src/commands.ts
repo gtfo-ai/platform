@@ -89,11 +89,19 @@ export interface TaskCommands {
     readonly capUsd: number;
   }): Promise<{ readonly capUsd: number; readonly previousCapUsd: number }>;
   cancel(input: { readonly taskId: string; readonly userId: string }): Promise<void>;
+  /**
+   * Answers the attempt entered and the stage's run it stopped, if one was in flight (PROGRESS
+   * backlog 494); the stop's `run_commands` id is derived from the `Idempotency-Key`.
+   */
   retryStage(input: {
     readonly taskId: string;
     readonly userId: string;
     readonly stage: string;
-  }): Promise<void>;
+    readonly idempotencyKey: string | null;
+  }): Promise<{
+    readonly attempt: number | null;
+    readonly stoppedRun: { readonly runId: string; readonly commandId: string | null } | null;
+  }>;
   returnToStage(input: {
     readonly taskId: string;
     readonly userId: string;
@@ -263,6 +271,15 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
         taskId: id(input.taskId),
         userId: id(input.userId),
         stage: slug(input.stage),
+        ...(input.idempotencyKey === null
+          ? {}
+          : {
+              stopCommandId: runCommandIdFor(
+                input.userId,
+                'task.retry_stage',
+                input.idempotencyKey,
+              ),
+            }),
       }),
     returnToStage: async (input) =>
       returnToStageCommand(deps, {

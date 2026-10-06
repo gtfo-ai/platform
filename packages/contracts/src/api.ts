@@ -1447,6 +1447,27 @@ export const taskCommandResponseSchema = z.strictObject({
   performed: z.boolean(),
 });
 
+/**
+ * `POST /api/tasks/:id/retry-stage` — where the task stands, and what the retry did (PROGRESS
+ * backlog 494).
+ *
+ * `attempt` is the attempt the stage was entered at, `null` at `ready_for_merge`, which the request
+ * does not enter (the head check does, WP-79). `stopped_run` is the stage's run that was still in
+ * flight: its `command_id` names the stop recorded for the process holding it — the run reads
+ * `running` until that process ends it `cancelled`, and the new attempt starts after — and is
+ * `null` when no process held the run and its record was ended here. `null` when no run of the
+ * stage was live. A replay answers what the first attempt recorded.
+ */
+export const retryStageResponseSchema = taskCommandResponseSchema.extend({
+  attempt: z.number().int().positive().nullable(),
+  stopped_run: z
+    .strictObject({
+      run_id: idSchema,
+      command_id: idSchema.nullable(),
+    })
+    .nullable(),
+});
+
 /** What a run command answers with: the run, and where its task now stands (WP-15i). */
 export const runCommandResponseSchema = z.strictObject({
   run_id: idSchema,
@@ -2792,6 +2813,7 @@ export type AnswerQuestionRequest = z.infer<typeof answerQuestionRequestSchema>;
 export type DecideApprovalRequest = z.infer<typeof decideApprovalRequestSchema>;
 export type SubmitFeedbackRequest = z.infer<typeof submitFeedbackRequestSchema>;
 export type TaskCommandResponse = z.infer<typeof taskCommandResponseSchema>;
+export type RetryStageResponse = z.infer<typeof retryStageResponseSchema>;
 export type TakeOverRequest = z.infer<typeof takeOverRequestSchema>;
 export type TakeOverResponse = z.infer<typeof takeOverResponseSchema>;
 export type AskTaskRequest = z.infer<typeof askTaskRequestSchema>;

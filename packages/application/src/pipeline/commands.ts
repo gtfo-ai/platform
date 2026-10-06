@@ -538,10 +538,19 @@ const writeTask = async <T>(
   if (work !== null && 'readyCheck' in work) {
     await enqueueReadyHeadCheck(requireJobs(deps), work.readyCheck);
   } else if (work !== null) {
-    await enqueueStage(requireJobs(deps), {
+    const enqueued = await enqueueStage(requireJobs(deps), {
       ...work.job,
       ...(work.overrides === undefined ? {} : { overrides: work.overrides }),
     });
+    if (enqueued.status === 'coalesced') {
+      // Stated, not silent (backlog 494): another job for the task holds the queue's one waiting
+      // slot. When it fires for an older attempt it forwards the wake-up to this one
+      // (`supersededBy`, `./jobs.ts`); for this attempt, it is this wake-up already.
+      deps.logger?.warn(
+        { task_id: work.job.taskId, stage: work.job.stage, attempt: work.job.attempt },
+        'the stage job a human command enqueued was coalesced onto one already waiting for the task',
+      );
+    }
   }
   return outcome.result;
 };
@@ -902,22 +911,62 @@ export const cancelTaskCommand = async (
   });
 
 /**
+ * What `retry-stage` did, so the person who pressed it is told (PROGRESS backlog 494).
+ *
+ * `attempt` is the attempt the stage was entered at — `null` at `ready_for_merge`, which the request
+ * does not enter (the `ready_head_check` duty does, WP-79). `stoppedRun` is the stage's run that was
+ * still in flight when the retry landed, and how it is being stopped: `commandId` names the `cancel`
+ * recorded for the process holding its lease, `null` when no process held it and the record was
+ * ended here. `null` when no run of the stage was live.
+ */
+export interface RetryStageOutcome {
+  readonly attempt: number | null;
+  readonly stoppedRun: { readonly runId: Id; readonly commandId: Id | null } | null;
+}
+
+/**
  * `POST /api/tasks/:task_id/retry-stage` — run the current stage again, as a new attempt.
  *
  * A **retry**, so the stage must be the one the task is at: sending it somewhere else is
- * `return-to-stage`, which counts a round and records a reason on the stage it leaves. The attempt
- * counter moves, which is what supersedes any run still in flight for the old attempt — the stage
- * executor's `revalidate` skips a job whose attempt has been passed.
+ * `return-to-stage`, which counts a round and records a reason on the stage it leaves.
+ *
+ * **A run of the stage still in flight is stopped, in the same transaction** (PROGRESS backlog 494).
+ * The attempt counter moving was all this did before, and the docblock said that *superseded* the
+ * old run. It did not: the executor's `revalidate` skips a *job* whose attempt has passed, but the
+ * old run was already past that check, so it ran on, completed the stage on the task's new attempt,
+ * and the new attempt's job — queued behind it, because `stage.execute` is `stately` per task —
+ * found the task at the next stage and did nothing. The person was answered 200; no second run
+ * started (first local test, 2026-10-06). Now the live run is stopped through the run cancel's own
+ * path (TD-028 decision 11): a `cancel` row for the process holding its lease, which interrupts the
+ * session and ends the run `cancelled` with what it measured — or, with no live lease, the record
+ * ended here. The task is **not** paused, unlike a run cancel: the retry is the person's next
+ * instruction. The executor's recording transaction asks `isCurrentStageAttempt` and records a
+ * superseded run without completing anything, and the new attempt's job runs once the old one has
+ * ended — so a new attempt is never queued behind a run whose result would have won.
  */
 export const retryStageCommand = async (
   deps: HumanCommandDependencies,
-  input: { readonly taskId: Id; readonly userId: Id; readonly stage: Slug },
-): Promise<void> => {
+  input: {
+    readonly taskId: Id;
+    readonly userId: Id;
+    readonly stage: Slug;
+    /** The stop's `run_commands` id when one is recorded; see {@link steerRunCommand}'s. */
+    readonly stopCommandId?: Id;
+  },
+): Promise<RetryStageOutcome> => {
   requireJobs(deps);
   return writeTask(deps, { ...input, what: 'retrying a stage' }, async (scope, stored, context) => {
     if (stored.task.currentStage !== input.stage) {
       throw new StageNotCurrentError(input.stage, stored.task.currentStage);
     }
+    // Before the task row is written: `runs` then `tasks`, the order the run's ending takes. The
+    // stage's run only — an ask beside it is not the attempt being retried.
+    const live = await deps.store.runCommands.lockLiveRunOf(scope.tx, stored.task.id, {
+      forUpdate: true,
+      stage: input.stage,
+    });
+    const stoppedRun =
+      live === null ? null : await stopRunForRetry(deps, scope, live, context, input);
     // At `ready_for_merge` this is the ready-head check, not an entry (WP-79 review round 1).
     const work = await humanEnter(deps, scope, stored, context, {
       stage: input.stage,
@@ -925,8 +974,39 @@ export const retryStageCommand = async (
       userId: input.userId,
       cause: null,
     });
-    return { result: undefined, work };
+    const attempt = work !== null && 'job' in work ? work.job.attempt : null;
+    return { result: { attempt, stoppedRun }, work };
   });
+};
+
+/**
+ * {@link retryStageCommand}'s stop: the run cancel's two branches (TD-028 decision 11) without its
+ * pause. With a live lease the stop is **recorded** for the holder, which ends the run itself with
+ * the cost it measured; with none, nothing is driving the session, so the record is ended here.
+ */
+const stopRunForRetry = async (
+  deps: HumanCommandDependencies,
+  scope: TransactionScope,
+  live: LockedRun,
+  context: CommandContext,
+  input: { readonly userId: Id; readonly stopCommandId?: Id },
+): Promise<{ readonly runId: Id; readonly commandId: Id | null }> => {
+  assertRunTransition(live.status, 'cancelled');
+  if (leaseIsLive(live, context.clock.now())) {
+    const commandId = input.stopCommandId ?? context.ids.next();
+    await recordRunCommand(deps, scope, live, {
+      id: commandId,
+      actorUserId: input.userId,
+      instruction: { kind: 'cancel' },
+    });
+    return { runId: live.runId, commandId };
+  }
+  const run = await deps.store.runs.load(scope.tx, live.runId);
+  if (run === null) {
+    throw new UnknownAggregateError(`run ${live.runId} does not exist`);
+  }
+  await scope.events.append(await endRunRecordInPlace(deps, scope, run, context));
+  return { runId: live.runId, commandId: null };
 };
 
 /** What a human return leaves behind for the stage it goes back to, and for a spent loop. */
@@ -1447,6 +1527,21 @@ const endCancelledRunInPlace = async (
   run: StoredRun,
   context: CommandContext,
 ): Promise<void> => {
+  await pauseForCancel(deps, scope, run.taskId, context, [
+    ...(await endRunRecordInPlace(deps, scope, run, context)),
+  ]);
+};
+
+/**
+ * Ends a run **as a record** — `cancelled`, no figure — and answers its `run.finished`, unappended:
+ * the run cancel's second branch, and since backlog 494 the retry's ({@link stopRunForRetry}).
+ */
+const endRunRecordInPlace = async (
+  deps: HumanCommandDependencies,
+  scope: TransactionScope,
+  run: StoredRun,
+  context: CommandContext,
+): Promise<readonly DomainEvent[]> => {
   const won = await deps.store.runs.finish(scope.tx, {
     runId: run.id,
     status: 'cancelled',
@@ -1486,7 +1581,7 @@ const endCancelledRunInPlace = async (
     },
     context,
   );
-  await pauseForCancel(deps, scope, run.taskId, context, [...decision.events]);
+  return decision.events;
 };
 
 /** Wall time for a run ended from outside the process that started it; `0` when it never started. */

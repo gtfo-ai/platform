@@ -20,6 +20,7 @@ import {
   enterStage,
   escalateTask,
   handBackTask,
+  isCurrentStageAttempt,
   isTaskFinished,
   markReadyForMerge,
   pauseTask,
@@ -234,6 +235,18 @@ describe('completeStage', () => {
         context(),
       ),
     ).toThrow(InvariantViolationError);
+  });
+});
+
+describe('isCurrentStageAttempt', () => {
+  it('is the stage the task is at, on that stage’s latest attempt, and nothing else (backlog 494)', () => {
+    const entered = enterStage(activeTask('refinement'), { stage: 'refinement' }, context());
+    const task = entered.aggregate;
+    const attempt = task.stageAttempts.refinement ?? 0;
+    expect(isCurrentStageAttempt(task, 'refinement', attempt)).toBe(true);
+    // The attempt a retry superseded, and a stage the task is not at, on any attempt.
+    expect(isCurrentStageAttempt(task, 'refinement', attempt - 1)).toBe(false);
+    expect(isCurrentStageAttempt(task, 'architecture', attempt)).toBe(false);
   });
 });
 

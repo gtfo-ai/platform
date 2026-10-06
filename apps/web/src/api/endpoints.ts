@@ -94,6 +94,7 @@ import {
   retireIntegrationResponseSchema,
   retryRunRequestSchema,
   retryStageRequestSchema,
+  retryStageResponseSchema,
   returnToStageRequestSchema,
   reworkRequestSchema,
   runCommandsResponseSchema,
@@ -477,10 +478,11 @@ export interface Endpoints {
     approvalId: string,
     body: z.input<typeof decideApprovalRequestSchema>,
   ) => Promise<void>;
+  /** Backlog 494: what the retry did — the attempt it entered and the run it stopped. */
   readonly retryStage: (
     taskId: string,
     body: z.input<typeof retryStageRequestSchema>,
-  ) => Promise<void>;
+  ) => Promise<z.output<typeof retryStageResponseSchema>>;
   readonly returnToStage: (
     taskId: string,
     body: z.input<typeof returnToStageRequestSchema>,
@@ -894,7 +896,11 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     // so they carry an `Idempotency-Key` (technical/08 § Principles). A double-clicked Retry that
     // starts two runs is the failure the header exists for.
     retryStage: (taskId, body) =>
-      command(`/api/tasks/${seg(taskId)}/retry-stage`, retryStageRequestSchema, body, true),
+      client.command(`/api/tasks/${seg(taskId)}/retry-stage`, {
+        schema: retryStageResponseSchema,
+        body: retryStageRequestSchema.parse(body),
+        idempotent: true,
+      }),
     returnToStage: (taskId, body) =>
       command(`/api/tasks/${seg(taskId)}/return-to-stage`, returnToStageRequestSchema, body, true),
     reworkStage: (taskId, body) =>

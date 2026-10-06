@@ -1711,8 +1711,19 @@ export interface RunCommandRepository {
     runId: Id,
     options?: { readonly forUpdate?: boolean },
   ): Promise<LockedRun | null>;
-  /** The task's live run (`ACTIVE_RUN_STATUSES`), locked `for share`, or `null` when it has none. */
-  lockLiveRunOf(tx: Transaction, taskId: Id): Promise<LockedRun | null>;
+  /**
+   * The task's live run (`ACTIVE_RUN_STATUSES`), locked `for share`, or `null` when it has none.
+   *
+   * `stage` narrows it to a run attached to that stage (any attempt), so an **ask** run — which has
+   * no stage — is never mistaken for the stage's (PROGRESS backlog 494: a retry stops the stage's
+   * run and nothing else). `forUpdate` takes the row exclusively, for {@link lockRun}'s reason: the
+   * caller may go on to `finish` the row it read.
+   */
+  lockLiveRunOf(
+    tx: Transaction,
+    taskId: Id,
+    options?: { readonly forUpdate?: boolean; readonly stage?: Slug },
+  ): Promise<LockedRun | null>;
   insert(tx: Transaction, command: NewRunCommand): Promise<void>;
   /**
    * Pending commands for the live runs **this holder** leases, oldest first — optionally for one run.

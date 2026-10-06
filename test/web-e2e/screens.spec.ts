@@ -386,6 +386,10 @@ test('the task screen sends retry-stage, return-to-stage, rework and feedback', 
   await expect
     .poll(async () => (await commandLog(request)).map((entry) => entry.path))
     .toContain(`/api/tasks/${IDS.taskFeature}/retry-stage`);
+  // Backlog 494: the control says what the retry did, rather than nothing at all.
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Attempt 2 of refinement' }),
+  ).toBeVisible();
 
   // `returnToStageRequestSchema` requires a reason, so the button stays disabled without one —
   // the client refuses a request the server would reject rather than sending it.

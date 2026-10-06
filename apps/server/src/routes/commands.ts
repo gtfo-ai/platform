@@ -100,6 +100,7 @@ import {
   resumeTaskRequestSchema,
   retryRunRequestSchema,
   retryStageRequestSchema,
+  retryStageResponseSchema,
   returnToStageRequestSchema,
   reworkRequestSchema,
   runCommandResponseSchema,
@@ -398,6 +399,39 @@ export const registerCommandRoutes = async (
     return recorded;
   };
 
+  /** What `retry-stage` answers about what it did (backlog 494). */
+  const retryAnswerOf = (result: {
+    readonly attempt: number | null;
+    readonly stoppedRun: { readonly runId: string; readonly commandId: string | null } | null;
+  }) => ({
+    attempt: result.attempt,
+    stopped_run:
+      result.stoppedRun === null
+        ? null
+        : { run_id: result.stoppedRun.runId, command_id: result.stoppedRun.commandId },
+  });
+
+  /** What a replayed retry recorded, or a refusal: it never answers a placeholder. */
+  const recordedRetry = (previous: JsonObject | null) => {
+    if (previous === null || !('attempt' in previous)) {
+      // A retry performed before backlog 494 recorded neither field.
+      throw new HttpError(
+        409,
+        'idempotency_key_reused',
+        'this Idempotency-Key has already retried this stage, and the attempt that did predates what it did being audited; use a new key',
+      );
+    }
+    const runId = previous.stopped_run_id;
+    const commandId = previous.stop_command_id;
+    return retryAnswerOf({
+      attempt: typeof previous.attempt === 'number' ? previous.attempt : null,
+      stoppedRun:
+        typeof runId === 'string'
+          ? { runId, commandId: typeof commandId === 'string' ? commandId : null }
+          : null,
+    });
+  };
+
   /** The command id a replayed steer recorded, or a refusal: it never answers a placeholder. */
   const recordedCommandId = (previous: JsonObject | null): string => {
     const recorded = previous?.command_id;
@@ -552,19 +586,62 @@ export const registerCommandRoutes = async (
     perform: async ({ deps, taskId, userId }) => deps.cancel({ taskId, userId }),
   });
 
-  taskCommand({
-    path: '/api/tasks/:task_id/retry-stage',
-    action: 'task.retry_stage',
-    name: 'task.retry_stage',
-    key: 'required',
-    body: retryStageRequestSchema,
-    summary: 'Run the current stage again, as a new attempt',
-    description:
-      'The stage must be the one the task is at: sending it somewhere else is `return-to-stage`, which counts a round and records a reason. The attempt counter moves, which supersedes any run still in flight for the old attempt. At `ready_for_merge` (a task paused there) the request moves nothing: the `ready_head_check` duty re-enters `rebase_gate` for the branch head the gates judged (WP-105) and `ci_gate` otherwise (WP-79), spending no loop.',
-    params: (body) => ({ stage: body.stage }),
-    perform: async ({ deps, body, taskId, userId }) =>
-      deps.retryStage({ taskId, userId, stage: body.stage }),
-  });
+  /**
+   * `retry-stage` is its own route rather than a {@link taskCommand}, for the run cancel's reason: it
+   * answers what it **did** (PROGRESS backlog 494) — the attempt it entered and the run it stopped —
+   * and the stop's `run_commands` id is derived from the `Idempotency-Key`, which the shared helper
+   * does not hand its command.
+   */
+  typed.post(
+    '/api/tasks/:task_id/retry-stage',
+    {
+      preValidation: [
+        scope,
+        requirePermission(guard, 'task.retry_stage', { project: scopedProject }),
+      ],
+      schema: {
+        summary: 'Run the current stage again, as a new attempt',
+        description:
+          'The stage must be the one the task is at: sending it somewhere else is `return-to-stage`, which counts a round and records a reason. The answer names the `attempt` the stage was entered at. **A run of the stage still in flight is stopped** (PROGRESS backlog 494), through the run cancel’s two branches without its pause: when a process holds the run’s lease the stop is recorded for it and `stopped_run.command_id` names it — the run reads `running` until that process ends it `cancelled` with the cost it measured, and the new attempt starts after it; when none does, the record is ended here and `command_id` is `null`. `stopped_run` is `null` when no run of the stage was live; an ask beside it is never stopped. The old run’s result is recorded and never completes the stage. At `ready_for_merge` (a task paused there) the request moves nothing and `attempt` is `null`: the `ready_head_check` duty re-enters `rebase_gate` for the branch head the gates judged (WP-105) and `ci_gate` otherwise (WP-79), spending no loop.',
+        tags: ['tasks'],
+        params: taskParamsSchema,
+        body: retryStageRequestSchema,
+        response: {
+          200: retryStageResponseSchema,
+          400: apiErrorSchema,
+          409: apiErrorSchema,
+          503: apiErrorSchema,
+        },
+      },
+    },
+    async (request) => {
+      const taskId = request.params.task_id;
+      const body = request.body;
+      return command({
+        request,
+        action: 'task.retry_stage',
+        key: 'required',
+        subject: { task_id: taskId, body },
+        params: { task_id: taskId, stage: body.stage },
+        // What a replay cannot recompute: the attempt entered and the run stopped (backlog 494).
+        auditResult: (result) => ({
+          attempt: result.attempt,
+          stopped_run_id: result.stoppedRun?.runId ?? null,
+          stop_command_id: result.stoppedRun?.commandId ?? null,
+        }),
+        taskId,
+        perform: async (idempotencyKey: string | null) => {
+          const { userId } = actorOf(request);
+          return commands().retryStage({ taskId, userId, stage: body.stage, idempotencyKey });
+        },
+        answer: async ({ performed, result, previous }) => ({
+          ...(await positionOf(taskId)),
+          performed,
+          ...(result === null ? recordedRetry(previous) : retryAnswerOf(result)),
+        }),
+      });
+    },
+  );
 
   taskCommand({
     path: '/api/tasks/:task_id/return-to-stage',

@@ -222,6 +222,20 @@ export const enterStage = (
   };
 };
 
+/**
+ * **Is this the attempt the task is on?** — the stage it is at, and that stage's latest attempt
+ * (PROGRESS backlog 494).
+ *
+ * A run belongs to one attempt of one stage, and every way back into a stage — resume, retry, a
+ * return, a hand-back — is a **new** attempt, so a run that was started for an attempt the task has
+ * since left can no longer speak for the stage: its result is the platform's record of what it
+ * spent, never the stage's verdict. {@link completeStage} cannot ask this (its input names the
+ * stage, not the attempt), so whoever ends a run asks it first. Until backlog 494 nobody did, and a
+ * retry pressed while the old run was in flight was completed by the old run.
+ */
+export const isCurrentStageAttempt = (task: Task, stage: Slug, attempt: number): boolean =>
+  task.currentStage === stage && (task.stageAttempts[stage] ?? 0) === attempt;
+
 export interface CompleteStageInput {
   readonly stage: Slug;
   readonly artifacts: readonly ArtifactRef[];

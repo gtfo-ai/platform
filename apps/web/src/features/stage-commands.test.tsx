@@ -15,6 +15,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { retryOutcomeText } from './task-detail.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -122,6 +123,20 @@ const fetchFor = (task: TaskDetailResponse, sent: Sent[]) =>
         body: JSON.parse(String(init.body)),
         key: new Headers(init.headers).get('idempotency-key'),
       });
+      if (path.endsWith('/retry-stage')) {
+        // Backlog 494: a retry pressed while the stage's run was still in flight.
+        return json({
+          task_id: TASK,
+          state: 'active',
+          current_stage: 'ci_gate',
+          performed: true,
+          attempt: 2,
+          stopped_run: {
+            run_id: '00000000-0000-4000-8000-0000000000c1',
+            command_id: '00000000-0000-4000-8000-0000000000c2',
+          },
+        });
+      }
       return json({
         task_id: TASK,
         state: 'active',
@@ -190,5 +205,44 @@ describe('the stage commands on an escalated task (backlog 483)', () => {
     );
     await screen.findByRole('button', { name: 'Return to stage' });
     expect(container.textContent).not.toContain(HINT);
+  });
+});
+
+describe('what a retry says it did (backlog 494)', () => {
+  it('names the attempt, and that the run still in flight is being stopped first', async () => {
+    const sent: Sent[] = [];
+    const user = userEvent.setup();
+    render(
+      createApp({ fetchImpl: fetchFor(escalatedAtCi('active'), sent), realtime: false }).element,
+    );
+    await user.click(await screen.findByRole('button', { name: 'Retry stage' }));
+    const said =
+      'Attempt 2 of ci_gate is queued. The run still in flight is being stopped; the new attempt starts once it has ended.';
+    // A live region, beside the connection indicator's: the answer is announced, not only drawn.
+    const status = await screen.findByText(said);
+    expect(status.getAttribute('role')).toBe('status');
+    expect(sent.find((entry) => entry.path.endsWith('/retry-stage'))?.key).toMatch(/.+/);
+  });
+
+  it('says each of the four answers differently', () => {
+    const base = {
+      task_id: TASK,
+      state: 'active',
+      current_stage: 'refinement',
+      performed: true,
+    } as const;
+    expect(retryOutcomeText({ ...base, attempt: 3, stopped_run: null })).toBe(
+      'Attempt 3 of refinement is queued.',
+    );
+    expect(
+      retryOutcomeText({
+        ...base,
+        attempt: 3,
+        stopped_run: { run_id: '00000000-0000-4000-8000-0000000000c1', command_id: null },
+      }),
+    ).toContain('had no live process, so its record was ended');
+    expect(retryOutcomeText({ ...base, attempt: null, stopped_run: null })).toContain(
+      'Nothing was re-entered here',
+    );
   });
 });

@@ -78,6 +78,7 @@ import {
   failRun,
   finishRun,
   HISTORY_BOOTSTRAP_TEMPLATE_ID,
+  isCurrentStageAttempt,
   isRunnableTaskState,
   maintenanceBudgetUsdOf,
   markRunning,
@@ -261,8 +262,15 @@ export interface StageRunPlanner {
 export type StageExecutionOutcome =
   /** The run happened and its result has been recorded. */
   | { readonly kind: 'ran'; readonly runId: Id; readonly verdict: string | null }
-  /** Nothing to do: the task moved on, was paused, or the job is a duplicate. */
-  | { readonly kind: 'skipped'; readonly reason: string }
+  /**
+   * Nothing to do: the task moved on, was paused, or the job is a duplicate.
+   *
+   * `supersededBy` is set when the only thing wrong with the job is its **attempt**: the task is
+   * running at this stage on a newer one (PROGRESS backlog 494). The caller forwards the wake-up to
+   * that attempt, because `stage.execute` is `stately` per task and the newer attempt's own enqueue
+   * may have been coalesced onto this very job.
+   */
+  | { readonly kind: 'skipped'; readonly reason: string; readonly supersededBy?: number }
   /** A budget stopped it; the task is `paused` and a human may raise the cap. */
   | { readonly kind: 'paused'; readonly reason: string }
   /** The run ended without a usable result; the pipeline escalates on the event. */
@@ -619,7 +627,7 @@ export const taskBudgetDetail = (
   ` and "${stage}" may spend ${runBudgetUsd(settings, stage)} more`;
 
 type Prepared =
-  | { readonly kind: 'skipped'; readonly reason: string }
+  | { readonly kind: 'skipped'; readonly reason: string; readonly supersededBy?: number }
   | { readonly kind: 'paused'; readonly reason: string }
   /** Refused before any run exists, the task parked for a human (WP-63, WP-106: bad config). */
   | { readonly kind: 'escalated'; readonly reason: string }
@@ -677,7 +685,7 @@ const revalidate = (
   stored: StoredTask | null,
   job: StageExecutionJob,
 ):
-  | { readonly kind: 'skipped'; readonly reason: string }
+  | { readonly kind: 'skipped'; readonly reason: string; readonly supersededBy?: number }
   | {
       readonly kind: 'ok';
       readonly stored: StoredTask;
@@ -695,9 +703,12 @@ const revalidate = (
     };
   }
   if ((task.stageAttempts[job.stage] ?? 0) !== job.attempt) {
+    const current = task.stageAttempts[job.stage] ?? 0;
     return {
       kind: 'skipped',
-      reason: `attempt ${job.attempt} of "${job.stage}" has been superseded by attempt ${task.stageAttempts[job.stage] ?? 0}`,
+      reason: `attempt ${job.attempt} of "${job.stage}" has been superseded by attempt ${current}`,
+      // Only forward: a job for a *later* attempt than the task's is not a wake-up anybody owes.
+      ...(current > job.attempt ? { supersededBy: current } : {}),
     };
   }
   const stage = stageOf(
@@ -1547,6 +1558,19 @@ const record = async (
     return recordOntoStoppedTask(scope, input, withCost, context);
   }
 
+  /**
+   * **The task left this run's attempt while it was in flight** (PROGRESS backlog 494).
+   *
+   * A retry of the stage, a return, a hand-back — every way back into a stage is a new attempt, and
+   * a run started for the old one can no longer speak for the stage: it is recorded, and its spend
+   * charged, exactly like a run that ended into a stopped task. Until backlog 494 this transaction
+   * never asked which attempt it was recording, so a retry pressed during a run was completed by
+   * the run it meant to replace — and the new attempt's job found the stage done.
+   */
+  if (!isCurrentStageAttempt(stored.task, job.stage, job.attempt)) {
+    return recordOntoStoppedTask(scope, input, withCost, context);
+  }
+
   if (outcome.status !== 'completed') {
     return recordUnsuccessful(scope, input, withCost, context);
   }
@@ -1837,7 +1861,8 @@ const lostTheRun = async (input: {
 };
 
 /**
- * The run ended and the task is no longer running at this stage: record the run, stop there.
+ * The run ended and the task is no longer running at this stage — or no longer on this run's
+ * attempt of it (backlog 494): record the run, stop there.
  *
  * The caller's docblock has the reasoning. What this function is careful about is the *order*: the
  * run's row is written first and everything else depends on having won it, so a lost race leaves
@@ -1897,9 +1922,12 @@ const recordOntoStoppedTask = async (
   // command. Since WP-31 the spend is its own narrow write, which is what made that possible.
   await store.tasks.addSpend(scope.tx, input.job.taskId, spendOf(outcome));
   await scope.events.append(decision.events);
+  const { task } = withCost;
   return {
     kind: 'skipped',
-    reason: `the task is "${withCost.task.state}" at "${withCost.task.currentStage ?? 'no stage'}", so the run was recorded and the stage was not completed`,
+    reason: `the task is "${task.state}" at "${task.currentStage ?? 'no stage'}" (attempt ${String(
+      task.currentStage === null ? 0 : (task.stageAttempts[task.currentStage] ?? 0),
+    )}), so the run of attempt ${String(input.job.attempt)} of "${input.job.stage}" was recorded and the stage was not completed`,
   };
 };
 

@@ -93,7 +93,7 @@
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { agentRoleSchema, effortSchema, runModeSchema } from '@platform/contracts';
 import type { CommandContext, Run } from '@platform/domain';
-import { canTransitionTask, escalateTask, failRun } from '@platform/domain';
+import { canTransitionTask, escalateTask, failRun, type Task } from '@platform/domain';
 import type { PipelineStore, StoredRun } from '../pipeline/store.js';
 import { retryOnTaskConflict } from '../pipeline/task-conflict.js';
 import type { EventStore } from '../ports/event-store.js';
@@ -275,6 +275,24 @@ export const sweepExpiredRunLeases = async (
   return { found: found.length, ended, skipped };
 };
 
+/**
+ * **A run whose attempt a person already replaced escalates nothing** (PROGRESS backlog 494).
+ *
+ * `retry-stage` stops the stage's live run and enters a new attempt in one transaction; when the
+ * process holding the old run dies before applying the stop, this sweep is what ends it. The task
+ * is then running the **new** attempt of the same stage (or waiting for its job), so parking it for
+ * a human over the old run's lost heartbeat would undo the retry. The run is still ended and its
+ * reservation released — that is the sweep's point — and its stage row was already closed
+ * `superseded` by the retry's entry.
+ */
+const supersededAtItsStage = (
+  task: Pick<Task, 'currentStage' | 'stageAttempts'>,
+  run: ExpiredRunLease,
+): boolean =>
+  run.stage !== null &&
+  task.currentStage === run.stage &&
+  (task.stageAttempts[run.stage] ?? 0) > run.attempt;
+
 const endOneRun = async (
   options: RunLeaseSweepOptions,
   run: ExpiredRunLease,
@@ -331,7 +349,11 @@ const endOneRun = async (
     const events = [...failed.events];
 
     const task = await options.pipeline.tasks.load(scope.tx, run.taskId);
-    if (task !== null && canTransitionTask(task.task.state, 'needs_human')) {
+    if (
+      task !== null &&
+      canTransitionTask(task.task.state, 'needs_human') &&
+      !supersededAtItsStage(task.task, run)
+    ) {
       const escalated = escalateTask(
         task.task,
         {

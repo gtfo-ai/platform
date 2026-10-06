@@ -817,6 +817,34 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
           );
         }
       }
+      /**
+       * **A wake-up for an attempt the task has left is forwarded to the one it is on** (PROGRESS
+       * backlog 494). The queue is `stately` per task — one job waiting, one running — so a
+       * person's second retry while the first retry's job still waits behind a live run is
+       * `coalesced` onto that waiting job, which then fires for an attempt that was superseded
+       * and would skip with the newest attempt left with no job at all. This job is running, so the
+       * waiting slot is free again and the forward is admitted; when the newer attempt's own job is
+       * already waiting it coalesces, which is that job. Bounded: the forwarded job is for the
+       * task's current attempt, so it never forwards again unless a person moves the task again.
+       */
+      if (outcome.kind === 'skipped' && outcome.supersededBy !== undefined) {
+        const forwarded = await enqueueStage(options.jobs, {
+          taskId: request.taskId,
+          projectId: request.projectId,
+          stage: request.stage,
+          attempt: outcome.supersededBy,
+        });
+        logger.info(
+          {
+            task_id: request.taskId,
+            stage: request.stage,
+            attempt: request.attempt,
+            current_attempt: outcome.supersededBy,
+            forwarded: forwarded.status,
+          },
+          'a superseded stage wake-up was forwarded to the attempt the task is on',
+        );
+      }
       logger.info(
         {
           task_id: request.taskId,
