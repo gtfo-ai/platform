@@ -164,7 +164,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
       <Card>
         <div className="flex flex-wrap items-center gap-2 pb-3">
           <h1 className="text-lg font-semibold">
-            {record.stage} · {record.role}
+            {record.stage === null ? record.role : `${record.stage} · ${record.role}`}
           </h1>
           <Badge
             tone={
@@ -482,16 +482,21 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
 
       {tab === 'settings' ? <RunSettingsPanel query={settings} /> : null}
 
-      <FeedbackForm
-        heading={`Feedback on the ${record.stage} stage`}
-        hint="Scoped to the stage rather than to this attempt: a run is one attempt, and the retrospective reads the stage (product/10)."
-        pending={commands.feedback.isPending}
-        failed={commands.feedback.isError}
-        accepted={commands.feedback.isSuccess}
-        onSubmit={(input) => {
-          commands.feedback.mutate({ taskId: record.task_id, stage: record.stage, ...input });
-        }}
-      />
+      {/* An ask run has no stage to give feedback on (backlog 493). */}
+      {record.stage === null ? null : (
+        <FeedbackForm
+          heading={`Feedback on the ${record.stage} stage`}
+          hint="Scoped to the stage rather than to this attempt: a run is one attempt, and the retrospective reads the stage (product/10)."
+          pending={commands.feedback.isPending}
+          failed={commands.feedback.isError}
+          accepted={commands.feedback.isSuccess}
+          onSubmit={(input) => {
+            if (record.stage !== null) {
+              commands.feedback.mutate({ taskId: record.task_id, stage: record.stage, ...input });
+            }
+          }}
+        />
+      )}
     </div>
   );
 };

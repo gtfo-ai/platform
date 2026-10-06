@@ -264,6 +264,27 @@ export const savedWorkOf = (
 };
 
 /**
+ * `runs.task_stage_id`'s stage → `RunRecord.stage` (PROGRESS backlog 493).
+ *
+ * An **ask** run has no stage attempt by design — a question is answered beside the pipeline, not
+ * in a stage (WP-31) — and publishes `null`. Every other run must be linked to one: a stage run
+ * with no link (stored before WP-15h) is refused by name rather than published as an ask. Until
+ * this split, one question put to a task made its page, the run page and the Agents screen fail.
+ */
+export const runStageOf = (row: Pick<RunProjectionRow, 'id' | 'stage' | 'role'>): string | null => {
+  if (row.stage !== null) {
+    return row.stage;
+  }
+  if (row.role === 'ask') {
+    return null;
+  }
+  throw new UnprojectableRowError(
+    `run ${row.id}`,
+    'it is not linked to a stage attempt (`runs.task_stage_id` is null), and only an ask run has none. Runs stored before WP-15h carry no link',
+  );
+};
+
+/**
  * `runs` + the joined stage + its per-model usage → `RunRecord`.
  *
  * **`cost.is_estimate` is `usd_reported is null`**, which is BD-011's rule read off the column that
@@ -274,17 +295,12 @@ const toRunRecord = (
   row: RunProjectionRow,
   modelUsage: readonly RunModelUsageRecord[],
 ): RunRecord => {
-  if (row.stage === null) {
-    throw new UnprojectableRowError(
-      `run ${row.id}`,
-      'it is not linked to a stage attempt (`runs.task_stage_id` is null), and the API publishes the stage as a required field. Runs stored before WP-15h carry no link',
-    );
-  }
+  const stage = runStageOf(row);
   return {
     id: row.id as Id,
     task_id: row.taskId as Id,
     project_id: row.projectId as Id,
-    stage: row.stage,
+    stage,
     role: row.role as RunRecord['role'],
     mode: row.mode as RunRecord['mode'],
     attempt: row.attempt,

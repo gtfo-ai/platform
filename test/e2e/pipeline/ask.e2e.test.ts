@@ -218,6 +218,21 @@ describe('ask-the-task, through a composed instance', () => {
       status: 'completed',
     });
 
+    // ── Backlog 493: the task page and the run page still load with a stage-less run on them ──
+    // An ask run made `GET /api/tasks/:id` (and `/api/runs/:id`, `/api/org/agents`) answer 409
+    // "not linked to a stage attempt" — the first local test's task page after one question.
+    const detail = await client.json<{
+      runs: { id: string; stage: string | null; role: string }[];
+    }>(`/api/tasks/${waiting.id}`);
+    expect(detail.status, JSON.stringify(detail.body)).toBe(200);
+    expect(detail.body.runs.find((run) => run.id === ask?.run_id)).toMatchObject({
+      stage: null,
+      role: 'ask',
+    });
+    const runPage = await client.json<{ stage: string | null }>(`/api/runs/${ask?.run_id ?? ''}`);
+    expect(runPage.status, JSON.stringify(runPage.body)).toBe(200);
+    expect(runPage.body.stage).toBeNull();
+
     // ── Criterion 9: an ordinary ledger entry, distinguishable from stage spend ───────────────
     //
     // **A second wait, and it is standing rule 87's whole lesson.** `task_asks.status` and

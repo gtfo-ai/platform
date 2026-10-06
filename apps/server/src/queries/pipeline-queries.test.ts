@@ -21,6 +21,7 @@ import { runStatusSchema, taskStageStateSchema, taskStateSchema } from '@platfor
 import { describe, expect, it } from 'vitest';
 import {
   CLOSED_TASK_STATES,
+  runStageOf,
   savedWorkOf,
   stageStateOf,
   startFailureOf,
@@ -155,6 +156,27 @@ describe('the saved work a run record publishes', () => {
 
   it('refuses a value it cannot read rather than saying nothing was saved', () => {
     expect(() => savedWorkOf({ id: ID, savedWork: { ...saved, branch: 'main' } })).toThrow(
+      `run ${ID} cannot be returned`,
+    );
+  });
+});
+
+/**
+ * `RunRecord.stage` (PROGRESS backlog 493): an ask run has none and publishes `null`; a stage run
+ * has its stage; a stage run with no link is still refused — never published as if it were an ask.
+ */
+describe('the stage a run record publishes', () => {
+  const ID = '00000000-0000-4000-8000-000000000493';
+
+  it('publishes null for an ask run and the stage for a stage run', () => {
+    expect(runStageOf({ id: ID, stage: null, role: 'ask' })).toBeNull();
+    expect(runStageOf({ id: ID, stage: 'implementation', role: 'developer' })).toBe(
+      'implementation',
+    );
+  });
+
+  it('refuses a stage run with no stage attempt rather than calling it an ask', () => {
+    expect(() => runStageOf({ id: ID, stage: null, role: 'developer' })).toThrow(
       `run ${ID} cannot be returned`,
     );
   });

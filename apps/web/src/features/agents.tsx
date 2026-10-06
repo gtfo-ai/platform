@@ -51,7 +51,7 @@ export const AgentsScreen = (): ReactElement => {
               params={{ runId: entry.run.id }}
               className="text-sm font-medium hover:underline"
             >
-              {entry.run.stage} · {entry.role}
+              {entry.run.stage === null ? entry.role : `${entry.run.stage} · ${entry.role}`}
             </Link>
             <Badge tone="accent">{entry.run.status}</Badge>
             <span className="font-mono text-xs text-fg-muted">

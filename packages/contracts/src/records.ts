@@ -759,7 +759,15 @@ export const runRecordSchema = z.strictObject({
   id: idSchema,
   task_id: idSchema,
   project_id: idSchema,
-  stage: stageIdSchema,
+  /**
+   * The stage attempt the run belongs to, or `null` **exactly** for an ask run (`role: 'ask'`,
+   * WP-31): a question asked of a task is answered beside its pipeline, not inside a stage, so
+   * `runs.task_stage_id` is null by design. A stage run with no link is still refused by name
+   * (`UnprojectableRowError`). Until this was nullable, one question put to a task made its page,
+   * the run page and the Agents screen fail with "not linked to a stage attempt" (first local
+   * test, 2026-10-06, backlog 493).
+   */
+  stage: stageIdSchema.nullable(),
   role: agentRoleSchema,
   mode: runModeSchema,
   attempt: z.int().positive(),

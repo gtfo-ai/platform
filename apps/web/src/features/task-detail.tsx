@@ -1532,7 +1532,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
                       params={{ runId: run.id }}
                       className="text-sm font-medium hover:underline"
                     >
-                      {run.stage} · {run.role}
+                      {run.stage === null ? run.role : `${run.stage} · ${run.role}`}
                     </Link>
                     <Badge
                       tone={
