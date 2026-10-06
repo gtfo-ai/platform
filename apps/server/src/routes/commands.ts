@@ -200,6 +200,13 @@ const performing = async <T>(perform: () => Promise<T>): Promise<T> => {
   }
 };
 
+/**
+ * The audit row's record of a return's `attach_gate_feedback` (WP-152): the person's choice when they
+ * made one, nothing when they left the default — so the row says what was asked, not what followed.
+ */
+const attachParam = (attach: boolean | undefined): JsonObject =>
+  attach === undefined ? {} : { attach_gate_feedback: attach };
+
 const taskParamsSchema = z.strictObject({ task_id: z.uuid() });
 const questionParamsSchema = z.strictObject({ task_id: z.uuid(), question_id: z.uuid() });
 const approvalParamsSchema = z.strictObject({ task_id: z.uuid(), approval_id: z.uuid() });
@@ -651,10 +658,18 @@ export const registerCommandRoutes = async (
     body: returnToStageRequestSchema,
     summary: 'Send the task back to an earlier stage with a reason',
     description:
-      'Spends one of BD-008’s human rounds; when they are spent the command is refused (409) rather than the task being escalated — no HTTP request parks a task for a human. The reason reaches the stage the task returns to, so it is redacted where it is stored (TD-012). The stage must be one the task’s template runs (409 `stage_not_in_template`) and one the task has been through at or before the stage it is at (409 `stage_not_reached`). A task in `needs_human` may be returned too: it leaves the escalation (`task.resumed`) and goes back in one step (PROGRESS backlog 483).',
-    params: (body) => ({ stage: body.stage }),
+      'Spends one of BD-008’s human rounds; when they are spent the command is refused (409) rather than the task being escalated — no HTTP request parks a task for a human. The reason reaches the stage the task returns to, so it is redacted where it is stored (TD-012). The stage must be one the task’s template runs (409 `stage_not_in_template`) and one the task has been through at or before the stage it is at (409 `stage_not_reached`). A task in `needs_human` may be returned too: it leaves the escalation (`task.resumed`) and goes back in one step (PROGRESS backlog 483). Out of an escalation at a **gate**, the gate’s last failure goes to the stage beside the reason unless `attach_gate_feedback` is `false`; `true` where there is none is 409 `no_gate_feedback` (WP-152). A task that was merged is never sent to a stage before the merge (409 `task_merged`).',
+    params: (body) => ({ stage: body.stage, ...attachParam(body.attach_gate_feedback) }),
     perform: async ({ deps, body, taskId, userId }) =>
-      deps.returnToStage({ taskId, userId, stage: body.stage, reason: body.reason }),
+      deps.returnToStage({
+        taskId,
+        userId,
+        stage: body.stage,
+        reason: body.reason,
+        ...(body.attach_gate_feedback === undefined
+          ? {}
+          : { attachGateFeedback: body.attach_gate_feedback }),
+      }),
   });
 
   taskCommand({
@@ -665,10 +680,18 @@ export const registerCommandRoutes = async (
     body: reworkRequestSchema,
     summary: 'Reject the approach and restart from a stage',
     description:
-      'product/04’s "human rejection = reset, not patching": the instructions travel as the return’s reason and the **agent-to-agent** iteration counters are reset, while the human rounds are not. The old merge request is let go here and closed by a duty after the commit. The stage rules and the way out of `needs_human` are `return-to-stage`’s (PROGRESS backlog 483).',
-    params: (body) => ({ stage: body.stage }),
+      'product/04’s "human rejection = reset, not patching": the instructions travel as the return’s reason and the **agent-to-agent** iteration counters are reset, while the human rounds are not. The old merge request is let go here and closed by a duty after the commit. The stage rules, the way out of `needs_human`, `attach_gate_feedback` and `task_merged` are `return-to-stage`’s (PROGRESS backlog 483, WP-152).',
+    params: (body) => ({ stage: body.stage, ...attachParam(body.attach_gate_feedback) }),
     perform: async ({ deps, body, taskId, userId }) =>
-      deps.rework({ taskId, userId, stage: body.stage, instructions: body.instructions }),
+      deps.rework({
+        taskId,
+        userId,
+        stage: body.stage,
+        instructions: body.instructions,
+        ...(body.attach_gate_feedback === undefined
+          ? {}
+          : { attachGateFeedback: body.attach_gate_feedback }),
+      }),
   });
 
   typed.post(

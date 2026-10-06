@@ -92,6 +92,7 @@ import {
 } from '@platform/contracts';
 import {
   ACTIVE_RUN_STATUSES,
+  type CompiledPipeline,
   compilePipeline,
   DEFAULT_TASK_BUDGET_USD,
   estimateAccuracy,
@@ -1479,19 +1480,31 @@ const findTakenOver = async (
  * cannot compile answers `[]` — the screen then says the stages cannot be read — rather than a list
  * the route would refuse (standing rule 20's read side: refuse, never invent).
  */
-export const handBackStagesOf = (task: {
+export const handBackStagesOf = (task: CompilableTask): string[] =>
+  (compiledPipelineOf(task)?.stages ?? [])
+    .filter((stage) => stage.enabled)
+    .map((stage) => stage.id);
+
+/** The columns a task's compiled pipeline is made from. */
+interface CompilableTask {
   readonly template: string;
   readonly templateSnapshot: unknown;
   /** `tasks.pipeline_dial` (WP-62): a stage the dial disabled is not one a hand-back may name. */
   readonly pipelineDial: unknown;
-}): string[] => {
+}
+
+/**
+ * The task's compiled pipeline, as `handBackTaskCommand` and the store compile it, or `null` when
+ * this build cannot compile it — which every reader here answers by offering nothing.
+ */
+const compiledPipelineOf = (task: CompilableTask): CompiledPipeline | null => {
   const snapshot = task.templateSnapshot;
   const template =
     snapshot !== null && typeof snapshot === 'object' && 'stages' in snapshot
       ? (snapshot as PipelineTemplate)
       : SHIPPED_TEMPLATES[task.template];
   if (template === undefined) {
-    return [];
+    return null;
   }
   // Parsed as the store parses it, and refused the same way: a document that does not match its
   // schema is a pipeline this build cannot compile, so the picker offers nothing.
@@ -1500,15 +1513,55 @@ export const handBackStagesOf = (task: {
       ? null
       : taskPipelineDialSchema.safeParse(task.pipelineDial);
   if (dial !== null && !dial.success) {
-    return [];
+    return null;
   }
   try {
-    return compilePipeline(task.template, template, dial === null ? null : dial.data)
-      .stages.filter((stage) => stage.enabled)
-      .map((stage) => stage.id);
+    return compilePipeline(task.template, template, dial === null ? null : dial.data);
   } catch {
-    return [];
+    return null;
   }
+};
+
+/**
+ * **What a return out of this escalation would carry** (WP-152, PROGRESS backlog 491): the parked
+ * gate attempt's stored failure, as a length — the box the return dialog offers. The same three
+ * facts the command checks (`keepGateFeedback`): the task is `needs_human`, the stage it is at is a
+ * **gate** in its compiled pipeline, and that stage's latest attempt was closed `returned` with a
+ * reason. `null` otherwise, and the dialog then offers no box — a request that ticks one anyway is
+ * refused `no_gate_feedback`. Never the text: it is provider output, and the count is all the
+ * dialog needs.
+ */
+const gateFeedbackOf = (
+  task: CompilableTask & { readonly state: string; readonly currentStage: string | null },
+  stageRows: readonly (typeof taskStages.$inferSelect)[],
+): TaskDetailResponse['gate_feedback'] => {
+  const stage = task.currentStage;
+  if (task.state !== 'needs_human' || stage === null) {
+    return null;
+  }
+  if (compiledPipelineOf(task)?.stages.find((entry) => entry.id === stage)?.kind !== 'gate') {
+    return null;
+  }
+  const latest = stageRows
+    .filter((row) => row.stage === stage)
+    .reduce<(typeof stageRows)[number] | null>(
+      (newest, row) => (newest === null || row.attempt > newest.attempt ? row : newest),
+      null,
+    );
+  if (
+    latest === null ||
+    latest.state !== 'returned' ||
+    latest.returnReason === null ||
+    latest.returnReason.length === 0
+  ) {
+    return null;
+  }
+  return {
+    stage,
+    attempt: latest.attempt,
+    chars: latest.returnReason.length,
+    original_chars: latest.returnReasonOriginalChars ?? null,
+  };
 };
 
 /** `GET /api/tasks/:task_id` — the task with its stages, artifacts, questions, approvals and runs. */
@@ -1581,6 +1634,7 @@ export const findTaskDetail = async (
     ),
     taken_over: takenOver,
     human_time: humanTime,
+    gate_feedback: gateFeedbackOf(task, stageRows),
     stages: stageRows.map((row) => ({
       stage: row.stage,
       attempt: row.attempt,

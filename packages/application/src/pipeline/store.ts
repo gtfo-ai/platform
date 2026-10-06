@@ -1048,6 +1048,37 @@ export interface TaskRepository {
     },
   ): Promise<void>;
   /**
+   * **Keeps a gate's last failure through a person's return** (WP-152, PROGRESS backlog 491,
+   * migration 0086): moves `stage`'s attempt `attempt`'s `return_reason` (and its
+   * `return_reason_original_chars`) into `attached_feedback` (and `attached_feedback_original_chars`)
+   * — **only** on a row closed `returned` that holds a non-empty reason — records `send` as
+   * `attached_feedback_sent`, and answers whether it moved one. The move does not depend on `send`
+   * (ruling (a): the excerpt is kept); `send` is the person's choice of whether the next run is handed
+   * it (ruling (b)), and {@link lastReturnReason} reads it.
+   *
+   * Why a move and not a read: a person's return from `needs_human` closes the **same** row the
+   * gate's spent loop closed — the same `(task, stage, attempt)` — and {@link recordStageExited}
+   * overwrites its `return_reason` with the person's note, so the CI excerpt was lost before anyone
+   * could ask for it (measured at `068a0cfb`). The command calls this in its own transaction, just
+   * before the return writes the row; {@link lastReturnReason} then hands the target stage both.
+   * The text moves as it is: it was redacted when the gate stored it (TD-012), and nothing here
+   * re-derives or keys anything on it (rule 70).
+   *
+   * A row that is open, closed some other way, or holds no reason (or an empty one) moves nothing
+   * (`false`), so the caller can refuse a request to attach where there is nothing to attach
+   * (`no_gate_feedback`).
+   */
+  attachReturnReason(
+    tx: Transaction,
+    entry: {
+      readonly taskId: Id;
+      readonly stage: Slug;
+      readonly attempt: number;
+      /** Whether the next run is handed the kept text (`attach_gate_feedback`). */
+      readonly send: boolean;
+    },
+  ): Promise<boolean>;
+  /**
    * Whether `stage`'s attempt `attempt` has a `task_stages` row, and whether it is still open
    * (`running`, never exited) — WP-108 review round 1, PROGRESS backlog 365. `absent` for a task
    * written before every entry opened a row: the executor treats it as open, the fail-open
@@ -1194,6 +1225,22 @@ export interface ReturnFeedback {
    * `artifactsShownTo`).
    */
   readonly cause?: ReturnCause;
+  /**
+   * The gate's last failure a person sent on with this return (WP-152, migration 0086): the
+   * returning row's `attached_feedback`, which {@link TaskRepository.attachReturnReason} moved there
+   * before the person's note took `return_reason`, **when `attached_feedback_sent`**. **Absent**
+   * when nothing was sent — every return but a person's from a parked gate with the box left ticked,
+   * an unticked one included, whose text is kept on the row and not handed on — so a caller that
+   * reads only the reason is unchanged. When present, {@link reason} is the person's note.
+   */
+  readonly attached?: AttachedReturnFeedback;
+}
+
+/** {@link ReturnFeedback.attached}: the gate's stored text and its uncut length (WP-152). */
+export interface AttachedReturnFeedback {
+  readonly reason: string;
+  /** The length the gate's text had before the gate cut it, `null` when nothing was cut (WP-81). */
+  readonly originalChars: number | null;
 }
 
 /** Which artifact caused a return: its type and version, which identify it on the task. */

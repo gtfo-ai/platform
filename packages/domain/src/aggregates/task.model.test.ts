@@ -23,6 +23,7 @@ import {
   IllegalTransitionError,
   InvariantViolationError,
   PermissionDeniedError,
+  TaskMergedError,
 } from '../errors.js';
 import type { CommandContext } from '../events.js';
 import { type IdSource, sequentialIds } from '../ids.js';
@@ -68,9 +69,12 @@ const STAGES = ['refinement', 'architecture', 'implementation', 'code_review'] a
  * One id source and one clock per world, so ids stay unique and timestamps advance across the
  * whole command sequence — the same discipline the application ring will use.
  */
-const context = (real: TaskReal): CommandContext => ({
+const context = (real: TaskReal, by: 'system' | 'user' = 'system'): CommandContext => ({
   ids: real.ids,
-  actor: { kind: 'system', component: 'model-test' },
+  actor:
+    by === 'user'
+      ? { kind: 'user', user_id: USER_ID }
+      : { kind: 'system', component: 'model-test' },
   clock: real.clock,
 });
 
@@ -101,7 +105,10 @@ interface TaskModel {
   limits: IterationLimits;
   returns: number;
   escalations: number;
-  /** The task entered `merged_gate` — what {@link ReturnEscalated} refuses on (backlog 483). */
+  /**
+   * The task entered `merged_gate` — what {@link ReturnEscalated} refuses on (backlog 483), and what
+   * WP-152 keeps away from work for good (invariant 6).
+   */
   merged: boolean;
 }
 
@@ -189,7 +196,35 @@ const assertInvariants = (model: TaskModel, real: TaskReal): void => {
   );
   expect(real.task.sequence).toBe(real.events.length + 1);
   expect(new Set(real.events.map((event) => event.id)).size).toBe(real.events.length);
+
+  // 6. A merged task never goes back to work (WP-152, technical/02's M9 amendment, backlog 497):
+  // whatever the sequence, once it entered `merged_gate` it is never `active` again, and no stage
+  // before the merge is entered after it.
+  expect(real.task.stageAttempts.merged_gate !== undefined).toBe(model.merged);
+  if (model.merged) {
+    expect(MERGED_TASK_STATES).toContain(real.task.state);
+    const merge = real.events.findIndex(
+      (event) => event.type === 'task.stage.entered' && event.payload.stage === 'merged_gate',
+    );
+    const enteredAfter = real.events
+      .slice(merge + 1)
+      .filter((event) => event.type === 'task.stage.entered')
+      .map((event) => (event.payload as { stage: string }).stage);
+    for (const stage of enteredAfter) {
+      expect(['merged_gate', 'retrospective', 'librarian']).toContain(stage);
+    }
+  }
 };
+
+/** Every state a merged task may be in (invariant 6): never `active`, never waiting, never Ready. */
+const MERGED_TASK_STATES: readonly TaskState[] = [
+  'merged',
+  'retro',
+  'needs_human',
+  'paused',
+  'done',
+  'cancelled',
+];
 
 /** Runs a command that moves the machine to `target`, asserting success or rejection. */
 /**
@@ -201,13 +236,29 @@ const pausedTailEdgeAllowed = (model: TaskModel, target: TaskState): boolean =>
   (target !== 'ready_for_merge' && target !== 'merged') ||
   model.currentStage === 'ready_for_merge';
 
+/**
+ * The guard the edge table cannot state for `needs_human → retro` (WP-152): a merged task, and a
+ * person. Every other source state is the table's alone.
+ */
+const escalatedRetroEdgeAllowed = (
+  model: TaskModel,
+  target: TaskState,
+  by: 'system' | 'user',
+): boolean =>
+  model.state !== 'needs_human' || target !== 'retro' || (model.merged && by === 'user');
+
 const transition = (
   model: TaskModel,
   real: TaskReal,
   target: TaskState,
   command: () => TaskDecision,
+  by: 'system' | 'user' = 'system',
 ): TaskDecision | null => {
-  if (!canTransitionTask(model.state, target) || !pausedTailEdgeAllowed(model, target)) {
+  if (
+    !canTransitionTask(model.state, target) ||
+    !pausedTailEdgeAllowed(model, target) ||
+    !escalatedRetroEdgeAllowed(model, target, by)
+  ) {
     expect(command).toThrow(IllegalTransitionError);
     return null;
   }
@@ -229,9 +280,14 @@ class EnterStage implements TaskCommand {
     return true;
   }
   run(model: TaskModel, real: TaskReal): void {
-    const decision = transition(model, real, 'active', () =>
-      enterStage(real.task, { stage: this.stage }, context(real)),
-    );
+    const command = (): TaskDecision =>
+      enterStage(real.task, { stage: this.stage }, context(real, 'user'));
+    // WP-152: no command takes a merged task to `active`, a person's included — from any state.
+    if (model.merged) {
+      expect(command).toThrow(TaskMergedError);
+      return;
+    }
+    const decision = transition(model, real, 'active', command);
     if (decision !== null) {
       model.currentStage = this.stage;
     }
@@ -327,8 +383,13 @@ class ReturnEscalated implements TaskCommand {
         },
         context(real),
       );
-    if (model.state !== 'needs_human' || model.merged) {
+    if (model.state !== 'needs_human') {
       expect(command).toThrow(IllegalTransitionError);
+      return;
+    }
+    if (model.merged) {
+      // WP-152: by name, as every pre-merge target of a merged task is refused.
+      expect(command).toThrow(TaskMergedError);
       return;
     }
     if (model.counters.human_rounds >= model.limits.human_rounds) {
@@ -462,10 +523,25 @@ class TakeOver implements TaskCommand {
 }
 
 class HandBack implements TaskCommand {
+  private readonly stage: string;
+  constructor(stage: string) {
+    this.stage = stage;
+  }
   check(): boolean {
     return true;
   }
   run(model: TaskModel, real: TaskReal): void {
+    const command = (): TaskDecision =>
+      handBackTask(
+        real.task,
+        { branch: 'agentic/PROJ-1', stage: this.stage, summary: 'continued by hand' },
+        context(real, 'user'),
+      );
+    // WP-152 (backlog 497): a merged task is handed back only into a stage after the merge.
+    if (model.merged && this.stage !== 'retrospective' && this.stage !== 'librarian') {
+      expect(command).toThrow(TaskMergedError);
+      return;
+    }
     // **It moves nothing** (WP-27): `handBackTask` announces the hand-back and entering the chosen
     // stage is `applyDecision`'s, one ring out — which is why this is not a `transition(...)` call
     // like every other command here. What the model checks is the invariant that replaced the old
@@ -473,11 +549,7 @@ class HandBack implements TaskCommand {
     // state the sequence can reach, including the terminal ones no transition would allow.
     const state = real.task.state;
     const stage = real.task.currentStage;
-    const decision = handBackTask(
-      real.task,
-      { branch: 'agentic/PROJ-1', stage: 'code_review', summary: 'continued by hand' },
-      context(real),
-    );
+    const decision = command();
     real.task = decision.aggregate;
     real.events.push(...decision.events);
     expect(real.task.state).toBe(state);
@@ -485,7 +557,7 @@ class HandBack implements TaskCommand {
     expect(model.state).toBe(state);
   }
   toString(): string {
-    return 'handBack()';
+    return `handBack(${this.stage})`;
   }
 }
 
@@ -576,20 +648,33 @@ class Merge implements TaskCommand {
   }
 }
 
+/**
+ * The retrospective entered — by the pipeline (`system`), or by a person's `resume`, `retry-stage` or
+ * hand-back (`user`). The two differ only out of `needs_human`, which since WP-152 a person may take
+ * into `retro` for a merged task and nothing else may take at all.
+ */
 class Retro implements TaskCommand {
+  private readonly by: 'system' | 'user';
+  constructor(by: 'system' | 'user') {
+    this.by = by;
+  }
   check(): boolean {
     return true;
   }
   run(model: TaskModel, real: TaskReal): void {
-    const decision = transition(model, real, 'retro', () =>
-      startRetrospective(real.task, context(real)),
+    const decision = transition(
+      model,
+      real,
+      'retro',
+      () => startRetrospective(real.task, context(real, this.by)),
+      this.by,
     );
     if (decision !== null) {
       model.currentStage = 'retrospective';
     }
   }
   toString(): string {
-    return 'retro()';
+    return `retro(${this.by})`;
   }
 }
 
@@ -668,11 +753,13 @@ const rawCommandArbitraries: fc.Arbitrary<TaskCommand>[] = [
   fc.constant(new Pause()),
   fc.constant(new Escalate()),
   fc.constant(new TakeOver()),
-  fc.constant(new HandBack()),
+  fc
+    .constantFrom('code_review', 'implementation', 'retrospective')
+    .map((stage) => new HandBack(stage)),
   fc.constantFrom(...runStatusSchema.options).map((status) => new Steer(status)),
   fc.constant(new ReadyForMerge()),
   fc.constant(new Merge()),
-  fc.constant(new Retro()),
+  fc.constantFrom('system' as const, 'user' as const).map((by) => new Retro(by)),
   fc.constant(new Complete()),
   fc.constant(new Cancel()),
   fc.constant(new Queue()),

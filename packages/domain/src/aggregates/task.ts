@@ -27,7 +27,7 @@ import type {
   TicketRef,
   UserRole,
 } from '@platform/contracts';
-import { IllegalTransitionError, InvariantViolationError } from '../errors.js';
+import { IllegalTransitionError, InvariantViolationError, TaskMergedError } from '../errors.js';
 import { type CommandContext, type Decision, eventRecorder, FIRST_STREAM_SEQ } from '../events.js';
 import { assertCan } from '../permissions.js';
 import {
@@ -90,6 +90,24 @@ export const READY_FOR_MERGE_STAGE = 'ready_for_merge' as const;
 export const MERGED_GATE_STAGE = 'merged_gate' as const;
 export const RETROSPECTIVE_STAGE = 'retrospective' as const;
 export const LIBRARIAN_STAGE = 'librarian' as const;
+
+/**
+ * **Was this task merged?** — it entered `merged_gate`, which only the provider's `mr.merged` can
+ * make it do (technical/02). The one fact the rules for a merged task read (WP-152, PROGRESS backlog
+ * 497): such a task never goes back to work ({@link enterStage}, {@link returnEscalatedTask}), and
+ * a person may take it out of an escalation only into the stages after the merge
+ * ({@link enterTerminalStage}).
+ */
+export const isMergedTask = (task: Task): boolean =>
+  task.stageAttempts[MERGED_GATE_STAGE] !== undefined;
+
+/**
+ * The stages that run **after** the merge, with the task in `retro` — the only ones a merged task may
+ * be resumed, retried or handed back into (WP-152). They are the two the aggregate enters with
+ * `retro` ({@link startRetrospective}, {@link startLibrarianCuration}); any other stage is entered
+ * as `active`, which a merged task never is again.
+ */
+export const POST_MERGE_STAGES: readonly Slug[] = [RETROSPECTIVE_STAGE, LIBRARIAN_STAGE];
 
 // ── creation ─────────────────────────────────────────────────────────────────
 
@@ -188,6 +206,13 @@ export const enterStage = (
   input: EnterStageInput,
   context: CommandContext,
 ): TaskDecision => {
+  // WP-152 (technical/02's M9 amendment, backlog 497): a merged task never goes back to work. Every
+  // way to `active` is this function, so the guard here covers resume, retry, a hand-back and
+  // anything a later command adds; `retro` has no edge to `active` either, so the pipeline itself
+  // never asks.
+  if (isMergedTask(task)) {
+    throw new TaskMergedError(task.state, input.stage);
+  }
   const next = withState(task, 'active');
   const recorder = recorderFor(task, context);
   if (input.dequeueReason !== undefined) {
@@ -406,6 +431,9 @@ export const resumeStage = (
  *  - **a task that was merged** — it entered `merged_gate`. A merged task never goes back to
  *    work (`retro` has no edge to `returned`), and leaving `needs_human` through `active` would
  *    otherwise be a side door past that rule for a task escalated during its retrospective.
+ *    Refused as {@link TaskMergedError} since WP-152, the name every pre-merge target of a merged
+ *    task is refused by; such a task finishes through `resume` or `retry-stage` at the
+ *    retrospective instead (`needs_human → retro`, {@link enterTerminalStage}).
  */
 export const returnEscalatedTask = (
   task: Task,
@@ -415,8 +443,9 @@ export const returnEscalatedTask = (
   if (task.state !== 'needs_human') {
     throw new IllegalTransitionError('Task', task.state, 'returned (out of an escalation)');
   }
-  if (task.stageAttempts[MERGED_GATE_STAGE] !== undefined) {
-    throw new IllegalTransitionError('Task', task.state, 'returned (the task was merged)');
+  if (isMergedTask(task)) {
+    // WP-152: by name, as every pre-merge target of a merged task is refused.
+    throw new TaskMergedError(task.state, input.toStage);
   }
   const iteration = evaluateIteration(task.iterationCounters, input.loop, task.limits);
   if (!iteration.allowed) {
@@ -669,12 +698,21 @@ export const takeOverTask = (
  *
  * What a spent loop then costs is BD-008's ordinary ending: the next return escalates to
  * `needs_human`, with a person already attached to the task.
+ *
+ * **A merged task is handed back only into a stage after the merge** (WP-152, PROGRESS backlog
+ * 497). It checked nothing before, so a hand-back to `implementation` of a task escalated during its
+ * retrospective put a merged task back to work. Refused here by name ({@link TaskMergedError}) as
+ * well as by {@link enterStage}, so the refusal comes before the `task.handed_back` it would
+ * otherwise have recorded.
  */
 export const handBackTask = (
   task: Task,
   input: { readonly branch: string; readonly stage: Slug; readonly summary: string },
   context: CommandContext,
 ): TaskDecision => {
+  if (isMergedTask(task) && !POST_MERGE_STAGES.includes(input.stage)) {
+    throw new TaskMergedError(task.state, input.stage);
+  }
   const recorder = recorderFor(task, context);
   recorder.emit('task.handed_back', {
     project_id: task.projectId,
@@ -773,6 +811,19 @@ const enterTerminalStage = (
   // the task at Ready past CI and rebase, or recorded a merge that never happened.
   if (task.state === 'paused' && task.currentStage !== READY_FOR_MERGE_STAGE) {
     throw new IllegalTransitionError('Task', task.state, state);
+  }
+  // `needs_human → retro` (WP-152, technical/02's M9 amendment, PROGRESS backlog 497) is a person's
+  // way to finish a task escalated **after its merge**, and nothing else: the table cannot say
+  // *"only for a merged task, only from a human command"*, so the aggregate does. A task that never
+  // entered `merged_gate` has no retrospective to run, and a provider signal or a job interpreted
+  // for a parked task must not un-park it — a person was told to look at it.
+  if (task.state === 'needs_human' && state === 'retro') {
+    if (!isMergedTask(task)) {
+      throw new IllegalTransitionError('Task', task.state, `${state} (the task was not merged)`);
+    }
+    if (context.actor.kind !== 'user') {
+      throw new IllegalTransitionError('Task', task.state, `${state} (only a person resumes it)`);
+    }
   }
   const next = withState(task, state);
   const recorder = recorderFor(task, context);

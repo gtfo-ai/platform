@@ -85,6 +85,7 @@ const escalatedAtCi = (state: TaskDetailResponse['task']['state']): TaskDetailRe
   taken_over: null,
   can_raise_budget: false,
   can_export: false,
+  gate_feedback: null,
   human_time: {
     total_minutes: 0,
     by_kind: { review: 0, question: 0, approval: 0, steer: 0 },
@@ -112,7 +113,7 @@ interface Sent {
   readonly key: string | null;
 }
 
-const fetchFor = (task: TaskDetailResponse, sent: Sent[]) =>
+const fetchFor = (task: TaskDetailResponse | (() => TaskDetailResponse), sent: Sent[]) =>
   (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     if (url.includes('/api/auth/get-session')) return json(SESSION);
@@ -146,7 +147,7 @@ const fetchFor = (task: TaskDetailResponse, sent: Sent[]) =>
     }
     if (url.endsWith(`/api/tasks/${TASK}/asks`)) return json({ items: [] });
     if (url.endsWith(`/api/tasks/${TASK}/audit`)) return json({ items: [] });
-    if (url.endsWith(`/api/tasks/${TASK}`)) return json(task);
+    if (url.endsWith(`/api/tasks/${TASK}`)) return json(typeof task === 'function' ? task() : task);
     if (url.endsWith('/api/projects')) return json({ items: [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
@@ -199,12 +200,121 @@ describe('the stage commands on an escalated task (backlog 483)', () => {
     });
   });
 
+  it('says a merged task finishes its retrospective rather than going back (WP-152)', async () => {
+    const merged: TaskDetailResponse = {
+      ...escalatedAtCi('needs_human'),
+      stages: [
+        stage('implementation', 1, 'completed', 'approve'),
+        stage('merged_gate', 1, 'completed', 'pass'),
+        stage('retrospective', 1, 'failed', 'escalated'),
+      ],
+    };
+    const { container } = render(
+      createApp({ fetchImpl: fetchFor(merged, []), realtime: false }).element,
+    );
+    await screen.findByRole('button', { name: 'Return to stage' });
+    expect(container.textContent).toContain('This task was merged and is waiting for a person');
+    expect(container.textContent).not.toContain('Send it back to a stage it has run');
+  });
+
   it('says nothing about a person waiting on a task that is running', async () => {
     const { container } = render(
       createApp({ fetchImpl: fetchFor(escalatedAtCi('active'), []), realtime: false }).element,
     );
     await screen.findByRole('button', { name: 'Return to stage' });
     expect(container.textContent).not.toContain(HINT);
+  });
+});
+
+/**
+ * **The gate's last failure goes with the return** (WP-152, PROGRESS backlog 491). Out of an
+ * escalation at a gate the dialog offers a box, ticked, that names the excerpt's length — and the
+ * request says what the person chose. A task with nothing to attach gets no box and sends nothing,
+ * so the server's own default and its `no_gate_feedback` refusal are never second-guessed here.
+ */
+describe('the box that attaches the gate’s last failure (WP-152)', () => {
+  const withFeedback = (): TaskDetailResponse => ({
+    ...escalatedAtCi('needs_human'),
+    gate_feedback: { stage: 'ci_gate', attempt: 1, chars: 6_012, original_chars: 20_657 },
+  });
+  const BOX = /Attach the gate’s last failure/;
+
+  it('offers the box ticked, with the excerpt’s length, and sends it ticked by default', async () => {
+    const sent: Sent[] = [];
+    const user = userEvent.setup();
+    render(createApp({ fetchImpl: fetchFor(withFeedback(), sent), realtime: false }).element);
+    const box = await screen.findByRole('checkbox', { name: BOX });
+    expect((box as HTMLInputElement).checked).toBe(true);
+    expect(box.closest('label')?.textContent).toContain('6,012 characters, cut from 20,657');
+
+    await user.selectOptions(screen.getByLabelText('Stage'), 'implementation');
+    await user.type(screen.getByLabelText('Reason'), 'fix both jobs');
+    await user.click(screen.getByRole('button', { name: 'Return to stage' }));
+    await waitFor(() => {
+      expect(sent.some((entry) => entry.path.endsWith('/return-to-stage'))).toBe(true);
+    });
+    expect(sent.find((entry) => entry.path.endsWith('/return-to-stage'))?.body).toEqual({
+      stage: 'implementation',
+      reason: 'fix both jobs',
+      attach_gate_feedback: true,
+    });
+  });
+
+  it('sends the note alone when the person unticks it, for a rework too', async () => {
+    const sent: Sent[] = [];
+    const user = userEvent.setup();
+    render(createApp({ fetchImpl: fetchFor(withFeedback(), sent), realtime: false }).element);
+    await user.click(await screen.findByRole('checkbox', { name: BOX }));
+    await user.selectOptions(screen.getByLabelText('Stage'), 'implementation');
+    await user.type(screen.getByLabelText('Rework instructions'), 'start over');
+    await user.click(screen.getByRole('button', { name: 'Rework' }));
+    await waitFor(() => {
+      expect(sent.some((entry) => entry.path.endsWith('/rework'))).toBe(true);
+    });
+    expect(sent.find((entry) => entry.path.endsWith('/rework'))?.body).toEqual({
+      stage: 'implementation',
+      instructions: 'start over',
+      attach_gate_feedback: false,
+    });
+  });
+
+  /**
+   * Round 1: the box is ticked for every escalation. An untick belongs to the gate attempt it was
+   * made on; when the task comes back parked at a later attempt, the box is offered ticked again.
+   */
+  it('offers the box ticked again for a later escalation, whatever was unticked before', async () => {
+    const sent: Sent[] = [];
+    const user = userEvent.setup();
+    let current = withFeedback();
+    render(createApp({ fetchImpl: fetchFor(() => current, sent), realtime: false }).element);
+    await user.click(await screen.findByRole('checkbox', { name: BOX }));
+    expect(((await screen.findByRole('checkbox', { name: BOX })) as HTMLInputElement).checked).toBe(
+      false,
+    );
+    // The task is returned, runs, and parks at the gate again: a new attempt, a new failure.
+    current = {
+      ...withFeedback(),
+      gate_feedback: { stage: 'ci_gate', attempt: 2, chars: 812, original_chars: null },
+    };
+    await user.selectOptions(screen.getByLabelText('Stage'), 'implementation');
+    await user.type(screen.getByLabelText('Reason'), 'note');
+    await user.click(screen.getByRole('button', { name: 'Return to stage' }));
+    await waitFor(() => {
+      const box = screen.getByRole('checkbox', { name: BOX });
+      expect(box.closest('label')?.textContent).toContain('812 characters');
+      expect((box as HTMLInputElement).checked).toBe(true);
+    });
+    expect(sent.find((entry) => entry.path.endsWith('/return-to-stage'))?.body).toMatchObject({
+      attach_gate_feedback: false,
+    });
+  });
+
+  it('offers no box, and sends no field, when there is nothing to attach', async () => {
+    render(
+      createApp({ fetchImpl: fetchFor(escalatedAtCi('needs_human'), []), realtime: false }).element,
+    );
+    await screen.findByRole('button', { name: 'Return to stage' });
+    expect(screen.queryByRole('checkbox', { name: BOX })).toBeNull();
   });
 });
 

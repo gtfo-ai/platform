@@ -23,9 +23,15 @@
  * against a real instance, where a run really can be held open.
  */
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
-import { IllegalTransitionError, InvariantViolationError, readDataBlocks } from '@platform/domain';
+import {
+  IllegalTransitionError,
+  InvariantViolationError,
+  readDataBlocks,
+  TaskMergedError,
+} from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { withoutComments } from '../../../../scripts/source-scanner.mjs';
+import { exactSecretRedactor } from '../integrations/redaction.js';
 import { IntegrationError } from '../ports/integrations/common.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { type Logger, silentLogger } from '../ports/logger.js';
@@ -46,6 +52,7 @@ import {
   decideTaskApproval,
   handBackTaskCommand,
   IterationLimitReachedError,
+  NoGateFeedbackError,
   pauseTaskCommand,
   RunNotLiveError,
   resumeTaskCommand,
@@ -1401,6 +1408,389 @@ describe('a return out of needs_human (backlog 483)', () => {
     expect(countOf(harness, 'task.resumed')).toBe(1);
     expect(taskOf(harness).task.stageAttempts.ci_gate).toBe(3);
     expect(taskOf(harness).task.iterationCounters.human_rounds ?? 0).toBe(0);
+  });
+});
+
+/**
+ * **The CI logs survive a person's return** (WP-152 rulings (a)–(c), PROGRESS backlog 491). On the
+ * real red-CI loop: the gate reads the failing job's log, redacts it with the git binding's
+ * redactor and stores it as the gate attempt's return reason; `ci_fix` is spent and the task parks.
+ * A person's return then **moves** that excerpt aside before their note takes the row, and the next
+ * Developer run is handed both — two `return_feedback` blocks, `source="person"` and `source="gate"`.
+ * Unticked, the note goes alone.
+ */
+describe('a return out of a gate’s escalation carries the gate’s last failure (WP-152)', () => {
+  /** Obviously fake, and planted in the **CI log**, where only the git redactor can find it. */
+  const CI_SECRET = 'glpat-FAKE-wp152-ci-log-credential-0';
+  const LOG = `$ vendor/bin/phpstan analyse\nerror: Call to undefined method Foo::bar() (token ${CI_SECRET})\nFound 1 error`;
+  const redCiWithLog = {
+    getPipelineStatus: async () => ({
+      id: 'pipeline-red',
+      head_sha: 'b'.repeat(40),
+      status: 'failed' as const,
+      url: null,
+      jobs: [
+        {
+          id: 'job-1',
+          name: 'phpstan',
+          stage: 'test',
+          status: 'failed' as const,
+          log_ref: 'log:phpstan',
+          allow_failure: false,
+        },
+      ],
+      coverage_pct: null,
+      finished_at: '2026-06-01T09:30:00.000Z',
+    }),
+    getJobLog: async () => LOG,
+  };
+
+  const parkedAtCi = async () => {
+    const harness = harnessWith({
+      git: redCiWithLog as never,
+      gitRedactor: exactSecretRedactor([{ name: 'fake_git_token', value: CI_SECRET }]),
+      settings: { config: { pipeline: { limits: { ci_fix_iterations: 1 } } } },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(taskOf(harness).task.currentStage).toBe('ci_gate');
+    return harness;
+  };
+
+  const lastDeveloperFeedback = (harness: PipelineHarness) =>
+    readDataBlocks(
+      harness.specs.filter((spec) => spec.stage === 'implementation').at(-1)?.userPrompt ?? '',
+    ).blocks.filter((block) => block.kind === 'return_feedback');
+
+  it('hands the next Developer run the person’s note and the gate’s excerpt, and no credential', async () => {
+    const harness = await parkedAtCi();
+    const attempt = taskOf(harness).task.stageAttempts.ci_gate as number;
+    // The gate stored the redacted excerpt on its own attempt — the record the person's return used
+    // to overwrite.
+    const parked = harness.store.stageRows.find(
+      (row) => row.stage === 'ci_gate' && row.attempt === attempt,
+    );
+    expect(parked?.returnReason).toContain('Call to undefined method Foo::bar()');
+    expect(parked?.returnReason).not.toContain(CI_SECRET);
+
+    await returnToStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'implementation' as Slug,
+      reason: 'fix phpstan, and open the merge request from the tool',
+    });
+
+    // The row now holds both: the person's note where the reason goes, the excerpt kept beside it.
+    const row = harness.store.stageRows.find(
+      (entry) => entry.stage === 'ci_gate' && entry.attempt === attempt,
+    );
+    expect(row).toMatchObject({
+      state: 'returned',
+      outcome: 'escalated',
+      returnReason: 'fix phpstan, and open the merge request from the tool',
+    });
+    expect(row?.attachedFeedback).toBe(parked?.returnReason);
+    expect(row?.attachedFeedbackSent).toBe(true);
+
+    await harness.drain();
+    const blocks = lastDeveloperFeedback(harness);
+    expect(blocks.map((block) => block.attributes.source)).toEqual(['person', 'gate']);
+    expect(blocks[0]?.body).toBe('fix phpstan, and open the merge request from the tool');
+    expect(blocks[1]?.body).toContain('Log of the failing job phpstan, redacted:');
+    expect(blocks[1]?.body).toContain('Call to undefined method Foo::bar()');
+    // The credential the CI log carried reaches no block and no byte of the prompt.
+    const prompt =
+      harness.specs.filter((spec) => spec.stage === 'implementation').at(-1)?.userPrompt ?? '';
+    expect(prompt).not.toContain(CI_SECRET);
+    expect(prompt).toContain('[REDACTED:integration:fake_git_token]');
+  });
+
+  it('keeps the excerpt on the row but hands the note alone when the person unticks it', async () => {
+    const harness = await parkedAtCi();
+    const attempt = taskOf(harness).task.stageAttempts.ci_gate as number;
+    const excerpt = harness.store.stageRows.find(
+      (row) => row.stage === 'ci_gate' && row.attempt === attempt,
+    )?.returnReason;
+    expect(excerpt).toContain('Call to undefined method Foo::bar()');
+    await returnToStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'implementation' as Slug,
+      reason: 'start from the default branch',
+      attachGateFeedback: false,
+    });
+    const row = harness.store.stageRows.find(
+      (entry) => entry.stage === 'ci_gate' && entry.attempt === attempt,
+    );
+    // Ruling (a), round 1: kept whatever the person chose — the box decides only what is sent.
+    expect(row).toMatchObject({
+      returnReason: 'start from the default branch',
+      attachedFeedback: excerpt,
+      attachedFeedbackSent: false,
+    });
+    await harness.drain();
+    const blocks = lastDeveloperFeedback(harness);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.attributes.source).toBeUndefined();
+    expect(blocks[0]?.body).toBe('start from the default branch');
+  });
+
+  it('refuses an attach where the task is not parked at a gate, and records nothing', async () => {
+    // At Ready — a human stage — there is no gate failure to attach.
+    const harness = await walked();
+    const since = harness.events().length;
+    await expect(
+      returnToStageCommand(harness.humanCommands, {
+        taskId: taskOf(harness).task.id,
+        userId: USER,
+        stage: 'implementation' as Slug,
+        reason: 'go back',
+        attachGateFeedback: true,
+      }),
+    ).rejects.toThrow(NoGateFeedbackError);
+    expect(harness.events().length).toBe(since);
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(taskOf(harness).task.iterationCounters.human_rounds ?? 0).toBe(0);
+    // The same request with the default is admitted, and attaches nothing.
+    await returnToStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'implementation' as Slug,
+      reason: 'go back',
+    });
+    expect(taskOf(harness).task.currentStage).toBe('implementation');
+    expect(harness.store.stageRows.every((row) => row.attachedFeedback === null)).toBe(true);
+  });
+
+  it('refuses an attach at a gate whose attempt recorded no failure, and records nothing', async () => {
+    const harness = await parkedAtCi();
+    const task = taskOf(harness);
+    const attempt = task.task.stageAttempts.ci_gate as number;
+    // Seeded, because the shape is another escalation's: a gate the platform could not decide
+    // closes its row `failed` with the escalation's sentence and no target (`closeOpenStage`) —
+    // not a return, so nothing a person could attach.
+    await harness.memory.transaction(async (scope) => {
+      await harness.store.tasks.recordStageExited(scope.tx, {
+        taskId: task.task.id,
+        stage: 'ci_gate' as Slug,
+        attempt,
+        state: 'failed',
+        outcome: 'undecided',
+        returnReason: 'the CI gate could not decide',
+        returnedTo: null,
+      });
+    });
+    const since = harness.events().length;
+    await expect(
+      reworkStageCommand(harness.humanCommands, {
+        taskId: task.task.id,
+        userId: USER,
+        stage: 'implementation' as Slug,
+        instructions: 'again',
+        attachGateFeedback: true,
+      }),
+    ).rejects.toThrow(NoGateFeedbackError);
+    expect(harness.events().length).toBe(since);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(taskOf(harness).mr).toEqual(task.mr);
+  });
+});
+
+/**
+ * **A task escalated after its merge finishes, and never goes back to work** (WP-152 ruling (e),
+ * technical/02's M9 amendment, PROGRESS backlog 497). The retrospective fails, the merged task parks
+ * in `needs_human`, and the person's ways forward are the ones after the merge: `resume` and
+ * `retry-stage` at the retrospective are admitted and reach `done`; a hand-back, a return or a
+ * rework to a stage before the merge is refused `task_merged`, with nothing appended.
+ */
+describe('a task escalated after its merge (WP-152)', () => {
+  const outOfTurns = {
+    status: 'failed',
+    terminalReason: 'error_max_turns',
+    error: 'the session ran out of turns',
+    numTurns: 201,
+  } as never;
+
+  const escalatedInRetro = async () => {
+    const harness = await walked({ runs: { retrospective: outOfTurns } });
+    await harness.publish([
+      {
+        ...ticketMatched(),
+        type: 'mr.merged' as const,
+        payload: {
+          project_id: PROJECT,
+          task_id: null,
+          mr: {
+            provider: 'fake-git',
+            project_path: 'acme/api',
+            iid: 7,
+            url: 'https://git.example.test/acme/api/-/merge_requests/7',
+            branch: 'agentic/acme-1',
+            head_sha: 'b'.repeat(40),
+          },
+          draft: false,
+          head_sha: 'b'.repeat(40),
+          diff_stats: null,
+          merge_commit_sha: 'c'.repeat(40),
+        },
+      } as never,
+    ]);
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(taskOf(harness).task.currentStage).toBe('retrospective');
+    expect(taskOf(harness).task.stageAttempts.merged_gate).toBe(1);
+    harness.script('retrospective', ok(RETRO));
+    return harness;
+  };
+
+  it('resumes the retrospective out of the escalation and reaches done', async () => {
+    const harness = await escalatedInRetro();
+    await resumeTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+    });
+    expect(taskOf(harness).task.state).toBe('retro');
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('done');
+    // The person, out of the stop, into the retrospective — never `active`.
+    const resumed = harness.events().filter((event) => event.type === 'task.resumed');
+    expect(resumed.at(-1)?.actor.kind).toBe('user');
+    expect(
+      harness
+        .events()
+        .filter((event) => event.type === 'task.stage.entered')
+        .map((event) => (event.payload as { stage: string }).stage)
+        .slice(-3),
+    ).toEqual(['retrospective', 'retrospective', 'librarian']);
+  });
+
+  /**
+   * WP-152 round 1: a merged task parked **at the merge gate** — the gate settles at once, so the
+   * shape is seeded from the retrospective's escalation — resumes into the retrospective, the move
+   * the gate would have made; a retry of the merge gate itself is still refused (it would record the
+   * merge again), with nothing appended.
+   */
+  it('resumes a merged task parked at the merge gate into the retrospective, and refuses a retry of the gate', async () => {
+    const harness = await escalatedInRetro();
+    const stored = taskOf(harness);
+    await harness.memory.transaction(async (scope) => {
+      await harness.store.tasks.save(scope.tx, {
+        ...stored,
+        task: { ...stored.task, currentStage: 'merged_gate' },
+      });
+    });
+    const since = harness.events().length;
+    await expect(
+      retryStageCommand(harness.humanCommands, {
+        taskId: stored.task.id,
+        userId: USER,
+        stage: 'merged_gate' as Slug,
+      }),
+    ).rejects.toThrow(IllegalTransitionError);
+    expect(harness.events().length).toBe(since);
+
+    await resumeTaskCommand(harness.humanCommands, { taskId: stored.task.id, userId: USER });
+    expect(taskOf(harness).task.state).toBe('retro');
+    expect(taskOf(harness).task.currentStage).toBe('retrospective');
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('done');
+  });
+
+  it('retries the retrospective out of the escalation, spending no round', async () => {
+    const harness = await escalatedInRetro();
+    await retryStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'retrospective' as Slug,
+    });
+    expect(taskOf(harness).task.stageAttempts.retrospective).toBe(2);
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('done');
+    expect(taskOf(harness).task.iterationCounters.human_rounds ?? 0).toBe(0);
+  });
+
+  /**
+   * WP-152 round 1 (the reviewer's canary survived without it): the command's own check comes
+   * before the loop's, so a merged task whose human rounds are spent is told it was merged — the
+   * reason no return can ever take it — rather than that its rounds are spent, which a person could
+   * read as "raise the limit and try again".
+   */
+  it('names the merge before a spent loop: a merged task’s return is task_merged', async () => {
+    const harness = await escalatedInRetro();
+    const stored = taskOf(harness);
+    // Seeded: the loop that would spend the rounds escalates the task first (the file's note).
+    await harness.memory.transaction(async (scope) => {
+      await harness.store.tasks.save(scope.tx, {
+        ...stored,
+        task: {
+          ...stored.task,
+          iterationCounters: {
+            ...stored.task.iterationCounters,
+            human_rounds: stored.task.limits.human_rounds,
+          },
+        },
+      });
+    });
+    const since = harness.events().length;
+    await expect(
+      returnToStageCommand(harness.humanCommands, {
+        taskId: stored.task.id,
+        userId: USER,
+        stage: 'implementation' as Slug,
+        reason: 'one more change',
+      }),
+    ).rejects.toThrow(TaskMergedError);
+    await expect(
+      reworkStageCommand(harness.humanCommands, {
+        taskId: stored.task.id,
+        userId: USER,
+        stage: 'implementation' as Slug,
+        instructions: 'a different approach',
+      }),
+    ).rejects.toThrow(TaskMergedError);
+    expect(harness.events().length).toBe(since);
+  });
+
+  it('refuses every way back before the merge by name, and appends nothing', async () => {
+    const harness = await escalatedInRetro();
+    const task = taskOf(harness).task.id;
+    const since = harness.events().length;
+    await expect(
+      handBackTaskCommand(harness.humanCommands, {
+        taskId: task,
+        userId: USER,
+        stage: 'implementation' as Slug,
+        summary: 'one more change',
+      }),
+    ).rejects.toThrow(TaskMergedError);
+    await expect(
+      returnToStageCommand(harness.humanCommands, {
+        taskId: task,
+        userId: USER,
+        stage: 'implementation' as Slug,
+        reason: 'one more change',
+      }),
+    ).rejects.toThrow(TaskMergedError);
+    await expect(
+      reworkStageCommand(harness.humanCommands, {
+        taskId: task,
+        userId: USER,
+        stage: 'architecture' as Slug,
+        instructions: 'a different approach',
+      }),
+    ).rejects.toThrow(TaskMergedError);
+    expect(harness.events().length).toBe(since);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+
+    // The hand-back into a stage after the merge is the admitted direction.
+    await handBackTaskCommand(harness.humanCommands, {
+      taskId: task,
+      userId: USER,
+      stage: 'retrospective' as Slug,
+      summary: 'looked at the retrospective by hand',
+    });
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('done');
   });
 });
 
@@ -2914,15 +3304,18 @@ describe('a human’s way into Ready (WP-79)', () => {
         'InvariantViolationError',
         'isActiveRunStatus',
         'isBefore',
+        'isMergedTask', // a check (WP-152)
         'isTaskFinished',
         'MERGED_GATE_STAGE',
         'markReadyForMerge', // the dry run inside `humanEnter`, discarded
+        'POST_MERGE_STAGES', // data (WP-152)
         'pauseTask', // → paused
         'READY_FOR_MERGE_STAGE',
         'recordFeedback', // no state change
         'resetAgentIterations', // pure
         'stageOf', // pure
         'steerRun', // no state change
+        'TaskMergedError', // a refusal (WP-152)
         'takeOverTask', // → paused
         'taskBranchName', // pure
       ].sort(),

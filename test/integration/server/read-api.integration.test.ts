@@ -986,6 +986,82 @@ describe('the task projection', () => {
   });
 
   /**
+   * **The box the return dialog offers** (WP-152, PROGRESS backlog 491): a length, never the text,
+   * and only for a task parked at a **gate** whose attempt the gate closed `returned` with a reason —
+   * the three facts the command's default reads. Both directions (rule 42): an agent stage holding a
+   * return reason, a running task at the gate, and an escalation's `failed` close publish nothing.
+   */
+  it('publishes the parked gate’s failure as a length, and nothing where a return could not attach it', async () => {
+    const one = async <T extends Record<string, unknown>>(text: string, values: unknown[] = []) =>
+      (await pool.query<T>(text, values)).rows[0] as T;
+    const org = await one<{ id: string }>(
+      "insert into organizations (name) values ('gate-feedback') returning id",
+    );
+    const project = await one<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'gatefb', 'Gate feedback', 'https://git.example.test/acme/gatefb.git')
+       returning id`,
+      [org.id],
+    );
+    const taskAt = async (key: string, state: string, stage: string) =>
+      (
+        await one<{ id: string }>(
+          `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                              current_stage, stage_attempts)
+           values ($1, 'fake-jira', $2, 'https://jira.example.test/browse/' || $2, 'feature', $3, $4,
+                   jsonb_build_object($4::text, 1)) returning id`,
+          [project.id, key, state, stage],
+        )
+      ).id;
+    const closed = async (
+      taskId: string,
+      stage: string,
+      state: string,
+      reason: string | null,
+      returnedTo: string | null,
+      originalChars: number | null,
+    ) => {
+      await pool.query(
+        `insert into task_stages (task_id, stage, attempt, state, exited_at, outcome, return_reason,
+                                  returned_to, return_reason_original_chars)
+         values ($1, $2, 1, $3, now(), 'returned', $4, $5, $6)`,
+        [taskId, stage, state, reason, returnedTo, originalChars],
+      );
+    };
+    const EXCERPT =
+      'pipeline p-1 failed: phpstan\nLog of the failing job phpstan, redacted:\nerror';
+
+    const parked = await taskAt('GATE-1', 'needs_human', 'ci_gate');
+    await closed(parked, 'ci_gate', 'returned', EXCERPT, 'implementation', 20_657);
+    expect((await findTaskDetail(drizzled, parked))?.gate_feedback).toEqual({
+      stage: 'ci_gate',
+      attempt: 1,
+      chars: EXCERPT.length,
+      original_chars: 20_657,
+    });
+
+    // An agent stage's return reason is its verdict's, not a gate's failure.
+    const atAgent = await taskAt('GATE-2', 'needs_human', 'code_review');
+    await closed(
+      atAgent,
+      'code_review',
+      'returned',
+      'the footer rounds twice',
+      'implementation',
+      null,
+    );
+    // A task still running at the gate is not parked.
+    const running = await taskAt('GATE-3', 'active', 'ci_gate');
+    await closed(running, 'ci_gate', 'returned', EXCERPT, 'implementation', null);
+    // An escalation's close is `failed`, with no target: not a return, nothing to attach.
+    const undecided = await taskAt('GATE-4', 'needs_human', 'ci_gate');
+    await closed(undecided, 'ci_gate', 'failed', 'the CI gate could not decide', null, null);
+    for (const taskId of [atAgent, running, undecided]) {
+      expect((await findTaskDetail(drizzled, taskId))?.gate_feedback, taskId).toBeNull();
+    }
+  });
+
+  /**
    * **product/18:32's *"per user breakdown off by default"*, both directions** (WP-29).
    *
    * The rows are seeded here rather than folded from events **because this is a test of the read**:

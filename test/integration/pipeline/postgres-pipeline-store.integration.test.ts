@@ -10,6 +10,7 @@
  * without a database per case.
  */
 import type { Transaction } from '@platform/application';
+import type { Id } from '@platform/contracts';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import { pipeline } from '@platform/infrastructure';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -213,6 +214,91 @@ describe('tasks.ticket_id (migration 0077)', () => {
       // Provider text that is not an id is refused, not stored.
       await refusedWith(() => insert('BAD-1', "1' or '1"), '23514', 'tasks_ticket_id_shape');
       await refusedWith(() => insert('BAD-2', 'x'.repeat(65)), '23514', 'tasks_ticket_id_shape');
+    } finally {
+      await client.query('rollback');
+      await client.end();
+    }
+  });
+});
+
+/**
+ * **The gate's failure is kept on the row whatever the person chose** (WP-152 round 1, migration
+ * 0086). The contract suite reads what the port serves; this reads the row, which the port does not
+ * expose: an unticked return keeps the excerpt in `attached_feedback` with
+ * `attached_feedback_sent = false`, and the database refuses a `sent` with no text beside it.
+ */
+describe('task_stages.attached_feedback (migration 0086)', () => {
+  it('keeps an unticked excerpt on the row, unsent, and refuses a sent flag with no text', async () => {
+    const client = createTestClient(database.connectionString);
+    await client.connect();
+    await client.query('begin');
+    try {
+      const { rows } = await client.query<{ id: string }>(
+        `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                            current_stage)
+         values ($1, 'fake-jira', 'GATE-1', 'https://jira.example.test/browse/GATE-1', 'feature',
+                 'needs_human', 'ci_gate') returning id`,
+        [projectId],
+      );
+      const taskId = rows[0]?.id as Id;
+      const store = pipeline.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+      const tx = { adapter: 'postgres', client } as unknown as Transaction;
+      const EXCERPT = 'pipeline p-1 failed: phpstan';
+      await store.tasks.recordStageEntered(tx, {
+        taskId,
+        stage: 'ci_gate',
+        attempt: 1,
+        causedByEventId: null,
+      });
+      const exit = (reason: string) =>
+        store.tasks.recordStageExited(tx, {
+          taskId,
+          stage: 'ci_gate',
+          attempt: 1,
+          state: 'returned',
+          outcome: 'returned',
+          returnReason: reason,
+          returnedTo: 'implementation',
+        });
+      await exit(EXCERPT);
+      expect(
+        await store.tasks.attachReturnReason(tx, {
+          taskId,
+          stage: 'ci_gate',
+          attempt: 1,
+          send: false,
+        }),
+      ).toBe(true);
+      await exit('the person’s note');
+      const row = await client.query<{
+        return_reason: string;
+        attached_feedback: string | null;
+        attached_feedback_sent: boolean;
+      }>(
+        `select return_reason, attached_feedback, attached_feedback_sent from task_stages
+          where task_id = $1 and stage = 'ci_gate' and attempt = 1`,
+        [taskId],
+      );
+      expect(row.rows[0]).toEqual({
+        return_reason: 'the person’s note',
+        attached_feedback: EXCERPT,
+        attached_feedback_sent: false,
+      });
+
+      await client.query('savepoint attempt');
+      const refused = (await client
+        .query(
+          `update task_stages set attached_feedback = null, attached_feedback_sent = true
+            where task_id = $1`,
+          [taskId],
+        )
+        .then(
+          () => null,
+          (caught: unknown) => caught,
+        )) as { code?: string; constraint?: string } | null;
+      await client.query('rollback to savepoint attempt');
+      expect(refused?.code).toBe('23514');
+      expect(refused?.constraint).toBe('task_stages_attached_feedback_sent_has_text');
     } finally {
       await client.query('rollback');
       await client.end();

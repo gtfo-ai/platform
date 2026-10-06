@@ -44,7 +44,7 @@ queued ─► active(stage=…) ─► … ─► ready_for_merge ─► merged 
    │           ├─► waiting_answers ─► active
    │           ├─► waiting_approval ─► active | needs_human
    │           ├─► paused(budget|manual|taken_over) ─► active | ready_for_merge | merged
-   │           └─► needs_human ─► active | cancelled
+   │           └─► needs_human ─► active | cancelled | retro (a merged task, from a person's command)
    └─► cancelled
 ```
 Guards: WIP limits on `queued → active`; iteration limits on any `returned`; budget on every `active` entry; readiness/autonomy policies on approvals.
@@ -73,6 +73,17 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > closed `returned` with outcome `escalated` (it ended in the escalation, not in a verdict), and
 > the person's note is its `return_reason`, so the target stage is handed it. `retry-stage` and
 > `resume` out of `needs_human` are unchanged: they re-enter the stopped stage and spend no round.
+> **Since WP-152 (PROGRESS backlog 491) the note no longer erases what a gate recorded there.** When
+> the task is parked at a **gate** whose attempt closed `returned` with a failure — a spent `ci_fix`
+> loop, whose reason is the failing jobs' log excerpts — the command first moves that failure to
+> the row's `attached_feedback` (migration 0086), in the same transaction, and the target stage is
+> handed **both**: the person's note and the gate's failure, as two `return_feedback` data blocks
+> with platform-written `source` attributes (`person`, `gate`; technical/04). Before it, the note
+> was written over the same `(task, stage, attempt)` row and the Developer was given the person's
+> words alone. The failure is kept whatever the person chooses; `attach_gate_feedback`
+> (technical/08), ticked by default, decides only whether the run is handed it — unticked, the note
+> goes alone; asked for where there is nothing to attach (no reason, or an empty one), it is refused
+> `no_gate_feedback` and nothing is recorded.
 >
 > **A run speaks only for its own attempt** (amended 2026-10-06, PROGRESS backlog 494). Every way
 > back into a stage is a new attempt, so a run started for an attempt the task has since left —
@@ -96,7 +107,15 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > appended — `hand-back` included, which closes the side door for the hand-back as 483 closed it
 > for returns. `needs_human → done` is **not** added: `cancel` already ends such a task without
 > its retrospective, and a `done` reached that way would be a task in `done` whose post-merge
-> stages never ran.
+> stages never ran. *As built* (WP-152): the edge is the Task aggregate's `enterTerminalStage` guard
+> (a merged task, a `user` actor); `enterStage` refuses any merged task (`TaskMergedError`), so no
+> command takes one to `active`; `handBackTask` and `returnEscalatedTask` refuse a pre-merge stage
+> by the same name; and the commands check the target first, so the refusal names the stage the
+> person chose. A merged task parked **at `merged_gate`** resumes into the first post-merge stage
+> (the move the gate would have made, since re-entering it would record the merge again); a
+> `retry-stage` of `merged_gate` stays refused. **Residual:** a merged task escalated and then
+> **paused** or **taken over** is at a pause, not in `needs_human`, and `paused → retro` is not an
+> edge — such a task can only be cancelled.
 
 *Which* limit a `returned` spends is decided by the transition and not only by the stage it leaves (WP-26). `ready_for_merge` has two outgoing returns — a human's comment, which is BD-008's `human_rounds`, and the default branch moving, which re-enters the rebase gate — and attributing the second to the first escalated a task with *"human_rounds iteration limit of 3 reached: main moved to …"* after three merges to `main` under a waiting merge request. The edges that need their own loop are enumerated in `RETURN_LOOPS_BY_EDGE` (`packages/domain/src/pipeline/interpreter.ts`); everything else is attributed by the stage, and an edge in neither table cannot return at all.
 

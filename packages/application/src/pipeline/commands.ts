@@ -47,15 +47,18 @@ import {
   InvariantViolationError,
   isActiveRunStatus,
   isBefore,
+  isMergedTask,
   isTaskFinished,
   MERGED_GATE_STAGE,
   markReadyForMerge,
+  POST_MERGE_STAGES,
   pauseTask,
   READY_FOR_MERGE_STAGE,
   recordFeedback,
   resetAgentIterations,
   stageOf,
   steerRun,
+  TaskMergedError,
   takeOverTask,
   taskBranchName,
 } from '@platform/domain';
@@ -827,6 +830,9 @@ export const raiseTaskBudgetCommand = async (
  * compares the branch's live head with the head the gates judged and re-enters `rebase_gate` (the
  * same head, WP-105) or `ci_gate` (any other, WP-79) — `ready-head.ts`. The task therefore reads
  * `paused` until the duty runs.
+ *
+ * **A merged task escalated at the merge gate resumes into the retrospective** (WP-152 round 1,
+ * {@link resumeTargetOf}).
  */
 export const resumeTaskCommand = async (
   deps: HumanCommandDependencies,
@@ -837,7 +843,7 @@ export const resumeTaskCommand = async (
     deps,
     { ...input, what: 'resuming the task' },
     async (scope, stored, context) => {
-      const stage = currentStageOrThrow(stored, 'resume');
+      const stage = resumeTargetOf(stored, currentStageOrThrow(stored, 'resume'));
       const work = await humanEnter(deps, scope, stored, context, {
         stage,
         via: 'resume',
@@ -847,6 +853,31 @@ export const resumeTaskCommand = async (
       return { result: undefined, work };
     },
   );
+};
+
+/**
+ * Where `resume` re-enters: the stage the task stopped at — except for a merged task parked **at
+ * `merged_gate`** (WP-152 round 1), which resumes into the first post-merge stage its compiled
+ * pipeline runs (the retrospective on every shipped template). Re-entering `merged_gate` itself
+ * would record the merge again, which `needs_human → merged` refuses — the provider's `mr.merged` is
+ * the only thing that may say a merge happened — and the gate is bookkeeping that settles at once
+ * and walks to that same stage, so this is the move resuming it would make. It stays inside ruling
+ * (e): `needs_human → retro`, a merged task, a post-merge stage, from `resume`. `retry-stage` at
+ * `merged_gate` is still refused: a retry re-runs the stage it names, and that stage is the merge.
+ */
+const resumeTargetOf = (stored: StoredTask, stage: Slug): Slug => {
+  if (
+    stored.task.state !== 'needs_human' ||
+    stage !== MERGED_GATE_STAGE ||
+    !isMergedTask(stored.task)
+  ) {
+    return stage;
+  }
+  const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+  const next = pipeline.stages.find(
+    (entry) => entry.enabled && POST_MERGE_STAGES.includes(entry.id),
+  );
+  return next?.id ?? stage;
 };
 
 /**
@@ -1081,6 +1112,90 @@ const escalationReturn = (
     ? { returnFromEscalation: true, stageOutcome: ESCALATED_OUTCOME }
     : {};
 
+/**
+ * A return or a rework asked to attach the gate's last failure where there is none (WP-152 ruling
+ * (b)): the task is not parked at a gate, or the gate's attempt holds no failure to attach. A 409 at
+ * the route, `no_gate_feedback`, and nothing is recorded — a box the person ticked is not dropped
+ * quietly, because the run would then be told less than the person thought they sent (rule 20).
+ */
+export class NoGateFeedbackError extends Error {
+  override readonly name = 'NoGateFeedbackError';
+  readonly stage: Slug | null;
+
+  constructor(stage: Slug | null, why: string) {
+    super(
+      `there is no gate failure to attach to this return: ${why}. Send it without ` +
+        '`attach_gate_feedback`, or put what the stage needs in your own note',
+    );
+    this.stage = stage;
+  }
+}
+
+/**
+ * **The gate's last failure goes with a person's return out of an escalation at that gate**
+ * (WP-152, PROGRESS backlog 491) — moved, in this transaction, from the parked attempt's
+ * `return_reason` to its `attached_feedback`, before the return writes the person's note over it.
+ *
+ * Measured at `068a0cfb`: when the `ci_fix` loop is spent, the gate attempt's row holds the CI
+ * excerpt as its `return_reason`, and a person's return from `needs_human` closes **that same row**
+ * — the same `(task, stage, attempt)` — so the excerpt was overwritten and the Developer was handed
+ * the person's words alone (AUT-6820). The move is what keeps it; `lastReturnReason` then hands the
+ * target stage both, as two data blocks.
+ *
+ * **The move does not depend on the box** (ruling (a), and the orchestrator's round-1 ruling on it):
+ * whenever the task is parked (`needs_human`) at a **gate** whose attempt holds a non-empty failure,
+ * the failure is kept. `requested` — the request's `attach_gate_feedback` — decides only whether the
+ * next run is handed it (ruling (b)), recorded as `attached_feedback_sent`: **absent** or **`true`**
+ * sends it, **`false`** keeps it on the row and sends the note alone. `true` where there is nothing
+ * to keep is refused by name ({@link NoGateFeedbackError}). Answers whether the run will be handed
+ * the failure.
+ */
+const keepGateFeedback = async (
+  deps: HumanCommandDependencies,
+  scope: TransactionScope,
+  stored: StoredTask,
+  from: Slug,
+  requested: boolean | undefined,
+): Promise<boolean> => {
+  const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+  if (stored.task.state !== 'needs_human' || stageOf(pipeline, from)?.kind !== 'gate') {
+    if (requested === true) {
+      throw new NoGateFeedbackError(
+        from,
+        `the task is ${stored.task.state} at "${from}", which is not a gate it was parked at`,
+      );
+    }
+    return false;
+  }
+  // Moved whatever the person chose (ruling (a)); `send` is their choice (ruling (b)).
+  const send = requested !== false;
+  const moved = await deps.store.tasks.attachReturnReason(scope.tx, {
+    taskId: stored.task.id,
+    stage: from,
+    attempt: stored.task.stageAttempts[from] ?? 1,
+    send,
+  });
+  if (!moved && requested === true) {
+    throw new NoGateFeedbackError(from, `the "${from}" gate's last attempt recorded no failure`);
+  }
+  return moved && send;
+};
+
+/**
+ * **A merged task is never sent to a stage before the merge** (WP-152, technical/02's 2026-10-06
+ * (M9) amendment, PROGRESS backlog 497) — refused by name, `task_merged`, before anything is
+ * recorded. The aggregate refuses the same moves ({@link TaskMergedError} from `enterStage`,
+ * `returnEscalatedTask` and `handBackTask`); this is the command's own check so the refusal names the
+ * stage the person chose before any other rule is asked. The stages after the merge — the
+ * retrospective and the librarian — are what such a task may still be resumed, retried or handed
+ * back into.
+ */
+const assertNotBeforeTheMerge = (stored: StoredTask, target: Slug): void => {
+  if (isMergedTask(stored.task) && !POST_MERGE_STAGES.includes(target)) {
+    throw new TaskMergedError(stored.task.state, target);
+  }
+};
+
 /** Refuses before the aggregate can escalate; see the module note on why that is the ending here. */
 const assertLoopHasRoom = (stored: StoredTask): void => {
   const iteration = evaluateIteration(
@@ -1116,6 +1231,8 @@ export const returnToStageCommand = async (
     readonly userId: Id;
     readonly stage: Slug;
     readonly reason: string;
+    /** WP-152: attach the parked gate's last failure — see {@link keepGateFeedback}. */
+    readonly attachGateFeedback?: boolean;
   },
 ): Promise<void> => {
   requireJobs(deps);
@@ -1125,7 +1242,9 @@ export const returnToStageCommand = async (
     async (scope, stored, context) => {
       const from = currentStageOrThrow(stored, 'return');
       assertReturnTarget(stored, from, input.stage);
+      assertNotBeforeTheMerge(stored, input.stage);
       assertLoopHasRoom(stored);
+      await keepGateFeedback(deps, scope, stored, from, input.attachGateFeedback);
       const applied = await applyHumanDecisionRecorded(
         deps,
         scope,
@@ -1187,6 +1306,8 @@ export const reworkStageCommand = async (
     readonly userId: Id;
     readonly stage: Slug;
     readonly instructions: string;
+    /** WP-152: attach the parked gate's last failure — see {@link keepGateFeedback}. */
+    readonly attachGateFeedback?: boolean;
   },
 ): Promise<void> => {
   const jobs = requireJobs(deps);
@@ -1196,7 +1317,9 @@ export const reworkStageCommand = async (
     async (scope, stored, context) => {
       const from = currentStageOrThrow(stored, 'rework');
       assertReturnTarget(stored, from, input.stage);
+      assertNotBeforeTheMerge(stored, input.stage);
       assertLoopHasRoom(stored);
+      await keepGateFeedback(deps, scope, stored, from, input.attachGateFeedback);
       const fresh = stored.mr === null && stored.branch === null ? null : reworkBranchName(stored);
       const reset: StoredTask = {
         ...stored,
@@ -2028,6 +2151,12 @@ export const takeOverTaskCommand = async (
  * read again, PROGRESS backlog 337) and `ci_gate` otherwise — see `ready-head.ts`. That covers the
  * take-over at Ready this entry was filed for and the wider door beside it: a hand-back into Ready
  * from an `active` task, which `active → ready_for_merge` let skip both gates.
+ *
+ * **Not before the merge, for a merged task** (WP-152, PROGRESS backlog 497): a task that entered
+ * `merged_gate` is handed back only into the retrospective or the librarian (`needs_human → retro`),
+ * and any other target is refused `task_merged` before `task.handed_back` is recorded
+ * ({@link assertNotBeforeTheMerge}). Before it, a hand-back to `implementation` of a task escalated
+ * in its retrospective put a merged task back to work.
  */
 export const handBackTaskCommand = async (
   deps: HumanCommandDependencies,
@@ -2071,6 +2200,9 @@ export const handBackTaskCommand = async (
           pipeline.stages.filter((entry) => entry.enabled).map((entry) => entry.id),
         );
       }
+      // WP-152 (backlog 497): a merged task is handed back only into a stage after the merge. Before
+      // it a hand-back to `implementation` put a merged task back to work.
+      assertNotBeforeTheMerge(stored, input.stage);
       const branch = stored.branch ?? taskBranchName(stored.task.ticket.key);
       const decision = handBackTask(
         stored.task,

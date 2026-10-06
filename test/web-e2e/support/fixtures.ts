@@ -462,6 +462,7 @@ export const taskDetail = taskDetailResponseSchema.parse({
   taken_over: null,
   can_raise_budget: false,
   can_export: false,
+  gate_feedback: null,
   /**
    * WP-29's minutes, with the per-user breakdown **on** — which is not this project's default and
    * is exactly why the corpus carries it: `by_user` is the one place the task screen renders a
@@ -529,6 +530,7 @@ export const bugTaskDetail = taskDetailResponseSchema.parse({
   taken_over: null,
   can_raise_budget: false,
   can_export: false,
+  gate_feedback: null,
   // Nothing recorded, and the breakdown off — the shipped default (product/18:32). `by_user: null`
   // and an empty list are different answers, and this is the first.
   human_time: {
@@ -563,6 +565,7 @@ export const takenOverTaskDetail = taskDetailResponseSchema.parse({
   },
   can_raise_budget: false,
   can_export: false,
+  gate_feedback: null,
   taken_over: {
     at: now,
     branch: 'agentic/demo-3',

@@ -51,8 +51,8 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
     how: "inside the job's transaction: the loaded row's `stored`/`current.pipelineDial`",
   },
   'packages/application/src/pipeline/commands.ts': {
-    sites: 3,
-    how: "inside the human command's transaction (`writeTask`): the loaded row's `stored.pipelineDial` — the hand-back's and the return's target checks (`assertReturnTarget`, backlog 483) therefore refuse a stage the dial disabled",
+    sites: 5,
+    how: "inside the human command's transaction (`writeTask`): the loaded row's `stored.pipelineDial` — the hand-back's and the return's target checks (`assertReturnTarget`, backlog 483) therefore refuse a stage the dial disabled, `keepGateFeedback` (WP-152) asks of the same compiled pipeline whether the parked stage is a gate, and `resumeTargetOf` (WP-152 round 1) which post-merge stage a merged task resumes into",
   },
   'packages/application/src/pipeline/dependency-gate.ts': {
     sites: 2,
@@ -200,9 +200,9 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
     expect(counts).toEqual(expected);
   });
 
-  it('counts twenty-nine — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486 — and states how each resolves the dial', () => {
+  it('counts thirty-one — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152 — and states how each resolves the dial', () => {
     const total = [...census().values()].reduce((sum, calls) => sum + calls.length, 0);
-    expect(total).toBe(29);
+    expect(total).toBe(31);
     for (const [file, entry] of Object.entries(EXPECTED_SITES)) {
       expect(entry.how.length, file).toBeGreaterThan(20);
     }

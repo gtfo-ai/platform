@@ -1409,6 +1409,23 @@ export const taskDetailResponseSchema = z.strictObject({
   taken_over: takenOverSchema.nullable(),
   /** Human minutes derived from events by the WP-29 projector; never summed with the USD. */
   human_time: humanTimeSummarySchema,
+  /**
+   * The failure a return out of this escalation would carry (WP-152, PROGRESS backlog 491): set
+   * when the task is `needs_human` at a **gate** whose attempt recorded one — the box the return
+   * dialog offers, ticked by default, with the excerpt's length. `null` for every other task, where
+   * `attach_gate_feedback: true` is refused. A count, never the text: the excerpt is provider output
+   * (BD-022) and the page has no reason to render it.
+   */
+  gate_feedback: z
+    .strictObject({
+      stage: stageIdSchema,
+      attempt: z.int().positive(),
+      /** The stored excerpt's length in characters (UTF-16 code units, as the prompt cap counts). */
+      chars: z.int().positive(),
+      /** The length before the gate cut it (WP-81), or `null` when nothing was cut. */
+      original_chars: z.int().positive().nullable(),
+    })
+    .nullable(),
   stages: z.array(
     z.strictObject({
       stage: stageIdSchema,
@@ -1602,9 +1619,21 @@ export const retryStageRequestSchema = z.strictObject({
   stage: stageIdSchema,
   reason: commandTextSchema.optional(),
 });
+/**
+ * Whether a person's return out of an escalation **at a gate** carries the gate's last failure to
+ * the stage beside their own note (WP-152, PROGRESS backlog 491) — on a CI gate, the failing jobs'
+ * log excerpts the gate stored. Absent is the default: attached when the task is parked at a gate
+ * whose attempt recorded a failure, nothing otherwise. `true` where there is nothing to attach is
+ * refused `409 no_gate_feedback` and records nothing; `false` sends the note alone. The note's own
+ * bound is unchanged ({@link requiredCommandTextSchema}); the excerpt is the platform's stored text,
+ * never the caller's.
+ */
+const attachGateFeedbackSchema = z.boolean().optional();
+
 export const returnToStageRequestSchema = z.strictObject({
   stage: stageIdSchema,
   reason: requiredCommandTextSchema,
+  attach_gate_feedback: attachGateFeedbackSchema,
 });
 export const takeOverRequestSchema = z.strictObject({
   reason: commandTextSchema.optional(),
@@ -1626,6 +1655,8 @@ export const handBackRequestSchema = z.strictObject({
 export const reworkRequestSchema = z.strictObject({
   stage: stageIdSchema,
   instructions: requiredCommandTextSchema,
+  /** {@link attachGateFeedbackSchema} — the same box, the same default (WP-152). */
+  attach_gate_feedback: attachGateFeedbackSchema,
 });
 
 export const answerQuestionRequestSchema = z.strictObject({

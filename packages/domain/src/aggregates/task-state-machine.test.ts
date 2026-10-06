@@ -21,7 +21,7 @@ import {
  *    │           ├─► waiting_answers ─► active
  *    │           ├─► waiting_approval ─► active | needs_human
  *    │           ├─► paused(budget|manual|taken_over) ─► active | ready_for_merge | merged
- *    │           └─► needs_human ─► active | cancelled
+ *    │           └─► needs_human ─► active | cancelled | retro (a merged task)
  *    └─► cancelled
  * ```
  *
@@ -60,8 +60,10 @@ const EXPECTED_TASK_EDGES = {
   // WP-73 (backlog 244, Q104): a pause at `ready_for_merge` resumes there, and a provider merge
   // during it ends it.
   paused: ['active', 'ready_for_merge', 'merged', 'needs_human', 'cancelled'],
-  // "needs_human ─► active | cancelled".
-  needs_human: ['active', 'paused', 'cancelled'],
+  // "needs_human ─► active | cancelled | retro" — the last since WP-152 (technical/02's M9
+  // amendment, backlog 497): a task escalated after its merge finishes its retrospective. The
+  // aggregate narrows it to a merged task and a person's command.
+  needs_human: ['active', 'paused', 'cancelled', 'retro'],
   // "ready_for_merge ─► merged" and "returned(stage) ◄─┘ (human comments / rework)".
   ready_for_merge: ['merged', 'returned', 'paused', 'needs_human', 'cancelled'],
   // "merged ─► retro"; a merged task can still escalate but can never be cancelled.

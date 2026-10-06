@@ -772,15 +772,25 @@ export const useTaskCommands = (taskId: string) => {
       onSuccess: invalidate,
     }),
     returnToStage: useMutation({
-      mutationFn: (input: { stage: string; reason: string }) =>
-        endpoints.returnToStage(taskId, { stage: input.stage, reason: input.reason }),
+      mutationFn: (input: { stage: string; reason: string; attachGateFeedback?: boolean }) =>
+        endpoints.returnToStage(taskId, {
+          stage: input.stage,
+          reason: input.reason,
+          // WP-152: sent only when the dialog offered the box, so the server's default stands.
+          ...(input.attachGateFeedback === undefined
+            ? {}
+            : { attach_gate_feedback: input.attachGateFeedback }),
+        }),
       onSuccess: invalidate,
     }),
     rework: useMutation({
-      mutationFn: (input: { stage: string; instructions: string }) =>
+      mutationFn: (input: { stage: string; instructions: string; attachGateFeedback?: boolean }) =>
         endpoints.reworkStage(taskId, {
           stage: input.stage,
           instructions: input.instructions,
+          ...(input.attachGateFeedback === undefined
+            ? {}
+            : { attach_gate_feedback: input.attachGateFeedback }),
         }),
       onSuccess: invalidate,
     }),

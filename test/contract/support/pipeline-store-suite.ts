@@ -1824,6 +1824,152 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await store.tasks.lastReturnReason(tx, id, 'code_review', 2)).toBeNull();
       });
 
+      /**
+       * WP-152 (PROGRESS backlog 491, migration 0086): a person's return out of an escalation at a
+       * gate closes **the same row** the gate's spent loop closed, so `recordStageExited` writes the
+       * person's note over the gate's excerpt. `attachReturnReason` moves the excerpt aside first,
+       * and the next attempt is served both — on both stores alike (rule 1).
+       */
+      it('keeps a gate’s last failure through a person’s return on the same row (WP-152)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const id = stored.task.id;
+        await enter(id, 'implementation', 1);
+        await complete(id, 'implementation', 1);
+        await enter(id, 'ci_gate', 1);
+        // Nothing to move from an open row.
+        expect(
+          await store.tasks.attachReturnReason(tx, {
+            taskId: id,
+            stage: 'ci_gate',
+            attempt: 1,
+            send: true,
+          }),
+        ).toBe(false);
+        // The spent `ci_fix` loop: the gate's excerpt, cut by the gate, on its own attempt.
+        await store.tasks.recordStageExited(tx, {
+          taskId: id,
+          stage: 'ci_gate',
+          attempt: 1,
+          state: 'returned',
+          outcome: 'returned',
+          returnReason:
+            'pipeline p-1 failed: phpstan\nLog of the failing job phpstan, redacted:\nerror',
+          returnedTo: 'implementation',
+          returnReasonOriginalChars: 20_657,
+        });
+        expect(
+          await store.tasks.attachReturnReason(tx, {
+            taskId: id,
+            stage: 'ci_gate',
+            attempt: 1,
+            send: true,
+          }),
+        ).toBe(true);
+        // The person's return: the same `(task, stage, attempt)`, their note as the reason.
+        await store.tasks.recordStageExited(tx, {
+          taskId: id,
+          stage: 'ci_gate',
+          attempt: 1,
+          state: 'returned',
+          outcome: 'escalated',
+          returnReason: 'fix phpstan and open the merge request',
+          returnedTo: 'implementation',
+        });
+        await enter(id, 'implementation', 2);
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 2)).toEqual({
+          reason: 'fix phpstan and open the merge request',
+          originalChars: null,
+          attached: {
+            reason:
+              'pipeline p-1 failed: phpstan\nLog of the failing job phpstan, redacted:\nerror',
+            originalChars: 20_657,
+          },
+        });
+      });
+
+      /**
+       * WP-152 round 1 (the orchestrator's ruling on ruling (a)): the excerpt is kept whatever the
+       * person chose, and the box decides only whether the next attempt is served it. An empty
+       * reason is no reason — nothing moves, as the read projection publishes nothing for one.
+       */
+      it('keeps an unticked gate’s failure without serving it, and moves no empty reason (WP-152)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const id = stored.task.id;
+        await enter(id, 'implementation', 1);
+        await complete(id, 'implementation', 1);
+        await enter(id, 'ci_gate', 1);
+        await returnFrom(id, 'ci_gate', 1, 'implementation', '');
+        expect(
+          await store.tasks.attachReturnReason(tx, {
+            taskId: id,
+            stage: 'ci_gate',
+            attempt: 1,
+            send: true,
+          }),
+        ).toBe(false);
+        await enter(id, 'ci_gate', 2);
+        await returnFrom(id, 'ci_gate', 2, 'implementation', 'pipeline p-2 failed: test:unit');
+        expect(
+          await store.tasks.attachReturnReason(tx, {
+            taskId: id,
+            stage: 'ci_gate',
+            attempt: 2,
+            send: false,
+          }),
+        ).toBe(true);
+        await returnFrom(id, 'ci_gate', 2, 'implementation', 'the person’s note, alone');
+        await enter(id, 'implementation', 2);
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 2)).toEqual({
+          reason: 'the person’s note, alone',
+          originalChars: null,
+        });
+      });
+
+      it('moves nothing from a row a return did not close, and attaches nothing unasked (WP-152)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const id = stored.task.id;
+        await enter(id, 'implementation', 1);
+        await complete(id, 'implementation', 1);
+        await enter(id, 'ci_gate', 1);
+        // An escalation's close: `failed`, the escalation's sentence, no target.
+        await store.tasks.closeOpenStage(tx, {
+          taskId: id,
+          stage: 'ci_gate',
+          attempt: 1,
+          outcome: 'undecided',
+          reason: 'the CI gate could not decide',
+        });
+        expect(
+          await store.tasks.attachReturnReason(tx, {
+            taskId: id,
+            stage: 'ci_gate',
+            attempt: 1,
+            send: true,
+          }),
+        ).toBe(false);
+        // A row that does not exist moves nothing either.
+        expect(
+          await store.tasks.attachReturnReason(tx, {
+            taskId: id,
+            stage: 'ci_gate',
+            attempt: 9,
+            send: true,
+          }),
+        ).toBe(false);
+        // Without the move, a person's note over a gate's return is all the next attempt is served.
+        await enter(id, 'ci_gate', 2);
+        await returnFrom(id, 'ci_gate', 2, 'implementation', 'pipeline p-2 failed: test:unit');
+        await returnFrom(id, 'ci_gate', 2, 'implementation', 'the person’s note');
+        await enter(id, 'implementation', 2);
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 2)).toEqual({
+          reason: 'the person’s note',
+          originalChars: null,
+        });
+      });
+
       it('is nothing for an attempt entered forward, after the loop that carried a finding', async () => {
         const stored = task();
         await store.tasks.insert(tx, stored);

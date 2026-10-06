@@ -8,7 +8,7 @@
  *    │           ├─► waiting_answers ─► active
  *    │           ├─► waiting_approval ─► active | needs_human
  *    │           ├─► paused(budget|manual|taken_over) ─► active | ready_for_merge | merged
- *    │           └─► needs_human ─► active | cancelled
+ *    │           └─► needs_human ─► active | cancelled | retro (a merged task, WP-152)
  *    └─► cancelled
  * ```
  *
@@ -38,6 +38,16 @@ import { IllegalTransitionError } from '../errors.js';
  *    sends an escalated task back through `returnEscalatedTask` in `task.ts`, which takes
  *    `needs_human → active → returned` in one decision; an edge here would let any caller of
  *    `returnToStage` — a provider signal interpreted for a parked task included — un-park it.
+ *  - **`needs_human → retro` was added at WP-152** (technical/02's 2026-10-06 (M9) amendment,
+ *    PROGRESS backlog 497). A task escalated after its merge — in `merged` or `retro` — could only
+ *    be cancelled: `resume` and `retry-stage` at the retrospective had no edge, while a hand-back
+ *    to an agent stage took `needs_human → active` and put a merged task back to work. The table
+ *    cannot say *"only for a merged task, only from a human command"*, so the **aggregate** does
+ *    (`enterTerminalStage` in `task.ts`): the edge is taken only by a task that entered
+ *    `merged_gate`, only by a person, and only into the retrospective or the librarian; and no
+ *    command takes such a task to `active` (`enterStage` refuses it, `TaskMergedError`).
+ *    `needs_human → done` is **not** an edge: `cancel` ends such a task, and a `done` reached
+ *    without the post-merge stages would be a task whose retrospective never ran.
  *  - **`paused → ready_for_merge` and `paused → merged` were added at WP-73** (PROGRESS backlog
  *    244, Q104): *a task paused while waiting for a merge resumes waiting for it*, and a merge made
  *    on the provider while it is paused ends the pause (Q104's answer (a)) — the saga takes that
@@ -75,7 +85,7 @@ export const TASK_TRANSITIONS = {
   waiting_answers: ['active', 'paused', 'needs_human', 'cancelled'],
   waiting_approval: ['active', 'paused', 'needs_human', 'cancelled'],
   paused: ['active', 'ready_for_merge', 'merged', 'needs_human', 'cancelled'],
-  needs_human: ['active', 'paused', 'cancelled'],
+  needs_human: ['active', 'paused', 'cancelled', 'retro'],
   ready_for_merge: ['merged', 'returned', 'paused', 'needs_human', 'cancelled'],
   merged: ['retro', 'needs_human'],
   retro: ['retro', 'done', 'needs_human'],

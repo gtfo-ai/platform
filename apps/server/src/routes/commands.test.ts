@@ -21,6 +21,7 @@
 import {
   CommandsUnavailableError,
   IterationLimitReachedError,
+  NoGateFeedbackError,
   RunNotLiveError,
   StageNotCurrentError,
   StageNotInTemplateError,
@@ -32,7 +33,7 @@ import {
   UnknownAggregateError,
 } from '@platform/application';
 import type { JsonObject, UserRole } from '@platform/contracts';
-import { IllegalTransitionError, InvariantViolationError } from '@platform/domain';
+import { IllegalTransitionError, InvariantViolationError, TaskMergedError } from '@platform/domain';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -607,6 +608,65 @@ describe('a return out of needs_human (backlog 483)', () => {
     expect(reply.body.error?.message).toContain('has not been through "code_review"');
     expect(parked.actions).toEqual([]);
   });
+
+  /**
+   * WP-152 ruling (b): the person's choice reaches the command and the audit row, for both routes;
+   * absent stays absent, so the command's default — attach a parked gate's failure — stands.
+   */
+  for (const route of [
+    { name: 'return-to-stage', body: { stage: 'implementation', reason: 'fix both jobs' } },
+    { name: 'rework', body: { stage: 'implementation', instructions: 'start over' } },
+  ]) {
+    it(`carries ${route.name}’s attach_gate_feedback to the command and the audit row (WP-152)`, async () => {
+      const parked = await escalatedWorld();
+      parked.role = 'maintainer';
+      const path = `/api/tasks/${TASK}/${route.name}`;
+      const unticked = await post(
+        parked,
+        path,
+        { ...route.body, attach_gate_feedback: false },
+        `${route.name}-attach-1`,
+      );
+      expect(unticked.status, JSON.stringify(unticked.body)).toBe(200);
+      expect(parked.calls[0]?.input).toMatchObject({ attachGateFeedback: false });
+      expect(parked.actions[0]?.params).toMatchObject({ attach_gate_feedback: false });
+
+      await post(parked, path, route.body, `${route.name}-attach-2`);
+      expect(parked.calls[1]?.input).not.toHaveProperty('attachGateFeedback');
+      expect(parked.actions[1]?.params).not.toHaveProperty('attach_gate_feedback');
+    });
+  }
+
+  it('answers 409 no_gate_feedback for an attach with nothing behind it, and audits nothing (WP-152)', async () => {
+    const parked = await escalatedWorld();
+    parked.throws = new NoGateFeedbackError(
+      'ready_for_merge' as never,
+      'the task is ready_for_merge at "ready_for_merge", which is not a gate it was parked at',
+    );
+    const reply = await post(
+      parked,
+      `/api/tasks/${TASK}/return-to-stage`,
+      { stage: 'implementation', reason: 'go back', attach_gate_feedback: true },
+      'return-no-gate-1',
+    );
+    expect(`${reply.status} ${reply.body.error?.code ?? ''}`).toBe('409 no_gate_feedback');
+    expect(reply.body.error?.message).toContain('no gate failure to attach');
+    expect(parked.actions).toEqual([]);
+  });
+
+  it('answers 409 task_merged for a merged task sent before its merge, and audits nothing (WP-152)', async () => {
+    const parked = await escalatedWorld();
+    parked.throws = new TaskMergedError('needs_human', 'implementation');
+    const reply = await post(
+      parked,
+      `/api/tasks/${TASK}/hand-back`,
+      { stage: 'implementation', summary: 'one more change' },
+      'hand-back-merged-1',
+    );
+    expect(`${reply.status} ${reply.body.error?.code ?? ''}`).toBe('409 task_merged');
+    expect(reply.body.error?.message).toContain('a merged task never goes back to work');
+    expect(parked.actions).toEqual([]);
+  });
 });
 
 describe('what each refusal maps to', () => {
@@ -652,6 +712,18 @@ describe('what each refusal maps to', () => {
       error: new StageNotReachedError('code_review' as never, 'ci_gate' as never),
       status: 409,
       code: 'stage_not_reached',
+    },
+    {
+      // WP-152: a merged task never goes back to work — named, though it is an illegal transition.
+      error: new TaskMergedError('needs_human', 'implementation'),
+      status: 409,
+      code: 'task_merged',
+    },
+    {
+      // WP-152: a ticked box with nothing behind it.
+      error: new NoGateFeedbackError('refinement' as never, 'not a gate'),
+      status: 409,
+      code: 'no_gate_feedback',
     },
     {
       error: new TaskConflictExhaustedError(TASK as never, 3, 'pausing the task'),

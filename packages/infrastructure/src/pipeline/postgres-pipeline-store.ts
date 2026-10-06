@@ -1219,6 +1219,32 @@ export const createPostgresPipelineStore = (
       );
     },
 
+    /**
+     * WP-152 (migration 0086): the move the port describes, as one statement — so the reason the
+     * person's note is about to replace and the copy kept are the same bytes, read and written in the
+     * command's own transaction. `state = 'returned'` and a non-empty reason are the whole condition
+     * (`<> ''` is false for null too): an open row, a row the executor or a sweep closed `failed`,
+     * and a return with no reason move nothing. `send` is recorded beside it, never a condition.
+     */
+    attachReturnReason: async (tx, entry) => {
+      const { rowCount } = await sqlOf(tx).query(
+        `update task_stages
+            set attached_feedback = return_reason,
+                attached_feedback_original_chars = return_reason_original_chars,
+                attached_feedback_sent = $5
+          where task_id = $1 and stage = $2 and attempt = $3
+            and state = $4 and return_reason <> ''`,
+        [
+          entry.taskId,
+          entry.stage,
+          entry.attempt,
+          taskStageStateSchema.parse('returned'),
+          entry.send,
+        ],
+      );
+      return (rowCount ?? 0) > 0;
+    },
+
     stageAttemptState: async (tx, taskId, stage, attempt) => {
       const { rows } = await sqlOf(tx).query<{ open: boolean }>(
         `select (state = 'running' and exited_at is null) as open from task_stages
@@ -1274,6 +1300,9 @@ export const createPostgresPipelineStore = (
       const { rows } = await sqlOf(tx).query<{
         return_reason: string;
         return_reason_original_chars: number | null;
+        attached_feedback: string | null;
+        attached_feedback_original_chars: number | null;
+        attached_feedback_sent: boolean;
         cause_type: string | null;
         cause_version: number | null;
       }>(
@@ -1288,6 +1317,7 @@ export const createPostgresPipelineStore = (
             where task_id = $1 and stage = $2 and attempt = $3
          )
          select r.return_reason, r.return_reason_original_chars,
+                r.attached_feedback, r.attached_feedback_original_chars, r.attached_feedback_sent,
                 c.cause_type, c.cause_version
            from task_stages r
           cross join previous
@@ -1326,6 +1356,16 @@ export const createPostgresPipelineStore = (
               cause: {
                 type: artifactTypeSchema.parse(row.cause_type),
                 version: row.cause_version,
+              },
+            }),
+        // WP-152: the gate's last failure a person sent on, beside their note — kept but not
+        // handed on when they unticked it.
+        ...(row.attached_feedback === null || !row.attached_feedback_sent
+          ? {}
+          : {
+              attached: {
+                reason: row.attached_feedback,
+                originalChars: row.attached_feedback_original_chars ?? null,
               },
             }),
       };

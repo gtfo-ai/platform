@@ -5,6 +5,7 @@ import {
   IllegalTransitionError,
   InvariantViolationError,
   PermissionDeniedError,
+  TaskMergedError,
 } from '../errors.js';
 import type { CommandContext } from '../events.js';
 import { sequentialIds } from '../ids.js';
@@ -21,6 +22,7 @@ import {
   escalateTask,
   handBackTask,
   isCurrentStageAttempt,
+  isMergedTask,
   isTaskFinished,
   markReadyForMerge,
   pauseTask,
@@ -29,6 +31,7 @@ import {
   requestApproval,
   returnEscalatedTask,
   returnToStage,
+  startLibrarianCuration,
   startRetrospective,
   steerRun,
   type Task,
@@ -360,9 +363,9 @@ describe('returnEscalatedTask', () => {
     }
   });
 
-  it('refuses a task that was merged: a merged task never goes back to work', () => {
+  it('refuses a task that was merged, by name: a merged task never goes back to work', () => {
     const task = parked({ stageAttempts: { implementation: 1, merged_gate: 1, retrospective: 1 } });
-    expect(() => returnEscalatedTask(task, input, context())).toThrow(IllegalTransitionError);
+    expect(() => returnEscalatedTask(task, input, context())).toThrow(TaskMergedError);
   });
 
   it('refuses a spent loop rather than escalating a task that is already parked (BD-008)', () => {
@@ -628,6 +631,117 @@ describe('the tail of the pipeline', () => {
     expect(() => cancelTask(aggregate, { outcome: 'again', totals }, context())).toThrow(
       IllegalTransitionError,
     );
+  });
+});
+
+/**
+ * WP-152 (technical/02's 2026-10-06 (M9) amendment, PROGRESS backlog 497): a task escalated after
+ * its merge finishes — a person takes it into the retrospective — and never goes back to work.
+ * Both directions (rule 42): what `needs_human → retro` admits, and everything it must still refuse.
+ */
+describe('a merged task escalated after its merge (WP-152)', () => {
+  const person = (): CommandContext => ({
+    ...context(),
+    actor: { kind: 'user', user_id: '00000000-0000-4000-8000-0000000000e9' },
+  });
+  const mergedThenEscalated = (): Task => {
+    const ready = markReadyForMerge(activeTask(), context()).aggregate;
+    const merged = recordMerge(ready, context()).aggregate;
+    const retro = startRetrospective(merged, context()).aggregate;
+    return escalateTask(
+      retro,
+      { reason: 'the retrospective failed', blockerBrief: 'look' },
+      context(),
+    ).aggregate;
+  };
+
+  it('is merged once it entered merged_gate, and not before', () => {
+    expect(isMergedTask(activeTask())).toBe(false);
+    expect(isMergedTask(mergedThenEscalated())).toBe(true);
+  });
+
+  it('lets a person resume the retrospective, and the librarian after it, out of needs_human', () => {
+    const task = mergedThenEscalated();
+    expect(task.state).toBe('needs_human');
+    const resumed = startRetrospective(task, person());
+    expect(resumed.aggregate.state).toBe('retro');
+    expect(resumed.aggregate.currentStage).toBe('retrospective');
+    expect(resumed.aggregate.stageAttempts.retrospective).toBe(2);
+    // Out of the stop with the `task.resumed` every way out emits, then the stage.
+    expect(types(resumed.events)).toEqual(['task.resumed', 'task.stage.entered']);
+    const librarian = startLibrarianCuration(task, person());
+    expect(librarian.aggregate.state).toBe('retro');
+    expect(librarian.aggregate.currentStage).toBe('librarian');
+    // And it finishes the way every merged task does.
+    expect(
+      completeTask(resumed.aggregate, { outcome: 'merged', totals }, person()).aggregate.state,
+    ).toBe('done');
+  });
+
+  it('refuses the same edge to anything but a person: a signal never un-parks it', () => {
+    const task = mergedThenEscalated();
+    expect(() => startRetrospective(task, context())).toThrow(IllegalTransitionError);
+    expect(() =>
+      startRetrospective(task, {
+        ...context(),
+        actor: {
+          kind: 'integration',
+          integration_id: '00000000-0000-4000-8000-0000000000f2',
+          provider: 'fake-git',
+        },
+      }),
+    ).toThrow(IllegalTransitionError);
+  });
+
+  it('refuses the edge for a task that was never merged, a person or not', () => {
+    const parked = escalateTask(
+      activeTask('ci_gate'),
+      { reason: 'r', blockerBrief: 'b' },
+      context(),
+    ).aggregate;
+    expect(() => startRetrospective(parked, person())).toThrow(IllegalTransitionError);
+    expect(() => startRetrospective(parked, person())).not.toThrow(TaskMergedError);
+  });
+
+  it('never takes a merged task to active, from any state it can be in', () => {
+    const escalated = mergedThenEscalated();
+    const paused = pauseTask(escalated, { reason: 'manual' }, person()).aggregate;
+    for (const task of [escalated, paused]) {
+      expect(() => enterStage(task, { stage: 'implementation' }, person()), task.state).toThrow(
+        TaskMergedError,
+      );
+    }
+    // The pipeline's own way out of a parked, never-merged task is unchanged.
+    const parked = escalateTask(
+      activeTask('ci_gate'),
+      { reason: 'r', blockerBrief: 'b' },
+      context(),
+    ).aggregate;
+    expect(enterStage(parked, { stage: 'implementation' }, person()).aggregate.state).toBe(
+      'active',
+    );
+  });
+
+  it('hands a merged task back only into a stage after the merge', () => {
+    const task = mergedThenEscalated();
+    const input = { branch: 'agentic/PROJ-1', summary: 'checked by hand' };
+    expect(() => handBackTask(task, { ...input, stage: 'implementation' }, person())).toThrow(
+      TaskMergedError,
+    );
+    expect(() => handBackTask(task, { ...input, stage: 'ci_gate' }, person())).toThrow(
+      TaskMergedError,
+    );
+    for (const stage of ['retrospective', 'librarian']) {
+      expect(types(handBackTask(task, { ...input, stage }, person()).events)).toEqual([
+        'task.handed_back',
+      ]);
+    }
+    // A task that was never merged is handed back anywhere, as before.
+    expect(
+      types(
+        handBackTask(activeTask('ci_gate'), { ...input, stage: 'implementation' }, person()).events,
+      ),
+    ).toEqual(['task.handed_back']);
   });
 });
 

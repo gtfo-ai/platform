@@ -244,6 +244,23 @@ export const taskStages = pgTable('task_stages', {
    * (`task_stages_return_reason_original_chars_positive`).
    */
   returnReasonOriginalChars: integer('return_reason_original_chars'),
+  /**
+   * The gate's last failure, kept through a person's return out of an escalation at that gate
+   * (WP-152, migration 0086): the row's `return_reason`, moved here by `attachReturnReason` before
+   * the person's note took its place, whether or not they sent it on. Null when nothing was kept.
+   */
+  attachedFeedback: text('attached_feedback'),
+  /**
+   * The uncut length of `attached_feedback`, when the gate cut it (migration 0086). Positive and only
+   * beside the text (`task_stages_attached_feedback_original_chars_positive`).
+   */
+  attachedFeedbackOriginalChars: integer('attached_feedback_original_chars'),
+  /**
+   * Whether the next run is handed `attached_feedback` — the person's *Attach the gate's last failure*
+   * (WP-152 ruling (b)); the text is kept either way (ruling (a)). `true` only beside a text
+   * (`task_stages_attached_feedback_sent_has_text`).
+   */
+  attachedFeedbackSent: boolean('attached_feedback_sent').notNull().default(false),
   /** Convergence detection's stable key; nothing else writes it (WP-15, migration 0012). */
   signature: text('signature'),
   causedByEventId: uuid('caused_by_event_id'),

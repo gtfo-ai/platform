@@ -107,12 +107,16 @@ export interface TaskCommands {
     readonly userId: string;
     readonly stage: string;
     readonly reason: string;
+    /** WP-152: the request's `attach_gate_feedback`, absent for the default. */
+    readonly attachGateFeedback?: boolean;
   }): Promise<void>;
   rework(input: {
     readonly taskId: string;
     readonly userId: string;
     readonly stage: string;
     readonly instructions: string;
+    /** WP-152: the request's `attach_gate_feedback`, absent for the default. */
+    readonly attachGateFeedback?: boolean;
   }): Promise<void>;
   submitFeedback(input: {
     readonly taskId: string;
@@ -287,6 +291,9 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
         userId: id(input.userId),
         stage: slug(input.stage),
         reason: input.reason,
+        ...(input.attachGateFeedback === undefined
+          ? {}
+          : { attachGateFeedback: input.attachGateFeedback }),
       }),
     rework: async (input) =>
       reworkStageCommand(deps, {
@@ -294,6 +301,9 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
         userId: id(input.userId),
         stage: slug(input.stage),
         instructions: input.instructions,
+        ...(input.attachGateFeedback === undefined
+          ? {}
+          : { attachGateFeedback: input.attachGateFeedback }),
       }),
     submitFeedback: async (input) =>
       submitFeedbackCommand(deps, {

@@ -103,6 +103,12 @@ interface StageRow {
   returnReason: string | null;
   /** The uncut length of `returnReason`, when its writer cut it (WP-81, migration 0058). */
   returnReasonOriginalChars: number | null;
+  /** The gate's last failure a person attached to their return (WP-152, migration 0086). */
+  attachedFeedback: string | null;
+  /** The uncut length of `attachedFeedback`, when the gate cut it (migration 0086). */
+  attachedFeedbackOriginalChars: number | null;
+  /** Whether the next run is handed `attachedFeedback` (migration 0086). */
+  attachedFeedbackSent: boolean;
   signature: string | null;
   enteredAt: number;
   /**
@@ -829,6 +835,9 @@ export const createMemoryPipelineStore = (
         returnedTo: null,
         returnReason: null,
         returnReasonOriginalChars: null,
+        attachedFeedback: null,
+        attachedFeedbackOriginalChars: null,
+        attachedFeedbackSent: false,
         signature: null,
         enteredAt: sequence,
         enteredAtMs: stageClock(),
@@ -916,6 +925,9 @@ export const createMemoryPipelineStore = (
           returnedTo: null,
           returnReason: null,
           returnReasonOriginalChars: null,
+          attachedFeedback: null,
+          attachedFeedbackOriginalChars: null,
+          attachedFeedbackSent: false,
           signature: entry.signature,
           enteredAt: sequence,
           enteredAtMs: stageClock(),
@@ -924,6 +936,33 @@ export const createMemoryPipelineStore = (
         return;
       }
       row.signature = entry.signature;
+    },
+    /**
+     * The SQL store's `update … where state = 'returned' and return_reason <> ''` (WP-152): the
+     * reason moves with its cut length and the person's choice, and a row that is open, closed
+     * another way or holds no (or an empty) reason moves nothing.
+     */
+    attachReturnReason: async (_tx, entry) => {
+      const row = [...stages]
+        .reverse()
+        .find(
+          (candidate) =>
+            candidate.taskId === entry.taskId &&
+            candidate.stage === entry.stage &&
+            candidate.attempt === entry.attempt,
+        );
+      if (
+        row === undefined ||
+        row.state !== 'returned' ||
+        row.returnReason === null ||
+        row.returnReason === ''
+      ) {
+        return false;
+      }
+      row.attachedFeedback = row.returnReason;
+      row.attachedFeedbackOriginalChars = row.returnReasonOriginalChars;
+      row.attachedFeedbackSent = entry.send;
+      return true;
     },
     stageAttemptState: async (_tx, taskId, stage, attempt) => {
       const row = stages.find(
@@ -1024,6 +1063,16 @@ export const createMemoryPipelineStore = (
         reason: found.returnReason,
         originalChars: found.returnReasonOriginalChars,
         ...(cause === undefined ? {} : { cause: { type: cause.type, version: cause.version } }),
+        // WP-152: the gate's last failure a person sent on, beside their note — kept but not
+        // handed on when they unticked it.
+        ...(found.attachedFeedback === null || !found.attachedFeedbackSent
+          ? {}
+          : {
+              attached: {
+                reason: found.attachedFeedback,
+                originalChars: found.attachedFeedbackOriginalChars,
+              },
+            }),
       };
     },
   };

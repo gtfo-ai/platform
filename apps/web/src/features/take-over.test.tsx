@@ -123,6 +123,7 @@ const detail = (over: Partial<TaskDetailResponse> = {}): TaskDetailResponse => (
   taken_over: null,
   can_raise_budget: false,
   can_export: false,
+  gate_feedback: null,
   human_time: {
     total_minutes: 0,
     by_kind: { review: 0, question: 0, approval: 0, steer: 0 },

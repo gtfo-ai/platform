@@ -22,6 +22,7 @@ import {
   BreakdownRefusedError,
   CommandsUnavailableError,
   IterationLimitReachedError,
+  NoGateFeedbackError,
   RunNotLiveError,
   StageNotCurrentError,
   StageNotInTemplateError,
@@ -39,6 +40,7 @@ import {
   InvariantViolationError,
   PermissionDeniedError,
   PolicyViolationError,
+  TaskMergedError,
 } from '@platform/domain';
 import { hasZodFastifySchemaValidationErrors } from 'fastify-type-provider-zod';
 
@@ -153,6 +155,10 @@ export class TooManyRequestsError extends HttpError {
  * park a task in `needs_human` for a race the human never saw.
  */
 export const commandRefusal = (error: unknown): HttpError | null => {
+  // Before its parent class: a merged task's refusal has its own fix (WP-152, backlog 497).
+  if (error instanceof TaskMergedError) {
+    return new HttpError(409, 'task_merged', error.message);
+  }
   if (error instanceof IllegalTransitionError) {
     return new HttpError(409, 'illegal_transition', error.message);
   }
@@ -173,6 +179,10 @@ export const commandRefusal = (error: unknown): HttpError | null => {
   }
   if (error instanceof StageNotInTemplateError) {
     return new HttpError(409, 'stage_not_in_template', error.message);
+  }
+  if (error instanceof NoGateFeedbackError) {
+    // WP-152 ruling (b): a ticked box with nothing behind it is refused, never dropped.
+    return new HttpError(409, 'no_gate_feedback', error.message);
   }
   if (error instanceof StageNotReachedError) {
     // PROGRESS backlog 483: a return goes to a stage the task has run, at or before its own.

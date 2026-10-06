@@ -189,6 +189,13 @@ export interface PromptArtifact {
   readonly primary?: boolean;
 }
 
+/** {@link PromptTask.attachedFeedback}: the gate's stored failure, and its uncut length (WP-152). */
+export interface PromptAttachedFeedback {
+  readonly text: string;
+  /** The length {@link text} had before the gate cut it, or `null` when nothing was cut (WP-81). */
+  readonly originalChars: number | null;
+}
+
 export interface PromptTask {
   /**
    * The stage this run is one attempt of, or `null` for a run that belongs to **no** stage.
@@ -252,6 +259,19 @@ export interface PromptTask {
    * `original_chars` in the block's marker, nothing in the body (technical/07).
    */
   readonly returnFeedbackOriginalChars?: number | null;
+  /**
+   * The **gate's last failure** a person attached to their return out of an escalation (WP-152,
+   * PROGRESS backlog 491) — on a CI gate, the failing jobs' log excerpts the gate stored, redacted at
+   * that write. Absent or `null` for every other return, which is every return but a person's from a
+   * gate a task was parked at with the box left ticked.
+   *
+   * When present, {@link returnFeedback} is the **person's** note, and the two are two data blocks
+   * of kind `return_feedback`, each with its own marker and a platform-written `source` attribute —
+   * `person` and `gate` — so neither text can pass for the other. Each is held to
+   * {@link MAX_FEEDBACK_CHARS} on its own, and a cut, the gate's or this module's, is announced in
+   * its own marker. Untrusted, every byte.
+   */
+  readonly attachedFeedback?: PromptAttachedFeedback | null;
   /**
    * The platform's own record of what has happened to this task — WP-31's ask-the-task.
    *
@@ -1473,7 +1493,11 @@ const checklistBlock = (checklist: BoundedReviewChecklist): DataBlock => ({
  * `truncated="true"` with the length the text had before **any** cut — the producer's figure when it
  * cut first, since that is the larger — and the body carries no line about it.
  */
-const feedbackBlock = (feedback: string, storedOriginalChars: number | null): DataBlock => {
+const feedbackBlock = (
+  feedback: string,
+  storedOriginalChars: number | null,
+  source: FeedbackSource | null = null,
+): DataBlock => {
   const capped = cap(feedback, MAX_FEEDBACK_CHARS);
   const originalChars =
     storedOriginalChars !== null && storedOriginalChars > feedback.length
@@ -1481,9 +1505,36 @@ const feedbackBlock = (feedback: string, storedOriginalChars: number | null): Da
       : capped.originalChars;
   return {
     kind: 'return_feedback',
-    attributes: cappedAttributes({ text: capped.text, originalChars }),
+    attributes: {
+      // WP-152: a platform literal from a closed set, never a stage id or anything a project names.
+      ...(source === null ? {} : { source }),
+      ...cappedAttributes({ text: capped.text, originalChars }),
+    },
     body: capped.text,
   };
+};
+
+/**
+ * Who wrote a `return_feedback` block, when a return carries two (WP-152): the **person** who sent
+ * the task back, and the **gate** whose last failure they attached. Platform words — the marker is
+ * the platform's, so its attributes come from this closed set. A return with one block names no
+ * source: the row it is read from does not record who wrote it (PROGRESS backlog 353).
+ */
+type FeedbackSource = 'person' | 'gate';
+
+/** The return's block or blocks: one as before, or the person's note then the gate's (WP-152). */
+const feedbackBlocks = (task: PromptTask): readonly DataBlock[] => {
+  if (task.returnFeedback === null) {
+    return [];
+  }
+  const attached = task.attachedFeedback ?? null;
+  if (attached === null) {
+    return [feedbackBlock(task.returnFeedback, task.returnFeedbackOriginalChars ?? null)];
+  }
+  return [
+    feedbackBlock(task.returnFeedback, task.returnFeedbackOriginalChars ?? null, 'person'),
+    feedbackBlock(attached.text, attached.originalChars, 'gate'),
+  ];
 };
 
 /** The field names of the artifact's schema — one source, so the prompt cannot drift from it. */
@@ -1609,7 +1660,12 @@ const stageLines = (task: PromptTask, stage: string): readonly string[] => {
   if (saved === null && previous !== null) {
     lines.push(previousRunLine(previous));
   }
-  if (task.returnFeedback !== null) {
+  if (task.returnFeedback !== null && (task.attachedFeedback ?? null) !== null) {
+    // WP-152: a person's return that carries the gate's last failure — two blocks, two sources.
+    lines.push(
+      'A person returned the task to this stage. Their note is the `return_feedback` block with `source="person"`, and the last failure of the gate the task had stopped at, which they attached, is the `return_feedback` block with `source="gate"`. This attempt must address both, and where the two disagree the person’s note decides.',
+    );
+  } else if (task.returnFeedback !== null) {
     lines.push(
       'The task was returned to this stage: why is in the `return_feedback` block below, and that is what this attempt must address.',
     );
@@ -1754,7 +1810,9 @@ const inventoryLines = (input: AssemblePromptInput, run: PromptRunFacts): readon
   lines.push(
     task.returnFeedback === null
       ? '- no return feedback'
-      : '- the reason this stage was returned (`return_feedback` block)',
+      : (task.attachedFeedback ?? null) === null
+        ? '- the reason this stage was returned (`return_feedback` block)'
+        : '- the reason this stage was returned: a person’s note and the gate’s last failure they attached (two `return_feedback` blocks)',
   );
   const observability = task.observability ?? [];
   if (observability.length > 0) {
@@ -1848,9 +1906,8 @@ export const assemblePrompt = (input: AssemblePromptInput): AssembledPrompt => {
     // WP-45: `?? []` for the reason `ticketBlock` uses `?? null` — a caller that lost the field
     // through a cast emits no block rather than throwing.
     ...boundReviewChecklists(input.task.reviewChecklists ?? []).map(checklistBlock),
-    ...(input.task.returnFeedback === null
-      ? []
-      : [feedbackBlock(input.task.returnFeedback, input.task.returnFeedbackOriginalChars ?? null)]),
+    // WP-152: one block, or the person's note and the gate's last failure they attached.
+    ...feedbackBlocks(input.task),
     ...input.task.record.map(recordBlock),
     // Last, so it is the nearest thing to the output contract the model reads next.
     ...(input.ask === null ? [] : [askBlock(input.ask)]),

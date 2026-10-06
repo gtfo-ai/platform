@@ -43,6 +43,32 @@ export class IllegalTransitionError extends DomainError {
   }
 }
 
+/**
+ * A command would take a task that has been **merged** — it entered `merged_gate` — anywhere but the
+ * stages that follow the merge (technical/02's 2026-10-06 (M9) amendment, PROGRESS backlog 497,
+ * WP-152). A merged task never goes back to work: its branch is already in the default branch, so a
+ * Developer run on it would re-do work that has shipped. The way forward from an escalation after
+ * the merge is `resume` or `retry-stage` at the retrospective (or the librarian), a hand-back to
+ * one of them, or `cancel`.
+ *
+ * An {@link IllegalTransitionError}, so every caller that already treats a refused move as one —
+ * the saga escalates or drops it, a command answers 409 — keeps doing so; the HTTP surface names
+ * it `task_merged` rather than `illegal_transition` because the fix is different: not "the task
+ * is in the wrong state" but "this task is past that stage for good".
+ */
+export class TaskMergedError extends IllegalTransitionError {
+  /** The stage the refused command aimed at. */
+  readonly stage: string;
+
+  constructor(from: string, stage: string) {
+    super('Task', from, `${stage} (the task was merged)`);
+    this.stage = stage;
+    this.message =
+      `this task was merged, so it cannot be sent to "${stage}": a merged task never goes back to ` +
+      'work. Resume or retry its retrospective, hand it back to a stage after the merge, or cancel it';
+  }
+}
+
 /** A policy (iteration limit, WIP limit, budget, autonomy preset, command list) refused. */
 export class PolicyViolationError extends DomainError {
   readonly policy: string;

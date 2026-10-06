@@ -106,6 +106,16 @@ import { exceptionsOf } from './tamper.js';
 import { TICKET_LINT_STAGE, TICKET_LINT_TEMPLATE_ID } from './ticket-lint.js';
 import { unfinishedWorkBranchFor } from './unfinished-work.js';
 
+/** {@link StageRunRequest.attachedFeedback} in the assembler's shape, `null` when none (WP-152). */
+const attachedFeedbackFor = (
+  request: StageRunRequest,
+): { readonly text: string; readonly originalChars: number | null } | null => {
+  const attached = request.attachedFeedback ?? null;
+  return attached === null
+    ? null
+    : { text: attached.reason, originalChars: attached.originalChars };
+};
+
 /**
  * Which platform tools a role may call (technical/04: "a run is given the subset its role needs:
  * a read-only stage never sees `open_mr`, so a mutating action is impossible rather than merely
@@ -915,6 +925,8 @@ export const taskTextOf = (request: StageRunRequest): string =>
     request.task.task.ticket.key,
     ...artifactsShownTo(request).map((artifact) => JSON.stringify(artifact.data)),
     request.returnFeedback ?? '',
+    // WP-152: the gate's failure a person attached was the return feedback before it was kept apart.
+    request.attachedFeedback?.reason ?? '',
   ]
     .join('\n')
     .slice(0, MAX_TASK_TEXT_CHARS);
@@ -1544,6 +1556,8 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           returnFeedback: request.returnFeedback,
           // WP-81: a cut the CI gate made to a failing job's log, announced in the marker.
           returnFeedbackOriginalChars: request.returnFeedbackOriginalChars ?? null,
+          // WP-152: the gate's last failure a person attached — a second block, `source="gate"`.
+          attachedFeedback: attachedFeedbackFor(request),
           // A stage is not shown the audit trail (WP-31): the record blocks are the ask's, and a
           // stage that carried them would be paying context for the platform talking to itself.
           record: [],

@@ -433,6 +433,12 @@ describe('when the merge request’s pipeline is red', () => {
    * is the effect, not the answer: the next Developer run is given the person's words inside its
    * `return_feedback` block, a human round is spent, one `human_actions` row is written — and,
    * because CI is still red and `ci_fix` is spent, BD-008 parks the task again rather than looping.
+   *
+   * **WP-152 (backlog 491), on the same path:** the task page reads the parked gate's failure as a
+   * length (`gate_feedback`), the return leaves the box at its default, and the run is given **two**
+   * `return_feedback` blocks — the person's note (`source="person"`) and the CI gate's stored excerpt
+   * (`source="gate"`), which the person's return used to overwrite — with the binding's credential in
+   * neither.
    */
   it('lets a person send the parked task back to implementation, with a note the run is given', async () => {
     const pipeline = await startPipeline({
@@ -453,6 +459,12 @@ describe('when the merge request’s pipeline is red', () => {
       password: BOOTSTRAP_PASSWORD,
     });
     expect(signedIn.status, JSON.stringify(signedIn.body)).toBe(200);
+    const detail = await admin.json<{ gate_feedback?: { stage: string; chars: number } | null }>(
+      `/api/tasks/${parked.id}`,
+    );
+    expect(detail.status).toBe(200);
+    expect(detail.body.gate_feedback).toMatchObject({ stage: 'ci_gate' });
+    expect(detail.body.gate_feedback?.chars).toBeGreaterThan(0);
     const note = 'The pipeline is red on the totals test; fix the rounding, not the test.';
     const reply = await admin.json<{ state?: string; current_stage?: string; performed?: boolean }>(
       `/api/tasks/${parked.id}/return-to-stage`,
@@ -473,10 +485,13 @@ describe('when the merge request’s pipeline is red', () => {
     expect(reparked.iteration_counters.ci_fix).toBe(3);
     const implementation = pipeline.specs.filter((spec) => spec.stage === 'implementation');
     expect(implementation).toHaveLength(runsBefore + 1);
-    const [feedback] = readDataBlocks(implementation.at(-1)?.userPrompt ?? '').blocks.filter(
+    const returned = readDataBlocks(implementation.at(-1)?.userPrompt ?? '').blocks.filter(
       (block) => block.kind === 'return_feedback',
     );
-    expect(feedback?.body).toContain(note);
+    expect(returned.map((block) => block.attributes.source)).toEqual(['person', 'gate']);
+    expect(returned[0]?.body).toContain(note);
+    expect(returned[1]?.body).toContain('FAIL src/totals.test.ts');
+    expect(implementation.at(-1)?.userPrompt ?? '').not.toContain(GIT_BINDING_TOKEN);
 
     const events = await pipeline.events();
     const humanEvents = events.filter((event) => event.actor.kind === 'user');

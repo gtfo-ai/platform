@@ -143,6 +143,7 @@ import { type ProjectSettings, settingsAdmission } from './settings.js';
 import { runSettingsSnapshot } from './settings-snapshot.js';
 import type { RunStopReasons } from './stop-reasons.js';
 import type {
+  AttachedReturnFeedback,
   EndedRun,
   PipelineStore,
   ReturnCause,
@@ -179,6 +180,12 @@ export interface StageRunRequest {
    * no artifact caused. The planner shows a returned stage this verdict and no other.
    */
   readonly returnCause?: ReturnCause | null;
+  /**
+   * The gate's last failure a person attached to this attempt's return (WP-152,
+   * `ReturnFeedback.attached`) — absent or `null` for every other return. When present,
+   * {@link returnFeedback} is the person's note and the prompt carries both, as two blocks.
+   */
+  readonly attachedFeedback?: AttachedReturnFeedback | null;
   /**
    * The commit a **shadow** run's workspace is checked out at — Q82 (a), PROGRESS backlog 71.
    *
@@ -671,6 +678,8 @@ type Admitted = {
   readonly returnFeedback: string | null;
   readonly returnFeedbackOriginalChars: number | null;
   readonly returnCause: ReturnCause | null;
+  /** WP-152: the gate's last failure a person attached to the return, `null` when none. */
+  readonly attachedFeedback: AttachedReturnFeedback | null;
   /** WP-34 / backlog 71: a shadow task's comparison base, `null` for every other task. */
   readonly checkoutBase: string | null;
   /** Backlog 467: the stage's previous attempt, when it saved unfinished work. */
@@ -1008,6 +1017,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         returnFeedback: feedback?.reason ?? null,
         returnFeedbackOriginalChars: feedback?.originalChars ?? null,
         returnCause: feedback?.cause ?? null,
+        attachedFeedback: feedback?.attached ?? null,
         /**
          * Q82 (a) / PROGRESS backlog **71**: the commit this run's workspace starts from.
          *
@@ -1193,6 +1203,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       returnFeedback: admission.returnFeedback,
       returnFeedbackOriginalChars: admission.returnFeedbackOriginalChars,
       returnCause: admission.returnCause,
+      attachedFeedback: admission.attachedFeedback,
       checkoutBase: admission.checkoutBase,
       previousAttempt: admission.previousAttempt,
       previousRun: admission.previousRun,

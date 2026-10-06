@@ -1094,16 +1094,30 @@ const ApprovalCard = ({
 const StageCommands = ({
   state,
   stages,
+  gateFeedback,
   commands,
 }: {
   readonly state: string;
   readonly stages: readonly { readonly stage: string }[];
+  /** WP-152: the parked gate's stored failure, as a length — `null` offers no box. */
+  readonly gateFeedback: TaskDetailResponse['gate_feedback'];
   readonly commands: ReturnType<typeof useTaskCommands>;
 }): ReactElement => {
   const options = [...new Set(stages.map((entry) => entry.stage))];
+  // A task that entered `merged_gate` was merged (WP-152): the server's own test of the same fact.
+  const merged = options.includes('merged_gate');
   const [stage, setStage] = useState(options[0] ?? '');
   const [reason, setReason] = useState('');
   const [instructions, setInstructions] = useState('');
+  // Ticked by default, as the server's own default is (WP-152 ruling (b)) — and ticked again for
+  // every new escalation (round 1): an untick is remembered for the gate attempt it was made on, so
+  // a later escalation, a different attempt, offers the box ticked rather than inheriting it.
+  const feedbackKey =
+    gateFeedback === null ? null : `${gateFeedback.stage}#${gateFeedback.attempt}`;
+  const [untickedFor, setUntickedFor] = useState<string | null>(null);
+  const attachGateFeedback = feedbackKey === null || untickedFor !== feedbackKey;
+  // Sent only when the box was offered, so a task with nothing to attach sends nothing either.
+  const attach = gateFeedback === null ? {} : { attachGateFeedback };
 
   if (options.length === 0) {
     return (
@@ -1123,7 +1137,15 @@ const StageCommands = ({
         should run again, and since then the server accepts a return and a rework out of
         `needs_human`. The controls were never hidden for it; this says they are the way out.
       */}
-      {state === 'needs_human' ? (
+      {state === 'needs_human' && merged ? (
+        // WP-152 (backlog 497): a merged task never goes back to work, so the way out is the
+        // retrospective — a return, a rework or a hand-back before the merge is refused.
+        <p className="text-sm text-fg-muted">
+          This task was merged and is waiting for a person. Resume it to run its retrospective — a
+          task stopped at the merge gate resumes there too — or retry the retrospective or librarian
+          stage it stopped at; it cannot be sent back before the merge.
+        </p>
+      ) : state === 'needs_human' ? (
         <p className="text-sm text-fg-muted">
           This task is waiting for a person. Send it back to a stage it has run, with a note the
           stage is given, rework it from there, or retry the stage it stopped at.
@@ -1162,7 +1184,7 @@ const StageCommands = ({
         <Button
           disabled={commands.returnToStage.isPending || reason.trim() === ''}
           onClick={() => {
-            commands.returnToStage.mutate({ stage: selected, reason });
+            commands.returnToStage.mutate({ stage: selected, reason, ...attach });
             setReason('');
           }}
         >
@@ -1178,12 +1200,33 @@ const StageCommands = ({
         placeholder="Reason (required to return, optional to retry)"
         className="rounded-md border border-line bg-surface px-2 py-1 text-sm"
       />
+      {/*
+        WP-152 (PROGRESS backlog 491): out of an escalation at a gate, a return or a rework carries
+        the gate's last failure — on a CI gate, the failing jobs' log excerpts — beside the person's
+        note, unless they untick it. The excerpt is provider output and is never rendered here: the
+        box says how long it is, which is what a person deciding to send it needs.
+      */}
+      {gateFeedback === null ? null : (
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={attachGateFeedback}
+            onChange={(event) => {
+              setUntickedFor(event.target.checked ? null : feedbackKey);
+            }}
+          />
+          <span>
+            Attach the gate’s last failure from <UntrustedText value={gateFeedback.stage} /> (
+            {gateFeedbackLength(gateFeedback)}) to a return or a rework
+          </span>
+        </label>
+      )}
 
       <form
         className="flex gap-2"
         onSubmit={(event) => {
           event.preventDefault();
-          commands.rework.mutate({ stage: selected, instructions });
+          commands.rework.mutate({ stage: selected, instructions, ...attach });
           setInstructions('');
         }}
       >
@@ -1212,6 +1255,17 @@ const StageCommands = ({
     </Card>
   );
 };
+
+/**
+ * The attached excerpt's size, in the box's own words (WP-152): the characters the run will be given,
+ * and — when the gate cut a longer log to fit (WP-81) — how long it was before.
+ */
+export const gateFeedbackLength = (
+  feedback: NonNullable<TaskDetailResponse['gate_feedback']>,
+): string =>
+  feedback.original_chars === null
+    ? `${feedback.chars.toLocaleString('en')} characters`
+    : `${feedback.chars.toLocaleString('en')} characters, cut from ${feedback.original_chars.toLocaleString('en')}`;
 
 /**
  * What a retry did, in one sentence (PROGRESS backlog 494).
@@ -1319,6 +1373,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
     taken_over: takenOver,
     can_raise_budget: canRaiseBudget,
     can_export: canExport,
+    gate_feedback: gateFeedback,
   } = detail.data;
   // The route may be entered without a project key (from the inbox or the agents view), so the
   // link back to the board is resolved from the task's own project rather than from the URL.
@@ -1454,7 +1509,12 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
 
         <div>
           <SectionHeading>Stage commands</SectionHeading>
-          <StageCommands state={task.state} stages={stages} commands={commands} />
+          <StageCommands
+            state={task.state}
+            stages={stages}
+            gateFeedback={gateFeedback}
+            commands={commands}
+          />
         </div>
 
         <TakeOverPanel taskId={task.id} state={task.state} takenOver={takenOver} runs={runs} />

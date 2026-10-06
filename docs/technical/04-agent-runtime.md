@@ -294,6 +294,20 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > data block, so a log can print a line that looks like one; the nonce'd marker, not the label, is
 > the boundary (the residual above).
 >
+> **Amended 2026-10-06 — a person's return carries the gate's failure beside their note (WP-152,
+> PROGRESS backlog 491).** When the `ci_fix` loop is spent the task parks at the gate with that
+> excerpt as the gate attempt's return reason, and a person's `return-to-stage` or `rework` out of
+> the escalation used to write their note over it, so the next Developer run was given the note
+> alone. The command now keeps the excerpt (`task_stages.attached_feedback`, technical/03) whatever
+> the person chooses, and unless they untick *Attach the gate's last failure* the run's prompt carries **two**
+> `return_feedback` blocks: the person's note with `source="person"` and the gate's failure with
+> `source="gate"`. `source` is a platform literal from a closed set — never a stage id or anything a
+> project names — so an excerpt that prints a marker cannot pass for the person's note. Each block
+> is bounded by `MAX_FEEDBACK_CHARS` on its own and announces its own cut (the gate's
+> `original_chars` included) in its own marker. The task section says which block is which and that
+> the person's note decides where the two disagree. A return with one block names no source: the row
+> it is read from does not record who wrote it (PROGRESS backlog 353).
+>
 > The CI gate's reason also names the paths of a failed **tamper check** (BD-024 §2), which the gate computes as part of its
 > read — its second half, the Code review's confirmation of a declared change, in the rebase gate's
 > settlement since WP-102 (technical/02 has its inputs and endings); the workspace's path guard below enforces protected

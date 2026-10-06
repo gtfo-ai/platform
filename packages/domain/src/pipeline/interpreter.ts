@@ -463,9 +463,23 @@ const returnTo = (
     to: destination.id,
     loop,
     reason,
-    escalationBrief: `The "${from}" stage has sent this task back to "${destination.id}" as many times as the ${loop} limit allows, and it is still not resolved. Read the last ${from} verdict on the task, decide what should change, and hand the task back at the stage you want it to resume from.`,
+    escalationBrief: `The "${from}" stage has sent this task back to "${destination.id}" as many times as the ${loop} limit allows, and it is still not resolved. Read the last ${from} verdict on the task, decide what should change, and hand the task back at the stage you want it to resume from.${gateFeedbackSentence(pipeline, from, reason)}`,
   };
 };
+
+/**
+ * What a person who returns a task parked by a **gate** is offered (WP-152, PROGRESS backlog 491):
+ * the gate's last failure — on a CI gate, the failing jobs' log excerpts — goes with a
+ * `return-to-stage` or `rework` beside their own note unless they untick it (`attach_gate_feedback`).
+ * Before it, the person's return overwrote that excerpt and the Developer was handed their words
+ * alone. Empty for an agent stage, whose verdict is on the task as an artifact already, and for a
+ * return with no reason (round 1): the row then stores nothing to attach, and the command and the
+ * task page treat an empty reason as none, so the brief must not promise one.
+ */
+const gateFeedbackSentence = (pipeline: CompiledPipeline, from: Slug, reason: string): string =>
+  stageOf(pipeline, from)?.kind === 'gate' && reason !== ''
+    ? ` A return or a rework from here carries the gate's last failure to the stage you choose, beside your own note, unless you untick "Attach the gate's last failure".`
+    : '';
 
 /** Advance or return, decided by direction (rule 2 of the module docblock). */
 const transition = (

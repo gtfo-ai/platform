@@ -305,6 +305,40 @@ describe('returns', () => {
     expect(decision.kind).toBe('return');
     expect(decision.kind === 'return' ? decision.escalationBrief : '').toContain('code_review');
   });
+
+  /**
+   * WP-152 ruling (d), PROGRESS backlog 491: the brief a spent `ci_fix` loop leaves tells the person
+   * that a return to the Developer carries the gate's last failure unless they untick it — and an
+   * agent stage's brief says nothing of the kind, because no gate feedback is attached from there.
+   */
+  it('tells the person a return from a gate carries its last failure, and says nothing of it elsewhere', () => {
+    const fromGate = interpret(feature, {
+      kind: 'gate_settled',
+      stage: 'ci_gate',
+      passed: false,
+      detail: 'pipeline failed: test:unit',
+    });
+    expect(fromGate).toMatchObject({ kind: 'return', loop: 'ci_fix' });
+    expect(fromGate.kind === 'return' ? fromGate.escalationBrief : '').toContain(
+      "carries the gate's last failure",
+    );
+    expect(fromGate.kind === 'return' ? fromGate.escalationBrief : '').toContain('untick');
+    const fromAgent = interpret(feature, completed('code_review', 'request_changes'));
+    expect(fromAgent.kind === 'return' ? fromAgent.escalationBrief : 'x').not.toContain(
+      "the gate's last failure",
+    );
+    // Round 1: a gate that stored no reason has nothing to attach, and the brief promises nothing.
+    const empty = interpret(feature, {
+      kind: 'gate_settled',
+      stage: 'ci_gate',
+      passed: false,
+      detail: '',
+    });
+    expect(empty).toMatchObject({ kind: 'return', loop: 'ci_fix' });
+    expect(empty.kind === 'return' ? empty.escalationBrief : 'x').not.toContain(
+      "the gate's last failure",
+    );
+  });
 });
 
 describe('what escalates instead of transitioning', () => {
