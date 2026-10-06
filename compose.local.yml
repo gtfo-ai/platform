@@ -57,7 +57,13 @@ x-local-model: &local-model
   # test, 2026-10-06): exported under its own name in a shell profile, the token is also picked up
   # by every *other* Claude Code session started from that shell. A namespaced name keeps it to
   # this instance; inside the containers the CLI still receives `CLAUDE_CODE_OAUTH_TOKEN`.
-  CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-${AGENTIC_CLAUDE_CODE_OAUTH_TOKEN:?set CLAUDE_CODE_OAUTH_TOKEN (or AGENTIC_CLAUDE_CODE_OAUTH_TOKEN) for local mode}}
+  # **No `:?` inside the fallback.** Docker Compose v2 evaluates a nested `${B:?…}` even when the
+  # outer variable is set (measured with v2.39.4: `${A:-${B:?m}}` with `A=1` fails on `B`), so the
+  # first version refused every v2 instance that set `CLAUDE_CODE_OAUTH_TOKEN`, CI's included; v5
+  # does not. A flat `:?` cannot say "one of two", so an instance with neither name resolves to an
+  # empty token, which the server reads as absent: `runner` logs "composed without an agent
+  # runner" naming `CLAUDE_CODE_OAUTH_TOKEN` and `/readyz` reports `agent_runs: degraded`.
+  CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-${AGENTIC_CLAUDE_CODE_OAUTH_TOKEN:-}}
   # `api` mode's credential is meaningless here and would be a second secret in the container
   # for nothing; blanking it is what makes "which mode is this instance in" answerable from the
   # environment rather than from two variables that disagree.

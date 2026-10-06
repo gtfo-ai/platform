@@ -795,7 +795,7 @@ const localLeg = async () => {
       // The runner's two halves, as `.env.example` names them for this topology.
       ['APP_LAUNCHER_URL', 'http://launcher:7780'],
       ['APP_LAUNCHER_TOKEN', LAUNCHER_TOKEN],
-      // `compose.local.yml`'s `:?` refuses to resolve without it.
+      // Without it `runner` composes no agent runner and the local leg has nothing to measure.
       ['CLAUDE_CODE_OAUTH_TOKEN', FAKE_OAUTH_TOKEN],
       ['APP_WORKSPACE_CONTROL_VOLUME', `${LOCAL_PROJECT}-ctl`],
       ['APP_WORKSPACE_CACHE_VOLUME', `${LOCAL_PROJECT}-repo-cache`],

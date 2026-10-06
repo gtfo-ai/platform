@@ -222,13 +222,39 @@ describe('compose.yml', () => {
         'compose-config-test-namespaced-token',
       );
     }
-    // Neither set: compose still refuses to resolve the file, and says which names it reads.
-    expect(() =>
-      config(['compose.yml', 'compose.local.yml'], {
-        CLAUDE_CODE_OAUTH_TOKEN: '',
-        AGENTIC_CLAUDE_CODE_OAUTH_TOKEN: '',
-      }),
-    ).toThrow(/AGENTIC_CLAUDE_CODE_OAUTH_TOKEN/);
+    // Neither set: the file resolves to an empty token — a nested `:?` is evaluated eagerly by
+    // Compose v2 and refused every v2 instance that *did* set the first name (CI, 2026-10-06) —
+    // and the server reads the empty value as no token, so `runner` names the missing credential.
+    const neither = config(['compose.yml', 'compose.local.yml'], {
+      CLAUDE_CODE_OAUTH_TOKEN: '',
+      AGENTIC_CLAUDE_CODE_OAUTH_TOKEN: '',
+    }) as unknown as { services: Record<string, { environment: Record<string, string> }> };
+    for (const service of ['app', 'runner']) {
+      expect(neither.services[service]?.environment['CLAUDE_CODE_OAUTH_TOKEN'], service).toBe('');
+    }
+    const loaded = loadServerConfig({
+      DATABASE_URL: 'postgres://app:app@db:5432/app',
+      APP_SECRET_KEY: 'compose-config-test-not-a-real-secret-at-least-32',
+      APP_PROVIDER_MODE: 'local',
+      CLAUDE_CODE_OAUTH_TOKEN:
+        neither.services['runner']?.environment['CLAUDE_CODE_OAUTH_TOKEN'] ?? '',
+    });
+    expect(loaded.modelOauthToken).toBeNull();
+  });
+
+  it('nests no `:?` inside another substitution in either compose file (Compose v2)', () => {
+    // Docker Compose v2.39.4 evaluates `${A:-${B:?m}}`'s inner `:?` even when `A` is set, so the
+    // file that resolves on this machine's Compose refuses on CI's. Read off the files, because the
+    // `config` cases above run on whichever Compose this machine has.
+    for (const file of ['compose.yml', 'compose.local.yml']) {
+      const lines = readFileSync(path.join(REPO, file), 'utf8')
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('#'));
+      expect(
+        lines.filter((line) => /\$\{[^}]*\$\{[^}]*:\?/.test(line)),
+        file,
+      ).toEqual([]);
+    }
   });
 
   it('switches the provider mode rather than adding a process', () => {
