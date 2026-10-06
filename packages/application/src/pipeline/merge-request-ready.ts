@@ -279,9 +279,14 @@ export const runMergeRequestPipeline = async (
    * nobody finished (eight e2e cases stuck at `ci_gate`); a held job is the evidence that mattered.
    */
   const status = await gitReads(integrations).pipelineStatus(head, context);
+  // A **blocking** manual job only (`allow_failure: false`): an optional one — Autix's image builds
+  // are `when: manual, allow_failure: true` in every merge-request pipeline — holds nothing, and
+  // counting it asked for a second pipeline on every Developer completion (first local test,
+  // 2026-10-06, backlog 459's follow-up).
   const heldAtManual =
     status !== null &&
-    (status.status === 'manual' || status.jobs.some((job) => job.status === 'manual'));
+    (status.status === 'manual' ||
+      status.jobs.some((job) => job.status === 'manual' && !job.allow_failure));
   if (status !== null && !heldAtManual) {
     return 'not_needed';
   }

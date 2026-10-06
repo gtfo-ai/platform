@@ -195,10 +195,12 @@ const world = async (
             head_sha: HEAD,
             status: options.pipelineStatus ?? 'running',
             url: null,
+            // `manual?` is a manual job with `allow_failure: true` — an optional one.
             jobs: (options.jobStatuses ?? []).map((status, index) => ({
               id: String(index + 1),
               name: `job-${String(index + 1)}`,
-              status,
+              status: status.replace(/\?$/, ''),
+              allow_failure: status.endsWith('?'),
             })),
             coverage_pct: null,
             finished_at: null,
@@ -294,6 +296,18 @@ describe('the mr_pipeline duty, after the Developer stage (backlog 486)', () => 
       expect(pipelines).toEqual([7]);
       expect(updates).toEqual([]);
     }
+  });
+
+  it('asks for nothing when the only manual job is an optional one (allow_failure), as in every Autix pipeline', async () => {
+    // Autix's image builds are `when: manual, allow_failure: true` in every merge-request
+    // pipeline; counting them asked for a second pipeline on every Developer completion.
+    const { run, pipelines } = await world({
+      pipeline: true,
+      pipelineStatus: 'running',
+      jobStatuses: ['success', 'running', 'manual?'],
+    });
+    expect(await run()).toBe('not_needed');
+    expect(pipelines).toEqual([]);
   });
 
   it('asks once per head: a redelivered wake-up replays rather than starting a second pipeline', async () => {
