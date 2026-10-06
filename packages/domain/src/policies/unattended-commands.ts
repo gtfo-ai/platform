@@ -55,9 +55,14 @@ import {
   commandWriteTargets,
   evaluateCommand,
   type HazardousArgument,
+  type HereDocumentOperator,
   hazardousArguments,
+  hereDocumentsAtNewline,
   type ResolvedCommandPolicy,
+  readHereDocumentOperator,
+  readsHereDocumentsAsScripts,
   splitCommandSegments,
+  withoutHereDocumentBodies,
 } from './command-policy.js';
 
 /** Which rule decided an unattended command. */
@@ -553,37 +558,16 @@ const namesGitInternals = (word: string): boolean => {
 };
 
 /**
- * The index of the last character of the here-document bodies that start after the newline at
- * `newline`, one body per pending delimiter in order; the end of the line when a body never closes.
- */
-const skipHeredocBodies = (
-  command: string,
-  newline: number,
-  pending: readonly { readonly delimiter: string; readonly stripTabs: boolean }[],
-): number => {
-  let cursor = newline;
-  for (const { delimiter, stripTabs } of pending) {
-    for (;;) {
-      const start = cursor + 1;
-      if (start >= command.length) {
-        return command.length;
-      }
-      const end = command.indexOf('\n', start);
-      const line = command.slice(start, end === -1 ? command.length : end);
-      cursor = end === -1 ? command.length : end;
-      if ((stripTabs ? line.replace(/^\t+/, '') : line) === delimiter) {
-        break;
-      }
-    }
-  }
-  return cursor;
-};
-
-/**
  * Whether a command's **name** is computed when it runs — `$X …`, `"$X" …`, `$(…) …`, `` `…` … `` in
  * command position, after any assignments and environment wrappers — which the policy cannot read.
  * A quote-aware walk of the raw line, separate from the scanner because the scanner lifts a
  * substitution out of the fragment it sat in (`$(echo git) push x` reads as `push x` there).
+ *
+ * A here-document's body is data, not commands (WP-153): `cat > a.php <<'EOF'` followed by PHP
+ * whose lines start with `$` must not read as computed command names. The operator and the bodies
+ * are the scanner's own reader (`readHereDocumentOperator`, `hereDocumentsAtNewline`), so this walk
+ * skips exactly what the scanner skips — and skips nothing on a line that hands its here-documents
+ * to a shell (`readsHereDocumentsAsScripts`), where a body is the script that runs.
  */
 export const computesCommandName = (command: string): boolean => {
   const WRAPPERS = new Set([
@@ -610,7 +594,11 @@ export const computesCommandName = (command: string): boolean => {
   let atCommand = true;
   let word = '';
   const restore: boolean[] = [];
-  const heredocs: { readonly delimiter: string; readonly stripTabs: boolean }[] = [];
+  const skipsBodies = !readsHereDocumentsAsScripts(command);
+  let pending: HereDocumentOperator[] = [];
+  let pendingFrom = -1;
+  let skipped = '';
+  let skippedUpTo = 0;
   const finishWord = (): void => {
     if (word === '') {
       return;
@@ -639,18 +627,30 @@ export const computesCommandName = (command: string): boolean => {
       index += 1;
       continue;
     }
-    // A here-document's body is data, not commands: `cat > a.php <<'EOF'` followed by PHP whose
-    // lines start with `$` must not read as computed command names. The body is skipped from the
-    // next newline to the line that is the delimiter.
-    const heredoc = /^<<(-?)\s*(['"]?)([A-Za-z0-9_.-]+)\2/.exec(command.slice(index));
-    if (heredoc !== null && command[index + 2] !== '<') {
-      finishWord();
-      heredocs.push({ delimiter: heredoc[3] as string, stripTabs: heredoc[1] === '-' });
-      index += heredoc[0].length - 1;
-      continue;
+    if (char === '<' && command.startsWith('<<', index)) {
+      skipped += command.slice(skippedUpTo, index);
+      skippedUpTo = index;
+      const operator = readHereDocumentOperator(command, index, skipped);
+      if (operator !== null) {
+        finishWord();
+        if (pending.length === 0) {
+          pendingFrom = index;
+        }
+        pending.push(operator);
+        index += operator.length - 1;
+        continue;
+      }
     }
-    if (char === '\n' && heredocs.length > 0) {
-      index = skipHeredocBodies(command, index, heredocs.splice(0));
+    if (char === '\n' && pending.length > 0) {
+      const at = hereDocumentsAtNewline(command, index, pending, pendingFrom);
+      pending = [];
+      if (skipsBodies && at.range !== null) {
+        // What the walk read before the body, kept for the next operator's context check; the
+        // body itself is left out, as the scanner leaves it out.
+        skipped += command.slice(skippedUpTo, at.range[0]);
+        skippedUpTo = at.range[1];
+        index = at.resume - 1;
+      }
       finishWord();
       atCommand = true;
       continue;
@@ -723,6 +723,9 @@ export const computesCommandName = (command: string): boolean => {
 const REDIRECTION_WORD = /^(?:\d+|&)?(?:>>?|<)/;
 
 export const gitBoundaryViolation = (command: string): GitBoundaryViolation | null => {
+  // Read on the raw line, here-document bodies included: a body is data to the shell, but it may
+  // be a program's input (`python3 - <<'EOF'` naming the credential socket), and the control mount
+  // is never a word a run needs.
   if (CONTROL_MOUNT_REFERENCE.test(command)) {
     return {
       fragment: command,
@@ -745,7 +748,9 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
       };
     }
   }
-  const fragments = [command, ...splitCommandSegments(command)];
+  // The whole line as the shell reads it for commands: a here-document body that is data is not
+  // in it (WP-153 (b)), so a body line `GIT_DIR=x` or `git push --force` is not judged here.
+  const fragments = [withoutHereDocumentBodies(command), ...splitCommandSegments(command)];
   /**
    * A fragment that **contains another fragment** — the whole line, or a pipeline the splitter
    * also returns whole so `curl * | sh` still matches the block list — is not one program's argv:
@@ -842,7 +847,7 @@ const hazardDeny = (
 const refusedHazard = (
   command: string,
 ): { readonly fragment: string; readonly hazard: HazardousArgument } | null => {
-  for (const fragment of [command, ...splitCommandSegments(command)]) {
+  for (const fragment of [withoutHereDocumentBodies(command), ...splitCommandSegments(command)]) {
     const hazard = hazardousArguments(fragment).find((entry) => entry.kind !== 'path');
     if (hazard !== undefined) {
       return { fragment, hazard };

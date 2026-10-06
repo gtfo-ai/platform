@@ -12,7 +12,8 @@
  *     list (`a && b`, `a; b`, `a & b`), each stage of a pipeline, the pipeline as a whole (so
  *     `curl * | sh` still matches), each subshell `( … )`, the body of every command substitution
  *     (`$( … )`, backticks) and process substitution (`<( … )`, `>( … )`), and the script a shell
- *     wrapper is handed (`sh -c '…'`, `eval '…'`). The most restrictive verdict of all wins.
+ *     wrapper is handed (`sh -c '…'`, `eval '…'`, or a here-document a shell reads). The most
+ *     restrictive verdict of all wins.
  *  2. **Block patterns match tokens *or* the whole line.** Token matching lets a flag sit anywhere
  *     (`git push --force*` catches `git push origin agentic/x --force`) and lets extra arguments
  *     never escape a ban; the whole-line glob is kept alongside it so the token rule can only ever
@@ -33,6 +34,18 @@
  *  5. **Parse uncertainty fails closed.** A hand-rolled shell scanner is never complete, so it
  *     says when it is out of its depth (`CommandEvaluation.uncertainty`) and an uncertain line can
  *     never be `allow`. See `UNCERTAINTY` for the exhaustive list of constructs that trip it.
+ *
+ * **A here-document's body is data** (WP-153, PROGRESS backlog 482). `cat > a.php <<'EOF'` followed
+ * by PHP is one command, `cat`, and its body is what `cat` reads: no segment, no quote state, no
+ * write target and no block-list match comes out of it; the line that opens it is judged as before,
+ * redirection included, and the lines after the terminator are commands again. One reader
+ * (`readHereDocumentOperator`, `readHereDocumentBodies`) serves the scanner, the substitution
+ * matcher and the git boundary's `computesCommandName`. It is written to recognise **only what the
+ * shell certainly reads as a here-document** — the cost of missing one is today's behaviour (the
+ * body read as commands), the cost of inventing one is a line the shell runs and the policy never
+ * sees — and three things keep a body from being data: an unquoted delimiter whose body the shell
+ * expands, a body that never ends (both uncertain, rule 5), and a body handed to a shell, which is a
+ * script and is read as one (rule 1's `sh -c`, `HERE_DOCUMENT_SCRIPT_READERS`).
  *
  * **Quoting is honoured in one place and ignored in the other, on purpose.** The scanner
  * (`scan`, and so the redirection floor) honours it: `ls "> out"` is not a redirection, because
@@ -87,6 +100,17 @@ export const UNCERTAINTY = {
   unterminatedBacktick: 'a backtick substitution is never closed',
   ansiCQuoting: "ANSI-C quoting ($'…'), whose escapes change what the shell sees",
   arithmetic: 'arithmetic expansion ($((…))), whose result can become a command',
+  /** WP-153 (e): the body runs to the end of the line, so where the commands resume is unknown. */
+  unterminatedHereDocument:
+    'a here-document whose terminator never comes (the closing line must be the delimiter alone — no leading spaces, no trailing space)',
+  /**
+   * WP-153 (d): an **unquoted** delimiter lets the shell expand the body. A substitution there runs
+   * a command, and a line ending in a backslash is joined to the next before bash compares it with
+   * the delimiter (measured: bash 5.2 ends `<<EOF` at `E\` + `OF`), so the body may end before the
+   * line the scanner reads as its terminator. `$VAR` alone is not on this list.
+   */
+  hereDocumentExpansion:
+    "a here-document with an unquoted delimiter whose body the shell expands (a $(…) or backtick substitution, or a line ending in a backslash) — quote the delimiter, <<'EOF', so the body is plain text",
 } as const;
 
 export type UncertaintyReason = (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY];
@@ -1658,12 +1682,240 @@ interface ScanResult {
   readonly writeTargets: readonly string[];
   /** Constructs the scanner will not reason about; each one floors the verdict at `ask`. */
   readonly uncertainty: readonly UncertaintyReason[];
+  /** Where each of `substitutions` starts in the scanned text, in the same order. */
+  readonly substitutionOffsets: readonly number[];
+  /** The here-documents this pass skipped (only a pass that splits on newlines reads them). */
+  readonly hereDocuments: readonly HereDocumentBody[];
+  /** `[newline, end)` of every skipped body, terminator line included, in the scanned text. */
+  readonly bodyRanges: readonly (readonly [number, number])[];
 }
 
+// ── here-documents (WP-153) ──────────────────────────────────────────────────
+
+/**
+ * A here-document operator as written: `<<WORD`, `<<'WORD'`, `<<"WORD"`, each also as `<<-`.
+ *
+ * The **one** reader the scanner (`scan`), the substitution matcher (`findClosingParen`) and the
+ * git boundary's `computesCommandName` share (ruling (a)); each walks its own quote state and asks
+ * this reader at an unquoted `<<` and again at the newline that ends the line.
+ */
+export interface HereDocumentOperator {
+  /** The word the terminator line must equal, quotes taken off. */
+  readonly delimiter: string;
+  /** `<<'EOF'` or `<<"EOF"`: the shell expands nothing in the body. */
+  readonly quoted: boolean;
+  /** `<<-`: leading tabs come off every body line and off the terminator line. */
+  readonly stripTabs: boolean;
+  /** How many characters the operator and its word take, from the first `<`. */
+  readonly length: number;
+}
+
+/**
+ * The operator and a word in one of the three shapes, ending at a word boundary. A word the shell
+ * would join to more text (`<<EOF"X"` is the delimiter `EOFX`, measured) or one carrying a `$`, a
+ * backslash or mixed quoting is **not recognised** — its body stays commands, today's reading.
+ *
+ * **The boundary is bash's own metacharacters — space, tab, newline, `;&|)<>` — and never `\s`.**
+ * JavaScript's `\s` also matches `\r`, `\f`, `\v` and NBSP, which bash keeps inside the word: on a
+ * CRLF line `cat <<'EOF'\r` the delimiter is `EOF\r`, the body ends at the line `EOF\r`, and bash
+ * 5.2 runs the next line (measured for all four, WP-153 review round 1). Read with `\s`, the
+ * delimiter was `EOF` and that line stayed in the body. `(` is a metacharacter too, but `<<EOF(`
+ * is a syntax error, so it is left out: not recognising costs only the old reading.
+ */
+const HERE_DOCUMENT_OPERATOR =
+  /^<<(-?)[ \t]*(?:'([A-Za-z0-9_.-]+)'|"([A-Za-z0-9_.-]+)"|([A-Za-z0-9_.-]+))(?=$|[ \t\n;&|)<>])/;
+
+/**
+ * Text before an operator that puts it where the shell may **not** read a here-document: a
+ * parameter expansion (`${x:-<<EOF}`), an arithmetic command or old-style expansion (`((x<<y))`,
+ * `$[1<<2]`), a `[[ … ]]` test, or a comment (`# <<EOF`). Each was measured on bash 5.2 to run the
+ * line after it, so a reader that skipped that line would hide a command. Matched on everything the
+ * walker has read before the operator — quoted text included, bodies already skipped excluded — so
+ * it errs towards not recognising, whose cost is the old reading. Its `\s` is wider than bash's
+ * blanks on purpose: a wider "word start" finds more comments, and so recognises less.
+ */
+const HERE_DOCUMENT_CONTEXT = /\$\{|\$\[|\(\(|\[\[|(?:^|[\s;&|()<>])#/;
+
+/**
+ * The here-document operator at `text[index]`, or `null` when there is none the shell certainly
+ * reads as one. `before` is what the walker read ahead of it, with skipped bodies left out.
+ * `<<<` is a here-string, never a here-document, at either of its first two characters.
+ */
+export const readHereDocumentOperator = (
+  text: string,
+  index: number,
+  before: string,
+): HereDocumentOperator | null => {
+  if (text.startsWith('<<<', index) || text[index - 1] === '<') {
+    return null;
+  }
+  const match = HERE_DOCUMENT_OPERATOR.exec(text.slice(index));
+  if (match === null || HERE_DOCUMENT_CONTEXT.test(before)) {
+    return null;
+  }
+  const [whole, dash, single, double, bare] = match;
+  return {
+    delimiter: (single ?? double ?? bare) as string,
+    quoted: bare === undefined,
+    stripTabs: dash === '-',
+    length: whole.length,
+  };
+};
+
+/** One here-document's body, read up to its terminator. */
+export interface HereDocumentBody {
+  readonly operator: HereDocumentOperator;
+  /** The body's lines, tabs already stripped for `<<-`, without the terminator. */
+  readonly body: string;
+  /** False when the text ended before a line equal to the delimiter came. */
+  readonly terminated: boolean;
+}
+
+/**
+ * Reads the bodies of the here-documents opened on one line, in the order they were opened, from
+ * the newline at `newline`. A terminator is a line **equal** to the delimiter — after leading tabs
+ * come off, for `<<-` — so `EOF ` or ` EOF` does not end a body (measured, bash 5.2 and dash).
+ * `end` is the newline that ends the last terminator line, or the end of the text.
+ */
+export const readHereDocumentBodies = (
+  text: string,
+  newline: number,
+  pending: readonly HereDocumentOperator[],
+): { readonly end: number; readonly bodies: readonly HereDocumentBody[] } => {
+  let cursor = newline;
+  const bodies: HereDocumentBody[] = [];
+  for (const operator of pending) {
+    const lines: string[] = [];
+    let terminated = false;
+    while (cursor < text.length) {
+      const next = text.indexOf('\n', cursor + 1);
+      const stop = next === -1 ? text.length : next;
+      const line = text.slice(cursor + 1, stop);
+      cursor = stop;
+      const read = operator.stripTabs ? line.replace(/^\t+/, '') : line;
+      if (read === operator.delimiter) {
+        terminated = true;
+        break;
+      }
+      lines.push(read);
+    }
+    bodies.push({ operator, body: lines.join('\n'), terminated });
+  }
+  return { end: cursor, bodies };
+};
+
+/** What a walker does at the newline that ends a line with here-documents pending. */
+export interface HereDocumentsAtNewline {
+  /** Where the walker resumes: the newline after the last terminator, the end, or `newline`. */
+  readonly resume: number;
+  readonly bodies: readonly HereDocumentBody[];
+  /** `[newline, resume)` — what leaves the line — or `null` when nothing is skipped. */
+  readonly range: readonly [number, number] | null;
+}
+
+/**
+ * The walkers' one entry at a newline. A line whose operator and newline are separated by another
+ * newline — inside quotes or a substitution the walker jumped — is one where the walker's idea of
+ * "the next line" and the shell's could differ, so nothing is skipped there (the old reading).
+ */
+export const hereDocumentsAtNewline = (
+  text: string,
+  newline: number,
+  pending: readonly HereDocumentOperator[],
+  pendingFrom: number,
+): HereDocumentsAtNewline => {
+  if (text.slice(pendingFrom, newline).includes('\n')) {
+    return { resume: newline, bodies: [], range: null };
+  }
+  const { end, bodies } = readHereDocumentBodies(text, newline, pending);
+  return { resume: end, bodies, range: [newline, end] };
+};
+
+/** `text[from, to)` with the skipped `ranges` (absolute, sorted) left out. */
+const outsideRanges = (
+  text: string,
+  from: number,
+  to: number,
+  ranges: readonly (readonly [number, number])[],
+): string => {
+  let out = '';
+  let cursor = from;
+  for (const [start, end] of ranges) {
+    if (end <= cursor || start >= to) {
+      continue;
+    }
+    out += text.slice(cursor, Math.max(cursor, start));
+    cursor = Math.max(cursor, end);
+  }
+  return out + text.slice(cursor, Math.max(cursor, to));
+};
+
+/** What ruling (d) and (e) make uncertain about one body. */
+const hereDocumentUncertainty = (body: HereDocumentBody): readonly UncertaintyReason[] => {
+  const reasons: UncertaintyReason[] = [];
+  if (!body.terminated) {
+    reasons.push(UNCERTAINTY.unterminatedHereDocument);
+  }
+  if (!body.operator.quoted && /\$\(|`|\\$/m.test(body.body)) {
+    reasons.push(UNCERTAINTY.hereDocumentExpansion);
+  }
+  return reasons;
+};
+
+/**
+ * Commands that run what they read as a **script** — a shell, `eval`, `source`/`.` — so a
+ * here-document they can reach is not data (rule 1's `sh -c '…'`, `eval '…'`): `bash <<'EOF'`,
+ * `cat <<'EOF' | sh` and `sh -c "$(cat <<'EOF' …)"` run their body. A name is recognised as any
+ * word of the scanned level (shells) or in command position (`.`, which is also a directory), and
+ * then **every** body at that level and below is read as commands — it over-reads, which only
+ * costs the old behaviour. Interpreters that are not shells (`python3 - <<'EOF'`) are the module's
+ * stated residual: an unmatched command runs under `auto`, and its script is not read.
+ *
+ * A command whose **name the shell expands** — a glob or a brace (`cat <<'EOF' | /bin/s?`,
+ * `/bin/{sh,x}`) — may be any of these, so it counts as one in command position (review round 1).
+ * A name computed from a variable (`| $SH`) is refused by the git boundary's computed-name check
+ * under `auto`, and is unmatched (so refused) under `deny`.
+ */
+export const HERE_DOCUMENT_SCRIPT_READERS: ReadonlySet<string> = new Set([
+  'sh',
+  'bash',
+  'zsh',
+  'dash',
+  'ksh',
+  'mksh',
+  'ash',
+  'rbash',
+  'busybox',
+  'fish',
+  'csh',
+  'tcsh',
+  'eval',
+  'source',
+]);
+
+/**
+ * Does this segment run something that reads a script (a shell, `eval`, `source`, `.`, or a name
+ * the shell expands)? The split's `\s` is wider than bash's blanks on purpose: it cuts `sh\r` out
+ * as `sh`, so it finds more readers, and a reader found is only the old reading.
+ */
+const feedsScriptReader = (segment: string): boolean =>
+  segment
+    .split(/[\s|&;()<>]+/)
+    .some((word) => word.length > 0 && HERE_DOCUMENT_SCRIPT_READERS.has(argv0Name(word))) ||
+  scan(segment, PIPE_OPERATORS).segments.some((stage) =>
+    argv0Candidates(tokenise(stage)).some(([name]) => name === '.' || /[*?[{]/.test(name ?? '')),
+  );
+
 /** Index of the `)` closing the `(` at `openIndex`, honouring quotes, or -1 when unbalanced. */
-const findClosingParen = (text: string, openIndex: number): number => {
+const findClosingParen = (text: string, openIndex: number, hereDocuments = false): number => {
   let depth = 0;
   let quote: '"' | "'" | null = null;
+  // A command substitution's body is commands, so a here-document in it is skipped here as the
+  // shell skips it — bash 5.2 and dash do not close `$(cat <<'EOF'` at a `)` inside the body
+  // (measured). Never inside `$((…))`, where `<<` is a shift.
+  let pending: HereDocumentOperator[] = [];
+  let pendingFrom = -1;
+  const skipped: (readonly [number, number])[] = [];
   for (let index = openIndex; index < text.length; index += 1) {
     const char = text[index] as string;
     if (char === '\\') {
@@ -1678,6 +1930,33 @@ const findClosingParen = (text: string, openIndex: number): number => {
     }
     if (char === '"' || char === "'") {
       quote = char;
+      continue;
+    }
+    if (hereDocuments && char === '<' && text.startsWith('<<', index)) {
+      const operator = readHereDocumentOperator(
+        text,
+        index,
+        outsideRanges(text, openIndex + 1, index, skipped),
+      );
+      if (operator !== null) {
+        if (pending.length === 0) {
+          pendingFrom = index;
+        }
+        pending.push(operator);
+        index += operator.length - 1;
+        continue;
+      }
+    }
+    if (char === '\n' && pending.length > 0) {
+      const at = hereDocumentsAtNewline(text, index, pending, pendingFrom);
+      pending = [];
+      if (at.range !== null) {
+        if (at.bodies.some((body) => !body.terminated)) {
+          return -1;
+        }
+        skipped.push(at.range);
+        index = at.resume - 1;
+      }
       continue;
     }
     if (char === '(') {
@@ -1729,15 +2008,34 @@ const isWriteTarget = (target: string): boolean =>
  * Single quotes protect everything; double quotes protect the operators but *not* substitution,
  * because the shell still runs it there. Anything the scanner cannot follow is reported in
  * `uncertainty` rather than guessed at.
+ *
+ * A pass that splits on newlines also reads here-documents (WP-153): an unquoted `<<WORD` is kept
+ * on its line, and at that line's newline the bodies are skipped — never a segment, never quote
+ * state — and the pass resumes after the last terminator line.
  */
 const scan = (command: string, operators: readonly string[]): ScanResult => {
   const segments: string[] = [];
   const substitutions: string[] = [];
+  const substitutionOffsets: number[] = [];
   const writeTargets: string[] = [];
   const uncertainty = new Set<UncertaintyReason>();
+  const readsLines = operators.includes('\n');
+  const hereDocuments: HereDocumentBody[] = [];
+  const bodyRanges: (readonly [number, number])[] = [];
+  let pending: HereDocumentOperator[] = [];
+  let pendingFrom = -1;
   let current = '';
   let inDouble = false;
   let index = 0;
+
+  const recordBodies = (bodies: readonly HereDocumentBody[]): void => {
+    for (const body of bodies) {
+      hereDocuments.push(body);
+      for (const reason of hereDocumentUncertainty(body)) {
+        uncertainty.add(reason);
+      }
+    }
+  };
 
   const push = (): void => {
     const segment = current.trim();
@@ -1777,14 +2075,16 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
     const opensSubstitution =
       rest.startsWith('$(') || rest.startsWith('<(') || rest.startsWith('>(');
     if (opensSubstitution) {
-      const close = findClosingParen(command, index + 1);
+      const close = findClosingParen(command, index + 1, true);
       if (close === -1) {
         uncertainty.add(UNCERTAINTY.unterminatedSubstitution);
         substitutions.push(command.slice(index + 2));
+        substitutionOffsets.push(index + 2);
         index = command.length;
         continue;
       }
       substitutions.push(command.slice(index + 2, close));
+      substitutionOffsets.push(index + 2);
       index = close + 1;
       continue;
     }
@@ -1794,10 +2094,12 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       if (close === -1) {
         uncertainty.add(UNCERTAINTY.unterminatedBacktick);
         substitutions.push(command.slice(index + 1));
+        substitutionOffsets.push(index + 1);
         index = command.length;
         continue;
       }
       substitutions.push(command.slice(index + 1, close));
+      substitutionOffsets.push(index + 1);
       index = close + 1;
       continue;
     }
@@ -1857,6 +2159,24 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       continue;
     }
 
+    // ── a here-document operator: kept on its line, its body read at the line's newline ──
+    if (readsLines && rest.startsWith('<<')) {
+      const operator = readHereDocumentOperator(
+        command,
+        index,
+        outsideRanges(command, 0, index, bodyRanges),
+      );
+      if (operator !== null) {
+        if (pending.length === 0) {
+          pendingFrom = index;
+        }
+        pending.push(operator);
+        current += command.slice(index, index + operator.length);
+        index += operator.length;
+        continue;
+      }
+    }
+
     // ── redirection: consumed as one unit so `2>&1` does not split on the `&` ──
     if (char === '>' || rest.startsWith('&>')) {
       let cursor = index + (rest.startsWith('&>') ? 2 : 1);
@@ -1909,6 +2229,18 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
     const operator = operators.find((candidate) => rest.startsWith(candidate));
     if (operator !== undefined) {
       push();
+      if (operator === '\n' && pending.length > 0) {
+        const at = hereDocumentsAtNewline(command, index, pending, pendingFrom);
+        pending = [];
+        if (at.range !== null) {
+          recordBodies(at.bodies);
+          bodyRanges.push(at.range);
+          // `resume` is the newline after the last terminator (or the end), which the next turn
+          // reads as an ordinary separator: the lines after it are commands again.
+          index = at.resume;
+          continue;
+        }
+      }
       index += operator.length;
       continue;
     }
@@ -1919,8 +2251,20 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
   if (inDouble) {
     uncertainty.add(UNCERTAINTY.unbalancedQuote);
   }
+  if (pending.length > 0) {
+    // The line that opened them is the last one: no newline, so no body and no terminator.
+    recordBodies(pending.map((operator) => ({ operator, body: '', terminated: false })));
+  }
   push();
-  return { segments, substitutions, writeTargets, uncertainty: [...uncertainty] };
+  return {
+    segments,
+    substitutions,
+    substitutionOffsets,
+    writeTargets,
+    uncertainty: [...uncertainty],
+    hereDocuments,
+    bodyRanges,
+  };
 };
 
 /** The script a shell wrapper is handed: `sh -c '…'`, `bash -c "…"`, `eval '…'`. */
@@ -1962,14 +2306,25 @@ interface Parsed {
   readonly uncertainty: readonly UncertaintyReason[];
   /** Whether the line, at any depth, carries a command or process substitution. */
   readonly substitutes: boolean;
+  /**
+   * Every here-document body read as data, as `[start, end)` in **this** text — its own level's and
+   * those of its command substitutions, shifted to where each sits. A wrapped script's are not here:
+   * its text is rebuilt from tokens, and a body under a shell is a script anyway.
+   */
+  readonly bodyRanges: readonly (readonly [number, number])[];
+  /** Whether any level read its here-documents as scripts (`HERE_DOCUMENT_SCRIPT_READERS`). */
+  readonly readsScripts: boolean;
 }
 
 /**
  * Parses a command line into everything the shell would run, plus what the scanner could not
  * follow. Recurses through substitution bodies and wrapped scripts, so nesting is walked to the
  * bottom rather than to a fixed depth.
+ *
+ * `scripted` is true when an enclosing level runs a script reader, so a here-document body here
+ * may be what it runs (`sh -c "$(cat <<'EOF' …)"`).
  */
-const parseCommand = (command: string, depth = 0): Parsed => {
+const parseCommand = (command: string, depth = 0, scripted = false): Parsed => {
   const fragments: string[] = [];
   const uncertainty = new Set<UncertaintyReason>();
   const outer = scan(command, LIST_OPERATORS);
@@ -1978,6 +2333,25 @@ const parseCommand = (command: string, depth = 0): Parsed => {
   }
   const writeTargets = [...outer.writeTargets];
   let substitutes = outer.substitutions.length > 0;
+  const readsScripts = scripted || outer.segments.some(feedsScriptReader);
+  let anyReadsScripts = readsScripts;
+  const bodyRanges: (readonly [number, number])[] = [];
+  // A body under a script reader is the script it runs, so it is parsed as commands: rule 1, the
+  // same as `sh -c '…'`. Its range stays out of `bodyRanges` — it is not data.
+  for (const hereDocument of outer.hereDocuments) {
+    if (readsScripts && depth < MAX_WRAPPER_DEPTH) {
+      const nested = parseCommand(hereDocument.body, depth + 1, true);
+      fragments.push(...nested.fragments);
+      writeTargets.push(...nested.writeTargets);
+      substitutes ||= nested.substitutes;
+      for (const reason of nested.uncertainty) {
+        uncertainty.add(reason);
+      }
+    }
+  }
+  if (!readsScripts) {
+    bodyRanges.push(...outer.bodyRanges);
+  }
 
   for (const segment of outer.segments) {
     fragments.push(segment);
@@ -1999,7 +2373,8 @@ const parseCommand = (command: string, depth = 0): Parsed => {
     }
     const script = depth < MAX_WRAPPER_DEPTH ? wrappedScript(segment) : null;
     if (script !== null && script !== segment) {
-      const nested = parseCommand(script, depth + 1);
+      const nested = parseCommand(script, depth + 1, readsScripts);
+      anyReadsScripts ||= nested.readsScripts;
       fragments.push(script, ...nested.fragments);
       writeTargets.push(...nested.writeTargets);
       substitutes ||= nested.substitutes;
@@ -2009,15 +2384,23 @@ const parseCommand = (command: string, depth = 0): Parsed => {
     }
   }
 
-  for (const substitution of outer.substitutions) {
-    fragments.push(substitution);
+  for (const [position, substitution] of outer.substitutions.entries()) {
     if (depth < MAX_WRAPPER_DEPTH) {
-      const nested = parseCommand(substitution, depth + 1);
-      fragments.push(...nested.fragments);
+      const nested = parseCommand(substitution, depth + 1, readsScripts);
+      anyReadsScripts ||= nested.readsScripts;
+      // The substitution as a fragment of its own is its text with its data bodies left out, so
+      // a body line never reaches the block list as part of `cat <<'EOF' … EOF` (ruling (b)).
+      fragments.push(withoutRanges(substitution, nested.bodyRanges), ...nested.fragments);
       writeTargets.push(...nested.writeTargets);
+      const offset = outer.substitutionOffsets[position] as number;
+      bodyRanges.push(
+        ...nested.bodyRanges.map(([start, end]) => [start + offset, end + offset] as const),
+      );
       for (const reason of nested.uncertainty) {
         uncertainty.add(reason);
       }
+    } else {
+      fragments.push(substitution);
     }
   }
 
@@ -2026,8 +2409,14 @@ const parseCommand = (command: string, depth = 0): Parsed => {
     writeTargets,
     uncertainty: [...uncertainty],
     substitutes,
+    bodyRanges: [...bodyRanges].sort(([a], [b]) => a - b),
+    readsScripts: anyReadsScripts,
   };
 };
+
+/** `text` with `ranges` (sorted, non-overlapping) cut out. */
+const withoutRanges = (text: string, ranges: readonly (readonly [number, number])[]): string =>
+  outsideRanges(text, 0, text.length, ranges);
 
 /**
  * Every fragment of a command line that the shell would run as a command in its own right.
@@ -2038,6 +2427,22 @@ const parseCommand = (command: string, depth = 0): Parsed => {
  */
 export const splitCommandSegments = (command: string): readonly string[] =>
   parseCommand(command).fragments;
+
+/**
+ * The command line with every here-document body that is **data** cut out (WP-153 (b)): the lines
+ * that open them and the lines after their terminators stay, so this is the line as the shell reads
+ * it for commands. What reads a whole line — the whole-line candidate here, the git boundary's
+ * assignment check, the unattended hazard check — reads this instead of the raw text.
+ */
+export const withoutHereDocumentBodies = (command: string): string =>
+  withoutRanges(command, parseCommand(command).bodyRanges);
+
+/**
+ * Whether this line hands any of its here-documents to a script reader (a shell, `eval`, `source`,
+ * `.`), so their bodies are commands rather than data. `computesCommandName` reads them then.
+ */
+export const readsHereDocumentsAsScripts = (command: string): boolean =>
+  parseCommand(command).readsScripts;
 
 /** Does the command redirect output to a path (`> file`), rather than to a descriptor or `/dev/null`? */
 export const hasOutputRedirection = (command: string): boolean =>
@@ -2193,6 +2598,9 @@ export const evaluateCommand = (
     // Nothing runnable: an empty command, or only operators. Never `allow`.
     return { verdict: fallback, matched: null, segment: null, uncertainty: parsed.uncertainty };
   }
+  // The whole line as the shell reads it for commands: a here-document body that is data is not
+  // part of it, so `timeout 5 cat <<'EOF'` over a body line `git push --force` is not a push.
+  const line = withoutRanges(request.command, parsed.bodyRanges);
 
   if (request.resolvedBinary !== undefined) {
     const name = basename(request.resolvedBinary);
@@ -2207,10 +2615,10 @@ export const evaluateCommand = (
     }
   }
 
-  const candidates: string[] = [request.command, ...parsed.fragments];
+  const candidates: string[] = [line, ...parsed.fragments];
   if (request.resolvedBinary !== undefined) {
     // argv[0] replaced by what it really resolves to, so `tf apply` is judged as `terraform apply`.
-    const tokens = tokenise(request.command);
+    const tokens = tokenise(line);
     candidates.push([basename(request.resolvedBinary), ...tokens.slice(1)].join(' '));
   }
 
@@ -2220,7 +2628,7 @@ export const evaluateCommand = (
   // body out of the fragment it sat in — so on a line with one, a precise entry would judge
   // `sed -n 1p f $(ls)` as `sed -n 1p f`. It is not consulted there at all.
   const admitPrecise = !parsed.substitutes;
-  let result = evaluateOne(request.command, policy, 'allow', admitPrecise);
+  let result = evaluateOne(line, policy, 'allow', admitPrecise);
   for (const candidate of candidates.slice(1)) {
     const evaluation = evaluateOne(candidate, policy, fallback, admitPrecise);
     if (mostRestrictive(result.verdict, evaluation.verdict) !== result.verdict) {

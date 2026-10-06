@@ -296,7 +296,10 @@ export const COVERAGE_RINGS: Readonly<
  *                    filesystem I/O in a temp directory on purpose, and say so at the top:
  *                    `scripts/check-ignored.test.ts` and
  *                    `packages/infrastructure/src/runner/path-guard.filesystem.test.ts`, whose
- *                    whole point is which names the running volume treats as one file.
+ *                    whole point is which names the running volume treats as one file. A third,
+ *                    `packages/domain/src/policies/here-documents.shell.test.ts`, starts `bash`
+ *                    and `dash` in a temp directory, because the shell is the only oracle for the
+ *                    scanner's here-document reader that is not a copy of it (WP-153).
  *   contract         integration-type ports against fakes / recorded fixtures
  *   process          the suites that start real processes ({@link PROCESS_SUITES}), after the
  *                    two above and one file at a time, in the same `pnpm test` run

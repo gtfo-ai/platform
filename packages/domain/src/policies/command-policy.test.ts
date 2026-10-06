@@ -8,6 +8,7 @@ import {
   CI_VERIFICATION_BLOCK,
   CONFLICT_RESOLUTION_EXTRA_ALLOW,
   commandUncertainty,
+  commandWriteTargets,
   DECLINED_BLOCK_VARIANTS,
   DEFAULT_BLOCKED_COMMANDS,
   DEFAULT_COMMAND_POLICY,
@@ -32,12 +33,15 @@ import {
   PRECISE_ALLOW_ENTRIES,
   PROJECT_COMMAND_ALLOW,
   type ResolvedCommandPolicy,
+  readHereDocumentBodies,
+  readHereDocumentOperator,
   runCommandPolicy,
   SED_PRINT_RANGE_ALLOW,
   splitCommandSegments,
   UNCERTAINTY,
   UNPATTERNABLE_BLOCK_ITEMS,
   WORKSPACE_SETUP_ALLOW,
+  withoutHereDocumentBodies,
   withVerificationMode,
 } from './command-policy.js';
 
@@ -1915,7 +1919,11 @@ describe('backlog 462 — the read verbs the first local test was denied', () =>
       ['sed -n 1p f >&out', 'a write spelled as a descriptor'],
       ['sed -n 1p f 2>/dev/nullx', 'another path'],
       ['sed -n 1p f <in', 'an input redirection (over-asked)'],
-      ['sed -n 1p <<EOF', 'a here-document (over-asked)'],
+      // Re-decided at WP-153: no longer "over-asked" — the line *is* an unterminated
+      // here-document, which is uncertain (ruling (e)); a terminated one is still not `allow`,
+      // because the grammar admits plain file operands and `<<'EOF'` is not one.
+      ['sed -n 1p <<EOF', 'an unterminated here-document (WP-153 (e))'],
+      ["sed -n 1p <<'EOF'\na\nEOF", 'a here-document is not a plain file operand (WP-153)'],
       // wrappers that are not environment wrappers
       ["sh -c 'sed -n 1p f'", 'a shell wrapper'],
       ['xargs sed -n 1p', 'xargs (its operands come from stdin)'],
@@ -2040,5 +2048,185 @@ describe('backlog 462 — the read verbs the first local test was denied', () =>
       expect(hasOutputRedirection(command)).toBe(true);
       expect(verdict(command, READ_ONLY)).toBe('ask');
     });
+  });
+});
+
+describe('WP-153 — a here-document body is data (backlog 482)', () => {
+  const PHP = "cat <<'EOF'\n<?php\n// don't\n$order->total = ['net' => 1, 'vat' => 2];\nEOF";
+
+  it('reads no segment, no quote state and no write target out of a body (ruling (b))', () => {
+    expect(splitCommandSegments(PHP)).toEqual(["cat <<'EOF'"]);
+    expect(commandUncertainty(PHP)).toEqual([]);
+    // `->` and `=>` in the body would each be a redirection to a path if the body were commands.
+    expect(commandWriteTargets(PHP)).toEqual([]);
+    expect(evaluateCommand({ command: PHP })).toMatchObject({ verdict: 'allow', matched: 'cat *' });
+  });
+
+  it('still judges the line that opens it, its own redirection included', () => {
+    const command = "cat > src/a.php <<'EOF'\n$a->b => 1;\nEOF";
+    expect(commandWriteTargets(command)).toEqual(['src/a.php']);
+    expect(evaluateCommand({ command }).verdict).toBe('ask');
+    expect(evaluateCommand({ command: "sudo tee x <<'EOF'\nok\nEOF" }).verdict).toBe('block');
+  });
+
+  it('matches no block entry on a body line, and does on the line after the terminator', () => {
+    const body = "cat <<'EOF'\ngit push --force origin main\nEOF";
+    expect(evaluateCommand({ command: body }).verdict).toBe('allow');
+    expect(evaluateCommand({ command: `${body}\ngit push --force origin main` })).toMatchObject({
+      verdict: 'block',
+      matched: 'git push --force*',
+      segment: 'git push --force origin main',
+    });
+  });
+
+  it('keeps a body out of the whole-line reading, where a wrapper would have peeled to it', () => {
+    // `timeout` is a block-list wrapper, so the whole line read raw was `git push --force …` from
+    // its fourth word — the body line — and every line like this was blocked.
+    const command = "timeout 5 cat <<'EOF'\ngit push --force origin main\nEOF";
+    expect(withoutHereDocumentBodies(command)).toBe("timeout 5 cat <<'EOF'");
+    expect(evaluateCommand({ command }).verdict).toBe('ask');
+  });
+
+  it('reads a commit message in a substitution as data, apostrophe and parentheses included', () => {
+    const command =
+      "git commit -m \"$(cat <<'EOF'\nfix(scanner): don't read (a) body) as commands\n\ngit push --force origin main\nEOF\n)\"";
+    expect(commandUncertainty(command)).toEqual([]);
+    expect(evaluateCommand({ command })).toMatchObject({
+      verdict: 'allow',
+      matched: 'git commit *',
+    });
+    expect(withoutHereDocumentBodies(command)).toBe('git commit -m "$(cat <<\'EOF\'\n)"');
+  });
+
+  it.each([
+    ['<<EOF', { delimiter: 'EOF', quoted: false, stripTabs: false }],
+    ["<<'EOF'", { delimiter: 'EOF', quoted: true, stripTabs: false }],
+    ['<<"EOF"', { delimiter: 'EOF', quoted: true, stripTabs: false }],
+    ['<<-EOF', { delimiter: 'EOF', quoted: false, stripTabs: true }],
+    ["<<- 'END_X.1'", { delimiter: 'END_X.1', quoted: true, stripTabs: true }],
+    ['<< -x', { delimiter: '-x', quoted: false, stripTabs: false }],
+    ['<<EOF>out', { delimiter: 'EOF', quoted: false, stripTabs: false }],
+  ])('reads the operator %s (ruling (c))', (operator, expected) => {
+    expect(readHereDocumentOperator(`cat ${operator}`, 4, 'cat ')).toMatchObject(expected);
+  });
+
+  it.each([
+    ['cat <<<EOF', 4, 'a here-string'],
+    ['cat <<<EOF', 5, 'the second `<` of a here-string'],
+    ['cat <<EOF"X"', 4, 'a delimiter the shell joins to more text (`EOFX`, measured)'],
+    ["cat <<E'O'F", 4, 'mixed quoting'],
+    ['cat <<$X', 4, 'a parameter as the delimiter'],
+    ['cat <<\\EOF', 4, 'an escaped delimiter'],
+    ['cat <<(ls)', 4, 'no word'],
+    ["cat <<'EOF'\r", 4, 'a carriage return: bash keeps it in the word (review round 1)'],
+    ['cat <<EOF\r', 4, 'a carriage return after an unquoted word'],
+    ["cat <<'EOF'\f", 4, 'a form feed'],
+    ["cat <<'EOF'\v", 4, 'a vertical tab'],
+    ["cat <<'EOF'\u00a0", 4, 'a no-break space'],
+  ])('recognises nothing in %j at %i (%s)', (text, index) => {
+    expect(readHereDocumentOperator(text, index, text.slice(0, index))).toBeNull();
+  });
+
+  it.each([
+    ['echo ${x:-', 'a parameter expansion (measured: bash 5.2 runs the next line)'],
+    ['((x', 'an arithmetic command (measured)'],
+    ['echo $[1', 'old-style arithmetic (measured)'],
+    ['[[ a ', 'a `[[` test'],
+    ['echo hi # ', 'a comment (measured)'],
+    ['# ', 'a comment at the start'],
+  ])('recognises nothing after %j (%s)', (before) => {
+    const text = `${before}<<EOF`;
+    expect(readHereDocumentOperator(text, before.length, before)).toBeNull();
+  });
+
+  it('ends a body only at a line equal to the delimiter, tabs off for `<<-` alone', () => {
+    const operator = { delimiter: 'EOF', quoted: true, stripTabs: false, length: 7 };
+    const text = '\nEOF \n EOF\n\tEOF\nEOFX\nEOF\nafter';
+    expect(readHereDocumentBodies(text, 0, [operator])).toEqual({
+      end: text.indexOf('\nafter'),
+      bodies: [{ operator, body: 'EOF \n EOF\n\tEOF\nEOFX', terminated: true }],
+    });
+    const stripped = { ...operator, stripTabs: true };
+    const tabbed = '\n\t\tbody\n\t\tEOF\nafter';
+    expect(readHereDocumentBodies(tabbed, 0, [stripped])).toEqual({
+      end: tabbed.indexOf('\nafter'),
+      bodies: [{ operator: stripped, body: 'body', terminated: true }],
+    });
+    expect(readHereDocumentBodies('\nbody\nEOF ', 0, [operator]).bodies[0]?.terminated).toBe(false);
+  });
+
+  describe('what keeps a body from being data', () => {
+    it.each([
+      ['cat <<EOF\n$(git push --force origin main)\nEOF', 'a substitution'],
+      ['cat <<EOF\n`git push --force origin main`\nEOF', 'a backtick'],
+      ['cat <<"EOF"x\n$(id)\nEOF', 'not an operator at all: read as before'],
+      ['cat <<EOF\nE\\\nOF\ngit push --force origin main\nEOF', 'a line ending in a backslash'],
+    ])('an unquoted delimiter whose body the shell expands is uncertain: %j (%s)', (command) => {
+      expect(evaluateCommand({ command }).verdict).not.toBe('allow');
+    });
+
+    it('names the expansion and tells the model to quote the delimiter (ruling (d))', () => {
+      const command = 'cat <<EOF\n$(git push --force origin main)\nEOF';
+      expect(commandUncertainty(command)).toEqual([UNCERTAINTY.hereDocumentExpansion]);
+      expect(UNCERTAINTY.hereDocumentExpansion).toContain("<<'EOF'");
+      // `$VAR` alone is not on the list, and a quoted delimiter's body is never expanded.
+      expect(commandUncertainty(`cat <<EOF\n$HOME and \${PWD}\nEOF`)).toEqual([]);
+      expect(commandUncertainty("cat <<'EOF'\n$(git push --force origin main)\nEOF")).toEqual([]);
+      expect(commandUncertainty('cat <<"EOF"\nE\\\nOF\nEOF')).toEqual([]);
+    });
+
+    it.each([
+      ['sed -n 1p <<EOF', 'no newline at all'],
+      ["cat <<'EOF'\nbody\nEOF ", 'a terminator with a trailing space'],
+      ["cat <<'EOF'\nbody\n EOF", 'a terminator with a leading space'],
+      ["cat <<'EOF'\nbody\n\tEOF", 'a tab-indented terminator without `<<-`'],
+      ["cat <<'A' <<'B'\na\nA\nb", 'the second of two'],
+    ])('an unterminated here-document is uncertain: %j (%s, ruling (e))', (command) => {
+      expect(commandUncertainty(command)).toContain(UNCERTAINTY.unterminatedHereDocument);
+      expect(evaluateCommand({ command }).verdict).not.toBe('allow');
+    });
+
+    it.each([
+      ["bash <<'EOF'\ngit push --force origin main\nEOF", 'a shell reading it'],
+      ["/bin/sh -s <<'EOF'\ngit push --force origin main\nEOF", 'a shell by path, with -s'],
+      ["cat <<'EOF' | sh\ngit push --force origin main\nEOF", 'a shell at the end of the pipe'],
+      ['sh -c "$(cat <<\'EOF\'\ngit push --force origin main\nEOF\n)"', 'a script built by it'],
+      ['eval "$(cat <<\'EOF\'\ngit push --force origin main\nEOF\n)"', 'eval'],
+      [". /dev/stdin <<'EOF'\ngit push --force origin main\nEOF", '`.` in command position'],
+      ["cat <<'EOF' | /bin/s?\ngit push --force origin main\nEOF", 'a shell named by a glob'],
+      ["cat <<'EOF' | /bin/{sh,x}\ngit push --force origin main\nEOF", 'a brace expansion'],
+      ["source /dev/stdin <<'EOF'\ngit push --force origin main\nEOF", 'source'],
+    ])('a body a script reader runs is a script, read as commands: %j (%s)', (command) => {
+      expect(evaluateCommand({ command })).toMatchObject({
+        verdict: 'block',
+        matched: 'git push --force*',
+      });
+    });
+
+    it('leaves the old reading where the operator and its newline are not on one line', () => {
+      const command = 'cat <<\'EOF\' "a\nb"\ngit push --force origin main\nEOF';
+      expect(evaluateCommand({ command }).verdict).toBe('block');
+    });
+  });
+
+  it('is never the reader of a quoted `<<`, a here-string or a shift (ruling (e))', () => {
+    for (const command of [
+      'echo "<<EOF"\ngit push --force origin main\nEOF',
+      "echo '<<EOF'\ngit push --force origin main\nEOF",
+      'cat <<< EOF\ngit push --force origin main\nEOF',
+      'echo $((1<<2))\ngit push --force origin main\n2',
+      `x=1; echo \${x:-<<EOF }\ngit push --force origin main\nEOF`,
+    ]) {
+      expect(evaluateCommand({ command }).verdict, command).toBe('block');
+    }
+  });
+
+  it('consumes several here-documents on one line in order, then reads commands again', () => {
+    const two = "cat <<'A' - <<'B'\ngit push --force origin main\nA\ndon't\nB";
+    expect(evaluateCommand({ command: two }).verdict).toBe('allow');
+    expect(evaluateCommand({ command: `${two}\ngit push -f origin main` }).verdict).toBe('block');
+    // Two lines, two operators, each body after its own line.
+    const lines = "cat <<'A'\nx\nA\ncat <<'B'\ngit push --force\nB\nls";
+    expect(splitCommandSegments(lines)).toEqual(["cat <<'A'", "cat <<'B'", 'ls']);
   });
 });

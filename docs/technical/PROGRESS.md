@@ -14622,6 +14622,94 @@ Whether a tier run **directly** in a linked worktree (an ordinary shell, no hook
 
 **Depends on** WP-152 and **Q117**.
 
+### 509. **The command scanner reads a variable's quoted text as data, but bash evaluates that text as code in an array subscript, a `@P` transformation and the other arithmetic contexts, so `x='b[$(cmd)]'; echo ${y[x]}` runs `cmd` behind a line the policy reads as an assignment and an `echo`** (TODO, **major — under `unattended: auto` it is an allow path for an arbitrary hidden command, in pure shell, past the block list and the git boundary, which module rule 5 says cannot happen: `UNCERTAINTY` is *"the exhaustive list of constructs that trip it"*, and none of these is on it**. What bounds the consequence is what already bounds backlog 481's residual (the credential answered for the project's repository only since `860be46a`, the egress allow-list, the run container), so this is a hole in the reader's claim rather than a new reach. It is reachable by a model that is told to write it (BD-022), not by an ordinary command. WP-153's *Discovered work*, session 12, verified by the refiner against WP-153's uncommitted tree on `f8bfda68`. **No work package owns it**: none of WP-154…WP-157 touches `packages/domain/src/policies/`. **It needs its own row, first in the M9 queue**, and it is parallel-safe with every other M9 row for the same reason WP-153 was)
+
+**The measurement (WP-153's implementer, bash 5.2.37 from the run image).** Quoted from the row notes:
+*"`x='b[$(cmd)]'; echo ${y[x]}` and `z='$(cmd)'; echo ${z@P}` both run `cmd`. The scanner reads both
+assignments as single-quoted text, so the same line without a here-document passes the git boundary
+today. The class also covers `${z:x}` offsets, `$[x]` and `${!x}`, which by bash's documented
+semantics evaluate the same way; only the first two were run."* The first two are measured; the rest of
+the class is a **hypothesis** from the manual, and so is the list below.
+
+**What the code does (read in the working tree, not run — rule 66).**
+- `scan` (`packages/domain/src/policies/command-policy.ts:1999`) flags exactly one arithmetic form,
+  `$((` (`:2039-2041`, `UNCERTAINTY.arithmetic` at `:102`). A single-quoted string is copied into the
+  segment as literal text (`:2118-2130`), and nothing in the walk reads a `${`. `$[`, an arithmetic
+  command `((…))`, `let`, `[[ … -eq … ]]`, `${name[…]}`, `${name@P}`, `${!name}` and `${name:offset}`
+  produce no uncertainty. `UNCERTAINTY` (`:97-114`) has no entry for any of them.
+- WP-153's `HERE_DOCUMENT_CONTEXT` (`:1729`) recognises `${`, `$[` and `((` only to decide that a
+  `<<` is **not** a here-document. That is the one place the scanner sees them.
+- So the line is two segments: `x='b[$(…)]'`, which no allow entry matches (`evaluateOne`, `:2506-2541`,
+  falls back to `ask`), and `echo ${y[x]}`. The git boundary (`gitBoundaryViolation`,
+  `packages/domain/src/policies/unattended-commands.ts:725`) reads the same fragments, and its
+  `computesCommandName` (`:572`) sees a literal command name. Nothing on the line names `git`, `sudo`
+  or `/ctl` outside the quotes.
+- `decideUnattendedCommand` (`unattended-commands.ts:874`) then runs an `ask` line under `auto` as
+  `unattended_auto`. **Expected verdict under `auto`: `allow` / `unattended_auto`, no uncertainty**, for
+  `x='b[$(git push origin HEAD:main)]'; echo ${y[x]}`. Under `deny`, the assignment segment is
+  unmatched, so the line is `unattended_deny`. No shipped allow entry sets a variable (`DEFAULT_READ_ONLY_ALLOW`,
+  `:324`, and `DEFAULT_IMPLEMENTATION_ALLOW`, `:466`), so `deny` and interactive mode look out of reach.
+  **Needs measurement**: both verdicts as unit cases, plus whether a bare `x=$(cat f)` (a value read
+  from a file the run's Write tool planted) is ever `allow`. If it is, `deny` is reached too.
+
+**What it costs to leave.** Every guarantee the scanner gives under `auto` (the block list, the git
+boundary's push, remote and config rules, the hazard list) has a shell-only spelling that skips it. The
+spelling is short and documented in the bash manual, so a prompt injection can carry it. The
+here-document case is the same hole: ruling (d) leaves *"`$VAR` alone is not"* open, so `${y[x]}` in
+an unquoted body runs the planted text too.
+
+**Done when** (fail closed, rule 5):
+1. A new `UNCERTAINTY` entry, worded for the model (*"write the value literally; the platform cannot
+   read an expansion that evaluates a variable's text"*), fires on every context in which bash
+   evaluates a variable's value as an arithmetic expression or a prompt string: a `${` whose name is
+   followed by `[`, `@` or a `:` that is not `:-`, `:=`, `:+` or `:?`; `${!`; `${#name[`; `$[`; an
+   arithmetic command `((` (the `$((` entry stays); `let`; `declare`/`typeset`/`local`/`export` with
+   `-i`; and `[[` with `-eq`, `-ne`, `-lt`, `-le`, `-gt` or `-ge`. It applies outside quotes, inside
+   double quotes, and in an unquoted here-document body (ruling (d) gains it). The list is checked
+   against the bash manual's *Arithmetic Evaluation* and *Parameter Expansion* sections, and the
+   module docblock names what it still does not read.
+2. Bypass cases in `unattended-commands.test.ts`, one per context, each with a planted `git push` to a
+   non-`agentic/` branch: `uncertain` under `auto`. **Canary**: remove the new entry and each answers
+   `unattended_auto`.
+3. `here-documents.shell.test.ts`'s oracle gains the measured payloads (`${y[x]}`, `${z@P}`) on bash,
+   so the shell, not the reader, says which lines run (rule 65).
+4. **Needs measurement before the rule is fixed**: how often recorded runs write these constructs
+   legitimately (`${#arr[@]}`, `${x:0:7}`, `((i++))`). This is a read over the `hook` rows of
+   `run_messages` from the dogfood install, not a test run. A narrower rule (uncertain only when the
+   line also carries a quoted `$(` or backtick) is **not** enough, because the value can come from a
+   file through `$(cat f)` or `read`.
+5. technical/05 § "Command and tool policy" states the rule (rule 83).
+
+**Depends on** WP-153 (the shared reader, and ruling (d)'s body check this extends). Nothing else.
+
+### 510. **The readiness re-check's husky reader is a third here-document reader, with its own regex and a `trim()` terminator, so it disagrees with the shell in both directions** (TODO, **nit — a readiness heuristic, not a security boundary. R13 is pass-only on a re-check, so the harmful direction is a false pass, and that needs a hook whose here-document terminator is indented or a body that names a scanner. The inputs are contrived and no real hook has shown either**. WP-153's *Discovered work*, session 12, verified by the refiner. The report's path is right, `packages/domain/src/readiness/recheck.ts`, not the application package's `onboarding/recheck.ts`. **No work package owns it.** It is a candidate fold for backlog **509**'s row, which edits the module it would import from)
+
+**What is wrong (read, not run — rule 66).** `shellCommandsOf`
+(`packages/domain/src/readiness/recheck.ts:294-311`) is WP-94's R13 reader for `.husky/pre-commit`
+(called at `:351`). Its docblock (`:295-296`) says *"a heredoc's body (`cat <<EOF` … `EOF`) is
+data"*, which is WP-153's rule, but it reads that rule with its own code. WP-153's ruling (a) made the
+scanner's reader the only one:
+- the operator is `/<<-?\s*["']?(\w+)["']?/` anywhere on the line (`:308`). It matches inside
+  `<<<word` (a here-string, at the second `<`), `$((1<<2))` and `${x:-<<EOF}`. It does not see `#`,
+  because `withoutComment` (`:238`) strips comments first;
+- the terminator is compared after `line.trim()` (`:303`), so a plain `<<` body ends at an indented
+  `  EOF`, which the shell does not. The lines it reads have already been `trimEnd()`-ed by
+  `withoutComment`, so a trailing-space terminator ends it too. WP-153's terminator canary (*"compared
+  after `trim()`"*) was killed by seven cases in the scanner for this reason.
+
+**What it costs to leave.** Too early an end reads a body line as a command. If that line names a
+scanner, R13 passes for a hook that runs none. Too late an end, or a `<<<`, hides real commands, and
+R13 is carried as before: the direction readiness may be wrong in. Two readers of one rule drift.
+
+**Done when** `shellCommandsOf` gets its bodies from the scanner's reader (`readHereDocumentBodies`
+or `withoutHereDocumentBodies` in `packages/domain/src/policies/command-policy.ts`; readiness →
+policies is inside `packages/domain`, so the dependency rule allows it) and its own regex is deleted.
+Cases in `packages/domain/src/readiness/recheck.test.ts`: an indented terminator keeps a scanner line
+in the body (no pass); a `<<<word` hides nothing. **Canary**: restore the regex and the first case
+passes R13. The docblock at `:295-296` points to the shared reader.
+
+**Depends on** WP-153.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -18371,7 +18459,7 @@ file, or the first work package that touches upgrade behaviour.
 disposition of every open backlog heading is § "Architect ruling (M9, session 12)" at the end of this
 file). Recommended order is the table's. WP-153 is parallel-safe with WP-150, WP-154 and WP-155;
 WP-154 and WP-155 are parallel-safe with everything but each other. Migrations take the next free
-number from **0085** in the order rows land. Read the backlog entry a row folds before planning it.
+number from **0085** in the order rows land. Read the backlog entry a row folds before planning it. *Amended 2026-10-06 (second amendment)*: WP-158 and WP-159 were added, and the order of the rows still open is WP-158, WP-159, WP-154, WP-155, WP-156, WP-157 (§ "Architect ruling (M9, session 12)", second amendment). The next free migration number is **0087**.
 
 | WP | Title | Status | Commit | Notes |
 |---|---|---|---|---|
@@ -18383,6 +18471,8 @@ number from **0085** in the order rows land. Read the backlog entry a row folds 
 | WP-155 | **The onboarding wizard says what it is doing** | TODO | — | Folds **450**, **451**, **452**. No deps. No migration. User-guide sweep |
 | WP-156 | **Work that fails without telling anyone: an expired last try escalates, and one refused knowledge page fails alone** | TODO | — | Folds **421** (measure first), **420**. Deps WP-124. Migration only if the expiry pass needs a mark |
 | WP-157 | **One broken organisation account named once, and the listings, fakes and poll state that disagree with production** | TODO | — | Folds **413**, **414**, **431**, **430**, **434**, **435** (docs), **447**. No deps. No migration |
+| WP-158 | **The command scanner refuses an expansion that runs a variable's text as code, and readiness reads hook here-documents with the scanner's reader** | TODO | — | Folds **509** (major, security; measure first), **510**. Deps WP-153. No migration. First of the remaining rows. Parallel-safe with every other row (it touches only `packages/domain/src/policies/` and `packages/domain/src/readiness/recheck.ts`) |
+| WP-159 | **Retry run offers the platform's own model list instead of a free-text box, and refuses a model nobody chose on purpose** | TODO | — | Folds **498** (the product owner's request). No migration. New read route `GET /api/org/models` over `price_list`, held by the client census. Serial with WP-154, WP-155 and WP-157; parallel-safe with WP-158 and WP-156 |
 
 ## WP notes (decisions, assumptions, reviewer findings)
 
@@ -43700,6 +43790,42 @@ says how far it got. Ruling (d) conflated them.*
   half, WP-154 is **no longer parallel-safe with WP-151 or WP-152**: all three touch the stop and
   start-failure paths, and WP-152 also touches `commands.ts`. It runs after WP-150 lands.
 
+**Second amendment (2026-10-06, architect, session 12): two rows added, WP-158 first and WP-159
+second.** Backlog **509** and **510** came out of WP-153's *Discovered work*, and the product owner
+filed **498** during WP-150. None of WP-154…WP-157 can own them, so each needs its own row.
+- **WP-158 (509, 510) runs first among the rows still open.** 509 is graded **major** and it is
+  security. Under `unattended: auto`, a line such as `x='b[$(cmd)]'; echo ${y[x]}` runs `cmd` behind a
+  verdict of `unattended_auto`, past the block list and the git boundary. bash 5.2 ran that line and
+  the `${z@P}` one (WP-153's notes). The rest of the class is the manual's word, so the row
+  **measures first**: it records each form's verdict under `deny` and `auto` before changing
+  anything. Then it **fails closed**: every expansion that evaluates a variable's text is `uncertain`
+  with a reason the model can act on. The only exemptions are literal: digit-only operands and the
+  `@`/`*` subscripts, each backed by a case from the shell oracle. That keeps `${x:0:7}` and
+  `${#arr[@]}` readable without guessing. It builds on WP-153's reader rather than beside it. The
+  unquoted-body check (WP-153 (d)) calls the same detector, and **510**, the readiness re-check's
+  third here-document reader, is folded in because it is the same module family and a fold costs
+  two cases. 509's item 4, how often real runs write these forms, needs the dogfood database. It is
+  not a criterion, because fail-closed does not wait for it. The row is parallel-safe with every
+  other row and depends only on WP-153.
+- **WP-159 (498) runs second**, after WP-158. It is the product owner's explicit request, small, and a
+  typo in the box today can reach a failed or unpriced run (the outcome on a real CLI is unmeasured). **The option source is `price_list`**,
+  through `GET /api/org/models` at `run.read`. It is the ledger's own definition of a chargeable
+  model and the operator maintains it. A run-DTO field and the shipped defaults were rejected (plan
+  row, ruling (a)). **The server refuses an unlisted id at the write** (409 `model_not_listed`,
+  nothing recorded), and that answers the rule *fail closed on a mutation*. The cases the
+  `api.ts` docblock protects keep working: the run's own model and the stage's configured model are
+  always admitted, and `allow_unlisted_model: true` (the SPA's *Other…*) admits a custom or
+  not-yet-priced id that a person chose on purpose. Configuration is not validated by this row.
+  WP-159 is **serial** with WP-154, WP-155 and WP-157. All of them touch
+  `apps/web/src/app/queries.ts` or `packages/contracts/src/api.ts`, and the read hook belongs in
+  `queries.ts`, because `endpoint-callers.test.ts` reads it there. It is parallel-safe with WP-158
+  and WP-156.
+- **The new order of the rows still open:** WP-158, WP-159, WP-154, WP-155, WP-156, WP-157. WP-153
+  stays under review and must land before WP-158. Neither new row needs a migration, so the next
+  free number is still **0087**.
+- **Disposition:** 498 → WP-159; 509 → WP-158 (a)–(e) and (g); 510 → WP-158 (f). The other
+  headings filed since the first pass (499, 501, 504–508) are not dispositioned here.
+
 ## WP notes — session 12 (M9)
 
 #### WP-150
@@ -43871,4 +43997,99 @@ Round 1 verification: `PASS: verify` (with the harness's `.claude/scheduled_task
 **Round 1 verification** (each started under a load of 12, the lock aside for `verify` only): `PASS: verify` (11 621 tests), `PASS: verify:integration` (846 tests), `PASS: verify:ui` (573 tests); the citation guard passes.
 
 Docs moved with it: technical/02 (kept whatever the person chooses; the `merged_gate` resume in the *as built* paragraph), technical/03 (the third column, the unconditional move, `<> ''`), technical/04, technical/08 (resume and retry at `merged_gate`), the user guide's paragraph on a task escalated after its merge.
+
+#### WP-153
+
+**The command scanner reads a here-document's body as data**: rulings (a)–(e) (plan § "Milestone M9"), backlog 482. Built on `f8bfda68`. No migration. Files: `packages/domain/src/policies/{command-policy,unattended-commands}.ts`, their tests, the new `here-documents.shell.test.ts`, technical/05, and one docblock sentence in `vitest.config.ts`.
+
+**Measured first.** Throwaway scripts in the scratchpad, run three ways: by bash 5.2.37 and dash, both from the run image (`docker run --rm --network none -v "$PWD":/w:ro --entrypoint bash platform-runtime:dev /w/<t>.sh`, and `--entrypoint dash`), and by the macOS `/bin/bash` 3.2.57. The run image's login shell is `/bin/bash` and its `/bin/sh` is dash.
+- Bash runs the line after each of these: `echo ${x:-<<EOF}`, `((x<<y))`, `echo $[1<<2]` and `echo hi # <<EOF`. None of them opens a here-document.
+- `<<EOF"X"` takes the delimiter `EOFX`.
+- A terminator with a trailing space does not end the body, in bash 3.2, bash 5.2 or dash.
+- `<<-` strips tabs from both the body and the terminator. `cat <<A <<B` reads its bodies in order.
+- **bash 3.2 and 5.2 join `E\` + `OF` in an unquoted body into the terminator, and then run the next line.** dash does not join them.
+- **bash 5.2 and dash do not close `$(cat <<'EOF'` at a `)` inside the body. bash 3.2 does**, and runs `; echo BYPASS` after it.
+- bash 5.2 runs a command from an unquoted body with no `$(` in it, through `${y[x]}` or `${z@P}`, when `x='b[$(…)]'` or `z='$(…)'` was set earlier on the line. The scanner treats both assignments as single-quoted. See Discovered work.
+
+**What was built**
+- **(a) One reader.** `readHereDocumentOperator`, `readHereDocumentBodies` and `hereDocumentsAtNewline` live in `command-policy.ts`. `scan` (the pass that splits on newlines), `findClosingParen` (for `$(`/`<(`/`>(` only, never `$((`) and `computesCommandName` each keep their own quote state and call the same three functions. `skipHeredocBodies` and the old inline regex are deleted, and so is that regex's `<<<` bug: it recognised a here-document at the second `<` of a here-string.
+- **(b) The body is data.** It produces no segment, no quote state, no write target and no block or hazard match. `parseCommand` returns the body ranges of its own level and of its substitutions, shifted to their position. `withoutHereDocumentBodies` is the line every whole-line reader now uses: the whole-line candidate of `evaluateCommand` (and its resolved-binary form), the git boundary's fragment list and assignment check, and the unattended hazard check. A substitution's own fragment is stripped too. `CONTROL_MOUNT_REFERENCE` still reads the raw line (a body can be a program's input).
+- **(c) Recognition.** The operator must be one of `<<WORD`, `<<'WORD'` or `<<"WORD"`, also as `<<-`. The word must match `[A-Za-z0-9_.-]+` and end at a word boundary. It is refused after a `${`, `$[`, `((`, `[[` or a word-start `#` anywhere earlier (bodies excluded), and at either `<` of `<<<`. A refused operator leaves the old reading, where the body is commands. A terminator is a line equal to the word. If the operator and its newline are separated by another newline (quotes or a substitution the walker jumped), nothing is skipped.
+- **(d)/(e) Uncertainty.** Two new `UNCERTAINTY` entries. `hereDocumentExpansion` covers an unquoted body with `$(`, a backtick or a line ending in `\` (the measured join). Its text says *quote the delimiter, <<'EOF'*. `unterminatedHereDocument` covers no terminator before the end, including no newline at all.
+- **Assumption (rule 20, beyond the ruling's letter): a body a script reader can reach is a script.** Readers are `HERE_DOCUMENT_SCRIPT_READERS`: the shells, `eval` and `source`, as any word of the level, and `.` in command position. Examples: `bash <<'EOF'`, `cat <<'EOF' | sh`, `sh -c "$(cat <<'EOF' …)"`, `eval "$(cat <<'EOF' …)"`. Every body at that level and below is then parsed as commands (rule 1's `sh -c`), and `computesCommandName` skips none. Without this, `sh -c "$(cat <<'EOF'\ngit push --force origin main\nEOF\n)"` would have gone from block to `allow` under `auto`, because `computesCommandName` does not read `sh -c "$(…)"`. It over-reads a line that has, for example, `bash run.sh` beside a `cat > a.php <<'EOF'`, which costs only the old behaviour.
+
+**Criteria and tests**
+- **(1)** In `packages/domain/src/policies/unattended-commands.test.ts`, the table *runs under `auto`* (criterion 1) covers five cases: the apostrophe body (`unattended_auto`, it writes `notes.md`), a body line `git push --force origin main`, the PHP body with `->` and `=>`, a commit message via `git commit -F -` and a body `GIT_DIR=…`. All but the first are `allow_list`, and each has no uncertainty. For the PHP body's missing write target: `packages/domain/src/policies/command-policy.test.ts` › "reads no segment, no quote state and no write target out of a body (ruling (b))".
+- **(2)** In `unattended-commands.test.ts`, each case also asserts which rule fired:
+  - › "refuses an unquoted body with a substitution, and tells the model to quote it (criterion 2)"
+  - › "refuses the line after the terminator (criterion 2)" (`block_list`, the fragment named)
+  - › "refuses a body whose terminator carries a trailing space: it never ends (criterion 2)" (`uncertain`, `unterminatedHereDocument` alone)
+  - the `<<-` case, which shows that a plain `<<` with a tab-indented terminator stays unterminated
+  - › "reads two here-documents on one line in order (criterion 2)"
+  - › "refuses the push behind what is not a here-document body: %j (%s, criterion 2)": a here-string, a quoted `"<<EOF"` and `'<<EOF'`, a shell reader, a pipe into `sh`, `${x:-<<EOF }`, `((x<<y))`, a comment and the joined `EOFX` delimiter.
+- **(3)** The `sed -n 1p <<EOF` row is re-decided. It is no longer *over-asked*: the line is an unterminated here-document, so it is **uncertain** (ruling (e)). A new row beside it, `sed -n 1p <<'EOF'\na\nEOF`, stays not-`allow`, because the sed grammar admits plain file operands and `<<'EOF'` is not one. It runs under `auto` as an unmatched command. Both rows sit in the backlog-462 table of `command-policy.test.ts`.
+- **(4)** The goldens are unchanged. `denied-tool` refuses `sudo rm -rf /var` and `happy-path` allows `git status`; neither has a here-document. `pnpm exec vitest run packages/infrastructure/src/runner packages/domain --project unit --project contract`: 3 000 tests pass and `test/fixtures/claude/` shows no diff.
+- **(5)** technical/05 § "Command and tool policy" has the WP-153 amendment.
+- **The independent oracle (rule 65).** `packages/domain/src/policies/here-documents.shell.test.ts` › "holds over generated lines, for every shell present". It runs 400 generated lines through bash and dash (`-c`, empty stdin, a temp dir, a 5 s bound) and requires that every `echo RAN_<n>` a shell ran is either a fragment the policy judges or on an uncertain line. Two counters check that both branches ran (rule 10). The table *bash runs the marker, and the policy judges it or is uncertain* adds seven fixed payloads. Each is one that a reader which skips too much lets through (rule 43), and bash confirms each one runs the marker. › "no shell runs the marker, and the policy reads it as data: %j (%s)" adds three. Here-documents inside `$(…)` are generated only on bash ≥ 4. Locally that is bash 3.2, so this machine ran the rest; CI's bash runs all of it.
+
+**Canaries, each run and each killed.** Each one changed `command-policy.ts` or `unattended-commands.ts` and ran the three policy test files.
+- The terminator compared after `trim()`: killed by 7 cases (the trailing-space, leading-space and tab criteria, the `<<-` case, a `computesCommandName` row).
+- The context guard removed: killed by 15 cases, including the property and the shell-verified `${`, `((` and `#` payloads.
+- The word-boundary lookahead removed: killed by 6 cases, including the shell-verified joined delimiter.
+- The `\`-at-end-of-line check removed: killed by 3 cases, including the shell-verified `E\` + `OF`.
+- The script readers removed: killed by 13 cases, including the property.
+- The `<<<` guard removed: killed by 5 cases, including the property.
+- The expansion check removed: killed by 7 cases, including the property.
+- The unterminated check removed: killed by 7 cases. The property cannot kill this one: when the reader agrees with the shell, an unterminated body runs nothing, so (e) is fail-closed against divergence, not a bypass.
+- The whole line in `evaluateCommand` read raw: killed by › "keeps a body out of the whole-line reading, where a wrapper would have peeled to it". A first version of this canary changed only `candidates[0]` and **survived**, because the first `evaluateOne` reads `line` separately. It was re-run with both changed.
+- `withoutHereDocumentBodies` dropped from the git boundary: killed by 2 cases.
+- `computesCommandName` skipping script bodies: killed by 2 rows.
+- `findClosingParen` without the reader: killed by › "reads a commit message in a substitution as data, apostrophe and parentheses included".
+
+**Residuals**
+- **bash 3.2** closes `$(cat <<'EOF'` at a `)` in the body (measured), so `x=$(cat <<'EOF'\nfoo); git push --force …\nEOF\n)` would run the push there. The run image's bash 5.2 and dash do not close it there. It is stated in technical/05.
+- **Interpreters that are not shells** (`python3 - <<'EOF'`, `node`, `php`) read their body as a program the policy does not read. This is the module's existing residual for `python3 -c`.
+- **The convenience half of the property is not asserted.** It counts markers the reader skipped as data, but does not bound how often it over-reads.
+
+**Sentences falsified (rule 83).** The grep covered `here-doc`, `heredoc`, `skipHeredocBodies`, `here doc` and `reads the body` over every tracked file.
+- **Changed**:
+  - the module docblock of `command-policy.ts` (rule 1 names *a here-document a shell reads*, and a new paragraph states the rule);
+  - the docblock of `computesCommandName` (its inline comment *"the body is skipped from the next newline to the line that is the delimiter"* now describes the shared reader and the script exception);
+  - technical/05 (the amendment);
+  - `vitest.config.ts`'s unit-tier docblock (*"Two files do real filesystem I/O"* now names the third file and why it is there).
+- **Left, still true**: PROGRESS backlog 480's sentence *"a quote-aware walk that skips here-document bodies"*. It is still true (the walk skips them, now through the shared reader), and it is history. Backlog 482's own heading is the orchestrator's to close.
+- **Left as other components**: `packages/domain/src/readiness/recheck.ts:295-308`, the husky hook reader with its own `heredoc` regex (see Discovered work); `packages/domain/src/prompt/assembly.ts:1560` (*heredoc attempts*, about the run's behaviour); the `reads the body` hits in `apps/server/src/commands.ts`, `packages/application/src/pipeline/commands.ts`, the three fakes and two HTTP fixtures, which are about HTTP bodies.
+
+**Verification** (each started at a one-minute load under 12): `PASS: verify` (with the harness's `.claude/scheduled_tasks.lock` in the scratchpad for the run and then put back; 539 files, 11 714 tests; `PASS: coverage:ratchet`; lint at the baseline's 44 warnings) and `PASS: verify:integration` (85 files, 846 tests). The citation guard passes over these notes. Docker: 188 volumes before and after, and the run-image shells ran with `--rm`. The shell test's first version ran the shells in the checkout, and a noise line it ran as a command (`$a->b => 1;`) wrote two empty files, `b` and `1`, into the repository root. They were removed, and the test now runs in a temporary directory it deletes.
+
+**Discovered work** (candidates for the refiner):
+- **Arithmetic-context and prompt expansions run a variable's text as code, inside a body or not.** *(Filed by the orchestrator as backlog **509**, row **WP-158**; not fixed here.)* Measured on bash 5.2.37: `x='b[$(cmd)]'; echo ${y[x]}` and `z='$(cmd)'; echo ${z@P}` both run `cmd`. The scanner reads both assignments as single-quoted text, so the same line without a here-document passes the git boundary today. The class also covers `${z:x}` offsets, `$[x]` and `${!x}`, which by bash's documented semantics evaluate the same way; only the first two were run. It is scanner-wide (rule 5's `UNCERTAINTY` list), not this row's. In a body, ruling (d)'s *`$VAR` alone is not* keeps it open.
+- **A third here-document reader**: `packages/domain/src/readiness/recheck.ts:295-308` (`shellCommandsOf`, WP-94's R13 husky read). It compares the terminator after `trim()` and recognises `<<` anywhere, including after `${`, `((` or `#`. It is a readiness heuristic, not a security boundary, but it can skip a line the shell runs, so a scanner named there could be missed. It could import the reader from `../policies/command-policy.js`.
+- **The unit tier starts processes in two places**: `packages/application/src/integrations/ssh-deploy-key.test.ts` (`ssh-keygen`) and this row's shell test. `vitest.config.ts`'s tier docblock now names this row's, not the first.
+
+**Round 1** (reviewer REQUEST-CHANGES, one blocker, one minor and one nit, all addressed):
+1. **[blocker] The word boundary was JavaScript's `\s`.** `HERE_DOCUMENT_OPERATOR`'s lookahead matched `\r`, `\f`, `\v` and NBSP, all of which bash keeps inside the word. Measured on bash 5.2.37 for all four: `cat <<'EOF'\r` takes the delimiter `EOF\r`, ends its body at the line `EOF\r` and runs the next line. The scanner read the delimiter as `EOF`, so a push after `EOF\r` stayed in the body and `cat` was allowed, in `deny` and attended policy too. **Fix:** the lookahead is bash's metacharacters, `[ \t\n;&|)<>]`. With these bytes the operator is not recognised and the old reading applies. Audit of the reader:
+   - the terminator comparison strips leading tabs only, and only for `<<-`, with no `trim`;
+   - the gap between the operator and the word is `[ \t]*`;
+   - two `\s` remain, both on purpose and stated at the line: `HERE_DOCUMENT_CONTEXT`'s comment start and `feedsScriptReader`'s split. In both, wider than bash means less recognised or more readers found, which costs only the old reading.
+
+   Tests:
+   - `packages/domain/src/policies/command-policy.test.ts`: five rows (`'EOF'\r`, `EOF\r`, `\f`, `\v`, NBSP) in the `recognises nothing in %j at %i (%s)` table;
+   - `packages/domain/src/policies/unattended-commands.test.ts`: the table *refuses the push after a terminator that carries %j, which bash keeps in the word (round 1)*, four bytes, each `block_list` under `auto` and `deny`;
+   - `here-documents.shell.test.ts`: six new generator openers (four bytes, CRLF unquoted, a glob reader), each byte opener with the decoy `EOF`, and six bash-verified fixed rows.
+
+   **Canary:** with `\s` restored, 15 cases fail, including › "holds over generated lines, for every shell present".
+2. **[minor] A shrunk oracle now says so.** bash is required (the first test fails without it). Two tests are reported as **skipped** when their condition is missing, rather than shrinking the property silently: *compares dash, the run image's /bin/sh, too* and *holds over here-documents inside a substitution (skipped on a bash older than 4)*. The substitution openers moved into the second test. On this machine (bash 3.2) the second is skipped and the first runs.
+3. **[nit] A reader named by a glob or a brace** (`| /bin/s?`, `| /bin/{sh,x}`) now counts as a script reader in command position. It over-reads, which costs only the old reading. A computed name (`| $SH`) is already refused by the computed-name check under `auto` and is unmatched under `deny`. Tests: two rows in the `command-policy.test.ts` script-reader table, and the bash-verified row with `/bin/[s]h`. **Canary:** the glob check removed, and 3 cases fail.
+4. Backlog 509 / WP-158 is noted on the Discovered work entry above.
+
+**Machine discipline:** one run of the shell test file alone (21 tests) was started at a one-minute load of 21. The load was not mine. Every later run waited for a load under 12. Round 1 verification: `PASS: verify` (11 732 tests, 15 skipped; lint at the baseline's 44 warnings; the harness lock was absent this time, so nothing was moved) and `PASS: verify:integration` (846 tests). The citation guard passes. Docker volumes went from 195 to 193 across the run: other sessions' activity, none of it mine.
+
+**Round 2** (test-only): `packages/domain/src/policies/unattended-commands.test.ts` gained the describe *the opening line after its operator is judged as before (ruling (b), round 2)*, with four cases, each asserting the rule that fires:
+- › "refuses a redirection into `.git` written after the operator" (`git_boundary`, `auto` and `deny`);
+- › "floors a redirection to a path written after the operator" (`ask`; `unattended_auto` naming `src/a.php`; `unattended_deny`);
+- › "refuses a blocked command listed after the operator" (`block_list`, both modes);
+- › "ends a `<<-` body only at a tab-indented terminator, never a space-indented one" (both directions).
+
+The reviewer's two mutants were re-run and both are killed. `isWriteTarget(target) && pending.length === 0` fails the first two cases. `<<-` stripping spaces as well as tabs fails the last. Each run started at a load under 12.
 

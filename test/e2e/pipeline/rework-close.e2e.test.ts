@@ -171,7 +171,16 @@ describe('rework closes the rejected merge request and moves to a new branch (Q9
     expect(closes.map((row) => row.status)).toEqual(['ok']);
     expect(closes[0]?.payload).toMatchObject({ iid: pipeline.world.mr.iid });
     // The rework's row (migration 0043, backlog 178) is settled by the duty, so the recovery pass
-    // has nothing to re-drive.
+    // has nothing to re-drive. Its `outcome` is written after the close's audit row, in a later
+    // transaction, so it is waited on itself (rule 87): read beside the audit row it lagged under
+    // load (session 12, a `verify:e2e` pass at a five-minute load of 21 read `outcome: null`).
+    await pipeline.waitFor('the rejected merge request recorded as closed', async () => {
+      const settled = await pipeline.query<{ outcome: string | null }>(
+        'select outcome from superseded_merge_requests where task_id = $1',
+        [before.id],
+      );
+      return settled.length === 1 && settled[0]?.outcome !== null;
+    });
     const rows = await pipeline.query<{ iid: number; outcome: string | null; new_branch: string }>(
       'select iid, outcome, new_branch from superseded_merge_requests where task_id = $1',
       [before.id],

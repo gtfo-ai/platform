@@ -14,6 +14,7 @@ import {
   HAZARDOUS_ARGUMENTS,
   type ResolvedCommandPolicy,
   runCommandPolicy,
+  UNCERTAINTY,
   unattendedCommandModeOf,
   withVerificationMode,
 } from './command-policy.js';
@@ -439,6 +440,18 @@ describe('the git boundary (module check 4)', () => {
     ['(cd sub && ls) && echo $HOME', false],
     ["cat <<'EOF'\n$a\nEOF\nls", false],
     ['cat <<-EOF\n\t$a\n\tEOF\n$x', true],
+    // WP-153: the scanner's reader, so the walk skips what the scanner skips and no more
+    ["cat <<'EOF'\n$a\nEOF \n$x", false],
+    ["cat <<'EOF'\n$a\nEOF\n$x", true],
+    ["bash <<'EOF'\n$X push\nEOF", true],
+    ["cat <<'EOF' | sh\n$X push\nEOF", true],
+    ['cat <<< x\n$X push', true],
+    ['echo "<<EOF"\n$X push\nEOF', true],
+    [`x=1; echo \${x:-<<EOF }\n$X push\nEOF`, true],
+    ['echo hi # <<EOF\n$X push\nEOF', true],
+    ['cat <<EOF"X"\nEOFX\n$X push\nEOF', true],
+    ["cat <<'A' <<'B'\n$a\nA\n$b\nB\nls", false],
+    ["git commit -m \"$(cat <<'EOF'\n$a don't\nEOF\n)\"", false],
   ] as const)('computesCommandName(%j) is %s', (command, expected) => {
     expect(computesCommandName(command)).toBe(expected);
   });
@@ -455,6 +468,163 @@ describe('the git boundary (module check 4)', () => {
     ]) {
       expect(gitBoundaryViolation(command), command).toBeNull();
     }
+  });
+});
+
+describe('WP-153 — a here-document body is data, and every way it is not (backlog 482)', () => {
+  const pushed = 'git push --force origin main';
+
+  it.each([
+    [
+      "cat > notes.md <<'EOF'\nWe don't push from here.\nEOF",
+      'unattended_auto',
+      'the apostrophe body',
+    ],
+    [`cat <<'EOF'\n${pushed}\nEOF`, 'allow_list', 'a body line `git push --force origin main`'],
+    [
+      "cat <<'EOF'\n<?php\n$order->total = ['net' => 1];\nEOF",
+      'allow_list',
+      'a PHP body with `->` and `=>`, which carries no write target',
+    ],
+    [`git commit -F - <<'EOF'\nfix: don't ${pushed}\nEOF`, 'allow_list', 'a commit message'],
+    [`cat <<'EOF'\nGIT_DIR=/elsewhere git fetch evil\nEOF`, 'allow_list', 'a guarded assignment'],
+  ])('runs under `auto`: %j (%s, criterion 1)', (command, rule) => {
+    const decision = auto(command);
+    expect(decision).toMatchObject({ decision: 'allow', rule });
+    expect(decision.evaluation.uncertainty).toEqual([]);
+  });
+
+  it('refuses an unquoted body with a substitution, and tells the model to quote it (criterion 2)', () => {
+    const decision = auto(`cat <<EOF\n$(${pushed})\nEOF`);
+    expect(decision).toMatchObject({ decision: 'deny', rule: 'uncertain' });
+    expect(decision.evaluation.uncertainty).toEqual([UNCERTAINTY.hereDocumentExpansion]);
+    expect(decision.reason).toContain("quote the delimiter, <<'EOF'");
+  });
+
+  it('refuses the line after the terminator (criterion 2)', () => {
+    const decision = auto(`cat <<'EOF'\nok\nEOF\n${pushed}`);
+    expect(decision).toMatchObject({ decision: 'deny', rule: 'block_list', fragment: pushed });
+  });
+
+  it('refuses a body whose terminator carries a trailing space: it never ends (criterion 2)', () => {
+    const decision = auto(`cat <<'EOF'\nok\nEOF \n${pushed}`);
+    expect(decision).toMatchObject({ decision: 'deny', rule: 'uncertain' });
+    expect(decision.evaluation.uncertainty).toEqual([UNCERTAINTY.unterminatedHereDocument]);
+  });
+
+  it('ends a `<<-` body at a tab-indented terminator, and only a `<<-` body (criterion 2)', () => {
+    expect(auto(`cat <<-'EOF'\n\t${pushed}\n\tEOF`)).toMatchObject({ rule: 'allow_list' });
+    expect(auto(`cat <<-'EOF'\n\tok\n\tEOF\n${pushed}`)).toMatchObject({ rule: 'block_list' });
+    expect(auto(`cat <<'EOF'\nok\n\tEOF\n${pushed}`)).toMatchObject({ rule: 'uncertain' });
+  });
+
+  it('reads two here-documents on one line in order (criterion 2)', () => {
+    const two = `cat <<'A' - <<'B'\n${pushed}\nA\ndon't\nB`;
+    expect(auto(two)).toMatchObject({ decision: 'allow', rule: 'allow_list' });
+    expect(auto(`${two}\n${pushed}`)).toMatchObject({ decision: 'deny', rule: 'block_list' });
+    // The first terminator does not end the second body.
+    expect(auto(`cat <<'A' <<'B'\nok\nA\n${pushed}\nA\nB`)).toMatchObject({
+      decision: 'allow',
+    });
+  });
+
+  it.each([
+    [`cat <<< 'ok'\n${pushed}`, 'a here-string'],
+    [`echo "<<EOF"\n${pushed}\nEOF`, 'a quoted "<<EOF"'],
+    [`echo '<<EOF'\n${pushed}\nEOF`, "a quoted '<<EOF'"],
+    [`bash <<'EOF'\n${pushed}\nEOF`, 'a body a shell runs'],
+    [`cat <<'EOF' | sh\n${pushed}\nEOF`, 'a body piped into a shell'],
+    [`x=1; echo \${x:-<<EOF }\n${pushed}\nEOF`, 'a parameter expansion'],
+    [`((x<<y))\n${pushed}\ny`, 'an arithmetic shift'],
+    [`echo hi # <<EOF\n${pushed}\nEOF`, 'a comment'],
+    [`cat <<EOF"X"\nEOFX\n${pushed}\nEOF`, 'a delimiter the shell joins (`EOFX`)'],
+  ])(
+    'refuses the push behind what is not a here-document body: %j (%s, criterion 2)',
+    (command) => {
+      expect(auto(command)).toMatchObject({ decision: 'deny', rule: 'block_list' });
+    },
+  );
+
+  it.each(['\r', '\f', '\v', '\u00a0'])(
+    'refuses the push after a terminator that carries %j, which bash keeps in the word (round 1)',
+    (byte) => {
+      // bash's delimiter is `EOF<byte>`, so the body ends at `EOF<byte>` and the push runs.
+      const command = `cat <<'EOF'${byte}\nx\nEOF${byte}\n${pushed}\nEOF\n`;
+      for (const mode of ['auto', 'deny'] as const) {
+        expect(decideUnattendedCommand({ command }, policy, mode), mode).toMatchObject({
+          decision: 'deny',
+          rule: 'block_list',
+        });
+      }
+      expect(evaluateCommand({ command }).verdict).toBe('block');
+    },
+  );
+
+  it('refuses a body line the shell joins into the terminator (`E\\` + `OF`, measured)', () => {
+    const decision = auto(`cat <<EOF\nE\\\nOF\n${pushed}\nEOF`);
+    expect(decision).toMatchObject({ decision: 'deny', rule: 'uncertain' });
+    expect(decision.evaluation.uncertainty).toEqual([UNCERTAINTY.hereDocumentExpansion]);
+  });
+
+  it('still refuses the control mount inside a body, which a program may read', () => {
+    expect(auto("python3 - <<'EOF'\nopen('/ctl/cred.sock')\nEOF")).toMatchObject({
+      decision: 'deny',
+      rule: 'git_boundary',
+    });
+  });
+
+  it('judges the git boundary on the opening line and after the terminator', () => {
+    expect(gitBoundaryViolation(`cat <<'EOF'\n${pushed}\nGIT_DIR=x\nEOF`)).toBeNull();
+    expect(gitBoundaryViolation("cat > .git/hooks/pre-push <<'EOF'\nexit 0\nEOF")).not.toBeNull();
+    expect(gitBoundaryViolation("cat <<'EOF'\nok\nEOF\ngit push origin main")).toMatchObject({
+      fragment: 'git push origin main',
+    });
+  });
+
+  describe('the opening line after its operator is judged as before (ruling (b), round 2)', () => {
+    const modes = ['auto', 'deny'] as const;
+
+    it('refuses a redirection into `.git` written after the operator', () => {
+      const command = "cat <<'EOF' > .git/hooks/pre-push\nexit 0\nEOF";
+      for (const mode of modes) {
+        expect(decideUnattendedCommand({ command }, policy, mode), mode).toMatchObject({
+          decision: 'deny',
+          rule: 'git_boundary',
+        });
+      }
+    });
+
+    it('floors a redirection to a path written after the operator', () => {
+      const command = "cat <<'EOF' > src/a.php\n<?php\nEOF";
+      expect(evaluateCommand({ command }).verdict).toBe('ask');
+      expect(auto(command)).toMatchObject({ decision: 'allow', rule: 'unattended_auto' });
+      expect(auto(command).reason).toContain('a redirection writes `src/a.php`');
+      expect(denyMode(command)).toMatchObject({ decision: 'deny', rule: 'unattended_deny' });
+    });
+
+    it('refuses a blocked command listed after the operator', () => {
+      const command = "cat <<'EOF' && sudo id\nx\nEOF";
+      for (const mode of modes) {
+        expect(decideUnattendedCommand({ command }, policy, mode), mode).toMatchObject({
+          decision: 'deny',
+          rule: 'block_list',
+          fragment: 'sudo id',
+        });
+      }
+    });
+
+    it('ends a `<<-` body only at a tab-indented terminator, never a space-indented one', () => {
+      const spaces = `cat <<-'EOF'\n  EOF\n${pushed}\nEOF`;
+      expect(auto(spaces)).toMatchObject({ decision: 'allow', rule: 'allow_list' });
+      const tabs = `cat <<-'EOF'\n\tEOF\n${pushed}\nEOF`;
+      for (const mode of modes) {
+        expect(decideUnattendedCommand({ command: tabs }, policy, mode), mode).toMatchObject({
+          decision: 'deny',
+          rule: 'block_list',
+          fragment: pushed,
+        });
+      }
+    });
   });
 });
 
