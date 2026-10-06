@@ -877,6 +877,41 @@ describe('the CI gate', () => {
     expect(result).toEqual({ kind: 'pending', detail: 'pipeline pipeline-1 is running' });
   });
 
+  /**
+   * Backlog 486: the merge request stays a draft until Ready, so a project whose CI rules hold jobs
+   * for a `Draft:` title leaves the gate on a `manual` pipeline. The wait says so, plainly.
+   */
+  it('says plainly that a draft’s pipeline is held at a manual job, and names the job', async () => {
+    const held = pipelineStatus('manual', [
+      job('phpstan', 'success'),
+      job('build_composer', 'manual'),
+    ]);
+    const draft = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+      getMergeRequest: async () => ({ ...liveMergeRequest(HEAD_SHA), draft: true }),
+      getPipelineStatus: async () => held,
+    });
+    expect(draft.kind).toBe('pending');
+    const detail = (draft as { detail: string }).detail;
+    expect(detail).toContain('the merge request is a draft');
+    expect(detail).toContain('held at manual job "build_composer"');
+    expect(detail).toContain('may skip or hold jobs for drafts');
+    expect(detail).toContain('readiness panel');
+    // Not a draft (a person marked it ready): held, without the draft sentence.
+    const ready = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+      getPipelineStatus: async () => held,
+    });
+    expect((ready as { detail: string }).detail).toBe(
+      'pipeline pipeline-1 is held at manual job "build_composer": nothing runs until somebody starts it on the provider',
+    );
+    // A running pipeline with a manual job further on is still running, not held.
+    const running = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+      getMergeRequest: async () => ({ ...liveMergeRequest(HEAD_SHA), draft: true }),
+      getPipelineStatus: async () =>
+        pipelineStatus('running', [job('test', 'running'), job('deploy', 'manual')]),
+    });
+    expect(running).toEqual({ kind: 'pending', detail: 'pipeline pipeline-1 is running' });
+  });
+
   it('waits — rather than passing — while the merge request has no head commit', async () => {
     const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
       getMergeRequest: async () =>

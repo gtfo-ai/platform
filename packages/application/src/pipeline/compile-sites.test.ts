@@ -59,8 +59,8 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
     how: "inside the `pipeline.outbound` duty's transactions: the loaded row's `stored`/`current.pipelineDial`",
   },
   'packages/application/src/pipeline/merge-request-ready.ts': {
-    sites: 1,
-    how: "inside the `mr_ready` handler's transaction (WP-138): the loaded row's `stored.pipelineDial` — only to ask whether the completed stage produces ImplementationNotes",
+    sites: 2,
+    how: "inside the two merge-request handlers' transactions (WP-138, backlog 486): the loaded row's `stored.pipelineDial` — only to ask whether the completed stage produces ImplementationNotes, and whether an entered stage is an agent stage",
   },
   'packages/application/src/pipeline/stage-executor.ts': {
     sites: 1,
@@ -200,9 +200,9 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
     expect(counts).toEqual(expected);
   });
 
-  it('counts twenty-eight — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483 — and states how each resolves the dial', () => {
+  it('counts twenty-nine — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486 — and states how each resolves the dial', () => {
     const total = [...census().values()].reduce((sum, calls) => sum + calls.length, 0);
-    expect(total).toBe(28);
+    expect(total).toBe(29);
     for (const [file, entry] of Object.entries(EXPECTED_SITES)) {
       expect(entry.how.length, file).toBeGreaterThan(20);
     }

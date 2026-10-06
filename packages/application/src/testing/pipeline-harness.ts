@@ -972,7 +972,8 @@ const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitPro
         listCommits: async () => [],
         /**
          * WP-138's writes and reads, defaulted: the `mr_ready` duty marks every developer merge
-         * request ready, so every walk through Implementation makes the update. The answer is the
+         * request ready at `ready_for_merge` (backlog 486), so every walk to Ready makes the
+         * update, and `mr_draft` puts it back when an agent stage follows. The answer is the
          * merge request the reference names, now not a draft, at the reference's own head — the
          * honest echo, never a provider's invention of a title or a head.
          */

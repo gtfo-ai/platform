@@ -146,26 +146,30 @@ also leave **Allowed to force push** off: that rule is checked at **Test connect
 run, and a run is refused while it does not hold.
 
 **Autix's CI rules — required before the first feature ticket.** The platform's branches are
-`agentic/<ticket>` (fixed, Q114), and its merge requests are opened as drafts and **marked ready
-before CI is asked for** (§ 7). Autix runs its Composer jobs only for source branches matching
-`^(feature|bugfix)/`, so, in `.gitlab-ci.yml` on `develop`:
+`agentic/<ticket>` (fixed, Q114), and its merge requests are opened as drafts and **stay drafts
+while the CI gate and the reviews run** — the platform marks one ready only when its task reaches
+*Ready for merge* (§ 7; the product owner's decision of 2026-10-06, which reversed WP-138's *ready
+before CI*). Autix runs its Composer jobs only for source branches matching `^(feature|bugfix)/`,
+and holds them at `manual` for a `Draft:` title, so, in `.gitlab-ci.yml` on `develop`:
 
 - **admit `agentic/`** wherever `feature|bugfix` is matched — `^(feature|bugfix|agentic)/`;
 - **make the test jobs run on merge-request pipelines** (`$CI_PIPELINE_SOURCE == "merge_request_event"`
-  in their `rules:`): when the head of a ready merge request has no pipeline, the platform asks GitLab
-  for a **merge-request pipeline**, and a job whose rules do not admit one is not in it — GitLab may
-  then refuse the pipeline as having no jobs, and the CI gate waits until its timeout (§ 8);
-- the rule that **skips a `Draft:` title** needs no change: the platform removes `Draft:` when
-  Implementation completes, before the gate reads CI.
+  in their `rules:`): when the head of the draft has no pipeline after Implementation, the platform
+  asks GitLab for a **merge-request pipeline**, and a job whose rules do not admit one is not in it —
+  GitLab may then refuse the pipeline as having no jobs, and the CI gate waits until its timeout (§ 8);
+- **let an `agentic/` draft run the test jobs**: the rule that sends a `Draft:` title (or a `WIP`
+  commit) to `when: manual` must not apply to an `agentic/` source branch — for example put
+  `$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^agentic\//` (with `when: always`) before it. Otherwise
+  the draft's pipeline stops at `manual`, and the CI gate waits, saying *"the merge request is a draft
+  and pipeline … is held at manual job …"*, until its timeout.
 
-Without the first two the merge request gets no pipeline and every task parks at the CI gate.
-Whether GitLab starts a pipeline on its own when a draft is marked ready was read off its
-documentation, not measured on gitlab.com (`docs/TODO.md`).
+Without these the merge request gets no pipeline, or a held one, and every task parks at the CI gate.
 
 **The readiness panel checks this for you, as far as it can (WP-143).** Discovery and every
 re-check after a merge evaluate the default branch's CI file — at the path GitLab names, read from
 the platform's mirror — for a **push** pipeline of `agentic/X-1` and a **merge-request** pipeline
-from it into the stored default branch (title not `Draft:`, commit message not `WIP`). It reads
+from it into the stored default branch, for a **draft** (title `Draft: …`, commit message not
+`WIP` — since 2026-10-06 the merge request is a draft while CI runs). It reads
 `workflow:rules`, each job's `rules:` (`if:` with `==`, `!=`, `=~`, `!~`, `&&`, `||`, parentheses,
 `null`) and `only`/`except`. When **no** job in stage `test` (or no job at all, for a file with no
 `test` stage) runs in **either** pipeline and it understood every rule that decided, the panel shows
@@ -481,13 +485,16 @@ is *Done*.
   platform's `open_mr` tool (WP-138): from `agentic/<ticket>` into the project's **default branch**
   (Autix: `develop` — the project's `default_branch`, never a branch the agent names), as a
   **draft**, with *"Opened by the agentic platform for <ticket>."* at the end of its description
-  (and *"Requested by <name>"* when the ticket's reporter maps to a platform user). When Implementation completes, the platform **marks it ready** (removes
-  `Draft:`), and — when its head has no pipeline and the default branch has the project's CI file
-  (GitLab's *CI/CD configuration file* setting, `.gitlab-ci.yml` unless the project set another, or
-  a configuration in another project), or the platform cannot read whether it has one — asks
-  GitLab for a merge-request pipeline (the API behind the merge request's *Run pipeline* button),
-  because GitLab does not start one when a draft is marked ready. Read off GitLab's documentation,
-  not measured on gitlab.com (docs/TODO.md).
+  (and *"Requested by <name>"* when the ticket's reporter maps to a platform user). It **stays a
+  draft** while the CI gate, the code review, the business review and the rebase gate run. When
+  Implementation completes and its head has no pipeline (or one held at a manual job) and the
+  default branch has the project's CI file (GitLab's *CI/CD configuration file* setting,
+  `.gitlab-ci.yml` unless the project set another, or a configuration in another project), or the
+  platform cannot read whether it has one, the platform asks GitLab for a merge-request pipeline
+  (the API behind the merge request's *Run pipeline* button). It **marks the merge request ready**
+  (removes `Draft:`) only when the task reaches *Ready for merge*, and puts it back to draft if the
+  task goes back to an agent stage (your review comments, a conflict resolution, a return) — the
+  product owner's decision of 2026-10-06 (PROGRESS backlog 486).
 - **Autix's CI rules are required** (§ 1): `agentic/` admitted where `feature|bugfix` is matched,
   and the test jobs run on merge-request pipelines — otherwise the merge request gets no pipeline
   and the CI gate waits for one until its timeout (the platform's branch namespace is fixed, Q114).

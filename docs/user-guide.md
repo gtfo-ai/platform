@@ -406,6 +406,18 @@ second click stays pending for a moment and then shows the first one's result, n
 server stopped while performing a command, nobody can say whether it was done; the screen says so and
 asks you to check the task first, and pressing the button again is then a new request.
 
+### The merge request stays a draft until Ready
+
+The Developer opens its merge request as a **draft**, and it stays one while the CI gate, the code
+review, the business review and the rebase gate run: the platform marks it ready only when the task
+reaches **Ready for merge** (the product owner's decision of 2026-10-06). When the task leaves Ready
+for an agent stage again — your review comments sent it back, a conflict is being resolved, you
+returned it — the merge request goes back to draft until the task is Ready again; a gate re-check
+(the default branch moved) leaves it ready. So your project's CI has to run its tests on a **draft**
+merge request from an `agentic/` branch. If its rules skip or hold jobs for a `Draft:` title, the CI
+gate waits and says so — *"the merge request is a draft and pipeline … is held at manual job …"* —
+and the readiness panel's CI-rules warning names the rule it understood.
+
 ### The checks panel
 
 The product defines eleven merge-readiness checks, and the panel shows **all eleven**:

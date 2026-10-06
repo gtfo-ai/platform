@@ -60,13 +60,15 @@ export const PLATFORM_SKILL_VERSIONS = {
   // WP-54, the four provider skills: each now says it is provisioned because the project has the
   // binding (backlog 40) and which of its recipes the run's command policy allows (backlog 39).
   // WP-138: `open_mr` takes a title and a description; the platform chooses both branches.
-  'gitlab-mr': '3',
+  // Backlog 486: the merge request stays a draft until Ready; the platform marks it, never the run.
+  'gitlab-mr': '4',
   'jira-ticket': '2',
   // Backlog 476: no `.agentic-run/context/` — nothing writes it; the prompt is the whole pack.
   kb: '2',
   'loki-logs': '2',
   // WP-138: the platform marks the merge request ready at the Developer stage's completion.
-  'mr-description': '2',
+  // Backlog 486: no longer — a pipeline at the stage's completion, ready only after CI and review.
+  'mr-description': '3',
   retro: '1',
   'sentry-issue': '2',
   'verify-work': '1',

@@ -84,7 +84,7 @@ import {
   type RepositoryFileSource,
 } from '../config/repository-config.js';
 import { IntegrationError } from '../ports/integrations/common.js';
-import type { CiConfigLocation } from '../ports/integrations/git-provider.js';
+import type { CiConfigLocation, PipelineStatus } from '../ports/integrations/git-provider.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import {
   type FailingJobLogs,
@@ -627,6 +627,35 @@ const withCiWait = async (
 const CI_TERMINAL_PASS = new Set(['success']);
 const CI_TERMINAL_FAIL = new Set(['failed', 'canceled', 'skipped']);
 
+/** How much of a held job's name (provider text) the pending detail quotes. */
+const MAX_HELD_JOB_NAME_CHARS = 100;
+
+/**
+ * The CI gate's pending detail for a pipeline that is neither green nor red — and, for one **held
+ * at a manual job**, a plain sentence about why (backlog 486). The merge request stays a draft
+ * until Ready since the product owner's 2026-10-06 decision, so a project whose CI rules hold or
+ * skip jobs for a `Draft:` title (Autix's, before its rule admitted `agentic/*` drafts) leaves the
+ * gate waiting on a pipeline whose status is `manual`; *"pipeline 12 is manual"* told an operator
+ * nothing about that. Only a pipeline whose own status is `manual` is called held: a `running`
+ * pipeline with a manual deploy job in a later stage is still running.
+ */
+export const pendingPipelineDetail = (
+  status: Pick<PipelineStatus, 'id' | 'status' | 'jobs'>,
+  draft: boolean,
+): string => {
+  if (status.status !== 'manual') {
+    return `pipeline ${status.id} is ${status.status}`;
+  }
+  const job = status.jobs.find((entry) => entry.status === 'manual');
+  const held =
+    job === undefined
+      ? 'a manual job'
+      : `manual job ${JSON.stringify(job.name.slice(0, MAX_HELD_JOB_NAME_CHARS))}`;
+  return draft
+    ? `the merge request is a draft and pipeline ${status.id} is held at ${held} — the project's CI rules may skip or hold jobs for drafts, and the platform keeps its merge request a draft until Ready; see the readiness panel's CI-rules warning`
+    : `pipeline ${status.id} is held at ${held}: nothing runs until somebody starts it on the provider`;
+};
+
 export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
   const { integrations } = options;
   return {
@@ -761,7 +790,7 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
                   : `pipeline ${status.id} ${status.status}: ${failed.join(', ')}`,
             });
           }
-          return { kind: 'pending', detail: `pipeline ${status.id} is ${status.status}` };
+          return { kind: 'pending', detail: pendingPipelineDetail(status, live?.draft === true) };
         };
         const result = await read();
         return result.kind === 'pending'

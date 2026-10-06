@@ -12,10 +12,12 @@
  *  - the merge request is on the provider from the task's own branch (`agentic/ACME-1`) into
  *    `develop`, and `tasks.mr_ref` is the platform's record of it — not the iid the Developer's
  *    artifact reports, which names another merge request on purpose (the canary of ruling (e));
- *  - the `mr_ready` duty marked it ready when the Developer stage completed (ruling (g));
  *  - the CI gate reads **that** merge request's head: until its pipeline exists it waits (this
  *    instance has no mirror, so it cannot tell whether `develop` has a CI file — ruling (f)'s
  *    fail-closed answer), and it passes once the pipeline succeeds;
+ *  - the merge request is still a **draft** while the CI gate waits, and the `mr_ready` duty marks
+ *    it ready only once the task reaches `ready_for_merge` (backlog 486, the product owner's
+ *    2026-10-06 reversal of ruling (g), which marked it ready at the Developer stage's completion);
  *  - the merge-request poll matches the merge to the task, which finishes.
  *
  * **WP-139: the branch arrives through the API, not the seed.** The project row starts at `main` —
@@ -152,6 +154,20 @@ describe('the Developer’s merge request (WP-138)', () => {
     expect(refused.body.error?.code).toBe('project_has_live_tasks');
     expect(opened.description).toContain('Opened by the agentic platform for ACME-1');
 
+    // Backlog 486: past the Developer stage the merge request is still a draft while the CI gate
+    // waits on its pipeline — nothing marked it ready.
+    await pipeline.settle('ci_gate', (task) => task.current_stage === 'ci_gate');
+    const whileCi = await pipeline.git.getMergeRequest({
+      provider: 'fake-git',
+      project_path: GIT_PROJECT,
+      iid,
+      url: opened.web_url,
+    });
+    expect(whileCi.draft).toBe(true);
+    expect(
+      (await pipeline.auditRows()).filter((row) => row.action === 'mark_merge_request_ready'),
+    ).toEqual([]);
+
     // The merge request's change and its pipeline: the gate waits for the pipeline, then reads it.
     pipeline.git.setDiff({
       project: GIT_PROJECT,
@@ -166,7 +182,7 @@ describe('the Developer’s merge request (WP-138)', () => {
     });
     await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
 
-    // Ruling (g): the Developer stage's completion marked it ready (the `mr_ready` duty's row).
+    // Backlog 486: the entry into `ready_for_merge` marked it ready (the `mr_ready` duty's row).
     await pipeline.waitFor('the merge request marked ready', async () =>
       (await pipeline.auditRows()).some(
         (row) => row.action === 'mark_merge_request_ready' && row.status === 'ok',

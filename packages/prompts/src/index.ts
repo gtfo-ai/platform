@@ -75,7 +75,8 @@ export const ROLE_PROMPT_VERSIONS = {
   // platform's, the platform marks the merge request ready, and the record is the tool's.
   // Backlogs 473, 475 and 476: work in slices — commit, push and `open_mr` after the first, notes
   // before the cap — a check the workspace cannot run is a known gap, and no tool is reverse-engineered.
-  developer: '3',
+  // Backlog 486: the merge request stays a draft until Ready; the platform marks it, never the run.
+  developer: '4',
   // WP-45: the project's `review_checklist` blocks, and `criteria` when a human's merge request is
   // compared against a RefinedSpec (the shadow report's review of the human MR).
   // WP-81: judge the plan's `protected_path_changes` into `protected_path_changes_confirmed`.

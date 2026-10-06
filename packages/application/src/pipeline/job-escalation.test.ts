@@ -108,7 +108,9 @@ describe('the declared set (TD-004’s M7 amendment)', () => {
     expect(BOUND_DUTIES.sort()).toEqual([
       'breakdown_create',
       'dependency_gate',
-      // WP-138 (g): a draft nobody marks ready is a CI gate waiting for a pipeline it never gets.
+      // Backlog 486: a head nobody asked a pipeline for is a CI gate waiting on nothing, and a task
+      // at Ready whose merge request is still a draft cannot be merged.
+      'mr_pipeline',
       'mr_ready',
       'ready_head_check',
       'review_only_post',

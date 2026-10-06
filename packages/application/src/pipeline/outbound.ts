@@ -67,7 +67,11 @@ import {
 import { runBreakdownCreate, runSpikeReport } from './epic-split.js';
 import { type ExhaustedJob, escalatingOnLastTry } from './job-escalation.js';
 import type { OutboundJobData } from './jobs.js';
-import { runMergeRequestReady } from './merge-request-ready.js';
+import {
+  runMergeRequestDraft,
+  runMergeRequestPipeline,
+  runMergeRequestReady,
+} from './merge-request-ready.js';
 import { runReadyHeadCheck } from './ready-head.js';
 import { runResolveOnMerge } from './resolve-on-merge.js';
 import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
@@ -125,10 +129,15 @@ export const OUTBOUND_ESCALATION_TEXT: Readonly<
     remedy:
       'Nothing was allowed, asked about or blocked: review the merge request’s manifests yourself, then hand the task back at the stage it should resume from.',
   },
-  mr_ready: {
-    what: 'mark this task’s merge request ready and start its pipeline',
+  mr_pipeline: {
+    what: 'start a pipeline for this task’s merge request',
     remedy:
-      'The merge request may still be a draft with no pipeline: mark it ready on the provider and run its pipeline there, then retry the CI gate.',
+      'The merge request’s head may have no pipeline, or one held at a manual job: run its pipeline on the provider, then retry the CI gate.',
+  },
+  mr_ready: {
+    what: 'mark this task’s merge request ready',
+    remedy:
+      'Every check before Ready passed, but the merge request may still be a draft: mark it ready on the provider, then resume the task.',
   },
   ready_head_check: {
     what: 'judge the branch head for the resume, hand-back or retry a person asked for',
@@ -276,8 +285,14 @@ const dispatchOutbound =
       case 'resolve_on_merge':
         await runResolveOnMerge(options, data);
         return;
+      case 'mr_pipeline':
+        await runMergeRequestPipeline(options, data);
+        return;
       case 'mr_ready':
         await runMergeRequestReady(options, data);
+        return;
+      case 'mr_draft':
+        await runMergeRequestDraft(options, data);
         return;
       default:
         logger.warn(

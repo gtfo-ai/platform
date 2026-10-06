@@ -1883,9 +1883,10 @@ export type CodeMergeRequestOpening =
   | { readonly kind: 'shadow' };
 
 /**
- * The developer's own merge request — opened, described, marked ready and given a pipeline
- * (WP-138). Every call is the executor's, outside a transaction (WP-15d): the platform tool runs in
- * `stage.execute`'s no-transaction phase and the ready duty in `pipeline.outbound`.
+ * The developer's own merge request — opened, described, given a pipeline, marked ready at
+ * `ready_for_merge` and put back to draft when an agent changes it again (WP-138, backlog 486).
+ * Every call is the executor's, outside a transaction (WP-15d): the platform tool runs in
+ * `stage.execute`'s no-transaction phase and the three merge-request duties in `pipeline.outbound`.
  *
  * The caller has already decided the branch (the task's), the target (`projects.default_branch`)
  * and the text (bounded, redacted, footer appended); nothing here takes a value from the model.
@@ -2005,7 +2006,11 @@ export const codeMergeRequestWrites = (integrations: PipelineIntegrations) => ({
     );
   },
 
-  /** Removes the draft prefix (ruling (g)) — the provider's own title rewrite, nothing else. */
+  /**
+   * Removes the draft prefix — the provider's own title rewrite, nothing else. Called when the task
+   * enters `ready_for_merge` (backlog 486, the product owner's 2026-10-06 reversal of WP-138 ruling
+   * (g), which called it at the Developer stage's completion).
+   */
   markReady: async (
     input: { readonly ref: MergeRequestRefInput; readonly idempotencyKey: string },
     context: CallContext & { readonly mode: TaskMode },
@@ -2023,6 +2028,38 @@ export const codeMergeRequestWrites = (integrations: PipelineIntegrations) => ({
       async () =>
         git.port.updateMergeRequest(addressed(git, input.ref), {
           draft: false,
+          title: null,
+          description: null,
+          labels: null,
+          reviewers: null,
+        }),
+      () => null as unknown as MergeRequest,
+      (result) => (result === null ? null : { iid: result.ref.iid, draft: result.draft }),
+      replayable<MergeRequest>(input.idempotencyKey),
+    );
+  },
+
+  /**
+   * Puts the draft prefix back (backlog 486): a task that left `ready_for_merge` for an agent stage
+   * is being changed again, so its merge request is not left ready meanwhile.
+   */
+  markDraft: async (
+    input: { readonly ref: MergeRequestRefInput; readonly idempotencyKey: string },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<MergeRequest | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      git.ref,
+      'mark_merge_request_draft',
+      { project: git.project, iid: input.ref.iid },
+      context,
+      async () =>
+        git.port.updateMergeRequest(addressed(git, input.ref), {
+          draft: true,
           title: null,
           description: null,
           labels: null,

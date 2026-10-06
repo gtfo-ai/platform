@@ -186,6 +186,8 @@ const startHarness = (options: {
 }): WarningHarness => {
   const posted: Posted[] = [];
   const diffReads: number[] = [];
+  // Backlog 486: the provider keeps the draft flag the platform sets (`mr_ready`, `mr_draft`).
+  const drafts = new Map<number, boolean>();
   const harness = createPipelineHarness({
     projectId: PROJECT,
     runs: {
@@ -198,7 +200,14 @@ const startHarness = (options: {
     gitRedactor: exactSecretRedactor([{ name: 'git_token', value: PLANTED }]),
     git: {
       getPipelineStatus: async () => null,
-      getMergeRequest: async (ref) => mergeRequest(ref.iid) as never,
+      getMergeRequest: async (ref) =>
+        ({ ...mergeRequest(ref.iid), draft: drafts.get(ref.iid) ?? true }) as never,
+      updateMergeRequest: async (ref, update) => {
+        if (update.draft != null) {
+          drafts.set(ref.iid, update.draft);
+        }
+        return { ...mergeRequest(ref.iid), draft: drafts.get(ref.iid) ?? true } as never;
+      },
       getMergeRequestDiff: async (ref) => {
         diffReads.push(ref.iid);
         const paths =
@@ -539,6 +548,9 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
      * measured by running this case with the coalescer bypassed (WP-59's notes). **Two since
      * WP-142**: the classification read the provider's default-branch head only to learn the
      * branch's *name*, and the name is now the stored `projects.default_branch` — no read.
+     * **Three since backlog 486**: the gate passes back into `ready_for_merge`, and the `mr_ready`
+     * duty reads the merge request to learn whether it is a draft — and, finding it ready, writes
+     * nothing.
      */
     const started = startHarness({ ownPaths: ['src/totals.ts'] });
     await started.harness.publish([ticketMatched()]);
@@ -568,7 +580,7 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
       .filter((entry) => entry.integrationId === '00000000-0000-4000-8000-00000000a001')
       .map((entry) => entry.action)
       .sort();
-    expect(reads).toEqual(['get_merge_request', 'read_codeowners']);
+    expect(reads).toEqual(['get_merge_request', 'get_merge_request', 'read_codeowners']);
     expect(started.diffReads).toEqual([IID]);
   });
 

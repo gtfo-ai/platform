@@ -91,7 +91,8 @@ describe('evaluateCiExpression (WP-143)', () => {
     ['$CI_COMMIT_BRANCH =~ /^agentic\\//', push, true],
     ['$CI_COMMIT_BRANCH !~ /^agentic\\//', push, false],
     ['$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^(feature|bugfix)\\//', mr, false],
-    ['$CI_MERGE_REQUEST_TITLE =~ /^Draft:/', mr, false],
+    // Backlog 486: the platform's merge request is a draft until Ready, so the context's title is.
+    ['$CI_MERGE_REQUEST_TITLE =~ /^Draft:/', mr, true],
     [
       '$CI_MERGE_REQUEST_IID && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == $CI_DEFAULT_BRANCH',
       mr,
@@ -192,7 +193,11 @@ describe('ciRulesNotice (WP-143)', () => {
     expect(notice?.code).toBe(CI_RULES_WARNING_CODE);
     expect(notice?.severity).toBe('warning');
     expect(notice?.message).toContain('a push pipeline runs no test job (stage test)');
-    expect(notice?.message).toContain('a merge-request pipeline runs no test job (stage test)');
+    // Backlog 486: the merge-request pipeline is a draft's, and Autix's `Draft:` rule decides it.
+    expect(notice?.message).toContain(
+      'a draft merge-request pipeline runs no test job (stage test) — first, "codeception" rules[1] if: "$CI_MERGE_REQUEST_TITLE =~ /^Draft:/" (when: manual)',
+    );
+    expect(notice?.message).toContain('including a draft');
     // The rule that kept the branch out, quoted, and the fix.
     expect(notice?.message).toContain('"codeception" rules[2]');
     expect(notice?.message).toContain('(feature|bugfix)');

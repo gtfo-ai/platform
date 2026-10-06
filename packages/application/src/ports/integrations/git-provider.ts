@@ -784,9 +784,9 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
   /**
    * Starts a new pipeline **for a merge request** at its current head (WP-138 ruling (g)) — GitLab's
    * `POST /projects/:id/merge_requests/:iid/pipelines`, the API form of the merge request's own
-   * *Run pipeline* button. The platform asks only when the head has no pipeline after the merge
-   * request was marked ready, because removing a draft prefix is not one of the events GitLab
-   * documents as starting a merge-request pipeline.
+   * *Run pipeline* button. The platform asks after the Developer stage completes, only when the
+   * head has no pipeline or one held at a manual job (backlog 459) — the merge request is still a
+   * draft then, and stays one until the task reaches Ready (backlog 486).
    *
    * **It is a mutation** (technical/06): every call goes through `IntegrationActionExecutor`, so a
    * shadow-mode caller never reaches it, and the caller keys it per head sha.

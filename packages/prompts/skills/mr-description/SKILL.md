@@ -31,8 +31,8 @@ Keep it **current**: when the change grows, the description grows with it. Updat
 
 Open the MR with the `open_mr` platform tool once your commits are pushed: it opens a **draft**
 from the task's `agentic/` branch into the default branch, so a human can watch. Run the self-check
-(`verify-work`) before you finish: the platform marks the MR ready — and starts its pipeline when it
-has none — when your stage completes, not before.
+(`verify-work`) before you finish. When your stage completes the platform starts the MR's pipeline
+if it has none; it marks the MR ready only when CI and the reviews have passed, never before.
 
 ## Commit messages
 

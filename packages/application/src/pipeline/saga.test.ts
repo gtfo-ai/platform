@@ -280,6 +280,36 @@ const taskOf = (harness: PipelineHarness) => {
 };
 
 /**
+ * Backlog 486: a merge request whose draft flag the provider keeps, and every draft toggle the
+ * platform asks for, stamped with the stage the task was at when it asked. `bind` hands it the
+ * harness once it exists, because the double is part of the harness's own options.
+ */
+const draftTracker = () => {
+  let draft = true;
+  let of: PipelineHarness | null = null;
+  const toggles: { readonly draft: boolean; readonly stage: string | null }[] = [];
+  return {
+    toggles,
+    bind: (harness: PipelineHarness) => {
+      of = harness;
+    },
+    git: {
+      getMergeRequest: async () => ({ ...mergeRequest(false), draft }),
+      updateMergeRequest: async (_ref: unknown, update: { readonly draft?: boolean | null }) => {
+        if (update.draft != null) {
+          draft = update.draft;
+          toggles.push({
+            draft,
+            stage: of === null ? null : (taskOf(of).task.currentStage ?? null),
+          });
+        }
+        return { ...mergeRequest(false), draft };
+      },
+    } as NonNullable<HarnessOptions['git']>,
+  };
+};
+
+/**
  * WP-138 ruling (e): the merge request is the **platform's** record — written when the `open_mr`
  * tool opened it — never the iid a model reported in `ImplementationNotes`.
  */
@@ -386,6 +416,19 @@ describe('a feature ticket through the whole loop', () => {
       'retrospective',
       'librarian',
     ]);
+  });
+
+  it('keeps the merge request a draft through CI and the reviews, and marks it ready at ready_for_merge (backlog 486)', async () => {
+    const tracker = draftTracker();
+    const harness = harnessWith({ git: tracker.git });
+    tracker.bind(harness);
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    // One toggle, and it is the entry into Ready — not the Developer stage's completion
+    // (WP-138 ruling (g), reversed by the product owner on 2026-10-06).
+    expect(tracker.toggles).toEqual([{ draft: false, stage: 'ready_for_merge' }]);
+    expect(harness.audit.entriesFor('mark_merge_request_ready')).toHaveLength(1);
+    expect(harness.audit.entriesFor('mark_merge_request_draft')).toHaveLength(0);
   });
 
   it('runs one agent run per agent stage, with the role the template names', async () => {
@@ -3153,6 +3196,27 @@ describe('human merge-request comments (BD-007)', () => {
       (returns[0] as Extract<DomainEvent, { type: 'task.stage.returned' }>).payload,
     ).toMatchObject({ from_stage: 'ready_for_merge', to_stage: 'implementation' });
     expect(taskOf(harness).task.iterationCounters.human_rounds).toBe(1);
+  });
+
+  it('puts the merge request back to draft for the rework the comments ask for, and marks it ready again at Ready (backlog 486)', async () => {
+    const threads = [discussion('t1', '2026-06-01T09:00:00.000Z')];
+    const tracker = draftTracker();
+    const harness = harnessWith({
+      git: { ...tracker.git, listDiscussions: async () => threads },
+    });
+    tracker.bind(harness);
+    await harness.publish([ticketMatched()]);
+    await harness.publish([comment('one')]);
+    harness.clock.advance(DEFAULT_REVIEW_COMMENT_WINDOW_MS + 1);
+    await harness.drain();
+
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(harness.types().filter((type) => type === 'task.stage.returned')).toHaveLength(1);
+    expect(tracker.toggles).toEqual([
+      { draft: false, stage: 'ready_for_merge' },
+      { draft: true, stage: 'implementation' },
+      { draft: false, stage: 'ready_for_merge' },
+    ]);
   });
 
   it('does nothing when the human resolved the threads inside the window', async () => {

@@ -40,7 +40,7 @@
  *    effect, or what is lost is a notification (rule 20). The workpad, the status and
  *    `notify.digest` are the ruling's examples.
  *
- * `pipeline.outbound` carries twenty-nine duties of all three shapes, so it is the one queue whose
+ * `pipeline.outbound` carries thirty-two duties of all three shapes, so it is the one queue whose
  * shape is **`per_duty`**: {@link OUTBOUND_DUTY_EXHAUSTION} declares each, and it is typed as a
  * record over the duty union, so a duty added to `OutboundJobData` without a row fails the build.
  *
@@ -106,7 +106,7 @@ export const JOB_EXHAUSTION: Readonly<Record<string, JobExhaustion>> = {
     shape: 'per_duty',
     loss: 'one provider call the pipeline decided on — a ticket status, a workpad, a comment, a notification, a merge request close, a credential revoke, a Sentry issue resolved on merge',
     recoveredBy:
-      'per duty (WP-124): notification_repost (notify, notify_organisation), superseded_mr (close_superseded_mr), run_credential (revoke_run_credential), deferred_dependency (dependency_gate_resume) and the intake reconciler (intake_check) recover theirs; the last try of breakdown_create, review_only_post, ticket_lint_post, spike_report, dependency_gate and ready_head_check escalates the task with a brief; the rest are re-derived by the next transition or are notifications, and are listed only',
+      'per duty (WP-124): notification_repost (notify, notify_organisation), superseded_mr (close_superseded_mr), run_credential (revoke_run_credential), deferred_dependency (dependency_gate_resume) and the intake reconciler (intake_check) recover theirs; the last try of breakdown_create, review_only_post, ticket_lint_post, spike_report, dependency_gate, mr_pipeline, mr_ready and ready_head_check escalates the task with a brief; the rest are re-derived by the next transition or are notifications, and are listed only',
   },
   [JOB_QUEUES.deadlineSweep]: {
     kind: 'relies_on_retries',
@@ -333,9 +333,17 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
     why: 'an organisation notification that spent its job is re-posted once under the same key',
     recoveredBy: 'notification_repost',
   },
+  mr_pipeline: {
+    shape: 'bound_and_escalate',
+    why: 'a head with no pipeline, or one held at a manual job, is a CI gate waiting for a pipeline nobody asked for; nothing re-runs the duty for this completion',
+  },
   mr_ready: {
     shape: 'bound_and_escalate',
-    why: 'a draft nobody marks ready is a CI gate waiting for a pipeline the project skips for drafts; nothing re-runs the duty for this completion',
+    why: 'a task at ready_for_merge whose merge request is still a draft cannot be merged by the person it waits for; nothing re-runs the duty for this entry',
+  },
+  mr_draft: {
+    shape: 'notification_shaped',
+    why: 'a merge request left ready while an agent changes it again; the next entry into ready_for_merge marks it ready anyway, and nobody waits on the draft',
   },
   ready_head_check: {
     shape: 'bound_and_escalate',

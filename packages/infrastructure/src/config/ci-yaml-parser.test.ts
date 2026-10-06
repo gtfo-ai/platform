@@ -153,8 +153,24 @@ describe('the CI-rules notice over Autix’s shape, parsed (WP-143)', () => {
     expect(notice?.message).toContain('admit agentic/');
   });
 
+  /**
+   * Backlog 486: the platform's merge request is a draft until Ready, so admitting `agentic/` means
+   * admitting an `agentic/` **draft** too — here an exemption ahead of the `Draft:` rule, the change
+   * the product owner is making to Autix.
+   */
+  const AGENTIC_DRAFTS =
+    "        -   if: '$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^agentic\\//'\n            when: always\n";
+
   it('says nothing once agentic/ is admitted', () => {
-    expect(noticeOf(AUTIX_SHAPE('feature|bugfix|agentic'))).toBeNull();
+    expect(noticeOf(AUTIX_SHAPE('feature|bugfix|agentic', AGENTIC_DRAFTS))).toBeNull();
+  });
+
+  it('warns while an agentic/ draft is still held at manual by the Draft: rule (backlog 486)', () => {
+    const held = noticeOf(AUTIX_SHAPE('feature|bugfix|agentic'));
+    expect(held?.code).toBe(CI_RULES_WARNING_CODE);
+    expect(held?.message).toContain(
+      'a draft merge-request pipeline runs no test job (stage test) — first, "codeception" rules[0] if: "$CI_MERGE_REQUEST_TITLE =~ /^Draft:/" (when: manual)',
+    );
   });
 
   it('gives only a note when the rules come through !reference, as Autix’s real file does', () => {

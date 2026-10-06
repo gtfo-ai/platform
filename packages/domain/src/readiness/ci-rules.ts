@@ -9,8 +9,9 @@
  * default branch's CI file in two synthetic contexts:
  *
  *  - a **push** pipeline for `agentic/X-1` ({@link pushContextFor});
- *  - a **merge-request** pipeline from it to the stored default branch, title not draft
- *    ({@link mergeRequestContextFor}).
+ *  - a **merge-request** pipeline from it to the stored default branch, for a **draft** title
+ *    ({@link mergeRequestContextFor}) — the platform's merge request is a draft until Ready
+ *    (backlog 486).
  *
  * It reads `workflow:rules`, a job's `rules:` (`if` with `==`, `!=`, `=~`, `!~`, `&&`, `||`,
  * parentheses and `null`, over the predefined variables a context sets) and `only`/`except` (refs,
@@ -37,9 +38,13 @@
  *
  * ## What it assumes, stated
  *
- * The merge request's title and the head commit's message are the agent's, so they are taken as a
- * plain `X-1: change` — neither `Draft:` nor `WIP` — because `mr_ready` undrafts before the CI gate
- * reads a pipeline. `CI_OPEN_MERGE_REQUESTS`, `CI_MERGE_REQUEST_DRAFT` and
+ * The head commit's message is the agent's, taken as a plain `X-1: change` (not `WIP`). The merge
+ * request's title is **`Draft: X-1: change`**: the platform keeps its merge request a draft while
+ * the CI gate and the review stages run and marks it ready only at `ready_for_merge` (the product
+ * owner's decision of 2026-10-06, PROGRESS backlog 486 — until then WP-138 ruling (g) marked it
+ * ready before CI, and this context modelled a ready title). So a rule that holds or skips jobs for
+ * a `Draft:` title decides here, and the warning names it. `CI_OPEN_MERGE_REQUESTS`,
+ * `CI_MERGE_REQUEST_DRAFT` and
  * `CI_MERGE_REQUEST_EVENT_TYPE` are **not** set (they differ between the first push and a later one,
  * or between GitLab tiers), so a rule over them is unknown. `when: manual`, `never` and `on_failure`
  * count as skipped: none of them runs a test on a green pipeline without a person.
@@ -95,6 +100,9 @@ export const CI_RULES_SAMPLE_BRANCH = 'agentic/X-1';
 
 const SAMPLE_TITLE = 'X-1: change';
 
+/** The merge request's title while the CI gate reads it: a draft until Ready (backlog 486). */
+const SAMPLE_MERGE_REQUEST_TITLE = `Draft: ${SAMPLE_TITLE}`;
+
 /** Longest job name or expression quoted in a notice; longest notice. */
 const MAX_QUOTED_CHARS = 120;
 const MAX_NOTICE_CHARS = 1_200;
@@ -140,7 +148,10 @@ export const pushContextFor = (branch: string, defaultBranch: string): CiContext
   },
 });
 
-/** A merge-request pipeline from the agent's branch into the stored default branch. */
+/**
+ * A merge-request pipeline from the agent's branch into the stored default branch, while the merge
+ * request is still a draft (backlog 486).
+ */
 export const mergeRequestContextFor = (branch: string, defaultBranch: string): CiContext => ({
   kind: 'merge_request',
   branch,
@@ -157,7 +168,7 @@ export const mergeRequestContextFor = (branch: string, defaultBranch: string): C
     CI_MERGE_REQUEST_IID: '1',
     CI_MERGE_REQUEST_SOURCE_BRANCH_NAME: branch,
     CI_MERGE_REQUEST_TARGET_BRANCH_NAME: defaultBranch,
-    CI_MERGE_REQUEST_TITLE: SAMPLE_TITLE,
+    CI_MERGE_REQUEST_TITLE: SAMPLE_MERGE_REQUEST_TITLE,
   },
 });
 
@@ -840,7 +851,7 @@ export type CiRulesReading =
 
 const CONTEXT_WORDS: Record<CiContextKind, string> = {
   push: 'a push pipeline',
-  merge_request: 'a merge-request pipeline',
+  merge_request: 'a draft merge-request pipeline',
 };
 
 const listed = (names: readonly string[]): string =>
@@ -943,7 +954,7 @@ export const ciRulesNotice = (input: {
       code: CI_RULES_WARNING_CODE,
       severity: 'warning',
       message: bounded(
-        `${path} gives an agentic/ branch (${input.branch}) no ${jobsWord}: ${reasons.join('; ')}. The CI gate will see no pipeline or a pipeline without tests. Fix: admit agentic/ in that rule (for example ^(feature|bugfix|agentic)/), and let test jobs run on merge-request pipelines.`,
+        `${path} gives an agentic/ branch (${input.branch}) no ${jobsWord}: ${reasons.join('; ')}. The CI gate will see no pipeline or a pipeline without tests. Fix: admit agentic/ in that rule (for example ^(feature|bugfix|agentic)/), and let test jobs run on merge-request pipelines — including a draft's: the platform keeps its merge request a draft until it is ready to merge.`,
       ),
     };
   }

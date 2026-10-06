@@ -115,8 +115,8 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // WP-122's manual start: one resolution for the ticket read a person asked for — from an HTTP
   // request, outside every transaction and outside any run, so no minted credential.
   'manual-start.ts': 1,
-  // WP-138's `mr_ready` duty: one resolution for the undraft and the merge-request pipeline, in a
-  // job after the Developer stage, outside every transaction and outside any run.
+  // Backlog 486's three merge-request duties (`mr_pipeline`, `mr_ready`, `mr_draft`): one shared
+  // resolution, in a job, outside every transaction and outside any run.
   'merge-request-ready.ts': 1,
   // WP-138's `open_mr` and `update_mr_description`: one resolution per tool call — the one door
   // made **inside a run**, so its scope is the run's and not `noRunScopedSecrets()`

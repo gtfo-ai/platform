@@ -342,7 +342,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       ...coverageHandlers(options),
       // WP-38: the dependency gate, on the Developer stage's own completion (product/04:58).
       ...dependencyGateHandlers(options),
-      // WP-138 (g): the developer's merge request marked ready, with a pipeline when it has none.
+      // Backlog 486: a pipeline for the Developer's head when it has none, the merge request marked
+      // ready at `ready_for_merge`, and put back to draft when an agent changes it after Ready.
       ...mergeRequestReadyHandlers(options),
       // WP-34: the shadow report at the human stage, and the batch's own completion.
       ...shadowHandlers(shadowOptions),

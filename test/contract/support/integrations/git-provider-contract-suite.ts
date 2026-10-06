@@ -721,7 +721,8 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
       });
 
       /**
-       * WP-138 ruling (g): a merge request marked ready with no pipeline on its head gets one.
+       * WP-138 ruling (g), as amended by backlog 486: a merge request with no pipeline on its head
+       * gets one after the Developer stage, while it is still a draft.
        * Asserted on the head the pipeline runs at, not only on an id coming back.
        */
       it("creates a merge-request pipeline at the merge request's head", async () => {

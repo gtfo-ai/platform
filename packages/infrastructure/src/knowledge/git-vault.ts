@@ -504,8 +504,8 @@ type PreparedMirror =
  * **One refresh of a mirror at a time, per process** (WP-138 review round 1, measured).
  *
  * Every reader composed over the same `APP_KNOWLEDGE_MIRROR_ROOT` — the knowledge index, the
- * configuration reading, the readiness re-check and, since WP-138, the CI gate and the `mr_ready`
- * duty asking whether the default branch has a `.gitlab-ci.yml` — prepares its read with a
+ * configuration reading, the readiness re-check and, since WP-138, the CI gate and the merge
+ * request's pipeline duty (`mr_ready` then, `mr_pipeline` since backlog 486) asking whether the default branch has a `.gitlab-ci.yml` — prepares its read with a
  * `git remote update` into the same bare mirror, and they are separate instances of this adapter.
  * Two refreshes of one mirror at once lose a ref race: *"cannot lock ref 'refs/heads/main': is at
  * … but expected …"* (measured in `readiness-loop.e2e.test.ts`, where the `mr_ready` duty's read

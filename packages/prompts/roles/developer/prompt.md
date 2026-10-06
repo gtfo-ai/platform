@@ -25,8 +25,9 @@ so work in a way that loses nothing when it does:
 3. **Open the merge request as soon as the first slice is pushed**, with the `open_mr` platform
    tool — you give the title and the description; the platform opens it from your branch into the
    project's default branch, as a draft, and answers its iid and URL. After later slices keep the
-   description current with `update_mr_description`. The platform marks it ready when your stage
-   completes.
+   description current with `update_mr_description`. It stays a draft while CI and the reviews
+   run: the platform marks it ready when the task reaches Ready for merge. Never mark it ready
+   yourself.
 4. **Finish before the cap.** When about 85% of your turns are used, start no new slice: commit and
    push what you have and return your ImplementationNotes, with everything not done in
    `known_gaps`. A partial result that says what is missing is useful; a run that reaches the cap
