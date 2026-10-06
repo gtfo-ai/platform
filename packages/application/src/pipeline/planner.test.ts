@@ -2238,13 +2238,30 @@ describe('a project that verifies on CI (BD-025, 2026-10-05; PROGRESS backlog 46
   it("hands a red pipeline's failing job log to the developer's next run (the CI gate is the verification)", async () => {
     // What the CI gate's return carries (`ci-log.ts`, WP-81) reaches the next implementation run in
     // a `return_feedback` block — in `ci` mode exactly as in `local`, beside the CI instruction.
-    const log =
-      'pipeline p-7 failed: phpstan\nLog of the failing job phpstan, redacted:\nLine 12: Call to an undefined method';
-    const spec = await planIn(STAGES.developer, CI, { attempt: 2, returnFeedback: log });
-    const [feedback] = readDataBlocks(spec.userPrompt).blocks.filter(
-      (block) => block.kind === 'return_feedback',
-    );
-    expect(feedback?.body).toBe(log);
+    // Backlog 485: every failing job's excerpt, each labelled, all inside the one block, and the
+    // gate's cuts announced on its marker (the length the reason had with every log whole).
+    const log = [
+      'pipeline p-7 failed: phpstan, db-schema-consistency, codesniffer',
+      'Log of the failing job phpstan, redacted:',
+      'Line 12: Call to an undefined method',
+      'Log of the failing job db-schema-consistency, redacted:',
+      '[ERROR] The database schema is not in sync with the current mapping file.',
+      'No log of the failing job codesniffer is included: the provider refused the log (not_found).',
+    ].join('\n');
+    const spec = await planIn(STAGES.developer, CI, {
+      attempt: 2,
+      returnFeedback: log,
+      returnFeedbackOriginalChars: 20_657,
+    });
+    const blocks = readDataBlocks(spec.userPrompt).blocks;
+    const feedback = blocks.filter((block) => block.kind === 'return_feedback');
+    expect(feedback).toHaveLength(1);
+    expect(feedback[0]?.body).toBe(log);
+    expect(feedback[0]?.attributes).toMatchObject({ truncated: 'true', original_chars: '20657' });
+    // No byte of a job's log is outside the block.
+    const outside = spec.userPrompt.replace(log, '');
+    expect(outside).not.toContain('Call to an undefined method');
+    expect(outside).not.toContain('not in sync with the current mapping');
     expect(spec.systemPromptAppend).toContain(
       'A red pipeline returns the task to the Developer stage',
     );

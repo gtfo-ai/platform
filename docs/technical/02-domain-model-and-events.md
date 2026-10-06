@@ -220,7 +220,10 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > is announced as `truncated="true"` in that block's marker — carried by
 > `task_stages.return_reason_original_chars` (technical/03) — and never as a line in the body. A log
 > the platform could not read is stated as unreadable in the reason, never replaced by an empty
-> excerpt.
+> excerpt. **Amended 2026-10-06 (PROGRESS backlog 485):** *every* failing, not-allowed-to-fail
+> job's log, up to five, each labelled with its job's name and bounded to its share of the one
+> 6 000-character budget, the end first; an unreadable log is stated by its job's name, and the jobs
+> past the cap are named as not read (technical/04 has the rule).
 >
 > **`retro → retro` was added at WP-18b**, when the librarian stage went back into the shipped
 > templates (technical/12's example has always carried it). The retrospective phase now has **two**

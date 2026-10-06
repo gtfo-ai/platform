@@ -568,6 +568,12 @@ export interface StartPipelineOptions {
    * to one line of test output.
    */
   readonly ciJobLog?: string;
+  /**
+   * The failing jobs when `ciStatus` is `failed`, replacing the one `test:unit` job `ciJobLog`
+   * describes (backlog 485: the CI gate hands back every failing job's log). A `null` log is a job
+   * the provider names no log for.
+   */
+  readonly ciFailedJobs?: readonly { readonly name: string; readonly log: string | null }[];
   /** Tickets the fake task-management provider knows; the workpad is written on one of them. */
   readonly tickets?: readonly {
     readonly key: string;
@@ -952,6 +958,20 @@ export const seedIntegrations = async (
   );
 };
 
+/** The jobs of the head pipeline the harness seeds: one `test:unit`, or the case's failing jobs. */
+const ciJobsOf = (options: StartPipelineOptions) =>
+  options.ciStatus !== 'failed'
+    ? [{ name: 'test:unit', status: 'success' as const }]
+    : (
+        options.ciFailedJobs ?? [
+          { name: 'test:unit', log: options.ciJobLog ?? 'FAIL src/totals.test.ts' },
+        ]
+      ).map((job) => ({
+        name: job.name,
+        status: 'failed' as const,
+        ...(job.log === null ? {} : { log: job.log }),
+      }));
+
 export const startPipeline = async (options: StartPipelineOptions): Promise<PipelineE2E> => {
   const git = createFakeGitProvider({
     integrationId: GIT_INTEGRATION_ID,
@@ -1028,16 +1048,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       project: GIT_PROJECT,
       headSha: seededMr.head_sha,
       status: options.ciStatus ?? 'success',
-      jobs:
-        options.ciStatus === 'failed'
-          ? [
-              {
-                name: 'test:unit',
-                status: 'failed',
-                log: options.ciJobLog ?? 'FAIL src/totals.test.ts',
-              },
-            ]
-          : [{ name: 'test:unit', status: 'success' }],
+      jobs: ciJobsOf(options),
     });
   }
   const world: SeededWorld = {
@@ -1151,16 +1162,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       project: GIT_PROJECT,
       headSha: live.head_sha,
       status: options.ciStatus ?? 'success',
-      jobs:
-        options.ciStatus === 'failed'
-          ? [
-              {
-                name: 'test:unit',
-                status: 'failed',
-                log: options.ciJobLog ?? 'FAIL src/totals.test.ts',
-              },
-            ]
-          : [{ name: 'test:unit', status: 'success' }],
+      jobs: ciJobsOf(options),
     });
   };
   /**

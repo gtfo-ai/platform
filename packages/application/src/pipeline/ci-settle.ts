@@ -33,7 +33,7 @@ import { compilePipeline, stageOf } from '@platform/domain';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
-import { failingJobWithLog } from './ci-log.js';
+import { failingJobs } from './ci-log.js';
 import { judgeCiSettlement } from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import { gateSettlementOf, type PipelineOutboundData, settleGate } from './jobs.js';
@@ -104,9 +104,9 @@ export const runCiSettle = async (
   const passed = status === 'success';
   /**
    * **The same settlement as the poll** (WP-81): `judgeCiSettlement` makes the tamper check and, on
-   * a failure, reads the first failing job's log — so a pipeline's event is not a side door past
-   * BD-024 §2. The log reference is the event's own (`failed_job_logs`); a payload an older build
-   * wrote carries none, and the reason then says so rather than reading a log.
+   * a failure, reads every failing job's log (backlog 485) — so a pipeline's event is not a side
+   * door past BD-024 §2. The log references are the event's own (`failed_job_logs`); a payload an
+   * older build wrote carries none, and the reason then says so per job rather than reading a log.
    */
   const logs = data.failed_job_logs;
   const result = await judgeCiSettlement(
@@ -120,12 +120,10 @@ export const runCiSettle = async (
           kind: 'failed',
           status,
           failingJobs: failing,
-          logJob:
+          logJobs:
             logs === undefined
-              ? failing[0] === undefined
-                ? null
-                : { name: failing[0], logRef: null }
-              : failingJobWithLog(
+              ? failing.map((name) => ({ name, logRef: null }))
+              : failingJobs(
                   logs.map((job) => ({
                     name: job.name,
                     status: 'failed' as const,

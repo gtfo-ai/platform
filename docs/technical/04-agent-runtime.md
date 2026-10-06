@@ -270,8 +270,31 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > assembler renders it exactly as its own cap: `truncated="true"` and `original_chars` in the block's
 > marker, nothing in the body. The excerpt is redacted by the git binding's redactor — TD-012's two
 > steps plus every minted-credential shape (WP-80) — on the **whole** log before the cut, because a
-> cut first leaves a token's leading bytes that no exact-match rule can find again. The reason also
-> names the paths of a failed **tamper check** (BD-024 §2), which the gate computes as part of its
+> cut first leaves a token's leading bytes that no exact-match rule can find again.
+>
+> **Amended 2026-10-06 — every failing job's log, not the first (PROGRESS backlog 485).** On
+> AUT-6820 three jobs failed (`phpstan`, `db-schema-consistency`, `codesniffer`) and the next
+> Developer run was handed phpstan's log alone, in a `verification.mode: ci` project whose run image
+> cannot run the other two. The gate now reads the log of **every** failing job that is not allowed
+> to fail, in the pipeline's order, up to **five** (`MAX_CI_LOG_JOBS`; the jobs naming a log are
+> chosen first), each through `getJobLog` and the executor — so every read is audited and counted
+> against the binding's rate limit — and outside every transaction. **The budget is WP-81's single
+> log's 6 000 characters, split, not multiplied** (`CI_LOG_BUDGET_CHARS`, inside the block's
+> `MAX_FEEDBACK_CHARS`): max-min fair, so each read log gets an even share of what is left and a
+> short log keeps itself whole and leaves the rest to the others — at five, no log gets less than
+> 1 200 unless it is shorter. Each share keeps **the end first**: the tail takes it up to 4 500 and
+> only a larger share keeps a head (up to 1 500), so a lone failing job keeps exactly WP-81's head
+> and tail. Each excerpt is labelled `Log of the failing job <name>, redacted:`; a job whose log
+> could not be read is a line of its own, `No log of the failing job <name> is included: <why>.`;
+> the jobs past the cap are named, `N more failing jobs past the first 5, whose logs were not read:
+> …`. All of it stays inside the one `return_feedback` block, every log redacted whole before its
+> cut, and `return_reason_original_chars` is the length the reason would have had with **every
+> included** log whole — so `truncated`/`original_chars` stay true for the whole block; the jobs
+> past the cap are said in words rather than counted as a cut. The labels are platform text inside a
+> data block, so a log can print a line that looks like one; the nonce'd marker, not the label, is
+> the boundary (the residual above).
+>
+> The CI gate's reason also names the paths of a failed **tamper check** (BD-024 §2), which the gate computes as part of its
 > read — its second half, the Code review's confirmation of a declared change, in the rebase gate's
 > settlement since WP-102 (technical/02 has its inputs and endings); the workspace's path guard below enforces protected
 > paths at write time, and the gate is the deterministic check of what actually reached the branch —

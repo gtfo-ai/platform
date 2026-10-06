@@ -444,8 +444,10 @@ The product defines eleven merge-readiness checks, and the panel shows **all ele
   cannot tell whether a protected path changed and hands the task to a human (`needs_human`) even
   on green CI — split a large refactor, or take the merge from there yourself.
 
-When CI fails, the developer's next run is also handed the failing job's log — its beginning and
-its end, with credentials redacted — beside the job names.
+When CI fails, the developer's next run is also handed the log of every failing job — up to five,
+each labelled with the job's name and cut to its share of one budget, the end of the log first,
+with credentials redacted — beside the job names. A job whose log could not be read is named as
+such, and so are the failing jobs past the fifth.
 
 ### Taking over, the epic breakdown, and asking the task
 

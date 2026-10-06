@@ -34,16 +34,18 @@
  *
  * ## What a failed CI gate says (Q55 closed, WP-81)
  *
- * The failure branch settles `passed: false`, names every failing job, and hands back the **first
- * failing job's log** — product/04 S4's *"failing job's error block"*, BD-024 §5 — read through
- * `getJobLog`, redacted by the git binding's redactor (TD-012's two steps plus every minted shape,
- * WP-80) on the whole text and only then bounded to its head and tail (`ci-log.ts`). The `detail`
- * is stored on the task as the return reason and handed to the next Implementation run inside its
- * `return_feedback` data block; the bound's cut travels as `detailOriginalChars` and is announced in
- * that block's marker, never in the body. A log the platform could not read is **said** in the
- * detail. Until WP-81 this gate returned the job names only, because a minted run credential had no
- * redactor on the pipeline's path (Q55); WP-76 and WP-80 gave it one, and the pin in `gates.test.ts`
- * is inverted by name rather than deleted.
+ * The failure branch settles `passed: false`, names every failing job, and hands back **every
+ * failing job's log** (up to `MAX_CI_LOG_JOBS`, backlog 485; the first one only until then) —
+ * product/04 S4's *"failing job's error block"*, BD-024 §5 — each read through `getJobLog`,
+ * redacted by the git binding's redactor (TD-012's two steps plus every minted shape, WP-80) on the
+ * whole text and only then bounded to its share of one budget, the end first (`ci-log.ts`), and
+ * labelled with its job's name. The `detail` is stored on the task as the return reason and handed
+ * to the next Implementation run inside its `return_feedback` data block; the cuts travel as
+ * `detailOriginalChars` and are announced in that block's marker, never in the body. A log the
+ * platform could not read is **said** in the detail by its job's name, and so are the jobs past
+ * the cap. Until WP-81 this gate returned the job names only, because a minted run credential had
+ * no redactor on the pipeline's path (Q55); WP-76 and WP-80 gave it one, and the pin in
+ * `gates.test.ts` is inverted by name rather than deleted.
  *
  * ## The tamper check is part of this gate's read (WP-81, BD-024 §2)
  *
@@ -84,7 +86,12 @@ import {
 import { IntegrationError } from '../ports/integrations/common.js';
 import type { CiConfigLocation } from '../ports/integrations/git-provider.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
-import { failingJobWithLog, readFailingJobLog } from './ci-log.js';
+import {
+  type FailingJobLogs,
+  type FailingJobRef,
+  failingJobs,
+  readFailingJobLogs,
+} from './ci-log.js';
 import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
 import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
@@ -381,8 +388,11 @@ export type CiReading =
       readonly status: string;
       /** Every failing job that is not allowed to fail, by name. */
       readonly failingJobs: readonly string[];
-      /** The job whose log is read (`failingJobWithLog`), or `null` when none was named. */
-      readonly logJob: { readonly name: string; readonly logRef: string | null } | null;
+      /**
+       * Every failing job whose log the settlement reads (`failingJobs`, backlog 485), in the
+       * pipeline's order; empty when none was named.
+       */
+      readonly logJobs: readonly FailingJobRef[];
       readonly detail: string;
     };
 
@@ -392,11 +402,12 @@ const NO_PIPELINE_DETAIL =
 /**
  * **The CI gate's settlement, for both paths that settle it** (WP-81): the poll below and the
  * pipeline's event (`ci-settle.ts`). The pipeline's verdict comes in as `reading`; this makes the
- * tamper check (`tamper.ts`), reads the failing job's log when there is a failure to explain
+ * tamper check (`tamper.ts`), reads the failing jobs' logs when there is a failure to explain
  * (`ci-log.ts`), and answers the one {@link GateResult}.
  *
  * Every provider call here is a read through the executor, outside every transaction; the
- * artifacts are read in a transaction of their own after them. The endings, in order:
+ * artifacts are read in a transaction of their own, closed before the logs are read. The endings,
+ * in order:
  *
  *  - the diff lists **no** file → `pending` (not yet computed, never *nothing changed*); a list at
  *    the read's bound → `unsupported` (the rest is unseen) — neither is read as *no tamper*;
@@ -502,9 +513,11 @@ export const judgeCiSettlement = async (
       ...(verdict.kind === 'changed' ? [tamperFailureDetail(verdict, redact)] : []),
       ciDetail,
     ].join('\n');
-    const log =
-      reading.kind === 'failed' ? await readFailingJobLog(bindings, reading.logJob, context) : null;
-    const composed = composeFailureDetail(head, log);
+    const logs =
+      reading.kind === 'failed'
+        ? await readFailingJobLogs(bindings, reading.logJobs, context)
+        : null;
+    const composed = composeFailureDetail(head, logs);
     return {
       kind: 'settled',
       passed: false,
@@ -546,28 +559,42 @@ export const judgeCiSettlement = async (
 };
 
 /**
- * The failure's detail: the platform's sentences, then the log excerpt or the reason there is none.
- * `originalChars` is the length the detail would have had with the whole redacted log in it, when
- * `ci-log.ts` cut the log — what the prompt's marker announces (technical/04).
+ * The failure's detail: the platform's sentences, then — per failing job, in the pipeline's order —
+ * its labelled log excerpt or the reason there is none, then the jobs past the cap by name
+ * (backlog 485). `originalChars` is the length the detail would have had with every included log
+ * whole, when `ci-log.ts` cut any of them — what the prompt's marker announces (technical/04); the
+ * jobs past the cap are not a cut, because the body says in words that their logs were not read.
  */
 const composeFailureDetail = (
   head: string,
-  log: Awaited<ReturnType<typeof readFailingJobLog>> | null,
+  logs: FailingJobLogs | null,
 ): { readonly detail: string; readonly originalChars: number | null } => {
-  if (log === null) {
+  if (logs === null) {
     return { detail: head, originalChars: null };
   }
-  if (log.kind === 'unreadable') {
+  if (logs.logs.length === 0) {
     return {
-      detail: `${head}\nNo job log is included: ${log.why}${log.job === null ? '' : ` (job ${log.job})`}.`,
+      detail: `${head}\nNo job log is included: no failing job was named, so no log was read.`,
       originalChars: null,
     };
   }
-  const prefix = `${head}\nLog of the failing job ${log.job}, redacted:\n`;
-  return {
-    detail: `${prefix}${log.text}`,
-    originalChars: log.originalChars === null ? null : prefix.length + log.originalChars,
-  };
+  let cutChars = 0;
+  const parts = logs.logs.map((log) => {
+    if (log.kind === 'unreadable') {
+      return `No log of the failing job ${log.job} is included: ${log.why}.`;
+    }
+    if (log.originalChars !== null) {
+      cutChars += log.originalChars - log.text.length;
+    }
+    return `Log of the failing job ${log.job}, redacted:\n${log.text}`;
+  });
+  if (logs.omitted.length > 0) {
+    parts.push(
+      `${logs.omitted.length} more failing ${logs.omitted.length === 1 ? 'job' : 'jobs'} past the first ${logs.logs.length}, whose logs were not read: ${logs.omitted.join(', ')}.`,
+    );
+  }
+  const detail = [head, ...parts].join('\n');
+  return { detail, originalChars: cutChars === 0 ? null : detail.length + cutChars };
 };
 
 /**
@@ -727,7 +754,7 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
               kind: 'failed',
               status: status.status,
               failingJobs: failed,
-              logJob: failingJobWithLog(status.jobs),
+              logJobs: failingJobs(status.jobs),
               detail:
                 failed.length === 0
                   ? `pipeline ${status.id} ${status.status}`

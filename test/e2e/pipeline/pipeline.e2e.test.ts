@@ -367,6 +367,66 @@ describe('when the merge request’s pipeline is red', () => {
   });
 
   /**
+   * PROGRESS backlog 485, on the real path (AUT-6820's pipeline): three jobs failed and the next
+   * Developer run was given phpstan's log alone. Every failing job is now read through the fake
+   * provider, labelled by name inside the one `return_feedback` block — a job the provider names no
+   * log for said so by name — the cut announced on the marker and the binding's credential absent.
+   */
+  it('hands the next run every failing job’s log, each labelled by its job (backlog 485)', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'feature-ci-red-jobs',
+      tickets: TICKETS,
+      ciStatus: 'failed',
+      ciFailedJobs: [
+        {
+          name: 'phpstan',
+          log: [
+            '$ vendor/bin/phpstan analyse',
+            'progress '.repeat(2_000),
+            ' Line 12: Call to an undefined method Totals::round()',
+            ` [ERROR] Found 1 error (token ${GIT_BINDING_TOKEN})`,
+          ].join('\n'),
+        },
+        {
+          name: 'db-schema-consistency',
+          log: '[ERROR] The database schema is not in sync with the current mapping file.',
+        },
+        { name: 'codesniffer', log: null },
+      ],
+    });
+    harness = pipeline;
+    await pipeline.publish([ticketMatched(pipeline, 'ACME-1', 'Story')]);
+    const parked = await pipeline.settle('needs_human', (task) => task.state === 'needs_human');
+    expect(parked.current_stage).toBe('ci_gate');
+
+    const [, second] = pipeline.specs.filter((spec) => spec.stage === 'implementation');
+    const prompt = second?.userPrompt ?? '';
+    const feedback = readDataBlocks(prompt).blocks.filter(
+      (block) => block.kind === 'return_feedback',
+    );
+    expect(feedback).toHaveLength(1);
+    const body = feedback[0]?.body ?? '';
+    expect(body).toContain('failed: phpstan, db-schema-consistency, codesniffer');
+    expect(body).toContain(
+      'Log of the failing job phpstan, redacted:\n$ vendor/bin/phpstan analyse',
+    );
+    expect(body).toContain('Call to an undefined method Totals::round()');
+    expect(body).toContain(
+      'Log of the failing job db-schema-consistency, redacted:\n[ERROR] The database schema is not in sync with the current mapping file.',
+    );
+    expect(body).toContain(
+      'No log of the failing job codesniffer is included: the provider names no log for this job.',
+    );
+    // phpstan's progress noise was cut, so the block's marker says so; the body does not.
+    expect(feedback[0]?.attributes.truncated).toBe('true');
+    expect(Number(feedback[0]?.attributes.original_chars)).toBeGreaterThan(body.length);
+    expect(body).not.toMatch(/truncat/i);
+    expect(prompt).not.toContain(GIT_BINDING_TOKEN);
+    expect(prompt).not.toContain(GIT_BINDING_TOKEN.slice(0, 16));
+  });
+
+  /**
    * PROGRESS backlog 483, on the real path (AUT-6820's shape): the task parked at `ci_gate` is sent
    * back to `implementation` by a person through `POST /api/tasks/:id/return-to-stage`, the route
    * the task page calls. Until backlog 483 it answered `409 illegal_transition`. What is asserted

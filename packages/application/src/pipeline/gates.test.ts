@@ -27,7 +27,7 @@
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { BUILTIN_GATE_STAGE_IDS } from '@platform/contracts';
 import type { PipelineStage } from '@platform/domain';
-import { compilePipeline, FEATURE_TEMPLATE, stageOf } from '@platform/domain';
+import { compilePipeline, FEATURE_TEMPLATE, MAX_FEEDBACK_CHARS, stageOf } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import type { RepositoryFileEntry, RepositoryFileSource } from '../config/repository-config.js';
 import { createIntegrationActionExecutor } from '../integrations/action-executor.js';
@@ -41,7 +41,12 @@ import type {
 } from '../ports/integrations/git-provider.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { createMemoryAuditLog, createVirtualTimer } from '../testing/memory-integrations.js';
-import { CI_LOG_HEAD_CHARS, CI_LOG_TAIL_CHARS } from './ci-log.js';
+import {
+  CI_LOG_BUDGET_CHARS,
+  CI_LOG_HEAD_CHARS,
+  CI_LOG_TAIL_CHARS,
+  MAX_CI_LOG_JOBS,
+} from './ci-log.js';
 import { MAX_CONFLICT_FILES } from './diff-coalescer.js';
 import { ciTimeoutMinutesOf, createGateEvaluator, rebaseAgainstCi } from './gates.js';
 import type { PipelineIntegrations } from './integrations.js';
@@ -408,10 +413,12 @@ describe('the CI gate', () => {
       passed: false,
       // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
       ciSignature: `ci:failed:test:e2e,test:unit@${HEAD_SHA}`,
-      // WP-81: the first failing job's log was asked for; this provider has none, and says so.
+      // WP-81, backlog 485: every failing job's log was asked for; this provider has none, and the
+      // reason says so for each job by name.
       detail:
         'pipeline pipeline-1 failed: test:unit, test:e2e\n' +
-        'No job log is included: the provider refused the log (not_found) (job test:unit).',
+        'No log of the failing job test:unit is included: the provider refused the log (not_found).\n' +
+        'No log of the failing job test:e2e is included: the provider refused the log (not_found).',
     });
   });
 
@@ -464,9 +471,10 @@ describe('the CI gate', () => {
       passed: false,
       // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
       ciSignature: `ci:failed:test:unit@${HEAD_SHA}`,
-      detail: expect.stringMatching(
-        /^pipeline pipeline-1 failed: test:unit\n.*\(job test:unit\)\.$/,
-      ),
+      // The allowed failure gets no line and no log read (backlog 485 reads every *failing* job).
+      detail:
+        'pipeline pipeline-1 failed: test:unit\n' +
+        'No log of the failing job test:unit is included: the provider refused the log (not_found).',
     });
   });
 
@@ -526,6 +534,165 @@ describe('the CI gate', () => {
         'FAIL src/totals.test.ts\n  expected 3, received 2',
     });
     expect(result).not.toHaveProperty('detailOriginalChars');
+  });
+
+  /**
+   * **PROGRESS backlog 485** — AUT-6820's pipeline failed `phpstan`, `db-schema-consistency` and
+   * `codesniffer`, and the next Developer run was given phpstan's log alone, in a project whose run
+   * image cannot run the other two. Every failing job's log is now read and labelled, and the one
+   * budget WP-81 gave a single log is split between them.
+   */
+  describe('every failing job’s log (backlog 485)', () => {
+    /** A log whose head and tail are each recognisable, `length` characters long. */
+    const longLog = (job: string, length: number): string => {
+      const head = `HEAD ${job}\n`;
+      const tail = `\nERROR ${job}: the summary block`;
+      return `${head}${'.'.repeat(length - head.length - tail.length)}${tail}`;
+    };
+    /** The text after `job`'s label, up to the next platform line. */
+    const excerptOf = (detail: string, job: string): string | undefined => {
+      const label = `Log of the failing job ${job}, redacted:\n`;
+      const start = detail.indexOf(label);
+      if (start === -1) {
+        return undefined;
+      }
+      const rest = detail.slice(start + label.length);
+      const next = rest.search(
+        /\n(Log of the failing job |No log of the failing job |\d+ more failing)/,
+      );
+      return next === -1 ? rest : rest.slice(0, next);
+    };
+    const settledFrom = async (
+      jobs: PipelineStatus['jobs'],
+      logs: Readonly<Record<string, string>>,
+    ) => {
+      const reads: string[] = [];
+      const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+        getPipelineStatus: async () => pipelineStatus('failed', jobs),
+        getJobLog: async (_project, logRef) => {
+          reads.push(logRef);
+          const log = logs[logRef];
+          if (log === undefined) {
+            throw new IntegrationError('not_found', 'fake-git', 'no log for this job', {
+              action: 'get_job_log',
+            });
+          }
+          return log;
+        },
+      });
+      if (result.kind !== 'settled') {
+        throw new Error(`expected a settlement, got ${result.kind}`);
+      }
+      return { result, reads };
+    };
+
+    it('hands back three labelled excerpts, the end of each, inside the one budget', async () => {
+      // One token straddles where codesniffer's share of the raw log would begin — a cut made before
+      // the redaction would keep its last bytes — and one sits inside the share.
+      const sniffer = longLog('codesniffer', 7_000);
+      const suffix = sniffer.slice(7_000 - 1_940);
+      const straddled = `${sniffer.slice(0, 7_000 - 1_940)}${BINDING_TOKEN}${suffix.slice(0, 400)}${BINDING_TOKEN}${suffix.slice(400)}`;
+      const placeholder = '[REDACTED:integration:fake_git_token]';
+      const { result, reads } = await settledFrom(
+        [
+          job('phpstan', 'failed'),
+          job('lint:js', 'success'),
+          job('db-schema-consistency', 'failed'),
+          job('codesniffer', 'failed'),
+        ],
+        {
+          'log:phpstan': longLog('phpstan', 20_657),
+          'log:db-schema-consistency': longLog('db-schema-consistency', 9_000),
+          'log:codesniffer': straddled,
+        },
+      );
+      expect(reads).toEqual(['log:phpstan', 'log:db-schema-consistency', 'log:codesniffer']);
+      expect(
+        result.detail.startsWith(
+          'pipeline pipeline-1 failed: phpstan, db-schema-consistency, codesniffer\nLog of the failing job phpstan, redacted:\n',
+        ),
+      ).toBe(true);
+      const jobs = ['phpstan', 'db-schema-consistency', 'codesniffer'];
+      for (const name of jobs) {
+        const excerpt = excerptOf(result.detail, name) ?? '';
+        // An even third of the budget, all of it from the end: the summary block, not the setup.
+        expect(excerpt, name).toHaveLength(CI_LOG_BUDGET_CHARS / 3);
+        expect(excerpt, name).toMatch(new RegExp(`ERROR ${name}: the summary block$`));
+        expect(excerpt, name).not.toContain(`HEAD ${name}`);
+      }
+      expect(result.detail).not.toContain(BINDING_TOKEN.slice(0, 10));
+      expect(result.detail).not.toContain(BINDING_TOKEN.slice(-10));
+      expect(excerptOf(result.detail, 'codesniffer')).toContain(placeholder);
+      // The marker's figure is true for the whole block: the detail with every included log whole.
+      const redactedSnifferLength =
+        straddled.length + 2 * (placeholder.length - BINDING_TOKEN.length);
+      expect(result.detailOriginalChars).toBe(
+        result.detail.length + (20_657 + 9_000 + redactedSnifferLength - CI_LOG_BUDGET_CHARS),
+      );
+      expect(result.detail.length).toBeLessThan(MAX_FEEDBACK_CHARS);
+      expect(result.detail).not.toMatch(/truncat|\bcut\b|…/i);
+    });
+
+    it('gives a short log’s unused share to the long ones and keeps it whole', async () => {
+      // An even length, so the two long logs split what it leaves exactly.
+      const short = 'codesniffer: 2 errors in src/Totals.php.';
+      const { result } = await settledFrom(
+        [job('phpstan', 'failed'), job('codesniffer', 'failed'), job('schema', 'failed')],
+        {
+          'log:phpstan': longLog('phpstan', 20_000),
+          'log:codesniffer': short,
+          'log:schema': longLog('schema', 20_000),
+        },
+      );
+      expect(excerptOf(result.detail, 'codesniffer')).toBe(short);
+      const share = (CI_LOG_BUDGET_CHARS - short.length) / 2;
+      expect(excerptOf(result.detail, 'phpstan')).toHaveLength(share);
+      expect(excerptOf(result.detail, 'schema')).toHaveLength(share);
+    });
+
+    it('says by name which job’s log it could not read, and gives its share to the one it could', async () => {
+      const unit = longLog('test:unit', 20_000);
+      const { result, reads } = await settledFrom(
+        [
+          { ...job('build', 'failed'), log_ref: null },
+          job('test:unit', 'failed'),
+          job('lint', 'failed'),
+        ],
+        { 'log:test:unit': unit },
+      );
+      // `build` names no log, so it is not asked for; `lint`'s read is refused.
+      expect(reads).toEqual(['log:test:unit', 'log:lint']);
+      expect(result.detail).toBe(
+        [
+          'pipeline pipeline-1 failed: build, test:unit, lint',
+          'No log of the failing job build is included: the provider names no log for this job.',
+          'Log of the failing job test:unit, redacted:',
+          // The whole budget for the one log read: WP-81's head and tail.
+          `${unit.slice(0, CI_LOG_HEAD_CHARS)}\n${unit.slice(unit.length - CI_LOG_TAIL_CHARS)}`,
+          'No log of the failing job lint is included: the provider refused the log (not_found).',
+        ].join('\n'),
+      );
+    });
+
+    it(`reads at most ${MAX_CI_LOG_JOBS} jobs and names how many more failed`, async () => {
+      const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+      const { result, reads } = await settledFrom(
+        names.map((name) => job(name, 'failed')),
+        Object.fromEntries(names.map((name) => [`log:${name}`, `FAIL in ${name}`])),
+      );
+      expect(reads).toEqual(['log:a', 'log:b', 'log:c', 'log:d', 'log:e']);
+      for (const name of ['a', 'b', 'c', 'd', 'e']) {
+        expect(excerptOf(result.detail, name)).toBe(`FAIL in ${name}`);
+      }
+      expect(excerptOf(result.detail, 'f')).toBeUndefined();
+      expect(
+        result.detail.endsWith(
+          '\n2 more failing jobs past the first 5, whose logs were not read: f, g.',
+        ),
+      ).toBe(true);
+      // Short logs, nothing cut: the jobs past the cap are said in words, not counted as a cut.
+      expect(result).not.toHaveProperty('detailOriginalChars');
+    });
   });
 
   it('settles a failed pipeline whose only failing job may fail as not passed, with no names', async () => {
