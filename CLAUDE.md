@@ -32,7 +32,7 @@ spawn frame's environment alone, so the proxy, `HOME`, `CLAUDE_CONFIG_DIR`, the 
 and the git credential helper (`--socket /ctl/cred.sock`, never a `RUNLET_*` name) are answered by the
 launcher as `ProvisionedRunWorkspace.cliEnvironment` beside `claudeCodePath` — from the one function that
 writes the container's — and `cliEnvironment` in `packages/infrastructure/src/runner/options.ts` composes
-the CLI's whole environment with one `GIT_CONFIG_*` list (`COUNT=2`). Before WP-118 none of them reached
+the CLI's whole environment with one `GIT_CONFIG_*` list (`COUNT=3` since backlog 481: `credential.helper`, `credential.useHttpPath`, `core.fsmonitor`). Before WP-118 none of them reached
 the CLI and a real `claude` never reached the sidecar (measured, backlog 342).
 
 `packages/infrastructure/src/db/migrations/*.sql` is the authoritative database schema (TD-011): forward-only, applied under an advisory lock, never edited once applied — add a new numbered file. The Drizzle definitions beside them type the queries and are held to the SQL by an integration parity test.
