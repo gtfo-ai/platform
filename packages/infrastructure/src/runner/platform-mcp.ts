@@ -42,9 +42,11 @@ import {
   kbSearchInputSchema,
   notifyHumanInputSchema,
   openMrInputSchema,
+  PROGRESS_MIN_INTERVAL_MS,
   reportProgressInputSchema,
   updateMrDescriptionInputSchema,
 } from '@platform/application';
+import { PROGRESS_SUMMARY_MAX_CHARS } from '@platform/contracts';
 import type * as z from 'zod';
 
 /**
@@ -145,9 +147,9 @@ const definitions = (
     platformTool(
       runtime,
       'report_progress',
-      'Report progress so the workpad and the board stay current. Does not block.',
+      `Tell the people watching this task what you have just finished or are starting, in one plain line (at most ${PROGRESS_SUMMARY_MAX_CHARS} characters; \`percent_complete\` is optional). It appears live on the task page. Does not block. At most one line every ${PROGRESS_MIN_INTERVAL_MS / 1000} seconds is recorded.`,
       reportProgressInputSchema,
-      (input, context) => runtime.tools.reportProgress(input, context).then(() => 'recorded'),
+      (input, context) => runtime.tools.reportProgress(input, context),
     ),
   get_task_context: () =>
     platformTool(

@@ -65,6 +65,7 @@ const runWith = (saved: RunSavedWork | null): RunRecord => ({
   settings_hash: null,
   start_failure: null,
   saved_work: saved,
+  latest_progress: null,
 });
 
 const json = (body: unknown, status = 200): Response =>

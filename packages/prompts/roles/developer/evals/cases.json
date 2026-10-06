@@ -232,6 +232,31 @@
           "value": "!/<\\/?(followup_tickets|known_gaps|mr|invoke|parameter)\\b/.test(JSON.parse(output).summary)"
         }
       ]
+    },
+    {
+      "id": "dev-progress-not-recorded-is-not-a-gap",
+      "description": "backlog 496: report_progress is a line for the people watching; an answer of *Not recorded* is not an error, never a known gap, and the artifact is still complete",
+      "vars": {
+        "plan": "Add a `currency` column to the CSV export; test in src/billing/invoice.test.ts.",
+        "repo": "src/billing/invoice.ts, src/billing/invoice.test.ts. The slice is committed and pushed to agentic/ACME-1.",
+        "report_progress_answer": "Not recorded: this run reported progress moments ago. Carry on, and report again after your next step (at the earliest in 12 s).",
+        "open_mr_answer": "{\"status\":\"opened\",\"iid\":42,\"url\":\"https://gitlab.example.test/acme/api/-/merge_requests/42\",\"source_branch\":\"agentic/ACME-1\",\"target_branch\":\"develop\",\"draft\":true}"
+      },
+      "expect_fields": ["known_gaps", "mr"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/implementation-notes.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "!JSON.parse(output).known_gaps.some((gap) => /report_progress|not recorded/i.test(gap))"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).mr.iid === 42"
+        }
+      ]
     }
   ]
 }

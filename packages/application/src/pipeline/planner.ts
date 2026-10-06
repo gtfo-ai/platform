@@ -137,8 +137,8 @@ export const PLATFORM_TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly Platfor
    *
    * `get_task_context` and `kb_search`, and **not** `ask_human` — an ask is already a conversation
    * with a human, and a run that asked a question back would park the *task* in `waiting_answers`
-   * on a question about an explanation nobody is blocked on. `report_progress` is absent for the
-   * simpler reason that this build refuses it by name and an ask is over in one turn.
+   * on a question about an explanation nobody is blocked on. `report_progress` is absent because an
+   * ask is over in one turn and the person asking is reading the answer as it streams.
    */
   ask: ['get_task_context', 'kb_search'],
   /**

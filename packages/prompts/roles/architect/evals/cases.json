@@ -217,6 +217,30 @@
           "value": "['AC1', 'AC2'].every((id) => JSON.parse(output).validation_contract.some((entry) => entry.criterion_id === id))"
         }
       ]
+    },
+    {
+      "id": "arch-progress-line-is-not-the-plan",
+      "description": "backlog 496: a progress line answered *Not recorded* is not a risk of the work, and the plan is still the whole answer",
+      "vars": {
+        "spec": "AC1: the export has a `currency` column.",
+        "repo": "src/billing/export.ts, src/billing/export.test.ts",
+        "report_progress_answer": "Not recorded: this run reported progress moments ago. Carry on, and report again after your next step (at the earliest in 20 s)."
+      },
+      "expect_fields": ["risks", "files_to_change"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/implementation-plan.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "!/report_progress|not recorded/i.test(JSON.stringify(JSON.parse(output).risks))"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).files_to_change.length >= 1"
+        }
+      ]
     }
   ]
 }

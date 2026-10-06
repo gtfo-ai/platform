@@ -454,6 +454,60 @@
         "phase"
       ],
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "parent_tool_use_id": {
+          "$ref": "#/$defs/anon_19cad1b6"
+        },
+        "redaction_count": {
+          "$ref": "#/$defs/anon_265a4e55"
+        },
+        "kind": {
+          "type": "string",
+          "const": "progress"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "percent_complete": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "run_id",
+        "seq",
+        "created_at",
+        "redaction_count",
+        "kind",
+        "summary",
+        "truncated"
+      ],
+      "additionalProperties": false
     }
   ],
   "$defs": {

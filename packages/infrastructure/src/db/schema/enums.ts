@@ -158,6 +158,8 @@ export const transcriptKindEnum = pgEnum('transcript_kind', [
   'hook',
   'steer',
   'compaction',
+  // Migration 0084 (PROGRESS backlog 496): a line the agent reported through `report_progress`.
+  'progress',
 ]);
 export const blobStorageEnum = pgEnum('blob_storage', ['db', 'file', 's3']);
 

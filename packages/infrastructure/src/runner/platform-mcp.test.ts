@@ -134,6 +134,24 @@ describe('handling one call', () => {
     expect(context_.calls[0]).toEqual({ tool: 'ask_human', outcome: 'ok' });
   });
 
+  /**
+   * Backlog 496: `report_progress` answers with the port's own sentence — recorded, shortened or
+   * not recorded and why — rather than a constant `recorded` that would hide a refusal.
+   */
+  it('answers report_progress with the port’s sentence, as a non-error', async () => {
+    const tools = recordingTools({
+      reportProgress: async () => 'Not recorded: this run reported progress moments ago.',
+    });
+    const [reportProgress] = definitionsFor(runtime({ tools }), ['report_progress']);
+    expect(await callTool(reportProgress!, { summary: 'half way', percent_complete: 50 })).toEqual({
+      text: 'Not recorded: this run reported progress moments ago.',
+      isError: false,
+    });
+    expect((await callTool(reportProgress!, { summary: 'x', percent_complete: 101 })).isError).toBe(
+      true,
+    );
+  });
+
   it('rejects an unknown key, because the model writes these arguments (BD-022)', async () => {
     const context_ = runtime();
     const [askHuman] = definitionsFor(context_, ['ask_human']);

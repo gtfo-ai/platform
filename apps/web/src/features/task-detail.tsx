@@ -96,6 +96,7 @@ import { AskThread } from './ask-thread.js';
 import { BreakdownPanel } from './breakdown-panel.js';
 import { unmeasuredRunsText } from './cost-text.js';
 import { FeedbackForm } from './feedback.js';
+import { LiveStagePanel, liveStageRun } from './live-stage.js';
 import { TakeOverPanel } from './take-over.js';
 
 /**
@@ -1331,6 +1332,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
   const ciGate = latestStageRow(stages, 'ci_gate');
   const rebaseGate = latestStageRow(stages, 'rebase_gate');
   const pendingApprovals = approvals.filter((approval) => approval.status === 'pending');
+  const liveRun = liveStageRun(runs);
 
   return (
     <div className="grid gap-4 lg:grid-cols-[16rem_1fr_18rem]">
@@ -1382,6 +1384,8 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
       </aside>
 
       <section className="flex flex-col gap-4">
+        {/* Backlogs 455 (1) and 496: the live stage, its elapsed time and its latest progress line. */}
+        {liveRun === null ? null : <LiveStagePanel key={liveRun.id} run={liveRun} />}
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-lg font-semibold">
             <UntrustedText value={task.ticket.key} />

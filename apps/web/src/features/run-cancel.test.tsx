@@ -62,6 +62,7 @@ const RUNNING: RunRecord = {
   settings_hash: null,
   start_failure: null,
   saved_work: null,
+  latest_progress: null,
 };
 
 const json = (body: unknown, status = 200): Response =>

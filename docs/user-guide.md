@@ -362,6 +362,14 @@ what* lists it: the start, with the person who pressed it. Pressing **Start** tw
 Left: the stage timeline. Centre: artifacts, runs, questions and approvals. Right: checks, cost and
 links. Live on that task's topic.
 
+**While an agent is working on a stage**, a panel at the top of the centre column says so: a pulsing
+dot, the stage and the role, how long the run has been going, and the **latest progress line** the
+agent reported — *"slice 2 of 4 pushed; next the endpoint"* — with its percentage when it gave one
+and how long ago it said it. The line updates live as the agent reports, and *Watch the run* opens
+the run's transcript. The agent writes the line, so it is shown as text, never as markup; an agent
+reports at most one line every 30 seconds. *No progress reported yet* means the agent has not called
+the tool, not that it is idle — the run page's transcript is the full record.
+
 Every artifact in the centre column **opens**: *Open* shows the document the stage produced, on this
 page, as text. It is model output, so it is rendered the way everything else untrusted is — as
 characters, never as markup and never as a link. The line above it says how many credentials the

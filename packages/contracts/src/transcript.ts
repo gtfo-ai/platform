@@ -25,7 +25,7 @@ import {
   tokenCountSchema,
   tokenUsageSchema,
 } from './common.js';
-import { jsonObjectSchema, jsonValueSchema } from './records.js';
+import { jsonObjectSchema, jsonValueSchema, PROGRESS_SUMMARY_STORED_MAX_CHARS } from './records.js';
 
 /** `run_messages.kind` (technical/03). */
 export const transcriptKindSchema = z.enum([
@@ -37,6 +37,7 @@ export const transcriptKindSchema = z.enum([
   'hook',
   'steer',
   'compaction',
+  'progress',
 ]);
 
 /** Hooks the runner installs (technical/04 § "Hooks and policies"). */
@@ -152,6 +153,24 @@ export const transcriptCompactionEvent = defineTranscript('compaction', {
   post_tokens: tokenCountSchema.nullish(),
 });
 
+/**
+ * A progress line the agent reported through the platform tool `report_progress` (PROGRESS backlog
+ * 496) — the one kind the runner writes on the model's request rather than from an SDK message.
+ *
+ * The tool call itself is already in the transcript (an `assistant` `tool_use` and a `user`
+ * `tool_result`); this row is the **platform's record** of what it accepted: the summary cut to
+ * `PROGRESS_SUMMARY_MAX_CHARS` (`truncated` says so) and redacted by the runner's single door like
+ * every other entry. A call the per-run rate bound refused writes no row. It is not a domain event:
+ * nothing in the pipeline decides anything on progress, and the transcript is already announced on
+ * `run:<id>` — a `run.progress` event would be a second copy for no consumer.
+ */
+export const transcriptProgressEvent = defineTranscript('progress', {
+  summary: z.string().min(1).max(PROGRESS_SUMMARY_STORED_MAX_CHARS),
+  percent_complete: z.int().min(0).max(100).nullish(),
+  /** `true` when the model's summary was longer than the cut and was shortened. */
+  truncated: z.boolean(),
+});
+
 /** Everything a run emits, discriminated on `kind`. */
 export const transcriptEventSchema = z.discriminatedUnion('kind', [
   transcriptSystemEvent,
@@ -162,6 +181,7 @@ export const transcriptEventSchema = z.discriminatedUnion('kind', [
   transcriptHookEvent,
   transcriptSteerEvent,
   transcriptCompactionEvent,
+  transcriptProgressEvent,
 ]);
 
 export type TranscriptEvent = z.infer<typeof transcriptEventSchema>;

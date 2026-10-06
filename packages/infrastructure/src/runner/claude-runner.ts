@@ -97,6 +97,7 @@ import type {
   RunHandle,
   RunnerClock,
   RunOutcome,
+  RunProgressRecorder,
   RunSpec,
   RunStop,
   RunStopReason,
@@ -108,7 +109,7 @@ import type {
   ToolApprovalPort,
   WorkspaceCliEnvironment,
 } from '@platform/application';
-import { runSpecSchema, silentLogger } from '@platform/application';
+import { createProgressGate, runSpecSchema, silentLogger } from '@platform/application';
 import type {
   JsonObject,
   JsonValue,
@@ -488,10 +489,10 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
     armStall();
   };
 
-  const append = async (
+  const appendNow = async (
     build: (envelope: TranscriptEnvelope) => TranscriptEvent | null,
-    progress: Progress = 'progress',
-  ) => {
+    progress: Progress,
+  ): Promise<void> => {
     const envelope: TranscriptEnvelope = {
       run_id: spec.runId,
       seq,
@@ -540,6 +541,56 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
     progressed(progress);
   };
 
+  /**
+   * The door is **serialised** (PROGRESS backlog 496): one entry reaches the sink after the one
+   * before it has, in `seq` order. The message loop is not the only writer — hooks and, since
+   * `report_progress` writes a row, the platform MCP's tool handlers run while the loop awaits its
+   * own append — and the SSE bridge reads a run's rows back from a watermark, so a row committed
+   * after a higher `seq` would be skipped on the live stream. A failed append still rejects its own
+   * caller; the chain carries on for the next one.
+   */
+  let appendTail: Promise<void> = Promise.resolve();
+  const append = (
+    build: (envelope: TranscriptEnvelope) => TranscriptEvent | null,
+    progress: Progress = 'progress',
+  ): Promise<void> => {
+    const next = appendTail.then(() => appendNow(build, progress));
+    appendTail = next.catch(() => undefined);
+    return next;
+  };
+
+  /**
+   * `report_progress`'s door into this run (PROGRESS backlog 496): the per-run rate bound, then one
+   * `progress` row through {@link append} — the run's `seq`, its redactor and its sink. `neutral`,
+   * because the tool call that asked for it is already transcribed and has re-armed the stall.
+   */
+  const progressGate = createProgressGate({ now: deps.clock.now });
+  const progress: RunProgressRecorder = {
+    record: async (report) => {
+      const receipt = progressGate.admit();
+      if (!receipt.recorded) {
+        logger.debug(
+          { run_id: spec.runId, reason: receipt.reason },
+          'a progress report was not recorded',
+        );
+        return receipt;
+      }
+      await append(
+        (envelope) => ({
+          ...envelope,
+          kind: 'progress',
+          redaction_count: 0,
+          parent_tool_use_id: null,
+          summary: report.summary,
+          percent_complete: report.percentComplete,
+          truncated: report.truncated,
+        }),
+        'neutral',
+      );
+      return receipt;
+    },
+  };
+
   const recordHook = async (record: HookRecord): Promise<void> => {
     await append((envelope) => ({
       ...envelope,
@@ -584,6 +635,8 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
           signal: abortController.signal,
           // Backlog 474: what the prompt holds whole, so `get_task_context` does not re-send it.
           ...(spec.promptHolds === undefined ? {} : { promptHolds: spec.promptHolds }),
+          // Backlog 496: `report_progress` writes through this run's own transcript door.
+          progress,
         },
         onCall: (toolName, outcome) => {
           logger.debug({ run_id: spec.runId, tool: toolName, outcome }, 'platform tool called');

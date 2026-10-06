@@ -39,6 +39,8 @@ export const blockText = (block: TranscriptBlock): string => {
       return `${block.subtype} ${block.model ?? ''}`;
     case 'result':
       return block.terminalReason;
+    case 'progress':
+      return block.summary;
   }
 };
 
@@ -158,6 +160,22 @@ const BlockView = ({ block }: { readonly block: TranscriptBlock }): ReactElement
       return (
         <Frame kind="system" label={`system · ${block.subtype}`}>
           <JsonView value={block.data} />
+        </Frame>
+      );
+    case 'progress':
+      return (
+        <Frame kind="progress" label="progress" tone="border-accent/50">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            {block.percentComplete === null ? null : (
+              <Badge tone="accent">{`${formatInteger(block.percentComplete)}%`}</Badge>
+            )}
+            <span>
+              <UntrustedText value={block.summary} />
+            </span>
+            {block.truncated ? (
+              <span className="text-xs text-fg-muted">(shortened by the platform)</span>
+            ) : null}
+          </div>
         </Frame>
       );
     case 'result':

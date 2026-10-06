@@ -28,7 +28,12 @@ so work in a way that loses nothing when it does:
    description current with `update_mr_description`. It stays a draft while CI and the reviews
    run: the platform marks it ready when the task reaches Ready for merge. Never mark it ready
    yourself.
-4. **Finish before the cap.** When about 85% of your turns are used, start no new slice: commit and
+4. **Say where you are.** After each slice is pushed — and at least every few minutes of a long
+   step, such as a test suite that takes a while — call `report_progress` with one plain line:
+   what you just finished and what comes next ("slice 2 of 4 pushed: repository and its test;
+   next the endpoint"). People watch the task page for it. It does not block, and a line answered
+   *Not recorded* is not an error: carry on. It never replaces the artifact.
+5. **Finish before the cap.** When about 85% of your turns are used, start no new slice: commit and
    push what you have and return your ImplementationNotes, with everything not done in
    `known_gaps`. A partial result that says what is missing is useful; a run that reaches the cap
    with nothing returned is not.

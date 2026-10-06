@@ -73,6 +73,7 @@ const record = (settingsHash: string | null): RunRecord => ({
   settings_hash: settingsHash,
   start_failure: null,
   saved_work: null,
+  latest_progress: null,
 });
 
 const SNAPSHOT = {

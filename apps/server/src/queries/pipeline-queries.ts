@@ -63,6 +63,7 @@ import type {
   PromptsWithheldRecord,
   QuestionRecord,
   RunCommandRecord,
+  RunLatestProgress,
   RunModelUsageRecord,
   RunRecord,
   RunSavedWork,
@@ -294,6 +295,7 @@ export const runStageOf = (row: Pick<RunProjectionRow, 'id' | 'stage' | 'role'>)
 const toRunRecord = (
   row: RunProjectionRow,
   modelUsage: readonly RunModelUsageRecord[],
+  latestProgress: RunLatestProgress | null,
 ): RunRecord => {
   const stage = runStageOf(row);
   return {
@@ -344,6 +346,64 @@ const toRunRecord = (
     settings_hash: row.settingsHash,
     start_failure: startFailureOf(row),
     saved_work: savedWorkOf(row),
+    latest_progress: latestProgress,
+  };
+};
+
+/**
+ * Each run's newest `progress` transcript row → `RunRecord.latest_progress` (PROGRESS backlog 496).
+ *
+ * One query for the whole list, `distinct on (run_id)` over the primary key's `(run_id, seq)` order.
+ * A run that reported nothing is absent from the map and publishes `null`. A row this release cannot
+ * read is refused by name, as `/messages` refuses it, rather than published as "no progress": the
+ * runner validated it against the same schema when it wrote it, so a mismatch is a fault to see.
+ *
+ * The cost is stated: there is no partial index on `kind = 'progress'` (migration 0084 could not
+ * name the label it added), so for a run that reported nothing the read walks that run's rows.
+ */
+export const latestProgressFor = async (
+  database: Database,
+  runIds: readonly string[],
+): Promise<Map<string, RunLatestProgress>> => {
+  const byRun = new Map<string, RunLatestProgress>();
+  if (runIds.length === 0) {
+    return byRun;
+  }
+  const rows = await database
+    .selectDistinctOn([runMessages.runId], {
+      runId: runMessages.runId,
+      seq: runMessages.seq,
+      payload: runMessages.payload,
+      blobId: runMessages.blobId,
+    })
+    .from(runMessages)
+    .where(and(inArray(runMessages.runId, [...runIds]), eq(runMessages.kind, 'progress')))
+    .orderBy(asc(runMessages.runId), desc(runMessages.seq));
+  for (const row of rows) {
+    byRun.set(row.runId, latestProgressOfRow(row));
+  }
+  return byRun;
+};
+
+/** One stored `progress` row → `RunLatestProgress`, or a refusal by name. Pure, for its unit test. */
+export const latestProgressOfRow = (row: {
+  readonly runId: string;
+  readonly seq: number;
+  readonly payload: unknown;
+  readonly blobId: string | null;
+}): RunLatestProgress => {
+  const parsed = row.blobId === null ? transcriptEventSchema.safeParse(row.payload) : null;
+  if (parsed === null || !parsed.success || parsed.data.kind !== 'progress') {
+    throw new UnprojectableRowError(
+      `entry ${row.seq} of run ${row.runId}`,
+      'its stored progress line does not match the current TranscriptEvent schema, or its payload is in `blobs`, which no reader resolves',
+    );
+  }
+  return {
+    seq: parsed.data.seq,
+    at: parsed.data.created_at,
+    summary: parsed.data.summary,
+    percent_complete: parsed.data.percent_complete ?? null,
   };
 };
 
@@ -397,8 +457,11 @@ export const findRun = async (database: Database, runId: string): Promise<RunRec
   if (row === undefined) {
     return null;
   }
-  const usage = await modelUsageFor(database, [row.id]);
-  return toRunRecord(row, usage.get(row.id) ?? []);
+  const [usage, progress] = await Promise.all([
+    modelUsageFor(database, [row.id]),
+    latestProgressFor(database, [row.id]),
+  ]);
+  return toRunRecord(row, usage.get(row.id) ?? [], progress.get(row.id) ?? null);
 };
 
 /**
@@ -1471,9 +1534,13 @@ export const findTaskDetail = async (
       .orderBy(asc(runs.createdAt)),
   ]);
 
-  const [usage, takenOver, humanTime, conflicts, estimated, unmeasured, pausedReasons] =
+  const [usage, progress, takenOver, humanTime, conflicts, estimated, unmeasured, pausedReasons] =
     await Promise.all([
       modelUsageFor(
+        database,
+        runRows.map((row) => row.id),
+      ),
+      latestProgressFor(
         database,
         runRows.map((row) => row.id),
       ),
@@ -1527,7 +1594,9 @@ export const findTaskDetail = async (
       decided_at: iso(row.decidedAt),
       reason: row.reason,
     })),
-    runs: runRows.map((row) => toRunRecord(row, usage.get(row.id) ?? [])),
+    runs: runRows.map((row) =>
+      toRunRecord(row, usage.get(row.id) ?? [], progress.get(row.id) ?? null),
+    ),
   };
 };
 
@@ -1567,13 +1636,14 @@ export const listRunningAgents = async (database: Database): Promise<AgentsRespo
     .leftJoin(taskStages, eq(taskStages.id, runs.taskStageId))
     .where(notInArray(runs.status, [...TERMINAL_RUN_STATUSES]))
     .orderBy(desc(runs.createdAt));
-  const usage = await modelUsageFor(
-    database,
-    rows.map((row) => row.id),
-  );
+  const ids = rows.map((row) => row.id);
+  const [usage, progress] = await Promise.all([
+    modelUsageFor(database, ids),
+    latestProgressFor(database, ids),
+  ]);
   return {
     items: rows.map((row) => {
-      const run = toRunRecord(row, usage.get(row.id) ?? []);
+      const run = toRunRecord(row, usage.get(row.id) ?? [], progress.get(row.id) ?? null);
       return {
         run,
         project_id: run.project_id,

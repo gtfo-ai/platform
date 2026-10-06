@@ -101,6 +101,10 @@ export interface RunMessageRow {
 
 /** The text blocks of a content-carrying entry, in order, for the search vector. */
 const textOfBlocks = (event: TranscriptEvent): string[] => {
+  // A progress line (backlog 496) is searchable text too: it is what the agent said it was doing.
+  if (event.kind === 'progress') {
+    return [event.summary];
+  }
   const blocks =
     'content' in event && Array.isArray(event.content)
       ? event.content

@@ -538,6 +538,25 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > allowlist"* (measured at WP-83; the three cases are recorded in
 > `packages/infrastructure/src/runner/options.ts`). Nothing in the platform reads the `init` row's
 > list as a capability, and a reader added later must not.
+> **Amended 2026-10-06 (PROGRESS backlog 496) — `report_progress` is built, and it is the one
+> transcript entry the model asks for.** It was granted to nearly every role (`PLATFORM_TOOLS_BY_ROLE`),
+> offered, and refused at runtime because `TranscriptEvent` had no kind for it. Now: the runner puts a
+> **progress door** on `PlatformToolContext` (`progress`), built over its own single transcript door,
+> so an accepted call writes one `progress` row — `{summary, percent_complete, truncated}` — with the
+> run's next `seq`, the run's redactor (TD-012) and the run's sink, announced on `run:<id>` like any
+> other entry (migration 0084 adds the `transcript_kind` label). `reportProgressTool`
+> (`packages/application/src/pipeline/progress-tool.ts`) trims the summary and cuts it to 500
+> characters (the stored ceiling is four times that, for redaction lengthening it), and the door
+> holds a per-run rate bound: at most one line every 30 s and 100 per run, measured on the runner's
+> clock. A refused call writes nothing and is answered — not as an error — in one plain sentence
+> (*"Progress recorded."*, *"Not recorded: … Carry on …"*). The row is `neutral` for the stall
+> detector: the tool call that asked for it is already transcribed. **No domain event**: nothing in
+> the pipeline decides on progress, and the transcript is already streamed, so a `run.progress`
+> event would be a second copy with no consumer. **The door is serialised** since the same change:
+> hooks and tool handlers write while the message loop does, and the SSE bridge reads rows back from
+> a watermark, so the runner now hands the sink one entry at a time in `seq` order. The developer
+> (6) and architect (5) role prompts say when to call it; `GET /api/runs/:id` and the task page
+> publish a run's newest line as `latest_progress`.
 - **Steer:** the run's input is an async queue; a `run.steered` command pushes an `SDKUserMessage` (author recorded). **Pause/cancel:** `interrupt()`; cancel then ends the run with `cancelled`. **Tighten:** `applyFlagSettings` to reduce permissions after untrusted input if a policy requires (future).
 
 > **As built at WP-101 (TD-028 decision 11): a human's stop keeps what the session measured.** A

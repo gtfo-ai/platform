@@ -1,0 +1,14 @@
+-- 0084 — `transcript_kind` gains `progress` (PROGRESS backlog 496, first local test, 2026-10-06).
+--
+-- `report_progress` was granted to nearly every role, offered to the model and refused at runtime,
+-- because `TranscriptEvent` had no kind for a line the agent reports. It now writes one transcript
+-- row per accepted call — the summary, cut to 500 characters and redacted by the runner's single
+-- door like every other entry — through the run's own sink, so the row has the usual envelope and
+-- `seq` and is announced on `run:<id>` with the rest. The task page reads the newest one of a run.
+--
+-- Appended, like 0080's `shutdown`: a bare `add value` appends, and
+-- `test/integration/db/enums.integration.test.ts` compares the database's order with the zod enum's.
+-- Nothing in this migration writes the new label, which is what lets it run inside the migrator's
+-- transaction. No partial index on the new label: an index predicate naming it would be a use of
+-- the value in the transaction that added it, which PostgreSQL refuses.
+alter type transcript_kind add value 'progress';

@@ -68,6 +68,7 @@ const run = (id: string, startedAt: string): RunRecord => ({
   settings_hash: null,
   start_failure: null,
   saved_work: null,
+  latest_progress: null,
 });
 
 const TAKEN_OVER: TakenOver = {

@@ -35,6 +35,7 @@ import {
   runStartFailureSchema,
   runStatusSchema,
   runTerminalReasonSchema,
+  sequenceSchema,
   shaSchema,
   sizeSchema,
   slugSchema,
@@ -755,6 +756,40 @@ export const runModelUsageRecordSchema = modelUsageSchema.extend({
   usd: usdSchema.nullable(),
 });
 
+/**
+ * The longest progress line `report_progress` records, in characters (PROGRESS backlog 496).
+ *
+ * One line a person reads at a glance on the task page — a slice finished, a test run started — not
+ * a report: the artifact is where the run explains itself. A longer summary is **cut** here and the
+ * model is told so, rather than refused, because a refusal costs a turn and a progress line is not
+ * worth one (backlog 492's lesson about rejected tool input).
+ */
+export const PROGRESS_SUMMARY_MAX_CHARS = 500;
+
+/**
+ * The stored ceiling of a progress line, after redaction (TD-012).
+ *
+ * The cut to {@link PROGRESS_SUMMARY_MAX_CHARS} happens **before** the runner's single redaction
+ * door, and a redaction may lengthen the text (a short secret becomes a longer
+ * `[REDACTED:…]` placeholder). The stored schema therefore allows four times the cut: a summary
+ * made only of injected secrets is the case it covers, and an entry past even that fails its own
+ * schema and becomes the runner's `transcript_normalisation_failed` row rather than an unbounded one.
+ */
+export const PROGRESS_SUMMARY_STORED_MAX_CHARS = 4 * PROGRESS_SUMMARY_MAX_CHARS;
+
+/**
+ * The latest progress line a run reported through `report_progress` (PROGRESS backlog 496): the
+ * newest `progress` row of its transcript, projected. `summary` is the model's words, redacted and
+ * bounded — untrusted text (BD-022).
+ */
+export const runLatestProgressSchema = z.strictObject({
+  /** The transcript row's `seq`, so a client can tell it from a newer live frame. */
+  seq: sequenceSchema,
+  at: isoDateTimeSchema,
+  summary: z.string().min(1).max(PROGRESS_SUMMARY_STORED_MAX_CHARS),
+  percent_complete: z.int().min(0).max(100).nullable(),
+});
+
 export const runRecordSchema = z.strictObject({
   id: idSchema,
   task_id: idSchema,
@@ -821,6 +856,12 @@ export const runRecordSchema = z.strictObject({
    * had no changes, or it ended before the column had a writer.
    */
   saved_work: runSavedWorkSchema.nullable(),
+  /**
+   * The newest line the run reported through `report_progress` (PROGRESS backlog 496), or `null`
+   * for a run that reported none — including every run that ended before the tool was built. The
+   * task page shows it beside the running stage, and newer lines arrive live on `run:<id>`.
+   */
+  latest_progress: runLatestProgressSchema.nullable(),
 });
 
 /** Precedence chain for the effective configuration (technical/12). */
@@ -873,6 +914,7 @@ export type EstimateBasis = z.infer<typeof estimateBasisSchema>;
 export type HumanTimeKind = z.infer<typeof humanTimeKindSchema>;
 export type TaskRecord = z.infer<typeof taskRecordSchema>;
 export type RunRecord = z.infer<typeof runRecordSchema>;
+export type RunLatestProgress = z.infer<typeof runLatestProgressSchema>;
 export type ConfigSource = z.infer<typeof configSourceSchema>;
 export type ProjectRecord = z.infer<typeof projectRecordSchema>;
 export type HumanActionRecord = z.infer<typeof humanActionRecordSchema>;

@@ -101,6 +101,17 @@ export interface ResultBlock extends BlockBase {
   readonly isEstimate: boolean;
 }
 
+/**
+ * A line the agent reported through `report_progress` (PROGRESS backlog 496): the model's words,
+ * redacted and bounded by the runner — untrusted text, rendered as such.
+ */
+export interface ProgressBlock extends BlockBase {
+  readonly kind: 'progress';
+  readonly summary: string;
+  readonly percentComplete: number | null;
+  readonly truncated: boolean;
+}
+
 export type TranscriptBlock =
   | TextBlock
   | ThinkingBlock
@@ -110,7 +121,8 @@ export type TranscriptBlock =
   | SteerBlock
   | CompactionBlock
   | SystemBlock
-  | ResultBlock;
+  | ResultBlock
+  | ProgressBlock;
 
 /** Mutable twin of `ToolBlock`, used while the result and the children are still arriving. */
 interface ToolDraft {
@@ -304,6 +316,17 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
           subtype: event.subtype,
           model: nullish(event.model),
           data: event.data,
+        });
+        break;
+
+      case 'progress':
+        sink(event).push({
+          kind: 'progress',
+          id: `${event.seq}`,
+          seq: event.seq,
+          summary: event.summary,
+          percentComplete: nullish(event.percent_complete),
+          truncated: event.truncated,
         });
         break;
 

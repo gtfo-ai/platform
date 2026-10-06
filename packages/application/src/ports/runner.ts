@@ -431,10 +431,14 @@ export interface PlatformToolPort {
   /** Blocking question with a blocker brief; returns the human's answer text. */
   readonly askHuman: (input: AskHumanInput, context: PlatformToolContext) => Promise<string>;
   readonly notifyHuman: (input: NotifyHumanInput, context: PlatformToolContext) => Promise<void>;
+  /**
+   * Records one progress line in the run's transcript (PROGRESS backlog 496) and answers the model
+   * with a short plain acknowledgement — recorded, shortened, or not recorded and why.
+   */
   readonly reportProgress: (
     input: ReportProgressInput,
     context: PlatformToolContext,
-  ) => Promise<void>;
+  ) => Promise<string>;
   readonly getTaskContext: (
     input: GetTaskContextInput,
     context: PlatformToolContext,
@@ -472,6 +476,34 @@ export interface PlatformToolContext {
   readonly redactor?: SecretRedactor;
   /** What the run's prompt already carries whole — `RunSpec.promptHolds` (PROGRESS backlog 474). */
   readonly promptHolds?: PromptHolds;
+  /**
+   * The run's own progress door (PROGRESS backlog 496): the runner builds it over the transcript
+   * door it writes every other entry through, so a progress row gets the run's `seq`, its
+   * redactor and its sink — and the per-run rate bound, which only the runner can hold. Absent in a
+   * composition with no runner behind it, and `report_progress` then refuses.
+   */
+  readonly progress?: RunProgressRecorder;
+}
+
+/** One progress report as the tool hands it to the runner — already bounded (`boundProgressSummary`). */
+export interface RunProgressReport {
+  readonly summary: string;
+  readonly percentComplete: number | null;
+  /** The model's summary was longer than `PROGRESS_SUMMARY_MAX_CHARS` and was cut. */
+  readonly truncated: boolean;
+}
+
+/**
+ * What the runner did with a report: recorded, or not and why. A refusal is not an error — the
+ * model is told, in one plain sentence, and carries on.
+ */
+export type RunProgressReceipt =
+  | { readonly recorded: true }
+  | { readonly recorded: false; readonly reason: 'too_soon'; readonly retryAfterMs: number }
+  | { readonly recorded: false; readonly reason: 'run_limit'; readonly limit: number };
+
+export interface RunProgressRecorder {
+  readonly record: (report: RunProgressReport) => Promise<RunProgressReceipt>;
 }
 
 // ── Platform tool inputs (BD-022: everything the model writes is untrusted) ───

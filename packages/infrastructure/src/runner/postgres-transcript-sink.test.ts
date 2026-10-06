@@ -52,6 +52,27 @@ describe('the row a transcript entry becomes', () => {
     });
   });
 
+  it('stores a progress line as kind `progress`, searchable by its words (backlog 496)', () => {
+    const event: TranscriptEvent = {
+      ...envelope,
+      seq: 7,
+      kind: 'progress',
+      parent_tool_use_id: null,
+      summary: 'slice 2 pushed; next the endpoint',
+      percent_complete: 50,
+      truncated: false,
+    };
+    const row = runMessageRowFor(event);
+    expect(JSON.parse(row.payload)).toEqual(event);
+    expect(row).toMatchObject({
+      kind: 'progress',
+      subtype: null,
+      toolUseId: null,
+      toolName: null,
+      searchText: 'slice 2 pushed; next the endpoint',
+    });
+  });
+
   it('keeps seq zero-based, which is what migration 0016 is about', () => {
     // The producer's first entry is `seq: 0` (`claude-runner.ts` stamps then increments) and
     // `0006_transcripts.sql` constrained `seq >= 1`. Translating here instead would make the stored

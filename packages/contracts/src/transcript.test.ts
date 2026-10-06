@@ -1,5 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { PROGRESS_SUMMARY_MAX_CHARS, PROGRESS_SUMMARY_STORED_MAX_CHARS } from './records.js';
 import { PROPERTY_TEST_TIMEOUT_MS } from './testing/property.js';
 import {
   contentBlockSchema,
@@ -108,6 +109,14 @@ const BY_KIND: Record<TranscriptKind, TranscriptEvent> = {
     cost: { usd: 1.25, is_estimate: false, price_list_id: uuid(4) },
     structured_output: { verdict: 'approve', findings: [] },
   },
+  progress: {
+    ...envelope,
+    seq: 8,
+    kind: 'progress',
+    summary: 'slice 2 of 4 pushed: the repository and its test; next the endpoint',
+    percent_complete: 50,
+    truncated: false,
+  },
 };
 
 const FIXTURES = Object.values(BY_KIND);
@@ -161,6 +170,28 @@ describe('TranscriptEvent', () => {
     const withoutCount: Record<string, unknown> = { ...BY_KIND.assistant };
     delete withoutCount.redaction_count;
     expect(transcriptEventSchema.safeParse(withoutCount).success).toBe(false);
+  });
+
+  /**
+   * Backlog 496: a progress line is bounded at rest — the tool cuts the model's words to
+   * `PROGRESS_SUMMARY_MAX_CHARS` before redaction, and the stored ceiling leaves room for redaction
+   * to lengthen them — and it is never empty.
+   */
+  it('bounds a progress line and its percentage', () => {
+    const at = (summary: string) =>
+      transcriptEventSchema.safeParse({ ...BY_KIND.progress, summary }).success;
+    expect(at('x'.repeat(PROGRESS_SUMMARY_STORED_MAX_CHARS))).toBe(true);
+    expect(at('x'.repeat(PROGRESS_SUMMARY_STORED_MAX_CHARS + 1))).toBe(false);
+    expect(at('')).toBe(false);
+    expect(PROGRESS_SUMMARY_STORED_MAX_CHARS).toBeGreaterThan(PROGRESS_SUMMARY_MAX_CHARS);
+    for (const percent_complete of [-1, 101, 2.5]) {
+      expect(
+        transcriptEventSchema.safeParse({ ...BY_KIND.progress, percent_complete }).success,
+      ).toBe(false);
+    }
+    expect(
+      transcriptEventSchema.safeParse({ ...BY_KIND.progress, percent_complete: null }).success,
+    ).toBe(true);
   });
 
   it('accepts only the terminal reasons the runner can produce', () => {

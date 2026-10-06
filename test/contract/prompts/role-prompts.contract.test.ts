@@ -11,6 +11,7 @@
  * `HOSTILE_CONSTRUCTS` rather than a hand-picked string, so "the role prompt survives untrusted
  * text" is checked for the roles nobody remembered as well as for the one that motivated the test.
  */
+import { PLATFORM_TOOL_NAMES, PLATFORM_TOOLS_BY_ROLE } from '@platform/application';
 import { agentRoleSchema, artifactTypeSchema } from '@platform/contracts';
 import {
   assemblePrompt,
@@ -84,14 +85,10 @@ const assembleFor = (role: (typeof agentRoleSchema.options)[number], text: strin
  * A sentence of a role prompt that names a platform tool this build refuses — and so no run is
  * given (PROGRESS backlog 476, `availablePlatformTools`) — must say *when your tools include it*:
  * an unconditional "use `ask_human`" sends every run to a tool its list does not have.
+ * `report_progress` left this list when it was built (backlog 496); the test below holds a prompt
+ * that names it to a role that is given it.
  */
-const UNBUILT_TOOLS = [
-  'ask_human',
-  'notify_human',
-  'report_progress',
-  'add_ticket_comment',
-  'create_followup_ticket',
-];
+const UNBUILT_TOOLS = ['ask_human', 'notify_human', 'add_ticket_comment', 'create_followup_ticket'];
 const HEDGE = /\b(when|if) your (platform )?tool(s| list)\b/i;
 const unhedgedToolSentences = (text: string): readonly string[] =>
   text
@@ -113,6 +110,21 @@ describe.each(agentRoleSchema.options.map((role) => [role] as const))(
     it('promises no unbuilt platform tool unconditionally, and no `.agentic-run/` directory', () => {
       expect(unhedgedToolSentences(ROLE_PROMPTS[role].text)).toEqual([]);
       expect(ROLE_PROMPTS[role].text).not.toContain('.agentic-run/');
+    });
+
+    /**
+     * Backlog 496: a prompt that tells its role to call a platform tool is a prompt for a role the
+     * planner gives that tool (`PLATFORM_TOOLS_BY_ROLE`) — otherwise the instruction names a tool the
+     * run's *This run* list says does not exist.
+     */
+    it('names only platform tools its role is given', () => {
+      const named = PLATFORM_TOOL_NAMES.filter((tool) =>
+        ROLE_PROMPTS[role].text.includes(`\`${tool}\``),
+      );
+      const unhedged = named.filter(
+        (tool) => !UNBUILT_TOOLS.includes(tool) && !PLATFORM_TOOLS_BY_ROLE[role].includes(tool),
+      );
+      expect(unhedged).toEqual([]);
     });
 
     it('never itself contains a data-block marker, which would make the platform a spoofer', () => {

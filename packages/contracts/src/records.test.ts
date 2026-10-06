@@ -281,6 +281,7 @@ describe('records', () => {
       settings_hash: null,
       start_failure: null,
       saved_work: null,
+      latest_progress: null,
     };
     expect(runRecordSchema.parse(run)).toEqual(run);
     expect(runRecordSchema.safeParse({ ...run, attempt: 0 }).success).toBe(false);

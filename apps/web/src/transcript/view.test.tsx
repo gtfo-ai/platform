@@ -104,6 +104,32 @@ describe('TranscriptView', () => {
     expect(screen.getByText('$1.50', { exact: false })).toBeTruthy();
   });
 
+  it('renders a progress line as untrusted text, with its percentage and a cut marked (backlog 496)', () => {
+    const summary = '<b>slice 2</b> pushed';
+    const { container } = render(
+      <TranscriptView
+        blocks={[
+          { kind: 'progress', id: 'p', seq: 4, summary, percentComplete: 40, truncated: true },
+        ]}
+      />,
+    );
+    const block = container.querySelector('[data-block-kind="progress"]');
+    expect(block?.textContent).toContain(summary);
+    expect(block?.textContent).toContain('40%');
+    expect(block?.textContent).toContain('(shortened by the platform)');
+    expect(block?.querySelector('b')).toBeNull();
+    expect(
+      blockText({
+        kind: 'progress',
+        id: 'p',
+        seq: 4,
+        summary,
+        percentComplete: null,
+        truncated: false,
+      }),
+    ).toBe(summary);
+  });
+
   it('renders a Bash tool as a terminal block with the ANSI stripped', () => {
     render(
       <TranscriptView

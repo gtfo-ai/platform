@@ -16,7 +16,9 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import type { RunOutcome, RunSpec, ToolApprovalDecision } from '@platform/application';
+import { PROGRESS_MIN_INTERVAL_MS, reportProgressTool } from '@platform/application';
 import type { TranscriptEvent } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import {
@@ -1468,5 +1470,121 @@ describe('an artifact delivered in the turn that crossed the cap (backlog 466)',
     expect(result.structuredOutput).toBeNull();
     // The interrupted turn's figure is still the run's cost (WP-101).
     expect(result.cost.usd).toBe(5.4);
+  });
+});
+
+/**
+ * PROGRESS backlog 496: `report_progress` reaches the run's own transcript door. The tool is called
+ * the way the CLI calls it — through the `platform` MCP server the adapter handed to the real
+ * `query()` — mid-run, so the row it writes takes the run's next `seq`, its redactor and its sink.
+ */
+describe('report_progress (backlog 496)', () => {
+  type ToolHandler = (args: unknown, extra: unknown) => Promise<{ content: { text: string }[] }>;
+  /** The registered handler, read off the MCP server instance the adapter built for this run. */
+  const reportProgressHandler = (options: unknown): ToolHandler => {
+    const servers = (options as { mcpServers: Record<string, unknown> }).mcpServers;
+    const platform = servers['platform'] as {
+      instance: { _registeredTools: Record<string, { handler: ToolHandler } | undefined> };
+    };
+    const registered = platform.instance._registeredTools['report_progress'];
+    if (registered === undefined) {
+      throw new Error('report_progress is not registered on the platform server');
+    }
+    return registered.handler;
+  };
+
+  it('writes one redacted progress row per admitted call through the run’s door, and refuses a burst', async () => {
+    let options: unknown = null;
+    const harness = start('stall', {
+      deps: {
+        tools: recordingTools({
+          reportProgress: (input, context) => reportProgressTool(input, context),
+        }),
+        query: ((args: Parameters<typeof sdkQuery>[0]) => {
+          options = args.options;
+          return sdkQuery(args);
+        }) as ClaudeRunnerDependencies['query'],
+      },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const call = reportProgressHandler(options);
+    const answer = async (args: unknown): Promise<string> =>
+      (await call(args, {})).content.map((item) => item.text).join('');
+
+    expect(
+      await answer({
+        summary: `slice 1 pushed with ${FIXTURE_INJECTED_SECRET}`,
+        percent_complete: 25,
+      }),
+    ).toBe('Progress recorded.');
+    expect(await answer({ summary: 'slice 1 again' })).toMatch(/^Not recorded: /);
+    harness.clock.advance(PROGRESS_MIN_INTERVAL_MS);
+    expect(await answer({ summary: 'slice 2 started' })).toBe('Progress recorded.');
+
+    const result = await settleStop(harness, harness.handle.stop({ reason: 'cancelled' }));
+    const progress = harness.events.filter((event) => event.kind === 'progress');
+    expect(progress).toEqual([
+      expect.objectContaining({
+        kind: 'progress',
+        summary: 'slice 1 pushed with [REDACTED:integration:gitlab_token]',
+        percent_complete: 25,
+        truncated: false,
+        redaction_count: 1,
+      }),
+      expect.objectContaining({ kind: 'progress', summary: 'slice 2 started', redaction_count: 0 }),
+    ]);
+    expect(JSON.stringify(harness.events)).not.toContain(FIXTURE_INJECTED_SECRET);
+    // The door is serialised: every row has its own `seq`, and they reach the sink in order.
+    const seqs = harness.events.map((event) => event.seq);
+    expect(seqs).toEqual([...seqs].sort((left, right) => left - right));
+    expect(new Set(seqs).size).toBe(seqs.length);
+    expect(result.redactionCount).toBeGreaterThanOrEqual(1);
+  });
+
+  /**
+   * The tool handler writes while the loop writes too. A slow sink write of the progress row must
+   * not let a later row overtake it: the SSE bridge reads rows back from a watermark, so a row
+   * stored after a higher `seq` would never reach a live stream.
+   */
+  it('keeps a slow progress write ahead of the rows written after it', async () => {
+    let options: unknown = null;
+    let release: () => void = () => {};
+    const slow = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const stored: TranscriptEvent[] = [];
+    const harness = start('stall', {
+      deps: {
+        sink: {
+          append: async (event) => {
+            if (event.kind === 'progress') {
+              await slow;
+            }
+            stored.push(event);
+          },
+        },
+        tools: recordingTools({
+          reportProgress: (input, context) => reportProgressTool(input, context),
+        }),
+        query: ((args: Parameters<typeof sdkQuery>[0]) => {
+          options = args.options;
+          return sdkQuery(args);
+        }) as ClaudeRunnerDependencies['query'],
+      },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const reported = reportProgressHandler(options)({ summary: 'tests running' }, {});
+    const stopping = harness.handle.stop({ reason: 'cancelled' });
+    // Let the stop write its own rows while the progress row is still in the sink.
+    for (let round = 0; round < 20; round += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      harness.clock.advance(INTERRUPT_GRACE_MS);
+    }
+    release();
+    await reported;
+    await settleStop(harness, stopping);
+    expect(stored.some((event) => event.kind === 'progress')).toBe(true);
+    const seqs = stored.map((event) => event.seq);
+    expect(seqs).toEqual([...seqs].sort((left, right) => left - right));
   });
 });

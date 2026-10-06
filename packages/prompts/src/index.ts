@@ -70,14 +70,17 @@ export const ROLE_PROMPT_VERSIONS = {
   // WP-81: `protected_path_changes` — declare every existing test / CI-lint file changed (BD-024).
   // Backlogs 475 and 476: plans only what the workspace can carry out (a missing generator's file is
   // written by hand and judged by CI), `validation_contract` named, knowledge "when the project has it".
-  architect: '4',
+  // Backlog 496: `report_progress` is built — one line when the reading ends and the plan begins.
+  architect: '5',
   // WP-138: `open_mr` takes a title and a description; the branch and the target are the
   // platform's, the platform marks the merge request ready, and the record is the tool's.
   // Backlogs 473, 475 and 476: work in slices — commit, push and `open_mr` after the first, notes
   // before the cap — a check the workspace cannot run is a known gap, and no tool is reverse-engineered.
   // Backlog 486: the merge request stays a draft until Ready; the platform marks it, never the run.
   // Backlog 492: every artifact field is its own parameter; `summary` short, at most 4 000 characters.
-  developer: '5',
+  // Backlog 496: `report_progress` is built — one line after each pushed slice; *Not recorded* is
+  // not an error.
+  developer: '6',
   // WP-45: the project's `review_checklist` blocks, and `criteria` when a human's merge request is
   // compared against a RefinedSpec (the shadow report's review of the human MR).
   // WP-81: judge the plan's `protected_path_changes` into `protected_path_changes_confirmed`.

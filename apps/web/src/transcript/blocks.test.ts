@@ -200,6 +200,44 @@ describe('toBlocks', () => {
     expect(blocks[4]).toMatchObject({ costUsd: 0.5, isEstimate: true });
   });
 
+  it('renders a progress line the agent reported (backlog 496)', () => {
+    const blocks = toBlocks([
+      {
+        ...envelope,
+        kind: 'progress',
+        seq: 7,
+        summary: 'slice 2 pushed',
+        percent_complete: 40,
+        truncated: true,
+      } as TranscriptEvent,
+      {
+        ...envelope,
+        kind: 'progress',
+        seq: 8,
+        summary: 'tests',
+        truncated: false,
+      } as TranscriptEvent,
+    ]);
+    expect(blocks).toEqual([
+      {
+        kind: 'progress',
+        id: '7',
+        seq: 7,
+        summary: 'slice 2 pushed',
+        percentComplete: 40,
+        truncated: true,
+      },
+      {
+        kind: 'progress',
+        id: '8',
+        seq: 8,
+        summary: 'tests',
+        percentComplete: null,
+        truncated: false,
+      },
+    ]);
+  });
+
   it('gives every block a distinct key', () => {
     const blocks = toBlocks([
       assistant(1, [

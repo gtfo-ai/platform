@@ -2,8 +2,8 @@
  * The production `PlatformToolPort`, over **every** name in `PLATFORM_TOOL_NAMES`.
  *
  * Parameterised over the set rather than over the tools somebody remembered (standing rule 68), and
- * asserted in **both** directions (rule 42): the five that are not composed must refuse by name,
- * and the four that are must not — a port that threw for everything would pass the first half.
+ * asserted in **both** directions (rule 42): the four that are not composed must refuse by name,
+ * and the five that are must not — a port that threw for everything would pass the first half.
  *
  * It also keeps {@link IMPLEMENTED_PLATFORM_TOOLS} honest, which matters because that constant is a
  * *claim about this file* and standing rule 11 is about justifications that name something which
@@ -14,15 +14,19 @@ import type {
   PlatformToolContext,
   PlatformToolName,
   PlatformToolPort,
+  RunProgressRecorder,
+  RunProgressReport,
 } from '@platform/application';
 import {
   exactSecretRedactor,
   MUTATING_PLATFORM_TOOLS,
   PLATFORM_TOOL_NAMES,
+  RunProgressUnavailableError,
   silentLogger,
   staticPipelineIntegrations,
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
+import { PROGRESS_SUMMARY_MAX_CHARS } from '@platform/contracts';
 import type pg from 'pg';
 import { describe, expect, it } from 'vitest';
 import {
@@ -108,6 +112,7 @@ describe('the production platform tools', () => {
 
   it('implements exactly what it claims to implement', () => {
     expect([...IMPLEMENTED_PLATFORM_TOOLS]).toEqual([
+      'report_progress',
       'kb_search',
       'get_task_context',
       'open_mr',
@@ -131,15 +136,53 @@ describe('the production platform tools', () => {
    * platform's own account of what is missing goes to the run log, on `missing`.
    */
   it('refuses in one short plain sentence, and keeps the detail for the log', async () => {
-    const failure = (await CALL.report_progress(tools).catch((error: unknown) => error)) as
+    const failure = (await CALL.notify_human(tools).catch((error: unknown) => error)) as
       | PlatformToolUnavailableError
       | undefined;
     expect(failure).toBeInstanceOf(PlatformToolUnavailableError);
     expect(failure?.message).toBe(
-      '"report_progress" is not available in this build. Continue without it, and say in your artifact what you would have used it for.',
+      '"notify_human" is not available in this build. Continue without it, and say in your artifact what you would have used it for.',
     );
-    expect(failure?.message).not.toMatch(/TranscriptEvent|aggregate|WP-\d+|sink/);
-    expect(failure?.missing).toContain('TranscriptEvent');
+    expect(failure?.message).not.toMatch(/SSE|aggregate|WP-\d+|sink/);
+    expect(failure?.missing).toContain('SSE hub');
+  });
+
+  /**
+   * Backlog 496: `report_progress` is composed. It writes through the progress door the runner puts
+   * on the context — the run's own transcript door — and answers the model in one plain sentence.
+   * Without a door (a composition with no runner behind it) it refuses in one plain sentence too.
+   */
+  it('records report_progress through the run’s own progress door, bounded, and answers in a sentence', async () => {
+    const reports: RunProgressReport[] = [];
+    const progress: RunProgressRecorder = {
+      record: async (report) => {
+        reports.push(report);
+        return { recorded: true };
+      },
+    };
+    await expect(
+      tools.reportProgress(
+        { summary: '  slice 1 pushed; writing the migration  ', percent_complete: 40 },
+        { ...CONTEXT, progress },
+      ),
+    ).resolves.toBe('Progress recorded.');
+    await expect(
+      tools.reportProgress(
+        { summary: 'x'.repeat(PROGRESS_SUMMARY_MAX_CHARS + 50) },
+        {
+          ...CONTEXT,
+          progress,
+        },
+      ),
+    ).resolves.toBe(
+      `Progress recorded, shortened to its first ${PROGRESS_SUMMARY_MAX_CHARS} characters.`,
+    );
+    expect(reports).toEqual([
+      { summary: 'slice 1 pushed; writing the migration', percentComplete: 40, truncated: false },
+      { summary: 'x'.repeat(PROGRESS_SUMMARY_MAX_CHARS), percentComplete: null, truncated: true },
+    ]);
+    await expect(CALL.report_progress(tools)).rejects.toThrow(RunProgressUnavailableError);
+    await expect(CALL.report_progress(tools)).rejects.not.toThrow(PlatformToolUnavailableError);
   });
 
   it('does not refuse kb_search — it reaches the store, which is what fails here', async () => {

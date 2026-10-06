@@ -147,6 +147,7 @@ export * from './pipeline/mr-poll.js';
 export * from './pipeline/observability-prefetch.js';
 export * from './pipeline/outbound.js';
 export * from './pipeline/planner.js';
+export * from './pipeline/progress-tool.js';
 export * from './pipeline/project-stream.js';
 export * from './pipeline/run-commands.js';
 export * from './pipeline/run-redaction.js';

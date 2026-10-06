@@ -21,6 +21,7 @@ import { runStatusSchema, taskStageStateSchema, taskStateSchema } from '@platfor
 import { describe, expect, it } from 'vitest';
 import {
   CLOSED_TASK_STATES,
+  latestProgressOfRow,
   runStageOf,
   savedWorkOf,
   stageStateOf,
@@ -178,6 +179,52 @@ describe('the stage a run record publishes', () => {
   it('refuses a stage run with no stage attempt rather than calling it an ask', () => {
     expect(() => runStageOf({ id: ID, stage: null, role: 'developer' })).toThrow(
       `run ${ID} cannot be returned`,
+    );
+  });
+});
+
+/**
+ * `RunRecord.latest_progress` (PROGRESS backlog 496): a stored `progress` row is published as its
+ * line, and a row this release cannot read is refused by name, never published as "no progress".
+ */
+describe('the latest progress line a run record publishes', () => {
+  const RUN = '00000000-0000-4000-8000-000000000496';
+  const payload = {
+    run_id: RUN,
+    seq: 9,
+    created_at: '2026-10-06T10:00:00.000Z',
+    parent_tool_use_id: null,
+    redaction_count: 0,
+    kind: 'progress',
+    summary: 'slice 2 pushed',
+    percent_complete: 40,
+    truncated: false,
+  };
+
+  it('publishes the summary, the percentage and where the row sits', () => {
+    expect(latestProgressOfRow({ runId: RUN, seq: 9, payload, blobId: null })).toEqual({
+      seq: 9,
+      at: '2026-10-06T10:00:00.000Z',
+      summary: 'slice 2 pushed',
+      percent_complete: 40,
+    });
+    const { percent_complete: _omitted, ...withoutPercent } = payload;
+    expect(
+      latestProgressOfRow({ runId: RUN, seq: 9, payload: withoutPercent, blobId: null })
+        .percent_complete,
+    ).toBeNull();
+  });
+
+  it.each([
+    ['a payload in blobs', { payload, blobId: '00000000-0000-4000-8000-0000000000b1' }],
+    ['a payload the schema refuses', { payload: { ...payload, summary: '' }, blobId: null }],
+    [
+      'a row of another kind',
+      { payload: { ...payload, kind: 'steer', message: 'x', author_user_id: RUN }, blobId: null },
+    ],
+  ])('refuses %s by name', (_name, row) => {
+    expect(() => latestProgressOfRow({ runId: RUN, seq: 9, ...row })).toThrow(
+      `entry 9 of run ${RUN} cannot be returned`,
     );
   });
 });

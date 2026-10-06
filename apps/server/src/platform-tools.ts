@@ -8,7 +8,7 @@
  * so `kb_search` had no home and the retrieval layer was reachable by nothing a run sees. This file
  * is the home.
  *
- * ## Four tools are real and five are refusals, and that is deliberate
+ * ## Five tools are real and four are refusals, and that is deliberate
  *
  * `kb_search` is wired to the PostgreSQL knowledge store, and **`get_task_context`** — since WP-54
  * (PROGRESS backlog 83) — to the read projections (`queries/task-context-queries.ts`), scoped to the
@@ -16,18 +16,14 @@
  * `update_mr_description`** are real since WP-138 (`@platform/application`'s
  * `createMergeRequestTools`): `IntegrationActionExecutor` reached from inside a live run, which is
  * the no-transaction phase of `stage.execute` and so the *call* half of WP-15d's split by
- * construction. The other five need collaborators this build does not have — the Question
- * aggregate's HTTP surface and a waiter for the human's answer, a progress row's shape, and a ticket
+ * construction. **`report_progress`** is real since PROGRESS backlog 496: the runner hands every
+ * run's tools a progress door over its own transcript door (`PlatformToolContext.progress`), so the
+ * row gets the run's `seq`, redactor and sink, and `reportProgressTool` bounds the words and answers
+ * the model. The other four need collaborators this build does not have — the Question aggregate's
+ * HTTP surface and a waiter for the human's answer, a channel bound to a live run, and a ticket
  * write from inside a run. Each is therefore a **named refusal**, exactly like
  * `unavailableClaudeRunner` beside it in `pipeline.ts`, and for the same reason: a null object that
  * returns `{}` is a tool the model believes it used.
- *
- * **The transcript sink is no longer one of them** (WP-15g, and this correction is standing rule 83:
- * closing a gap falsifies the sentence nearest it). `createPostgresTranscriptSink` exists and
- * `agent.ts` composes it, so `report_progress` still refuses **for a different reason** — the sink is
- * reached by the *runner*, which writes what the SDK produced, and nothing routes a tool call into it;
- * a `report_progress` row is a `TranscriptEvent` kind the contract does not have. That is a decision
- * for whoever gives the progress feed a shape, not a missing adapter.
  *
  * **The "no run exists at all" half of this paragraph is gone** (standing rule 83, the second time
  * in this file): WP-53 built TD-028's control plane, so a configured instance does run agents and
@@ -53,11 +49,16 @@ import type {
   PlatformToolContext,
   PlatformToolName,
   PlatformToolPort,
+  ReportProgressInput,
   TaskRepository,
   UnitOfWork,
   UpdateMrDescriptionInput,
 } from '@platform/application';
-import { createKbSearchTool, createMergeRequestTools } from '@platform/application';
+import {
+  createKbSearchTool,
+  createMergeRequestTools,
+  reportProgressTool,
+} from '@platform/application';
 import type { Id, JsonValue, MergeRequestRef, TaskMode } from '@platform/contracts';
 import { mergeRequestRefSchema } from '@platform/contracts';
 import {
@@ -105,8 +106,6 @@ const MISSING: Readonly<Record<Exclude<PlatformToolName, ImplementedTool>, strin
     'asking a human needs the Question aggregate bound to a run that can wait for the answer; nothing suspends a run on a question and nothing resumes it on an answer (BD-025’s unattended default is deny, which `agent.ts` composes)',
   notify_human:
     'notifications need a channel bound to a live run; the SSE hub carries the transcript a run produces and has no path back into one',
-  report_progress:
-    'progress reporting writes a transcript row, and the run transcript sink now exists (WP-15g) — what is missing is a shape for it: the sink is the runner’s, it writes what the SDK produced, and `TranscriptEvent` has no kind for a tool-reported progress line',
   add_ticket_comment:
     'every outbound provider call goes through IntegrationActionExecutor, which the pipeline reaches from its `pipeline.outbound` job (WP-15d); a ticket comment from inside a run is unbuilt',
   create_followup_ticket:
@@ -115,6 +114,7 @@ const MISSING: Readonly<Record<Exclude<PlatformToolName, ImplementedTool>, strin
 
 /** The tools this build actually performs. Read by the composition test, not by the runtime. */
 export const IMPLEMENTED_PLATFORM_TOOLS = [
+  'report_progress',
   'kb_search',
   'get_task_context',
   'open_mr',
@@ -215,7 +215,12 @@ export const composePlatformTools = (options: PlatformToolsOptions): PlatformToo
       kbSearch(context.projectId, input),
     askHuman: async () => refuse('ask_human', options.logger),
     notifyHuman: async () => refuse('notify_human', options.logger),
-    reportProgress: async () => refuse('report_progress', options.logger),
+    /**
+     * The run's own progress door (backlog 496), never a run the model named: the runner puts it on
+     * `PlatformToolContext`, and the tool's input has no run field.
+     */
+    reportProgress: async (input: ReportProgressInput, context: PlatformToolContext) =>
+      reportProgressTool(input, context),
     /**
      * The run's own task and project, never ones the model named (WP-54): `PlatformToolContext`
      * is built by the runner from the `RunSpec` and the tool's input schema has neither field.

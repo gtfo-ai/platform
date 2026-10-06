@@ -1505,9 +1505,10 @@ const stagelessLine = (ask: PromptAsk | null): string =>
       'given and from nothing else.';
 
 const outputContract = (type: ArtifactType | null): string => {
-  // PROGRESS backlog 476: no `report_progress` (this build refuses it, so no run is given it) and
-  // no "write the markdown to `.agentic-run/out/`" — nothing reads that directory, and the sentence
-  // cost every run Write and heredoc attempts.
+  // PROGRESS backlog 476: no "write the markdown to `.agentic-run/out/`" — nothing reads that
+  // directory, and the sentence cost every run Write and heredoc attempts. `report_progress` is not
+  // named here either: since backlog 496 it is built, a run that holds it sees it in *This run*'s
+  // tool list, and the role prompts that use it say when.
   if (type === null) {
     return `## Output contract
 

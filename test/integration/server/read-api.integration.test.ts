@@ -355,6 +355,79 @@ describe('the run projection', () => {
     }
   });
 
+  /**
+   * PROGRESS backlog 496: a run's newest `progress` row is its `latest_progress`, on the run record
+   * and on the task page's runs, and a run that reported none publishes `null`. The rows go through
+   * the production sink — the `transcript_kind` label migration 0084 added is what lets them in.
+   */
+  it('publishes the newest progress line a run reported, and null for one that reported none', async () => {
+    const one = async <T extends Record<string, unknown>>(text: string, values: unknown[]) =>
+      (await pool.query<T>(text, values)).rows[0] as T;
+    // An organisation and a project of its own, so the list projections' counts are untouched.
+    const org = await one<{ id: string }>(
+      "insert into organizations (name) values ('progress') returning id",
+      [],
+    );
+    const project = await one<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'progress', 'Progress', 'https://git.example.test/acme/progress.git')
+       returning id`,
+      [org.id],
+    );
+    const task = await one<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                          current_stage)
+       values ($1, 'fake-jira', 'ACME-496', 'https://jira.example.test/browse/ACME-496',
+               'feature', 'active', 'implementation') returning id`,
+      [project.id],
+    );
+    const stage = await one<{ id: string }>(
+      `insert into task_stages (task_id, stage, attempt, state)
+       values ($1, 'implementation', 1, 'completed') returning id`,
+      [task.id],
+    );
+    const insertRun = async () =>
+      one<{ id: string }>(
+        `insert into runs (task_id, task_stage_id, project_id, role, model, prompt_version, status)
+         values ($1, $2, $3, 'developer', 'claude-opus-5', 'feature@1+developer', 'completed')
+         returning id`,
+        [task.id, stage.id, project.id],
+      );
+    const reporting = await insertRun();
+    const silent = await insertRun();
+    const progress = (seq: number, summary: string): TranscriptEvent => ({
+      run_id: reporting.id,
+      seq,
+      created_at: AT,
+      redaction_count: 0,
+      kind: 'progress',
+      parent_tool_use_id: null,
+      summary,
+      percent_complete: seq === 1 ? 20 : null,
+      truncated: false,
+    });
+    const sink = runner.createPostgresTranscriptSink({ sql: pool });
+    await sink.append(progress(1, 'slice 1 pushed'));
+    await sink.append(entry(2, 'still working', reporting.id));
+    await sink.append(progress(3, 'slice 2 pushed; next the endpoint'));
+    await sink.append(entry(4, 'and after it', reporting.id));
+    await sink.append(entry(0, 'nothing to report', silent.id));
+
+    const expected = {
+      seq: 3,
+      at: AT,
+      summary: 'slice 2 pushed; next the endpoint',
+      percent_complete: null,
+    };
+    expect((await findRun(drizzled, reporting.id))?.latest_progress).toEqual(expected);
+    expect((await findRun(drizzled, silent.id))?.latest_progress).toBeNull();
+    expect((await findRun(drizzled, runId))?.latest_progress).toBeNull();
+    const detail = await findTaskDetail(drizzled, task.id);
+    expect(
+      Object.fromEntries((detail?.runs ?? []).map((run) => [run.id, run.latest_progress])),
+    ).toEqual({ [reporting.id]: expected, [silent.id]: null });
+  });
+
   it('is null for a run that does not exist, and refuses one with no stage by name', async () => {
     expect(await findRun(drizzled, '00000000-0000-4000-8000-00000000dead')).toBeNull();
     await expect(findRun(drizzled, unlinkedRunId)).rejects.toThrow(/is not linked to a stage/);

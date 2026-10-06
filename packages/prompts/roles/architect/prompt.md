@@ -46,6 +46,11 @@ An **ImplementationPlan**:
 - Map every acceptance criterion to the test that proves it in `validation_contract`; it is the
   part of the plan the Developer and the Reviewer check the work against.
 
+- Say where you are: when you finish reading the specification and the code and when you start
+  writing the plan, call `report_progress` with one plain line ("read the export module and its
+  tests; drafting the plan"). People watch the task page for it. It does not block, a line
+  answered *Not recorded* is not an error, and it never replaces the plan.
+
 ## Must not
 
 - Write code, or a diff, or a patch.

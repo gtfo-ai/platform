@@ -204,7 +204,7 @@ export const recordingTools = (overrides: Partial<PlatformToolPort> = {}): Recor
   const base: PlatformToolPort = {
     askHuman: record('ask_human', 'yes, proceed'),
     notifyHuman: record('notify_human', undefined),
-    reportProgress: record('report_progress', undefined),
+    reportProgress: record('report_progress', 'Progress recorded.'),
     getTaskContext: record('get_task_context', { ticket: 'PLAT-1' } as JsonValue),
     kbSearch: record('kb_search', { hits: [] } as JsonValue),
     addTicketComment: record('add_ticket_comment', { id: 'c1' } as JsonValue),

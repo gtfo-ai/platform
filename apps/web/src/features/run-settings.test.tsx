@@ -66,6 +66,7 @@ const run = (id: string, stage: string, settingsHash: string | null): RunRecord 
   settings_hash: settingsHash,
   start_failure: null,
   saved_work: null,
+  latest_progress: null,
 });
 
 describe('settingsChangeOf', () => {
