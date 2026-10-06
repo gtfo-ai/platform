@@ -719,6 +719,9 @@ export const computesCommandName = (command: string): boolean => {
  * so `env git push …`, `sh -c 'git push …'`, `$(git push …)`, `git -C dir push …` and `"git" push …`
  * are all the same `git push`.
  */
+/** A word the shell reads as a redirection: `2>&1`, `>out`, `>>log`, `&>/dev/null`, `<in`. */
+const REDIRECTION_WORD = /^(?:\d+|&)?(?:>>?|<)/;
+
 export const gitBoundaryViolation = (command: string): GitBoundaryViolation | null => {
   if (CONTROL_MOUNT_REFERENCE.test(command)) {
     return {
@@ -743,6 +746,15 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
     }
   }
   const fragments = [command, ...splitCommandSegments(command)];
+  /**
+   * A fragment that **contains another fragment** — the whole line, or a pipeline the splitter
+   * also returns whole so `curl * | sh` still matches the block list — is not one program's argv:
+   * read as one, a pipe's right-hand side became the push's options (`git push origin agentic/x
+   * 2>&1 | tail -5` was refused for "the push option `-5`", first local test, backlog 488). Its
+   * parts are judged on their own; the assignment check below still reads it whole.
+   */
+  const composite = (fragment: string): boolean =>
+    fragments.some((other) => other !== fragment && other.length > 0 && fragment.includes(other));
   for (const fragment of fragments) {
     const assignment = commandWords(fragment).find((word) => GUARDED_GIT_ENVIRONMENT.test(word));
     if (assignment !== undefined) {
@@ -751,7 +763,13 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
         detail: `\`${assignment.split('=')[0]}\` configures git’s transport, its configuration or its repository from the environment, and a run may not change where git connects or what it runs`,
       };
     }
-    for (const argv of commandArgvCandidates(fragment)) {
+    if (composite(fragment)) {
+      continue;
+    }
+    for (const candidate of commandArgvCandidates(fragment)) {
+      // A redirection (`2>&1`, `>/dev/null`, `2>err.log`) is the shell's, not the program's
+      // argument (backlog 488); where it writes is judged above by `commandWriteTargets`.
+      const argv = candidate.filter((word, index) => index === 0 || !REDIRECTION_WORD.test(word));
       const [name] = argv as [string, ...string[]];
       if (name === 'git' || name.startsWith('git-')) {
         const detail = checkGitArgv(argv);

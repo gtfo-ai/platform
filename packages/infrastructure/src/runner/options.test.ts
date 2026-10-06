@@ -105,7 +105,7 @@ describe('buildQueryOptions', () => {
       secretEnvNames: [],
     });
     expect(buildQueryOptions(spec, parts()).env).toMatchObject({
-      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_COUNT: '2',
       GIT_CONFIG_KEY_0: 'core.fsmonitor',
       GIT_CONFIG_VALUE_0: 'false',
     });
@@ -292,11 +292,13 @@ describe('cliEnvironment (WP-118)', () => {
       Object.entries(env).filter(([name]) => name.startsWith('GIT_CONFIG')),
     );
     expect(git).toEqual({
-      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_COUNT: '3',
       GIT_CONFIG_KEY_0: 'credential.helper',
       GIT_CONFIG_VALUE_0: '!agentic-runlet credential --socket /ctl/cred.sock',
       GIT_CONFIG_KEY_1: 'core.fsmonitor',
       GIT_CONFIG_VALUE_1: 'false',
+      GIT_CONFIG_KEY_2: 'core.hooksPath',
+      GIT_CONFIG_VALUE_2: '/dev/null',
     });
   });
 
@@ -306,7 +308,7 @@ describe('cliEnvironment (WP-118)', () => {
       Object.entries(env).filter(([name]) => name.startsWith('GIT_CONFIG')),
     );
     expect(git).toEqual({
-      GIT_CONFIG_COUNT: '3',
+      GIT_CONFIG_COUNT: '4',
       GIT_CONFIG_KEY_0: 'credential.helper',
       GIT_CONFIG_VALUE_0: '!agentic-runlet credential --socket /ctl/cred.sock',
       // Backlog 481: the workspace's entry, so git sends the helper the repository path.
@@ -314,6 +316,9 @@ describe('cliEnvironment (WP-118)', () => {
       GIT_CONFIG_VALUE_1: 'true',
       GIT_CONFIG_KEY_2: 'core.fsmonitor',
       GIT_CONFIG_VALUE_2: 'false',
+      // Backlog 488: no repository hook (git-lfs's `pre-push` among them) runs under the CLI's git.
+      GIT_CONFIG_KEY_3: 'core.hooksPath',
+      GIT_CONFIG_VALUE_3: '/dev/null',
     });
   });
 
@@ -360,11 +365,11 @@ describe('cliEnvironment (WP-118)', () => {
         HOME: '/root',
         CLAUDE_CONFIG_DIR: '/work/repo/.claude',
         PATH: '/work/repo/bin',
-        // One past the answered list (three entries since backlog 481), so a spec entry that
+        // One past the answered list (four entries since backlog 488), so a spec entry that
         // survived would sit at an index git reads only if the count were the spec's.
-        GIT_CONFIG_COUNT: '4',
-        GIT_CONFIG_KEY_3: 'core.hooksPath',
-        GIT_CONFIG_VALUE_3: '/work/repo/hooks',
+        GIT_CONFIG_COUNT: '5',
+        GIT_CONFIG_KEY_4: 'core.pager',
+        GIT_CONFIG_VALUE_4: 'sh',
         GIT_CONFIG_PARAMETERS: "'core.pager=sh'",
         GIT_CONFIG_GLOBAL: '/work/repo/gitconfig',
       },
@@ -378,11 +383,12 @@ describe('cliEnvironment (WP-118)', () => {
       HOME: '/tmp',
       CLAUDE_CONFIG_DIR: '/tmp/claude',
       PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-      GIT_CONFIG_COUNT: '3',
+      GIT_CONFIG_COUNT: '4',
+      GIT_CONFIG_VALUE_3: '/dev/null',
     });
     for (const name of [
-      'GIT_CONFIG_KEY_3',
-      'GIT_CONFIG_VALUE_3',
+      'GIT_CONFIG_KEY_4',
+      'GIT_CONFIG_VALUE_4',
       'GIT_CONFIG_PARAMETERS',
       'GIT_CONFIG_GLOBAL',
     ]) {
@@ -423,9 +429,11 @@ describe('cliEnvironment (WP-118)', () => {
     expect(cliEnvironment(spec, null)).toEqual({
       ...spec.env,
       ...platformEnvironment(spec),
-      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_COUNT: '2',
       GIT_CONFIG_KEY_0: 'core.fsmonitor',
       GIT_CONFIG_VALUE_0: 'false',
+      GIT_CONFIG_KEY_1: 'core.hooksPath',
+      GIT_CONFIG_VALUE_1: '/dev/null',
     });
     expect(buildQueryOptions(spec, parts()).env).toEqual(cliEnvironment(spec, null));
   });

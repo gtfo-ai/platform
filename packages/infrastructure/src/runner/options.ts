@@ -84,6 +84,17 @@ export const PLATFORM_GIT_IDENTITY: Readonly<Record<string, string>> = {
  */
 export const PLATFORM_GIT_CONFIG: readonly WorkspaceGitConfigEntry[] = [
   { key: 'core.fsmonitor', value: 'false' },
+  /**
+   * **No repository hook runs under the CLI's git** (first local test, 2026-10-06, backlog 488).
+   * The workspace clone is made by a helper whose image carries `git-lfs`, which installs its
+   * `pre-push` (and checkout/commit/merge) hooks into `.git/hooks` of a repository that uses LFS;
+   * the run image has no `git-lfs`, so every `git push` of AUT-6820's CI-fix run failed *"This
+   * repository is configured for Git LFS but 'git-lfs' was not found on your path"*, and the
+   * ways around it (`--no-verify`, moving the hook) are refused at the git boundary. A hook is
+   * also code the policy never reads. The export helper already pushes with
+   * `core.hooksPath=/dev/null` (`exportScript`); this is the same rule for the run's own git.
+   */
+  { key: 'core.hooksPath', value: '/dev/null' },
 ];
 
 /**

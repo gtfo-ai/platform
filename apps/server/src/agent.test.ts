@@ -249,9 +249,10 @@ describe('the composed runner hands the launcher’s CLI environment to the spaw
       HOME: '/tmp',
       CLAUDE_CONFIG_DIR: '/tmp/claude',
       PATH: '/usr/local/bin:/usr/bin:/bin',
-      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_COUNT: '3',
       GIT_CONFIG_KEY_0: 'credential.helper',
       GIT_CONFIG_KEY_1: 'core.fsmonitor',
+      GIT_CONFIG_KEY_2: 'core.hooksPath',
     });
   });
 });
