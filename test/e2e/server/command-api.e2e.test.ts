@@ -25,6 +25,7 @@
  */
 import type { RunSpec } from '@platform/application';
 import type { RunRecord, TaskDetailResponse } from '@platform/contracts';
+import { readDataBlocks } from '@platform/domain';
 import { afterEach, describe, expect, it } from 'vitest';
 import { decisionAuditShape, expectedApprovalAudit } from '../support/decision-audit.js';
 import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
@@ -534,6 +535,18 @@ describe('answering a question and deciding an approval', () => {
     expect(after.body.questions[0]?.answer).toBe('the one in the footer');
     expect(after.body.questions[0]?.answered_by_user_id).not.toBeNull();
 
+    // PROGRESS backlog 495: the answer resumes refinement as attempt 2 **with its own row**, and
+    // the run of that attempt is attached to it (the scenario asks again, so the task re-parks).
+    await pipeline.waitFor('refinement attempt 2 to run', async () => {
+      const rows = await pipeline.query<{ n: number }>(
+        `select count(*)::int as n from runs r join task_stages s on s.id = r.task_stage_id
+          where r.task_id = $1 and s.stage = 'refinement' and s.attempt = 2
+            and r.status <> 'running'`,
+        [parked.id],
+      );
+      return rows[0]?.n === 1;
+    });
+
     // First answer wins: a second one is an illegal transition, whatever the key.
     const second = await send(
       admin,
@@ -620,7 +633,118 @@ describe('answering a question and deciding an approval', () => {
     );
     expect(audit[0]?.params.idempotency_key, 'the route’s own door').toBe('decide-1');
   }, 240_000);
+
+  /**
+   * PROGRESS backlog 495, the product owner's first local test: *"rejecting the plan does not
+   * create a stage attempt (we wrote it into the DB by hand)"*. Through the real route, the real
+   * saga and the real PostgreSQL store: the rejection opens architecture's attempt 2 row, the run
+   * of attempt 2 is attached to it, and the architect is handed the maintainer's reason.
+   */
+  it('sends a rejected plan back to architecture as a new attempt that carries the reason', async () => {
+    const pipeline = await startPipeline({
+      scenarios: approvingScenarios,
+      label: 'command-reject',
+      tickets: TICKETS,
+      agent: 'fake-runner',
+    });
+    harness = pipeline;
+    const admin = await signIn(pipeline.instance.baseUrl);
+    await pipeline.publish([ticketMatched(pipeline)]);
+    const waiting = await pipeline.settle(
+      'waiting_approval',
+      (snapshot) => snapshot.state === 'waiting_approval',
+    );
+    const detail = await admin.json<TaskDetailResponse>(`/api/tasks/${waiting.id}`);
+    const approvalId = detail.body.approvals[0]?.id as string;
+
+    const reason = 'split the migration into its own merge request';
+    const rejected = await send(
+      admin,
+      `/api/tasks/${waiting.id}/approvals/${approvalId}/decide`,
+      { decision: 'reject', reason },
+      'reject-1',
+    );
+    expect(rejected.status, JSON.stringify(rejected.body)).toBe(200);
+
+    // The second architect run writes another XL plan, so the task parks at a second approval.
+    await pipeline.waitFor('the second plan approval', async () => {
+      const rows = await pipeline.query<{ n: number }>(
+        `select count(*)::int as n from approvals where task_id = $1 and status = 'pending'`,
+        [waiting.id],
+      );
+      return rows[0]?.n === 1 && (await stateOf(pipeline, waiting.id)) === 'waiting_approval';
+    });
+
+    const stages = await pipeline.query<{
+      attempt: number;
+      state: string;
+      outcome: string | null;
+      returned_to: string | null;
+      return_reason: string | null;
+      caused_by_event_id: string | null;
+    }>(
+      `select attempt, state, outcome, returned_to, return_reason, caused_by_event_id
+         from task_stages where task_id = $1 and stage = 'architecture' order by attempt`,
+      [waiting.id],
+    );
+    expect(stages.map((row) => row.attempt)).toEqual([1, 2]);
+    expect(stages[0]).toMatchObject({
+      state: 'returned',
+      outcome: 'plan.rejected',
+      returned_to: 'architecture',
+      return_reason: reason,
+    });
+    expect(stages[1]?.state).toBe('completed');
+    // The row is the saga's, caused by the decision the route appended.
+    const [decided] = await pipeline.query<{ id: string }>(
+      `select id from events where type = 'task.approval.decided' and payload->>'task_id' = $1`,
+      [waiting.id],
+    );
+    expect(stages[1]?.caused_by_event_id).toBe(decided?.id);
+
+    const entered = await pipeline.query<{ type: string; attempt: number | null }>(
+      `select type, (payload->>'attempt')::int as attempt from events
+        where payload->>'task_id' = $1 and position > (select position from events where id = $2)
+          and type in ('task.resumed', 'task.stage.entered', 'task.stage.returned')
+        order by position limit 2`,
+      [waiting.id, decided?.id],
+    );
+    expect(entered).toEqual([
+      { type: 'task.resumed', attempt: null },
+      { type: 'task.stage.entered', attempt: 2 },
+    ]);
+
+    // The run of attempt 2 is attached to its stage, and its prompt carries the reason.
+    const runs = await pipeline.query<{
+      attempt: number;
+      task_stage_id: string | null;
+      user_prompt: string | null;
+    }>(
+      `select attempt, task_stage_id, user_prompt from runs
+        where task_id = $1 and role = 'architect' order by started_at`,
+      [waiting.id],
+    );
+    expect(runs.map((run) => run.attempt)).toEqual([1, 2]);
+    expect(runs.every((run) => run.task_stage_id !== null)).toBe(true);
+    const feedback = readDataBlocks(runs[1]?.user_prompt ?? '').blocks.filter(
+      (block) => block.kind === 'return_feedback',
+    );
+    expect(feedback.map((block) => block.body)).toEqual([reason]);
+    expect(
+      readDataBlocks(runs[0]?.user_prompt ?? '').blocks.map((block) => block.kind),
+    ).not.toContain('return_feedback');
+
+    const counters = await pipeline.query<{ revisions: number }>(
+      `select (iteration_counters->>'architecture_revisions')::int as revisions from tasks where id = $1`,
+      [waiting.id],
+    );
+    expect(counters[0]?.revisions).toBe(1);
+  }, 240_000);
 });
+
+const stateOf = async (pipeline: PipelineE2E, taskId: string): Promise<string | undefined> =>
+  (await pipeline.query<{ state: string }>('select state from tasks where id = $1', [taskId]))[0]
+    ?.state;
 
 describe('the run command surface', () => {
   it('cancels a run that is running, and retries a finished one on another model', async () => {

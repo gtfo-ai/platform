@@ -771,6 +771,8 @@ export const stageOutcomeWordSentence = (word: TaskStageOutcomeWord): string => 
       return 'Escalated: an approval expired undecided.';
     case 'budget.rejected':
       return 'Escalated: the budget approval was rejected.';
+    case 'plan.rejected':
+      return 'Sent back: a maintainer rejected the plan, and the next attempt is given the reason.';
     case 'take_over.expired':
       return 'Escalated: the take-over saw no activity for five working days.';
     case 'write_conflict':

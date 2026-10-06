@@ -62,7 +62,6 @@ import {
   requestApproval,
   requiresBudgetApproval,
   requiresPlanApproval,
-  resumeStage,
   returnLoopFor,
   riskClassesRequiringPlanApproval,
   stageOf,
@@ -100,7 +99,12 @@ import {
 import type { PipelineStore, StoredTask } from './store.js';
 import { DefaultBranchChangedError, INITIAL_TASK_VERSION, PIPELINE_ACTOR } from './store.js';
 import { type RequesterOptions, readTicketForTask, resolveRequester } from './ticket-snapshot.js';
-import { applyDecision, closeParkedStageRow, ESCALATED_OUTCOME } from './transitions.js';
+import {
+  applyDecision,
+  closeParkedStageRow,
+  ESCALATED_OUTCOME,
+  resumeAtStage,
+} from './transitions.js';
 import { reviewFindingSignature, verdictReturnReason } from './verdicts.js';
 import { statusMappingHandler, workpadHandler } from './workpad.js';
 
@@ -1283,7 +1287,10 @@ const questionHandler = (options: PipelineSagaOptions): EventHandler => ({
       return;
     }
 
-    const resumed = resumeStage(
+    // PROGRESS backlog 495: through `resumeAtStage`, so the new attempt gets its `task_stages` row.
+    const resumed = await resumeAtStage(
+      options.store,
+      context.scope.tx,
       stored.task,
       {
         stage: question.stage,
@@ -1294,6 +1301,7 @@ const questionHandler = (options: PipelineSagaOptions): EventHandler => ({
           'Read the answers so far and either give the stage what it needs in one go, or hand the task back at a different stage.',
       },
       commandContext,
+      event.id,
     );
     await options.store.tasks.save(context.scope.tx, { ...stored, task: resumed.aggregate });
     await emitAndSchedule(
@@ -1374,18 +1382,30 @@ const approvalHandler = (options: PipelineSagaOptions): EventHandler => ({
     }
 
     if (event.payload.decision === 'rejected') {
-      // product/04 S2: a rejected plan goes back to Architecture with the human's reasoning.
-      const resumed = resumeStage(
+      // product/04 S2: a rejected plan goes back to Architecture with the human's reasoning — a
+      // new attempt with its own `task_stages` row, the parked attempt closed as a return to its
+      // own stage carrying the reason, which is the next architect run's `return_feedback`
+      // (PROGRESS backlog 495). The reason was redacted where the command stored it.
+      const reason =
+        typeof event.payload.reason === 'string' && event.payload.reason.length > 0
+          ? event.payload.reason
+          : 'the plan was rejected';
+      const resumed = await resumeAtStage(
+        options.store,
+        context.scope.tx,
         stored.task,
         {
           stage,
           loop: returnLoopFor(stage) ?? 'architecture_revisions',
-          reason: event.payload.reason ?? 'the plan was rejected',
+          reason,
           escalationBrief:
-            `The plan for ${stored.task.ticket.key} has been rejected as many times as its limit allows. ` +
+            `The plan for ${stored.task.ticket.key} has been rejected as many times as its limit allows` +
+            ` (the last time: ${reason}). ` +
             'Write what the plan should say instead, and hand the task back at Architecture.',
+          sentBack: { reason, outcome: 'plan.rejected' },
         },
         commandContext,
+        event.id,
       );
       await options.store.tasks.save(context.scope.tx, { ...stored, task: resumed.aggregate });
       await emitAndSchedule(

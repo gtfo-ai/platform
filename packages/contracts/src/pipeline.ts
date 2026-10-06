@@ -114,6 +114,9 @@ export type TaskStageState = z.infer<typeof taskStageStateSchema>;
  *    evaluate, or stopped on a repeated failure;
  *  - `question.expired`, `approval.expired`, `budget.rejected`, `take_over.expired` — the timers and
  *    the budget decision that park a task;
+ *  - `plan.rejected` — a maintainer rejected the plan this attempt produced: the attempt is closed
+ *    `returned` to its own stage with the maintainer's reason, which the next attempt is given as
+ *    its return feedback (`resumeAtStage`, PROGRESS backlog 495);
  *  - `write_conflict`, `dead_lettered`, `repository_config_invalid` — a write that lost every race,
  *    an event that spent its dispatch bound, a repository file that does not parse;
  *  - `settings_config_invalid` — the project's stored settings (`projects.config`) do not parse
@@ -157,6 +160,7 @@ export const taskStageOutcomeWordSchema = z.enum([
   'question.expired',
   'approval.expired',
   'budget.rejected',
+  'plan.rejected',
   'take_over.expired',
   'write_conflict',
   'dead_lettered',

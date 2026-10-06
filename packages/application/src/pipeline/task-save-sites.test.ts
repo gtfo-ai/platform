@@ -263,8 +263,12 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
  * What it cannot see is what the save census above cannot: an escalation reached through an alias,
  * and a `closeParkedStageRow` placed on a different branch from the escalation it answers — the
  * count is per file, not per call. The per-site behaviour is asserted in `saga.test.ts`.
+ *
+ * **`resumeStage(` counts as an escalation** (PROGRESS backlog 495): the domain command escalates by
+ * itself when its loop is spent, so its one call site (`resumeAtStage`) closes the parked row on
+ * that branch like any other escalation does.
  */
-const ESCALATE_CALL = /\bescalateTask\s*\(/g;
+const ESCALATE_CALL = /\bescalateTask\s*\(|\bresumeStage\s*\(/g;
 const CLOSE_PARKED_CALL = /\bcloseParkedStageRow\s*\(/g;
 
 const ROW_CLOSED_BY_ITS_OWN_WRITE: ReadonlyMap<string, string> = new Map([
@@ -310,9 +314,10 @@ describe('every escalation closes the parked stage’s row (WP-46, backlog 160)'
     // Calibrate the instrument (standing rule 21): the modules backlog 160 named, plus the saga's
     // own six, are all in the census with a close for each escalation.
     const census = escalationCensus();
+    // `applyEscalation`'s `escalateTask` and `resumeAtStage`'s `resumeStage` (backlog 495).
     expect(census.get('packages/application/src/pipeline/transitions.ts')).toEqual({
-      escalations: 1,
-      closes: 1,
+      escalations: 2,
+      closes: 2,
     });
     expect(census.get('packages/application/src/pipeline/saga.ts')).toEqual({
       escalations: 6,
@@ -361,14 +366,63 @@ describe('every entry, completion and cancellation closes the attempt it ends (W
   });
 
   it('finds the endings it claims to, so a vacuous census cannot pass', () => {
-    // One entry and two completions in the transitions, one cancellation in the commands.
+    // Two entries (`enter` and `resumeAtStage`, backlog 495) and two completions in the
+    // transitions, one cancellation in the commands.
     expect(census().get('packages/application/src/pipeline/transitions.ts')).toEqual({
-      endings: 3,
-      closes: 3,
+      endings: 4,
+      closes: 4,
     });
     expect(census().get('packages/application/src/pipeline/commands.ts')).toEqual({
       endings: 1,
       closes: 1,
     });
+  });
+});
+
+/**
+ * **Every entry into a stage opens that attempt's row** — the census the two above did not have,
+ * and whose absence is PROGRESS backlog 495. The domain enters a stage through two commands,
+ * `enterStage(` and `resumeStage(` (a wait ending back into the stage it was at); each call in a
+ * production module is matched one for one by a `.recordStageEntered(` in the same module. Until
+ * backlog 495 the saga called `resumeStage` for an answered question and a rejected plan and wrote
+ * no row, so the attempt it entered was run with `runs.task_stage_id` null and a rejected plan's
+ * reason never reached the architect — the product owner inserted the row by hand. Same syntactic
+ * limits as the censuses above; the behaviour is asserted in `saga.test.ts` (`plan approval`,
+ * `questions`).
+ */
+const ENTRY_CALL = /\benterStage\s*\(|\bresumeStage\s*\(/g;
+const ROW_OPENED_CALL = /\.recordStageEntered\s*\(/g;
+
+describe('every stage entry opens its attempt’s row (PROGRESS backlog 495)', () => {
+  const census = (): Map<string, { entries: number; opens: number }> => {
+    const found = new Map<string, { entries: number; opens: number }>();
+    for (const file of sources()) {
+      if (isTestTier(file) || !file.startsWith('packages/application/src/')) {
+        continue;
+      }
+      const body = withoutComments(censusText(REPO_ROOT, file));
+      const entries = body.match(ENTRY_CALL)?.length ?? 0;
+      const opens = body.match(ROW_OPENED_CALL)?.length ?? 0;
+      if (entries > 0 || opens > 0) {
+        found.set(file, { entries, opens });
+      }
+    }
+    return found;
+  };
+
+  it('matches each `enterStage`/`resumeStage` with a `.recordStageEntered`, file by file', () => {
+    const unmatched = [...census()]
+      .filter(([, counts]) => counts.entries !== counts.opens)
+      .map(([file, counts]) => `${file}: ${counts.entries} entries, ${counts.opens} row opens`);
+    expect(unmatched).toEqual([]);
+  });
+
+  it('finds the entries it claims to, so a vacuous census cannot pass', () => {
+    // `enter`'s `enterStage` and `resumeAtStage`'s `resumeStage`, and nowhere else.
+    expect(census().get('packages/application/src/pipeline/transitions.ts')).toEqual({
+      entries: 2,
+      opens: 2,
+    });
+    expect(census().get('packages/application/src/pipeline/saga.ts')).toBeUndefined();
   });
 });

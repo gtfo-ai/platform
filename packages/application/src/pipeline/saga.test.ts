@@ -729,6 +729,16 @@ describe('questions', () => {
     expect(resumed.task.iterationCounters.refinement_questions).toBe(1);
     expect(resumed.task.stageAttempts.refinement).toBe(2);
     expect(resumed.task.state).toBe('ready_for_merge');
+    // PROGRESS backlog 495: the answered question's resumption opens the new attempt's row, as
+    // every entry does, so the run of attempt 2 has a stage to be attached to and to close.
+    expect(
+      harness.store.stageRows
+        .filter((row) => row.stage === 'refinement')
+        .map((row) => [row.attempt, row.state]),
+    ).toEqual([
+      [1, 'completed'],
+      [2, 'completed'],
+    ]);
   });
 
   it('escalates when the question expires instead of waiting for ever', async () => {
@@ -1448,6 +1458,112 @@ describe('plan approval (product/04 S2, BD-006)', () => {
 
     expect(taskOf(harness).task.stageAttempts.architecture).toBe(2);
     expect(taskOf(harness).task.iterationCounters.architecture_revisions).toBe(1);
+  });
+
+  /**
+   * PROGRESS backlog 495 — the product owner's first local test: *"rejecting the plan does not
+   * create a stage attempt"*. The aggregate moved to architecture attempt 2, but nothing opened
+   * that attempt's `task_stages` row, so the run it started was attached to no stage
+   * (`runs.task_stage_id` null), its completion closed nothing, and the maintainer's reason never
+   * reached the architect — `lastReturnReason` reads a row whose `returned_to` is the stage.
+   */
+  it('enters the rejected plan’s stage as a new attempt row, and hands the architect the reason', async () => {
+    const harness = large();
+    await harness.publish([ticketMatched()]);
+    const requested = harness
+      .events()
+      .find((entry) => entry.type === 'task.approval.requested') as Extract<
+      DomainEvent,
+      { type: 'task.approval.requested' }
+    >;
+    const before = harness.events().length;
+
+    // Parked again, so the second attempt's row is read before anything else closes it.
+    harness.script('architecture', completedRun({ ...PLAN, estimated_size: 'XL' }));
+    await decideTaskApproval(harness.commands, {
+      approvalId: requested.payload.approval.id,
+      decision: 'rejected',
+      userId: '00000000-0000-4000-8000-0000000000c1',
+      role: 'maintainer',
+      reason: 'split it into two merge requests',
+    });
+    await harness.drain();
+
+    // Event by event: the decision, the way out of the wait, the new attempt.
+    expect(
+      harness
+        .events()
+        .slice(before)
+        .map((entry) => entry.type)
+        .slice(0, 3),
+    ).toEqual(['task.approval.decided', 'task.resumed', 'task.stage.entered']);
+    const entered = harness
+      .events()
+      .slice(before)
+      .find((entry) => entry.type === 'task.stage.entered') as Extract<
+      DomainEvent,
+      { type: 'task.stage.entered' }
+    >;
+    expect(entered.payload).toMatchObject({ stage: 'architecture', attempt: 2 });
+
+    const rows = harness.store.stageRows.filter((row) => row.stage === 'architecture');
+    expect(rows.map((row) => row.attempt)).toEqual([1, 2]);
+    // The rejected attempt is a return to its own stage, carrying the maintainer's words…
+    expect(rows[0]).toMatchObject({
+      state: 'returned',
+      outcome: 'plan.rejected',
+      returnedTo: 'architecture',
+      returnReason: 'split it into two merge requests',
+    });
+    // …and the new attempt has a row, which its run closed with its verdict.
+    expect(rows[1]).toMatchObject({ state: 'completed' });
+
+    const [, second] = harness.specs.filter((spec) => spec.stage === 'architecture');
+    const feedback = readDataBlocks(second?.userPrompt ?? '').blocks.filter(
+      (block) => block.kind === 'return_feedback',
+    );
+    expect(feedback.map((block) => block.body)).toEqual(['split it into two merge requests']);
+    expect(taskOf(harness).task.state).toBe('waiting_approval');
+  });
+
+  it('escalates a plan rejected past the architecture_revisions bound, counter at its limit', async () => {
+    const harness = harnessWith({
+      runs: { ...happyRuns(), architecture: completedRun({ ...PLAN, estimated_size: 'XL' }) },
+    });
+    await harness.publish([ticketMatched()]);
+    const reject = async (reason: string) => {
+      const pending = harness
+        .events()
+        .filter((entry) => entry.type === 'task.approval.requested')
+        .at(-1) as Extract<DomainEvent, { type: 'task.approval.requested' }>;
+      await decideTaskApproval(harness.commands, {
+        approvalId: pending.payload.approval.id,
+        decision: 'rejected',
+        userId: '00000000-0000-4000-8000-0000000000c1',
+        role: 'maintainer',
+        reason,
+      });
+      await harness.drain();
+    };
+    await reject('first');
+    await reject('second');
+    expect(taskOf(harness).task.stageAttempts.architecture).toBe(3);
+    await reject('third');
+
+    const stopped = taskOf(harness).task;
+    expect(stopped.state).toBe('needs_human');
+    expect(stopped.iterationCounters.architecture_revisions).toBe(2);
+    expect(stopped.stageAttempts.architecture).toBe(3);
+    const rows = harness.store.stageRows.filter((row) => row.stage === 'architecture');
+    // One row per attempt, none left running under a parked task, the last one carrying the
+    // reason it was rejected with for whoever hands the task back.
+    expect(rows.map((row) => [row.attempt, row.state])).toEqual([
+      [1, 'returned'],
+      [2, 'returned'],
+      [3, 'returned'],
+    ]);
+    expect(rows[2]?.returnReason).toBe('third');
+    expect(harness.specs.filter((spec) => spec.stage === 'architecture')).toHaveLength(3);
   });
 
   it('refuses a decision from a role that may not make it', async () => {

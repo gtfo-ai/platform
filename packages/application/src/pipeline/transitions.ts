@@ -34,7 +34,9 @@ import type {
   IterationLoop,
   PipelineDecision,
   PipelineSignal,
+  ResumeStageInput,
   Task,
+  TaskDecision,
 } from '@platform/domain';
 import {
   completeStage,
@@ -50,6 +52,7 @@ import {
   READY_FOR_MERGE_STAGE,
   RETROSPECTIVE_STAGE,
   recordMerge,
+  resumeStage,
   returnEscalatedTask,
   returnToStage,
   stageOf,
@@ -476,6 +479,81 @@ export const closeCurrentStageRow = async (
     outcome,
     reason,
   });
+};
+
+/** What {@link resumeAtStage} takes beyond the domain's own {@link ResumeStageInput}. */
+export interface ResumeAtStageInput extends ResumeStageInput {
+  /**
+   * The wait ended because a human **sent the parked attempt's work back** — a rejected plan
+   * (product/04 S2) — rather than because it was answered. The attempt the task was parked on is
+   * then closed as a return **to its own stage**, carrying the human's words: that row is what
+   * `lastReturnReason` hands the next attempt as its `return_feedback` block, exactly as an agent
+   * verdict's return is (`apply`'s `return` case writes the same shape over the same executor-closed
+   * row). Absent for an answered question, whose answers reach the next run by their own table.
+   */
+  readonly sentBack?: { readonly reason: string; readonly outcome: TaskStageOutcome };
+}
+
+/**
+ * **A task leaves a human wait back into the stage it was waiting at** (PROGRESS backlog 495): the
+ * domain's `resumeStage` — `task.resumed`, `task.stage.entered` with a new attempt, a round of the
+ * bounded loop spent, or the escalation when the loop is spent — **plus the `task_stages`
+ * bookkeeping every entry owes**, which is what an answered question and a rejected plan never had.
+ *
+ * Until backlog 495 the saga called `resumeStage` itself and wrote nothing but the task row. The
+ * aggregate moved to attempt N+1 with no row for it, so the run `stage.execute` started for that
+ * attempt was inserted with `runs.task_stage_id` null (the API then refuses it a stage), its
+ * completion closed no row, the stranded-stage census saw an attempt nothing recorded, and a
+ * rejected plan's reason never reached the architect. The product owner's first local test hit it
+ * and inserted the row by hand. The entry census in `task-save-sites.test.ts` now holds every
+ * `resumeStage(`/`enterStage(` call to a `.recordStageEntered(` in the same module.
+ *
+ * Writes rows only; the caller saves the aggregate it is handed and emits its events, so the save
+ * stays at the call site the task-save census already counts.
+ */
+export const resumeAtStage = async (
+  store: PipelineStore,
+  tx: import('../ports/transaction.js').Transaction,
+  task: Task,
+  input: ResumeAtStageInput,
+  context: CommandContext,
+  causedByEventId: Id | null,
+): Promise<TaskDecision> => {
+  const parkedAttempt = task.stageAttempts[input.stage];
+  if (input.sentBack !== undefined && parkedAttempt !== undefined) {
+    // Written even when the loop is spent and the task escalates below: the rejection was the
+    // human's decision, and the stage a person later hands the task back to is where it belongs.
+    await store.tasks.recordStageExited(tx, {
+      taskId: task.id,
+      stage: input.stage,
+      attempt: parkedAttempt,
+      state: 'returned',
+      outcome: input.sentBack.outcome,
+      returnReason: input.sentBack.reason,
+      returnedTo: input.stage,
+    });
+  }
+  const resumed = resumeStage(task, input, context);
+  if (resumed.aggregate.state !== 'active') {
+    // `resumeStage` escalated: the loop is spent (BD-008) and the counter stays at its limit.
+    await closeParkedStageRow(store, tx, resumed, ESCALATED_OUTCOME);
+    return resumed;
+  }
+  const attempt = resumed.aggregate.stageAttempts[input.stage] ?? 1;
+  await closeCurrentStageRow(
+    store,
+    tx,
+    task,
+    task.currentStage === input.stage ? SUPERSEDED_OUTCOME : LEFT_OUTCOME,
+    `the task entered ${input.stage} (attempt ${String(attempt)})`,
+  );
+  await store.tasks.recordStageEntered(tx, {
+    taskId: task.id,
+    stage: input.stage,
+    attempt,
+    causedByEventId,
+  });
+  return resumed;
 };
 
 /** Enters a stage, choosing the command its id implies and scheduling whatever it needs. */
