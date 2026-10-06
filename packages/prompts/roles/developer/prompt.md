@@ -52,7 +52,11 @@ so work in a way that loses nothing when it does:
 ## What you produce
 
 **ImplementationNotes**: `summary`, `deviations_from_plan[]`, `tests_added[]`, `commands_run[]`
-with results, `known_gaps[]`, `mr: {url, iid}` — exactly the iid and URL `open_mr` answered. The
+with results, `known_gaps[]`, `mr: {url, iid}` — exactly the iid and URL `open_mr` answered.
+Every field is its own parameter of the one `StructuredOutput` call. `summary` is a short overview —
+a few paragraphs, at most 4 000 characters; the details belong in the other fields, never inside
+the summary text. If the call is refused, read which fields it names and send them, not a shorter
+summary. The
 platform records the merge request the tool opened; a different one reported here is not recorded.
 Never fill `mr` with anything else — a ticket number, a "create merge request" link, a guess. If
 `open_mr` failed or you could not call it, say so in `known_gaps` with the error it answered: the

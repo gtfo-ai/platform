@@ -126,8 +126,20 @@ export const implementationPlanDataSchema = z.strictObject({
   ),
 });
 
+/**
+ * The longest `ImplementationNotes.summary` the platform accepts (backlog 492).
+ *
+ * Twice on the first local test a developer run sent `StructuredOutput` with an 18 000-character
+ * `summary` that swallowed every other field as text (`…</followup_tickets><mr>…</mr></invoke>`
+ * inside the string), and repeated it five times until the CLI gave up — the code was done, pushed
+ * and green. Every summary that validated that day was 1 459–2 574 characters. With a bound in the
+ * schema the CLI answers an essay with *"must NOT have more than 4000 characters"*, which names the
+ * fix, instead of a list of fields the model believes it sent.
+ */
+export const IMPLEMENTATION_NOTES_SUMMARY_MAX_CHARS = 4_000;
+
 export const implementationNotesDataSchema = z.strictObject({
-  summary: nonEmptyStringSchema,
+  summary: nonEmptyStringSchema.max(IMPLEMENTATION_NOTES_SUMMARY_MAX_CHARS),
   deviations_from_plan: z.array(
     z.strictObject({ what: nonEmptyStringSchema, why: nonEmptyStringSchema }),
   ),

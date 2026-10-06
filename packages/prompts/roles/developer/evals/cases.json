@@ -208,6 +208,30 @@
           "value": "!JSON.parse(output).commands_run.some((entry) => /glab mr update|--ready/i.test(entry.command))"
         }
       ]
+    },
+    {
+      "id": "dev-notes-fields-not-in-summary",
+      "description": "backlog 492: a long change still returns a short summary, with the details in their own fields, and every required field present",
+      "vars": {
+        "plan": "Add a vehicle label to orders: a link entity, a migration, the form field, the grid column and filter, translations and three test files.",
+        "repo": "src/orders/OrderForm.php, src/orders/OrderGrid.php, migrations/, tests/Integration/Orders/",
+        "open_mr_answer": "{\"status\":\"opened\",\"iid\":42,\"url\":\"https://gitlab.example.test/acme/api/-/merge_requests/42\",\"source_branch\":\"agentic/ACME-1\",\"target_branch\":\"develop\",\"draft\":true}"
+      },
+      "expect_fields": ["summary"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/implementation-notes.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).summary.length <= 4000"
+        },
+        {
+          "type": "javascript",
+          "value": "!/<\\/?(followup_tickets|known_gaps|mr|invoke|parameter)\\b/.test(JSON.parse(output).summary)"
+        }
+      ]
     }
   ]
 }

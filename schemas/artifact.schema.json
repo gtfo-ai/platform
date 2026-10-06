@@ -490,6 +490,7 @@
           "type": "object",
           "properties": {
             "summary": {
+              "maxLength": 4000,
               "$ref": "#/$defs/NonEmptyString"
             },
             "deviations_from_plan": {
