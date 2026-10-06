@@ -181,6 +181,34 @@ describe('the client', () => {
     });
   });
 
+  // WP-151 round 1: a run-image protocol refusal's two numbers cross as integers, or not at all.
+  it('carries a protocol refusal’s two numbers across, and reads a body with non-integer ones by its status', async () => {
+    const answering = (protocols: unknown) =>
+      clientWith(() => ({
+        status: 400,
+        body: JSON.stringify({
+          error: {
+            code: 'invalid_spec',
+            message: 'refused',
+            runId: null,
+            detail: null,
+            reason: 'runtime_image_protocol_missing',
+            protocols,
+          },
+        }),
+      })).client;
+    await expect(answering({ runner: 3, shim: null }).health()).rejects.toMatchObject({
+      reason: 'runtime_image_protocol_missing',
+      protocols: { runner: 3, shim: null },
+    });
+    for (const forged of [{ runner: 3, shim: '2' }, { runner: 3 }, { runner: 3, shim: 2, x: 1 }]) {
+      await expect(answering(forged).health()).rejects.toMatchObject({
+        reason: 'launcher_request_refused',
+        protocols: null,
+      });
+    }
+  });
+
   /**
    * Backlog 453: the helper's own words were on the wire as `detail` and were replaced here by the
    * code and the status, so a start failure reached the task with no reason at all. `output` is the

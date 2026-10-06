@@ -322,6 +322,12 @@ export interface ScriptedRun {
    */
   readonly rejectsAfterCli?: Error;
   /**
+   * The outcome **rejects** with this error and the marker is never asked for (WP-151): what
+   * `claude-runner.ts` answers for a run whose transport ended before its `spawn` frame — a
+   * `RunStartError` whose diagnosis names the step, here a shim protocol mismatch with both numbers.
+   */
+  readonly rejectsBeforeCli?: Error;
+  /**
    * Whether the run **called `open_mr`** (WP-138). A completed run whose spec carries the tool and
    * whose artifact reports `mr` is taken to have opened that merge request, and the harness records
    * it the way the tool does (`tasks.recordMergeRequest`, compare-and-set) before the outcome
@@ -1614,7 +1620,10 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         sessionId: `session-${spec.runId}`,
         // WP-138: the `open_mr` call the run made, recorded as the tool records it, before the
         // run ends — what the stage executor's final transaction then reads.
-        outcome: askForCli(scripted, hooks)
+        outcome: (scripted.rejectsBeforeCli === undefined
+          ? askForCli(scripted, hooks)
+          : Promise.reject(scripted.rejectsBeforeCli)
+        )
           .then(() => {
             if (scripted.rejectsAfterCli !== undefined) {
               throw scripted.rejectsAfterCli;

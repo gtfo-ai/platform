@@ -33,12 +33,15 @@
  * `60_000` from WP-13 onward, which is why the first failure reported the helper's 30 s deadline
  * at 31,482 ms and the second `Test timed out in 60000ms`.
  */
+
 import { type ChildProcess, spawn as spawnProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { type LogFields, silentLogger } from '@platform/application';
+import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { systemClock } from '../runner/clock.js';
 import { createAllowListCredentialResponder, createRunletSpawn } from './spawn-adapter.js';
@@ -91,6 +94,8 @@ interface ShimProcess {
   readonly dir: string;
   readonly stderr: () => string;
   readonly exited: Promise<number | null>;
+  /** What `tini` forwards when the launcher stops the run container (WP-151). */
+  readonly stop: () => void;
 }
 
 /** Starts `apps/runlet/src/index.ts` the way the image's entrypoint will. */
@@ -125,6 +130,29 @@ const startShimProcess = async (env: Record<string, string> = {}): Promise<ShimP
     dir: volume.dir,
     stderr: () => stderr,
     exited,
+    stop: () => {
+      child.kill('SIGTERM');
+    },
+  };
+};
+
+/** Every line a transport logged, with its level — what backlog 463 is about (WP-151). */
+const recordingLogger = () => {
+  const lines: { level: string; message: string }[] = [];
+  const at =
+    (level: string) =>
+    (_fields: LogFields, message: string): void => {
+      lines.push({ level, message });
+    };
+  return {
+    lines,
+    logger: {
+      ...silentLogger,
+      debug: at('debug'),
+      info: at('info'),
+      warn: at('warn'),
+      error: at('error'),
+    },
   };
 };
 
@@ -255,7 +283,7 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     const BULK_BYTES = 16 * 1024 * 1024;
     const shim = await startShimProcess();
     const runner = await connectProbe(shim.controlSocketPath);
-    runner.send({ type: 'hello', protocol: 2, token: TOKEN });
+    runner.send({ type: 'hello', protocol: RUNLET_PROTOCOL_VERSION, token: TOKEN });
     await runner.next('hello.ok');
     runner.send({
       type: 'spawn',
@@ -320,6 +348,132 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     expect(await shim.exited).toBe(0);
   });
 
+  /**
+   * **Backlog 463, both directions** (WP-151 criterion (4), TD-025's M9 amendment). Measured first
+   * (PROGRESS § WP-151): the close that logged a level-50 *"runlet transport failed"* at the end of
+   * every completed run is the platform's own teardown — the runner returns its outcome once it has
+   * the `result`, the workspace runner ends the workspace, and the launcher's stop reaches the shim
+   * (through `tini`, a SIGTERM) while the CLI is still exiting, so the shim closes the control
+   * connection with no `exit` frame. The SDK never stopped reading: no pause was observed.
+   *
+   * Here the CLI lingers past stdin EOF, so the stop always wins — the order the measurement found
+   * for a CLI that is slower to exit than the launcher's round trip — and the runner consumes the
+   * session exactly as `claude-runner.ts` does: it stops at `result`, tells the transport, ends the
+   * prompt stream and returns the iterator without awaiting it.
+   */
+  it('logs no error-level line when the run shim closes after the session’s result', async () => {
+    const shim = await startShimProcess();
+    const { logger, lines } = recordingLogger();
+    const transport = createRunletSpawn({
+      socketPath: shim.controlSocketPath,
+      token: TOKEN,
+      clock: systemClock,
+      logger,
+    });
+    const exits: Promise<[number | null, string | null]>[] = [];
+    const errors: Error[] = [];
+    const spawn = Object.assign(
+      (options: SpawnOptions) => {
+        const child = transport(options);
+        child.on('error', (error: Error) => errors.push(error));
+        exits.push(
+          new Promise((resolve) => {
+            child.once('exit', (code: number | null, signal: string | null) =>
+              resolve([code, signal]),
+            );
+          }),
+        );
+        return child;
+      },
+      { noteSessionResult: transport.noteSessionResult },
+    );
+    let endPrompts: () => void = () => {};
+    const promptsEnded = new Promise<void>((resolve) => {
+      endPrompts = resolve;
+    });
+    async function* prompts() {
+      yield {
+        type: 'user' as const,
+        message: { role: 'user' as const, content: 'summarise the bug' },
+        parent_tool_use_id: null,
+        session_id: '',
+      };
+      await promptsEnded;
+    }
+    const session = query({
+      prompt: prompts(),
+      options: {
+        spawnClaudeCodeProcess: spawn,
+        pathToClaudeCodeExecutable: FAKE_CLI,
+        cwd: REPO,
+        env: { PATH: process.env['PATH'] ?? '/usr/bin' },
+        extraArgs: { scenario: 'linger' },
+      },
+    });
+    const iterator = session[Symbol.asyncIterator]();
+    await settlesWithin(
+      'the shim to carry the session to its result',
+      (async () => {
+        for (;;) {
+          const step = await iterator.next();
+          if (step.done === true || step.value.type === 'result') {
+            return;
+          }
+        }
+      })(),
+    );
+    spawn.noteSessionResult();
+    endPrompts();
+    void iterator.return?.().catch(() => undefined);
+    // The launcher's stop, as the workspace runner's `release()` asks for it once the outcome is in.
+    shim.stop();
+    expect(await shim.exited).toBe(0);
+    const [code, signal] = (await settlesWithin(
+      'the transport to report the end of the process',
+      exits[0] as Promise<[number | null, string | null]>,
+    )) as [number | null, string | null];
+
+    // The branch that ran (rule 10): the close came with no `exit` frame, so the status is unknown.
+    expect([code, signal]).toEqual([null, null]);
+    expect(errors).toEqual([]);
+    expect(lines.filter((line) => line.level === 'error')).toEqual([]);
+    expect(lines.map((line) => line.message)).toContain(
+      'the run shim closed the control connection after the session’s result; the CLI’s exit status was not reported',
+    );
+  });
+
+  it('still logs an error-level line when the run shim closes with neither an exit frame nor a result', async () => {
+    const shim = await startShimProcess();
+    const { logger, lines } = recordingLogger();
+    const spawn = createRunletSpawn({
+      socketPath: shim.controlSocketPath,
+      token: TOKEN,
+      clock: systemClock,
+      logger,
+    });
+    const pidFile = `${shim.dir}/no-result.pid`;
+    const child = spawn(spawnOptions(['--scenario', 'signal-report', '--pid-file', pidFile]));
+    const errors: Error[] = [];
+    child.on('error', (error) => errors.push(error));
+    const exited = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
+      child.once('exit', (code, signal) => resolve([code, signal]));
+    });
+    child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user' } })}\n`);
+    await waitForFile('the shim to spawn the fake CLI, which writes its pid file', pidFile);
+    shim.stop();
+    expect(await shim.exited).toBe(0);
+    expect(await settlesWithin('the transport to report the end of the process', exited)).toEqual([
+      null,
+      null,
+    ]);
+    expect(errors.map((error) => error.message)).toEqual([
+      'the run shim closed the control connection',
+    ]);
+    expect(lines.filter((line) => line.level === 'error').map((line) => line.message)).toEqual([
+      'runlet transport failed',
+    ]);
+  });
+
   it('relays a signal to the CLI and forwards its stderr', async () => {
     const shim = await startShimProcess();
     const stderrChunks: string[] = [];
@@ -364,7 +518,7 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     // `SpawnedProcess.kill()` would send a `signal` frame instead, which is the polite path and
     // proves nothing about the impolite one.
     const runner = await connectProbe(shim.controlSocketPath);
-    runner.send({ type: 'hello', protocol: 2, token: TOKEN });
+    runner.send({ type: 'hello', protocol: RUNLET_PROTOCOL_VERSION, token: TOKEN });
     await runner.next('hello.ok');
     runner.send({
       type: 'spawn',

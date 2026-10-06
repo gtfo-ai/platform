@@ -52,15 +52,17 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { readRunletProtocol } from './runlet-protocol.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
  * @type {{name: string, dockerfile: string, dependsOn: string|null, maxBytes: number,
- *   versioned?: boolean}[]}
+ *   versioned?: boolean, runletProtocol?: boolean}[]}
  * In build order: `dependsOn` is passed as `BASE_IMAGE`, so a run of this script is self-contained.
  * `versioned` marks the two images that declare `APP_VERSION`/`APP_COMMIT`/`APP_BUILT_AT` — the
- * others would answer a build argument they do not use with a warning.
+ * others would answer a build argument they do not use with a warning. `runletProtocol` marks the
+ * run image, which labels the protocol its shim speaks from `RUNLET_PROTOCOL` (WP-151).
  */
 const IMAGES = [
   // Node 24 slim plus git/jq/ripgrep/ssh and the uid-1000 user. Measured 547 MB.
@@ -71,6 +73,7 @@ const IMAGES = [
     dockerfile: 'runtime.Dockerfile',
     dependsOn: 'platform-base',
     maxBytes: 1.8e9,
+    runletProtocol: true,
   },
   // Alpine + tinyproxy. Measured 13.2 MB; the ceiling is deliberately tight, because anything that
   // grows this image is something running beside the only route out of a run.
@@ -221,12 +224,41 @@ function assertBuildMetadata(reference) {
   return missing.length === 0 ? null : `${reference} did not take ${missing.join(', ')}`;
 }
 
+/**
+ * The run shim's protocol (WP-151): read off `RUNLET_PROTOCOL_VERSION` and handed to the run image
+ * as `RUNLET_PROTOCOL`, which its Dockerfile checks against the same source line and writes into the
+ * `com.agentic.runlet-protocol` label. Read once, here, so a source the reader cannot read fails the
+ * run before anything builds.
+ */
+const RUNLET_PROTOCOL = readRunletProtocol(REPO);
+const RUNLET_PROTOCOL_LABEL = 'com.agentic.runlet-protocol';
+
+/** The run image carries the protocol it was built with — checked on the artefact, not the argv. */
+function assertRunletProtocolLabel(reference) {
+  const inspected = spawnSync(
+    'docker',
+    [
+      'image',
+      'inspect',
+      reference,
+      '--format',
+      `{{index .Config.Labels "${RUNLET_PROTOCOL_LABEL}"}}`,
+    ],
+    { encoding: 'utf8' },
+  );
+  const label = inspected.stdout.trim();
+  return label === String(RUNLET_PROTOCOL)
+    ? null
+    : `${reference} declares ${RUNLET_PROTOCOL_LABEL}=${JSON.stringify(label)}, not ${RUNLET_PROTOCOL}`;
+}
+
 let failed = false;
 for (const image of order) {
   const reference = `${image.name}:${tag}`;
   const buildArgs = [
     ...(image.dependsOn === null ? [] : ['--build-arg', `BASE_IMAGE=${image.dependsOn}:${tag}`]),
     ...(image.versioned === true ? metadataArgs : []),
+    ...(image.runletProtocol === true ? ['--build-arg', `RUNLET_PROTOCOL=${RUNLET_PROTOCOL}`] : []),
   ];
   process.stdout.write(`\n── ${reference} (docker/${image.dockerfile}) ──\n`);
   const build = spawnSync(
@@ -242,6 +274,11 @@ for (const image of order) {
   const metadata = image.versioned === true ? assertBuildMetadata(reference) : null;
   if (metadata !== null) {
     process.stdout.write(`FAIL: ${metadata}\n`);
+    failed = true;
+  }
+  const protocol = image.runletProtocol === true ? assertRunletProtocolLabel(reference) : null;
+  if (protocol !== null) {
+    process.stdout.write(`FAIL: ${protocol}\n`);
     failed = true;
   }
   // A size this script cannot read is a **failed check**, not a stack trace: `imageBytes` throws on

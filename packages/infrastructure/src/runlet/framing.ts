@@ -26,6 +26,7 @@ import {
   isRunletByteFrameType,
   type RunletFatalReason,
   type RunletFrame,
+  type RunletProtocols,
   runletFrameSchema,
 } from '@platform/contracts';
 
@@ -40,14 +41,24 @@ export const MAX_FRAME_PAYLOAD_BYTES = 4 * 1024 * 1024;
 
 const PREFIX_BYTES = 8;
 
-/** A protocol violation. Carries the reason both endpoints report on the wire as `fatal`. */
+/**
+ * A protocol violation. Carries the reason both endpoints report on the wire as `fatal`, and — for a
+ * `protocol_mismatch` only (WP-151) — the two versions that frame carries.
+ */
 export class RunletProtocolError extends Error {
   readonly reason: RunletFatalReason;
+  /** Both versions, for a `protocol_mismatch`; `null` for every other reason. */
+  readonly protocols: RunletProtocols | null;
 
-  constructor(message: string, reason: RunletFatalReason = 'protocol_error') {
+  constructor(
+    message: string,
+    reason: RunletFatalReason = 'protocol_error',
+    protocols: RunletProtocols | null = null,
+  ) {
     super(message);
     this.name = 'RunletProtocolError';
     this.reason = reason;
+    this.protocols = protocols;
   }
 }
 

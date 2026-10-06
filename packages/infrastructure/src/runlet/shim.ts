@@ -619,10 +619,13 @@ export const createRunletShim = (options: RunletShimOptions): RunletShim => {
     }
     switch (frame.type) {
       case 'hello': {
+        // Before the token (WP-151): a runner from another build is told which, by number, rather
+        // than that its token was wrong — the diagnosis AUT-6820's run got (backlog 489).
         if (frame.protocol !== RUNLET_PROTOCOL_VERSION) {
           throw new RunletProtocolError(
             `the runner speaks protocol ${frame.protocol}, the shim speaks ${RUNLET_PROTOCOL_VERSION}`,
-            'auth_failed',
+            'protocol_mismatch',
+            { runner: frame.protocol, shim: RUNLET_PROTOCOL_VERSION },
           );
         }
         if (!tokensMatch(token, frame.token)) {
@@ -719,8 +722,12 @@ export const createRunletShim = (options: RunletShimOptions): RunletShim => {
       onError: (error) => {
         const reason: RunletFatalReason =
           error instanceof RunletProtocolError ? error.reason : 'protocol_error';
-        logger.warn({ reason, message: error.message }, 'runlet control connection failed');
-        connection.fail(reason, error.message);
+        const protocols = error instanceof RunletProtocolError ? error.protocols : null;
+        logger.warn(
+          { reason, message: error.message, ...(protocols === null ? {} : { protocols }) },
+          'runlet control connection failed',
+        );
+        connection.fail(reason, error.message, protocols);
       },
       onClose: () => {
         handshake?.();

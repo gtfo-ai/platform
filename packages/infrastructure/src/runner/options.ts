@@ -75,12 +75,12 @@ export const PLATFORM_GIT_IDENTITY: Readonly<Record<string, string>> = {
  * PROGRESS backlog 282 (WP-104): a `core.fsmonitor` the run writes into `.git/config` turns the
  * allow-listed `git status` into an arbitrary command — measured in `platform-runtime` (git 2.47.3),
  * the WP-104 notes. `GIT_CONFIG_COUNT` entries are command-line configuration, which outranks the
- * repository's, and every git the CLI's shell starts inherits this environment. Only this key, for
- * the export helper's reason against enumerating `-c` overrides (`../workspace/provider.ts`): the
- * write guard refuses `.git/` for Edit and Write, and this key covers the setting whichever route
- * wrote it — a shell redirection or `git config` is `ask`, but repository content a project command
- * runs (BD-025's accepted residual) is not. `core.hooksPath` and the other keys git executes are not
- * overridden here; that residual is stated, not closed.
+ * repository's, and every git the CLI's shell starts inherits this environment. Two keys, not an
+ * enumeration of every `-c` override (the export helper's reason, `../workspace/provider.ts`): the
+ * write guard refuses `.git/` for Edit and Write, and these cover the settings whichever route wrote
+ * them — a shell redirection or `git config` is `ask`, but repository content a project command runs
+ * (BD-025's accepted residual) is not. Since backlog 488, `core.hooksPath=/dev/null` is the second
+ * (below), so no repository hook runs either; the other keys git executes are not overridden.
  */
 export const PLATFORM_GIT_CONFIG: readonly WorkspaceGitConfigEntry[] = [
   { key: 'core.fsmonitor', value: 'false' },
@@ -116,14 +116,15 @@ export const PLATFORM_GIT_CONFIG: readonly WorkspaceGitConfigEntry[] = [
  *     home the launcher answered;
  *  3. {@link platformEnvironment};
  *  4. **one** git list: the workspace's entries first (`credential.helper` and, since backlog 481,
- *     `credential.useHttpPath`), then {@link PLATFORM_GIT_CONFIG} (`core.fsmonitor`) —
- *     `GIT_CONFIG_COUNT=3` for an HTTPS run, 2 for a deploy-key run — with contiguous indices.
+ *     `credential.useHttpPath`), then {@link PLATFORM_GIT_CONFIG} (`core.fsmonitor` and, since
+ *     backlog 488, `core.hooksPath`) — `GIT_CONFIG_COUNT=4` for an HTTPS run, 3 for a deploy-key
+ *     run — with contiguous indices.
  *     A key on both sides is refused by name (`numberGitConfig`), which fails the run's start rather
  *     than dropping one of them.
  *
  * `workspace` is `null` for a run with no launcher answer behind it (a test's fake CLI, or a
  * composition that does not forward one): the environment is then what it was before WP-118 — the
- * spec's and the platform's, and the one platform git entry at `COUNT=1`.
+ * spec's and the platform's, and the two platform git entries at `COUNT=2`.
  */
 export const cliEnvironment = (
   spec: RunSpec,

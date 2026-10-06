@@ -68,6 +68,7 @@ import type {
   WorkspaceSpec,
 } from '@platform/application';
 import { platformSkillOfQualified, workspaceSpecSchema } from '@platform/application';
+import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import { LOCKFILE_INSTALL_ALLOW } from '@platform/domain';
 
 /**
@@ -337,5 +338,7 @@ export const buildWorkspaceSpec = (input: BuildWorkspaceSpecInput): WorkspaceSpe
     protectedPaths: checkout ? [...input.spec.protectedPaths] : [],
     env: { ...(input.containerEnv ?? {}) },
     keepUntil: keepUntil.toISOString(),
+    // WP-151: this process's own shim protocol — the runner that will open the run's control socket.
+    runletProtocol: RUNLET_PROTOCOL_VERSION,
   });
 };

@@ -989,6 +989,39 @@ describe('a run refused by its workspace names the kind and the reason (WP-127)'
     expect(describeStartFailure(new Error(PLANTED))).toBe('Error');
     expect(describeStartFailure(PLANTED)).toBe('unknown error');
   });
+
+  // WP-151: the two protocol numbers are written only as integers through their schema.
+  it('writes the protocol numbers of a mismatch only when both are integers', () => {
+    const mismatch = (protocols: unknown) =>
+      describeStartFailure(
+        new RunStartError('x', {
+          retryable: false,
+          diagnosis: {
+            kind: 'workspace_failed',
+            reason: 'runlet_protocol_mismatch',
+            commit: null,
+            protocols: protocols as never,
+          },
+        }),
+      );
+    expect(mismatch({ runner: 3, shim: 2 })).toBe(
+      'RunStartError: workspace_failed, runlet_protocol_mismatch, runner protocol 3, shim protocol 2',
+    );
+    // A run image that declares no protocol (the launcher's refusal, WP-151 round 1).
+    expect(mismatch({ runner: 3, shim: null })).toBe(
+      'RunStartError: workspace_failed, runlet_protocol_mismatch, runner protocol 3, shim protocol undeclared',
+    );
+    for (const forged of [
+      { runner: 3, shim: PLANTED },
+      { runner: '3', shim: 2 },
+      { runner: 3, shim: 2.5 },
+      { runner: 3 },
+      { runner: 3, shim: 2, note: PLANTED },
+      null,
+    ]) {
+      expect(mismatch(forged)).toBe('RunStartError: workspace_failed, runlet_protocol_mismatch');
+    }
+  });
 });
 
 /**
@@ -1086,6 +1119,53 @@ describe('a run that never started records the launcher’s reason (backlog 453)
     expect(brief).toContain('There is no transcript');
     expect(brief).not.toContain("Open the run's transcript");
     expect(JSON.stringify(harness.events())).not.toContain(SECRET);
+  });
+
+  /**
+   * WP-151 criterion (2), PROGRESS backlog 500: a shim from another build refuses the handshake with
+   * both protocol numbers, and they reach the start failure and `run.failed` as **platform text**
+   * (the diagnosis), never as the untrusted `detail` — through WP-150's start-failure path, with the
+   * marker never asked and a measured zero.
+   */
+  it('carries both shim protocol numbers into the start failure and run.failed (WP-151)', async () => {
+    const harness = harnessWith({
+      runs: {
+        refinement: {
+          status: 'failed',
+          terminalReason: 'crash',
+          rejectsBeforeCli: new RunStartError(
+            'the run ended before its CLI was asked to start (runlet_protocol_mismatch): …',
+            {
+              retryable: false,
+              diagnosis: {
+                kind: 'workspace_failed',
+                reason: 'runlet_protocol_mismatch',
+                commit: null,
+                protocols: { runner: 3, shim: 2 },
+              },
+            },
+          ),
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+
+    const failed = failedOf(harness);
+    const sentence =
+      'RunStartError: workspace_failed, runlet_protocol_mismatch, runner protocol 3, shim protocol 2';
+    expect(failed?.payload.start_failure).toEqual({
+      kind: 'not_started',
+      diagnosis: sentence,
+      detail: null,
+      truncated: false,
+      attempt: 1,
+      retryable: false,
+    });
+    expect(failed?.payload.error).toContain(sentence);
+    expect(failed?.payload.terminal_reason).toBe('error_during_execution');
+    expect(failed?.payload.cost).toEqual({ usd: 0, is_estimate: false, price_list_id: null });
+    expect(harness.store.startFailureOf(failed?.payload.run_id as Id)?.diagnosis).toBe(sentence);
+    expect(escalationOf(harness)?.payload.blocker_brief ?? '').toContain(sentence);
   });
 
   it('drops the partial token a cut leaves, so half a secret is never stored, and announces the cut', async () => {

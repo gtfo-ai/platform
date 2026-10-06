@@ -32,6 +32,7 @@ import type {
   WorkspaceSpec,
 } from '@platform/application';
 import { PLATFORM_SKILLS_PLUGIN_DIRECTORY, WorkspaceError } from '@platform/application';
+import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import { workspace } from '@platform/infrastructure';
 import { describe, expect, it } from 'vitest';
 
@@ -272,6 +273,39 @@ export const runWorkspaceProviderContractSuite = (
         await expect(
           harness.provider.create({ ...harness.spec, runId: '../other-run' }),
         ).rejects.toMatchObject({ code: 'invalid_spec' });
+      } finally {
+        await harness.cleanup();
+      }
+    });
+
+    /**
+     * WP-151 (TD-025's M9 amendment, PROGRESS backlog 489): the requesting runner's shim protocol is
+     * on the spec, and an image whose shim speaks another is refused by name — both numbers — before
+     * anything exists, so the same run id is then created cleanly with the right one.
+     */
+    it('refuses a spec whose runner speaks another shim protocol than the run image, before creating anything', async () => {
+      const harness = await context.provider();
+      try {
+        if (harness.spec.repo !== null) {
+          await harness.provider.updateMirror({
+            projectId: harness.spec.projectId,
+            repo: harness.spec.repo,
+            credential: null,
+          });
+        }
+        const other = RUNLET_PROTOCOL_VERSION + 1;
+        await expect(
+          harness.provider.create({ ...harness.spec, runletProtocol: other }),
+        ).rejects.toMatchObject({
+          code: 'invalid_spec',
+          reason: 'runtime_image_protocol_mismatch',
+          message: expect.stringContaining(
+            `declares shim protocol ${String(RUNLET_PROTOCOL_VERSION)}, and the runner speaks protocol ${String(other)}`,
+          ),
+        });
+        const handle = await harness.provider.create(harness.spec);
+        expect(handle.runId).toBe(harness.spec.runId);
+        await harness.provider.destroy(handle);
       } finally {
         await harness.cleanup();
       }

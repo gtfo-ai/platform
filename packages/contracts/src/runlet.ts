@@ -49,8 +49,26 @@ import * as z from 'zod';
  * 2 (backlog 481, 2026-10-06): `cred.get` carries the repository `path`, so a run image and a
  * runner from either side of that change refuse each other by name rather than one dropping a field
  * the other decides on.
+ *
+ * 3 (WP-151, TD-025's M9 amendment, backlog 489): `protocol_mismatch` joins the fatal reasons and its
+ * `fatal` frame carries both versions. A protocol-3 shim answers a `hello` for any other protocol
+ * with it, before it reads the token; a protocol-2 shim still answers a protocol-3 runner
+ * `auth_failed`, which the runner reads, on the first frame of a handshake, as a refused handshake
+ * that a rebuild of both sides may explain (`spawn-adapter.ts`).
+ *
+ * **The run image declares this number** as the label `com.agentic.runlet-protocol`, written by
+ * `docker/runtime.Dockerfile` from this line at build time and never by hand
+ * (`scripts/runlet-protocol.test.ts` holds the two together), and the launcher refuses a create
+ * whose image declares another number than the requesting runner's, or none (`provider.ts`).
  */
-export const RUNLET_PROTOCOL_VERSION = 2;
+export const RUNLET_PROTOCOL_VERSION = 3;
+
+/**
+ * The run image's label declaring the protocol its shim speaks (WP-151): `docker/runtime.Dockerfile`
+ * writes {@link RUNLET_PROTOCOL_VERSION} into it at build time, and the launcher reads it at image
+ * inspection (`packages/infrastructure/src/workspace/provider.ts`).
+ */
+export const RUNLET_PROTOCOL_IMAGE_LABEL = 'com.agentic.runlet-protocol';
 
 /**
  * Signals the shim will relay to the child.
@@ -90,6 +108,12 @@ export const runletFatalReasonSchema = z.enum([
   'protocol_error',
   /** `hello` was absent, malformed, or carried the wrong token — including an empty one. */
   'auth_failed',
+  /**
+   * `hello` named a protocol this shim does not speak (WP-151). Checked **before** the token, and
+   * its `fatal` frame carries both versions as integers ({@link runletProtocolsSchema}), so the
+   * runner names them without reading a message. Until protocol 3 this was `auth_failed`.
+   */
+  'protocol_mismatch',
   /** A second connection arrived while one was authenticated, or after one had been. */
   'connection_taken',
   /** A well-formed frame arrived in a state that does not accept it. */
@@ -104,6 +128,16 @@ export const runletFatalReasonSchema = z.enum([
   'shutting_down',
 ]);
 export type RunletFatalReason = z.infer<typeof runletFatalReasonSchema>;
+
+/**
+ * The two protocol versions a `protocol_mismatch` names (WP-151): what the `hello` said the runner
+ * speaks, and what the shim speaks. Integers, never prose, so neither end parses a message.
+ */
+export const runletProtocolsSchema = z.strictObject({
+  runner: z.int(),
+  shim: z.int(),
+});
+export type RunletProtocols = z.infer<typeof runletProtocolsSchema>;
 
 const absolutePathSchema = z
   .string()
@@ -282,11 +316,22 @@ export const runletFrameSchema = z.discriminatedUnion('type', [
     data: base64Schema(16_384),
     flags: z.int().min(0).max(0xffff_ffff),
   }),
-  z.strictObject({
-    type: z.literal('fatal'),
-    reason: runletFatalReasonSchema,
-    message: z.string(),
-  }),
+  /**
+   * A refusal that says why. `protocols` is present **exactly** when `reason` is
+   * `protocol_mismatch` (WP-151): optional rather than required-and-nullable because a protocol-3
+   * runner must still read a protocol-2 shim's `fatal`, which has no such key.
+   */
+  z
+    .strictObject({
+      type: z.literal('fatal'),
+      reason: runletFatalReasonSchema,
+      message: z.string(),
+      protocols: runletProtocolsSchema.optional(),
+    })
+    .refine((frame) => (frame.reason === 'protocol_mismatch') === (frame.protocols !== undefined), {
+      message: 'a fatal frame carries protocols exactly when its reason is protocol_mismatch',
+      path: ['protocols'],
+    }),
 
   // ── either direction ─────────────────────────────────────────────────────
   z.strictObject({ type: z.literal('ping') }),

@@ -51,6 +51,7 @@ import {
   WORKSPACE_ERROR_OUTPUT_MAX_CHARS,
   workspaceErrorReasonSchema,
   workspaceGitSshSchema,
+  workspaceProtocolsSchema,
   workspaceSpecSchema,
 } from '@platform/application';
 import { isoDateTimeSchema, nonEmptyStringSchema, shaSchema } from '@platform/contracts';
@@ -498,6 +499,12 @@ export const errorResponseSchema = z.strictObject({
     output: z.string().max(WORKSPACE_ERROR_OUTPUT_MAX_CHARS).nullable().optional(),
     /** `true` when `output` is the tail of something longer: the launcher's cut, announced. */
     outputTruncated: z.boolean().optional(),
+    /**
+     * The two shim protocol numbers a run-image refusal is about (WP-151 round 1): the requesting
+     * runner's and the image's declared one, `null` when it declares none. Integers, strict, so they
+     * reach the run's platform-written diagnosis; optional, for a launcher one build behind.
+     */
+    protocols: workspaceProtocolsSchema.nullable().optional(),
   }),
 });
 export type ErrorResponse = z.infer<typeof errorResponseSchema>;

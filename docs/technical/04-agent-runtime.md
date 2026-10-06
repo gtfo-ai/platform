@@ -37,7 +37,7 @@ Runner service (infrastructure)  ── platform-side SDK host; the CLI itself r
 | `skills`: the stage role's platform skills, plugin-qualified (`agentic:kb`) — **amended at WP-14a**, see the note below: the `.claude/skills/_platform/` layout this row used to specify is not discovered by the pinned CLI, and the shipped delivery is a plugin directory inside the workspace. **Amended at WP-83** (PROGRESS backlog 149): the list is sent **always**, the empty list included, because an omitted `skills` is the CLI's defaults and — measured — lets the `Skill` tool load a skill the CLI bundles; and every role that holds a skill holds `Skill` in `tools`, because the base set removes it otherwise (the `system`/`init` message lists `tools: []` for `tools: []`, `claude` 2.1.267) | product/13 § "Skills"; measured against `@anthropic-ai/claude-agent-sdk@0.3.267` |
 | `plugins`: one `{type:'local', path: <workspace>/.agentic-run/plugins/agentic, skipMcpDiscovery: true}`, emitted only when the role has skills | WP-14a |
 | `outputFormat: { type: 'json_schema', schema }` | artifact schema (12) |
-| `env` (explicit, never inherited): `PATH`, `HOME`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_PROJECT_DIR_NAME=<task-id>`, telemetry/updater/auto-memory disables, provider credentials for the run only (`GITLAB_TOKEN` scoped, `LOKI_*`, `SENTRY_ACCESS_TOKEN`), `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` per provider mode. **Where each value comes from** (WP-118, TD-025's amendment): the credential from `RunSpec.env`; `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` (when the run has a sidecar), `HOME`, `CLAUDE_CONFIG_DIR`, `PATH` (the run image's own declared `Config.Env` value) and the credential helper from the launcher's answer, `ProvisionedRunWorkspace.cliEnvironment`; the opt-outs and `CLAUDE_CODE_PROJECT_DIR_NAME` from `platformEnvironment`; git configuration as **one** `GIT_CONFIG_*` list numbered once (`credential.helper`, `core.fsmonitor`: `COUNT=2`). `cliEnvironment` (`packages/infrastructure/src/runner/options.ts`) composes them; the run shim replaces its child's environment with it, so nothing on the container is inherited — before WP-118 the container's proxy, home and helper stopped at the shim (PROGRESS backlog 342, measured) | BD-025; research/05 (`env` replaces); TD-025 |
+| `env` (explicit, never inherited): `PATH`, `HOME`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_PROJECT_DIR_NAME=<task-id>`, telemetry/updater/auto-memory disables, provider credentials for the run only (`GITLAB_TOKEN` scoped, `LOKI_*`, `SENTRY_ACCESS_TOKEN`), `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` per provider mode. **Where each value comes from** (WP-118, TD-025's amendment): the credential from `RunSpec.env`; `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` (when the run has a sidecar), `HOME`, `CLAUDE_CONFIG_DIR`, `PATH` (the run image's own declared `Config.Env` value) and the credential helper from the launcher's answer, `ProvisionedRunWorkspace.cliEnvironment`; the opt-outs and `CLAUDE_CODE_PROJECT_DIR_NAME` from `platformEnvironment`; git configuration as **one** `GIT_CONFIG_*` list numbered once (at WP-118 `credential.helper`, `core.fsmonitor`: `COUNT=2`; since backlog 481 and 488 the launcher's `credential.helper` and `credential.useHttpPath`, then the platform's `core.fsmonitor=false` and `core.hooksPath=/dev/null`: `COUNT=4`, 3 for a deploy-key run). `cliEnvironment` (`packages/infrastructure/src/runner/options.ts`) composes them; the run shim replaces its child's environment with it, so nothing on the container is inherited — before WP-118 the container's proxy, home and helper stopped at the shim (PROGRESS backlog 342, measured) | BD-025; research/05 (`env` replaces); TD-025 |
 | `pathToClaudeCodeExecutable` in `local` mode | BD-004 |
 | `sessionStore`, `sessionStoreFlush: 'eager'` for live tailing | 03 |
 
@@ -419,12 +419,15 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   it. The shell half is the environment: the CLI's environment sets `core.fsmonitor=false` through
 >   `GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n`, which git reads as command-line configuration and so
 >   above the repository's own (since WP-118 it is `PLATFORM_GIT_CONFIG`, numbered after the
->   launcher's `credential.helper` in one list, `COUNT=2`; at WP-104 it was `platformEnvironment`'s
->   own index 0). Measured in `platform-runtime` (git 2.47.3): a `core.fsmonitor`
+>   launcher's `credential.helper` in one list, `COUNT=2` at WP-118; at WP-104 it was
+>   `platformEnvironment`'s own index 0). Measured in `platform-runtime` (git 2.47.3): a `core.fsmonitor`
 >   written into `.git/config` ran under `git status` with the environment before the change, and
->   did not with the environment after it (the WP-104 notes). Only that key is overridden, for the
->   export helper's reason against enumerating `-c` overrides; a `core.hooksPath` written through
->   repository content is still BD-025's residual.
+>   did not with the environment after it (the WP-104 notes). **Since backlog 488** the list also sets
+>   `core.hooksPath=/dev/null`, so no repository hook runs under the CLI's git either (a failing
+>   `pre-push` refused the push without the entry and let it land with it, measured there), and the
+>   list is `COUNT=4` (`credential.helper`, `credential.useHttpPath`, `core.fsmonitor`,
+>   `core.hooksPath`). Only those two platform keys are overridden, for the export helper's reason
+>   against enumerating `-c` overrides; the other keys git executes remain BD-025's residual.
 
 > **Amended by TD-027 (ruling on Q77) — where the policy a run is given comes from, and the per-stage
 > layer BD-025 always had.** The run's `ResolvedCommandPolicy` is built in the planner, at one call
@@ -664,7 +667,8 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   refused or failed write sends no `spawn`, so **no CLI runs without the marker**. The ask executor's
 >   runs get the same marker.
 > - **No marker is a measured zero.** Every ending before the marker — the shim refused the handshake
->   (`runlet_handshake_refused`), no `hello.ok` in time (`runlet_handshake_timeout`), the socket lost
+>   (`runlet_handshake_refused`), or speaks another protocol (`runlet_protocol_mismatch`, with both
+>   numbers in the diagnosis, WP-151), no `hello.ok` in time (`runlet_handshake_timeout`), the socket lost
 >   (`runlet_connection_lost`), the marker write refused (`cli_spawn_record_refused`), any other
 >   session that ended first (`cli_spawn_not_requested`) — ends through the **start-failure** path
 >   with that closed-vocabulary cause (WP-127), never as `crash`, and writes the start failure's zero

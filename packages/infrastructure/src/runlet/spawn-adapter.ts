@@ -36,7 +36,7 @@ import { connect, type Socket } from 'node:net';
 import { Readable, Writable } from 'node:stream';
 import type { SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import { type Logger, type RunnerClock, silentLogger } from '@platform/application';
-import type { RunletFrame, RunletSignal } from '@platform/contracts';
+import type { RunletFrame, RunletProtocols, RunletSignal } from '@platform/contracts';
 import { RUNLET_PROTOCOL_VERSION, runletFrameSchema } from '@platform/contracts';
 import { createFrameConnection, type FrameConnection } from './connection.js';
 import { RunletProtocolError } from './framing.js';
@@ -112,12 +112,17 @@ export type RunletStderrSink = (chunk: string) => void;
  *
  *  - `connection_lost`: the socket could not be opened, or closed or failed before the spawn;
  *  - `handshake_timeout`: no `hello.ok` within the connect timeout;
- *  - `handshake_refused`: the shim's `fatal` frame, or a `hello.ok` for another protocol;
+ *  - `protocol_mismatch`: the shim speaks another protocol (WP-151) — its `fatal` said so with both
+ *    numbers, or its `hello.ok` named another one. The step carries both
+ *    ({@link RunletSpawnGate.failedBeforeSpawn}'s second argument);
+ *  - `handshake_refused`: any other `fatal` frame before `hello.ok` — including a protocol-2 shim's
+ *    `auth_failed`, which is what a shim from before WP-151 answers a newer runner;
  *  - `spawn_refused`: the gate's `beforeSpawn` refused, so no `spawn` was sent.
  */
 export type RunletPreSpawnStep =
   | 'connection_lost'
   | 'handshake_timeout'
+  | 'protocol_mismatch'
   | 'handshake_refused'
   | 'spawn_refused';
 
@@ -132,8 +137,12 @@ export type RunletPreSpawnStep =
  */
 export interface RunletSpawnGate {
   readonly beforeSpawn: () => Promise<void>;
-  /** Told once, when the transport ends before a `spawn` frame was sent, with the step it reached. */
-  readonly failedBeforeSpawn: (step: RunletPreSpawnStep) => void;
+  /**
+   * Told once, when the transport ends before a `spawn` frame was sent, with the step it reached —
+   * and, for `protocol_mismatch` only, the two versions (this runner's, and the shim's as its frame
+   * said; integers, so they can be named in platform text). `null` for every other step.
+   */
+  readonly failedBeforeSpawn: (step: RunletPreSpawnStep, protocols: RunletProtocols | null) => void;
 }
 
 /**
@@ -154,6 +163,20 @@ export type RunletSpawn = ((spawnOptions: SpawnOptions) => SpawnedProcess) & {
    * (WP-150); `null` removes it, and with none the frame is sent at `hello.ok` as before.
    */
   readonly setSpawnGate: (gate: RunletSpawnGate | null) => void;
+  /**
+   * The runner has read the session's `result` from the processes this spawn started (WP-151,
+   * backlog 463, TD-025's M9 amendment). From here a close of the control connection that comes
+   * before the `exit` frame is **not a transport failure**: the session's answer is in, and what
+   * the close leaves unknown is the CLI's exit status, which is reported as `null` — never `0`
+   * (standing rule 16) — at `info`, with no `error` event.
+   *
+   * Measured, not assumed (PROGRESS § WP-151): the close comes from the platform itself. The runner
+   * returns its outcome once it has the `result`, the workspace runner then ends the workspace, and
+   * the launcher's stop reaches the shim (through `tini`) while the CLI is still exiting on stdin
+   * EOF — so the shim closes the connection with no `exit` frame. A close before the `result` is
+   * still logged at `error`.
+   */
+  readonly noteSessionResult: () => void;
 };
 
 /**
@@ -198,6 +221,8 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
   const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   let stderrSink: RunletStderrSink | null = options.onStderr ?? null;
   let spawnGate: RunletSpawnGate | null = null;
+  /** One per process this spawn started: `noteSessionResult` marks each (WP-151). */
+  const resultReaders = new Set<() => void>();
 
   const spawn = (spawnOptions: SpawnOptions): SpawnedProcess => {
     const events = new EventEmitter();
@@ -212,6 +237,16 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
     const gate = spawnGate;
     /** Set where the failure is known to be one of {@link RunletPreSpawnStep}'s named steps. */
     let preSpawnStep: RunletPreSpawnStep | null = null;
+    /** Both versions, set with `preSpawnStep = 'protocol_mismatch'` and never otherwise (WP-151). */
+    let mismatch: RunletProtocols | null = null;
+    /** How many frames the shim has sent this connection — a protocol-2 refusal is the first. */
+    let framesReceived = 0;
+    /** The runner read the session's `result` (WP-151): a close after it is not a failure. */
+    let resultRead = false;
+    const markResultRead = (): void => {
+      resultRead = true;
+    };
+    resultReaders.add(markResultRead);
     /** stdin the SDK wrote before the `spawn` frame. Bounded by the SDK's own prompt size. */
     const queued: { chunk: Buffer | null }[] = [];
 
@@ -220,7 +255,7 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
         return;
       }
       if (!spawnSent) {
-        gate?.failedBeforeSpawn(preSpawnStep ?? 'connection_lost');
+        gate?.failedBeforeSpawn(preSpawnStep ?? 'connection_lost', mismatch);
       }
       logger.error({ err: error }, 'runlet transport failed');
       events.emit('error', error);
@@ -234,6 +269,7 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
         return;
       }
       state.exited = true;
+      resultReaders.delete(markResultRead);
       exitCode = code;
       signalCode = signal;
       stdout.push(null);
@@ -368,6 +404,7 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
     };
 
     const onFrame = (frame: RunletFrame, payload: Buffer | null): void => {
+      framesReceived += 1;
       if (!RUNNER_ACCEPTS.includes(frame.type)) {
         throw new RunletProtocolError(
           `a ${frame.type} frame arrived at the runner, which only the runner sends`,
@@ -377,10 +414,14 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
       switch (frame.type) {
         case 'hello.ok': {
           if (frame.protocol !== RUNLET_PROTOCOL_VERSION) {
-            preSpawnStep = 'handshake_refused';
+            // A shim that accepted a protocol it does not speak — the same mismatch, named the
+            // same way, from this side (WP-151).
+            preSpawnStep = 'protocol_mismatch';
+            mismatch = { runner: RUNLET_PROTOCOL_VERSION, shim: frame.protocol };
             throw new RunletProtocolError(
-              `the shim speaks protocol ${frame.protocol}`,
-              'protocol_error',
+              `the runner speaks protocol ${RUNLET_PROTOCOL_VERSION}, the shim answered for protocol ${frame.protocol}`,
+              'protocol_mismatch',
+              mismatch,
             );
           }
           handshaken = true;
@@ -434,18 +475,43 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
         case 'pong':
           return;
         case 'fatal':
-          if (!handshaken) {
-            preSpawnStep = 'handshake_refused';
-          }
-          // The shim's own words, and they are attacker-influenced text on their way to a log:
-          // carried as data on an Error, never interpolated into a decision.
-          throw new RunletProtocolError(
-            `the shim refused the connection: ${frame.reason}`,
-            frame.reason,
-          );
+          refused(frame);
+          return;
         default:
           return;
       }
+    };
+
+    /**
+     * The shim's `fatal`. Its `message` is the shim's own words — attacker-influenced text on its way
+     * to a log — so nothing here reads it: the reason and the two integers decide.
+     */
+    const refused = (frame: Extract<RunletFrame, { type: 'fatal' }>): never => {
+      if (!handshaken && frame.reason === 'protocol_mismatch' && frame.protocols !== undefined) {
+        // The shim's number is its claim, an integer by the schema; ours is this build's own.
+        preSpawnStep = 'protocol_mismatch';
+        mismatch = { runner: RUNLET_PROTOCOL_VERSION, shim: frame.protocols.shim };
+        throw new RunletProtocolError(
+          `the shim refused the handshake: the runner speaks protocol ${RUNLET_PROTOCOL_VERSION}, the shim speaks ${frame.protocols.shim}; rebuild and recreate the runner and the run image from one commit`,
+          'protocol_mismatch',
+          mismatch,
+        );
+      }
+      if (!handshaken) {
+        preSpawnStep = 'handshake_refused';
+      }
+      if (!handshaken && frame.reason === 'auth_failed' && framesReceived === 1) {
+        // TD-025's M9 amendment: a protocol-2 shim answers a protocol-3 runner exactly like this,
+        // as the first frame of the handshake, so the refusal is read with that possibility named.
+        throw new RunletProtocolError(
+          'the shim refused the handshake; if the run image and the runner were built from different commits, rebuild and recreate both',
+          frame.reason,
+        );
+      }
+      throw new RunletProtocolError(
+        `the shim refused the connection: ${frame.reason}`,
+        frame.reason,
+      );
     };
 
     let cancelConnectTimeout: (() => void) | null = null;
@@ -478,9 +544,20 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
       onFrame: (decoded) => onFrame(decoded.frame, decoded.payload),
       onError: (error) => fail(error),
       onClose: () => {
-        if (!state.exited) {
-          fail(new RunletProtocolError('the run shim closed the control connection'));
+        if (state.exited) {
+          return;
         }
+        if (resultRead) {
+          // Backlog 463, measured (PROGRESS § WP-151): the platform's own teardown after the
+          // session's answer. The exit status is unknown and stays `null`; it is not a failure.
+          logger.info(
+            {},
+            'the run shim closed the control connection after the session’s result; the CLI’s exit status was not reported',
+          );
+          finish(null, null);
+          return;
+        }
+        fail(new RunletProtocolError('the run shim closed the control connection'));
       },
       onDrain: () => {},
     });
@@ -558,6 +635,11 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
     },
     setSpawnGate: (next: RunletSpawnGate | null): void => {
       spawnGate = next;
+    },
+    noteSessionResult: (): void => {
+      for (const mark of resultReaders) {
+        mark();
+      }
     },
   });
 };

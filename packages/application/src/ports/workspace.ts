@@ -310,6 +310,15 @@ export const workspaceSpecSchema = z.strictObject({
   ),
   /** When the workspace's volume may be purged (technical/05 §5: 3 days, 14 when paused). */
   keepUntil: isoDateTimeSchema,
+  /**
+   * The run-shim protocol the **requesting runner** speaks (`RUNLET_PROTOCOL_VERSION`, WP-151,
+   * TD-025's M9 amendment) — the runner, not the launcher, is the other end of the run's control
+   * socket, and the two can be from different builds. The launcher compares it with the run image's
+   * `com.agentic.runlet-protocol` label before it creates anything and refuses another number, or
+   * none, as `invalid_spec` naming the image and both numbers. Required: a runner from before WP-151
+   * sends no number, and its create is refused by this schema rather than admitted unchecked.
+   */
+  runletProtocol: z.int().positive(),
 });
 export type WorkspaceSpec = z.infer<typeof workspaceSpecSchema>;
 
@@ -648,6 +657,13 @@ export const WORKSPACE_ERROR_REASONS = [
   'runtime_image_path_missing',
   /** The run image declares a `PATH` that is not a list of absolute directories (WP-118). */
   'runtime_image_path_invalid',
+  /**
+   * The run image declares no shim protocol (its `com.agentic.runlet-protocol` label is absent or
+   * not an integer), so the launcher cannot tell whether its shim speaks the runner's (WP-151).
+   */
+  'runtime_image_protocol_missing',
+  /** The run image's shim speaks another protocol than the requesting runner (WP-151). */
+  'runtime_image_protocol_mismatch',
   /** The runner is not the uid the run shim's `0600` control socket admits (TD-025, Q51). */
   'runner_uid_mismatch',
   /** The workspace spec did not validate against `workspaceSpecSchema`. */
@@ -680,8 +696,17 @@ export const WORKSPACE_ERROR_REASONS = [
   'runlet_connection_lost',
   /** The run shim did not answer the handshake in time. */
   'runlet_handshake_timeout',
-  /** The run shim refused the handshake (a `fatal` frame, or a protocol it does not speak). */
+  /**
+   * The run shim refused the handshake with a `fatal` frame other than a protocol mismatch — a
+   * refused token, or a protocol-2 shim's `auth_failed`, which is how a shim from before WP-151
+   * answers a newer runner (the runner's log line then names the rebuild).
+   */
   'runlet_handshake_refused',
+  /**
+   * The run shim speaks another protocol than the runner (WP-151): its `fatal` named both, or its
+   * `hello.ok` named another. Both numbers ride in the diagnosis (`RunStartDiagnosis.protocols`, `ports/runner.ts`).
+   */
+  'runlet_protocol_mismatch',
   /** The platform could not record that the CLI is about to start, so it did not start one. */
   'cli_spawn_record_refused',
   /** The session ended before its CLI was asked to start, for a reason none of the above names. */
@@ -691,6 +716,19 @@ export const WORKSPACE_ERROR_REASONS = [
 ] as const;
 export type WorkspaceErrorReason = (typeof WORKSPACE_ERROR_REASONS)[number];
 export const workspaceErrorReasonSchema = z.enum(WORKSPACE_ERROR_REASONS);
+
+/**
+ * The two shim protocol numbers a start failure may name (WP-151, TD-025's M9 amendment): the
+ * runner's, and the shim's — what the shim's `fatal` frame said, or what the run image's
+ * `com.agentic.runlet-protocol` label declares, `null` when it declares none. Integers only, so
+ * they can stand in the platform-written diagnosis (`describeStartFailure`), never in the untrusted
+ * `detail`.
+ */
+export const workspaceProtocolsSchema = z.strictObject({
+  runner: z.int(),
+  shim: z.int().nullable(),
+});
+export type WorkspaceProtocols = z.infer<typeof workspaceProtocolsSchema>;
 
 /** The bound on {@link WorkspaceError.output}: the tail a helper's failure keeps (backlog 453). */
 export const WORKSPACE_ERROR_OUTPUT_MAX_CHARS = 2_000;
@@ -740,6 +778,13 @@ export class WorkspaceError extends Error {
   readonly output: string | null;
   /** `true` when {@link output} is a tail of something longer — the platform's cut, announced. */
   readonly outputTruncated: boolean;
+  /**
+   * The two shim protocol numbers a protocol refusal is about (WP-151): the requesting runner's,
+   * and the run image's declared one — `null` when the image declares none. Only through
+   * {@link workspaceProtocolsSchema}, so nothing but integers rides beside the reason into the
+   * platform-written diagnosis; `null` for every other refusal.
+   */
+  readonly protocols: WorkspaceProtocols | null;
 
   constructor(
     code: WorkspaceErrorCode,
@@ -753,6 +798,7 @@ export class WorkspaceError extends Error {
       readonly output?: string | null;
       /** The caller already cut {@link output} (a launcher one hop back, across the wire). */
       readonly outputTruncated?: boolean;
+      readonly protocols?: WorkspaceProtocols | null;
     } = {},
   ) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
@@ -762,6 +808,7 @@ export class WorkspaceError extends Error {
     this.detail = options.detail ?? null;
     this.reason = workspaceErrorReasonSchema.safeParse(options.reason).data ?? null;
     this.commit = shaSchema.safeParse(options.commit).data ?? null;
+    this.protocols = workspaceProtocolsSchema.safeParse(options.protocols).data ?? null;
     const bounded = boundOutputTail(options.output ?? '');
     this.output = bounded.text === '' ? null : bounded.text;
     this.outputTruncated =

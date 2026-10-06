@@ -22,6 +22,9 @@
  *   --scenario stderr         a line on stderr before the result
  *   --scenario signal-report  never finishes; reports the signals it receives on stdout
  *   --scenario ignore-term    never finishes and ignores SIGTERM (for the kill-on-disconnect test)
+ *   --scenario linger         the three messages, then stays alive past stdin EOF — a CLI still
+ *                             shutting down when the platform's teardown stops its container
+ *                             (WP-151, backlog 463)
  *
  * `--pid-file <path>` writes its own pid, so a test can ask the operating system whether the child
  * is gone rather than believing a frame that says so.
@@ -169,6 +172,10 @@ const start = () => {
     return;
   }
   emitResult();
+  if (scenario === 'linger') {
+    // stdout stays open, as the real CLI's does after a result in streaming-input mode.
+    return;
+  }
   // No `process.exit()`: it would discard whatever stdout still has buffered, which is a truncation
   // inside this process that looks exactly like a transport dropping bytes.
   endStdout();
@@ -180,6 +187,9 @@ if (scenario === 'signal-report') {
       write({ type: 'system', subtype: 'signal', signal, session_id: SESSION });
     });
   }
+  setInterval(() => {}, 1000);
+}
+if (scenario === 'linger') {
   setInterval(() => {}, 1000);
 }
 if (scenario === 'ignore-term') {
@@ -228,7 +238,7 @@ process.stdin.on('data', (chunk) => {
 // The scenarios that never finish keep the process alive on their own timer; the rest end when
 // stdin closes, exactly as the real CLI's graceful-exit path does.
 process.stdin.on('end', () => {
-  if (scenario !== 'signal-report' && scenario !== 'ignore-term') {
+  if (scenario !== 'signal-report' && scenario !== 'ignore-term' && scenario !== 'linger') {
     endStdout();
   }
 });

@@ -18,6 +18,7 @@
 import { chmod, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { type LogFields, silentLogger } from '@platform/application';
+import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { manualClock } from '../runner/clock.js';
 import {
@@ -92,7 +93,7 @@ afterEach(async () => {
 /** Connects and authenticates, the way the runner does. */
 const authenticate = async (harness: Harness): Promise<RunletProbe> => {
   const probe = await connectProbe(harness.volume.controlSocketPath);
-  probe.send({ type: 'hello', protocol: 2, token: TOKEN });
+  probe.send({ type: 'hello', protocol: RUNLET_PROTOCOL_VERSION, token: TOKEN });
   await probe.next('hello.ok');
   return probe;
 };
@@ -125,7 +126,7 @@ describe('the run shim: one authenticated connection', () => {
     const harness = await startShim();
     const attacker = await connectProbe(harness.volume.controlSocketPath);
     // The attempt is made *with* the empty token, not merely asserted about (standing rule 18).
-    attacker.send({ type: 'hello', protocol: 2, token: '' });
+    attacker.send({ type: 'hello', protocol: RUNLET_PROTOCOL_VERSION, token: '' });
     const refusal = await attacker.next('fatal');
     expect(refusal).toMatchObject({ type: 'fatal', reason: 'auth_failed' });
     await attacker.closed;
@@ -141,7 +142,7 @@ describe('the run shim: one authenticated connection', () => {
   ])('refuses a hello carrying %s', async (_name, token) => {
     const harness = await startShim();
     const probe = await connectProbe(harness.volume.controlSocketPath);
-    probe.send({ type: 'hello', protocol: 2, token });
+    probe.send({ type: 'hello', protocol: RUNLET_PROTOCOL_VERSION, token });
     expect(await probe.next('fatal')).toMatchObject({ reason: 'auth_failed' });
   });
 
@@ -157,12 +158,39 @@ describe('the run shim: one authenticated connection', () => {
     await volume.cleanup();
   });
 
-  // Version 1 is the runner from before `cred.get` carried a path (backlog 481): refused at hello.
-  it('refuses a protocol version it does not speak', async () => {
+  // WP-151 (backlog 489): until protocol 3 this answered `auth_failed`, which is how AUT-6820's run
+  // came to fail as a refused token. Version 2 is the runner from before that change.
+  it('answers a protocol-2 hello with protocol_mismatch and both numbers, before any token check', async () => {
     const harness = await startShim();
     const probe = await connectProbe(harness.volume.controlSocketPath);
-    probe.send({ type: 'hello', protocol: 1, token: TOKEN });
-    expect(await probe.next('fatal')).toMatchObject({ reason: 'auth_failed' });
+    // The **wrong** token too: a mismatch is named before the token is read, so a runner from
+    // another build hears which build, never that its token was refused.
+    probe.send({ type: 'hello', protocol: 2, token: 'run-token-bbbbbbbbbbbbbbbbbbbbbb' });
+    const refusal = await probe.next('fatal');
+    expect(refusal).toEqual({
+      type: 'fatal',
+      reason: 'protocol_mismatch',
+      message: `the runner speaks protocol 2, the shim speaks ${String(RUNLET_PROTOCOL_VERSION)}`,
+      protocols: { runner: 2, shim: RUNLET_PROTOCOL_VERSION },
+    });
+    expect(RUNLET_PROTOCOL_VERSION).toBe(3);
+    await probe.closed;
+    expect(harness.shim.childPid).toBeNull();
+    // Still a failed handshake, counted toward the attempt budget like any other.
+    expect(harness.shim.metrics.failedHandshakes).toBe(1);
+  });
+
+  it('answers the right protocol with the wrong token as auth_failed, with no protocols', async () => {
+    const harness = await startShim();
+    const probe = await connectProbe(harness.volume.controlSocketPath);
+    probe.send({
+      type: 'hello',
+      protocol: RUNLET_PROTOCOL_VERSION,
+      token: 'run-token-bbbbbbbbbbbbbbbbbbbbbb',
+    });
+    const refusal = await probe.next('fatal');
+    expect(refusal).toMatchObject({ type: 'fatal', reason: 'auth_failed' });
+    expect(refusal).not.toHaveProperty('protocols');
   });
 
   it('refuses any frame that arrives before hello', async () => {
@@ -199,7 +227,11 @@ describe('the run shim: one authenticated connection', () => {
     const harness = await startShim({ maxFailedHandshakes: 2 });
     for (const attempt of [1, 2]) {
       const probe = await connectProbe(harness.volume.controlSocketPath);
-      probe.send({ type: 'hello', protocol: 2, token: `wrong-${attempt}-aaaaaaaaaaaaaaaaaaaa` });
+      probe.send({
+        type: 'hello',
+        protocol: RUNLET_PROTOCOL_VERSION,
+        token: `wrong-${attempt}-aaaaaaaaaaaaaaaaaaaa`,
+      });
       await probe.closed;
     }
     expect(harness.shutdowns).toEqual(['handshake_attempts_exhausted']);
@@ -343,7 +375,7 @@ describe('the run shim: stdio', () => {
 
     const second = await startShim();
     const reader = await connectProbe(second.volume.controlSocketPath);
-    reader.send({ type: 'hello', protocol: 2, token: TOKEN });
+    reader.send({ type: 'hello', protocol: RUNLET_PROTOCOL_VERSION, token: TOKEN });
     await reader.next('hello.ok');
     reader.pause();
     reader.send(
@@ -425,7 +457,7 @@ describe('the run shim: kill on disconnect', () => {
 
     const later = await connectProbe(harness.volume.controlSocketPath).catch(() => null);
     if (later !== null) {
-      later.send({ type: 'hello', protocol: 2, token: TOKEN });
+      later.send({ type: 'hello', protocol: RUNLET_PROTOCOL_VERSION, token: TOKEN });
       await later.closed;
       expect(later.received.map((d) => d.frame.type)).not.toContain('hello.ok');
     }

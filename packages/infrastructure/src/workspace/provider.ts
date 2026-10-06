@@ -92,6 +92,7 @@ import {
   WorkspaceError,
   workspaceSpecSchema,
 } from '@platform/application';
+import { RUNLET_PROTOCOL_IMAGE_LABEL } from '@platform/contracts';
 import { cliEnvironmentVariables, numberGitConfig } from './cli-environment.js';
 import { EGRESS_CONFIG_MOUNT, egressProxyUrl, renderEgressConfig } from './egress.js';
 import type { DockerEngine, EngineVolume } from './engine.js';
@@ -234,6 +235,9 @@ export const runSshCommand = (input: {
 
 /** A `PATH` of absolute directories, colon-separated — what the run image may declare (WP-118). */
 const IMAGE_PATH_PATTERN = /^\/[\w./+-]*(?::\/[\w./+-]*)*$/;
+
+/** A shim protocol as the run image's label spells it: a positive integer, digits only (WP-151). */
+const IMAGE_PROTOCOL_PATTERN = /^[1-9][0-9]{0,8}$/;
 
 /**
  * What the clone helper prints when the project's mirror is not on the volume (WP-75). A fixed
@@ -778,6 +782,57 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     return declared;
   }
 
+  /**
+   * The run image's shim must speak the requesting runner's protocol (WP-151, TD-025's M9
+   * amendment, PROGRESS backlog 489). The image declares it as {@link RUNLET_PROTOCOL_IMAGE_LABEL},
+   * written by `docker/runtime.Dockerfile` from `RUNLET_PROTOCOL_VERSION` at build time; the runner
+   * sends its own as `spec.runletProtocol`. Another number, or none, is `invalid_spec` naming the
+   * image and both numbers — terminal, because the fix is a rebuild — and nothing is created, so the
+   * run ends as a start failure rather than as a shim refusing a handshake inside a container.
+   *
+   * **Read per create, never memoised** — unlike the `PATH` beside it. The deploy this guards is an
+   * image rebuilt under a running launcher (AUT-6820's: `platform-runtime` rebuilt, the runner and
+   * the launcher left as they were), and a label cached at the launcher's first create would answer
+   * for the image that is no longer there. One image inspect per run is the cost.
+   *
+   * **It answers the image id it read, and the run container is created from that id** (WP-151
+   * review round 1): the tag is checked here, the clone runs for as long as it runs, and a create by
+   * tag after it would start whatever the tag points at *then* — an image rebuilt during a long clone,
+   * whose label nobody read. An id names one image for good.
+   *
+   * The refusal carries both numbers as `WorkspaceError.protocols` (the image's `null` when it
+   * declares none), so they reach the run's diagnosis as integers rather than only inside this
+   * message, which the runner stores as the launcher's untrusted words.
+   */
+  async #assertRunletProtocol(spec: WorkspaceSpec): Promise<string> {
+    const image = this.#images.runtime;
+    const inspected = await this.#engine.inspectImage(image);
+    const label = inspected.Config?.Labels?.[RUNLET_PROTOCOL_IMAGE_LABEL];
+    const declared =
+      label !== undefined && IMAGE_PROTOCOL_PATTERN.test(label) ? Number(label) : null;
+    if (declared === spec.runletProtocol) {
+      return inspected.Id;
+    }
+    const protocols = { runner: spec.runletProtocol, shim: declared };
+    if (declared === null) {
+      throw new WorkspaceError(
+        'invalid_spec',
+        `the run image ${image} declares no shim protocol (no ${RUNLET_PROTOCOL_IMAGE_LABEL} label, or not a number), and the runner speaks protocol ${spec.runletProtocol}; rebuild the run image from the runner's commit (WP-151)`,
+        {
+          runId: spec.runId,
+          reason: 'runtime_image_protocol_missing',
+          protocols,
+          ...(label === undefined ? {} : { detail: label.slice(0, 64) }),
+        },
+      );
+    }
+    throw new WorkspaceError(
+      'invalid_spec',
+      `the run image ${image} declares shim protocol ${declared}, and the runner speaks protocol ${spec.runletProtocol}; rebuild and recreate the runner and the run image from one commit (WP-151)`,
+      { runId: spec.runId, reason: 'runtime_image_protocol_mismatch', protocols },
+    );
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   #labels(spec: { runId: string; projectId: string }, role: string, keepUntil: string) {
@@ -1052,6 +1107,8 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     // Before anything is created, so a launcher pointed at an image with no CLI refuses rather
     // than leaking a network, a volume and three helpers per attempt (backlog 34).
     await this.assertRuntimeCli();
+    // WP-151: and an image whose shim the requesting runner cannot speak to is refused the same way.
+    const runtimeImageId = await this.#assertRunletProtocol(spec);
 
     const names = runObjectNames(spec.runId);
     const token = this.#mintToken();
@@ -1098,7 +1155,8 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         names.container,
         runContainerCreateBody({
           spec,
-          images: this.#images,
+          // The image whose label was read, by id — never the tag again (WP-151 round 1).
+          images: { ...this.#images, runtime: runtimeImageId },
           controlVolume: this.#controlVolume,
           cacheVolume: this.#cacheVolume,
           labels: this.#labels(spec, 'workspace', spec.keepUntil),

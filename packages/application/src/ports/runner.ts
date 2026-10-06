@@ -56,7 +56,9 @@ import {
   WorkspaceError,
   type WorkspaceErrorCode,
   type WorkspaceErrorReason,
+  type WorkspaceProtocols,
   workspaceErrorReasonSchema,
+  workspaceProtocolsSchema,
 } from './workspace.js';
 
 // ── Time ─────────────────────────────────────────────────────────────────────
@@ -788,12 +790,21 @@ export interface RunStartDiagnosis {
   readonly kind: WorkspaceErrorCode;
   readonly reason: WorkspaceErrorReason | null;
   readonly commit: string | null;
+  /**
+   * The runner's and the shim's protocol versions (WP-151, PROGRESS backlog 500) — for
+   * `runlet_protocol_mismatch` (the shim's `fatal` named both) and for the launcher's
+   * `runtime_image_protocol_mismatch` / `runtime_image_protocol_missing` (the run image's label, or
+   * `null` for none). Integers, so they stand in the platform-written sentence beside the reason
+   * rather than in the untrusted `detail`. Absent for every other cause.
+   */
+  readonly protocols?: WorkspaceProtocols | null;
 }
 
 export const diagnosisOfWorkspaceError = (error: WorkspaceError): RunStartDiagnosis => ({
   kind: error.code,
   reason: error.reason,
   commit: error.commit,
+  ...(error.protocols === null ? {} : { protocols: error.protocols }),
 });
 
 const WORKSPACE_ERROR_KINDS: readonly WorkspaceErrorCode[] = [
@@ -808,10 +819,11 @@ const WORKSPACE_ERROR_KINDS: readonly WorkspaceErrorCode[] = [
  * text only** (WP-127, PROGRESS backlog 351).
  *
  * The class name, then the diagnosis when there is one: `RunStartError: invalid_spec,
- * checkout_commit_missing, commit 0123abc…`. Each field is re-read through its own schema here rather
- * than trusted to have been set by the constructor, because a `RunStartError` is an object any
- * caller can build, and this string is written with no redactor. A field that does not parse is
- * left out, never quoted.
+ * checkout_commit_missing, commit 0123abc…`, or `RunStartError: workspace_failed,
+ * runlet_protocol_mismatch, runner protocol 3, shim protocol 2` (WP-151). Each field is re-read
+ * through its own schema here rather than trusted to have been set by the constructor, because a
+ * `RunStartError` is an object any caller can build, and this string is written with no redactor.
+ * A field that does not parse is left out, never quoted.
  */
 export const describeStartFailure = (error: unknown): string => {
   if (!(error instanceof Error)) {
@@ -837,6 +849,14 @@ export const describeStartFailure = (error: unknown): string => {
   const commit = shaSchema.safeParse(diagnosis.commit).data;
   if (commit !== undefined) {
     parts.push(`commit ${commit}`);
+  }
+  // WP-151: two integers through their schema, so nothing but digits reaches this sentence.
+  const protocols = workspaceProtocolsSchema.safeParse(diagnosis.protocols).data;
+  if (protocols !== undefined) {
+    parts.push(
+      `runner protocol ${protocols.runner}`,
+      `shim protocol ${protocols.shim === null ? 'undeclared' : protocols.shim}`,
+    );
   }
   return parts.length === 0 ? error.name : `${error.name}: ${parts.join(', ')}`;
 };

@@ -5,6 +5,7 @@
  * the caller is not the caller we imagined" (BD-022). The round-trip tests run against the **real**
  * shim, because the refusals that matter are the shim's and a stub would be free to be kinder.
  */
+import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { manualClock } from '../runner/clock.js';
 import {
@@ -46,7 +47,7 @@ const startRun = async (): Promise<{ volume: ControlVolume; runner: RunletProbe 
   await shim.start();
   open.push({ shim, volume });
   const runner = await connectProbe(volume.controlSocketPath);
-  runner.send({ type: 'hello', protocol: 2, token: TOKEN });
+  runner.send({ type: 'hello', protocol: RUNLET_PROTOCOL_VERSION, token: TOKEN });
   await runner.next('hello.ok');
   runner.send({
     type: 'spawn',

@@ -170,14 +170,16 @@ describe('PATH is the run image’s own declared value (WP-118)', () => {
     const handle = await provider.create(workspaceSpecFixture());
     expect((await provider.cliEnvironment(handle)).path).toBe('/opt/tools/bin:/usr/bin:/bin');
     expect(containerEnv(handle.containerId)['PATH']).toBe('/opt/tools/bin:/usr/bin:/bin');
-    // Asked of the image by name, once per process — beside `test -x`, not per run.
+    // The `PATH` is asked of the image by name once per process, beside `test -x`; every create
+    // inspects it once more for its shim protocol label (WP-151, `runtime-protocol.test.ts`), which
+    // must not be memoised. So: one, then one per create.
     await provider.create(workspaceSpecFixture({ runId: 'aaaaaaaa-1111-4111-8111-111111111111' }));
     const inspects = daemon.requests.filter(
       (request) => request.method === 'GET' && request.path.startsWith('/images/'),
     );
-    expect(inspects.map((request) => request.path)).toEqual([
-      `/images/${encodeURIComponent(RUNTIME)}/json`,
-    ]);
+    expect(inspects.map((request) => request.path)).toEqual(
+      Array.from({ length: 3 }, () => `/images/${encodeURIComponent(RUNTIME)}/json`),
+    );
   });
 
   it('is the Debian/node value when the image declares that', async () => {

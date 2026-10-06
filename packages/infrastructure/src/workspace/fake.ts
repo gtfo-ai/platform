@@ -32,6 +32,7 @@
  * | 5 | `updateMirror` performs no fetch, so a URL that does not resolve still "updates". | **Kinder** | The fake refuses a `create` whose project has no mirror (stricter than nothing, same as Docker's failing clone), asserted by `provider-suite.ts` › "refuses to create a workspace before the mirror exists". The refusal is for a spec **with** a repository only: a repo-less spec (WP-74) clones nothing in either implementation, and `provider-suite.ts` › "creates a workspace with no checkout and no mirror, and keeps its container, socket and skills" holds both to that. |
  * | 6 | No image pull, no daemon, so `engine_unavailable` never happens. | Kinder | Nothing pins it. Stated so no one reads the fake's reliability as the system's. |
  * | 7 | No repository, so a `repo.checkoutCommit` the mirror does not hold is not refused: the fake has no objects to look it up in (WP-105). | **Kinder** — a spec naming a lost shadow base creates a workspace here | `workspace/provider.test.ts` › "refuses a checkout commit the mirror does not hold, by name, before the run container" and the daemon case in `test/e2e/workspace/docker-workspace.e2e.test.ts` › "refuses a shadow base the mirror does not hold, and checks out one it does, detached". |
+ * | 8 | No image, so its shim protocol label is this build's `RUNLET_PROTOCOL_VERSION` by definition: an image with **no** label cannot be expressed (WP-151). | Neither for a mismatch, **kinder** for an absent label | A runner protocol the "image" does not speak is refused in both implementations: `provider-suite.ts` › "refuses a spec whose runner speaks another shim protocol than the run image, before creating anything". The absent label is the Docker provider's alone: `workspace/runtime-protocol.test.ts` › "refuses an image with no protocol label, and one with a label that is not a number". |
  *
  * Three places the fake is deliberately **stricter**, which is always allowed: it refuses a second
  * `create` for a run id it has ever seen (Docker refuses only while the container exists, because
@@ -65,6 +66,7 @@ import {
   WorkspaceError,
   workspaceSpecSchema,
 } from '@platform/application';
+import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import { egressProxyUrl, renderEgressConfig } from './egress.js';
 import { type DockerCreateBody, runContainerCreateBody } from './hardening.js';
 import {
@@ -214,6 +216,19 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     const spec = parsed.data;
     assertRunId(spec.runId);
     assertProjectEnv(spec.env);
+    // WP-151: the fake's run image is one built from this commit, so its shim speaks this build's
+    // protocol — refused before the run id is marked seen, as the Docker provider creates nothing.
+    if (spec.runletProtocol !== RUNLET_PROTOCOL_VERSION) {
+      throw new WorkspaceError(
+        'invalid_spec',
+        `the run image fake declares shim protocol ${RUNLET_PROTOCOL_VERSION}, and the runner speaks protocol ${spec.runletProtocol}; rebuild and recreate the runner and the run image from one commit (WP-151)`,
+        {
+          runId: spec.runId,
+          reason: 'runtime_image_protocol_mismatch',
+          protocols: { runner: spec.runletProtocol, shim: RUNLET_PROTOCOL_VERSION },
+        },
+      );
+    }
     if (this.#seen.has(spec.runId)) {
       throw new WorkspaceError('invalid_spec', 'this run already had a workspace', {
         runId: spec.runId,

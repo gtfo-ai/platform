@@ -91,7 +91,11 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Logger, WorkspaceSpec } from '@platform/application';
-import { WorkspaceError, type WorkspaceErrorReason } from '@platform/application';
+import {
+  WorkspaceError,
+  type WorkspaceErrorReason,
+  type WorkspaceProtocols,
+} from '@platform/application';
 import { launcher as launcherProtocol } from '@platform/infrastructure';
 import * as z from 'zod';
 import type { LauncherService } from './service.js';
@@ -163,6 +167,8 @@ class ControlPlaneError extends Error {
   /** The failing step's own redacted words, for the run page (backlog 453, `WorkspaceError.output`). */
   readonly output: string | null;
   readonly outputTruncated: boolean;
+  /** A run-image protocol refusal's two numbers (WP-151 round 1, `WorkspaceError.protocols`). */
+  readonly protocols: WorkspaceProtocols | null;
 
   constructor(
     code: ControlPlaneErrorCode,
@@ -174,6 +180,7 @@ class ControlPlaneError extends Error {
       readonly commit?: string | null;
       readonly output?: string | null;
       readonly outputTruncated?: boolean;
+      readonly protocols?: WorkspaceProtocols | null;
     } = {},
   ) {
     super(message);
@@ -185,6 +192,7 @@ class ControlPlaneError extends Error {
     this.commit = options.commit ?? null;
     this.output = options.output ?? null;
     this.outputTruncated = options.outputTruncated ?? false;
+    this.protocols = options.protocols ?? null;
   }
 }
 
@@ -263,6 +271,7 @@ const errorOf = (error: unknown): ControlPlaneError => {
       commit: error.commit,
       output: error.output,
       outputTruncated: error.outputTruncated,
+      protocols: error.protocols,
     });
   }
   // Deliberately **not** the thrown message: an unclassified failure from inside the launcher may
@@ -480,6 +489,7 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
             commit: failure.commit,
             output: failure.output,
             outputTruncated: failure.outputTruncated,
+            protocols: failure.protocols,
           },
         });
       }

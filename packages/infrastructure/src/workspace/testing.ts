@@ -31,6 +31,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { RUNLET_PROTOCOL_IMAGE_LABEL, RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 
 export interface FakeContainer {
   readonly id: string;
@@ -106,7 +107,26 @@ export interface FakeDaemonOptions {
    * no environment at all.
    */
   readonly imageEnv?: ReadonlyMap<string, readonly string[] | null>;
+  /**
+   * `Config.Labels` per image (WP-151). An image not named here declares this build's shim
+   * protocol ({@link FAKE_IMAGE_LABELS}), as an image built by `docker/runtime.Dockerfile` does;
+   * `null` declares no labels at all, which is what the daemon answers for an image with none. Read
+   * at every inspect, so a test may change an entry between two creates — an image rebuilt under a
+   * running launcher.
+   */
+  readonly imageLabels?: ReadonlyMap<string, Readonly<Record<string, string>> | null>;
+  /**
+   * The image id each tag points at (WP-151 round 1). A tag not named here is `sha256:<tag>`. Read at
+   * every inspect, so a test may move a tag to another image between two requests — an image rebuilt
+   * under a running launcher.
+   */
+  readonly imageIds?: ReadonlyMap<string, string>;
 }
+
+/** The labels a fake image declares unless a test says otherwise: this build's shim protocol. */
+export const FAKE_IMAGE_LABELS: Readonly<Record<string, string>> = {
+  [RUNLET_PROTOCOL_IMAGE_LABEL]: String(RUNLET_PROTOCOL_VERSION),
+};
 
 /** The `PATH` a fake image declares unless a test says otherwise — the Debian/`node` image value. */
 export const FAKE_IMAGE_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
@@ -131,6 +151,18 @@ export class FakeDockerDaemon {
    */
   readonly networkMeta = new Map<string, { labels: Record<string, string>; created: string }>();
   readonly containers = new Map<string, FakeContainer>();
+  /**
+   * Every image id an inspect answered, with what it answered (WP-151 round 1). A container may be
+   * created from one of these ids, as Docker creates from an image it holds whatever its tags now
+   * say; an id the daemon never had is refused `404 No such image` — never created from.
+   */
+  readonly imagesById = new Map<
+    string,
+    {
+      readonly env: readonly string[] | null;
+      readonly labels: Readonly<Record<string, string>> | null;
+    }
+  >();
   /**
    * Every container ever created, removals included.
    *
@@ -251,9 +283,19 @@ export class FakeDockerDaemon {
     }
     if (method === 'GET' && /^\/images\/.+\/json$/.test(pathname)) {
       const name = decodeURIComponent(pathname.slice('/images/'.length, -'/json'.length));
+      const held = this.imagesById.get(name);
+      if (held !== undefined) {
+        // By id, as Docker answers it: what that image declared, whatever a tag points at now.
+        send(200, { Id: name, Config: { Env: held.env, Labels: held.labels } });
+        return;
+      }
       const configured = this.#options.imageEnv?.get(name);
       const env = configured === undefined ? [`PATH=${FAKE_IMAGE_PATH}`] : configured;
-      send(200, { Id: `sha256:${name}`, Config: { Env: env } });
+      const declared = this.#options.imageLabels?.get(name);
+      const labels = declared === undefined ? FAKE_IMAGE_LABELS : declared;
+      const imageId = this.#options.imageIds?.get(name) ?? `sha256:${name}`;
+      this.imagesById.set(imageId, { env, labels });
+      send(200, { Id: imageId, Config: { Env: env, Labels: labels } });
       return;
     }
     if (method === 'POST' && pathname === '/volumes/create') {
@@ -361,9 +403,14 @@ export class FakeDockerDaemon {
         send(409, { message: `container name "${name}" is already in use` });
         return;
       }
+      const create = body as FakeCreateBody;
+      const image = create.Image;
+      if (image?.startsWith('sha256:') === true && !this.imagesById.has(image)) {
+        send(404, { message: `No such image: ${image}` });
+        return;
+      }
       counter += 1;
       const id = `cnt-${counter}`;
-      const create = body as FakeCreateBody;
       const container: FakeContainer = {
         id,
         name,

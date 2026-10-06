@@ -87,7 +87,8 @@
  *    of its own, which is what let the fake CLI start while the container's variables stopped at the
  *    shim). `fake-claude-cli` reports the names in its `/proc/self/environ` (never values, except
  *    `GIT_CONFIG_COUNT` and each `GIT_CONFIG_KEY_<n>`), and the check asserts the proxy names, `HOME`,
- *    `CLAUDE_CONFIG_DIR`, `PATH`, no `RUNLET_*` and one git list of two. On the pre-fix tree the fake
+ *    `CLAUDE_CONFIG_DIR`, `PATH`, no `RUNLET_*` and one git list (two at WP-118; since backlogs
+ *    481 and 488 four, the expectation read off `PLATFORM_GIT_CONFIG`). On the pre-fix tree the fake
  *    CLI could not start at all (exit 127: `#!/usr/bin/env node` with no `PATH`); with a `PATH`
  *    planted in the spec it reported fourteen names and none of the container's.
  *  - **The image's real `claude`** ({@link measureRealCli}), with an obviously fake key and no model
@@ -155,6 +156,15 @@
  *    container and network. Measured at WP-144: 5.7 s (Docker Desktop, `linux/arm64`), most of it the
  *    runner's 5 s interrupt grace, since this CLI never answers the interrupt with a result.
  *
+ * ## What WP-151 added (PROGRESS backlog 489, TD-025's M9 amendment)
+ *
+ *  - **A run image whose shim speaks another protocol, refused before a container exists.** The
+ *    check builds a throwaway image `FROM` the run image with only its
+ *    `com.agentic.runlet-protocol` label changed (to `RUNLET_PROTOCOL_VERSION - 1`, the deploy
+ *    AUT-6820 met), starts a third launcher on it, and asks it for a run: `invalid_spec`, reason
+ *    `runtime_image_protocol_mismatch`, the image and both numbers named, and no container labelled
+ *    for the run on the daemon. The image is removed in the `finally`.
+ *
  * ## Environment
  *
  *     DOCKER_HOST=unix:///var/run/docker.sock node scripts/launcher-control-plane-check.mjs
@@ -200,6 +210,24 @@ const { startDockerFixture, RUNTIME_IMAGE, EGRESS_IMAGE, GIT_IMAGE, REPO_ROOT, d
  */
 const { SERVER_CONFIG_DEFAULTS } = await import(
   new URL('../apps/server/src/config.ts', import.meta.url).href
+);
+/**
+ * The git list the CLI must see (backlog 503): the launcher's two entries for an HTTPS run
+ * (`credential.helper`, and `credential.useHttpPath` since backlog 481) and the platform's own,
+ * read off `PLATFORM_GIT_CONFIG` rather than written down here — the count a written number missed
+ * when backlog 488 added `core.hooksPath`.
+ */
+const { PLATFORM_GIT_CONFIG } = await import(
+  new URL('../packages/infrastructure/src/runner/options.ts', import.meta.url).href
+);
+const EXPECTED_GIT_KEYS = [
+  'credential.helper',
+  'credential.useHttpPath',
+  ...PLATFORM_GIT_CONFIG.map((entry) => entry.key),
+].sort();
+/** WP-151: the protocol this checkout's runner speaks, and the label the launcher reads. */
+const { RUNLET_PROTOCOL_VERSION, RUNLET_PROTOCOL_IMAGE_LABEL } = await import(
+  new URL('../packages/contracts/src/runlet.ts', import.meta.url).href
 );
 const STOCK_MODEL_EGRESS_HOSTS = [...SERVER_CONFIG_DEFAULTS.modelEgressHosts];
 
@@ -249,6 +277,10 @@ const TOKEN = 'FAKE-wp53-launcher-token-000000000000';
 const PORT = '7780';
 const LAUNCHER_NAME = 'agentic-wp53-launcher';
 const BAD_LAUNCHER_NAME = 'agentic-wp53-launcher-badcli';
+/** WP-151: a launcher whose run image declares another shim protocol than the runner speaks. */
+const RELABELLED_LAUNCHER_NAME = 'agentic-wp151-launcher-relabelled';
+const RELABELLED_IMAGE = 'agentic-wp151-relabelled-runtime:check';
+const RELABELLED_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000151a';
 
 /**
  * `--runner-image <ref>` (WP-82, backlog 34's residual): run the runner half inside that image,
@@ -403,6 +435,28 @@ const launcherArgs = (name, fixture, extra) => [
   `${REPO_ROOT}/scripts/launcher-control-plane-launcher.mjs`,
 ];
 
+/**
+ * WP-151: the run image with its `com.agentic.runlet-protocol` label set to the protocol **before**
+ * this build's — a throwaway image `FROM` the run image, so the shim, the CLI and every layer are the
+ * real ones and only the declaration differs. Built from a context with nothing in it but the
+ * two-line Dockerfile, in this process' temporary directory, and removed in the `finally`.
+ */
+const buildRelabelledImage = async () => {
+  const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const context = await mkdtemp(path.join(tmpdir(), 'wp151-'));
+  try {
+    await writeFile(
+      path.join(context, 'Dockerfile'),
+      `FROM ${RUNTIME_IMAGE}\nLABEL ${RUNLET_PROTOCOL_IMAGE_LABEL}="${String(RUNLET_PROTOCOL_VERSION - 1)}"\n`,
+    );
+    await docker(['build', '-q', '-t', RELABELLED_IMAGE, context]);
+  } finally {
+    await rm(context, { recursive: true, force: true });
+  }
+};
+
 /** Polls the launcher container's log for the line it prints once it is listening. */
 const waitForListening = async (name) => {
   for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -455,6 +509,8 @@ const runRunner = async (extraEnv, options = {}) => {
     CHECK_BAD_RUN_ID: BAD_RUN_ID,
     CHECK_LAUNCHER_URL: `http://${LAUNCHER_NAME}:${PORT}`,
     CHECK_BAD_LAUNCHER_URL: `http://${BAD_LAUNCHER_NAME}:${PORT}`,
+    CHECK_RELABELLED_RUN_ID: RELABELLED_RUN_ID,
+    CHECK_RELABELLED_LAUNCHER_URL: `http://${RELABELLED_LAUNCHER_NAME}:${PORT}`,
     CHECK_LAUNCHER_TOKEN: TOKEN,
     CHECK_REPO_URL: fixture.repoUrl,
     CHECK_REPO_HOST: fixture.repoContainer,
@@ -1259,9 +1315,19 @@ try {
   // EINVAL on a bind-backed volume on macOS (measured at WP-15g).
   fixture = await startDockerFixture({ controlVolumeBind: false });
 
-  await docker(['rm', '-f', LAUNCHER_NAME, BAD_LAUNCHER_NAME], { allowFailure: true });
+  await docker(['rm', '-f', LAUNCHER_NAME, BAD_LAUNCHER_NAME, RELABELLED_LAUNCHER_NAME], {
+    allowFailure: true,
+  });
   await docker(launcherArgs(LAUNCHER_NAME, fixture, []));
   await docker(launcherArgs(BAD_LAUNCHER_NAME, fixture, ['-e', 'CHECK_CLI_PATH=/nowhere/claude']));
+  // WP-151: the run image with only its shim-protocol label changed, behind a third launcher.
+  await buildRelabelledImage();
+  await docker(
+    launcherArgs(RELABELLED_LAUNCHER_NAME, fixture, [
+      '-e',
+      `CHECK_RUNTIME_IMAGE=${RELABELLED_IMAGE}`,
+    ]),
+  );
 
   const up = await waitForListening(LAUNCHER_NAME);
   record('the launcher container exposes the control plane', up, `${LAUNCHER_NAME}:${PORT}`);
@@ -1270,6 +1336,12 @@ try {
     'a second launcher is up with a CLI path the run image does not carry',
     badUp,
     `${BAD_LAUNCHER_NAME}:${PORT}`,
+  );
+  const relabelledUp = await waitForListening(RELABELLED_LAUNCHER_NAME);
+  record(
+    'WP-151: a third launcher is up on a run image whose shim protocol label is another number',
+    relabelledUp,
+    `${RELABELLED_LAUNCHER_NAME}:${PORT} on ${RELABELLED_IMAGE}`,
   );
 
   driven = await runRunner({});
@@ -1310,6 +1382,19 @@ try {
         report.wrongCliPathError.includes('/nowhere/claude') &&
         report.wrongCliPathError.includes(RUNTIME_IMAGE),
       String(report.wrongCliPathError),
+    );
+    const relabelled = report.relabelledImageError;
+    const relabelledLeft = await runObjects(RELABELLED_RUN_ID);
+    record(
+      'WP-151: a run image declaring another shim protocol is refused as invalid_spec, naming the image and both numbers, before a container exists',
+      typeof relabelled === 'string' &&
+        relabelled.startsWith('invalid_spec/runtime_image_protocol_mismatch: ') &&
+        relabelled.includes(
+          `the run image ${RELABELLED_IMAGE} declares shim protocol ${String(RUNLET_PROTOCOL_VERSION - 1)}, and the runner speaks protocol ${String(RUNLET_PROTOCOL_VERSION)}`,
+        ) &&
+        relabelledLeft.containers.length === 0 &&
+        relabelledLeft.networks.length === 0,
+      `${String(relabelled)} | left: ${JSON.stringify(relabelledLeft)}`,
     );
     record(
       'the workspace’s CLI path reached the bytes the SDK spawned with (rule 82)',
@@ -1392,11 +1477,10 @@ try {
     `RUNLET_*: ${JSON.stringify(environ?.runlet ?? null)}`,
   );
   record(
-    'backlog 342 and 481: one git list, GIT_CONFIG_COUNT=3, credential.helper, credential.useHttpPath and core.fsmonitor',
+    `backlog 342, 481 and 488: one git list, GIT_CONFIG_COUNT=${EXPECTED_GIT_KEYS.length}, ${EXPECTED_GIT_KEYS.join(', ')}`,
     environ !== null &&
-      environ.git.count === '3' &&
-      JSON.stringify(environ.git.keys) ===
-        JSON.stringify(['core.fsmonitor', 'credential.helper', 'credential.useHttpPath']),
+      environ.git.count === String(EXPECTED_GIT_KEYS.length) &&
+      JSON.stringify(environ.git.keys) === JSON.stringify(EXPECTED_GIT_KEYS),
     JSON.stringify(environ?.git ?? null),
   );
 
@@ -1886,7 +1970,10 @@ try {
 } catch (error) {
   record('the check ran to completion', false, String(error?.stack ?? error));
 } finally {
-  await docker(['rm', '-f', LAUNCHER_NAME, BAD_LAUNCHER_NAME], { allowFailure: true });
+  await docker(['rm', '-f', LAUNCHER_NAME, BAD_LAUNCHER_NAME, RELABELLED_LAUNCHER_NAME], {
+    allowFailure: true,
+  });
+  await docker(['image', 'rm', '-f', RELABELLED_IMAGE], { allowFailure: true });
   await docker(['network', 'rm', `run-${NETWORK_ONLY_RUN_ID}`], { allowFailure: true });
   await fixture?.cleanup();
   // The two run volumes retention deliberately keeps; this is a check, not an instance.
@@ -1900,6 +1987,7 @@ try {
     NO_ROUTE_RUN_ID,
     GIT_CREDENTIAL_RUN_ID,
     SHUTDOWN_RUN_ID,
+    RELABELLED_RUN_ID,
     ...ALL_286_RUN_IDS,
   ]) {
     await docker(['volume', 'rm', '-f', `ws-${runId}`], { allowFailure: true });

@@ -125,7 +125,13 @@ export type EngineNetworkSummary = z.infer<typeof networkSummarySchema>;
 
 const imageInspectSchema = z.looseObject({
   Id: z.string().min(1),
-  Config: z.looseObject({ Env: z.array(z.string()).nullish() }).nullish(),
+  Config: z
+    .looseObject({
+      Env: z.array(z.string()).nullish(),
+      // WP-151: the run image's `com.agentic.runlet-protocol`; Docker answers `null` for none.
+      Labels: z.record(z.string(), z.string()).nullish(),
+    })
+    .nullish(),
 });
 
 export type EngineImageInspect = z.infer<typeof imageInspectSchema>;

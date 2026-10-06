@@ -16,7 +16,14 @@
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
-import { silentLogger, WorkspaceError, type WorkspaceSpec } from '@platform/application';
+import {
+  describeStartFailure,
+  RunStartError,
+  silentLogger,
+  WorkspaceError,
+  type WorkspaceSpec,
+} from '@platform/application';
+import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import { launcher as launcherAdapters, workspace } from '@platform/infrastructure';
 import { PLATFORM_SKILLS } from '@platform/prompts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -309,6 +316,31 @@ describe('create (TD-028 decision 4: idempotent on the run id)', () => {
       mirrorFails = false;
       mirrorFailure = null;
     }
+  });
+
+  /**
+   * WP-151 review round 1: a run image whose shim speaks another protocol than the requesting
+   * runner is refused with **both numbers as integers** across the control plane — not only inside
+   * the launcher's message, which the runner stores as untrusted words — so the run's
+   * platform-written diagnosis names them, as it does for the shim's own refusal.
+   */
+  it('carries a run-image protocol refusal’s two numbers to the runner as integers, into the diagnosis (WP-151)', async () => {
+    const runId = randomUUID();
+    const other = RUNLET_PROTOCOL_VERSION + 1;
+    const failure = await clientFor()
+      .createRun({ spec: specFor(runId, { runletProtocol: other }), credential: credentialRequest })
+      .then(() => null)
+      .catch((error: unknown) => error as WorkspaceError);
+    expect(failure).toBeInstanceOf(WorkspaceError);
+    expect(failure).toMatchObject({
+      code: 'invalid_spec',
+      reason: 'runtime_image_protocol_mismatch',
+      protocols: { runner: other, shim: RUNLET_PROTOCOL_VERSION },
+    });
+    expect(describeStartFailure(new RunStartError('x', { retryable: false, cause: failure }))).toBe(
+      `RunStartError: invalid_spec, runtime_image_protocol_mismatch, runner protocol ${String(other)}, shim protocol ${String(RUNLET_PROTOCOL_VERSION)}`,
+    );
+    expect(createdRuns()).not.toContain(runId);
   });
 
   it('carries a failed helper’s redacted output tail to the runner (backlog 453)', async () => {

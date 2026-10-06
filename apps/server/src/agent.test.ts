@@ -15,6 +15,7 @@ import type {
 } from '@platform/application';
 import * as applicationRunRedaction from '@platform/application';
 import { countingStartHooks } from '@platform/application';
+import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import { runlet as runletAdapters, runner as runnerAdapters } from '@platform/infrastructure';
 import type pg from 'pg';
 import { describe, expect, it } from 'vitest';
@@ -349,11 +350,68 @@ describe('the composed runner logs a containerised CLI’s stderr, redacted (WP-
  */
 describe('the composed runner and the CLI spawn marker (WP-150)', () => {
   const key = 'FAKE-anthropic-key-not-a-real-secret-000';
+  /** The production composition over a runlet transport to `socketPath`; the outcome, settled. */
+  const startComposed = (options: {
+    readonly socketPath: string;
+    readonly runnerToken: string;
+    readonly hooks: ReturnType<typeof countingStartHooks>;
+  }): Promise<unknown> => {
+    const { logger } = recordingLogger();
+    const transport = runletAdapters.createRunletSpawn({
+      socketPath: options.socketPath,
+      token: options.runnerToken,
+      clock: runnerAdapters.systemClock,
+    });
+    const answering: runnerAdapters.RunWorkspaceProvisioner = {
+      provision: async () => ({
+        workdir: process.cwd(),
+        claudeCodePath: '/usr/local/bin/claude',
+        // The command is the only thing replaced; both seams are the transport's own.
+        spawn: Object.assign(
+          (spawnOptions: Parameters<typeof transport>[0]) =>
+            transport({
+              ...spawnOptions,
+              ...runletAdapters.nodeScript('process.exit(0)'),
+              cwd: process.cwd(),
+            }),
+          {
+            setStderrSink: transport.setStderrSink,
+            setSpawnGate: transport.setSpawnGate,
+            noteSessionResult: transport.noteSessionResult,
+          },
+        ),
+        release: async () => {},
+      }),
+    };
+    const composed = composeAgentRunner({
+      pool,
+      broadcast,
+      provisioner: answering,
+      runSecrets,
+      tools,
+      providerMode: 'api',
+      modelApiKey: key,
+      modelOauthToken: null,
+      logger,
+    });
+    if (composed.runner === null) {
+      throw new Error('expected a runner');
+    }
+    const spec = runnerAdapters.runSpecFixture({
+      env: agentRunEnvironment({ providerMode: 'api', modelApiKey: key, modelOauthToken: null })
+        .env,
+      secretEnvNames: ['ANTHROPIC_API_KEY'],
+      artifactType: null,
+    });
+    return composed.runner.start(spec, options.hooks).outcome.then(
+      () => null,
+      (failure: unknown) => failure,
+    );
+  };
   const runThroughShim = async (options: {
     readonly runnerToken: string;
     readonly hooks: ReturnType<typeof countingStartHooks>;
   }) => {
-    const { logger } = recordingLogger();
     const volume = await runletAdapters.createControlVolume();
     const shim = runletAdapters.createRunletShim({
       controlSocketPath: volume.controlSocketPath,
@@ -363,52 +421,7 @@ describe('the composed runner and the CLI spawn marker (WP-150)', () => {
     });
     await shim.start();
     try {
-      const transport = runletAdapters.createRunletSpawn({
-        socketPath: volume.controlSocketPath,
-        token: options.runnerToken,
-        clock: runnerAdapters.systemClock,
-      });
-      const answering: runnerAdapters.RunWorkspaceProvisioner = {
-        provision: async () => ({
-          workdir: process.cwd(),
-          claudeCodePath: '/usr/local/bin/claude',
-          // The command is the only thing replaced; both seams are the transport's own.
-          spawn: Object.assign(
-            (spawnOptions: Parameters<typeof transport>[0]) =>
-              transport({
-                ...spawnOptions,
-                ...runletAdapters.nodeScript('process.exit(0)'),
-                cwd: process.cwd(),
-              }),
-            { setStderrSink: transport.setStderrSink, setSpawnGate: transport.setSpawnGate },
-          ),
-          release: async () => {},
-        }),
-      };
-      const composed = composeAgentRunner({
-        pool,
-        broadcast,
-        provisioner: answering,
-        runSecrets,
-        tools,
-        providerMode: 'api',
-        modelApiKey: key,
-        modelOauthToken: null,
-        logger,
-      });
-      if (composed.runner === null) {
-        throw new Error('expected a runner');
-      }
-      const spec = runnerAdapters.runSpecFixture({
-        env: agentRunEnvironment({ providerMode: 'api', modelApiKey: key, modelOauthToken: null })
-          .env,
-        secretEnvNames: ['ANTHROPIC_API_KEY'],
-        artifactType: null,
-      });
-      const error = await composed.runner.start(spec, options.hooks).outcome.then(
-        () => null,
-        (failure: unknown) => failure,
-      );
+      const error = await startComposed({ socketPath: volume.controlSocketPath, ...options });
       return { error, childPid: shim.childPid };
     } finally {
       await shim.close();
@@ -432,6 +445,50 @@ describe('the composed runner and the CLI spawn marker (WP-150)', () => {
     expect(startError.retryable).toBe(false);
     expect(hooks.asks()).toBe(0);
     expect(childPid).toBeNull();
+  });
+
+  /**
+   * WP-151 criterion (2), PROGRESS backlog 500: a shim from another build answers `protocol_mismatch`
+   * with both numbers, and the composed runner carries them into the start failure's platform-written
+   * diagnosis. A raw runlet server stands in for that shim: the in-process one speaks this build's.
+   */
+  it('names a shim protocol mismatch with both numbers, as a start failure that never asks for the marker (WP-151)', async () => {
+    const hooks = countingStartHooks();
+    const volume = await runletAdapters.createControlVolume();
+    const server = await runletAdapters.createRawServer(volume.controlSocketPath);
+    try {
+      const settled = startComposed({
+        socketPath: volume.controlSocketPath,
+        runnerToken: 'run-token-wp151-0000000000000000',
+        hooks,
+      });
+      const peer = await server.peer();
+      await peer.next('hello');
+      peer.send({
+        type: 'fatal',
+        reason: 'protocol_mismatch',
+        message: 'the runner speaks protocol 3, the shim speaks 2',
+        protocols: { runner: RUNLET_PROTOCOL_VERSION, shim: 2 },
+      });
+      const error = await settled;
+      expect(error).toBeInstanceOf(applicationRunRedaction.RunStartError);
+      const startError = error as InstanceType<typeof applicationRunRedaction.RunStartError>;
+      expect(startError.diagnosis).toEqual({
+        kind: 'workspace_failed',
+        reason: 'runlet_protocol_mismatch',
+        commit: null,
+        protocols: { runner: RUNLET_PROTOCOL_VERSION, shim: 2 },
+      });
+      expect(startError.retryable).toBe(false);
+      expect(applicationRunRedaction.describeStartFailure(startError)).toBe(
+        `RunStartError: workspace_failed, runlet_protocol_mismatch, runner protocol ${String(RUNLET_PROTOCOL_VERSION)}, shim protocol 2`,
+      );
+      expect(hooks.asks()).toBe(0);
+      expect(peer.received.map((decoded) => decoded.frame.type)).toEqual(['hello']);
+    } finally {
+      await server.close();
+      await volume.cleanup();
+    }
   });
 
   it('starts no CLI when the platform refuses the marker, and says so (criterion 5)', async () => {

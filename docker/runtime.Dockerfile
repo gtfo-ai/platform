@@ -140,6 +140,24 @@ COPY apps/runlet apps/runlet
 RUN pnpm --filter @platform/runlet run build \
  && node scripts/assert-runlet-bundle.mjs apps/runlet/dist/agentic-runlet.mjs
 
+# ── The shim's protocol, as a label the launcher reads (WP-151, TD-025's M9 amendment) ──────────
+#
+# A `LABEL` cannot take a value a `RUN` computed, so the number arrives as a build argument —
+# `scripts/build-images.mjs` reads it off `RUNLET_PROTOCOL_VERSION` — and is checked **here**
+# against the very source this stage just bundled. No default: an image built without the argument,
+# or with a hand-written number that is not the constant, does not build. The launcher refuses a
+# create whose image declares another protocol than the requesting runner's, or none
+# (`packages/infrastructure/src/workspace/provider.ts`); `scripts/runlet-protocol.test.ts` holds
+# this file, the script and the constant together.
+ARG RUNLET_PROTOCOL
+RUN set -eu; \
+    declared="$(sed -n 's/^export const RUNLET_PROTOCOL_VERSION = \([0-9][0-9]*\);$/\1/p' packages/contracts/src/runlet.ts)"; \
+    test -n "$declared"; \
+    if [ "$declared" != "${RUNLET_PROTOCOL:-}" ]; then \
+      echo "RUNLET_PROTOCOL=${RUNLET_PROTOCOL:-(not passed)}, but packages/contracts/src/runlet.ts declares ${declared}: build through scripts/build-images.mjs" >&2; \
+      exit 1; \
+    fi
+
 # ── The image ────────────────────────────────────────────────────────────────────────────────────
 FROM ${BASE_IMAGE} AS runtime
 USER root
@@ -177,6 +195,11 @@ RUN set -eux; \
     sentry-cli --version; \
     jira version; \
     acli --version
+
+# The protocol the shim above speaks (WP-151): the build argument the `shim` stage checked against
+# the source it bundled — never a number written here.
+ARG RUNLET_PROTOCOL
+LABEL com.agentic.runlet-protocol="${RUNLET_PROTOCOL}"
 
 LABEL org.opencontainers.image.title="platform-runtime" \
       org.opencontainers.image.description="Run container: claude CLI, agent CLIs and the agentic-runlet shim (TD-021, TD-025)." \

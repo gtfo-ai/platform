@@ -168,6 +168,46 @@ const TAKE_OVER_EXPORT = {
   keepUntil: '2026-09-28T00:00:00.000Z',
 } as const;
 
+/**
+ * WP-151 (backlog 463): the runner tells its transport when it has read the session's `result`, so
+ * a close of the run shim's control connection after it — the workspace's own teardown, which
+ * follows the outcome — is not logged as a transport failure. Asserted on both branches (rule 10):
+ * told exactly once for a session that delivered its result, never for one that crashed without.
+ */
+describe('telling the transport the session’s result was read (WP-151)', () => {
+  const noting = (name: string) => {
+    const cli = fakeSpawnClaudeCodeProcess(loadScript(name));
+    let noted = 0;
+    const spawn = Object.assign((options: Parameters<typeof cli.spawn>[0]) => cli.spawn(options), {
+      noteSessionResult: () => {
+        noted += 1;
+      },
+    });
+    const runner = createClaudeRunner({
+      sink: recordingSink(),
+      approvals: scriptedApprovals(undefined),
+      tools: recordingTools(),
+      clock: manualClock(FIXTURE_CLOCK_START),
+      injectedSecretRedactorFor: () => injectedSecretRedactorFixture(),
+      spawnClaudeCodeProcess: spawn,
+    });
+    const handle = runner.start(runSpecFixture(), countingStartHooks());
+    return { outcome: handle.outcome, noted: () => noted };
+  };
+
+  it('tells it once, for a session that delivered its result', async () => {
+    const harness = noting('happy-path');
+    expect((await harness.outcome).status).toBe('completed');
+    expect(harness.noted()).toBe(1);
+  });
+
+  it('never tells it for a session that ended with no result', async () => {
+    const harness = noting('crash');
+    expect((await harness.outcome).terminalReason).toBe('crash');
+    expect(harness.noted()).toBe(0);
+  });
+});
+
 describe('happy path', () => {
   it('completes, validates the artifact and reports the cost', async () => {
     const { result, events } = await run('happy-path');

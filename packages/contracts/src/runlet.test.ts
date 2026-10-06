@@ -52,6 +52,12 @@ describe('runlet frame protocol', () => {
       { type: 'ping' },
       { type: 'pong' },
       { type: 'fatal', reason: 'auth_failed', message: 'no' },
+      {
+        type: 'fatal',
+        reason: 'protocol_mismatch',
+        message: 'no',
+        protocols: { runner: 2, shim: RUNLET_PROTOCOL_VERSION },
+      },
     ];
     for (const frame of frames) {
       expect(parse(frame).success, JSON.stringify(frame)).toBe(true);
@@ -225,8 +231,39 @@ describe('runlet frame protocol', () => {
     expect(isRunletByteFrameType('exit')).toBe(false);
   });
 
+  describe('protocol_mismatch carries both versions (WP-151)', () => {
+    const fatal = (over: Record<string, unknown>) => ({
+      type: 'fatal',
+      reason: 'protocol_mismatch',
+      message: 'the runner speaks protocol 2',
+      ...over,
+    });
+
+    it('is protocol 3, the version that added it', () => {
+      expect(RUNLET_PROTOCOL_VERSION).toBe(3);
+    });
+
+    it('requires the two integers on a protocol_mismatch, and refuses them on any other reason', () => {
+      expect(parse(fatal({ protocols: { runner: 2, shim: 3 } })).success).toBe(true);
+      // Absent on a mismatch is a frame that names nothing — refused, never read as unknown.
+      expect(parse(fatal({})).success).toBe(false);
+      expect(parse(fatal({ protocols: { runner: '2', shim: 3 } })).success).toBe(false);
+      expect(parse(fatal({ protocols: { runner: 2.5, shim: 3 } })).success).toBe(false);
+      expect(parse(fatal({ protocols: { runner: 2 } })).success).toBe(false);
+      expect(parse(fatal({ protocols: { runner: 2, shim: 3, image: 1 } })).success).toBe(false);
+      expect(
+        parse(fatal({ reason: 'auth_failed', protocols: { runner: 2, shim: 3 } })).success,
+      ).toBe(false);
+    });
+
+    it('still parses a protocol-2 shim’s fatal, which has no protocols key', () => {
+      expect(parse({ type: 'fatal', reason: 'auth_failed', message: 'no' }).success).toBe(true);
+    });
+  });
+
   it('enumerates the refusal reasons the two endpoints can report', () => {
     expect(runletFatalReasonSchema.options).toContain('auth_failed');
+    expect(runletFatalReasonSchema.options).toContain('protocol_mismatch');
     expect(runletFatalReasonSchema.options).toContain('connection_taken');
     expect(runletFatalReasonSchema.options).toContain('credential_refused');
   });

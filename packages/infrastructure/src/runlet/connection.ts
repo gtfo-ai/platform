@@ -8,7 +8,7 @@
  * frame followed by a close rather than an unhandled throw inside a `data` listener.
  */
 import type { Socket } from 'node:net';
-import type { RunletFatalReason, RunletFrame } from '@platform/contracts';
+import type { RunletFatalReason, RunletFrame, RunletProtocols } from '@platform/contracts';
 import {
   createFrameDecoder,
   type DecodedFrame,
@@ -29,8 +29,11 @@ export interface FrameConnectionHandlers {
 export interface FrameConnection {
   /** Writes one frame. `false` means the kernel buffer is full — wait for `onDrain`. */
   send(frame: RunletFrame, payload?: Buffer): boolean;
-  /** Sends `fatal` (best effort) and closes. Idempotent. */
-  fail(reason: RunletFatalReason, message: string): void;
+  /**
+   * Sends `fatal` (best effort) and closes. Idempotent. `protocols` rides on a `protocol_mismatch`
+   * and on nothing else (WP-151); the schema refuses it anywhere else.
+   */
+  fail(reason: RunletFatalReason, message: string, protocols?: RunletProtocols | null): void;
   /** Closes without a `fatal`. Idempotent. */
   close(): void;
   /** Stops reading the socket — the peer's kernel buffer then fills and it feels the backpressure. */
@@ -70,10 +73,17 @@ export const createFrameConnection = (
         return false;
       }
     },
-    fail: (reason, message) => {
+    fail: (reason, message, protocols) => {
       if (!closed && !socket.destroyed) {
         // Best effort: the peer may already be gone, and `end()` flushes what it can.
-        socket.write(encodeFrame({ type: 'fatal', reason, message }));
+        socket.write(
+          encodeFrame({
+            type: 'fatal',
+            reason,
+            message,
+            ...(reason === 'protocol_mismatch' && protocols != null ? { protocols } : {}),
+          }),
+        );
       }
       connection.close();
     },

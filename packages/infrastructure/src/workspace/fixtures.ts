@@ -9,6 +9,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { WorkspaceRepo, WorkspaceSpec } from '@platform/application';
+import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import type { PlatformSkillCatalogue } from './skills.js';
 
 /**
@@ -103,6 +104,7 @@ export const workspaceSpecFixture = (
   protectedPaths: overrides.protectedPaths ?? ['**/*.test.*', '.gitlab-ci.yml'],
   env: (overrides.env as Record<string, string> | undefined) ?? { CI: 'true' },
   keepUntil: overrides.keepUntil ?? '2026-09-13T00:00:00.000Z',
+  runletProtocol: overrides.runletProtocol ?? RUNLET_PROTOCOL_VERSION,
 });
 
 /**

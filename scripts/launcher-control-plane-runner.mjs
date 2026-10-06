@@ -1159,6 +1159,7 @@ const report = {
   replayedHandleMatches: null,
   spawnCommand: null,
   wrongCliPathError: null,
+  relabelledImageError: null,
   releases: [],
   kinds: [],
   text: '',
@@ -1292,6 +1293,36 @@ try {
       report.wrongCliPathError = 'ACCEPTED';
     } catch (error) {
       report.wrongCliPathError = `${error?.code ?? '?'}: ${error?.message ?? String(error)}`;
+    }
+  }
+
+  /**
+   * 6. A run image whose shim speaks another protocol is refused **before a container exists**
+   * (WP-151, TD-025's M9 amendment): a third launcher runs on a copy of the run image with only its
+   * `com.agentic.runlet-protocol` label changed, and this runner's spec carries its own protocol.
+   */
+  const relabelledUrl = process.env['CHECK_RELABELLED_LAUNCHER_URL'];
+  if (relabelledUrl !== undefined && relabelledUrl.length > 0) {
+    const relabelledProvisioner = launcherAdapters.createLauncherRunWorkspaceProvisioner({
+      client: launcherAdapters.createLauncherControlClient({
+        baseUrl: relabelledUrl,
+        token,
+        logger,
+      }),
+      credentials,
+      projects: projectSource,
+      controlRoot: CONTROL_ROOT,
+      modelEgressHosts: [],
+      runRegistryHosts: [],
+      credentialTtlSeconds: 3_600,
+      clock: runnerAdapters.systemClock,
+      logger,
+    });
+    try {
+      await relabelledProvisioner.provision(specFor(required('CHECK_RELABELLED_RUN_ID')));
+      report.relabelledImageError = 'ACCEPTED';
+    } catch (error) {
+      report.relabelledImageError = `${error?.code ?? '?'}/${error?.reason ?? '?'}: ${error?.message ?? String(error)}`;
     }
   }
 

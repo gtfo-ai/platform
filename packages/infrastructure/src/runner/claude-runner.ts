@@ -122,6 +122,7 @@ import type {
   JsonObject,
   JsonValue,
   ModelUsage,
+  RunletProtocols,
   RunTerminalReason,
   TokenUsage,
   TranscriptEvent,
@@ -163,6 +164,12 @@ export type ClaudeCodeSpawn = ((options: SpawnOptions) => SpawnedProcess) & {
    * the session starts instead, which is the same rule with no handshake to wait for.
    */
   readonly setSpawnGate?: (gate: RunletSpawnGate | null) => void;
+  /**
+   * Told when the session's `result` has been read (WP-151, backlog 463): the runlet transport then
+   * reads a close of its control connection before the `exit` frame as the platform's own teardown
+   * rather than as a transport failure.
+   */
+  readonly noteSessionResult?: () => void;
 };
 
 export interface ClaudeRunnerDependencies {
@@ -435,6 +442,8 @@ const NOT_SPAWNED: Record<
 > = {
   connection_lost: { reason: 'runlet_connection_lost', retryable: true },
   handshake_timeout: { reason: 'runlet_handshake_timeout', retryable: true },
+  // WP-151: a rebuild is the fix, so another attempt against the same image would meet it again.
+  protocol_mismatch: { reason: 'runlet_protocol_mismatch', retryable: false },
   handshake_refused: { reason: 'runlet_handshake_refused', retryable: false },
   // The gate refused for a reason the marker's own state does not name — a frame this side refused.
   spawn_refused: { reason: 'cli_spawn_not_requested', retryable: false },
@@ -470,6 +479,8 @@ const startRun = (
    */
   let marker: 'unasked' | 'recorded' | 'refused' | 'failed' = 'unasked';
   let preSpawnStep: RunletPreSpawnStep | null = null;
+  /** Both protocol versions, when the transport ended at `protocol_mismatch` (WP-151). */
+  let mismatch: RunletProtocols | null = null;
   const askForCli = async (): Promise<void> => {
     if (marker !== 'unasked') {
       throw new Error('the CLI of this run was already asked for once');
@@ -497,8 +508,11 @@ const startRun = (
   const gated = deps.spawnClaudeCodeProcess?.setSpawnGate !== undefined;
   deps.spawnClaudeCodeProcess?.setSpawnGate?.({
     beforeSpawn: askForCli,
-    failedBeforeSpawn: (step) => {
-      preSpawnStep ??= step;
+    failedBeforeSpawn: (step, protocols) => {
+      if (preSpawnStep === null) {
+        preSpawnStep = step;
+        mismatch = step === 'protocol_mismatch' ? protocols : null;
+      }
     },
   });
   const notSpawned = (failure: string | null): RunStartError => {
@@ -511,7 +525,16 @@ const startRun = (
     const { reason, retryable } = NOT_SPAWNED[key];
     return new RunStartError(
       `the run ended before its CLI was asked to start (${reason}): ${failure ?? 'no error reported'}`,
-      { retryable, diagnosis: { kind: 'workspace_failed', reason, commit: null } },
+      {
+        retryable,
+        diagnosis: {
+          kind: 'workspace_failed',
+          reason,
+          commit: null,
+          // WP-151 (backlog 500): both numbers in the platform-written sentence, never in `detail`.
+          ...(key === 'protocol_mismatch' && mismatch !== null ? { protocols: mismatch } : {}),
+        },
+      },
     );
   };
 
@@ -820,6 +843,10 @@ const startRun = (
     deliveries.accept(message);
     if (message.type === 'result') {
       result = message;
+      // WP-151 (backlog 463): the session's answer is in, so the transport's control connection may
+      // now close before its `exit` frame — the workspace's teardown follows this outcome — and that
+      // is not a transport failure.
+      deps.spawnClaudeCodeProcess?.noteSessionResult?.();
       const cost = reportedCostUsd(message.total_cost_usd);
       if (cost === null) {
         // `NaN > ceiling` is `false`, so the comparison below would have waved this through as a

@@ -325,7 +325,9 @@ Two optional lines, only if you need them:
 
 ```bash
 docker build -f docker/base.Dockerfile -t platform-base:dev .                                          # run
-docker build -f docker/runtime.Dockerfile --build-arg BASE_IMAGE=platform-base:dev -t platform-runtime:dev .  # run
+docker build -f docker/runtime.Dockerfile --build-arg BASE_IMAGE=platform-base:dev \
+  --build-arg RUNLET_PROTOCOL="$(sed -n 's/^export const RUNLET_PROTOCOL_VERSION = \([0-9][0-9]*\);$/\1/p' packages/contracts/src/runlet.ts)" \
+  -t platform-runtime:dev .                                                                            # run
 docker build -f docker/egress.Dockerfile -t platform-egress:dev .                                      # run
 APP_COMMIT=$(git rev-parse HEAD) docker compose build                                                  # run
 docker compose up -d                                                                                   # run (as the stock check's `local` leg)
@@ -347,6 +349,13 @@ agent run fails. With Node 24, `node scripts/build-images.mjs` does all four bui
 empty machine was not measured**. `APP_COMMIT=…` bakes the commit into the image, so
 `/api/version` can tell you which build you are running (the image's environment carried it, run;
 the endpoint reads it in `apps/server/src/runtime.ts`).
+
+**The run image's `RUNLET_PROTOCOL`** (WP-151) is the protocol its run shim speaks, read off the source
+by that `sed`; the image carries it as the label `com.agentic.runlet-protocol`, and the launcher
+refuses to start a run in an image whose label is not the runner's protocol. The build **fails
+without it**, and fails with a number that is not the source's (*"RUNLET_PROTOCOL=…, but
+packages/contracts/src/runlet.ts declares …"*), so the label cannot be typed by hand.
+`node scripts/build-images.mjs` passes it for you.
 
 The published images on GHCR are an alternative to building (operator guide § 2), but on
 2026-10-03 the packages were **not anonymously pullable** (the registry's token endpoint answered
@@ -522,6 +531,7 @@ is *Done*.
 | *(form C)* `run_credential` is red: *"not one of … deploy keys"* or *"without write access"*; or `default_branch_protection` lets a deploy key push | the integration's card | **Settings → Repository → Deploy keys**: add the `.pub` with **Grant write permissions**; **Protected branches**: push **No one**, and remove the deploy key from *Allowed to push* |
 | a task parks with *"the merge request adds the static run token to the repository"* | the task page's brief | **rotate the run token**: revoke it in GitLab, create a new one, re-seal it, declare its expiry; remove it from the branch before anything else |
 | a run fails with *"…the model API answered HTTP 401…"* | the run page's error (measured with a fake token, WP-133) | a wrong or expired token: replace it in `.env`, `docker compose up -d` |
+| a run *did not start*: `runtime_image_protocol_mismatch` or `runtime_image_protocol_missing` (the launcher's words name the run image), or `runlet_protocol_mismatch` — each with `runner protocol 3, shim protocol 2` (or `shim protocol undeclared`) | the run page's *did not start* panel and the task page's brief; for a run image from before WP-151 the runner's log says *"the shim refused the handshake; if the run image and the runner were built from different commits, rebuild and recreate both"* (`runlet_handshake_refused`) | the run image and the runner were built from **different commits** (AUT-6820's case: `platform-runtime` rebuilt, the runner not). **Rebuild them together and recreate the runner and the launcher**: the four build lines of § 4 (or `node scripts/build-images.mjs`), then `docker compose up -d`, which recreates `app`, `runner` and `launcher` on their new images; then **Hand back** at the stage. A run that never started spent nothing and holds no budget (below) |
 | an agent cannot install a package or reach a host | the run's egress sidecar: `docker ps --filter label=com.agentic.run` lists `egress-<run id>` while the run lives, and `docker logs egress-<run id>` has *"Proxying refused on filtered domain …"* (not run here) | add a registry to `APP_RUN_REGISTRY_HOSTS`, or a model-side host to `APP_MODEL_EGRESS_HOSTS` |
 | **the CI gate on a poll-only binding**: the task parks with *"The CI pipeline … was still running after 60 minutes — the CI timeout (`pipeline.limits.ci_timeout_minutes = 60`) …"* | the task page's brief | see below |
 | something failed with no task to show it | **Settings → Dead letters** and **Settings → Failed jobs** (admin) | operator guide § 9 |
@@ -576,7 +586,9 @@ admission compares.
 was refused by its run shim before the CLI started (a run image rebuilt from another commit than the
 runner, backlog 489), and the run was then held at the 40 USD implementation cap against the task.
 Since WP-150 such a run fails as *did not start* with the step it reached on the run page
-(`runlet_handshake_refused`, `runlet_handshake_timeout`, `runlet_connection_lost`, …), its cost is a
+(`runlet_handshake_refused`, `runlet_handshake_timeout`, `runlet_connection_lost`, …; since WP-151 a
+shim from another build says `runlet_protocol_mismatch` with both numbers, and the launcher refuses
+such a run image before the run exists — the row in the table above), its cost is a
 measured 0, and no cap holds it. A cancel or a lost runner while the workspace was still being
 prepared is the same. Only a run that asked for its CLI and then reported nothing is held at its cap
 — the task page's *Excludes N runs nobody measured*.

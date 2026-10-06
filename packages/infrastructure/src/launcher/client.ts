@@ -232,6 +232,8 @@ export const createLauncherControlClient = (
       // `RunStartError: workspace_failed` alone. `detail` stays the log field it was.
       output: failure.success ? (failure.data.error.output ?? null) : null,
       outputTruncated: failure.success && failure.data.error.outputTruncated === true,
+      // WP-151 round 1: a run-image protocol refusal's two numbers, as integers, for the diagnosis.
+      protocols: failure.success ? (failure.data.error.protocols ?? null) : null,
     });
   };
 
