@@ -60,3 +60,26 @@ redactor (`packages/infrastructure/src/runner/stderr-log.ts`): before the stream
 held, bounded at 64 Ki characters, redacted once as a whole and logged at `warn` if the run ends there; after it, each
 line is redacted and logged at `debug`. No stderr text reaches the run record, the task or an event payload
 (BD-022). `docs/technical/04-agent-runtime.md` carries the same correction.
+
+## Amendment (M9 architect pass, 2026-10-06, session 12) — a protocol mismatch says so, and is refused before a run (PROGRESS backlog 489)
+
+The 481 amendment says the two sides *"refuse each other at `hello`, naming both versions"*. Measured on the first local test,
+they did not: the shim checks the protocol before the token (`packages/infrastructure/src/runlet/shim.ts:622` before `:628`) but
+throws the mismatch as `auth_failed` (`:625`), the fatal-reason vocabulary has no other word for it
+(`packages/contracts/src/runlet.ts:88-106`), and the runner keeps the reason and drops the message
+(`packages/infrastructure/src/runlet/spawn-adapter.ts:366`), so AUT-6820's run failed as *"the shim refused the connection:
+auth_failed"*. Three decisions, built at WP-151:
+1. **`protocol_mismatch` joins the fatal-reason vocabulary**, and a `fatal` frame for it carries both versions as integers
+   (not prose), so the runner names them in `run.failed` and the start failure without parsing a message. A frame vocabulary
+   change is itself a shape change, so `RUNLET_PROTOCOL_VERSION` becomes 3 — and a protocol-2 shim meeting a protocol-3
+   runner still answers `auth_failed`, which the runner reads, **only on the first frame of a handshake**, as *"the shim
+   refused the handshake; if the run image and the runner were built from different commits, rebuild and recreate both"*.
+2. **The run image declares the protocol its shim speaks** as an image label (`com.agentic.runlet-protocol`, written by
+   `docker/runtime.Dockerfile` from the constant at build time, never by hand). The create request carries the protocol the
+   **requesting runner** speaks (the runner, not the launcher, is the other end of the socket, and the two can be from
+   different builds), and the launcher reads the label at image inspection — beside the `PATH` read it already makes — and
+   refuses a create whose image declares another protocol, or none, as `invalid_spec` naming the image and both numbers. No
+   container is created, so the run ends as a start failure.
+3. A close of the control connection **after** the `exit` frame, or after the session's `result` has been read, is not a
+   transport failure (backlog 463): the order of the shim's last frames is measured first, and the error line is kept for a
+   close that leaves the child's exit unknown.

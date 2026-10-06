@@ -82,6 +82,21 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > on a newer attempt of the swept run's stage. `retry-stage` also stops the stage's live run itself
 > (technical/08's amendment of the same date), so the new attempt is not queued behind a run whose
 > result would otherwise have won.
+>
+> **A merged task escalated after its merge finishes; it never goes back to work** (amended
+> 2026-10-06 by the M9 architect pass, PROGRESS backlog 497, built at WP-152). Before this, a task
+> escalated in `merged` or `retro` could only be cancelled — `resume` and `retry-stage` at the
+> retrospective answered 409 because `needs_human → retro` was not an edge — while `hand-back` to
+> an agent stage took `needs_human → active` and put a merged task back to work. **One edge is
+> added, `needs_human → retro`**, and the Task aggregate admits it only for a task that entered
+> `merged_gate` (the same fact `returnEscalatedTask` refuses on), only into a post-merge stage of
+> the compiled template (the retrospective, the librarian), and only from a human command
+> (`resume`, `retry-stage`, `hand-back`); a provider signal never takes it. Every command that
+> would enter a pre-merge stage of such a task is refused by name (`task_merged`), with no event
+> appended — `hand-back` included, which closes the side door for the hand-back as 483 closed it
+> for returns. `needs_human → done` is **not** added: `cancel` already ends such a task without
+> its retrospective, and a `done` reached that way would be a task in `done` whose post-merge
+> stages never ran.
 
 *Which* limit a `returned` spends is decided by the transition and not only by the stage it leaves (WP-26). `ready_for_merge` has two outgoing returns — a human's comment, which is BD-008's `human_rounds`, and the default branch moving, which re-enters the rebase gate — and attributing the second to the first escalated a task with *"human_rounds iteration limit of 3 reached: main moved to …"* after three merges to `main` under a waiting merge request. The edges that need their own loop are enumerated in `RETURN_LOOPS_BY_EDGE` (`packages/domain/src/pipeline/interpreter.ts`); everything else is attributed by the stage, and an edge in neither table cannot return at all.
 
