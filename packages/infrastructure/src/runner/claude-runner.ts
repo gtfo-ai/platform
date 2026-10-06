@@ -99,6 +99,7 @@ import type {
   RunOutcome,
   RunProgressRecorder,
   RunSpec,
+  RunStartHooks,
   RunStop,
   RunStopReason,
   RunTranscriptSink,
@@ -108,8 +109,15 @@ import type {
   TerminalRunStatus,
   ToolApprovalPort,
   WorkspaceCliEnvironment,
+  WorkspaceErrorReason,
 } from '@platform/application';
-import { createProgressGate, runSpecSchema, silentLogger } from '@platform/application';
+import {
+  createProgressGate,
+  RunStartError,
+  runSpecSchema,
+  silentLogger,
+  unspawnedStop,
+} from '@platform/application';
 import type {
   JsonObject,
   JsonValue,
@@ -121,6 +129,7 @@ import type {
 import { transcriptEventSchema } from '@platform/contracts';
 import type { ResolvedCommandPolicy } from '@platform/domain';
 import { composeRedactors, patternRedactor } from '../redaction/pattern-redaction.js';
+import type { RunletPreSpawnStep, RunletSpawnGate } from '../runlet/spawn-adapter.js';
 import { createAsyncQueue, deferred } from './async-queue.js';
 import { buildHooks, type HookRecord } from './hooks.js';
 import { buildQueryOptions } from './options.js';
@@ -148,6 +157,12 @@ export type QueryFunction = typeof sdkQuery;
  */
 export type ClaudeCodeSpawn = ((options: SpawnOptions) => SpawnedProcess) & {
   readonly setStderrSink?: (sink: ((chunk: string) => void) | null) => void;
+  /**
+   * The seam the CLI spawn marker is asked through **between the handshake and the `spawn` frame**
+   * (WP-150). The runlet transport has one; a spawn without it (a test's fake CLI) is asked before
+   * the session starts instead, which is the same rule with no handshake to wait for.
+   */
+  readonly setSpawnGate?: (gate: RunletSpawnGate | null) => void;
 };
 
 export interface ClaudeRunnerDependencies {
@@ -210,6 +225,9 @@ type StopCause = 'stalled' | 'timed_out' | 'budget_exceeded' | 'cost_unreported'
  *    the interrupt already had ({@link INTERRUPT_GRACE_MS}) and a stop never waits longer than it did.
  *  - `budget_exceeded`, `cost_unreported` — not here: both are decided **from** a `result`, so the
  *    run already has the only one it will get.
+ *
+ * A stop that landed **before the CLI was asked for** reads nothing and is a measured zero instead
+ * (WP-150, `unspawnedStop`): no CLI, no spend.
  *
  * What a stop in this set reads nothing for is **unmeasured** — `RunOutcome.costUnmeasured`, `null`
  * cost columns, no ledger row and a `null` cost on the terminal event — never a measured zero
@@ -403,10 +421,34 @@ const commandPolicyOf = (spec: RunSpec): ResolvedCommandPolicy => ({
 });
 
 export const createClaudeRunner = (deps: ClaudeRunnerDependencies): ClaudeRunner => ({
-  start: (rawSpec: RunSpec): RunHandle => startRun(deps, rawSpec),
+  start: (rawSpec: RunSpec, hooks: RunStartHooks): RunHandle => startRun(deps, rawSpec, hooks),
 });
 
-const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle => {
+/**
+ * The start failure of a run that ended **before its CLI was asked for** (WP-150, ruling (d)): the
+ * step it reached, as WP-127's closed vocabulary, and whether another attempt could differ. Never a
+ * `crash` — nothing ran, so nothing crashed, and the run spent nothing.
+ */
+const NOT_SPAWNED: Record<
+  RunletPreSpawnStep | 'record_refused' | 'record_failed' | 'not_requested',
+  { readonly reason: WorkspaceErrorReason; readonly retryable: boolean }
+> = {
+  connection_lost: { reason: 'runlet_connection_lost', retryable: true },
+  handshake_timeout: { reason: 'runlet_handshake_timeout', retryable: true },
+  handshake_refused: { reason: 'runlet_handshake_refused', retryable: false },
+  // The gate refused for a reason the marker's own state does not name — a frame this side refused.
+  spawn_refused: { reason: 'cli_spawn_not_requested', retryable: false },
+  record_refused: { reason: 'cli_spawn_record_refused', retryable: false },
+  // A database that failed the write is a condition that passes; the attempt bound still holds.
+  record_failed: { reason: 'cli_spawn_record_refused', retryable: true },
+  not_requested: { reason: 'cli_spawn_not_requested', retryable: false },
+};
+
+const startRun = (
+  deps: ClaudeRunnerDependencies,
+  rawSpec: RunSpec,
+  hooks: RunStartHooks,
+): RunHandle => {
   const spec = runSpecSchema.parse(rawSpec);
   const logger = deps.logger ?? silentLogger;
   const redactor = composeRedactors(deps.injectedSecretRedactorFor(spec), patternRedactor());
@@ -420,6 +462,58 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
   // that ends before its first stream message and at `debug` otherwise — and nowhere else.
   const stderrLog = createStderrLog({ runId: spec.runId, logger, redactor });
   deps.spawnClaudeCodeProcess?.setStderrSink?.(stderrLog.accept);
+
+  /**
+   * The CLI spawn marker (WP-150): asked once, awaited, and no CLI without it. `marker` is what the
+   * ask answered, and `preSpawnStep` what the transport reached when it ended before the `spawn`
+   * frame — the two facts {@link NOT_SPAWNED} turns into a start failure.
+   */
+  let marker: 'unasked' | 'recorded' | 'refused' | 'failed' = 'unasked';
+  let preSpawnStep: RunletPreSpawnStep | null = null;
+  const askForCli = async (): Promise<void> => {
+    if (marker !== 'unasked') {
+      throw new Error('the CLI of this run was already asked for once');
+    }
+    if (stopCause !== null) {
+      marker = 'refused';
+      throw new Error('the run was stopped before its CLI was asked for');
+    }
+    let recorded: boolean;
+    try {
+      recorded = await hooks.beforeCliSpawn();
+    } catch (error) {
+      marker = 'failed';
+      logger.error(
+        { run_id: spec.runId, err: error },
+        'the CLI spawn marker could not be written; no CLI is started',
+      );
+      throw error;
+    }
+    marker = recorded ? 'recorded' : 'refused';
+    if (!recorded) {
+      throw new Error('the platform refused to record the CLI spawn; no CLI is started');
+    }
+  };
+  const gated = deps.spawnClaudeCodeProcess?.setSpawnGate !== undefined;
+  deps.spawnClaudeCodeProcess?.setSpawnGate?.({
+    beforeSpawn: askForCli,
+    failedBeforeSpawn: (step) => {
+      preSpawnStep ??= step;
+    },
+  });
+  const notSpawned = (failure: string | null): RunStartError => {
+    const key =
+      marker === 'refused'
+        ? 'record_refused'
+        : marker === 'failed'
+          ? 'record_failed'
+          : (preSpawnStep ?? 'not_requested');
+    const { reason, retryable } = NOT_SPAWNED[key];
+    return new RunStartError(
+      `the run ended before its CLI was asked to start (${reason}): ${failure ?? 'no error reported'}`,
+      { retryable, diagnosis: { kind: 'workspace_failed', reason, commit: null } },
+    );
+  };
 
   let seq = 0;
   let redactionCount = 0;
@@ -765,6 +859,10 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
     let pending: Promise<IteratorResult<SDKMessage, void>> | null = null;
 
     try {
+      if (!gated) {
+        // No handshake to wait for: the marker is asked before the session can start a CLI.
+        await askForCli();
+      }
       session = queryFn({ prompt: inputs.iterable, options });
       iterator = session[Symbol.asyncIterator]();
       for (;;) {
@@ -855,6 +953,14 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
       stderrLog.runEnded();
     }
 
+    if (marker !== 'recorded') {
+      // WP-150: nothing was asked of a CLI, so nothing was spent. A stop keeps its ending as a
+      // measured zero; everything else is a start failure naming the step, never a `crash`.
+      if (stopCause !== null) {
+        return unspawnedStop(outcomeOf(failure));
+      }
+      throw notSpawned(failure);
+    }
     return outcomeOf(failure);
   };
 

@@ -38,6 +38,12 @@
 import process from 'node:process';
 import './ts-source-resolver.mjs';
 
+/**
+ * The CLI spawn marker (WP-150) for a check with no database: every ask is answered "recorded".
+ * Production writes `runs.cli_spawn_requested_at` here; this script only needs the CLI to start.
+ */
+const SCRIPT_START_HOOKS = { beforeCliSpawn: async () => true };
+
 const required = (name) => {
   const value = process.env[name];
   if (!value) {
@@ -186,7 +192,7 @@ const report = {
 };
 
 try {
-  const outcome = await runner.start(runSpec).outcome;
+  const outcome = await runner.start(runSpec, SCRIPT_START_HOOKS).outcome;
   report.status = outcome.status;
   report.terminalReason = outcome.terminalReason;
   report.costUsd = outcome.cost.usd;

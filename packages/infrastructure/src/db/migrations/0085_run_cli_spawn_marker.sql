@@ -1,0 +1,39 @@
+-- 0085 — `runs.cli_spawn_requested_at`: the record that a run's CLI was asked to start (WP-150,
+-- BD-010's 2026-10-06 amendment, PROGRESS backlogs 410 and 489).
+--
+-- WP-131 holds an ended run nobody measured at the reservation it was admitted at, because nothing on
+-- the row could tell a run that never started its CLI from one whose CLI ran and reported nothing.
+-- On the first local test that hold paused AUT-6820 for a run its shim had refused at the handshake
+-- (recorded as a `crash`), held at the implementation cap for money that could not have been spent.
+--
+-- The process holding the run writes this column in a transaction of its own, **commits it**, and
+-- only then sends the run shim its `spawn` frame — after `hello.ok`, so the shim has accepted the
+-- connection. The write is a compare-and-set (`RunRepository.markCliSpawnRequested`): only where the
+-- column is null **and** the run is still live, so a cancel or a lease sweep that ended the row first
+-- wins and the late process starts no CLI. A refused or failed write sends no `spawn`. So:
+--
+--   null      — the run never asked for its CLI and cannot have sent a model request: a **measured
+--               zero**. Its ending writes `usd_reported = 0`, and no cap holds it.
+--   non-null  — the CLI may have run. With no figure it stays held at `reserve_usd`, as before.
+--
+-- **Backfilled for every existing row**, to `started_at` (or `created_at` for a row that never
+-- reached `starting`), so a run that ended before this column existed reads as having reached the
+-- CLI, and nothing held today is released by the migration. A live row is backfilled too: a run
+-- started by the release before this one keeps the held side of the rule when it ends unmeasured.
+--
+-- **`default now()`, and why a marker column has a default.** `migrate` runs before `app` and `runner`
+-- are recreated, so for that window the **previous** release is still inserting runs and starting
+-- their CLIs — and its insert does not name this column. Nullable with no default, each of those rows
+-- would read as *never asked for its CLI*, and one that ended unmeasured (a `shutdown` on the
+-- recreate's SIGTERM, a crash) would be counted free by every cap: the over-admission WP-131 closed,
+-- reopened by the upgrade. With the default an insert that does not name the column is marked — the
+-- held side, fail-closed (standing rule 20). This release's insert names the column and writes `null`
+-- (`postgres-pipeline-store.ts`, `RunRepository.insert`), so only its own compare-and-set marks its
+-- runs. A `now()` default on `add column` is evaluated once and stored as a fast default, so existing
+-- rows are not rewritten by it; the backfill below then sets them to when they started.
+--
+-- No index: every reader filters `runs` by task, project or window first and reads this column as
+-- one more predicate (`packages/infrastructure/src/cost/pending-run-spend.ts`).
+alter table runs add column cli_spawn_requested_at timestamptz default now();
+
+update runs set cli_spawn_requested_at = coalesce(started_at, created_at);

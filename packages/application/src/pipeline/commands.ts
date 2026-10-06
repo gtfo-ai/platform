@@ -66,6 +66,7 @@ import type { Logger } from '../ports/logger.js';
 import type { RunTakeOverExport } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
+import { MEASURED_ZERO_COST, NO_RUN_USAGE } from './cli-spawn.js';
 import {
   enqueueOutbound,
   enqueueReadyHeadCheck,
@@ -1542,13 +1543,22 @@ const endRunRecordInPlace = async (
   run: StoredRun,
   context: CommandContext,
 ): Promise<readonly DomainEvent[]> => {
+  /**
+   * **A run whose CLI was never asked for is a measured zero** (WP-150, BD-010's 2026-10-06
+   * amendment). The row is locked `for update` above, so the marker read here cannot be written
+   * underneath this command: the holder's compare-and-set waits for the lock and then finds the run
+   * ended, and starts no CLI. `undefined` (a store that does not answer it) reads as reached.
+   */
+  const unspawned = run.cliSpawnRequestedAt === null;
+  const cost = unspawned ? MEASURED_ZERO_COST : run.cost;
+  const usage = unspawned ? NO_RUN_USAGE : (run.usage ?? NO_USAGE);
   const won = await deps.store.runs.finish(scope.tx, {
     runId: run.id,
     status: 'cancelled',
     terminalReason: 'cancelled',
     sessionId: run.sessionId,
-    numTurns: run.numTurns,
-    usage: run.usage ?? NO_USAGE,
+    numTurns: unspawned ? 0 : run.numTurns,
+    usage,
     /**
      * **`null`, not a zero** — WP-47, Q70 (b).
      *
@@ -1558,9 +1568,10 @@ const endRunRecordInPlace = async (
      * `runs.usd_estimated` — a measurement, as far as every later reader is concerned, and the one
      * thing that would stop the process that *does* know the number from writing it:
      * `runs.recordCost` refuses a row that already carries a figure. So the honest absence is what
-     * is stored, and the money arrives if that process finishes.
+     * is stored, and the money arrives if that process finishes — unless the run never asked for
+     * its CLI, when the zero **is** a measurement (`unspawned`, above).
      */
-    cost: run.cost,
+    cost,
     wallMs: wallMsSince(run.startedAt, context.clock.now()),
   });
   if (!won) {
@@ -1572,12 +1583,13 @@ const endRunRecordInPlace = async (
     {
       status: 'cancelled',
       terminalReason: 'cancelled',
-      usage: run.usage ?? NO_USAGE,
+      usage,
       modelUsage: [],
       // The row's `null`, carried as it is: `run.finished.cost` is nullable since WP-119 (backlog
-      // 334), and the zero this event used to state was the claim the row refuses above.
-      cost: run.cost,
-      numTurns: run.numTurns,
+      // 334), and the zero this event used to state was the claim the row refuses above. A run
+      // that never asked for its CLI carries the measured zero instead (WP-150).
+      cost,
+      numTurns: unspawned ? 0 : run.numTurns,
     },
     context,
   );

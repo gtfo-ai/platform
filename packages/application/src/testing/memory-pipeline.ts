@@ -19,6 +19,7 @@
  * | 8 | `takenOver` reads the **committed** log through {@link MemoryPipelineStoreOptions.taskEvents}; PostgreSQL's query also sees the calling transaction's own staged appends (WP-56). Unwired, it answers `null`; its `lastActivityAt` reads {@link MemoryPipelineStoreOptions.humanActions} (WP-44), and unwired that is the take-over's own instant. | **same, when wired; kinder by one window** | Both readers of it — the workpad render and the take-over timer — run in a job's **own** transaction after the events they react to have committed, so the window this cannot see is one neither reader stands in. A caller that asked inside the transaction that appended the take-over would get `null` here and the record from PostgreSQL; nothing does, and the contract suite drives the committed case against both. |
  * | 9 | `runCommands` (WP-85): `lockRun`/`lockLiveRunOf`/`markApplied` take no lock, `admitSteer` (WP-101) takes no advisory lock and reads `created_at` off {@link MemoryPipelineStoreOptions.now} rather than the database's clock, and `LockedRun.sessionId` is the run row's `sessionId` where PostgreSQL reads the run's `system`/`init` transcript entry (this store keeps no transcript). | **kinder** on ordering, **same** on predicates | The `for share` ordering between a command and the run's ending is a property of two concurrent transactions, which a single-threaded store cannot interleave; it is asserted against PostgreSQL in `test/integration/pipeline/run-commands.integration.test.ts`, both orders — and the steer window's lock there by a second transaction that must wait (WP-101). Every predicate — live run, this owner's lease, still pending, closed `run_ended` by the winning `finish` — is the SQL's, and the contract suite drives each against both stores. |
  * | 10 | `bugTraces.latest` (WP-90) reads the **committed** project log through {@link MemoryPipelineStoreOptions.projectEvents}, in stream order; PostgreSQL orders by `occurred_at` then `position` and also sees the calling transaction's own staged appends. Unwired, it answers `null`. | **same, when wired** | Its one caller, the `ticket.updated` handler, asks in the dispatcher's transaction about traces an earlier job committed; a trace appended in the asking transaction does not exist, because no handler appends one. Stream order and `occurred_at` order agree for every trace the duty writes, which appends with the platform clock in sequence. The contract suite drives both. |
+ * | 11 | `runs.markCliSpawnRequested` (WP-150) refuses a run that has ended and a run already marked, exactly as the SQL's `where cli_spawn_requested_at is null and status = any(active)`; `load` answers the marker and `insert` drops one a caller passed; the held set (`heldFor`, `totalsFor`'s `unmeasuredRuns`) excludes an unmarked run, as `unmeasuredEndedRunSql` does. What it cannot show is the marker **committed before** the `spawn` frame is sent — divergence 4's isolation. | **same** on predicates, **kinder** on commit order | The commit order is asserted against PostgreSQL from a second connection in `test/integration/pipeline/cli-spawn-marker.integration.test.ts`, and the predicates by the shared suite against both stores. |
  */
 import type {
   ArtifactType,
@@ -135,8 +136,16 @@ const ticketSignalReaches = (
  * An ended run nobody measured — the SQL adapter's `unmeasuredEndedRunSql` over this store's rows:
  * terminal, and no figure (`cost` null is both columns null, `finish` writing one or the other).
  */
-const endedUnmeasured = (run: StoredRun, floors: ReadonlySet<Id>): boolean =>
-  !isActiveRunStatus(run.status) && (run.cost === null || floors.has(run.id));
+const endedUnmeasured = (
+  run: StoredRun,
+  floors: ReadonlySet<Id>,
+  spawnMarkers: ReadonlyMap<Id, IsoDateTime>,
+): boolean =>
+  !isActiveRunStatus(run.status) &&
+  (run.cost === null || floors.has(run.id)) &&
+  // WP-150: a run that never asked for its CLI is a measured zero, held by no cap — the SQL's
+  // `r.cli_spawn_requested_at is not null`.
+  spawnMarkers.has(run.id);
 
 export interface MemoryPipelineStore extends PipelineStore {
   /** Every task, for a test that wants to look without a transaction. */
@@ -287,6 +296,8 @@ export const createMemoryPipelineStore = (
   const savedWorks = new Map<Id, RunSavedWork>();
   /** `runs.figure_is_floor` (WP-131 pre-review round, backlog 407): the runs whose cost is a floor. */
   const floors = new Set<Id>();
+  /** `runs.cli_spawn_requested_at` (migration 0085, WP-150), written only by its compare-and-set. */
+  const spawnMarkers = new Map<Id, IsoDateTime>();
   const questions = new Map<Id, Question>();
   const approvals = new Map<Id, StoredApproval>();
   const breakdown = new Map<Id, StoredBreakdownItem>();
@@ -1072,6 +1083,8 @@ export const createMemoryPipelineStore = (
         askId,
         // Backlog 454: write-only too; read back through `providerModeOf`.
         providerMode,
+        // WP-150: never written by `insert`, in either store — only its compare-and-set writes it.
+        cliSpawnRequestedAt: _m,
         ...stored
       } = run;
       providerModes.set(run.id, providerMode);
@@ -1163,9 +1176,23 @@ export const createMemoryPipelineStore = (
       leases.set(lease.runId, { owner: lease.owner, expiresAt: lease.expiresAt });
       return true;
     },
+    /** WP-150's compare-and-set, with the SQL adapter's two predicates: still live, still unmarked. */
+    markCliSpawnRequested: async (_tx, marker) => {
+      const run = runs.get(marker.runId);
+      if (run === undefined) {
+        throw new PipelineStoreError(`run ${marker.runId} does not exist`);
+      }
+      if (!isActiveRunStatus(run.status) || spawnMarkers.has(marker.runId)) {
+        return false;
+      }
+      spawnMarkers.set(marker.runId, marker.at);
+      return true;
+    },
     load: async (_tx, runId) => {
       const run = runs.get(runId);
-      return run === undefined ? null : clone(run);
+      return run === undefined
+        ? null
+        : { ...clone(run), cliSpawnRequestedAt: spawnMarkers.get(runId) ?? null };
     },
     /** WP-149's ask bound, over this store's rows with the SQL adapter's predicate. */
     askShutdownEndings: async (_tx, askId) =>
@@ -1229,7 +1256,7 @@ export const createMemoryPipelineStore = (
         runs: owned.length,
         costUsd: owned.reduce((total, run) => total + (run.cost?.usd ?? 0), 0),
         isEstimate: owned.some((run) => run.cost?.is_estimate === true && !floors.has(run.id)),
-        unmeasuredRuns: owned.filter((run) => endedUnmeasured(run, floors)).length,
+        unmeasuredRuns: owned.filter((run) => endedUnmeasured(run, floors, spawnMarkers)).length,
         wallMs: owned.reduce((total, run) => total + run.wallMs, 0),
       };
     },
@@ -1237,7 +1264,7 @@ export const createMemoryPipelineStore = (
     heldFor: async (_tx, taskId, admittingReserveUsd) =>
       holdOf(
         [...runs.values()]
-          .filter((run) => run.taskId === taskId && endedUnmeasured(run, floors))
+          .filter((run) => run.taskId === taskId && endedUnmeasured(run, floors, spawnMarkers))
           .map((run) => reserves.get(run.id) ?? null),
         admittingReserveUsd,
       ),

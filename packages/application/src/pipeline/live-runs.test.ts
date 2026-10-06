@@ -12,6 +12,7 @@ import { DEFAULT_COMMAND_POLICY } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import type { ClaudeRunner, RunHandle, RunOutcome, RunSpec } from '../ports/runner.js';
 import { runLimitsDefaults, runSpecSchema } from '../ports/runner.js';
+import { countingStartHooks } from '../testing/run-start-hooks.js';
 import { createLiveRuns, MAX_LIVE_RUNS } from './live-runs.js';
 
 const RUN = '11111111-1111-4111-8111-111111111111' as Id;
@@ -141,7 +142,7 @@ describe('the register of live runs', () => {
   it('finds a running run by its id and by its task, and returns the handle unchanged', () => {
     const live = createLiveRuns();
     const inner = deferredRunner();
-    const handle = live.observe(inner.runner).start(specFixture());
+    const handle = live.observe(inner.runner).start(specFixture(), countingStartHooks());
 
     expect(handle).toBe(inner.handles[0]);
     expect(live.forRun(RUN)?.handle).toBe(handle);
@@ -154,7 +155,7 @@ describe('the register of live runs', () => {
     async (how) => {
       const live = createLiveRuns();
       const inner = deferredRunner();
-      const handle = live.observe(inner.runner).start(specFixture());
+      const handle = live.observe(inner.runner).start(specFixture(), countingStartHooks());
 
       inner.settle(RUN, how);
       await handle.outcome.catch(() => undefined);
@@ -180,8 +181,8 @@ describe('the register of live runs', () => {
     const runner = live.observe(inner.runner);
     const second = '44444444-4444-4444-8444-444444444444' as Id;
 
-    const first = runner.start(specFixture());
-    runner.start(specFixture({ runId: second }));
+    const first = runner.start(specFixture(), countingStartHooks());
+    runner.start(specFixture({ runId: second }), countingStartHooks());
     // The first run ends *after* the second started — the ordinary shape of a retried stage.
     inner.settle(RUN, 'resolve');
     await first.outcome;
@@ -206,6 +207,7 @@ describe('the register of live runs', () => {
     for (const [index, runId] of ids.entries()) {
       runner.start(
         specFixture({ runId, taskId: `88888888-8888-4888-8888-00000000000${index}` as Id }),
+        countingStartHooks(),
       );
     }
 
@@ -224,7 +226,7 @@ describe('the register of live runs', () => {
   it('forgets a run on request, so a caller that ended one need not wait for its outcome', () => {
     const live = createLiveRuns();
     const inner = deferredRunner();
-    live.observe(inner.runner).start(specFixture());
+    live.observe(inner.runner).start(specFixture(), countingStartHooks());
 
     live.forget(RUN);
 
@@ -243,9 +245,10 @@ describe('stopping every run this process holds (WP-144)', () => {
     const live = createLiveRuns();
     const inner = deferredRunner();
     const runner = live.observe(inner.runner);
-    runner.start(specFixture());
+    runner.start(specFixture(), countingStartHooks());
     runner.start(
       specFixture({ runId: second, taskId: '99999999-9999-4999-8999-999999999999' as Id }),
+      countingStartHooks(),
     );
 
     expect(live.closed).toBe(false);
@@ -260,7 +263,7 @@ describe('stopping every run this process holds (WP-144)', () => {
   it('stops nothing for a run that finished on its own before the stop', async () => {
     const live = createLiveRuns();
     const inner = deferredRunner();
-    const handle = live.observe(inner.runner).start(specFixture());
+    const handle = live.observe(inner.runner).start(specFixture(), countingStartHooks());
     inner.settle(RUN, 'resolve');
     await handle.outcome;
     await Promise.resolve();
@@ -277,7 +280,7 @@ describe('stopping every run this process holds (WP-144)', () => {
     const inner = deferredRunner();
     const runner = live.observe(inner.runner);
     live.stopAll({ reason: 'shutdown' });
-    runner.start(specFixture());
+    runner.start(specFixture(), countingStartHooks());
 
     expect(inner.stops).toEqual([{ runId: RUN, reason: 'shutdown' }]);
   });

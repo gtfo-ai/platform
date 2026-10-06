@@ -61,7 +61,8 @@
  * ## A run nobody measured is **held** at its reservation — WP-131
  *
  * A run whose ending carried no figure — both cost columns null: the lease sweep's ending, a cancel
- * ended in place, a stop or a crash that read no `result` (WP-47, WP-101, WP-119) — used to count
+ * ended in place, a stop or a crash that read no `result` (WP-47, WP-101, WP-119), each **after**
+ * the run asked for its CLI (WP-150, below) — used to count
  * **0** here once it had ended, and this paragraph called that *"the term saying that nothing is
  * known"*. It was over-admission stated as a decision (PROGRESS backlog **402**): the reservation the
  * run held while live disappeared at its ending and nothing replaced it, so a scope whose runs kept
@@ -86,10 +87,17 @@
  *   `ended_at`, and it ages out with that window; a batch-scoped cap (the history bootstrap) holds it
  *   for the batch's life. **The task cap never rolls over**: the task stays paused until a human
  *   raises the cap.
- * - **No exclusion.** A run counts `0` only when its row proves no CLI process was spawned, and the
- *   one row this build writes that way — a run that could not be started — already carries a
- *   measured `usd_reported = 0`; a run swept or cancelled before its process spawned is
- *   indistinguishable on the row from one that ran, and is held (`pending-run-spend.ts`).
+ * - **One exclusion, and it is a proof — WP-150** (BD-010's 2026-10-06 amendment, PROGRESS backlogs
+ *   410 and 489). A run counts `0` only when its row proves no CLI process was asked for:
+ *   `runs.cli_spawn_requested_at` (migration 0085) is written, in its own committed transaction, by
+ *   the process holding the run **before** it sends the run shim its `spawn` frame, and no CLI is
+ *   started without it (`../pipeline/cli-spawn.ts`). A run whose marker is null — refused at the
+ *   handshake, cancelled in place or swept while it was provisioned — is a **measured zero**: its
+ *   ending writes `usd_reported = 0`, and the held set excludes it besides
+ *   (`pending-run-spend.ts`). Until WP-150 there was no such column, so a run swept or cancelled
+ *   before its process spawned was indistinguishable on the row from one that ran, and was held —
+ *   which paused AUT-6820 at its task cap for a run its shim had refused. A run **with** the marker
+ *   and no figure is held exactly as above.
  *
  * The other direction is stated too: a **live** run is counted at the admitting stage's per-run
  * cap, which is exact when the scope is one kind of work (a bootstrap batch mines with one stage)

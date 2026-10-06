@@ -18,6 +18,12 @@ import { readdirSync, readFileSync } from 'node:fs';
 import process from 'node:process';
 import './ts-source-resolver.mjs';
 
+/**
+ * The CLI spawn marker (WP-150) for a check with no database: every ask is answered "recorded".
+ * Production writes `runs.cli_spawn_requested_at` here; this script only needs the CLI to start.
+ */
+const SCRIPT_START_HOOKS = { beforeCliSpawn: async () => true };
+
 const required = (name) => {
   const value = process.env[name];
   if (!value) {
@@ -726,7 +732,7 @@ if (PHASE === 'real-cli') {
         stallTimeoutMs: Number(process.env['CHECK_REAL_CLI_WALL_CLOCK_MS'] ?? 90_000),
       },
     });
-    const outcome = await runner.start(spec).outcome;
+    const outcome = await runner.start(spec, SCRIPT_START_HOOKS).outcome;
     phase.ok = true;
     phase.status = outcome.status;
     phase.terminalReason = outcome.terminalReason;
@@ -879,7 +885,7 @@ if (PHASE === 'real-model') {
             : { workspaceEnvironment: transport.cliEnvironment }),
         }),
     });
-    const outcome = await runner.start(spec).outcome;
+    const outcome = await runner.start(spec, SCRIPT_START_HOOKS).outcome;
     phase.ok = true;
     phase.status = outcome.status;
     phase.terminalReason = outcome.terminalReason;
@@ -1017,7 +1023,7 @@ if (PHASE === 'no-route') {
         stallTimeoutMs: Number(required('CHECK_NO_ROUTE_STALL_MS')),
       },
     });
-    const outcome = await runner.start(spec).outcome;
+    const outcome = await runner.start(spec, SCRIPT_START_HOOKS).outcome;
     phase.ok = true;
     phase.status = outcome.status;
     phase.terminalReason = outcome.terminalReason;
@@ -1115,7 +1121,7 @@ if (PHASE === 'shutdown') {
           ...(cliEnvironment === undefined ? {} : { workspaceEnvironment: cliEnvironment }),
         }),
     });
-    const handle = runner.start(specFor(runId));
+    const handle = runner.start(specFor(runId), SCRIPT_START_HOOKS);
     for (let waited = 0; waited < 240 && transcript.length === 0; waited += 1) {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
@@ -1231,7 +1237,7 @@ try {
       }),
   });
 
-  const outcome = await runner.start(specFor(RUN_ID)).outcome;
+  const outcome = await runner.start(specFor(RUN_ID), SCRIPT_START_HOOKS).outcome;
   report.status = outcome.status;
   report.terminalReason = outcome.terminalReason;
   report.kinds = transcript.map((entry) => entry.kind);

@@ -1452,18 +1452,21 @@ export const createPostgresPipelineStore = (
         // and never re-derived (Q64, WP-52): the prompt's nonce is drawn per prompt and the pack is
         // a point-in-time read, so a re-derivation is a different document answering a different
         // question. `runs.redaction_count` is what the redactor replaced *in those two columns*.
+        // WP-150: `cli_spawn_requested_at` is written null **by name**, so this release's runs start
+        // unmarked, while the column's `default now()` marks a row inserted by a release that never
+        // names it (migration 0085's rolling-upgrade window) — that run may start a CLI, so it is held.
         `insert into runs (id, task_id, project_id, task_stage_id, role, mode, attempt, model,
                            effort, prompt_version, status, started_at,
                            system_prompt, user_prompt, redaction_count,
                            context_budget_tokens, context_total_tokens, context_kb_commit,
                            context_text_search, settings_snapshot, settings_hash, reserve_usd,
-                           prompts_withheld, ask_id, provider_mode)
+                           prompts_withheld, ask_id, provider_mode, cli_spawn_requested_at)
          values ($1, $2, $3,
                  (select id from task_stages
                    where task_id = $2 and stage = $11 and attempt = $6),
                  $4, $5, $6, $7, $8, $9, $10, $12, $13, $14, $15, $16, $17, $18, $19::jsonb,
                  coalesce($20::jsonb, '{}'::jsonb), $21, nullif($22::numeric, 0), $23::jsonb,
-                 $24, $25::provider_mode)`,
+                 $24, $25::provider_mode, null)`,
         [
           run.id,
           run.taskId,
@@ -1643,11 +1646,36 @@ export const createPostgresPipelineStore = (
       );
       return result.rowCount !== 0;
     },
+    /**
+     * WP-150's marker, as a compare-and-set — the port's docblock has the rule. One statement, so a
+     * cancel or a sweep holding the row `for update` makes this wait and then match nothing.
+     */
+    markCliSpawnRequested: async (tx, marker) => {
+      const result = await sqlOf(tx).query(
+        `update runs
+            set cli_spawn_requested_at = $2::timestamptz
+          where id = $1
+            and cli_spawn_requested_at is null
+            and status = any($3::run_status[])`,
+        [marker.runId, marker.at, [...ACTIVE_RUN_STATUSES]],
+      );
+      if (result.rowCount !== 0) {
+        return true;
+      }
+      const { rows } = await sqlOf(tx).query<{ id: string }>('select id from runs where id = $1', [
+        marker.runId,
+      ]);
+      if (rows.length === 0) {
+        throw new PipelineRowMissingError(`run ${marker.runId} does not exist`);
+      }
+      return false;
+    },
     load: async (tx, runId) => {
       const { rows } = await sqlOf(tx).query<RunRow>(
         `select r.id, r.task_id, r.project_id, s.stage, r.role, r.mode, r.attempt, r.model,
                 r.effort, r.prompt_version, r.status, r.terminal_reason, r.session_id, r.num_turns,
-                r.usd_reported, r.usd_estimated, r.wall_ms, r.created_at, r.started_at
+                r.usd_reported, r.usd_estimated, r.wall_ms, r.created_at, r.started_at,
+                r.cli_spawn_requested_at
            from runs r
            left join task_stages s on s.id = r.task_stage_id
           where r.id = $1`,
@@ -2250,6 +2278,8 @@ interface RunRow extends Record<string, unknown> {
   wall_ms: string | number;
   created_at: Date;
   started_at: Date | null;
+  /** Migration 0085 (WP-150); absent from a select that does not name it. */
+  cli_spawn_requested_at?: Date | null;
 }
 
 /** `is_estimate: false` fills `usd_reported`; `true` fills `usd_estimated`; `null` fills neither. */
@@ -2358,6 +2388,15 @@ const toStoredRun = (row: RunRow): StoredRun => ({
   createdAt: new Date(row.created_at).toISOString() as IsoDateTime,
   startedAt:
     row.started_at === null ? null : (new Date(row.started_at).toISOString() as IsoDateTime),
+  // WP-150: `undefined` only for a select that does not name the column; `load` always names it.
+  ...(row.cli_spawn_requested_at === undefined
+    ? {}
+    : {
+        cliSpawnRequestedAt:
+          row.cli_spawn_requested_at === null
+            ? null
+            : (new Date(row.cli_spawn_requested_at).toISOString() as IsoDateTime),
+      }),
 });
 
 const QUESTION_SELECT = `select q.id, q.task_id, q.stage, q.run_id, q.text, q.options, q.blocking,

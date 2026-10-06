@@ -18,7 +18,7 @@ import type {
   RunSpec,
   TerminalRunStatus,
 } from '@platform/application';
-import { RunStartError, WorkspaceError } from '@platform/application';
+import { countingStartHooks, RunStartError, WorkspaceError } from '@platform/application';
 import { describe, expect, it } from 'vitest';
 import { runSpecFixture } from './fixtures.js';
 import {
@@ -143,7 +143,7 @@ describe('every ending frees the workspace', () => {
         stop: async () => {},
       }),
     });
-    const result = await world.runner.start(spec).outcome;
+    const result = await world.runner.start(spec, countingStartHooks()).outcome;
 
     expect(result.status).toBe(status);
     // The ending is reported, not merely "released": the launcher's retention policy reads it
@@ -161,7 +161,9 @@ describe('every ending frees the workspace', () => {
         stop: async () => {},
       }),
     });
-    await expect(world.runner.start(runSpecFixture()).outcome).rejects.toThrow('transport died');
+    await expect(
+      world.runner.start(runSpecFixture(), countingStartHooks()).outcome,
+    ).rejects.toThrow('transport died');
     expect(world.released).toEqual([{ kind: 'crashed' }]);
   });
 
@@ -172,7 +174,7 @@ describe('every ending frees the workspace', () => {
       },
     });
     const failure = await world.runner
-      .start(runSpecFixture())
+      .start(runSpecFixture(), countingStartHooks())
       .outcome.catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(RunStartError);
@@ -185,7 +187,9 @@ describe('every ending frees the workspace', () => {
     // complete — and it must not be silent either; the log line is the only signal that a container
     // may still be up.
     const world = harness({ releaseThrows: true });
-    await expect(world.runner.start(runSpecFixture()).outcome).resolves.toMatchObject({
+    await expect(
+      world.runner.start(runSpecFixture(), countingStartHooks()).outcome,
+    ).resolves.toMatchObject({
       status: 'completed',
     });
     expect(world.released).toHaveLength(1);
@@ -198,7 +202,7 @@ describe('every ending frees the workspace', () => {
       },
     });
     const failure = await world.runner
-      .start(runSpecFixture())
+      .start(runSpecFixture(), countingStartHooks())
       .outcome.catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(RunStartError);
@@ -220,7 +224,7 @@ describe('every ending frees the workspace', () => {
       },
     });
     const failure = await world.runner
-      .start(runSpecFixture())
+      .start(runSpecFixture(), countingStartHooks())
       .outcome.catch((error: unknown) => error);
 
     expect((failure as RunStartError).diagnosis).toEqual({
@@ -236,7 +240,7 @@ describe('the run is executed in the workspace’s own working directory', () =>
   it('replaces the planned workspacePath with the provisioned workdir', async () => {
     const spec = runSpecFixture({ workspacePath: '/workspaces/task-22222222' });
     const world = harness({});
-    await world.runner.start(spec).outcome;
+    await world.runner.start(spec, countingStartHooks()).outcome;
 
     // The planner cannot know where the container has the checkout mounted; the CLI runs inside the
     // container, so its `cwd` must be the path the container sees.
@@ -263,12 +267,12 @@ describe('the run is executed in the workspace’s own working directory', () =>
       }),
     });
     const spec = runSpecFixture();
-    await listed.runner.start(spec).outcome;
+    await listed.runner.start(spec, countingStartHooks()).outcome;
     expect(listed.startedWith[0]?.existingProtectedPaths).toEqual(listing);
     expect(listed.provisioned[0]?.existingProtectedPaths.state).toBe('unlisted');
 
     const silent = harness({});
-    await silent.runner.start(spec).outcome;
+    await silent.runner.start(spec, countingStartHooks()).outcome;
     expect(silent.startedWith[0]?.existingProtectedPaths).toEqual(spec.existingProtectedPaths);
   });
 
@@ -291,11 +295,11 @@ describe('the run is executed in the workspace’s own working directory', () =>
         release: async () => {},
       }),
     });
-    await answered.runner.start(runSpecFixture()).outcome;
+    await answered.runner.start(runSpecFixture(), countingStartHooks()).outcome;
     expect(answered.transports[0]?.cliEnvironment).toEqual(answer);
 
     const bare = harness({});
-    await bare.runner.start(runSpecFixture()).outcome;
+    await bare.runner.start(runSpecFixture(), countingStartHooks()).outcome;
     expect(bare.transports[0]).not.toHaveProperty('cliEnvironment');
   });
 });
@@ -334,7 +338,7 @@ describe('a stop that arrives before the run has started', () => {
       }),
     });
 
-    const handle = world.runner.start(spec);
+    const handle = world.runner.start(spec, countingStartHooks());
     await handle.stop({ reason: 'cancelled' });
     const result = await handle.outcome;
 
@@ -384,7 +388,7 @@ describe('an unsuccessful run’s unfinished work (backlog 467)', () => {
         }),
       }),
     });
-    const handle = runner.start(options.spec);
+    const handle = runner.start(options.spec, countingStartHooks());
     return {
       handle,
       released,

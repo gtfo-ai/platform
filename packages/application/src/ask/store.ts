@@ -111,7 +111,8 @@ export interface AskRunLine {
    * The run's own figure — the provider's (`usd_reported`), else the platform's pricing
    * (`usd_estimated`) — or **`null` when nobody measured it** (both columns null: the lease sweep, a
    * cancel ended in place, a stop or a crash that read no `result`). Never a `0` for that, which the
-   * model would read as a free run (WP-119 pre-review round, standing rule 16).
+   * model would read as a free run (WP-119 pre-review round, standing rule 16) — except for a run
+   * that never asked for its CLI, whose ending writes a measured `0` since WP-150.
    */
   readonly costUsd: number | null;
   readonly createdAt: IsoDateTime;

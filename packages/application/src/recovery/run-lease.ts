@@ -54,6 +54,12 @@
  * figure through `runs.recordCost` (`../cost/late.ts`) — the only path by which that money can ever
  * be known, and the one that releases the hold.
  *
+ * **Except for a run that never asked for its CLI** (WP-150, BD-010's 2026-10-06 amendment): a run
+ * swept while its workspace was being provisioned has a null `cli_spawn_requested_at`, so it cannot
+ * have sent a model request. Its ending writes the measured zero and a start failure with the cause
+ * `ended_before_cli_spawn`, and its brief says nothing was spent. Its process, if alive, finds the
+ * row ended when it asks for the marker, and starts no CLI.
+ *
  * ## The bound is both, and which is primary
  *
  * 1. **The lease** (primary). `lease_expires_at < now - grace`, where the grace is the pass's own
@@ -90,15 +96,17 @@
  * and then writes nothing, because its own predicate no longer holds. That negative case is
  * asserted (standing rule 42).
  */
-import type { Id, IsoDateTime, Slug } from '@platform/contracts';
+import type { Id, IsoDateTime, RunStartFailure, Slug } from '@platform/contracts';
 import { agentRoleSchema, effortSchema, runModeSchema } from '@platform/contracts';
 import type { CommandContext, Run } from '@platform/domain';
 import { canTransitionTask, escalateTask, failRun, type Task } from '@platform/domain';
+import { MEASURED_ZERO_COST, NO_RUN_USAGE } from '../pipeline/cli-spawn.js';
 import type { PipelineStore, StoredRun } from '../pipeline/store.js';
 import { retryOnTaskConflict } from '../pipeline/task-conflict.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
+import { describeStartFailure, RunStartError } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 
@@ -202,18 +210,44 @@ const toRunAggregate = (stored: StoredRun, sequence: number): Run => ({
   sequence,
 });
 
-const endingReason = (run: ExpiredRunLease): string =>
-  run.leaseExpiresAt === null
+const endingReason = (run: ExpiredRunLease, unspawned: boolean): string =>
+  (run.leaseExpiresAt === null
     ? `no process has held a lease on this run and it started at ${run.startedAt ?? 'an unknown time'}, longer ago than a run's whole wall clock`
-    : `the lease on this run expired at ${run.leaseExpiresAt} and no process renewed it`;
+    : `the lease on this run expired at ${run.leaseExpiresAt} and no process renewed it`) +
+  (unspawned ? ', before the run asked for its CLI' : '');
 
-const blockerBrief = (run: ExpiredRunLease, ticketKey: string): string =>
-  `A run of ${ticketKey}${run.stage === null ? '' : ` at "${run.stage}"`} was ended by the platform because ` +
-  'no process was renewing its lease. That means only that nothing is driving the run — it does ' +
-  'not mean the agent stopped, and the session may have kept working after the platform lost ' +
-  'sight of it. Nothing was retried automatically and no cost was recorded for the attempt, ' +
-  "because nobody measured it. Open the run's transcript, decide what should change, and hand the " +
-  'task back at the stage you want it to resume from.';
+const blockerBrief = (run: ExpiredRunLease, ticketKey: string, unspawned: boolean): string =>
+  unspawned
+    ? `A run of ${ticketKey}${run.stage === null ? '' : ` at "${run.stage}"`} was ended by the platform because ` +
+      'no process was renewing its lease, before the run had asked for its CLI — so no agent ran ' +
+      'and nothing was spent. Nothing was retried automatically. The run page shows that it did not ' +
+      'start; fix what stopped the process that held it, then hand the task back at this stage.'
+    : `A run of ${ticketKey}${run.stage === null ? '' : ` at "${run.stage}"`} was ended by the platform because ` +
+      'no process was renewing its lease. That means only that nothing is driving the run — it does ' +
+      'not mean the agent stopped, and the session may have kept working after the platform lost ' +
+      'sight of it. Nothing was retried automatically and no cost was recorded for the attempt, ' +
+      "because nobody measured it. Open the run's transcript, decide what should change, and hand the " +
+      'task back at the stage you want it to resume from.';
+
+/**
+ * What a sweep of a run that **never asked for its CLI** records about it (WP-150, ruling (d)): the
+ * start-failure shape, with the closed-vocabulary cause `ended_before_cli_spawn` — platform text
+ * only, no detail, because nothing but the lease's absence is known. `attempt` is 1: the sweep does
+ * not know the stage's start-attempt count, and the run is not retried either way.
+ */
+const SWEPT_BEFORE_CLI_SPAWN: RunStartFailure = {
+  kind: 'not_started',
+  diagnosis: describeStartFailure(
+    new RunStartError('the lease expired before the run asked for its CLI', {
+      retryable: false,
+      diagnosis: { kind: 'workspace_failed', reason: 'ended_before_cli_spawn', commit: null },
+    }),
+  ),
+  detail: null,
+  truncated: false,
+  attempt: 1,
+  retryable: false,
+};
 
 /**
  * One pass over the runs nothing is renewing.
@@ -255,7 +289,7 @@ export const sweepExpiredRunLeases = async (
       },
       async () => endOneRun(options, run, query),
     );
-    if (acted) {
+    if (acted !== null) {
       ended += 1;
       logger.warn(
         {
@@ -265,8 +299,11 @@ export const sweepExpiredRunLeases = async (
           stage: run.stage,
           lease_owner: run.leaseOwner,
           lease_expires_at: run.leaseExpiresAt,
+          cli_spawn_requested: !acted.unspawned,
         },
-        'no process was renewing this run’s lease, so the run was failed and its task escalated; the reservation it held is released and no cost was recorded because nobody measured one (PROGRESS backlog 109)',
+        acted.unspawned
+          ? 'no process was renewing this run’s lease and it had not asked for its CLI, so the run was failed as not started, its task escalated, and its cost recorded as a measured zero (WP-150)'
+          : 'no process was renewing this run’s lease, so the run was failed and its task escalated; the reservation it held is released and no cost was recorded because nobody measured one (PROGRESS backlog 109)',
       );
       continue;
     }
@@ -297,18 +334,25 @@ const endOneRun = async (
   options: RunLeaseSweepOptions,
   run: ExpiredRunLease,
   query: ExpiredRunQuery,
-): Promise<boolean> =>
+): Promise<{ readonly unspawned: boolean } | null> =>
   options.unitOfWork.transaction(async (scope) => {
     const claimed = await options.store.claimExpiredRun(scope.tx, { runId: run.runId, query });
     if (!claimed) {
-      return false;
+      return null;
     }
     const stored = await options.pipeline.runs.load(scope.tx, run.runId);
     if (stored === null) {
-      return false;
+      return null;
     }
     const now = options.clock.now();
     const context = options.context(run.taskId);
+    /**
+     * WP-150: a run that never asked for its CLI — swept while its workspace was being provisioned —
+     * is a **measured zero** and a start failure, not a run nobody measured. The row is locked by
+     * the claim, so the holder's marker write waits for this transaction and then finds the run
+     * ended. `undefined` (a store that does not answer it) reads as reached, the held side.
+     */
+    const unspawned = stored.cliSpawnRequestedAt === null;
     const won = await options.pipeline.runs.finish(scope.tx, {
       runId: run.runId,
       status: 'failed',
@@ -316,19 +360,15 @@ const endOneRun = async (
       sessionId: stored.sessionId,
       numTurns: stored.numTurns,
       // The row's own zeros: nothing here measured this run's usage, and the `runs` columns are
-      // already what they were. What must **not** happen is a cost — see the module docblock.
-      usage: {
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_write_5m_tokens: 0,
-        cache_write_1h_tokens: 0,
-        cache_read_tokens: 0,
-      },
-      cost: null,
+      // already what they were. What must **not** happen is a cost — see the module docblock —
+      // unless the run never asked for its CLI, when the zero is the measurement (WP-150).
+      usage: NO_RUN_USAGE,
+      cost: unspawned ? MEASURED_ZERO_COST : null,
       wallMs: wallMsSince(stored.startedAt, now),
+      ...(unspawned ? { startFailure: SWEPT_BEFORE_CLI_SPAWN } : {}),
     });
     if (!won) {
-      return false;
+      return null;
     }
     const aggregate = toRunAggregate(
       stored,
@@ -339,10 +379,14 @@ const endOneRun = async (
       {
         status: 'failed',
         terminalReason: 'lease_expired',
-        error: endingReason(run),
+        error: endingReason(run, unspawned),
         // No `usage` and no `cost`: both are optional on this input and both become `null` in the
         // payload, which is what makes the cost ledger's `no_usage_and_no_cost` branch the right
-        // one. A `{ usd: 0 }` here would be published as a free run.
+        // one. A `{ usd: 0 }` here would be published as a free run — except for a run that never
+        // asked for its CLI, which **was** free (WP-150).
+        ...(unspawned
+          ? { usage: NO_RUN_USAGE, cost: MEASURED_ZERO_COST, startFailure: SWEPT_BEFORE_CLI_SPAWN }
+          : {}),
       },
       context,
     );
@@ -357,8 +401,8 @@ const endOneRun = async (
       const escalated = escalateTask(
         task.task,
         {
-          reason: `run ${run.runId}: ${endingReason(run)}`,
-          blockerBrief: blockerBrief(run, task.task.ticket.key),
+          reason: `run ${run.runId}: ${endingReason(run, unspawned)}`,
+          blockerBrief: blockerBrief(run, task.task.ticket.key, unspawned),
         },
         context,
       );
@@ -370,12 +414,12 @@ const endOneRun = async (
           attempt: run.attempt,
           state: 'failed',
           outcome: 'failed',
-          returnReason: endingReason(run),
+          returnReason: endingReason(run, unspawned),
           returnedTo: null,
         });
       }
       events.push(...escalated.events);
     }
     await scope.events.append(events);
-    return true;
+    return { unspawned };
   });

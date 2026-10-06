@@ -139,8 +139,8 @@ export const createLiveRuns = (maxEntries: number = MAX_LIVE_RUNS): LiveRuns => 
 
   return {
     observe: (runner) => ({
-      start: (spec) => {
-        const handle = runner.start(spec);
+      start: (spec, hooks) => {
+        const handle = runner.start(spec, hooks);
         remember({ runId: spec.runId, taskId: spec.taskId, handle });
         // `finally` on the outcome, not on a status: a rejected outcome is a run that crashed, and
         // its handle is as dead as a completed one's. The `catch` is not optional — an unhandled

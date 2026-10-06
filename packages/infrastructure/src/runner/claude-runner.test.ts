@@ -18,7 +18,11 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import type { RunOutcome, RunSpec, ToolApprovalDecision } from '@platform/application';
-import { PROGRESS_MIN_INTERVAL_MS, reportProgressTool } from '@platform/application';
+import {
+  countingStartHooks,
+  PROGRESS_MIN_INTERVAL_MS,
+  reportProgressTool,
+} from '@platform/application';
 import type { TranscriptEvent } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import {
@@ -116,7 +120,7 @@ const startScript = (script: FakeCliScript, options: StartOptions = {}): Harness
     spawnClaudeCodeProcess: cli.spawn,
     ...options.deps,
   });
-  const handle = runner.start(runSpecFixture(options.spec));
+  const handle = runner.start(runSpecFixture(options.spec), countingStartHooks());
   return { cli, clock, events: sink.events, outcome: handle.outcome, handle };
 };
 
@@ -140,7 +144,7 @@ const start = (
     spawnClaudeCodeProcess: cli.spawn,
     ...options.deps,
   });
-  const handle = runner.start(runSpecFixture(options.spec));
+  const handle = runner.start(runSpecFixture(options.spec), countingStartHooks());
   return { cli, clock, events: sink.events, outcome: handle.outcome, handle };
 };
 
@@ -642,7 +646,7 @@ describe('the stall detector', () => {
     const spec = runSpecFixture({
       limits: { ...runSpecFixture().limits, stallTimeoutMs: 300_000, wallClockMs: 3_600_000 },
     });
-    const result = await runner.start(spec).outcome;
+    const result = await runner.start(spec, countingStartHooks()).outcome;
     expect(result.status).toBe('completed');
     expect(sink.events).toHaveLength(7);
     expect(armed.filter((delayMs) => delayMs === 300_000)).toHaveLength(8);
@@ -706,6 +710,7 @@ describe('a run whose CLI only retries the model API', () => {
       runSpecFixture({
         limits: { ...runSpecFixture().limits, stallTimeoutMs: 300_000, wallClockMs: 3_600_000 },
       }),
+      countingStartHooks(),
     );
     return { clock, armed, events: sink.events, cli, outcome: handle.outcome, handle };
   };
@@ -803,7 +808,7 @@ describe('a run whose CLI only retries the model API', () => {
       clock: manualClock(FIXTURE_CLOCK_START),
       injectedSecretRedactorFor: () => injectedSecretRedactorFixture(),
       spawnClaudeCodeProcess: cli.spawn,
-    }).start(runSpecFixture()).outcome;
+    }).start(runSpecFixture(), countingStartHooks()).outcome;
     expect(result.status).toBe('failed');
     expect(result.error).toBe(retriedWithoutModel('gave_up', 2, []));
     expect(result.error).not.toContain('Request timed out');
@@ -830,7 +835,10 @@ describe('a run whose CLI only retries the model API', () => {
       clock,
       injectedSecretRedactorFor: () => injectedSecretRedactorFixture(),
       spawnClaudeCodeProcess: cli.spawn,
-    }).start(runSpecFixture({ limits: { ...runSpecFixture().limits, stallTimeoutMs: 300_000 } }));
+    }).start(
+      runSpecFixture({ limits: { ...runSpecFixture().limits, stallTimeoutMs: 300_000 } }),
+      countingStartHooks(),
+    );
     await settle(sink.events, 4);
     clock.advance(300_000);
     const result = await releaseByGrace({ clock, outcome: handle.outcome } as unknown as Harness);
@@ -1122,7 +1130,7 @@ describe('the failure branches of the transcript writer', () => {
         error: (fields, message) => errors.push({ fields, message }),
       },
     });
-    const result = await runner.start(runSpecFixture()).outcome;
+    const result = await runner.start(runSpecFixture(), countingStartHooks()).outcome;
     expect(sink.events[0]).toMatchObject({
       kind: 'system',
       subtype: 'transcript_normalisation_failed',
@@ -1162,7 +1170,7 @@ describe('the failure branches of the transcript writer', () => {
         };
       }) as unknown as ClaudeRunnerDependencies['query'],
     });
-    const result = await runner.start(runSpecFixture()).outcome;
+    const result = await runner.start(runSpecFixture(), countingStartHooks()).outcome;
     expect(result.terminalReason).toBe('crash');
     expect(signal).not.toBeNull();
     expect((signal as unknown as AbortSignal).aborted).toBe(true);
@@ -1180,7 +1188,7 @@ describe('the failure branches of the transcript writer', () => {
         throw new Error(`the transport refused ${FIXTURE_INJECTED_SECRET}`);
       }) as ClaudeRunnerDependencies['query'],
     });
-    const result = await runner.start(runSpecFixture()).outcome;
+    const result = await runner.start(runSpecFixture(), countingStartHooks()).outcome;
     expect(result.status).toBe('failed');
     expect(result.terminalReason).toBe('crash');
     expect(result.error).not.toContain(FIXTURE_INJECTED_SECRET);

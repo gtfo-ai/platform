@@ -15,6 +15,7 @@ import { silentLogger } from '../ports/logger.js';
 import type { ClaudeRunner, RunHandle, RunStop, SteerMessage } from '../ports/runner.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { createMemoryPipelineStore, type MemoryPipelineStore } from '../testing/memory-pipeline.js';
+import { countingStartHooks } from '../testing/run-start-hooks.js';
 import { type HeartbeatSchedule, startRunHeartbeat } from './lease.js';
 import { createLiveRuns, type LiveRuns } from './live-runs.js';
 import { createRunCommandInbox, runCommandsTopic } from './run-commands.js';
@@ -122,7 +123,7 @@ const recordingRunner = (options: { readonly failSteer?: boolean } = {}) => {
 };
 
 const startRun = (live: LiveRuns, runner: ClaudeRunner): void => {
-  live.observe(runner).start({ runId: RUN, taskId: TASK } as never);
+  live.observe(runner).start({ runId: RUN, taskId: TASK } as never, countingStartHooks());
 };
 
 const inboxOver = (w: World, live: LiveRuns, logger: Logger = silentLogger) =>
@@ -358,7 +359,9 @@ describe('the run command inbox', () => {
     expect(rowsOf(w)).toMatchObject([{ refusedReason: null, applied: false }]);
 
     // The composition's order: the inbox outside the register, so the handle exists when it looks.
-    inbox.observe(live.observe(runner)).start({ runId: RUN, taskId: TASK } as never);
+    inbox
+      .observe(live.observe(runner))
+      .start({ runId: RUN, taskId: TASK } as never, countingStartHooks());
     await inbox.drain({ runId: RUN });
 
     expect(steers.map((message) => message.text)).toEqual(['early']);

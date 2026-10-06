@@ -397,12 +397,24 @@ describe('a run nobody measured is held at its reservation (WP-131)', () => {
         heldRuns: 2,
       });
 
-      // No exclusion: a run no process ran is written with a measured 0 and is not held.
+      // A run that could not be started is written with a measured 0 and is not held.
       await endedRun(15, 0);
       expect(
         (await store.pendingSpend(tx, { scope: 'project', scopeId: projectId as never }, JUNE, 10))
           .heldRuns,
       ).toBe(2);
+
+      // WP-150's one exclusion, on the real fragment: an unmeasured run whose CLI was never asked
+      // for is not held, even with no figure — while the rows above, marked by the column's
+      // `default now()` as an older release's insert is, are (rule 42).
+      const unspawned = await endedRun(15);
+      await client.query('update runs set cli_spawn_requested_at = null where id = $1', [
+        unspawned,
+      ]);
+      expect(
+        await store.pendingSpend(tx, { scope: 'project', scopeId: projectId as never }, JUNE, 10),
+      ).toEqual({ pendingUsd: 0, heldUsd: 25, heldRuns: 2 });
+      await client.query('delete from runs where id = $1', [unspawned]);
 
       // Backlog 407: a `cost_unreported` stop's row carries the floor `usd_reported = 0` with
       // `figure_is_floor` set — held at its reservation, not read as a measured zero.

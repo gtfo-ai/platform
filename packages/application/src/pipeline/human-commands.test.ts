@@ -1569,7 +1569,15 @@ describe('the two commands that predate this row', () => {
 });
 
 /** A `running` run row for the task's current stage attempt — see this file's docblock. */
-const seedLiveRun = async (harness: PipelineHarness, stage: Slug): Promise<Id> => {
+/**
+ * A live run of `stage`, **with its CLI spawn marker written** unless `reachedCli` is `false`
+ * (WP-150): the seeded session has turns and a session id, so it is a run whose CLI was asked for.
+ */
+const seedLiveRun = async (
+  harness: PipelineHarness,
+  stage: Slug,
+  options: { readonly reachedCli?: boolean } = {},
+): Promise<Id> => {
   const stored = taskOf(harness);
   const runId = harness.ids.next();
   await harness.memory.transaction(async (scope) => {
@@ -1603,6 +1611,9 @@ const seedLiveRun = async (harness: PipelineHarness, stage: Slug): Promise<Id> =
       createdAt: harness.clock.now(),
       startedAt: harness.clock.now(),
     });
+    if (options.reachedCli !== false) {
+      await harness.store.runs.markCliSpawnRequested(scope.tx, { runId, at: harness.clock.now() });
+    }
   });
   return runId;
 };
@@ -1671,6 +1682,51 @@ describe('cancel a run', () => {
     expect(recorder.stops).toEqual([{ reason: 'cancelled' }]);
     expect(harness.store.runCommandRows()).toMatchObject([{ applied: true, refusedReason: null }]);
     await holder.stop();
+  });
+
+  /**
+   * WP-150 criterion (3), both directions (standing rule 42): the same in-place cancel, before and
+   * after the run's CLI spawn marker. Before it the run cannot have spent — a measured zero on the
+   * row and on `run.finished`, held by no cap; after it the run may have, and WP-131's hold stands.
+   */
+  describe('a cancel ended in place, either side of the CLI spawn marker (WP-150)', () => {
+    const cancelInPlace = async (reachedCli: boolean) => {
+      const harness = await asking();
+      const runId = await seedLiveRun(harness, 'refinement' as Slug, { reachedCli });
+      const outcome = await cancelRunCommand(harness.humanCommands, { runId, userId: USER });
+      // No lease was ever claimed, so the record is ended in place either way (TD-028 decision 11).
+      expect(outcome.commandId).toBeNull();
+      const run = await harness.memory.transaction(async (scope) =>
+        harness.store.runs.load(scope.tx, runId),
+      );
+      const held = await harness.memory.transaction(async (scope) =>
+        harness.store.runs.heldFor(scope.tx, outcome.taskId, 15),
+      );
+      const finished = harness
+        .events()
+        .filter((entry) => entry.type === 'run.finished' && entry.payload.run_id === runId)
+        .map((entry) => (entry.payload as { cost: unknown }).cost);
+      return { run, held, finished };
+    };
+
+    it('holds nothing for a run whose CLI was never asked for: a measured zero', async () => {
+      const { run, held, finished } = await cancelInPlace(false);
+      expect(run?.status).toBe('cancelled');
+      expect(run?.cliSpawnRequestedAt).toBeNull();
+      const zero = { usd: 0, is_estimate: false, price_list_id: null };
+      expect(run?.cost).toEqual(zero);
+      expect(finished).toEqual([zero]);
+      expect(held).toEqual({ heldUsd: 0, heldRuns: 0 });
+    });
+
+    it('holds the same cancel at its reservation once the CLI was asked for (WP-131 unchanged)', async () => {
+      const { run, held, finished } = await cancelInPlace(true);
+      expect(run?.status).toBe('cancelled');
+      expect(run?.cliSpawnRequestedAt).not.toBeNull();
+      expect(run?.cost).toBeNull();
+      expect(finished).toEqual([null]);
+      expect(held).toEqual({ heldUsd: 15, heldRuns: 1 });
+    });
   });
 
   it('ends the record in place when the lease has expired, and records nothing (WP-101, criterion 3)', async () => {

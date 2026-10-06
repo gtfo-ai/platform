@@ -99,7 +99,21 @@ import {
   SHIPPED_TEMPLATES,
 } from '@platform/domain';
 import { db as dbAdapters, pipeline as pipelineAdapters } from '@platform/infrastructure';
-import { and, asc, desc, eq, gt, inArray, isNull, ne, notInArray, or, sql, sum } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  ne,
+  notInArray,
+  or,
+  sql,
+  sum,
+} from 'drizzle-orm';
 import { HttpError } from '../errors.js';
 import { APPROVAL_TOUCHED, MACHINE_AUTHORED } from './human-time-predicates.js';
 import { perUserBreakdownEnabled, summariseHumanTime } from './human-time-summary.js';
@@ -328,7 +342,8 @@ const toRunRecord = (
     // **Both columns may be null since WP-47** (migration 0035), and that is a third answer rather
     // than a spelling of zero: `usd_reported` is the provider's figure, `usd_estimated` is the
     // platform's own pricing of a `local`-mode run — and neither means *nobody measured this run*:
-    // the lease sweep, a cancel ended in place, a stop or a crash that read no `result`. Published
+    // the lease sweep, a cancel ended in place, a stop or a crash that read no `result`, each after the
+    // run asked for its CLI (one that never did writes a measured 0 since WP-150). Published
     // as `null` since WP-119 (rule 16); until then the DTO had no spelling for it and read `0`.
     cost:
       row.usdReported === null && row.usdEstimated === null
@@ -1166,6 +1181,8 @@ const unmeasuredRunsFor = async (
         // Both cost columns null, **or** a figure that is the runner's floor (`figure_is_floor`, a
         // `cost_unreported` stop — WP-131 review round 1): the caps' predicate, both halves.
         or(and(isNull(runs.usdReported), isNull(runs.usdEstimated)), eq(runs.figureIsFloor, true)),
+        // WP-150: a run that never asked for its CLI is a measured zero, not unmeasured.
+        isNotNull(runs.cliSpawnRequestedAt),
       ),
     )
     .groupBy(runs.taskId);

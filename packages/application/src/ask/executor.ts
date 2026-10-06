@@ -62,6 +62,14 @@ import { type Hold, holdDetail } from '../cost/pending.js';
 import { composeSecretRedactors } from '../integrations/redaction.js';
 import { redactTextSearchTerms } from '../knowledge/text-search-record.js';
 import {
+  cliSpawnNotRequested,
+  isStopEnding,
+  MEASURED_ZERO_COST,
+  NO_RUN_USAGE,
+  recordCliSpawn,
+  unspawnedStop,
+} from '../pipeline/cli-spawn.js';
+import {
   leaseExpiryAt,
   RUN_LEASE_TTL_MS,
   type RunLeaseOptions,
@@ -916,9 +924,20 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
               },
               runId,
             );
+      // WP-150: the ask's runs get the stage runs' marker, and the same rule about a missing one.
+      const spawn = recordCliSpawn({
+        unitOfWork: options.unitOfWork,
+        runs: options.store.runs,
+        now: () => options.context(admitted.ask.taskId).clock.now(),
+        runId,
+        logger,
+      });
       try {
-        const handle = options.runner.start(plan.spec);
+        const handle = options.runner.start(plan.spec, spawn.hooks);
         outcome = await handle.outcome;
+        if (!spawn.requested() && !isStopEnding(outcome)) {
+          throw cliSpawnNotRequested(outcome);
+        }
       } catch (error) {
         await stopHeartbeat();
         options.stopReasons.forget(runId);
@@ -939,12 +958,16 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
           retryable: false,
         });
         return await options.unitOfWork.transaction(async (scope) => {
+          // The measured zero only when the CLI was never asked for (WP-150); a runner that failed
+          // after the marker leaves no figure, and the run is held at its reservation (WP-131).
+          const requested = spawn.requested();
           const failed = failRun(
             started.run,
             {
               status: 'failed',
               terminalReason: 'error_during_execution',
               error: reason,
+              ...(requested ? {} : { usage: NO_RUN_USAGE, cost: MEASURED_ZERO_COST }),
               startFailure: notStarted,
             },
             options.context(admitted.ask.taskId),
@@ -955,14 +978,8 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
             terminalReason: 'error_during_execution',
             sessionId: null,
             numTurns: 0,
-            usage: {
-              input_tokens: 0,
-              output_tokens: 0,
-              cache_write_5m_tokens: 0,
-              cache_write_1h_tokens: 0,
-              cache_read_tokens: 0,
-            },
-            cost: { usd: 0, is_estimate: false },
+            usage: NO_RUN_USAGE,
+            cost: requested ? null : MEASURED_ZERO_COST,
             wallMs: 0,
             startFailure: notStarted,
           });
@@ -978,6 +995,10 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
       await stopHeartbeat();
       const stopReason = options.stopReasons.reasonFor(runId);
       options.stopReasons.forget(runId);
+      if (!spawn.requested()) {
+        // A stop before the CLI was asked for keeps its status and spent nothing (WP-150).
+        outcome = unspawnedStop(outcome);
+      }
 
       const recorded = await record({
         ask: admitted.ask,

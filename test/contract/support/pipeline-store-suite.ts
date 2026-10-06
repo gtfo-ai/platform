@@ -2380,7 +2380,8 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
        * The seeding helper is shared because every case here is about a run in a particular state,
        * and the states are the whole subject: live, terminal-with-no-figure, terminal-with-a-figure.
        */
-      const liveRun = async (): Promise<Id> => {
+      /** A live run; its CLI spawn marker is written unless `marked` is `false` (WP-150). */
+      const liveRun = async (options: { readonly marked?: boolean } = {}): Promise<Id> => {
         const stored = task();
         await store.tasks.insert(tx, stored);
         await store.tasks.recordStageEntered(tx, {
@@ -2419,6 +2420,12 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           createdAt: '2026-06-01T09:00:00.000Z',
           startedAt: '2026-06-01T09:00:01.000Z',
         });
+        if (options.marked !== false) {
+          await store.runs.markCliSpawnRequested(tx, {
+            runId,
+            at: '2026-06-01T09:00:02.000Z' as IsoDateTime,
+          });
+        }
         return runId;
       };
 
@@ -2851,6 +2858,11 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             createdAt: '2026-06-01T09:00:00.000Z',
             startedAt: '2026-06-01T09:00:01.000Z',
           });
+          // Every run here reached its CLI (WP-150); the next case holds the one that did not.
+          await store.runs.markCliSpawnRequested(tx, {
+            runId,
+            at: '2026-06-01T09:00:02.000Z' as IsoDateTime,
+          });
           return runId;
         };
         const end = async (runId: Id, cost: { usd: number; is_estimate: boolean } | null) =>
@@ -2935,6 +2947,44 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         const zeroTask = (await store.runs.load(tx, zero))?.taskId as Id;
         expect(await store.runs.heldFor(tx, zeroTask, 2)).toEqual({ heldUsd: 0, heldRuns: 0 });
         expect((await store.runs.totalsFor(tx, zeroTask)).unmeasuredRuns).toBe(0);
+      });
+
+      /**
+       * WP-150 (BD-010's 2026-10-06 amendment): the CLI spawn marker is a compare-and-set — a live,
+       * unmarked run once, never an ended one and never twice — and a run that ended without it is a
+       * measured zero no hold counts, even with no figure on the row. Both directions (rule 42): the
+       * same unmeasured ending after the marker is held (the case above).
+       */
+      it('marks a live run once, refuses an ended run, and holds an unmeasured run only when it was marked (WP-150)', async () => {
+        const at = '2026-06-01T09:00:05.000Z' as IsoDateTime;
+        const marked = await liveRun({ marked: false });
+        expect((await store.runs.load(tx, marked))?.cliSpawnRequestedAt).toBeNull();
+        expect(await store.runs.markCliSpawnRequested(tx, { runId: marked, at })).toBe(true);
+        expect(await store.runs.markCliSpawnRequested(tx, { runId: marked, at })).toBe(false);
+        expect(Date.parse((await store.runs.load(tx, marked))?.cliSpawnRequestedAt ?? '')).toBe(
+          Date.parse(at),
+        );
+
+        const unmarked = await liveRun({ marked: false });
+        await store.runs.finish(tx, {
+          runId: unmarked,
+          status: 'cancelled',
+          terminalReason: 'cancelled',
+          sessionId: null,
+          numTurns: 0,
+          usage: MEASURED.usage,
+          cost: null,
+          wallMs: 10,
+        });
+        // A late process finds the run ended and is refused: it starts no CLI.
+        expect(await store.runs.markCliSpawnRequested(tx, { runId: unmarked, at })).toBe(false);
+        const taskId = (await store.runs.load(tx, unmarked))?.taskId as Id;
+        expect(await store.runs.heldFor(tx, taskId, 2)).toEqual({ heldUsd: 0, heldRuns: 0 });
+        expect((await store.runs.totalsFor(tx, taskId)).unmeasuredRuns).toBe(0);
+
+        await expect(
+          store.runs.markCliSpawnRequested(tx, { runId: nextId(), at }),
+        ).rejects.toThrow();
       });
 
       /** 403's other half: unmeasured runs alone are not an estimate (the old `usd_reported is null`). */

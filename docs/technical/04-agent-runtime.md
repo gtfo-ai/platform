@@ -649,6 +649,38 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   completes instead of pausing the task. The run page shows a "budget cap crossed" badge beside
 >   `completed`, and the next stage's admission still reads the task cap.
 
+> **Amended 2026-10-06 (WP-150, BD-010's amendment of that date, PROGRESS backlogs 410 and 489): a
+> run that never reached its CLI holds no money.** WP-131 holds an ended run nobody measured at its
+> per-run cap against every cap, the task cap included, and that hold never rolls over. Nothing on the
+> row could tell a run that never started its CLI from one that ran, so on the first local test a run
+> whose shim refused the handshake was recorded as a `crash` and held at the implementation cap of 40
+> USD. Since this amendment:
+>
+> - **The marker.** The process holding the run writes `runs.cli_spawn_requested_at` (migration 0085)
+>   through `RunStartHooks.beforeCliSpawn`, a compare-and-set in **its own committed transaction**
+>   (only where the column is null and the run is live). The runner asks it **after** the shim's
+>   `hello.ok` and **before** the `spawn` frame — the run shim's spawn gate, `RunletSpawn.setSpawnGate`
+>   — and, for a spawn with no handshake, before `query()`. stdin stays queued behind the gate. A
+>   refused or failed write sends no `spawn`, so **no CLI runs without the marker**. The ask executor's
+>   runs get the same marker.
+> - **No marker is a measured zero.** Every ending before the marker — the shim refused the handshake
+>   (`runlet_handshake_refused`), no `hello.ok` in time (`runlet_handshake_timeout`), the socket lost
+>   (`runlet_connection_lost`), the marker write refused (`cli_spawn_record_refused`), any other
+>   session that ended first (`cli_spawn_not_requested`) — ends through the **start-failure** path
+>   with that closed-vocabulary cause (WP-127), never as `crash`, and writes the start failure's zero
+>   (`usd_reported = 0`). A cancel ended in place keeps `cancelled` and writes the zero; the lease
+>   sweep keeps `lease_expired` and writes the zero and the cause `ended_before_cli_spawn`; a stop the
+>   holder applied before the marker keeps its status and writes the zero. Every cap's held set
+>   requires the marker, so none of them holds such a run.
+> - **A run with the marker and no figure keeps WP-131's hold, unchanged**, including a runner that
+>   failed after it asked for the CLI (its start failure records no figure). The marker is written one
+>   frame before the CLI exists, so a `spawn` the shim then refused is held — the fail-closed side.
+> - Every row from before 0085 was backfilled to `started_at`, so nothing held then is released.
+>
+> The per-run caps themselves are unchanged (Q116 (a)): `docs/first-local-test.md` and the user guide
+> publish Autix's measured caps as a worked example for a large repository, and say that a raised
+> stage cap needs a raised task cap.
+
 ## Result handling
 
 - `structured_output` validated again by the platform against the artifact schema (defence in depth) and stored as an Artifact version. (**Amended 2026-10-06**, PROGRESS backlog 476: this line also said a markdown artifact is read from `.agentic-run/out/`; nothing reads it, and the prompt no longer asks for it.)

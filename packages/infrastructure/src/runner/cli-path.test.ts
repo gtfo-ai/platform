@@ -27,6 +27,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
+import { countingStartHooks } from '@platform/application';
 import { describe, expect, it } from 'vitest';
 import { createClaudeRunner } from './claude-runner.js';
 import { manualClock } from './clock.js';
@@ -74,7 +75,7 @@ const runThrough = async (
         spawnClaudeCodeProcess: spawn,
       }),
   });
-  await runner.start(runSpecFixture(specFields)).outcome;
+  await runner.start(runSpecFixture(specFields), countingStartHooks()).outcome;
   const spawned = cli.spawnOptions;
   expect(spawned, 'the SDK never spawned, so there is nothing to assert about').not.toBeNull();
   return { command: (spawned as SpawnOptions).command, cwd: (spawned as SpawnOptions).cwd };

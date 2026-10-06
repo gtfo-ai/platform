@@ -1231,7 +1231,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
   /** Every `open_mr` answer the Developer runs got through the production port (WP-138). */
   const openMrAnswers: { readonly stage: string; readonly answer: JsonValue }[] = [];
   const runner = (tools: PlatformToolPort): ClaudeRunner => ({
-    start: (spec) => {
+    start: (spec, hooks) => {
       specs.push(spec);
       const toolContext = {
         runId: spec.runId,
@@ -1284,11 +1284,11 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
         );
       }
       if (!opens && !(spec.mode === 'shadow' && (options.shadowMergeRequests ?? '').length > 0)) {
-        return fake.start(spec);
+        return fake.start(spec, hooks);
       }
       // The run's outcome waits for the tool's answer, as a real run's `result` follows its tool
       // calls; a refusal fails the harness loudly rather than a run that reported a merge request.
-      const handle = fake.start(spec);
+      const handle = fake.start(spec, hooks);
       return { ...handle, outcome: opened.then(() => handle.outcome) };
     },
   });

@@ -127,6 +127,7 @@ export * from './onboarding/rediscovery.js';
 export * from './onboarding/runtime.js';
 // The pipeline (WP-15): interpreter-driven sagas, the stage executor and their ports
 export * from './pipeline/ci-config-location.js';
+export * from './pipeline/cli-spawn.js';
 export * from './pipeline/commands.js';
 export * from './pipeline/dead-letter.js';
 export * from './pipeline/deadline-rules.js';
@@ -236,6 +237,7 @@ export * from './testing/memory-readiness.js';
 export * from './testing/memory-shadow.js';
 export * from './testing/memory-stats.js';
 export * from './testing/project-stream-race.js';
+export * from './testing/run-start-hooks.js';
 export * from './testing/ssh-deploy-key-fixtures.js';
 
 export const packageId = '@platform/application' as const;

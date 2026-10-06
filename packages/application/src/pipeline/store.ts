@@ -1310,6 +1310,19 @@ export interface StoredRun {
    * is on this type because `load` answers it.
    */
   readonly startedAt: IsoDateTime | null;
+  /**
+   * When the process holding the run recorded that it was about to ask for the run's CLI —
+   * `runs.cli_spawn_requested_at` (migration 0085, WP-150) — or `null` when it never did.
+   *
+   * `null` is a **proof**, not an absence: no CLI is started without this record
+   * ({@link RunRepository.markCliSpawnRequested}), so a run whose marker is null never sent a model
+   * request and is a measured zero, which no cap holds (BD-010's 2026-10-06 amendment). Every row
+   * written before the migration was backfilled, so it reads as having reached the CLI.
+   *
+   * Optional on the type because `insert` never writes it — the marker's own method does — and
+   * `load` always answers it.
+   */
+  readonly cliSpawnRequestedAt?: IsoDateTime | null;
 }
 
 /**
@@ -1439,6 +1452,10 @@ export interface RunRepository {
        *
        * The two are written apart: `is_estimate: false` fills `usd_reported`, `true` fills
        * `usd_estimated` (WP-47, migration 0035), and the other one is `null`.
+       *
+       * **Not `null` for a run that never asked for its CLI** (WP-150): every writer passes the
+       * measured zero (`MEASURED_ZERO_COST`) for a row whose `cli_spawn_requested_at` is null, so
+       * no cap holds a run that cannot have spent.
        */
       readonly cost: RunCost | null;
       readonly wallMs: number;
@@ -1496,6 +1513,23 @@ export interface RunRepository {
       /** The cost is the runner's floor (`runs.figure_is_floor`, WP-131 review round 1). */
       readonly costIsFloor?: boolean;
     },
+  ): Promise<boolean>;
+  /**
+   * Records that this run's CLI is about to be asked to start — `runs.cli_spawn_requested_at`
+   * (migration 0085, WP-150, BD-010's 2026-10-06 amendment).
+   *
+   * A **compare-and-set**: it writes only where the column is null **and** the run is still live,
+   * and answers whether it wrote. `false` is the answer for a run another writer already ended (a
+   * cancel ended in place, the lease sweep) and for a second call: the caller then starts no CLI.
+   * The caller runs it in a transaction of its own and commits it **before** it asks for the CLI
+   * (`RunStartHooks.beforeCliSpawn`), so the record is durable whenever a CLI can exist. Never a
+   * whole-row write (standing rule 79): the run's status, cost and lease are other writers'.
+   *
+   * @throws when the run does not exist at all, exactly as {@link RunRepository.finish} does.
+   */
+  markCliSpawnRequested(
+    tx: Transaction,
+    marker: { readonly runId: Id; readonly at: IsoDateTime },
   ): Promise<boolean>;
   /**
    * Claims or renews the run's lease — `runs.lease_owner` / `lease_expires_at` (TD-003, WP-47).
@@ -1588,6 +1622,9 @@ export interface RunRepository {
    * The task's ended runs **nobody measured**, held at the reservations they were admitted at —
    * what the task cap adds beside `tasks.cost_actual` (WP-131, PROGRESS backlog 402;
    * `../cost/pending.ts`).
+   *
+   * Only a run that **asked for its CLI** (`cli_spawn_requested_at` set, WP-150): one that never did
+   * is a measured zero and is not held, in either store.
    *
    * An ended run with both cost columns null moves `cost_actual` by nothing, ever, so without this
    * a task whose runs kept ending unmeasured was admitted retry after retry under its cap. Each is

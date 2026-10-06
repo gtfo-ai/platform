@@ -283,6 +283,15 @@ export const runs = pgTable('runs', {
   startedAt: timestamp('started_at', { withTimezone: true }),
   endedAt: timestamp('ended_at', { withTimezone: true }),
   lastOutputAt: timestamp('last_output_at', { withTimezone: true }),
+  /**
+   * When the process holding the run recorded that it was about to ask for the run's CLI (migration
+   * 0085, WP-150): written by `RunRepository.markCliSpawnRequested`'s compare-and-set and committed
+   * before the shim's `spawn` frame. `null` is a run that never asked — a **measured zero**, held
+   * by no cap. Every row before 0085 was backfilled to `started_at`. `default now()` marks a row
+   * an older release inserts without naming the column (the rolling-upgrade window); this release's
+   * insert writes `null` by name.
+   */
+  cliSpawnRequestedAt: timestamp('cli_spawn_requested_at', { withTimezone: true }).defaultNow(),
   leaseOwner: text('lease_owner'),
   leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
   numTurns: integer('num_turns').notNull().default(0),

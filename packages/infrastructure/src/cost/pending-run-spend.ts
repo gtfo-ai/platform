@@ -35,12 +35,16 @@
  * ({@link committedRunsSql}'s `held_usd` and `held_runs`), because a hold is not spend and an
  * operator raising a cap is told the two separately (standing rule 16).
  *
- * **There is no exclusion.** A run counts `0` only when its row *proves* no CLI process was spawned,
- * and the one such row this build writes already proves it with a measurement: a run that could not
- * be started is finished by the stage executor's `recordUnstarted` with `usd_reported = 0`
- * (`NO_COST`, *"nothing was spent, because nothing ran"*), so it is not in the held set at all. A
- * run swept or cancelled before its process spawned anything leaves both columns null like any
- * other, and nothing on the row tells the two apart — so it is held.
+ * **One exclusion, since WP-150: `r.cli_spawn_requested_at is not null`** (migration 0085, BD-010's
+ * 2026-10-06 amendment). A run counts `0` only when its row *proves* no CLI process was asked for,
+ * and since WP-150 the row can: the process holding the run commits the marker before it sends the
+ * shim its `spawn` frame and starts no CLI without it, so a null marker is a run that cannot have
+ * sent a model request. Every ending of such a run writes the start failure's measured
+ * `usd_reported = 0` as well (`MEASURED_ZERO_COST`, *"nothing was spent, because nothing ran"*), so
+ * the predicate is the second guard, for a row an older writer ended with no figure. Until WP-150 a
+ * run swept or cancelled before its process spawned left both columns null like any other, nothing
+ * on the row told the two apart, and it was held. Every row from before 0085 was backfilled to
+ * `started_at`, so nothing held then is released.
  *
  * **Why `not exists` and not a join**: a run has one ledger row per model, so a join would
  * multiply the reservation by the number of models, and `cost_entries` is partitioned by
@@ -56,6 +60,8 @@ export const ACTIVE_RUN_STATUSES_PARAM: readonly string[] = [...ACTIVE_RUN_STATU
  * An **ended** run nobody measured — terminal, and both cost columns null — over the alias `r`.
  * Or, since the WP-131 pre-review round (backlog 407), terminal with `figure_is_floor` set: a
  * `cost_unreported` stop, whose `0` in the cost column is the runner's floor and not a figure.
+ * Either way only a run that **asked for its CLI** (`cli_spawn_requested_at` set, WP-150): one that
+ * never did is a measured zero, not an unmeasured run.
  *
  * The set {@link committedRunsSql} holds and `RunRepository.heldFor` sums for the task cap. One
  * spelling for both, so the five ledger-backed caps and the task cap cannot disagree about which runs
@@ -65,7 +71,8 @@ export const ACTIVE_RUN_STATUSES_PARAM: readonly string[] = [...ACTIVE_RUN_STATU
  */
 export const unmeasuredEndedRunSql = (statuses: string): string =>
   `(not (r.status = any(${statuses}::run_status[]))
-         and ((r.usd_reported is null and r.usd_estimated is null) or r.figure_is_floor))`;
+         and ((r.usd_reported is null and r.usd_estimated is null) or r.figure_is_floor)
+         and r.cli_spawn_requested_at is not null)`;
 
 /**
  * What one run of the pending set is worth, as a `sum(...)` argument over the alias `r`.

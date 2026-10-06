@@ -352,7 +352,9 @@ export interface RunOutcome {
    * the session before its `result` (`failed`/`crash`). `cost` then holds the
    * column's floor and is not a figure — the stage executor and the ask executor write `null` to the
    * run row and to the terminal event's `cost`, and the ledger writes no row (standing rule 16).
-   * Absent means the cost was reported.
+   * Absent means the cost was reported — or, since WP-150, that the run never asked for its CLI and
+   * its cost is the measured zero (`unspawnedStop`); a non-stop ending before the marker is not an
+   * outcome at all but a {@link RunStartError}.
    */
   readonly costUnmeasured?: boolean;
   readonly wallMs: number;
@@ -689,12 +691,40 @@ export interface RunHandle {
   readonly stop: (stop: RunStop) => Promise<void>;
 }
 
+/**
+ * What the process holding a run lends the runner for one start (WP-150, BD-010's 2026-10-06
+ * amendment).
+ *
+ * The run's caller owns the database; the runner owns the moment the CLI is asked for. The one
+ * thing the two must agree on is that moment, so the caller hands it in rather than the runner
+ * growing a store.
+ */
+export interface RunStartHooks {
+  /**
+   * Records, in **its own committed transaction**, that this run's CLI is about to be asked to
+   * start — `runs.cli_spawn_requested_at`, a compare-and-set that writes only where the column is
+   * null and the run has not ended (`RunRepository.markCliSpawnRequested`).
+   *
+   * A runner calls it **at most once**, awaits it, and asks for no CLI unless it answered `true`.
+   * For the run shim that is between `hello.ok` and the `spawn` frame (TD-025); for a runner with no
+   * handshake, before it starts the session. `false` means the run has already ended (a cancel or a
+   * sweep won the row); a throw means the write failed. Either way no CLI is started, and the run
+   * is a start failure that spent nothing. A run whose marker was never written cannot have sent a
+   * model request, which is what lets every cap count it as a **measured zero** rather than hold it
+   * (`../cost/pending.ts`).
+   */
+  readonly beforeCliSpawn: () => Promise<boolean>;
+}
+
 export interface ClaudeRunner {
   /**
    * Starts a run. Returns as soon as the session is being established; everything else is observed
    * through the transcript sink and the returned {@link RunHandle}.
+   *
+   * `hooks` is required (WP-150): a wrapper that dropped it would start CLIs nobody recorded, which
+   * every cap would then count as free.
    */
-  readonly start: (spec: RunSpec) => RunHandle;
+  readonly start: (spec: RunSpec, hooks: RunStartHooks) => RunHandle;
 }
 
 /**

@@ -65,6 +65,7 @@ import type {
   RunHandle,
   RunOutcome,
   RunSpec,
+  RunStartHooks,
   RunStop,
   RunTakeOverExport,
   SteerMessage,
@@ -244,7 +245,7 @@ export const createWorkspaceClaudeRunner = (
   const logger = options.logger ?? silentLogger;
 
   return {
-    start: (spec: RunSpec): RunHandle => {
+    start: (spec: RunSpec, hooks: RunStartHooks): RunHandle => {
       /**
        * A `stop()` or `steer()` that arrives before the inner handle exists.
        *
@@ -346,7 +347,8 @@ export const createWorkspaceClaudeRunner = (
                 ? {}
                 : { cliEnvironment: workspace.cliEnvironment }),
             })
-            .start(provisioned);
+            // WP-150: the caller's marker reaches the runner that owns the handshake, unchanged.
+            .start(provisioned, hooks);
           for (const message of pendingSteers.splice(0)) {
             await handle.steer(message);
           }

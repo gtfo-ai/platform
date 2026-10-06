@@ -1132,6 +1132,43 @@ describe('an ask that never runs', () => {
   });
 
   /**
+   * WP-150 round 1: an ask whose runner failed **after** its CLI spawn marker was written may have
+   * spent, so the run row keeps no figure and the task cap holds it at its reservation; an ask
+   * refused before the marker would be the measured zero.
+   */
+  it('holds an ask run that failed after its CLI was asked for, with no figure (WP-150)', async () => {
+    const harness = createPipelineHarness({
+      projectId: PROJECT,
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          structuredOutput: askingRefinedSpec(),
+          costUsd: 0.1,
+        },
+        [`ask:${QUESTION}`]: {
+          status: 'failed',
+          terminalReason: 'crash',
+          rejectsAfterCli: new Error('the transport went away after the spawn'),
+        },
+      },
+    });
+    await seedTask(harness);
+    await askThroughHttp(harness);
+    const [ask] = harness.asks.all();
+    expect(ask?.status).toBe('failed');
+    const [row, held] = await harness.memory.transaction(async (scope) => {
+      const run = await harness.store.runs.load(scope.tx, ask?.runId as Id);
+      return [run, await harness.store.runs.heldFor(scope.tx, run?.taskId as Id, 7)] as const;
+    });
+    expect(row?.cliSpawnRequestedAt).not.toBeNull();
+    expect(row?.cost).toBeNull();
+    // Only the ask run is held: the refinement run reported its figure.
+    expect(held.heldRuns).toBe(1);
+    expect(held.heldUsd).toBeGreaterThan(0);
+  });
+
+  /**
    * **An ask refused by its workspace says why, in platform words** — WP-132, PROGRESS backlog 424,
    * mirroring `stage-executor.test.ts` › "a run refused by its workspace names the kind and the
    * reason (WP-127)". The ask row and `run.failed.error` carry the workspace's error kind, its

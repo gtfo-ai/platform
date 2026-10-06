@@ -107,6 +107,36 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 export type RunletStderrSink = (chunk: string) => void;
 
 /**
+ * How far a transport got when it ended **before the `spawn` frame was sent** (WP-150) — the step
+ * a run that never asked for its CLI reached, so the runner can name it in the start failure.
+ *
+ *  - `connection_lost`: the socket could not be opened, or closed or failed before the spawn;
+ *  - `handshake_timeout`: no `hello.ok` within the connect timeout;
+ *  - `handshake_refused`: the shim's `fatal` frame, or a `hello.ok` for another protocol;
+ *  - `spawn_refused`: the gate's `beforeSpawn` refused, so no `spawn` was sent.
+ */
+export type RunletPreSpawnStep =
+  | 'connection_lost'
+  | 'handshake_timeout'
+  | 'handshake_refused'
+  | 'spawn_refused';
+
+/**
+ * The runner's say over the one frame that starts a CLI (WP-150, BD-010's 2026-10-06 amendment).
+ *
+ * The adapter stays free of the database: the runner composes `beforeSpawn` over the run's
+ * `RunStartHooks.beforeCliSpawn`, which commits the CLI spawn marker. It is awaited **after**
+ * `hello.ok` — so the shim has accepted the connection — and **before** the `spawn` frame; a
+ * rejection sends no `spawn` and fails the transport. stdin the SDK writes meanwhile stays queued
+ * until the `spawn` frame is on the wire.
+ */
+export interface RunletSpawnGate {
+  readonly beforeSpawn: () => Promise<void>;
+  /** Told once, when the transport ends before a `spawn` frame was sent, with the step it reached. */
+  readonly failedBeforeSpawn: (step: RunletPreSpawnStep) => void;
+}
+
+/**
  * The spawn, and the seam its stderr leaves through (WP-127, PROGRESS backlog 344).
  *
  * The SDK attaches its own `stderr` callback only to a process it spawns itself (0.3.267's
@@ -119,6 +149,11 @@ export type RunletStderrSink = (chunk: string) => void;
 export type RunletSpawn = ((spawnOptions: SpawnOptions) => SpawnedProcess) & {
   /** Replaces the stderr sink for every process this spawn starts from now on; `null` drops. */
   readonly setStderrSink: (sink: RunletStderrSink | null) => void;
+  /**
+   * Sets the gate every process this spawn starts from now on passes before its `spawn` frame
+   * (WP-150); `null` removes it, and with none the frame is sent at `hello.ok` as before.
+   */
+  readonly setSpawnGate: (gate: RunletSpawnGate | null) => void;
 };
 
 /**
@@ -162,6 +197,7 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
   const logger = options.logger ?? silentLogger;
   const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   let stderrSink: RunletStderrSink | null = options.onStderr ?? null;
+  let spawnGate: RunletSpawnGate | null = null;
 
   const spawn = (spawnOptions: SpawnOptions): SpawnedProcess => {
     const events = new EventEmitter();
@@ -170,12 +206,21 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
     let signalCode: NodeJS.Signals | null = null;
     let killed = false;
     let handshaken = false;
-    /** stdin the SDK wrote before the socket was up. Bounded by the SDK's own prompt size. */
+    /** The `spawn` frame is on the wire: stdin flows and a failure is the CLI's, not the start's. */
+    let spawnSent = false;
+    /** The gate this process was started under — read once, so a later `setSpawnGate` cannot swap it. */
+    const gate = spawnGate;
+    /** Set where the failure is known to be one of {@link RunletPreSpawnStep}'s named steps. */
+    let preSpawnStep: RunletPreSpawnStep | null = null;
+    /** stdin the SDK wrote before the `spawn` frame. Bounded by the SDK's own prompt size. */
     const queued: { chunk: Buffer | null }[] = [];
 
     const fail = (error: Error): void => {
       if (state.exited) {
         return;
+      }
+      if (!spawnSent) {
+        gate?.failedBeforeSpawn(preSpawnStep ?? 'connection_lost');
       }
       logger.error({ err: error }, 'runlet transport failed');
       events.emit('error', error);
@@ -214,7 +259,7 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
     const stdin = new Writable({
       write: (chunk: Buffer, _encoding, callback) => {
         const connection = state.connection;
-        if (connection === null || !handshaken) {
+        if (connection === null || !spawnSent) {
           queued.push({ chunk });
           callback();
           return;
@@ -224,7 +269,7 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
       },
       final: (callback) => {
         const connection = state.connection;
-        if (connection === null || !handshaken) {
+        if (connection === null || !spawnSent) {
           queued.push({ chunk: null });
         } else {
           connection.send({ type: 'stdin.end' });
@@ -297,6 +342,31 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
         });
     };
 
+    /**
+     * The gate, then the frame (WP-150). The gate's own failure is `spawn_refused`; a transport
+     * that ended while the gate was deciding, or a stop that arrived meanwhile, sends nothing.
+     */
+    const sendSpawn = async (spawnFrame: RunletFrame): Promise<void> => {
+      if (gate !== null) {
+        try {
+          await gate.beforeSpawn();
+        } catch (error) {
+          preSpawnStep = 'spawn_refused';
+          fail(error instanceof Error ? error : new Error(String(error)));
+          return;
+        }
+      }
+      const connection = state.connection;
+      // `killed`: a `kill()` while the gate decided is a process its caller already gave up on, and
+      // a `spawn` now would start a CLI nobody waits for (review round 1).
+      if (state.exited || spawnOptions.signal.aborted || killed || connection === null) {
+        return;
+      }
+      connection.send(spawnFrame);
+      spawnSent = true;
+      flushQueued(connection);
+    };
+
     const onFrame = (frame: RunletFrame, payload: Buffer | null): void => {
       if (!RUNNER_ACCEPTS.includes(frame.type)) {
         throw new RunletProtocolError(
@@ -307,6 +377,7 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
       switch (frame.type) {
         case 'hello.ok': {
           if (frame.protocol !== RUNLET_PROTOCOL_VERSION) {
+            preSpawnStep = 'handshake_refused';
             throw new RunletProtocolError(
               `the shim speaks protocol ${frame.protocol}`,
               'protocol_error',
@@ -314,13 +385,13 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
           }
           handshaken = true;
           cancelConnectTimeout?.();
-          const connection = state.connection;
-          if (connection === null) {
+          if (state.connection === null) {
             return;
           }
           // The `spawn` frame is re-validated here rather than trusted: `env` comes from the SDK
-          // and an env name carrying `=` would otherwise reach `execve` inside the container.
-          const spawnFrame = runletFrameSchema.parse({
+          // and an env name carrying `=` would otherwise reach `execve` inside the container. It is
+          // built **before** the gate, so a frame this side refuses records no marker (WP-150).
+          const parsed = runletFrameSchema.safeParse({
             type: 'spawn',
             command: spawnOptions.command,
             args: [...spawnOptions.args],
@@ -331,8 +402,11 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
               ),
             ),
           });
-          connection.send(spawnFrame);
-          flushQueued(connection);
+          if (!parsed.success) {
+            preSpawnStep = 'spawn_refused';
+            throw parsed.error;
+          }
+          void sendSpawn(parsed.data);
           return;
         }
         case 'spawn.ok':
@@ -360,6 +434,9 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
         case 'pong':
           return;
         case 'fatal':
+          if (!handshaken) {
+            preSpawnStep = 'handshake_refused';
+          }
           // The shim's own words, and they are attacker-influenced text on their way to a log:
           // carried as data on an Error, never interpolated into a decision.
           throw new RunletProtocolError(
@@ -382,6 +459,7 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
 
     cancelConnectTimeout = options.clock.setTimer(connectTimeoutMs, () => {
       if (!handshaken) {
+        preSpawnStep = 'handshake_timeout';
         fail(
           new RunletProtocolError('the run shim did not answer the handshake', 'protocol_error'),
         );
@@ -422,6 +500,12 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
         },
         kill: (signal: NodeJS.Signals) => {
           killed = true;
+          if (!spawnSent) {
+            // No child yet (WP-150): nothing to signal, and `sendSpawn` reads `killed` after its
+            // gate, so none will be started. The process ends here, as the abort's does.
+            finish(null, signal);
+            return true;
+          }
           const parsed = runletFrameSchema.safeParse({ type: 'signal', name: signal });
           if (!parsed.success) {
             logger.warn({ signal }, 'runlet will not relay this signal');
@@ -447,10 +531,17 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
     spawnOptions.signal.addEventListener(
       'abort',
       () => {
-        if (!state.exited) {
-          const signal: RunletSignal = 'SIGTERM';
-          state.connection?.send({ type: 'signal', name: signal });
+        if (state.exited) {
+          return;
         }
+        if (!spawnSent) {
+          // No child to signal (WP-150): the teardown is the transport's own, and no `spawn` frame
+          // follows — `sendSpawn` reads the aborted signal after its gate.
+          finish(null, null);
+          return;
+        }
+        const signal: RunletSignal = 'SIGTERM';
+        state.connection?.send({ type: 'signal', name: signal });
       },
       { once: true },
     );
@@ -464,6 +555,9 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
   return Object.assign(spawn, {
     setStderrSink: (sink: RunletStderrSink | null): void => {
       stderrSink = sink;
+    },
+    setSpawnGate: (next: RunletSpawnGate | null): void => {
+      spawnGate = next;
     },
   });
 };

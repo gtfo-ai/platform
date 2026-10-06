@@ -358,8 +358,8 @@ export const createRunCommandInbox = (deps: RunCommandInboxDependencies): RunCom
     owner: deps.owner,
     drain,
     observe: (runner) => ({
-      start: (spec) => {
-        const handle = runner.start(spec);
+      start: (spec, hooks) => {
+        const handle = runner.start(spec, hooks);
         void drain({ runId: spec.runId });
         return handle;
       },

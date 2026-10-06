@@ -27,6 +27,7 @@
  * | 6 | Hooks, `canUseTool` and the platform MCP tools are **not** executed. Scripted `hook` entries are replayed verbatim. | **different** | This fake stands in for the model *and* the SDK; the hooks are the adapter's own code and are driven by the real SDK in `claude-runner.test.ts` — `runs the command policy hook against the real SDK dispatch and allows `git status`` and `records the deny the command policy returned` are the two that watch a verdict travel through `query()` to the CLI and back. (The name this register carried until WP-12's review, `claude-runner.sdk.test.ts`, never existed: a justification is a claim about the suite, so it is checkable, and this one was false.) Divergence 4 is what stops the difference becoming a kindness. |
  * | 7 | `created_at` comes from the fixture, not from the injected clock; only `run_id` and `seq` are rewritten. | **different** | Replaying a golden transcript with its own timestamps is what makes two runs of the same fixture byte-identical, which is what a UI dev server and a snapshot test both want. The clock still governs pacing, stalls and the wall clock. |
  * | 8 | A scenario ends immediately unless it scripts `stepDelayMs`; a real run takes minutes. | **kinder** | The fake never makes a caller wait, so a caller that forgot to await would still pass here and hang in production. The **positive assertion** for it: `advances the injected clock by stepDelayMs per entry, and the stall detector fires on a scenario that stops emitting` — the fake reaches `stalled` through the same clock the adapter uses, so "time passes" is exercised rather than assumed. |
+ * | 9 | The CLI spawn marker (`RunStartHooks.beforeCliSpawn`, WP-150) is asked once, before the first scripted entry, rather than between a shim's `hello.ok` and its `spawn` frame — there is no shim. A refusal throws `RunStartError` (`cli_spawn_record_refused`) and plays nothing, as the real runner starts no CLI. | **same** on the rule, **different** on the moment | The real runner's two moments (gated by the runlet's handshake, or before `query()` for a spawn with no gate) are driven by `claude-runner.test.ts`; this fake keeps only the rule the stage executor reads: no marker, no run. |
  *
  * Entry 8 is the kindest and carries a positive assertion rather than a warning, per the standing
  * rule; entry 6 is neutralised by entry 4 rather than merely documented.
@@ -37,13 +38,14 @@ import type {
   RunnerClock,
   RunOutcome,
   RunSpec,
+  RunStartHooks,
   RunStop,
   RunStopReason,
   RunTranscriptSink,
   SteerMessage,
   TerminalRunStatus,
 } from '@platform/application';
-import { runSpecSchema } from '@platform/application';
+import { RunStartError, runSpecSchema } from '@platform/application';
 import type {
   ModelUsage,
   RunCost,
@@ -213,7 +215,7 @@ const assertScenarioIsPossible = (spec: RunSpec, scenario: FakeRunScenario): voi
 };
 
 export const createFakeClaudeRunner = (options: FakeClaudeRunnerOptions): ClaudeRunner => ({
-  start: (rawSpec: RunSpec): RunHandle => {
+  start: (rawSpec: RunSpec, hooks: RunStartHooks): RunHandle => {
     const spec = runSpecSchema.parse(rawSpec);
     const scenario = options.select(spec);
     assertScenarioIsPossible(spec, scenario);
@@ -270,6 +272,14 @@ export const createFakeClaudeRunner = (options: FakeClaudeRunnerOptions): Claude
      * is always false, which is the sort of "simplification" that removes a break condition.
      */
     const play = async (): Promise<RunOutcome> => {
+      // WP-150: the marker before anything the "CLI" does, as the real runner asks it — and a
+      // refusal is a start failure that plays nothing (divergence 9).
+      if (!(await hooks.beforeCliSpawn())) {
+        throw new RunStartError('the platform refused to record the CLI spawn; no CLI is started', {
+          retryable: false,
+          diagnosis: { kind: 'workspace_failed', reason: 'cli_spawn_record_refused', commit: null },
+        });
+      }
       const state: { interrupted: RunStopReason | 'stalled' | null } = { interrupted: null };
       stopped.promise.then(
         (reason) => {

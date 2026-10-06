@@ -548,6 +548,39 @@ gate then cannot tell and waits. The file's presence is read from the platform's
 (`APP_KNOWLEDGE_MIRROR_ROOT`); a process that has none cannot tell, and waits too — on a poll-only
 binding up to the same CI timeout.
 
+**Budgets on a large repository — Autix's caps as a worked example** (Q116 (a), WP-150). The shipped
+per-run caps (product/04: refinement 2, architecture 5, implementation 15, code review 5, business
+review 3 USD) and the task cap of 50 USD are the same in both provider modes. On Autix the architect
+(Opus 5, `local` mode) spent its 5 USD reading the code and crossed its cap on the turn that
+delivered its plan — kept since backlog 466 — and the product owner raised Autix's own caps in its
+`.agentic/config.yml`:
+
+```yaml
+stages:
+  refinement: { budget_usd: 5 }
+  architecture: { budget_usd: 15 }
+  implementation: { budget_usd: 40 }
+  code_review: { budget_usd: 15 }
+  business_review: { budget_usd: 10 }
+```
+
+**A raised stage cap needs a raised task cap.** A run is admitted only if what the task has spent and
+holds, plus the run's own cap, fits the task cap: after a 15 USD architecture run, a 40 USD
+implementation run does not fit under 50 (15 + 40 > 50), and the task pauses *Paused: budget* before
+the run starts. The task cap has no configuration key in this build; on the task page, **Raise this
+task's cap** to at least what its remaining stages may spend (here, 15 + 40 + 15 + 10 = 80 USD plus
+what is already spent). In `local` mode these are list-price estimates (§ 10), but they are what
+admission compares.
+
+**A run that never reached its CLI holds nothing** (WP-150). On the first test AUT-6820's developer run
+was refused by its run shim before the CLI started (a run image rebuilt from another commit than the
+runner, backlog 489), and the run was then held at the 40 USD implementation cap against the task.
+Since WP-150 such a run fails as *did not start* with the step it reached on the run page
+(`runlet_handshake_refused`, `runlet_handshake_timeout`, `runlet_connection_lost`, …), its cost is a
+measured 0, and no cap holds it. A cancel or a lost runner while the workspace was still being
+prepared is the same. Only a run that asked for its CLI and then reported nothing is held at its cap
+— the task page's *Excludes N runs nobody measured*.
+
 The logs are JSON, one line per entry, with `task_id` and `run_id` where they apply:
 `docker compose logs -f app runner launcher`.
 

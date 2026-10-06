@@ -732,6 +732,10 @@ as before.
 
 A run that ended with **nobody measuring it** — the platform stopped it, or it crashed, or a cancel
 or a lost process ended it before it reported — has no cost at all, and is shown as *not measured*.
+This is only a run that got as far as asking for the Claude Code CLI: a run that never did — its
+workspace refused the handshake, or a cancel or a lost process ended it while its workspace was
+still being prepared — cannot have spent anything, is shown with a cost of **0** (a run that refused
+at the handshake says *did not start*), and is never held.
 Its spend is unknown, so every budget **holds** it at the per-run cap it was started under: a held
 run is never counted as spent and writes no cost entry, but it counts toward the budget exactly as
 spend does when the next run is admitted, and the pause says how much is held apart from what was
@@ -744,6 +748,19 @@ stopped at. A cap is only ever raised, and raising it releases no hold — the h
 against the new cap. A task an organisation, project or feature budget paused is not offered it: that
 cap is raised where it is set. A task's **Cost so far** adds only the measured runs, and says *Excludes N runs nobody
 measured* beneath it when there are any — as do the board card and the chat message when a task completes.
+
+**The per-run caps are sized for a small or medium repository, and a raised stage cap needs a raised
+task cap.** The shipped caps are refinement 2, architecture 5, implementation 15, code review 5 and
+business review 3 USD, with a task cap of 50 USD, the same in both provider modes. A large repository
+can need more: on the first local test (Autix, a large PHP application read by Opus 5 in `local`
+mode) the architect spent its 5 USD reading the code, and its project raised its own caps in
+`.agentic/config.yml` to refinement 5, architecture 15, implementation 40, code review 15 and
+business review 10 (`stages.<stage>.budget_usd`). A run is admitted only if what the task has spent
+and holds, plus that run's own cap, fits the task cap — so at those figures a task that spent 15 USD
+on architecture cannot start a 40 USD implementation run under the default 50 USD task cap, and
+pauses before it. The task cap has no configuration key in this build: raise it on the task, with
+**Raise this task's cap**, to at least what its remaining stages may spend. In `local` mode the
+dollars are list-price estimates (above), but they are what admission compares.
 
 ## 9. Integrations
 

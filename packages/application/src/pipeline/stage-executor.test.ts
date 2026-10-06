@@ -1312,11 +1312,17 @@ describe('a task a human stopped while its stage was running', () => {
       },
       ...(options.cost === true ? { cost: true } : {}),
     });
-    const repository = harness.store.runs as { insert: typeof harness.store.runs.insert };
-    const real = repository.insert.bind(harness.store.runs);
-    repository.insert = async (tx, run) => {
-      await real(tx, run);
-      await stop(harness, tx, run.id);
+    // The stop lands **while the CLI runs** — right after the run's CLI spawn marker is written
+    // (WP-150). A stop before the marker is a run that spent nothing, which the WP-150 block at the
+    // end of this file covers on its own.
+    const repository = harness.store.runs as {
+      markCliSpawnRequested: typeof harness.store.runs.markCliSpawnRequested;
+    };
+    const real = repository.markCliSpawnRequested.bind(harness.store.runs);
+    repository.markCliSpawnRequested = async (tx, marker) => {
+      const written = await real(tx, marker);
+      await stop(harness, tx, marker.runId);
+      return written;
     };
     return harness;
   };
@@ -1928,4 +1934,132 @@ describe('a stop that measured nothing (WP-119, backlog 334)', () => {
       expect(domainEventSchemasByType[event].safeParse(terminal[0]).success).toBe(true);
     },
   );
+});
+
+/**
+ * WP-150 (BD-010's 2026-10-06 amendment, PROGRESS backlogs 410 and 489): a run that never reached its
+ * CLI holds no money.
+ *
+ * The figures are the shipped ones — a task cap of 50 and the implementation stage's 15 (here on
+ * the stage the harness starts at, `refinement`) — so three held runs are 45, and a fourth admission
+ * reads `0 + 45 + 15 > 50`. AUT-6820's run is the script: its shim refused the handshake and the
+ * runner answered `failed`/`crash` with nothing measured, **without** asking for the CLI
+ * (`reachesCli: false`, what WP-127's runner did). Canary: the executor's missing-marker rule
+ * removed, the three runs are held and the fourth is refused (the companion case is that world).
+ */
+describe('a run that never reached its CLI holds no money (WP-150)', () => {
+  const USER = '00000000-0000-4000-8000-00000000a150' as Id;
+  const settings = {
+    taskBudgetUsd: 50,
+    config: { stages: { refinement: { budget_usd: 15 } } },
+  } as HarnessOptions['settings'];
+  const refusedAtHello = (reachesCli: boolean) =>
+    harnessWith({
+      settings,
+      runs: {
+        refinement: {
+          status: 'failed',
+          terminalReason: 'crash',
+          costUnmeasured: true,
+          error:
+            'Failed to spawn Claude Code process: the shim refused the connection: auth_failed',
+          reachesCli,
+        },
+      },
+    });
+  /** Three runs, each followed by a person's retry, and the fourth admission's answer. */
+  const fourAttempts = async (harness: PipelineHarness) => {
+    await harness.publish([ticketMatched()]);
+    const taskId = taskOf(harness).task.id;
+    for (let retry = 0; retry < 3; retry += 1) {
+      await retryStageCommand(harness.humanCommands, {
+        taskId,
+        userId: USER,
+        stage: 'refinement' as Slug,
+      });
+      await harness.drain();
+    }
+    const held = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.heldFor(scope.tx, taskId, 15),
+    );
+    return { taskId, held };
+  };
+
+  it('ends a run refused at hello as a start failure with a measured zero, and admits a fourth at the task cap', async () => {
+    const harness = refusedAtHello(false);
+    const { held } = await fourAttempts(harness);
+
+    // The fourth was admitted: four runs were planned and started.
+    expect(harness.specs).toHaveLength(4);
+    expect(held).toEqual({ heldUsd: 0, heldRuns: 0 });
+    const rows = await harness.memory.transaction(async (scope) =>
+      Promise.all(harness.specs.map((spec) => harness.store.runs.load(scope.tx, spec.runId))),
+    );
+    for (const row of rows) {
+      // Never `crash`: the start-failure path, with the closed-vocabulary cause.
+      expect(row?.terminalReason).toBe('error_during_execution');
+      expect(row?.cliSpawnRequestedAt).toBeNull();
+      expect(row?.cost).toEqual({ usd: 0, is_estimate: false, price_list_id: null });
+      expect(harness.store.startFailureOf(row?.id as Id)?.diagnosis).toBe(
+        'RunStartError: workspace_failed, cli_spawn_not_requested',
+      );
+    }
+    expect(
+      harness
+        .events()
+        .filter((event) => event.type === 'run.failed')
+        .map((event) => (event.payload as { terminal_reason: string }).terminal_reason),
+    ).toEqual([
+      'error_during_execution',
+      'error_during_execution',
+      'error_during_execution',
+      'error_during_execution',
+    ]);
+  });
+
+  /**
+   * Round 1: a runner that fails **after** the marker was written may have started a CLI that spent,
+   * so its start failure records no figure and the run is held at its reservation — never the
+   * measured zero a run refused before its CLI gets. Canary: `recordUnstarted` writing the zero
+   * whatever the marker says.
+   */
+  it('holds a start failure that came after the marker, with no figure on the row (round 1)', async () => {
+    const harness = harnessWith({
+      settings,
+      runs: {
+        refinement: {
+          status: 'failed',
+          terminalReason: 'crash',
+          rejectsAfterCli: new Error('the transport went away after the spawn'),
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    const task = taskOf(harness);
+    const runId = harness.specs.at(-1)?.runId as Id;
+    const [row, held] = await harness.memory.transaction(async (scope) => [
+      await harness.store.runs.load(scope.tx, runId),
+      await harness.store.runs.heldFor(scope.tx, task.task.id, 2),
+    ]);
+    expect(row?.terminalReason).toBe('error_during_execution');
+    expect(row?.cliSpawnRequestedAt).not.toBeNull();
+    expect(row?.cost).toBeNull();
+    expect(held).toEqual({ heldUsd: 15, heldRuns: 1 });
+    const failed = harness.events().find((event) => event.type === 'run.failed');
+    expect((failed?.payload as { cost?: unknown } | undefined)?.cost).toBeNull();
+  });
+
+  it('holds the same crash once the CLI was asked for, and refuses the fourth (WP-131 unchanged)', async () => {
+    const harness = refusedAtHello(true);
+    const { held } = await fourAttempts(harness);
+
+    expect(harness.specs).toHaveLength(3);
+    expect(held).toEqual({ heldUsd: 45, heldRuns: 3 });
+    expect(taskOf(harness).task.state).toBe('paused');
+    const last = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.load(scope.tx, harness.specs.at(-1)?.runId as Id),
+    );
+    expect(last?.terminalReason).toBe('crash');
+    expect(last?.cliSpawnRequestedAt).not.toBeNull();
+  });
 });

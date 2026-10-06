@@ -96,7 +96,14 @@ import {
   type OrganisationSettingsPort,
   staticOrganisationSettings,
 } from '../ports/organisation-settings.js';
-import type { ClaudeRunner, RunOutcome, RunSpec, RunTranscriptSink } from '../ports/runner.js';
+import {
+  type ClaudeRunner,
+  type RunOutcome,
+  type RunSpec,
+  RunStartError,
+  type RunStartHooks,
+  type RunTranscriptSink,
+} from '../ports/runner.js';
 import { createWorkingCalendar, type WorkingCalendar } from '../scheduling/working-calendar.js';
 import { createMemoryAskStore, type MemoryAskStore } from './memory-ask.js';
 import {
@@ -299,6 +306,21 @@ export interface ScriptedRun {
    * escaped both of the executor's endings and left a run `running` for ever.
    */
   readonly throwsOnStart?: Error;
+  /**
+   * `false` scripts a run that ended **before its CLI was asked for** (WP-150): the runner never
+   * calls `RunStartHooks.beforeCliSpawn` and still answers the scripted outcome — what WP-127's
+   * runner answered for a shim that refused the handshake (a `crash` with nothing measured). The
+   * executor's rule for a missing marker is what the case then asserts. @default true, which asks
+   * for the marker before the outcome, as every shipped runner does, and refuses the run as a start
+   * failure when the marker is refused.
+   */
+  readonly reachesCli?: boolean;
+  /**
+   * The runner asks for the marker, it is written, and then the outcome **rejects** with this error
+   * (WP-150 round 1): a runner that failed after the CLI may have started. The executor records it
+   * through the start-failure path with **no** figure, so every cap holds it (WP-131).
+   */
+  readonly rejectsAfterCli?: Error;
   /**
    * Whether the run **called `open_mr`** (WP-138). A completed run whose spec carries the tool and
    * whose artifact reports `mr` is taken to have opened that merge request, and the harness records
@@ -543,6 +565,23 @@ const reportedMergeRequestOf = (output: unknown): MergeRequestRef | null => {
   }
   const parsed = mergeRequestRefSchema.safeParse((output as { mr?: unknown }).mr);
   return parsed.success ? parsed.data : null;
+};
+
+/**
+ * The CLI spawn marker, asked the way the shipped runners ask it (WP-150): once, before anything
+ * the run does, and a refusal is a start failure that starts nothing. A script with
+ * `reachesCli: false` skips it.
+ */
+const askForCli = async (scripted: ScriptedRun, hooks: RunStartHooks): Promise<void> => {
+  if (scripted.reachesCli === false) {
+    return;
+  }
+  if (!(await hooks.beforeCliSpawn())) {
+    throw new RunStartError('the platform refused to record the CLI spawn; no CLI was started', {
+      retryable: false,
+      diagnosis: { kind: 'workspace_failed', reason: 'cli_spawn_record_refused', commit: null },
+    });
+  }
 };
 
 const outcomeFor = (runId: Id, scripted: ScriptedRun, structuredOutput: unknown): RunOutcome => ({
@@ -1538,7 +1577,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   });
 
   const runner: ClaudeRunner = {
-    start: (spec) => {
+    start: (spec, hooks) => {
       specs.push(spec);
       const { key, scripted } = scriptFor(scripts, spec);
       if (scripted === undefined) {
@@ -1575,12 +1614,19 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         sessionId: `session-${spec.runId}`,
         // WP-138: the `open_mr` call the run made, recorded as the tool records it, before the
         // run ends — what the stage executor's final transaction then reads.
-        outcome: (opens && reported !== null
-          ? memory.transaction(async (scope) =>
-              store.tasks.recordMergeRequest(scope.tx, spec.taskId, reported),
-            )
-          : Promise.resolve()
-        )
+        outcome: askForCli(scripted, hooks)
+          .then(() => {
+            if (scripted.rejectsAfterCli !== undefined) {
+              throw scripted.rejectsAfterCli;
+            }
+          })
+          .then(async () =>
+            opens && reported !== null
+              ? memory.transaction(async (scope) =>
+                  store.tasks.recordMergeRequest(scope.tx, spec.taskId, reported),
+                )
+              : undefined,
+          )
           .then(async () => options.whileRunning?.(spec))
           .then(() => outcomeFor(spec.runId, scripted, checked.value)),
         steer: async () => {},
@@ -2019,13 +2065,13 @@ const wrapRunner = (
   clock: () => TestClock,
   sink: RunTranscriptSink,
 ): ClaudeRunner => ({
-  start: (spec) => {
+  start: (spec, hooks) => {
     const found = scriptFor(scripts, spec).scripted;
     const scripted = found === undefined || isDeclaredCannotStart(found) ? undefined : found;
     if (scripted?.throwsOnStart !== undefined) {
       throw scripted.throwsOnStart;
     }
-    const handle = runner.start(spec);
+    const handle = runner.start(spec, hooks);
     if (scripted?.stopReason === undefined) {
       return handle;
     }

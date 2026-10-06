@@ -18,6 +18,7 @@ import {
   createAllowListCredentialResponder,
   createRunletSpawn,
   type RunletCredential,
+  type RunletPreSpawnStep,
   type RunletSpawnOptions,
 } from './spawn-adapter.js';
 import {
@@ -315,6 +316,192 @@ describe('the runner-side SpawnedProcess', () => {
       const [code] = await exitOf(child);
       expect(code).toBeNull();
       expect(errors[0]?.message).toMatch(/ENOENT/);
+    });
+  });
+
+  /**
+   * WP-150 (BD-010's 2026-10-06 amendment): the runner's gate between `hello.ok` and the `spawn`
+   * frame — where the CLI spawn marker is committed. Against the raw server, because the question
+   * is which frames reached the wire and when, which the real shim cannot answer.
+   */
+  describe('the spawn gate (WP-150)', () => {
+    const gateOf = (beforeSpawn: () => Promise<void>) => {
+      const steps: RunletPreSpawnStep[] = [];
+      return {
+        gate: { beforeSpawn, failedBeforeSpawn: (step: RunletPreSpawnStep) => steps.push(step) },
+        steps,
+      };
+    };
+
+    it('sends the spawn frame only after the gate answered, and keeps stdin queued behind it', async () => {
+      const { server, spawn } = await withRawShim();
+      let open: () => void = () => {};
+      const asked = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      let calls = 0;
+      const { gate, steps } = gateOf(async () => {
+        calls += 1;
+        await asked;
+      });
+      spawn.setSpawnGate(gate);
+      const child = spawn(spawnOptionsFor('process.exit(0)'));
+      const peer = await server.peer();
+      await peer.next('hello');
+      peer.send({ type: 'hello.ok', protocol: 2 });
+      child.stdin.write('the first prompt');
+      // The gate is deciding: nothing but the hello has reached the shim.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(calls).toBe(1);
+      expect(peer.received.map((decoded) => decoded.frame.type)).toEqual(['hello']);
+      open();
+      await peer.next('spawn');
+      await peer.next('stdin');
+      expect(peer.received.map((decoded) => decoded.frame.type)).toEqual([
+        'hello',
+        'spawn',
+        'stdin',
+      ]);
+      expect(steps).toEqual([]);
+      child.on('error', () => {});
+      peer.close();
+      await exitOf(child);
+    });
+
+    it('sends no spawn frame when the gate refuses, and names the step (criterion 5)', async () => {
+      const { server, spawn } = await withRawShim();
+      const { gate, steps } = gateOf(async () => {
+        throw new Error('the platform refused to record the CLI spawn');
+      });
+      spawn.setSpawnGate(gate);
+      const child = spawn(spawnOptionsFor('process.exit(0)'));
+      const errors: Error[] = [];
+      child.on('error', (error) => errors.push(error));
+      const peer = await server.peer();
+      await peer.next('hello');
+      const exited = exitOf(child);
+      peer.send({ type: 'hello.ok', protocol: 2 });
+      const [code] = await exited;
+      expect(code).toBeNull();
+      expect(errors.map((error) => error.message)).toEqual([
+        'the platform refused to record the CLI spawn',
+      ]);
+      expect(steps).toEqual(['spawn_refused']);
+      await peer.closed;
+      expect(peer.received.map((decoded) => decoded.frame.type)).not.toContain('spawn');
+    });
+
+    it.each([
+      [
+        'a fatal frame',
+        'handshake_refused',
+        (peer: Awaited<ReturnType<RawServer['peer']>>) =>
+          peer.send({ type: 'fatal', reason: 'auth_failed', message: 'no' }),
+      ],
+      [
+        'a hello.ok for another protocol',
+        'handshake_refused',
+        (peer: Awaited<ReturnType<RawServer['peer']>>) =>
+          peer.send({ type: 'hello.ok', protocol: 99 }),
+      ],
+      [
+        'a closed connection',
+        'connection_lost',
+        (peer: Awaited<ReturnType<RawServer['peer']>>) => peer.close(),
+      ],
+    ] as const)(
+      'names %s before the spawn as %s, and never asks the gate',
+      async (_name, step, act) => {
+        const { server, spawn } = await withRawShim();
+        let calls = 0;
+        const { gate, steps } = gateOf(async () => {
+          calls += 1;
+        });
+        spawn.setSpawnGate(gate);
+        const child = spawn(spawnOptionsFor('process.exit(0)'));
+        child.on('error', () => {});
+        const peer = await server.peer();
+        await peer.next('hello');
+        const exited = exitOf(child);
+        act(peer);
+        await exited;
+        expect(steps).toEqual([step]);
+        expect(calls).toBe(0);
+      },
+    );
+
+    it('names a handshake that timed out, and never asks the gate', async () => {
+      const { server, spawn, clock } = await withRawShim({ connectTimeoutMs: 5_000 });
+      let calls = 0;
+      const { gate, steps } = gateOf(async () => {
+        calls += 1;
+      });
+      spawn.setSpawnGate(gate);
+      const child = spawn(spawnOptionsFor('process.exit(0)'));
+      child.on('error', () => {});
+      const peer = await server.peer();
+      await peer.next('hello');
+      const exited = exitOf(child);
+      clock.advance(5_001);
+      await exited;
+      expect(steps).toEqual(['handshake_timeout']);
+      expect(calls).toBe(0);
+    });
+
+    it('starts nothing when the process is killed while the gate is deciding (round 1)', async () => {
+      const { server, spawn } = await withRawShim();
+      let open: () => void = () => {};
+      const { gate, steps } = gateOf(
+        () =>
+          new Promise<void>((resolve) => {
+            open = resolve;
+          }),
+      );
+      spawn.setSpawnGate(gate);
+      const child = spawn(spawnOptionsFor('process.exit(0)'));
+      child.on('error', () => {});
+      const peer = await server.peer();
+      await peer.next('hello');
+      peer.send({ type: 'hello.ok', protocol: 2 });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const exited = exitOf(child);
+      expect(child.kill('SIGTERM')).toBe(true);
+      const [code, signal] = await exited;
+      open();
+      await peer.closed;
+      expect(code).toBeNull();
+      expect(signal).toBe('SIGTERM');
+      expect(child.killed).toBe(true);
+      expect(steps).toEqual([]);
+      expect(peer.received.map((decoded) => decoded.frame.type)).toEqual(['hello']);
+    });
+
+    it('starts nothing when the SDK aborts while the gate is deciding', async () => {
+      const { server, spawn } = await withRawShim();
+      let open: () => void = () => {};
+      const { gate, steps } = gateOf(
+        () =>
+          new Promise<void>((resolve) => {
+            open = resolve;
+          }),
+      );
+      spawn.setSpawnGate(gate);
+      const abort = new AbortController();
+      const child = spawn(spawnOptionsFor('process.exit(0)', { signal: abort.signal }));
+      child.on('error', () => {});
+      const peer = await server.peer();
+      await peer.next('hello');
+      peer.send({ type: 'hello.ok', protocol: 2 });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const exited = exitOf(child);
+      abort.abort();
+      const [code] = await exited;
+      open();
+      await peer.closed;
+      expect(code).toBeNull();
+      expect(steps).toEqual([]);
+      // Neither the spawn nor a signal for a child that does not exist.
+      expect(peer.received.map((decoded) => decoded.frame.type)).toEqual(['hello']);
     });
   });
 

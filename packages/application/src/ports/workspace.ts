@@ -674,6 +674,20 @@ export const WORKSPACE_ERROR_REASONS = [
   'launcher_request_refused',
   /** The launcher failed for a reason it does not publish; its own log has it (TD-028). */
   'launcher_internal_error',
+  // ── WP-150: how far a run got before its CLI was asked to start (BD-010's 2026-10-06 amendment).
+  // Each is a run that spent nothing: the marker `runs.cli_spawn_requested_at` was never written.
+  /** The runner could not reach the run shim's control socket, or lost it before `hello.ok`. */
+  'runlet_connection_lost',
+  /** The run shim did not answer the handshake in time. */
+  'runlet_handshake_timeout',
+  /** The run shim refused the handshake (a `fatal` frame, or a protocol it does not speak). */
+  'runlet_handshake_refused',
+  /** The platform could not record that the CLI is about to start, so it did not start one. */
+  'cli_spawn_record_refused',
+  /** The session ended before its CLI was asked to start, for a reason none of the above names. */
+  'cli_spawn_not_requested',
+  /** The run was ended by another writer (a cancel, the lease sweep) before its CLI was asked for. */
+  'ended_before_cli_spawn',
 ] as const;
 export type WorkspaceErrorReason = (typeof WORKSPACE_ERROR_REASONS)[number];
 export const workspaceErrorReasonSchema = z.enum(WORKSPACE_ERROR_REASONS);

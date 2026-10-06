@@ -281,6 +281,8 @@ describe('the late cost releases the hold (WP-131)', () => {
         createdAt: AT,
         startedAt: AT,
       });
+      // It reached its CLI (WP-150): a run that never asked for one would be a measured zero.
+      await pipeline.runs.markCliSpawnRequested(tx.tx, { runId: RUN, at: AT });
       // The in-place cancel's ending: terminal, and nobody measured it (WP-101, WP-119).
       await pipeline.runs.finish(tx.tx, {
         runId: RUN,

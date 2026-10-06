@@ -14,6 +14,7 @@ import type {
   ToolApprovalRequest,
 } from '@platform/application';
 import * as applicationRunRedaction from '@platform/application';
+import { countingStartHooks } from '@platform/application';
 import { runlet as runletAdapters, runner as runnerAdapters } from '@platform/infrastructure';
 import type pg from 'pg';
 import { describe, expect, it } from 'vitest';
@@ -239,7 +240,7 @@ describe('the composed runner hands the launcher’s CLI environment to the spaw
       secretEnvNames: ['ANTHROPIC_API_KEY'],
       artifactType: null,
     });
-    await composed.runner.start(spec).outcome.catch(() => undefined);
+    await composed.runner.start(spec, countingStartHooks()).outcome.catch(() => undefined);
     expect(spawned).toHaveLength(1);
     expect(spawned[0]).toMatchObject({
       ANTHROPIC_API_KEY: 'FAKE-anthropic-key-not-a-real-secret-000',
@@ -319,7 +320,7 @@ describe('the composed runner logs a containerised CLI’s stderr, redacted (WP-
         secretEnvNames: ['ANTHROPIC_API_KEY'],
         artifactType: null,
       });
-      const outcome = await composed.runner.start(spec).outcome;
+      const outcome = await composed.runner.start(spec, countingStartHooks()).outcome;
 
       const warned = lines.filter((line) =>
         line.message.includes('before its first stream message'),
@@ -335,6 +336,128 @@ describe('the composed runner logs a containerised CLI’s stderr, redacted (WP-
       await shim.close();
       await volume.cleanup();
     }
+  });
+});
+
+/**
+ * **A run whose shim refused the handshake is a start failure that spent nothing** (WP-150, PROGRESS
+ * backlog 489, ruling (d)). AUT-6820's run, through the production composition and the real shim:
+ * the shim answers a wrong token with `fatal auth_failed` — the answer a protocol mismatch gave on
+ * the first local test — and the runner, which used to report a `crash` held at the stage's cap,
+ * now rejects with the start failure that names the step. The marker is never asked, so no row
+ * could hold the run. Its other half: a marker the platform refused starts no CLI (criterion 5).
+ */
+describe('the composed runner and the CLI spawn marker (WP-150)', () => {
+  const key = 'FAKE-anthropic-key-not-a-real-secret-000';
+  const runThroughShim = async (options: {
+    readonly runnerToken: string;
+    readonly hooks: ReturnType<typeof countingStartHooks>;
+  }) => {
+    const { logger } = recordingLogger();
+    const volume = await runletAdapters.createControlVolume();
+    const shim = runletAdapters.createRunletShim({
+      controlSocketPath: volume.controlSocketPath,
+      credentialSocketPath: volume.credentialSocketPath,
+      token: 'run-token-wp150-0000000000000000',
+      clock: runnerAdapters.systemClock,
+    });
+    await shim.start();
+    try {
+      const transport = runletAdapters.createRunletSpawn({
+        socketPath: volume.controlSocketPath,
+        token: options.runnerToken,
+        clock: runnerAdapters.systemClock,
+      });
+      const answering: runnerAdapters.RunWorkspaceProvisioner = {
+        provision: async () => ({
+          workdir: process.cwd(),
+          claudeCodePath: '/usr/local/bin/claude',
+          // The command is the only thing replaced; both seams are the transport's own.
+          spawn: Object.assign(
+            (spawnOptions: Parameters<typeof transport>[0]) =>
+              transport({
+                ...spawnOptions,
+                ...runletAdapters.nodeScript('process.exit(0)'),
+                cwd: process.cwd(),
+              }),
+            { setStderrSink: transport.setStderrSink, setSpawnGate: transport.setSpawnGate },
+          ),
+          release: async () => {},
+        }),
+      };
+      const composed = composeAgentRunner({
+        pool,
+        broadcast,
+        provisioner: answering,
+        runSecrets,
+        tools,
+        providerMode: 'api',
+        modelApiKey: key,
+        modelOauthToken: null,
+        logger,
+      });
+      if (composed.runner === null) {
+        throw new Error('expected a runner');
+      }
+      const spec = runnerAdapters.runSpecFixture({
+        env: agentRunEnvironment({ providerMode: 'api', modelApiKey: key, modelOauthToken: null })
+          .env,
+        secretEnvNames: ['ANTHROPIC_API_KEY'],
+        artifactType: null,
+      });
+      const error = await composed.runner.start(spec, options.hooks).outcome.then(
+        () => null,
+        (failure: unknown) => failure,
+      );
+      return { error, childPid: shim.childPid };
+    } finally {
+      await shim.close();
+      await volume.cleanup();
+    }
+  };
+
+  it('rejects a run its shim refused at hello as a start failure, never a crash, and never asks for the marker', async () => {
+    const hooks = countingStartHooks();
+    const { error, childPid } = await runThroughShim({
+      runnerToken: 'run-token-wrong-000000000000000',
+      hooks,
+    });
+    expect(error).toBeInstanceOf(applicationRunRedaction.RunStartError);
+    const startError = error as InstanceType<typeof applicationRunRedaction.RunStartError>;
+    expect(startError.diagnosis).toEqual({
+      kind: 'workspace_failed',
+      reason: 'runlet_handshake_refused',
+      commit: null,
+    });
+    expect(startError.retryable).toBe(false);
+    expect(hooks.asks()).toBe(0);
+    expect(childPid).toBeNull();
+  });
+
+  it('starts no CLI when the platform refuses the marker, and says so (criterion 5)', async () => {
+    const hooks = countingStartHooks(false);
+    const { error, childPid } = await runThroughShim({
+      runnerToken: 'run-token-wp150-0000000000000000',
+      hooks,
+    });
+    expect(hooks.asks()).toBe(1);
+    expect((error as { diagnosis?: unknown }).diagnosis).toEqual({
+      kind: 'workspace_failed',
+      reason: 'cli_spawn_record_refused',
+      commit: null,
+    });
+    expect(childPid).toBeNull();
+  });
+
+  it('runs the CLI once the marker is recorded, and asks for it exactly once', async () => {
+    const hooks = countingStartHooks();
+    const { childPid } = await runThroughShim({
+      runnerToken: 'run-token-wp150-0000000000000000',
+      hooks,
+    });
+    expect(hooks.asks()).toBe(1);
+    // The shim started the child: the spawn frame was sent after the marker.
+    expect(childPid).not.toBeNull();
   });
 });
 

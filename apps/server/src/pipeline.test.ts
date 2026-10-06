@@ -10,6 +10,7 @@ import type { RunSpec } from '@platform/application';
 import {
   autonomyPresetFor,
   commandBaselineFor,
+  countingStartHooks,
   pipelineDialFor,
   settingsAdmission,
   silentLogger,
@@ -46,7 +47,7 @@ describe('unavailableClaudeRunner', () => {
     const runner = unavailableClaudeRunner();
     let thrown: unknown;
     try {
-      runner.start({ stage: 'implementation' } as RunSpec);
+      runner.start({ stage: 'implementation' } as RunSpec, countingStartHooks());
     } catch (error) {
       thrown = error;
     }
@@ -56,7 +57,9 @@ describe('unavailableClaudeRunner', () => {
   });
 
   it('still names the failure when the spec has no stage', () => {
-    expect(() => unavailableClaudeRunner().start({} as RunSpec)).toThrow(RunnerUnavailableError);
+    expect(() => unavailableClaudeRunner().start({} as RunSpec, countingStartHooks())).toThrow(
+      RunnerUnavailableError,
+    );
   });
 });
 

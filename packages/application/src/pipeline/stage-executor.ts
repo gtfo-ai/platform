@@ -122,6 +122,14 @@ import {
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import type { WorkingCalendar } from '../scheduling/working-calendar.js';
+import {
+  cliSpawnNotRequested,
+  isStopEnding,
+  MEASURED_ZERO_COST,
+  NO_RUN_USAGE,
+  recordCliSpawn,
+  unspawnedStop,
+} from './cli-spawn.js';
 import { questionDeadlineRule } from './deadline-rules.js';
 import {
   leaseExpiryAt,
@@ -1260,9 +1268,27 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
             },
             prepared.run.id,
           );
+    /**
+     * The CLI spawn marker for this run (WP-150): the runner asks it between the shim's `hello.ok`
+     * and the `spawn` frame, and this process learns back whether it was written — the one fact
+     * that tells a run that may have spent from one that cannot have (`./cli-spawn.ts`).
+     */
+    const spawn = recordCliSpawn({
+      unitOfWork,
+      runs: store.runs,
+      now: () => options.context(job.taskId).clock.now(),
+      runId: prepared.run.id,
+      logger,
+    });
     try {
-      const handle = runner.start(prepared.spec);
+      const handle = runner.start(prepared.spec, spawn.hooks);
       outcome = await handle.outcome;
+      if (!spawn.requested() && !isStopEnding(outcome)) {
+        // Ruling (d): an ending that came back with no marker is a run whose CLI was never asked
+        // for — a refused handshake, a connect timeout, a session that ended first. It ends as a
+        // start failure, never as the `crash` the runner may have reported.
+        throw cliSpawnNotRequested(outcome);
+      }
     } catch (error) {
       // **A start that throws used to escape both endings** (WP-15c, Q52/Q59).
       //
@@ -1333,12 +1359,17 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
           }),
           startAttempts,
           retryable,
+          spawnRequested: spawn.requested(),
         }),
       );
     }
     await stopHeartbeat();
     const stopReason = stopReasons.reasonFor(prepared.spec.runId);
     stopReasons.forget(prepared.spec.runId);
+    if (!spawn.requested()) {
+      // A stop that landed before the CLI was asked for keeps its status and spent nothing (WP-150).
+      outcome = unspawnedStop(outcome);
+    }
 
     return writing(job.taskId, "recording a run's result", async (scope) =>
       record(scope, {
@@ -2050,8 +2081,10 @@ const withSavedBranch = (stored: StoredTask, outcome: RunOutcome): StoredTask =>
  * row moves (so it is the entry's earlier hand-backs), `finish` is the arbiter with every other
  * writer (a person's cancel that ended the row first wins, and this writes nothing but the late
  * cost — `lostTheRun`), and the spend is added once, by the winner. The reservation is released by
- * the row becoming terminal, as for every ending; a run that measured nothing keeps both cost
- * columns null and is held at its reservation by the task cap (rule 16, WP-131) — never a `0`.
+ * the row becoming terminal, as for every ending; a run that measured nothing **after asking for its
+ * CLI** keeps both cost columns null and is held at its reservation by the task cap (rule 16,
+ * WP-131) — never a `0`. A hand-back that landed before the marker spent nothing and carries the
+ * measured zero (`unspawnedStop`, WP-150).
  *
  * **The task is not touched** on the hand-back: still `active` at this stage on this attempt with
  * its stage row open, which is exactly what `revalidateOpen` admits when the re-enqueued job fires
@@ -2187,9 +2220,16 @@ const recordUnstarted = async (
     readonly startAttempts: number;
     /** `true` leaves the task where it is; the caller re-enqueues the stage. */
     readonly retryable: boolean;
+    /**
+     * Whether the run's CLI spawn marker was written (WP-150). Almost always `false` here. `true` is
+     * a runner that failed **after** asking for the CLI, whose spend nobody measured: the run is
+     * then recorded with no figure and held at its reservation (WP-131), never the measured zero.
+     */
+    readonly spawnRequested: boolean;
   },
 ): Promise<StageExecutionOutcome> => {
   const { job, run, options, startFailure } = input;
+  const spend = input.spawnRequested ? {} : { usage: NO_USAGE, cost: NO_COST };
   const stored = await options.store.tasks.load(scope.tx, job.taskId);
   if (stored === null) {
     return { kind: 'skipped', reason: 'the task was deleted before its run could start' };
@@ -2204,8 +2244,7 @@ const recordUnstarted = async (
       status: 'failed',
       terminalReason: 'error_during_execution',
       error: reason,
-      usage: NO_USAGE,
-      cost: NO_COST,
+      ...spend,
       startFailure: input.notStarted,
     },
     context,
@@ -2217,7 +2256,7 @@ const recordUnstarted = async (
     sessionId: null,
     numTurns: 0,
     usage: NO_USAGE,
-    cost: NO_COST,
+    cost: input.spawnRequested ? null : NO_COST,
     wallMs: 0,
     startFailure: input.notStarted,
   });
@@ -2290,17 +2329,11 @@ export const notStartedBrief = (
   );
 };
 
-/** Nothing was spent, because nothing ran. Written out so no caller invents a different zero. */
-const NO_USAGE = {
-  input_tokens: 0,
-  output_tokens: 0,
-  cache_write_5m_tokens: 0,
-  cache_write_1h_tokens: 0,
-  cache_read_tokens: 0,
-} as const;
+/** Nothing was spent, because nothing ran — the one zero `./cli-spawn.ts` names (WP-150). */
+const NO_USAGE = NO_RUN_USAGE;
 
 /** `is_estimate: false` — "nothing" is a measurement, not a guess (BD-011). */
-const NO_COST = { usd: 0, is_estimate: false, price_list_id: null } as const;
+const NO_COST = MEASURED_ZERO_COST;
 
 /** The blocker brief a stage that stopped without a result gets when its caller wrote none. */
 const defaultBlockerBrief = (stage: Slug, ticketKey: string, reason: string): string =>

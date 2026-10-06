@@ -264,7 +264,9 @@ the CLI and a real `claude` never reached the sidecar (measured, backlog 342).
   never that the model stopped, so the sweep ends the **row**: `run.failed` with the new terminal
   reason `lease_expired` (migration 0035), the task escalated, and the reservation released with
   whatever the run reported — which for a run nobody measured is **nothing**, both cost columns null
-  and no ledger row (rule 16), never a zero. The bound is **both**: the lease is primary and
+  and no ledger row (rule 16), never a zero. Since WP-150 that holds only for a run that asked for its CLI: `runs.cli_spawn_requested_at`
+  (migration 0085) is committed before the shim's `spawn` frame, and a run ended with it null is a measured zero that
+  holds nothing. The bound is **both**: the lease is primary and
   `started_at + wallClockMs + grace` is the backstop for rows written before the column had a writer.
   The money a *cancelled* or swept run burned reaches the ledger from the process that ran it, which
   is refused `finish` and takes the narrow `runs.recordCost` plus `cost/late.ts` instead (Q70 (b)) —

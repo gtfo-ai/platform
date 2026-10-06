@@ -102,6 +102,8 @@ const sweep = async (options: {
   readonly taskState?: 'active' | 'done';
   /** The task's attempt at the run's stage; the run is attempt 1 (backlog 494). */
   readonly taskAttempt?: number;
+  /** `false` sweeps a run whose CLI was never asked for (WP-150). @default true */
+  readonly reachedCli?: boolean;
 }) => {
   const store = createMemoryPipelineStore();
   const eventing = new MemoryEventing();
@@ -144,6 +146,9 @@ const sweep = async (options: {
       createdAt: STARTED,
       startedAt: STARTED,
     });
+    if (options.reachedCli !== false) {
+      await store.runs.markCliSpawnRequested(scope.tx, { runId: RUN, at: STARTED });
+    }
   });
 
   const report = await sweepExpiredRunLeases({
@@ -215,6 +220,45 @@ describe('the run-lease sweep', () => {
     // and therefore no `cost_entries` row, no rollup delta and no budget movement.
     expect((failed.payload as { usage: unknown }).usage).toBeNull();
     expect((failed.payload as { cost: unknown }).cost).toBeNull();
+  });
+
+  /**
+   * WP-150 ruling (d): a run swept while its workspace was being provisioned — its CLI never asked
+   * for — is a start failure and a measured zero, not a run nobody measured. Both directions: the
+   * case above is the same sweep after the marker.
+   */
+  it('records a measured zero and a start failure for a run that never asked for its CLI (WP-150)', async () => {
+    const { run, eventing, store, stored } = await sweep({ claim: true, reachedCli: false });
+
+    expect(run?.status).toBe('failed');
+    expect(run?.terminalReason).toBe('lease_expired');
+    expect(run?.cost).toEqual({ usd: 0, is_estimate: false, price_list_id: null });
+    expect(store.startFailureOf(RUN)).toEqual({
+      kind: 'not_started',
+      diagnosis: 'RunStartError: workspace_failed, ended_before_cli_spawn',
+      detail: null,
+      truncated: false,
+      attempt: 1,
+      retryable: false,
+    });
+    const failed = eventing.log.find((row) => row.event.type === 'run.failed')?.event;
+    if (failed === undefined) {
+      throw new Error('the sweep appended no `run.failed`');
+    }
+    expect((failed.payload as { cost: unknown }).cost).toEqual({
+      usd: 0,
+      is_estimate: false,
+      price_list_id: null,
+    });
+    expect((failed.payload as { start_failure: unknown }).start_failure).toMatchObject({
+      diagnosis: 'RunStartError: workspace_failed, ended_before_cli_spawn',
+    });
+    expect(stored?.task.state).toBe('needs_human');
+    // The brief says what happened and does not claim an unmeasured spend.
+    const escalated = eventing.log.find((row) => row.event.type === 'task.escalated')?.event;
+    const brief = (escalated?.payload as { blocker_brief?: string } | undefined)?.blocker_brief;
+    expect(brief).toContain('before the run had asked for its CLI');
+    expect(brief).not.toContain('nobody measured it');
   });
 
   it('writes nothing when the lease was renewed between the read and the write (rule 42)', async () => {

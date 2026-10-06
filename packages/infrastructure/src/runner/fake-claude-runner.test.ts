@@ -8,6 +8,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunOutcome, RunSpec } from '@platform/application';
+import { countingStartHooks } from '@platform/application';
 import type { TranscriptEvent } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { manualClock } from './clock.js';
@@ -54,7 +55,7 @@ const runFake = async (
     clock: manualClock(FIXTURE_CLOCK_START),
     select: () => scenario,
   });
-  const outcome = await runner.start(runSpecFixture(spec)).outcome;
+  const outcome = await runner.start(runSpecFixture(spec), countingStartHooks()).outcome;
   return { outcome, events: sink.events };
 };
 
@@ -85,7 +86,7 @@ describe('replaying a golden transcript', () => {
       clock: manualClock(FIXTURE_CLOCK_START),
       select: () => scenarioOf('happy-path'),
     });
-    const handle = runner.start(runSpecFixture());
+    const handle = runner.start(runSpecFixture(), countingStartHooks());
     await handle.outcome;
     await handle.steer({
       text: 'try the other branch',
@@ -261,6 +262,7 @@ describe('the kindest divergence (8) and its positive assertion', () => {
     const runner = createFakeClaudeRunner({ sink, clock, select: () => stallScenario });
     const handle = runner.start(
       runSpecFixture({ limits: { ...runSpecFixture().limits, stallTimeoutMs: 120_000 } }),
+      countingStartHooks(),
     );
 
     // Two entries, each behind a 1 s delay on the injected clock: time has to pass for them to
@@ -296,7 +298,7 @@ describe('stopping', () => {
       clock,
       select: () => ({ ...scenarioOf('happy-path'), stepDelayMs: 1_000 }),
     });
-    const handle = runner.start(runSpecFixture());
+    const handle = runner.start(runSpecFixture(), countingStartHooks());
     await handle.stop({ reason: 'cancelled' });
     const outcome = await handle.outcome;
     expect(outcome.status).toBe('cancelled');
@@ -310,7 +312,7 @@ describe('stopping', () => {
       clock,
       select: () => ({ ...scenarioOf('happy-path'), stepDelayMs: 1_000 }),
     });
-    const handle = runner.start(runSpecFixture());
+    const handle = runner.start(runSpecFixture(), countingStartHooks());
     await handle.stop({ reason: 'shutdown' });
     const outcome = await handle.outcome;
     expect(outcome.status).toBe('failed');

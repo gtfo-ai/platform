@@ -18,6 +18,7 @@
  *     another transaction waits on the user's advisory lock and is then refused.
  */
 import {
+  countingStartHooks,
   createLiveRuns,
   createRunCommandInbox,
   INITIAL_TASK_VERSION,
@@ -472,7 +473,7 @@ describe('a row the holder cannot read (WP-85 review round 1)', () => {
           stop: async () => undefined,
         }),
       })
-      .start({ runId: run.runId, taskId: run.taskId } as never);
+      .start({ runId: run.runId, taskId: run.taskId } as never, countingStartHooks());
     const pool = createTestPool(database.connectionString, { max: 2 });
     const inbox = createRunCommandInbox({
       unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
@@ -507,7 +508,7 @@ describe('the holder applies a command recorded in another process', () => {
       stop: async () => undefined,
     };
     const live = createLiveRuns();
-    live.observe({ start: () => handle }).start({ runId, taskId } as never);
+    live.observe({ start: () => handle }).start({ runId, taskId } as never, countingStartHooks());
     return { live, steers };
   };
 
