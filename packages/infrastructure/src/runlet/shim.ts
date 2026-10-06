@@ -31,7 +31,8 @@
  *
  * ## What a compromised child can ask for, and what it cannot
  *
- * It can ask for a credential for **one lowercase DNS host over https**, at most
+ * It can ask for a credential for **one lowercase DNS host over https** (and one repository path on
+ * it, which the runner compares — backlog 481), at most
  * {@link RunletShimOptions.maxCredentialRequests} times per run, at most
  * {@link RunletShimOptions.maxConcurrentCredentials} at a time, and only while a child is
  * *running* — which is a stronger statement than "a child was spawned", and the difference was a
@@ -811,6 +812,8 @@ export const createRunletShim = (options: RunletShimOptions): RunletShim => {
       type: 'cred.get',
       request_id: requestId,
       host: frame.host,
+      // Backlog 481: carried, never judged here — the shim holds no allow-list for it either.
+      path: frame.path,
       protocol: 'https',
     });
   };

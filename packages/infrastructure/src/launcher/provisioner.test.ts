@@ -715,9 +715,16 @@ describe('the workspace’s cred.get is answered by this process', () => {
       child.kill('SIGKILL');
     });
     await new Promise((resolve) => setTimeout(resolve, 150));
-    const ask = async (host: string) => {
+    // `PROJECT.projectPath` is `acme/api`; git sends the path of `origin`'s URL, `.git` and all.
+    const ask = async (host: string, repositoryPath: string | null = 'acme/api.git') => {
       const helper = await connectProbe(volume.credentialSocketPath);
-      helper.send({ type: 'cred.get', request_id: 'git-1', host, protocol: 'https' });
+      helper.send({
+        type: 'cred.get',
+        request_id: 'git-1',
+        host,
+        path: repositoryPath,
+        protocol: 'https',
+      });
       const reply = await helper.next('cred.reply');
       helper.close();
       return (reply as { credential: unknown }).credential;
@@ -739,6 +746,25 @@ describe('the workspace’s cred.get is answered by this process', () => {
       'ci.git.example.com',
     ]) {
       expect(await ask(host), host).toBeNull();
+    }
+  });
+
+  /**
+   * Backlog 481: the broker the provisioner holds is given the project's repository path, so the
+   * exact host is not enough — rule 42's pair is the same host, the same run, one path apart.
+   */
+  it('answers the project’s repository on the git host and refuses another repository on it', async () => {
+    const { ask } = await live();
+    expect(await ask('git.example.com', 'acme/api')).not.toBeNull();
+    expect(await ask('git.example.com', 'acme/api.git')).not.toBeNull();
+    for (const other of [
+      'acme/other.git',
+      'other/api.git',
+      'acme/api/x.git',
+      'ACME/api.git',
+      null,
+    ]) {
+      expect(await ask('git.example.com', other), String(other)).toBeNull();
     }
   });
 
@@ -1155,12 +1181,14 @@ describe('a deploy-key run (WP-146)', () => {
       format: 'jwk',
     });
     expect(verify(null, userauthFor(blob), publicKey, signature)).toBe(true);
-    // The HTTPS credential socket answers nothing for a deploy-key run.
+    // The HTTPS credential socket answers nothing for a deploy-key run — even for the project's own
+    // repository path, which is what an HTTPS run would be answered for (backlog 481).
     const helper = await connectProbe(volume.credentialSocketPath);
     helper.send({
       type: 'cred.get',
       request_id: 'git-1',
       host: 'git.example.com',
+      path: 'acme/api.git',
       protocol: 'https',
     });
     expect(((await helper.next('cred.reply')) as { credential: unknown }).credential).toBeNull();

@@ -248,6 +248,7 @@ describe('cliEnvironment (WP-118)', () => {
     path: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
     gitConfig: [
       { key: 'credential.helper', value: '!agentic-runlet credential --socket /ctl/cred.sock' },
+      { key: 'credential.useHttpPath', value: 'true' },
     ],
     ...overrides,
   });
@@ -278,8 +279,15 @@ describe('cliEnvironment (WP-118)', () => {
     expect(bare['PATH']).toBe('/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
   });
 
+  // Cited by PROGRESS (WP-118) under this name: the list as a launcher from before backlog 481
+  // answered it — the helper alone — still numbers contiguously after the platform's entry.
   it('numbers one git list once: credential.helper and core.fsmonitor under COUNT=2, contiguous', () => {
-    const env = cliEnvironment(credentialOnly(), answer());
+    const helperOnly = answer({
+      gitConfig: [
+        { key: 'credential.helper', value: '!agentic-runlet credential --socket /ctl/cred.sock' },
+      ],
+    });
+    const env = cliEnvironment(credentialOnly(), helperOnly);
     const git = Object.fromEntries(
       Object.entries(env).filter(([name]) => name.startsWith('GIT_CONFIG')),
     );
@@ -290,6 +298,45 @@ describe('cliEnvironment (WP-118)', () => {
       GIT_CONFIG_KEY_1: 'core.fsmonitor',
       GIT_CONFIG_VALUE_1: 'false',
     });
+  });
+
+  it('numbers one git list once: the helper, useHttpPath and core.fsmonitor under COUNT=3, contiguous', () => {
+    const env = cliEnvironment(credentialOnly(), answer());
+    const git = Object.fromEntries(
+      Object.entries(env).filter(([name]) => name.startsWith('GIT_CONFIG')),
+    );
+    expect(git).toEqual({
+      GIT_CONFIG_COUNT: '3',
+      GIT_CONFIG_KEY_0: 'credential.helper',
+      GIT_CONFIG_VALUE_0: '!agentic-runlet credential --socket /ctl/cred.sock',
+      // Backlog 481: the workspace's entry, so git sends the helper the repository path.
+      GIT_CONFIG_KEY_1: 'credential.useHttpPath',
+      GIT_CONFIG_VALUE_1: 'true',
+      GIT_CONFIG_KEY_2: 'core.fsmonitor',
+      GIT_CONFIG_VALUE_2: 'false',
+    });
+  });
+
+  /**
+   * Backlog 481: `useHttpPath` cannot be smuggled out by the spec — every `GIT_CONFIG*` name in
+   * `RunSpec.env` is dropped — and a spec cannot add a `GIT_CONFIG_PARAMETERS` that git would read
+   * after the numbered list.
+   */
+  it('keeps the answer’s useHttpPath whatever the spec carries', () => {
+    const spec = runSpecFixture({
+      env: {
+        ANTHROPIC_API_KEY: 'FAKE-wp118-model-key-not-a-credential',
+        GIT_CONFIG_PARAMETERS: "'credential.useHttpPath'='false'",
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'credential.useHttpPath',
+        GIT_CONFIG_VALUE_0: 'false',
+      },
+      secretEnvNames: ['ANTHROPIC_API_KEY'],
+    });
+    const env = cliEnvironment(spec, answer());
+    expect(env['GIT_CONFIG_PARAMETERS']).toBeUndefined();
+    expect(env['GIT_CONFIG_KEY_1']).toBe('credential.useHttpPath');
+    expect(env['GIT_CONFIG_VALUE_1']).toBe('true');
   });
 
   it('refuses a configuration key present on both sides by name, never deduplicating it', () => {
@@ -313,9 +360,11 @@ describe('cliEnvironment (WP-118)', () => {
         HOME: '/root',
         CLAUDE_CONFIG_DIR: '/work/repo/.claude',
         PATH: '/work/repo/bin',
-        GIT_CONFIG_COUNT: '3',
-        GIT_CONFIG_KEY_2: 'core.hooksPath',
-        GIT_CONFIG_VALUE_2: '/work/repo/hooks',
+        // One past the answered list (three entries since backlog 481), so a spec entry that
+        // survived would sit at an index git reads only if the count were the spec's.
+        GIT_CONFIG_COUNT: '4',
+        GIT_CONFIG_KEY_3: 'core.hooksPath',
+        GIT_CONFIG_VALUE_3: '/work/repo/hooks',
         GIT_CONFIG_PARAMETERS: "'core.pager=sh'",
         GIT_CONFIG_GLOBAL: '/work/repo/gitconfig',
       },
@@ -329,11 +378,11 @@ describe('cliEnvironment (WP-118)', () => {
       HOME: '/tmp',
       CLAUDE_CONFIG_DIR: '/tmp/claude',
       PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_COUNT: '3',
     });
     for (const name of [
-      'GIT_CONFIG_KEY_2',
-      'GIT_CONFIG_VALUE_2',
+      'GIT_CONFIG_KEY_3',
+      'GIT_CONFIG_VALUE_3',
       'GIT_CONFIG_PARAMETERS',
       'GIT_CONFIG_GLOBAL',
     ]) {

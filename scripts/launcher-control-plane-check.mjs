@@ -1392,10 +1392,11 @@ try {
     `RUNLET_*: ${JSON.stringify(environ?.runlet ?? null)}`,
   );
   record(
-    'backlog 342: one git list, GIT_CONFIG_COUNT=2, credential.helper and core.fsmonitor',
+    'backlog 342 and 481: one git list, GIT_CONFIG_COUNT=3, credential.helper, credential.useHttpPath and core.fsmonitor',
     environ !== null &&
-      environ.git.count === '2' &&
-      JSON.stringify(environ.git.keys) === JSON.stringify(['core.fsmonitor', 'credential.helper']),
+      environ.git.count === '3' &&
+      JSON.stringify(environ.git.keys) ===
+        JSON.stringify(['core.fsmonitor', 'credential.helper', 'credential.useHttpPath']),
     JSON.stringify(environ?.git ?? null),
   );
 
@@ -1407,17 +1408,26 @@ try {
     ),
   );
   record(
-    'the CLI’s git, with the CLI’s environment, gets the run credential from the shim’s cred.get (WP-118 review)',
+    'the CLI’s git, with the CLI’s environment, gets the run credential from the shim’s cred.get for the project’s repository (WP-118 review, backlog 481)',
     gitCredential?.ok === true &&
       gitCredential.username === 'agentic-wp118' &&
       gitCredential.passwordMatches === true,
     JSON.stringify({
       helper: gitCredential?.helper,
       exitCode: gitCredential?.exitCode,
+      projectExit: gitCredential?.projectExit,
       username: gitCredential?.username,
       passwordMatches: gitCredential?.passwordMatches,
       error: gitCredential?.error,
       notes: gitCredential?.notes,
+    }),
+  );
+  record(
+    'backlog 481: the same git, host and run get no credential for another repository on the git host',
+    gitCredential?.otherRefused === true,
+    JSON.stringify({
+      otherExit: gitCredential?.otherExit,
+      otherRefused: gitCredential?.otherRefused,
     }),
   );
 

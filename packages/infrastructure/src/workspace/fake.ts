@@ -361,6 +361,8 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       path: FAKE_RUN_IMAGE_PATH,
       gitConfig: [
         { key: 'credential.helper', value: '!agentic-runlet credential --socket /ctl/cred.sock' },
+        // Backlog 481: the Docker provider's pair, so the fake's answer has the same shape.
+        { key: 'credential.useHttpPath', value: 'true' },
       ],
     };
   }

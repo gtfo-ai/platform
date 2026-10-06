@@ -529,6 +529,11 @@ if (PHASE === 'deploy-key') {
  * answer comes back. Before review round 1 the helper looked for `RUNLET_CREDENTIAL_SOCKET`, which
  * the CLI's environment never carries, and answered nothing. The token is compared here and never
  * printed.
+ *
+ * Backlog 481: two fills, one child. The first names the project's repository (`acme/api.git`,
+ * `projectSource.projectPath` with `.git`) and must be answered; the second names another
+ * repository on the same host and must not — git keeps a `path=` only when the composed list's
+ * `credential.useHttpPath` is on, so the first answer is also the proof that the entry arrived.
  */
 if (PHASE === 'git-credential') {
   const runId = required('CHECK_GIT_CREDENTIAL_RUN_ID');
@@ -557,10 +562,18 @@ if (PHASE === 'git-credential') {
     workspace = await minting.provision(spec);
     const env = runnerAdapters.cliEnvironment(spec, workspace.cliEnvironment ?? null);
     phase.helper = env.GIT_CONFIG_VALUE_0 ?? null;
+    // One spawn per run (TD-025 §1), so one shell runs both fills; the host is its `$1`.
+    const fill = (repository, label) =>
+      `printf 'protocol=https\\nhost=%s\\npath=${repository}\\n\\n' "$1" | /usr/bin/git credential fill; echo "${label}=$?"; echo ---`;
     const child = workspace.spawn({
-      // The spawn frame takes an absolute command (TD-025 §1); the image's git.
-      command: '/usr/bin/git',
-      args: ['credential', 'fill'],
+      // The spawn frame takes an absolute command (TD-025 §1); the image's shell and git.
+      command: '/bin/sh',
+      args: [
+        '-c',
+        `${fill('acme/api.git', 'EXIT_PROJECT')}\n${fill('other/repo.git', 'EXIT_OTHER')}`,
+        'sh',
+        required('CHECK_REPO_HOST'),
+      ],
       cwd: workspace.workdir,
       env,
       signal: new AbortController().signal,
@@ -572,20 +585,26 @@ if (PHASE === 'git-credential') {
     child.on('error', (error) => {
       phase.error = String(error?.message ?? error);
     });
-    const exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
-    child.stdin.write(`protocol=https\nhost=${required('CHECK_REPO_HOST')}\n\n`);
     child.stdin.end();
-    phase.exitCode = await exited;
-    const fields = Object.fromEntries(
-      out
-        .split('\n')
-        .filter((line) => line.includes('='))
-        .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
-    );
+    phase.exitCode = await new Promise((resolve) => child.once('exit', (code) => resolve(code)));
+    const [project = '', other = ''] = out.split('---\n');
+    const fieldsOf = (block) =>
+      Object.fromEntries(
+        block
+          .split('\n')
+          .filter((line) => line.includes('='))
+          .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
+      );
+    const fields = fieldsOf(project);
+    const otherFields = fieldsOf(other);
     phase.username = fields.username ?? null;
     phase.passwordMatches = fields.password === FAKE_GIT_TOKEN;
     phase.passwordLength = (fields.password ?? '').length;
-    phase.ok = phase.exitCode === 0 && phase.passwordMatches;
+    phase.projectExit = fields.EXIT_PROJECT ?? null;
+    phase.otherExit = otherFields.EXIT_OTHER ?? null;
+    // Backlog 481: another repository on the same host gets no password, and git fails the fill.
+    phase.otherRefused = otherFields.password === undefined && otherFields.EXIT_OTHER !== '0';
+    phase.ok = phase.projectExit === '0' && phase.passwordMatches && phase.otherRefused;
   } catch (error) {
     phase.error = String(error?.message ?? error).slice(0, 600);
   } finally {

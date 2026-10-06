@@ -104,8 +104,9 @@ export const PLATFORM_GIT_CONFIG: readonly WorkspaceGitConfigEntry[] = [
  *     a sidecar, `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` — so a spec cannot redirect the proxy or the
  *     home the launcher answered;
  *  3. {@link platformEnvironment};
- *  4. **one** git list: the workspace's entries first (`credential.helper`), then
- *     {@link PLATFORM_GIT_CONFIG} (`core.fsmonitor`), `GIT_CONFIG_COUNT=2` with contiguous indices.
+ *  4. **one** git list: the workspace's entries first (`credential.helper` and, since backlog 481,
+ *     `credential.useHttpPath`), then {@link PLATFORM_GIT_CONFIG} (`core.fsmonitor`) —
+ *     `GIT_CONFIG_COUNT=3` for an HTTPS run, 2 for a deploy-key run — with contiguous indices.
  *     A key on both sides is refused by name (`numberGitConfig`), which fails the run's start rather
  *     than dropping one of them.
  *

@@ -40,7 +40,13 @@ describe('runlet frame protocol', () => {
       { type: 'stderr' },
       { type: 'signal', name: 'SIGTERM' },
       { type: 'exit', code: 0, signal: null },
-      { type: 'cred.get', request_id: 'cred-1', host: 'gitlab.example.com', protocol: 'https' },
+      {
+        type: 'cred.get',
+        request_id: 'cred-1',
+        host: 'gitlab.example.com',
+        path: 'acme/api',
+        protocol: 'https',
+      },
       { type: 'cred.reply', request_id: 'cred-1', credential: { username: 'x', password: 'y' } },
       { type: 'cred.reply', request_id: 'cred-1', credential: null },
       { type: 'ping' },
@@ -166,7 +172,13 @@ describe('runlet frame protocol', () => {
 
   describe('cred.get is the narrowest surface in the protocol', () => {
     it('has no representation for cleartext', () => {
-      const frame = { type: 'cred.get', request_id: 'c1', host: 'example.com', protocol: 'http' };
+      const frame = {
+        type: 'cred.get',
+        request_id: 'c1',
+        host: 'example.com',
+        path: 'acme/api',
+        protocol: 'http',
+      };
       expect(parse(frame).success).toBe(false);
     });
 
@@ -200,7 +212,7 @@ describe('runlet frame protocol', () => {
     });
 
     it('refuses a request id that is not opaque', () => {
-      const base = { type: 'cred.get', host: 'example.com', protocol: 'https' };
+      const base = { type: 'cred.get', host: 'example.com', path: 'acme/api', protocol: 'https' };
       expect(parse({ ...base, request_id: '../../etc' }).success).toBe(false);
       expect(parse({ ...base, request_id: '' }).success).toBe(false);
       expect(parse({ ...base, request_id: 'a'.repeat(65) }).success).toBe(false);

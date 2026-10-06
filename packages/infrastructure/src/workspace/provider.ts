@@ -1569,7 +1569,15 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       gitConfig:
         gitSsh === undefined
           ? // TD-021: `credential.helper=!agentic-cred` — git asks the shim, which asks the runner.
-            [{ key: 'credential.helper', value: this.#credentialHelperCommand() }]
+            // Backlog 481: and tells it which repository, which git does only with `useHttpPath`.
+            // In this numbered list it is git's command-line scope, read after every repository
+            // file, and git applies each matching `credential.*` entry in order — so a checkout's
+            // `credential[.<url>].useHttpPath=false` loses to it (measured, technical/05). Turning
+            // it off anyway (`git -c …`) makes git send no path, which the broker refuses.
+            [
+              { key: 'credential.helper', value: this.#credentialHelperCommand() },
+              { key: 'credential.useHttpPath', value: 'true' },
+            ]
           : // WP-146 (TD-028 decision 13b item 3): the repository's ordinary URL goes over SSH, and
             // the HTTPS credential helper is not configured for such a run.
             [{ key: `url.${gitSsh.sshPrefix}.insteadOf`, value: gitSsh.httpsPrefix }],

@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { manualClock } from '../runner/clock.js';
 import {
   credentialHost,
+  credentialPath,
   NO_CREDENTIAL_SOCKET_MESSAGE,
   parseCredentialHelperArgs,
   parseCredentialRequest,
@@ -45,7 +46,7 @@ const startRun = async (): Promise<{ volume: ControlVolume; runner: RunletProbe 
   await shim.start();
   open.push({ shim, volume });
   const runner = await connectProbe(volume.controlSocketPath);
-  runner.send({ type: 'hello', protocol: 1, token: TOKEN });
+  runner.send({ type: 'hello', protocol: 2, token: TOKEN });
   await runner.next('hello.ok');
   runner.send({
     type: 'spawn',
@@ -97,16 +98,45 @@ describe('which requests this helper will answer at all', () => {
   });
 });
 
+/** Backlog 481: the path is carried verbatim or as `null`; the decision on it is the runner's. */
+describe('the repository path this helper forwards', () => {
+  it.each([
+    ['the path git sent', 'acme/api.git'],
+    ['its case, unfolded', 'Acme/API.git'],
+    ['a path that is not the project’s — the runner refuses it, not the helper', 'other/repo.git'],
+    ['a query git left in it', 'acme/api.git?x=1'],
+  ])('forwards %s verbatim', (_name, path) => {
+    expect(credentialPath({ protocol: 'https', host: 'gitlab.example.com', path })).toBe(path);
+  });
+
+  it.each([
+    ['no path (useHttpPath off)', {}],
+    ['an empty path', { path: '' }],
+    ['a path over the wire’s bound', { path: 'a'.repeat(1025) }],
+    ['a control character', { path: 'acme/api\u0007' }],
+    ['a carriage return', { path: 'acme/api\r' }],
+  ])('sends null for %s', (_name, fields) => {
+    expect(credentialPath({ protocol: 'https', host: 'gitlab.example.com', ...fields })).toBeNull();
+  });
+});
+
 describe('the helper end to end, against the real shim', () => {
   it('prints the two lines git expects when the runner answers', async () => {
     const { volume, runner } = await startRun();
     const answer = runCredentialHelper({
       argv: ['get'],
-      stdin: 'protocol=https\nhost=GitLab.Example.com\n\n',
+      stdin: 'protocol=https\nhost=GitLab.Example.com\npath=Acme/API.git\n\n',
       socketPath: volume.credentialSocketPath,
     });
-    const asked = (await runner.next('cred.get')) as { request_id: string; host: string };
+    const asked = (await runner.next('cred.get')) as {
+      request_id: string;
+      host: string;
+      path: string | null;
+    };
     expect(asked.host).toBe('gitlab.example.com');
+    // Backlog 481: the path is forwarded verbatim — not lowercased like the host, because the
+    // runner compares it byte for byte and a fold here would decide for it.
+    expect(asked.path).toBe('Acme/API.git');
     runner.send({
       type: 'cred.reply',
       request_id: asked.request_id,
@@ -122,9 +152,25 @@ describe('the helper end to end, against the real shim', () => {
       stdin: 'protocol=https\nhost=evil.example\n',
       socketPath: volume.credentialSocketPath,
     });
-    const asked = (await runner.next('cred.get')) as { request_id: string };
+    const asked = (await runner.next('cred.get')) as { request_id: string; path: string | null };
+    // No `path=` from git (`credential.useHttpPath` off): still asked, as `null`, so the runner —
+    // which knows the run's repository — is the one that refuses it and logs why.
+    expect(asked.path).toBeNull();
     runner.send({ type: 'cred.reply', request_id: asked.request_id, credential: null });
     expect(await answer).toBe('');
+  });
+
+  it('sends a path the wire would refuse as null, never as a frame the shim drops', async () => {
+    const { volume, runner } = await startRun();
+    const answer = requestCredential({
+      socketPath: volume.credentialSocketPath,
+      host: 'gitlab.example.com',
+      path: 'a'.repeat(1025),
+    });
+    const asked = (await runner.next('cred.get')) as { request_id: string; path: string | null };
+    expect(asked.path).toBeNull();
+    runner.send({ type: 'cred.reply', request_id: asked.request_id, credential: null });
+    expect(await answer).toBeNull();
   });
 
   it('asks nothing at all for store, erase or a cleartext get', async () => {
@@ -156,7 +202,11 @@ describe('the helper end to end, against the real shim', () => {
 
   it('answers nothing when the socket is not there', async () => {
     expect(
-      await requestCredential({ socketPath: '/nowhere/cred.sock', host: 'example.com' }),
+      await requestCredential({
+        socketPath: '/nowhere/cred.sock',
+        host: 'example.com',
+        path: null,
+      }),
     ).toBeNull();
   });
 
@@ -166,6 +216,7 @@ describe('the helper end to end, against the real shim', () => {
     const answer = requestCredential({
       socketPath: volume.credentialSocketPath,
       host: 'example.com',
+      path: 'acme/api.git',
       timeoutMs: 5_000,
       clock,
     });
@@ -176,7 +227,7 @@ describe('the helper end to end, against the real shim', () => {
 
   it('refuses a host the wire could not carry before opening a socket', async () => {
     expect(
-      await requestCredential({ socketPath: '/nowhere/cred.sock', host: 'not a host' }),
+      await requestCredential({ socketPath: '/nowhere/cred.sock', host: 'not a host', path: null }),
     ).toBeNull();
   });
 });

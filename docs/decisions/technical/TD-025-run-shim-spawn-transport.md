@@ -30,6 +30,16 @@ ship: the helper talks to the shim over a **second** Unix socket on the same con
 `ping` only, unauthenticated on purpose — Q50), while `/ctl/ctl.sock` stays §1's one authenticated connection; and the token it
 answers with is the one **the runner minted for this run** (TD-028, WP-76), not one from a launcher broker.
 
+## Amendment (backlog 481, 2026-10-06) — `cred.get` carries the repository path; protocol 2
+
+§1's `cred.get{host}` now carries a **`path`** beside the host: git's own `path` field (sent because the launcher sets
+`credential.useHttpPath=true` beside the helper), forwarded verbatim by the helper, required on the wire and `null` when git
+sent none or one the wire refuses (over 1 024 characters, or a control character). The runner's broker answers only for the
+project's repository path — the rule and its measurements are technical/05 § *Credentials and identity*, amendment of the same
+date. A frame changed shape, so `RUNLET_PROTOCOL_VERSION` is 2 and a run image and a runner from either side of the change
+refuse each other at `hello`, naming both versions. The shim still holds no allow-list: the path, like the host, is decided on
+the platform side of the volume.
+
 ## Amendment (backlog 342, 2026-09-30, session 10) — the CLI's environment is composed by the runner from the launcher's answer
 
 §1's `spawn{command,args,cwd,env}` stays the **whole** environment of the child: the shim replaces, never merges, and technical/04's `env` row (*explicit, never inherited*) stands. What §1 did not say is who supplies the variables that describe the **container**: the egress proxy, `HOME`, `CLAUDE_CONFIG_DIR`, the image's `PATH`, and the git credential helper. Before this amendment they were written only on the container. Backlog 342 reads, off the tree, that they therefore stop at the shim.

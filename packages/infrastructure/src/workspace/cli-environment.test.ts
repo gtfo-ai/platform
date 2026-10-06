@@ -11,11 +11,16 @@
  * runner half is this one:
  * `packages/infrastructure/src/runner/options.test.ts` › "cliEnvironment (WP-118)".
  */
-import { mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { type WorkspaceCliEnvironment, WorkspaceError } from '@platform/application';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { detectSecrets } from '../redaction/pattern-redaction.js';
+import { runSpecFixture } from '../runner/fixtures.js';
+import { cliEnvironment } from '../runner/options.js';
 import { cliEnvironmentVariables, numberGitConfig } from './cli-environment.js';
 import { DockerEngine } from './engine.js';
 import { FakeWorkspaceProvider } from './fake.js';
@@ -97,7 +102,12 @@ describe('the launcher’s answer and the run container’s environment come fro
     expect(env['HTTPS_PROXY']).toBe(answer.proxy?.url);
     expect(answer.gitConfig).toEqual([
       { key: 'credential.helper', value: '!agentic-runlet credential --socket /ctl/cred.sock' },
+      // Backlog 481: beside the helper, so git tells it which repository it is asking for.
+      { key: 'credential.useHttpPath', value: 'true' },
     ]);
+    // …and on the container under the same numbered list, after the helper.
+    expect(env['GIT_CONFIG_KEY_1']).toBe('credential.useHttpPath');
+    expect(env['GIT_CONFIG_VALUE_1']).toBe('true');
   });
 
   /**
@@ -256,5 +266,143 @@ describe('numberGitConfig', () => {
         { key: 'CORE.fsmonitor', value: 'true' },
       ]),
     ).toThrow(/CORE\.fsmonitor is given twice/);
+  });
+});
+
+/**
+ * Backlog 481 (technical/05's 2026-10-06 amendment): **a real `git`, reading the list the CLI is
+ * spawned with, sends the credential helper the repository path** — and a repository's own
+ * configuration cannot switch that off.
+ *
+ * The list is the Docker provider's answer composed by the runner (`cliEnvironment`), with one
+ * substitution: the helper's command is a script that records what git asked, in place of
+ * `agentic-runlet credential` (which needs a shim and `https`). `credential.useHttpPath` is the
+ * provider's own entry, untouched. git talks to a local HTTP server that answers every request
+ * `401`, so git asks the helper and nothing is ever authenticated; no credential exists here.
+ *
+ * Why the repository's `false` loses (measured the same way with git 2.47.3 in `platform-runtime`):
+ * git applies **every** `credential.*` entry whose URL matches, in reading order, and the numbered
+ * `GIT_CONFIG_*` list is the command-line scope, read after the repository's file — so even the
+ * URL-scoped `credential.http://127.0.0.1:<port>.useHttpPath=false` is overridden. Only a later
+ * command-line entry (`git -c …`) beats it, and then git sends no path at all, which the broker
+ * refuses (`broker.test.ts`).
+ */
+describe('a real git sends the helper the path under the composed list (backlog 481)', () => {
+  let server: Server | null = null;
+  afterEach(async () => {
+    await new Promise<void>((resolve) =>
+      server === null ? resolve() : server.close(() => resolve()),
+    );
+    server = null;
+  });
+
+  const unauthorised = async (): Promise<number> => {
+    const listening = createServer((_request, response) => {
+      response.writeHead(401, { 'WWW-Authenticate': 'Basic realm="fixture"' });
+      response.end();
+    });
+    server = listening;
+    await new Promise<void>((resolve) => listening.listen(0, '127.0.0.1', resolve));
+    return (listening.address() as AddressInfo).port;
+  };
+
+  const git = async (env: Record<string, string>, args: readonly string[]): Promise<void> => {
+    await new Promise<void>((resolve) => {
+      execFile('git', [...args], { env, timeout: 20_000 }, () => resolve());
+    });
+  };
+
+  /** What each `get` the helper received said about `path`, in order — `null` for none. */
+  const askedPaths = async (log: string): Promise<(string | null)[]> =>
+    (await readFile(log, 'utf8').catch(() => ''))
+      .split('---\n')
+      .filter((block) => block.length > 0)
+      .map((block) => /^path=(.*)$/m.exec(block)?.[1] ?? null);
+
+  it('asks with the path for ls-remote and push, over a repository that turned it off', async () => {
+    const port = await unauthorised();
+    const base = `http://127.0.0.1:${port}`;
+    const provider = await providerOn();
+    const answer = await provider.cliEnvironment(await provider.create(workspaceSpecFixture()));
+    const helper = path.join(workDir, 'record-helper');
+    const log = path.join(workDir, 'asked.log');
+    await writeFile(
+      helper,
+      '#!/bin/sh\n[ "$1" = get ] || exit 0\ngrep -E \'^(host|path)=\' >> "$ASKED_LOG"\necho --- >> "$ASKED_LOG"\n',
+      { mode: 0o755 },
+    );
+    const recorded = (
+      gitConfig: WorkspaceCliEnvironment['gitConfig'],
+    ): WorkspaceCliEnvironment => ({
+      ...answer,
+      gitConfig: gitConfig.map((entry) =>
+        entry.key === 'credential.helper' ? { ...entry, value: `!${helper}` } : entry,
+      ),
+    });
+    const gitList = (workspace: WorkspaceCliEnvironment): Record<string, string> =>
+      Object.fromEntries(
+        Object.entries(cliEnvironment(runSpecFixture(), workspace)).filter(([name]) =>
+          name.startsWith('GIT_CONFIG'),
+        ),
+      );
+    const home = path.join(workDir, 'home');
+    await mkdir(home);
+    const isolated = {
+      PATH: process.env['PATH'] ?? '/usr/bin:/bin',
+      HOME: home,
+      XDG_CONFIG_HOME: home,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_TERMINAL_PROMPT: '0',
+      ASKED_LOG: log,
+    };
+    const repo = path.join(workDir, 'checkout');
+    await git(isolated, ['init', '-q', repo]);
+    await git(isolated, [
+      '-C',
+      repo,
+      '-c',
+      'user.email=a@example.test',
+      '-c',
+      'user.name=a',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'x',
+    ]);
+    // The checkout's own configuration says no, bare and URL-scoped.
+    await git(isolated, ['-C', repo, 'config', 'credential.useHttpPath', 'false']);
+    await git(isolated, ['-C', repo, 'config', `credential.${base}.useHttpPath`, 'false']);
+
+    /** Runs one command and answers the distinct `path` values its helper calls carried. */
+    const asks = async (env: Record<string, string>, args: readonly string[]) => {
+      await rm(log, { force: true });
+      await git(env, ['-C', repo, ...args]);
+      const seen = await askedPaths(log);
+      // A command that asked nothing would make every assertion below vacuous (rule 29).
+      expect(seen.length, args.join(' ')).toBeGreaterThan(0);
+      return [...new Set(seen)];
+    };
+    const composed = { ...isolated, ...gitList(recorded(answer.gitConfig)) };
+    const project = `${base}/acme/api.git`;
+    expect(await asks(composed, ['ls-remote', project])).toEqual(['acme/api.git']);
+    expect(await asks(composed, ['push', project, 'HEAD:refs/heads/agentic/x'])).toEqual([
+      'acme/api.git',
+    ]);
+    // Another repository on the same host: git names it, and the broker refuses that name.
+    expect(
+      await asks(composed, ['push', `${base}/other/repo.git`, 'HEAD:refs/heads/agentic/x']),
+    ).toEqual(['other/repo.git']);
+    // `git -c` is read after the list: git then sends no path, which the broker refuses too.
+    expect(
+      await asks(composed, ['-c', 'credential.useHttpPath=false', 'ls-remote', project]),
+    ).toEqual([null]);
+    // Rule 42's control: the same list without the provider's entry, and git sends no path.
+    const withoutEntry = recorded(
+      answer.gitConfig.filter((entry) => entry.key !== 'credential.useHttpPath'),
+    );
+    expect(await asks({ ...isolated, ...gitList(withoutEntry) }, ['ls-remote', project])).toEqual([
+      null,
+    ]);
   });
 });

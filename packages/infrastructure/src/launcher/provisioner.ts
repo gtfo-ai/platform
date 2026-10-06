@@ -326,16 +326,21 @@ export const createLauncherRunWorkspaceProvisioner = (
               expiresAt: minted.expiresAt,
               source: minted.source ?? 'minted',
             };
-      if (carried !== null) {
-        broker.hold({
-          runId: spec.runId,
-          readOnly: runSpec.readOnly,
-          credential: carried,
-          ...(runSpec.repo?.ssh === undefined ? {} : { ssh: runSpec.repo.ssh }),
-        });
-      }
       let created: CreateRunResponse | null = null;
       try {
+        // Inside the `try` since backlog 481: `hold` refuses a repository path it cannot scope the
+        // helper to, and a refusal here must revoke what was minted like any other failed start.
+        if (carried !== null) {
+          broker.hold({
+            runId: spec.runId,
+            readOnly: runSpec.readOnly,
+            credential: carried,
+            ...(runSpec.repo?.ssh === undefined ? {} : { ssh: runSpec.repo.ssh }),
+            // Backlog 481: the workspace's `cred.get` is answered for this repository only — the
+            // handle the credential was minted for (`repositoryPathOf(projects.repo_url)`).
+            repositoryPath: project.projectPath,
+          });
+        }
         created = await options.client.createRun({ spec: runSpec, credential: carried });
         assertControlSocketUnderRoot(created.attachment.socketPath, options.controlRoot);
       } catch (error) {
@@ -383,12 +388,13 @@ export const createLauncherRunWorkspaceProvisioner = (
           token: ready.attachment.token,
           clock: options.clock,
           logger,
-          // The agent's own `git push origin agentic/*` asks here (decision 4). Exact host, and
-          // `null` once `release` has begun — the broker forgets before the end request is sent.
-          // The frame carries `username` and `password` and nothing else (its schema is strict: a
-          // `host` beside them fails the reply's validation and the shim drops the connection).
-          credentials: async ({ host }) => {
-            const answered = broker.answer(spec.runId, host);
+          // The agent's own `git push origin agentic/*` asks here (decision 4). Exact host, the
+          // project's repository path only (backlog 481), and `null` once `release` has begun —
+          // the broker forgets before the end request is sent. The frame carries `username` and
+          // `password` and nothing else (its schema is strict: a `host` beside them fails the
+          // reply's validation and the shim drops the connection).
+          credentials: async ({ host, path }) => {
+            const answered = broker.answer(spec.runId, { host, path });
             return answered === null
               ? null
               : { username: answered.username, password: answered.password };

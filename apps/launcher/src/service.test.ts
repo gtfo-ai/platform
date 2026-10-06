@@ -201,7 +201,7 @@ describe('startRun', () => {
     await expect(service.startRun(spec, carried())).rejects.toMatchObject({
       code: 'invalid_spec',
     });
-    expect(broker.answer(spec.runId, 'vcs.example.com')).toBeNull();
+    expect(broker.answer(spec.runId, { host: 'vcs.example.com', path: 'acme/api' })).toBeNull();
     expect(broker.credentialFor(spec.runId)).toBeNull();
     // Another run's credential is untouched by this one's failure.
     expect(broker.credentialFor(other.runId)).not.toBeNull();
@@ -569,11 +569,16 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
 
   it('stops answering credential questions once the run has ended', async () => {
     const { started } = await start();
-    expect(broker.answer(started.handle.runId, 'vcs.example.com')).not.toBeNull();
+    expect(broker.credentialFor(started.handle.runId)).not.toBeNull();
+    // The launcher's copy serves its own helpers only, so it is held with no repository path and
+    // answers no workspace question even for the right host and path (backlog 481) — the runner's
+    // copy is the one that answers `cred.get`.
+    const question = { host: 'vcs.example.com', path: 'acme/api.git' };
+    expect(broker.answer(started.handle.runId, question)).toBeNull();
     await service.endRun(started.handle, { export: null });
     // The window between "the run ended" and "the container is gone" is real, and a broker that
     // kept answering in it would hand a live push token to a workspace nobody is watching.
-    expect(broker.answer(started.handle.runId, 'vcs.example.com')).toBeNull();
+    expect(broker.credentialFor(started.handle.runId)).toBeNull();
   });
 });
 

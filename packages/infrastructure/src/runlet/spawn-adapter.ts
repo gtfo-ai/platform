@@ -47,9 +47,14 @@ export interface RunletCredential {
   readonly password: string;
 }
 
-/** Answers a `cred.get`. `null` means "no credential for that host" — the fail-closed answer. */
+/**
+ * Answers a `cred.get`. `null` means "no credential for that host and repository" — the
+ * fail-closed answer. `path` is git's own (backlog 481): `null` when git sent none, which the
+ * production responder (`RunCredentialBroker.answer`, through the provisioner) refuses.
+ */
 export type RunletCredentialResponder = (request: {
   readonly host: string;
+  readonly path: string | null;
 }) => Promise<RunletCredential | null>;
 
 /** Signs for a deploy-key run. `null` is a refusal: another key, the budget spent, a run that ended. */
@@ -121,21 +126,25 @@ export type RunletSpawn = ((spawnOptions: SpawnOptions) => SpawnedProcess) & {
  *
  * Standing rule 31 in the other direction: the *host list* is required, and an empty one is a
  * responder that answers `null` to everything rather than one that answers everything.
+ *
+ * It gates the **host** only and hands the repository `path` to `credential`, whose question it
+ * then is. Production does not compose this: the provisioner answers through
+ * `RunCredentialBroker.answer`, which decides the host and the path (backlog 481).
  */
 export const createAllowListCredentialResponder = (options: {
   readonly allowedHosts: readonly string[];
-  readonly credential: (host: string) => Promise<RunletCredential | null>;
+  readonly credential: (host: string, path: string | null) => Promise<RunletCredential | null>;
   readonly logger?: Logger;
 }): RunletCredentialResponder => {
   const logger = options.logger ?? silentLogger;
   const allowed = new Set(options.allowedHosts.map((host) => host.toLowerCase()));
-  return async ({ host }) => {
+  return async ({ host, path }) => {
     if (!allowed.has(host)) {
       logger.warn({ host }, 'runlet refused a credential for a host outside the run allow-list');
       return null;
     }
     try {
-      return await options.credential(host);
+      return await options.credential(host, path);
     } catch (error) {
       // A broker that failed is not a broker that said yes.
       logger.error({ host, err: error }, 'runlet credential lookup failed');
@@ -235,7 +244,7 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
       queued.length = 0;
     };
 
-    const answerCredential = (requestId: string, host: string): void => {
+    const answerCredential = (requestId: string, host: string, path: string | null): void => {
       const responder = options.credentials;
       const reply = (credential: RunletCredential | null): void => {
         state.connection?.send({ type: 'cred.reply', request_id: requestId, credential });
@@ -249,7 +258,7 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
       // *synchronously* would otherwise take the whole control connection down with it, turning a
       // broken credential broker into a failed run.
       Promise.resolve()
-        .then(() => responder({ host }))
+        .then(() => responder({ host, path }))
         .then(reply)
         .catch((error: unknown) => {
           logger.error({ host, err: error }, 'runlet credential responder threw');
@@ -343,7 +352,7 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
           finish(frame.code, frame.signal as NodeJS.Signals | null);
           return;
         case 'cred.get':
-          answerCredential(frame.request_id, frame.host);
+          answerCredential(frame.request_id, frame.host, frame.path);
           return;
         case 'ssh.sign':
           answerSign(frame);

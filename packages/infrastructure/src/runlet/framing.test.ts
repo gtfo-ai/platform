@@ -31,7 +31,7 @@ describe('runlet framing', () => {
     'decodes the same frames whatever the chunk boundaries are',
     () => {
       const stream = Buffer.concat([
-        encodeFrame({ type: 'hello', protocol: 1, token: 'x'.repeat(32) }),
+        encodeFrame({ type: 'hello', protocol: 2, token: 'x'.repeat(32) }),
         encodeFrame({ type: 'stdin' }, Buffer.from([0, 1, 2, 3, 255])),
         encodeFrame({ type: 'ping' }),
         encodeFrame({ type: 'stdout' }, Buffer.from('a'.repeat(5000))),

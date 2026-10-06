@@ -92,7 +92,7 @@ afterEach(async () => {
 /** Connects and authenticates, the way the runner does. */
 const authenticate = async (harness: Harness): Promise<RunletProbe> => {
   const probe = await connectProbe(harness.volume.controlSocketPath);
-  probe.send({ type: 'hello', protocol: 1, token: TOKEN });
+  probe.send({ type: 'hello', protocol: 2, token: TOKEN });
   await probe.next('hello.ok');
   return probe;
 };
@@ -125,7 +125,7 @@ describe('the run shim: one authenticated connection', () => {
     const harness = await startShim();
     const attacker = await connectProbe(harness.volume.controlSocketPath);
     // The attempt is made *with* the empty token, not merely asserted about (standing rule 18).
-    attacker.send({ type: 'hello', protocol: 1, token: '' });
+    attacker.send({ type: 'hello', protocol: 2, token: '' });
     const refusal = await attacker.next('fatal');
     expect(refusal).toMatchObject({ type: 'fatal', reason: 'auth_failed' });
     await attacker.closed;
@@ -141,7 +141,7 @@ describe('the run shim: one authenticated connection', () => {
   ])('refuses a hello carrying %s', async (_name, token) => {
     const harness = await startShim();
     const probe = await connectProbe(harness.volume.controlSocketPath);
-    probe.send({ type: 'hello', protocol: 1, token });
+    probe.send({ type: 'hello', protocol: 2, token });
     expect(await probe.next('fatal')).toMatchObject({ reason: 'auth_failed' });
   });
 
@@ -157,10 +157,11 @@ describe('the run shim: one authenticated connection', () => {
     await volume.cleanup();
   });
 
+  // Version 1 is the runner from before `cred.get` carried a path (backlog 481): refused at hello.
   it('refuses a protocol version it does not speak', async () => {
     const harness = await startShim();
     const probe = await connectProbe(harness.volume.controlSocketPath);
-    probe.send({ type: 'hello', protocol: 2, token: TOKEN });
+    probe.send({ type: 'hello', protocol: 1, token: TOKEN });
     expect(await probe.next('fatal')).toMatchObject({ reason: 'auth_failed' });
   });
 
@@ -198,7 +199,7 @@ describe('the run shim: one authenticated connection', () => {
     const harness = await startShim({ maxFailedHandshakes: 2 });
     for (const attempt of [1, 2]) {
       const probe = await connectProbe(harness.volume.controlSocketPath);
-      probe.send({ type: 'hello', protocol: 1, token: `wrong-${attempt}-aaaaaaaaaaaaaaaaaaaa` });
+      probe.send({ type: 'hello', protocol: 2, token: `wrong-${attempt}-aaaaaaaaaaaaaaaaaaaa` });
       await probe.closed;
     }
     expect(harness.shutdowns).toEqual(['handshake_attempts_exhausted']);
@@ -342,7 +343,7 @@ describe('the run shim: stdio', () => {
 
     const second = await startShim();
     const reader = await connectProbe(second.volume.controlSocketPath);
-    reader.send({ type: 'hello', protocol: 1, token: TOKEN });
+    reader.send({ type: 'hello', protocol: 2, token: TOKEN });
     await reader.next('hello.ok');
     reader.pause();
     reader.send(
@@ -424,7 +425,7 @@ describe('the run shim: kill on disconnect', () => {
 
     const later = await connectProbe(harness.volume.controlSocketPath).catch(() => null);
     if (later !== null) {
-      later.send({ type: 'hello', protocol: 1, token: TOKEN });
+      later.send({ type: 'hello', protocol: 2, token: TOKEN });
       await later.closed;
       expect(later.received.map((d) => d.frame.type)).not.toContain('hello.ok');
     }
@@ -447,11 +448,18 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
       type: 'cred.get',
       request_id: 'git-1',
       host: 'gitlab.example.com',
+      path: 'acme/api.git',
       protocol: 'https',
     });
 
-    const asked = (await runner.next('cred.get')) as { request_id: string; host: string };
+    const asked = (await runner.next('cred.get')) as {
+      request_id: string;
+      host: string;
+      path: string | null;
+    };
     expect(asked.host).toBe('gitlab.example.com');
+    // Backlog 481: the path reaches the runner as the helper sent it; the decision is the runner's.
+    expect(asked.path).toBe('acme/api.git');
     // The workspace does not get to name the request the runner sees.
     expect(asked.request_id).not.toBe('git-1');
 
@@ -472,7 +480,13 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
     const harness = await startShim();
     const runner = await authenticate(harness);
     const helper = await connectProbe(harness.volume.credentialSocketPath);
-    helper.send({ type: 'cred.get', request_id: 'g', host: 'example.com', protocol: 'https' });
+    helper.send({
+      type: 'cred.get',
+      request_id: 'g',
+      host: 'example.com',
+      path: 'acme/api',
+      protocol: 'https',
+    });
     expect(await helper.next('fatal')).toMatchObject({ reason: 'credential_refused' });
     expect(credentialFrames(runner)).toHaveLength(0);
   });
@@ -526,7 +540,13 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
       // Baseline first (standing rule 29): while the child runs, *this exact request* is forwarded.
       // Without it, "the runner heard nothing" would also be true of a harness that cannot ask.
       const early = await connectProbe(harness.volume.credentialSocketPath);
-      early.send({ type: 'cred.get', request_id: 'g1', host: 'example.com', protocol: 'https' });
+      early.send({
+        type: 'cred.get',
+        request_id: 'g1',
+        host: 'example.com',
+        path: 'acme/api',
+        protocol: 'https',
+      });
       const asked = (await runner.next('cred.get')) as { request_id: string };
       runner.send({ type: 'cred.reply', request_id: asked.request_id, credential: null });
       await early.next('cred.reply');
@@ -545,7 +565,13 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
       expect(runner.received.filter((d) => d.frame.type === 'exit')).toHaveLength(0);
 
       const late = await connectProbe(harness.volume.credentialSocketPath);
-      late.send({ type: 'cred.get', request_id: 'g2', host: 'example.com', protocol: 'https' });
+      late.send({
+        type: 'cred.get',
+        request_id: 'g2',
+        host: 'example.com',
+        path: 'acme/api',
+        protocol: 'https',
+      });
       // Waiting for *either* outcome, then asserting which one happened. `await late.next('fatal')`
       // would be the obvious line and it is the wrong one: restoring the old guard makes it hang,
       // and a mutant that dies of a timeout has not been killed by an assertion (standing rule 3).
@@ -687,16 +713,69 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
     // Baseline first, so "the runner heard nothing" is a change from something rather than a
     // vacuous zero (standing rule 29).
     const good = await connectProbe(harness.volume.credentialSocketPath);
-    good.send({ type: 'cred.get', request_id: 'g', host: 'example.com', protocol: 'https' });
+    good.send({
+      type: 'cred.get',
+      request_id: 'g',
+      host: 'example.com',
+      path: 'acme/api',
+      protocol: 'https',
+    });
     await runner.next('cred.get');
     expect(credentialFrames(runner)).toHaveLength(1);
 
     for (const bad of [
-      { type: 'cred.get', request_id: 'g', host: 'example.com', protocol: 'http' },
-      { type: 'cred.get', request_id: 'g', host: 'EXAMPLE.com', protocol: 'https' },
-      { type: 'cred.get', request_id: 'g', host: 'example.com:8443', protocol: 'https' },
-      { type: 'cred.get', request_id: 'g', host: 'user@example.com', protocol: 'https' },
-      { type: 'cred.get', request_id: '../../etc', host: 'example.com', protocol: 'https' },
+      {
+        type: 'cred.get',
+        request_id: 'g',
+        host: 'example.com',
+        path: 'acme/api',
+        protocol: 'http',
+      },
+      {
+        type: 'cred.get',
+        request_id: 'g',
+        host: 'EXAMPLE.com',
+        path: 'acme/api',
+        protocol: 'https',
+      },
+      {
+        type: 'cred.get',
+        request_id: 'g',
+        host: 'example.com:8443',
+        path: 'acme/api',
+        protocol: 'https',
+      },
+      {
+        type: 'cred.get',
+        request_id: 'g',
+        host: 'user@example.com',
+        path: 'acme/api',
+        protocol: 'https',
+      },
+      {
+        type: 'cred.get',
+        request_id: '../../etc',
+        host: 'example.com',
+        path: 'acme/api',
+        protocol: 'https',
+      },
+      // Backlog 481: the path is required (null, not absent), bounded, and one line.
+      { type: 'cred.get', request_id: 'g', host: 'example.com', protocol: 'https' },
+      { type: 'cred.get', request_id: 'g', host: 'example.com', path: '', protocol: 'https' },
+      {
+        type: 'cred.get',
+        request_id: 'g',
+        host: 'example.com',
+        path: 'a\nhost=evil',
+        protocol: 'https',
+      },
+      {
+        type: 'cred.get',
+        request_id: 'g',
+        host: 'example.com',
+        path: 'a'.repeat(1025),
+        protocol: 'https',
+      },
     ]) {
       const helper = await connectProbe(harness.volume.credentialSocketPath);
       helper.send(bad);
@@ -726,6 +805,7 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
         type: 'cred.get',
         request_id: `g${index}`,
         host: 'example.com',
+        path: null,
         protocol: 'https',
       });
       const asked = (await runner.next('cred.get')) as { request_id: string };
@@ -733,7 +813,13 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
       await helper.next('cred.reply');
     }
     const third = await connectProbe(harness.volume.credentialSocketPath);
-    third.send({ type: 'cred.get', request_id: 'g3', host: 'example.com', protocol: 'https' });
+    third.send({
+      type: 'cred.get',
+      request_id: 'g3',
+      host: 'example.com',
+      path: 'acme/api',
+      protocol: 'https',
+    });
     expect(await third.next('fatal')).toMatchObject({ reason: 'credential_refused' });
     expect(credentialFrames(runner)).toHaveLength(2);
     expect(harness.shim.metrics.credentialRefusals).toBe(1);
@@ -751,14 +837,32 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
     // One connection, two questions, neither answered — so the *connection* cap is not what
     // refuses the third one.
     const helper = await connectProbe(harness.volume.credentialSocketPath);
-    helper.send({ type: 'cred.get', request_id: 'g1', host: 'a.example', protocol: 'https' });
+    helper.send({
+      type: 'cred.get',
+      request_id: 'g1',
+      host: 'a.example',
+      path: 'acme/api',
+      protocol: 'https',
+    });
     await runner.next('cred.get');
-    helper.send({ type: 'cred.get', request_id: 'g2', host: 'b.example', protocol: 'https' });
+    helper.send({
+      type: 'cred.get',
+      request_id: 'g2',
+      host: 'b.example',
+      path: 'acme/api',
+      protocol: 'https',
+    });
     await runner.next('cred.get');
     expect(credentialFrames(runner)).toHaveLength(2);
 
     const third = await connectProbe(harness.volume.credentialSocketPath);
-    third.send({ type: 'cred.get', request_id: 'g3', host: 'c.example', protocol: 'https' });
+    third.send({
+      type: 'cred.get',
+      request_id: 'g3',
+      host: 'c.example',
+      path: 'acme/api',
+      protocol: 'https',
+    });
     // Either outcome, then assert which: `await third.next('fatal')` would hang when the cap is
     // gone, and a mutant killed by a timeout is not killed by an assertion (standing rule 3).
     await waitFor(
@@ -776,7 +880,13 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
   it('caps how many helpers may hold the credential socket at once', async () => {
     const { harness, runner } = await startRun({ maxConcurrentCredentials: 1 });
     const helper = await connectProbe(harness.volume.credentialSocketPath);
-    helper.send({ type: 'cred.get', request_id: 'g1', host: 'a.example', protocol: 'https' });
+    helper.send({
+      type: 'cred.get',
+      request_id: 'g1',
+      host: 'a.example',
+      path: 'acme/api',
+      protocol: 'https',
+    });
     const asked = (await runner.next('cred.get')) as { request_id: string };
     runner.send({ type: 'cred.reply', request_id: asked.request_id, credential: null });
     await helper.next('cred.reply');
@@ -785,7 +895,13 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
     // Nothing is in flight now, so this refusal is the *connection* cap and not the other one:
     // the second helper is turned away before a decoder is ever attached to its socket.
     const second = await connectProbe(harness.volume.credentialSocketPath);
-    second.send({ type: 'cred.get', request_id: 'g2', host: 'b.example', protocol: 'https' });
+    second.send({
+      type: 'cred.get',
+      request_id: 'g2',
+      host: 'b.example',
+      path: 'acme/api',
+      protocol: 'https',
+    });
     await waitFor(
       'the shim answered the second helper one way or the other',
       () => second.received.length > 0 || credentialFrames(runner).length > 1,
@@ -802,7 +918,13 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
   it('tells the helper "no credential" when the runner never answers', async () => {
     const { harness, runner } = await startRun({ credentialTimeoutMs: 10_000 });
     const helper = await connectProbe(harness.volume.credentialSocketPath);
-    helper.send({ type: 'cred.get', request_id: 'g', host: 'example.com', protocol: 'https' });
+    helper.send({
+      type: 'cred.get',
+      request_id: 'g',
+      host: 'example.com',
+      path: 'acme/api',
+      protocol: 'https',
+    });
     const asked = (await runner.next('cred.get')) as { request_id: string };
 
     harness.clock.advance(10_001);
@@ -828,9 +950,21 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
     const { harness, runner } = await startRun();
     const first = await connectProbe(harness.volume.credentialSocketPath);
     const second = await connectProbe(harness.volume.credentialSocketPath);
-    first.send({ type: 'cred.get', request_id: 'same-id', host: 'a.example', protocol: 'https' });
+    first.send({
+      type: 'cred.get',
+      request_id: 'same-id',
+      host: 'a.example',
+      path: 'acme/api',
+      protocol: 'https',
+    });
     const askedFirst = (await runner.next('cred.get')) as { request_id: string; host: string };
-    second.send({ type: 'cred.get', request_id: 'same-id', host: 'b.example', protocol: 'https' });
+    second.send({
+      type: 'cred.get',
+      request_id: 'same-id',
+      host: 'b.example',
+      path: 'acme/api',
+      protocol: 'https',
+    });
     await new Promise((resolve) => setTimeout(resolve, 50));
     const asks = credentialFrames(runner).map((d) => d.frame) as {
       request_id: string;

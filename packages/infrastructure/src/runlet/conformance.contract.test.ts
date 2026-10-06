@@ -255,7 +255,7 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     const BULK_BYTES = 16 * 1024 * 1024;
     const shim = await startShimProcess();
     const runner = await connectProbe(shim.controlSocketPath);
-    runner.send({ type: 'hello', protocol: 1, token: TOKEN });
+    runner.send({ type: 'hello', protocol: 2, token: TOKEN });
     await runner.next('hello.ok');
     runner.send({
       type: 'spawn',
@@ -364,7 +364,7 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     // `SpawnedProcess.kill()` would send a `signal` frame instead, which is the polite path and
     // proves nothing about the impolite one.
     const runner = await connectProbe(shim.controlSocketPath);
-    runner.send({ type: 'hello', protocol: 1, token: TOKEN });
+    runner.send({ type: 'hello', protocol: 2, token: TOKEN });
     await runner.next('hello.ok');
     runner.send({
       type: 'spawn',

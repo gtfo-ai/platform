@@ -18,13 +18,19 @@
  *    port is refused rather than stripped, because dropping `:8443` would ask for — and possibly
  *    receive — the credential of a *different* endpoint.
  *
+ * The **repository path** is forwarded, not judged (backlog 481): git sends `path=` because the
+ * workspace sets `credential.useHttpPath`, already percent-decoded and with its dot segments and
+ * slashes resolved, and this helper passes it verbatim — or `null` when git sent none or one the
+ * wire refuses ({@link credentialPath}). Whether it is the project's repository is the runner's
+ * question, asked where the agent cannot read the answer key.
+ *
  * Git's protocol is text on stdin from a process the agent can also run directly. It is parsed as
  * data: unknown keys are ignored, a key is never turned into a decision, and the answer only ever
  * contains the two lines git expects.
  */
 import { connect } from 'node:net';
 import type { RunnerClock } from '@platform/application';
-import { runletHostSchema } from '@platform/contracts';
+import { runletCredentialPathSchema, runletHostSchema } from '@platform/contracts';
 import { systemClock } from '../runner/clock.js';
 import { createFrameConnection } from './connection.js';
 import { RunletProtocolError } from './framing.js';
@@ -59,9 +65,21 @@ export const credentialHost = (fields: Record<string, string>): string | null =>
   return runletHostSchema.safeParse(host).success ? host : null;
 };
 
+/**
+ * The repository path git asked about, verbatim, or `null` — absent, empty, over the wire's bound
+ * or carrying a control character. `null` is still asked (and refused by the runner, which logs
+ * it), never answered here: the refusal belongs where the run's repository is known.
+ */
+export const credentialPath = (fields: Record<string, string>): string | null => {
+  const path = fields['path'];
+  return path !== undefined && runletCredentialPathSchema.safeParse(path).success ? path : null;
+};
+
 export interface CredentialRequestOptions {
   readonly socketPath: string;
   readonly host: string;
+  /** git's `path` field (backlog 481), or `null` when it sent none. */
+  readonly path: string | null;
   /** How long to wait for an answer. Measured on {@link CredentialRequestOptions.clock}. */
   readonly timeoutMs?: number;
   /** Injected so the timeout is a property of the code and not of the machine (rule 2). */
@@ -76,6 +94,12 @@ export const requestCredential = async (
   if (!runletHostSchema.safeParse(host).success) {
     return null;
   }
+  // A path the wire would refuse is sent as `null` rather than failing the frame: the runner then
+  // refuses it by name, where a dropped connection would say nothing.
+  const path =
+    options.path !== null && runletCredentialPathSchema.safeParse(options.path).success
+      ? options.path
+      : null;
   return await new Promise<CredentialAnswer | null>((resolve) => {
     const socket = connect(options.socketPath);
     let settled = false;
@@ -109,7 +133,7 @@ export const requestCredential = async (
     });
 
     socket.on('connect', () => {
-      connection.send({ type: 'cred.get', request_id: 'git-1', host, protocol: 'https' });
+      connection.send({ type: 'cred.get', request_id: 'git-1', host, path, protocol: 'https' });
     });
   });
 };
@@ -172,13 +196,15 @@ export const runCredentialHelper = async (io: CredentialHelperIo): Promise<strin
     // `store` and `erase` are answered with silence, which git reads as "handled, nothing to say".
     return '';
   }
-  const host = credentialHost(parseCredentialRequest(io.stdin));
+  const fields = parseCredentialRequest(io.stdin);
+  const host = credentialHost(fields);
   if (host === null) {
     return '';
   }
   const answer = await requestCredential({
     socketPath: io.socketPath,
     host,
+    path: credentialPath(fields),
     ...(io.timeoutMs === undefined ? {} : { timeoutMs: io.timeoutMs }),
     ...(io.clock === undefined ? {} : { clock: io.clock }),
   });

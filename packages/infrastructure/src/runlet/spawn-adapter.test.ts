@@ -227,7 +227,7 @@ describe('the runner-side SpawnedProcess', () => {
       const child = spawn(spawnOptionsFor('process.exit(0)'));
       const peer = await server.peer();
       await peer.next('hello');
-      peer.send({ type: 'hello.ok', protocol: 1 });
+      peer.send({ type: 'hello.ok', protocol: 2 });
       const errors: Error[] = [];
       child.on('error', (error) => errors.push(error));
       const exited = exitOf(child);
@@ -242,7 +242,7 @@ describe('the runner-side SpawnedProcess', () => {
       ['stdin.end', { type: 'stdin.end' }],
       ['signal', { type: 'signal', name: 'SIGKILL' }],
       ['cred.reply', { type: 'cred.reply', request_id: 'x', credential: null }],
-      ['hello', { type: 'hello', protocol: 1, token: TOKEN }],
+      ['hello', { type: 'hello', protocol: 2, token: TOKEN }],
     ])(
       'refuses a %s frame arriving at the runner, which only the runner sends',
       async (_name, frame) => {
@@ -250,7 +250,7 @@ describe('the runner-side SpawnedProcess', () => {
         const child = spawn(spawnOptionsFor('process.exit(0)'));
         const peer = await server.peer();
         await peer.next('hello');
-        peer.send({ type: 'hello.ok', protocol: 1 });
+        peer.send({ type: 'hello.ok', protocol: 2 });
         const errors: Error[] = [];
         child.on('error', (error) => errors.push(error));
         const exited = exitOf(child);
@@ -361,7 +361,7 @@ describe('the runner-side SpawnedProcess', () => {
       child.on('error', () => {});
       const peer = await server.peer();
       await peer.next('hello');
-      peer.send({ type: 'hello.ok', protocol: 1 });
+      peer.send({ type: 'hello.ok', protocol: 2 });
       await exitOf(child);
       expect(peer.received.map((decoded) => decoded.frame.type)).not.toContain('spawn');
     });
@@ -370,7 +370,13 @@ describe('the runner-side SpawnedProcess', () => {
   describe('credentials are decided on the platform side', () => {
     const helperAsk = async (harness: Harness, host: string) => {
       const helper = await connectProbe(harness.volume.credentialSocketPath);
-      helper.send({ type: 'cred.get', request_id: 'git-1', host, protocol: 'https' });
+      helper.send({
+        type: 'cred.get',
+        request_id: 'git-1',
+        host,
+        path: 'acme/api',
+        protocol: 'https',
+      });
       return helper;
     };
 
@@ -431,7 +437,9 @@ describe('the runner-side SpawnedProcess', () => {
       }
       // And no refusal reached the broker: the one call is the one host that was on the list.
       expect(mint).toHaveBeenCalledTimes(1);
-      expect(mint).toHaveBeenCalledWith('gitlab.example.com');
+      // …and the repository path the helper sent reached it through the shim and this adapter
+      // unchanged (backlog 481): the decision on it is the platform side's, so it must arrive.
+      expect(mint).toHaveBeenCalledWith('gitlab.example.com', 'acme/api');
     });
 
     it('matches exactly, without a socket in the way', async () => {
@@ -443,15 +451,15 @@ describe('the runner-side SpawnedProcess', () => {
       });
       // The configured spelling is folded to lowercase, because that is the only spelling the wire
       // can carry (`runletHostSchema` refuses an uppercase host outright).
-      expect(await responder({ host: 'gitlab.example.com' })).toEqual({
+      expect(await responder({ host: 'gitlab.example.com', path: null })).toEqual({
         username: 'agentic',
         password: 'token-for-gitlab.example.com',
       });
       for (const [, host] of REFUSED) {
-        expect(await responder({ host }), host).toBeNull();
+        expect(await responder({ host, path: null }), host).toBeNull();
       }
-      expect(await responder({ host: 'gitlab.example.co' })).toBeNull();
-      expect(await responder({ host: 'gitlab.example.comm' })).toBeNull();
+      expect(await responder({ host: 'gitlab.example.co', path: null })).toBeNull();
+      expect(await responder({ host: 'gitlab.example.comm', path: null })).toBeNull();
       /**
        * Two negatives only an *exact* match refuses, and they can only be asked here.
        *
@@ -466,8 +474,8 @@ describe('the runner-side SpawnedProcess', () => {
        * also why nothing would notice if this layer started folding, so it is pinned here
        * (standing rules 22 and 43).
        */
-      expect(await responder({ host: 'GITLAB.EXAMPLE.COM' })).toBeNull();
-      expect(await responder({ host: 'gitlab.example.com.' })).toBeNull();
+      expect(await responder({ host: 'GITLAB.EXAMPLE.COM', path: null })).toBeNull();
+      expect(await responder({ host: 'gitlab.example.com.', path: null })).toBeNull();
     });
 
     it('is an allow-list, so an empty one allows nothing', async () => {
@@ -475,7 +483,7 @@ describe('the runner-side SpawnedProcess', () => {
         allowedHosts: [],
         credential: async () => ({ username: 'agentic', password: 'never' }),
       });
-      expect(await responder({ host: 'gitlab.example.com' })).toBeNull();
+      expect(await responder({ host: 'gitlab.example.com', path: null })).toBeNull();
     });
 
     it('answers null when the broker throws, rather than failing the run open', async () => {
