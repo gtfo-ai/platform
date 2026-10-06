@@ -104,6 +104,13 @@ export interface FailureScript {
   failNext(action: string, error: Error): void;
   /** The next `times` calls to `action` throw `error`. */
   failNextTimes(action: string, error: Error, times: number): void;
+  /**
+   * An **outage**: every call to `action` asks `decide`, and throws what it answers — `null` lets
+   * the call through (PROGRESS backlog 490). Consulted after the queued failures, and never
+   * consumed: a provider stays down until the test's own condition says it is back, which a count
+   * cannot express when other callers share the action and the order between them is a queue's.
+   */
+  failWhile(action: string, decide: () => Error | null): void;
   /** Consumed by the fake at the start of each method. */
   take(action: string): Error | null;
   /** Failures scripted but never consumed — a test that armed the wrong action sees them here. */
@@ -113,7 +120,11 @@ export interface FailureScript {
 
 export const createFailureScript = (): FailureScript => {
   const queued = new Map<string, Error[]>();
+  const outages = new Map<string, () => Error | null>();
   return {
+    failWhile: (action, decide) => {
+      outages.set(action, decide);
+    },
     failNext: (action, error) => {
       const list = queued.get(action) ?? [];
       list.push(error);
@@ -131,14 +142,17 @@ export const createFailureScript = (): FailureScript => {
     },
     take: (action) => {
       const list = queued.get(action);
-      if (list === undefined || list.length === 0) {
-        return null;
+      if (list !== undefined && list.length > 0) {
+        return list.shift() ?? null;
       }
-      return list.shift() ?? null;
+      return outages.get(action)?.() ?? null;
     },
     unconsumed: () =>
       [...queued.entries()].flatMap(([action, list]) => list.map(() => action)).sort(),
-    reset: () => queued.clear(),
+    reset: () => {
+      queued.clear();
+      outages.clear();
+    },
   };
 };
 

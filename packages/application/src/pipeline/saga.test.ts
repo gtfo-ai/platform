@@ -22,6 +22,7 @@ import {
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
+import { IntegrationError } from '../ports/integrations/common.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { startShadowBatch } from '../shadow/batch.js';
 import {
@@ -3103,6 +3104,238 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
     }
     expect(harness.clock.epochMs - entered).toBe(20 * MINUTE);
     expect(lastEscalation(harness)?.payload.blocker_brief).toContain('after 20 minutes');
+  });
+});
+
+/**
+ * **A gate whose provider does not answer re-asks on a time bound, and never throws its job**
+ * (PROGRESS backlog 490, first local test). AUT-6820's CI gate read threw while the host's network
+ * to gitlab.com was down; pg-boss failed the job in ten minutes and the task was escalated as a stage
+ * that *"never started"*. A transient failure is now an outage: re-asked after 30 s, doubling to
+ * 5 min, until the gate's own bound — the CI timeout from the entry on a poll-only binding, sixty
+ * minutes from the first failure elsewhere — and then parked with a brief naming the host and code.
+ */
+describe('a gate whose provider does not answer (backlog 490)', () => {
+  const MINUTE = 60_000;
+  const POLL_ONLY = { interval_seconds: 60, receives_webhooks: false } as const;
+  const HOST = 'gitlab.example.test';
+  const pipeline = (status: 'running' | 'success') => ({
+    id: 'pipeline-9',
+    head_sha: 'b'.repeat(40),
+    status,
+    url: null,
+    jobs: [],
+    coverage_pct: null,
+    finished_at: null,
+  });
+  const down = () =>
+    new IntegrationError('unavailable', 'fake-git', 'GET … could not be reached', {
+      action: 'get_pipeline_status',
+      cause: new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+    });
+
+  type Answer = ReturnType<typeof pipeline> | Error;
+  interface OutageOptions {
+    readonly plan?: typeof POLL_ONLY | null;
+    readonly timeoutMinutes?: number;
+  }
+
+  /** A harness whose pipeline read answers `answer()` and whose binding names a host. */
+  const outageHarness = (answer: () => Answer, options: OutageOptions) =>
+    harnessWith({
+      git: {
+        ref: {
+          integrationId: '00000000-0000-4000-8000-00000000a001',
+          provider: 'fake-git',
+          type: 'git',
+          host: HOST,
+        } as never,
+        pollPlan: () => options.plan ?? null,
+        getMergeRequest: async () => mergeRequest(false),
+        getPipelineStatus: async () => {
+          const value = answer();
+          if (value instanceof Error) {
+            throw value;
+          }
+          return value;
+        },
+      },
+      ...(options.timeoutMinutes === undefined
+        ? {}
+        : {
+            settings: {
+              config: { pipeline: { limits: { ci_timeout_minutes: options.timeoutMinutes } } },
+            },
+          }),
+    });
+
+  const stageJobs = (harness: PipelineHarness) =>
+    harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.stageExecute);
+
+  const queuedPayload = (harness: PipelineHarness) =>
+    stageJobs(harness)[0]?.data as Record<string, unknown> | undefined;
+
+  const lastEscalation = (harness: PipelineHarness) =>
+    harness
+      .events()
+      .filter((entry) => entry.type === 'task.escalated')
+      .at(-1) as Extract<DomainEvent, { type: 'task.escalated' }> | undefined;
+
+  const ciRows = (harness: PipelineHarness) =>
+    harness.store.stageRows
+      .filter((row) => row.stage === 'ci_gate')
+      .map((row) => [row.attempt, row.state, row.outcome]);
+
+  /** Moves the clock to the next queued stage job and fires it; answers the delay it waited. */
+  const nextCheck = async (harness: PipelineHarness): Promise<number> => {
+    const due = stageJobs(harness)
+      .map((request) => request.startAfter?.getTime() ?? harness.clock.epochMs)
+      .sort((a, b) => a - b)[0];
+    if (due === undefined) {
+      throw new Error('no gate check is queued');
+    }
+    const waited = due - harness.clock.epochMs;
+    harness.clock.advance(Math.max(0, waited));
+    await harness.drain();
+    return waited;
+  };
+
+  /** A harness parked at `ci_gate` on a running pipeline; the test then takes the provider away. */
+  const atGate = async (options: OutageOptions = {}) => {
+    const state: { answer: () => Answer } = { answer: () => pipeline('running') };
+    const harness = outageHarness(() => state.answer(), options);
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.currentStage).toBe('ci_gate');
+    return { harness, state };
+  };
+
+  it('re-asks after 30 s doubling to 5 min, spends no gate check, and passes when the provider answers', async () => {
+    const { harness, state } = await atGate();
+    state.answer = down;
+    const delays: number[] = [];
+    // Seven failed reads in a row — more than `MAX_GATE_CHECKS`, which they must not spend.
+    for (let read = 0; read < 7; read += 1) {
+      delays.push(await nextCheck(harness));
+    }
+    // The first delay is the pending check's; the six after it are the outage's.
+    expect(delays).toEqual([30_000, 30_000, 60_000, 120_000, 240_000, 300_000, 300_000]);
+    expect(taskOf(harness).task.state).toBe('active');
+    expect(lastEscalation(harness)).toBeUndefined();
+    expect(queuedPayload(harness)).toMatchObject({
+      gate_checks: 1,
+      provider_failures: 7,
+      provider_failing_since: expect.any(String),
+    });
+
+    state.answer = () => pipeline('success');
+    await nextCheck(harness);
+    // Through the reviews and the rebase gate, all answering: the task reaches Ready.
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(lastEscalation(harness)).toBeUndefined();
+    expect(ciRows(harness)).toEqual([[1, 'completed', 'protected_paths_clean']]);
+  });
+
+  it('clears the outage clock on any answer, a pending one included', async () => {
+    const { harness, state } = await atGate();
+    state.answer = down;
+    await nextCheck(harness);
+    await nextCheck(harness);
+    expect(queuedPayload(harness)).toMatchObject({ provider_failures: 2 });
+    state.answer = () => pipeline('running');
+    await nextCheck(harness);
+    const payload = queuedPayload(harness) ?? {};
+    expect(payload).not.toHaveProperty('provider_failing_since');
+    expect(payload).not.toHaveProperty('provider_failures');
+    expect(payload).toMatchObject({ gate_checks: 2 });
+    state.answer = down;
+    // A new outage starts at the first step again.
+    expect(await nextCheck(harness)).toBe(30_000);
+    expect(queuedPayload(harness)).toMatchObject({ provider_failures: 1 });
+    expect(await nextCheck(harness)).toBe(30_000);
+    expect(queuedPayload(harness)).toMatchObject({ provider_failures: 2 });
+  });
+
+  it('parks after sixty minutes of failed reads, naming the host, the code and the bound', async () => {
+    const { harness, state } = await atGate();
+    await nextCheck(harness);
+    state.answer = down;
+    const firstFailure = harness.clock.epochMs + 30_000;
+    let reads = 0;
+    while (taskOf(harness).task.state === 'active') {
+      await nextCheck(harness);
+      reads += 1;
+    }
+    expect(harness.clock.epochMs - firstFailure).toBe(60 * MINUTE);
+    // 30 + 60 + 120 + 240 s, ten reads 5 min apart, and the last step cut to the deadline.
+    expect(reads).toBe(16);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    const escalation = lastEscalation(harness);
+    expect(escalation?.payload.blocker_brief).toBe(
+      `${HOST} did not answer for 60 minutes: unavailable. ` +
+        `The "ci_gate" gate asked ${String(reads)} times without an answer, waiting 30 seconds and then twice as long each time up to 5 minutes, until the platform's 60-minute limit for a provider outage at a gate. ` +
+        'Nothing about the merge request was decided: this is the provider being unreachable, not a result. ' +
+        `Check that ${HOST} is reachable from the platform's host (and its status page), then hand the task back at ci_gate.`,
+    );
+    expect(escalation?.payload.reason).toBe(
+      `the "ci_gate" gate could not be decided: ${HOST} did not answer for 60 minutes: unavailable (${String(reads)} failed reads); it stopped at the platform's 60-minute limit for a provider outage at a gate (PROGRESS backlog 490)`,
+    );
+    expect(ciRows(harness)).toEqual([[1, 'failed', 'undecided']]);
+    expect(stageJobs(harness)).toEqual([]);
+  });
+
+  it('bounds a poll-only CI gate’s outage by its CI timeout from the gate’s entry, re-asking at the deadline', async () => {
+    const { harness, state } = await atGate({ plan: POLL_ONLY, timeoutMinutes: 15 });
+    const entered = harness.clock.epochMs;
+    while (harness.clock.epochMs - entered < 10 * MINUTE) {
+      await nextCheck(harness);
+    }
+    state.answer = down;
+    const delays: number[] = [];
+    while (taskOf(harness).task.state === 'active') {
+      delays.push(await nextCheck(harness));
+    }
+    expect(harness.clock.epochMs - entered).toBe(15 * MINUTE);
+    // The wait's own 60 s, then the outage's 30, 60, 120 — and the last step cut to the deadline
+    // (30 s, not 240) rather than a backoff step past it.
+    expect(delays).toEqual([60_000, 30_000, 60_000, 120_000, 30_000]);
+    const brief = lastEscalation(harness)?.payload.blocker_brief ?? '';
+    expect(brief).toContain(`${HOST} did not answer for 4 minutes: unavailable.`);
+    expect(brief).toContain(
+      "until the CI timeout of 15 minutes from the gate's entry (`pipeline.limits.ci_timeout_minutes = 15`)",
+    );
+    expect(ciRows(harness)).toEqual([[1, 'failed', 'undecided']]);
+  });
+
+  it('keeps today’s ending for a failure a later attempt does not fix: the job throws', async () => {
+    const { harness, state } = await atGate();
+    const refused = new IntegrationError('forbidden', 'fake-git', 'GET … answered 403', {
+      action: 'get_pipeline_status',
+    });
+    state.answer = () => refused;
+    await expect(nextCheck(harness)).rejects.toBe(refused);
+    expect(stageJobs(harness)).toEqual([]);
+    expect(lastEscalation(harness)).toBeUndefined();
+  });
+
+  it('refuses a stage.execute payload whose outage instant does not parse, or carries an unknown key', async () => {
+    for (const extra of [{ provider_failing_since: 'yesterday' }, { gate_check: 3 }]) {
+      const { harness } = await atGate();
+      harness.jobs.take(JOB_QUEUES.stageExecute);
+      await harness.jobs.enqueue({
+        queue: JOB_QUEUES.stageExecute,
+        singletonKey: `task:${taskOf(harness).task.id}`,
+        data: {
+          task_id: taskOf(harness).task.id,
+          project_id: PROJECT,
+          stage: 'ci_gate',
+          attempt: 1,
+          ...extra,
+        },
+      });
+      await expect(harness.drain(), JSON.stringify(extra)).rejects.toThrow(
+        new RegExp(Object.keys(extra)[0] ?? ''),
+      );
+    }
   });
 });
 

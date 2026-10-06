@@ -225,6 +225,27 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > 6 000-character budget, the end first; an unreadable log is stated by its job's name, and the jobs
 > past the cap are named as not read (technical/04 has the rule).
 >
+> **Amended 2026-10-06 (PROGRESS backlog 490): a provider that does not answer is not an answer,
+> and not a thrown job.** A gate's evaluation has a third ending beside *settled* and *pending*:
+> when a provider read fails **transiently** — an `IntegrationError` the executor itself would
+> retry (`unavailable`, `rate_limited`), or a bare transport error the adapter did not wrap,
+> recognised by class or code only (`TimeoutError`, undici's `fetch failed`, the socket codes in
+> `NETWORK_ERROR_CODES`) — the gate answers *unreachable*, and `stage.execute` re-asks after 30 s,
+> doubling to a 5-minute ceiling, **without** spending `MAX_GATE_CHECKS` (a failed read is not a
+> check). The bound is a time: on the CI gate of a poll-only binding, WP-136's own clock
+> (`ci_timeout_minutes` from the gate's entry, the last re-ask moved up to it, so an outage never
+> extends the configured wait); on every other gate, 60 minutes from the first failure in a row,
+> which rides the job's payload (`provider_failing_since`, `provider_failures`; the payload is now
+> parsed by a strict schema) and is cleared by any answer, a `pending` included. A backstop count
+> bounds the chain if a clock is wrong. At the bound the task is escalated `undecided` with a brief
+> naming the binding's host, the time and the code (*"gitlab.com did not answer for 60 minutes:
+> unavailable"*). A non-transient failure (`unauthorised`, `forbidden`, `not_found`,
+> `invalid_response`, …) keeps the old ending: the job throws. Before this, AUT-6820's CI gate threw
+> through pg-boss's two retries in ten minutes, and the stranded-stage recovery (WP-108) — which
+> now says, when the entry's last job **failed**, that the job failed and with which error class
+> and code, never its message — called it a stage that had *"never started"*. Code:
+> `packages/application/src/pipeline/gate-outage.ts`.
+>
 > **`retro → retro` was added at WP-18b**, when the librarian stage went back into the shipped
 > templates (technical/12's example has always carried it). The retrospective phase now has **two**
 > stages — the facilitator's report and the Librarian's curation of the proposals it produced — and

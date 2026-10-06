@@ -224,6 +224,15 @@
  * 29. **Stricter — `deployKeyAccess` knows exactly the keys a test enabled** (WP-146). A key
  *     installed with `setDeployKey` answers its write access; any other is not enabled. GitLab
  *     lists every key of the project, matched by type and base64 as the GitLab adapter matches them.
+ * 30. **Different — an outage is a script, and it fails at the port, never at the socket**
+ *     (PROGRESS backlog 490). `core.script.failWhile(action, decide)` throws what `decide`
+ *     answers at every call of the action until it answers `null` — the shape of a provider that is
+ *     down for a while, which `failNextTimes` cannot express when other callers share the action.
+ *     The error is whatever the test builds: a real GitLab outage reaches the platform as the
+ *     adapter's `IntegrationError {code: "unavailable"}` (a transport failure or a 5xx) or, when the
+ *     time limit fires while a body is still being read, as a bare `TimeoutError` the adapter's
+ *     `catch` never saw — a test of the second shape throws it itself. No request is made, so the
+ *     executor's retry runs against the script, as against an adapter.
  */
 import {
   type BranchPushProtection,

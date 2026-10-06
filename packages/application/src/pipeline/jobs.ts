@@ -33,6 +33,7 @@ import {
   isRunnableTaskState,
   stageOf,
 } from '@platform/domain';
+import * as z from 'zod';
 import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { EnqueueResult, JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
@@ -41,9 +42,17 @@ import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import { ciWaitBrief, ciWaitReason, decideCiWait } from './ci-wait.js';
 import {
+  decideGateOutage,
+  GATE_OUTAGE_LIMIT_MINUTES,
+  type GateOutageBound,
+  gateOutageBrief,
+  gateOutageReason,
+} from './gate-outage.js';
+import {
   CI_GATE_STAGE,
   type CiWait,
   createGateEvaluator,
+  type GateProviderOutage,
   type GateResult,
   MAX_GATE_CHECKS,
   rebaseAgainstCi,
@@ -98,8 +107,34 @@ export interface StageExecuteData {
    */
   readonly model?: string;
   readonly effort?: string;
+  /**
+   * A gate whose provider did not answer (PROGRESS backlog 490, `gate-outage.ts`): the instant of
+   * the **first** failed read in a row, and how many there have been. Absent once the provider
+   * answers anything — a `pending` included — so an outage's clock never outlives the outage. On
+   * the payload for `gate_checks`' reason: the process that re-asks may not be the one that failed.
+   */
+  readonly provider_failing_since?: string;
+  readonly provider_failures?: number;
   readonly [key: string]: unknown;
 }
+
+/**
+ * The `stage.execute` payload, parsed at the handler (backlog 490). **Strict**, like every boundary
+ * schema: a key this build does not know is refused rather than dropped. The enqueue side is
+ * {@link enqueueStage}, the only writer, and every key it writes is here.
+ */
+export const stageExecuteDataSchema = z.strictObject({
+  task_id: z.string().min(1),
+  project_id: z.string().min(1),
+  stage: z.string().min(1),
+  attempt: z.number().int().min(1),
+  gate_checks: z.number().int().min(0).optional(),
+  start_attempts: z.number().int().min(0).optional(),
+  model: z.string().min(1).optional(),
+  effort: effortSchema.optional(),
+  provider_failing_since: z.iso.datetime().optional(),
+  provider_failures: z.number().int().min(1).optional(),
+});
 
 export interface ReviewWindowData {
   readonly task_id: string;
@@ -526,7 +561,12 @@ export const SHUTDOWN_HAND_BACK_DELAY_MS = 30_000;
 
 export const enqueueStage = async (
   jobs: Jobs,
-  job: StageExecutionJob & { readonly gateChecks?: number; readonly startAfter?: Date },
+  job: StageExecutionJob & {
+    readonly gateChecks?: number;
+    readonly startAfter?: Date;
+    /** Backlog 490: a gate's provider outage, carried from one failed read to the next. */
+    readonly providerOutage?: { readonly since: string; readonly failures: number };
+  },
 ): Promise<EnqueueResult> =>
   jobs.enqueue<StageExecuteData>({
     queue: JOB_QUEUES.stageExecute,
@@ -538,6 +578,12 @@ export const enqueueStage = async (
       stage: job.stage,
       attempt: job.attempt,
       ...(job.gateChecks === undefined ? {} : { gate_checks: job.gateChecks }),
+      ...(job.providerOutage === undefined
+        ? {}
+        : {
+            provider_failing_since: job.providerOutage.since,
+            provider_failures: job.providerOutage.failures,
+          }),
       ...(job.startAttempts === undefined ? {} : { start_attempts: job.startAttempts }),
       ...(job.overrides?.model === undefined ? {} : { model: job.overrides.model }),
       ...(job.overrides?.effort === undefined ? {} : { effort: job.overrides.effort }),
@@ -641,19 +687,20 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
   const gates = createGateEvaluator(options);
 
   return async (job) => {
-    // The payload is a boundary, so the one field with a closed set of values is parsed rather
-    // than cast: `effort` reaches the SDK, and a payload written by an older build (or by hand)
-    // must not become a spec nobody validated.
+    // The payload is a boundary, so it is parsed rather than cast: `effort` reaches the SDK, and a
+    // payload written by an older build (or by hand) must not become a spec nobody validated. Since
+    // backlog 490 the whole payload is, strictly — the outage clock it carries bounds a wait.
+    const data = stageExecuteDataSchema.parse(job.data);
     const overrides = {
-      ...(job.data.model === undefined ? {} : { model: job.data.model }),
-      ...(job.data.effort === undefined ? {} : { effort: effortSchema.parse(job.data.effort) }),
+      ...(data.model === undefined ? {} : { model: data.model }),
+      ...(data.effort === undefined ? {} : { effort: data.effort }),
     };
     const request: StageExecutionJob = {
-      taskId: job.data.task_id,
-      projectId: job.data.project_id,
-      stage: job.data.stage,
-      attempt: job.data.attempt,
-      ...(job.data.start_attempts === undefined ? {} : { startAttempts: job.data.start_attempts }),
+      taskId: data.task_id,
+      projectId: data.project_id,
+      stage: data.stage,
+      attempt: data.attempt,
+      ...(data.start_attempts === undefined ? {} : { startAttempts: data.start_attempts }),
       ...(Object.keys(overrides).length === 0 ? {} : { overrides }),
     };
 
@@ -797,7 +844,13 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
       return;
     }
     const result = await gates.evaluate(stage, stored);
-    const checks = (job.data.gate_checks ?? 0) + 1;
+
+    if (result.kind === 'unreachable') {
+      await waitForProvider(options, request, data, result);
+      return;
+    }
+
+    const checks = (data.gate_checks ?? 0) + 1;
 
     if (result.kind === 'pending') {
       // WP-136: the CI gate on a poll-only binding is bounded by time, not by the five checks —
@@ -1002,6 +1055,99 @@ const waitForPollOnlyCi = async (
     blockerBrief: ciWaitBrief(wait, decision, checks),
   });
   return true;
+};
+
+/**
+ * **A gate whose provider did not answer** (PROGRESS backlog 490, `gate-outage.ts`): re-ask with a
+ * growing delay until the gate's own bound, then park the task with a brief naming the provider and
+ * the failure — never a thrown job, whose retries pg-boss spends in minutes and whose exhaustion the
+ * stranded-stage recovery could only describe as a stage that *"never started"*.
+ *
+ * `gate_checks` rides through unchanged: a failed read is not a check. The bound:
+ *  - the CI gate on a **poll-only** binding: WP-136's own clock — `ci_timeout_minutes` from the
+ *    attempt's `task_stages.entered_at`, read here; a **closed** row is an attempt somebody left,
+ *    and this fire does nothing (as in {@link waitForPollOnlyCi}). An attempt with no row is timed
+ *    from the first failure instead, the fail-closed direction of the same bound;
+ *  - every other gate: {@link GATE_OUTAGE_LIMIT_MINUTES} from the first failure in a row.
+ */
+const waitForProvider = async (
+  options: PipelineJobOptions,
+  request: StageExecutionJob,
+  data: z.infer<typeof stageExecuteDataSchema>,
+  outage: GateProviderOutage,
+): Promise<void> => {
+  const logger: Logger = options.logger ?? silentLogger;
+  const nowIso = options.clock.now();
+  const nowMs = Date.parse(nowIso);
+  const since = data.provider_failing_since ?? nowIso;
+  const sinceMs = Date.parse(since);
+  const failures = (data.provider_failures ?? 0) + 1;
+  const fields = {
+    task_id: request.taskId,
+    stage: request.stage,
+    attempt: request.attempt,
+    provider: outage.provider,
+    host: outage.host,
+    code: outage.code,
+    failures,
+    failing_since: since,
+  };
+
+  let bound: GateOutageBound;
+  let deadlineMs: number;
+  if (outage.ciTimeoutMinutes === null) {
+    bound = { kind: 'ceiling', minutes: GATE_OUTAGE_LIMIT_MINUTES };
+    deadlineMs = sinceMs + GATE_OUTAGE_LIMIT_MINUTES * 60_000;
+  } else {
+    const entry = await options.unitOfWork.transaction(async (scope) =>
+      options.store.tasks.stageAttemptEntry(
+        scope.tx,
+        request.taskId,
+        request.stage,
+        request.attempt,
+      ),
+    );
+    if (entry !== null && !entry.open) {
+      logger.info(fields, 'a gate read of an attempt that is no longer open does nothing');
+      return;
+    }
+    bound = { kind: 'ci_timeout', minutes: outage.ciTimeoutMinutes };
+    deadlineMs =
+      (entry === null ? sinceMs : Date.parse(entry.enteredAt)) + outage.ciTimeoutMinutes * 60_000;
+  }
+
+  const decision = decideGateOutage({ nowMs, deadlineMs, failures, limitMinutes: bound.minutes });
+  if (decision.kind === 'recheck') {
+    logger.warn(
+      { ...fields, err: outage.error, retry_in_ms: decision.delayMs },
+      'the provider did not answer the gate; the gate asks again (PROGRESS backlog 490)',
+    );
+    await enqueueStage(options.jobs, {
+      ...request,
+      ...(data.gate_checks === undefined ? {} : { gateChecks: data.gate_checks }),
+      providerOutage: { since, failures },
+      startAfter: new Date(nowMs + decision.delayMs),
+    });
+    return;
+  }
+  const facts = {
+    stage: request.stage,
+    where: outage.host ?? outage.provider,
+    code: outage.code,
+    failures,
+    minutes: Number.isFinite(sinceMs) ? Math.round((nowMs - sinceMs) / 60_000) : null,
+    bound,
+  };
+  logger.warn(
+    { ...fields, err: outage.error, ending: decision.kind },
+    'the provider did not answer the gate within its bound; the task is parked (PROGRESS backlog 490)',
+  );
+  await settle(options, request, {
+    kind: 'escalate',
+    outcome: 'undecided',
+    reason: gateOutageReason(facts, decision),
+    blockerBrief: gateOutageBrief(facts),
+  });
 };
 
 /** {@link settle}, for a duty that settles a gate outside `stage.execute` (`ci-settle.ts`). */

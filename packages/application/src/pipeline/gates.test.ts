@@ -48,7 +48,12 @@ import {
   MAX_CI_LOG_JOBS,
 } from './ci-log.js';
 import { MAX_CONFLICT_FILES } from './diff-coalescer.js';
-import { ciTimeoutMinutesOf, createGateEvaluator, rebaseAgainstCi } from './gates.js';
+import {
+  ciTimeoutMinutesOf,
+  createGateEvaluator,
+  type GateResult,
+  rebaseAgainstCi,
+} from './gates.js';
 import type { PipelineIntegrations } from './integrations.js';
 import { staticPipelineIntegrations } from './integrations.js';
 import { defaultProjectSettings, staticProjectSettings } from './settings.js';
@@ -297,7 +302,19 @@ const WITH_CI_FILE = repositoryWith({
   '.gitlab-ci.yml': { kind: 'file', text: 'test:\n  script: make test\n', blobSha: 'e'.repeat(40) },
 });
 
-const evaluate = (
+/**
+ * {@link evaluation} for a case that expects a verdict or a wait: a provider outage (backlog 490)
+ * fails the case by name rather than reaching a `.detail` the outage does not have.
+ */
+const evaluate = async (...args: Parameters<typeof evaluation>): Promise<GateResult> => {
+  const answer = await evaluation(...args);
+  if (answer.kind === 'unreachable') {
+    throw new Error(`the gate answered a provider outage (${answer.code}), not a result`);
+  }
+  return answer;
+};
+
+const evaluation = (
   stage: PipelineStage,
   stored: StoredTask,
   git: Partial<GitProviderPort> | null,
@@ -1452,5 +1469,124 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
         String(untrusted),
       ).toBe(60);
     }
+  });
+});
+
+/**
+ * **A provider that does not answer is an outage, not a thrown job** (PROGRESS backlog 490):
+ * AUT-6820's `ci_gate` read threw a bare `TimeoutError`, then `IntegrationError {code:
+ * "unavailable"}`, and `stage.execute` threw until pg-boss failed it. The evaluator now answers a
+ * transient failure as `unreachable`, and rethrows every other one unchanged.
+ */
+describe('a gate whose provider does not answer (backlog 490)', () => {
+  const POLL_ONLY = { interval_seconds: 60, receives_webhooks: false };
+  const timeout = () =>
+    new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+
+  it('answers unreachable, naming the code, for every read of both gates', async () => {
+    const cases: readonly [string, Partial<GitProviderPort>, Slug, string][] = [
+      [
+        'the live merge request read, unavailable',
+        {
+          getMergeRequest: async () => {
+            throw new IntegrationError('unavailable', 'fake-git', 'GET … could not be reached', {
+              action: 'get_merge_request',
+              cause: timeout(),
+            });
+          },
+        },
+        'ci_gate' as Slug,
+        'unavailable',
+      ],
+      [
+        'the pipeline read, a bare TimeoutError from a body still being read',
+        {
+          getPipelineStatus: async () => {
+            throw timeout();
+          },
+        },
+        'ci_gate' as Slug,
+        'timeout',
+      ],
+      [
+        'the diff read, rate limited',
+        {
+          getPipelineStatus: async () => pipelineStatus('success'),
+          getMergeRequestDiff: async () => {
+            throw new IntegrationError('rate_limited', 'fake-git', 'slow down', {
+              action: 'get_merge_request_diff',
+            });
+          },
+        },
+        'ci_gate' as Slug,
+        'rate_limited',
+      ],
+      [
+        'the rebase gate, undici’s fetch failed over a reset socket',
+        {
+          getMergeRequest: async () => {
+            throw new TypeError('fetch failed', {
+              cause: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
+            });
+          },
+        },
+        'rebase_gate' as Slug,
+        'network',
+      ],
+    ];
+    for (const [name, git, stage, code] of cases) {
+      const answer = await evaluation(templateStage(stage), storedTask(MR), git);
+      expect(answer, name).toMatchObject({
+        kind: 'unreachable',
+        code,
+        provider: 'fake-git',
+        ciTimeoutMinutes: null,
+      });
+    }
+  });
+
+  it('carries the CI timeout only for the CI gate on a poll-only binding', async () => {
+    const failing = {
+      pollPlan: () => POLL_ONLY,
+      getMergeRequest: async () => {
+        throw timeout();
+      },
+    };
+    expect(
+      await evaluation(templateStage('ci_gate'), storedTask(MR), failing, {
+        ciTimeoutMinutes: 15,
+      }),
+    ).toMatchObject({ kind: 'unreachable', code: 'timeout', ciTimeoutMinutes: 15 });
+    expect(
+      await evaluation(templateStage('rebase_gate'), storedTask(MR), failing, {
+        ciTimeoutMinutes: 15,
+      }),
+    ).toMatchObject({ kind: 'unreachable', ciTimeoutMinutes: null });
+  });
+
+  it('rethrows a failure a later attempt does not fix, unchanged', async () => {
+    for (const code of ['unauthorised', 'forbidden', 'not_found', 'invalid_response'] as const) {
+      const error = new IntegrationError(code, 'fake-git', 'refused', {
+        action: 'get_merge_request',
+        // The adapter's code wins over a transport-looking cause.
+        cause: timeout(),
+      });
+      await expect(
+        evaluation(templateStage('ci_gate'), storedTask(MR), {
+          getMergeRequest: async () => {
+            throw error;
+          },
+        }),
+        code,
+      ).rejects.toBe(error);
+    }
+    const bug = new RangeError('a programming error');
+    await expect(
+      evaluation(templateStage('rebase_gate'), storedTask(MR), {
+        getMergeRequest: async () => {
+          throw bug;
+        },
+      }),
+    ).rejects.toBe(bug);
   });
 });

@@ -47,6 +47,12 @@ interface Row extends Record<string, unknown> {
   readonly attempted_at: Date | string | null;
   readonly ended_status: string | null;
   readonly ended_reason: string | null;
+  readonly failed_at: Date | string | null;
+  readonly failed_tries: number | null;
+  readonly failed_name: string | null;
+  readonly failed_code: string | null;
+  readonly failed_cause_name: string | null;
+  readonly failed_cause_code: string | null;
 }
 
 const toStranded = (row: Row): StrandedStage => ({
@@ -61,7 +67,21 @@ const toStranded = (row: Row): StrandedStage => ({
     row.ended_status === null
       ? null
       : { status: row.ended_status, terminalReason: row.ended_reason },
+  failedJob:
+    row.failed_at === null
+      ? null
+      : {
+          failedAt: new Date(row.failed_at).toISOString() as IsoDateTime,
+          tries: Number(row.failed_tries ?? 1),
+          errorName: row.failed_name,
+          errorCode: row.failed_code,
+          causeName: row.failed_cause_name,
+          causeCode: row.failed_cause_code,
+        },
 });
+
+/** Longest class or code read back; the application admits only an identifier of 64 characters. */
+const FAILED_IDENTIFIER_CHARS = 80;
 
 /**
  * Every task stranded at its stage, whatever its age. `$1` is the queue name. `attempted_at` is the
@@ -74,7 +94,9 @@ const strandedSql = (schema: string): string => `
          case when t.stage_recovery_attempted_at >= s.entered_at
               then t.stage_recovery_attempted_at end as attempted_at,
          er.status as ended_status, er.terminal_reason as ended_reason,
-         er.ended_at as ended_instant
+         er.ended_at as ended_instant,
+         fj.completed_on as failed_at, fj.tries as failed_tries,
+         fj.failed_name, fj.failed_code, fj.failed_cause_name, fj.failed_cause_code
     from tasks t
     join task_stages s
       on s.task_id = t.id and s.stage = t.current_stage
@@ -89,6 +111,23 @@ const strandedSql = (schema: string): string => `
        order by r.started_at desc nulls last, r.id desc
        limit 1
     ) er on true
+    -- Backlog 490: the newest job of **this entry** that pg-boss failed (every retry spent), read
+    -- for the ending's brief — the stage did start. Only the serialised error's name and code and
+    -- its cause's (pg-boss stores the thrown error through serialize-error as output), never the
+    -- message; \`data\` is compared, never selected.
+    left join lateral (
+      select j.completed_on, j.retry_count + 1 as tries,
+             left(j.output ->> 'name', ${FAILED_IDENTIFIER_CHARS}) as failed_name,
+             left(j.output ->> 'code', ${FAILED_IDENTIFIER_CHARS}) as failed_code,
+             left(j.output -> 'cause' ->> 'name', ${FAILED_IDENTIFIER_CHARS}) as failed_cause_name,
+             left(j.output -> 'cause' ->> 'code', ${FAILED_IDENTIFIER_CHARS}) as failed_cause_code
+        from ${schema}.job j
+       where j.name = $1 and j.singleton_key = 'task:' || t.id::text and j.state = 'failed'
+         and j.data ->> 'stage' = t.current_stage and j.data ->> 'attempt' = s.attempt::text
+         and j.completed_on >= s.entered_at
+       order by j.completed_on desc
+       limit 1
+    ) fj on true
    where t.state in ('active', 'merged', 'retro')
      and s.state = 'running' and s.exited_at is null
      and (t.template_snapshot is null

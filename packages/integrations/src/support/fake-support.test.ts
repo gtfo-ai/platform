@@ -121,6 +121,25 @@ describe('createFailureScript', () => {
     script.reset();
     expect(script.unconsumed()).toEqual([]);
   });
+
+  it('keeps an outage until its own condition says the provider is back (backlog 490)', () => {
+    const script = createFailureScript();
+    const down = new Error('unavailable');
+    const queued = new Error('queued first');
+    let isDown = true;
+    script.failWhile('get_pipeline_status', () => (isDown ? down : null));
+    script.failNext('get_pipeline_status', queued);
+    expect(script.take('get_pipeline_status')).toBe(queued);
+    expect(script.take('get_pipeline_status')).toBe(down);
+    expect(script.take('get_pipeline_status')).toBe(down);
+    expect(script.take('get_merge_request')).toBeNull();
+    expect(script.unconsumed()).toEqual([]);
+    isDown = false;
+    expect(script.take('get_pipeline_status')).toBeNull();
+    isDown = true;
+    script.reset();
+    expect(script.take('get_pipeline_status')).toBeNull();
+  });
 });
 
 describe('createFakeCore', () => {

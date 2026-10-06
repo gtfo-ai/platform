@@ -20,6 +20,9 @@ import { silentLogger } from '../ports/logger.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import { runStrandedRecovery, STRANDED_ENDING_AFTER_MS } from './stranded.js';
 import {
+  errorIdentifier,
+  failedJobBrief,
+  failedJobError,
   isDrivenStage,
   STRANDED_STAGE_COMPONENT,
   type StrandedStage,
@@ -47,6 +50,8 @@ const harnessStore = (
     readonly stillStranded?: boolean;
     /** The attempt's ended run, as the SQL's lateral read answers it (WP-108 review round 1). */
     readonly endedRun?: StrandedStage['endedRun'];
+    /** The entry's newest failed job, as the SQL's second lateral read answers it (backlog 490). */
+    readonly failedJob?: StrandedStage['failedJob'];
   } = {},
 ) => {
   const marks = new Map<Id, IsoDateTime>();
@@ -82,6 +87,7 @@ const harnessStore = (
       enteredAt,
       recoveryAttemptedAt: mark !== null && mark >= enteredAt ? mark : null,
       endedRun: options.endedRun ?? null,
+      failedJob: options.failedJob ?? null,
     };
   };
   const store: StrandedStageRecoveryStore = {
@@ -336,6 +342,89 @@ describe('the stranded-stage row (WP-108, PROGRESS backlog 320)', () => {
     },
   );
 
+  /**
+   * Backlog 490: AUT-6820's CI gate job threw against an unreachable gitlab.com until pg-boss failed
+   * it, and the ending said the stage had *"never started"*. With the entry's failed job read, it
+   * says the job failed, after how many tries, and with which error class and code — and still
+   * re-enqueues once first, because a provider that came back lets the second job through.
+   */
+  it('says the stage’s job failed, by class and code, when its last job failed rather than was lost (backlog 490)', async () => {
+    const { harness } = setup();
+    const taskId = await lostDiscovery(harness);
+    const failedJob = {
+      failedAt: '2026-10-06T05:41:12.000Z' as IsoDateTime,
+      tries: 3,
+      errorName: 'IntegrationError',
+      errorCode: 'unavailable',
+      causeName: 'TimeoutError',
+      causeCode: '23',
+    };
+    const { store, calls } = harnessStore(harness, { failedJob });
+    harness.clock.advance(GRACE_MS + 1);
+    expect(siteOf(await pass(harness, store))).toMatchObject({ reEnqueued: 1 });
+    expect(calls).toEqual([`mark:${taskId}`]);
+    expect(harness.jobs.take(JOB_QUEUES.stageExecute)).toHaveLength(1);
+    harness.clock.advance(STRANDED_ENDING_AFTER_MS + GRACE_MS + 1);
+    expect(siteOf(await pass(harness, store))).toMatchObject({ found: 1, ended: 1 });
+
+    const escalated = harness.events().filter((event) => event.type === 'task.escalated');
+    const payload = (
+      escalated[0] as Extract<(typeof escalated)[number], { type: 'task.escalated' }>
+    ).payload;
+    expect(payload.reason).toContain(
+      'its stage.execute job failed: the queue spent its retries (3 tries), the last one at 2026-10-06T05:41:12.000Z throwing IntegrationError (unavailable), caused by TimeoutError (23)',
+    );
+    expect(payload.reason).not.toContain('never started');
+    expect(payload.blocker_brief).toBe(
+      `${(await loaded(harness, taskId)).task.ticket.key} is at "discovery", and the job that runs this stage kept failing: the queue spent its retries (3 tries) and the last one threw IntegrationError (unavailable), caused by TimeoutError (23); one re-enqueue by the platform did not get the stage past it either. The stage did start — it is the job that failed, not a job that was lost. That error means a provider did not answer: check that it is reachable from the platform’s host. The failed job and its message are in the organisation’s failed-jobs list. Fix the cause, then hand the task back at "discovery" — or cancel it if it is no longer wanted.`,
+    );
+  });
+
+  it('quotes a failed job’s class and code only when they are identifiers, never text (BD-022)', () => {
+    const failed = (fields: Partial<NonNullable<StrandedStage['failedJob']>>) => ({
+      failedAt: '2026-10-06T05:41:12.000Z' as IsoDateTime,
+      tries: 3,
+      errorName: null,
+      errorCode: null,
+      causeName: null,
+      causeCode: null,
+      ...fields,
+    });
+    expect(failedJobError(failed({}))).toBe('an error whose class was not recorded');
+    expect(failedJobError(failed({ errorName: 'ZodError' }))).toBe('ZodError');
+    expect(failedJobError(failed({ errorCode: 'ECONNRESET' }))).toBe(
+      'an error with code ECONNRESET',
+    );
+    expect(
+      failedJobError(
+        failed({
+          errorName: 'Error: token glpat-FAKEFAKEFAKE leaked',
+          errorCode: 'see https://gitlab.example.test/x',
+          causeName: 'a "quoted" name',
+        }),
+      ),
+    ).toBe('an error whose class was not recorded');
+    expect(errorIdentifier('x'.repeat(65))).toBeNull();
+    expect(errorIdentifier('UND_ERR_SOCKET')).toBe('UND_ERR_SOCKET');
+    // A failure that is not a provider's gets no reachability hint.
+    expect(
+      failedJobBrief(
+        {
+          taskId: 'task' as Id,
+          projectId: 'project' as Id,
+          stage: 'ci_gate' as Slug,
+          attempt: 1,
+          enteredAt: '2026-10-06T05:00:00.000Z' as IsoDateTime,
+          recoveryAttemptedAt: null,
+          endedRun: null,
+          failedJob: null,
+        },
+        failed({ errorName: 'ZodError' }),
+        'ACME-1',
+      ),
+    ).not.toContain('provider did not answer');
+  });
+
   it('enqueues nothing when the mark finds the live path got there first (standing rule 9)', async () => {
     const { harness } = setup();
     await lostDiscovery(harness);
@@ -401,6 +490,7 @@ describe('isDrivenStage: the stage kinds stage.execute drives', () => {
     enteredAt: '2026-09-20T10:00:00.000Z' as IsoDateTime,
     recoveryAttemptedAt: null,
     endedRun: null,
+    failedJob: null,
   });
   const at = async (stage: string, state: StoredTask['task']['state'] = 'active') => {
     const { harness } = setup();

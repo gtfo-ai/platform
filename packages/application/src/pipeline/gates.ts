@@ -93,6 +93,7 @@ import {
   readFailingJobLogs,
 } from './ci-log.js';
 import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
+import { type TransientProviderCode, transientProviderFailure } from './gate-outage.js';
 import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import type { ProjectSettings, ProjectSettingsPort } from './settings.js';
@@ -264,8 +265,32 @@ export const ciTimeoutMinutesOf = (settings: ProjectSettings): number => {
     : DEFAULT_CI_TIMEOUT_MINUTES;
 };
 
+/**
+ * **The provider did not answer** (PROGRESS backlog 490, `gate-outage.ts`): a transient failure of
+ * a provider read during the evaluation — never a verdict, and not a `pending` either, because it
+ * is bounded by a time and must not spend `MAX_GATE_CHECKS`. Only {@link GateEvaluator.evaluate}
+ * answers it; `judgeCiSettlement`, which `ci-settle.ts` also calls, keeps {@link GateResult}.
+ */
+export interface GateProviderOutage {
+  readonly kind: 'unreachable';
+  readonly code: TransientProviderCode;
+  /** The git binding's provider id (`gitlab`). */
+  readonly provider: string;
+  /** The binding's host (`gitlab.com`), named in the brief; `null` for an adapter that dials none. */
+  readonly host: string | null;
+  /**
+   * `pipeline.limits.ci_timeout_minutes` when this is the CI gate on a **poll-only** binding — the
+   * wait WP-136 bounds by time from the gate's entry, which an outage does not extend — else `null`.
+   */
+  readonly ciTimeoutMinutes: number | null;
+  /** The failure itself, for the job's log line (the executor has already redacted it in place). */
+  readonly error: unknown;
+}
+
+export type GateEvaluation = GateResult | GateProviderOutage;
+
 export interface GateEvaluator {
-  evaluate(stage: PipelineStage, stored: StoredTask): Promise<GateResult>;
+  evaluate(stage: PipelineStage, stored: StoredTask): Promise<GateEvaluation>;
 }
 
 /**
@@ -725,115 +750,150 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
         };
       }
       const git = gitReads(bindings);
+      const binding = bindings.git;
+      // Held as a local: the closure below does not keep the `stored.mr !== null` narrowing.
+      const mrRef = stored.mr;
 
-      if (stage.id === 'ci_gate') {
-        // WP-136: the head pipeline the read saw, for a poll-only binding's brief.
-        let seenPipeline: CiWait['pipeline'] = null;
-        // Held as a local: the closure below does not keep the `stored.mr !== null` narrowing.
-        const recorded = stored.mr;
-        const read = async (): Promise<GateResult> => {
-          /**
-           * **The live head, not the recorded one** (WP-60 review round 2). `tasks.mr_ref.head_sha`
-           * lags the branch — it moves when a pushing stage reports or when a push's `mr.updated` is
-           * dispatched, and a late delivery can briefly hold an older revision — so a gate that asked
-           * the pipeline status of the recorded sha could pass on a green pipeline for a commit that
-           * is no longer the head. One `get_merge_request` read per evaluation (the rebase gate's
-           * read, now made here too); the diff coalescer is not involved.
-           */
-          const live = await git.mergeRequest(recorded, context);
-          const headSha = live?.ref.head_sha ?? null;
-          if (headSha === null || headSha === undefined) {
-            return { kind: 'pending', detail: 'the merge request has no head commit yet' };
-          }
-          const status = await git.pipelineStatus(headSha, context);
-          if (status === null) {
+      /**
+       * **A provider that does not answer is an outage, not a thrown job** (backlog 490). Every
+       * provider read of the two gates is inside this one closure, and the `catch` below it sorts
+       * what it throws: a transient failure answers {@link GateProviderOutage} and the job re-asks
+       * on its own bound; any other failure — an auth refusal, a `not_found`, a response that
+       * failed its schema, or anything that is not a provider's — is rethrown unchanged, which is
+       * today's ending.
+       */
+      const readProvider = async (): Promise<GateResult> => {
+        if (stage.id === 'ci_gate') {
+          // WP-136: the head pipeline the read saw, for a poll-only binding's brief.
+          let seenPipeline: CiWait['pipeline'] = null;
+          const read = async (): Promise<GateResult> => {
             /**
-             * **No pipeline is not no CI** (WP-138 ruling (f)). "If the project has no CI, the gate
-             * is skipped and the local test run is the evidence" (product/04 S4) — but a head with
-             * no pipeline on a project whose default branch carries a CI file is a pipeline that has
-             * not started (a draft merge request whose pipelines the project skips, a runner queue,
-             * a rule that does not match the branch), and passing it would be a pass with no
-             * evidence. Only a default branch with no CI file reads as no CI; the pipeline's half is
-             * then skipped, the tamper check is not.
+             * **The live head, not the recorded one** (WP-60 review round 2). `tasks.mr_ref.head_sha`
+             * lags the branch — it moves when a pushing stage reports or when a push's `mr.updated` is
+             * dispatched, and a late delivery can briefly hold an older revision — so a gate that asked
+             * the pipeline status of the recorded sha could pass on a green pipeline for a commit that
+             * is no longer the head. One `get_merge_request` read per evaluation (the rebase gate's
+             * read, now made here too); the diff coalescer is not involved.
              */
-            const ci = await ciConfigOnDefaultBranch(options.repositoryFiles, bindings, context);
-            if (ci.kind === 'absent') {
-              return judgeCiSettlement(options, bindings, stored, headSha, { kind: 'no_pipeline' });
+            const live = await git.mergeRequest(mrRef, context);
+            const headSha = live?.ref.head_sha ?? null;
+            if (headSha === null || headSha === undefined) {
+              return { kind: 'pending', detail: 'the merge request has no head commit yet' };
             }
-            return {
-              kind: 'pending',
-              detail:
-                ci.kind === 'present'
-                  ? `no pipeline has run for the head ${headSha.slice(0, 12)} yet, and the project has CI configuration (${ci.where}), so this is not a project without CI`
-                  : `no pipeline has run for the head ${headSha.slice(0, 12)}, and whether the project has CI configuration on its default branch cannot be read (${ci.reason}), so the gate waits rather than passing`,
-            };
-          }
-          seenPipeline = { id: status.id, status: status.status };
-          if (CI_TERMINAL_PASS.has(status.status)) {
-            return judgeCiSettlement(options, bindings, stored, headSha, {
-              kind: 'passed',
-              detail: `pipeline ${status.id} succeeded`,
-            });
-          }
-          if (CI_TERMINAL_FAIL.has(status.status)) {
-            const failed = status.jobs
-              .filter((job) => job.status === 'failed' && !job.allow_failure)
-              .map((job) => job.name);
-            return judgeCiSettlement(options, bindings, stored, headSha, {
-              kind: 'failed',
-              status: status.status,
-              failingJobs: failed,
-              logJobs: failingJobs(status.jobs),
-              detail:
-                failed.length === 0
-                  ? `pipeline ${status.id} ${status.status}`
-                  : `pipeline ${status.id} ${status.status}: ${failed.join(', ')}`,
-            });
-          }
-          return { kind: 'pending', detail: pendingPipelineDetail(status, live?.draft === true) };
-        };
-        const result = await read();
-        return result.kind === 'pending'
-          ? withCiWait(options, bindings, stored, result, seenPipeline)
-          : result;
-      }
-
-      // rebase_gate
-      const mr = await git.mergeRequest(stored.mr, context);
-      if (mr === null) {
-        /**
-         * **Deliberately unreachable, and said so rather than left looking tested** (standing
-         * rule 22). `gitReads.mergeRequest` returns `null` for exactly one reason — the project has
-         * no git binding — and `GitProviderPort.getMergeRequest` is `Promise<MergeRequest>`, never
-         * nullable: a provider that cannot find the merge request throws `not_found`. The outer
-         * guard that makes this unreachable is the `bindings.git === null` refusal above, which has
-         * its own named test for both gates. Kept because the type still admits `null`, and a
-         * `??`-shaped shortcut here would be the same fail-open the guard above was written to fix.
-         */
-        return {
-          kind: 'unsupported',
-          detail: `gate "${stage.id}" needs a git provider and the project has no git binding`,
-        };
-      }
-      if (mr.has_conflicts === null || mr.has_conflicts === undefined) {
-        return { kind: 'pending', detail: 'the provider has not computed mergeability yet' };
-      }
-      // The head this read carried, when the provider named one (WP-79): what Ready is entered with.
-      const rebaseHead = mr.ref.head_sha ?? null;
-      const judged = rebaseHead === null ? {} : { headSha: rebaseHead };
-      return mr.has_conflicts
-        ? {
-            kind: 'settled',
-            passed: false,
-            ...judged,
-            detail: `merge request !${mr.ref.iid} conflicts with ${mr.target_branch}`,
-          }
-        : {
-            kind: 'settled',
-            passed: true,
-            ...judged,
-            detail: `merge request !${mr.ref.iid} applies cleanly to ${mr.target_branch}`,
+            const status = await git.pipelineStatus(headSha, context);
+            if (status === null) {
+              /**
+               * **No pipeline is not no CI** (WP-138 ruling (f)). "If the project has no CI, the gate
+               * is skipped and the local test run is the evidence" (product/04 S4) — but a head with
+               * no pipeline on a project whose default branch carries a CI file is a pipeline that has
+               * not started (a draft merge request whose pipelines the project skips, a runner queue,
+               * a rule that does not match the branch), and passing it would be a pass with no
+               * evidence. Only a default branch with no CI file reads as no CI; the pipeline's half is
+               * then skipped, the tamper check is not.
+               */
+              const ci = await ciConfigOnDefaultBranch(options.repositoryFiles, bindings, context);
+              if (ci.kind === 'absent') {
+                return judgeCiSettlement(options, bindings, stored, headSha, {
+                  kind: 'no_pipeline',
+                });
+              }
+              return {
+                kind: 'pending',
+                detail:
+                  ci.kind === 'present'
+                    ? `no pipeline has run for the head ${headSha.slice(0, 12)} yet, and the project has CI configuration (${ci.where}), so this is not a project without CI`
+                    : `no pipeline has run for the head ${headSha.slice(0, 12)}, and whether the project has CI configuration on its default branch cannot be read (${ci.reason}), so the gate waits rather than passing`,
+              };
+            }
+            seenPipeline = { id: status.id, status: status.status };
+            if (CI_TERMINAL_PASS.has(status.status)) {
+              return judgeCiSettlement(options, bindings, stored, headSha, {
+                kind: 'passed',
+                detail: `pipeline ${status.id} succeeded`,
+              });
+            }
+            if (CI_TERMINAL_FAIL.has(status.status)) {
+              const failed = status.jobs
+                .filter((job) => job.status === 'failed' && !job.allow_failure)
+                .map((job) => job.name);
+              return judgeCiSettlement(options, bindings, stored, headSha, {
+                kind: 'failed',
+                status: status.status,
+                failingJobs: failed,
+                logJobs: failingJobs(status.jobs),
+                detail:
+                  failed.length === 0
+                    ? `pipeline ${status.id} ${status.status}`
+                    : `pipeline ${status.id} ${status.status}: ${failed.join(', ')}`,
+              });
+            }
+            return { kind: 'pending', detail: pendingPipelineDetail(status, live?.draft === true) };
           };
+          const result = await read();
+          return result.kind === 'pending'
+            ? withCiWait(options, bindings, stored, result, seenPipeline)
+            : result;
+        }
+
+        // rebase_gate
+        const mr = await git.mergeRequest(mrRef, context);
+        if (mr === null) {
+          /**
+           * **Deliberately unreachable, and said so rather than left looking tested** (standing
+           * rule 22). `gitReads.mergeRequest` returns `null` for exactly one reason — the project has
+           * no git binding — and `GitProviderPort.getMergeRequest` is `Promise<MergeRequest>`, never
+           * nullable: a provider that cannot find the merge request throws `not_found`. The outer
+           * guard that makes this unreachable is the `bindings.git === null` refusal above, which has
+           * its own named test for both gates. Kept because the type still admits `null`, and a
+           * `??`-shaped shortcut here would be the same fail-open the guard above was written to fix.
+           */
+          return {
+            kind: 'unsupported',
+            detail: `gate "${stage.id}" needs a git provider and the project has no git binding`,
+          };
+        }
+        if (mr.has_conflicts === null || mr.has_conflicts === undefined) {
+          return { kind: 'pending', detail: 'the provider has not computed mergeability yet' };
+        }
+        // The head this read carried, when the provider named one (WP-79): what Ready is entered with.
+        const rebaseHead = mr.ref.head_sha ?? null;
+        const judged = rebaseHead === null ? {} : { headSha: rebaseHead };
+        return mr.has_conflicts
+          ? {
+              kind: 'settled',
+              passed: false,
+              ...judged,
+              detail: `merge request !${mr.ref.iid} conflicts with ${mr.target_branch}`,
+            }
+          : {
+              kind: 'settled',
+              passed: true,
+              ...judged,
+              detail: `merge request !${mr.ref.iid} applies cleanly to ${mr.target_branch}`,
+            };
+      };
+
+      try {
+        return await readProvider();
+      } catch (error) {
+        const code = transientProviderFailure(error);
+        if (code === null) {
+          throw error;
+        }
+        // The settings are read only for the one gate whose bound they state, after the failure.
+        const pollOnlyCi =
+          stage.id === CI_GATE_STAGE && binding.port.pollPlan()?.receives_webhooks === false;
+        return {
+          kind: 'unreachable',
+          code,
+          provider: binding.ref.provider,
+          host: binding.ref.host,
+          ciTimeoutMinutes: pollOnlyCi
+            ? ciTimeoutMinutesOf(await options.settings.forProject(stored.task.projectId))
+            : null,
+          error,
+        };
+      }
     },
   };
 };

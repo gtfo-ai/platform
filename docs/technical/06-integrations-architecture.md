@@ -401,7 +401,11 @@ the existing suite (BD-017).
 >    shadow guard live in `IntegrationActionExecutor`, which owns the injected timer; a retry loop
 >    inside a provider would be a second one running on a wall clock. The injected transport is
 >    also what makes replay mode work without an HTTP interception library, and what lets a test
->    assert that a shadow-mode call issued *zero* requests.
+>    assert that a shadow-mode call issued *zero* requests. *Amended 2026-10-06 (PROGRESS backlog
+>    490):* the executor's retry is seconds long; an outage longer than it is the **caller's**
+>    bound, never a second retry loop here — a pipeline gate re-asks a provider that did not answer
+>    on its own time bound (technical/02, the gate amendment of that date), reading the executor's
+>    `retryable` codes and a bare `TimeoutError`/`fetch failed` as *the provider did not answer*.
 >  - **The client is handwritten for Slack too, and TD-024 says otherwise** (WP-10, Q42). TD-024
 >    names `@slack/bolt` with `@slack/web-api`; `WebClient` retries a call "up to 10 times, spaced
 >    out over about 30 minutes" and waits out a 429 itself, on a wall clock, which is precisely the

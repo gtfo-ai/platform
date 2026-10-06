@@ -174,6 +174,7 @@ import type { RunLeaseSweepOptions } from './run-lease.js';
 import { sweepExpiredRunLeases } from './run-lease.js';
 import {
   endStrandedStage,
+  failedJobError,
   type StrandedStage,
   type StrandedStageRecoverySite,
   strandedStagesIn,
@@ -1153,6 +1154,8 @@ const recoverStrandedStages = async (
           ...fields,
           attempted_at: row.recoveryAttemptedAt,
           ended_run_status: row.endedRun?.status ?? null,
+          // Backlog 490: the entry's failed job, by class and code only — never its message.
+          failed_job_error: row.failedJob === null ? null : failedJobError(row.failedJob),
         },
         row.endedRun === null
           ? 'a stage nothing ran did not start after its one recovery attempt, so the task was escalated to needs_human with a brief rather than left active for ever (PROGRESS backlog 320)'

@@ -224,6 +224,69 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
     expect(await foundIds()).toContain(task);
   });
 
+  /**
+   * Backlog 490: the entry's failed job, read for the ending's brief — the error's class and code
+   * and its cause's, as pg-boss stores them through serialize-error (the `output` below is that
+   * library's answer for AUT-6820's error, measured with serialize-error 13.0.1), never its message.
+   * A failed job of another attempt of the stage, or one older than the entry, is not this entry's.
+   */
+  it('reads the entry’s failed job by class and code, and no other entry’s (backlog 490)', async () => {
+    const failJob = async (
+      taskId: Id,
+      data: { readonly stage: string; readonly attempt: number },
+      completedMinutesAgo: number,
+    ): Promise<void> => {
+      const sent = await sender.jobs.enqueue({
+        queue: JOB_QUEUES.stageExecute,
+        data: { task_id: taskId, project_id: projectId, ...data },
+        singletonKey: `task:${taskId}`,
+      });
+      expect(sent.status).toBe('enqueued');
+      await handle.pool.query(
+        `update pgboss.job set state = 'failed', retry_count = 2,
+                completed_on = now() - ($3::int * interval '1 minute'), output = $2::jsonb
+          where id = $1`,
+        [
+          (sent as { readonly jobId: string }).jobId,
+          JSON.stringify({
+            code: 'unavailable',
+            provider: 'gitlab',
+            action: 'get_merge_request',
+            retryable: true,
+            name: 'IntegrationError',
+            message: 'gitlab: GET /projects/1 could not be reached FAKE-token-in-a-message',
+            cause: {
+              name: 'TimeoutError',
+              message: 'The operation was aborted due to timeout',
+              code: 23,
+            },
+          }),
+          completedMinutesAgo,
+        ],
+      );
+    };
+    const failed = await seedTask({ stage: 'ci_gate', enteredMinutesAgo: 30 });
+    await failJob(failed, { stage: 'ci_gate', attempt: 1 }, 5);
+    const otherAttempt = await seedTask({ stage: 'ci_gate', attempt: 2, enteredMinutesAgo: 30 });
+    await failJob(otherAttempt, { stage: 'ci_gate', attempt: 1 }, 5);
+    const beforeEntry = await seedTask({ stage: 'ci_gate', enteredMinutesAgo: 30 });
+    await failJob(beforeEntry, { stage: 'ci_gate', attempt: 1 }, 45);
+
+    const found = await store.strandedStages(tx, query());
+    const row = found.find((entry) => entry.taskId === failed);
+    expect(row?.failedJob).toEqual({
+      failedAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT/),
+      tries: 3,
+      errorName: 'IntegrationError',
+      errorCode: 'unavailable',
+      causeName: 'TimeoutError',
+      causeCode: '23',
+    });
+    expect(JSON.stringify(row)).not.toContain('FAKE-token');
+    expect(found.find((entry) => entry.taskId === otherAttempt)?.failedJob).toBeNull();
+    expect(found.find((entry) => entry.taskId === beforeEntry)?.failedJob).toBeNull();
+  });
+
   it('marks an entry once, only while it is stranded, and reads the mark back as that entry’s', async () => {
     const task = await seedTask({});
     const [row] = await store.strandedStages(tx, query());

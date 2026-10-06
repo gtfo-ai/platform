@@ -62,10 +62,19 @@
  * no new task state. The ending re-asks the predicate inside its own transaction, so a stage that
  * started meanwhile is left alone. Its `save` is under {@link retryOnTaskConflict}; a spent bound is
  * logged and the next pass tries again, because the task is still stranded and still marked.
+ *
+ * **A job that failed is not a job that was lost** (PROGRESS backlog 490). When the entry's newest
+ * `stage.execute` job is in pg-boss's `failed` state, the stage did start and its job kept throwing
+ * — AUT-6820's CI gate against an unreachable gitlab.com — and the brief said *"never started"*.
+ * The store now reads that job ({@link StrandedStage.failedJob}) and the ending says the job failed,
+ * after how many tries, and with which error **class and code** (and its cause's): identifiers
+ * only, never the message, which can quote a provider (BD-022). The re-enqueue before it is
+ * unchanged — a provider that has come back lets the second job through.
  */
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
 import { canTransitionTask, compilePipeline, escalateTask, stageOf } from '@platform/domain';
+import { NETWORK_ERROR_CODES } from '../pipeline/gate-outage.js';
 import type { PipelineStore, StoredTask } from '../pipeline/store.js';
 import { retryOnTaskConflict, TaskConflictExhaustedError } from '../pipeline/task-conflict.js';
 import { closeParkedStageRow, ESCALATED_OUTCOME } from '../pipeline/transitions.js';
@@ -98,6 +107,23 @@ export interface StrandedStage {
     readonly status: string;
     /** `run_terminal_reason`, a platform enum value, or `null`. */
     readonly terminalReason: string | null;
+  } | null;
+  /**
+   * The newest `stage.execute` job of **this entry** that pg-boss moved to `failed` — every retry
+   * spent — or `null` when none did (PROGRESS backlog 490). The entry then *did* start; its job kept
+   * throwing, and the brief says so instead of *"never started"*. The four strings are the
+   * serialised error's `name` and `code` and its cause's, **as stored** — the store bounds them and
+   * {@link errorIdentifier} admits only an identifier, so no message text (which can quote a
+   * provider) reaches the brief.
+   */
+  readonly failedJob: {
+    readonly failedAt: IsoDateTime;
+    /** `retry_count + 1`: the first try and every retry. */
+    readonly tries: number;
+    readonly errorName: string | null;
+    readonly errorCode: string | null;
+    readonly causeName: string | null;
+    readonly causeCode: string | null;
   } | null;
 }
 
@@ -208,6 +234,63 @@ export const endedRunBrief = (
 export const strandedStageBrief = (row: StrandedStage, ticketKey: string): string =>
   `${ticketKey} was entered at "${row.stage}" and nothing ever ran it: the job that runs a stage was lost (a process stopped between the task's commit and the enqueue, or the job spent every retry), and one re-enqueue by the platform did not start it either. Nothing ran, so nothing was spent on this attempt. Check that a runner is serving agent stages (/readyz's agent_runs line), then hand the task back at the stage it should resume from — or cancel it if it is no longer wanted.`;
 
+/**
+ * A serialised error's `name` or `code` as the brief may quote it — an identifier and nothing else
+ * (`TimeoutError`, `IntegrationError`, `unavailable`, `ECONNRESET`, a DOMException's numeric `23`),
+ * or `null`. Anything with a space, a quote or a slash is not a class or a code: it is text, which
+ * may be a provider's, and BD-022 keeps it out of a brief.
+ */
+export const errorIdentifier = (value: string | null): string | null =>
+  value !== null && /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/.test(value) ? value : null;
+
+/** Class and code of the job's failure, and of its cause: `IntegrationError (unavailable), caused by TimeoutError`. */
+export const failedJobError = (failed: NonNullable<StrandedStage['failedJob']>): string => {
+  const one = (name: string | null, code: string | null): string | null => {
+    const n = errorIdentifier(name);
+    const c = errorIdentifier(code);
+    if (n === null && c === null) return null;
+    if (n === null) return `an error with code ${String(c)}`;
+    return c === null ? n : `${n} (${c})`;
+  };
+  const top = one(failed.errorName, failed.errorCode) ?? 'an error whose class was not recorded';
+  const cause = one(failed.causeName, failed.causeCode);
+  return cause === null ? top : `${top}, caused by ${cause}`;
+};
+
+/**
+ * Does the failure read as a provider that did not answer? The same classes and codes
+ * `pipeline/gate-outage.ts` treats as transient, read off the stored names — a hint in the brief,
+ * never a decision.
+ */
+const looksUnreachable = (failed: NonNullable<StrandedStage['failedJob']>): boolean =>
+  [failed.errorName, failed.errorCode, failed.causeName, failed.causeCode].some(
+    (value) =>
+      value === 'TimeoutError' ||
+      value === 'unavailable' ||
+      value === 'rate_limited' ||
+      (value !== null && NETWORK_ERROR_CODES.has(value)),
+  );
+
+/** Why a task whose stage's job **failed** was parked (PROGRESS backlog 490). Platform text only. */
+export const failedJobReason = (
+  row: StrandedStage,
+  failed: NonNullable<StrandedStage['failedJob']>,
+  attemptedAt: IsoDateTime,
+): string =>
+  `the "${row.stage}" stage (attempt ${String(row.attempt)}) was entered at ${row.enteredAt} and its stage.execute job failed: the queue spent its retries (${String(failed.tries)} tries), the last one at ${failed.failedAt} throwing ${failedJobError(failed)}; the platform re-enqueued the stage once at ${attemptedAt} and it is still stuck (PROGRESS backlogs 320, 490)`;
+
+/** The brief for a stage whose job kept failing — not one that "never started". */
+export const failedJobBrief = (
+  row: StrandedStage,
+  failed: NonNullable<StrandedStage['failedJob']>,
+  ticketKey: string,
+): string =>
+  `${ticketKey} is at "${row.stage}", and the job that runs this stage kept failing: the queue spent its retries (${String(failed.tries)} tries) and the last one threw ${failedJobError(failed)}; one re-enqueue by the platform did not get the stage past it either. The stage did start — it is the job that failed, not a job that was lost.${
+    looksUnreachable(failed)
+      ? ' That error means a provider did not answer: check that it is reachable from the platform’s host.'
+      : ''
+  } The failed job and its message are in the organisation’s failed-jobs list. Fix the cause, then hand the task back at "${row.stage}" — or cancel it if it is no longer wanted.`;
+
 export interface StrandedStageEndingOptions {
   readonly unitOfWork: UnitOfWork;
   readonly site: StrandedStageRecoverySite;
@@ -241,6 +324,7 @@ export const endStrandedStage = async (
             return false;
           }
           const ended = row.endedRun;
+          const failed = row.failedJob;
           const escalated = escalateTask(
             stored.task,
             ended !== null
@@ -248,10 +332,15 @@ export const endStrandedStage = async (
                   reason: endedRunReason(row, ended),
                   blockerBrief: endedRunBrief(row, ended, stored.task.ticket.key),
                 }
-              : {
-                  reason: strandedStageReason(row, attemptedAt ?? row.enteredAt),
-                  blockerBrief: strandedStageBrief(row, stored.task.ticket.key),
-                },
+              : failed !== null
+                ? {
+                    reason: failedJobReason(row, failed, attemptedAt ?? row.enteredAt),
+                    blockerBrief: failedJobBrief(row, failed, stored.task.ticket.key),
+                  }
+                : {
+                    reason: strandedStageReason(row, attemptedAt ?? row.enteredAt),
+                    blockerBrief: strandedStageBrief(row, stored.task.ticket.key),
+                  },
             site.context(row.taskId),
           );
           await site.pipeline.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
