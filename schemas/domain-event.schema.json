@@ -2753,6 +2753,16 @@
                   "type": "null"
                 }
               ]
+            },
+            "start_failure": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/anon_ff13f99c"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -2856,48 +2866,7 @@
             "start_failure": {
               "anyOf": [
                 {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "const": "not_started"
-                    },
-                    "diagnosis": {
-                      "maxLength": 500,
-                      "$ref": "#/$defs/NonEmptyString"
-                    },
-                    "detail": {
-                      "anyOf": [
-                        {
-                          "maxLength": 3000,
-                          "$ref": "#/$defs/NonEmptyString"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "truncated": {
-                      "type": "boolean"
-                    },
-                    "attempt": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 9007199254740991
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "kind",
-                    "diagnosis",
-                    "detail",
-                    "truncated",
-                    "attempt",
-                    "retryable"
-                  ],
-                  "additionalProperties": false
+                  "$ref": "#/$defs/anon_ff13f99c"
                 },
                 {
                   "type": "null"
@@ -6402,6 +6371,50 @@
           "type": "null"
         }
       ]
+    },
+    "anon_ff13f99c": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "not_started"
+        },
+        "diagnosis": {
+          "maxLength": 500,
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "maxLength": 3000,
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "attempt": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "diagnosis",
+        "detail",
+        "truncated",
+        "attempt",
+        "retryable"
+      ],
+      "additionalProperties": false
     },
     "anon_fffb1e71": {
       "maxLength": 256,

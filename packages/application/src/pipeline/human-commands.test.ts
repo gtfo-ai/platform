@@ -23,6 +23,7 @@
  * against a real instance, where a run really can be held open.
  */
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
+import { runFinishedEvent } from '@platform/contracts';
 import {
   IllegalTransitionError,
   InvariantViolationError,
@@ -2093,11 +2094,21 @@ describe('cancel a run', () => {
       const held = await harness.memory.transaction(async (scope) =>
         harness.store.runs.heldFor(scope.tx, outcome.taskId, 15),
       );
-      const finished = harness
+      const events = harness
         .events()
-        .filter((entry) => entry.type === 'run.finished' && entry.payload.run_id === runId)
-        .map((entry) => (entry.payload as { cost: unknown }).cost);
-      return { run, held, finished };
+        .filter((entry) => entry.type === 'run.finished' && entry.payload.run_id === runId);
+      const finished = events.map((entry) => (entry.payload as { cost: unknown }).cost);
+      // WP-154 (b′): the cause, on the event (parsed by the published schema) and on the row.
+      const causes = events.map(
+        (entry) => runFinishedEvent.shape.payload.parse(entry.payload).start_failure ?? null,
+      );
+      return {
+        run,
+        held,
+        finished,
+        causes,
+        exitDetail: harness.store.startFailureOf(runId),
+      };
     };
 
     it('holds nothing for a run whose CLI was never asked for: a measured zero', async () => {
@@ -2110,13 +2121,35 @@ describe('cancel a run', () => {
       expect(held).toEqual({ heldUsd: 0, heldRuns: 0 });
     });
 
+    it('records why it did not start, on run.finished and on the row (WP-154 (b′), backlog 502)', async () => {
+      const { run, causes, exitDetail } = await cancelInPlace(false);
+      // The status still says who ended it; the cause says how far it got.
+      expect(run?.status).toBe('cancelled');
+      const cause = {
+        kind: 'not_started',
+        diagnosis:
+          'cancelled by a person before its CLI was asked to start: no process was holding the run, so it was ended as a record',
+        detail: null,
+        truncated: false,
+        attempt: 1,
+        retryable: false,
+      };
+      expect(causes).toEqual([cause]);
+      expect(exitDetail).toEqual(cause);
+      // Never a workspace word: a person's cancel is not a workspace failure.
+      expect(cause.diagnosis).not.toMatch(/workspace_failed|ended_before_cli_spawn/);
+    });
+
     it('holds the same cancel at its reservation once the CLI was asked for (WP-131 unchanged)', async () => {
-      const { run, held, finished } = await cancelInPlace(true);
+      const { run, held, finished, causes, exitDetail } = await cancelInPlace(true);
       expect(run?.status).toBe('cancelled');
       expect(run?.cliSpawnRequestedAt).not.toBeNull();
       expect(run?.cost).toBeNull();
       expect(finished).toEqual([null]);
       expect(held).toEqual({ heldUsd: 15, heldRuns: 1 });
+      // A run that reached its CLI started: no cause on either (WP-154 (b′)).
+      expect(causes).toEqual([null]);
+      expect(exitDetail).toBeNull();
     });
   });
 

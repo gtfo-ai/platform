@@ -1,4 +1,9 @@
-import { type ContextPackRecord, runStatusSchema, type TokenUsage } from '@platform/contracts';
+import {
+  type ContextPackRecord,
+  runFinishedEvent,
+  runStatusSchema,
+  type TokenUsage,
+} from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { addMs, type Clock, fixedClock } from '../clock.js';
 import { IllegalTransitionError, InvariantViolationError } from '../errors.js';
@@ -289,6 +294,35 @@ describe('the unfinished work an ending saved (backlog 467)', () => {
       context(world()),
     );
     expect(plain.events[0]?.payload).not.toHaveProperty('saved_work');
+  });
+});
+
+describe('the cause a stop before the CLI spawn marker records (WP-154 (b′))', () => {
+  const cause = {
+    kind: 'not_started' as const,
+    diagnosis:
+      'cancelled by a person before its CLI was asked to start: while its workspace and run shim were being prepared',
+    detail: null,
+    truncated: false,
+    attempt: 1,
+    retryable: false,
+  };
+
+  it('carries it on `run.finished` when given, and omits the key when not', () => {
+    const ending = {
+      status: 'cancelled' as const,
+      terminalReason: 'cancelled' as const,
+      usage,
+      modelUsage: [],
+      cost: { usd: 0, is_estimate: false, price_list_id: null },
+      numTurns: 0,
+    };
+    const stopped = finishRun(runningRun(), { ...ending, startFailure: cause }, context(world()));
+    expect(stopped.events[0]?.payload).toMatchObject({ start_failure: cause });
+    expect(runFinishedEvent.safeParse(stopped.events[0]).success).toBe(true);
+
+    const started = finishRun(runningRun(), ending, context(world()));
+    expect(started.events[0]?.payload).not.toHaveProperty('start_failure');
   });
 });
 

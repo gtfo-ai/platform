@@ -1169,6 +1169,50 @@ describe('an ask that never runs', () => {
   });
 
   /**
+   * WP-154 (b′), PROGRESS backlog 502: an ask run cancelled before its CLI spawn marker is the
+   * measured zero (WP-150) and says how far it got — on `runs.exit_detail` and on `run.failed`,
+   * the one ending an ask has. Canary: the ask executor's `unspawnedStop` called without the cause.
+   */
+  it('records why an ask cancelled before its CLI spawn marker did not start (WP-154 (b′))', async () => {
+    const harness = createPipelineHarness({
+      projectId: PROJECT,
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          structuredOutput: askingRefinedSpec(),
+          costUsd: 0.1,
+        },
+        [`ask:${QUESTION}`]: {
+          status: 'cancelled',
+          terminalReason: 'cancelled',
+          reachesCli: false,
+        },
+      },
+    });
+    await seedTask(harness);
+    await askThroughHttp(harness);
+    const [ask] = harness.asks.all();
+    const runId = ask?.runId as Id;
+    const cause = {
+      kind: 'not_started',
+      diagnosis:
+        'cancelled by a person before its CLI was asked to start: while its workspace and run shim were being prepared',
+      detail: null,
+      truncated: false,
+      attempt: 1,
+      retryable: false,
+    };
+    expect(harness.store.startFailureOf(runId)).toEqual(cause);
+    const failed = harness
+      .events()
+      .find((event) => event.type === 'run.failed' && event.payload.run_id === runId);
+    expect((failed?.payload as { start_failure?: unknown } | undefined)?.start_failure).toEqual(
+      cause,
+    );
+  });
+
+  /**
    * **An ask refused by its workspace says why, in platform words** — WP-132, PROGRESS backlog 424,
    * mirroring `stage-executor.test.ts` › "a run refused by its workspace names the kind and the
    * reason (WP-127)". The ask row and `run.failed.error` carry the workspace's error kind, its

@@ -693,6 +693,12 @@ docker compose up -d                      # recreates app, runner and launcher o
 curl -fsS localhost:8080/readyz
 ```
 
+**Open browser tabs** keep the previous version's page until they are reloaded. Since WP-154 each
+page carries the commit it was built from (`APP_COMMIT`, the same build argument `GET /api/version`
+reports), and a tab whose server now reports a different commit shows *The platform was updated —
+reload this page* rather than a schema error. An image built without `APP_COMMIT` (a checkout's
+`docker compose build`) reports none, and its tabs then show the error as they always did.
+
 The `stop` line is what makes the commands do what the sentence above says. Without it the old `app`
 and `runner` keep serving while `migrate` runs, and a migration that builds an index (0071 does, with
 a plain `create index`: each migration runs in one transaction, so it cannot be `concurrently`)

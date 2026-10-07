@@ -138,6 +138,37 @@ describe('the run page of a run that never started (backlog 453)', () => {
     expect(cut.textContent).toContain('shortened by the platform');
   });
 
+  /**
+   * WP-154 (b′), PROGRESS backlog 502: a run a person cancelled before its CLI spawn marker carries
+   * the same record, and the run page shows the panel for it — with the stop's sentence, never the
+   * workspace's, and no "the launcher gave no reason" line for a stop no launcher was asked about.
+   */
+  it('shows the not-started panel for a run cancelled before its CLI was asked to start', async () => {
+    const cancelled: RunRecord = {
+      ...runWith({
+        kind: 'not_started',
+        diagnosis:
+          'cancelled by a person before its CLI was asked to start: no process was holding the run, so it was ended as a record',
+        detail: null,
+        truncated: false,
+        attempt: 1,
+        retryable: false,
+      }),
+      status: 'cancelled',
+      terminal_reason: 'cancelled',
+    };
+    render(createApp({ fetchImpl: fetchWith(cancelled), realtime: false }).element);
+    const panel = await screen.findByRole('region', { name: 'This run did not start' });
+    expect(panel.textContent).toContain('It was stopped before its CLI was asked to start');
+    expect(panel.textContent).toContain(
+      'cancelled by a person before its CLI was asked to start: no process was holding the run',
+    );
+    expect(panel.textContent).not.toContain('workspace could not be created');
+    expect(panel.textContent).not.toContain('handed to a person');
+    expect(panel.textContent).not.toContain('The launcher gave no reason');
+    expect(screen.queryByRole('textbox', { name: 'Steer the agent' })).toBeNull();
+  });
+
   it('shows the transcript and the steer box for a run that started', async () => {
     render(createApp({ fetchImpl: fetchWith(runWith(null)), realtime: false }).element);
     expect(await screen.findByRole('textbox', { name: 'Steer the agent' })).not.toBeNull();

@@ -57,6 +57,12 @@ export interface RealtimeProviderProps {
   }) => Promise<void>;
   /** When false the provider is inert: used by unit tests that render a screen in isolation. */
   readonly enabled?: boolean;
+  /**
+   * Called each time a dropped stream is open again — `reconnecting` (or a server's `shutdown`)
+   * followed by `open`, never the first connect. The app re-reads `/api/version` here (WP-154 (d)):
+   * a server restart is when an upgraded build first becomes reachable.
+   */
+  readonly onReconnected?: () => void;
 }
 
 export const RealtimeProvider = ({
@@ -65,12 +71,17 @@ export const RealtimeProvider = ({
   openStream,
   updateSubscriptions,
   enabled = true,
+  onReconnected,
 }: RealtimeProviderProps): ReactElement => {
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<RealtimeStatus>('idle');
   const counts = useRef(new Map<SseTopic, number>());
+  // A ref, so a caller's new function identity never rebuilds the client (and reconnects).
+  const reconnected = useRef(onReconnected);
+  reconnected.current = onReconnected;
 
   const client = useMemo(() => {
+    let previous: RealtimeStatus = 'idle';
     const bridge = createQueryBridge({
       queryClient,
       onTranscript: (frame) => {
@@ -82,7 +93,13 @@ export const RealtimeProvider = ({
       ...(updateSubscriptions === undefined ? {} : { updateSubscriptions }),
       onFrame: bridge.onFrame,
       onReset: bridge.onReset,
-      onStatus: setStatus,
+      onStatus: (next) => {
+        if (next === 'open' && previous === 'reconnecting') {
+          reconnected.current?.();
+        }
+        previous = next;
+        setStatus(next);
+      },
     });
   }, [queryClient, transcripts, openStream, updateSubscriptions]);
 

@@ -524,6 +524,48 @@ describe('event catalogue', () => {
   });
 });
 
+/**
+ * WP-154 (b′), PROGRESS backlog 502: `run.finished` gained a nullish `start_failure`. Events are
+ * append-only and replayed, so a `run.finished` appended before it must still parse unchanged — the
+ * catalogue's fixture is that shape — and the new key is held to `runStartFailureSchema` rather
+ * than accepted as anything.
+ */
+describe('run.finished’s start_failure (WP-154 (b′))', () => {
+  const finished = FIXTURES.find((event) => event.type === 'run.finished') as DomainEvent;
+  const cause = {
+    kind: 'not_started',
+    diagnosis:
+      'cancelled by a person before its CLI was asked to start: while its workspace and run shim were being prepared',
+    detail: null,
+    truncated: false,
+    attempt: 1,
+    retryable: false,
+  };
+  const withPayload = (payload: Record<string, unknown>) => ({
+    ...finished,
+    payload: { ...(finished.payload as Record<string, unknown>), ...payload },
+  });
+
+  it('replays a run.finished appended before it unchanged', () => {
+    expect(finished.payload).not.toHaveProperty('start_failure');
+    expect(domainEventSchemasByType['run.finished'].parse(finished)).toEqual(finished);
+  });
+
+  it('carries the cause, and null, and refuses a cause of another shape', () => {
+    const stopped = withPayload({ start_failure: cause });
+    expect(domainEventSchema.parse(stopped)).toEqual(stopped);
+    expect(domainEventSchema.safeParse(withPayload({ start_failure: null })).success).toBe(true);
+    expect(
+      domainEventSchema.safeParse(withPayload({ start_failure: { ...cause, kind: 'cancelled' } }))
+        .success,
+    ).toBe(false);
+    expect(
+      domainEventSchema.safeParse(withPayload({ start_failure: { ...cause, extra: true } }))
+        .success,
+    ).toBe(false);
+  });
+});
+
 describe('event catalogue — property', () => {
   const knownKeys = (record: Record<string, unknown>) => new Set(Object.keys(record));
 

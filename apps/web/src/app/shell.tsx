@@ -9,7 +9,7 @@
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate } from '@tanstack/react-router';
-import type { ReactElement } from 'react';
+import { type ReactElement, useSyncExternalStore } from 'react';
 import { displayName } from '../auth/session.js';
 import { useRealtime } from '../realtime/provider.js';
 import { Badge, type BadgeTone, Button, cx } from '../ui/kit.js';
@@ -73,6 +73,41 @@ const ThemeControl = (): ReactElement => {
   );
 };
 
+/**
+ * **"The platform was updated — reload this page"** (WP-154 (d), PROGRESS backlog 487): shown once
+ * the server answers `/api/version` with a different build from this bundle's
+ * (`platform-version.ts`). A screen whose read was refused for it shows nothing of its own
+ * (`ErrorNotice`), so this banner is the one place the page says it — instead of a schema error that
+ * reads as a server fault.
+ */
+export const PlatformUpdatedBanner = (): ReactElement | null => {
+  const { platform } = useServices();
+  const updated = useSyncExternalStore(platform.subscribe, platform.updated, platform.updated);
+  if (!updated) {
+    return null;
+  }
+  return (
+    <div
+      role="alert"
+      data-testid="platform-updated"
+      className="flex flex-wrap items-center gap-3 border-b border-accent/40 bg-accent/10 px-4 py-2 text-sm"
+    >
+      <span className="font-medium">The platform was updated — reload this page.</span>
+      <span className="text-fg-muted">
+        This tab still runs the previous version, which cannot read the new server's answers.
+      </span>
+      <Button
+        tone="primary"
+        onClick={() => {
+          window.location.reload();
+        }}
+      >
+        Reload
+      </Button>
+    </div>
+  );
+};
+
 export const AppShell = (): ReactElement => {
   const session = useSession();
   const { auth } = useServices();
@@ -126,6 +161,7 @@ export const AppShell = (): ReactElement => {
           )}
         </div>
       </header>
+      <PlatformUpdatedBanner />
       {/* A screen that throws is contained here rather than taking the header with it: every
           route match carries `defaultErrorComponent` (`routes/tree.tsx`), which is the boundary
           the router puts *inside* this outlet. A second boundary wrapped around the outlet would

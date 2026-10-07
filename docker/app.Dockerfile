@@ -52,7 +52,12 @@ COPY apps/runlet/package.json apps/runlet/
 RUN pnpm install --frozen-lockfile --filter @platform/web... --ignore-scripts
 COPY packages/contracts packages/contracts
 COPY apps/web apps/web
-RUN pnpm --filter @platform/web run build
+# The build's commit, compiled into the bundle (WP-154 (d), PROGRESS backlog 487): the same
+# `APP_COMMIT` the final stage hands `GET /api/version`, so an open tab can tell an upgraded server
+# from a contract defect. `vite.config.ts` reads it; empty is `dev`. Declared here, after the
+# install, so a new commit re-runs only the build, and held by `scripts/web-build-commit.test.ts`.
+ARG APP_COMMIT=
+RUN APP_COMMIT="${APP_COMMIT}" pnpm --filter @platform/web run build
 
 # ── Production dependencies ──────────────────────────────────────────────────────────────────────
 # `--prod` and the server's sub-graph only: no vitest, no biome, no playwright, no vite.

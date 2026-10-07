@@ -14,14 +14,24 @@
  * which is itself an answer to the question.
  *
  * The summary is the model's words (BD-022): a text node through `UntrustedText`, never markup.
+ *
+ * **Below the line, the run's transcript as it happens** (WP-154 (c), backlog 455 item (4)): the
+ * run page's `TranscriptView` over the same store and the same `run:<id>` subscription this panel
+ * already holds, bounded to the newest blocks (`live-transcript.tsx`). It is loaded lazily, so the
+ * transcript renderer stays out of the initial bundle (TD-013).
  */
 import type { RunLatestProgress, RunRecord, TranscriptEvent } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
-import { type ReactElement, useSyncExternalStore } from 'react';
+import { lazy, type ReactElement, Suspense, useSyncExternalStore } from 'react';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
 import { Badge, Card, formatElapsed, formatInteger } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+
+/** The bounded live transcript, in its own chunk (see the module note). */
+const LiveTranscript = lazy(async () => ({
+  default: (await import('./live-transcript.js')).LiveTranscript,
+}));
 
 /** A run that has not ended (`ACTIVE_RUN_STATUSES` in `@platform/domain`). */
 const LIVE_STATUSES: readonly RunRecord['status'][] = ['created', 'starting', 'running'];
@@ -110,6 +120,9 @@ export const LiveStagePanel = ({ run }: { readonly run: RunRecord }): ReactEleme
             </>
           )}
         </p>
+        <Suspense fallback={<p className="text-xs text-fg-muted">Loading the transcript…</p>}>
+          <LiveTranscript runId={run.id} />
+        </Suspense>
       </Card>
     </section>
   );

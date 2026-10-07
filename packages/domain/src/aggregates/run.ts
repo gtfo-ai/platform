@@ -267,6 +267,11 @@ export interface FinishRunInput {
    * `run.finished.saved_work` as given; absent when it attempted no export.
    */
   readonly savedWork?: RunSavedWork;
+  /**
+   * Why a run **stopped before its CLI was asked to start** went no further (WP-154 (b′), PROGRESS
+   * backlog 502), carried onto `run.finished.start_failure` as given; absent for every other ending.
+   */
+  readonly startFailure?: RunStartFailure;
 }
 
 /** A terminal outcome the platform counts as a completed attempt (`run.finished`). */
@@ -290,6 +295,7 @@ export const finishRun = (
     num_turns: input.numTurns,
     wall_ms: run.startedAt === null ? 0 : Math.max(0, differenceMs(run.startedAt, endedAt)),
     ...(input.savedWork === undefined ? {} : { saved_work: input.savedWork }),
+    ...(input.startFailure === undefined ? {} : { start_failure: input.startFailure }),
   });
   return {
     aggregate: {

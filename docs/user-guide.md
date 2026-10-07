@@ -45,6 +45,14 @@ from the dashboard, into a project: its **board**, **knowledge**, **pipeline** a
 Screens that show live data subscribe to a server-sent event stream, so agent counts, task states
 and transcripts move without a refresh.
 
+**After the platform is upgraded, an open tab asks for a reload.** A banner under the navigation
+says *The platform was updated — reload this page*, with a **Reload** button, in place of the error
+an old page would otherwise show when the new server's answers no longer match what it expects. The
+page checks the server's version each time its live connection comes back (a restart drops it) and
+whenever an answer does not match. If the server is the **same** version as the page, a mismatch is
+a real fault and is shown as the error it is; an instance built from a checkout has no version to
+compare and always shows the error.
+
 ## 1. Onboarding a project — the wizard
 
 **Onboarding** in the top navigation. Five steps, each of which is also reachable on its own, so
@@ -362,6 +370,14 @@ what* lists it: the start, with the person who pressed it. Pressing **Start** tw
 Left: the stage timeline. Centre: artifacts, runs, questions and approvals. Right: checks, cost and
 links. Live on that task's topic.
 
+**The stage timeline lists the newest stage first**, and each entry opens the run of that stage
+attempt: *Open the run* (*Open the run (live)* while it is running) goes to its transcript, and when
+the attempt ran more than once — a retry of the same attempt, say — to the latest run. *Why the run
+did not start* goes to the run page of a run that never reached its agent, which says why instead of
+showing an empty transcript. A stage that runs no agent — a gate such as the CI or rebase gate, or a
+plan approval — or one whose agent has not started yet says *No run for this stage* and links
+nothing.
+
 **While an agent is working on a stage**, a panel at the top of the centre column says so: a pulsing
 dot, the stage and the role, how long the run has been going, and the **latest progress line** the
 agent reported — *"slice 2 of 4 pushed; next the endpoint"* — with its percentage when it gave one
@@ -369,6 +385,10 @@ and how long ago it said it. The line updates live as the agent reports, and *Wa
 the run's transcript. The agent writes the line, so it is shown as text, never as markup; an agent
 reports at most one line every 30 seconds. *No progress reported yet* means the agent has not called
 the tool, not that it is idle — the run page's transcript is the full record.
+
+Below that line, the panel shows **the run's transcript as it happens** — the same entries as the
+run page, arriving live — bounded to the newest 30 blocks, with *Open the full run* for the whole session, its search and the
+steer box.
 
 Every artifact in the centre column **opens**: *Open* shows the document the stage produced, on this
 page, as text. It is model output, so it is rendered the way everything else untrusted is — as
@@ -750,8 +770,11 @@ A run that ended with **nobody measuring it** — the platform stopped it, or it
 or a lost process ended it before it reported — has no cost at all, and is shown as *not measured*.
 This is only a run that got as far as asking for the Claude Code CLI: a run that never did — its
 workspace refused the handshake, or a cancel or a lost process ended it while its workspace was
-still being prepared — cannot have spent anything, is shown with a cost of **0** (a run that refused
-at the handshake says *did not start*), and is never held.
+still being prepared — cannot have spent anything, is shown with a cost of **0**, and is never held.
+Its run page says *This run did not start* in place of an empty transcript: for a run refused at the
+handshake, the reason; for a run a person cancelled (or the platform's restart handed back) before its
+CLI was asked to start, that it was stopped first and how far it had got — the run is still shown as
+**cancelled**, because the status says who ended it.
 Its spend is unknown, so every budget **holds** it at the per-run cap it was started under: a held
 run is never counted as spent and writes no cost entry, but it counts toward the budget exactly as
 spend does when the next run is admitted, and the pause says how much is held apart from what was

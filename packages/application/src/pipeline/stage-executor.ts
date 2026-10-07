@@ -128,6 +128,8 @@ import {
   MEASURED_ZERO_COST,
   NO_RUN_USAGE,
   recordCliSpawn,
+  stopEndingOf,
+  stoppedBeforeCliSpawn,
   unspawnedStop,
 } from './cli-spawn.js';
 import { questionDeadlineRule } from './deadline-rules.js';
@@ -1378,8 +1380,19 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
     const stopReason = stopReasons.reasonFor(prepared.spec.runId);
     stopReasons.forget(prepared.spec.runId);
     if (!spawn.requested()) {
-      // A stop that landed before the CLI was asked for keeps its status and spent nothing (WP-150).
-      outcome = unspawnedStop(outcome);
+      // A stop that landed before the CLI was asked for keeps its status and spent nothing (WP-150),
+      // and records how far it got (WP-154 (b′), backlog 502): the run page then says *did not
+      // start* rather than showing an empty transcript, and the event log can tell it from a run
+      // that started and was stopped.
+      outcome = unspawnedStop(
+        outcome,
+        stoppedBeforeCliSpawn({
+          ending: stopEndingOf(outcome),
+          step: spawn.asked() ? 'spawn_gate' : 'preparing',
+          attempt: (job.startAttempts ?? 0) + 1,
+          retryable: false,
+        }),
+      );
     }
 
     return writing(job.taskId, "recording a run's result", async (scope) =>
@@ -1927,7 +1940,7 @@ const recordOntoStoppedTask = async (
             terminalReason: outcome.terminalReason,
             error: outcome.error ?? outcome.terminalReason,
             ...failedSpendOf(outcome),
-            ...savedWorkOf(outcome),
+            ...endingDetailOf(outcome),
           },
           context,
         )
@@ -1940,7 +1953,7 @@ const recordOntoStoppedTask = async (
             modelUsage: outcome.modelUsage,
             cost: rowCostOf(outcome),
             numTurns: outcome.numTurns,
-            ...savedWorkOf(outcome),
+            ...endingDetailOf(outcome),
           },
           context,
         );
@@ -1954,7 +1967,7 @@ const recordOntoStoppedTask = async (
     cost: rowCostOf(outcome),
     wallMs: outcome.wallMs,
     costIsFloor: costIsFloorOf(input),
-    ...savedWorkOf(outcome),
+    ...endingDetailOf(outcome),
   });
   if (!owned) {
     return lostTheRun({ ...input, scope });
@@ -1999,7 +2012,7 @@ const recordUnsuccessful = async (
             terminalReason: outcome.terminalReason,
             error: outcome.error ?? outcome.terminalReason,
             ...failedSpendOf(outcome),
-            ...savedWorkOf(outcome),
+            ...endingDetailOf(outcome),
           },
           context,
         )
@@ -2012,7 +2025,7 @@ const recordUnsuccessful = async (
             modelUsage: outcome.modelUsage,
             cost: rowCostOf(outcome),
             numTurns: outcome.numTurns,
-            ...savedWorkOf(outcome),
+            ...endingDetailOf(outcome),
           },
           context,
         );
@@ -2027,7 +2040,7 @@ const recordUnsuccessful = async (
     cost: rowCostOf(outcome),
     wallMs: outcome.wallMs,
     costIsFloor: costIsFloorOf(input),
-    ...savedWorkOf(outcome),
+    ...endingDetailOf(outcome),
   });
   if (!owned) {
     return lostTheRun({ ...input, scope });
@@ -2069,6 +2082,18 @@ const recordUnsuccessful = async (
  */
 const savedWorkOf = (outcome: RunOutcome): { readonly savedWork?: RunSavedWork } =>
   outcome.savedWork === undefined ? {} : { savedWork: outcome.savedWork };
+
+/**
+ * {@link savedWorkOf} plus the cause of a stop that landed before the CLI spawn marker (WP-154
+ * (b′)): `outcome.startFailure`, onto `runs.exit_detail` and the terminal event's `start_failure` —
+ * absent for every other ending, which leaves both unset.
+ */
+const endingDetailOf = (
+  outcome: RunOutcome,
+): { readonly savedWork?: RunSavedWork; readonly startFailure?: RunStartFailure } => ({
+  ...savedWorkOf(outcome),
+  ...(outcome.startFailure === undefined ? {} : { startFailure: outcome.startFailure }),
+});
 
 /**
  * The task with the branch its run's unfinished work was **pushed** to (PROGRESS backlog 467).
@@ -2121,6 +2146,17 @@ const recordHandBack = async (
     attempt: job.attempt,
   });
   const handBacks = earlier + 1;
+  // A hand-back before the CLI spawn marker records why it did not start (WP-154 (b′)); whether
+  // the stage goes again is decided only here, so the cause's `retryable` is set here too.
+  const notStarted =
+    outcome.startFailure === undefined
+      ? {}
+      : {
+          startFailure: {
+            ...outcome.startFailure,
+            retryable: handBacks <= MAX_SHUTDOWN_HAND_BACKS,
+          },
+        };
   const failed = failRun(
     run,
     {
@@ -2128,6 +2164,7 @@ const recordHandBack = async (
       terminalReason: 'shutdown',
       error: outcome.error ?? 'shutdown',
       ...failedSpendOf(outcome),
+      ...notStarted,
     },
     context,
   );
@@ -2141,6 +2178,7 @@ const recordHandBack = async (
     cost: rowCostOf(outcome),
     wallMs: outcome.wallMs,
     costIsFloor: costIsFloorOf(input),
+    ...notStarted,
   });
   if (!owned) {
     return lostTheRun({ ...input, scope });

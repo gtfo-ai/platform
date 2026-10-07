@@ -70,7 +70,7 @@ import type { Logger } from '../ports/logger.js';
 import type { RunTakeOverExport } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
-import { MEASURED_ZERO_COST, NO_RUN_USAGE } from './cli-spawn.js';
+import { MEASURED_ZERO_COST, NO_RUN_USAGE, stoppedBeforeCliSpawn } from './cli-spawn.js';
 import {
   enqueueOutbound,
   enqueueReadyHeadCheck,
@@ -1716,6 +1716,24 @@ const endRunRecordInPlace = async (
   const unspawned = run.cliSpawnRequestedAt === null;
   const cost = unspawned ? MEASURED_ZERO_COST : run.cost;
   const usage = unspawned ? NO_RUN_USAGE : (run.usage ?? NO_USAGE);
+  /**
+   * **And it says so** (WP-154 (b′), PROGRESS backlog 502): on `runs.exit_detail` and on
+   * `run.finished.start_failure`, so the run page shows *did not start* rather than an empty
+   * transcript and the event log can tell this run from one that started. The status stays
+   * `cancelled` — it says who ended the run; the cause says how far it got. Attempt 1, because an
+   * ending with no process holding the run cannot know the stage's start-attempt count (the lease
+   * sweep's answer, WP-150).
+   */
+  const notStarted = unspawned
+    ? {
+        startFailure: stoppedBeforeCliSpawn({
+          ending: 'cancelled',
+          step: 'unheld',
+          attempt: 1,
+          retryable: false,
+        }),
+      }
+    : {};
   const won = await deps.store.runs.finish(scope.tx, {
     runId: run.id,
     status: 'cancelled',
@@ -1737,6 +1755,7 @@ const endRunRecordInPlace = async (
      */
     cost,
     wallMs: wallMsSince(run.startedAt, context.clock.now()),
+    ...notStarted,
   });
   if (!won) {
     throw new RunNotLiveError(run.id, run.status, 'cancelled: it has already ended');
@@ -1754,6 +1773,7 @@ const endRunRecordInPlace = async (
       // that never asked for its CLI carries the measured zero instead (WP-150).
       cost,
       numTurns: unspawned ? 0 : run.numTurns,
+      ...notStarted,
     },
     context,
   );

@@ -378,6 +378,13 @@ export interface RunOutcome {
    * `runs.saved_work` and the terminal event, and records the branch on the task.
    */
   readonly savedWork?: RunSavedWork;
+  /**
+   * Why a **stop that landed before the CLI spawn marker** went no further (WP-154 (b′), PROGRESS
+   * backlog 502) — set by the process holding the run (`unspawnedStop` with
+   * `stoppedBeforeCliSpawn`), never by a runner. The stage and ask executors write it to
+   * `runs.exit_detail` and the terminal event's `start_failure`; absent for every other ending.
+   */
+  readonly startFailure?: RunStartFailure;
 }
 
 // ── Collaborators ────────────────────────────────────────────────────────────

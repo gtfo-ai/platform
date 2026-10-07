@@ -40,6 +40,25 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * What the person is told when an answer failed its schema **because the server was upgraded**
+ * under an open tab (WP-154 (d), PROGRESS backlog 487) — a platform sentence, and the whole fix.
+ */
+export const PLATFORM_UPDATED_MESSAGE = 'the platform was updated — reload this page';
+
+/**
+ * An `invalid_response` from a server that is **a different build** from this bundle (WP-154 (d)):
+ * the old bundle's strict schemas refusing the new server's fields, not a contract defect. Thrown
+ * in place of the schema error only after `/api/version` said so (`app/platform-version.ts`); when
+ * the two builds are the same, or either is `dev`, the schema error stands.
+ */
+export class PlatformUpdatedError extends ApiError {
+  constructor(status: number) {
+    super(status, 'platform_updated', PLATFORM_UPDATED_MESSAGE);
+    this.name = 'PlatformUpdatedError';
+  }
+}
+
 /** Thrown when the network never produced a response at all. */
 export class NetworkError extends Error {
   constructor(cause: unknown) {
@@ -98,6 +117,12 @@ export interface ApiClientOptions {
   readonly baseUrl?: string;
   /** Injected for the same reason as `fetchImpl`; used for `Idempotency-Key`. */
   readonly newIdempotencyKey?: () => string;
+  /**
+   * Asked before an `invalid_response` is thrown (WP-154 (d)): `true` when the server is a
+   * different build from this bundle, and the client then throws {@link PlatformUpdatedError}
+   * instead. Never asked about `/api/version` itself, which is what it reads.
+   */
+  readonly isPlatformUpdated?: () => Promise<boolean>;
 }
 
 export type QueryValue = string | number | boolean | undefined;
@@ -215,6 +240,13 @@ export const createApiClient = (options: ApiClientOptions = {}): ApiClient => {
     const body: unknown = await response.json().catch(() => null);
     const parsed = options_.schema.safeParse(body);
     if (!parsed.success) {
+      if (
+        path !== '/api/version' &&
+        options.isPlatformUpdated !== undefined &&
+        (await options.isPlatformUpdated())
+      ) {
+        throw new PlatformUpdatedError(response.status);
+      }
       throw new ApiError(
         response.status,
         'invalid_response',

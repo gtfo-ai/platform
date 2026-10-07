@@ -10,6 +10,7 @@ import { createContext, type ReactElement, type ReactNode, useContext } from 're
 import type { Endpoints } from '../api/endpoints.js';
 import type { AuthApi } from '../auth/session.js';
 import type { TranscriptStore } from '../transcript/store.js';
+import type { PlatformVersionWatch } from './platform-version.js';
 
 export interface Services {
   readonly endpoints: Endpoints;
@@ -17,6 +18,8 @@ export interface Services {
   readonly transcripts: TranscriptStore;
   /** Injected so a component never reads a clock directly (standing rule 2). */
   readonly now: () => number;
+  /** Whether the server is still the build this tab loaded (WP-154 (d), `platform-version.ts`). */
+  readonly platform: PlatformVersionWatch;
 }
 
 const ServicesContext = createContext<Services | null>(null);

@@ -14,6 +14,7 @@
  */
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactElement, ReactNode } from 'react';
 import { useId } from 'react';
+import { PLATFORM_UPDATED_MESSAGE } from '../api/http.js';
 import { UntrustedText } from './untrusted.js';
 
 export const cx = (...parts: (string | false | null | undefined)[]): string =>
@@ -169,6 +170,12 @@ export const Loading = ({ label }: { readonly label: string }): ReactElement => 
  * the caller sent, so both halves go through `UntrustedText` like anything else the platform did
  * not author. `role="alert"` announces it once, which is what a screen reader user needs from a
  * failure that appears without them doing anything.
+ *
+ * **A read refused because the server was upgraded under this tab renders nothing here** (WP-154
+ * (d), PROGRESS backlog 487): its text is `PlatformUpdatedError`'s sentence, and the shell's
+ * banner already says it once for the whole page — so the screen shows no schema error, and no
+ * second copy of the reload instruction per section. Only that sentence, which the API client
+ * writes after `/api/version` named a different build; every other failure is shown as before.
  */
 export const ErrorNotice = ({
   title,
@@ -176,18 +183,19 @@ export const ErrorNotice = ({
 }: {
   readonly title: string;
   readonly detail?: string;
-}): ReactElement => (
-  <div role="alert" className="rounded-lg border border-danger/40 bg-danger/10 p-4 text-sm">
-    <p className="font-medium">
-      <UntrustedText value={title} />
-    </p>
-    {detail === undefined ? null : (
-      <p className="pt-1 text-fg-muted">
-        <UntrustedText value={detail} />
+}): ReactElement | null =>
+  [title, detail].some((text) => text?.includes(PLATFORM_UPDATED_MESSAGE) === true) ? null : (
+    <div role="alert" className="rounded-lg border border-danger/40 bg-danger/10 p-4 text-sm">
+      <p className="font-medium">
+        <UntrustedText value={title} />
       </p>
-    )}
-  </div>
-);
+      {detail === undefined ? null : (
+        <p className="pt-1 text-fg-muted">
+          <UntrustedText value={detail} />
+        </p>
+      )}
+    </div>
+  );
 
 // ── Metric ───────────────────────────────────────────────────────────────────
 

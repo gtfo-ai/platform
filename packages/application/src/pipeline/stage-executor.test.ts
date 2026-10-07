@@ -2129,6 +2129,83 @@ describe('a run that never reached its CLI holds no money (WP-150)', () => {
     expect((failed?.payload as { cost?: unknown } | undefined)?.cost).toBeNull();
   });
 
+  /**
+   * WP-154 (b′), PROGRESS backlog 502: a stop the process holding the run applied before the marker
+   * keeps its status and its measured zero (WP-150) **and records how far it got**, on the row and
+   * on its terminal event. Both stop endings: a person's cancel (`run.finished`) and a hand-back at
+   * shutdown (`run.failed`, re-enqueued, so `retryable`). Canary: `unspawnedStop` called without the
+   * cause, and both cases fail on a null `exit_detail`.
+   */
+  const stopsBeforeMarker = [
+    {
+      name: 'a cancel',
+      script: { status: 'cancelled', terminalReason: 'cancelled' } as const,
+      event: 'run.finished',
+      diagnosis:
+        'cancelled by a person before its CLI was asked to start: while its workspace and run shim were being prepared',
+      retryable: false,
+    },
+    {
+      name: 'a hand-back at shutdown',
+      script: { status: 'failed', terminalReason: 'shutdown' } as const,
+      event: 'run.failed',
+      diagnosis:
+        "handed back when the platform's runner stopped before its CLI was asked to start: while its workspace and run shim were being prepared",
+      retryable: true,
+    },
+  ];
+  it.each(stopsBeforeMarker)(
+    'records why $name before the marker did not start (WP-154 (b′))',
+    async (row) => {
+      const harness = harnessWith({
+        settings,
+        runs: { refinement: { ...row.script, reachesCli: false } },
+      });
+      await harness.publish([ticketMatched()]);
+      const runId = harness.specs[0]?.runId as Id;
+      const stored = await harness.memory.transaction(async (scope) =>
+        harness.store.runs.load(scope.tx, runId),
+      );
+      const cause = {
+        kind: 'not_started',
+        diagnosis: row.diagnosis,
+        detail: null,
+        truncated: false,
+        attempt: 1,
+        retryable: row.retryable,
+      };
+      expect(stored?.cliSpawnRequestedAt).toBeNull();
+      expect(stored?.cost).toEqual({ usd: 0, is_estimate: false, price_list_id: null });
+      expect(harness.store.startFailureOf(runId)).toEqual(cause);
+      const ending = harness
+        .events()
+        .find(
+          (event) =>
+            event.type === row.event && (event.payload as { run_id?: string }).run_id === runId,
+        );
+      expect((ending?.payload as { start_failure?: unknown } | undefined)?.start_failure).toEqual(
+        cause,
+      );
+    },
+  );
+
+  it('records no cause for a stop that came after the marker (WP-154 (b′), the other direction)', async () => {
+    const harness = harnessWith({
+      settings,
+      runs: { refinement: { status: 'cancelled', terminalReason: 'cancelled' } },
+    });
+    await harness.publish([ticketMatched()]);
+    const runId = harness.specs[0]?.runId as Id;
+    expect(harness.store.startFailureOf(runId)).toBeNull();
+    const ending = harness
+      .events()
+      .find((event) => event.type === 'run.finished' && event.payload.run_id === runId);
+    expect(ending).toBeDefined();
+    expect(
+      (ending?.payload as { start_failure?: unknown } | undefined)?.start_failure,
+    ).toBeUndefined();
+  });
+
   it('holds the same crash once the CLI was asked for, and refuses the fourth (WP-131 unchanged)', async () => {
     const harness = refusedAtHello(true);
     const { held } = await fourAttempts(harness);

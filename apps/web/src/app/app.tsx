@@ -18,12 +18,19 @@ import { createAppRouter, type RouterContext } from '../routes/tree.js';
 import { createTranscriptStore } from '../transcript/store.js';
 import { ErrorBoundary } from '../ui/error-boundary.js';
 import { ThemeProvider } from '../ui/theme.js';
+import { BUNDLE_COMMIT } from './build-commit.js';
+import { createPlatformVersionWatch, serverCommitReader } from './platform-version.js';
 import { type Services, ServicesProvider } from './services.js';
 
 /** `POST /events/subscriptions` answers with the connection id and its topic list. */
 const subscriptionAck = z.looseObject({});
 
-export interface CreateAppOptions extends ApiClientOptions {
+export interface CreateAppOptions extends Omit<ApiClientOptions, 'isPlatformUpdated'> {
+  /**
+   * The commit this bundle was built from (WP-154 (d)) — `BUNDLE_COMMIT`, compiled in by
+   * `vite.config.ts`, unless a test names one.
+   */
+  readonly bundleCommit?: string;
   readonly openStream?: EventStreamFactory;
   readonly now?: () => number;
   readonly queryClient?: QueryClient;
@@ -47,7 +54,16 @@ export interface App {
 }
 
 export const createApp = (options: CreateAppOptions = {}): App => {
-  const client = createApiClient(options);
+  // WP-154 (d): the client asks the watch before it calls an answer a schema error, and the watch
+  // reads `/api/version` through that same client — so the watch is declared first and given its
+  // reader once the client exists.
+  let readServerCommit: () => Promise<string | null> = async () => null;
+  const platform = createPlatformVersionWatch({
+    bundleCommit: options.bundleCommit ?? BUNDLE_COMMIT,
+    readServerCommit: () => readServerCommit(),
+  });
+  const client = createApiClient({ ...options, isPlatformUpdated: () => platform.check() });
+  readServerCommit = serverCommitReader(client);
   const endpoints = createEndpoints(client);
   const auth = createAuthApi(client);
   const transcripts = createTranscriptStore();
@@ -56,6 +72,11 @@ export const createApp = (options: CreateAppOptions = {}): App => {
     auth,
     transcripts,
     now: options.now ?? (() => Date.now()),
+    platform,
+  };
+  // Every SSE reconnect re-reads the server's build: a restart is when an upgrade first shows.
+  const onReconnected = (): void => {
+    void platform.check();
   };
 
   const queryClient =
@@ -98,6 +119,7 @@ export const createApp = (options: CreateAppOptions = {}): App => {
               enabled={options.realtime !== false}
               {...(options.openStream === undefined ? {} : { openStream: options.openStream })}
               updateSubscriptions={updateSubscriptions}
+              onReconnected={onReconnected}
             >
               <RouterProvider router={router} />
             </RealtimeProvider>

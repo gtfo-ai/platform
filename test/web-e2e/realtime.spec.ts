@@ -65,6 +65,30 @@ test('a live transcript frame renders on the run screen', async ({ page, request
   await expect(page.getByText('Streamed after the page was fetched.')).toBeVisible();
 });
 
+/**
+ * WP-154 criterion (2), PROGRESS backlog 455 item (4): the **task page** shows the running stage's
+ * transcript as it happens — the same frame, on the same `run:<id>` topic, the run screen renders
+ * above. The live panel's transcript is a lazily loaded chunk, so this is also the case that proves
+ * the chunk loads in a real browser from the built bundle.
+ */
+test('a running stage’s transcript appears live on the task page', async ({ page, request }) => {
+  await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskFeature}`);
+  const transcript = page.getByTestId('live-transcript');
+  // The REST page rendered first: this line is in `runMessages`, not in the stream.
+  await expect(transcript.getByText('Reading the retry helper.')).toBeVisible();
+  await expect(transcript.getByText('Streamed after the page was fetched.')).toHaveCount(0);
+  await expect(transcript.getByRole('link', { name: 'Open the full run' })).toHaveAttribute(
+    'href',
+    `/runs/${IDS.run}`,
+  );
+
+  await waitForStreamCarrying(request, runTopic, pingProbe(runTopic), 'ping');
+  const delivered = await publishFrame(request, runTopic, 'assistant', transcriptFrame(6));
+  expect(delivered, 'the frame reached no stream, so the assertion below proves nothing').toBe(1);
+
+  await expect(transcript.getByText('Streamed after the page was fetched.')).toBeVisible();
+});
+
 test('a duplicate frame does not render twice', async ({ page, request }) => {
   await page.goto(`/runs/${IDS.run}`);
   await expect(page.getByText('Reading the retry helper.')).toBeVisible();

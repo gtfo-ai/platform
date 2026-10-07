@@ -50,7 +50,7 @@ import {
 import { CodeText, DownloadLink, UntrustedText } from '../ui/untrusted.js';
 import { FeedbackForm } from './feedback.js';
 import { RunCommandLog } from './run-command-log.js';
-import { RunNotStartedPanel } from './run-not-started.js';
+import { isStoppedRun, RunNotStartedPanel } from './run-not-started.js';
 import {
   initialRetryModelChoice,
   type RetryModelChoice,
@@ -332,9 +332,10 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
       ) : null}
 
       {/* Backlog 453: a run whose workspace never started has no transcript to show, and an empty
-          one read as "nothing happened yet". The reason is shown in its place. */}
+          one read as "nothing happened yet". The reason is shown in its place — and since WP-154
+          (b′) for a run a person cancelled before its CLI was asked to start, too. */}
       {tab === 'transcript' && record.start_failure !== null ? (
-        <RunNotStartedPanel failure={record.start_failure} />
+        <RunNotStartedPanel failure={record.start_failure} stopped={isStoppedRun(record)} />
       ) : null}
 
       {tab === 'transcript' && record.start_failure === null ? (

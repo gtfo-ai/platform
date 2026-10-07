@@ -97,6 +97,7 @@ import { BreakdownPanel } from './breakdown-panel.js';
 import { unmeasuredRunsText } from './cost-text.js';
 import { FeedbackForm } from './feedback.js';
 import { LiveStagePanel, liveStageRun } from './live-stage.js';
+import { type TimelineLink, timelineEntries } from './stage-timeline.js';
 import { TakeOverPanel } from './take-over.js';
 
 /**
@@ -1344,6 +1345,28 @@ const ArtifactBody = ({
   );
 };
 
+/** Where one timeline entry leads (WP-154 (b)): its latest run, the not-started panel, or nowhere. */
+const TimelineRunLink = ({ link }: { readonly link: TimelineLink }): ReactElement => {
+  if (link.kind === 'none') {
+    return <p className="text-[11px] text-fg-muted">No run for this stage.</p>;
+  }
+  const label =
+    link.kind === 'not_started'
+      ? 'Why the run did not start'
+      : link.live
+        ? 'Open the run (live)'
+        : 'Open the run';
+  return (
+    <Link
+      to="/runs/$runId"
+      params={{ runId: link.runId }}
+      className="text-[11px] text-accent underline"
+    >
+      {label}
+    </Link>
+  );
+};
+
 export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): ReactElement => {
   useTopics([`task:${taskId}`]);
   const detail = useTask(taskId);
@@ -1399,9 +1422,10 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             hint="Stages appear as the pipeline enters them. A queued task has none."
           />
         ) : (
-          <ol className="flex flex-col gap-2">
-            {stages.map((stage) => (
-              <li key={`${stage.stage}:${stage.attempt}`}>
+          // WP-154 (a) and (b): newest first, each entry leading to its latest run.
+          <ol className="flex flex-col gap-2" aria-label="Timeline, newest first">
+            {timelineEntries(stages, runs).map(({ stage, link }) => (
+              <li key={`${stage.stage}:${stage.attempt}`} data-testid="timeline-entry">
                 <Card className="flex flex-col gap-1">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium">{stage.stage}</span>
@@ -1431,6 +1455,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
                       <UntrustedText value={stageOutcomeSentence(stage.outcome)} />
                     </p>
                   )}
+                  <TimelineRunLink link={link} />
                 </Card>
               </li>
             ))}

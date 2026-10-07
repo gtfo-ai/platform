@@ -997,7 +997,11 @@ export const runStartFailureSchema = z.strictObject({
   diagnosis: nonEmptyStringSchema.max(RUN_START_FAILURE_MESSAGE_MAX_CHARS),
   detail: nonEmptyStringSchema.max(RUN_START_FAILURE_DETAIL_MAX_CHARS).nullable(),
   truncated: z.boolean(),
-  /** Which start attempt of the stage this was (`MAX_RUN_START_ATTEMPTS`); 1 for an ask. */
+  /**
+   * Which start attempt of the stage this was (`MAX_RUN_START_ATTEMPTS`); 1 for an ask, and 1 for
+   * a run a person's cancel ended in place before its CLI spawn marker, because no process held the
+   * run to know the count (WP-154 (b′)) — so there it is not a count of earlier start attempts.
+   */
   attempt: z.int().positive(),
   /** `true` when the stage was re-enqueued after this failure rather than escalated. */
   retryable: z.boolean(),

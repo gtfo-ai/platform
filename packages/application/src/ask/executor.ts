@@ -36,6 +36,7 @@ import type {
   DomainEvent,
   Id,
   JsonValue,
+  RunStartFailure,
 } from '@platform/contracts';
 import {
   askAnswerDataSchema,
@@ -67,6 +68,8 @@ import {
   MEASURED_ZERO_COST,
   NO_RUN_USAGE,
   recordCliSpawn,
+  stopEndingOf,
+  stoppedBeforeCliSpawn,
   unspawnedStop,
 } from '../pipeline/cli-spawn.js';
 import {
@@ -326,6 +329,19 @@ export const redactAskAnswer = (
   };
   return { data, count };
 };
+
+/**
+ * The cause of a stop that landed before the CLI spawn marker (`outcome.startFailure`, WP-154
+ * (b′)), with whether the ask goes again — onto `runs.exit_detail` and `run.failed.start_failure`.
+ * Absent for every other ending.
+ */
+const notStartedOf = (
+  outcome: RunOutcome,
+  retryable: boolean,
+): { readonly startFailure?: RunStartFailure } =>
+  outcome.startFailure === undefined
+    ? {}
+    : { startFailure: { ...outcome.startFailure, retryable } };
 
 export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
   const logger = options.logger ?? silentLogger;
@@ -654,6 +670,8 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
             ...(outcome.costUnmeasured === true
               ? {}
               : { usage: outcome.usage, cost: outcome.cost }),
+            // WP-154 (b′): a hand-back before the CLI spawn marker, and the ask goes again.
+            ...notStartedOf(outcome, true),
           },
           context,
         );
@@ -667,6 +685,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
           cost: outcome.costUnmeasured === true ? null : outcome.cost,
           wallMs: outcome.wallMs,
           costIsFloor: input.stopReason === COST_UNREPORTED,
+          ...notStartedOf(outcome, true),
         });
         if (!owned) {
           return { kind: 'skipped' as const, reason: 'another writer ended this run first' };
@@ -753,6 +772,8 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
             ...(outcome.costUnmeasured === true
               ? {}
               : { usage: outcome.usage, cost: outcome.cost }),
+            // WP-154 (b′): a stop before the CLI spawn marker says how far it got.
+            ...notStartedOf(outcome, false),
           },
           context,
         );
@@ -768,6 +789,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
           wallMs: outcome.wallMs,
           // WP-131 pre-review round (backlog 407): a `cost_unreported` stop's cost is a floor.
           costIsFloor: input.stopReason === COST_UNREPORTED,
+          ...notStartedOf(outcome, false),
         });
         if (!owned) {
           return { kind: 'skipped' as const, reason: 'another writer ended this run first' };
@@ -996,8 +1018,17 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
       const stopReason = options.stopReasons.reasonFor(runId);
       options.stopReasons.forget(runId);
       if (!spawn.requested()) {
-        // A stop before the CLI was asked for keeps its status and spent nothing (WP-150).
-        outcome = unspawnedStop(outcome);
+        // A stop before the CLI was asked for keeps its status and spent nothing (WP-150), and
+        // records how far it got (WP-154 (b′)). An ask has no start attempts: attempt 1.
+        outcome = unspawnedStop(
+          outcome,
+          stoppedBeforeCliSpawn({
+            ending: stopEndingOf(outcome),
+            step: spawn.asked() ? 'spawn_gate' : 'preparing',
+            attempt: 1,
+            retryable: false,
+          }),
+        );
       }
 
       const recorded = await record({

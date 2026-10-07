@@ -11,6 +11,8 @@ import {
   IN_FLIGHT_RETRY_LIMIT,
   isRetiredIdempotencyKey,
   NetworkError,
+  PLATFORM_UPDATED_MESSAGE,
+  PlatformUpdatedError,
 } from './http.js';
 
 const schema = z.strictObject({ ok: z.boolean() });
@@ -46,6 +48,47 @@ describe('the API client', () => {
     const client = createApiClient({ fetchImpl: fetchImpl as unknown as typeof fetch });
 
     await expect(client.get('/api/thing', { schema })).resolves.toEqual({ ok: true });
+  });
+
+  /**
+   * WP-154 (d), PROGRESS backlog 487: before an answer is called a schema error, the client asks
+   * whether the server is a different build — and says *reload* only when it is. Never about
+   * `/api/version`, which is what the question reads (a loop otherwise).
+   */
+  it('answers an invalid response from a different build as PlatformUpdatedError, and only then', async () => {
+    const updated = createApiClient({
+      fetchImpl: respondWith({ ok: 'yes' }) as unknown as typeof fetch,
+      isPlatformUpdated: async () => true,
+    });
+    const error = await updated.get('/api/thing', { schema }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(PlatformUpdatedError);
+    expect((error as ApiError).code).toBe('platform_updated');
+    expect(String(error)).toContain(PLATFORM_UPDATED_MESSAGE);
+    expect(String(error)).not.toContain('did not match the published schema');
+
+    const same = createApiClient({
+      fetchImpl: respondWith({ ok: 'yes' }) as unknown as typeof fetch,
+      isPlatformUpdated: async () => false,
+    });
+    const schemaError = await same.get('/api/thing', { schema }).catch((caught: unknown) => caught);
+    expect((schemaError as ApiError).code).toBe('invalid_response');
+
+    // A valid answer never asks, and `/api/version` is never asked about.
+    const asked = vi.fn(async () => true);
+    const valid = createApiClient({
+      fetchImpl: respondWith({ ok: true }) as unknown as typeof fetch,
+      isPlatformUpdated: asked,
+    });
+    await valid.get('/api/thing', { schema });
+    const version = createApiClient({
+      fetchImpl: respondWith({ ok: 'yes' }) as unknown as typeof fetch,
+      isPlatformUpdated: asked,
+    });
+    const versionError = await version
+      .get('/api/version', { schema })
+      .catch((caught: unknown) => caught);
+    expect((versionError as ApiError).code).toBe('invalid_response');
+    expect(asked).not.toHaveBeenCalled();
   });
 
   it('refuses a response that does not match, rather than handing it to a component', async () => {

@@ -29,7 +29,7 @@
  * the shim then refused is held like any run that may have spent. That is the fail-closed side of
  * the window (standing rule 20), and it is one frame wide.
  */
-import type { Id, IsoDateTime, RunCost, TokenUsage } from '@platform/contracts';
+import type { Id, IsoDateTime, RunCost, RunStartFailure, TokenUsage } from '@platform/contracts';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import { type RunOutcome, RunStartError, type RunStartHooks } from '../ports/runner.js';
@@ -57,6 +57,12 @@ export interface CliSpawnRecord {
   readonly hooks: RunStartHooks;
   /** `true` once this record's own write committed — the CLI may then have been started. */
   readonly requested: () => boolean;
+  /**
+   * `true` once the runner reached the spawn gate and asked — whether or not the write committed.
+   * It tells a stop that landed while the workspace and the shim were still being prepared from one
+   * that landed at the marker itself (WP-154 (b′), {@link stoppedBeforeCliSpawn}).
+   */
+  readonly asked: () => boolean;
 }
 
 /**
@@ -98,6 +104,7 @@ export const recordCliSpawn = (deps: {
       },
     },
     requested: () => written,
+    asked: () => asked,
   };
 };
 
@@ -113,7 +120,7 @@ export const isStopEnding = (outcome: RunOutcome): boolean =>
  * A stop that landed **before** the CLI was asked for, as a measured zero: no usage, no turns, the
  * start failure's zero, and not `costUnmeasured` — nothing could have been spent.
  */
-export const unspawnedStop = (outcome: RunOutcome): RunOutcome => {
+export const unspawnedStop = (outcome: RunOutcome, startFailure?: RunStartFailure): RunOutcome => {
   const { costUnmeasured: _unmeasured, ...rest } = outcome;
   return {
     ...rest,
@@ -121,8 +128,61 @@ export const unspawnedStop = (outcome: RunOutcome): RunOutcome => {
     usage: NO_RUN_USAGE,
     modelUsage: [],
     cost: MEASURED_ZERO_COST,
+    ...(startFailure === undefined ? {} : { startFailure }),
   };
 };
+
+/**
+ * How far a stopped run got before its CLI was asked for (WP-154 (b′), PROGRESS backlog 502).
+ *
+ * - `unheld` — no process held a live lease on the run, so the cancel ended the row **in place**
+ *   (`endRunRecordInPlace`) and nothing was asked of a workspace on its behalf after that;
+ * - `preparing` — the process holding the run applied the stop while its workspace and run shim
+ *   were still being prepared, before the runner reached the spawn gate;
+ * - `spawn_gate` — the runner had reached the spawn gate and the marker was not written.
+ */
+export type UnspawnedStopStep = 'unheld' | 'preparing' | 'spawn_gate';
+
+const STOP_ENDING_WORDS = {
+  cancelled: 'cancelled by a person',
+  shutdown: "handed back when the platform's runner stopped",
+} as const;
+
+const STOP_STEP_WORDS: Readonly<Record<UnspawnedStopStep, string>> = {
+  unheld: 'no process was holding the run, so it was ended as a record',
+  preparing: 'while its workspace and run shim were being prepared',
+  spawn_gate: 'at the CLI spawn marker, which was not written',
+};
+
+/**
+ * The cause a stop that landed **before** the CLI spawn marker records — on `runs.exit_detail`
+ * and on its terminal event's `start_failure` — so the run page can say *did not start* and the
+ * event log can tell this run from one that started and was stopped (WP-154 (b′)).
+ *
+ * Platform text only, from two closed tables: who ended it and the step it had reached. **Never a
+ * `workspace_failed` word** (`describeStartFailure`'s vocabulary): a person's cancel is not a
+ * workspace failure, and the run's status (`cancelled`) still says who ended it — the architect's
+ * amendment to WP-150's ruling (d). `detail` is `null`: no launcher said anything.
+ */
+export const stoppedBeforeCliSpawn = (input: {
+  readonly ending: keyof typeof STOP_ENDING_WORDS;
+  readonly step: UnspawnedStopStep;
+  /** The stage's start attempt, or 1 where the caller cannot know it (an in-place cancel, an ask). */
+  readonly attempt: number;
+  /** `true` only for a hand-back the stage was re-enqueued after. */
+  readonly retryable: boolean;
+}): RunStartFailure => ({
+  kind: 'not_started',
+  diagnosis: `${STOP_ENDING_WORDS[input.ending]} before its CLI was asked to start: ${STOP_STEP_WORDS[input.step]}`,
+  detail: null,
+  truncated: false,
+  attempt: input.attempt,
+  retryable: input.retryable,
+});
+
+/** Which of {@link stoppedBeforeCliSpawn}'s endings a stop outcome is. */
+export const stopEndingOf = (outcome: RunOutcome): 'cancelled' | 'shutdown' =>
+  outcome.terminalReason === 'shutdown' ? 'shutdown' : 'cancelled';
 
 /**
  * Why an ending that was not a stop is recorded as a start failure when it came back with no marker

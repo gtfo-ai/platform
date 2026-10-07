@@ -635,6 +635,15 @@ export const runFinishedEvent = defineEvent('run.finished', {
    * every `run.finished` appended before it still parses unchanged on replay.
    */
   saved_work: runSavedWorkSchema.nullish(),
+  /**
+   * Present exactly when the run was **stopped before its CLI was asked to start** (WP-154 (b′),
+   * PROGRESS backlog 502): a person's cancel, ended in place or applied by the process holding the
+   * run, or a hand-back at shutdown, that landed before `runs.cli_spawn_requested_at` was written.
+   * The status still says who ended the run (`cancelled`); this says how far it got — platform text
+   * naming the step, never a `workspace_failed` word — and is the object `runs.exit_detail` holds.
+   * Nullish, so every `run.finished` appended before it still parses unchanged on replay.
+   */
+  start_failure: runStartFailureSchema.nullish(),
 });
 
 export const runFailedEvent = defineEvent('run.failed', {
