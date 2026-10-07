@@ -15188,6 +15188,78 @@ WP-154's note at `PROGRESS.md:45421` are amended (rule 83).
 **Depends on** WP-154 landing. Touching the 60 `String(error)` sites is the cost of the instance-check option; a
 single `errorText`/marker helper keeps the change at one module plus the call sites' spelling.
 
+### 525. **`last_discovery.escalation.brief` is published with no length bound: the read and the DTO take whatever string the newest `task.escalated` event carries, and neither the event schema nor `amendEscalation` bounds it** (TODO, **minor, live once WP-155 lands. It is the first DTO to publish `blocker_brief`. The review's *"keeps growing"* is not what the code does: an amendment is a new event with its own brief, and the read takes only the newest one, so nothing accumulates. What is unbounded is one brief.** WP-155's review, session 13, read by the refiner against WP-155's uncommitted tree on `473679f2`. **No work package owns it**: no open M9 row (WP-156, WP-157, WP-161) touches `apps/server/src/onboarding.ts` or the gate DTO)
+
+**What is wrong (read, not run — rule 66).** `createDiscoveryEscalationRead` (`apps/server/src/onboarding.ts:386-410`)
+selects `payload->>'blocker_brief'` of the newest `task.escalated` event and returns it unchanged.
+The DTO field is `brief: nonEmptyStringSchema` (`packages/contracts/src/api.ts:814`), which is
+`z.string().min(1)` (`packages/contracts/src/common.ts:31`), and the event field is the same schema
+(`packages/contracts/src/events.ts:294-296`). So no bound exists at the producer, the event, the read or the wire.
+`amendEscalation` (`packages/domain/src/aggregates/task.ts:578-594`) emits a fresh `task.escalated` with the
+caller's brief and does not concatenate; its callers (`packages/application/src/pipeline/job-escalation.ts:154`,
+`packages/application/src/pipeline/saga.ts:1556`) pass platform sentences. The read orders newest first and takes one row
+(`onboarding.ts:394-398`), so repeated amendments replace the brief rather than grow it.
+
+**Evidence.** Read only. **Hypothesis, not measured:** whether any producer that can escalate a *discovery* task
+interpolates provider or model text of unbounded length. One brief that does interpolate is the gate outage's
+(`packages/application/src/pipeline/ci-settle.ts:155`, `result.detail`), and a discovery task does not reach that gate.
+Needs measurement: the longest brief any producer can write, read producer by producer.
+
+**What it costs to leave.** A pathological brief makes one gate response large and one wizard paragraph long.
+The SPA renders it as text (`<UntrustedText>`), so nothing is injected. It is a size issue, not a safety issue.
+
+**Done when** one of two things is true. Either the read caps `brief` at a stated byte budget with a platform-written
+truncation marker, with a unit case (an over-budget brief answers the cap plus the marker; one under the cap is unchanged).
+Or the `createDiscoveryEscalationRead` docblock and the `api.ts:803-809` docblock state that the brief is unbounded,
+naming why that is acceptable (every producer is platform text plus a ticket key), with the producer census to back it.
+The reviewer's direction is the cap.
+
+**Depends on** WP-155 landing.
+
+### 526. **The wizard's discovery status prints the gate's stale in-flight sentence after "It is waiting for a person" when the task's SSE update reaches `needs_human` before the gate is re-read** (TODO, **nit, live once WP-155 lands. It is transient, and it lasts until the gate refetches. The text is the platform's own, so it is wrong, not unsafe.** WP-155's review, session 13, read by the refiner against WP-155's uncommitted tree on `473679f2`. **No work package owns it**: no open M9 row touches `apps/web/src/features/discovery-status.tsx`)
+
+**What is wrong (read, not run — rule 66).** In `apps/web/src/features/discovery-status.tsx:133-138`, the `needs_human`
+branch with no `escalation` renders the gate's `blocker.detail` after the fixed sentence. The phase comes from the task's own read
+(`:96`, which the `task:<id>` topic refreshes), but `blocker` and `escalation` come from the gate (`:77-78`, `:104`).
+When the task moves first, the gate still holds the `discovery_in_flight` blocker written for a running task:
+*"discovery task … started … ago … and has not finished; follow it on its task page, or …"*
+(`packages/application/src/onboarding/rediscovery.ts:192-193`). The server writes a different sentence for a parked task
+(`rediscovery.ts:259-264`), but the client shows the older one until its gate read is refreshed.
+
+**Evidence.** Read only. No ui case drives the ordering (task update first, gate second). **Needs measurement:** whether anything
+re-reads the gate on that task update at all, or whether the stale sentence stays until the next invalidation.
+
+**What it costs to leave.** A person reads "waiting for a person" followed by "has not finished; follow it". The two contradict each other.
+
+**Done when** the fallback shows `blocker.detail` only when the gate's own view agrees with the phase (for example, only when `last_discovery.state`
+is `needs_human`), or it drops the detail and links the task, or the task update also invalidates the gate. A ui case: the task reads `needs_human`
+while the gate still holds the in-flight blocker, and the in-flight sentence is absent. **Canary:** restore the unconditional detail and the case fails.
+
+**Depends on** WP-155 landing.
+
+### 527. **A 503 from the rediscovery gate holds the wizard's *Save operating mode* busy for about a second, because the save's success handler awaits a project-wide invalidation that refetches the gate, and the gate inherits the app's `retry: 1`** (TODO, **minor, live once WP-155 lands. It only happens when the gate route fails, and the save is already performed when the button is held. It is a delay, not a lost write.** WP-155's review, session 13, observed in `apps/web/src/features/onboarding.test.tsx`'s fake; the mechanism was read by the refiner against WP-155's uncommitted tree on `473679f2`. **No work package owns it**: no open M9 row touches `apps/web/src/app/queries.ts` for this hook)
+
+**What is wrong (read, not run — rule 66).** `useRediscoveryGate` (`apps/web/src/app/queries.ts:116-124`) sets no `retry`, so
+it takes the application default `retry: 1` (`apps/web/src/app/app.tsx:89`), and TanStack's default delay before that retry is about 1 s.
+Its key is `['project', id, 'rediscovery']` (`apps/web/src/api/keys.ts:42`), under the prefix `['project', id]`
+(`keys.ts:39`). `setAutonomy`'s `onSuccess` awaits `invalidateQueries({ queryKey: queryKeys.project(projectId) })`
+(`queries.ts:1246-1249`), which refetches every active query under that prefix, the gate included. WP-155 now mounts the gate on the wizard
+(the discovery-status step), so the mutation stays pending and the button disabled (`apps/web/src/features/operating-mode.tsx:433`, `:446`)
+until the gate's retry has also failed. The hook is shared by `apps/web/src/features/rediscovery.tsx` (settings) and
+`apps/web/src/features/discovery-status.tsx` (wizard), so a change applies to both.
+
+**Evidence.** The reviewer's observation in the test fake (about 1 s), and the mechanism above read off the tree.
+**Not measured here:** the delay against a real server. `useProjectReadiness` already sets `retry: false` for a 409 (`queries.ts:105-107`), which is the precedent.
+
+**What it costs to leave.** Saving the operating mode takes about a second longer while the gate route is failing. Nothing is lost.
+
+**Done when** one of these is decided and tested. Either (a) the gate read sets `retry: false`, because a failed gate shows its own notice and the
+next invalidation re-reads it, which is the readiness precedent. Or (b) `setAutonomy` does not await the prefix invalidation (fire it, or
+narrow it to the keys the dial actually moves). Option (a) is the smaller change. A ui case: the gate answers 503 and the save button is enabled again
+as soon as the PUT resolves. **Canary:** restore the default retry, or the awaited prefix invalidation, and the case fails.
+
+**Depends on** WP-155 landing.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -45427,3 +45499,41 @@ The reviewer's two mutants were re-run and both are killed. `isWriteTarget(targe
 **Not run by the implementer:** `verify:integration` as a whole and `verify:e2e` (the orchestrator's); only `test/integration/pipeline/cancel-before-cli-spawn.integration.test.ts` was run (2 passed). No image was built: criterion (4) is held on the files and a real Vite build, not on a built image's bundle.
 
 **Discovered work:** none beyond the residual stated above (a command whose response fails its schema after an upgrade shows its screen's title-only notice beside the banner).
+
+#### WP-155
+
+**The onboarding wizard says what it is doing** (backlog 450, 451, 452). Implemented in the main checkout at `473679f2`; no migration.
+
+**What changed:**
+- **(a) Step 3** (`apps/web/src/features/onboarding.tsx`) is headed *Business interview (optional)*, says every section can be left empty and the step answered later from the project's settings (a router link; the settings page renders the same `BusinessInterview`), and has **Skip for now**: a client-side collapse with **Answer it now** to undo it — no request, nothing recorded.
+- **(b) The shared result** is `apps/web/src/features/connection-test-result.tsx` (`ConnectionTestResult`): pending (*Testing the connection…*, new on both screens), *Last test: passed/failed* with each check through `UntrustedText`, or the *could not be run* notice. The Integrations screen's inline card is replaced by it at the same place; the wizard renders it inside the row whose id is the mutation's `variables`, so the answer sits beside the tested integration only. The wizard's button is now disabled while a probe runs, as the card's is. Before WP-155 the wizard's press sent the probe (the request was always made) and rendered none of the mutation's state — that answers backlog 451's open question.
+- **(c) Step 2** renders `apps/web/src/features/discovery-status.tsx` (`DiscoveryStatus`): the task id from `GET …/rediscovery` (`discovery_in_flight`'s `task_id`, else `last_discovery.task_id`), the task through `useTask` with `task:<id>` retained, and a phase — queued / running (*Watch its live transcript* → `/runs/<id>`) / needs a person (the escalation) / paused / done (*readiness level N* from the readiness read) / cancelled — plus *Open its task*. The click's own sentence stays above it, and a failed click now shows an error notice (it showed nothing).
+- **The escalation reason had no reader**: no DTO published `task.escalated`'s `reason`/`blocker_brief`. Added `last_discovery.escalation: {at, reason, brief} | null` to `rediscoveryGateResponseSchema`, asked by `readRediscoveryGate` only while the last discovery is `needs_human` (`RediscoveryReadOptions.escalation`), composed in `apps/server/src/onboarding.ts` as `createDiscoveryEscalationRead` — the newest `task.escalated` on the task's stream, ordered like `pausedReasonsFor`, `null` for a payload missing either string.
+
+**Tests:** `apps/web/src/features/onboarding-status.test.tsx` (11 ui cases: (a) heading, link, skip records nothing; (b) pending → failed with checks beside the tested row only, error notice; (c) phase table, refresh during a running discovery, queued, parked with reason as text, done with level, nothing before the first discovery and the read failure, the task's state over a stale gate, and live — a `task.escalated` frame through the real provider and bridge moves running → needs a person with the reason); `packages/application/src/onboarding/rediscovery.test.ts` (asked only while parked); `apps/server/src/routes/rediscovery.test.ts` (published); `apps/server/src/onboarding.test.ts` (the row-to-answer half — added because `verify`'s coverage ratchet measured `apps/server` branches at 56.97 % against 57 % with the read covered only by the integration tier); `test/integration/server/onboarding.integration.test.ts` › "the discovery escalation read" (2 cases, run by the implementer: 2 passed); `test/web-e2e/screens.spec.ts` › "the wizard’s Test connection shows a failed result beside the integration (WP-155)" (fake backend answers `POST /api/integrations/<id>/test` with a refused credential).
+
+**Canaries** (each on the file, restored by copy, `git diff` clean afterwards):
+- heading without *(optional)* → dead by `onboarding-status.test.tsx` › "is headed optional, names the settings page, and skipping records nothing" and `onboarding.test.tsx` › "shows every step, the business interview included".
+- *Skip for now* also sends a command → **survived** the first version (the assertion ran before the request left — rule 87); the case now sends a known probe after the skip and waits for it, and the canary is dead by "is headed optional, names the settings page, and skipping records nothing".
+- wizard renders no `ConnectionTestResult` → dead by "shows pending, then the failed result with its checks, beside the tested integration only", "shows the error notice when the test could not be run", and the Playwright case (`screens.spec.ts` › "the wizard’s Test connection shows a failed result beside the integration (WP-155)", `Last test: failed` not found).
+- result rendered on every row → dead by "shows pending, then the failed result with its checks, beside the tested integration only".
+- no `task:<id>` topic → dead by "follows the task live: a frame for it moves the step from running to parked".
+- state read from the gate only → **survived** the live case (both reads refresh on one frame); dead by the added "takes the task’s own state over the gate’s when the two reads disagree".
+- escalation not read → dead by "shows a parked discovery with the escalation’s reason and brief, as text" and the live case.
+- no transcript link → dead by "shows a running discovery after a refresh, with the link to its live transcript".
+- the reader asked for a finished task → dead by `packages/application/src/onboarding/rediscovery.test.ts` › "carries the escalation of a parked discovery task, and asks for it only while the task waits (WP-155)".
+- the route publishes `null` → dead by `apps/server/src/routes/rediscovery.test.ts` › "publishes why a parked discovery waits for a person (WP-155)".
+- the SQL without `type = 'task.escalated'` → dead by `onboarding.integration.test.ts` › "answers the newest escalation of that task, and nothing of another task’s or another type".
+
+**Decisions and assumptions:**
+- **The reason rides the gate, not the task DTO.** Ruling (c) names the gate as the step's read; adding a field to `taskRecordSchema` or `taskDetailResponseSchema` would touch every strict fixture of both (26 files) for one screen. Published only while `needs_human`: a resolved escalation is history, and the step would show it as the present.
+- **`last_discovery` is the gate's own answer**: after a re-evaluation records an evaluation the gate's basis moves and `last_discovery` names the *first* discovery task again (WP-94's loop). The wizard's step is the first discovery, so it follows what the gate names; stated, not changed.
+- **Phase table**: `queued` also covers an `active` task with no live stage run (its stage job not started, or the run just ended and the recording is pending); any other open state reads as running; `done`/`merged`/`retro`/`ready_for_merge` read as done.
+- **A gate read that fails** says so in one muted line rather than an error notice: the step's own button and the readiness panel still work.
+- `onboarding.test.tsx`'s fake now answers the gate: its 404 retried with backoff inside a mutation's `invalidateQueries(['project', id])`, holding *Save operating mode* pending past the next click — measured, "saves the dial through its own command…" failed until the fake served it. A real 503 from the gate would delay a step-4 save the same ~1 s; recorded, not changed (`useRediscoveryGate` is shared with the settings page).
+
+**Sentences falsified** (rule 83; grep: `red badge`, `transcript you can watch`, `leave it empty to skip`, `Test connection`, `Wizard |`): `docs/user-guide.md` § "Step 1 — Connect" (*a red badge here* — the wizard drew none; now the shared result), § "Step 2" (*a transcript you can watch* — now true from the step, with the phases), § "Step 3" (skippable step and *Skip for now*), § "9. Integrations" (*Test connection … in the wizard beside the binding* — was true of the button only); `docs/technical/09-ui-architecture.md` *Wizard* row (it claimed `project:*`; the wizard retained no topic before WP-155, now `task:<discovery task>`); `docs/technical/08-api-and-realtime.md` rediscovery entry (`last_discovery.escalation`).
+
+**Not run by the implementer:** `verify:integration` as a whole and `verify:e2e`; only `onboarding.integration.test.ts -t "discovery escalation"` (2 passed).
+
+**Discovered work:** none.

@@ -27,7 +27,10 @@ import { SHIPPED_PROVIDERS } from '@platform/integrations';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createReadinessCiEvents } from '../../../apps/server/src/onboarding.js';
+import {
+  createDiscoveryEscalationRead,
+  createReadinessCiEvents,
+} from '../../../apps/server/src/onboarding.js';
 import type { Database } from '../../../apps/server/src/queries/identity-queries.js';
 import {
   claimIdempotentAttemptInTransaction,
@@ -889,5 +892,77 @@ describe('claiming an attempt inside the command’s transaction', () => {
         where action = 'project.interview.record' and params ->> 'idempotency_key' = 'claim-race'`,
     );
     expect(rows.rows).toEqual([{ count: 1 }]);
+  });
+});
+
+/**
+ * Why a parked discovery waits for a person (WP-155, PROGRESS backlog 452): the newest
+ * `task.escalated` off the task's own stream, read from the real `events` table because the order
+ * and the JSON reads are SQL. Each excluded shape has a row that would answer if its clause were
+ * dropped (rule 42).
+ */
+describe('the discovery escalation read', () => {
+  const appendTask = async (
+    taskId: string,
+    type: string,
+    payload: Record<string, unknown>,
+    occurredAt: string,
+  ) => {
+    const next = await pool.query<{ seq: number }>(
+      `select coalesce(max(stream_seq), 0)::int + 1 as seq
+         from events where stream_type = 'task' and stream_id = $1`,
+      [taskId],
+    );
+    await pool.query(
+      `insert into events (id, stream_type, stream_id, stream_seq, type, payload, actor, occurred_at)
+       values (gen_random_uuid(), 'task', $1, $2, $3, $4::jsonb, $5::jsonb, $6)`,
+      [
+        taskId,
+        next.rows[0]?.seq ?? 1,
+        type,
+        JSON.stringify({ project_id: projectId, task_id: taskId, ...payload }),
+        JSON.stringify({ kind: 'system', component: 'test' }),
+        occurredAt,
+      ],
+    );
+  };
+  const read = () => createDiscoveryEscalationRead(pool);
+
+  it('answers the newest escalation of that task, and nothing of another task’s or another type', async () => {
+    const task = crypto.randomUUID();
+    const other = crypto.randomUUID();
+    const earlier = new Date(Date.now() - 60_000).toISOString();
+    const later = new Date(Date.now() - 1_000).toISOString();
+    await appendTask(task, 'task.escalated', { reason: 'first', blocker_brief: 'old' }, earlier);
+    await appendTask(
+      task,
+      'task.escalated',
+      { reason: 'run_failed', blocker_brief: 'read it' },
+      later,
+    );
+    // Newer than both, but not an escalation: the type clause is what keeps it out.
+    await appendTask(
+      task,
+      'task.paused',
+      { reason: 'manual', blocker_brief: 'x' },
+      new Date().toISOString(),
+    );
+    // Another task's escalation, newest of all: the stream clause is what keeps it out.
+    await appendTask(
+      other,
+      'task.escalated',
+      { reason: 'other', blocker_brief: 'theirs' },
+      new Date().toISOString(),
+    );
+
+    expect(await read()(task)).toEqual({ at: later, reason: 'run_failed', brief: 'read it' });
+    expect(await read()(other)).toMatchObject({ reason: 'other', brief: 'theirs' });
+  });
+
+  it('answers null for a task that never escalated, and for half a reason', async () => {
+    expect(await read()(crypto.randomUUID())).toBeNull();
+    const half = crypto.randomUUID();
+    await appendTask(half, 'task.escalated', { reason: 'run_failed' }, new Date().toISOString());
+    expect(await read()(half)).toBeNull();
   });
 });

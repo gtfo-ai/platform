@@ -69,6 +69,12 @@ export type RediscoveryGateReader = (projectId: string) => Promise<{
     readonly costUsd: number;
     /** WP-124: why this task's findings were never recorded, when the recovery gave up. */
     readonly findingsUnrecorded?: { readonly at: string; readonly reason: string } | null;
+    /** WP-155: the newest escalation, while the task is `needs_human`. */
+    readonly escalation?: {
+      readonly at: string;
+      readonly reason: string;
+      readonly brief: string;
+    } | null;
   } | null;
   readonly blocker: {
     readonly code: string;
@@ -217,7 +223,7 @@ export const registerRediscoveryRoutes = async (
       schema: {
         summary: 'Whether discovery may run again on this project, and what it may cost',
         description:
-          '`can_start` and `blocker` are the answer the command decides with, published so the screen states the reason instead of offering a button that fails. `ceiling_usd` is the `discovery` stage’s run budget — the figure the admission guard reserves, a cap and not a prediction; `last_discovery.cost_usd` is what the project’s most recent discovery task actually cost.',
+          '`can_start` and `blocker` are the answer the command decides with, published so the screen states the reason instead of offering a button that fails. `ceiling_usd` is the `discovery` stage’s run budget — the figure the admission guard reserves, a cap and not a prediction; `last_discovery.cost_usd` is what the project’s most recent discovery task actually cost, and `last_discovery.escalation` why it waits for a person while it is `needs_human`.',
         tags: ['projects'],
         params: projectParamsSchema,
         response: { 200: rediscoveryGateResponseSchema, 404: apiErrorSchema, 503: apiErrorSchema },
@@ -255,6 +261,7 @@ export const registerRediscoveryRoutes = async (
                 state: gate.lastDiscovery.state as never,
                 cost_usd: gate.lastDiscovery.costUsd,
                 findings_unrecorded: gate.lastDiscovery.findingsUnrecorded ?? null,
+                escalation: gate.lastDiscovery.escalation ?? null,
               },
       };
     },

@@ -15,13 +15,19 @@
  *   **It does not create an integration**, and the sentence that said it did was false from WP-21
  *   until WP-30 (PROGRESS backlog 55): the create control is on the Integrations screen, where
  *   product/10 puts it and where this step links. The two screens used to attribute it to each
- *   other, which is how a served endpoint ended up with no caller anywhere.
+ *   other, which is how a served endpoint ended up with no caller anywhere. Since WP-155 (backlog
+ *   451) a *Test connection* shows its answer beside the integration it tested, through the
+ *   Integrations screen's own component (`connection-test-result.tsx`); before it the wizard sent
+ *   the probe and rendered nothing.
  * - **Step 2 (technical discovery)** starts the Discovery agent and shows the readiness evaluation
- *   it produces, with product/17's three cheapest improvements.
+ *   it produces, with product/17's three cheapest improvements — and, since WP-155 (backlog 452),
+ *   where the discovery task is now (`discovery-status.tsx`), read back on load and followed live.
  * - **Step 3 (business interview)** is `features/business-interview.tsx` since WP-64, rendered here
  *   and on the project settings page: product/19 §8's question bank as a form, whose answers become
  *   `business/*` pages **in the proposal queue** — never a commit. It is the form without the
- *   Product Manager's conversation (Q102), and it says so.
+ *   Product Manager's conversation (Q102), and it says so. Since WP-155 (backlog 450) it is headed
+ *   *(optional)*, says it can be answered later from the settings page, and has a *Skip for now*
+ *   that records nothing.
  * - **Step 3b (history bootstrap)** is `features/history-bootstrap.tsx`, rendered here and on the
  *   project settings page — the *same component*, for step 4's reason. It is optional and
  *   budget-capped, it shows the estimate before it starts anything (product/06's own requirement),
@@ -70,7 +76,9 @@ import {
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { BusinessInterview } from './business-interview.js';
+import { ConnectionTestResult } from './connection-test-result.js';
 import { DefaultBranch, DefaultBranchMismatch } from './default-branch.js';
+import { DiscoveryStatus } from './discovery-status.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 import { ReadinessNotices } from './readiness-notices.js';
@@ -104,6 +112,8 @@ export const OnboardingScreen = (): ReactElement => {
   const [chosen, setChosen] = useState<string | null>(null);
   const [draft, setDraft] = useState({ key: '', name: '', repoUrl: '', defaultBranch: '' });
   const [selected, setSelected] = useState<readonly string[]>([]);
+  /** Step 3's *Skip for now* (WP-155 ruling (a)): this tab's view only — it records nothing. */
+  const [interviewSkipped, setInterviewSkipped] = useState(false);
 
   /**
    * **The wizard is resumable, and this is the whole of it** (product/06: *"UI wizard, resumable,
@@ -221,28 +231,42 @@ export const OnboardingScreen = (): ReactElement => {
             <div className="flex flex-col gap-1">
               {/* A retired integration (WP-114) cannot be bound: the selector leaves it out (WP-122). */}
               {integrations.items.map((integration) => (
-                <label key={integration.id} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(integration.id)}
-                    onChange={(event) =>
-                      setSelected(
-                        event.target.checked
-                          ? [...selected, integration.id]
-                          : selected.filter((id) => id !== integration.id),
-                      )
-                    }
-                  />
-                  <UntrustedText value={integration.name} />
-                  <Badge>{integration.type}</Badge>
-                  <Button
-                    type="button"
-                    tone="ghost"
-                    onClick={() => commands.testIntegration.mutate(integration.id)}
-                  >
-                    Test connection
-                  </Button>
-                </label>
+                <div
+                  key={integration.id}
+                  className="flex flex-col gap-1"
+                  data-integration-row={integration.id}
+                >
+                  <div className="flex items-center gap-2 text-sm">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(integration.id)}
+                        onChange={(event) =>
+                          setSelected(
+                            event.target.checked
+                              ? [...selected, integration.id]
+                              : selected.filter((id) => id !== integration.id),
+                          )
+                        }
+                      />
+                      <UntrustedText value={integration.name} />
+                    </label>
+                    <Badge>{integration.type}</Badge>
+                    <Button
+                      type="button"
+                      tone="ghost"
+                      disabled={commands.testIntegration.isPending}
+                      onClick={() => commands.testIntegration.mutate(integration.id)}
+                    >
+                      Test connection
+                    </Button>
+                  </div>
+                  {/* WP-155 (backlog 451): the answer the Integrations card shows — the same
+                      component — beside the integration that was tested, and only that one. */}
+                  {commands.testIntegration.variables === integration.id ? (
+                    <ConnectionTestResult test={commands.testIntegration} />
+                  ) : null}
+                </div>
               ))}
             </div>
             {integrations.isSuccess && integrations.items.length === 0 ? (
@@ -305,6 +329,16 @@ export const OnboardingScreen = (): ReactElement => {
             <UntrustedText value={commands.startDiscovery.data.detail} />
           </p>
         ) : null}
+        {commands.startDiscovery.isError ? (
+          <ErrorNotice
+            title="Discovery was not started."
+            detail={String(commands.startDiscovery.error)}
+          />
+        ) : null}
+        {/* WP-155 (backlog 452): the discovery task read back — on load, after a refresh, and live. */}
+        {project === null ? null : (
+          <DiscoveryStatus projectId={project.id} projectKey={project.key} />
+        )}
         {/* WP-142: beside the readiness panel, the provider's default when it is not the stored one. */}
         {project === null ? null : <DefaultBranchMismatch projectId={project.id} />}
         {readiness.isSuccess ? (
@@ -351,14 +385,42 @@ export const OnboardingScreen = (): ReactElement => {
         ) : null}
       </Step>
 
-      <Step number={3} title="Business interview">
+      <Step number={3} title="Business interview (optional)">
         {project === null ? (
           <EmptyState
             title="Create the project first"
             hint="Step 1 is what a business context belongs to."
           />
         ) : (
-          <BusinessInterview projectId={project.id} projectKey={project.key} />
+          <>
+            {/* WP-155 ruling (a), backlog 450: the step says it can be left, and how to come back. */}
+            <p className="text-xs text-fg-muted">
+              Every section can be left empty, and the whole step can be skipped and answered later
+              from the project&rsquo;s{' '}
+              <Link to="/projects/$key/settings" params={{ key: project.key }}>
+                settings
+              </Link>
+              , which render this same form under <em>Business context</em>.
+            </p>
+            {interviewSkipped ? (
+              <p className="flex flex-wrap items-center gap-2 text-xs" data-interview="skipped">
+                Skipped for now — nothing was recorded.
+                <Button type="button" tone="ghost" onClick={() => setInterviewSkipped(false)}>
+                  Answer it now
+                </Button>
+              </p>
+            ) : (
+              <>
+                <div>
+                  {/* Records nothing: a client-side collapse, no request (ruling (a)). */}
+                  <Button type="button" tone="ghost" onClick={() => setInterviewSkipped(true)}>
+                    Skip for now
+                  </Button>
+                </div>
+                <BusinessInterview projectId={project.id} projectKey={project.key} />
+              </>
+            )}
+          </>
         )}
       </Step>
 

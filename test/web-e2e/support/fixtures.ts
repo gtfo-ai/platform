@@ -53,6 +53,7 @@ import {
   taskBreakdownSchema,
   taskDetailResponseSchema,
   taskRecordSchema,
+  testIntegrationResponseSchema,
   transcriptEventSchema,
   versionResponseSchema,
 } from '@platform/contracts';
@@ -874,6 +875,22 @@ export const integrationProviders = integrationProvidersResponseSchema.parse({
   items: SHIPPED_PROVIDERS.map(toIntegrationProvider),
 });
 
+/**
+ * `POST /api/integrations/:id/test` — a probe that reached the provider and was refused (WP-155,
+ * backlog 451). The detail carries markup on purpose: it is the provider's words (BD-022).
+ */
+export const failedConnectionTest = testIntegrationResponseSchema.parse({
+  ok: false,
+  checks: [
+    { name: 'reachable', ok: true, detail: 'HTTP 200 from fake.atlassian.invalid' },
+    {
+      name: 'authenticated',
+      ok: false,
+      detail: '401 <b>Unauthorized</b>: the API token was refused',
+    },
+  ],
+});
+
 export const setupGuide = setupGuideResponseSchema.parse({
   provider: 'jira-cloud',
   title: 'Connect Jira Cloud',
@@ -930,6 +947,7 @@ export const rediscoveryGate = rediscoveryGateResponseSchema.parse({
     state: 'done',
     cost_usd: 0.84,
     findings_unrecorded: null,
+    escalation: null,
   },
 });
 

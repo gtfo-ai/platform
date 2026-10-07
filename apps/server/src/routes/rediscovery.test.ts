@@ -217,8 +217,33 @@ describe('GET /api/projects/:project_id/rediscovery', () => {
       can_start: true,
       blocker: null,
       ceiling_usd: 2,
-      last_discovery: { task_id: TASK, state: 'done', cost_usd: 0.84, findings_unrecorded: null },
+      last_discovery: {
+        task_id: TASK,
+        state: 'done',
+        cost_usd: 0.84,
+        findings_unrecorded: null,
+        escalation: null,
+      },
     });
+  });
+
+  it('publishes why a parked discovery waits for a person (WP-155)', async () => {
+    const escalation = {
+      at: '2026-10-07T10:00:00.000Z',
+      reason: 'run_failed',
+      brief: 'The Discovery agent’s run failed; read its transcript.',
+    };
+    world.gate = {
+      ceilingUsd: 2,
+      lastDiscovery: { taskId: TASK, state: 'needs_human', costUsd: 0.84, escalation },
+      blocker: { code: 'discovery_in_flight', detail: 'parked for a human', taskId: TASK },
+    };
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${PROJECT}/rediscovery`,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body).last_discovery.escalation).toEqual(escalation);
   });
 
   it('publishes why the last discovery’s findings were never recorded, when the recovery gave up (WP-124)', async () => {

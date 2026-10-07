@@ -800,6 +800,20 @@ export const rediscoveryGateResponseSchema = z.strictObject({
       findings_unrecorded: z
         .strictObject({ at: isoDateTimeSchema, reason: nonEmptyStringSchema })
         .nullable(),
+      /**
+       * Why this discovery task waits for a person — its newest `task.escalated` event's `reason`
+       * and `blocker_brief`, with the instant (WP-155, PROGRESS backlog 452) — published only while
+       * the task is `needs_human`, and `null` otherwise. The wizard's technical-discovery step shows
+       * it beside the task's state. The brief is platform text that can quote a provider or a run's
+       * own words, so a reader renders it as untrusted text (BD-022).
+       */
+      escalation: z
+        .strictObject({
+          at: isoDateTimeSchema,
+          reason: nonEmptyStringSchema,
+          brief: nonEmptyStringSchema,
+        })
+        .nullable(),
     })
     .nullable(),
 });

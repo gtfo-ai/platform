@@ -199,6 +199,19 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
           );
     }
     if (url.includes('/api/projects/') && url.includes('/bindings')) return json({ items: [] });
+    // WP-155 (c): step 2 reads the discovery gate. No discovery has run in this world.
+    if (url.includes('/api/projects/') && url.includes('/rediscovery')) {
+      return json({
+        can_start: false,
+        blocker: {
+          code: 'discovery_not_started',
+          detail: 'this project has never run discovery',
+          task_id: null,
+        },
+        ceiling_usd: 2,
+        last_discovery: null,
+      });
+    }
     // WP-139: the stored default branch beside the provider's — no git binding in this world.
     if (url.includes('/api/projects/') && url.includes('/repository')) {
       return json({
@@ -328,7 +341,8 @@ describe('the onboarding wizard', () => {
     for (const title of [
       'Connect',
       'Technical discovery',
-      'Business interview',
+      // WP-155 (a): optional, like 3b.
+      'Business interview (optional)',
       // WP-35: product/06's own step 3b, the one step the wizard did not have.
       'History bootstrap (optional)',
       'Operating mode and features',

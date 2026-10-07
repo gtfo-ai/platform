@@ -33,6 +33,7 @@ import type {
   BusinessInterviewAnswers,
   BusinessInterviewResult,
   DiscoveryArtifact,
+  DiscoveryEscalation,
   DiscoveryRecordOptions,
   IntegrationActionExecutor,
   Jobs,
@@ -374,6 +375,41 @@ const readArtifact = async (
 };
 
 /**
+ * A discovery task's newest escalation — the `task.escalated` event's `reason` and `blocker_brief`
+ * off the task's own stream (WP-155, PROGRESS backlog 452), `null` when it has none.
+ *
+ * Read off the append-only log because no column holds it: the aggregate writes the state and the
+ * event carries the why, exactly as the task page's `paused_reason` is read (`pausedReasonsFor`).
+ * Ordered like that read — newest instant, then position — so a second escalation replaces the
+ * first. A payload missing either string is answered `null` rather than half a reason.
+ */
+export const createDiscoveryEscalationRead =
+  (pool: pg.Pool) =>
+  async (taskId: string): Promise<DiscoveryEscalation | null> => {
+    const { rows } = await pool.query<{
+      occurred_at: Date;
+      reason: string | null;
+      brief: string | null;
+    }>(
+      `select occurred_at, payload->>'reason' as reason, payload->>'blocker_brief' as brief
+         from events
+        where stream_type = 'task' and stream_id = $1 and type = 'task.escalated'
+        order by occurred_at desc, position desc
+        limit 1`,
+      [taskId],
+    );
+    const row = rows[0];
+    if (row === undefined || !row.reason || !row.brief) {
+      return null;
+    }
+    return {
+      at: new Date(row.occurred_at).toISOString() as IsoDateTime,
+      reason: row.reason,
+      brief: row.brief,
+    };
+  };
+
+/**
  * Whether a re-evaluation may start, and what it may cost — the read endpoint's half (WP-94).
  *
  * Composed on every API process, like the history bootstrap's gate: the answer is about the
@@ -409,6 +445,8 @@ export const createRediscoveryGate =
             ? null
             : { at: new Date(row.ended_at).toISOString() as IsoDateTime, reason: row.detail };
         },
+        // WP-155, backlog 452: why a parked discovery waits for a person, for the wizard's step 2.
+        escalation: createDiscoveryEscalationRead(options.pool),
       },
       projectId as Id,
     );

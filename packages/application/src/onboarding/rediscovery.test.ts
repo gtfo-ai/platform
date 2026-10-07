@@ -301,6 +301,52 @@ describe('readRediscoveryGate', () => {
     ).toBeNull();
   });
 
+  it('carries the escalation of a parked discovery task, and asks for it only while the task waits (WP-155)', async () => {
+    const parked = setup({ failing: true });
+    await startProjectDiscovery(parked.discovery, {
+      projectId: parked.projectId,
+      requestedByUserId: USER,
+    });
+    await settle(parked.harness);
+    expect(parked.harness.store.snapshot()[0]?.task.state).toBe('needs_human');
+    const asked: string[] = [];
+    const escalation = {
+      at: '2026-10-07T10:00:00.000Z' as IsoDateTime,
+      reason: 'run_failed',
+      brief: 'The Discovery agent’s run failed; read its transcript.',
+    };
+    const reader = async (taskId: Id) => {
+      asked.push(taskId);
+      return escalation;
+    };
+    const read = await readRediscoveryGate(
+      { ...parked.gate, escalation: reader },
+      parked.projectId,
+    );
+    expect(read.lastDiscovery?.escalation).toEqual(escalation);
+    expect(asked).toEqual([read.lastDiscovery?.taskId]);
+    // Without the reader the field is null, not absent.
+    expect(
+      (await readRediscoveryGate(parked.gate, parked.projectId)).lastDiscovery?.escalation,
+    ).toBeNull();
+
+    // A finished discovery is not asked: an escalation a person resolved is history.
+    const finished = setup();
+    await startProjectDiscovery(finished.discovery, {
+      projectId: finished.projectId,
+      requestedByUserId: USER,
+    });
+    await settle(finished.harness);
+    asked.length = 0;
+    const done = await readRediscoveryGate(
+      { ...finished.gate, escalation: reader },
+      finished.projectId,
+    );
+    expect(done.lastDiscovery?.state).toBe('done');
+    expect(done.lastDiscovery?.escalation).toBeNull();
+    expect(asked).toEqual([]);
+  });
+
   it('reads the project’s own stage budget when it sets one', async () => {
     const { gate, projectId } = setup({ stageBudgetUsd: 3.5 });
     expect((await readRediscoveryGate(gate, projectId)).ceilingUsd).toBe(3.5);

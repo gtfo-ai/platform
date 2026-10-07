@@ -129,10 +129,22 @@ export interface RediscoveryGate {
      * or `null` when nothing was lost.
      */
     readonly findingsUnrecorded?: { readonly at: IsoDateTime; readonly reason: string } | null;
+    /**
+     * Why this task waits for a person — its newest `task.escalated` (WP-155, PROGRESS backlog
+     * 452). Read only while the task is `needs_human`; absent or `null` otherwise.
+     */
+    readonly escalation?: DiscoveryEscalation | null;
   } | null;
   readonly blocker: RediscoveryBlocker | null;
   /** The key the next re-evaluation would take; `null` exactly when {@link blocker} is set. */
   readonly ticketKey: string | null;
+}
+
+/** A discovery task's newest escalation: the event's `reason`, its `blocker_brief`, its instant. */
+export interface DiscoveryEscalation {
+  readonly at: IsoDateTime;
+  readonly reason: string;
+  readonly brief: string;
 }
 
 export interface RediscoveryReadOptions {
@@ -149,6 +161,11 @@ export interface RediscoveryReadOptions {
   readonly findingsUnrecorded?: (
     taskId: Id,
   ) => Promise<{ readonly at: IsoDateTime; readonly reason: string } | null>;
+  /**
+   * The newest escalation of a discovery task (WP-155), asked only when the last discovery is
+   * `needs_human`. Optional: a composition without it publishes `null`.
+   */
+  readonly escalation?: (taskId: Id) => Promise<DiscoveryEscalation | null>;
 }
 
 /**
@@ -298,10 +315,16 @@ export const readRediscoveryGate = async (
     last === null || options.findingsUnrecorded === undefined
       ? null
       : await options.findingsUnrecorded(last.taskId);
+  // WP-155: the reason is published only while the task waits for a person — an escalation a
+  // person has since resolved is history, and the wizard would otherwise show it as the present.
+  const escalation =
+    last === null || last.state !== 'needs_human' || options.escalation === undefined
+      ? null
+      : await options.escalation(last.taskId);
   return {
     ceilingUsd: runBudgetUsd(settings, DISCOVERY_STAGE),
     ...decided,
-    lastDiscovery: last === null ? null : { ...last, findingsUnrecorded: lost },
+    lastDiscovery: last === null ? null : { ...last, findingsUnrecorded: lost, escalation },
   };
 };
 

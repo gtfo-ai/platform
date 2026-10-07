@@ -21,7 +21,11 @@ import type { PipelineIntegrationsPort } from '@platform/application';
 import { silentLogger } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
-import { boundProjectReader, createPlatformReadinessProbe } from './onboarding.js';
+import {
+  boundProjectReader,
+  createDiscoveryEscalationRead,
+  createPlatformReadinessProbe,
+} from './onboarding.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1' as Id;
 
@@ -177,6 +181,28 @@ describe('boundProjectReader (WP-137, WP-141)', () => {
         'https://gitlab.example.test/acme/autix.git',
         'https://gitlab.example.test/acme/other.git',
       ])('i-1'),
+    ).toBeNull();
+  });
+});
+
+/**
+ * WP-155: the row-to-answer half of the discovery escalation read. The SQL is held by
+ * `test/integration/server/onboarding.integration.test.ts` › "the discovery escalation read"; this
+ * is the decision about what a row means — no row, half a reason, a whole one.
+ */
+describe('createDiscoveryEscalationRead (WP-155)', () => {
+  const readOver = (rows: readonly Record<string, unknown>[]) =>
+    createDiscoveryEscalationRead({ query: async () => ({ rows }) } as never);
+  const at = new Date('2026-10-07T05:30:00.000Z');
+
+  it('answers the row’s reason, brief and instant, and null for no row or half a reason', async () => {
+    expect(
+      await readOver([{ occurred_at: at, reason: 'run_failed', brief: 'exit 1' }])('t-1'),
+    ).toEqual({ at: '2026-10-07T05:30:00.000Z', reason: 'run_failed', brief: 'exit 1' });
+    expect(await readOver([])('t-1')).toBeNull();
+    expect(await readOver([{ occurred_at: at, reason: null, brief: 'exit 1' }])('t-1')).toBeNull();
+    expect(
+      await readOver([{ occurred_at: at, reason: 'run_failed', brief: '' }])('t-1'),
     ).toBeNull();
   });
 });

@@ -504,6 +504,14 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       });
       return;
     }
+    // WP-155 (backlog 451): the connection probe, answered as a refused credential. Logged like
+    // every command, so a test can tell the press reached the server from the answer it rendered.
+    if (path === `/api/integrations/${fixtures.IDS.integration}/test` && method === 'POST') {
+      await readBody(request);
+      commands.push({ path, body: {} });
+      json(response, 200, fixtures.failedConnectionTest);
+      return;
+    }
     // WP-93: `PATCH /api/org`, parsed with the published schema and logged like every command.
     if (path === '/api/org' && method === 'PATCH') {
       const parsed = patchOrgSettingsRequestSchema.safeParse(await readBody(request));

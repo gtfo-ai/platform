@@ -72,6 +72,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { CopyableUrl, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { ConnectionTestResult } from './connection-test-result.js';
 
 const HEALTH_TONE: Record<string, BadgeTone> = {
   ok: 'success',
@@ -749,26 +750,8 @@ export const IntegrationsScreen = (): ReactElement => {
         ))}
       </div>
 
-      {commands.testIntegration.isError ? (
-        <ErrorNotice
-          title="The connection test could not be run."
-          detail={String(commands.testIntegration.error)}
-        />
-      ) : null}
-      {commands.testIntegration.isSuccess ? (
-        <Card className="flex flex-col gap-1 text-xs">
-          <p className="font-semibold">
-            Last test: {commands.testIntegration.data.ok ? 'passed' : 'failed'}
-          </p>
-          {commands.testIntegration.data.checks.map((check) => (
-            <p key={check.name}>
-              <Badge tone={check.ok ? 'success' : 'danger'}>{check.name}</Badge>{' '}
-              {/* The provider's own words about the operator's own instance (BD-022). */}
-              <UntrustedText value={check.detail} />
-            </p>
-          ))}
-        </Card>
-      ) : null}
+      {/* WP-155 (backlog 451): the one rendering the wizard's step 1 shares. */}
+      <ConnectionTestResult test={commands.testIntegration} />
 
       <Card className="flex flex-col gap-2">
         <SectionHeading>Add an integration</SectionHeading>

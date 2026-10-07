@@ -300,6 +300,28 @@ test('the integrations screen carries the create and test controls', async ({ pa
   await expect(page.getByLabel('Environment variable for api_token')).toBeVisible();
 });
 
+test('the wizard’s Test connection shows a failed result beside the integration (WP-155)', async ({
+  page,
+  request,
+}) => {
+  // PROGRESS backlog 451: the press sent the probe and the step rendered nothing. The answer is
+  // the Integrations card's own component, beside the integration that was tested.
+  await page.goto('/onboarding');
+  const row = page.locator(`[data-integration-row="${IDS.integration}"]`);
+  await expect(row.getByText('Jira (fake)', { exact: true })).toBeVisible();
+  await row.getByRole('button', { name: 'Test connection' }).click();
+  // Waited on the last thing the page writes — the rendered verdict — then the log asserted as
+  // what it implies (rule 87): exactly one probe reached the server.
+  await expect(row.getByText('Last test: failed')).toBeVisible();
+  await expect(row.getByText('authenticated', { exact: true })).toBeVisible();
+  // The provider's words, as text (BD-022).
+  await expect(row.getByText('401 <b>Unauthorized</b>: the API token was refused')).toBeVisible();
+  await expect(row.locator('b')).toHaveCount(0);
+  expect((await commandLog(request)).filter((entry) => entry.path.endsWith('/test'))).toHaveLength(
+    1,
+  );
+});
+
 test('the theme control switches the document theme', async ({ page }) => {
   await page.goto('/settings');
   await page.getByLabel('Theme preference').selectOption('dark');

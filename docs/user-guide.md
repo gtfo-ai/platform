@@ -85,8 +85,10 @@ button that did nothing.
 Then: the integrations the project uses. This step **binds and tests** them; it does not create them.
 An integration has to exist first: an admin creates it on the **Integrations** screen (section 9) or
 with the request in the operator guide's §4. Once one exists it appears here as a checkbox, "Test connection" makes one real call to the provider and records the
-result, and "Bind" attaches it to this project. A wrong token is therefore a red badge here rather
-than a failed run tomorrow.
+result, and "Bind" attaches it to this project. The result is shown beside the integration you
+tested, as on the Integrations screen: *testing…* while the call runs, then **Last test: passed** or
+**Last test: failed** with each check the provider answered, or a notice that the test could not be
+run. A wrong token is therefore a failed test here rather than a failed run tomorrow.
 
 You never paste a credential into the browser, at any point. What is named is the *environment
 variable* the server should read, and the server seals the value itself.
@@ -95,7 +97,14 @@ variable* the server should read, and the server seals the value itself.
 
 Starts the **Discovery agent** on the repository. It is a normal agent run in every respect — it has
 a budget, a transcript you can watch, a cost entry, and it escalates to a human if it fails — and it
-produces two things:
+produces two things (below). The step shows where the discovery is **now**, read back from its task
+whenever the page loads — a refresh included — and followed live while the page is open: *queued*
+(its run has not started), *running* with a **Watch its live transcript** link to the run page,
+*needs a person* with the escalation's reason and brief, *paused*, or *done* with the project's current readiness level
+(which a later re-check or re-evaluation may have moved since the discovery recorded it) — and **Open its task** leads to the task page. The sentence the button answers with
+(*"the Discovery agent is queued"*) is only the click's immediate feedback.
+
+What discovery produces:
 
 - a **readiness evaluation**: fourteen criteria and a level from 0 to 4
   ([product/17](product/17-repository-readiness.md)), with the three cheapest improvements named —
@@ -160,8 +169,10 @@ re-evaluating runs it again.
 
 [product/19](product/19-operating-definitions.md) §8's eight sections — product, users, business
 rules, glossary, direction, quality bar, review expectations, communication — as a form. Each is
-optional: leave it empty to skip it, or tick **Not applicable** (with an optional reason). The same
-form is on the project settings page under *Business context*.
+optional: leave it empty to skip it, or tick **Not applicable** (with an optional reason). The whole
+step is optional too: it is headed *(optional)*, and **Skip for now** folds the form away and records
+nothing (**Answer it now** brings it back). The same form is on the project settings page under
+*Business context*, so a skipped interview can be answered there later.
 
 Submitting writes **proposals, not pages**: each answered or not-applicable section becomes one page
 under `business/` in the knowledge proposal queue, where a maintainer edits and approves it, and
@@ -813,7 +824,8 @@ secret before publishing an integration's configuration, and publishes nothing a
 this build does not ship — because it then cannot tell configuration from credential.
 
 **Add an integration** (admin) is a form on this screen, and **Test connection** is on each card as
-well as in the wizard beside the binding it is about. Choose a provider and the form asks for the
+well as in the wizard beside the binding it is about; both show the same answer (since WP-155 — the
+wizard's button used to show nothing). Choose a provider and the form asks for the
 fields that provider requires — its URL, its organisation or channel — and, for each credential, the
 *environment variable* the server reads it from, which must be on the operator's allow-list (operator
 guide, §4). The form never takes a credential. The server checks the configuration against the

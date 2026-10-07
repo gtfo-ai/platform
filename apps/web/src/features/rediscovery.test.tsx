@@ -86,6 +86,7 @@ const fetchFor = (world: World = {}) =>
             world.unrecorded === undefined
               ? null
               : { at: '2026-09-13T05:00:00.000Z', reason: world.unrecorded },
+          escalation: null,
         },
       });
     }
