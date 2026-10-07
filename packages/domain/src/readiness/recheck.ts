@@ -308,9 +308,12 @@ const commentBlanked = (line: string): string => line.replace(/(^|\s)#.*$/, '$1'
  * dash, so trimming first would end it too early and read a body line as a command.
  *
  * **Comments are blanked first, untrimmed** — a deviation from ruling (f)'s *raw text*, measured:
- * the scanner refuses a here-document after a word-start `#` **anywhere earlier in the text**
- * (`HERE_DOCUMENT_CONTEXT`, which a one-line command needs), so on the raw hook the `#!/bin/sh`
- * line alone made every body in it commands again, and a scanner named in one passed R13.
+ * the scanner then refused a here-document after a word-start `#` **anywhere earlier in the text**,
+ * so on the raw hook the `#!/bin/sh` line alone made every body in it commands again, and a
+ * scanner named in one passed R13. WP-160 (f) scoped that refusal to a comment on the operator's
+ * own line and stopped a comment naming a shell from making bodies scripts, so the blanking is no
+ * longer what keeps a body data. WP-160 left it in place (its ruling (f)), and with it the residual
+ * WP-158 recorded: the blanking cuts a `#` after a blank inside a quoted string too.
  */
 const shellCommandsOf = (text: string): string[] => {
   const uncommented = text.split('\n').map(commentBlanked).join('\n');

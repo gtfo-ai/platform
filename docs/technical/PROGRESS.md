@@ -14925,6 +14925,235 @@ configured option and an unchanged submit sends no `model`; choosing the run's o
 (and effort) from — **needs measurement**: whether an existing read carries it; if none does, a field
 on the run read beside `record.model` is the smallest addition.
 
+### 515. **git accepts any unambiguous prefix of a long option, and every git entry on `HAZARDOUS_ARGUMENTS` names the full spelling, so `git commit --no-verif -m x` skips the project's hooks and is `allow_list` in the implementation baseline, attended included. `git diff --ext-dif` and `git log --textco` are `allow_list` in all three baselines** (TODO, **major, security. It is the one entry of 515–518 that reaches `allow`, so a person running attended is never asked, and `deny` mode does not stop it either. `--no-verify` is a `trust` hazard: it skips the hooks where a repository runs its secret scan (`packages/domain/src/policies/command-policy.ts:1003-1008`).** WP-160's *Discovered work*, session 13, re-measured by the refiner against WP-160's uncommitted tree on `5217acc0`. **Owner WP-161** (rulings (a)–(c), architect's fourth M9 amendment, 2026-10-07: git 2.47.3 abbreviates only parse-options tables, so `--ext-dif` and `--textco` are refused by git; the fix is git's prefix rule against a generated table, not a list). Before that, no work package owned it. WP-154…WP-157 do not touch `packages/domain/src/policies/`, and WP-160's scope is 511, 512 and 513. **It needs a row**, as 509 and 511 did. The suggested fold is in 518)
+
+**The measurement (WP-160's implementer, git 2.54).** Quoted from the row notes: *"`git fetch --upload-p=x .` ran `x` (git 2.54, measured), and a commit made with `--no-verif` skipped a failing pre-commit hook (measured)."* The implementer named `--receive-p`, `--ext-dif` and `--textco` as *"the same class"*. Those three were **not run** against git.
+
+**Verdicts (refiner, `decideUnattendedCommand` from a scratch script; `DEFAULT_COMMAND_POLICY` with `allow` replaced by each baseline, as `planner.ts` composes them; each cell is attended `evaluateCommand` verdict / `auto` rule / `deny` rule):**
+
+| line | read-only | verification | implementation |
+|---|---|---|---|
+| `git commit --no-verify -m x` (control) | ask / hazardous_argument / hazardous_argument | same | same |
+| `git commit --no-verif -m x` | ask / unattended_auto / unattended_deny | same | **allow / allow_list / allow_list** |
+| `git fetch origin --upload-pack=evil` (control) | ask / hazardous_argument / hazardous_argument | same | same |
+| `git fetch origin --upload-p=evil` | ask / unattended_auto / unattended_deny | same | **allow / allow_list / allow_list** |
+| `git diff --ext-dif`, `git log --textco` | **allow / allow_list / allow_list** | same | same |
+| `git fetch --upload-p=x .`, `git push --receive-p=x origin` | ask / git_boundary / git_boundary | same | same |
+
+The last row is refused for other reasons: `checkFetchLike` refuses a remote that is not `origin`
+(`packages/domain/src/policies/unattended-commands.ts:314-317`), and a push is judged by `checkPush`
+(`:269`). So the implementer's measured `--upload-p` spelling is **refused** in this tree. Only the
+`origin` spelling passes.
+
+**What the code does (read).** The entries are globs over the line: `git * --upload-pack*` (`command-policy.ts:897`), `git * --receive-pack*` (`:903`), `git * --exec*` (`:915`), `git * --ext-diff*` (`:931`), `git * --textconv*` (`:937`) and `git * --no-verify*` (`:1008`). A prefix shorter than the name matches none of them. The allow entries that then answer are `git commit *` (`:526`), `git fetch *` (`:536`), `git log *` (`:388`) and `git diff *` (`:390`). WP-160 closed this class for `rebase` only (`--ex`/`--exe`, technical/05's WP-160 amendment). WP-54 closed it for `make`/`npm`/`pnpm` (*"floored from the **shortest prefix unique today**"*, PROGRESS § WP-54). git's options never got that pass.
+
+**Reach. Hypotheses, each needs measurement before it is quoted as a finding:**
+- **`--upload-p` against `origin`.** git uses `--upload-pack` only on the local, `file://` and ssh transports. A run's `origin` is the project's https remote, so `git fetch origin --upload-p=evil` probably runs nothing. Not measured.
+- **`--ext-dif` and `--textco`.** They run a driver that git configuration names (`diff.external`, `diff.<driver>.textconv`). The git boundary refuses writes to `.git/config`. Whether a run can name a driver any other way (a `.gitattributes` it writes, plus configuration it cannot write) is not measured.
+- **`--no-verif`** is the measured half, and it alone justifies the grade.
+
+**What it costs to leave.** A developer run commits past the project's pre-commit hook (the secret scan, lint) with no person asked, in either unattended mode or attended. The fix is the policy's own stated rule: a flag under a wide allow entry is floored by `HAZARDOUS_ARGUMENTS` (`command-policy.ts:661-663`). As written, that holds only for the full spelling.
+
+**Done when** every git long option on `HAZARDOUS_ARGUMENTS` matches every prefix git accepts. Either list each entry from its shortest unambiguous prefix in the pinned git (2.47.3 in the run image), the way WP-54 did for npm, or fail closed: floor any `--` word that is a prefix of a listed name, at least four characters long, at `ask`. The second does not depend on git's option table staying the same. Cases in `packages/domain/src/policies/command-policy.test.ts`, across all three baselines and both modes:
+- `--no-verif`, `--no-veri`, `--upload-p=`, `--receive-p=`, `--ext-dif`, `--textco` and `--exe=` are refused.
+- `git commit -m "--no-verify is a flag"` keeps its present verdict.
+- `git log --no-walk` is unchanged. It is not a prefix of any listed name.
+
+**Canary:** restore the full-spelling globs and `--no-verif` reads `allow_list` again. Also needed: one shell-oracle row (rule 65) that runs the pinned git with `--no-verif` against a failing hook, and the https-origin `--upload-p` hypothesis, measured once and recorded.
+
+**Depends on** nothing. It is in `packages/domain/src/policies/` and is parallel-safe with every open M9 row except one still editing the same file.
+
+### 516. **`MAX_WRAPPER_DEPTH` is a bound that fails open in three places: nine assignments or wrappers before a command, or ten nested `$(…)`, hide it from the block list and the git boundary, so `nice` ×9 `git push --force origin main` and `A=1 … I=9 sudo id` are `unattended_auto`** (TODO, **major, security, `auto` only. Attended asks and `deny` refuses. An allow path for a block-listed command under the default unattended mode (BD-025's `commands.unattended`, default `auto`). One cause, so one entry. WP-160's two findings about it (the argv peel, major, and the nested substitution, filed as a nit) are folded here, and the nit is **regraded major**: the refiner measured it reaching `unattended_auto` with `sudo id`.** WP-160's *Discovered work*, session 13, re-measured by the refiner on WP-160's tree. **Owner WP-161** (ruling (d), architect's fourth M9 amendment, 2026-10-07). Before that, no work package owned it. It needs a row; see 518)
+
+**Verdicts (refiner, same script and cell format as 515; all three baselines gave the same result):**
+
+| line | verdict |
+|---|---|
+| `nice` ×8 `git push --force origin main` | block / block_list / block_list |
+| `nice` ×9 `git push --force origin main` | **ask / unattended_auto** / unattended_deny |
+| `A=1 … H=8 sudo id` | block / block_list / block_list |
+| `A=1 … I=9 sudo id`, and the same with `git push origin HEAD:main` | **ask / unattended_auto** / unattended_deny |
+| `nice` ×9 `sudo id` | **ask / unattended_auto** / unattended_deny |
+| `echo $(` ×9 around `sudo id` or the push (9 levels) | block_list, git_boundary |
+| `echo $(` ×10 around `sudo id` or the push (10 levels) | **ask / unattended_auto** (implementation baseline), no uncertainty |
+
+Not run in a shell. Bash runs each of these lines by its documented semantics. Proving that is one oracle row each, not an open question.
+
+**What the code does (read).**
+- **The argv peel.** `argv0Candidates` (`packages/domain/src/policies/command-policy.ts:1620-1631`) tries suffixes `1..MAX_WRAPPER_DEPTH` (`:1578`, value 8) and drops the rest without marking anything. The git boundary reaches it through `commandArgvCandidates` (`:3846`). `commandPositions` (`:3174`) has the same bound for wrappers. Its own docblock already admits the gap (`:1573-1576`).
+- **Substitutions.** `parseCommand`'s substitution loop parses one only while `depth < MAX_WRAPPER_DEPTH` (`:3752`). Past that, it pushes the raw text as a fragment (`:3773-3775`), with no uncertainty. WP-160 made the handed-string path fail closed at the bound (`:3720-3723`) but not this path.
+- **The record that called it safe.** PROGRESS § WP-02a: *"`MAX_WRAPPER_DEPTH = 8` means nine or more stacked `nice -n 5` wrappers escape token block-matching and land on `ask` rather than `allow` — pre-existing and fail-safe."* That was true before `commands.unattended: auto` existed. Under `auto`, `ask` runs. The sentence is falsified (rule 83).
+
+**What it costs to leave.** A model told to write it (BD-022) runs `sudo`, a forced push, or any other block-listed command under `auto`, with nothing in the reason to show the line was not read. The consequence has the same bounds as 509's (the repository-scoped credential, egress, the container). That is why it is major and not a blocker.
+
+**Done when** the bound fails closed everywhere it is applied. Past it, a peel or a substitution adds `uncertain` with a reason worded for the model, the way WP-160's handed-string branch already does. Alternatively, the argv peel is made unbounded. It is linear in the line's words, so the bound buys nothing there. Cases in `command-policy.test.ts` and `unattended-commands.test.ts`, for each of the three places:
+- At the bound, the line is still read (block, or git boundary).
+- One past the bound, it is refused under `auto` and under `deny`, for both `sudo id` and `git push --force origin main`.
+
+**Canary:** remove the uncertainty at any one site and that site's past-the-bound case reads `unattended_auto`. WP-02a's sentence gets a dated correction, and the `:1573-1576` docblock is amended.
+
+**Depends on** nothing.
+
+### 517. **`gitBoundaryViolation` skips any fragment that contains another fragment's text as a substring, so `git push origin main; m` is `unattended_auto`: the fragment `m` is inside `git push origin main`, the push is taken for a composite and never judged** (TODO, **major, security, `auto` only. Attended asks and `deny` refuses. The git boundary is the one check that stops a push to a branch other than the run's own (technical/05). A one-letter suffix disables it. The block list still catches what it names (`git push --force origin main; m` is block_list), so the loss is exactly what only the boundary refuses: a plain push to `main`, `--mirror`, a refspec.** WP-160's *Discovered work*, session 13, re-measured by the refiner. Introduced at `894aad30` (backlog 488). **Owner WP-161** (ruling (e), architect's fourth M9 amendment, 2026-10-07: `git push origin HEAD:main && o` is already `hazardous_argument`, so the row's canaries use `main`). Before that, no work package owned it. It needs a row; see 518)
+
+**Verdicts (refiner; all three baselines the same):**
+
+| line | verdict |
+|---|---|
+| `git push origin main` | ask / git_boundary / git_boundary |
+| `git push origin main; m` | **ask / unattended_auto** / unattended_deny |
+| `git push --mirror origin; i` | **ask / unattended_auto** / unattended_deny |
+| `git push --force origin main; m` | block / block_list / block_list |
+
+**What the code does (read).** `gitBoundaryViolation` (`packages/domain/src/policies/unattended-commands.ts:725`) judges `[withoutHereDocumentBodies(command), ...splitCommandSegments(command)]` (`:753`). `composite` (`:761`) skips a fragment when `fragment.includes(other)` for any other non-empty fragment (`:771`). It was written so the **whole line** of `git push … 2>&1 | tail -5` is not read as one argv (backlog 488). The test is on text, so a segment that is a substring of another segment (`m` in `main`, `i` in `origin`) disqualifies the real push. A segment of any length that happens to occur inside the push does the same.
+
+**What it costs to leave.** Under `auto`, a run pushes to any branch of `origin` by appending `; x`, where `x` is any letter in its own command. This is the same reach backlog 488 was written to keep closed.
+
+**Done when** a fragment is skipped only when it is the whole line, or a pipeline that **is made of** other fragments: compare it by structure (the splitter's own list of parts), never by substring. Cases in `unattended-commands.test.ts`:
+- `git push origin main; m`, `git push --mirror origin; i` and `git push origin HEAD:main && o` are `git_boundary`.
+- 488's `git push origin agentic/x 2>&1 | tail -5` is still allowed through the boundary.
+
+**Canary:** restore `includes` and the first case reads `unattended_auto`.
+
+**Depends on** nothing. It is in the same file as 516, so the two belong in one change.
+
+### 518. **A command name the shell expands by pathname or brace expansion is not read by the block list or the git boundary: `/usr/bin/sud? id`, `/usr/bin/[s]udo id` and `{sudo,x} id` are `unattended_auto`** (TODO, **minor, security, `auto` only. Attended asks and `deny` refuses. The name only expands to `sudo` where that path exists, and the run image is the reach: whether `sudo` is installed in `platform-runtime` is not checked here. **Needs measurement.** If it is absent, the same shape still hides any block-listed binary that is present. WP-160 reads this shape only for a shell (`/bin/[r]bash -c`).** WP-160's *Discovered work*, session 13, re-measured by the refiner (all three baselines: ask / unattended_auto / unattended_deny). **Owner WP-161** (ruling (f), architect's fourth M9 amendment, 2026-10-07). **Regraded major:** `sudo` is absent from the run image, but `/usr/bin/g[i]t push origin main` is `unattended_auto` and bash in the image expanded it to git 2.47.3. Before that, no work package owned it. **Suggested row: one M9 security row folding 515, 516, 517 and 518.** They share one module pair (`packages/domain/src/policies/command-policy.ts`, `unattended-commands.ts`), one oracle (`here-documents.shell.test.ts`'s shell runs) and one refusal shape. Place it next in the queue after WP-160, as the third amendment placed WP-160 after WP-159, ahead of WP-154…WP-157. The reason is the one 509 and 511 were given: an allow path under the default mode comes first)
+
+**What the code does (read).** `computesCommandName` (`packages/domain/src/policies/unattended-commands.ts:572`) reads `$`, `"$`, `$(` and backticks in command position. It does not read `*`, `?`, `[`, or `{…,…}`. The block list matches `argv0Name` of the **written** token (`command-policy.ts:1524`), so `sud?` is not `sudo`.
+
+**Done when** a command word in command position (after the assignment and wrapper peel, never the peeled token itself, per 512's lesson) holding an unquoted `*`, `?`, `[` or a brace expansion with a comma or `..` is `uncertain` in both modes. Exception: a name the policy already reads as a shell (WP-160) keeps its reading. Cases:
+- `/usr/bin/sud? id`, `/usr/bin/[s]udo id`, `{sudo,x} id` and `g?t push origin main` are refused.
+- `'[' -d x ]`, `[ -d x ]`, `[[ -d x ]]` and `{ ls; }` are unchanged.
+
+**Canary:** drop the check and the first case reads `unattended_auto`.
+
+**Depends on** nothing. It goes in the 515–518 row.
+
+### 519. **Two over-asks and one leftover from WP-160's walk, recorded together as nits** (TODO, **nit — each one fails closed or runs unchanged; no security consequence.** WP-160's *Discovered work*, session 13, re-measured by the refiner. **Owner WP-161** (ruling (g), optional under its split clause, architect's fourth M9 amendment, 2026-10-07). Before that, no work package owned them. Candidates to fold into the 515–518 row if it touches the same reader. WP-160's third nit, the substitution nested past `MAX_WRAPPER_DEPTH`, is **not here**: it reaches `unattended_auto` and is part of 516)
+- **`read` with a here-string is `evaluatedText`.** The implementer filed *"`read -r PS4 <<< 'x'` is `evaluatedText` (an over-ask, fail closed)"*. The refiner found it is broader: `read -r X <<< 'x'` is uncertain too (`evaluatedText` only; the `PS4` form also adds `handedCommand`). So every `read` fed a here-string is refused under `auto`. **Done when** the name reader skips a redirection's word, and `read -r X <<< 'x'` is certain.
+- **`scan` splits `<&3` at its `&`.** `cat <&3`, `ls <&3` and `git status <&3` split into segments `… <` and `3` (refiner, `splitCommandSegments`), so each reads `ask` / `unattended_auto` instead of its allow entry. WP-160 makes `bash <&3` uncertain through the stdin path (`command-policy.ts:3291-3296`). Any other effect of the split is **unmeasured**. **Done when** `<&N`, `>&N` and `<&-` are read as one redirection word, and `git status <&3` answers like `git status`.
+
+### 520. **A line continuation (`\` + newline) inside a word hides the word from every reader that classifies words: `su\⏎do id` and `git pu\⏎sh origin HEAD:main` are `unattended_auto`, and `git rebase -\⏎x 'sudo id' main` and `git commit --no-ver\⏎ify -m x` are `allow_list` in the implementation baseline, attended included** (TODO, **major, security. Bash removes a continuation before it splits words, outside single quotes, so each of these lines runs the hidden word. Two of them reach `allow`, so no person is asked and `deny` does not stop them. One cause, so one entry.** WP-160's review round 1 (reviewer), session 13, re-measured by the refiner on `5217acc0` and on WP-160's working tree. **Owner WP-161** as a fold (criterion (10), added by the refiner in session 13 at the orchestrator's direction; no architect ruling covers it). Before that, no work package owned it. WP-158 added `joinContinuations` for its own readers only, and WP-160 is extending it reader by reader)
+
+**Measured.** Refiner, `decideUnattendedCommand` and attended `evaluateCommand` from `scratchpad/ref160b/probe3.mjs`. Each cell is attended / `auto` rule / `deny` rule, and the result is the same in all three baselines unless the row says otherwise. ⏎ stands for a newline after the backslash. The `5217acc0` column comes from a `git archive` of that commit.
+
+| line | `5217acc0` | WP-160 working tree, 13:24 |
+|---|---|---|
+| `sudo id` (control) | block / block_list / block_list | same |
+| `su\⏎do id`, `s\⏎udo id`, `nice su\⏎do id` | **ask / unattended_auto** / unattended_deny | same |
+| `git pu\⏎sh origin HEAD:main` | **ask / unattended_auto** / unattended_deny | same |
+| `en\⏎v git push origin HEAD:main` | **ask / unattended_auto** / unattended_deny | same |
+| `git rebase -\⏎x 'sudo id' main` | read-only and verification: ask / unattended_auto; implementation: **allow / allow_list / allow_list** | same |
+| `git commit --no-ver\⏎ify -m x` | read-only and verification: ask / unattended_auto; implementation: **allow / allow_list / allow_list** | same |
+| `git rebase --ex\⏎ec='sudo id' main` | read-only and verification: ask / unattended_auto; implementation: **allow / allow_list / allow_list** | ask / hazardous_argument / hazardous_argument |
+| `find . -ex\⏎ec sudo id \;` | **allow / allow_list / allow_list** | block / block_list / block_list |
+| `tr\⏎ap 'sudo id' EXIT` | **ask / unattended_auto** / unattended_deny | block / block_list / block_list |
+| `git sta\⏎tus` (over-ask, fails closed) | ask / unattended_auto / unattended_deny | same |
+| `git status \⏎--short` (continuation between words) | allow / allow_list / allow_list | same |
+
+So WP-160's tree has closed the `trap`, `find` and `--exec` rows the reviewer reported, and the rest stay open. The reviewer's own measurements: *"`su\⏎do id`, `git pu\⏎sh origin HEAD:main`, `tr\⏎ap '…' EXIT` are `unattended_auto` (bash 3.2 ran the last); `find . -ex\⏎ec sudo id \;` and `git rebase -\⏎x 'sudo id'` are **`allow_list`**"*. Their shell runs are in `scratchpad/r160/` (`c1.txt`, `c5.txt`, `sh1/`). The refiner did not run a shell. WP-160 is still editing these readers, so the table needs a re-run on WP-160's landed tree.
+
+**What the code does (read and measured).** `splitCommandSegments` keeps `su\⏎do id` as one segment, and `evaluateCommand` answers it with `matched: null` and no uncertainty. `unquoteToken` (`packages/domain/src/policies/command-policy.ts:1475`) reads `\` as an escape of the next character, so `su\⏎do` becomes `su` + newline + `do`. That is not `sudo`, and `argv0Name` (`:1524`) is built on it. `joinContinuations` (`:2310` on WP-160's tree, `:2060` at `5217acc0`) does the right thing, but only the readers that call it see a joined text.
+
+**What it costs to leave.** A run told to write it (BD-022) runs any block-listed command or pushes past the git boundary under `auto`. In the implementation baseline it rebases with `-x` or commits past the project's hooks with nobody asked. The reach is the same as 515's.
+
+**Done when** a continuation outside single quotes is removed **once**, before any word is classified, the way bash does it. Here-document bodies keep their own rules (WP-158). The alternative is to fail closed: a continuation inside a word makes the line `uncertain`. Cases in `command-policy.test.ts` and `unattended-commands.test.ts`, in all three baselines, attended and both modes:
+- `su\⏎do id` is block_list.
+- `git pu\⏎sh origin HEAD:main` is git_boundary.
+- `git rebase -\⏎x 'sudo id' main` and `git commit --no-ver\⏎ify -m x` are hazardous_argument.
+- The `find`, `trap` and `--ex\⏎ec` rows keep their refusal.
+- Unchanged: `git status \⏎--short` stays allow, and a `\⏎` inside single quotes stays literal.
+
+**Canary:** skip the join and `su\⏎do id` reads `unattended_auto`. One shell-oracle row in `here-documents.shell.test.ts` shows that bash runs a planted script through a split name.
+
+**Depends on** WP-160 landing, since it edits the same readers.
+
+### 521. **`git difftool -x 'sudo id'` is `unattended_auto`: the `--extcmd` hazard entry names `-x` in its own text but matches only the long spelling** (TODO, **major, security, `auto` only. Attended asks and `deny` refuses, because `git difftool` is on no allow list. The reviewer measured that git 2.47.3 ran the command. It has the same shape as WP-160's `rebase -x`.** WP-160's review round 1 (reviewer), session 13, re-measured by the refiner. **Owner WP-161** as a fold (criterion (11), added by the refiner in session 13 at the orchestrator's direction). Ruling (b) says *"Short options are unchanged"*, so no row covered it before)
+
+**Measured** (refiner, same script and cells; all three baselines, both trees):
+
+| line | verdict |
+|---|---|
+| `git difftool --extcmd='sudo id' HEAD` (control) | ask / hazardous_argument / hazardous_argument |
+| `git difftool -x 'sudo id' HEAD`, `-x'sudo id'`, `-yx 'sudo id'` | **ask / unattended_auto** / unattended_deny |
+| `git -c diff.tool=x difftool -x 'sudo id' HEAD` | **ask / unattended_auto** / unattended_deny |
+| `git difftool --extc='sudo id' HEAD` | **ask / unattended_auto** / unattended_deny (already 515's case, WP-161 criterion (2)) |
+| `git mergetool -x 'sudo id'` | ask / unattended_auto / unattended_deny |
+
+**What the code does (read).** The entry is the glob `git * --extcmd*` (`command-policy.ts:926`), and its hazard text at `:928` says *"git difftool and mergetool run --extcmd (-x) once per changed file"*. WP-160's diff leaves the entry as it was at `5217acc0` (`:887` there). WP-160 gave `--exec` a `tokens` predicate that reads `rebase`'s `-x` attached and in a cluster. `--extcmd` has no such predicate.
+
+**Needs measurement:** whether `git mergetool` accepts `-x` or `--extcmd` at all in git 2.47.3. If it does not, the hazard text is wrong about mergetool (rule 83). The reviewer measured difftool only.
+
+**What it costs to leave.** Under `auto`, a run executes any command through difftool, including a block-listed one or a push past the boundary.
+
+**Done when** the `--extcmd` entry gets a `tokens` predicate like `--exec`'s: `-x` for `difftool` (and for `mergetool` if it is measured to accept it), attached, separate or last in a cluster. Cases: `git difftool -x 'sudo id' HEAD`, `-x'…'`, `-yx '…'` and `git -c k=v difftool -x '…'` are hazardous_argument in all three baselines. `git diff -x` and `git log -x` keep their present verdicts. **Canary:** drop the predicate and the first case reads `unattended_auto`. The image measurement goes into WP-161's (a) table.
+
+**Depends on** WP-160 landing. Same entry list.
+
+### 522. **`hash -p /usr/bin/sudo ls; ls` is `unattended_auto`: `hash -p` binds a command name to any file, so the name the scanner reads is not the program that runs** (TODO, **minor, security, `auto` only. Attended asks and `deny` refuses. The reviewer measured that bash ran it. It is a sibling of 518: a command name the scanner cannot see. `sudo` is not in the run image (518), but `/usr/bin/git` and `/bin/su` are.** WP-160's review round 1 (reviewer), session 13, re-measured by the refiner. **Owner WP-161** as a fold (criterion (12), added by the refiner in session 13 at the orchestrator's direction))
+
+**Measured** (refiner; all three baselines, both trees):
+
+| line | verdict |
+|---|---|
+| `hash -p /usr/bin/sudo ls; ls`, `… && ls id` | **ask / unattended_auto** / unattended_deny |
+| `hash -p /usr/bin/git ls; ls push origin HEAD:main` | **ask / unattended_auto** / unattended_deny |
+| `BASH_CMDS[ls]=/usr/bin/git; ls push origin HEAD:main` | ask / uncertain / uncertain |
+| `hash`, `hash -r`, `hash ls`, `hash -d ls` | ask / unattended_auto / unattended_deny |
+
+So the same binding written as an assignment to `BASH_CMDS` is already refused, and the builtin form is not. `hash` appears nowhere in `command-policy.ts`. The bound name persists only within that one shell invocation. Whether a run's Bash tool keeps a shell between calls is **not measured** here. If it does, the reach extends to later lines.
+
+**Done when** `hash` with `-p` anywhere in its flags (including a cluster) is `uncertain` in both modes, with a reason for the model that it rebinds a command name. Cases: the first two rows are uncertain. `hash`, `hash -r` and `hash ls` keep their verdicts. **Canary:** drop the check and `hash -p /usr/bin/git ls; ls push origin HEAD:main` reads `unattended_auto`. Bash runs it in the shell-oracle row of WP-161 criterion (7).
+
+**Depends on** nothing beyond WP-161's own order.
+
+### 523. **`xargs` appends argv it reads from standard input to a command that runs its arguments, and the scanner judges only the words on the line: `echo 'sudo id ;' | xargs find . -maxdepth 0 -exec`, `xargs env` and `xargs nohup` ran their payload in the run image, and `xargs timeout 5`, `xargs nice` and `echo 'push origin HEAD:main' | xargs git` are `unattended_auto` too** (TODO, **minor, security, `auto` only, pre-existing. Attended asks and `deny` refuses. The reviewer reports all 20 forms `unattended_auto` at `5217acc0` as well as on WP-160's tree, so WP-160 did not introduce it.** WP-160's review round 2 (reviewer), session 13. Not re-measured by the refiner (rule 66). **Owner WP-161** as a fold (criterion (13), added by the refiner in session 13 at the orchestrator's direction; no architect ruling covers it). Before that, no work package owned it. The module docblock (`packages/domain/src/policies/command-policy.ts:82-83`) and technical/05's WP-160 amendment already name it as *"still not read"* under this number)
+
+**What is wrong.** `xargs` is on `ARGV0_WRAPPERS` (`packages/domain/src/policies/command-policy.ts:1412`), so the
+peel skips it and the block list and git boundary judge the command after it on its literal words alone. The
+words that command finally runs with arrive on standard input. WP-160 handled the case where the command is a
+shell: `fedByXargs` (`command-policy.ts:3265`, `:3346`, `:3469`) makes a `-c` with no operand uncertain, and
+`xargs -I{} {}` is uncertain. It did not handle a command that is not a shell but **runs its arguments as a
+command**: a wrapper (`env`, `nohup`, `timeout`, `nice`, `command`, `exec`, `xargs`), `find … -exec`, or `git`,
+whose subcommand and refspec then come from the pipe.
+
+**Evidence** (reviewer, WP-160 review round 2; probe lines in the session scratchpad `r160/c22.txt`, the bash
+case in `r160/c21/1`, with `PAY` standing for the payload):
+
+| line (stdin-fed) | reviewer's result |
+|---|---|
+| `echo 'sudo id ;' \| xargs find . -maxdepth 0 -exec` | `unattended_auto`; **ran its payload** in the run image |
+| `echo 'PAY' \| xargs env` | `unattended_auto`; **ran** |
+| `echo 'PAY' \| xargs nohup` | `unattended_auto`; **ran** |
+| `echo 'PAY' \| xargs timeout 5`, `… \| xargs nice` | `unattended_auto` |
+| `echo 'push origin HEAD:main' \| xargs git` | `unattended_auto` |
+| `… \| xargs command`, `xargs exec`, `xargs xargs`, `echo 'PAY' \| xargs git` | in the probe file; the report gives no per-line verdict beyond *"all 20 forms"* |
+
+`r160/c22.txt` holds ten lines, and the report counts 20 forms. The breakdown of the other ten is not in the
+report, so the table carries only what the report states. **Needs measurement:** the implementer re-measures
+every line of `c22.txt` in all three baselines, attended and both modes, before changing anything (WP-161
+ruling (a)'s shape). Whether `xargs command` and `xargs exec` run anything under GNU xargs in the image is
+also unmeasured, because `command` and `exec` are shell builtins and xargs execs a program. If no binary of
+that name exists, they fail and are not a reach.
+
+**What it costs to leave.** Under the default unattended mode (`auto`), a model can reach any block-listed
+binary present in the image, and a push to `main` past the git boundary, by printing the words into a pipe.
+It needs only `xargs` plus one wrapper, and `xargs` is a common thing for a model to write. It is minor, not
+major, only because attended asks and `deny` refuses. No form reaches `allow`.
+
+**Done when** an `xargs` whose command (after xargs' own options, and after the wrapper peel) is a wrapper
+from `ARGV0_WRAPPERS`, `find` with `-exec`/`-execdir`/`-ok`/`-okdir`, or `git`, is `uncertain` under `auto` and
+`deny`. The reason given to the model says that `xargs` supplies the command's arguments from its input.
+This is the reviewer's recommendation. Cases: the six table rows above are uncertain. `xargs grep x`,
+`xargs rm -f`, `xargs -I{} cat {}`, `find . -name x \| xargs wc -l` and the shell forms WP-160 already pins
+keep their verdicts (rule 42). **Canary:** drop the check and `echo 'push origin HEAD:main' \| xargs git` reads
+`unattended_auto`. `r160/c21/1` joins the shell-oracle row of WP-161 criterion (7). The docblock line
+(`command-policy.ts:82-83`) and technical/05's *"Still not read"* lose the `xargs` clause, or keep it narrowed
+to what stays open.
+
+**Depends on** nothing beyond WP-161's own order. It edits the same peel as 516 (`commandPositions`), so
+it is built after 516 is.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -18689,6 +18918,7 @@ number from **0085** in the order rows land. Read the backlog entry a row folds 
 | WP-158 | **The command scanner refuses an expansion that runs a variable's text as code, and readiness reads hook here-documents with the scanner's reader** | DONE | `ebd2ecd3` | Folds **509**, **510**. Deps WP-153. No migration. **Built:** measured ~100 forms first (bash 5.2 and dash from the run image, bash 3.2; table in the notes); `UNCERTAINTY.evaluatedText` fires on every form that evaluates a variable's text (subscripts, `${x@op}`, `${!x}`, offsets, `$[`, `((`, `let`, `declare -i`, `[[ -eq`, and the folded name-taking builtins) outside single quotes, in double quotes, in redirection targets and in unquoted bodies, after joining continuations and behind wrapper options and `coproc`; decimal and `@`/`*` subscripts stay literal; `ls ${y[$(cat f)]}` had been `allow` in every mode. Beyond the row: a WP-153 bypass (a would-be body after a closed `${…}`, a comment or a CRLF delimiter) and `coproc` added to `ARGV0_WRAPPERS` (a block-list bypass). The husky reader uses the shared reader (510). **Review:** two rounds — round 1 **REQUEST-CHANGES** on three majors (a redirection target, a continuation inside `${…}`, `let` behind `command -p`/`coproc`, each run by bash); round 2 **APPROVE** with a dead-clause nit fixed by the orchestrator. Six reviewer canaries round 1 and five round 2, all dead. **Orchestrator verification:** round 0 `PASS: verify` (11855), `PASS: verify:integration` (846), `PASS: verify:e2e` twice (290, `:wp151` run image); round 1 `PASS: verify`, `PASS: verify:e2e` (290); after the nit `PASS: verify` (11898). Filed **511** (major: a builtin or wrapper that runs a string as code), 512, 513. CI on `ebd2ecd3`: `ci` `37599958320`, `image` `37599958373`. |
 | WP-159 | **Retry run offers the platform's own model list instead of a free-text box, and refuses a model nobody chose on purpose** | DONE | `8f1569a3` | Folds **498** (the product owner's request). No migration. **Built:** `GET /api/org/models` (`run.read`) over open `price_list` windows (half-open, distinct, ordered, no prices, ids over 128 characters left out); `retryRunCommand` refuses an unlisted id that is neither the run's own nor the stage's configured model with `409 model_not_listed` before any write, `allow_unlisted_model` admits it; the retry form is a select (run's model preselected, unchanged submit sends no `model`, *not priced* option kept, *Other…* sends the flag, a failed read keeps the run's model); censuses both directions; every shipped default held to an open window. **Review:** one round, **APPROVE-with-nits** — canary 2 (the run's-own-model admission) **survived** because the run's model was also the template default; the test now isolates it (dies), the half-open boundary and the web-e2e wait (rule 87) pinned; canaries 3–6 dead, 1 covered by the integration tier. Filed **514** (minor UX: the preselected model is not the one an unchanged retry plans on, effort likewise). **Orchestrator verification:** `PASS: verify`, `PASS: verify:ui` (581), `PASS: verify:web-e2e` (51), `PASS: verify:integration` (851), `PASS: verify:e2e` twice (290, `:wp151` run image); after the round's tests `PASS: verify` and `PASS: verify:web-e2e`. CI on `8f1569a3`: `ci` `37606230322`, `image` `37606230370`. |
 | WP-160 | **The command scanner reads, or refuses, a command handed over as a string (a trap, a prompt, a callback, a shell it does not name, a `find -exec`), and a here-document it cannot recognise no longer hides the lines after it** | TODO | — | Folds **511** (major, security), **513** (regraded major: the architect's measurement ran its hidden command in bash 5.2, dash and bash 3.2), **512** (nit, same function). Deps WP-158. No migration. Measure first (ruling (a)); backlog 511's item 3 (`bash -lc`) is already refused, so it is pinned, not built. Next after WP-159; parallel-safe with every open row, WP-159 included. The orchestrator may split (f) and (g) into a follow-up row; it may not split (a)–(e) |
+| WP-161 | **The command scanner resolves git's abbreviated long options the way git does, fails closed past its depth bound, judges every `git push` a line contains, and refuses a command name the shell expands** | TODO | — | Folds **515** (major, security: `git commit --no-verif` is `allow` attended), **516** (major), **517** (major), **518** (regraded major: `/usr/bin/g[i]t push origin main` reaches git in the run image), **519** (nits, optional), and since WP-160's review round 1 **520** (major: a `\`-newline inside a word, `git commit --no-ver\⏎ify` is `allow` attended), **521** (major: `git difftool -x`) and **522** (minor: `hash -p`), criteria (10)–(12), and since review round 2 **523** (minor, pre-existing: stdin-fed `xargs git`/`env`/`find -exec`), criterion (13). Deps WP-160. No migration. Measure first (ruling (a)); git's prefix rule against a generated per-subcommand table, with a Docker check. Next after WP-160, serial with it; parallel-safe with WP-154…WP-157. The orchestrator may split (g) or leave 519 open; it may not split (b)–(f) |
 
 ## WP notes (decisions, assumptions, reviewer findings)
 
@@ -44101,6 +44331,63 @@ touches `packages/domain/src/policies/`, so they need a row of their own.
 - **Disposition:** 511 → WP-160 (a)–(e); 513 → WP-160 (a), (e) (security half) and (f); 512 →
   WP-160 (g). No other heading is dispositioned here.
 
+**Fourth amendment (2026-10-07, architect, session 13): WP-161 is added, and it runs next after
+WP-160.** Backlog **515**, **516**, **517** and **518** came out of WP-160's *Discovered work*, and the
+refiner re-measured them on WP-160's uncommitted tree. **519** collects the nits from the same walk.
+None of WP-154…WP-157 touches `packages/domain/src/policies/`, and WP-160's scope is closed, so they
+need a row of their own. The refiner's suggested fold, all four in one row, is accepted.
+- **Measured before ruling** on `5217acc0` plus WP-160's tree. No test was run and no source was
+  changed. A scratchpad script called `decideUnattendedCommand` and `evaluateCommand` through
+  `scripts/ts-source-resolver.mjs` for the three baselines. git 2.47.3 and bash 5.2 were run from
+  `platform-runtime:wp151` (`--rm --network none`), with each git hazard run against a failing hook
+  or a planted `touch`. The full table is in the plan row's ruling (a). Four results changed the
+  ruling:
+  1. **515 is real, and narrower than filed.** git abbreviates only options in its parse-options
+     tables. `commit --no-verif` and `--no-veri` and `push --no-verif` skipped a failing hook.
+     `fetch --upload`/`--upload-p`, `ls-remote --upload-p` and `push --receive-p`/`--exe`/`--ex` ran
+     their value. `cat-file --text` ran the textconv driver, because git resolves it to `--textconv`
+     in that subcommand. `--no-ver` (commit) and `--no-verif` (merge) are refused as ambiguous. Diff,
+     revision and global options are **exact-only**: `diff --ext-dif`, `log --textco`, `--outp=` and
+     `git --exec-p=` were refused by git and ran nothing. So the two cells that read `allow` in every
+     baseline are wrong verdicts with no reach. The grade stands on `--no-verif`, which is `allow`
+     attended in the implementation baseline.
+  2. **The fix is git's rule, not a list.** Being a prefix of a hazardous spelling is a necessary
+     condition for an abbreviation to reach the hazard. So that is the floor, and the only exception
+     is git's own resolution of the token, against the subcommand's generated table, to exactly one
+     non-hazardous option. The table can only remove a floor. An unknown subcommand or an alias is
+     floored on the prefix alone. Both alternatives the refiner offered are rejected: the
+     hand-written shortest prefixes drift with git, and the ≥ 4-character fallback is falsified by
+     `git push --ex=`, which ran. `GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS`, which 2.47.3 honours, is
+     rejected as the mechanism: it is an undocumented test knob, a line can unset it, and it would
+     move the row into the runner's environment. It is recorded, not built.
+  3. **518 is regraded major.** `sudo` is not in the run image, which is the reach the refiner
+     could not check. But `/usr/bin/g[i]t push origin main` and `/usr/bin/gi? push --force origin
+     main` are `unattended_auto`, and bash in the image expanded both names to git 2.47.3. The
+     shape therefore reaches the git boundary and the block list's git entries in the image as
+     shipped. Quote removal and globbed arguments are already read, and they are pinned.
+  4. **517's third case is the wrong canary.** `git push origin HEAD:main && o` is already
+     `hazardous_argument` (the refspec colon). `m; git push origin main` and `git push origin main |
+     m` also reproduce, so the replacement is structural and the row adds a property test. 516
+     reproduces with `env`, `command` and `timeout 5` as well as `nice`, and bash ran all five shapes.
+- **What the row does** (plan row, rulings (b)–(g)): 515 is floored by git's own resolution rule
+  over a generated per-subcommand table, with a Docker check that regenerates the table against the
+  run image. The depth bound fails closed at the peel and at the substitution, under one new entry.
+  The git boundary's composite skip compares structure, never text. A command name the shell
+  expands is `uncertain` under one new entry. 519 is optional.
+- **Order.** The rows still open run as WP-160 (in review), **WP-161**, WP-154, WP-155, WP-156,
+  WP-157. This follows the reasoning of the second and third amendments: an allow path under the
+  default mode comes before anything a person sees. 515 is also an `allow` attended, which no
+  earlier M9 security row was. WP-161 is **serial after WP-160**, because both edit
+  `command-policy.ts`, `unattended-commands.ts` and the shell-oracle file, and it starts on WP-160's
+  landed tree. It is **parallel-safe with WP-154…WP-157**. **No migration.** The next free number is
+  still **0087**.
+- **Size.** Four entries in one module pair. (d)–(f) are line-level. (b)–(c) are new: a predicate,
+  a generated table and its Docker check. That makes the row wider than WP-160, so the split clause
+  (ruling (i)) lets the orchestrator move (g) to a follow-up row or leave 519 open, because it only
+  over-refuses. (b)–(f) may not be moved.
+- **Disposition:** 515 → WP-161 (a)–(c); 516 → WP-161 (d); 517 → WP-161 (e); 518 → WP-161 (f),
+  regraded major; 519 → WP-161 (g), optional. No other heading is dispositioned here.
+
 ## WP notes — session 12 (M9)
 
 #### WP-150
@@ -44627,3 +44914,323 @@ The reviewer's two mutants were re-run and both are killed. `isWriteTarget(targe
 **Review round 1** (APPROVE-with-nits, tests only). (1) [major] The canary that drops the run's-own admission survived, because the case's `claude-opus-5` is also refinement's template default. The case now first retries with `allowUnlistedModel` on `claude-custom-x`, then retries that run on the same id without the flag. Re-run: the canary is killed by › "admits the run’s own model when the list does not carry it". (2) A half-open window case: an `effective_to` exactly at the instant is absent, and 1 ms earlier it is listed. (3) `screens.spec.ts` waits for a listed option before asserting the preselection (rule 87). Not run: Playwright is the orchestrator's.
 
 **Discovered work:** none.
+
+#### WP-160
+
+**The command scanner reads, or refuses, a command handed over as a string, and a here-document it cannot recognise no longer hides the lines after it**: rulings (a)–(h) (plan row), backlog 511, 512 and 513. Built on `5217acc0`. No migration. Files: `packages/domain/src/policies/command-policy.ts`, its two policy test files and `here-documents.shell.test.ts`, technical/05, and one docblock in `packages/domain/src/readiness/recheck.ts` (a sentence naming the deleted `HERE_DOCUMENT_CONTEXT`; no code there changes, ruling (f)). No new test file, so `vitest.config.ts` is unchanged. Start-up: `main` was green at WP-159's verify and `5217acc0` is docs-only, so the start-up `verify` was not repeated (machine discipline); the policy, readiness and runner tests passed before the first edit.
+
+**Measured first (ruling (a), criterion 1).** Scripts in the session scratchpad, never in the checkout. **Verdicts:** `decideUnattendedCommand` under `auto` and `deny` for the three baselines (`DEFAULT_COMMAND_POLICY` with `allow` replaced by `DEFAULT_READ_ONLY_ALLOW`, `DEFAULT_VERIFICATION_ALLOW` and `DEFAULT_IMPLEMENTATION_ALLOW`, as `planner.ts` composes them), each form planted twice: `P` = `git push origin HEAD:main` and `P` = `sudo id`. A cell is the rule under `auto` / `deny`, with `+` where the baselines differ. *Before* is `git archive 5217acc0` of `packages/domain` and `packages/contracts` imported from the scratchpad; *after* is this tree. **Shells:** `P` = `touch RAN_EXEC` in a fresh temporary directory, a run counted only when the file exists afterwards (an echoed literal or an error quoting it cannot count, which is WP-158's lesson, and output on stderr or a pty counts). The line ran as `<shell> -c "$(cat case)"`, stdin `/dev/null`, a five-second bound: bash 5.2.37 and dash (`/bin/sh`) in `platform-runtime:wp151` (`--rm --network none`, scratchpad mounted read-only), and macOS `/bin/bash` 3.2.57. The *dash* column is dash as the outer shell, so a form that names `bash` runs bash there. `git rebase` needs a repository, so its rows say *no* and git was measured separately (below). Abbreviations: `auto`/`deny` = `unattended_auto`/`unattended_deny`, `git` = `git_boundary`, `block` = `block_list`, `hazard` = `hazardous_argument`, **allow** = `allow_list`.
+
+| Form (`P` = the payload) | bash 5.2 | bash 3.2 | dash | before: push | before: `sudo id` | after: push | after: `sudo id` |
+|---|---|---|---|---|---|---|---|
+| `trap 'P' EXIT` | RAN | RAN | RAN | auto / deny | auto / deny | git / git | block / block |
+| `trap 'P' ERR; false` | RAN | RAN | no | auto / deny | auto / deny | git / git | block / block |
+| `trap 'P' DEBUG; :` | RAN | RAN | no | auto / deny | auto / deny | hazard / hazard | block / block |
+| `trap 'P' RETURN; f() { :; }; f` | no | no | no | auto / deny | auto / deny | git / git | block / block |
+| `trap 'P' INT TERM` | no | no | no | auto / deny | auto / deny | git / git | block / block |
+| `trap -- 'P' EXIT` | RAN | RAN | RAN | auto / deny | auto / deny | git / git | block / block |
+| `trap -p; trap 'P' EXIT` | RAN | RAN | no | auto / deny | auto / deny | git / git | block / block |
+| `x='P'; trap "$x" EXIT` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `trap "$(echo 'P')" EXIT` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `PS4='$(P)' bash -xc :` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `PS4='$(P)'; set -x; :` | RAN | RAN | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `export PS4='$(P)'; set -x; :` | RAN | RAN | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `declare PS4='$(P)'; set -x; :` | RAN | RAN | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `env PS4='$(P)' bash -xc :` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `PROMPT_COMMAND='P'` | no | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `export PROMPT_COMMAND='P'` | no | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `PS1='$(P)'` | no | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `PS0='$(P)'` | no | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `BASH_ENV=/tmp/x bash -c :` | no | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `ENV=/tmp/x sh -i -c :` | no | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `mapfile -C 'P;:' -c 1 a <<< x` | RAN | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `readarray -C 'P;:' -c 1 a <<< x` | RAN | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `shopt -s expand_aliases; alias ll='P'⏎ll` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `alias ll='P'` | no | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `bind -x '"\C-a": P'` | no | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `complete -C 'P' foo` | no | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `compgen -C 'P' foo` | RAN | RAN | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `fc -e 'P'` | no | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `fc -s` | no | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `rbash -c 'P'` | RAN | no | RAN | auto / deny | auto / deny | git / git | block / block |
+| `ksh -c 'P'` | no | RAN | no | auto / deny | auto / deny | git / git | block / block |
+| `mksh -c 'P'` | no | no | no | auto / deny | auto / deny | git / git | block / block |
+| `ash -c 'P'` | no | no | no | auto / deny | auto / deny | git / git | block / block |
+| `fish -c 'P'` | no | no | no | auto / deny | auto / deny | git / git | block / block |
+| `busybox sh -c 'P'` | no | no | no | auto / deny | auto / deny | git / git | block / block |
+| `script -c 'P' /dev/null` | RAN | no | RAN | auto / deny | auto / deny | git / git | block / block |
+| `script -qc 'P' /dev/null` | RAN | no | RAN | auto / deny | auto / deny | git / git | block / block |
+| `script -q -c 'P' /dev/null` | RAN | no | RAN | auto / deny | auto / deny | git / git | block / block |
+| `script --command 'P' /dev/null` | RAN | no | RAN | auto / deny | auto / deny | git / git | block / block |
+| `script --command='P' /dev/null` | RAN | no | RAN | auto / deny | auto / deny | git / git | block / block |
+| `bash <<<'P'` | RAN | RAN | no | auto / deny | auto / deny | git / git | block / block |
+| `bash <<< 'P'` | RAN | RAN | no | git / git | block / block | git / git | block / block |
+| `sh <<<"P"` | RAN | RAN | no | auto / deny | auto / deny | git / git | block / block |
+| `x='P'; bash <<<"$x"` | RAN | RAN | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `echo 'P' \| bash` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `printf '%s\⏎' 'P' \| sh` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `source /dev/stdin <<<'P'` | RAN | RAN | no | auto / deny | auto / deny | git / git | block / block |
+| `. /dev/stdin <<<'P'` | RAN | RAN | no | auto / deny | auto / deny | git / git | block / block |
+| `. <(echo 'P')` | RAN | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `source <(echo 'P')` | RAN | no | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `bash < <(echo 'P')` | RAN | RAN | no | auto / deny | block / block | uncertain / uncertain | block / block |
+| `find . -exec P \;` | RAN | RAN | RAN | auto / deny | auto / deny | git / git | block / block |
+| `find . -exec P ';'` | RAN | RAN | RAN | auto / deny | auto / deny | git / git | block / block |
+| `find . -execdir P \;` | RAN | RAN | RAN | auto / deny | auto / deny | git / git | block / block |
+| `find . -ok P \;` | no | no | no | auto / deny | auto / deny | git / git | block / block |
+| `find . -okdir P \;` | no | no | no | auto / deny | auto / deny | git / git | block / block |
+| `find . -exec P {} +` | RAN | RAN | RAN | auto / deny | auto / deny | git / git | block / block |
+| `find . -name '*.ts' -exec P \;` | no | no | no | auto / deny | auto / deny | git / git | block / block |
+| `git rebase -x 'P' HEAD~1` | no | no | no | auto / deny | auto / deny | hazard / hazard | hazard / hazard |
+| `git rebase -x'P' HEAD~1` | no | no | no | auto / deny | auto / deny | hazard / hazard | hazard / hazard |
+| `git rebase -ix 'P' HEAD~1` | no | no | no | auto+**allow** / deny+**allow** | auto+**allow** / deny+**allow** | hazard / hazard | hazard / hazard |
+| `git rebase --exec 'P' HEAD~1` | no | no | no | hazard / hazard | hazard / hazard | hazard / hazard | hazard / hazard |
+| `git rebase --exec='P' HEAD~1` | no | no | no | hazard / hazard | hazard / hazard | hazard / hazard | hazard / hazard |
+| `bash -lc 'P'` | RAN | RAN | RAN | git / git | block / block | git / git | block / block |
+| `sh -ec 'P'` | RAN | RAN | RAN | git / git | block / block | git / git | block / block |
+| `bash -cl 'P'` | RAN | RAN | RAN | git / git | block / block | git / git | block / block |
+| `bash -l -c 'P'` | RAN | RAN | RAN | git / git | block / block | git / git | block / block |
+| `bash --login -c 'P'` | RAN | RAN | RAN | git / git | block / block | git / git | block / block |
+| `/usr/bin/bash -lc 'P'` | RAN | no | RAN | git / git | block / block | git / git | block / block |
+| `exec bash -lc 'P'` | RAN | RAN | RAN | git / git | block / block | git / git | block / block |
+| `timeout 5 bash -lc 'P'` | RAN | no | RAN | git / git | block / block | git / git | block / block |
+| `nohup bash -lc 'P'` | RAN | RAN | RAN | git / git | block / block | git / git | block / block |
+| `su -c 'P'` | no | no | no | git / git | block / block | git / git | block / block |
+| `flock f -c 'P'` | RAN | no | RAN | git / git | block / block | git / git | block / block |
+| `watch 'P'` | no | no | no | git / git | block / block | git / git | block / block |
+| `env -S 'P'` | RAN | RAN | RAN | git / git | block / block | git / git | block / block |
+| `echo x \| xargs sh -c 'P'` | RAN | RAN | RAN | git / git | block / block | git / git | block / block |
+| `bash -c 'P'` | RAN | RAN | RAN | git / git | block / block | git / git | block / block |
+| `eval 'P'` | RAN | RAN | RAN | git / git | block / block | git / git | block / block |
+| `cat <<\EOF⏎a'⏎EOF⏎P⏎'` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | block / block |
+| `cat <<E'OF'⏎a'⏎EOF⏎P⏎'` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | block / block |
+| `cat <<'E'OF⏎a'⏎EOF⏎P⏎'` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | block / block |
+| `cat <<"E"OF⏎a"⏎EOF⏎P⏎"` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | block / block |
+| `cat <<\EOF⏎cat <<'X'⏎EOF⏎P⏎X` | RAN | RAN | RAN | **allow** / **allow** | **allow** / **allow** | git / git | block / block |
+| `cat <<'EOF'␍⏎cat <<'X'⏎EOF␍⏎P⏎X` | RAN | RAN | RAN | **allow** / **allow** | **allow** / **allow** | git / git | block / block |
+| `cat <<'E F'⏎a'⏎E F⏎P⏎'` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | block / block |
+| `echo ${x:-$(cat <<'EOF'⏎a'⏎EOF⏎)}⏎P⏎'` | RAN | no | RAN | uncertain / uncertain | block / block | uncertain / uncertain | block / block |
+| `echo hi # <<'EOF'⏎a'⏎EOF⏎P⏎'` | no | no | no | auto / deny | auto / deny | uncertain / uncertain | block / block |
+| `x=1; echo ${x:-<<'EOF' }⏎a'⏎EOF⏎P⏎'` | no | no | no | auto / deny | block / block | uncertain / uncertain | block / block |
+| `# note⏎cat <<'EOF'⏎a'⏎EOF⏎P⏎'` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | block / block |
+| `echo ${HOME}⏎cat <<'EOF'⏎a'⏎EOF⏎P⏎'` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | block / block |
+| `[[ -d x ]]⏎cat <<"EOF"⏎a'⏎EOF⏎P⏎'` | RAN | RAN | RAN | auto / deny | block / block | uncertain / uncertain | block / block |
+| `# note⏎cat <<'EOF'⏎a"⏎EOF⏎P⏎"` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | block / block |
+| `cat <<'EOF'␍⏎a'⏎EOF␍⏎P⏎'` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | block / block |
+| `# note⏎cat <<'EOF'⏎EOF⏎P` | RAN | RAN | RAN | git / git | block / block | git / git | block / block |
+| `echo 'P' \| script -q /dev/null` | RAN | no | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `script -q /dev/null <<<'P'` | RAN | no | no | auto / deny | auto / deny | git / git | block / block |
+| `script --c 'P' /dev/null` | RAN | no | RAN | auto / deny | auto / deny | git / git | block / block |
+| `script -c'P' /dev/null` | RAN | no | RAN | auto / deny | auto / deny | git / git | block / block |
+| `echo 'P' \| xargs -I{} sh -c '{}'` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `echo x \| xargs -I{} sh -c 'P {}'` | RAN | RAN | RAN | git / git | block / block | uncertain / uncertain | block / block |
+| `read -r PS4 <<< '$(P)'; set -x; :` | RAN | RAN | no | uncertain / uncertain | uncertain / uncertain | uncertain / uncertain | uncertain / uncertain |
+| `printf -v PS4 %s '$(P)'; set -x; :` | RAN | RAN | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `bash -c '"$@"' _ P` | RAN | RAN | RAN | auto / deny | block / block | git / git | block / block |
+| `echo 'P' \| (bash)` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `echo 'P' \| { bash; }` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `bash 0<<<'P'` | RAN | RAN | no | auto / deny | auto / deny | git / git | block / block |
+| `exec 3<<<'P'; bash <&3` | RAN | RAN | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `BASH_ENV=<(echo 'P') bash -c :` | RAN | RAN | no | auto / deny | block / block | uncertain / uncertain | block / block |
+| `env -u X PS4='$(P)' bash -xc :` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `bash -o errexit -c 'P'` | RAN | RAN | RAN | git / git | block / block | git / git | block / block |
+| `bash -c -- 'P'` | RAN | RAN | RAN | auto / deny | block / block | git / git | block / block |
+| `sh -c -e 'P'` | RAN | RAN | RAN | auto / deny | block / block | git / git | block / block |
+| `bash -s <<<'P'` | RAN | RAN | no | auto / deny | auto / deny | git / git | block / block |
+| `bash /dev/stdin <<<'P'` | RAN | RAN | no | auto / deny | auto / deny | git / git | block / block |
+| `echo 'P' \| bash -s` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `echo 'P' \| sh /dev/stdin` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `echo 'P' \| source /dev/stdin` | RAN | RAN | no | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `x='P'; eval "$x"` | RAN | RAN | RAN | git / git | git / git | uncertain / uncertain | uncertain / uncertain |
+| `x='P'; bash -c "$x"` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `x='P'; bash -c "echo; $x"` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | uncertain / uncertain |
+| `trap 'P' 0` | RAN | RAN | RAN | auto / deny | auto / deny | git / git | block / block |
+| `find . -maxdepth 0 -exec sh -c 'P' \;` | RAN | RAN | RAN | auto / deny | auto / deny | git / git | block / block |
+| `find . -maxdepth 0 -exec sh -c 'P {}' \;` | RAN | RAN | RAN | auto / deny | auto / deny | uncertain / uncertain | block / block |
+| `git rebase --ex 'P' HEAD~1` | no | no | no | auto+**allow** / deny+**allow** | auto+**allow** / deny+**allow** | hazard / hazard | hazard / hazard |
+| `git rebase -qx 'P' HEAD~1` | no | no | no | auto+**allow** / deny+**allow** | auto+**allow** / deny+**allow** | hazard / hazard | hazard / hazard |
+| `git -C . rebase -x 'P' HEAD~1` | no | no | no | auto / deny | auto / deny | hazard / hazard | hazard / hazard |
+| `command trap 'P' EXIT` | RAN | RAN | RAN | git / git | block / block | git / git | block / block |
+| `builtin trap 'P' EXIT` | RAN | RAN | no | git / git | block / block | git / git | block / block |
+| `eval trap "'P'" EXIT` | RAN | RAN | RAN | auto / deny | block / block | git / git | block / block |
+| `f() { trap 'P' RETURN; }; f` | RAN | RAN | no | git / git | block / block | git / git | block / block |
+| `nice -n 5 rbash -c 'P'` | RAN | no | RAN | git / git | block / block | git / git | block / block |
+
+| Line with no payload (criteria 4 and 6) | before | after |
+|---|---|---|
+| `cat > f <<'EOF'⏎don't⏎EOF` | auto / deny | auto / deny |
+| `x='b[1]'; cat > f <<'EOF'⏎don't⏎EOF` | uncertain / uncertain (*a quote is never closed*) | auto / deny |
+| `[ -d x ] && cat > f <<'EOF'⏎don't⏎EOF` | uncertain / uncertain (*a quote is never closed*) | auto / deny |
+| `{ cat > f <<'EOF'⏎don't⏎EOF⏎}` | uncertain / uncertain (*a quote is never closed*) | auto / deny |
+| `# note⏎cat > f <<'EOF'⏎don't⏎EOF` | uncertain / uncertain (*a quote is never closed*) | auto / deny |
+| `#!/bin/sh⏎cat > f <<'EOF'⏎don't⏎EOF` | uncertain / uncertain (*a quote is never closed*) | auto / deny |
+| `echo ${HOME}⏎cat > f <<'EOF'⏎don't⏎EOF` | uncertain / uncertain (*a quote is never closed*) | auto / deny |
+| `git commit -m "fix #12"⏎cat > f <<'EOF'⏎don't⏎EOF` | uncertain / uncertain (*a quote is never closed*) | auto / deny |
+| `[[ -d x ]] && echo y⏎cat > f <<'EOF'⏎don't⏎EOF` | uncertain / uncertain (*a quote is never closed*) | auto / deny |
+| `trap 'rm -f "$tmp"' EXIT` | auto / deny | auto / deny |
+| `trap - EXIT` | auto / deny | auto / deny |
+| `trap '' INT` | auto / deny | auto / deny |
+| `bash -c 'ls'` | auto / deny | auto / deny |
+| `script -qc 'ls' /dev/null` | auto / deny | auto / deny |
+| `find . -name '*.ts' -exec grep -l foo {} +` | auto / deny | auto / deny |
+| `alias` | auto / deny | auto / deny |
+| `echo "$PS4"` | auto / deny | auto / deny |
+| `bash <<<'ls'` | auto / deny | auto / deny |
+
+- **Headline.** 132 forms. Before: **103** were `unattended_auto` with at least one payload (95 with both), **5 reached `allow_list`** in some baseline — attended runs included — and a shell ran the payload of **75** of the 103. After: **none** answers `unattended_auto` or `allow_list` with either payload. Every literal string is judged (`git`/`block`), every string the platform cannot read is `uncertain`, and every `git rebase -x` spelling is `hazard`. The no-payload lines keep their verdicts, and the nine 512/513 lines go from `uncertain` (*a quote is never closed*) to certain.
+- **The architect's numbers held, with four corrections.** (1) `PS4='$(…)' bash -xc :` was `unattended_auto` here, not refused; the architect's push column must have read a different spelling. (2) The two `allow_list` here-document rows (`cat <<\EOF` + `cat <<'X'` + `EOF` + `P` + `X`, and the CRLF twin) are new: worse than 513's hypothesis, because they reach `allow` in every mode. (3) **"Already refused, only pinned" holds for the short spellings only.** `su -c`, `flock -c`, `watch` and `env -S` were refused by the block list's eight-word suffix peel (`argv0Candidates`, `MAX_WRAPPER_DEPTH`), which offers `'sudo` as a name once it is among the first eight words. Put the payload after eight words (`su -c 'true 1 2 3 4 5 6 7 8; git push origin HEAD:main'`, `env -u A -u B -u C -u D -S 'sudo id'`) and each was `unattended_auto`. So they are read now (rule 27), not only pinned. The short spellings are pinned as criterion (3) asks. (4) git 2.50 is on neither machine: the run image has **2.47.3** and the host **2.54.0**. Both ran the command for `-x CMD`, `-xCMD`, `-qx`, `-ix`, `-kx`, `--exec`, `--exec=` and the abbreviations **`--ex`** and **`--exe=`** (a throwaway repository, `GIT_SEQUENCE_EDITOR=:`). `--e` is ambiguous (`--empty`) and git refused it.
+- **[unverified], as the ruling directs:** whether the CLI's Bash tool ever runs an interactive or login shell. `PROMPT_COMMAND`, `PS0`, `PS1`, `bind -x`, `complete -C` and `fc` ran in none of the three shells here, which is what a non-interactive shell does. They fail closed anyway.
+
+**What was built**
+- **(b) One reader, `wrappedScript`, now per pipeline stage and off the words as written.** `scan` returns `rawSegments`, each segment with its substitutions kept (`segments` lifts them out, which made `trap "$(…)" EXIT` look like `trap "" EXIT`). `shellWords` splits a stage quote-, substitution- and redirection-aware. `isLiteralWord` decides whether a string is literal: no `$` or backtick outside single quotes, and no unquoted glob, brace, tilde, redirection or parenthesis. `literalValue` gives what the program receives. The reader tries every command position the block list's peel tries (past assignments, then every word after a wrapper), and reads:
+  - `eval`'s words and `trap`'s action (`-`, `''`, `-l`, `-p` and `-P` run nothing);
+  - a shell's `-c` operand after any option cluster holding `c`, past `-o`/`-O`/`--rcfile` values, for one set `SCRIPT_SHELLS`. That is `SHELL_NAMES` merged with the shells of `HERE_DOCUMENT_SCRIPT_READERS`, plus `hush`, plus `busybox` with a shell word, plus **a name the shell expands** (`/bin/[r]bash -c`, an over-read);
+  - `script`'s, `su`/`runuser`'s, `flock`'s and `env -S`'s option string (`readOptionString`: a cluster, attached, long, or abbreviated), and `watch`'s operands;
+  - `find`'s `-exec`/`-execdir`/`-ok`/`-okdir` argv to `;` or `{} +`, parsed as a command (ruling (d));
+  - a shell's operands when its script names a positional parameter (`sh -c '"$@"' _ cmd`; `"$@"` ran the operands, measured). This is not in the ruling, and it was `unattended_auto` with the push.
+
+  A string that is not literal is `UNCERTAINTY.handedCommand`, worded for the model with the ruling's sentence. So is a string `find` or `xargs -I` puts `{}` into (`replace`), a command word holding that string (`xargs -I{} {}`), operands `xargs` feeds a `"$@"` script, and a string nested past `MAX_WRAPPER_DEPTH` (it used to be dropped silently).
+- **Assumption (rule 27, the ruling's heading over its list): a non-literal `eval`/`sh -c`/`script -c` string is uncertain too.** The list names only the trap. But the heading — *"parsed as a script when it is literal, and is uncertain when it is not"* — covers every string, and `x='…'; bash -c "$x"` and `bash -c "echo; $x"` were `unattended_auto` with the push (`eval "$x"` was `git_boundary` by the computed-name check). Cost: `bash -c "cd $dir && make"` is now refused under both modes and asked when attended.
+- **`storesCommand`, per stage — what the shell runs later.** It catches an assignment to `PS0`, `PS1`, `PS2`, `PS4`, `PROMPT_COMMAND`, `BASH_ENV` or `ENV` in any of these places:
+  - in the prefix, or at any command position (so after `env` and its options);
+  - as a declaration builtin's argument;
+  - as `${NAME:=…}`;
+  - as a name `read`/`mapfile`/`readarray`/`printf -v`/`getopts` writes. `read -r PS4` and `printf -v PS4` ran the payload under `set -x`; they are not in the ruling's list, and were `unattended_auto`.
+
+  It also catches `alias` with a definition, `mapfile`/`readarray -C`, `bind -x`, `complete`/`compgen -C` and `fc -e`/`-s` (in a cluster too).
+- **(c) Standard input, inside `wrappedScript`.** A shell with no `-c`, and with no operand, `-s` or a standard-input path, reads its script from standard input. So do `script` without `-c` (it ran `$SHELL` on a pipe and on a here-string, measured) and `source`/`.` of `/dev/stdin`, `/dev/fd/0` or `/proc/self/fd/0`. A literal here-string is parsed. These are uncertain:
+  - a non-literal here-string, a `<(…)` as stdin or as the operand, a descriptor (`<&3`), and a redirection target the scanner lost;
+  - no redirection at all while the level has a pipe anywhere. A `( … )` or `{ …; }` cuts the stage from the pipe, so the stage index alone missed `| (bash)` and `| { bash; }`, both measured to run. The exception is `cat <<…`-only feeding the stage, which stays WP-153's: the body is the script.
+  - **Fed** levels — beyond the ruling's list, each measured: a `>(…)` body (`tee >(bash)`), a script a piped stage hands on (`| bash -c 'true; bash'`), `coproc bash`, and a level where `exec … <` moves standard input.
+
+  **Deviation from the ruling's letter:** ruling (g) expected (c) to edit `feedsScriptReader`. It did not need to: `feedsScriptReader` decides which here-document bodies are scripts, and none of (c)'s readers is a here-document. So that function was edited once, for (g) and the comment rule.
+- **(d) `git rebase -x`** is the `git * --exec*` entry itself, now a token predicate. It matches `--exec…`, `--ex`, `--exe[=]`, and on `rebase`, a single-dash flag holding `x` (`-x`, `-xCMD`, `-ix`, `-qx`). A glob cannot read a cluster. Anything the glob matched, the predicate matches too, since dequoting and any subcommand were already the token half's. `git --exec-path=…` now floors at `ask` (it re-points git's helpers, so that is the right direction). `git cherry-pick -x` is untouched: no `rebase` positional.
+- **(e) 513, case before code.** Eight rows were written first in `unattended-commands.test.ts`, and **8 failed** on the unchanged tree (2 already passed). The rows are now › "ruling (e): a here-document the reader refuses is read to bash’s terminator". `unrecognisedOperator` (renamed from `unrecognisedUnquotedOperator`) now reads a quoted word as bash does: quotes and backslashes come off, and the boundary is bash's metacharacters, so `<<\EOF`, `<<E'OF'`, `<<'E F'` and `<<'EOF'\r` each yield their delimiter. `scan` reports `resumeFrom`, the newline after the first such would-be terminator, and `parseCommand` parses the text from there again at the same depth. That text is strictly shorter, and each level spawns one such parse, so the chain ends.
+  - **Deviation, measured (rule 27):** the ruling's separate *"if that body leaves a quote open, the line is uncertain"* check was built, and its canary **survived every row**. The fresh reading already delivers it. The quote the body opened is the one the walk pairs with a quote after the terminator, so either the walk ends with a quote open or the fresh reading of the lines after does. That is a parity argument, and every row in the table agrees. So the check was removed rather than kept as a guard no input distinguishes (rule 3). The rows still answer `unbalancedQuote`, from the fresh reading.
+- **(f)** `HERE_DOCUMENT_CONTEXT` is gone. `readShellContext` walks the text before the operator the way the shell does:
+  - quotes are honoured;
+  - a comment runs to the end of its line, and only where a word starts;
+  - `${`, `$[`, `((`/`$((` and `[[` are counted until they close;
+  - a `$(…)` gets a fresh quote state.
+
+  It refuses only what is open at the operator, or text it cannot follow (an unclosed quote or backtick). WP-153's four refusal rows still refuse.
+- **(f′, needed for criterion 6, beyond the ruling's letter)** The expanded-name half of `feedsScriptReader` was not the only over-read. Its shell-name half split the segment on blanks, so `#!/bin/sh` named `sh` and every body after it was a script. Comments (`readShellContext().comments`) are now cut first. A comment is not a command in bash, and the cut is the shell's own reading, so it is fail-safe.
+- **(g) 512.** The expanded-name check now applies only to a command word: not a peeled token (an assignment, or a wrapper, `{` included), not `[`, and nothing inside a stage that is a `[`/`[[` test. WP-153's glob, brace and bracket rows still read scripts, and so do a glob behind an assignment and a glob inside a group.
+- **Docs, ruling (h).**
+  - The module docblock: rule 1 now names the strings, and rule 5 points to a new *What it still does not read* paragraph. A new paragraph covers *A command handed over as a string*, and the here-document paragraph now states (e) and (f).
+  - The `HERE_DOCUMENT_OPERATOR`, `unrecognisedOperator`, `readShellContext` and `MAX_WRAPPER_DEPTH` docblocks.
+  - technical/05: a WP-160 amendment, and the WP-153 and WP-158 amendments qualified (below).
+
+**Criteria and tests**
+- **(1)** The table above, before and after.
+- **(2)** `packages/domain/src/policies/unattended-commands.test.ts` › "WP-160 — a command handed over as a string, and a here-document the reader refuses". Each row is planted with the push and with `sudo id`, under both modes:
+  - 60 `PARSED` rows answer `git_boundary` (push) and `block_list` (sudo). They cover the trap forms, every shell in the set, the clusters, `script` and the four string-taking wrappers past eight words, here-strings, `find` and `"$@"`.
+  - 63 `UNREAD` rows answer `uncertain` with exactly `[handedCommand]` for the push. With sudo they answer that or `block_list`.
+  - The eight (e) rows answer `[unbalancedQuote]` or `git_boundary`/`block_list`.
+  - Eight rebase rows answer `hazardous_argument`, naming `git * --exec*`.
+  - › "refuses a string nested past the bound it reads to, rather than leaving it unread".
+- **(3)** › "still refuses %j (criterion 3)": 16 rows with both payloads in both modes. These are the forms (a) found refused, plus `bash -c` and `eval`.
+- **(4)** › "reads %j and is not uncertain (criterion 4)": 17 rows. They are the nine the ruling names, plus `trap -l`, `alias ll`, a bare `bash`, `cat <<'EOF' | sh` with `ls`, `bash -c 'echo "$1"' _ hi`, `git cherry-pick -x abc123`, `find … -exec mv {} {}.bak \;` and `ls | grep x` (still `allow_list`).
+- **(5)** `packages/domain/src/policies/here-documents.shell.test.ts` › "WP-160 — a string a shell runs is judged, or the line is uncertain". It has 34 bash-run rows, including the 513 hypothesis line run whole and three paired or inner-operator lines. `mapfile`/`readarray -C`, `source <(…)` and `. <(…)` are gated at bash 4.0, because 3.2 ran none of them here; 3.2 ran `source <(…)` once in the scratchpad table, a race. Also a `script -qc` row and an `rbash` row, each gated on its binary (`it.skipIf`, so not cited here), and › "runs nothing for a trap that is reset, and the policy reads it (criterion 4)". The generator gained a `trap` setter and a pipe-into-shell piece. **The whole file was run in the run image** (bash 5.2, dash, util-linux `script`, `rbash`): `node` 24 in `platform-runtime:wp151`, the checkout mounted read-only, a 45-line vitest stand-in in the scratchpad. It gave 99 passed, 0 skipped, 0 failed, four runs (fresh seeds). On this machine: 85 passed, 14 skipped.
+- **(6)** `packages/domain/src/policies/command-policy.test.ts` › "WP-160 — a body stays data beside an assignment, a test, a group or an earlier comment":
+  - 11 body-stays-data rows: the three 512 cases plus `[[ -f *.ts ]]`, and the three 513 cases plus a comment line, a closed `[[`, `((` and `$[` (the last two keep WP-158's `evaluatedText`);
+  - five rows where a body is still a script;
+  - nine still-refused contexts;
+  - eleven recognised contexts.
+- **(7)** Goldens unchanged: `vitest run packages/domain/src/policies packages/domain/src/readiness packages/infrastructure/src/runner --project unit --project contract` passed (2412), with no diff under `test/fixtures/`.
+
+**Canaries.** `command-policy.ts` was copied to the scratchpad, mutated in place, then the four policy and readiness test files were run (`--reporter=json`). The file was restored with `cp` and checked with `cmp`. Every run started at a one-minute load under 12.
+- **Dead** (first killing test named; the count is failed tests):
+  - **(e)** the quoted word not read: 9, › "ruling (e): …" rows and the shell's inner-operator row. The fresh-state parse removed: 9, the same.
+  - the trap reader: 18, including the WP-153 property and › "reads %j as the script it is" trap rows.
+  - the shared set reverted to four shells: 9, the `rbash -c` row first.
+  - `script`: 9.
+  - standard input: 33.
+  - `find`: 10.
+  - `storesCommand`: 41.
+  - `rebase -x`: 5.
+  - `su`/`runuser`: 2. `flock`: 1. `watch`: 1.
+  - `env -S`: 1. Its first run **survived**: the short row is refused by the eight-word peel, so the `-u A -u B -u C -u D -S` row was added.
+  - **criterion 4** (the entry fires on every trap): 16. The first criterion-4 row, › "reads %j and is not uncertain (criterion 4)" for `trap 'rm -f "$tmp"' EXIT`, failed.
+  - **(g)**, the assignment token restored as a candidate: 2. The first 512 row (`x='b[1]'`) failed.
+  - **(f)**, the whole-text regex restored: 17, including the `#!/bin/sh`, `${HOME}` and `fix #12` rows.
+  - comments read for shell names: 1, the `#!/bin/sh` row.
+  - a `>(…)` body not fed: 2.
+  - a nested script not fed: 1. Its first run **survived**: `| bash -c 'bash'` is caught at the outer level by the position walk, so the `'true; bash'` row was added.
+  - the depth guard: 1. `"$@"` operands: 2. The `xargs` replace string: 2. `exec` moving stdin: 1. `coproc`: 1.
+  - a `-c` cluster read only as the word `-c`: 1, the shell's `bash -lc` row (the unit rows were caught by the old peel).
+- **Survived:** the separate (e) pairing check, which was therefore removed (above).
+
+**Residuals**
+- A script in a file (`bash file`, `bash < file`, `. ./x.sh`): a file the run wrote, backlog 481's residual.
+- An interpreter that is not a shell (`python3 -c`).
+- `parallel`.
+- An alias or prompt variable from a start-up file.
+- The WP-158 residuals (`read -aNAME`, `getopts`, `wait -p`, `exec {var}>…`, attributes outside the line).
+- **Over-asks introduced (fail closed, each a choice):**
+  - `trap "rm -f $tmp" EXIT` (double-quoted, `$`: bash re-parses `$tmp`'s value at exit, so it is the ruling's non-literal action);
+  - `bash -c "… $x …"`;
+  - a stdin-reading shell anywhere on a level with a pipe (`ls | wc; bash`);
+  - `echo x | xargs sh` (but `xargs bash -c` with no operand was **open** until review round 1, below);
+  - `echo PS1=x` is **not** one: only assignments in command position and declaration arguments count.
+- `read -r PS4 <<< '…'` also answers WP-158's `evaluatedText`: its name reader takes the here-string's word for a name. That is an over-ask and is filed below.
+
+**Sentences falsified (rule 83).** Grep over the policies, readiness and technical/05 for `wrappedScript`, `SHELL_NAMES`, `HERE_DOCUMENT_CONTEXT`, `unrecognisedUnquotedOperator`, `still does not read`, `a string`, `old reading`, `today's reading`, `already refused` and `exhaustive`.
+- **Changed:**
+  - `command-policy.ts` rule 1 (*"the script a shell wrapper is handed (`sh -c '…'`, `eval '…'`, …)"*) now names every string and `find -exec`'s argv;
+  - rule 5's *"named below, under *A variable's text is code*"* now points to *What it still does not read*;
+  - **the docblock's *"What it still does not read: a builtin that runs a *string* as code (`trap '…' EXIT`, `PS4` …)"*** is narrowed to what is still not read;
+  - the here-document paragraph (`unrecognisedUnquotedOperator`, *"an unquoted delimiter"*);
+  - `HERE_DOCUMENT_OPERATOR`'s *"its body stays commands, today's reading"* and *"(and, for an unquoted word, …)"*;
+  - `HERE_DOCUMENT_CONTEXT`'s whole docblock (*"Matched on everything the walker has read before the operator"*), replaced by `readShellContext`'s;
+  - `unrecognisedUnquotedOperator`'s *"a word with a quote or a backslash makes the body literal, and nothing is read"*;
+  - `MAX_WRAPPER_DEPTH`'s;
+  - technical/05's WP-153 amendment (*"or after a `${`, `((`, `$[`, `[[` or a comment on the line before it"* and *"In each of these the lines are read as commands, as before — and, since WP-158, an **unquoted** one's …"*);
+  - **technical/05's WP-158 amendment** (*"the context guard refuses a here-document after any `${`, closed or not, and after a comment on an earlier line"*, now past tense and scoped, and **"a different class, filed as Discovered work"**, now followed by *"read or refused since WP-160"*);
+  - `recheck.ts`'s R13 docblock (*"the scanner refuses a here-document after a word-start `#` anywhere earlier in the text (`HERE_DOCUMENT_CONTEXT`, …)"*).
+- **Left, still true:**
+  - `feedsScriptReader`'s *"a reader found is only the old reading"* (an over-read);
+  - `ENVIRONMENT_WRAPPERS`'s *"`sh -c`, `eval` and `xargs` … unpeeled for the allow-list"*;
+  - `canonicalShellStage`'s `| bash` examples (it now covers the whole shell set);
+  - the unattended module's *"`python3 -c '…subprocess…'` or a script the run wrote"*;
+  - no *"exhaustive"* claim exists in the policies.
+- **Left as history:**
+  - **backlog 511's item 3** (*"the strongest reason this is major"*): the plan row and the third amendment already record it falsified, and this row's table narrows that further for `su`/`flock`/`watch`/`env -S`;
+  - the plan row's *"already refused … No test pins any of them"* (now pinned, and partly read);
+  - WP-158's notes.
+
+**Verification.** Every tier started at a one-minute load under 12; one targeted policy run started at 13.1 before the check was repeated.
+`PASS: verify` (12 152 tests, 28 skipped; lint at the baseline's 44 warnings — the seven this row's strings first added were rewritten as template literals; `PASS: coverage:ratchet`), with `.claude/scheduled_tasks.lock` moved to the scratchpad for the run and put back. No integration or e2e tier: the row is domain-only. The citation guard passes over these notes. Docker: every container this row started was `--rm` on `platform-runtime:wp151`, and none is left.
+
+**Discovered work** (candidates for the refiner; each measured on this tree unless it says otherwise):
+- **[major, security, attended too] git's long-option abbreviations walk past `HAZARDOUS_ARGUMENTS`.** git accepts any unambiguous prefix of a long option. `git fetch --upload-p=x .` ran `x` (git 2.54, measured), and a commit made with `--no-verif` skipped a failing pre-commit hook (measured). The entries name full spellings (`git * --upload-pack*`, `git * --no-verify*`, …), so `git fetch origin --upload-p=evil` and `git commit --no-verif -m x` are **`allow_list`** in every mode, and `--receive-p`, `--ext-dif`, `--textco` and the rest are the same class. `rebase`'s `--ex`/`--exe` are closed here. A fix reads a long flag as every prefix git would accept (≥ the shortest unambiguous one, or fail closed on any prefix of a listed name).
+- **[major, security] The argv peel stops at `MAX_WRAPPER_DEPTH`, and the command after it is never seen.** `A=1 B=2 C=3 D=4 E=5 F=6 G=7 H=8 I=9 sudo id` and the same with `git push origin HEAD:main`, and `nice ×9 git push --force origin main`, are `unattended_auto` (`argv0Candidates` tries eight suffixes; the git boundary's `commandArgvCandidates` is the same walk). Fail closed past the bound (uncertain), or peel to the end.
+- **[major, security] `gitBoundaryViolation`'s *composite* skip drops a push that merely contains a shorter fragment's text** (`894aad30`, backlog 488). `git push origin main; m` is `unattended_auto`: the fragment `m` is a substring of `git push origin main`, so the push is treated as a composite and never judged. `git push --mirror origin; i` likewise. The check needs to compare fragments as fragments (the pipeline it was written for), not as substrings.
+- **[minor, security] A command name the shell expands hides it from the block list and the git boundary.** `/usr/bin/sud? id` and `{sudo,x} id` are `unattended_auto`. That is a computed command name by pathname or brace expansion, which `computesCommandName` does not read. Here only the shell case (`/bin/[r]bash -c`) is read.
+- **[nit] WP-158's name reader takes a here-string's word for a variable name**: `read -r PS4 <<< 'x'` is `evaluatedText` (an over-ask, fail closed).
+- **[nit] `scan` splits `<&3` at its `&`.** `bash <&3` becomes the segments `bash <` and `3`. This row makes a lost stdin target uncertain, and other effects of the split are unmeasured.
+- **[nit] A substitution nested past `MAX_WRAPPER_DEPTH` is kept as a raw fragment, unparsed and not uncertain.** This row fails closed for a handed-over string at the bound, and the substitution path still does not.
+
+**Review round 1** (reviewer REQUEST-CHANGES: three majors, all fixed fail closed). Each form below was `unattended_auto` in all three baselines with the push and with `sudo id` (the reviewer's probes, re-measured with the scratchpad's verdict script), and is now refused in both modes.
+1. **[major] A shell `-c` with no operand on the line.** `echo "'sudo id'" | xargs bash -c` runs the line `xargs` supplies as the script (bash 5.2 ran it; so does `-L1`, `-d '\n'`, `xargs -- sh -c`, `xargs env bash -c`, `xargs bash -c <<<…`, `xargs -a /dev/stdin bash -c`). **Fix:** `readShell` makes a `-c` with no operand `handedCommand`. `readOptionString` does the same for a `-c`/`--command`/`-S` with no value, which covers `xargs script -qc`, `xargs script --command` and `xargs su -c`. My notes' *"`echo x | xargs sh` over-ask"* was true, and beside the point: the `-c` spelling was open.
+2. **[major] `complete`/`compgen -W`.** bash expands the word list, command substitutions included, and `compgen -W '$(touch R1)' x` ran in a non-interactive bash 5.2. **Fix:** any option cluster holding `W` or `C` (`-W`, `-oW`) is `handedCommand`. `-F` names a function, which a line that defines it has read, so it stays readable (› "review round 1 — xargs’s script, -W, and continuations" pins `complete -F _fn x`).
+3. **[major] Line continuations between the words the new readers read.** `find . \⏎-exec sudo id \;`, `find . -exec \⏎sudo id \;`, `echo 'sudo id' | \⏎bash`, `export \⏎PS4='$(…)'; set -x; :` and `mapfile -\⏎C '…;:' -c 1 a <<< x` were open. **Fix:** `parseCommand` hands `wrappedScript` and `storesCommand` each stage with `joinContinuations` applied, as `wordsOf` does. **Sibling sweep of every new reader**, with these results:
+   - `feedsScriptReader` joins its text too.
+   - The `exec … <` check reads the joined level.
+   - **`cat <<\⏎EOF` was a fourth instance, found by the sweep.** bash reads it as `cat <<EOF` (measured), and the body reading never ran, because `hereDocumentsAtNewline` took the continuation's newline for the end of the line. The fix joins continuations in that check and skips them in `unrecognisedOperator`'s word. The paired form (`cat <<\⏎EOF` + `a'` + `EOF` + push + `'`) was `unattended_auto` and is now `unbalancedQuote`.
+   - The same check now ends `cat <<'EOF' \⏎>f` at the joined line, as bash does (measured).
+   - `readShellContext` already skipped `\` + newline.
+   - Mid-word continuations (`su\⏎do id`) are WP-161's, as the reviewer filed.
+- **Tests.**
+  - `packages/domain/src/policies/unattended-commands.test.ts` › "review round 1 — xargs’s script, -W, and continuations" has 17 refused rows: `uncertain`, exactly `[handedCommand]` with the push, and `uncertain` or `block_list` with `sudo id`, in both modes. It also has 5 continuation rows that are read (`git_boundary`/`block_list`), the `cat <<\⏎EOF` row, and 2 rows that still read (`complete -F`, `xargs echo`).
+  - `here-documents.shell.test.ts` gained 8 bash-run rows: `xargs bash -c`, `xargs -L1`, `compgen -W`, both `find` continuations, the pipe continuation, `export \⏎PS4` and `cat <<\⏎EOF`. Each prints the marker on this machine's bash 3.2. The run image's bash ran the reviewer's forms.
+- **Canaries** (same method):
+  - the no-operand `-c` rule removed: killed by 9;
+  - the long option string with no value: killed by 1 (› `xargs script --command`, added after its first run survived);
+  - the short one: killed by 2;
+  - `-W` reverted to `C`: killed by 4;
+  - continuations not joined in the stage: killed by 8;
+  - the operator-word continuation: killed by 1;
+  - the operator-line continuation: killed by 1.
+- **Docs.** technical/05's WP-160 amendment names `-c` with no operand, `-W` and the joined continuations. The module docblock's *What it still does not read* now names a mid-word line continuation (WP-161).
+- **Verification.** I started `verify` after the reviewer's e2e chain read `DONE`, at a one-minute load of 5.8. It gave `PASS: verify` (12 185 tests, 28 skipped) with 46 lint warnings. The two extra warnings were my own `'\;'` in two `find` rows, which also meant those rows planted `;` rather than `\;`. I fixed both rows to `\;`. Afterwards `biome check` on `packages/domain/src/policies` reports none (back at the baseline's 44), and the file passes again (565). The shell-oracle file passed 107/107 twice in `platform-runtime:wp151`. The citation guard passes. The lock file was moved aside for the run and put back.

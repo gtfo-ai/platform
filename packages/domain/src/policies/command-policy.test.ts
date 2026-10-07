@@ -35,6 +35,7 @@ import {
   type ResolvedCommandPolicy,
   readHereDocumentBodies,
   readHereDocumentOperator,
+  readsHereDocumentsAsScripts,
   runCommandPolicy,
   SED_PRINT_RANGE_ALLOW,
   splitCommandSegments,
@@ -2228,5 +2229,82 @@ describe('WP-153 — a here-document body is data (backlog 482)', () => {
     // Two lines, two operators, each body after its own line.
     const lines = "cat <<'A'\nx\nA\ncat <<'B'\ngit push --force\nB\nls";
     expect(splitCommandSegments(lines)).toEqual(["cat <<'A'", "cat <<'B'", 'ls']);
+  });
+});
+
+/**
+ * WP-160 (g) and (f): backlog 512 (a glob-named reader found in an assignment, a test or a group)
+ * and 513's convenience half (a comment, a closed `${…}` or a `#` in quotes on an earlier line
+ * stopped every later here-document from being recognised). Each line's body has an apostrophe, so
+ * a body read as commands is `unbalancedQuote`; bash reads each as data (PROGRESS § WP-160).
+ */
+describe('WP-160 — a body stays data beside an assignment, a test, a group or an earlier comment', () => {
+  const BODY = "cat > f <<'EOF'\ndon't\nEOF";
+
+  it.each([
+    [`x='b[1]'; ${BODY}`, 'an assignment carrying a `[` (backlog 512, criterion 6)'],
+    [`[ -d x ] && ${BODY}`, 'a `[` test'],
+    [`{ ${BODY}\n}`, 'a `{ …; }` group'],
+    [`[[ -f *.ts ]] && ${BODY}`, 'a `[[` test with a glob operand'],
+    [`#!/bin/sh\n${BODY}`, 'a `#!/bin/sh` line (backlog 513, criterion 6)'],
+    [`echo \${HOME}\n${BODY}`, `a closed \`\${…}\` on an earlier line`],
+    [`git commit -m "fix #12"\n${BODY}`, 'a `#` inside quotes on an earlier line'],
+    [`# note\n${BODY}`, 'a comment line'],
+    [`[[ -d x ]] && echo y\n${BODY}`, 'a closed `[[ … ]]`'],
+    // `((…))` and `$[…]` are WP-158's `evaluatedText` whatever follows; the body is still data.
+    [`(( 1 )) && echo y\n${BODY}`, 'a closed `(( … ))`', [UNCERTAINTY.evaluatedText]],
+    [`echo $[1]\n${BODY}`, 'a closed `$[…]`', [UNCERTAINTY.evaluatedText]],
+  ])('reads the body of %j as data (%s)', (command, _why, uncertainty = []) => {
+    expect(commandUncertainty(command)).toEqual(uncertainty);
+    expect(readsHereDocumentsAsScripts(command)).toBe(false);
+    expect(splitCommandSegments(command).some((fragment) => fragment.includes("don't"))).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    ["cat <<'EOF' | /bin/s?\ngit push --force origin main\nEOF", 'a glob'],
+    ["cat <<'EOF' | /bin/{sh,x}\ngit push --force origin main\nEOF", 'a brace'],
+    ["cat <<'EOF' | /bin/[s]h\ngit push --force origin main\nEOF", 'a bracket'],
+    ["X=1 /bin/s? <<'EOF'\ngit push --force origin main\nEOF", 'a glob behind an assignment'],
+    ["{ /bin/s?; } <<'EOF'\ngit push --force origin main\nEOF", 'a glob inside a group'],
+  ])(
+    'still reads a body as a script for a name the shell expands: %j (%s, criterion 6)',
+    (command) => {
+      expect(readsHereDocumentsAsScripts(command)).toBe(true);
+      expect(evaluateCommand({ command })).toMatchObject({ verdict: 'block' });
+    },
+  );
+
+  it.each([
+    [`echo \${x:-`, 'an open parameter expansion'],
+    [`echo \${x:-\${y}`, 'an open one around a closed one'],
+    ['((x', 'an open arithmetic command'],
+    ['echo $((1', 'an open arithmetic expansion'],
+    ['echo $[1', 'an open `$[`'],
+    ['[[ a ', 'an open `[[`'],
+    ['echo hi # ', 'a comment on the line'],
+    ['echo ok\n# ', 'a comment after an earlier line'],
+    ["echo 'a\n", 'a quote the walk cannot close'],
+  ])('still recognises nothing while %j is open (%s, WP-153’s rows)', (before) => {
+    const text = `${before}<<EOF`;
+    expect(readHereDocumentOperator(text, before.length, before)).toBeNull();
+  });
+
+  it.each([
+    [`echo \${HOME}; cat `, `a closed \`\${…}\``],
+    ['#!/bin/sh\ncat ', 'a comment on an earlier line'],
+    ['git commit -m "fix #12"\ncat ', 'a `#` inside double quotes'],
+    ["echo 'a # b' ", 'a `#` inside single quotes'],
+    ['echo a#b ', 'a `#` inside a word'],
+    ['echo $# ', '`$#`'],
+    [`echo \${#x} `, `\`\${#x}\``],
+    ['(( x )); cat ', 'a closed arithmetic command'],
+    ['echo $((1)) ', 'a closed arithmetic expansion'],
+    ['[[ -d x ]] && cat ', 'a closed `[[`'],
+    ['x=$(cat ', 'an open command substitution (WP-153’s substitution openers)'],
+  ])('recognises the operator after %j (%s)', (before) => {
+    const text = `${before}<<EOF`;
+    expect(readHereDocumentOperator(text, before.length, before)).not.toBeNull();
   });
 });

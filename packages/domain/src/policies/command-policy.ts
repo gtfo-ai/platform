@@ -12,8 +12,9 @@
  *     list (`a && b`, `a; b`, `a & b`), each stage of a pipeline, the pipeline as a whole (so
  *     `curl * | sh` still matches), each subshell `( … )`, the body of every command substitution
  *     (`$( … )`, backticks) and process substitution (`<( … )`, `>( … )`), and the script a shell
- *     wrapper is handed (`sh -c '…'`, `eval '…'`, or a here-document a shell reads). The most
- *     restrictive verdict of all wins.
+ *     wrapper is handed (`sh -c '…'`, `eval '…'`, or a here-document a shell reads) — every string
+ *     a builtin or a program runs as one, now or later, and `find -exec`'s argv (WP-160, below).
+ *     The most restrictive verdict of all wins.
  *  2. **Block patterns match tokens *or* the whole line.** Token matching lets a flag sit anywhere
  *     (`git push --force*` catches `git push origin agentic/x --force`) and lets extra arguments
  *     never escape a ban; the whole-line glob is kept alongside it so the token rule can only ever
@@ -34,7 +35,7 @@
  *  5. **Parse uncertainty fails closed.** A hand-rolled shell scanner is never complete, so it
  *     says when it is out of its depth (`CommandEvaluation.uncertainty`) and an uncertain line can
  *     never be `allow`. `UNCERTAINTY` lists every construct that trips it; what the scanner still
- *     does not read is named below, under *A variable's text is code*, and nowhere else.
+ *     does not read is named below, under *What it still does not read*, and nowhere else.
  *
  * **A here-document's body is data** (WP-153, PROGRESS backlog 482). `cat > a.php <<'EOF'` followed
  * by PHP is one command, `cat`, and its body is what `cat` reads: no segment, no quote state, no
@@ -49,7 +50,11 @@
  * read as one (rule 1's `sh -c`, `HERE_DOCUMENT_SCRIPT_READERS`). Reading a missed body as commands
  * is not free when its delimiter is unquoted: the shell expands a `$(…)` there that the commands'
  * reading takes for single-quoted text, so such a would-be body is also read as a body for its
- * expansions (`unrecognisedUnquotedOperator`, WP-158).
+ * expansions (`unrecognisedOperator`, WP-158); and a missed body's quotes can pair across bash's
+ * terminator and hide what runs after it, so the lines after that terminator are read again from
+ * a fresh state, quoted delimiter or not (WP-160 (e), backlog 513). What keeps an operator from
+ * being recognised is only what is still open at it — a `${`, `$[`, `((`, `[[`, or a comment on its
+ * own line (WP-160 (f)) — and a comment names no script reader.
  *
  * **A variable's text is code in some places** (WP-158, PROGRESS backlog 509). bash evaluates a
  * value as an arithmetic expression — and runs the `$(…)` of an array subscript inside it — in a
@@ -60,11 +65,26 @@
  * Reading a value is never uncertain; evaluating one is. The detector runs wherever the walk does
  * **and** over the words it consumes whole — a redirection's target (review round 1) — on the text
  * as bash reads it, line continuations (`\\` + newline) joined; and a stage's command is found past
- * a wrapper's options (`command -p`, `time -p`, `--`) and `coproc`. **What it still does not read:** a builtin
- * that runs a *string* as code (`trap '…' EXIT`, `PS4` under `bash -x`, `PROMPT_COMMAND`,
- * `bind -x`, `complete -C`), an option's value attached to its option (`read -aNAME`), a name taken
- * by a builtin it does not list (`getopts`, `wait -p`, `exec {var}>…`), and an attribute (`-i`,
- * `-n`) given to a variable outside the line.
+ * a wrapper's options (`command -p`, `time -p`, `--`) and `coproc`.
+ *
+ * **A command handed over as a string is a script** (WP-160, PROGRESS backlog 511). `trap '…' EXIT`,
+ * `rbash -c '…'`, `script -qc '…'`, `bash <<<'…'` and `find -exec …` each run a command the line
+ * holds as a string or as argv; read as one `trap`, `script` or `find` command, the push or the
+ * `sudo` inside was `unattended_auto` (measured, with bash running it). `wrappedScript` reads every
+ * such string off the stage's words as written and parses it when it is literal; when it is not —
+ * or when the shell will run a stored string later (`PS4`, `PROMPT_COMMAND`, an alias, a callback)
+ * or read its script from a pipe or a process substitution — the line is `UNCERTAINTY.handedCommand`
+ * (`storesCommand`, and `wrappedScript`'s standard-input reader).
+ *
+ * **What it still does not read:** a script in a file (`bash file`, `bash < file`, `. ./x.sh` — a
+ * file the run wrote, backlog 481's residual and the unattended module's), an interpreter that is not
+ * a shell (`python3 -c`, `perl -e`), a command a program assembles from its input where no string on
+ * the line names it (`parallel`; and argv `xargs` reads from standard input into a command that
+ * runs its arguments, `echo 'sudo id ;' | xargs find . -exec` — backlog 523, WP-161), a prompt variable or an alias set by a start-up file, an option's
+ * value attached to its option (`read -aNAME`), a name taken by a builtin it does not list
+ * (`getopts`, `wait -p`, `exec {var}>…`), an attribute (`-i`, `-n`) given to a variable outside
+ * the line, and a line continuation **inside** a word (`su\⏎do id` — WP-161; one between words is
+ * joined before every reader here reads, review round 1).
  *
  * **Quoting is honoured in one place and ignored in the other, on purpose.** The scanner
  * (`scan`, and so the redirection floor) honours it: `ls "> out"` is not a redirection, because
@@ -140,6 +160,15 @@ export const UNCERTAINTY = {
    * `evaluatesVariableText` (expansions) and `stageEvaluatesText` (commands); the only exemptions
    * are literal — a plain decimal number, a `@`/`*` subscript — and each is backed by the shell.
    */
+  /**
+   * WP-160 (backlog 511): a command handed over as a **string** the platform cannot read — a trap
+   * action, an `eval`/`sh -c`/`script -c` script that is not literal, a prompt or hook variable
+   * (`PS4`, `PROMPT_COMMAND`, …), an alias, a callback (`mapfile -C`, `bind -x`, `complete -C`,
+   * `fc`), or a script a shell reads from a pipe or a process substitution. A literal one is read
+   * as a script instead (`wrappedScript`); these are what is left.
+   */
+  handedCommand:
+    'a command handed over as a string — a trap action, an eval or sh -c script that is not literal, a prompt or hook variable (PS4, PROMPT_COMMAND), an alias, a callback (mapfile -C, bind -x, complete -C or -W, fc), or a script piped or process-substituted into a shell — write the command itself; the platform cannot read a command stored in a trap, a prompt, an alias or a callback',
   evaluatedText: `an expansion or command that evaluates a variable's text as code (a subscript or offset that is not a plain number, \${x@…}, \${!x}, $[…], ((…)), let, declare -i or -n, a [[ … -eq … ]] or -v test, a variable name built from an expansion) — write the value literally; the platform cannot read an expansion that evaluates a variable's text`,
 } as const;
 
@@ -877,11 +906,23 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     kind: 'command',
     hazard: 'the push-side twin of --upload-pack, and equally a shell command',
   },
+  /**
+   * `--exec`, and since WP-160 (d) `git rebase`'s short spelling, `-x`: attached (`-xCMD`) or last
+   * in a cluster (`-ix`, `-qx`) — git 2.47.3 (the run image's) and 2.54 each ran the command for all
+   * three, and for `--ex`/`--exe`, the abbreviations git's option parser accepts. A token predicate
+   * rather than the glob it was, because a glob cannot read a cluster; the glob's own reach (a flag
+   * after any subcommand, quoting off) is the predicate's too.
+   */
   {
     pattern: 'git * --exec*',
     kind: 'command',
     hazard:
-      "--exec is git push's synonym for --receive-pack, and git fetch-pack's for --upload-pack; it is not scoped to a subcommand because the next verb to grow one would be missed",
+      "--exec is git push's synonym for --receive-pack, git fetch-pack's for --upload-pack, and git rebase runs it (or -x) after each commit; it is not scoped to a subcommand because the next verb to grow one would be missed",
+    tokens: ({ name, flags, positional }) =>
+      (name === 'git' || name.startsWith('git-')) &&
+      (flags.some((flag) => flag.startsWith('--exec') || /^--exe?(?:=|$)/.test(flag)) ||
+        ((name === 'git-rebase' || positional.includes('rebase')) &&
+          flags.some((flag) => /^-[^-]*x/.test(flag)))),
   },
   {
     pattern: 'git * --extcmd*',
@@ -1484,8 +1525,27 @@ const isWrapperToken = (token: string): boolean =>
 /** The name a token would run under: quoting off, then the last path segment. */
 const argv0Name = (token: string): string => basename(unquoteToken(token));
 
-/** Shells that take a script as an argument. */
-const SHELL_NAMES: ReadonlySet<string> = new Set(['sh', 'bash', 'zsh', 'dash']);
+/**
+ * The shells, as **one** set (WP-160 (b)): each takes a script as its `-c` argument, reads one
+ * from standard input, and runs a here-document it is handed. It was two sets until WP-160 —
+ * `sh`/`bash`/`zsh`/`dash` for `-c`, and these for a here-document — so `rbash -c '…'` (shipped in
+ * the run image) and `ksh -c '…'` were unread. `busybox` is not here: it is a shell only with a
+ * second word (`busybox sh -c '…'`), which `wrappedScript` reads.
+ */
+const SCRIPT_SHELLS: ReadonlySet<string> = new Set([
+  'sh',
+  'bash',
+  'zsh',
+  'dash',
+  'ksh',
+  'mksh',
+  'ash',
+  'rbash',
+  'fish',
+  'csh',
+  'tcsh',
+  'hush',
+]);
 
 /**
  * Wrappers that only set up the environment and then `exec` what follows, so the command that runs
@@ -1512,7 +1572,11 @@ const tokenise = (text: string): readonly string[] =>
     .split(' ')
     .filter((token) => token.length > 0);
 
-/** How many suffixes to try past a wrapper prefix; a shell line is never this deep in practice. */
+/**
+ * How many suffixes to try past a wrapper prefix; a shell line is never this deep in practice. It is
+ * also how deep a handed-over script is parsed, and one nested past it is uncertain (WP-160). The
+ * suffix walk past a prefix is **not** fail-closed at the bound — PROGRESS § WP-160, Discovered work.
+ */
 const MAX_WRAPPER_DEPTH = 8;
 
 /**
@@ -1710,6 +1774,12 @@ const PIPE_OPERATORS = ['|&', '|'] as const;
 
 interface ScanResult {
   readonly segments: readonly string[];
+  /**
+   * Each of `segments` as written, in the same order: its substitutions and backticks kept, which
+   * `segments` lifts out (WP-160 — a string handed to a trap or a shell is literal only if nothing
+   * in it expands). Here-document bodies are not in either.
+   */
+  readonly rawSegments: readonly string[];
   /** Bodies of `$(…)`, `` `…` ``, `<(…)` and `>(…)`, which the shell executes in their own right. */
   readonly substitutions: readonly string[];
   /** Redirection targets that are paths — a duplication (`2>&1`) or `/dev/null` is not one. */
@@ -1722,6 +1792,13 @@ interface ScanResult {
   readonly hereDocuments: readonly HereDocumentBody[];
   /** `[newline, end)` of every skipped body, terminator line included, in the scanned text. */
   readonly bodyRanges: readonly (readonly [number, number])[];
+  /**
+   * Where bash resumes reading commands after the **first** here-document this pass did not
+   * recognise (WP-160 (e)): the newline after its would-be terminator, or `null`. The walk read
+   * that body as commands, so its quote state there may not be bash's; `parseCommand` reads the
+   * text from here again, from a fresh state.
+   */
+  readonly resumeFrom: number | null;
 }
 
 // ── here-documents (WP-153) ──────────────────────────────────────────────────
@@ -1747,30 +1824,175 @@ export interface HereDocumentOperator {
 /**
  * The operator and a word in one of the three shapes, ending at a word boundary. A word the shell
  * would join to more text (`<<EOF"X"` is the delimiter `EOFX`, measured) or one carrying a `$`, a
- * backslash or mixed quoting is **not recognised** — its body stays commands, today's reading.
+ * backslash or mixed quoting is **not recognised** — its body stays commands, read both ways
+ * (`unrecognisedOperator`).
  *
  * **The boundary is bash's own metacharacters — space, tab, newline, `;&|)<>` — and never `\s`.**
  * JavaScript's `\s` also matches `\r`, `\f`, `\v` and NBSP, which bash keeps inside the word: on a
  * CRLF line `cat <<'EOF'\r` the delimiter is `EOF\r`, the body ends at the line `EOF\r`, and bash
  * 5.2 runs the next line (measured for all four, WP-153 review round 1). Read with `\s`, the
  * delimiter was `EOF` and that line stayed in the body. `(` is a metacharacter too, but `<<EOF(`
- * is a syntax error, so it is left out: not recognising costs the old reading (and, for an unquoted
- * word, a would-be body read for its expansions — `unrecognisedUnquotedOperator`, WP-158).
+ * is a syntax error, so it is left out: not recognising costs the old reading, made safe by
+ * `unrecognisedOperator` (a would-be body read for its expansions, WP-158, and the lines after its
+ * terminator read again, WP-160 (e)).
  */
 const HERE_DOCUMENT_OPERATOR =
   /^<<(-?)[ \t]*(?:'([A-Za-z0-9_.-]+)'|"([A-Za-z0-9_.-]+)"|([A-Za-z0-9_.-]+))(?=$|[ \t\n;&|)<>])/;
 
 /**
- * Text before an operator that puts it where the shell may **not** read a here-document: a
- * parameter expansion (`${x:-<<EOF}`), an arithmetic command or old-style expansion (`((x<<y))`,
- * `$[1<<2]`), a `[[ … ]]` test, or a comment (`# <<EOF`). Each was measured on bash 5.2 to run the
- * line after it, so a reader that skipped that line would hide a command. Matched on everything the
- * walker has read before the operator — quoted text included, bodies already skipped excluded — so
- * it errs towards not recognising, whose cost is the old reading — plus, for an unquoted word, a
- * would-be body read for its expansions (`unrecognisedUnquotedOperator`). Its `\s` is wider than bash's
- * blanks on purpose: a wider "word start" finds more comments, and so recognises less.
+ * Reads `before` as the shell would up to its end, and answers two things: its comments (which
+ * `feedsScriptReader` does not read for script-reader names), and `refuses` — whether an operator
+ * at the end of `before` sits where the shell reads **no** here-document: in a
+ * comment, or inside a parameter expansion (`${x:-<<EOF}`), an arithmetic command or expansion
+ * (`((x<<y))`, `$[1<<2]`) or a `[[ … ]]` test. Each was measured on bash 5.2 to run the line after
+ * it (WP-153), so a reader that skipped that line would hide a command.
+ *
+ * **Scoped to what is still open at the operator** (WP-160 (f), backlog 513). The first version
+ * matched a pattern anywhere in the text before the operator, so one `#!/bin/sh` line, a closed
+ * `${HOME}` or `git commit -m "fix #12"` on an earlier line stopped every later here-document from
+ * being recognised (its body read as commands: an apostrophe in it was `unbalancedQuote`). bash
+ * reads a here-document after each of them (measured). So this walks `before` as the shell does —
+ * quotes honoured, a comment running to the end of its line and only where a word starts (after a
+ * blank or `;&|()<>`; `\s` is wider than bash's blanks on purpose: it finds more comments, and so
+ * recognises less), `${`, `$[`, `((`/`$((` and `[[` counted until they close, a substitution's
+ * text with a quote state of its own — and refuses only when one of them is open at the end, or
+ * when the walk cannot follow the text (a quote it cannot close). Refusing costs the commands'
+ * reading of the would-be body, which `unrecognisedOperator` makes safe.
  */
-const HERE_DOCUMENT_CONTEXT = /\$\{|\$\[|\(\(|\[\[|(?:^|[\s;&|()<>])#/;
+const readShellContext = (
+  before: string,
+): { readonly refuses: boolean; readonly comments: readonly (readonly [number, number])[] } => {
+  const unfollowable = { refuses: true, comments: [] } as const;
+  const comments: [number, number][] = [];
+  type Frame = '$(' | '(' | '${' | '$[' | '((' | '[[' | '"';
+  const REFUSING: ReadonlySet<Frame> = new Set<Frame>(['${', '$[', '((', '[[']);
+  const frames: { kind: Frame; depth: number }[] = [];
+  let comment = -1;
+  let boundary = true;
+  for (let index = 0; index < before.length; index += 1) {
+    const char = before[index] as string;
+    const frame = frames.at(-1);
+    const kind = frame?.kind;
+    const startsWord = boundary;
+    boundary = /[\s;&|()<>]/.test(char);
+    if (comment !== -1) {
+      if (char === '\n') {
+        comments.push([comment, index]);
+        comment = -1;
+      }
+      boundary = true;
+      continue;
+    }
+    if (char === '\\') {
+      index += 1;
+      boundary = false;
+      continue;
+    }
+    if (kind === '"') {
+      boundary = false;
+      if (char === '"') {
+        frames.pop();
+        continue;
+      }
+    } else if (char === "'") {
+      const close = before.indexOf("'", index + 1);
+      if (close === -1) {
+        return unfollowable;
+      }
+      index = close;
+      boundary = false;
+      continue;
+    } else if (char === '"') {
+      frames.push({ kind: '"', depth: 0 });
+      boundary = false;
+      continue;
+    }
+    if (char === '`') {
+      const close = before.indexOf('`', index + 1);
+      if (close === -1) {
+        return unfollowable;
+      }
+      index = close;
+      continue;
+    }
+    if (char === '$' && /^\$(?:\(\(|\(|\{|\[)/.test(before.slice(index, index + 3))) {
+      const opener = before.slice(index, index + 3).startsWith('$((')
+        ? '(('
+        : (`$${before[index + 1]}` as Frame);
+      frames.push({ kind: opener === '$(' ? '$(' : opener, depth: 0 });
+      index += opener === '((' ? 2 : 1;
+      continue;
+    }
+    if (kind === '"') {
+      continue;
+    }
+    if (kind === '${' || kind === '$[') {
+      const [open, close] = kind === '${' ? ['{', '}'] : ['[', ']'];
+      if (char === open) {
+        (frame as { depth: number }).depth += 1;
+      } else if (char === close) {
+        if ((frame as { depth: number }).depth === 0) {
+          frames.pop();
+        } else {
+          (frame as { depth: number }).depth -= 1;
+        }
+      }
+      continue;
+    }
+    if (kind === '((') {
+      if (char === '(') {
+        (frame as { depth: number }).depth += 1;
+      } else if (char === ')') {
+        if ((frame as { depth: number }).depth > 0) {
+          (frame as { depth: number }).depth -= 1;
+        } else {
+          frames.pop();
+          index += before[index + 1] === ')' ? 1 : 0;
+        }
+      }
+      continue;
+    }
+    if (char === '#' && startsWord) {
+      comment = index;
+      continue;
+    }
+    if (startsWord && before.startsWith('((', index)) {
+      frames.push({ kind: '((', depth: 0 });
+      index += 1;
+      continue;
+    }
+    if (startsWord && /^\[\[(?:[\s]|$)/.test(before.slice(index, index + 3))) {
+      frames.push({ kind: '[[', depth: 0 });
+      index += 1;
+      continue;
+    }
+    if (
+      kind === '[[' &&
+      startsWord &&
+      /^\]\](?:[\s;&|()<>]|$)/.test(before.slice(index, index + 3))
+    ) {
+      frames.pop();
+      index += 1;
+      continue;
+    }
+    if (char === '(') {
+      frames.push({ kind: '(', depth: 0 });
+    } else if (char === ')' && (kind === '(' || kind === '$(')) {
+      frames.pop();
+    }
+  }
+  if (comment !== -1) {
+    comments.push([comment, before.length]);
+  }
+  return {
+    refuses:
+      comment !== -1 || frames.some((frame) => REFUSING.has(frame.kind) || frame.kind === '"'),
+    comments,
+  };
+};
+
+/** {@link readShellContext}'s verdict: the operator at the end of `before` is not a here-document. */
+const hereDocumentContextRefuses = (before: string): boolean => readShellContext(before).refuses;
 
 /**
  * The operator's **shape** at `text[index]`, whatever precedes it — `null` for no operator, and for
@@ -1802,22 +2024,32 @@ export const readHereDocumentOperator = (
   index: number,
   before: string,
 ): HereDocumentOperator | null =>
-  HERE_DOCUMENT_CONTEXT.test(before) ? null : hereDocumentOperatorShape(text, index);
+  hereDocumentContextRefuses(before) ? null : hereDocumentOperatorShape(text, index);
 
 /**
- * A `<<` the reader does **not** recognise but bash may read as an **unquoted** here-document
- * (WP-158, found by the shell oracle). Not recognising was taken to cost only the old reading — the
+ * A `<<` the reader does **not** recognise but bash may read as a here-document (WP-158, found by
+ * the shell oracle). Not recognising was taken to cost only the old reading — the
  * lines after it read as commands — but an unquoted body expands a `$(…)` that the old reading
  * takes for single-quoted text: `echo ${HOME}; cat <<EOF` + `x='$(cmd)'` + `EOF` (the context guard
- * refuses after any `${`, closed or not, and after a comment on an earlier line) and `cat <<EOF\r`
+ * then refused after any `${`, closed or not, and after a comment on an earlier line — scoped to
+ * what is open at the operator since WP-160 (f)) and `cat <<EOF\r`
  * + `x='$(cmd)'` + `EOF\r` (the word boundary refuses `\r`) each ran `cmd` in bash 5.2 and in dash,
  * and each was `unattended_auto` (measured). So such an operator's would-be body is
  * read **both ways**: as commands, as before, and as a body whose expansion is uncertain
  * (`hereDocumentUncertainty`, an unterminated body aside). Its delimiter is bash's: the word up to a
- * metacharacter, taken literally, since a word with no quoting is not expanded as a delimiter; a
- * word with a quote or a backslash makes the body literal, and nothing is read.
+ * metacharacter, taken literally, since a word with no quoting is not expanded as a delimiter.
+ *
+ * **A quoted word is read too** (WP-160 (e), backlog 513). Its body expands nothing, but read as
+ * commands its quotes can pair **across** bash's terminator: `cat <<\EOF` + `a'` + `EOF` + `cmd` +
+ * `'` was `unattended_auto` with `cmd` inside one quoted word, and bash 5.2, 3.2 and dash each ran
+ * `cmd` (measured); `cat <<\EOF` + `cat <<'X'` + `EOF` + `cmd` + `X` was `allow_list`, the inner
+ * operator swallowing `cmd` as a body. So `parseCommand` reads the lines after the would-be
+ * terminator again from a fresh state (`ScanResult.resumeFrom`): what bash runs there is judged, and
+ * a quote the body left open is one those lines cannot close, so the line is `unbalancedQuote`. The word is read quote-aware, as bash reads it: quotes and
+ * backslashes come off (`<<E'OF'` and `<<\EOF` end at `EOF`), and a quote that does not close on
+ * the line leaves the operator unread (the old reading).
  */
-const unrecognisedUnquotedOperator = (
+const unrecognisedOperator = (
   text: string,
   index: number,
   before: string,
@@ -1829,16 +2061,35 @@ const unrecognisedUnquotedOperator = (
   ) {
     return null;
   }
-  const match = /^<<(-?)[ \t]*([^ \t\n;&|()<>]+)/.exec(text.slice(index));
-  if (match === null || /['"\\]/.test(match[2] as string)) {
+  const head = /^<<(-?)[ \t]*/.exec(text.slice(index)) as RegExpExecArray;
+  let cursor = index + head[0].length;
+  let delimiter = '';
+  let quoted = false;
+  while (cursor < text.length && !/[ \t\n;&|()<>]/.test(text[cursor] as string)) {
+    const char = text[cursor] as string;
+    if (char === '\\' && text[cursor + 1] === '\n') {
+      cursor += 2; // a line continuation joins the word, quoting nothing (review round 1)
+    } else if (char === '\\') {
+      quoted = true;
+      delimiter += text[cursor + 1] ?? '';
+      cursor += 2;
+    } else if (char === "'" || char === '"') {
+      const close = text.indexOf(char, cursor + 1);
+      if (close === -1 || text.slice(cursor, close).includes('\n')) {
+        return null;
+      }
+      quoted = true;
+      delimiter += text.slice(cursor + 1, close);
+      cursor = close + 1;
+    } else {
+      delimiter += char;
+      cursor += 1;
+    }
+  }
+  if (delimiter === '' && !quoted) {
     return null;
   }
-  return {
-    delimiter: match[2] as string,
-    quoted: false,
-    stripTabs: match[1] === '-',
-    length: match[0].length,
-  };
+  return { delimiter, quoted, stripTabs: head[1] === '-', length: cursor - index };
 };
 
 /** One here-document's body, read up to its terminator. */
@@ -1903,7 +2154,8 @@ export const hereDocumentsAtNewline = (
   pending: readonly HereDocumentOperator[],
   pendingFrom: number,
 ): HereDocumentsAtNewline => {
-  if (text.slice(pendingFrom, newline).includes('\n')) {
+  // A line continuation (`\` + newline) does not end the line (review round 1: `cat <<\⏎EOF`).
+  if (joinContinuations(text.slice(pendingFrom, newline)).includes('\n')) {
     return { resume: newline, bodies: [], range: null };
   }
   const { end, bodies } = readHereDocumentBodies(text, newline, pending);
@@ -2264,18 +2516,8 @@ const hereDocumentUncertainty = (body: HereDocumentBody): readonly UncertaintyRe
  * under `auto`, and is unmatched (so refused) under `deny`.
  */
 export const HERE_DOCUMENT_SCRIPT_READERS: ReadonlySet<string> = new Set([
-  'sh',
-  'bash',
-  'zsh',
-  'dash',
-  'ksh',
-  'mksh',
-  'ash',
-  'rbash',
+  ...SCRIPT_SHELLS,
   'busybox',
-  'fish',
-  'csh',
-  'tcsh',
   'eval',
   'source',
 ]);
@@ -2283,15 +2525,36 @@ export const HERE_DOCUMENT_SCRIPT_READERS: ReadonlySet<string> = new Set([
 /**
  * Does this segment run something that reads a script (a shell, `eval`, `source`, `.`, or a name
  * the shell expands)? The split's `\s` is wider than bash's blanks on purpose: it cuts `sh\r` out
- * as `sh`, so it finds more readers, and a reader found is only the old reading.
+ * as `sh`, so it finds more readers, and a reader found is only the old reading. A comment is not
+ * read (WP-160 (f)): a `#!/bin/sh` line named a shell, and every body after it was read as commands.
+ *
+ * **The expanded-name class looks at a command word only** (WP-160 (g), backlog 512). It was every
+ * `argv0Candidates` name, which puts the stage's own first token first — so an assignment
+ * (`x='b[1]'`), the `[`/`[[` test and the `{` group, each carrying a `[` or `{`, made every body at
+ * the level a script and an apostrophe in one `unbalancedQuote`. Now a name counts only where it
+ * is the command: not a peeled token (an assignment, a wrapper — `{` is one), not `[`, and nothing
+ * inside a `[`/`[[` test.
  */
-const feedsScriptReader = (segment: string): boolean =>
-  segment
-    .split(/[\s|&;()<>]+/)
-    .some((word) => word.length > 0 && HERE_DOCUMENT_SCRIPT_READERS.has(argv0Name(word))) ||
-  scan(segment, PIPE_OPERATORS).segments.some((stage) =>
-    argv0Candidates(tokenise(stage)).some(([name]) => name === '.' || /[*?[{]/.test(name ?? '')),
+const feedsScriptReader = (segment: string): boolean => {
+  const text = joinContinuations(withoutRanges(segment, readShellContext(segment).comments));
+  return (
+    text
+      .split(/[\s|&;()<>]+/)
+      .some((word) => word.length > 0 && HERE_DOCUMENT_SCRIPT_READERS.has(argv0Name(word))) ||
+    scan(text, PIPE_OPERATORS).segments.some((stage) => {
+      const tokens = tokenise(stage);
+      const head = tokens.find((token) => !isAssignment(token));
+      if (head !== undefined && (argv0Name(head) === '[' || argv0Name(head) === '[[')) {
+        return false;
+      }
+      return argv0Candidates(tokens).some(
+        ([name]) =>
+          name === '.' ||
+          (name !== undefined && /[*?[{]/.test(name) && !isWrapperToken(name) && name !== '['),
+      );
+    })
   );
+};
 
 /** Index of the `)` closing the `(` at `openIndex`, honouring quotes, or -1 when unbalanced. */
 const findClosingParen = (text: string, openIndex: number, hereDocuments = false): number => {
@@ -2402,6 +2665,7 @@ const isWriteTarget = (target: string): boolean =>
  */
 const scan = (command: string, operators: readonly string[]): ScanResult => {
   const segments: string[] = [];
+  const rawSegments: string[] = [];
   const substitutions: string[] = [];
   const substitutionOffsets: number[] = [];
   const writeTargets: string[] = [];
@@ -2413,6 +2677,7 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
   let pendingFrom = -1;
   let shadow: HereDocumentOperator[] = [];
   let shadowFrom = -1;
+  let resumeFrom: number | null = null;
   let current = '';
   let inDouble = false;
   let index = 0;
@@ -2426,10 +2691,14 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
     }
   };
 
-  const push = (): void => {
+  // Where the segment being read starts in `command`: its raw text keeps the substitutions and
+  // backticks that `current` leaves out (WP-160, `rawSegments`).
+  let segmentStart = 0;
+  const push = (end = index): void => {
     const segment = current.trim();
     if (segment.length > 0) {
       segments.push(segment);
+      rawSegments.push(command.slice(segmentStart, end).trim());
     }
     current = '';
   };
@@ -2573,8 +2842,9 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
         index += operator.length;
         continue;
       }
-      // Not skipped, but its would-be body is read for expansions at the newline (WP-158).
-      const refused = unrecognisedUnquotedOperator(command, index, before);
+      // Not skipped, but its would-be body is read at the newline: for expansions (WP-158), for a
+      // quote it leaves open, and for where bash resumes (WP-160 (e)).
+      const refused = unrecognisedOperator(command, index, before);
       if (refused !== null) {
         if (shadow.length === 0) {
           shadowFrom = index;
@@ -2640,13 +2910,23 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
     if (operator !== undefined) {
       push();
       if (operator === '\n' && shadow.length > 0) {
-        // The refused operators' would-be bodies, read for their expansion only; nothing skipped.
-        for (const body of hereDocumentsAtNewline(command, index, shadow, shadowFrom).bodies) {
+        // The refused operators' would-be bodies; nothing is skipped. Each is read for its
+        // expansions (WP-158). Read as commands, a body can leave a quote open that the walk then
+        // pairs with one after bash's terminator, hiding what bash runs there (WP-160 (e)); so where
+        // bash resumes is read again from a fresh state by `parseCommand` (`resumeFrom`). That second
+        // reading is also what makes such a line uncertain: the quote the body opened is one the
+        // lines after it cannot close, so one of the two readings leaves a quote open (a separate
+        // check on the body was measured to add nothing — its canary survived every case).
+        const at = hereDocumentsAtNewline(command, index, shadow, shadowFrom);
+        for (const body of at.bodies) {
           for (const reason of hereDocumentUncertainty(body)) {
             if (reason !== UNCERTAINTY.unterminatedHereDocument) {
               uncertainty.add(reason);
             }
           }
+        }
+        if (resumeFrom === null && at.range !== null && at.bodies.every((b) => b.terminated)) {
+          resumeFrom = at.resume;
         }
         shadow = [];
       }
@@ -2659,10 +2939,12 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
           // `resume` is the newline after the last terminator (or the end), which the next turn
           // reads as an ordinary separator: the lines after it are commands again.
           index = at.resume;
+          segmentStart = index;
           continue;
         }
       }
       index += operator.length;
+      segmentStart = index;
       continue;
     }
     current += char;
@@ -2676,37 +2958,659 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
     // The line that opened them is the last one: no newline, so no body and no terminator.
     recordBodies(pending.map((operator) => ({ operator, body: '', terminated: false })));
   }
-  push();
+  push(command.length);
   return {
     segments,
+    rawSegments,
     substitutions,
     substitutionOffsets,
     writeTargets,
     uncertainty: [...uncertainty],
     hereDocuments,
     bodyRanges,
+    resumeFrom,
   };
 };
 
-/** The script a shell wrapper is handed: `sh -c '…'`, `bash -c "…"`, `eval '…'`. */
-const wrappedScript = (segment: string): string | null => {
-  const tokens = tokenise(segment);
-  const head = tokens[0];
-  if (head === undefined) {
-    return null;
+// ── WP-160: a command handed over as a string (backlog 511) ──────────────────
+//
+// A builtin or a program that runs a **string** as a script — now (`sh -c`, `eval`, `script -c`, a
+// shell reading a here-string or a pipe) or later (`trap`, `PS4`, `PROMPT_COMMAND`, an alias, a
+// callback) — and `find -exec`, whose argv is a command. Each is read off the stage's words **as
+// written** (`ScanResult.rawSegments`: a substitution kept), because whether a string is literal is
+// a question about what in it expands.
+
+/** One word of a stage as the shell splits it, quotes and all. */
+interface ShellWord {
+  /** The word as written. For a redirection, its target. */
+  readonly raw: string;
+  /** For a redirection, its operator (`<<<`, `<`, `>&`, …) and its descriptor (`''` for none). */
+  readonly redirect?: { readonly operator: string; readonly fd: string };
+}
+
+const REDIRECTION_OPERATOR = /^(?:<<<|<<-|<<|<>|<&|>&|>>|>\||&>>|&>|<|>)/;
+
+/** Index one past the `}` closing the `${` whose `{` is at `open`, or the text's end. */
+const closingBraceEnd = (text: string, open: number): number => {
+  let depth = 0;
+  for (let index = open; index < text.length; index += 1) {
+    const char = text[index] as string;
+    if (char === '\\') {
+      index += 1;
+    } else if (char === "'") {
+      const close = text.indexOf("'", index + 1);
+      index = close === -1 ? text.length : close;
+    } else if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return index + 1;
+      }
+    }
   }
-  const name = argv0Name(head);
-  const unquote = (text: string): string => (/^(['"]).*\1$/s.test(text) ? text.slice(1, -1) : text);
-  if (name === 'eval') {
-    return tokens.length > 1 ? unquote(tokens.slice(1).join(' ')) : null;
+  return text.length;
+};
+
+/** Index one past the double-quoted string that opens at `open`, or the text's end. */
+const doubleQuoteEnd = (text: string, open: number): number => {
+  for (let index = open + 1; index < text.length; index += 1) {
+    const char = text[index] as string;
+    if (char === '\\') {
+      index += 1;
+    } else if (char === '"') {
+      return index + 1;
+    } else if (text.startsWith('$(', index)) {
+      const close = findClosingParen(text, index + 1, true);
+      index = close === -1 ? text.length : close;
+    } else if (text.startsWith('${', index)) {
+      index = closingBraceEnd(text, index + 1) - 1;
+    } else if (char === '`') {
+      const close = text.indexOf('`', index + 1);
+      index = close === -1 ? text.length : close;
+    }
   }
-  if (!SHELL_NAMES.has(name)) {
-    return null;
+  return text.length;
+};
+
+/**
+ * A pipeline stage's words, split on unquoted blanks as the shell splits them: quotes, `$(…)`,
+ * `${…}` and backticks kept inside the word they sit in, and each redirection's operator taken off
+ * its target (`2>&1`, `<<<'…'`, `< <(…)`). Nothing is expanded.
+ */
+const shellWords = (text: string): readonly ShellWord[] => {
+  const words: ShellWord[] = [];
+  let raw = '';
+  let redirect: ShellWord['redirect'];
+  const flush = (): void => {
+    if (raw !== '') {
+      words.push(redirect === undefined ? { raw } : { raw, redirect });
+      redirect = undefined;
+    }
+    raw = '';
+  };
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index] as string;
+    const rest = text.slice(index);
+    let end = index + 1;
+    if (/[ \t\n]/.test(char)) {
+      flush();
+      index += 1;
+      continue;
+    }
+    if (char === '\\') {
+      end = index + 2;
+    } else if (char === "'") {
+      const close = text.indexOf("'", index + 1);
+      end = close === -1 ? text.length : close + 1;
+    } else if (char === '"') {
+      end = doubleQuoteEnd(text, index);
+    } else if (rest.startsWith('$(') || rest.startsWith('<(') || rest.startsWith('>(')) {
+      const close = findClosingParen(text, index + 1, true);
+      end = close === -1 ? text.length : close + 1;
+    } else if (rest.startsWith('${')) {
+      end = closingBraceEnd(text, index + 1);
+    } else if (char === '`') {
+      const close = text.indexOf('`', index + 1);
+      end = close === -1 ? text.length : close + 1;
+    } else if (char === '<' || char === '>' || rest.startsWith('&>')) {
+      const operator = (REDIRECTION_OPERATOR.exec(rest) as RegExpExecArray)[0];
+      // A word of digits (or `{name}`) right before the operator is its descriptor.
+      const fd = /^(?:\d+|\{[A-Za-z_][A-Za-z0-9_]*\})$/.test(raw) ? raw : '';
+      if (fd === '') {
+        flush();
+      }
+      if (redirect !== undefined) {
+        words.push({ raw: '', redirect });
+      }
+      raw = '';
+      redirect = { operator, fd };
+      index += operator.length;
+      continue;
+    }
+    raw += text.slice(index, end);
+    index = end;
   }
-  // `"-c"` is still `-c` to the shell that receives it.
-  const flagIndex = tokens.findIndex((token) => unquoteToken(token) === '-c');
-  const script = flagIndex === -1 ? undefined : tokens[flagIndex + 1];
-  return script === undefined ? null : unquote(tokens.slice(flagIndex + 1).join(' '));
+  flush();
+  if (redirect !== undefined) {
+    words.push({ raw: '', redirect });
+  }
+  return words;
+};
+
+/**
+ * Whether the shell passes this word on as written, quotes off: nothing in it expands. A `$` or a
+ * backtick outside single quotes, or an unquoted glob, brace, tilde or redirection character, makes
+ * it a string the platform cannot read before it runs.
+ */
+const isLiteralWord = (raw: string): boolean => {
+  let quote: '"' | null = null;
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index] as string;
+    if (char === '\\') {
+      index += 1;
+    } else if (quote === null && char === "'") {
+      const close = raw.indexOf("'", index + 1);
+      if (close === -1) {
+        return false;
+      }
+      index = close;
+    } else if (char === '"') {
+      quote = quote === null ? '"' : null;
+    } else if (char === '$' || char === '`') {
+      return false;
+    } else if (quote === null && /[*?[{~<>()]/.test(char)) {
+      return false;
+    }
+  }
+  return quote === null;
+};
+
+/** A literal word's value — what the program receives (only meaningful when `isLiteralWord`). */
+const literalValue = (raw: string): string => {
+  let out = '';
+  let quote: '"' | null = null;
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index] as string;
+    const next = raw[index + 1] ?? '';
+    if (char === '\\') {
+      index += 1;
+      if (next === '\n') {
+        continue;
+      }
+      out += quote === '"' && !/[$`"\\]/.test(next) ? `\\${next}` : next;
+    } else if (quote === null && char === "'") {
+      const close = raw.indexOf("'", index + 1);
+      out += raw.slice(index + 1, close);
+      index = close;
+    } else if (char === '"') {
+      quote = quote === null ? '"' : null;
+    } else {
+      out += char;
+    }
+  }
+  return out;
+};
+
+/** The paths through which a script names its own standard input. */
+const STANDARD_INPUT_PATHS: ReadonlySet<string> = new Set([
+  '/dev/stdin',
+  '/dev/fd/0',
+  '/proc/self/fd/0',
+]);
+
+/** The pieces of argv a reader takes options from, with an option's value word skipped. */
+const optionWords = (args: readonly ShellWord[]): readonly string[] =>
+  args.map((word) => unquoteToken(word.raw)).filter((word) => /^-[A-Za-z]/.test(word));
+
+/**
+ * Where the command of a stage may start: past its assignments, and — when that word is a wrapper
+ * — every later word too, as `argv0Candidates` tries them (a wrapper's options and arguments sit
+ * between it and the command).
+ */
+const commandPositions = (argv: readonly ShellWord[]): readonly number[] => {
+  let start = 0;
+  while (start < argv.length && isAssignment((argv[start] as ShellWord).raw)) {
+    start += 1;
+  }
+  const positions = [start];
+  if (start < argv.length && ARGV0_WRAPPERS.has(argv0Name((argv[start] as ShellWord).raw))) {
+    for (let next = start + 1; next < argv.length && next <= start + MAX_WRAPPER_DEPTH; next += 1) {
+      positions.push(next);
+    }
+  }
+  return positions.filter((position) => position < argv.length);
+};
+
+/** A script a stage hands over, and the string an enclosing `find -exec`/`xargs -I` replaces in it. */
+export interface HandedScript {
+  readonly script: string;
+  readonly replace: string | null;
+}
+
+/** What a stage hands over as a string: the scripts the platform can read, and whether one it cannot. */
+interface HandedScripts {
+  readonly scripts: readonly HandedScript[];
+  readonly uncertain: boolean;
+}
+
+/** How a stage's standard input is reached, for a shell that reads its script from it. */
+interface StageInput {
+  /** The stage is fed by a pipe (it is not the first stage, or its level has a pipe). */
+  readonly piped: boolean;
+  /** …by a pipe whose only producer is `cat` of a here-document, whose body the level reads. */
+  readonly fromHereDocument: boolean;
+  /** The text an enclosing `find -exec` or `xargs -I` replaces when it runs this (`{}`). */
+  readonly replace: string | null;
+}
+
+/** `xargs -I R`, `-iR`, `-i`, `--replace[=R]`, `-J R`: the string xargs replaces, if it does. */
+const xargsReplace = (args: readonly ShellWord[]): string | null => {
+  for (const [index, word] of args.entries()) {
+    const value = unquoteToken(word.raw);
+    if (value === '-I' || value === '-J') {
+      return unquoteToken(args[index + 1]?.raw ?? '{}') || '{}';
+    }
+    if (/^-[IJ]./.test(value) || /^--replace=./.test(value)) {
+      return value.slice(value.startsWith('--') ? 10 : 2);
+    }
+    if (value === '-i' || value === '--replace') {
+      return '{}';
+    }
+    if (/^-i./.test(value)) {
+      return value.slice(2);
+    }
+  }
+  return null;
+};
+
+/**
+ * The scripts a stage hands over as **strings**, read off its words as written (WP-160, backlog
+ * 511) — `parseCommand` parses each as a script (rule 1), through its nested path and
+ * `MAX_WRAPPER_DEPTH`. A string is read when it is literal (`isLiteralWord`) and makes the stage
+ * `UNCERTAINTY.handedCommand` when it is not, since the platform cannot read what it will be.
+ *
+ *  - `eval` — its words, joined.
+ *  - `trap` — its action, the first operand after `--`; `-`, `''`, `-l`, `-p` and `-P` run nothing.
+ *    bash runs it on `EXIT`, `ERR`, `DEBUG`, `RETURN` or a signal (measured), so it is read now.
+ *  - a shell (`SCRIPT_SHELLS`, or `busybox` and one) — the first operand after an option cluster
+ *    holding `c` (`-c`, `-lc`, `-ec`, `-cl`, `-c -e …`), past `-o`/`-O` and `--rcfile`'s values.
+ *    Without `-c`, and with no operand, `-s` or a standard-input path, it reads its script from
+ *    standard input: a literal here-string is the script; a non-literal one, a process substitution
+ *    (`< <(…)`, an operand `<(…)`), a descriptor (`<&3`) or a pipe is uncertain. A here-document is
+ *    WP-153's (`HERE_DOCUMENT_SCRIPT_READERS`), and so is `cat <<'EOF' | sh`. `bash file` and
+ *    `bash < file` run a file the run wrote — backlog 481's residual, the module docblock's.
+ *  - `script` — its `-c`/`--command` string (a cluster, `-cX` attached, `--c…` abbreviated, which
+ *    util-linux accepts); without one it runs `$SHELL` on its standard input, read as a shell's.
+ *  - `source`/`.` of a standard-input path, read as a shell's; of `<(…)`, uncertain.
+ *  - `find` — the words from `-exec`/`-execdir`/`-ok`/`-okdir` to `;` (or `+` after `{}`), as a
+ *    command (WP-160 (d)): read, not refused, so the block list, the git boundary and the hazard
+ *    floor judge it. `{}` is a literal word, and a string in it that holds `{}` is not literal,
+ *    since `find` puts a file name there (`replace`) — as `xargs -I` does with its own string.
+ */
+const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
+  const words = shellWords(stage);
+  const argv = words.filter((word) => word.redirect === undefined);
+  const stdin = words.filter(
+    (word) =>
+      word.redirect !== undefined &&
+      (word.redirect.fd === '' || word.redirect.fd === '0') &&
+      word.redirect.operator.startsWith('<') &&
+      word.redirect.operator !== '<>',
+  );
+  const scripts: HandedScript[] = [];
+  let uncertain = false;
+  let replace = input.replace;
+  let fedByXargs = false;
+  let piped = input.piped;
+  const hand = (raw: string | readonly ShellWord[]): void => {
+    const pieces = typeof raw === 'string' ? [raw] : raw.map((word) => word.raw);
+    if (!pieces.every(isLiteralWord)) {
+      uncertain = true;
+      return;
+    }
+    const script = pieces.map(literalValue).join(' ');
+    if (replace !== null && script.includes(replace)) {
+      uncertain = true;
+    }
+    scripts.push({ script, replace: null });
+  };
+  /** A value attached to its option at `from` in the word as written; a quoted option is not read. */
+  const handAttached = (raw: string, from: number): void => {
+    if (raw.startsWith('-')) {
+      hand(raw.slice(from));
+    } else {
+      uncertain = true;
+    }
+  };
+  /** A reader of its standard input as a script. */
+  const readsStandardInput = (): void => {
+    if (stdin.length === 0) {
+      uncertain ||= piped && !input.fromHereDocument;
+    }
+    for (const word of stdin) {
+      const operator = word.redirect?.operator as string;
+      if (operator === '<<<') {
+        hand(word.raw);
+      } else if (
+        word.raw === '' ||
+        (operator === '<&' ? word.raw !== '-' : word.raw.startsWith('<('))
+      ) {
+        // A descriptor (`<&3`), a process substitution, or a target the walk lost.
+        uncertain = true;
+      }
+    }
+  };
+  const readShell = (args: readonly ShellWord[]): void => {
+    let index = 0;
+    let command = false;
+    let stdinFlag = false;
+    for (; index < args.length; index += 1) {
+      const value = unquoteToken((args[index] as ShellWord).raw);
+      if (value === '--' || value === '-') {
+        index += 1;
+        break;
+      }
+      if (value === '--command') {
+        command = true;
+      } else if (value.startsWith('--command=')) {
+        uncertain = true;
+        return;
+      } else if (value === '--rcfile' || value === '--init-file') {
+        index += 1;
+      } else if (/^[-+][A-Za-z]+$/.test(value)) {
+        command ||= value.startsWith('-') && value.includes('c');
+        stdinFlag ||= value.includes('s');
+        index += /[oO]/.test(value) ? 1 : 0;
+      } else if (!value.startsWith('--')) {
+        break;
+      }
+    }
+    const operand = args[index];
+    if (command) {
+      // `-c` with no operand on the line: the script is one `xargs` (or nothing) supplies at run
+      // time — `echo "'cmd'" | xargs bash -c` ran `cmd` (review round 1, measured).
+      uncertain ||= operand === undefined;
+      if (operand !== undefined) {
+        hand(operand.raw);
+        // `sh -c '"$@"' _ cmd …` runs its operands: a script that names a positional parameter
+        // has them read as a command too ($0 on, and $1 on), and under `xargs` they come from
+        // standard input, so the platform cannot read them.
+        const rest = args.slice(index + 1);
+        if (
+          rest.length > 0 &&
+          isLiteralWord(operand.raw) &&
+          /\$(?:[@*0-9]|\{[@*0-9])/.test(literalValue(operand.raw))
+        ) {
+          uncertain ||= fedByXargs;
+          scripts.push({ script: rest.map((word) => word.raw).join(' '), replace: null });
+          if (rest.length > 1) {
+            scripts.push({
+              script: rest
+                .slice(1)
+                .map((word) => word.raw)
+                .join(' '),
+              replace: null,
+            });
+          }
+        }
+      }
+      return;
+    }
+    if (operand !== undefined && !stdinFlag) {
+      if (/^[<>]\(/.test(operand.raw)) {
+        uncertain = true;
+      } else if (STANDARD_INPUT_PATHS.has(unquoteToken(operand.raw))) {
+        readsStandardInput();
+      }
+      return;
+    }
+    readsStandardInput();
+  };
+  /**
+   * A program's command-string option — `-c CMD`, `-qc CMD` (a cluster), `-cCMD`, `--command CMD`,
+   * `--command=CMD` or a long name abbreviated, which getopt accepts — handed over; `valued` are
+   * the short options that take a value of their own (so the rest of their cluster is not read).
+   * Whether one was found.
+   */
+  const readOptionString = (
+    args: readonly ShellWord[],
+    letter: string,
+    longNames: readonly string[],
+    valued: string,
+  ): boolean => {
+    for (let index = 0; index < args.length; index += 1) {
+      const raw = (args[index] as ShellWord).raw;
+      const value = unquoteToken(raw);
+      const next = args[index + 1]?.raw;
+      if (value === '--') {
+        return false;
+      }
+      const long = /^--([a-z-]+)(=?)/.exec(value);
+      if (long !== null) {
+        if (longNames.some((name) => name.startsWith(long[1] as string))) {
+          if (long[2] === '=') {
+            handAttached(raw, raw.indexOf('=') + 1);
+          } else if (next !== undefined) {
+            hand(next);
+          } else {
+            uncertain = true; // the string comes from somewhere else (`xargs`), review round 1
+          }
+          return true;
+        }
+        continue;
+      }
+      if (!/^-[A-Za-z0-9]/.test(value)) {
+        continue;
+      }
+      for (let at = 1; at < value.length; at += 1) {
+        const option = value[at] as string;
+        if (option === letter) {
+          if (raw.length > raw.indexOf(letter, 1) + 1 || !raw.startsWith('-')) {
+            handAttached(raw, raw.indexOf(letter, 1) + 1);
+          } else if (next !== undefined) {
+            hand(next);
+          } else {
+            uncertain = true;
+          }
+          return true;
+        }
+        if (valued.includes(option)) {
+          index += at === value.length - 1 ? 1 : 0;
+          break;
+        }
+      }
+    }
+    return false;
+  };
+  /** `watch`: its operands are joined into the string `sh -c` runs. */
+  const readWatch = (args: readonly ShellWord[]): void => {
+    let index = 0;
+    for (; index < args.length; index += 1) {
+      const value = unquoteToken((args[index] as ShellWord).raw);
+      if (value === '--') {
+        index += 1;
+        break;
+      }
+      if (!value.startsWith('-')) {
+        break;
+      }
+      index += /^(?:-[A-Za-z]*n|--interval)$/.test(value) ? 1 : 0;
+    }
+    if (index < args.length) {
+      hand(args.slice(index));
+    }
+  };
+  const readFind = (args: readonly ShellWord[]): void => {
+    for (let index = 0; index < args.length; index += 1) {
+      if (!/^-(?:exec|execdir|ok|okdir)$/.test(unquoteToken((args[index] as ShellWord).raw))) {
+        continue;
+      }
+      const command: ShellWord[] = [];
+      for (index += 1; index < args.length; index += 1) {
+        const value = unquoteToken((args[index] as ShellWord).raw);
+        if (value === ';' || (value === '+' && command.at(-1)?.raw === '{}')) {
+          break;
+        }
+        command.push(args[index] as ShellWord);
+      }
+      if (command.length > 0) {
+        scripts.push({ script: command.map((word) => word.raw).join(' '), replace: '{}' });
+      }
+    }
+  };
+
+  for (const position of commandPositions(argv)) {
+    for (const word of argv.slice(0, position)) {
+      // `coproc bash` reads a pipe the line writes into later.
+      piped ||= argv0Name(word.raw) === 'coproc';
+      if (argv0Name(word.raw) === 'xargs') {
+        fedByXargs = true;
+        replace = xargsReplace(argv.slice(argv.indexOf(word) + 1, position)) ?? replace;
+      }
+    }
+    const command = argv[position] as ShellWord;
+    if (replace !== null && command.raw.includes(replace)) {
+      uncertain = true;
+    }
+    let name = argv0Name(command.raw);
+    let args = argv.slice(position + 1);
+    if (name === 'busybox' && args[0] !== undefined) {
+      name = argv0Name(args[0].raw);
+      args = args.slice(1);
+    }
+    if (name === 'eval') {
+      if (args.length > 0) {
+        hand(args);
+      }
+    } else if (name === 'trap') {
+      const action =
+        args[0] !== undefined && unquoteToken(args[0].raw) === '--' ? args[1] : args[0];
+      if (
+        action !== undefined &&
+        !(isLiteralWord(action.raw) && /^(?:-|-[lpP]+|)$/.test(literalValue(action.raw)))
+      ) {
+        hand(action.raw);
+      }
+    } else if (SCRIPT_SHELLS.has(name) || /[*?[{]/.test(name)) {
+      // A name the shell expands (`/bin/s? -c '…'`) may be a shell: read as one (an over-read).
+      readShell(args);
+    } else if (name === 'script') {
+      if (!readOptionString(args, 'c', ['command'], 'EIOBTm')) {
+        readsStandardInput();
+      }
+    } else if (name === 'su' || name === 'runuser') {
+      readOptionString(args, 'c', ['command', 'session-command'], 'sgGw');
+    } else if (name === 'flock') {
+      readOptionString(args, 'c', ['command'], 'wE');
+    } else if (name === 'env') {
+      readOptionString(args, 'S', ['split-string'], 'uCP');
+    } else if (name === 'watch') {
+      readWatch(args);
+    } else if (name === 'source' || name === '.') {
+      const operand =
+        args[0] !== undefined && unquoteToken(args[0].raw) === '--' ? args[1] : args[0];
+      if (operand !== undefined && /^[<>]\(/.test(operand.raw)) {
+        uncertain = true;
+      } else if (operand !== undefined && STANDARD_INPUT_PATHS.has(unquoteToken(operand.raw))) {
+        readsStandardInput();
+      }
+    } else if (name === 'find') {
+      readFind(args);
+    }
+  }
+  return { scripts, uncertain };
+};
+
+/** Variables bash runs the text of later — as a prompt, a hook, a startup file (WP-160 (b)). */
+const STORED_COMMAND_VARIABLES: ReadonlySet<string> = new Set([
+  'PS0',
+  'PS1',
+  'PS2',
+  'PS4',
+  'PROMPT_COMMAND',
+  'BASH_ENV',
+  'ENV',
+]);
+
+/** `NAME=`, `NAME+=`, `NAME[…]=` for one of {@link STORED_COMMAND_VARIABLES}. */
+const STORED_COMMAND_ASSIGNMENT = /^(PS[0124]|PROMPT_COMMAND|BASH_ENV|ENV)(?:\[[^\]]*\])?\+?=/;
+
+/** Builtins that write a variable they are given by name. */
+const NAME_WRITING_BUILTINS: ReadonlySet<string> = new Set([
+  'read',
+  'mapfile',
+  'readarray',
+  'printf',
+  'getopts',
+]);
+
+/**
+ * Whether a stage stores a command for the shell to run **later**, where the line the policy reads
+ * is not the line that runs (WP-160 (b), backlog 511): an assignment to a prompt or hook variable
+ * (`PS4='$(…)'` under `set -x` ran in bash 5.2 and 3.2; `PROMPT_COMMAND`, `PS0`–`PS2`,
+ * `BASH_ENV`, `ENV`) — as a prefix, on its own, through a declaration builtin or `env`, through
+ * `${NAME:=…}`, or written by `read`/`printf -v`/`mapfile` — an `alias` with a definition (bash ran
+ * one after `shopt -s expand_aliases`), `mapfile`/`readarray -C` (ran in 5.2), `bind -x`,
+ * `complete`/`compgen -C` (`compgen -C` ran in 5.2 and 3.2) and `-W`, whose word list bash expands
+ * (`compgen -W '$(cmd)' x` ran in 5.2, review round 1), and `fc -e`/`-s`. Several run only
+ * in an interactive shell; whether the CLI's Bash tool ever is one is not measured, and these have
+ * no use in an unattended run, so they fail closed (rule 5).
+ */
+const storesCommand = (stage: string): boolean => {
+  if (/\$\{(?:PS[0124]|PROMPT_COMMAND|BASH_ENV|ENV):?=/.test(stage)) {
+    return true;
+  }
+  const argv = shellWords(stage).filter((word) => word.redirect === undefined);
+  const positions = commandPositions(argv);
+  const assigns = (word: ShellWord): boolean =>
+    STORED_COMMAND_ASSIGNMENT.test(unquoteToken(word.raw));
+  if (argv.slice(0, positions[0] ?? argv.length).some(assigns)) {
+    return true;
+  }
+  return positions.some((position) => {
+    const command = argv[position] as ShellWord;
+    const name = argv0Name(command.raw);
+    const args = argv.slice(position + 1);
+    const values = args.map((word) => unquoteToken(word.raw));
+    const options = optionWords(args);
+    if (assigns(command) || (DECLARATION_BUILTINS.has(name) && args.some(assigns))) {
+      return true;
+    }
+    switch (name) {
+      case 'alias':
+        return values.some((value) => !value.startsWith('-') && value.includes('='));
+      case 'mapfile':
+      case 'readarray':
+        if (options.some((option) => option.includes('C'))) {
+          return true;
+        }
+        break;
+      // `-W` expands its word list, command substitutions included: `compgen -W '$(cmd)' x` ran
+      // `cmd` in a non-interactive bash 5.2 (review round 1). Both run strings, in any cluster.
+      case 'complete':
+      case 'compgen':
+        if (options.some((option) => /[CW]/.test(option))) {
+          return true;
+        }
+        break;
+      case 'bind':
+        return options.some((option) => option.includes('x'));
+      case 'fc':
+        return options.some((option) => /[es]/.test(option));
+      default:
+        break;
+    }
+    return (
+      NAME_WRITING_BUILTINS.has(name) &&
+      values.some(
+        (value) =>
+          STORED_COMMAND_VARIABLES.has(value) ||
+          STORED_COMMAND_VARIABLES.has(value.replace(/^-[A-Za-z]*v/, '')),
+      )
+    );
+  });
 };
 
 /**
@@ -2719,7 +3623,7 @@ const wrappedScript = (segment: string): string | null => {
  */
 const canonicalShellStage = (stage: string): string =>
   // A pipeline stage always carries at least one token: `scan` drops the empty ones.
-  SHELL_NAMES.has(argv0Name(tokenise(stage)[0] as string)) ? 'sh' : stage;
+  SCRIPT_SHELLS.has(argv0Name(tokenise(stage)[0] as string)) ? 'sh' : stage;
 
 interface Parsed {
   readonly fragments: readonly string[];
@@ -2745,7 +3649,13 @@ interface Parsed {
  * `scripted` is true when an enclosing level runs a script reader, so a here-document body here
  * may be what it runs (`sh -c "$(cat <<'EOF' …)"`).
  */
-const parseCommand = (command: string, depth = 0, scripted = false): Parsed => {
+const parseCommand = (
+  command: string,
+  depth = 0,
+  scripted = false,
+  replace: string | null = null,
+  fed = false,
+): Parsed => {
   const fragments: string[] = [];
   const uncertainty = new Set<UncertaintyReason>();
   const outer = scan(command, LIST_OPERATORS);
@@ -2761,7 +3671,7 @@ const parseCommand = (command: string, depth = 0, scripted = false): Parsed => {
   // same as `sh -c '…'`. Its range stays out of `bodyRanges` — it is not data.
   for (const hereDocument of outer.hereDocuments) {
     if (readsScripts && depth < MAX_WRAPPER_DEPTH) {
-      const nested = parseCommand(hereDocument.body, depth + 1, true);
+      const nested = parseCommand(hereDocument.body, depth + 1, true, replace, fed);
       fragments.push(...nested.fragments);
       writeTargets.push(...nested.writeTargets);
       substitutes ||= nested.substitutes;
@@ -2775,7 +3685,16 @@ const parseCommand = (command: string, depth = 0, scripted = false): Parsed => {
   }
 
   const test: TestState = { inside: false };
-  for (const segment of outer.segments) {
+  // Whether a stage's standard input may be a pipe: the level has one somewhere (a `( … )` or a
+  // `{ …; }` group cuts the pipe from the stage that reads it, so the stage index alone is not it).
+  // `fed`: this level's standard input is itself a pipe — a `>(…)` body, `coproc`'s command, or a
+  // script handed over by a stage that a pipe feeds (`echo … | bash -c 'bash'`) — and `exec <…`
+  // moves it for the rest of the level.
+  const piped =
+    fed ||
+    scan(command, PIPE_OPERATORS).segments.length > 1 ||
+    /(?:^|[\s;&|(){}])exec\b[^\n;&|]*</.test(joinContinuations(command));
+  for (const [segmentIndex, segment] of outer.segments.entries()) {
     fragments.push(segment);
     const pipeline = scan(segment, PIPE_OPERATORS);
     for (const stage of pipeline.segments) {
@@ -2798,28 +3717,76 @@ const parseCommand = (command: string, depth = 0, scripted = false): Parsed => {
       fragments.push(pipeline.segments.join(' | '));
       fragments.push(pipeline.segments.map(canonicalShellStage).join(' | '));
     }
-    const script = depth < MAX_WRAPPER_DEPTH ? wrappedScript(segment) : null;
-    if (script !== null && script !== segment) {
-      const nested = parseCommand(script, depth + 1, readsScripts);
-      anyReadsScripts ||= nested.readsScripts;
-      fragments.push(script, ...nested.fragments);
-      writeTargets.push(...nested.writeTargets);
-      substitutes ||= nested.substitutes;
-      for (const reason of nested.uncertainty) {
-        uncertainty.add(reason);
+    // WP-160: what a stage hands over as a string, read off its words as written.
+    // Line continuations joined as bash joins them, as `wordsOf` reads (review round 1: `find . \⏎
+    // -exec sudo id \;` and `| \⏎bash` were `unattended_auto`).
+    const stages = scan(outer.rawSegments[segmentIndex] as string, PIPE_OPERATORS).rawSegments.map(
+      joinContinuations,
+    );
+    for (const [stageIndex, stage] of stages.entries()) {
+      if (storesCommand(stage)) {
+        uncertainty.add(UNCERTAINTY.handedCommand);
       }
+      const stagePiped = piped || stageIndex > 0;
+      const handed = wrappedScript(stage, {
+        piped: stagePiped,
+        fromHereDocument:
+          stageIndex === 1 &&
+          stages.length === 2 &&
+          /^cat(?:[ \t]+<<-?[ \t]*\S+)+$/.test(stages[0] as string),
+        replace,
+      });
+      if (handed.uncertain) {
+        uncertainty.add(UNCERTAINTY.handedCommand);
+      }
+      for (const { script, replace: inner } of handed.scripts) {
+        if (depth >= MAX_WRAPPER_DEPTH) {
+          // Nested past the bound: not read, so not certain (rule 5).
+          uncertainty.add(UNCERTAINTY.handedCommand);
+          continue;
+        }
+        const nested = parseCommand(script, depth + 1, readsScripts, inner ?? replace, stagePiped);
+        anyReadsScripts ||= nested.readsScripts;
+        fragments.push(script, ...nested.fragments);
+        writeTargets.push(...nested.writeTargets);
+        substitutes ||= nested.substitutes;
+        for (const reason of nested.uncertainty) {
+          uncertainty.add(reason);
+        }
+      }
+    }
+  }
+
+  // WP-160 (e): after a here-document the walk did not recognise, bash resumes at its own
+  // terminator from a fresh quote state, and so does this. The text is strictly shorter, and each
+  // level spawns one such read, so the chain ends; its bodies are not this level's data.
+  if (outer.resumeFrom !== null) {
+    const resumed = parseCommand(command.slice(outer.resumeFrom), depth, scripted, replace, fed);
+    anyReadsScripts ||= resumed.readsScripts;
+    fragments.push(...resumed.fragments);
+    writeTargets.push(...resumed.writeTargets);
+    substitutes ||= resumed.substitutes;
+    for (const reason of resumed.uncertainty) {
+      uncertainty.add(reason);
     }
   }
 
   for (const [position, substitution] of outer.substitutions.entries()) {
     if (depth < MAX_WRAPPER_DEPTH) {
-      const nested = parseCommand(substitution, depth + 1, readsScripts);
+      // A `>(…)` body reads what the command writes into it: its standard input is a pipe.
+      const offset = outer.substitutionOffsets[position] as number;
+      const nested = parseCommand(
+        substitution,
+        depth + 1,
+        readsScripts,
+        replace,
+        fed || command[offset - 2] === '>',
+      );
       anyReadsScripts ||= nested.readsScripts;
       // The substitution as a fragment of its own is its text with its data bodies left out, so
       // a body line never reaches the block list as part of `cat <<'EOF' … EOF` (ruling (b)).
       fragments.push(withoutRanges(substitution, nested.bodyRanges), ...nested.fragments);
       writeTargets.push(...nested.writeTargets);
-      const offset = outer.substitutionOffsets[position] as number;
       bodyRanges.push(
         ...nested.bodyRanges.map(([start, end]) => [start + offset, end + offset] as const),
       );

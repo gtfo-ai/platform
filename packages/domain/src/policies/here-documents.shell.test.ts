@@ -59,6 +59,9 @@ const BASH_MAJOR = Number(run('bash', `echo "\${BASH_VERSINFO[0]}"`).stdout.trim
 const BASH_VERSION = Number(
   run('bash', `echo "$(( \${BASH_VERSINFO[0]} * 100 + \${BASH_VERSINFO[1]} ))"`).stdout.trim(),
 );
+/** WP-160: util-linux `script` (the run image's; the BSD one has no `-c`) and `rbash`, if present. */
+const SCRIPT_C = run('bash', "script -qc 'echo ok' /dev/null").stdout.includes('ok');
+const RBASH = run('bash', "rbash -c 'echo ok'").stdout === 'ok\n';
 
 /** A line of a generated command; a marker gets its number when the command is rendered. */
 type Piece = { readonly text: string } | { readonly marker: (n: string) => string };
@@ -136,6 +139,9 @@ const LINES: readonly Piece[] = [
   { marker: (n) => `exec 3>&1; export x='b[$(echo RAN_${n} >&3)]'` },
   { text: `\${y[x]}` },
   { text: 'let x' },
+  // WP-160: a trap's action runs when the shell exits, and a script piped into a shell runs.
+  { marker: (n) => `trap 'echo RAN_${n}' EXIT` },
+  { marker: (n) => `echo 'echo RAN_${n}' | sh` },
 ];
 
 /** The terminator for an opener: its word exactly, or a near miss the shell does not accept. */
@@ -371,5 +377,93 @@ describe('WP-153 — every line a shell runs is judged, or the line is uncertain
     }
     expect(commandUncertainty(line)).toEqual([]);
     expect(judged(splitCommandSegments(line), '1')).toBe(false);
+  });
+});
+
+/**
+ * WP-160 (backlog 511, 513): every form of a command handed over as a string that a shell was
+ * measured to run, run here — the marker prints only when it runs — and the policy judges the
+ * marker or is uncertain (criterion 5). A gate skips a form the shell present cannot run:
+ * `mapfile -C`, `source <(…)` and `. <(…)` need bash 4 (3.2 ran none of them here; it ran
+ * `source <(…)` once in the scratchpad table, so it is a race there), `script -c` util-linux and
+ * `rbash` its binary — the run image has all of them, and CI's bash runs every row.
+ */
+describe('WP-160 — a string a shell runs is judged, or the line is uncertain', () => {
+  const OUT = 'exec 3>&1; ';
+  describe.each([
+    ["trap 'echo RAN_1' EXIT", 0, '`trap … EXIT`'],
+    ["trap 'echo RAN_1' ERR; false", 0, '`trap … ERR`'],
+    ["trap 'echo RAN_1' DEBUG; :", 0, '`trap … DEBUG`'],
+    ['x=\'echo RAN_1\'; trap "$x" EXIT', 0, 'a trap action from a variable'],
+    [`${OUT}PS4='$(echo RAN_1 >&3)' bash -xc :`, 0, '`PS4` before `bash -x`'],
+    [`${OUT}PS4='$(echo RAN_1 >&3)'; set -x; :`, 0, '`PS4` under `set -x`'],
+    [`${OUT}export PS4='$(echo RAN_1 >&3)'; set -x; :`, 0, 'an exported `PS4`'],
+    [`${OUT}env PS4='$(echo RAN_1 >&3)' bash -xc :`, 0, '`PS4` as an `env` argument'],
+    [`${OUT}IFS= read -r PS4 < <(echo '$(echo RAN_1 >&3)'); set -x; :`, 0, '`read` into `PS4`'],
+    ["mapfile -C 'echo RAN_1;:' -c 1 a <<< x", 400, '`mapfile -C`'],
+    ["readarray -C 'echo RAN_1;:' -c 1 a <<< x", 400, '`readarray -C`'],
+    ["shopt -s expand_aliases; alias ll='echo RAN_1'\nll", 0, 'an alias'],
+    // `compgen` appends its arguments to the command: `;:` takes them.
+    [`${OUT}compgen -C 'echo RAN_1 >&3;:' foo`, 0, '`compgen -C`'],
+    ["bash -lc 'echo RAN_1'", 0, '`bash -lc`'],
+    ["bash -c -- 'echo RAN_1'", 0, '`bash -c --`'],
+    ["bash <<<'echo RAN_1'", 0, '`bash <<<`'],
+    ['x=\'echo RAN_1\'; bash <<<"$x"', 0, 'a here-string that is not literal'],
+    ["echo 'echo RAN_1' | bash", 0, 'a pipe into `bash`'],
+    ["echo 'echo RAN_1' | (bash)", 0, 'a pipe into a subshell'],
+    ["echo 'echo RAN_1' | { bash; }", 0, 'a pipe into a group'],
+    ["echo 'echo RAN_1' | tee >(bash) >/dev/null; wait", 0, 'a `>(…)` body'],
+    ["source /dev/stdin <<<'echo RAN_1'", 0, '`source /dev/stdin <<<`'],
+    ["source <(echo 'echo RAN_1')", 400, '`source <(…)`'],
+    [". <(echo 'echo RAN_1')", 400, '`. <(…)`'],
+    ["bash < <(echo 'echo RAN_1')", 0, '`bash < <(…)`'],
+    ["exec 4<<<'echo RAN_1'; bash <&4", 0, 'a shell reading a descriptor'],
+    ['find . -maxdepth 0 -exec echo RAN_1 \\;', 0, '`find -exec`'],
+    ['find . -maxdepth 0 -execdir echo RAN_1 \\;', 0, '`find -execdir`'],
+    ["find . -maxdepth 0 -exec sh -c 'echo RAN_1' \\;", 0, 'a shell under `find -exec`'],
+    ["echo x | xargs -I{} sh -c 'echo RAN_1'", 0, '`xargs -I{}` into a shell'],
+    // Backlog 513: bash ends the body at its terminator and runs the next line, then fails on `'`.
+    ["# note\ncat <<'EOF'\na'\nEOF\necho RAN_1\n'", 0, 'the hypothesis line, whole'],
+    ["cat <<\\EOF\na'\nEOF\necho RAN_1\n'", 0, 'a backslash-quoted delimiter, paired'],
+    ["cat <<E'OF'\na'\nEOF\necho RAN_1\n'", 0, 'a partly quoted delimiter, paired'],
+    ["cat <<\\EOF\ncat <<'X'\nEOF\necho RAN_1\nX", 0, 'an operator in the body'],
+    // Review round 1: a script `xargs` supplies, `-W`, and line continuations between words.
+    [`echo "'echo RAN_1'" | xargs bash -c`, 0, '`xargs bash -c`'],
+    [`echo "'echo RAN_1'" | xargs -L1 bash -c`, 0, '`xargs -L1 bash -c`'],
+    [`${OUT}compgen -W '$(echo RAN_1 >&3)' x`, 0, '`compgen -W`'],
+    ['find . -maxdepth 0 \\\n-exec echo RAN_1 \\;', 0, 'a continuation before `-exec`'],
+    ['find . -maxdepth 0 -exec \\\necho RAN_1 \\;', 0, 'a continuation after `-exec`'],
+    ["echo 'echo RAN_1' | \\\nbash", 0, 'a continuation after the pipe'],
+    [`${OUT}export \\\nPS4='$(echo RAN_1 >&3)'; set -x; :`, 0, 'a continuation after `export`'],
+    ["cat <<\\\nEOF\na'\nEOF\necho RAN_1\n'", 0, 'a continuation before the delimiter'],
+  ] as const)('WP-160: %j (%s)', (line, needs, what) => {
+    it.skipIf(!(BASH_VERSION >= needs))(
+      `bash runs the marker through ${what}, and the policy judges it or is uncertain`,
+      () => {
+        expect([...new Set(executed(run('bash', line).stdout))]).toEqual(['1']);
+        expect(judged(splitCommandSegments(line), '1') || commandUncertainty(line).length > 0).toBe(
+          true,
+        );
+      },
+    );
+  });
+
+  it.skipIf(!SCRIPT_C)('bash runs the marker through `script -qc` (util-linux’s script)', () => {
+    const line = "script -qc 'echo RAN_1' /dev/null";
+    expect(executed(run('bash', line).stdout.replaceAll('\r', ''))).toEqual(['1']);
+    expect(judged(splitCommandSegments(line), '1')).toBe(true);
+  });
+
+  it.skipIf(!RBASH)('bash runs the marker through `rbash -c`', () => {
+    const line = "rbash -c 'echo RAN_1'";
+    expect(executed(run('bash', line).stdout)).toEqual(['1']);
+    expect(judged(splitCommandSegments(line), '1')).toBe(true);
+  });
+
+  it('runs nothing for a trap that is reset, and the policy reads it (criterion 4)', () => {
+    for (const line of ['trap - EXIT', "trap '' INT", "trap 'echo RAN_1' EXIT; trap - EXIT"]) {
+      expect(executed(run('bash', line).stdout), line).toEqual([]);
+      expect(commandUncertainty(line), line).toEqual([]);
+    }
   });
 });

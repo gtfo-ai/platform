@@ -852,6 +852,345 @@ describe('WP-158 review round 1 — a target, a continuation and a wrapper’s o
   });
 });
 
+/**
+ * WP-160 (backlog 511, 512, 513): a command handed over as a **string** — to a trap, a shell's `-c`,
+ * `script -c`, `find -exec`, a shell reading standard input — is read as a script when it is
+ * literal and is uncertain when it is not; and a here-document the reader does not recognise no
+ * longer hides the lines after the terminator bash reads. Every row is written twice, with a
+ * planted push to a branch outside `agentic/` and with `sudo id` (a block-list entry), and every
+ * one was `unattended_auto` (or `allow_list`) before this row with both (PROGRESS § WP-160).
+ */
+describe('WP-160 — a command handed over as a string, and a here-document the reader refuses', () => {
+  const PUSH = 'git push origin HEAD:main';
+  const SUDO = 'sudo id';
+  const modes = ['auto', 'deny'] as const;
+  const plant = (form: string, payload: string): string => form.replaceAll('%P', payload);
+
+  /** Asserts the rule (and, when given, the exact uncertainty) under both modes. */
+  const refuses = (command: string, rule: string, uncertainty?: readonly string[]): void => {
+    for (const mode of modes) {
+      const decision = decideUnattendedCommand({ command }, policy, mode);
+      expect(decision, `${mode}: ${command}`).toMatchObject({ decision: 'deny', rule });
+      if (uncertainty !== undefined) {
+        expect(decision.evaluation.uncertainty, mode).toEqual(uncertainty);
+      }
+    }
+  };
+
+  describe('ruling (e): a here-document the reader refuses is read to bash’s terminator', () => {
+    it.each<readonly [string, string]>([
+      ["cat <<\\EOF\na'\nEOF\n%P\n'", 'a backslash-quoted delimiter'],
+      ["cat <<E'OF'\na'\nEOF\n%P\n'", 'a partly quoted delimiter'],
+      ["cat <<'E'OF\na'\nEOF\n%P\n'", 'a quoted part first'],
+      ['cat <<"E"OF\na"\nEOF\n%P\n"', 'a double quote paired across the terminator'],
+      ["cat <<'EOF'\r\na'\nEOF\r\n%P\n'", 'a CRLF opener'],
+      ["cat <<'E F'\na'\nE F\n%P\n'", 'a delimiter with a blank in its quotes'],
+    ])('a body whose quote stays open in the commands’ reading is uncertain: %j (%s)', (form) => {
+      refuses(plant(form, PUSH), 'uncertain', [UNCERTAINTY.unbalancedQuote]);
+      refuses(plant(form, SUDO), 'block_list');
+    });
+
+    it.each<readonly [string, string]>([
+      ["cat <<\\EOF\ncat <<'X'\nEOF\n%P\nX", 'a body line that opens a here-document'],
+      ["cat <<'EOF'\r\ncat <<'X'\nEOF\r\n%P\nX", 'the same behind a CRLF opener'],
+      ['cat <<\\EOF\nok\nEOF\n%P', 'the line after the terminator'],
+    ])('the lines after bash’s terminator are judged from a fresh state: %j (%s)', (form) => {
+      refuses(plant(form, PUSH), 'git_boundary', []);
+      refuses(plant(form, SUDO), 'block_list');
+    });
+
+    it('a refused operator whose body has nothing open is not uncertain', () => {
+      const command = 'cat <<\\EOF\nit is fine\nEOF\nls';
+      expect(evaluateCommand({ command }).uncertainty).toEqual([]);
+    });
+  });
+
+  /** A literal string is read as the script it is: the push and `sudo id` inside it are judged. */
+  const PARSED: readonly (readonly [string, string])[] = [
+    // (b) trap
+    ["trap '%P' EXIT", '`trap … EXIT`'],
+    ["trap '%P' ERR; false", '`trap … ERR`'],
+    ["trap '%P' DEBUG; true", '`trap … DEBUG`'],
+    ["f() { trap '%P' RETURN; }; f", '`trap … RETURN`'],
+    ["trap '%P' INT TERM", 'a trap on signals'],
+    ["trap '%P' 0", 'a trap on condition 0'],
+    ["trap -- '%P' EXIT", '`trap --`'],
+    ["trap -p; trap '%P' EXIT", 'a trap after `trap -p`'],
+    ["command trap '%P' EXIT", '`trap` behind `command`'],
+    ["builtin trap '%P' EXIT", '`trap` behind `builtin`'],
+    [`eval trap "'%P'" EXIT`, '`trap` inside `eval`'],
+    // (b) a shell's `-c`, every shell of the one set
+    ...['rbash', 'ksh', 'mksh', 'ash', 'fish', 'csh', 'tcsh', 'zsh', 'dash'].map(
+      (shell) => [`${shell} -c '%P'`, `\`${shell} -c\``] as const,
+    ),
+    ["busybox sh -c '%P'", '`busybox sh -c`'],
+    ["busybox ash -c '%P'", '`busybox ash -c`'],
+    ["nice -n 5 rbash -c '%P'", 'a wrapper before `rbash -c`'],
+    ["/bin/[r]bash -c '%P'", 'a shell named by a glob'],
+    ["bash -o errexit -c '%P'", '`-o` and its value before `-c`'],
+    ["bash -c -- '%P'", '`--` after `-c`'],
+    ["sh -c -e '%P'", 'an option after `-c`'],
+    ["bash --norc -c '%P'", 'a long option before `-c`'],
+    ["echo hi | rbash -c '%P'", 'a shell in a pipeline stage'],
+    [`bash -c '"$@"' _ %P`, 'a script that runs its operands'],
+    // (b) script
+    ["script -c '%P' /dev/null", '`script -c`'],
+    ["script -qc '%P' /dev/null", '`script -qc`'],
+    ["script -q -c '%P' /dev/null", '`script -q -c`'],
+    ["script -c'%P' /dev/null", '`script -cCMD`'],
+    ["script --command '%P' /dev/null", '`script --command`'],
+    ["script --command='%P' /dev/null", '`script --command=`'],
+    ["script --c '%P' /dev/null", '`script --c`, an abbreviation getopt accepts'],
+    // the string-taking wrappers, which were refused only within eight words (rule 27)
+    ["su -c 'true 1 2 3 4 5 6 7 8; %P'", '`su -c` past eight words'],
+    ["runuser -u x -c 'true 1 2 3 4 5 6 7 8; %P'", '`runuser -c` past eight words'],
+    ["flock f -c 'true 1 2 3 4 5 6 7 8; %P'", '`flock -c` past eight words'],
+    ["watch 'true 1 2 3 4 5 6 7 8; %P'", '`watch` past eight words'],
+    ["env -S '%P'", '`env -S`'],
+    ["env -u A -u B -u C -u D -S '%P'", '`env -S` past eight words'],
+    // (c) a literal here-string into a shell, or to `source`/`.` of standard input
+    ["bash <<<'%P'", '`bash <<<`'],
+    ["bash <<< '%P'", '`bash <<< …`'],
+    ['sh <<<"%P"', '`sh <<<"…"`'],
+    ["bash 0<<<'%P'", 'a here-string on descriptor 0'],
+    ["bash -s <<<'%P'", '`bash -s <<<`'],
+    ["bash /dev/stdin <<<'%P'", '`bash /dev/stdin <<<`'],
+    ["source /dev/stdin <<<'%P'", '`source /dev/stdin <<<`'],
+    [". /dev/stdin <<<'%P'", '`. /dev/stdin <<<`'],
+    ["script -q /dev/null <<<'%P'", '`script` with no `-c`, which runs a shell on its input'],
+    // (d) find
+    ['find . -exec %P \\;', '`find -exec … \\;`'],
+    ["find . -exec %P ';'", "`find -exec … ';'`"],
+    ['find . -execdir %P \\;', '`-execdir`'],
+    ['find . -ok %P \\;', '`-ok`'],
+    ['find . -okdir %P \\;', '`-okdir`'],
+    ['find . -exec %P {} +', '`-exec … {} +`'],
+    ["find . -name '*.ts' -exec %P \\;", 'a test before `-exec`'],
+    ["find . -exec sh -c '%P' \\;", 'a shell under `-exec`'],
+  ];
+
+  it.each(PARSED)('reads %j as the script it is (%s, criterion 2)', (form) => {
+    refuses(plant(form, PUSH), 'git_boundary');
+    refuses(plant(form, SUDO), 'block_list');
+  });
+
+  /** A string the platform cannot read is uncertain, with exactly the new entry. */
+  const UNREAD: readonly (readonly [string, string])[] = [
+    // (b) a trap action that is not literal
+    [`x='%P'; trap "$x" EXIT`, 'a trap action from a variable'],
+    [`trap "$(echo '%P')" EXIT`, 'a trap action from a substitution'],
+    [`trap "rm $tmp; %P" EXIT`, 'a trap action with an expansion in it'],
+    // (b) a non-literal script handed to a shell or to `eval`
+    [`x='%P'; eval "$x"`, '`eval` of a variable'],
+    [`x='%P'; bash -c "$x"`, '`bash -c` of a variable'],
+    [`x='%P'; bash -c "echo; $x"`, 'a variable inside a `bash -c` string'],
+    // (b) a prompt or hook variable, every spelling
+    ...['PS0', 'PS1', 'PS2', 'PS4', 'PROMPT_COMMAND'].flatMap((name) => [
+      [`${name}='$(%P)'`, `\`${name}=\``] as const,
+      [`export ${name}='$(%P)'`, `\`export ${name}=\``] as const,
+    ]),
+    ["PS4='$(%P)' bash -xc :", 'a prefix assignment'],
+    ["PS4='$(%P)'; set -x; :", 'a plain assignment under `set -x`'],
+    ["declare PS4='$(%P)'; set -x; :", '`declare`'],
+    ["typeset PS4='$(%P)'; set -x; :", '`typeset`'],
+    ["f() { local PS4='$(%P)'; set -x; :; }; f", '`local`'],
+    ["readonly PS4='$(%P)'; set -x; :", '`readonly`'],
+    ["env PS4='$(%P)' bash -xc :", 'an `env` argument'],
+    ["env -u X PS4='$(%P)' bash -xc :", 'an `env` argument after an option'],
+    ["PS4+='$(%P)'; set -x; :", 'an appending assignment'],
+    // Not `<<< '…'`: WP-158's name reader takes a here-string's word for a name (an over-ask).
+    ["IFS= read -r PS4 < <(echo '$(%P)'); set -x; :", '`read` into it'],
+    ["printf -v PS4 %s '$(%P)'; set -x; :", '`printf -v` into it'],
+    [`: \${PS4:='$(%P)'}; set -x; :`, `\`\${PS4:=…}\``],
+    ["BASH_ENV=/tmp/x bash -c ':; %P'", '`BASH_ENV`'],
+    ["ENV=/tmp/x sh -i -c ':; %P'", '`ENV`'],
+    // (b) an alias, a callback
+    ["shopt -s expand_aliases; alias ll='%P'\nll", 'an alias, used'],
+    ["alias ll='%P'", 'an alias definition'],
+    ["mapfile -C '%P;:' -c 1 a <<< x", '`mapfile -C`'],
+    ["readarray -C '%P;:' -c 1 a <<< x", '`readarray -C`'],
+    ["mapfile -tC '%P;:' -c 1 a <<< x", '`-C` in a cluster'],
+    [`bind -x '"\\C-a": %P'`, '`bind -x`'],
+    ["complete -C '%P' foo", '`complete -C`'],
+    ["compgen -C '%P' foo", '`compgen -C`'],
+    ["fc -e '%P'", '`fc -e`'],
+    ['fc -s; %P', '`fc -s`'],
+    // (c) a script a shell reads from a pipe or a process substitution
+    ['x=\'%P\'; bash <<<"$x"', 'a here-string that is not literal'],
+    ["echo '%P' | bash", 'a pipe into `bash`'],
+    ["printf '%s\\n' '%P' | sh", 'a pipe into `sh`'],
+    ["echo '%P' | bash -s", 'a pipe into `bash -s`'],
+    ["echo '%P' | sh /dev/stdin", 'a pipe into `sh /dev/stdin`'],
+    ["echo '%P' | source /dev/stdin", 'a pipe into `source /dev/stdin`'],
+    ["echo '%P' | (bash)", 'a pipe into a subshell running `bash`'],
+    ["echo '%P' | { bash; }", 'a pipe into a group running `bash`'],
+    ["echo '%P' | script -q /dev/null", 'a pipe into `script`'],
+    ["echo x | bash -c 'bash'", 'a shell that a piped shell runs'],
+    ["echo '%P' | bash -c 'true; bash'", 'the same, after another command in the script'],
+    ["echo '%P' | tee >(bash)", 'a shell in a `>(…)` body'],
+    [". <(echo '%P')", '`. <(…)`'],
+    ["source <(echo '%P')", '`source <(…)`'],
+    ["bash < <(echo '%P')", '`bash < <(…)`'],
+    ["bash <(echo '%P')", '`bash <(…)`'],
+    ["exec 3<<<'%P'; bash <&3", 'a shell reading a descriptor'],
+    ["exec <<<'%P'; bash", 'a shell after `exec` moved standard input'],
+    [`coproc bash; echo '%P' >&\${COPROC[1]}`, '`coproc bash`'],
+    // (d) a string `find` or `xargs` puts a file name or a line into
+    ["find . -exec sh -c '%P {}' \\;", '`{}` inside a shell string under `-exec`'],
+    ["echo '%P' | xargs -I{} sh -c '{}'", '`xargs -I{}` into a shell string'],
+    ["echo x | xargs -I{} sh -c '%P {}'", 'the replace string beside the payload'],
+    [`echo '%P' | xargs sh -c '"$@"' _`, '`xargs` feeding a script that runs its operands'],
+  ];
+
+  it.each(UNREAD)('refuses %j as a string it cannot read (%s, criterion 2)', (form) => {
+    refuses(plant(form, PUSH), 'uncertain', [UNCERTAINTY.handedCommand]);
+    const sudo = plant(form, SUDO);
+    for (const mode of modes) {
+      const decision = decideUnattendedCommand({ command: sudo }, policy, mode);
+      expect(decision.decision, `${mode}: ${sudo}`).toBe('deny');
+      if (decision.rule === 'uncertain') {
+        expect(decision.evaluation.uncertainty, mode).toEqual([UNCERTAINTY.handedCommand]);
+      } else {
+        expect(decision.rule, mode).toBe('block_list');
+      }
+    }
+  });
+
+  it.each([
+    ["git rebase -x '%P' HEAD~1", '`-x`'],
+    ["git rebase -x'%P' HEAD~1", '`-xCMD`'],
+    ["git rebase -ix '%P' HEAD~1", '`-x` last in a cluster'],
+    ["git rebase -qx '%P' HEAD~1", '`-x` after `-q`'],
+    ["git -C . rebase -x '%P' HEAD~1", 'a global option before `rebase`'],
+    ["git rebase --ex '%P' HEAD~1", '`--ex`, an abbreviation git accepts'],
+    ["git rebase --exe='%P' HEAD~1", '`--exe=`'],
+    ["git rebase --exec '%P' HEAD~1", '`--exec`, as before'],
+  ])('refuses %j as `--exec`’s hazard (%s, ruling (d))', (form) => {
+    for (const payload of [PUSH, SUDO]) {
+      const command = plant(form, payload);
+      refuses(command, 'hazardous_argument');
+      expect(auto(command).reason, command).toContain('git * --exec*');
+    }
+  });
+
+  /** Criterion (3): what (a) measured already refused, pinned in both modes with both payloads. */
+  it.each([
+    "bash -lc '%P'",
+    "sh -ec '%P'",
+    "bash -cl '%P'",
+    "bash -l -c '%P'",
+    "bash --login -c '%P'",
+    "/usr/bin/bash -lc '%P'",
+    "exec bash -lc '%P'",
+    "timeout 5 bash -lc '%P'",
+    "nohup bash -lc '%P'",
+    "su -c '%P'",
+    "flock f -c '%P'",
+    "watch '%P'",
+    "env -S '%P'",
+    "echo x | xargs sh -c '%P'",
+    "bash -c '%P'",
+    "eval '%P'",
+  ])('still refuses %j (criterion 3)', (form) => {
+    refuses(plant(form, PUSH), 'git_boundary');
+    refuses(plant(form, SUDO), 'block_list');
+  });
+
+  /** Criterion (4), the other direction: each keeps the verdict its inner command earns. */
+  it.each([
+    [`trap 'rm -f "$tmp"' EXIT`, 'unattended_auto'],
+    ['trap - EXIT', 'unattended_auto'],
+    ["trap '' INT", 'unattended_auto'],
+    ['trap -l', 'unattended_auto'],
+    ["bash -c 'ls'", 'unattended_auto'],
+    ["script -qc 'ls' /dev/null", 'unattended_auto'],
+    ["find . -name '*.ts' -exec grep -l foo {} +", 'unattended_auto'],
+    ['find . -name x -exec mv {} {}.bak \\;', 'unattended_auto'],
+    ['alias', 'unattended_auto'],
+    ['alias ll', 'unattended_auto'],
+    ['echo "$PS4"', 'unattended_auto'],
+    ["bash <<<'ls'", 'unattended_auto'],
+    ['bash', 'unattended_auto'],
+    ["cat <<'EOF' | sh\nls\nEOF", 'unattended_auto'],
+    ['bash -c \'echo "$1"\' _ hi', 'unattended_auto'],
+    ['git cherry-pick -x abc123', 'unattended_auto'],
+    ['ls | grep x', 'allow_list'],
+  ])('reads %j and is not uncertain (criterion 4)', (command, rule) => {
+    const decision = auto(command);
+    expect(decision.rule).toBe(rule);
+    expect(decision.evaluation.uncertainty).toEqual([]);
+  });
+
+  it('refuses a string nested past the bound it reads to, rather than leaving it unread', () => {
+    // Eight `eval`s put the trap at `MAX_WRAPPER_DEPTH`, where its action is not parsed.
+    const command = `${'eval '.repeat(8)}trap "'${PUSH}'" EXIT`;
+    refuses(command, 'uncertain', [UNCERTAINTY.handedCommand]);
+  });
+
+  /**
+   * Review round 1: a `-c` whose script `xargs` supplies, `complete`/`compgen -W`, and line
+   * continuations between the words the new readers read. Each was `unattended_auto` in every
+   * baseline; bash 5.2 ran the `xargs`, `-W` and `find` forms (PROGRESS § WP-160, review round 1).
+   */
+  describe('review round 1 — xargs’s script, -W, and continuations', () => {
+    it.each<readonly [string, string]>([
+      [`echo "'%P'" | xargs bash -c`, '`xargs bash -c`, the script from the pipe'],
+      [`echo "'%P'" | xargs -L1 bash -c`, '`xargs -L1`'],
+      [`printf '%s\n' "'%P'" | xargs -d '\n' bash -c`, '`xargs -d`'],
+      [`echo "'%P'" | xargs -- sh -c`, '`xargs --`'],
+      [`echo "'%P'" | xargs env bash -c`, '`xargs env bash -c`'],
+      [`xargs bash -c <<<"'%P'"`, '`xargs` reading a here-string'],
+      [`xargs -a /dev/stdin bash -c <<<"'%P'"`, '`xargs -a /dev/stdin`'],
+      [`echo "'%P'" | xargs script -qc`, '`xargs script -qc`'],
+      [`echo "'%P'" | xargs su -c`, '`xargs su -c`'],
+      [`echo "'%P'" | xargs script --command`, '`xargs script --command`'],
+      ["compgen -W '$(%P)' x", '`compgen -W`'],
+      ["complete -W '$(%P)' x", '`complete -W`'],
+      ["complete -oW default '$(%P)' x", '`-W` in a cluster'],
+      ["export \\\nPS4='$(%P)'; set -x; :", 'a continuation after `export`'],
+      ["mapfile -\\\nC '%P;:' -c 1 a <<< x", 'a continuation inside `-C`'],
+      ["echo '%P' | \\\nbash", 'a continuation after the pipe'],
+      ["exec \\\n<<<'%P'; bash", 'a continuation after `exec`'],
+    ])('refuses %j (%s)', (form) => {
+      refuses(plant(form, PUSH), 'uncertain', [UNCERTAINTY.handedCommand]);
+      for (const mode of modes) {
+        const decision = decideUnattendedCommand({ command: plant(form, SUDO) }, policy, mode);
+        expect(decision.decision, mode).toBe('deny');
+        expect(['uncertain', 'block_list'], mode).toContain(decision.rule);
+      }
+    });
+
+    it.each<readonly [string, string]>([
+      ['find . \\\n-exec %P \\;', 'a continuation before `-exec`'],
+      ['find . -exec \\\n%P \\;', 'a continuation after `-exec`'],
+      ["trap \\\n'%P' EXIT", 'a continuation after `trap`'],
+      ["bash -\\\nc '%P'", 'a continuation inside `-c`'],
+      ["echo hi | rbash \\\n-c '%P'", 'a continuation before `-c`'],
+    ])('reads %j (%s)', (form) => {
+      refuses(plant(form, PUSH), 'git_boundary');
+      refuses(plant(form, SUDO), 'block_list');
+    });
+
+    it('reads a here-document whose word follows a continuation, as bash does', () => {
+      // bash reads `cat <<\⏎EOF` as `cat <<EOF`: the body ends at `EOF`, and the push runs.
+      refuses(`cat <<\\\nEOF\na'\nEOF\n${PUSH}\n'`, 'uncertain', [UNCERTAINTY.unbalancedQuote]);
+      refuses(`cat <<\\\nEOF\na'\nEOF\n${SUDO}\n'`, 'block_list');
+    });
+
+    it.each([
+      // `-F` names a function, which the line itself defines and is read; any `-W` is refused.
+      ['complete -F _fn x', 'complete -F'],
+      ['echo hi | xargs echo', 'xargs'],
+    ])('still reads %j (%s): no string runs', (command) => {
+      expect(auto(command).evaluation.uncertainty).toEqual([]);
+    });
+  });
+
+  it('runs the inner command’s verdict, not the trap’s: a blocked command in a trap is blocked', () => {
+    expect(auto(`trap 'rm -f "$tmp"; ${SUDO}' EXIT`)).toMatchObject({ rule: 'block_list' });
+  });
+});
+
 describe('properties over arbitrary lines', () => {
   const words = fc.constantFrom(
     'ls',
