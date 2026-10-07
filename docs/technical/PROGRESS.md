@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 13 — 2026-10-07.** `main` opened at **`deee26e6`**, tree clean; the runs session 12 left PENDING read **completed success** (`e214edb1`'s `ci` `37513843413` and `image` `37513843330`; `deee26e6`'s `ci` `37514075082` and `image` `37514075031`). `RELEASE_VERSIONING` unset. No notes from the person starting the session. Docker volume count **190** at open and **131** after the first tiers (the drop is not this session's; 131 is the baseline now); `platform-runtime:dev` still predates WP-151's label, so `verify:e2e` runs with `WORKSPACE_E2E_RUNTIME_IMAGE=platform-runtime:wp151`. **WP-158 is DONE at `ebd2ecd3`** (`ci` `37599958320` and `image` `37599958373` **completed success**, `release` skipped; its docs commit `9a96d763` `ci` `37600197446` and `image` `37600197202` **completed success**) — 509 and 510 closed; **511** (**major**: builtins and wrappers that run a string as code — `trap`, `bash -lc`) filed with no owner and goes to an architect pass for a row; 512 and 513 filed (nits). The architect's third M9 amendment placed **511** as **WP-160** (folding 512 and 513, 513 regraded major) after WP-159. **WP-159 is DONE at `8f1569a3`** (`ci` `37606230322` and `image` `37606230370` **completed success**, `release` skipped; its docs commit `5217acc0` `ci` `37606385640` and `image` `37606385759` **completed success**) — 498 closed; 514 filed (minor UX). **WP-160 is DONE at `c3462354`** (`ci` `37616512104` and `image` `37616512076` **PENDING — read them first**) — 511, 512 and 513 closed; 515–523 filed and folded by the architect's fourth amendment into **WP-161** (git's abbreviated long options, the fail-open depth bound, the git boundary's composite skip, expanded command names, mid-word continuations, `difftool -x`, `hash -p`, `xargs` argv). **Next: WP-161**, then WP-154, WP-155, WP-156, WP-157.
+**Session 13 — 2026-10-07.** `main` opened at **`deee26e6`**, tree clean; the runs session 12 left PENDING read **completed success** (`e214edb1`'s `ci` `37513843413` and `image` `37513843330`; `deee26e6`'s `ci` `37514075082` and `image` `37514075031`). `RELEASE_VERSIONING` unset. No notes from the person starting the session. Docker volume count **190** at open and **131** after the first tiers (the drop is not this session's; 131 is the baseline now); `platform-runtime:dev` still predates WP-151's label, so `verify:e2e` runs with `WORKSPACE_E2E_RUNTIME_IMAGE=platform-runtime:wp151`. **WP-158 is DONE at `ebd2ecd3`** (`ci` `37599958320` and `image` `37599958373` **completed success**, `release` skipped; its docs commit `9a96d763` `ci` `37600197446` and `image` `37600197202` **completed success**) — 509 and 510 closed; **511** (**major**: builtins and wrappers that run a string as code — `trap`, `bash -lc`) filed with no owner and goes to an architect pass for a row; 512 and 513 filed (nits). The architect's third M9 amendment placed **511** as **WP-160** (folding 512 and 513, 513 regraded major) after WP-159. **WP-159 is DONE at `8f1569a3`** (`ci` `37606230322` and `image` `37606230370` **completed success**, `release` skipped; its docs commit `5217acc0` `ci` `37606385640` and `image` `37606385759` **completed success**) — 498 closed; 514 filed (minor UX). **WP-160 is DONE at `c3462354`** (`ci` `37616512104` and `image` `37616512076` **PENDING — read them first**) — 511, 512 and 513 closed; 515–523 filed and folded by the architect's fourth amendment into **WP-161** (git's abbreviated long options, the fail-open depth bound, the git boundary's composite skip, expanded command names, mid-word continuations, `difftool -x`, `hash -p`, `xargs` argv). **WP-161 is BLOCKED** (paused for a human decision): its implementer was stopped twice by the harness's safety classifier during the measurement stage, before any code; the measurements are in its notes and its status row says how to resume. **Next: WP-154**, then WP-155, WP-156, WP-157, and WP-161 when a person decides how it continues.
 
 **Session 12 — 2026-10-06.** `main` opened at **`7638a47d`**, tree clean, and **red**: every push since `b3e0a3d1` (01:50, *local mode also reads AGENTIC_CLAUDE_CODE_OAUTH_TOKEN*) failed `ci`'s `e2e-fake-claude` and `image`'s stock check, because Docker Compose v2 evaluates a `:?` nested inside another substitution even when the outer variable is set (measured with v2.39.4; this machine's v5.5.1 does not). Fixed at **`068a0cfb`** (`ci` `37447153767` and `image` `37447153713` **completed success**, `release` skipped): the fallback is a nested default with no refusal, the server's named *composed without an agent runner* warning is the answer for neither name, and a new compose-config e2e case reads the files off disk (cited at the end of this paragraph). `RELEASE_VERSIONING` unset. Docker volume count at open **189** (the product owner's dogfood stack `agentic-*` is running on this daemon — never touch it). Notes from the person starting the session: *"Run for 6-8 hours — pick backlog items according the priority that can be solved."* The first local test's evidence triggered the architect pass: **M9 — what the first local test found** (plan § "Milestone M9", WP-150…WP-157; § "Architect ruling (M9, session 12)"; Q116 filed; 497 filed; 415 resolved by the Q48 note). Its docs commit `9cc93a45` read `ci` `37449772087` and `image` `37449772073` **completed success**. **WP-150 is DONE at `614cf050`** (`ci` `37464130532` and `image` `37464130522` **completed success**, `release` skipped; its docs commit `b697173b` `ci` `37464331277` and `image` `37464331239` **completed success**) — 410, 465 and 489's money half closed; 498 (the product owner's model select), 499 (**major**: the git-fixture tests write into the repository a linked worktree shares — rule 95, after this session's own incident at 13:02) and 500–502 filed. **WP-151 is DONE at `e1404e42`** (`ci` `37482178074`, `image` `37482178130` and `base-image` `37482178059` **completed success**, `release` skipped; its docs commit `3a980fbd` `ci` `37482373165` and `image` `37482372797` **completed success**) — 489, 463, 500 and 503 closed; 504–506 filed. **The product owner's next rebuild must rebuild the run image and the runner together** (an unlabelled `platform-runtime:dev` is now refused by name; runbook § 8). **WP-152 is DONE at `e290d44d`** (`ci` `37496630939` and `image` `37496630904` **completed success**, `release` skipped; its docs commit `f8bfda68` `ci` `37496813118` and `image` `37496813064` **completed success**) — 491 and 497 closed; 507, 508 and Q117 (recommendation (a)) filed. **WP-153 is DONE at `e214edb1`** (CI **PENDING** — `ci` `37513843413`, `image` `37513843330`; read them first) — 482 closed; 509 (**major**: expansions that run a variable's text as code are not uncertain in the scanner) and 510 filed; the architect added **WP-158** (509, 510 — first) and **WP-159** (498, the product owner's model select) to M9. **Session 12 stopped at the product owner's request after WP-153 (≈ 9 h).** For the next session: (1) the daemon's `platform-runtime:dev` predates WP-151's label, so run `verify:e2e` with `WORKSPACE_E2E_RUNTIME_IMAGE=platform-runtime:wp151` (built by this session, with `platform-base:wp151`; this session's only images — remove them once `:dev` is rebuilt) or rebuild `:dev` only when the product owner's stack is down (backlog 504); (2) rule 95 — never run a tier or push from a linked worktree; (3) `.claude/scheduled_tasks.lock` trips `ignored:check`: move it aside for a `verify` and put it back. **Next: WP-158**, then WP-159, WP-154, WP-155, WP-156, WP-157. The compose guard: `test/e2e/compose/compose-config.e2e.test.ts` › "nests no `:?` inside another substitution in either compose file (Compose v2)".
 
@@ -18918,7 +18918,7 @@ number from **0085** in the order rows land. Read the backlog entry a row folds 
 | WP-158 | **The command scanner refuses an expansion that runs a variable's text as code, and readiness reads hook here-documents with the scanner's reader** | DONE | `ebd2ecd3` | Folds **509**, **510**. Deps WP-153. No migration. **Built:** measured ~100 forms first (bash 5.2 and dash from the run image, bash 3.2; table in the notes); `UNCERTAINTY.evaluatedText` fires on every form that evaluates a variable's text (subscripts, `${x@op}`, `${!x}`, offsets, `$[`, `((`, `let`, `declare -i`, `[[ -eq`, and the folded name-taking builtins) outside single quotes, in double quotes, in redirection targets and in unquoted bodies, after joining continuations and behind wrapper options and `coproc`; decimal and `@`/`*` subscripts stay literal; `ls ${y[$(cat f)]}` had been `allow` in every mode. Beyond the row: a WP-153 bypass (a would-be body after a closed `${…}`, a comment or a CRLF delimiter) and `coproc` added to `ARGV0_WRAPPERS` (a block-list bypass). The husky reader uses the shared reader (510). **Review:** two rounds — round 1 **REQUEST-CHANGES** on three majors (a redirection target, a continuation inside `${…}`, `let` behind `command -p`/`coproc`, each run by bash); round 2 **APPROVE** with a dead-clause nit fixed by the orchestrator. Six reviewer canaries round 1 and five round 2, all dead. **Orchestrator verification:** round 0 `PASS: verify` (11855), `PASS: verify:integration` (846), `PASS: verify:e2e` twice (290, `:wp151` run image); round 1 `PASS: verify`, `PASS: verify:e2e` (290); after the nit `PASS: verify` (11898). Filed **511** (major: a builtin or wrapper that runs a string as code), 512, 513. CI on `ebd2ecd3`: `ci` `37599958320`, `image` `37599958373`. |
 | WP-159 | **Retry run offers the platform's own model list instead of a free-text box, and refuses a model nobody chose on purpose** | DONE | `8f1569a3` | Folds **498** (the product owner's request). No migration. **Built:** `GET /api/org/models` (`run.read`) over open `price_list` windows (half-open, distinct, ordered, no prices, ids over 128 characters left out); `retryRunCommand` refuses an unlisted id that is neither the run's own nor the stage's configured model with `409 model_not_listed` before any write, `allow_unlisted_model` admits it; the retry form is a select (run's model preselected, unchanged submit sends no `model`, *not priced* option kept, *Other…* sends the flag, a failed read keeps the run's model); censuses both directions; every shipped default held to an open window. **Review:** one round, **APPROVE-with-nits** — canary 2 (the run's-own-model admission) **survived** because the run's model was also the template default; the test now isolates it (dies), the half-open boundary and the web-e2e wait (rule 87) pinned; canaries 3–6 dead, 1 covered by the integration tier. Filed **514** (minor UX: the preselected model is not the one an unchanged retry plans on, effort likewise). **Orchestrator verification:** `PASS: verify`, `PASS: verify:ui` (581), `PASS: verify:web-e2e` (51), `PASS: verify:integration` (851), `PASS: verify:e2e` twice (290, `:wp151` run image); after the round's tests `PASS: verify` and `PASS: verify:web-e2e`. CI on `8f1569a3`: `ci` `37606230322`, `image` `37606230370`. |
 | WP-160 | **The command scanner reads, or refuses, a command handed over as a string, and a here-document it cannot recognise no longer hides the lines after it** | DONE | `c3462354` | Folds **511**, **512**, **513** (513 regraded major). Deps WP-158. No migration. **Built:** measured 132 forms first (103 `unattended_auto`, five `allow_list` in every mode, a shell ran 75; none after); `wrappedScript` parses a literal string as a script (trap's action, one shared `-c` shell set, `script -c`, `su`/`runuser -c`, `flock -c`, `watch`, `env -S`, literal here-strings to a shell, `find -exec` argv); `UNCERTAINTY.handedCommand` for a non-literal or stored command (prompt variables, `BASH_ENV`/`ENV`, `alias`, `mapfile -C`, `bind -x`, `complete`/`compgen -C`/`-W`, `fc`, pipes and process substitutions into a shell, a `-c` whose script `xargs` supplies); `git rebase -x` spellings join `--exec`'s hazard; a refused here-document's would-be body read to bash's terminator and the lines after it re-parsed; every reader reads continuation-joined stages; (f) and (g) landed in the row (no split). **Review:** two rounds — round 1 **REQUEST-CHANGES** on three majors, each run by bash (`xargs bash -c`, `compgen`/`complete -W`, continuations between words in the new readers; a fourth, `cat <<\⏎EOF`, found by the implementer's sweep); round 2 **APPROVE**, one pre-existing minor filed as 523 and named in the docblock by the orchestrator. Six reviewer canaries round 1 and five round 2, all dead; 27 implementer canaries, the separate (e) quote check removed after its canary survived (covered by the re-parse). **Orchestrator verification:** round 0 `PASS: verify`, `PASS: verify:integration` (851), `PASS: verify:e2e` twice (290, `:wp151` run image); round 1 `PASS: verify`, `PASS: verify:e2e`; final `PASS: verify` (12185). Filed 515–519 (refiner), 520–522 (review round 1) and 523 (round 2), all folded into **WP-161** by the architect's fourth amendment. CI on `c3462354`: `ci` `37616512104`, `image` `37616512076`. |
-| WP-161 | **The command scanner resolves git's abbreviated long options the way git does, fails closed past its depth bound, judges every `git push` a line contains, and refuses a command name the shell expands** | TODO | — | Folds **515** (major, security: `git commit --no-verif` is `allow` attended), **516** (major), **517** (major), **518** (regraded major: `/usr/bin/g[i]t push origin main` reaches git in the run image), **519** (nits, optional), and since WP-160's review round 1 **520** (major: a `\`-newline inside a word, `git commit --no-ver\⏎ify` is `allow` attended), **521** (major: `git difftool -x`) and **522** (minor: `hash -p`), criteria (10)–(12), and since review round 2 **523** (minor, pre-existing: stdin-fed `xargs git`/`env`/`find -exec`), criterion (13). Deps WP-160. No migration. Measure first (ruling (a)); git's prefix rule against a generated per-subcommand table, with a Docker check. Next after WP-160, serial with it; parallel-safe with WP-154…WP-157. The orchestrator may split (g) or leave 519 open; it may not split (b)–(f) |
+| WP-161 | **The command scanner resolves git's abbreviated long options the way git does, fails closed past its depth bound, judges every `git push` a line contains, and refuses a command name the shell expands** | BLOCKED | — | **Paused, session 13, for a human decision:** the implementer was stopped twice by the harness's safety classifier during the (a) measurement stage (planted payloads run in the run image), before any code; it did not retry around the flag. The before table and the git 2.47.3 measurements are in the notes (`#### WP-161`). To resume: write rulings (b)–(g) and the unit tests first (nothing executes), then the marker-only shell-oracle rows and the generator check, or have a person run those. | Folds **515** (major, security: `git commit --no-verif` is `allow` attended), **516** (major), **517** (major), **518** (regraded major: `/usr/bin/g[i]t push origin main` reaches git in the run image), **519** (nits, optional), and since WP-160's review round 1 **520** (major: a `\`-newline inside a word, `git commit --no-ver\⏎ify` is `allow` attended), **521** (major: `git difftool -x`) and **522** (minor: `hash -p`), criteria (10)–(12), and since review round 2 **523** (minor, pre-existing: stdin-fed `xargs git`/`env`/`find -exec`), criterion (13). Deps WP-160. No migration. Measure first (ruling (a)); git's prefix rule against a generated per-subcommand table, with a Docker check. Next after WP-160, serial with it; parallel-safe with WP-154…WP-157. The orchestrator may split (g) or leave 519 open; it may not split (b)–(f) |
 
 ## WP notes (decisions, assumptions, reviewer findings)
 
@@ -45234,3 +45234,130 @@ The reviewer's two mutants were re-run and both are killed. `isWriteTarget(targe
   - the operator-line continuation: killed by 1.
 - **Docs.** technical/05's WP-160 amendment names `-c` with no operand, `-W` and the joined continuations. The module docblock's *What it still does not read* now names a mid-word line continuation (WP-161).
 - **Verification.** I started `verify` after the reviewer's e2e chain read `DONE`, at a one-minute load of 5.8. It gave `PASS: verify` (12 185 tests, 28 skipped) with 46 lint warnings. The two extra warnings were my own `'\;'` in two `find` rows, which also meant those rows planted `;` rather than `\;`. I fixed both rows to `\;`. Afterwards `biome check` on `packages/domain/src/policies` reports none (back at the baseline's 44), and the file passes again (565). The shell-oracle file passed 107/107 twice in `platform-runtime:wp151`. The citation guard passes. The lock file was moved aside for the run and put back.
+
+#### WP-161
+
+**Paused before any code (session 13).** The implementer measured the (a) state on `b88c238e` and was then stopped twice by the harness's safety classifier during the measurement stage; it stopped rather than work around the flag, and the orchestrator paused the row (BLOCKED) for a human decision. What is measured:
+
+- **git 2.47.3 in `platform-runtime:wp151`:** a failing hook was skipped by `commit --no-verif`/`--no-veri`, `push --no-verif`, an alias and `-C . commit --no-verif`; `--no-ver` is ambiguous (exit 129). A planted value ran for `fetch --upload-p=`/`--upload=`, `ls-remote --upload-p=` and `push --receive-p=`/`--exe=`/`--ex=`; `--up=` ran nothing. `cat-file --text`/`--te` ran the textconv driver. `difftool -x`, `-yx`, `-xCMD` and `-c … difftool -x` ran the command; `--extc` printed `git diff` usage. `diff --ext-dif`, `log --textco`, `diff --outp=`, `diff -x` and `log -x` are refused by git; `merge --no-verif` is ambiguous. `--git-completion-helper-all` prints option tables for commit, push, fetch, cat-file, difftool, ls-remote, diff and log, and nothing for mergetool.
+- **Corrections to the row (rule 27), accepted by the orchestrator:** `git mergetool` rejects `-x` and `--extcmd`, so the `--extcmd` hazard text's *and mergetool* is wrong and criterion (11)'s mergetool half does not apply; criterion (2)'s `difftool --extc=x` ran nothing but keeps the floor on the prefix rule; `log -p --text` stays `allow` (textconv runs by default under `log -p`; the reach is the repository's configuration).
+
+**The before table** (verdicts attended / `auto` / `deny`; `ro`/`ver`/`impl` are the three baselines where they differ):
+
+| `git commit --no-verify -m x` | ask / hazard / hazard |
+| `git commit --no-verif -m x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / **allow** / **allow** |
+| `git commit --no-veri -m x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / **allow** / **allow** |
+| `git commit --no-ver -m x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / **allow** / **allow** |
+| `git push --no-verif origin agentic/x` | ask / git / git |
+| `git fetch origin --upload-p=x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / **allow** / **allow** |
+| `git fetch origin --upload=x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / **allow** / **allow** |
+| `git ls-remote --upload-p=x origin` | ask / auto / deny |
+| `git push --receive-p=x origin agentic/x` | ask / git / git |
+| `git push --exe=x origin agentic/x` | ask / git / git |
+| `git push --ex=x origin agentic/x` | ask / git / git |
+| `git cat-file --text HEAD:a` | ask / auto / deny |
+| `git cat-file --te HEAD:a` | ask / auto / deny |
+| `git difftool --extc=x` | ask / auto / deny |
+| `git ci --no-verif -m x` | ask / auto / deny |
+| `git merge --no-verif origin/main` | ask / auto / deny |
+| `git diff --ext-dif` | allow / **allow** / **allow** |
+| `git log --textco` | allow / **allow** / **allow** |
+| `git diff --outp=/tmp/x` | allow / **allow** / **allow** |
+| `git diff --text` | allow / **allow** / **allow** |
+| `git log -p --text` | allow / **allow** / **allow** |
+| `git log --no-walk` | allow / **allow** / **allow** |
+| `git commit --verify -m x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / **allow** / **allow** |
+| `git merge --verify-signatures origin/main` | ask / auto / deny |
+| `git commit -m "--no-verify is a flag"` | ask / hazard / hazard |
+| `nice git commit --no-verif -m x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / **allow** / **allow** |
+| `git -C . commit --no-verif -m x` | ask / auto / deny |
+| `git commit --no-verif -- x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / **allow** / **allow** |
+| `git commit -- --no-verif` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / **allow** / **allow** |
+| `nice nice nice nice nice nice nice nice sudo id` | block / block / block |
+| `nice nice nice nice nice nice nice nice nice sudo id` | ask / auto / deny |
+| `nice nice nice nice nice nice nice nice git push --force origin main` | block / block / block |
+| `nice nice nice nice nice nice nice nice nice git push --force origin main` | ask / auto / deny |
+| `A=1 B=2 C=3 D=4 E=5 F=6 G=7 H=8 sudo id` | block / block / block |
+| `A=1 B=2 C=3 D=4 E=5 F=6 G=7 H=8 I=9 sudo id` | ask / auto / deny |
+| `A=1 B=2 C=3 D=4 E=5 F=6 G=7 H=8 I=9 git push --force origin main` | ask / auto / deny |
+| `env env env env env env env env env sudo id` | ask / auto / deny |
+| `command command command command command command command command command sudo id` | ask / auto / deny |
+| `timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 sudo id` | ask / auto / deny |
+| `echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(sudo id)))))))))` | block / block / block |
+| `echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(sudo id))))))))))` | ask / auto / deny |
+| `echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(git push --force origin main))))))))))` | ask / auto / deny |
+| `git push origin main` | ask / git / git |
+| `git push origin main; m` | ask / auto / deny |
+| `m; git push origin main` | ask / auto / deny |
+| `git push origin main \| m` | ask / auto / deny |
+| `git push origin main && o` | ask / auto / deny |
+| `git push --mirror origin; i` | ask / auto / deny |
+| `git push origin HEAD:main && o` | ask / hazard / hazard |
+| `git push origin agentic/x 2>&1 \| tail -5` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / **allow** / **allow** |
+| `/usr/bin/g[i]t push origin main` | ask / auto / deny |
+| `/usr/bin/gi? push --force origin main` | ask / auto / deny |
+| `/usr/bin/g{i..i}t status` | ask / auto / deny |
+| `{sudo,x} id` | ask / auto / deny |
+| `/usr/bin/sud? id` | ask / auto / deny |
+| `/usr/bin/[s]udo id` | ask / auto / deny |
+| `g?t push origin main` | ask / auto / deny |
+| `/usr/bin/ni?e git push origin main` | ask / auto / deny |
+| `nice /usr/bin/g[i]t push origin main` | ask / auto / deny |
+| `[ -d x ]` | ask / auto / deny |
+| `[[ -d x ]]` | ask / auto / deny |
+| `{ ls; }` | ask / auto / deny |
+| `x='b[1]'` | ask / auto / deny |
+| `{x} y` | ask / auto / deny |
+| `g\it push origin main` | ask / git / git |
+| `'git' push origin main` | ask / git / git |
+| `"g"it push origin main` | ask / git / git |
+| `g""it push origin main` | ask / git / git |
+| `git push origin ma?n` | ask / git / git |
+| `git push origin {main,}` | ask / git / git |
+| `git push origin m{a,}in` | ask / git / git |
+| `read -r X <<< 'x'` | ask / uncertain / uncertain |
+| `git status <&3` | ask / auto / deny |
+| `cat <&3` | ask / auto / deny |
+| `ls <&3` | ask / auto / deny |
+| `git status >&2` | allow / **allow** / **allow** |
+| `su\⏎do id` | ask / auto / deny |
+| `s\⏎udo id` | ask / auto / deny |
+| `nice su\⏎do id` | ask / auto / deny |
+| `git pu\⏎sh origin HEAD:main` | ask / auto / deny |
+| `en\⏎v git push origin HEAD:main` | ask / auto / deny |
+| `git rebase -\⏎x 'sudo id' main` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / **allow** / **allow** |
+| `git commit --no-ver\⏎ify -m x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / **allow** / **allow** |
+| `git rebase --ex\⏎ec='sudo id' main` | ask / hazard / hazard |
+| `find . -ex\⏎ec sudo id \;` | block / block / block |
+| `tr\⏎ap 'sudo id' EXIT` | block / block / block |
+| `git sta\⏎tus` | ask / auto / deny |
+| `git status \⏎--short` | allow / **allow** / **allow** |
+| `echo 'a\⏎b'` | ask / auto / deny |
+| `git difftool --extcmd='sudo id' HEAD` | ask / hazard / hazard |
+| `git difftool -x 'sudo id' HEAD` | ask / auto / deny |
+| `git difftool -x'sudo id' HEAD` | ask / auto / deny |
+| `git difftool -yx 'sudo id' HEAD` | ask / auto / deny |
+| `git -c diff.tool=x difftool -x 'sudo id' HEAD` | ask / auto / deny |
+| `git mergetool -x 'sudo id'` | ask / auto / deny |
+| `git diff -x` | allow / **allow** / **allow** |
+| `git log -x` | allow / **allow** / **allow** |
+| `hash -p /usr/bin/sudo ls; ls` | ask / auto / deny |
+| `hash -p /usr/bin/git ls; ls push origin HEAD:main` | ask / auto / deny |
+| `hash -rp /usr/bin/git ls; ls push origin HEAD:main` | ask / auto / deny |
+| `hash` | ask / auto / deny |
+| `hash -r` | ask / auto / deny |
+| `hash ls` | ask / auto / deny |
+| `hash -d ls` | ask / auto / deny |
+| `echo 'sudo id ;' \| xargs find . -maxdepth 0 -exec` | ask / auto / deny |
+| `echo 'sudo id' \| xargs env` | ask / auto / deny |
+| `echo 'sudo id' \| xargs nohup` | ask / auto / deny |
+| `echo 'sudo id' \| xargs timeout 5` | ask / auto / deny |
+| `echo 'sudo id' \| xargs nice` | ask / auto / deny |
+| `echo 'sudo id' \| xargs command` | ask / auto / deny |
+| `echo 'sudo id' \| xargs exec` | ask / auto / deny |
+| `echo 'sudo id' \| xargs xargs` | ask / auto / deny |
+| `echo 'sudo id' \| xargs git` | ask / auto / deny |
+| `echo 'push origin HEAD:main' \| xargs git` | ask / auto / deny |
+| `echo x \| xargs grep x` | ask / auto / deny |
+| `echo x \| xargs rm -f` | ask / auto / deny |
+| `echo x \| xargs -I{} cat {}` | ask / uncertain / uncertain |
