@@ -500,8 +500,18 @@ describe('the list envelopes and the KB health report', () => {
       health: { status: 'unknown' as const, checked_at: null, detail: null },
       config_refusal: null,
       retired_at: null,
+      credentials_readable: null,
+      credentials_consequence: null,
     };
     expect(integrationsResponseSchema.parse({ items: [integration] })).toBeTruthy();
+    // WP-157: both credential fields are required-nullable, so a server that forgot them is caught.
+    const { credentials_readable: _unread, ...withoutReadable } = integration;
+    expect(integrationsResponseSchema.safeParse({ items: [withoutReadable] }).success).toBe(false);
+    expect(
+      integrationsResponseSchema.safeParse({
+        items: [{ ...integration, credentials_readable: false, credentials_consequence: '' }],
+      }).success,
+    ).toBe(false);
     // WP-100: the refusal is required-nullable, so a server that forgot it is caught here.
     const { config_refusal: _dropped, ...withoutRefusal } = integration;
     expect(integrationsResponseSchema.safeParse({ items: [withoutRefusal] }).success).toBe(false);

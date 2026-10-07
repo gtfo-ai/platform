@@ -86,7 +86,7 @@ describe('publishableConfig', () => {
 describe('toIntegrationSummary and a stored configuration', () => {
   it('names the refused paths and the PATCH for a row the provider’s schema refuses', () => {
     const broken = row({ config: { host: 'https://gitlab.example.test', token: PLANTED_TOKEN } });
-    const summary = toIntegrationSummary(broken, findShippedProvider('gitlab'));
+    const summary = toIntegrationSummary(broken, findShippedProvider('gitlab'), null);
     expect(summary.config_refusal?.paths.sort()).toEqual(['base_url', 'host']);
     expect(summary.config_refusal?.message).toContain(`PATCH /api/integrations/${broken.id}`);
     expect(JSON.stringify(summary)).not.toContain(PLANTED_TOKEN);
@@ -97,10 +97,11 @@ describe('toIntegrationSummary and a stored configuration', () => {
       toIntegrationSummary(
         row({ config: { base_url: 'https://gitlab.example.test' } }),
         findShippedProvider('gitlab'),
+        null,
       ).config_refusal,
     ).toBeNull();
     expect(
-      toIntegrationSummary(row({ provider: 'fake-git' }), undefined).config_refusal,
+      toIntegrationSummary(row({ provider: 'fake-git' }), undefined, null).config_refusal,
     ).toBeNull();
   });
 });

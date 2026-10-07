@@ -197,10 +197,41 @@ export const storedConfigRefusal = (
   };
 };
 
+/**
+ * What `credentials_readable: false` costs, in platform text (WP-157 (a), PROGRESS backlog 413).
+ *
+ * `createProjectBindingSecrets` adds every live communication account to every project's
+ * exact-value set, so the repository reading of **every** project stores its configuration and
+ * withholds its prompt files (`withheldPrompts` in `packages/application/src/config/repository-config.ts`).
+ */
+export const ORGANISATION_ACCOUNT_UNREADABLE_CONSEQUENCE =
+  'Its credentials cannot be decrypted (a changed APP_SECRET_KEY or a damaged secrets row), so the prompt files of every project are withheld: each repository reading stores the configuration and none of .agentic/prompts/ until the credentials are re-sealed or the account is retired.';
+
+/**
+ * Whether each live organisation communication account decrypts, by id — the answer of
+ * `createOrganisationAccountCredentialCheck`, or `null` for a process that composed no check.
+ */
+export type OrganisationCredentialStates = ReadonlyMap<string, boolean> | null;
+
 export const toIntegrationSummary = (
   row: IntegrationRow,
   provider: ProviderCatalogueEntry | undefined,
-): IntegrationSummary => ({
+  credentials: OrganisationCredentialStates,
+): IntegrationSummary => {
+  // A retired row is never read by the loader (its credentials are destroyed), so it is unchecked.
+  const readable = row.retiredAt === null ? (credentials?.get(row.id) ?? null) : null;
+  return {
+    ...summaryOf(row, provider),
+    credentials_readable: readable,
+    credentials_consequence:
+      readable === false ? ORGANISATION_ACCOUNT_UNREADABLE_CONSEQUENCE : null,
+  };
+};
+
+const summaryOf = (
+  row: IntegrationRow,
+  provider: ProviderCatalogueEntry | undefined,
+): Omit<IntegrationSummary, 'credentials_readable' | 'credentials_consequence'> => ({
   id: row.id as Id,
   type: row.type,
   provider: row.provider,

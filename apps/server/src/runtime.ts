@@ -85,6 +85,7 @@ import {
   composeKnowledgeIndexing,
   composeKnowledgeMirror,
   createKnowledgeCommands,
+  createOrganisationAccountCredentials,
 } from './knowledge.js';
 import { asLoggerPort, createLogger, type PinoLogger } from './logging.js';
 import { createMetrics, type Metrics } from './metrics.js';
@@ -1124,6 +1125,11 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       taskStart,
       projectConfig,
       shadowGate,
+      // WP-157 (a): one broken organisation chat account, named once on the integration list.
+      organisationCredentials: createOrganisationAccountCredentials(
+        database.pool,
+        config.secretKey,
+      ),
       historyBootstrap: bootstrapCommands,
       historyBootstrapGate: bootstrapGate,
       rediscoveryGate: capabilities.api

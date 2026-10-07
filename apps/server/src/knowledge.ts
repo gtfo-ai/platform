@@ -91,6 +91,7 @@ import type { IntegrationRegistry } from '@platform/integrations';
 import {
   accountOnlyFieldsOf,
   createGitMirrorCredentials,
+  createOrganisationAccountCredentialCheck,
   createProjectBindingSecrets,
   secretFieldsOf,
 } from '@platform/integrations';
@@ -358,6 +359,21 @@ export const createProjectCredentials = (pool: pg.Pool, secretKey: string) =>
       key: secretAdapters.deriveSecretKey(secretKey),
     }),
     secretFieldsOf,
+    organisationAccounts: () => secretAdapters.listCommunicationAccounts(pool),
+  });
+
+/**
+ * Whether each of the organisation's communication accounts decrypts (WP-157 (a), PROGRESS backlog
+ * 413) — the same accounts and the same secret store {@link createProjectCredentials} reads, asked
+ * once for the organisation rather than once per project. `GET /api/integrations` publishes the
+ * answer as `credentials_readable`; no value leaves it.
+ */
+export const createOrganisationAccountCredentials = (pool: pg.Pool, secretKey: string) =>
+  createOrganisationAccountCredentialCheck({
+    secrets: secretAdapters.createPostgresSecretStore({
+      sql: pool,
+      key: secretAdapters.deriveSecretKey(secretKey),
+    }),
     organisationAccounts: () => secretAdapters.listCommunicationAccounts(pool),
   });
 

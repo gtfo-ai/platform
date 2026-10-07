@@ -95,7 +95,7 @@ import {
 import { RUNLET_PROTOCOL_IMAGE_LABEL } from '@platform/contracts';
 import { cliEnvironmentVariables, numberGitConfig } from './cli-environment.js';
 import { EGRESS_CONFIG_MOUNT, egressProxyUrl, renderEgressConfig } from './egress.js';
-import type { DockerEngine, EngineVolume } from './engine.js';
+import type { DockerEngine, EngineContainerSummary, EngineVolume } from './engine.js';
 import {
   DEFAULT_RUNTIME_CLI_PATH,
   type DockerMount,
@@ -588,6 +588,18 @@ export const DEFAULT_MIRROR_MEMORY_MB = 2_048;
 const CONTROL_SWEEP_GRACE_MIN = 60;
 
 /**
+ * How old a helper container that belongs to **no run** must be before the retention pass removes
+ * it (WP-157 (d), PROGRESS backlog 430): one hour, the plan row's bound, and the same hour
+ * {@link CONTROL_SWEEP_GRACE_MIN} gives a control directory. Every such helper (`cli-check`,
+ * `mirror`, `control-sweep`) is run to completion and removed by `#helper` within one launcher
+ * call, so one an hour old is a launcher that died mid-call.
+ */
+export const STALE_HELPER_AGE_MS = 60 * 60 * 1000;
+
+/** At most this many stale helpers are removed per pass; the next pass lists again. */
+const MAX_STALE_HELPERS_PER_PASS = 100;
+
+/**
  * The most control directories one sweep examines.
  *
  * The listing comes back as container logs, which are bounded by `tail`; the cap is stated here
@@ -644,6 +656,13 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   readonly #egressLogAllowedConnects: boolean;
   /** One mirror is one directory; two fetches into it race. Serialised per project. */
   readonly #mirrorLocks = new Map<string, Promise<unknown>>();
+  /**
+   * The names of the helpers inside a live {@link #helper} call of this process (WP-157 review
+   * round 1). `#helper` has no timeout of its own, so a first `git clone --mirror` of a large
+   * repository can run past {@link STALE_HELPER_AGE_MS}; the retention pass skips these and reaps
+   * only a helper no live call is waiting on — one a crashed launcher left.
+   */
+  readonly #liveHelpers = new Set<string>();
   /** The memoised verdict of {@link assertRuntimeCli}; one helper container per process. */
   #runtimeCliVerified: Promise<void> | null = null;
   /**
@@ -922,7 +941,15 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         RestartPolicy: { Name: 'no' },
       },
     };
-    const id = await this.#createHelperContainer(run.name, body);
+    // Marked before the create, so no listing between the create and the start can miss it.
+    this.#liveHelpers.add(run.name);
+    let id: string;
+    try {
+      id = await this.#createHelperContainer(run.name, body);
+    } catch (error) {
+      this.#liveHelpers.delete(run.name);
+      throw error;
+    }
     let output = '';
     try {
       await this.#engine.startContainer(id);
@@ -947,6 +974,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       if (run.keep !== true) {
         await this.#engine.removeContainer(id).catch(() => undefined);
       }
+      this.#liveHelpers.delete(run.name);
     }
     return { output, id };
   }
@@ -2471,15 +2499,37 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   }
 
   async purgeExpired(now: Date): Promise<PurgeReport> {
+    // **This instance's** workspace volumes only (WP-157 (c), PROGRESS backlog 431), as
+    // `listLabelledRuns` lists this instance's runs: on a daemon two instances share, the other
+    // one's expired workspace is its own retention's to remove. A workspace volume carries the
+    // instance label since WP-103 (`#labels`); one made before it is no longer swept and is removed
+    // by hand (`docker volume ls --filter label=com.agentic.role=workspace`), the residual
+    // `listLabelledRuns` states for a pre-WP-103 container.
+    const instance = `${WORKSPACE_LABELS.instance}=${this.#controlVolume}`;
     const volumes = await this.#engine.listVolumes({
-      label: [`${WORKSPACE_LABELS.role}=workspace`],
+      label: [`${WORKSPACE_LABELS.role}=workspace`, instance],
     });
     // A second listing rather than one over `com.agentic.run`: the filter stays a positive
     // statement about the role each object plays, so a future object carrying a run label is not
     // swept up by accident (the egress config volume already carries one).
+    //
+    // **By role only, for the decision** (WP-157 review round 1): a hold carries the instance label
+    // only since WP-132, a workspace since WP-103, so a workspace from between the two that is held
+    // past its window has an **unlabelled** hold. Filtered by instance, that hold would vanish and
+    // the workspace would be deleted at its own `keep_until` — the loss a hold exists to prevent. A
+    // hold only *keeps* a workspace this sweep listed (matched by run id), so another instance's
+    // hold changes nothing here; what is **removed** below is this instance's labelled holds only.
     const holdVolumes = await this.#engine.listVolumes({
       label: [`${WORKSPACE_LABELS.role}=retention_hold`],
     });
+    const ownHolds = new Set(
+      holdVolumes
+        .filter(
+          (volume: EngineVolume) =>
+            volume.Labels?.[WORKSPACE_LABELS.instance] === this.#controlVolume,
+        )
+        .map((volume: EngineVolume) => volume.Name),
+    );
     const holds: RetentionHold[] = holdVolumes.flatMap((volume: EngineVolume) => {
       const runId = volume.Labels?.[WORKSPACE_LABELS.run];
       const keepUntil = volume.Labels?.[WORKSPACE_LABELS.keepUntil];
@@ -2522,19 +2572,85 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     // longer there at all. Reported in the log rather than in `PurgeReport`: a hold is an artefact
     // of how the window is expressed, and an operator counting workspaces would otherwise count
     // some of them twice.
-    for (const hold of expiredHolds(holds, decisions)) {
+    // Only this instance's (WP-157 review round 1): another instance's hold is its own retention's,
+    // and an unlabelled pre-WP-132 hold is left for a person, like a pre-WP-103 workspace.
+    for (const hold of expiredHolds(holds, decisions).filter((each) =>
+      ownHolds.has(each.volumeName),
+    )) {
       await this.#engine.removeVolume(hold.volumeName).catch(() => undefined);
       this.#logger.debug(
         { run_id: hold.runId, volume: hold.volumeName },
         'removed a retention hold whose workspace is gone',
       );
     }
+    const controlDirectories = await this.#sweepControlDirectories();
+    await this.#reapStaleHelpers(now);
     return {
       examined: results.length,
       removed: results.filter((result) => result.removed).length,
       volumes: results,
-      controlDirectories: await this.#sweepControlDirectories(),
+      controlDirectories,
     };
+  }
+
+  /**
+   * **A helper that belongs to no run, orphaned by a crash** (WP-157 (d), PROGRESS backlog 430).
+   *
+   * Since WP-132 every helper carries this instance's label, but `cli-check`, `mirror` and
+   * `control-sweep` carry no run label, so the run-keyed orphan pass (WP-103, TD-028 decision 12:
+   * `listLabelledRuns` and `destroyRun`) never lists one. Its decision needs no `runs` row — the
+   * reason that pass lives in the runner — only the daemon's own `Created`, so it is answered
+   * here, on the launcher's retention pass: **this instance's** containers (the role and instance
+   * labels, the daemon's filter) that carry **no** run label and were created more than
+   * {@link STALE_HELPER_AGE_MS} ago, and that no live `#helper` call of this process is waiting on
+   * (`#liveHelpers`: a large first mirror clone can outlast the hour). A run's own containers
+   * always carry the run label and are never touched here; another instance's helpers are never listed. An undatable container is
+   * kept — the young direction, as `listLabelledRuns` dates one. A removal that fails is logged
+   * and never fails the pass: the next pass lists again. Reported in the log rather than in
+   * {@link PurgeReport}, for the reason the expired holds are: an operator counting workspaces
+   * must not count a helper as one.
+   */
+  async #reapStaleHelpers(now: Date): Promise<void> {
+    let containers: readonly EngineContainerSummary[];
+    try {
+      containers = await this.#engine.listContainers({
+        label: [WORKSPACE_LABELS.role, `${WORKSPACE_LABELS.instance}=${this.#controlVolume}`],
+      });
+    } catch (error) {
+      this.#logger.warn(
+        { err: error },
+        'the retention pass could not list helper containers; a stale one may remain',
+      );
+      return;
+    }
+    const stale = containers
+      .filter((container) => container.Labels?.[WORKSPACE_LABELS.run] === undefined)
+      // A helper a live call of this process is still waiting on is not an orphan, however old.
+      .filter(
+        (container) =>
+          !(container.Names ?? []).some((name) => this.#liveHelpers.has(name.replace(/^\//, ''))),
+      )
+      .filter(
+        (container) =>
+          typeof container.Created === 'number' &&
+          now.getTime() - container.Created * 1000 > STALE_HELPER_AGE_MS,
+      )
+      .slice(0, MAX_STALE_HELPERS_PER_PASS);
+    for (const container of stale) {
+      const role = container.Labels?.[WORKSPACE_LABELS.role] ?? null;
+      try {
+        await this.#engine.removeContainer(container.Id);
+        this.#logger.info(
+          { container_id: container.Id, role },
+          'the retention pass removed a helper container that belongs to no run and outlived its launcher call',
+        );
+      } catch (error) {
+        this.#logger.warn(
+          { container_id: container.Id, role, err: error },
+          'the retention pass could not remove a stale helper container; the next pass tries again',
+        );
+      }
+    }
   }
 
   /**

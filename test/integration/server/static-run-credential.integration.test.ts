@@ -191,7 +191,7 @@ describe('declaring a static run credential (WP-137, TD-028 decision 13)', () =>
     );
     const row = await findIntegrationRow(db, id);
     if (row === undefined) throw new Error('the integration row exists');
-    const summary = toIntegrationSummary(row, gitlab);
+    const summary = toIntegrationSummary(row, gitlab, null);
     expect(summary.config).toMatchObject({ run_credential: 'static' });
     expect(JSON.stringify(summary)).not.toContain(RUN_TOKEN);
     expect(JSON.stringify(summary)).not.toContain('run_token"');

@@ -102,6 +102,11 @@ export interface FakeDaemonOptions {
    */
   readonly waitDelayMs?: number;
   /**
+   * Per container, overriding {@link waitDelayMs} where it answers a number (WP-157 review round 1:
+   * one helper live past the hour while the retention pass's own helpers answer at once).
+   */
+  readonly waitDelayFor?: (container: FakeContainer) => number | undefined;
+  /**
    * `Config.Env` per image, as `GET /images/<name>/json` answers it (WP-118). An image not named
    * here declares {@link FAKE_IMAGE_PATH}, the way every `node:*` base image does; `null` declares
    * no environment at all.
@@ -461,7 +466,7 @@ export class FakeDockerDaemon {
         container.state = 'exited';
         send(200, { StatusCode: container.exitCode });
       };
-      const delay = this.#options.waitDelayMs ?? 0;
+      const delay = this.#options.waitDelayFor?.(container) ?? this.#options.waitDelayMs ?? 0;
       if (delay > 0) {
         setTimeout(answer, delay);
       } else {

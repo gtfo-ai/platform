@@ -42,6 +42,7 @@ import type { AnyProviderRegistration } from '../registry.js';
 import { createIntegrationRegistry } from '../registry.js';
 import {
   BindingLoadError,
+  createOrganisationAccountCredentialCheck,
   createPipelineIntegrationsLoader,
   createProjectBindingSecrets,
 } from './loader.js';
@@ -1053,5 +1054,47 @@ describe('a project’s binding credentials, for a reading (WP-107)', () => {
         reason: 'secret … is sealed under key "v1:old"',
       },
     ]);
+  });
+
+  /**
+   * WP-157 (a), PROGRESS backlog 413: the organisation-scoped question, asked through the same
+   * resolution the project reading uses, answers whether and never what.
+   */
+  it('answers once per organisation account whether it decrypts, and carries no value or reason (WP-157)', async () => {
+    const SLACK_TOKEN = 'xoxb-FAKE-wp157-organisation-bot-token-0001';
+    const account = (id: string, secretId: string): IntegrationAccount => ({
+      integrationId: id as Id,
+      type: 'communication',
+      provider: 'slack',
+      name: 'slack',
+      config: {},
+      secretIds: [secretId as Id],
+      bindings: [],
+    });
+    const readable = account(
+      '00000000-0000-4000-8000-00000000a157',
+      '00000000-0000-4000-8000-00000000e157',
+    );
+    const broken = account(
+      '00000000-0000-4000-8000-00000000a158',
+      '00000000-0000-4000-8000-00000000e158',
+    );
+    const states = await createOrganisationAccountCredentialCheck({
+      secrets: {
+        resolve: async (ids): Promise<Readonly<Record<string, string>>> => {
+          if (ids[0] === broken.secretIds[0]) {
+            throw new SecretResolutionError('secret … is sealed under key "v1:old"', []);
+          }
+          return { bot_token: SLACK_TOKEN };
+        },
+      },
+      organisationAccounts: async () => [readable, broken],
+    })();
+    expect(states).toEqual([
+      { integrationId: readable.integrationId, readable: true },
+      { integrationId: broken.integrationId, readable: false },
+    ]);
+    expect(JSON.stringify(states)).not.toContain(SLACK_TOKEN);
+    expect(JSON.stringify(states)).not.toContain('v1:old');
   });
 });

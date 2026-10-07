@@ -30,6 +30,8 @@ const CHAT_ACCOUNT: IntegrationSummary = {
   health: { status: 'unknown', checked_at: null, detail: null },
   config_refusal: null,
   retired_at: null,
+  credentials_readable: null,
+  credentials_consequence: null,
 };
 
 const json = (body: unknown, status = 200): Response =>
@@ -93,6 +95,8 @@ const pickerIntegrations = {
       health: { status: 'unknown', checked_at: null, detail: null },
       config_refusal: null,
       retired_at: null,
+      credentials_readable: null,
+      credentials_consequence: null,
     },
     {
       id: '00000000-0000-4000-8000-0000000000f2',
@@ -103,6 +107,8 @@ const pickerIntegrations = {
       health: { status: 'unknown', checked_at: null, detail: null },
       config_refusal: null,
       retired_at: '2026-09-30T09:00:00.000Z',
+      credentials_readable: null,
+      credentials_consequence: null,
     },
   ],
 };

@@ -139,6 +139,7 @@ const build = async (): Promise<FastifyInstance> => {
     // WP-34: no pipeline here, so the batch command refuses by name and the gate cannot answer.
     shadow: null,
     shadowGate: null,
+    organisationCredentials: null,
     historyBootstrap: null,
     historyBootstrapGate: null,
     rediscoveryGate: null,

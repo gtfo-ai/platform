@@ -246,6 +246,26 @@ interface CredentialSource {
   readonly secretIds: readonly Id[];
 }
 
+/**
+ * One account's sealed credentials, or the store's reason they will not decrypt — the single
+ * question both {@link createProjectBindingSecrets} and {@link createOrganisationAccountCredentialCheck}
+ * ask, so the integration list's `credentials_readable` and the reading that withholds the prompt
+ * files cannot disagree about an account (WP-157 (a), PROGRESS backlog 413).
+ */
+const resolveSealed = async (
+  secrets: SecretStore,
+  secretIds: readonly Id[],
+): Promise<
+  | { readonly readable: true; readonly values: Readonly<Record<string, string>> }
+  | { readonly readable: false; readonly reason: string }
+> => {
+  try {
+    return { readable: true, values: await secrets.resolve(secretIds) };
+  } catch (cause) {
+    return { readable: false, reason: cause instanceof Error ? cause.message : String(cause) };
+  }
+};
+
 export const createProjectBindingSecrets =
   (options: ProjectBindingSecretsOptions) =>
   async (projectId: Id): Promise<ProjectBindingSecrets> => {
@@ -279,16 +299,15 @@ export const createProjectBindingSecrets =
     }
     for (const source of sources) {
       const prefix = `${source.provider}:${source.integrationId}`;
-      try {
-        for (const [field, value] of Object.entries(
-          await options.secrets.resolve(source.secretIds),
-        )) {
+      const sealed = await resolveSealed(options.secrets, source.secretIds);
+      if (sealed.readable) {
+        for (const [field, value] of Object.entries(sealed.values)) {
           keep(`${prefix}:${field}`, value);
         }
-      } catch (cause) {
+      } else {
         unreadable.set(source.integrationId, {
           integration: `integration "${source.name}" (${source.provider}, ${source.integrationId})`,
-          reason: cause instanceof Error ? cause.message : String(cause),
+          reason: sealed.reason,
         });
       }
       // WP-121 (backlog 362): a declared credential field the configuration still carries.
@@ -302,6 +321,41 @@ export const createProjectBindingSecrets =
       }
     }
     return { secrets: [...named.values()], unreadable: [...unreadable.values()] };
+  };
+
+/** Whether one organisation communication account's sealed credentials decrypt (WP-157 (a)). */
+export interface OrganisationAccountCredentialState {
+  readonly integrationId: Id;
+  readonly readable: boolean;
+}
+
+export interface OrganisationAccountCredentialCheckOptions {
+  readonly secrets: SecretStore;
+  /** The same list {@link ProjectBindingSecretsOptions.organisationAccounts} reads. */
+  readonly organisationAccounts: () => Promise<readonly IntegrationAccount[]>;
+}
+
+/**
+ * **One broken organisation account, named once** (WP-157 (a), PROGRESS backlog 413).
+ *
+ * {@link createProjectBindingSecrets} adds every live communication account to **every** project's
+ * exact-value set, so one whose credentials will not decrypt withholds the prompt files of every
+ * project — and until WP-157 the only signals were per project (each settings card, an `error` line
+ * per reading). This asks the same question of the same accounts through the same
+ * {@link resolveSealed}, once for the organisation, and answers **whether**, never what: no value
+ * and no store reason leaves it (the reason may name a key id, and the per-project record already
+ * carries it). `GET /api/integrations` publishes it as `credentials_readable`. Outside any
+ * transaction, like every read of the secret store.
+ */
+export const createOrganisationAccountCredentialCheck =
+  (options: OrganisationAccountCredentialCheckOptions) =>
+  async (): Promise<readonly OrganisationAccountCredentialState[]> => {
+    const states: OrganisationAccountCredentialState[] = [];
+    for (const account of await options.organisationAccounts()) {
+      const sealed = await resolveSealed(options.secrets, account.secretIds);
+      states.push({ integrationId: account.integrationId, readable: sealed.readable });
+    }
+    return states;
   };
 
 /** A built adapter and the redactor it was built with (WP-15f), plus WP-32's channels. */

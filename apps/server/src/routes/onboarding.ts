@@ -617,7 +617,8 @@ export const registerOnboardingRoutes = async (
       if (row === undefined) {
         throw new NotFoundError(`integration ${integrationId}`);
       }
-      return toIntegrationSummary(row, findShippedProvider(row.provider));
+      // The command's answer does not decrypt anything: `credentials_readable` is the list's (WP-157).
+      return toIntegrationSummary(row, findShippedProvider(row.provider), null);
     },
   );
 
@@ -627,7 +628,8 @@ export const registerOnboardingRoutes = async (
     if (row === undefined) {
       throw new NotFoundError(`integration ${integrationId}`);
     }
-    return toIntegrationSummary(row, findShippedProvider(row.provider));
+    // Unchecked (`null`): the list answers it, and the SPA re-reads the list after a command.
+    return toIntegrationSummary(row, findShippedProvider(row.provider), null);
   };
 
   /**

@@ -69,6 +69,7 @@ import {
   findIntegrationRow,
   listIntegrationRows,
   listRefusedDeliveries,
+  type OrganisationCredentialStates,
   toIntegrationSummary,
 } from '../queries/integration-queries.js';
 
@@ -76,6 +77,14 @@ export interface IntegrationRoutesOptions {
   readonly database: Database;
   /** `APP_BASE_URL`; the origin the webhook URL is built on (technical/08 — one origin). */
   readonly baseUrl: string;
+  /**
+   * Whether each live organisation communication account decrypts (WP-157 (a), PROGRESS backlog
+   * 413) — `createOrganisationAccountCredentials` in `knowledge.ts`, the loader that withholds the
+   * prompt files. `null` publishes `credentials_readable: null` (*not checked*) on every row.
+   */
+  readonly organisationCredentials:
+    | (() => Promise<readonly { readonly integrationId: string; readonly readable: boolean }[]>)
+    | null;
 }
 
 const integrationParamsSchema = z.strictObject({ integration_id: z.uuid() });
@@ -101,7 +110,7 @@ export const registerIntegrationRoutes = async (
       schema: {
         summary: 'The organisation’s integrations',
         description:
-          'Non-secret configuration only: the provider’s declared credential fields are removed here, and an integration whose provider this build does not ship publishes an empty `config` because the platform cannot tell its configuration from its credentials. `health.status` is `unknown` for a row nothing has probed; `POST /api/integrations/:id/test` (WP-21) is what writes `integrations.health`, so a tested integration publishes `ok` or `down` with the instant it was checked. `config_refusal` names the key paths of a stored configuration the provider’s schema refuses (a row written before WP-100 made the create parse it), with the `PATCH /api/integrations/:id` that repairs it; `null` when it parses. `retired_at` is when `DELETE /api/integrations/:id` retired it (its credentials destroyed, kept for the audit), `null` while live (WP-114).',
+          'Non-secret configuration only: the provider’s declared credential fields are removed here, and an integration whose provider this build does not ship publishes an empty `config` because the platform cannot tell its configuration from its credentials. `health.status` is `unknown` for a row nothing has probed; `POST /api/integrations/:id/test` (WP-21) is what writes `integrations.health`, so a tested integration publishes `ok` or `down` with the instant it was checked. `config_refusal` names the key paths of a stored configuration the provider’s schema refuses (a row written before WP-100 made the create parse it), with the `PATCH /api/integrations/:id` that repairs it; `null` when it parses. `retired_at` is when `DELETE /api/integrations/:id` retired it (its credentials destroyed, kept for the audit), `null` while live (WP-114). `credentials_readable` is whether a live organisation communication account’s sealed credentials decrypt — `false` withholds the prompt files of every project, which `credentials_consequence` says — and `null` for every other row, which this read does not check; it never carries a value (WP-157).',
         tags: ['org'],
         response: { 200: integrationsResponseSchema },
       },
@@ -119,8 +128,19 @@ export const registerIntegrationRoutes = async (
           'integration rows name a provider this build does not ship; their configuration is withheld because its credential fields are unknown',
         );
       }
+      const credentials: OrganisationCredentialStates =
+        options.organisationCredentials === null
+          ? null
+          : new Map(
+              (await options.organisationCredentials()).map((state) => [
+                state.integrationId,
+                state.readable,
+              ]),
+            );
       return {
-        items: rows.map((row) => toIntegrationSummary(row, findShippedProvider(row.provider))),
+        items: rows.map((row) =>
+          toIntegrationSummary(row, findShippedProvider(row.provider), credentials),
+        ),
       };
     },
   );

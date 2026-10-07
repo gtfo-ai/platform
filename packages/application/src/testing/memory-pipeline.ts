@@ -9,7 +9,7 @@
  *
  * | # | Divergence | Direction | Justification |
  * |---|---|---|---|
- * | 1 | `insert` throws on a duplicate `(project, ticket_key, mode)`; PostgreSQL raises a unique-violation the caller sees as an error too. | **same** | The unique index is `tasks_project_id_ticket_key_mode`; both refuse. Asserted by the shared suite's `refuses a second task for the same ticket`. |
+ * | 1 | `insert` throws on a duplicate `(project, ticket_key, mode)` **and**, since WP-157 (e) (backlog 434), on an equal non-null ticket id per `(project, provider, mode)`; PostgreSQL raises a unique-violation the caller sees as an error too. | **same** | Two unique indexes: `tasks_project_id_ticket_key_mode` and migration 0077's `tasks_project_ticket_id_mode` (`where ticket_id is not null`); both stores refuse both. Before WP-157 the fake refused the key only and this row said *same* — a test written against the fake could pass where production refused. Asserted by the shared suite's `refuses a second task for the same ticket key (WP-157)` and `refuses a second task for the same ticket id under another key (WP-157)`, with `admits the same ticket id in another mode or of another provider, and two tasks with no id (WP-157)` as their positive. |
  * | 2 | `save` throws when the task was never inserted; the SQL `update` would affect zero rows and say nothing. | **stricter** | A save that writes nothing is how a state machine silently stops advancing. The SQL implementation therefore checks `rowCount` and throws the same error, which is the only reason the two agree. Asserted by `refuses to save a task it has never seen`. |
  * | 3 | Everything is returned by structural clone, so a caller mutating what it read cannot change the store. Postgres cannot be mutated that way either. | **stricter** | A shared object graph makes a test pass for the wrong reason: the aggregate is immutable by design, and a fake that hands out live references would hide a mutation. |
  * | 5 | ~~The whole-row `save` writes `ticketSnapshot`/`ticketSnapshotAt`; the SQL `save` does not name those two columns at all (WP-15f).~~ **Closed at WP-15e**: `save` now writes exactly the column set the SQL statement names, in both stores, and the divergence is gone rather than justified. | **same** | It was filed as *stricter* and it was, but a fake that can clobber a column the database cannot is a fake that answers a question production never asks — and the same shape one work package later (`save` clobbering `workpad_ref`, which PostgreSQL **could** do) was a live defect. The partition is now enforced off disk by `tasks-column-ownership.test.ts`. |
@@ -411,6 +411,24 @@ export const createMemoryPipelineStore = (
       if (duplicate) {
         throw new PipelineStoreError(
           `a task already exists for ${stored.task.ticket.key} in mode ${stored.task.mode}`,
+        );
+      }
+      // WP-157 (e), backlog 434: migration 0077's second unique index,
+      // `tasks_project_ticket_id_mode` on `(project_id, ticket_provider, ticket_id, mode) where
+      // ticket_id is not null` — an equal non-null id under another key is refused too.
+      const ticketId = stored.task.ticket.id ?? null;
+      const duplicateId =
+        ticketId !== null &&
+        [...tasks.values()].some(
+          (existing) =>
+            existing.task.projectId === stored.task.projectId &&
+            existing.task.ticket.provider === stored.task.ticket.provider &&
+            (existing.task.ticket.id ?? null) === ticketId &&
+            existing.task.mode === stored.task.mode,
+        );
+      if (duplicateId) {
+        throw new PipelineStoreError(
+          `a task already exists for ticket id ${ticketId} of ${stored.task.ticket.provider} in mode ${stored.task.mode}`,
         );
       }
       // `ticketSignalAt` is not the insert's (WP-60): the SQL insert does not name the column, so a

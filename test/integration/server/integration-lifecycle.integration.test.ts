@@ -290,7 +290,7 @@ describe('retiring an integration (WP-114, backlog 331)', () => {
     expect(stored?.health).toEqual({});
     const listed = (await listIntegrationRows(db)).find((each) => each.id === id);
     expect(listed).toBeDefined();
-    const summary = toIntegrationSummary(listed as never, gitlab);
+    const summary = toIntegrationSummary(listed as never, gitlab, null);
     expect(summary.retired_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(summary.config_refusal).toBeNull();
 

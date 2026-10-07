@@ -1483,7 +1483,8 @@ export const replaceProjectBindings = async (
     // polled" (the next ticket poll read only its last interval, the next merge-request poll took a
     // fresh baseline and recorded no default-branch move). A binding to an integration that was not
     // bound before is a new row and starts fresh, as does one removed and later added back — a
-    // changed identity is a different binding. The config overlay is not part of the identity.
+    // changed identity is a different binding. The config overlay is not part of the identity, but
+    // since WP-157 (g) a changed overlay clears `mr_poll_default_head` (below).
     // `notInArray` over an empty list is `true` in drizzle, so an empty set deletes every binding.
     await tx
       .delete(bindings)
@@ -1495,9 +1496,17 @@ export const replaceProjectBindings = async (
         .values({ projectId, integrationId: item.integrationId, config })
         .onConflictDoUpdate({
           target: [bindings.projectId, bindings.integrationId],
-          // Narrow: the overlay and its instant, never the three poll columns (their writers are
-          // the pollers and the default-branch change).
-          set: { config, updatedAt: sql`now()` },
+          // Narrow: the overlay and its instant, never the two cursors (their writers are the
+          // pollers and the default-branch change). WP-157 (g), backlog 447: the recorded default
+          // head is kept only while the overlay is **unchanged** (jsonb `=`, so backlog 444's
+          // identical re-save keeps it) — an overlay that points the binding at another
+          // repository makes the old repository's head a stranger's, and the next poll would
+          // record one spurious `default_branch.moved`; `null` takes a fresh baseline instead.
+          set: {
+            config,
+            mrPollDefaultHead: sql`case when ${bindings.config} = excluded.config then ${bindings.mrPollDefaultHead} else null end`,
+            updatedAt: sql`now()`,
+          },
         });
     }
   });

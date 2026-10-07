@@ -187,7 +187,7 @@ describe('declaring a deploy key (WP-146, TD-028 decision 13b)', () => {
     );
     const row = await findIntegrationRow(db, id);
     if (row === undefined) throw new Error('the integration row exists');
-    const summary = toIntegrationSummary(row, gitlab);
+    const summary = toIntegrationSummary(row, gitlab, null);
     expect(summary.config).toMatchObject({ run_credential: 'deploy_key' });
     expect(JSON.stringify(summary)).not.toContain(KEY_LINE);
     expect(JSON.stringify(summary)).not.toContain('run_ssh_private_key"');

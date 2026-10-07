@@ -133,7 +133,7 @@ import { registerCommandRoutes } from './routes/commands.js';
 import { registerDeadLetterRoutes } from './routes/dead-letters.js';
 import { registerDownloadRoutes } from './routes/downloads.js';
 import { type FailedJobsReader, registerFailedJobRoutes } from './routes/failed-jobs.js';
-import { registerIntegrationRoutes } from './routes/integrations.js';
+import { type IntegrationRoutesOptions, registerIntegrationRoutes } from './routes/integrations.js';
 import { registerKbRoutes } from './routes/kb.js';
 import { registerOnboardingRoutes } from './routes/onboarding.js';
 import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
@@ -254,6 +254,12 @@ export interface BuildAppOptions {
   readonly shadowGate:
     | ((projectId: string) => Promise<{ canStart: boolean; blockedReason: string | null }>)
     | null;
+  /**
+   * Whether each live organisation communication account's credentials decrypt (WP-157 (a), PROGRESS
+   * backlog 413): `GET /api/integrations`'s `credentials_readable`. Required, so a composition that
+   * forgets it says `null` (every row *not checked*) rather than nothing.
+   */
+  readonly organisationCredentials: IntegrationRoutesOptions['organisationCredentials'];
   /**
    * The history bootstrap's start command (WP-35), or `null` for a process with no pipeline.
    *
@@ -549,6 +555,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     await registerIntegrationRoutes(app, {
       database: options.database,
       baseUrl: config.baseUrl,
+      organisationCredentials: options.organisationCredentials,
     });
     if (options.webhooks !== null) {
       await registerWebhookRoutes(app, { ingress: options.webhooks });

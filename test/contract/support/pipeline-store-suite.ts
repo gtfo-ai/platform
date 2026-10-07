@@ -1236,6 +1236,58 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       /**
+       * WP-157 (e), PROGRESS backlog 434: both unique indexes, on both stores — the key per
+       * `(project, key, mode)` and migration 0077's id per `(project, provider, id, mode)` where the
+       * id is not null. Positives first (another mode, another provider, two tasks with no id),
+       * because PostgreSQL's refusal aborts the case's transaction; each refusal is its own case.
+       */
+      it('admits the same ticket id in another mode or of another provider, and two tasks with no id (WP-157)', async () => {
+        const withId = (
+          key: string,
+          id: string | null,
+          extra: Partial<StoredTask['task']> = {},
+        ) => {
+          const base = task({}, key);
+          return {
+            ...base,
+            task: {
+              ...base.task,
+              ...extra,
+              ticket: { ...base.task.ticket, ...(id === null ? {} : { id }), ...extra.ticket },
+            },
+          } as StoredTask;
+        };
+        await store.tasks.insert(tx, withId('DUP-1', '70001'));
+        await store.tasks.insert(tx, withId('DUP-2', '70001', { mode: 'shadow' }));
+        await store.tasks.insert(
+          tx,
+          withId('DUP-3', '70001', {
+            ticket: {
+              provider: 'fake-other',
+              key: 'DUP-3',
+              url: 'https://other.example.test/DUP-3',
+            },
+          }),
+        );
+        await store.tasks.insert(tx, withId('NOID-1', null));
+        await store.tasks.insert(tx, withId('NOID-2', null));
+      });
+
+      it('refuses a second task for the same ticket key (WP-157)', async () => {
+        await store.tasks.insert(tx, task({}, 'SAME-KEY'));
+        await expect(store.tasks.insert(tx, task({}, 'SAME-KEY'))).rejects.toThrow();
+      });
+
+      it('refuses a second task for the same ticket id under another key (WP-157)', async () => {
+        const withId = (key: string): StoredTask => {
+          const base = task({}, key);
+          return { ...base, task: { ...base.task, ticket: { ...base.task.ticket, id: '80001' } } };
+        };
+        await store.tasks.insert(tx, withId('MOVED-1'));
+        await expect(store.tasks.insert(tx, withId('MOVED-2'))).rejects.toThrow();
+      });
+
+      /**
        * WP-145 (PROGRESS backlog 437): a `ticket.updated` reaches its task by the issue's stable id
        * first, and by the key only for a task that recorded none — on both stores, because a fake
        * that matched by key alone would certify the defect this closes (rule 23).

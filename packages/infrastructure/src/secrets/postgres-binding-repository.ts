@@ -211,11 +211,23 @@ export const listIntegrationIds = async (sql: SqlExecutor): Promise<readonly Id[
  * what the organisation-scoped notification is built from (WP-65, PROGRESS backlog 80).
  *
  * `config` is the account's own document, because the question is *which channel did the
- * organisation choose*, and a binding's channel is a project's answer to a different one. Kept
- * **Single-tenant by design (BD-009)**: it lists every communication account in the database and does
- * **not** filter by `org_id`, because an instance serves one organisation. A multi-tenant build
- * would have to pass the organisation here, or an organisation's alarm could reach another's
- * channel.
+ * organisation choose*, and a binding's channel is a project's answer to a different one.
+ *
+ * **Single-tenant by design (BD-009)**: it lists every communication account in the database and
+ * does **not** filter by `org_id`, because an instance serves one organisation. It has **three
+ * readers**, and a multi-tenant build (BD-009 reversed) must pass the organisation to each of them
+ * (PROGRESS backlog 414, WP-157 (b)):
+ *
+ *  1. **the organisation alarm** (`communicationAccounts` in `apps/server/src/pipeline.ts`, WP-65):
+ *     unfiltered, an organisation's budget alarm could reach another organisation's channel;
+ *  2. **the exact-value set over prompt files** (`organisationAccounts` in
+ *     `createProjectCredentials`, `apps/server/src/knowledge.ts`, WP-121): unfiltered, another
+ *     organisation's chat tokens join a project's redaction set (harmless for redaction, one extra
+ *     placeholder) and — backlog 413 — one organisation's undecryptable account withholds another
+ *     organisation's prompt files;
+ *  3. **the integration list's `credentials_readable`** (`createOrganisationAccountCredentials`,
+ *     `apps/server/src/knowledge.ts`, WP-157 (a)): unfiltered, it would report another
+ *     organisation's account on this one's list — which today lists every row unfiltered too.
  *
  * Kept beside {@link listIntegrationIds} rather than on the `BindingRepository` port for that function's
  * reason: the pipeline's project path never lists accounts. `bindings` is left empty — the

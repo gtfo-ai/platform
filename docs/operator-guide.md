@@ -790,6 +790,11 @@ cannot be read then (no `APP_KNOWLEDGE_MIRROR_ROOT`, an unreachable remote) keep
 until it can: a `warn` line names it, the project's settings page says why under *Project prompt
 files*, and its stages run without their prompt files. Fix the cause and press **Re-read now** (or
 `POST /api/projects/:project_id/config/refresh`); the next index run of the project does the same.
+One cause is **not** the project's: an organisation chat account whose credentials no longer decrypt
+(a changed `APP_SECRET_KEY`, a damaged `secrets` row) withholds the prompt files of **every** project.
+Since WP-157 that is said once — on the account's card under **Integrations** and as one banner on
+the dashboard for a maintainer or admin. Re-seal its credentials there (or retire the account), then
+re-read the projects.
 The platform cannot un-leak a credential already committed to a project's history — rotate it.
 
 **Upgrading past the build that renamed the poll sweep variable (WP-123).** `APP_TICKET_POLL_SWEEP_INTERVAL_MS`
@@ -845,7 +850,11 @@ answered, a run whose process died — but it finds them by a label, `com.agenti
 **older builds never wrote**, so an orphan left by an earlier build is never listed and stays on the
 Docker host until you remove it. (Until WP-132 the platform's own short-lived helper containers —
 `export-<run>`, `ctlempty-<run>`, `ctlrm-<run>` — did not write it either, so one left by a launcher
-that died while it ran is in the same position.) Once, after the upgrade, list every run container with that label
+that died while it ran is in the same position.) The launcher's retention sweep uses the same label (WP-157): a
+workspace **volume** made before WP-103 is no longer removed when its three days are up, and neither is a
+`hold-<run>` volume made before WP-132 once its workspace is gone. Remove them by hand: list them with
+`docker volume ls --filter label=com.agentic.role=workspace` (or `=retention_hold`) and an empty
+`com.agentic.instance`. Once, after the upgrade, list every run container with that label
 beside it:
 
 ```bash

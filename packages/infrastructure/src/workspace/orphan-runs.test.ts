@@ -13,7 +13,7 @@
 import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { WORKSPACE_LABELS } from '@platform/application';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DockerEngine } from './engine.js';
 import { SKILL_CATALOGUE_FIXTURE, shortTempDir, workspaceSpecFixture } from './fixtures.js';
 import { DockerWorkspaceProvider } from './provider.js';
@@ -30,13 +30,23 @@ let workDir: string;
 /** What the `ctlls-*` helper prints — the control directories `find` would have listed. */
 let controlListing: string;
 
-beforeEach(async () => {
-  controlListing = '';
-  workDir = await shortTempDir('agentic-wp103-');
+/**
+ * The daemon and the provider over it. WP-157 review round 1's live-helper case builds a second one
+ * whose daemon stamps containers two hours early and holds `wait` open, so a helper is live and old.
+ */
+const startWorld = async (
+  extra: {
+    readonly daemonNow?: () => number;
+    readonly waitDelayFor?: (container: FakeContainer) => number | undefined;
+    readonly fail?: Map<string, { status: number; message: string }>;
+  } = {},
+): Promise<void> => {
   const controlRoot = path.join(workDir, 'ctl');
   await mkdir(controlRoot, { recursive: true });
   daemon = new FakeDockerDaemon({
-    now: () => NOW.getTime(),
+    now: extra.daemonNow ?? (() => NOW.getTime()),
+    ...(extra.waitDelayFor === undefined ? {} : { waitDelayFor: extra.waitDelayFor }),
+    ...(extra.fail === undefined ? {} : { fail: extra.fail }),
     script: (container) =>
       container.name.startsWith('ctlls-')
         ? { exitCode: 0, logs: controlListing }
@@ -62,6 +72,12 @@ beforeEach(async () => {
     skills: SKILL_CATALOGUE_FIXTURE,
     now: () => NOW,
   });
+};
+
+beforeEach(async () => {
+  controlListing = '';
+  workDir = await shortTempDir('agentic-wp103-');
+  await startWorld();
 });
 
 afterEach(async () => {
@@ -259,5 +275,200 @@ describe('a run a killed create left with only its network', () => {
     const helpers = daemon.history.map((container) => container.name);
     expect(helpers).toContain(`ctlrm-${RUN_A}`);
     expect(await provider.listLabelledRuns()).toEqual([]);
+  });
+});
+
+/**
+ * WP-157 (c), PROGRESS backlog 431: retention lists **this instance's** volumes, as the listing verb
+ * lists this instance's runs — another instance's expired workspace and its hold are never touched.
+ */
+describe('retention on a daemon two instances share (WP-157 (c))', () => {
+  const EXPIRED = '2026-09-01T00:00:00.000Z';
+  const volumeLabels = (runId: string, role: string, instance: string | null) => ({
+    ...runLabels(runId, role, instance),
+    [WORKSPACE_LABELS.keepUntil]: EXPIRED,
+  });
+
+  it('removes this instance’s expired volume and never another instance’s', async () => {
+    daemon.volumes.set(`ws-${RUN_A}`, volumeLabels(RUN_A, 'workspace', CONTROL_VOLUME));
+    daemon.volumes.set(`ws-${RUN_B}`, volumeLabels(RUN_B, 'workspace', 'agentic-staging-ctl'));
+    daemon.volumes.set(
+      `hold-${RUN_B}`,
+      volumeLabels(RUN_B, 'retention_hold', 'agentic-staging-ctl'),
+    );
+    const report = await provider.purgeExpired(NOW);
+    expect(report.volumes.map((volume) => [volume.volumeName, volume.removed])).toEqual([
+      [`ws-${RUN_A}`, true],
+    ]);
+    expect(daemon.volumes.has(`ws-${RUN_A}`)).toBe(false);
+    // The other instance's workspace and its hold survive, and neither was examined.
+    expect(daemon.volumes.has(`ws-${RUN_B}`)).toBe(true);
+    expect(daemon.volumes.has(`hold-${RUN_B}`)).toBe(true);
+  });
+
+  /**
+   * Review round 1: a workspace carries the instance label since WP-103, a hold only since WP-132.
+   * An unlabelled hold beside a labelled workspace must still keep it — and is never removed here.
+   */
+  it('keeps a workspace its unlabelled pre-WP-132 hold still holds, and removes only its own holds', async () => {
+    daemon.volumes.set(`ws-${RUN_A}`, volumeLabels(RUN_A, 'workspace', CONTROL_VOLUME));
+    daemon.volumes.set(`hold-${RUN_A}`, {
+      ...volumeLabels(RUN_A, 'retention_hold', null),
+      [WORKSPACE_LABELS.keepUntil]: '2026-10-14T00:00:00.000Z',
+    });
+    // An expired workspace of this instance whose hold is its own: both go.
+    daemon.volumes.set(`ws-${RUN_B}`, volumeLabels(RUN_B, 'workspace', CONTROL_VOLUME));
+    daemon.volumes.set(`hold-${RUN_B}`, volumeLabels(RUN_B, 'retention_hold', CONTROL_VOLUME));
+    // Another instance's expired hold: never removed by this sweep.
+    const RUN_C = 'cccccccc-3333-4333-8333-333333333333';
+    daemon.volumes.set(
+      `hold-${RUN_C}`,
+      volumeLabels(RUN_C, 'retention_hold', 'agentic-staging-ctl'),
+    );
+    await provider.purgeExpired(NOW);
+    expect(daemon.volumes.has(`ws-${RUN_A}`)).toBe(true);
+    expect(daemon.volumes.has(`hold-${RUN_A}`)).toBe(true);
+    expect(daemon.volumes.has(`ws-${RUN_B}`)).toBe(false);
+    expect(daemon.volumes.has(`hold-${RUN_B}`)).toBe(false);
+    expect(daemon.volumes.has(`hold-${RUN_C}`)).toBe(true);
+  });
+
+  it('asks the daemon for this instance’s workspaces and for every hold', async () => {
+    await provider.purgeExpired(NOW);
+    const listings = daemon.requests
+      .filter((request) => request.method === 'GET' && request.path === '/volumes')
+      .map(
+        (request) =>
+          (
+            JSON.parse(
+              decodeURIComponent(new URLSearchParams(request.query ?? '').get('filters') ?? '{}'),
+            ) as { label?: string[] }
+          ).label,
+      );
+    const instance = `${WORKSPACE_LABELS.instance}=${CONTROL_VOLUME}`;
+    // The holds by role only (review round 1): the decision must see a pre-WP-132 hold.
+    expect(listings).toEqual([
+      [`${WORKSPACE_LABELS.role}=workspace`, instance],
+      [`${WORKSPACE_LABELS.role}=retention_hold`],
+    ]);
+  });
+});
+
+/**
+ * WP-157 (d), PROGRESS backlog 430: a helper that belongs to no run (`cli-check`, `mirror`,
+ * `control-sweep`) carries the instance label and no run label, so the run-keyed orphan pass never
+ * lists it. The retention pass removes this instance's such helpers once they are over an hour old.
+ */
+describe('a helper that belongs to no run (WP-157 (d))', () => {
+  const helperLabels = (role: string, instance: string | null = CONTROL_VOLUME) => ({
+    [WORKSPACE_LABELS.role]: role,
+    ...(instance === null ? {} : { [WORKSPACE_LABELS.instance]: instance }),
+  });
+  const secondsAgo = (seconds: number): number => Math.floor(NOW.getTime() / 1000) - seconds;
+
+  it('removes this instance’s run-less helpers older than an hour, and keeps everything else', async () => {
+    plant('old-check', 'clicheck-abc', helperLabels('cli-check'), 'exited', secondsAgo(3_700));
+    plant('old-sweep', 'ctlls-abc', helperLabels('control-sweep'), 'running', secondsAgo(7_200));
+    plant('old-mirror', 'mirror-x', helperLabels('mirror'), 'created', secondsAgo(86_400));
+    // The age bound: a helper younger than an hour may be a live launcher call.
+    plant('young', 'clicheck-new', helperLabels('cli-check'), 'running', secondsAgo(3_500));
+    // Another instance's helper, and one from before the instance label.
+    plant(
+      'other',
+      'clicheck-o',
+      helperLabels('cli-check', 'agentic-staging-ctl'),
+      'exited',
+      secondsAgo(86_400),
+    );
+    plant('older', 'clicheck-p', helperLabels('cli-check', null), 'exited', secondsAgo(86_400));
+    // A run's own container, however old, is the run-keyed pass's, never this one's.
+    plant('run', `ws-${RUN_A}`, runLabels(RUN_A, 'workspace'), 'running', secondsAgo(86_400));
+    await provider.purgeExpired(NOW);
+    expect([...daemon.containers.keys()].sort()).toEqual(['older', 'other', 'run', 'young']);
+  });
+
+  /**
+   * Review round 1: `#helper` has no timeout, so a first mirror clone of a large repository can be
+   * live past the hour. The pass skips a helper a live call of this process is waiting on, and
+   * still reaps an orphan of the same age.
+   */
+  it('keeps a live helper older than an hour, and reaps an orphan of the same age', async () => {
+    await daemon.stop();
+    await startWorld({
+      daemonNow: () => NOW.getTime() - 7_200_000,
+      // The mirror clone is long; the pass's own control-sweep helper answers at once.
+      waitDelayFor: (container) =>
+        container.body.Labels?.[WORKSPACE_LABELS.role] === 'mirror' ? 1_500 : undefined,
+    });
+    plant('orphan', 'clicheck-orphan', helperLabels('cli-check'), 'exited', secondsAgo(7_200));
+    const mirror = provider.updateMirror({
+      projectId: '00000000-0000-4000-8000-000000000157',
+      repo: {
+        ...workspaceSpecFixture().repo,
+        url: 'https://git.example.test/acme/big.git',
+        cacheKey: 'big',
+      },
+      credential: null,
+    });
+    await vi.waitFor(() => {
+      expect(
+        [...daemon.containers.values()].some(
+          (container) => container.body.Labels?.[WORKSPACE_LABELS.role] === 'mirror',
+        ),
+      ).toBe(true);
+    });
+    const live = [...daemon.containers.values()].find(
+      (container) => container.body.Labels?.[WORKSPACE_LABELS.role] === 'mirror',
+    );
+    await provider.purgeExpired(NOW);
+    expect(daemon.containers.has('orphan')).toBe(false);
+    // The live mirror helper finished its own call: one removal, its own, after its wait.
+    await expect(mirror).resolves.toMatchObject({ updated: true });
+    const removals = daemon.requests.filter(
+      (request) => request.method === 'DELETE' && request.path === `/containers/${live?.id}`,
+    );
+    expect(removals).toHaveLength(1);
+  });
+
+  it('forgets a helper whose create failed, so a later orphan of its name is reaped', async () => {
+    // WP-157 review round 2: a create that throws must clear the live mark, or every later orphan
+    // of the same `mirror-<key>` name would be kept as "live" for the life of the launcher.
+    await daemon.stop();
+    const fail = new Map([['POST /containers/create', { status: 500, message: 'create refused' }]]);
+    await startWorld({ fail });
+    await expect(
+      provider.updateMirror({
+        projectId: '00000000-0000-4000-8000-000000000157',
+        repo: {
+          ...workspaceSpecFixture().repo,
+          url: 'https://git.example.test/acme/big.git',
+          cacheKey: 'big',
+        },
+        credential: null,
+      }),
+    ).rejects.toThrow();
+    const create = daemon.requests.find(
+      (request) => request.method === 'POST' && request.path === '/containers/create',
+    );
+    const name = new URLSearchParams(create?.query ?? '').get('name') ?? '';
+    expect(name).toMatch(/^mirror-/);
+    fail.delete('POST /containers/create');
+    plant('stale-mirror', name, helperLabels('mirror'), 'exited', secondsAgo(7_200));
+    await provider.purgeExpired(NOW);
+    expect(daemon.containers.has('stale-mirror')).toBe(false);
+  });
+
+  it('keeps a helper the daemon gives no creation instant', async () => {
+    daemon.containers.set('undated', {
+      id: 'undated',
+      name: 'clicheck-undated',
+      body: { Labels: helperLabels('cli-check') },
+      state: 'exited',
+      exitCode: 0,
+      logs: '',
+      networks: [],
+    });
+    await provider.purgeExpired(NOW);
+    expect(daemon.containers.has('undated')).toBe(true);
   });
 });

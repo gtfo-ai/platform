@@ -1791,7 +1791,7 @@ describe('the list projections', () => {
 
     const rows = await listIntegrationRows(drizzled);
     const summaries = rows.map((row) =>
-      toIntegrationSummary(row, findShippedProvider(row.provider)),
+      toIntegrationSummary(row, findShippedProvider(row.provider), null),
     );
     const gitlab = summaries.find((summary) => summary.provider === 'gitlab');
     const other = summaries.find((summary) => summary.provider === 'unshipped-forge');

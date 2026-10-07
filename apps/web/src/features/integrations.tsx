@@ -675,6 +675,18 @@ export const IntegrationsScreen = (): ReactElement => {
                 detail={integration.config_refusal.message}
               />
             )}
+            {integration.credentials_readable === false ? (
+              // WP-157 (a), backlog 413: the account's own card says it, once.
+              <div data-credentials-unreadable={integration.id}>
+                {/* The server's sentence only (rule 3); none invented here when it sends none. */}
+                <ErrorNotice
+                  title="These credentials cannot be decrypted."
+                  {...(integration.credentials_consequence === null
+                    ? {}
+                    : { detail: integration.credentials_consequence })}
+                />
+              </div>
+            ) : null}
             {integration.retired_at !== null ? null : (
               <div className="flex flex-wrap gap-2">
                 <Button

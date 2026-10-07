@@ -940,6 +940,8 @@ describe('retention', () => {
       [WORKSPACE_LABELS.run]: '11111111-2222-4333-8444-555555555555',
       [WORKSPACE_LABELS.role]: 'workspace',
       [WORKSPACE_LABELS.keepUntil]: expired,
+      // This instance's, as every volume the provider creates is since WP-132 (WP-157 (c)).
+      [WORKSPACE_LABELS.instance]: 'ctl',
     });
     const report = await provider.purgeExpired(new Date('2026-09-10T12:00:00.000Z'));
     expect(report.removed).toBe(1);
@@ -953,6 +955,8 @@ describe('retention', () => {
       [WORKSPACE_LABELS.run]: FIXTURE_RUN_ID,
       [WORKSPACE_LABELS.role]: 'workspace',
       [WORKSPACE_LABELS.keepUntil]: expired,
+      // This instance's, as every volume the provider creates is since WP-132 (WP-157 (c)).
+      [WORKSPACE_LABELS.instance]: 'ctl',
     });
     const report = await provider.purgeExpired(new Date());
     expect(report.volumes).toContainEqual(

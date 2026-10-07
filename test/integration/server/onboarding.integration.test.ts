@@ -521,7 +521,8 @@ describe('bindings and configuration', () => {
    * the ticket cursor, the merge-request cursor and the default-branch head — because the row is
    * updated in place. A binding to an integration not bound before starts fresh, and so does one
    * removed and added back (a changed identity). The canary is the delete-and-re-insert this
-   * replaced: it would null all three on the first re-save.
+   * replaced: it would null all three on the first re-save. Since WP-157 (g) (backlog 447) a
+   * changed overlay clears the default head alone, and an identical overlay keeps it.
    */
   it('keeps every poll field of a binding re-saved unchanged, and starts a new identity fresh (WP-148)', async () => {
     const created = await pool.query<{ id: string }>(
@@ -565,7 +566,9 @@ describe('bindings and configuration', () => {
     expect(kept?.mr_poll_cursor?.toISOString()).toBe('2026-10-04T11:00:00.000Z');
     expect(kept?.mr_poll_default_head).toBe('b5f4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6');
 
-    // A changed overlay is the same identity: the config moves, the poll state stays.
+    // A changed overlay is the same identity: the config moves and the cursors stay — but the
+    // recorded default head goes (WP-157 (g), backlog 447): the overlay may point the binding at
+    // another repository, whose head the old one's would misreport as a move.
     await replaceProjectBindings(
       db,
       projectId,
@@ -575,14 +578,33 @@ describe('bindings and configuration', () => {
     const both = await pollState();
     const overlaid = both.find((row) => row.integration_id === first);
     const added = both.find((row) => row.integration_id === second);
+    expect(overlaid?.id, 'still the same row').toBe(before?.id);
     expect(overlaid?.config).toEqual({ poll_interval_seconds: 120 });
     expect(overlaid?.poll_cursor?.toISOString()).toBe('2026-10-04T10:00:00.000Z');
-    expect(overlaid?.mr_poll_default_head).toBe('b5f4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6');
+    expect(overlaid?.mr_poll_cursor?.toISOString()).toBe('2026-10-04T11:00:00.000Z');
+    expect(overlaid?.mr_poll_default_head, 'a changed overlay takes a fresh baseline').toBeNull();
     expect(added, 'a new identity is a new row').toMatchObject({
       poll_cursor: null,
       mr_poll_cursor: null,
       mr_poll_default_head: null,
     });
+
+    // The identical overlay re-saved keeps the head the poller recorded since (backlog 444's
+    // guarantee, with an overlay rather than none).
+    await pool.query(
+      `update bindings set mr_poll_default_head = 'c6a5b4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7'
+        where project_id = $1 and integration_id = $2`,
+      [projectId, first],
+    );
+    await replaceProjectBindings(
+      db,
+      projectId,
+      [{ integrationId: first, config: { poll_interval_seconds: 120 } }, { integrationId: second }],
+      { egress },
+    );
+    expect(
+      (await pollState()).find((row) => row.integration_id === first)?.mr_poll_default_head,
+    ).toBe('c6a5b4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7');
 
     // Removed, then added back: a changed identity starts fresh, stated.
     await replaceProjectBindings(db, projectId, [{ integrationId: second }], { egress });

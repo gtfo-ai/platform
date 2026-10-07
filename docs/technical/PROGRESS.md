@@ -45695,3 +45695,62 @@ The reviewer's two mutants were re-run and both are killed. `isWriteTarget(targe
 2. **[minor] a landed batch commit whose answer was lost** meets GitLab's 400 "branch exists" (`invalid_request`) on the executor's retry and is now split: its pages are committed again on their own branches and the batch branch keeps no merge request. Stated as the accepted trade-off in `apply.ts`' docblock (§ "A refused batch is split, once") and technical/07's WP-156 paragraph: the port carries no provider message to tell that 400 apart, and before the split such a batch failed every apply for ever.
 3. **Backlog 528, settled by reading the writers: production `kb_proposals` ids are v4.** The only `insert into kb_proposals` in the tree (`PostgresProposalStore.insert`, `packages/infrastructure/src/knowledge/postgres-proposal-store.ts`) names `id` and binds the domain's id, and every writer (`knowledge/librarian.ts`, `onboarding/record.ts`, `onboarding/interview.ts`, `bootstrap/record.ts`) takes it from `options.ids.next()`, which every composition root binds to `randomUUID()` (`apps/server/src/knowledge.ts`, `onboarding.ts`, `bootstrap.ts`, `pipeline.ts`, …); the column's `uuidv7()` default (migration 0008) is reached only by SQL that omits `id`, i.e. tests. So the refiner is right and a >20-proposal curation does **not** share the prefix. `knowledgeSoloBranchName`'s docblock, technical/07's paragraph, the unit test's comment and the integration test's header now say this: the integration test writes through the column default **on purpose**, as the worst case for the split's naming, not as production does. Branch naming unchanged.
 
+
+#### WP-157
+
+**Session 13, implementer.** Folds backlogs 413, 414, 431, 430, 434, 435 (docs) and 447. No migration.
+
+**Done, by ruling.**
+- **(a) 413.** `createOrganisationAccountCredentialCheck` (`packages/integrations/src/bindings/loader.ts`) asks each live communication account the question `createProjectBindingSecrets` asks, through one shared `resolveSealed`, and answers *whether*, never what. It is composed as `createOrganisationAccountCredentials` in `apps/server/src/knowledge.ts` and `BuildAppOptions.organisationCredentials` (required, `null` in the test apps). `integrationSummarySchema` gains `credentials_readable` (boolean | null) and `credentials_consequence` (`ORGANISATION_ACCOUNT_UNREADABLE_CONSEQUENCE`, `apps/server/src/queries/integration-queries.ts`). The account's card renders a notice (`apps/web/src/features/integrations.tsx`), and the dashboard renders one banner naming every such account for an `admin`/`maintainer` org role. It makes no request for other roles, because `integration.read` would answer 403. `/readyz` is unchanged.
+- **(b) 414.** `listCommunicationAccounts`' docblock names its three readers: the alarm (`pipeline.ts`), the prompt-file set (`knowledge.ts` `createProjectCredentials`) and (a)'s check. It also repairs a sentence that had been cut in half.
+- **(c) 431.** `purgeExpired`'s workspace listing carries `com.agentic.instance=<control volume>`. Since review round 1 the hold listing does not: holds are listed by role, and only this instance's holds are removed.
+- **(d) 430.** `#reapStaleHelpers` runs at the end of `purgeExpired`. It removes containers that carry this instance's label and **no run label**, and that the daemon dates as more than `STALE_HELPER_AGE_MS` (1 h) old. It keeps an undated container and removes at most 100 per pass. Failures are logged and never thrown.
+- **(e) 434.** The memory store refuses an equal non-null ticket id per `(project, provider, mode)`. Divergence row 1 now states both indexes and says it was wrong before.
+- **(f) 435.** technical/03's `tasks` paragraph states the residual. Ids share one space per provider, and the site is carried by no key.
+- **(g) 447.** The upsert's `set` adds `mrPollDefaultHead: case when bindings.config = excluded.config then … else null end`.
+
+**Decisions/assumptions.**
+1. **(a) answers only live organisation communication accounts.** Every other row, a retired one and a command's answer (`PATCH`/re-seal/retire) are `null`, meaning *not checked* and never *readable*. Only an organisation account's broken credential reaches every project. A bound account's failure is per project and is already on that project's settings card.
+2. **(d) runs in the launcher's retention pass, not the runner's orphan pass.** The plan row says "the orphan pass". The runner's pass is run-keyed, and it lives in the runner only because its decision needs `runs` (WP-103's docblock). A helper with no run has no id for it to list, and its decision is the daemon's `Created` alone. In the runner it would need a new control-plane verb, and the 58-check script would need updating. The reviewer may rule otherwise.
+3. The (c) residual: a workspace volume made before WP-103 has no instance label and is no longer swept. This is stated in the code, in technical/05 and in the operator guide (corrected in review round 1, which also moved the hold boundary to WP-132). **Measured on this daemon before the change: 0 volumes labelled `com.agentic.role=workspace`.**
+
+**Tests and canaries.** Every canary was a diffed revert by `scratchpad/wp157/canary.sh`, restored and `cmp`-checked.
+- (a) `apps/web/src/features/dashboard.test.tsx` (new). Three canaries are dead by it:
+  - "renders exactly one banner for one undecryptable account, whatever the project count" (banner inside each project card);
+  - "renders none when the account decrypts, or when the read did not check it" (filter `!== true`);
+  - "does not ask a role that cannot read integrations" (role guard removed).
+- (a) `integrations.test.tsx` › "says on the card that an organisation account’s credentials cannot be decrypted, and nothing otherwise". Dead by the canary `!== true`.
+- (a) The route case: `test/integration/server/organisation-credentials.integration.test.ts` (new). It uses a real Fastify, PostgreSQL 18, three projects and one account sealed under another key. Three canaries are dead by › "names the broken account once, whatever the project count, and carries no value":
+  - the route passing `null`;
+  - a retired or unchecked row reading `true`;
+  - `publishableConfig` unfiltered. The planted `signing_secret` appeared in the body.
+- (a) `loader.test.ts` › "answers once per organisation account whether it decrypts, and carries no value or reason (WP-157)". Dead by forcing `readable: true`.
+- (c) `orphan-runs.test.ts` › "removes this instance’s expired volume and never another instance’s" and › "asks the daemon for this instance’s workspaces and for every hold". Both are dead by dropping the filter.
+- (d) `orphan-runs.test.ts` › "removes this instance’s run-less helpers older than an hour, and keeps everything else". It is dead by dropping the run-label exclusion, and dead by dropping the age bound.
+- (e) `pipeline-store-suite.ts` › "refuses a second task for the same ticket id under another key (WP-157)". Dead (in-memory) by disabling the check. Its positive is › "admits the same ticket id in another mode or of another provider, and two tasks with no id (WP-157)". Both stores pass.
+- (g) `onboarding.integration.test.ts` › "keeps every poll field of a binding re-saved unchanged, and starts a new identity fresh (WP-148)". The assertion is flipped for a changed overlay, and an identical re-save keeps the head. It is dead by always keeping the head, and dead by always clearing it.
+- **Real daemon** (Engine 29.8.1): `docker-workspace.e2e.test.ts` › "removes this instance’s expired volume and stale helper, and keeps another instance’s". It uses only objects it creates, harness-labelled, with a unique test-only `agentic-e2e-other-<id>` instance. It passed twice. `docker ps -a` and `docker volume ls` were identical before and after the second run. No real-daemon canary was run: with the filter removed, the sweep would list every instance's expired workspace volumes.
+
+**Sentences falsified (rule 83), all amended.**
+- technical/03: 435's residual.
+- technical/05: the retention sweep's instance filter and the helper reap.
+- technical/06: a new bullet on the broken account.
+- technical/08: the Integrations row's DTO.
+- The memory store's divergence register row 1, which said *same* while it was kinder.
+- The binding repository docblock.
+- The operator guide: the prompt-files paragraph.
+- The user guide: the Dashboard section.
+
+**Incident (session 13, 17:36).** I ran `pkill -f "cat" -U <uid>` to stop a shell of my own that was blocked on `cat` reading stdin. `-f` matches whole command lines, so it killed every process of the user whose command line contained "cat", including everything under `/Applications/`. That took down Docker Desktop with every container on it (the dogfood `agentic-*` stack, `speedpuzzlingcz-*` and others), three MCP servers and several terminal sessions, and Claude.app restarted. The person restarted Docker Desktop. Nothing in the working tree was affected. Each mutated file had already been restored from its copy and `cmp`-checked before the kill. Standing rule from now on: never kill by pattern, only an exact PID you started, and put a timeout on your own commands.
+
+**Discovered work.** None new.
+
+**Review round 1 (REQUEST-CHANGES), all four addressed, plus the coordinator's `verify:ui` finding.**
+1. **[major] Holds.** A workspace volume carries the instance label since WP-103, a hold only since WP-132 (`814db05e`). With the hold listing filtered by instance, a WP-103…WP-132 workspace held past its window lost its hold and was deleted at its own `keep_until`. Holds are now listed by role for the decision. A hold only keeps a workspace this sweep listed, matched by run id. `expiredHolds` removes only holds carrying this instance's label. The case is `orphan-runs.test.ts` › "keeps a workspace its unlabelled pre-WP-132 hold still holds, and removes only its own holds". Two canaries are dead by it: re-filtering the hold listing (with › "asks the daemon for this instance’s workspaces and for every hold"), and removing every expired hold (with › "removes this instance’s expired volume and never another instance’s").
+2. **[major] Live helpers.** `#helper` has no timeout and the reap's removal is forced, so a first `git clone --mirror` that ran over an hour was killed. `#liveHelpers` now holds the names of helpers in a live `#helper` call of this process. A name is added before the create and dropped in `finally`, and the reap skips those names. The case is › "keeps a live helper older than an hour, and reaps an orphan of the same age". It is dead by not marking the helper, which removes the live mirror twice. To build it, the fake daemon gained `waitDelayFor` (`testing.ts`), so one helper stays live while the pass's own helper answers at once. Residual: two launcher processes sharing one control volume do not see each other's live helpers. That is already one instance by technical/05's stated residual.
+3. **[minor]** The operator guide's WP-103 upgrade section now names the volumes the sweep no longer removes: pre-WP-103 workspaces and pre-WP-132 holds. The technical/05 boundary and my decision 3 are corrected.
+4. **[nit]** The card and the banner write no consequence text of their own when `credentials_consequence` is `null` (rule 3).
+5. **`verify:ui` (`bindable-integrations.test.ts`).** WP-122's census keeps the unfiltered integration read to the screen that shows retired rows on purpose. The banner reads only live communication accounts, the only rows the server answers for, so it now goes through `useBindableIntegrations('communication')`. The census is unchanged.
+
+
+**Review round 2 (orchestrator, nit).** APPROVE-with-nits: the reviewer's canary *a failed create does not clear its live mark* survived. The orchestrator added `packages/infrastructure/src/workspace/orphan-runs.test.ts` › "forgets a helper whose create failed, so a later orphan of its name is reaped" (the fake daemon's `fail` map refuses the create, then an orphan of the same `mirror-<key>` name older than an hour is planted and reaped); the canary (the `#liveHelpers.delete` in `#helper`'s create `catch` removed) is dead by it (1 failed, 18 passed), the file restored byte-identical.

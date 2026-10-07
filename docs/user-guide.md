@@ -333,7 +333,9 @@ stage would be given now.
 ## 2. Dashboard
 
 Spend, active agents and open work at a glance, and a way into each project. The agent count moves
-live.
+live. A maintainer or admin also sees **one banner** when an organisation chat account's credentials
+cannot be decrypted: every project's prompt files are withheld until the account is re-sealed or
+retired under **Integrations**, whose card for that account says the same (WP-157).
 
 ## 3. The board
 

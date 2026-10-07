@@ -78,7 +78,12 @@ import {
   startDockerFixture,
   startEgressTarget,
 } from '../support/docker-workspace.js';
-import { harnessLabelMap, harnessProbe, harnessProbeName } from '../support/harness-volumes.js';
+import {
+  harnessLabelMap,
+  harnessLabels,
+  harnessProbe,
+  harnessProbeName,
+} from '../support/harness-volumes.js';
 
 let fixture: DockerFixture;
 
@@ -2785,4 +2790,70 @@ describe('on production’s control-volume shape, a plain named volume', () => {
       .map((entry) => entry.fields['step']);
     expect(failed).not.toContain('control-dir');
   }, 180_000);
+});
+
+/**
+ * WP-157 (c) and (d), PROGRESS backlogs 431 and 430, on a real daemon.
+ *
+ * **Safe on a shared daemon by construction**: every object here is created by this case, carries
+ * the harness labels, and is named by it; "the other instance" is a unique, test-only
+ * `com.agentic.instance` value, never a product instance's. The sweep is this fixture's provider,
+ * whose instance is the fixture's own control volume, so nothing another stack labelled is listed.
+ * `now` is two hours ahead so a helper created a second ago is past the hour bound without
+ * waiting; this fixture's own workspace volumes keep three days and are untouched by it.
+ */
+describe('retention lists this instance only, and reaps its run-less helpers (WP-157)', () => {
+  it('removes this instance’s expired volume and stale helper, and keeps another instance’s', async () => {
+    const otherInstance = `agentic-e2e-other-${randomUUID().slice(0, 8)}`;
+    const mine = `ws-${randomUUID()}`;
+    const theirs = `ws-${randomUUID()}`;
+    const myHelper = harnessProbeName('plant');
+    const theirHelper = harnessProbeName('plant');
+    const volume = (name: string, instance: string) => [
+      'volume',
+      'create',
+      ...harnessLabels(),
+      '--label',
+      `com.agentic.run=${name.slice(3)}`,
+      '--label',
+      'com.agentic.role=workspace',
+      '--label',
+      'com.agentic.keep_until=2000-01-01T00:00:00.000Z',
+      '--label',
+      `com.agentic.instance=${instance}`,
+      name,
+    ];
+    const helper = (name: string, instance: string) => [
+      'create',
+      '--name',
+      name,
+      ...harnessLabels(),
+      '--label',
+      'com.agentic.role=cli-check',
+      '--label',
+      `com.agentic.instance=${instance}`,
+      ALPINE_IMAGE,
+      'true',
+    ];
+    try {
+      await docker(volume(mine, fixture.controlVolume));
+      await docker(volume(theirs, otherInstance));
+      await docker(helper(myHelper, fixture.controlVolume));
+      await docker(helper(theirHelper, otherInstance));
+      const report = await fixture.provider.purgeExpired(new Date(Date.now() + 2 * 3_600_000));
+      expect(report.volumes.map((entry) => entry.volumeName)).not.toContain(theirs);
+      expect(report.volumes).toContainEqual(
+        expect.objectContaining({ volumeName: mine, removed: true }),
+      );
+      const exists = async (kind: 'volume' | 'container', name: string) =>
+        (await docker([kind, 'inspect', name], { allowFailure: true })).ok;
+      expect(await exists('volume', mine)).toBe(false);
+      expect(await exists('volume', theirs)).toBe(true);
+      expect(await exists('container', myHelper)).toBe(false);
+      expect(await exists('container', theirHelper)).toBe(true);
+    } finally {
+      await docker(['rm', '-f', myHelper, theirHelper], { allowFailure: true });
+      await docker(['volume', 'rm', '-f', mine, theirs], { allowFailure: true });
+    }
+  }, 120_000);
 });

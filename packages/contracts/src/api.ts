@@ -185,6 +185,24 @@ export const integrationSummarySchema = z.strictObject({
    * refuses every write; the row stays because the audit names the credential each call used.
    */
   retired_at: isoDateTimeSchema.nullable(),
+  /**
+   * Whether the platform can decrypt this integration's sealed credentials (WP-157 (a), PROGRESS
+   * backlog 413). Decided server-side by the same loader that withholds a project's prompt files
+   * (`packages/integrations/src/bindings/loader.ts`), and it says **whether**, never what: no value
+   * and no store reason is carried.
+   *
+   * Answered for a live organisation **communication** account only, because that is the account
+   * whose broken credential reaches every project at once. `null` for every other row — a retired
+   * one, an account of another type (whose consequence is per project and is shown on that
+   * project's settings card), or a process that composed no check — and `null` is *not checked*,
+   * never *readable*.
+   */
+  credentials_readable: z.boolean().nullable(),
+  /**
+   * The consequence of `credentials_readable: false`, in platform text — *the prompt files of every
+   * project are withheld* — or `null` whenever `credentials_readable` is not `false`.
+   */
+  credentials_consequence: nonEmptyStringSchema.nullable(),
 });
 
 /**

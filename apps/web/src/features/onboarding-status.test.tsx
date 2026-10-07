@@ -72,6 +72,8 @@ const integration = (id: string, name: string) => ({
   health: { status: 'unknown', checked_at: null, detail: null },
   config_refusal: null,
   retired_at: null,
+  credentials_readable: null,
+  credentials_consequence: null,
 });
 
 const READINESS = {

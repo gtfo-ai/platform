@@ -44,6 +44,8 @@ const INTEGRATIONS: IntegrationsResponse = {
       health: { status: 'unknown', checked_at: null, detail: null },
       config_refusal: null,
       retired_at: null,
+      credentials_readable: null,
+      credentials_consequence: null,
     },
   ],
 };
@@ -309,6 +311,44 @@ describe('the integrations screen', () => {
   );
 
   /**
+   * WP-157 (a), PROGRESS backlog 413: an organisation account whose credentials will not decrypt
+   * says so on its own card, once, with the consequence the server wrote; a readable or unchecked
+   * one says nothing.
+   */
+  it('says on the card that an organisation account’s credentials cannot be decrypted, and nothing otherwise', async () => {
+    const chat = (id: string, name: string, readable: boolean | null): IntegrationSummary => ({
+      id,
+      type: 'communication',
+      provider: 'slack',
+      name,
+      config: {},
+      health: { status: 'unknown', checked_at: null, detail: null },
+      config_refusal: null,
+      retired_at: null,
+      credentials_readable: readable,
+      credentials_consequence:
+        readable === false ? 'the prompt files of every project are withheld' : null,
+    });
+    const items = [
+      chat('00000000-0000-4000-8000-0000000000b1', 'Broken chat', false),
+      chat('00000000-0000-4000-8000-0000000000b2', 'Readable chat', true),
+      chat('00000000-0000-4000-8000-0000000000b3', 'Unchecked chat', null),
+    ];
+    const { fetchImpl: base } = recorder();
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+      (init?.method ?? 'GET') === 'GET' && String(input).endsWith('/api/integrations')
+        ? json({ items })
+        : base(input, init)) as typeof fetch;
+    render(createApp({ fetchImpl, realtime: false }).element);
+    expect(await screen.findByText('Readable chat')).toBeTruthy();
+    const notices = document.querySelectorAll('[data-credentials-unreadable]');
+    expect(
+      [...notices].map((notice) => notice.getAttribute('data-credentials-unreadable')),
+    ).toEqual(['00000000-0000-4000-8000-0000000000b1']);
+    expect(notices[0]?.textContent).toContain('the prompt files of every project are withheld');
+  });
+
+  /**
    * WP-100, criterion 4 on the screen: a stored row that would not load says so on its card, and
    * *Edit configuration* sends the `PATCH` the refusal names — the required field set, and the
    * key the provider does not declare removed.
@@ -328,6 +368,8 @@ describe('the integrations screen', () => {
         paths: ['organisation', 'organization'],
       },
       retired_at: null,
+      credentials_readable: null,
+      credentials_consequence: null,
     };
     const { sent, fetchImpl: base } = recorder();
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
