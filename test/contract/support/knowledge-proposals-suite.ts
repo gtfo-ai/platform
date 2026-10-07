@@ -455,6 +455,51 @@ export const runKnowledgeProposalsContract = (harness: KnowledgeProposalsHarness
       expect((await store.load(context.projectId, id(81)))?.applyDeferredReason).toBeUndefined();
     });
 
+    /**
+     * WP-156 (PROGRESS backlog 420): the proposal the provider refused on a commit of its own reads
+     * `apply_failed` with its reason — only while it was still awaiting apply, so a row somebody
+     * decided since the pass read it keeps the decision; and a decision moves it back.
+     */
+    it('fails only a proposal still awaiting apply, with its reason, and a decision clears it (WP-156)', async () => {
+      await store.insert(context.tx, [
+        proposal({ id: id(95), status: 'auto_applied' }),
+        proposal({ id: id(96), status: 'queued', decidedAt: AT, decidedByUserId: context.userId }),
+        proposal({
+          id: id(97),
+          status: 'rejected',
+          decidedAt: AT,
+          decidedByUserId: context.userId,
+        }),
+      ]);
+      await store.deferApply(context.tx, { deferrals: [{ id: id(96), reason: 'waits for !96' }] });
+      const moved = await store.markApplyFailed(context.tx, {
+        failures: [95, 96, 97].map((n) => ({ id: id(n), reason: `refused ${String(n)}` })),
+      });
+      expect([...moved].sort()).toEqual([id(95), id(96)]);
+      const failed = await store.load(context.projectId, id(96));
+      expect(failed?.status).toBe('apply_failed');
+      expect(failed?.applyFailureReason).toBe('refused 96');
+      expect(failed?.applyDeferredReason).toBeUndefined();
+      expect((await store.load(context.projectId, id(97)))?.status).toBe('rejected');
+      expect((await store.load(context.projectId, id(97)))?.applyFailureReason).toBeUndefined();
+      expect(
+        (await store.listAwaitingApply(context.projectId, 50)).map((row) => row.id),
+      ).not.toContain(id(95));
+      // A maintainer's approval moves it back and clears the reason.
+      expect(
+        await store.decide(context.tx, {
+          id: id(95),
+          status: 'queued',
+          decidedByUserId: context.userId,
+          decidedAt: AT,
+        }),
+      ).toBe(true);
+      const again = await store.load(context.projectId, id(95));
+      expect(again?.status).toBe('queued');
+      expect(again?.applyFailureReason).toBeUndefined();
+      expect(await store.markApplyFailed(context.tx, { failures: [] })).toEqual([]);
+    });
+
     it('clears a deferral a pass no longer holds, and touches nothing else (WP-125 review round 1)', async () => {
       await store.insert(context.tx, [
         proposal({ id: id(90), status: 'auto_applied' }),

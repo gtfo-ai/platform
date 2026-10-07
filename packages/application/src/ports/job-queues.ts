@@ -64,6 +64,23 @@ export const PIPELINE_OUTBOUND_RETRY = {
 export const PIPELINE_OUTBOUND_POLLING_INTERVAL_SECONDS = 0.5;
 
 /**
+ * The longest one provider call can take through `IntegrationActionExecutor` at the shipped
+ * defaults, in seconds (WP-156 (b), PROGRESS backlog 421): `DEFAULT_RETRY_POLICY`'s three attempts
+ * of a provider's `request_timeout_ms` (30 s for GitLab, Slack, Sentry and Loki, 20 s for Jira
+ * Cloud) plus its 0.5 s + 1 s of backoff. Not a guarantee: an operator may raise
+ * `request_timeout_ms` to 600 s, and a provider's `Retry-After` is honoured uncapped. It is the
+ * figure each bound-and-escalate queue's expiry is stated against.
+ */
+export const PROVIDER_CALL_BOUND_SECONDS = 3 * 30 + 1.5;
+
+/**
+ * The expiry every bound-and-escalate queue but `stage.execute` declares: pg-boss's own default,
+ * fifteen minutes, written down rather than inherited (WP-156 (b)), so the census
+ * (`job-exhaustion.test.ts`) can hold every such queue to a declared number.
+ */
+export const BOUND_AND_ESCALATE_EXPIRE_SECONDS = 15 * 60;
+
+/**
  * `notify.digest`'s retry policy, named for the reason {@link PIPELINE_OUTBOUND_RETRY} is: the
  * undelivered gauge derives how long a digest row may legitimately wait from it (WP-65).
  */
@@ -90,13 +107,33 @@ export const JOB_QUEUE_DEFINITIONS: readonly JobQueueDefinition[] = [
     // A stage is a whole agent run: minutes, not the 15-minute default.
     expireInSeconds: 2 * 60 * 60,
   },
-  { name: JOB_QUEUES.mrCommentDebounce, policy: 'stately', retryLimit: 2, retryDelaySeconds: 30 },
+  {
+    name: JOB_QUEUES.mrCommentDebounce,
+    policy: 'stately',
+    retryLimit: 2,
+    retryDelaySeconds: 30,
+    // Bound and escalate (WP-156 (b), TD-004's M7 amendment): stated, not inherited. One window is
+    // one task read, one provider read of the merge request's threads and one transaction, so its
+    // provider calls are bounded by PROVIDER_CALL_BOUND_SECONDS (≈ 92 s at the shipped timeouts),
+    // far under the expiry. A last try that outlives it anyway is escalated by the `expired_job`
+    // recovery row (`recovery/expired-job.ts`), because pg-boss's own timer fails it without the
+    // handler throwing (measured: `test/integration/jobs/job-expiry.integration.test.ts`).
+    expireInSeconds: BOUND_AND_ESCALATE_EXPIRE_SECONDS,
+  },
   {
     name: JOB_QUEUES.pipelineOutbound,
     // `standard`, not `stately`: see `JOB_QUEUES.pipelineOutbound`. A dropped wake-up would take
     // the event's blocker brief with it, and that is the one thing a render cannot re-derive.
     policy: 'standard',
     ...PIPELINE_OUTBOUND_RETRY,
+    // Bound and escalate per duty (WP-156 (b)): stated, not inherited — pg-boss's default is the
+    // same 15 minutes, which is what every existing database already carries (`create_queue` never
+    // updates a row, so this changes no live queue). A duty stops at its first failed call, so a
+    // provider that is down costs one call's bound, PROVIDER_CALL_BOUND_SECONDS. The longest
+    // duty is review_only_post at `max_findings: 50` — fifty-one posts — and against a provider
+    // that answers every call just inside its timeout, or a `Retry-After` the executor honours
+    // uncapped, no expiry bounds it: that tail is what the `expired_job` recovery row escalates.
+    expireInSeconds: BOUND_AND_ESCALATE_EXPIRE_SECONDS,
   },
   {
     name: JOB_QUEUES.deadlineSweep,
@@ -171,7 +208,10 @@ export const JOB_QUEUE_DEFINITIONS: readonly JobQueueDefinition[] = [
     retryDelaySeconds: 60,
     retryBackoff: true,
     // Two provider round trips against somebody else's instance; the 15-minute default is enough,
-    // and this states it rather than inheriting it silently.
+    // and this states it rather than inheriting it silently. Since WP-156 a refused batch is split
+    // into one commit and one merge request per page (at most MAX_PROPOSALS_PER_COMMIT, 20): forty
+    // more calls, seconds each at a provider's usual latency, and every page is recorded as it lands,
+    // so an expiry part way through costs a retry of the rest, never a page twice.
     expireInSeconds: 15 * 60,
   },
   {

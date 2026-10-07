@@ -198,6 +198,7 @@ export * from './ports/workspace.js';
 export * from './recovery/deadline.js';
 export * from './recovery/deferred-dependency.js';
 export * from './recovery/discovery-record.js';
+export * from './recovery/expired-job.js';
 export * from './recovery/knowledge-apply.js';
 export * from './recovery/notification-repost.js';
 export * from './recovery/orphan-workspaces.js';

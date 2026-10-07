@@ -314,6 +314,29 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > `update`; a merge request closed without merging blocks nothing. The check is made only before a
 > `create`, so two approved updates of a page that already exists still become two merge requests.
 >
+> **A batch the provider refuses whole is split, once** (WP-156 ruling (d), PROGRESS backlog
+> **420**). The pass commits a project's approved proposals as **one** commit, and GitLab refuses a
+> commit whole and names no file (every 4xx of `create_commit` is `invalid_request`, technical/06 §
+> "GitProvider"), so one page the provider refuses on every attempt failed every apply of its project,
+> and since WP-124 the `knowledge_apply` recovery's ending took the whole batch to `apply_failed`
+> about an hour later. Now, when the commit of a batch of **more than one** proposal is refused with
+> `invalid_request`, the same pass commits each proposal on its own — its own branch
+> (`agentic/knowledge/<date>-<the proposal's whole id>`: never the refused batch's branch, which
+> the batch name over its earliest proposal would be), its own
+> merge request — **once**. A proposal that commits is `applied`; one refused again reads
+> `apply_failed` with the refusal class in its reason (`applyRefusedReason`, platform text — the
+> provider's message can quote the page), each recorded as it lands. There is no bisection, because
+> there is no file name to bisect by and one commit per page is the smallest split. A batch of
+> **one** behaves as before: the refusal is thrown, pg-boss retries it, and the recovery ends it.
+> Any other failure inside the split is thrown as before, with the pages decided by then recorded.
+> What it costs: a split batch of *n* pages is *n* merge requests rather than one, each carrying one
+> page — which is what the maintainer reviewing them now sees, and which page failed is named on its
+> own card. And `invalid_request` is every 4xx, so a batch commit that **landed but whose answer was
+> lost** — the executor's retry then meets GitLab's 400 for a branch that exists — is split too: its
+> pages are committed again on their own branches and the batch branch is left with no merge
+> request. The port carries no provider message to tell that 400 apart, and before the split such a
+> batch failed every apply for ever; a stray branch a maintainer can delete is the better failure.
+>
 > The business interview does the same for its own `human` rows (WP-109 review round 1, backlog
 > 370): a re-submission discards the earlier submission's undecided page for each section it
 > answers again, with the platform's reason naming the submitting user and instant.

@@ -61,8 +61,11 @@ describe('Drizzle schema', () => {
     // plus `chat_threads` — which task a chat thread belongs to, which only an adapter's per-call
     // memory held, so a threaded reply reached nothing (migration 0062, WP-88, backlog 195), plus
     // `discovery_record_recoveries` — the discovery recorder's recovery mark and ending, keyed on
-    // the artifact as `knowledge_curations` is (migration 0075, WP-124, backlog 366).
-    expect(tables.length).toBe(70);
+    // the artifact as `knowledge_curations` is (migration 0075, WP-124, backlog 366), plus
+    // `expired_job_escalations` — the expired-last-try recovery's once-per-job-id mark, which
+    // pg-boss's own table cannot carry because the platform does not write it (migration 0087,
+    // WP-156, backlog 421).
+    expect(tables.length).toBe(71);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

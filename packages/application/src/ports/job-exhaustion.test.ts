@@ -10,12 +10,18 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  boundAndEscalateTargets,
   JOB_EXHAUSTION,
   jobExhaustionOf,
   OUTBOUND_DUTY_EXHAUSTION,
   outboundDutyExhaustionOf,
 } from './job-exhaustion.js';
-import { JOB_QUEUE_DEFINITIONS } from './job-queues.js';
+import {
+  BOUND_AND_ESCALATE_EXPIRE_SECONDS,
+  JOB_QUEUE_DEFINITIONS,
+  jobQueueDefinition,
+  PROVIDER_CALL_BOUND_SECONDS,
+} from './job-queues.js';
 
 const registered = (): readonly string[] => JOB_QUEUE_DEFINITIONS.map((row) => row.name).sort();
 
@@ -97,6 +103,42 @@ describe('the job exhaustion census (backlog 325)', () => {
       expect(outboundDutyExhaustionOf(duty)?.shape, duty).toBe('bound_and_escalate');
     }
     expect(outboundDutyExhaustionOf('constructor')).toBeNull();
+  });
+
+  /**
+   * WP-156 (b), PROGRESS backlog 421: a bound-and-escalate queue's expiry is a number somebody
+   * wrote down, never pg-boss's default inherited silently — because a last try that outlives it
+   * is failed without the handler throwing, and then it is the `expired_job` recovery row, not the
+   * wrapper, that escalates. Iterated over the targets the two tables declare, so a queue or duty
+   * newly declared `bound_and_escalate` is held to it the moment it is.
+   */
+  it('holds every bound-and-escalate queue to a declared expireInSeconds (WP-156)', () => {
+    const targets = boundAndEscalateTargets();
+    expect(targets.map((target) => target.queue).sort()).toEqual([
+      'mr.comment.debounce',
+      'pipeline.outbound',
+      'stage.execute',
+    ]);
+    for (const target of targets) {
+      expect(
+        jobQueueDefinition(target.queue).expireInSeconds,
+        `${target.queue}: a bound-and-escalate queue declares its expiry`,
+      ).toBeGreaterThan(0);
+    }
+    expect(targets.find((target) => target.queue === 'pipeline.outbound')?.duties).toEqual(
+      Object.entries(OUTBOUND_DUTY_EXHAUSTION)
+        .filter(([, row]) => row.shape === 'bound_and_escalate')
+        .map(([duty]) => duty)
+        .sort(),
+    );
+    expect(jobQueueDefinition('pipeline.outbound').expireInSeconds).toBe(
+      BOUND_AND_ESCALATE_EXPIRE_SECONDS,
+    );
+    expect(jobQueueDefinition('mr.comment.debounce').expireInSeconds).toBe(
+      BOUND_AND_ESCALATE_EXPIRE_SECONDS,
+    );
+    // The bound the expiry is stated against: one provider call, well under it.
+    expect(PROVIDER_CALL_BOUND_SECONDS * 5).toBeLessThan(BOUND_AND_ESCALATE_EXPIRE_SECONDS);
   });
 
   it('names, for every recovery row, a site the recovery pass really reports', () => {

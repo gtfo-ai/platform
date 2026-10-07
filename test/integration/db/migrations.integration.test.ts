@@ -40,6 +40,8 @@ const EXPECTED_TABLES = [
   'event_dispatch',
   'event_streams',
   'events',
+  // WP-156, migration 0087: the expired-last-try recovery's once-per-job-id mark (backlog 421).
+  'expired_job_escalations',
   'handler_executions',
   'human_actions',
   // WP-72, migration 0054: whether any process holds an account's inbound connection now — the
@@ -228,6 +230,8 @@ describe('migrate on an empty PostgreSQL 18', () => {
       row('event_dispatch', 'read_write', null),
       row('event_streams', 'read_only', null),
       row('events', 'append_only', 'occurred_at'),
+      // WP-156 (migration 0087): a mark is written once, before its escalation, and never changed.
+      row('expired_job_escalations', 'append_only', null),
       // WP-72 (migration 0054): renewed in place and deleted by the holder that stops.
       row('held_connection_liveness', 'read_write', null),
       // WP-35 (migration 0030): a batch moves through three statuses and a chunk is stamped once by

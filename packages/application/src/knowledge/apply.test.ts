@@ -27,6 +27,7 @@ import {
   applyAwaitingIndexReason,
   applyDeferredReason,
   applyKnowledgeProposals,
+  applyRefusedReason,
   applyUnreadableReason,
   INDEX_CATCH_UP_MS,
   type KnowledgeApplyOptions,
@@ -84,6 +85,8 @@ const harness = (
     readonly git?: boolean;
     readonly indexedPaths?: readonly string[];
     readonly onCommit?: () => void;
+    /** WP-156: a commit the provider refuses — `invalid_request` unless the test names another code. */
+    readonly refuse?: (request: CommitFilesRequest) => IntegrationError | null;
     readonly ticketKey?: string;
     /** WP-109: how many project-stream races a rival wins; the stores then roll back with the fake. */
     readonly losses?: number;
@@ -105,6 +108,8 @@ const harness = (
     commitFiles: async (request: CommitFilesRequest): Promise<CommitRef> => {
       options.onCommit?.();
       calls.commits.push(request);
+      const refusal = options.refuse?.(request) ?? null;
+      if (refusal !== null) throw refusal;
       return { sha: 'abc1234', branch: request.branch, url: null };
     },
     openMergeRequest: async (draft: {
@@ -517,6 +522,137 @@ describe('applying knowledge proposals', () => {
       expect(report).toMatchObject({ status: 'applied', deferred: 0 });
       expect(built.calls.commits[0]?.actions[0]?.action).toBe('update');
       expect(asked).toBe(0);
+    });
+  });
+
+  /**
+   * WP-156 ruling (d), PROGRESS backlog 420: GitLab refuses a commit whole and names no file, so a
+   * refused batch of more than one is retried one proposal per commit, once, in the same pass.
+   */
+  describe('a batch the provider refuses whole (WP-156, backlog 420)', () => {
+    const PAGES = [1, 2, 3].map((n) => `.agentic/knowledge/lessons/L-${String(n)}.md`);
+    const three = () =>
+      PAGES.map((targetPath, index) =>
+        proposal({
+          id: `00000000-0000-4000-8000-00000000ac0${String(index + 1)}` as Id,
+          targetPath,
+        }),
+      );
+    /** Refuses every commit that carries the second page — on every attempt. */
+    const refuseSecond = (request: CommitFilesRequest): IntegrationError | null =>
+      request.actions.some((action) => action.path === PAGES[1])
+        ? new IntegrationError('invalid_request', 'fake-git', 'the provider refused the commit')
+        : null;
+
+    it('ends a batch of three with one page refused on every attempt as two applied and one apply_failed', async () => {
+      const { applyOptions, calls, proposals, jobs } = harness({ refuse: refuseSecond });
+      await proposals.insert({} as never, three());
+
+      const report = await applyKnowledgeProposals(applyOptions, data);
+
+      // One refused batch, then one commit per proposal, once.
+      expect(calls.commits.map((commit) => commit.actions.map((action) => action.path))).toEqual([
+        PAGES,
+        [PAGES[0]],
+        [PAGES[1]],
+        [PAGES[2]],
+      ]);
+      // Each single on a branch of its own — never the refused batch's.
+      const singles = calls.commits.slice(1).map((commit) => commit.branch);
+      expect(new Set(singles).size).toBe(3);
+      expect(singles).not.toContain(calls.commits[0]?.branch);
+      // The whole id: these test ids share their first eight digits, the batch name's discriminator.
+      expect(singles).toEqual(
+        three().map((row) => `agentic/knowledge/2026-09-12-${row.id.replaceAll('-', '')}`),
+      );
+      expect(proposals.rows.map((row) => row.status)).toEqual([
+        'applied',
+        'apply_failed',
+        'applied',
+      ]);
+      const refused = proposals.rows[1];
+      expect(refused?.applyFailureReason).toBe(
+        applyRefusedReason(PAGES[1] as string, 'invalid_request'),
+      );
+      expect(refused?.applyFailureReason).toContain('(invalid_request)');
+      // Its siblings were committed, each with its own merge request.
+      expect(calls.mergeRequests.map((request) => request.branch)).toEqual([
+        singles[0],
+        singles[2],
+      ]);
+      expect(report).toMatchObject({ status: 'applied', applied: 2, failed: 1, remaining: 0 });
+      const stream = await applyOptions.eventStore.readStream('project', PROJECT);
+      expect(stream.map((entry) => entry.event.type)).toEqual([
+        'knowledge.proposal.applied',
+        'knowledge.proposal.applied',
+      ]);
+      // Nothing is waiting, so the pass asks for no other.
+      expect(jobs.take('knowledge.apply')).toEqual([]);
+    });
+
+    it('behaves as before for a batch of one: the refusal is thrown and nothing is split', async () => {
+      const { applyOptions, calls, proposals } = harness({ refuse: refuseSecond });
+      await proposals.insert({} as never, [three()[1] as StoredKnowledgeProposal]);
+
+      await expect(applyKnowledgeProposals(applyOptions, data)).rejects.toMatchObject({
+        code: 'invalid_request',
+      });
+      expect(calls.commits).toHaveLength(1);
+      expect(proposals.rows[0]?.status).toBe('auto_applied');
+      expect(proposals.rows[0]?.applyFailureReason).toBeUndefined();
+    });
+
+    /**
+     * Ruling (d) splits **only** on `invalid_request` (review round 1): a batch whose first commit
+     * fails any other way is thrown as before — one commit call, nothing split, nothing failed.
+     */
+    const refusedOtherwise = async (code: 'unavailable' | 'forbidden'): Promise<void> => {
+      const { applyOptions, calls, proposals } = harness({
+        refuse: () => new IntegrationError(code, 'fake-git', `the provider answered ${code}`),
+      });
+      await proposals.insert({} as never, three());
+
+      await expect(applyKnowledgeProposals(applyOptions, data)).rejects.toMatchObject({ code });
+      expect(calls.commits).toHaveLength(1);
+      expect(calls.mergeRequests).toEqual([]);
+      expect(proposals.rows.map((row) => row.status)).toEqual([
+        'auto_applied',
+        'auto_applied',
+        'auto_applied',
+      ]);
+    };
+
+    it('does not split a batch whose commit fails with unavailable: the error is thrown, one commit, nothing moved', async () => {
+      await refusedOtherwise('unavailable');
+    });
+
+    it('does not split a batch whose commit fails with forbidden: the error is thrown, one commit, nothing moved', async () => {
+      await refusedOtherwise('forbidden');
+    });
+
+    it('throws any other failure of a single, with the pages decided before it recorded', async () => {
+      let commits = 0;
+      const { applyOptions, calls, proposals } = harness({
+        refuse: () => {
+          commits += 1;
+          if (commits === 1)
+            return new IntegrationError('invalid_request', 'fake-git', 'refused whole');
+          return commits === 3
+            ? new IntegrationError('unavailable', 'fake-git', 'the provider went away')
+            : null;
+        },
+      });
+      await proposals.insert({} as never, three());
+
+      await expect(applyKnowledgeProposals(applyOptions, data)).rejects.toMatchObject({
+        code: 'unavailable',
+      });
+      expect(calls.commits).toHaveLength(3);
+      expect(proposals.rows.map((row) => row.status)).toEqual([
+        'applied',
+        'auto_applied',
+        'auto_applied',
+      ]);
     });
   });
 

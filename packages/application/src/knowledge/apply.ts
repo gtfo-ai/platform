@@ -30,7 +30,34 @@
  * written. The two can disagree (a page the model thought was missing may have been added since,
  * and vice versa), and the index is the fresher of the two. When it is wrong the provider refuses
  * the whole commit with `invalid_request`, which is the fail-closed direction: nothing is
- * overwritten and the batch is retried.
+ * overwritten.
+ *
+ * ## A refused batch is split, once (WP-156 ruling (d), PROGRESS backlog 420)
+ *
+ * GitLab refuses a commit **whole** and names no file: every 4xx of `create_commit` is
+ * `invalid_request` (`packages/integrations/src/providers/gitlab/http.ts`'s status table) and the
+ * adapter reads no file name out of the answer. So a batch with one page the provider refuses on
+ * every attempt used to fail every apply of its project, and since WP-124 the recovery's ending
+ * took all of its siblings to `apply_failed` with it. Now, when the commit of a batch of **more
+ * than one** proposal is refused with `invalid_request`, the same pass retries each proposal as its
+ * own commit on its own branch with its own merge request ({@link knowledgeSoloBranchName}),
+ * **once**: a proposal that commits is `applied`, a proposal refused again is `apply_failed` with
+ * the refusal class in its reason ({@link applyRefusedReason}), each recorded as it lands. There is
+ * no bisection, because there is no file name to bisect by and a single commit per page is the
+ * smallest split. A batch of **one** behaves as before: the refusal is thrown, pg-boss retries it,
+ * and the `knowledge_apply` recovery row ends it. Any other failure inside the split — a retryable
+ * one, a refusal that is not `invalid_request` — is thrown as before, with the pages already
+ * committed or refused by then recorded. A batch whose first commit fails with anything but
+ * `invalid_request` is not split at all.
+ *
+ * **The trade-off the split accepts** (WP-156 review round 1): `invalid_request` is every 4xx, so it
+ * is also what a batch commit that **landed but whose answer was lost** meets on the executor's
+ * retry — GitLab's 400 for a branch that already exists. That case is split too: each page is
+ * committed again on its own branch with its own merge request, and the batch branch, which already
+ * carries every page, is left with no merge request — a stray branch and duplicated commits a
+ * maintainer may delete. The alternative, telling "branch exists" apart, would read the provider's
+ * message, which the port does not carry; and before the split that batch failed every apply for
+ * ever, so duplicated pages a person can see are the better failure.
  *
  * ## A page already on an open knowledge merge request waits for it (WP-125, backlog 369)
  *
@@ -160,6 +187,11 @@ export type KnowledgeApplyStatus =
 
 export interface KnowledgeApplyReport {
   readonly status: KnowledgeApplyStatus;
+  /**
+   * Proposals this pass moved to `apply_failed` because the provider refused them on a commit of
+   * their own, after their batch was refused whole (WP-156, backlog 420). `0` for every other pass.
+   */
+  readonly failed?: number;
   readonly reason: string | null;
   readonly branch: string | null;
   readonly commitSha: string | null;
@@ -209,6 +241,34 @@ export const knowledgeBranchName = (
   const discriminator = (earliest?.id ?? '').replaceAll('-', '').slice(0, 8);
   return `agentic/knowledge/${(earliest?.createdAt ?? at).slice(0, 10)}-${discriminator}`;
 };
+
+/**
+ * The branch one proposal lands on when its batch was refused whole and the pass splits it (WP-156,
+ * backlog 420): the proposal's date and its **whole** id. Not {@link knowledgeBranchName} over a
+ * batch of one, whose discriminator is the id's first eight hex digits — which for the batch's
+ * earliest proposal **is** the refused batch's own branch. Every production writer passes a
+ * `randomUUID()` (v4) id to `insert into kb_proposals` (`PostgresProposalStore.insert` names `id`;
+ * the composition roots' `ids.next`), so eight digits collide only by chance; the column's
+ * `uuidv7()` default (migration 0008) is reached only by SQL that omits `id`, and there one
+ * transaction's ids **do** share their first eight digits (asserted by the split's integration
+ * test, which writes that way on purpose). The whole id is unique under either, and the same on a
+ * retry of the same split, which is what keeps the commit's and the merge request's idempotency
+ * keys idempotent.
+ */
+export const knowledgeSoloBranchName = (
+  at: IsoDateTime,
+  proposal: StoredKnowledgeProposal,
+): string =>
+  `agentic/knowledge/${(proposal.createdAt ?? at).slice(0, 10)}-${proposal.id.replaceAll('-', '')}`;
+
+/**
+ * The reason a proposal the provider refused on a commit of its own carries (WP-156, backlog 420).
+ * Platform text: the code is the port's closed `IntegrationErrorCode` union, and the path is one the
+ * curator joined onto the knowledge directory (`vaultPathOf`). The provider's message is never in
+ * it — it can quote the page.
+ */
+export const applyRefusedReason = (path: string, code: string): string =>
+  `the git provider refused to commit this approved change to ${path} (${code}), on a commit of its own after the batch it was part of was refused whole; the other pages of that batch were committed without it. Edit the change, or the page it targets, and approve it again — or reject it (PROGRESS backlog 420)`;
 
 /**
  * Longest token the provenance trailer carries, and the character class it admits.
@@ -526,43 +586,116 @@ export const applyKnowledgeProposals = async (
       deferred: plan.deferred.length,
     };
   }
-  const actions: CommitAction[] = plan.batch.map((entry) => ({
-    action: entry.action,
-    path: entry.proposal.targetPath,
-    content: entry.proposal.delta,
-  }));
-
   const at = options.clock.now();
   const branch = knowledgeBranchName(at, batch);
   const ticketKeys = await options.ticketKeys([
     ...new Set(batch.flatMap((proposal) => (proposal.taskId === null ? [] : [proposal.taskId]))),
   ]);
   const writes = knowledgeWrites(integrations);
-  const callContext = { projectId, taskId: null };
+  const commitOne = (input: {
+    readonly branch: string;
+    readonly entries: readonly PlannedAction[];
+  }): Promise<CommittedBatch | null> =>
+    commitBatch(options, {
+      writes,
+      projectId,
+      defaultBranch: project.defaultBranch,
+      at,
+      ticketKeys,
+      ...input,
+    });
 
-  const commit = await writes.commit(
+  let committed: CommittedBatch | null;
+  try {
+    committed = await commitOne({ branch, entries: plan.batch });
+  } catch (error) {
+    if (plan.batch.length > 1 && isWholeCommitRefusal(error)) {
+      return splitRefusedBatch(options, {
+        commitOne,
+        entries: plan.batch,
+        projectId,
+        at,
+        remaining,
+        deferred: plan.deferred.length,
+      });
+    }
+    throw error;
+  }
+  if (committed === null) {
+    return { ...nothing('the git binding disappeared between two reads'), status: 'unavailable' };
+  }
+
+  return {
+    status: 'applied',
+    reason: null,
+    branch,
+    commitSha: committed.commitSha,
+    mergeRequestUrl: committed.mergeRequestUrl,
+    applied: batch.length,
+    remaining,
+    deferred: plan.deferred.length,
+  };
+};
+
+/** What one commit and its merge request left, once recorded. */
+interface CommittedBatch {
+  readonly commitSha: string;
+  readonly mergeRequestUrl: string | null;
+}
+
+/**
+ * The refusal the split answers (WP-156, backlog 420): `invalid_request` from the commit — the class
+ * GitLab's every 4xx maps to, and a refusal no retry fixes. Anything else is thrown as before.
+ */
+const isWholeCommitRefusal = (error: unknown): error is IntegrationError =>
+  error instanceof IntegrationError && error.code === 'invalid_request';
+
+/**
+ * One commit, its merge request and the transaction that records them — the pass's whole write for
+ * a batch, and for each proposal of a split one. `null` when the git binding disappeared.
+ */
+const commitBatch = async (
+  options: KnowledgeApplyOptions,
+  input: {
+    readonly writes: ReturnType<typeof knowledgeWrites>;
+    readonly projectId: Id;
+    readonly defaultBranch: string;
+    readonly at: IsoDateTime;
+    readonly ticketKeys: ReadonlyMap<Id, string>;
+    readonly branch: string;
+    readonly entries: readonly PlannedAction[];
+  },
+): Promise<CommittedBatch | null> => {
+  const { projectId, branch, at } = input;
+  const batch = input.entries.map((entry) => entry.proposal);
+  const callContext = { projectId, taskId: null };
+  const commit = await input.writes.commit(
     {
       branch,
-      startBranch: project.defaultBranch,
-      message: commitMessageFor({ proposals: batch, ticketKeys }),
+      startBranch: input.defaultBranch,
+      message: commitMessageFor({ proposals: batch, ticketKeys: input.ticketKeys }),
       // BD-025 §4: the bot identity acts, and the provenance trailer records the humans' tasks.
       authorName: 'Agentic',
       authorEmail: 'agentic@platform.invalid',
-      actions,
+      actions: input.entries.map((entry) => ({
+        action: entry.action,
+        path: entry.proposal.targetPath,
+        content: entry.proposal.delta,
+      })),
       idempotencyKey: `knowledge_commit:${branch}`,
     },
     callContext,
   );
   if (commit === null) {
-    return { ...nothing('the git binding disappeared between two reads'), status: 'unavailable' };
+    return null;
   }
 
-  const mergeRequest = await writes.openMergeRequest(
+  const mergeRequest = await input.writes.openMergeRequest(
     {
       branch,
-      target: project.defaultBranch,
+      target: input.defaultBranch,
       title: `Knowledge: ${batch.length} proposal${batch.length === 1 ? '' : 's'}`,
-      description: mergeRequestBodyFor({ proposals: batch, ticketKeys }),
+      description: mergeRequestBodyFor({ proposals: batch, ticketKeys: input.ticketKeys }),
       idempotencyKey: `knowledge_mr:${branch}`,
     },
     callContext,
@@ -603,16 +736,87 @@ export const applyKnowledgeProposals = async (
       );
     },
   );
+  return { commitSha: commit.sha, mergeRequestUrl: mergeRequest?.web_url ?? null };
+};
 
+/**
+ * The split (WP-156 ruling (d), backlog 420): every proposal of a batch the provider refused whole,
+ * as its own commit, once, in order. Each outcome is recorded as it lands — an `applied` row by
+ * {@link commitBatch}'s own transaction, an `apply_failed` row by one of its own — so a throw part
+ * way through (a retryable failure) leaves the pages already decided recorded, and pg-boss's retry
+ * reads only the rest.
+ */
+const splitRefusedBatch = async (
+  options: KnowledgeApplyOptions,
+  input: {
+    readonly commitOne: (input: {
+      readonly branch: string;
+      readonly entries: readonly PlannedAction[];
+    }) => Promise<CommittedBatch | null>;
+    readonly entries: readonly PlannedAction[];
+    readonly projectId: Id;
+    readonly at: IsoDateTime;
+    readonly remaining: number;
+    readonly deferred: number;
+  },
+): Promise<KnowledgeApplyReport> => {
+  const logger = options.logger ?? silentLogger;
+  let applied = 0;
+  let failed = 0;
+  let last: (CommittedBatch & { readonly branch: string }) | null = null;
+  logger.warn(
+    { project_id: input.projectId, proposals: input.entries.length },
+    'the git provider refused a knowledge batch whole and names no file, so each proposal is committed on its own, once (PROGRESS backlog 420)',
+  );
+  for (const entry of input.entries) {
+    const branch = knowledgeSoloBranchName(input.at, entry.proposal);
+    let committed: CommittedBatch | null;
+    try {
+      committed = await input.commitOne({ branch, entries: [entry] });
+    } catch (error) {
+      if (!isWholeCommitRefusal(error)) throw error;
+      const reason = applyRefusedReason(entry.proposal.targetPath, error.code);
+      const ended = await options.unitOfWork.transaction(async (scope) =>
+        options.proposals.markApplyFailed(scope.tx, {
+          failures: [{ id: entry.proposal.id, reason }],
+        }),
+      );
+      failed += ended.length;
+      logger.error(
+        {
+          project_id: input.projectId,
+          proposal_id: entry.proposal.id,
+          path: entry.proposal.targetPath,
+          code: error.code,
+        },
+        'the git provider refused one knowledge proposal on a commit of its own, so it reads apply_failed and its siblings were committed without it (PROGRESS backlog 420)',
+      );
+      continue;
+    }
+    if (committed === null) {
+      return {
+        ...nothing('the git binding disappeared between two reads'),
+        status: 'unavailable',
+        applied,
+        failed,
+      };
+    }
+    applied += 1;
+    last = { ...committed, branch };
+  }
   return {
-    status: 'applied',
-    reason: null,
-    branch,
-    commitSha: commit.sha,
-    mergeRequestUrl: mergeRequest?.web_url ?? null,
-    applied: batch.length,
-    remaining,
-    deferred: plan.deferred.length,
+    status: applied > 0 ? 'applied' : 'nothing_to_apply',
+    reason:
+      applied > 0
+        ? null
+        : 'the git provider refused every proposal of the batch, each on a commit of its own; each reads apply_failed',
+    branch: last?.branch ?? null,
+    commitSha: last?.commitSha ?? null,
+    mergeRequestUrl: last?.mergeRequestUrl ?? null,
+    applied,
+    failed,
+    remaining: input.remaining,
+    deferred: input.deferred,
   };
 };
 
@@ -668,6 +872,7 @@ export const knowledgeApplyHandler =
       commit_sha: report.commitSha,
       merge_request: report.mergeRequestUrl,
       applied: report.applied,
+      failed: report.failed ?? 0,
       remaining: report.remaining,
       deferred: report.deferred,
       reason: report.reason,
@@ -680,8 +885,9 @@ export const knowledgeApplyHandler =
       return;
     }
     logger.info(fields, 'knowledge apply pass finished');
-    if (report.status === 'applied' && report.remaining > 0) {
-      // Bounded: every pass applies at least one proposal, so the waiting set strictly shrinks.
+    if (report.applied + (report.failed ?? 0) > 0 && report.remaining > 0) {
+      // Bounded: every such pass applies or fails at least one proposal, and an `apply_failed` one
+      // is no longer waiting (WP-156), so the waiting set strictly shrinks.
       await enqueueKnowledgeApply(options.jobs, {
         projectId: job.data.project_id as Id,
         reason: 'sweep',

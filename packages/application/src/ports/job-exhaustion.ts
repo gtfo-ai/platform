@@ -35,7 +35,12 @@
  *  - **`bound_and_escalate`** — `stage.execute`'s shape: the job carries a task and a human waits
  *    on its effect, so its **last** try escalates the task with a brief before the throw ends the
  *    job (`pipeline/job-escalation.ts`). `mr.comment.debounce` and six `pipeline.outbound` duties
- *    gained it at WP-124.
+ *    gained it at WP-124. **A last try that expires is the other ending** (WP-156, PROGRESS backlog
+ *    421): pg-boss fails it without the handler throwing — from the worker's own timer or from the
+ *    supervisor, measured in `test/integration/jobs/job-expiry.integration.test.ts` — so the
+ *    wrapper never runs, and the `expired_job` row of `recovery/stranded.ts`'s table escalates
+ *    the task instead, once per job id ({@link boundAndEscalateTargets} is what it reads). Every
+ *    such queue declares its `expireInSeconds` (`./job-queues.ts`), held by the census test.
  *  - **`notification_shaped`** — listed only: the next transition (or the next tick) re-derives the
  *    effect, or what is lost is a notification (rule 20). The workpad, the status and
  *    `notify.digest` are the ruling's examples.
@@ -99,14 +104,14 @@ export const JOB_EXHAUSTION: Readonly<Record<string, JobExhaustion>> = {
     loss: 'one review-comment window: the merge request’s comments are not turned into a return, and the task stays ready_for_merge until the next comment opens a window',
     recoveredBy: null,
     residual:
-      'its last try escalates the ready_for_merge task with a brief naming the unanswered review comments (WP-124), so the reviewer’s comments reach a person rather than a log',
+      'its last try escalates the ready_for_merge task with a brief naming the unanswered review comments (WP-124), so the reviewer’s comments reach a person rather than a log; a last try that expires instead of throwing is escalated by the expired_job recovery row, once per job id (WP-156)',
   },
   [JOB_QUEUES.pipelineOutbound]: {
     kind: 'relies_on_retries',
     shape: 'per_duty',
     loss: 'one provider call the pipeline decided on — a ticket status, a workpad, a comment, a notification, a merge request close, a credential revoke, a Sentry issue resolved on merge',
     recoveredBy:
-      'per duty (WP-124): notification_repost (notify, notify_organisation), superseded_mr (close_superseded_mr), run_credential (revoke_run_credential), deferred_dependency (dependency_gate_resume) and the intake reconciler (intake_check) recover theirs; the last try of breakdown_create, review_only_post, ticket_lint_post, spike_report, dependency_gate, mr_pipeline, mr_ready and ready_head_check escalates the task with a brief; the rest are re-derived by the next transition or are notifications, and are listed only',
+      'per duty (WP-124): notification_repost (notify, notify_organisation), superseded_mr (close_superseded_mr), run_credential (revoke_run_credential), deferred_dependency (dependency_gate_resume) and the intake reconciler (intake_check) recover theirs; the last try of breakdown_create, review_only_post, ticket_lint_post, spike_report, dependency_gate, mr_pipeline, mr_ready and ready_head_check escalates the task with a brief — from the handler when it throws (WP-124), and from the expired_job recovery row when it expires (WP-156); the rest are re-derived by the next transition or are notifications, and are listed only',
   },
   [JOB_QUEUES.deadlineSweep]: {
     kind: 'relies_on_retries',
@@ -360,3 +365,30 @@ export const outboundDutyExhaustionOf = (duty: string): OutboundDutyExhaustion |
 /** The census row of a queue, or `null` for a queue this build does not declare. */
 export const jobExhaustionOf = (queue: string): JobExhaustion | null =>
   Object.hasOwn(JOB_EXHAUSTION, queue) ? (JOB_EXHAUSTION[queue] as JobExhaustion) : null;
+
+/**
+ * One queue whose last try escalates its task, and — for `pipeline.outbound`, whose duties differ —
+ * the duties that do (WP-156, PROGRESS backlog 421). `duties: null` is the whole queue.
+ */
+export interface BoundAndEscalateTarget {
+  readonly queue: string;
+  readonly duties: readonly string[] | null;
+}
+
+/**
+ * Every bound-and-escalate queue and duty, read off the two tables above rather than listed beside
+ * them (standing rule 7): a queue declared `bound_and_escalate`, and a `per_duty` queue with its
+ * `bound_and_escalate` duties. The census holds each to a declared `expireInSeconds`, and the
+ * `expired_job` recovery row reads the expired last tries of these (all but the ones it names as
+ * recovered elsewhere).
+ */
+export const boundAndEscalateTargets = (): readonly BoundAndEscalateTarget[] =>
+  Object.entries(JOB_EXHAUSTION).flatMap(([queue, row]): BoundAndEscalateTarget[] => {
+    if (row.shape === 'bound_and_escalate') return [{ queue, duties: null }];
+    if (row.shape !== 'per_duty') return [];
+    const duties = Object.entries(OUTBOUND_DUTY_EXHAUSTION)
+      .filter(([, duty]) => duty.shape === 'bound_and_escalate')
+      .map(([duty]) => duty)
+      .sort();
+    return duties.length === 0 ? [] : [{ queue, duties }];
+  });

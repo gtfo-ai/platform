@@ -79,16 +79,27 @@ export interface ExhaustedJob {
   readonly what: string;
   /** Platform text: what a person can do now. */
   readonly remedy: string;
+  /**
+   * Set when the last try **expired** rather than threw — the queue's `expireInSeconds` — which only
+   * the `expired_job` recovery row knows (WP-156, PROGRESS backlog 421). Absent for a thrown last
+   * try, so the wrapper's brief is unchanged.
+   */
+  readonly expiredAfterSeconds?: number;
 }
 
 export type ExhaustedJobEnding = 'escalated' | 'amended' | 'notified' | 'unreachable' | 'absent';
 
 const reasonFor = (job: ExhaustedJob): string =>
-  `${job.duty ?? job.queue} failed on all ${job.tries} tries`;
+  job.expiredAfterSeconds === undefined
+    ? `${job.duty ?? job.queue} failed on all ${job.tries} tries`
+    : `${job.duty ?? job.queue} ran past its ${job.expiredAfterSeconds}-second limit on the last of ${job.tries} tries`;
 
 const briefFor = (job: ExhaustedJob, ticketKey: string): string =>
   `The platform could not ${job.what} for ${ticketKey}: the ${job.duty === null ? job.queue : `"${job.duty}"`} ` +
-  `job failed on all ${job.tries} of its tries, and nothing tries it again. ${job.remedy} ` +
+  (job.expiredAfterSeconds === undefined
+    ? `job failed on all ${job.tries} of its tries, and nothing tries it again. `
+    : `job ran past its ${job.expiredAfterSeconds}-second limit on the last of its ${job.tries} tries and was stopped, so whether it finished is not known, and nothing tries it again. `) +
+  `${job.remedy} ` +
   'The failure itself is on the organisation’s failed-jobs list (Settings), for an administrator.';
 
 /**

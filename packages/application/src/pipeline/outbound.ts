@@ -147,10 +147,18 @@ export const OUTBOUND_ESCALATION_TEXT: Readonly<
 };
 
 /** The brief's description of one outbound job, or `null` when this job does not escalate. */
-const exhaustedOutbound = (
-  job: JobContext<OutboundJobData>,
+const exhaustedOutbound = (job: JobContext<OutboundJobData>): Omit<ExhaustedJob, 'tries'> | null =>
+  describeExhaustedOutbound(job.data);
+
+/**
+ * The same description from the job's **payload** alone — what the `expired_job` recovery row has
+ * when it reads a failed job off pg-boss's table (WP-156, PROGRESS backlog 421), so a thrown and an
+ * expired last try escalate with one brief. `null` for a duty that does not escalate, and for a
+ * payload that names no task.
+ */
+export const describeExhaustedOutbound = (
+  data: OutboundJobData,
 ): Omit<ExhaustedJob, 'tries'> | null => {
-  const { data } = job;
   const declared = outboundDutyExhaustionOf(String(data.duty));
   const text = OUTBOUND_ESCALATION_TEXT[String(data.duty)];
   if (declared?.shape !== 'bound_and_escalate' || text === undefined) {

@@ -92,3 +92,24 @@ choice at the registration. *As built at WP-124 (session 11):* the cache **is** 
 refreshes every 60 s, so the burst branch measured identical to doing nothing at the shipped cadence;
 the per-queue branch was built — `pipeline.outbound` polls at 0.5 s (50 queued intakes drained in
 25.0 s instead of 98.9 s; PROGRESS backlog 392 has the table).
+
+## Amendment (WP-156, session 13, 2026-10-07) — an expired last try escalates, as built
+
+*As built at WP-156 (PROGRESS backlog 421).* Measured against pg-boss 12.30.0, a job whose last try
+runs past its queue's `expireInSeconds` is failed **without its handler throwing**, by one of two
+writers: the worker's own timer (a serialised `Error`, `handler execution exceeded <n>s`, while the
+handler keeps running) or the supervisor (`{"value":{"message":"job timed out"}}`, for a process that
+stopped). Both leave the `failed` row a thrown last try leaves; only `output` tells them apart. So
+the bound-and-escalate shape has **two endings**: a thrown last try escalates from inside its handler
+(`escalatingOnLastTry`, unchanged), and an expired one is escalated by the `expired_job` row of
+`recovery/stranded.ts`'s table, which reads those rows off `pgboss.job` (one day back), marks the job
+id in `expired_job_escalations` (migration 0087) before it escalates, and never re-enqueues — the
+expired call may have landed. `stage.execute`'s expiry stays the `run_lease` and `stranded_stage`
+rows'. **Every bound-and-escalate queue declares its `expireInSeconds`** at its definition, with the
+bound of one provider call stated beside it (`PROVIDER_CALL_BOUND_SECONDS`, about 92 s at the shipped
+timeouts); `pipeline.outbound` and `mr.comment.debounce` declare 15 minutes, and
+`job-exhaustion.test.ts` holds the declaration for every such queue. A provider's `Retry-After` and
+an operator-raised timeout have no such bound, which is why the recovery row exists rather than a
+larger expiry. **A recovery row's own work may split:** a `knowledge.apply` batch the provider refuses
+whole (`invalid_request`, which names no file) is retried one proposal per commit, once, in the same
+job, so only the refused proposal reaches `apply_failed` (backlog 420).

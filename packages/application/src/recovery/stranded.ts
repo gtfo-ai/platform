@@ -11,7 +11,7 @@
  * a `task_asks` row `pending` for ever. Nothing re-emits it, nothing retries it, and nothing logs
  * it — `EventBus` logs only the case where a callback *threw*.
  *
- * ## Fourteen sites, twelve of them here, and the other two named rather than silently absent
+ * ## Fifteen sites, thirteen of them here, and the other two named rather than silently absent
  *
  * | site | entry | what is lost | where the recovery is |
  * |---|---|---|---|
@@ -28,6 +28,7 @@
  * | a deferred dependency-gate ending (WP-67) | **240** | a question nobody asks, or a block nobody applies, on an `active` task | **here** — `deferred_dependency`, in `./deferred-dependency.ts` (WP-84) |
  * | a knowledge apply that failed or never ran (WP-124) | **366** | a change a human accepted, never committed; the proposal reads approved for ever | **here** — `knowledge_apply`, in `./knowledge-apply.ts`: one apply per project under a mark, then `apply_failed` with a reason on the proposal queue |
  * | a discovery run's recording that failed or never ran (WP-124) | **366** | a paid run's readiness evaluation and drafted pages | **here** — `discovery_record`, in `./discovery-record.ts`: the recording job once more under a mark, then the discovery task escalates with a brief |
+ * | a bound-and-escalate job whose last try **expired** rather than threw (WP-156) | **421** | a person waits on an escalation the wrapper never made: pg-boss fails an expired job without its handler throwing | **here** — `expired_job`, in `./expired-job.ts`: the task escalated once per job id under a mark, never re-enqueued |
  * | a create answer the runner never received (WP-103) | **286** | a run container, sidecar, network and control directory nobody holds a handle for | `./orphan-workspaces.ts`, on **the runner's own timer** at this pass's interval — it needs the launcher client, which only a process configured to run agents holds, while this pass rides a job any worker takes |
  *
  * …plus three rows that are **not** lost wake-ups at all and ride the same pass because each is the
@@ -159,6 +160,13 @@ import {
   recoverStrandedDiscoveryRecords,
   type StrandedDiscoveryRecord,
 } from './discovery-record.js';
+import {
+  EXPIRED_JOB_HORIZON_MS,
+  type ExpiredJob,
+  type ExpiredJobRecoverySite,
+  expiredJobTargets,
+  recoverExpiredJobs,
+} from './expired-job.js';
 import {
   type KnowledgeApplyRecoverySite,
   recoverStrandedApplies,
@@ -430,6 +438,15 @@ export interface StrandedRecoveryOptions {
    * the reason `runs` is: its ending escalates through the pipeline store.
    */
   readonly discoveryRecords?: DiscoveryRecordRecoverySite;
+  /**
+   * The expired-last-try site (WP-156, PROGRESS backlog **421**, `./expired-job.ts`): a
+   * bound-and-escalate job pg-boss failed because its last try ran past its expiry, which no
+   * handler threw and so no wrapper escalated.
+   *
+   * **Absent is "an expired last try is only listed"** — every build before WP-156. Optional for
+   * the reason `runs` is: its ending escalates through the pipeline store.
+   */
+  readonly expiredJobs?: ExpiredJobRecoverySite;
   readonly logger?: Logger;
 }
 
@@ -577,6 +594,7 @@ export const runStrandedRecovery = async (
   const stageSite = options.stages;
   const applySite = options.applies;
   const discoverySite = options.discoveryRecords;
+  const expiredSite = options.expiredJobs;
   // The re-post bound is the gauge's own, not the grace: a row younger than the job's retry window
   // still has an attempt of its own left (`./notification-repost.ts`).
   const repostBefore = new Date(at - IMMEDIATE_UNDELIVERED_AFTER_MS).toISOString() as IsoDateTime;
@@ -590,6 +608,15 @@ export const runStrandedRecovery = async (
       discoverySite === undefined
         ? ([] as readonly StrandedDiscoveryRecord[])
         : await discoverySite.store.strandedDiscoveryRecords(scope.tx, query),
+    expired:
+      expiredSite === undefined
+        ? ([] as readonly ExpiredJob[])
+        : await expiredSite.store.expiredJobs(scope.tx, {
+            olderThan,
+            notBefore: new Date(at - EXPIRED_JOB_HORIZON_MS).toISOString() as IsoDateTime,
+            targets: expiredJobTargets(),
+            limit,
+          }),
     deferred:
       deferredSite === undefined
         ? []
@@ -880,6 +907,9 @@ export const runStrandedRecovery = async (
     sites.push(
       await recoverStrandedDiscoveryRecords(options, discoverySite, found.discoveries, now),
     );
+  }
+  if (expiredSite !== undefined) {
+    sites.push(await recoverExpiredJobs(options, expiredSite, found.expired, now));
   }
   if (repostSite !== undefined) {
     let reposted = 0;

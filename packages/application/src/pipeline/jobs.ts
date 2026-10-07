@@ -58,7 +58,7 @@ import {
   rebaseAgainstCi,
 } from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
-import { escalatingOnLastTry } from './job-escalation.js';
+import { type ExhaustedJob, escalatingOnLastTry } from './job-escalation.js';
 import { prefetchObservability } from './observability-prefetch.js';
 import { REBASE_GATE_STAGE, recordRebaseCheck } from './rebase.js';
 import { reviewedMergeRequestPaths } from './review-paths.js';
@@ -1485,16 +1485,27 @@ export const reviewWindowHandler = (options: PipelineJobOptions): JobHandler<Rev
    * unanswered and only an administrator's failed-jobs list saying so. Its last try now escalates
    * the task with a brief first (`job-escalation.ts`), and the throw still ends the job.
    */
-  escalatingOnLastTry(options, reviewWindowWork(options), (job) => ({
-    taskId: job.data.task_id as Id,
-    projectId: job.data.project_id as Id,
-    queue: JOB_QUEUES.mrCommentDebounce,
-    duty: null,
-    causeEventId: null,
-    what: `turn the review comments on merge request !${job.data.iid} into a return`,
-    remedy:
-      'The comments are on the merge request; read them, then return the task to the stage that should answer them, or hand it back at Ready.',
-  }));
+  escalatingOnLastTry(options, reviewWindowWork(options), (job) =>
+    describeExhaustedReviewWindow(job.data),
+  );
+
+/**
+ * The review window's brief, from its payload alone — shared by the wrapper above and the
+ * `expired_job` recovery row (WP-156, PROGRESS backlog 421), which reads an expired window off
+ * pg-boss's table.
+ */
+export const describeExhaustedReviewWindow = (
+  data: ReviewWindowData,
+): Omit<ExhaustedJob, 'tries'> => ({
+  taskId: data.task_id as Id,
+  projectId: data.project_id as Id,
+  queue: JOB_QUEUES.mrCommentDebounce,
+  duty: null,
+  causeEventId: null,
+  what: `turn the review comments on merge request !${data.iid} into a return`,
+  remedy:
+    'The comments are on the merge request; read them, then return the task to the stage that should answer them, or hand it back at Ready.',
+});
 
 const reviewWindowWork = (options: PipelineJobOptions): JobHandler<ReviewWindowData> => {
   const logger: Logger = options.logger ?? silentLogger;

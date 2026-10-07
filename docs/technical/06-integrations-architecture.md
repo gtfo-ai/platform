@@ -60,6 +60,7 @@ Markdown → provider format converter (ADF for Jira Cloud, wiki markup for DC) 
 ```
 cloneUrl(project, credential) ; mintCredential(project, scope: read|push:agentic/*, ttl) -> Credential
 openMergeRequest({branch, target, title, description, draft, labels, reviewers}) -> MrRef
+commitFiles({project, branch, start_branch, message, author, actions[]}) -> {sha, branch, url}   # WP-18b: one commit of whole files (the knowledge apply); GitLab refuses it WHOLE and names no file (any 4xx → invalid_request), so the apply splits a refused batch into one commit per page, once (WP-156, backlog 420; technical/07)
 updateMergeRequest(mr, {description?, draft?, labels?, reviewers?, title?})
 getMergeRequest(mr) -> {state, draft, headSha, mergeable, diffStats, coverage?}
 closeMergeRequest(mr) -> MergeRequest                 # WP-59: idempotent (closed stays closed), `conflict` for a merged MR; a rework's superseded MR (Q92)

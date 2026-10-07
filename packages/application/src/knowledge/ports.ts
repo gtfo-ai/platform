@@ -538,6 +538,17 @@ export interface KnowledgeProposalStore {
     },
   ): Promise<void>;
   /**
+   * Moves these proposals to `apply_failed` with their reasons (platform text), **only while each
+   * is still awaiting apply** — a row decided, rejected or applied since the pass read it is left
+   * alone — and answers the ids it moved (WP-156, PROGRESS backlog 420: the proposal the provider
+   * refused on a commit of its own, after its batch was refused whole). A deferral it carried is
+   * cleared with it. A maintainer's decision moves it back, as it does a recovery's `apply_failed`.
+   */
+  markApplyFailed(
+    tx: Transaction,
+    input: { readonly failures: readonly { readonly id: Id; readonly reason: string }[] },
+  ): Promise<readonly Id[]>;
+  /**
    * The **applied** proposals of this project for these paths that recorded a merge request, newest
    * first, at most {@link MAX_CARRIERS_PER_PATH} per path (WP-125, PROGRESS backlog 369): the merge
    * requests that may already carry a page an apply is about to `create`. Whether each is still open

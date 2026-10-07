@@ -6,6 +6,8 @@ export * from './postgres-deadline-recovery-store.js';
 export * from './postgres-deferred-dependency-store.js';
 /** The discovery-record recovery's read, mark and ending — PROGRESS backlog 366 (WP-124). */
 export * from './postgres-discovery-record-recovery-store.js';
+/** The expired-last-try recovery's read and mark — PROGRESS backlog 421 (WP-156). */
+export * from './postgres-expired-job-store.js';
 /** The run-lease sweep's two reads — PROGRESS backlog 109 (WP-47). */
 export * from './postgres-expired-run-store.js';
 /** The knowledge-apply recovery's read, mark and ending — PROGRESS backlog 366 (WP-124). */

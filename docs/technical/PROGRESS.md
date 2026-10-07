@@ -15260,6 +15260,86 @@ as soon as the PUT resolves. **Canary:** restore the default retry, or the await
 
 **Depends on** WP-155 landing.
 
+### 528. **`knowledgeBranchName`'s eight-digit discriminator is written for uuidv7 ids, but every production `kb_proposals` id is a `randomUUID()` (v4): the silent loss WP-156 inferred is not reachable today, and WP-156's own docblock and integration test state a premise production does not have** (TODO, **minor, latent. The finding as reported is a major silent loss, and it would be one with uuidv7 ids. It is not reachable now because no production writer produces uuidv7 ids. It becomes reachable the day the `ids` port moves to uuidv7, which technical/03 says every entity key already is.** WP-156's discovered work, session 13, read by the refiner against WP-156's uncommitted tree on `8d962c30`. **No work package owns it**: no open M9 row (WP-157, WP-161) touches `packages/application/src/knowledge/apply.ts`. It does not need a row of its own)
+
+**What is wrong (read, not run — rule 66).** `knowledgeBranchName` (`packages/application/src/knowledge/apply.ts:226-233`) names a batch
+`agentic/knowledge/<created_at date>-<first eight hex digits of the lowest id>` (`:231`), and both provider calls take their idempotency key
+from that name: `knowledge_commit:${branch}` (`:672`) and `knowledge_mr:${branch}` (`:686`). Its only caller is the apply pass (`:577`).
+The executor answers a key it has a stored success for without calling the provider (`packages/application/src/integrations/action-executor.ts:962-974`,
+status `replayed`), scoped by `integrations.id`, action and key, so two batches with the same name would get one commit. The second batch's
+proposals would be marked `applied` with a commit that does not carry them.
+
+WP-156's report says this happens when two batches' earliest proposals were written within about a minute, because *"a uuidv7's first eight
+are the top of its millisecond clock"*. The arithmetic is right: a uuidv7's first 32 bits are the top of a 48-bit millisecond timestamp, so they change
+every 2^16 ms = **65.5 s** (refiner's scratch computation). Two reachable producers of a second batch inside one window exist in the code:
+the `MAX_PROPOSALS_PER_COMMIT = 20` cap (`apply.ts:145`, `:470`) and the one-action-per-path rule (`:471`). A curation that writes two
+proposals for one page in one transaction would leave the second for the next pass.
+
+**But the ids are not uuidv7 in production.** Every writer of `kb_proposals` takes the row's id from the `ids` port:
+`packages/application/src/knowledge/librarian.ts:350`, `knowledge/research.ts:182`, `bootstrap/record.ts:289` and `:309`, `onboarding/record.ts:506` and `onboarding/interview.ts:268`.
+The store always inserts that id (`packages/infrastructure/src/knowledge/postgres-proposal-store.ts:147-170`), so migration 0008's `default uuidv7()` never fires.
+Every composition root builds that port as `randomUUID()` (`apps/server/src/knowledge.ts:213`, `:491`, `:599`; `apps/server/src/bootstrap.ts:209`;
+`apps/server/src/onboarding.ts:201`). Node's `randomUUID()` is v4 (version nibble `4`, refiner's scratch run), so the eight digits are **32 random bits**.
+Two batches collide with probability 2^-32 ≈ 2.3e-10 per pair, and they must also share the earliest proposal's UTC date. At 1 000 batches
+in one project on one day the chance is about 1.2e-4 (birthday bound, scratch).
+
+**Where WP-156 states the wrong premise.** The `knowledgeSoloBranchName` docblock (`apply.ts:235-244`) says a `kb_proposals` id *"is a
+uuidv7 (migration 0008)"*. `test/integration/knowledge/knowledge-apply-split.integration.test.ts:62` says
+*"One statement, as a curation writes them: three uuidv7 ids from one transaction"*, but the test inserts with no `id`
+column (`:63-70`), so the database default runs. A curation does not write rows that way. WP-156's last canary, which replaces the solo name
+with the batch name and gets `expected 1 to be 3`, therefore measures an id shape production does not produce.
+technical/03 says *"`uuidv7()` primary keys (time-ordered, PG 18 built-in) on all entity tables"* (`docs/technical/03-data-model.md:9`), which is
+true of the column default and not of the rows the application writes. That gap is wider than this entry. It is recorded here because
+it is the reason the finding inverts, not opened as its own finding.
+
+**A second consequence of the same cause (hypothesis, needs measurement).** The docblock (`apply.ts:218-225`) and technical/07
+(`docs/technical/07-knowledge-and-search.md:265-266`) say the discriminator is *"the batch's earliest proposal id, so it is stable across a retry and different for the next batch"*.
+With v4 ids, the lowest id is not the earliest proposal. If the commit lands and the merge request call then fails retryably, the job's retry re-reads the queue
+(ordered `created_at, id`, `postgres-proposal-store.ts:241`). If a proposal approved in between joins a batch of fewer than 20 and sorts lower,
+the retry gets a new branch name. Both keys then miss, and the retry makes a second commit on a second branch, which leaves the first branch with no merge request.
+The odds are about 1/(n+1) for a batch of n. That is a stray branch, not a lost page. Not measured.
+
+**Is WP-156's split path immune?** Yes, under either id version. `knowledgeSoloBranchName` uses the whole id (`apply.ts:245-249`): 122 random bits under v4,
+and unique under v7. Its name has 32 hex digits after the date, so it cannot equal an eight-digit batch name.
+
+**What it costs to leave.** Nothing is lost today. The cost is a trap. The ids port is one line in each composition root, and technical/03 already says the ids are uuidv7.
+Whoever makes the code agree with that doc arms a silent loss of approved knowledge pages, and no test would fail: the unit tests use fixed ids, and the
+integration test already uses v7 ids for the split only.
+
+**Done when** the batch name does not depend on which uuid version the ids port produces. Recommended: pick the earliest proposal by `(createdAt, id)`,
+the queue's own order, and use its **whole** id. This also closes the retry hypothesis, because a later proposal cannot become the earliest. Then
+correct the three sentences above (the solo docblock, the integration test's comment, and technical/07:265-266). A unit case gives two batches
+whose earliest ids are uuidv7s from the same second (same first eight digits) two different branch names. A second case checks that a batch of one
+and the solo name of another proposal never coincide. **Canary:** restore `.slice(0, 8)` and the first case fails.
+Whether technical/03:9 should say *"the column default is uuidv7; application-written ids are v4"* or the ids port should become v7 is a separate decision. It is not this entry's to make.
+
+**Depends on** WP-156 landing, since it edits WP-156's docblock and test comment.
+
+### 529. **`stranded_stage`'s failed-job brief cannot tell an expired `stage.execute` job from a thrown one: a supervisor expiry reads *"an error whose class was not recorded"*, and a worker-timer expiry reads *"threw Error"* for a handler that never threw** (TODO, **minor, live. It is wording in a brief a person reads. The person is told to look for an error, and the job actually hit its two-hour limit. Nothing is wrongly moved.** WP-156's discovered work, session 13. The supervisor half was measured by WP-156; the worker-timer half was read by the refiner. **No work package owns it**: no open M9 row touches `packages/application/src/recovery/stranded-stage.ts`)
+
+**What is wrong (read, not run — rule 66).** The stranded-stage store reads a failed `stage.execute` job's class only from
+`output ->> 'name'`, `output ->> 'code'` and the same two under `cause` (`packages/infrastructure/src/recovery/postgres-stranded-stage-store.ts:120-123`).
+`failedJobError` (`packages/application/src/recovery/stranded-stage.ts:247-258`) falls back to *"an error whose class was not recorded"* (`:255`).
+`failedJobReason` and `failedJobBrief` (`:275-292`) then say the last try was *"throwing"* or *"threw"* that.
+WP-156 measured both expiry writers on pg-boss 12.30.0 (`test/integration/jobs/job-expiry.integration.test.ts`, notes under `#### WP-156` (a)):
+- the supervisor writes `output = {"value": {"message": "job timed out"}}`, with no `name`, so the brief says the class was not recorded;
+- the worker's own timer writes `{name: "Error", message: "handler execution exceeded <n>s", stack}` while the handler is still running, so the brief says the last try *"threw Error"*.
+
+`stage.execute` declares `expireInSeconds: 2 * 60 * 60` (`packages/application/src/ports/job-queues.ts:108`). WP-156 excluded it from the new `expired_job` row as
+recovered by `run_lease, stranded_stage` (`EXPIRY_RECOVERED_ELSEWHERE`), so `stranded_stage` is the only reader of such a job when no run row exists.
+The exact signatures already exist as `EXPIRY_SIGNATURES` (`packages/infrastructure/src/recovery/postgres-expired-job-store.ts:39-`).
+
+**Evidence.** The two output shapes are WP-156's measurement. The brief text is read off the tree. **Not measured:** a `stage.execute` job reaching its last
+try by expiry with no run row. The plausible path is a process stopping after the claim and before the run is created, on each of three tries.
+
+**What it costs to leave.** A misleading brief on a rare path. The person looks for an error and does not learn that the stage ran out of time.
+
+**Done when** the stranded-stage read also recognises the two expiry signatures (reusing `EXPIRY_SIGNATURES`, not a second copy), and the brief and reason
+say the job ran past its two-hour limit on its last try, *not* that it threw. A unit case for each signature, plus the thrown case unchanged. **Canary:** drop the
+signature match and both expiry cases read *"not recorded"* or *"threw Error"* again.
+
+**Depends on** WP-156 landing (`EXPIRY_SIGNATURES` is uncommitted).
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -45537,3 +45617,81 @@ The reviewer's two mutants were re-run and both are killed. `isWriteTarget(targe
 **Not run by the implementer:** `verify:integration` as a whole and `verify:e2e`; only `onboarding.integration.test.ts -t "discovery escalation"` (2 passed).
 
 **Discovered work:** none.
+
+#### WP-156
+
+**Work that fails without telling anyone: an expired last try escalates, and one refused knowledge page fails alone** (backlog 421, 420). Implemented in the main checkout at `8d962c30`; **migration 0087** (`expired_job_escalations`), because ruling (c)'s "once per job id" needs a mark the platform writes and pg-boss's row is not one.
+
+**(a) The measurement** (`test/integration/jobs/job-expiry.integration.test.ts`, real pg-boss 12.30.0 on PostgreSQL 18). Backlog 421 said an expiry has one writer; it has **two**, both read in `dist/` and then measured:
+- **the worker's own timer** — `#processJobs` races the handler against `resolveWithinSeconds(expireInSeconds)`. A `pipeline.outbound` job with `retryLimit: 0, expireInSeconds: 1` whose handler never returns ends `state = 'failed'`, `retry_count = 0`, `completed_on` set, `output = {name: "Error", message: "handler execution exceeded 1s", stack}` — the same `fail()` a throw takes — while the handler is **still running and never threw** (the wrapper sits inside the race). When it finally returns, the row stays `failed` (`complete` matches only `state < 'completed'`), and its `job.signal` is aborted. Pinned by `test/integration/jobs/job-expiry.integration.test.ts` › "in a live worker: pg-boss’s own timer fails it as an Error, while the handler is still running and never threw".
+- **the supervisor** — for a process that stopped: a real worker claimed an `mr.comment.debounce` job (expiry 1 h), the claim was aged two hours in SQL (the only row write the test makes), and a second instance with `supervise: true, maintenanceIntervalSeconds: 1` failed it: `state = 'failed'`, `output = {"value": {"message": "job timed out"}}` exactly. Pinned by › "in a process that stopped: the supervisor fails it with a fixed `job timed out` output".
+- **a thrown last try**, for comparison: the same `failed` state, `output = {name: "Error", message: <the handler's message>, stack}` (› "for comparison, a thrown last try: the same state, an Error carrying the handler’s own message").
+- **So an expiry is told apart from a throw only by `output`**: the supervisor's fixed `value.message` (`job timed out`; `job heartbeat timeout` for a heartbeat, which no platform queue sets), or an `Error` whose message is exactly `handler execution exceeded <n>s`. Both signatures are matched exactly by the store (`EXPIRY_SIGNATURES`). Runtime: 3 cases in 9.2 s.
+
+**What changed:**
+- **(b)** `packages/application/src/ports/job-queues.ts`: `mr.comment.debounce` and `pipeline.outbound` declare `expireInSeconds: BOUND_AND_ESCALATE_EXPIRE_SECONDS` (15 min — pg-boss's default, now written down; `create_queue` never updates a live queue, so no database changes), with `PROVIDER_CALL_BOUND_SECONDS` (3 × 30 s + 1.5 s ≈ 92 s: `DEFAULT_RETRY_POLICY` over the shipped `request_timeout_ms`) stated beside them. The statement is honest about the tail: a duty stops at its first failed call, but `review_only_post` at `max_findings: 50` is 51 posts, `request_timeout_ms` may be raised to 600 s, and the executor honours `Retry-After` uncapped — no expiry bounds those, and (c) is what catches them. `knowledge.apply`'s comment now counts the split's calls.
+- **The census** (`ports/job-exhaustion.ts`): `boundAndEscalateTargets()` reads the bound-and-escalate queues and `pipeline.outbound` duties off `JOB_EXHAUSTION`/`OUTBOUND_DUTY_EXHAUSTION` (rule 7); `job-exhaustion.test.ts` holds each to a declared `expireInSeconds`. The `mr.comment.debounce` and `pipeline.outbound` rows say who escalates an expired last try.
+- **(c)** `packages/application/src/recovery/expired-job.ts` — the `expired_job` row of `recovery/stranded.ts`'s table (fifteen sites now): `expiredJobs` reads `failed`, retries-spent jobs of `expiredJobTargets()` (every bound-and-escalate target except `stage.execute`, whose expiry `EXPIRY_RECOVERED_ELSEWHERE` names as `run_lease, stranded_stage`) whose `output` is an expiry signature, failed inside the grace-bounded window and at most `EXPIRED_JOB_HORIZON_MS` (24 h) back, with no mark; for each it inserts the mark (`on conflict do nothing`, its own transaction, committed first) and, only if it inserted it, escalates through `escalateExhaustedJob` — the wrapper's three endings, so a finished task's people get Q113's notification — with the brief and reason saying the job *ran past its N-second limit on the last of its M tries* (`ExhaustedJob.expiredAfterSeconds`, absent for a throw, so the wrapper's brief is unchanged). The brief is the duty's own: `describeExhaustedOutbound` (`pipeline/outbound.ts`) and `describeExhaustedReviewWindow` (`pipeline/jobs.ts`) are the wrapper's describers moved onto the payload, and the payload read back from the table is checked (`idSchema` for both ids, an integer `iid`). It is **never re-enqueued**: the measured live case keeps running after pg-boss gave up, so the call may have landed. Store: `packages/infrastructure/src/recovery/postgres-expired-job-store.ts`; composed in `apps/server/src/pipeline.ts` (`expiredJobs`). `escalatingOnLastTry` is unchanged.
+- **(d)** `packages/application/src/knowledge/apply.ts`: the commit + merge request + record became `commitBatch`; when a batch of **more than one** is refused with `invalid_request`, `splitRefusedBatch` commits each proposal on its own branch (`knowledgeSoloBranchName`) with its own merge request, once, in order, recording each outcome as it lands — `applied` through `commitBatch`'s own transaction, `apply_failed` through the new `KnowledgeProposalStore.markApplyFailed` (conditional on the awaiting-apply predicate; clears a deferral) with `applyRefusedReason(path, code)`. Any other failure in the split is thrown, with the pages decided by then recorded. A batch of one is unchanged. The report gains `failed`, and the handler re-enqueues when it applied **or failed** something and proposals remain.
+
+**Tests:** `job-expiry.integration.test.ts` (3, the measurement); `test/integration/recovery/expired-job-recovery.integration.test.ts` (criterion 2: the production wrapping over a hanging `dependency_gate` duty, the task still `active` with no escalation after pg-boss failed the job, then one pass → `needs_human` with one `task.escalated`, a second pass → nothing, one mark; and the store's predicate on both sides over clones of the real row — thrown output, `workpad` duty, retries left, past the horizon — reading only the supervisor-written expiry); `packages/application/src/recovery/expired-job.test.ts` (10: targets vs the census both ways, the query, the briefs and refused payloads, mark-then-escalate once, the arbiter, an indescribable payload marked once, Q113 for a `done` task, absent wiring); `job-exhaustion.test.ts` › "holds every bound-and-escalate queue to a declared expireInSeconds (WP-156)" (criterion 3); `packages/application/src/knowledge/apply.test.ts` (3 under "a batch the provider refuses whole (WP-156, backlog 420)", criterion 4's unit case); `test/integration/knowledge/knowledge-apply-split.integration.test.ts` (criterion 4's integration case: real proposal and event stores, three proposals written in one statement through the column's uuidv7 default so their ids share the batch discriminator — the worst case, not production's v4 ids, two `applied` with their commits and merge requests, one `apply_failed` naming `(invalid_request)` and not the provider's text, two `knowledge.proposal.applied` events); the knowledge-proposals contract suite › "fails only a proposal still awaiting apply, with its reason, and a decision clears it (WP-156)" (memory and PostgreSQL).
+
+**Canaries** (each on the file, restored by copy, `diff` clean afterwards):
+- the worker-timer signature dropped from the store's `where` (criterion 2's "drop the expiry branch") → dead by `test/integration/recovery/expired-job-recovery.integration.test.ts` › "is not escalated by its wrapper, and the recovery pass escalates its task once" (the pass reads nothing; the task stays `active`).
+- the supervisor signature dropped → dead by › "reads an expired bound-and-escalate last try and nothing beside it (rule 42)".
+- the mark exclusion dropped from the read → dead by › "is not escalated by its wrapper, and the recovery pass escalates its task once" (second pass `found: 1`) and › "reads an expired bound-and-escalate last try and nothing beside it (rule 42)".
+- the site's report not pushed in `runStrandedRecovery` → dead by `packages/application/src/recovery/expired-job.test.ts` › "marks the job, then escalates its task once with a brief that says the job ran out of time" (and two more).
+- `pipeline.outbound`'s `expireInSeconds` removed → dead by `packages/application/src/ports/job-exhaustion.test.ts` › "holds every bound-and-escalate queue to a declared expireInSeconds (WP-156)".
+- the split disarmed (`if (false && …)`) → dead by `packages/application/src/knowledge/apply.test.ts` › "ends a batch of three with one page refused on every attempt as two applied and one apply_failed" and `test/integration/knowledge/knowledge-apply-split.integration.test.ts` › "commits the pages it can on their own and fails only the refused one, on the real store" (`IntegrationError: fake-git: 400 Bad Request`).
+- `knowledgeSoloBranchName` replaced by `knowledgeBranchName(at, [proposal])` → dead by › "commits the pages it can on their own and fails only the refused one, on the real store" (`expected 1 to be 3`: the test's ids share the eight-digit discriminator).
+
+**Decisions and assumptions:**
+- **A mark, hence a migration.** pg-boss's row is the only trace of an expiry and the platform does not write it; a recovery that escalated without a mark would escalate on every pass until pg-boss's retention deleted the job. `expired_job_escalations` is `append_only`, without foreign keys (`job_id` names a `pgboss.job` row; `task_id` is what the payload said and may name a deleted task), with no retention: the read looks one day back, pg-boss deletes failed rows after a week.
+- **Mark first, then escalate**, the table's safe order: a crash between them costs that job's escalation (the failed-jobs list still shows it), never a second one. An escalation that throws is logged and not retried.
+- **A grace and a horizon.** The read waits the pass's grace (`olderThan`) like every row, and reads one day back (`EXPIRED_JOB_HORIZON_MS`): the first pass after an upgrade, or after an outage, must not escalate tasks about week-old jobs whose tasks have moved on.
+- **No re-enqueue** — an expired provider call may have landed (measured: the handler keeps running). A person reading a brief is cheaper than a second post.
+- **`stage.execute` is excluded** and named (`EXPIRY_RECOVERED_ELSEWHERE`): its run is ended by `run_lease` and a stage with no job and no run by `stranded_stage`, which already reads a failed `stage.execute` job.
+- **Residual, stated in the module:** a handler that outlives pg-boss's timer and then throws is escalated a second time by the unchanged wrapper; the task is in `needs_human` by then, so that is an **amendment** of the brief, not a second state move.
+- **The split's branch is the proposal's whole id**, not `knowledgeBranchName` over one proposal, which for the batch's earliest proposal *is* the refused batch's branch. (The first version of this bullet said production ids are uuidv7; they are not — see Review round 1.) Retries of one split compute the same branch, so its two idempotency keys stay idempotent; the executor stores only successes, so the refused batch left no record under any key.
+- **The refusal class in the reason is the port's `IntegrationErrorCode`** (a closed union, platform text); the provider's message is never stored, because it can quote the page.
+- **technical/06 had no `commitFiles` line** in the GitProvider port listing; the apply's granularity is recorded there (one line) and the split in technical/07, which is where the apply is described. Read as the brief's "technical/06 (the apply)".
+- **Start-up `verify` was not run** before the change (load ~18 at start; the tree was the orchestrator's green commit); the closing `verify` is below.
+
+**Proposed TD-004 amendment** (for the orchestrator to apply to `docs/decisions/technical/TD-004-pg-boss-jobs-and-timers.md`, after the M7 amendment):
+
+> ## Amendment (WP-156, session 13, 2026-10-07) — an expired last try escalates, as built
+>
+> *As built at WP-156 (PROGRESS backlog 421).* Measured against pg-boss 12.30.0, a job whose last try
+> runs past its queue's `expireInSeconds` is failed **without its handler throwing**, by one of two
+> writers: the worker's own timer (a serialised `Error`, `handler execution exceeded <n>s`, while the
+> handler keeps running) or the supervisor (`{"value":{"message":"job timed out"}}`, for a process that
+> stopped). Both leave the `failed` row a thrown last try leaves; only `output` tells them apart. So
+> the bound-and-escalate shape has **two endings**: a thrown last try escalates from inside its handler
+> (`escalatingOnLastTry`, unchanged), and an expired one is escalated by the `expired_job` row of
+> `recovery/stranded.ts`'s table, which reads those rows off `pgboss.job` (one day back), marks the job
+> id in `expired_job_escalations` (migration 0087) before it escalates, and never re-enqueues — the
+> expired call may have landed. `stage.execute`'s expiry stays the `run_lease` and `stranded_stage`
+> rows'. **Every bound-and-escalate queue declares its `expireInSeconds`** at its definition, with the
+> bound of one provider call stated beside it (`PROVIDER_CALL_BOUND_SECONDS`, about 92 s at the shipped
+> timeouts); `pipeline.outbound` and `mr.comment.debounce` declare 15 minutes, and
+> `job-exhaustion.test.ts` holds the declaration for every such queue. A provider's `Retry-After` and
+> an operator-raised timeout have no such bound, which is why the recovery row exists rather than a
+> larger expiry. **A recovery row's own work may split:** a `knowledge.apply` batch the provider refuses
+> whole (`invalid_request`, which names no file) is retried one proposal per commit, once, in the same
+> job, so only the refused proposal reaches `apply_failed` (backlog 420).
+
+**Proposed `CLAUDE.md` wording** (rule 83; not edited here). The `JOB_EXHAUSTION` sentence of § Non-negotiables should read: *Every **job queue** declares its exhaustion's shape in `JOB_EXHAUSTION` (TD-004's M7 amendment, WP-124): a recovery row, bound-and-escalate (`pipeline/job-escalation.ts`: the last try escalates the task with a brief, or tells a finished task's people, Q113; a last try that **expires** never throws, so the `expired_job` recovery row escalates it instead, once per job id, and every such queue declares its `expireInSeconds` — WP-156), or listed only; `pipeline.outbound` declares each duty and polls at its own 0.5 s.*
+
+**Sentences falsified** (rule 83; grep: `listed but not escalated`, `never reaches the wrapper`, `15-minute default`, `fails every apply`, `whole commit`, `bound and escalate`): `docs/technical/02-domain-model-and-events.md`'s exhaustion table, *bound and escalate* row (it described the throw only — amended); `ports/job-exhaustion.ts`' docblock and its `mr.comment.debounce`/`pipeline.outbound` rows (amended); `knowledge/apply.ts`' docblock (*"refuses the whole commit … and the batch is retried"* — now split; amended); `job-queues.ts`' `knowledge.apply` comment (*two provider round trips*; amended); `recovery/stranded.ts`' table heading (fourteen → fifteen sites); `CLAUDE.md`'s `JOB_EXHAUSTION` sentence (incomplete rather than false — wording proposed above); TD-004's M7 amendment (proposed above). **Not this row's:** technical/07's *"… different for the next batch"* holds except by chance (backlog 528).
+
+**Not run by the implementer:** `verify:integration` and `verify:e2e` as wholes. Run: the three new integration files, and `migrations`, `schema-parity`, `grants` and `postgres-knowledge-store` integration files (79 passed).
+
+**Discovered work:**
+- ~~`knowledgeBranchName`'s discriminator is shared by proposals written within about a minute~~ — **withdrawn in review round 1**: it assumed uuidv7 ids, and production writes v4 (below). What remains is backlog **528**'s chance collision: two batches of one project on one day whose earliest ids share eight hex digits (about 2⁻³² per pair) compute one branch and one `knowledge_commit:<branch>` key, and the second commit would be answered from the first's stored result. Minor, as 528 files it.
+- `stranded_stage`'s `failedJobBrief` for a `stage.execute` job the **supervisor** expired reads *"an error whose class was not recorded"*: the supervisor's output has no `name` (measured shape above). It could say the job ran past its two-hour expiry. Minor.
+
+**Review round 1** (REQUEST-CHANGES, tests and a docblock):
+1. **[major] the batch-level split had no test holding "only on `invalid_request`".** Added `packages/application/src/knowledge/apply.test.ts` › "does not split a batch whose commit fails with unavailable: the error is thrown, one commit, nothing moved" and › "does not split a batch whose commit fails with forbidden: the error is thrown, one commit, nothing moved" (one helper): the error is thrown, one commit call, no merge request, all three rows `auto_applied`. **Canary**: the condition replaced with `error instanceof IntegrationError` → dead by both cases (2 failed, 35 passed); restored by copy, `diff` clean. `apply.ts`' docblock now also says a batch failing any other way is not split.
+2. **[minor] a landed batch commit whose answer was lost** meets GitLab's 400 "branch exists" (`invalid_request`) on the executor's retry and is now split: its pages are committed again on their own branches and the batch branch keeps no merge request. Stated as the accepted trade-off in `apply.ts`' docblock (§ "A refused batch is split, once") and technical/07's WP-156 paragraph: the port carries no provider message to tell that 400 apart, and before the split such a batch failed every apply for ever.
+3. **Backlog 528, settled by reading the writers: production `kb_proposals` ids are v4.** The only `insert into kb_proposals` in the tree (`PostgresProposalStore.insert`, `packages/infrastructure/src/knowledge/postgres-proposal-store.ts`) names `id` and binds the domain's id, and every writer (`knowledge/librarian.ts`, `onboarding/record.ts`, `onboarding/interview.ts`, `bootstrap/record.ts`) takes it from `options.ids.next()`, which every composition root binds to `randomUUID()` (`apps/server/src/knowledge.ts`, `onboarding.ts`, `bootstrap.ts`, `pipeline.ts`, …); the column's `uuidv7()` default (migration 0008) is reached only by SQL that omits `id`, i.e. tests. So the refiner is right and a >20-proposal curation does **not** share the prefix. `knowledgeSoloBranchName`'s docblock, technical/07's paragraph, the unit test's comment and the integration test's header now say this: the integration test writes through the column default **on purpose**, as the worst case for the split's naming, not as production does. Branch naming unchanged.
+

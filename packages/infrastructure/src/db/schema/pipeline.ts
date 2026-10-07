@@ -602,6 +602,20 @@ export const chatThreads = pgTable(
 );
 
 /**
+ * The expired-last-try recovery's mark (WP-156, migration 0087, PROGRESS backlog 421): one row per
+ * pg-boss job id whose task the recovery pass escalated because its last try expired rather than
+ * threw. Written once, before the escalation, and never changed; no foreign keys (`job_id` names a
+ * row of `pgboss.job`).
+ */
+export const expiredJobEscalations = pgTable('expired_job_escalations', {
+  jobId: uuid('job_id').primaryKey(),
+  queue: text('queue').notNull(),
+  taskId: uuid('task_id'),
+  markedAt: timestamp('marked_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
  * The ask-the-task thread (WP-31, migration 0024).
  *
  * `citations` is the model's own list after the application dropped the entries that name another
@@ -703,4 +717,5 @@ export type CommandIdempotencyRow = typeof commandIdempotency.$inferSelect;
 export type RunCommandRow = typeof runCommands.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
 export type TaskAsk = typeof taskAsks.$inferSelect;
+export type ExpiredJobEscalation = typeof expiredJobEscalations.$inferSelect;
 export type TicketBreakdownItem = typeof ticketBreakdownItems.$inferSelect;

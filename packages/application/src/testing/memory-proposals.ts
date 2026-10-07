@@ -210,6 +210,20 @@ export const memoryProposalStore = (
       }
     },
 
+    markApplyFailed: async (tx: Transaction, input) => {
+      const moved: Id[] = [];
+      for (const failure of input.failures) {
+        const index = rows.findIndex((row) => row.id === failure.id);
+        const row = rows[index];
+        if (row === undefined || !isAwaitingApply(row)) continue;
+        const { applyDeferredReason: _undeferred, ...rest } = row;
+        replace(index, { ...rest, status: 'apply_failed', applyFailureReason: failure.reason });
+        undoOnRollback(tx, () => restore(row));
+        moved.push(failure.id);
+      }
+      return moved;
+    },
+
     applyCarriers: async (projectId, paths) => {
       const carriers: KnowledgeApplyCarrier[] = [];
       for (const path of paths) {

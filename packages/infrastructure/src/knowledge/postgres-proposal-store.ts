@@ -351,6 +351,27 @@ export class PostgresProposalStore implements KnowledgeProposalStore {
     );
   }
 
+  async markApplyFailed(
+    tx: Transaction,
+    input: { readonly failures: readonly { readonly id: Id; readonly reason: string }[] },
+  ): Promise<readonly Id[]> {
+    const moved: Id[] = [];
+    const sql = sqlOf(tx);
+    for (const failure of input.failures) {
+      // Conditional on the awaiting-apply predicate, as `markApplied` is: a row somebody decided
+      // since the pass read it is not given a failure that is no longer about it (WP-156).
+      const { rows } = await sql.query<{ id: string }>(
+        `update kb_proposals
+            set status = 'apply_failed', apply_failure_reason = $2, apply_deferred_reason = null
+          where id = $1 and ${AWAITING_APPLY}
+          returning id`,
+        [failure.id, failure.reason],
+      );
+      moved.push(...rows.map((row) => row.id as Id));
+    }
+    return moved;
+  }
+
   /**
    * The applied proposals of these paths that recorded a merge request, newest first, at most
    * {@link MAX_CARRIERS_PER_PATH} per path (WP-125, backlog 369). A stored reference that does not
