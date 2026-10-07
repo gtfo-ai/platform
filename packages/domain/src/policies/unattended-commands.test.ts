@@ -628,6 +628,230 @@ describe('WP-153 — a here-document body is data, and every way it is not (back
   });
 });
 
+/**
+ * WP-158 (backlog 509): bash evaluates a variable's text as code in these places, so a value the
+ * scanner reads as single-quoted data runs its `$(…)`. Every form carries a planted push to a
+ * non-`agentic/` branch, and every one was `unattended_auto` under `auto` and `unattended_deny`
+ * under `deny` before this row (PROGRESS § WP-158 has the table, and which of them bash 5.2, bash
+ * 3.2 and dash ran).
+ */
+describe('WP-158 — an expansion that evaluates a variable’s text is uncertain (backlog 509)', () => {
+  const push = '$(git push origin HEAD:main)';
+  const set = `x='b[${push}]'`;
+  const modes = ['auto', 'deny'] as const;
+
+  it.each<readonly [string, string]>([
+    [`${set}; echo \${y[x]}`, 'an array subscript'],
+    [`${set}; echo "\${y[x]}"`, 'an array subscript in double quotes'],
+    [`${set}; echo \${y[$x]}`, 'a subscript naming the variable with `$`'],
+    [`${set}; echo \${#y[x]}`, 'a length with a subscript'],
+    [`${set}; echo \${y[x]:-d}`, 'a subscript before a default'],
+    [`${set}; echo \${y[x]@Q}`, 'a subscript before a transformation'],
+    [`z='${push}'; echo \${z@P}`, 'a prompt-string transformation, `@P`'],
+    ...['Q', 'E', 'A', 'a', 'U', 'u', 'L', 'K', 'k'].map(
+      (op) => [`z='${push}'; echo \${z@${op}}`, `the transformation @${op}`] as const,
+    ),
+    [`${set}; echo \${!x}`, 'an indirection'],
+    [`${set}; echo \${!y[x]}`, 'an indirection with a subscript'],
+    [`${set}; z=abc; echo \${z:x}`, 'an offset'],
+    [`${set}; z=abc; echo \${z:0:x}`, 'a length'],
+    [`${set}; z=abc; echo \${z: x}`, 'an offset after a space'],
+    [`${set}; z=abc; echo "\${z:x}"`, 'an offset in double quotes'],
+    [`${set}; y=(a b); echo \${y[@]:x}`, 'an offset after an `@` subscript'],
+    [`${set}; echo $[x]`, 'the old arithmetic expansion, `$[…]`'],
+    [`${set}; ((x))`, 'an arithmetic command'],
+    [`${set}; for ((i=x;i<1;i++)); do :; done`, 'an arithmetic `for`'],
+    [`${set}; let x`, '`let`'],
+    [`${set}; command let x`, '`let` behind `command`'],
+    [`${set}; declare -i y=x`, '`declare -i`'],
+    [`${set}; typeset -i y=x`, '`typeset -i`'],
+    [`${set}; f() { local -i y=x; }; f`, '`local -i`'],
+    [`${set}; export -i y=x`, '`export -i`'],
+    [`${set}; declare -g -i y=x`, '`-i` as a second option'],
+    [`${set}; declare -ai y=(x)`, '`-i` combined'],
+    [`${set}; declare -i y; y=x`, 'an integer variable assigned later on the line'],
+    [`${set}; declare -n r=$x; echo $r`, 'a nameref'],
+    ...['-eq', '-ne', '-lt', '-le', '-gt', '-ge'].map(
+      (op) => [`${set}; [[ x ${op} 1 ]]`, `[[ … ${op} … ]]`] as const,
+    ),
+    [`${set}; [[ 1 -eq x ]]`, 'the right operand'],
+    [`${set}; [[ ! x -eq 1 ]]`, 'a negated test'],
+    [`${set}; [[ -f a && x -eq 1 ]]`, 'a comparison after `&&` inside `[[`'],
+    [`${set}; [[ -v $x ]]`, 'a `-v` test'],
+    [`${set}; test -v "$x"`, '`test -v`'],
+    [`${set}; y[x]=1`, 'an element assignment'],
+    [`${set}; y=([x]=1)`, 'an element in a compound assignment'],
+    [`${set}; declare "$x"=1`, 'a declared name built from an expansion'],
+    [`${set}; printf -v "$x" %s 1`, '`printf -v`'],
+    [`${set}; read "$x" <<< 1`, '`read`'],
+    [`${set}; b=(1 2); unset "$x"`, '`unset`'],
+    [`${set}; mapfile -t "$x" <<< 1`, '`mapfile`'],
+    // The body rows set the value with `export`: a bare assignment carrying a `[` makes the scanner
+    // read the level's bodies as scripts (WP-153's glob-named reader), and then the walk, not the
+    // body detector, would be what refused them.
+    [`export ${set}; cat <<EOF\n\${y[x]}\nEOF`, 'a subscript in an unquoted here-document body'],
+    [`export ${set}; cat <<EOF\nz\${z:x}\nEOF`, 'an offset in an unquoted body'],
+    [`z='${push}'; cat <<EOF\n\${z@P}\nEOF`, 'a transformation in an unquoted body'],
+    [`export ${set}; cat <<EOF\n$[x]\nEOF`, '`$[…]` in an unquoted body'],
+    [
+      `export ${set}; cat <<EOF\n'\${!x}'\nEOF`,
+      'an indirection in single quotes, which a body does not honour',
+    ],
+  ])('refuses %j under `auto` and `deny` (%s, criterion 2)', (command) => {
+    for (const mode of modes) {
+      const decision = decideUnattendedCommand({ command }, policy, mode);
+      expect(decision, mode).toMatchObject({ decision: 'deny', rule: 'uncertain' });
+      expect(decision.evaluation.uncertainty, mode).toEqual([UNCERTAINTY.evaluatedText]);
+      expect(decision.reason, mode).toContain('write the value literally');
+    }
+  });
+
+  it.each([
+    [`echo \${HOME}; cat <<EOF\nx='${push}'\nEOF`, `after a closed \`\${…}\``],
+    [`echo hi # note\ncat <<EOF\nx='${push}'\nEOF`, 'after a comment line'],
+    [`cat <<EOF\r\nx='${push}'\nEOF\r\n`, 'with a CRLF delimiter'],
+  ])(
+    'refuses an unquoted body the reader does not recognise, which bash expands: %j (%s)',
+    (command) => {
+      // Measured before this row: `unattended_auto`, and bash 5.2 and dash each ran the payload. The lines are read as commands, as before, and the would-be body as a body.
+      for (const mode of modes) {
+        const decision = decideUnattendedCommand({ command }, policy, mode);
+        expect(decision, mode).toMatchObject({ decision: 'deny', rule: 'uncertain' });
+        expect(decision.evaluation.uncertainty, mode).toEqual([UNCERTAINTY.hereDocumentExpansion]);
+      }
+    },
+  );
+
+  it.each([
+    [`echo \${HOME}; cat <<'EOF'\nx='${push}'\nEOF`, 'a quoted delimiter'],
+    [`echo hi # note\ncat <<"E"OF\nx='${push}'\nEOF`, 'a partly quoted delimiter'],
+    [`echo hi # note\ncat <<EOF\nplain text\nEOF`, 'a body with nothing to expand'],
+  ])(
+    'reads an unrecognised operator’s lines as before when its body expands nothing: %j (%s)',
+    (command) => {
+      expect(evaluateCommand({ command }).uncertainty).toEqual([]);
+    },
+  );
+
+  it(`refuses the substitution that reached \`deny\` and the attended policy: \`ls \${y[$(cat f)]}\``, () => {
+    // Measured before this row: `allow` / `allow_list` in every mode, because `ls *` and `cat *`
+    // are allowed; bash 5.2 and 3.2 ran the subscript the file `f` holds.
+    const command = `ls \${y[$(cat f)]}`;
+    expect(evaluateCommand({ command }).verdict).toBe('ask');
+    for (const given of [policy, readOnly]) {
+      for (const mode of modes) {
+        expect(decideUnattendedCommand({ command }, given, mode), mode).toMatchObject({
+          decision: 'deny',
+          rule: 'uncertain',
+        });
+      }
+    }
+  });
+
+  it.each([
+    [`z=abcdefghij; echo \${z:0:7}`, 'an offset and a length that are plain numbers'],
+    [`z=abc; echo \${z:1}`, 'an offset that is a plain number'],
+    [`arr=(a b); echo \${arr[0]}`, 'a subscript that is a plain number'],
+    [`arr=(a b); echo \${#arr[@]}`, 'the `@` subscript'],
+    [`arr=(a b); echo \${arr[*]}`, 'the `*` subscript'],
+    [`arr=(a b); echo \${arr[@]:1:1}`, 'an `@` subscript with plain-number operands'],
+    ['[[ 3 -eq 3 ]] && echo yes', 'a comparison of two plain numbers'],
+    [`echo \${@:1:2}`, 'a positional slice'],
+    [`echo \${!}`, `\`\${!}\`, the last background job`],
+    [`echo \${!BASH*}`, 'the names with a prefix'],
+    [`arr=(1 2); echo \${!arr[@]}`, 'an array’s keys'],
+    [`echo \${HOME:-/tmp} \${#HOME} \${HOME%/} \${HOME/a/b}`, 'the operators that read a word'],
+    [`echo $HOME "$HOME" \${HOME}`, 'a plain reference'],
+    [`echo '\${y[x]}' \\\${y[x]}`, 'a quoted and an escaped expansion'],
+    [`cat <<'EOF'\n\${y[x]}\n$[x]\nEOF`, 'a quoted-delimiter body'],
+    [`cat <<EOF\n\\\${y[x]}\nEOF`, 'an escaped `$` in an unquoted body'],
+    ['[[ $x == 1 ]] && echo yes', 'a string comparison'],
+    ['while read -r line; do echo "$line"; done < f', '`read` with a literal name'],
+    ['local msg="a b c"', 'a declaration with a literal name'],
+    ['declare -a arr', 'a declaration without `-i`'],
+    ['unset arr[0]', '`unset` with a literal subscript'],
+    ['git commit -m "let x be"', '`let` as a word of a message'],
+  ])('reads %j (%s, criterion 3)', (command) => {
+    expect(evaluateCommand({ command }).uncertainty).toEqual([]);
+  });
+});
+
+/**
+ * WP-158 review round 1: three places the first version did not reach — a redirection's target,
+ * which the walk consumes whole; a line continuation inside or before an expansion, which bash
+ * removes before it reads the word; and a wrapper's options between it and `let`/`declare`. Every
+ * row was `unattended_auto` before (measured, with the push), and bash 5.2 ran each payload.
+ */
+describe('WP-158 review round 1 — a target, a continuation and a wrapper’s options', () => {
+  const push = '$(git push origin HEAD:main)';
+  const set = `x='b[${push}]'`;
+  const modes = ['auto', 'deny'] as const;
+
+  it.each<readonly [string, string]>([
+    [`${set}; cat > \${y[x]}`, 'a redirection target'],
+    [`${set}; ls 2>\${y[x]}`, 'a descriptor redirection'],
+    [`${set}; echo hi &>\${y[x]}`, '`&>`'],
+    [`${set}; cat >> "\${y[x]}"`, 'an appending target in double quotes'],
+    [`${set}; echo hi >& \${y[x]}`, '`>&` with a word'],
+    [`${set}; echo hi >| \${y[x]}`, '`>|`'],
+    [`${set}; echo hi 2>&1 >\${y[x]}`, 'a target after a duplication'],
+    [`z='${push}'; echo hi > \${z@P}`, 'a transformation as a target'],
+    [`${set}; echo hi >\${!x}`, 'an indirection as a target'],
+    [`${set}; echo hi > a\${y[x]}b`, 'a target with text around it'],
+    [`${set}; echo hi > a$[1]`, '`$[…]` in a target'],
+    [`${set}; exec 3> \${y[x]}`, 'an `exec` redirection'],
+    [`${set}; echo $\\\n{y[x]}`, 'a continuation after `$`'],
+    [`${set}; echo \${y\\\n[x]}`, 'a continuation before the subscript'],
+    [`${set}; echo "\${y\\\n[x]}"`, 'a continuation in double quotes'],
+    [`${set}; (\\\n(x))`, 'a continuation inside `((`'],
+    [`${set}; l\\\net x`, 'a continuation inside `let`'],
+    // A continuation in an unquoted body is already `hereDocumentExpansion` (a line ending in `\\`).
+    [`${set}; command -p let x`, '`command -p`'],
+    [`${set}; command -- let x`, '`command --`'],
+    [`${set}; time -p let x`, '`time -p`'],
+    [`${set}; coproc let x`, '`coproc`'],
+    [`${set}; coproc C { let x; }`, 'a named `coproc`'],
+    [`${set}; command -p declare -i y=x`, '`declare -i` behind `command -p`'],
+    [`${set}; builtin declare -i y=x`, '`declare -i` behind `builtin`'],
+    [`${set}; [[ x "-eq" 1 ]]`, 'a quoted comparison operator (an over-ask: bash refused it)'],
+  ])('refuses %j under `auto` and `deny` (%s)', (command) => {
+    for (const mode of modes) {
+      const decision = decideUnattendedCommand({ command }, policy, mode);
+      expect(decision, mode).toMatchObject({ decision: 'deny', rule: 'uncertain' });
+      expect(decision.evaluation.uncertainty, mode).toEqual([UNCERTAINTY.evaluatedText]);
+    }
+  });
+
+  it.each([
+    ['coproc sudo id', 'block_list'],
+    ['coproc git push --force origin main', 'block_list'],
+    ['coproc C { git push --force origin main; }', 'block_list'],
+    ['coproc git push origin HEAD:main', 'git_boundary'],
+  ])(
+    'reads what `coproc` runs, which was `unattended_auto` (sibling sweep): %j → %s',
+    (command, rule) => {
+      for (const mode of modes) {
+        expect(decideUnattendedCommand({ command }, policy, mode), mode).toMatchObject({
+          decision: 'deny',
+          rule,
+        });
+      }
+    },
+  );
+
+  it.each([
+    [`echo hi > '\${y[x]}'`, 'a single-quoted target'],
+    [`echo hi > \${HOME}/out.txt`, 'a plain reference as a target'],
+    ['echo hi > out.txt 2>&1', 'a plain target'],
+    [`arr=(a); echo hi > out.\${#arr[@]}`, 'a literal subscript in a target'],
+    ['echo a\\\nb', 'a continuation with no expansion'],
+    ['command -v ls', '`command -v`'],
+    ['time -p ls', '`time -p`'],
+  ])('reads %j (%s)', (command) => {
+    expect(evaluateCommand({ command }).uncertainty).toEqual([]);
+  });
+});
+
 describe('properties over arbitrary lines', () => {
   const words = fc.constantFrom(
     'ls',

@@ -15,6 +15,7 @@
  * `evidence` here is **platform text** — a path, a line count, a number — and never a byte of the
  * file, so nothing a repository writes reaches the stored evaluation through this module.
  */
+import { withoutHereDocumentBodies } from '../policies/command-policy.js';
 
 /** product/17 R8's *"≤ 200 lines"*. */
 export const MAX_AGENT_INSTRUCTIONS_LINES = 200;
@@ -292,20 +293,31 @@ const commandLinesOf = (lines: readonly string[], keys: readonly string[]): stri
 };
 
 /**
- * The commands a shell hook runs, in order, up to an unconditional top-level `exit`; a heredoc's
- * body (`cat <<EOF` … `EOF`) is data, not commands.
+ * A line's comment blanked **without** trimming the line's end ({@link withoutComment} trims it). The
+ * whitespace before the `#` is kept, so a blanked line never becomes equal to a delimiter.
  */
-const shellCommandsOf = (lines: readonly string[]): string[] => {
+const commentBlanked = (line: string): string => line.replace(/(^|\s)#.*$/, '$1');
+
+/**
+ * The commands a shell hook runs, in order, up to an unconditional top-level `exit`. A
+ * here-document's body (`cat <<EOF` … `EOF`) is data, not commands, and **which lines are a body
+ * is the command scanner's answer** (`withoutHereDocumentBodies`, the reader WP-153 made the only
+ * one, `../policies/command-policy.ts`), never a reader of this module's own (WP-158 (f), backlog
+ * 510). The scanner reads the hook before {@link withoutComment} trims a line's end: a terminator
+ * with a trailing space, or an indented one under a plain `<<`, does not end a body in bash or
+ * dash, so trimming first would end it too early and read a body line as a command.
+ *
+ * **Comments are blanked first, untrimmed** — a deviation from ruling (f)'s *raw text*, measured:
+ * the scanner refuses a here-document after a word-start `#` **anywhere earlier in the text**
+ * (`HERE_DOCUMENT_CONTEXT`, which a one-line command needs), so on the raw hook the `#!/bin/sh`
+ * line alone made every body in it commands again, and a scanner named in one passed R13.
+ */
+const shellCommandsOf = (text: string): string[] => {
+  const uncommented = text.split('\n').map(commentBlanked).join('\n');
   const commands: string[] = [];
-  let heredoc: string | null = null;
-  for (const line of lines) {
-    if (heredoc !== null) {
-      if (line.trim() === heredoc) heredoc = null;
-      continue;
-    }
+  for (const line of withoutHereDocumentBodies(uncommented).split('\n').map(withoutComment)) {
     if (/^exit\b/.test(line)) break;
     commands.push(line);
-    heredoc = /<<-?\s*["']?(\w+)["']?/.exec(line)?.[1] ?? null;
   }
   return commands;
 };
@@ -348,7 +360,7 @@ const scannerRunIn = (path: string, text: string): string | null => {
   }
   const commands =
     path === '.husky/pre-commit'
-      ? shellCommandsOf(lines)
+      ? shellCommandsOf(text)
       : path === '.gitlab-ci.yml'
         ? commandLinesOf(lines, ['script', 'before_script', 'after_script'])
         : path === '.pre-commit-config.yaml'
@@ -410,15 +422,17 @@ export const mergeRequestConventionReadiness = (input: {
  *
  *  - `.pre-commit-config.yaml` — a hook whose `id` is a scanner's own, or an `entry:` command;
  *  - `lefthook.yml`, `.lefthook.yml` — a `run:` value (inline, or a `|` block under it);
- *  - `.husky/pre-commit` — every line, up to an unconditional top-level `exit`, a heredoc's body
- *    excluded;
+ *  - `.husky/pre-commit` — every line, up to an unconditional top-level `exit`, a here-document's
+ *    body excluded as the command scanner reads it (`withoutHereDocumentBodies`, WP-158);
  *  - `.gitlab-ci.yml` — the items and lines of `script:`, `before_script:` and `after_script:`;
  *    or GitLab's `Secret-Detection.gitlab-ci.yml` (or `.latest.`) template included, unless the file
  *    sets `SECRET_DETECTION_DISABLED` on or gives the `secret_detection:` job `when: never`, which
  *    refuses the whole file.
  *
  * Every other YAML list — `stages:`, `needs:`, `cache: paths:`, `exclude:` — is data. Comments are
- * stripped first (a line's `#…` tail, too).
+ * stripped first (a line's `#…` tail, too) — in the husky hook they are blanked without trimming,
+ * its here-document bodies taken out, and only then its lines trimmed, because a terminator's
+ * trailing space decides where a body ends.
  *
  * **Over-reports that remain, stated rather than closed** — this is a line reader, not a YAML or
  * shell parser: a hook in a pre-commit `stages: [manual]` block or disabled by `SKIP`; a lefthook

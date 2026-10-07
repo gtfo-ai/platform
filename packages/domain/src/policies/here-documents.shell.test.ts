@@ -30,7 +30,7 @@ import { join } from 'node:path';
 import fc from 'fast-check';
 import { afterAll, describe, expect, it } from 'vitest';
 import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
-import { commandUncertainty, splitCommandSegments } from './command-policy.js';
+import { commandUncertainty, splitCommandSegments, UNCERTAINTY } from './command-policy.js';
 
 const SCRATCH = mkdtempSync(join(tmpdir(), 'wp153-shells-'));
 afterAll(() => {
@@ -55,6 +55,10 @@ const run = (shell: string, script: string): { readonly ok: boolean; readonly st
  */
 const SHELLS = ['bash', 'dash'].filter((shell) => run(shell, 'echo ok').stdout === 'ok\n');
 const BASH_MAJOR = Number(run('bash', `echo "\${BASH_VERSINFO[0]}"`).stdout.trim());
+/** `major * 100 + minor`: 502 for bash 5.2, 302 for the macOS bash 3.2 (WP-158's gates). */
+const BASH_VERSION = Number(
+  run('bash', `echo "$(( \${BASH_VERSINFO[0]} * 100 + \${BASH_VERSINFO[1]} ))"`).stdout.trim(),
+);
 
 /** A line of a generated command; a marker gets its number when the command is rendered. */
 type Piece = { readonly text: string } | { readonly marker: (n: string) => string };
@@ -125,6 +129,13 @@ const LINES: readonly Piece[] = [
   // bash joins the two before comparing with the delimiter (`EOF`); dash does not (measured)
   { text: 'E\\\nOF' },
   { text: ')' },
+  // WP-158: a value the policy reads as single-quoted data, which bash evaluates as code where an
+  // expansion or a command reads it as arithmetic — as a command line, or in an unquoted body.
+  // `>&3` reaches the shell's own standard output from inside the subscript.
+  // `export`: a bare assignment carrying a `[` would make the level's bodies scripts to the scanner.
+  { marker: (n) => `exec 3>&1; export x='b[$(echo RAN_${n} >&3)]'` },
+  { text: `\${y[x]}` },
+  { text: 'let x' },
 ];
 
 /** The terminator for an opener: its word exactly, or a near miss the shell does not accept. */
@@ -259,6 +270,14 @@ describe('WP-153 — every line a shell runs is judged, or the line is uncertain
     ["cat <<'EOF'\f\nx\nEOF\f\necho RAN_1\nEOF\n", 'a form feed in the word'],
     ["cat <<'EOF'\v\nx\nEOF\v\necho RAN_1\nEOF\n", 'a vertical tab in the word'],
     ["cat <<'EOF'\u00a0\nx\nEOF\u00a0\necho RAN_1\nEOF\n", 'a no-break space in the word'],
+    // WP-158: an operator the reader does not recognise still opens an unquoted body in bash, which
+    // expands the `$(…)` the old reading takes for single-quoted text.
+    [
+      `exec 3>&1; echo \${HOME}; cat <<EOF\nx='$(echo RAN_1 >&3)'\nEOF`,
+      `a body after a closed \`\${…}\``,
+    ],
+    ["exec 3>&1 # c\ncat <<EOF\nx='$(echo RAN_1 >&3)'\nEOF", 'a body after a comment line'],
+    ["exec 3>&1\ncat <<EOF\r\nx='$(echo RAN_1 >&3)'\nEOF\r\n", 'a CRLF body, unrecognised'],
   ])('bash runs the marker, and the policy judges it or is uncertain: %j (%s)', (line) => {
     // Rule 43: each payload is one a reader that skipped too much would let through.
     expect(executed(run('bash', line).stdout)).toEqual(['1']);
@@ -266,6 +285,81 @@ describe('WP-153 — every line a shell runs is judged, or the line is uncertain
       true,
     );
   });
+
+  /**
+   * WP-158 (backlog 509): the measured payloads, each run by bash, outside a body and inside an
+   * unquoted one. A form newer than the bash present is skipped by its gate (`major * 100 +
+   * minor`): `@P` needs bash 4.4, and the nameref, `printf -v` and `-v` forms ran on bash 5.2 and
+   * not on 3.2 (PROGRESS § WP-158). CI's bash runs all of them.
+   */
+  const SET = "exec 3>&1; x='b[$(echo RAN_1 >&3)]'";
+  const PROMPT = "exec 3>&1; z='$(echo RAN_1 >&3)'";
+  // A body row sets the value with `export`: a bare assignment carrying a `[` makes the scanner read
+  // the level's bodies as scripts (WP-153's glob-named reader), which would hide the body detector.
+  const EXPORTED = `exec 3>&1; export x='b[$(echo RAN_1 >&3)]'`;
+  describe.each([
+    [`${SET}; echo \${y[x]}`, 0, 'an array subscript'],
+    [`${SET}; y=(a); echo \${#y[x]}`, 0, 'a length with a subscript'],
+    [`${PROMPT}; echo \${z@P}`, 404, 'a prompt-string transformation'],
+    [`${SET}; echo \${!x}`, 0, 'an indirection'],
+    [`${SET}; z=abc; echo \${z:x}`, 0, 'an offset'],
+    [`${SET}; z=abc; echo \${z:0:x}`, 0, 'a length'],
+    [`${SET}; echo $[x]`, 0, '`$[…]`'],
+    [`${SET}; ((x))`, 0, 'an arithmetic command'],
+    [`${SET}; let x`, 0, '`let`'],
+    [`${SET}; declare -i y=x`, 0, '`declare -i`'],
+    [`${SET}; [[ x -eq 1 ]]`, 0, '`[[ … -eq … ]]`'],
+    [`${SET}; y[x]=1`, 0, 'an element assignment'],
+    [`${SET}; y=([x]=1)`, 0, 'a compound element assignment'],
+    [`${SET}; declare "$x"=1`, 0, 'a declared name built from an expansion'],
+    [`${SET}; read "$x" <<< 1`, 0, '`read`'],
+    [`${SET}; b=(1 2); unset "$x"`, 0, '`unset`'],
+    [`${SET}; declare -n r=$x; echo $r`, 500, 'a nameref'],
+    [`${SET}; printf -v "$x" %s 1`, 500, '`printf -v`'],
+    [`${SET}; [[ -v $x ]]`, 500, 'a `-v` test'],
+    [`${EXPORTED}; cat <<EOF\n\${y[x]}\nEOF`, 0, 'a subscript in an unquoted body'],
+    [`${EXPORTED}; z=abc; cat <<EOF\n\${z:x}\nEOF`, 0, 'an offset in an unquoted body'],
+    [`${EXPORTED}; cat <<EOF\n$[x]\nEOF`, 0, '`$[…]` in an unquoted body'],
+    [`${PROMPT}; cat <<EOF\n\${z@P}\nEOF`, 404, 'a transformation in an unquoted body'],
+    // Review round 1: a redirection target, a line continuation, a wrapper's options.
+    [`${SET}; cat > \${y[x]}`, 0, 'a redirection target'],
+    [`${SET}; ls 2>\${y[x]}`, 0, 'a descriptor redirection target'],
+    [`${PROMPT}; echo hi > \${z@P}`, 404, 'a transformation as a target'],
+    [`${SET}; echo $\\\n{y[x]}`, 0, 'a continuation after `$`'],
+    [`${SET}; echo \${y\\\n[x]}`, 0, 'a continuation before the subscript'],
+    [`${SET}; command -p let x`, 0, '`command -p`'],
+    [`${SET}; time -p let x`, 0, '`time -p`'],
+    [`${SET}; coproc let x; wait`, 400, '`coproc`'],
+  ] as const)('WP-158: %j (%s)', (line, needs, what) => {
+    it.skipIf(!(BASH_VERSION >= needs))(
+      `bash runs the marker through ${what}, and the policy is uncertain (criterion 4)`,
+      () => {
+        // bash 3.2 expanded a redirection target twice here (measured), so the marker may print twice.
+        expect([...new Set(executed(run('bash', line).stdout))]).toEqual(['1']);
+        expect(commandUncertainty(line)).toContain(UNCERTAINTY.evaluatedText);
+      },
+    );
+  });
+
+  // The planted value is a variable each literal form would evaluate if it read one. The quoted
+  // body's has no `[`: a `[` in an assignment makes the scanner read that level's bodies as scripts
+  // (WP-153's glob-named reader, an over-read), which is not what this row is about.
+  it.each([
+    [SET, `z=abcdefghij; echo \${z:0:7} \${z:1}`, 'an offset and a length that are plain numbers'],
+    [SET, `arr=(a b); echo \${arr[0]} \${#arr[@]} \${arr[*]} \${arr[@]:1:1}`, 'literal subscripts'],
+    [SET, '[[ 3 -eq 3 ]]', 'a comparison of two plain numbers'],
+    [SET, `echo \${!} \${!x*} \${!x@}`, 'what `${!` reads that is not an indirection'],
+    [SET, `arr=(a b); echo \${!arr[@]}`, 'an array’s keys'],
+    [PROMPT, `cat <<'EOF'\n\${z@P}\n\${y[z]}\n$[z]\nEOF`, 'a quoted-delimiter body'],
+    [SET, `echo hi > '\${y[x]}'`, 'a single-quoted redirection target (review round 1)'],
+  ])(
+    'WP-158: bash runs no marker beside a planted value (%j), and the policy reads %j (%s, criterion 3)',
+    (planted, literal) => {
+      const line = `${planted}; ${literal}`;
+      expect(executed(run('bash', line).stdout)).toEqual([]);
+      expect(commandUncertainty(line)).toEqual([]);
+    },
+  );
 
   it.each([
     ["cat <<'EOF'\necho RAN_1\nEOF", 'a quoted body'],

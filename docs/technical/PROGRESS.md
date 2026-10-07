@@ -14710,6 +14710,168 @@ passes R13. The docblock at `:295-296` points to the shared reader.
 
 **Depends on** WP-153.
 
+### 511. **A builtin or wrapper that runs a *string* as code is not read by the command scanner, so `trap 'git push origin HEAD:main' EXIT` is `unattended_auto` and bash runs the push behind a line the policy reads as one `trap` command** (TODO, **major — the same consequence class as backlog 509: under `unattended: auto` it is a path for an arbitrary hidden command past the block list and the git boundary, which rule 1 says is read (*"the script a shell wrapper is handed"*). By reading it is `auto`-only: every spelling below is an unmatched line, so `deny` and the attended policy refuse or ask, unlike 509, which reached `allow`. What bounds the consequence is what bounds 481's residual and 509 (the credential answered for the project's repository path only since `860be46a`, the egress allow-list, the run container). Reachable by a model told to write it (BD-022), not by an ordinary command**. WP-158's *Discovered work*, session 13, verified by the refiner against WP-158's uncommitted tree on `deee26e6`. **No work package owns it**: WP-158's ruling (e) scoped it out as a named residual (the module docblock and technical/05's WP-158 amendment both name it, the latter as *"a different class, filed as Discovered work"*, which this entry is), and none of WP-154…WP-157 or WP-159 touches `packages/domain/src/policies/`. **It needs its own row, first in the remaining M9 queue after WP-158** (security, as 509 was placed), parallel-safe with every other row for the reason WP-153 and WP-158 were. Backlog **512** and **513** are candidate folds: same module, same shell oracle)
+
+**The measurement (WP-158's implementer, bash 5.2.37 from `platform-runtime:wp151`).** Quoted from the
+row's notes: *"`trap 'git push origin HEAD:main' EXIT` is `unattended_auto`, and bash 5.2 ran the trap
+(measured: `trap 'echo RAN_EXEC' EXIT`). So are `x='…'; trap "$x" EXIT` and `PS4='$(git push origin
+HEAD:main)' bash -xc :` (verdict measured; the shell run of the `PS4` case was not done)."* So: one
+shell run (the `trap … EXIT` payload) and three verdicts. Everything else below is **read, not run**
+(rule 66) and is a **hypothesis** until a verdict case and a shell-oracle row exist.
+
+**What the code does (read in the working tree on `deee26e6` plus WP-158's diff).**
+- `wrappedScript` (`packages/domain/src/policies/command-policy.ts:2627`) is the only reader of a
+  string handed to something that runs it. It answers `eval` (all the words after it) and a member of
+  `SHELL_NAMES` (`:1481`, exactly `sh`, `bash`, `zsh`, `dash`) followed by a word that is **exactly**
+  `-c` (`:2642`). Nothing else becomes a fragment, so the git boundary (`gitBoundaryViolation`,
+  `packages/domain/src/policies/unattended-commands.ts:725`) and the block list never see it.
+- `eval` is handled, through `wrappedScript` and through `HERE_DOCUMENT_SCRIPT_READERS` (`:2205`).
+  `source` and `.` are only in the latter: they run a **file**, which is the residual the unattended
+  module already states (*"a script the run wrote"*, `unattended-commands.ts:36`), so they belong here
+  only when the file is a string on the line (`source /dev/stdin <<<'…'`, `. <(…)`).
+- WP-158's docblock (`command-policy.ts:60-62`) names the residual: *"a builtin that runs a *string* as
+  code (`trap '…' EXIT`, `PS4` under `bash -x`, `PROMPT_COMMAND`, `bind -x`, `complete -C`)"*.
+
+**The class, by reading — each needs one verdict case and, where marked, a shell run.**
+1. **Builtins that keep a string and run it later, in a non-interactive shell** (the cases that
+   matter, because the CLI's Bash tool is not interactive): `trap` on `EXIT`, `ERR`, `DEBUG`,
+   `RETURN` or a signal (**measured** for `EXIT`); `PS4` under `bash -x` **or** `set -x` on the same
+   line (`PS4='$(…)'; set -x; :`; verdict measured for the `bash -xc` spelling only, no shell run);
+   `mapfile`/`readarray -C callback` (the manual: the callback is evaluated); `alias` after
+   `shopt -s expand_aliases` (an alias value is code; a later line using it runs it);
+   `BASH_ENV=… bash …` / `ENV=… sh …` (a file, so the 481 residual, but the assignment is on the line).
+2. **Interactive-only by the manual, so probably unreachable from a run**: `PROMPT_COMMAND`,
+   `bind -x`, `complete -C`/`compgen -C`, `fc -e`/`fc -s` (history is off in a non-interactive
+   shell). **Needs measurement**: whether the pinned CLI's Bash tool ever runs an interactive or
+   login shell; if it does not, these are a docblock line, not cases.
+3. **The shell wrapper `wrappedScript` misses** — the one most likely to be written by an ordinary
+   model, and the strongest reason this is major: a combined flag, `bash -lc 'git push origin
+   HEAD:main'`, `sh -ec '…'`, `bash -xc '…'`. `:2642` looks for a word equal to `-c`, so the script
+   is not parsed, and the argv peel (`argv0Candidates`, `:1551`) offers `'git push origin HEAD:main'`
+   as one quoted word whose name is not `git`. **Expected verdict under `auto`: `unattended_auto`**
+   with no uncertainty. No test in `command-policy.test.ts` or `unattended-commands.test.ts` uses a
+   combined flag (grep: none). **Needs measurement first** — one unit case decides it.
+4. **Shells not in `SHELL_NAMES`**: `ksh`, `mksh`, `ash`, `busybox sh`, `rbash`, `fish -c` (all in
+   `HERE_DOCUMENT_SCRIPT_READERS`, none in `SHELL_NAMES`). Live only if the run image ships one —
+   **needs measurement**: `ls` of the run image's `PATH`.
+5. **Exec wrappers that take a command string**, from `ARGV0_WRAPPERS` (`:1360`; most added by
+   backlog 484): `su -c '…'`, `runuser -c '…'`, `flock f -c '…'`, `watch '…'` (runs its argument
+   through `sh -c`), `env -S '…'` (splits a string into argv), and `script -c '…'` (not in the
+   list). Each is peeled for the block list but its string is one quoted word. Whether `su`/`runuser`
+   work in the run container (no setuid target) is unmeasured.
+6. **A shell reading a string from standard input**: `bash <<<'git push …'`, `echo 'git push …' |
+   bash`, `source /dev/stdin <<<'…'`. The block list's `curl * | sh` names one producer; whether the
+   scanner reads a here-string's word as a script is not read off the code here — `<<<` is
+   explicitly not a here-document (`:1770-1773`), so **probably not**. Needs a verdict case.
+
+**What it costs to leave.** Every guarantee the scanner gives under `auto` has a builtin spelling
+that skips it, and item 3's `bash -lc` is a spelling a model writes without being told to. The
+module docblock already concedes `python3 -c` under `auto` (`unattended-commands.ts:34-37`), so the
+reach is not new; what is wrong is the reader's claim in rule 1 that a shell wrapper's script is
+read. That is the shape 509 was graded major for.
+
+**Done when** (fail closed, rule 5):
+1. **Measure first**: verdicts for one spelling of each item above under `auto` and `deny`, both
+   shipped allow lists, with a planted `git push origin HEAD:main`; shell-oracle runs on bash 5.2
+   and dash for items 1 and 3 (the `PS4` run WP-158 did not do, `mapfile -C`, the alias). The
+   table goes in the row's notes in WP-158's shape (before / after).
+2. `wrappedScript` reads a combined short-option word containing `c` (`-lc`, `-ec`, `-xc`, `-cl`)
+   for every shell in one set shared with `HERE_DOCUMENT_SCRIPT_READERS`, and the string argument of
+   the wrappers in item 5 that take one — parsed as a script (rule 1), not refused.
+3. A string a builtin keeps for later (item 1) is **uncertain** with a model-worded reason (*"write
+   the command itself; the platform cannot read a command stored in a trap, a prompt or a
+   callback"*) — or parsed as a script where the string is literal. The row decides which per form
+   and says why. `PS4`/`BASH_ENV`/`ENV`/`PROMPT_COMMAND` assignments, exported or prefixed, count.
+4. Bypass cases in `packages/domain/src/policies/unattended-commands.test.ts`, one per form, planted
+   push, not `unattended_auto`. **Canary**: revert each reader and its rows answer `unattended_auto`.
+   Oracle rows in `packages/domain/src/policies/here-documents.shell.test.ts` for what bash ran.
+5. The docblock residual (`command-policy.ts:60-63`) and technical/05's WP-158 amendment are
+   narrowed to what is still not read (rule 83); item 2's forms stay named there if not measured.
+
+**Depends on** WP-158 (the same module; the row starts from its committed tree). Nothing else.
+
+### 512. **WP-153's glob-named script reader fires on any segment whose first word holds `*`, `?`, `[` or `{` — an assignment such as `x='b[1]'`, and by reading also `[ … ]`, `[[ … ]]` and a `{ …; }` group — so every quoted here-document body at that level is read as a script** (TODO, **nit — an over-read, so it fails closed: the cost is a body (`cat <<'EOF'` + PHP, say) read as commands and refused or asked, which is the pre-WP-153 behaviour backlog 482 closed, and a test that uses a bare assignment hides the body detector behind the walk. No security consequence.** WP-153's review round 1 nit 3 (*"A reader named by a glob or a brace (`| /bin/s?`, `| /bin/{sh,x}`) now counts as a script reader in command position. It over-reads, which costs only the old reading"*), its reach found by WP-158's implementer, session 13, verified by the refiner on `deee26e6` plus WP-158's diff. **No work package owns it.** Candidate fold for backlog **511**'s row, which edits the same function's neighbour)
+
+**What is wrong (read, not run — rule 66).** `feedsScriptReader`
+(`packages/domain/src/policies/command-policy.ts:2227-2232`) asks, of each pipeline stage,
+whether any `argv0Candidates` (`:1551`) first word is `.` or matches `/[*?[{]/`. `argv0Candidates`
+puts the stage's **own** first token first, and also every suffix after it when that token is a
+wrapper **or an assignment** (`isWrapperToken`, `:1474-1475`). So:
+- `x='b[1]'` is offered as a name, `argv0Name` unquotes it to `x=b[1]`, and the `[` matches. This is
+  the case WP-158 measured (quoted from its notes: *"`x='b[1]'; cat <<'EOF'` reads the body as a
+  script"*), and why its 59 body rows set the value with `export` instead.
+- **By reading, not run**: `[` (the test command), `[[` and `{` are first words that match the same
+  class, and `{` and `[[` are themselves in `ARGV0_WRAPPERS` (`:1409`, `:1412`). So `[ -d x ] && cat > f <<'EOF'` and a
+  brace group around a here-document would read the body as a script too. The report named only
+  the assignment; this half **needs one unit case** to confirm.
+- `parseCommand` applies the answer to the whole level (`readsScripts`, `:2692`), so one such
+  segment anywhere on the level turns every body on it into commands.
+
+**What it costs to leave.** A quoted body beside an ordinary test or assignment is read as commands:
+an apostrophe in it is `unbalancedQuote` (uncertain, refused in both unattended modes), a body line
+that looks like a refused git command is judged as one. The refusal names a construct the model did
+not write. Agents mostly write files with the Write tool (482's own estimate), so it is rare.
+Tests that build a line with a bare assignment silently test the walk instead of the body detector.
+
+**Done when** the glob check looks only at a word in **command position** that is not an assignment
+and not the `[`/`[[`/`{` keywords — i.e. after the assignment and wrapper peel, never the peeled
+token itself. Cases in `packages/domain/src/policies/command-policy.test.ts`: `x='b[1]'; cat
+<<'EOF'` + a line with an apostrophe + `EOF` stays certain; the same for `[ -d x ] &&` and a `{ …; }`
+group; WP-153's three glob/brace reader rows (`| /bin/s?`, `| /bin/{sh,x}`, `/bin/[s]h`) still read
+a script. **Canary**: restore the assignment token as a candidate and the first case is uncertain.
+WP-158's `export` setters may then go back to bare assignments (optional).
+
+**Depends on** WP-153. Nothing else.
+
+### 513. **`HERE_DOCUMENT_CONTEXT` is matched against the whole text before the operator, so one comment, one closed `${…}`, one `((`/`$[`/`[[` anywhere earlier — a `#!/bin/sh` line, or `git commit -m "fix #12"` — stops every later here-document in a multi-line command from being recognised** (TODO, **nit — a convenience loss that fails closed for an unquoted delimiter since WP-158, and fails *towards the old reading* for a quoted one; a hypothesis below would raise it if measured. WP-158's *Discovered work*, session 13, verified by the refiner on `deee26e6` plus WP-158's diff. **No work package owns it.** Candidate fold for **511**'s row; it needs its own shell-oracle cases)
+
+**What is wrong (read, not run — rule 66).** `HERE_DOCUMENT_CONTEXT`
+(`packages/domain/src/policies/command-policy.ts:1766`, `/\$\{|\$\[|\(\(|\[\[|(?:^|[\s;&|()<>])#/`)
+is tested by `readHereDocumentOperator` (`:1793-1798`) on `before`, which the walker builds from
+**everything** it read ahead of the operator, quoted text included, bodies excluded (`:2504-2505`).
+Its docblock says so (*"Matched on everything the walker has read before the operator … so it errs
+towards not recognising"*). Each pattern was measured by WP-153 to matter only **in its own
+construct** (`${x:-<<EOF}`, `((x<<y))`, `# <<EOF`); a closed `${HOME}` or a comment on an earlier
+line does not stop bash reading a later `<<EOF` (WP-158 measured both: bash 5.2 and dash read the
+body). The `#` alternative also matches a `#` after a space inside a quoted string.
+
+**Which direction it fails (the orchestrator's question).**
+- **Unquoted delimiter: closed, since WP-158.** `unrecognisedUnquotedOperator` (`:1813`) reads the
+  would-be body both ways — as commands, and through `hereDocumentUncertainty` for its expansions
+  (`:2515-2521`). Nothing is skipped; the lines may over-ask.
+- **Quoted delimiter: the old reading, which over-reads in the ordinary case** — the body is read as
+  commands, so an apostrophe is `unbalancedQuote` and a body line naming a refused git command is
+  refused (backlog 482's symptom, back for any command after such a context).
+- **Hypothesis, not measured — the one that would make it more than a nit.** Read as commands, a
+  body's quotes can **pair across the terminator**: `# note` / `cat <<'EOF'` / `a'` / `EOF` /
+  `git push origin HEAD:main` / `'`. If the scanner reads `a'…'` as one quoted word, the push is
+  inside it and is neither a segment nor a git-boundary fragment, while bash ends the body at `EOF`
+  and runs the push (what bash does with the final unmatched `'` — likely a syntax error after the
+  push has run — is also unmeasured). This shape is **pre-WP-153 behaviour** for every here-document,
+  so it is not a regression, but it is a hidden-command shape in the 509/511 class. **Needs
+  measurement**: the verdict of that line under `auto` (one unit case) and a bash run.
+- **Readiness felt it already**: WP-158's ruling (f) had to blank comments before calling the shared
+  reader, because the hook's `#!/bin/sh` line alone refused every operator in the hook
+  (`packages/domain/src/readiness/recheck.ts:299`, `:316`).
+
+**What it costs to leave.** A multi-line command that starts with a comment or uses `${…}` once is
+read with 482's old symptom: refused turns naming a construct the model did not write, and every
+future reader of `before` (R13 today) has to know to blank comments first. If the hypothesis holds,
+a hidden push under `auto`.
+
+**Done when** (each change needs its own shell-oracle rows, rule 65): the comment alternative is
+scoped to the current line (text after the last newline outside a body), and `${`/`$[`/`((`/`[[` to
+an **unclosed** construct at the operator; quoted text is excluded from the `#` test. Cases: a
+`#!/bin/sh` line, a closed `${HOME}` and `git commit -m "fix #12"` before `cat <<'EOF'` each keep
+the body as data; WP-153's four refusal rows (`${x:-<<EOF}`, `((x<<y))`, `$[1<<2]`, `# <<EOF`) still
+refuse. **Canary**: restore the whole-text match and the three new cases read the body as commands.
+R13's comment blanking may then be dropped (optional). The hypothesis case is written **first**,
+whatever the rest decides; if it answers `unattended_auto`, this entry is regraded major and the
+pairing is refused (an unrecognised operator whose would-be body has an odd quote count is
+uncertain) before the convenience fix.
+
+**Depends on** WP-158 (`unrecognisedUnquotedOperator`, ruling (f)).
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -44093,3 +44255,221 @@ Docs moved with it: technical/02 (kept whatever the person chooses; the `merged_
 
 The reviewer's two mutants were re-run and both are killed. `isWriteTarget(target) && pending.length === 0` fails the first two cases. `<<-` stripping spaces as well as tabs fails the last. Each run started at a load under 12.
 
+#### WP-158
+
+**The command scanner refuses an expansion that runs a variable's text as code, and readiness reads hook here-documents with the scanner's reader**: rulings (a)–(g) (plan row), backlog 509 and 510. Built on `deee26e6`. No migration. Files: `packages/domain/src/policies/command-policy.ts`, `packages/domain/src/readiness/recheck.ts`, their tests, `here-documents.shell.test.ts`, technical/05. No new test file, so `vitest.config.ts` is unchanged.
+
+**Measured first (ruling (a), criterion 1).** Scripts in the session scratchpad, never in the checkout. Shells: bash 5.2.37 and dash from `platform-runtime:wp151` (`docker run --rm --network none … --entrypoint sh … run.sh <shell> cases.txt`), and the macOS `/bin/bash` 3.2.57. Each case sets the value in a single-quoted assignment on the same line. For the shells, `P` is `echo RAN_EXEC >&2`, and a case counts as run only when an output line is exactly `RAN_EXEC`. A first version grepped for `RAN` anywhere, and an `echo` of the literal value or an error message quoting it made `${z@Q}` and `[ "$x" -eq 1 ]` look run. For the verdicts, `P` is `git push origin HEAD:main`, through `decideUnattendedCommand` with `DEFAULT_COMMAND_POLICY`. The *before* column is `main` at `deee26e6`; the *after* column is this tree.
+
+| Form (`P` = the payload) | bash 5.2 | bash 3.2 | dash | before: `auto` / `deny` | after: `auto` / `deny` |
+|---|---|---|---|---|---|
+| `x='b[$(P)]'; echo ${y[x]}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; echo ${#y[x]}` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `z='$(P)'; echo ${z@P}` | RAN | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `z='$(P)'; echo ${z@Q}` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `z='$(P)'; echo ${z@E}` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `z='$(P)'; echo ${z@A}` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `z='$(P)'; echo ${z@a}` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `z='$(P)'; echo ${z@U}` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `z='$(P)'; echo ${z@u}` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `z='$(P)'; echo ${z@L}` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `z='$(P)'; echo ${z@K}` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `z='$(P)'; echo ${z@k}` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; echo ${y[x]@Q}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; echo ${!x}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; z=abc; echo ${z:x}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; z=abc; echo ${z:0:x}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; echo $[x]` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; echo $((x))` | RAN | RAN | no | uncertain / uncertain | uncertain / uncertain |
+| `x='b[$(P)]'; ((x))` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; let x` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; declare -i y=x` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; typeset -i y=x` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; f() { local -i y=x; }; f` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; export -i y=x` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; declare -i y; y=x` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; [[ x -eq 1 ]]` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; [[ x -ne 1 ]]` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; [[ x -lt 1 ]]` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; [[ x -le 1 ]]` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; [[ x -gt 1 ]]` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; [[ x -ge 1 ]]` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; [[ 1 -eq x ]]` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; [[ $x -eq 1 ]]` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; [ x -eq 1 ]` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; [ "$x" -eq 1 ]` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; test "$x" -eq 1` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; y[x]=1` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; y=([x]=1)` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; declare -n r=$x; echo $r` | RAN | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; printf -v "$x" %s 1` | RAN | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; read "$x" <<< 1` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; read -a "$x" <<< 1` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; unset "$x"` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; [[ -v $x ]]` | RAN | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; test -v "$x"` | RAN | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; echo ${y[@]:x}` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; for ((i=x;i<0;i++)); do :; done` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; case 1 in $((x))) :;; esac` | RAN | RAN | no | uncertain / uncertain | uncertain / uncertain |
+| `x='b[$(P)]'; echo ${!y[x]}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; y=(a); echo ${#y[x]}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; y=(a b); echo ${y[@]:x}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; b=(1 2); unset "$x"` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; b=(1 2); unset 'b[$(P)]'` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; read -a b <<< "1"; echo ${b[x]}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; mapfile -t "$x" <<< 1` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; declare "$x"=1` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; export "$x"=1` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; local_test() { local "$x"=1; }; local_test` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; z=abc; echo "${z:x}"` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; echo "${y[x]}"` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; echo ${y[ x ]}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; echo ${y[$x]}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; echo ${y["x"]}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; z=abc; echo ${z: x}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; z=abc; echo ${z:(x)}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; z=abc; echo ${z:-x}` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; z=abc; echo ${z#x}` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; echo ${y[x]:-d}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; echo $(( 1 ))${y[x]}` | RAN | RAN | no | uncertain / uncertain | uncertain / uncertain |
+| `x=$(cat f); echo ok` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; echo ${x}` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; echo $x` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; echo "$x"` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; echo ${x:-a} ${x#b} ${x%]} ${x/b/c} ${x^^} ${#x}` | no | no | no | git_boundary / git_boundary | git_boundary / git_boundary |
+| `x='b[$(P)]'; echo ${!}` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; echo ${@:1:2}` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; arr=(1 2); echo ${!arr[@]}` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; echo ${!x*}` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; echo ${!x@}` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; [[ x == 1 ]]` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; [[ $x = 1 ]]` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; declare -A y; y[x]=1` | no | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; declare -A y; echo ${y[$x]}` | no | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; [[ ! x -eq 1 ]]` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; declare -ai y=(x)` | RAN | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; declare -g -i y=x` | RAN | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; readonly -i y=x` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; command let x` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; builtin let x` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; eval 'let x'` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; shift x` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; exit x` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; return x` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; printf '%d' x` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; printf '%d' "$x"` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; ulimit x` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; z=(a); echo ${z[@]: x}` | RAN | RAN | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; echo $[ 1 ]` | no | no | no | unattended_auto / unattended_deny | uncertain / uncertain |
+| `x='b[$(P)]'; f() { return x; }; f` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; break x` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; wait x` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; history x` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; set -- a; shift "$x"` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `x='b[$(P)]'; z=abc; echo ${z:1:2}` | no | no | no | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `z=abcdefghij; echo ${z:0:7}` (literal) | no | no | n/a | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `arr=(a b); echo ${arr[0]}` (literal) | no | no | n/a | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `arr=(a b); echo ${#arr[@]}` (literal) | no | no | n/a | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `arr=(a b); echo ${arr[*]}` (literal) | no | no | n/a | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+| `[[ 3 -eq 3 ]] && echo yes` (literal) | no | no | n/a | unattended_auto / unattended_deny | unattended_auto / unattended_deny |
+
+
+- **Headline.** Before the change, every form bash ran was `unattended_auto` under `auto` and `unattended_deny` under `deny`, as the backlog expected. The only exceptions already carried `$((`. After the change, every form any shell ran is `uncertain` in both modes. The literal rows are unchanged. dash ran none of them, because it reads a variable in arithmetic as a plain number. bash 3.2 ran most of them, but not `@P`, a nameref, `printf -v` or a `-v` test.
+- **Rows that are `uncertain` although no shell ran them.** These are fail-closed by the ruling, not over-asks found by accident.
+  - Every `@` operator but `@P`: ruling (a) says *every other `${name@op}`*, and the backlog says *a name followed by `@`*. Listing operators would let a later bash add one past the list.
+  - `export -i` and `readonly -i`: an invalid option in both bashes, but ruling (a) names `export -i`.
+  - `${#y[x]}`, `${y[@]:x}` and `unset "$x"` with `y`/`b` unset: each ran once the array was set (the second table rows).
+  - `read -a "$x"` and `mapfile -t "$x"`: no run measured.
+  - `$[ 1 ]`: `$[` is always uncertain, as `$((` is.
+- **Not on the list, and not run:** `[ x -eq 1 ]`, `[ "$x" -eq 1 ]` and `test "$x" -eq 1`, in every shell; and `shift`, `exit`, `return`, `break`, `wait`, `ulimit`, `history`, `printf %d` and `getopts` with the variable.
+- **The backlog's open question: is a bare `x=$(cat f)` ever `allow`?** **No.** The assignment segment matches no allow entry in any shipped list (`DEFAULT_COMMAND_POLICY`, `DEFAULT_READ_ONLY_ALLOW`, `DEFAULT_IMPLEMENTATION_ALLOW`), so it is `ask`, and `unattended_deny` under `deny`. **But `deny` and the attended policy were still reached**, by one step more. The substitution can sit inside the subscript: `ls ${y[$(cat f)]}` was `allow` / `allow_list` in every mode and every shipped list, because `ls *` and `cat *` are allowed. bash 5.2 and 3.2 both ran the subscript that the file `f` holds (`b[$(…)]`). It is now `uncertain`, and `evaluateCommand` says `ask`. This is the backlog's *"if it is, `deny` is reached too"*, by another route.
+- **Ruling (g):** how often recorded runs write these forms is **unmeasured**. It needs the dogfood database. The cost of failing closed is therefore not known. The shapes most likely to be legitimate stay readable: `${#arr[@]}`, `${x:0:7}`, `${arr[0]}`, `while read -r line` and `local msg="…"`. The shape known to cost is `((i++))`.
+
+**What was built**
+- **(b) One entry: `UNCERTAINTY.evaluatedText`.** It is worded for the model: *"… — write the value literally; the platform cannot read an expansion that evaluates a variable's text"*. The `$((` entry stays. Two detectors feed it:
+  - `evaluatesVariableText` reads one `${…}`/`$[` at a `$`. It flags: `$[`; a subscript that is not literal; an offset or length that is not literal; any `@` transformation; an indirection, except `${!}`, `${!prefix*}`/`${!prefix@}` and `${!name[@]}`/`${!name[*]}`, each measured to evaluate nothing; and a `${` with no parameter name (bash 5.3's `${ cmd; }` runs a command).
+  - `stageEvaluatesText` reads one pipeline stage's quote-aware words (the scanner itself, with blanks as the operators). It flags:
+    - `let`, also behind `command`/`builtin`;
+    - `declare`/`typeset`/`local`/`export`/`readonly` with `-i` or `-n`, or with a name that is not literal;
+    - element assignments with a subscript that is not literal, including `[x]=1` inside `y=( … )`, which the list split cuts at `(`;
+    - `read`/`mapfile`/`readarray`/`unset` names, `printf -v` and `test -v`/`[ -v`;
+    - inside `[[ … ]]`: `-v`, and `-eq`…`-ge` unless both operands are plain numbers. A `TestState` carries *inside `[[`* across stages, because the list split cuts `[[ -f a && x -eq 1 ]]` at `&&`.
+
+  The arithmetic command `((…))` is flagged in `scan`, before the `(` operator splits it.
+- **Assumption (rule 27, beyond the ruling's letter): the name-taking builtins are folded in.** Ruling (e) allowed this (*"unless (a) folds them in"*). (a) measured `declare -n`, `printf -v`, `read "$x"`, `unset "$x"`, `declare "$x"=1`, `local "$x"=1`, `[[ -v $x ]]` and `test -v "$x"` running the payload on bash 5.2. Naming them only in a docblock would have left eight measured `unattended_auto` paths open.
+- **(c) Literal exemptions only**, each backed by a shell-oracle case. A plain decimal operand or subscript, the `@`/`*` subscripts, and the three `${!` shapes. `((i++))` is uncertain. Quoted digits (`"3"`) are not literal: this over-asks, which is the fail-closed direction.
+- **(d) Where.** `scan` runs the expansion detector at every `$` outside single quotes: outside quotes and inside double quotes, the same branch as `$(`. `hereDocumentUncertainty` runs the same detector over an unquoted body (`bodyEvaluatesVariableText`, where only a backslash keeps a `$` from expanding). Single quotes and a quoted-delimiter body are data. The `HERE_DOCUMENT_CONTEXT` regex is unchanged.
+- **Found by the shell oracle, beyond the ruling: an operator the reader does not recognise still opens an unquoted body in bash and dash.** The criterion-(4) generator gained a setter line, `x='b[$(echo RAN_n >&3)]'`. Its first run failed on `echo ${HOME}; cat <<EOF` + `x='$(…)'` + `EOF`. `HERE_DOCUMENT_CONTEXT` refuses after **any** earlier `${`, closed or not, and after a comment on an earlier line. So the lines were read as commands, where `'…'` is a quote. The shell reads a body, where it is not, and expands the `$(…)`. A Linux run found `cat <<EOF\r` the same way: the word boundary refuses `\r`. Measured on `main`: all three shapes (closed `${…}`, a comment line, CRLF) are `unattended_auto` with a push in the quotes, and bash 5.2 and dash each ran the payload. WP-153 recorded *"not recognising costs only the old reading"*, and that is false for an unquoted delimiter. **Fix (fail closed, nothing skipped):** `unrecognisedUnquotedOperator` takes a `<<` that the reader refused, and whose word up to a metacharacter has no quote or backslash, as bash's delimiter. At the newline, its would-be body is read through `hereDocumentUncertainty`, apart from the unterminated check. The lines are still read as commands as well. It over-asks only when such a line's following lines hold a substitution or an evaluating expansion.
+- **(e)** The module docblock (rule 5 and a new paragraph, *A variable's text is code*) names what is still not read. technical/05 § "Command and tool policy" gains the WP-158 amendment, and two sentences of WP-153's amendment are qualified (below).
+- **(f) Backlog 510.** `shellCommandsOf` takes the hook's text and returns `withoutHereDocumentBodies(…)` lines, then `withoutComment`. Its regex is deleted, and its docblock points to the shared reader. **Measured deviation from *"the hook's raw text"* (rule 27):** with the raw text, the `#!/bin/sh` line alone made `HERE_DOCUMENT_CONTEXT` refuse every operator in the hook. The existing WP-94 case `#!/bin/sh\ncat <<EOF\ngitleaks detect\nEOF…` then **passed R13**, and so did the new indented and trailing-space cases. So comments are blanked first, **without trimming** (`commentBlanked` keeps the whitespace before the `#`, so a blanked line never equals a delimiter), and then the shared reader runs. The trailing-space property the ruling protects holds.
+
+**Criteria and tests**
+- **(1)** The table above, before and after.
+- **(2)** `packages/domain/src/policies/unattended-commands.test.ts` › "WP-158 — an expansion that evaluates a variable’s text is uncertain (backlog 509)". It has 59 rows, one per form and spelling, each with the planted push, `uncertain` under `auto` and `deny`, and `uncertainty` exactly `[evaluatedText]`. The body rows set the value with `export`: a bare assignment that carries a `[` makes the level's bodies scripts to the scanner (WP-153's glob-named reader), and then the walk, not the body detector, would refuse them. The table has two more cases: `ls ${y[$(cat f)]}` in every mode and both lists, and the three unrecognised-operator shapes. A control table (quoted delimiter, partly quoted delimiter, nothing to expand) stays certain.
+- **(3)** The same describe's table *reads %j (%s, criterion 3)* has 22 rows, with `uncertainty` `[]`. They include `${x:0:7}`, `${arr[0]}`, `${#arr[@]}`, `[[ 3 -eq 3 ]]`, `${!}`, a quoted body, an escaped `\${`, `read -r line`, `local msg="a b c"` and `git commit -m "let x be"`.
+- **(4)** `packages/domain/src/policies/here-documents.shell.test.ts`:
+  - 23 bash-run rows *bash runs the marker through %s, and the policy is uncertain*, outside a body and inside an unquoted one. `@P` is gated at bash 4.4, and the nameref, `printf -v` and `-v` rows at 5.0, by `BASH_VERSION = major·100+minor`. The marker reaches stdout through `exec 3>&1` and `>&3` from inside the subscript.
+  - 6 rows *bash runs no marker beside a planted value*, with the policy certain: the literal exemptions' shell backing.
+  - 3 rows in WP-153's table for the unrecognised operators.
+  - Three generator pieces: an `export`ed setter, `${y[x]}` and `let x`.
+
+  This machine's bash is 3.2, so 6 tests are skipped here (WP-153's 2 and these 4). **The whole file was also run under the run image's bash 5.2 and dash.** That was `node` 24 inside `platform-runtime:wp151`, with the checkout mounted read-only and a 40-line stand-in for vitest's API in the scratchpad: 53 passed, 0 skipped, 0 failed, four times over (different seeds).
+- **(5)** `packages/domain/src/readiness/recheck.test.ts` › "reads the husky hook’s here-documents with the command scanner’s reader (WP-158 (f))". Its cases: an indented terminator (no pass), a trailing-space terminator (no pass), a `<<<word` (passes: hides nothing), and the line after a terminator (passes).
+- **(6)** Goldens unchanged: `pnpm exec vitest run packages/domain packages/infrastructure/src/runner --project unit --project contract` passed 3 136, with no diff under `test/fixtures/`.
+
+**Canaries, each run on the tree, restored with `cp` from a copy and checked with `cmp`.** Each ran the four policy/readiness test files.
+- **The entry removed** (both detectors return false, `((` unflagged): killed by 79 tests, including › "holds over generated lines, for every shell present". With the same mutation, the verdict script reproduced the *before* column row for row: every form is `unattended_auto` / `unattended_deny` again.
+- **The literal exemption dropped** (`LITERAL_NUMBER` and `LITERAL_SUBSCRIPT` match nothing): killed by 11 tests, the criterion-3 rows and the shell-backed literal rows.
+- **(5) The regex restored** in `shellCommandsOf`: killed by 3 tests, the indented and trailing-space cases and the `<<<` case.
+- **The raw text, as the ruling's letter reads**: killed by 3 tests, including WP-94's › "answers nothing for a data list, a heredoc or a version check that names a scanner".
+- **The unrecognised-operator reading removed**: killed by 7 tests, including the property.
+- **The body detector removed**: killed by 8 tests (5 unit, 3 shell). **The property does not kill it in 400 runs**: a setter line that ran, followed by an unquoted body holding `${y[x]}`, is a rare draw. The fixed rows are what hold it. The first version of these rows set the value with a bare `x='b[…]'`, and only the `@P` row (`z='…'`, no `[`) died. That is how the glob-reader masking was found, and why the rows use `export`.
+- **`[[` state reset per stage**: killed by the `[[ -f a && x -eq 1 ]]` row.
+- **Indirection unflagged**: killed by 3 tests (2 unit, 1 shell).
+
+**Residuals**
+- **A builtin that runs a *string* as code is not read** (see Discovered work).
+- An option's value attached to the option (`read -aNAME`, `printf -vNAME` is read), a name taken by an unlisted builtin (`getopts` did not run; `wait -p` and `exec {var}>…` were not measured), and an attribute given outside the line. All are stated in the module docblock and technical/05.
+- The unrecognised-operator reading takes bash's delimiter as the literal word. A word with a `$` in it, such as `<<$x`, is a literal delimiter: bash 5.2 and dash both ended `cat <<$x` at the line `$x`, not at `EOF` with `x=EOF` (measured), so this is right. A word bash reads differently is not recognised, and its body is read as commands only, which is the old reading.
+- The R13 comment blanking keeps WP-94's crude rule: a `#` after whitespace inside a quoted string is cut. In the hook, that can unbalance a quote and stop a later operator from being recognised. The cost is a body read as commands (R13 may then pass on a scanner named in it), so it is the false-pass direction. No hook has shown it.
+
+**Sentences falsified (rule 83).** Grep over every tracked file except PROGRESS for `exhaustive list`, `alone is not`, `heredoc`/`here-doc`, `arithmetic expansion` and `old reading`.
+- **Changed:**
+  - `command-policy.ts` rule 5 (*"the exhaustive list of constructs that trip it"* now says the list trips it and points to the named residuals);
+  - the here-document paragraph (*"the cost of missing one is today's behaviour"*);
+  - `hereDocumentExpansion`'s docblock (*"`$VAR` alone is not on this list"*, now qualified);
+  - `HERE_DOCUMENT_OPERATOR`'s and `HERE_DOCUMENT_CONTEXT`'s docblocks (*"not recognising costs only the old reading"* / *"whose cost is the old reading"*);
+  - technical/05's WP-153 amendment (*"In each of these the lines are read as commands, as before"* and *"`$VAR` alone is not uncertain"*, both qualified);
+  - `recheck.ts`'s R13 docblock (*"a heredoc's body excluded"*, *"Comments are stripped first"*) and `shellCommandsOf`'s.
+- **Left, still true:**
+  - `command-policy.test.ts:2172` (*"`$VAR` alone is not on the list"*: a bare `$VAR` is still certain);
+  - `UNCERTAINTY.arithmetic` and the two `command-policy.test.ts` names that say *arithmetic expansion* (`$((`);
+  - `feedsScriptReader`'s *"a reader found is only the old reading"* (an over-read);
+  - the plan's WP-153 row (history).
+
+**Verification** (each tier started at a one-minute load under 12; the load above 12 in this session was the product owner's other Docker stack): `PASS: verify` (11 855 tests, 20 skipped; lint at the baseline's 44 warnings — the 28 this row's strings first added were rewritten as template literals; `PASS: coverage:ratchet`), with the harness's `.claude/scheduled_tasks.lock` moved to the scratchpad for the run and put back. No integration or e2e tier: the row is domain-only. The citation guard passes over these notes. Docker: every container this row started was `--rm` on `platform-runtime:wp151`, and none is left.
+
+**Discovered work** (candidates for the refiner):
+- **A builtin that runs a string as code is an `unattended_auto` path for a hidden command (major, same consequence class as 509).** `trap 'git push origin HEAD:main' EXIT` is `unattended_auto`, and bash 5.2 ran the trap (measured: `trap 'echo RAN_EXEC' EXIT`). So are `x='…'; trap "$x" EXIT` and `PS4='$(git push origin HEAD:main)' bash -xc :` (verdict measured; the shell run of the `PS4` case was not done). The class also covers `PROMPT_COMMAND`, `bind -x`, `complete -C` and `BASH_ENV`/`ENV` assignments ahead of a shell. `wrappedScript` reads `eval` and `sh -c` only. This is rule 1's *"the script a shell wrapper is handed"*, not 509's arithmetic.
+- **WP-153's glob-named reader fires on an assignment that carries a `[`, `*`, `?` or `{`** (`x='b[1]'; cat <<'EOF'` reads the body as a script), because `argv0Candidates` offers the assignment token itself as a name. It is an over-read, so it is safe, but it masks the body detector from tests that use a bare assignment (above). It costs a quoted body beside any such assignment being read as commands.
+- **`HERE_DOCUMENT_CONTEXT` reads the whole text before the operator**, so one comment line or one closed `${…}` anywhere earlier stops every later here-document in a multi-line command from being recognised. Its bodies are then read as commands, and they are `ask`/`unattended_auto` instead of data. It is safe since this row's both-ways reading, but it is a convenience loss, and R13 had to work around it (ruling (f)'s deviation). Scoping the comment rule to the current line, and the `${` rule to an unclosed `${`, would need its own shell-oracle cases.
+
+**Review round 1** (reviewer REQUEST-CHANGES: three majors and one nit, all addressed, fail closed). The table below was measured with scripts in the scratchpad (`cases3.txt`): bash 5.2 from the run image, the macOS bash 3.2, and the verdicts with the push planted, *before* being `main`.
+1. **[major] A redirection's target was consumed without the detector.** The `>` branch of `scan` reads the target (and `>&word`) in one step, so the walk's `$` check never saw it. `cat > ${y[x]}`, `ls 2>${y[x]}`, `&>`, `>>` in double quotes, `>|`, `>&`, `2>&1 >…`, `> ${z@P}`, `>${!x}`, `> a${y[x]}b` and `exec 3> ${y[x]}` were all `unattended_auto` (or `git_boundary` for `>&`/`>|`), and bash 5.2 ran each payload; bash 3.2 ran all but `@P`. **Fix:** `wordEvaluatesVariableText` runs the detector at every `$` of the consumed span outside single quotes. `> '${y[x]}'` stays certain and ran nothing.
+2. **[major] Line continuations.** `echo $\⏎{y[x]}`, `echo ${y\⏎[x]}` (also in double quotes), `(\⏎(x))` and `l\⏎et x` were `unattended_auto`, and both bashes ran each. **Fix:** `joinContinuations` removes `\`+newline (an escaped `\\` is kept whole). The expansion detector reads the text from the `$` with continuations joined (`evaluatesExpansionAt`), as do the body detector, the `((` check and the stage's words. `echo a\⏎b` stays certain. `[[ x\⏎-eq 1 ]]` joins into `x-eq`, which bash refuses, so it is certain and ran nothing.
+3. **[major] A wrapper's options ended the prefix walk.** `command -p let x`, `command -- let x`, `time -p let x`, `coproc let x`, `coproc C { let x; }`, `command -p declare -i y=x` and `builtin declare -i y=x` were `unattended_auto`. bash 5.2 ran each; bash 3.2 ran all but `coproc`, which it lacks. **Fix:** in `stageEvaluatesText`, after the first wrapper, every word that starts with `-` is skipped, `coproc` is a prefix, and `coproc NAME {` skips the name. The same walk serves `let`, the declarations and the name-taking builtins.
+4. **[nit] Over-asks, fail closed, kept:** `echo $'\x24{y[x]}'` (already `ansiCQuoting`, so the line was uncertain before this row too); `[[ x "-eq" 1 ]]` (the operator is compared unquoted; bash 5.2 refused the quoted operator and ran nothing); `${y[ 0 ]}` (a subscript with blanks is not literal).
+- **Sibling sweep.** Every other place the walk consumes a word was checked. The here-string `<<< ${y[x]}`, `exec 3< ${y[x]}`, `cat < ${y[x]}`, `for i in ${y[x]}` and `case ${y[x]} in` all go through the walk's own `$` check, and each was already `uncertain` before round 1 (bash ran each). `$(…)`, backtick and process-substitution bodies are parsed recursively, and `$((…))` and `$'…'` are uncertain as a whole. **One sibling of finding 3 was outside the detector: `coproc` was not a known wrapper, so `coproc sudo id` and `coproc git push --force origin main` were `unattended_auto`**, a block-list bypass, and bash ran `coproc echo …`. `coproc` was added to `ARGV0_WRAPPERS`. Both are now `block_list`, and `coproc git push origin HEAD:main` is `git_boundary`. `coproc ls` stays `unattended_auto`: the allow list does not peel keywords.
+- **Tests.** In `packages/domain/src/policies/unattended-commands.test.ts`, › "WP-158 review round 1 — a target, a continuation and a wrapper’s options" has:
+  - 25 rows, `uncertain` in both modes, `[evaluatedText]` exactly;
+  - 4 `coproc` rows (`block_list` / `git_boundary`);
+  - 7 rows that stay certain: a single-quoted target, a plain target, `${HOME}`, a literal subscript, a continuation with no expansion, `command -v` and `time -p ls`.
+
+  `here-documents.shell.test.ts` gained 8 bash-run rows (`@P` gated at 4.4, `coproc` at 4.0) and one no-run row (the single-quoted target). bash 3.2 printed the marker twice through `cat > ${y[x]}`, so that assertion compares the set of markers. The whole file under the run image's bash 5.2 and dash gave 62 passed, three seeds.
+- **Canaries** (copy, mutate, `cp` back, `cmp`):
+  - the target check removed: killed by 14;
+  - `joinContinuations` the identity: killed by 6;
+  - the option skip removed: killed by 6;
+  - `coproc` dropped from the stage walk: killed by 1 when measured, but the clause was dead once `coproc` joined `ARGV0_WRAPPERS` (`isWrapperToken` covers it; the reviewer's round-2 removal survived the unit tier), so the orchestrator deleted it as round 2's nit;
+  - `coproc` dropped from `ARGV0_WRAPPERS`: killed by 4.
+- **Swept sentences:** technical/05's *"outside single quotes (…)"* now names a redirection's target and continuations, and the amendment names `coproc`; the module docblock's *A variable's text is code* paragraph says where the detector runs. Load: every tier started under 12, but one `here-documents.shell.test.ts` run started at 12.7.

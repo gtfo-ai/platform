@@ -276,6 +276,51 @@ describe('secretScanningReadiness (R13, WP-94)', () => {
     }
   });
 
+  /**
+   * WP-158 (f), backlog 510: the husky hook's here-document bodies are the command scanner's
+   * answer, read off the raw text — so a terminator ends a body only where bash and dash end it
+   * (a line equal to the delimiter, measured at WP-153), and a here-string opens nothing.
+   */
+  describe('reads the husky hook’s here-documents with the command scanner’s reader (WP-158 (f))', () => {
+    it('keeps a scanner line in a body whose terminator is indented: no pass', () => {
+      expect(
+        r13({
+          '.husky/pre-commit': file(
+            '#!/bin/sh\ncat <<EOF\n  EOF\ngitleaks detect\nEOF\nnpm test\n',
+          ),
+        }),
+      ).toBeNull();
+    });
+
+    it('keeps a scanner line in a body whose terminator carries a trailing space: no pass', () => {
+      expect(
+        r13({
+          '.husky/pre-commit': file(
+            '#!/bin/sh\ncat <<EOF\nx\nEOF \ngitleaks detect\nEOF\nnpm test\n',
+          ),
+        }),
+      ).toBeNull();
+    });
+
+    it('hides nothing behind a here-string, `<<<word`', () => {
+      expect(
+        r13({
+          '.husky/pre-commit': file('#!/usr/bin/env bash\ncat <<<EOF\ngitleaks protect --staged\n'),
+        })?.evidence,
+      ).toBe(`at ${SHA.slice(0, 12)}: .husky/pre-commit runs gitleaks`);
+    });
+
+    it('reads the line after a terminator as a command again', () => {
+      expect(
+        r13({
+          '.husky/pre-commit': file(
+            "#!/bin/sh\ncat <<'EOF'\nnote\nEOF\ngitleaks protect --staged\n",
+          ),
+        })?.evidence,
+      ).toBe(`at ${SHA.slice(0, 12)}: .husky/pre-commit runs gitleaks`);
+    });
+  });
+
   it('reads a script block, a run block and GitLab’s latest template', () => {
     expect(
       r13({

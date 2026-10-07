@@ -33,7 +33,8 @@
  *     arbitrary command, an arbitrary path to write, or an unread package source.
  *  5. **Parse uncertainty fails closed.** A hand-rolled shell scanner is never complete, so it
  *     says when it is out of its depth (`CommandEvaluation.uncertainty`) and an uncertain line can
- *     never be `allow`. See `UNCERTAINTY` for the exhaustive list of constructs that trip it.
+ *     never be `allow`. `UNCERTAINTY` lists every construct that trips it; what the scanner still
+ *     does not read is named below, under *A variable's text is code*, and nowhere else.
  *
  * **A here-document's body is data** (WP-153, PROGRESS backlog 482). `cat > a.php <<'EOF'` followed
  * by PHP is one command, `cat`, and its body is what `cat` reads: no segment, no quote state, no
@@ -41,11 +42,29 @@
  * redirection included, and the lines after the terminator are commands again. One reader
  * (`readHereDocumentOperator`, `readHereDocumentBodies`) serves the scanner, the substitution
  * matcher and the git boundary's `computesCommandName`. It is written to recognise **only what the
- * shell certainly reads as a here-document** — the cost of missing one is today's behaviour (the
- * body read as commands), the cost of inventing one is a line the shell runs and the policy never
- * sees — and three things keep a body from being data: an unquoted delimiter whose body the shell
- * expands, a body that never ends (both uncertain, rule 5), and a body handed to a shell, which is a
- * script and is read as one (rule 1's `sh -c`, `HERE_DOCUMENT_SCRIPT_READERS`).
+ * shell certainly reads as a here-document** — the cost of missing one is the body read as
+ * commands, the cost of inventing one is a line the shell runs and the policy never sees — and three
+ * things keep a body from being data: an unquoted delimiter whose body the shell expands, a body
+ * that never ends (both uncertain, rule 5), and a body handed to a shell, which is a script and is
+ * read as one (rule 1's `sh -c`, `HERE_DOCUMENT_SCRIPT_READERS`). Reading a missed body as commands
+ * is not free when its delimiter is unquoted: the shell expands a `$(…)` there that the commands'
+ * reading takes for single-quoted text, so such a would-be body is also read as a body for its
+ * expansions (`unrecognisedUnquotedOperator`, WP-158).
+ *
+ * **A variable's text is code in some places** (WP-158, PROGRESS backlog 509). bash evaluates a
+ * value as an arithmetic expression — and runs the `$(…)` of an array subscript inside it — in a
+ * subscript, an offset, `$[…]`, `((…))`, `let`, an integer variable and a `[[` arithmetic test; as
+ * a prompt in `${x@P}`; as a name in `${!x}` and wherever a builtin takes a variable name. So a
+ * single-quoted value the scanner reads as data is code to the shell, and every such place is
+ * `UNCERTAINTY.evaluatedText` unless its operand is literal (a plain number, a `@`/`*` subscript).
+ * Reading a value is never uncertain; evaluating one is. The detector runs wherever the walk does
+ * **and** over the words it consumes whole — a redirection's target (review round 1) — on the text
+ * as bash reads it, line continuations (`\\` + newline) joined; and a stage's command is found past
+ * a wrapper's options (`command -p`, `time -p`, `--`) and `coproc`. **What it still does not read:** a builtin
+ * that runs a *string* as code (`trap '…' EXIT`, `PS4` under `bash -x`, `PROMPT_COMMAND`,
+ * `bind -x`, `complete -C`), an option's value attached to its option (`read -aNAME`), a name taken
+ * by a builtin it does not list (`getopts`, `wait -p`, `exec {var}>…`), and an attribute (`-i`,
+ * `-n`) given to a variable outside the line.
  *
  * **Quoting is honoured in one place and ignored in the other, on purpose.** The scanner
  * (`scan`, and so the redirection floor) honours it: `ls "> out"` is not a redirection, because
@@ -107,10 +126,21 @@ export const UNCERTAINTY = {
    * WP-153 (d): an **unquoted** delimiter lets the shell expand the body. A substitution there runs
    * a command, and a line ending in a backslash is joined to the next before bash compares it with
    * the delimiter (measured: bash 5.2 ends `<<EOF` at `E\` + `OF`), so the body may end before the
-   * line the scanner reads as its terminator. `$VAR` alone is not on this list.
+   * line the scanner reads as its terminator. `$VAR` alone is not on this list; an expansion that
+   * evaluates a variable's text is `evaluatedText` (WP-158).
    */
   hereDocumentExpansion:
     "a here-document with an unquoted delimiter whose body the shell expands (a $(…) or backtick substitution, or a line ending in a backslash) — quote the delimiter, <<'EOF', so the body is plain text",
+  /**
+   * WP-158 (backlog 509): bash evaluates a variable's **text** as an arithmetic expression — and
+   * an array subscript inside it runs its `$(…)` — in a subscript, an offset, `$[…]`, `((…))`,
+   * `let`, an integer or nameref variable and a `[[` arithmetic test, and as a prompt string in
+   * `${x@P}`. So `x='b[$(cmd)]'; echo ${y[x]}` runs `cmd` behind a single-quoted assignment
+   * (measured, bash 5.2.37 and 3.2.57; dash runs none of them). The detector is
+   * `evaluatesVariableText` (expansions) and `stageEvaluatesText` (commands); the only exemptions
+   * are literal — a plain decimal number, a `@`/`*` subscript — and each is backed by the shell.
+   */
+  evaluatedText: `an expansion or command that evaluates a variable's text as code (a subscript or offset that is not a plain number, \${x@…}, \${!x}, $[…], ((…)), let, declare -i or -n, a [[ … -eq … ]] or -v test, a variable name built from an expansion) — write the value literally; the platform cannot read an expansion that evaluates a variable's text`,
 } as const;
 
 export type UncertaintyReason = (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY];
@@ -1384,6 +1414,10 @@ const ARGV0_WRAPPERS: ReadonlySet<string> = new Set([
   '!',
   '[[',
   ']]',
+  // A keyword that runs the rest of its line as an asynchronous command (WP-158 review round 1's
+  // sibling sweep): without it, `coproc sudo id` and `coproc git push --force origin main` read
+  // as a `coproc` command and were `unattended_auto` (measured).
+  'coproc',
 ]);
 
 /**
@@ -1720,7 +1754,8 @@ export interface HereDocumentOperator {
  * CRLF line `cat <<'EOF'\r` the delimiter is `EOF\r`, the body ends at the line `EOF\r`, and bash
  * 5.2 runs the next line (measured for all four, WP-153 review round 1). Read with `\s`, the
  * delimiter was `EOF` and that line stayed in the body. `(` is a metacharacter too, but `<<EOF(`
- * is a syntax error, so it is left out: not recognising costs only the old reading.
+ * is a syntax error, so it is left out: not recognising costs the old reading (and, for an unquoted
+ * word, a would-be body read for its expansions — `unrecognisedUnquotedOperator`, WP-158).
  */
 const HERE_DOCUMENT_OPERATOR =
   /^<<(-?)[ \t]*(?:'([A-Za-z0-9_.-]+)'|"([A-Za-z0-9_.-]+)"|([A-Za-z0-9_.-]+))(?=$|[ \t\n;&|)<>])/;
@@ -1731,26 +1766,22 @@ const HERE_DOCUMENT_OPERATOR =
  * `$[1<<2]`), a `[[ … ]]` test, or a comment (`# <<EOF`). Each was measured on bash 5.2 to run the
  * line after it, so a reader that skipped that line would hide a command. Matched on everything the
  * walker has read before the operator — quoted text included, bodies already skipped excluded — so
- * it errs towards not recognising, whose cost is the old reading. Its `\s` is wider than bash's
+ * it errs towards not recognising, whose cost is the old reading — plus, for an unquoted word, a
+ * would-be body read for its expansions (`unrecognisedUnquotedOperator`). Its `\s` is wider than bash's
  * blanks on purpose: a wider "word start" finds more comments, and so recognises less.
  */
 const HERE_DOCUMENT_CONTEXT = /\$\{|\$\[|\(\(|\[\[|(?:^|[\s;&|()<>])#/;
 
 /**
- * The here-document operator at `text[index]`, or `null` when there is none the shell certainly
- * reads as one. `before` is what the walker read ahead of it, with skipped bodies left out.
- * `<<<` is a here-string, never a here-document, at either of its first two characters.
+ * The operator's **shape** at `text[index]`, whatever precedes it — `null` for no operator, and for
+ * `<<<`, a here-string, at either of its first two characters.
  */
-export const readHereDocumentOperator = (
-  text: string,
-  index: number,
-  before: string,
-): HereDocumentOperator | null => {
+const hereDocumentOperatorShape = (text: string, index: number): HereDocumentOperator | null => {
   if (text.startsWith('<<<', index) || text[index - 1] === '<') {
     return null;
   }
   const match = HERE_DOCUMENT_OPERATOR.exec(text.slice(index));
-  if (match === null || HERE_DOCUMENT_CONTEXT.test(before)) {
+  if (match === null) {
     return null;
   }
   const [whole, dash, single, double, bare] = match;
@@ -1759,6 +1790,54 @@ export const readHereDocumentOperator = (
     quoted: bare === undefined,
     stripTabs: dash === '-',
     length: whole.length,
+  };
+};
+
+/**
+ * The here-document operator at `text[index]`, or `null` when there is none the shell certainly
+ * reads as one. `before` is what the walker read ahead of it, with skipped bodies left out.
+ */
+export const readHereDocumentOperator = (
+  text: string,
+  index: number,
+  before: string,
+): HereDocumentOperator | null =>
+  HERE_DOCUMENT_CONTEXT.test(before) ? null : hereDocumentOperatorShape(text, index);
+
+/**
+ * A `<<` the reader does **not** recognise but bash may read as an **unquoted** here-document
+ * (WP-158, found by the shell oracle). Not recognising was taken to cost only the old reading — the
+ * lines after it read as commands — but an unquoted body expands a `$(…)` that the old reading
+ * takes for single-quoted text: `echo ${HOME}; cat <<EOF` + `x='$(cmd)'` + `EOF` (the context guard
+ * refuses after any `${`, closed or not, and after a comment on an earlier line) and `cat <<EOF\r`
+ * + `x='$(cmd)'` + `EOF\r` (the word boundary refuses `\r`) each ran `cmd` in bash 5.2 and in dash,
+ * and each was `unattended_auto` (measured). So such an operator's would-be body is
+ * read **both ways**: as commands, as before, and as a body whose expansion is uncertain
+ * (`hereDocumentUncertainty`, an unterminated body aside). Its delimiter is bash's: the word up to a
+ * metacharacter, taken literally, since a word with no quoting is not expanded as a delimiter; a
+ * word with a quote or a backslash makes the body literal, and nothing is read.
+ */
+const unrecognisedUnquotedOperator = (
+  text: string,
+  index: number,
+  before: string,
+): HereDocumentOperator | null => {
+  if (
+    text.startsWith('<<<', index) ||
+    text[index - 1] === '<' ||
+    readHereDocumentOperator(text, index, before) !== null
+  ) {
+    return null;
+  }
+  const match = /^<<(-?)[ \t]*([^ \t\n;&|()<>]+)/.exec(text.slice(index));
+  if (match === null || /['"\\]/.test(match[2] as string)) {
+    return null;
+  }
+  return {
+    delimiter: match[2] as string,
+    quoted: false,
+    stripTabs: match[1] === '-',
+    length: match[0].length,
   };
 };
 
@@ -1850,7 +1929,312 @@ const outsideRanges = (
   return out + text.slice(cursor, Math.max(cursor, to));
 };
 
-/** What ruling (d) and (e) make uncertain about one body. */
+// ── WP-158: what evaluates a variable's text (backlog 509) ───────────────────
+//
+// bash reads an array subscript, a substring offset or length, `$[…]`, `((…))`, `let`'s
+// arguments, an integer variable's value and a `[[ … -eq … ]]` operand as an **arithmetic
+// expression**, and an identifier in one is replaced by its variable's value, evaluated again — an
+// array subscript in that value included, whose `$(…)` then runs. `${x@P}` expands the value as a
+// prompt string, `${!x}` uses it as a name (subscript and all), and a builtin handed a variable
+// *name* (`declare`, `read`, `unset`, `printf -v`, `[[ -v`) evaluates that name's subscript. A
+// single-quoted assignment the scanner reads as data is therefore code to the shell. Measured on
+// bash 5.2.37 and 3.2.57 (PROGRESS § WP-158 has the table); dash evaluates a variable as a plain
+// number and ran none of them. **The only exemptions are literal** (ruling (c)): a plain decimal
+// number as an operand or subscript, and the `@`/`*` subscripts — none of them names a variable.
+
+/** A plain decimal number: the one arithmetic operand that names no variable. */
+const LITERAL_NUMBER = /^[0-9]+$/;
+
+/** A subscript bash does not evaluate: a plain number, or `@`/`*` (every element). */
+const LITERAL_SUBSCRIPT = /^(?:[0-9]+|[@*])$/;
+
+/** A variable name with nothing to evaluate: an identifier, with at most a literal subscript. */
+const LITERAL_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\[(?:[0-9]+|[@*])\])?$/;
+
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*/;
+
+/** A parameter's name inside `${…}`: an identifier, a positional number or a special parameter. */
+const PARAMETER_NAME = /^(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])/;
+
+/** Index of the `]` closing the `[` at `open`, counting nested brackets, or -1. */
+const closingBracket = (text: string, open: number): number => {
+  let depth = 0;
+  for (let index = open; index < text.length; index += 1) {
+    if (text[index] === '[') {
+      depth += 1;
+    } else if (text[index] === ']') {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+};
+
+/**
+ * `${!…}` from the character after the `!`. Indirection (`${!x}`, `${!x[i]}`, `${!x@Q}`) evaluates
+ * the value as a name; three shapes are not indirection and evaluate nothing (measured, bash 5.2):
+ * `${!}` (the last background job's PID), `${!prefix*}`/`${!prefix@}` (the names with a prefix) and
+ * `${!name[@]}`/`${!name[*]}` (an array's keys).
+ */
+const evaluatesIndirection = (text: string, at: number): boolean => {
+  if (text[at] === '}') {
+    return false;
+  }
+  const name = IDENTIFIER.exec(text.slice(at))?.[0];
+  if (name === undefined) {
+    return true;
+  }
+  const after = text.slice(at + name.length);
+  return !/^(?:[@*]|\[[@*]\])\}/.test(after);
+};
+
+/**
+ * What follows a parameter's name (and subscript): `@` is a transformation — `@P` evaluates the
+ * value as a prompt, and every other operator is refused with it rather than listed, because a
+ * later bash may add one; `:` not followed by `-`, `=`, `+` or `?` is a substring offset and
+ * length, which are arithmetic unless each is a plain number. Every other operator (`-`, `#`,
+ * `%`, `/`, `^`, `,`, …) reads a word or a pattern, which the walk reads as it reads any word.
+ */
+const evaluatesAfterName = (text: string, at: number): boolean => {
+  const char = text[at];
+  if (char === '@') {
+    return true;
+  }
+  if (char !== ':' || /[-=+?]/.test(text[at + 1] ?? '')) {
+    return false;
+  }
+  const close = text.indexOf('}', at);
+  if (close === -1) {
+    return true;
+  }
+  const operands = text.slice(at + 1, close).split(':');
+  return operands.length > 2 || !operands.every((operand) => LITERAL_NUMBER.test(operand));
+};
+
+/**
+ * Does the expansion at `text[index]` (a `$`) evaluate a variable's text? `$[…]` always does, as
+ * `$((…))` always counts as `UNCERTAINTY.arithmetic`; `${…}` does when it carries a subscript that
+ * is not literal (`${y[x]}`, `${#y[x]}`, `${y[x]:-d}`), an offset or length that is not a plain
+ * number (`${z:x}`, `${z: -1}`, `${y[@]:x}`), a transformation (`${z@P}`) or an indirection
+ * (`${!x}`). A `${` with no parameter name after it is refused too (bash 5.3's `${ cmd; }` runs a
+ * command). One detector for the walk (`scan`, outside quotes and inside double quotes) and for an
+ * unquoted here-document body (`hereDocumentUncertainty`) — ruling (d).
+ */
+const evaluatesVariableText = (text: string, index: number): boolean => {
+  if (text[index + 1] === '[') {
+    return true;
+  }
+  if (text[index + 1] !== '{') {
+    return false;
+  }
+  let at = index + 2;
+  if (text[at] === '!') {
+    return evaluatesIndirection(text, at + 1);
+  }
+  if (text[at] === '#' && /[A-Za-z_0-9@*?$!#-]/.test(text[at + 1] ?? '')) {
+    at += 1; // `${#name…}`: the length of what follows
+  }
+  const name = PARAMETER_NAME.exec(text.slice(at))?.[0];
+  if (name === undefined) {
+    return true;
+  }
+  at += name.length;
+  if (text[at] === '[') {
+    const close = closingBracket(text, at);
+    if (close === -1 || !LITERAL_SUBSCRIPT.test(text.slice(at + 1, close))) {
+      return true;
+    }
+    at = close + 1;
+  }
+  return evaluatesAfterName(text, at);
+};
+
+/**
+ * `text` with every line continuation (`\\` + newline) taken out, as bash takes it out before it
+ * reads a word — outside single quotes, in double quotes and in an unquoted body alike — so
+ * `$\\⏎{y[x]}` and `${y\\⏎[x]}` are `${y[x]}` (measured, bash 5.2 and 3.2; review round 1). An
+ * escaped backslash (`\\\\`) is kept whole, so the newline after it stays a newline.
+ */
+const joinContinuations = (text: string): string => {
+  if (!text.includes('\\\n')) {
+    return text;
+  }
+  let out = '';
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\\') {
+      if (text[index + 1] !== '\n') {
+        out += text.slice(index, index + 2);
+      }
+      index += 1;
+    } else {
+      out += text[index];
+    }
+  }
+  return out;
+};
+
+/** The detector at the `$` at `text[index]`, over the text as bash reads it (continuations joined). */
+const evaluatesExpansionAt = (text: string, index: number): boolean =>
+  evaluatesVariableText(joinContinuations(text.slice(index)), 0);
+
+/**
+ * The same detector over an unquoted here-document body, where quotes are plain characters and only
+ * a backslash keeps a `$` from expanding.
+ */
+const bodyEvaluatesVariableText = (body: string): boolean => {
+  const joined = joinContinuations(body);
+  for (let index = 0; index < joined.length; index += 1) {
+    if (joined[index] === '\\') {
+      index += 1;
+    } else if (joined[index] === '$' && evaluatesVariableText(joined, index)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/**
+ * The detector at every `$` of a word the walker consumes whole — a redirection's target (review
+ * round 1: `cat > ${y[x]}` ran the payload and was `unattended_auto`) — outside single quotes.
+ */
+const wordEvaluatesVariableText = (text: string, from: number, to: number): boolean => {
+  let quote: '"' | "'" | null = null;
+  for (let index = from; index < to; index += 1) {
+    const char = text[index];
+    if (quote === "'") {
+      quote = char === "'" ? null : quote;
+    } else if (char === '\\') {
+      index += 1;
+    } else if (char === '"' || char === "'") {
+      quote = quote === char ? null : quote === null ? char : quote;
+    } else if (char === '$' && evaluatesExpansionAt(text, index)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/** `[[ … ]]`'s arithmetic comparisons: both operands are evaluated as expressions. */
+const ARITHMETIC_COMPARISONS: ReadonlySet<string> = new Set([
+  '-eq',
+  '-ne',
+  '-lt',
+  '-le',
+  '-gt',
+  '-ge',
+]);
+
+/** Builtins whose arguments are variable names, with an optional `=value`. */
+const DECLARATION_BUILTINS: ReadonlySet<string> = new Set([
+  'declare',
+  'typeset',
+  'local',
+  'export',
+  'readonly',
+]);
+
+/** `name[subscript]=` (or `[subscript]=` inside `name=( … )`): an array element assignment. */
+const ELEMENT_ASSIGNMENT = /^(?:[A-Za-z_][A-Za-z0-9_]*)?\[([\s\S]*)\]\+?=/;
+
+/**
+ * One stage's words, split as the shell splits them — quotes honoured, substitutions left out — by
+ * the scanner itself with blanks as the operators. A redirection word is dropped: it names no
+ * variable.
+ */
+const wordsOf = (stage: string): readonly string[] =>
+  scan(stage, [' ', '\t']).segments.filter((word) => !/^[0-9]*[<>&]/.test(word));
+
+/** The words a name-taking builtin reads as names: every non-option, except an option's value. */
+const namesOf = (args: readonly string[], valueOption: RegExp | null): readonly string[] => {
+  const names: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const word = args[index] as string;
+    if (/^[-+]./.test(word)) {
+      if (valueOption?.test(word)) {
+        index += 1;
+      }
+      continue;
+    }
+    names.push(word);
+  }
+  return names;
+};
+
+const notLiteralName = (word: string): boolean => !LITERAL_NAME.test(word);
+
+/** Whether `[[ … ]]` is open at the start of the next stage: `&&`, `||` and `(` split one. */
+interface TestState {
+  inside: boolean;
+}
+
+/**
+ * The commands that evaluate a variable's text, read off one pipeline stage (WP-158): an array
+ * element assignment with a subscript that is not literal (`y[x]=1`, `[x]=1` in `y=( … )`), `let`,
+ * a declaration with `-i` (integer) or `-n` (nameref) or a name built from an expansion
+ * (`declare "$x"=1`), `read`/`mapfile`/`unset` handed such a name, `printf -v`, `test -v`, and —
+ * inside `[[ … ]]`, which the list split cuts at `&&`, `||` and `(`, so `state` carries it from
+ * stage to stage — a `-v` test or an arithmetic comparison whose operands are not both plain
+ * numbers. `((…))` is the walk's (`scan`), because the list split cuts it at `(`.
+ */
+const stageEvaluatesText = (stage: string, state: TestState): boolean => {
+  const words = wordsOf(joinContinuations(stage));
+  let evaluates = false;
+  for (const [index, word] of words.entries()) {
+    if (word === '[[') {
+      state.inside = true;
+    } else if (word === ']]') {
+      state.inside = false;
+    } else if (state.inside) {
+      const next = words[index + 1] ?? '';
+      const previous = words[index - 1] ?? '';
+      const operator = unquoteToken(word); // `[[ x "-eq" 1 ]]` compares arithmetically too
+      evaluates ||=
+        (operator === '-v' && notLiteralName(next)) ||
+        (ARITHMETIC_COMPARISONS.has(operator) &&
+          !(LITERAL_NUMBER.test(previous) && LITERAL_NUMBER.test(next)));
+    }
+  }
+  let start = 0;
+  for (; start < words.length; start += 1) {
+    const word = words[start] as string;
+    const element = ELEMENT_ASSIGNMENT.exec(word);
+    if (element !== null) {
+      evaluates ||= !LITERAL_SUBSCRIPT.test(element[1] as string);
+    } else if (word === 'coproc' && words[start + 2] === '{') {
+      start += 1; // `coproc NAME { … }`: the name is not the command
+    } else if (!(isWrapperToken(word) || (start > 0 && word.startsWith('-')))) {
+      // A wrapper's options (`command -p`, `time -p`, `--`) sit between it and the command.
+      break;
+    }
+  }
+  const command = unquoteToken(words[start] ?? '');
+  const args = words.slice(start + 1);
+  if (command === 'let') {
+    return true;
+  }
+  if (DECLARATION_BUILTINS.has(command)) {
+    evaluates ||=
+      args.some((word) => /^[-+][A-Za-z]*[in]/.test(word)) ||
+      namesOf(args, null).some((word) => notLiteralName(word.replace(/\+?=[\s\S]*$/, '')));
+  } else if (command === 'read') {
+    evaluates ||= namesOf(args, /^-[A-Za-z]*[dinNptu]$/).some(notLiteralName);
+  } else if (command === 'mapfile' || command === 'readarray') {
+    evaluates ||= namesOf(args, /^-[A-Za-z]*[dnOsuCc]$/).some(notLiteralName);
+  } else if (command === 'unset') {
+    evaluates ||= namesOf(args, null).some(notLiteralName);
+  } else if (command === 'printf' || command === 'test' || command === '[') {
+    evaluates ||= args.some(
+      (word, index) =>
+        (word === '-v' && notLiteralName(args[index + 1] ?? '')) ||
+        (command === 'printf' && /^-v./.test(word) && notLiteralName(word.slice(2))),
+    );
+  }
+  return evaluates;
+};
+
+/** What ruling (d) and (e) make uncertain about one body (and WP-158's ruling (d)). */
 const hereDocumentUncertainty = (body: HereDocumentBody): readonly UncertaintyReason[] => {
   const reasons: UncertaintyReason[] = [];
   if (!body.terminated) {
@@ -1858,6 +2242,9 @@ const hereDocumentUncertainty = (body: HereDocumentBody): readonly UncertaintyRe
   }
   if (!body.operator.quoted && /\$\(|`|\\$/m.test(body.body)) {
     reasons.push(UNCERTAINTY.hereDocumentExpansion);
+  }
+  if (!body.operator.quoted && bodyEvaluatesVariableText(body.body)) {
+    reasons.push(UNCERTAINTY.evaluatedText);
   }
   return reasons;
 };
@@ -2024,6 +2411,8 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
   const bodyRanges: (readonly [number, number])[] = [];
   let pending: HereDocumentOperator[] = [];
   let pendingFrom = -1;
+  let shadow: HereDocumentOperator[] = [];
+  let shadowFrom = -1;
   let current = '';
   let inDouble = false;
   let index = 0;
@@ -2104,6 +2493,12 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       continue;
     }
 
+    // An expansion that evaluates a variable's text (WP-158): flagged, never consumed — its words
+    // are read on as any others are, so a `$(…)` inside it is still a substitution.
+    if (char === '$' && evaluatesExpansionAt(command, index)) {
+      uncertainty.add(UNCERTAINTY.evaluatedText);
+    }
+
     if (inDouble) {
       if (char === '\\') {
         current += command.slice(index, index + 2);
@@ -2159,13 +2554,16 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       continue;
     }
 
+    // An arithmetic command, `((…))` or `for ((…))` (WP-158). `$((` and `<((` never reach here:
+    // both are consumed above. Read here and not per stage, because the list split cuts at `(`.
+    if (/^\((?:\\\n)*\(/.test(rest)) {
+      uncertainty.add(UNCERTAINTY.evaluatedText);
+    }
+
     // ── a here-document operator: kept on its line, its body read at the line's newline ──
     if (readsLines && rest.startsWith('<<')) {
-      const operator = readHereDocumentOperator(
-        command,
-        index,
-        outsideRanges(command, 0, index, bodyRanges),
-      );
+      const before = outsideRanges(command, 0, index, bodyRanges);
+      const operator = readHereDocumentOperator(command, index, before);
       if (operator !== null) {
         if (pending.length === 0) {
           pendingFrom = index;
@@ -2174,6 +2572,14 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
         current += command.slice(index, index + operator.length);
         index += operator.length;
         continue;
+      }
+      // Not skipped, but its would-be body is read for expansions at the newline (WP-158).
+      const refused = unrecognisedUnquotedOperator(command, index, before);
+      if (refused !== null) {
+        if (shadow.length === 0) {
+          shadowFrom = index;
+        }
+        shadow.push(refused);
       }
     }
 
@@ -2212,6 +2618,10 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       if (isWriteTarget(target)) {
         writeTargets.push(target);
       }
+      // The target is consumed here, so the walk's own `$` check never reaches it (WP-158 round 1).
+      if (wordEvaluatesVariableText(command, index, cursor)) {
+        uncertainty.add(UNCERTAINTY.evaluatedText);
+      }
       current += command.slice(index, cursor);
       index = cursor;
       continue;
@@ -2229,6 +2639,17 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
     const operator = operators.find((candidate) => rest.startsWith(candidate));
     if (operator !== undefined) {
       push();
+      if (operator === '\n' && shadow.length > 0) {
+        // The refused operators' would-be bodies, read for their expansion only; nothing skipped.
+        for (const body of hereDocumentsAtNewline(command, index, shadow, shadowFrom).bodies) {
+          for (const reason of hereDocumentUncertainty(body)) {
+            if (reason !== UNCERTAINTY.unterminatedHereDocument) {
+              uncertainty.add(reason);
+            }
+          }
+        }
+        shadow = [];
+      }
       if (operator === '\n' && pending.length > 0) {
         const at = hereDocumentsAtNewline(command, index, pending, pendingFrom);
         pending = [];
@@ -2353,9 +2774,15 @@ const parseCommand = (command: string, depth = 0, scripted = false): Parsed => {
     bodyRanges.push(...outer.bodyRanges);
   }
 
+  const test: TestState = { inside: false };
   for (const segment of outer.segments) {
     fragments.push(segment);
     const pipeline = scan(segment, PIPE_OPERATORS);
+    for (const stage of pipeline.segments) {
+      if (stageEvaluatesText(stage, test)) {
+        uncertainty.add(UNCERTAINTY.evaluatedText);
+      }
+    }
     // Every stage is a command in its own right, pushed whether or not there are two of them: a
     // segment that begins or ends with a pipe operator — `|& docker run alpine`, which the list
     // pass now hands over whole — has exactly one stage and it is *not* the segment. Requiring
