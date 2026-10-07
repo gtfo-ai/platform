@@ -533,6 +533,20 @@ export const useAgents = () => {
   });
 };
 
+/**
+ * `GET /api/org/models` (WP-159): the model ids *Retry run* offers. `retry: false`, because the
+ * field has an answer for a failed read (the run's own model and *Other…*) and says so at once.
+ */
+export const useOrgModels = () => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: [...queryKeys.orgModels],
+    queryFn: () => endpoints.orgModels(),
+    ...FOREVER,
+    retry: false,
+  });
+};
+
 export const useInbox = () => {
   const { endpoints } = useServices();
   return useQuery({
@@ -939,10 +953,19 @@ export const useRunCommands = (runId: string) => {
      * appears, and this run's own record does not change at all.
      */
     retry: useMutation({
-      mutationFn: (input: { taskId: string; model?: string; effort?: 'low' | 'medium' | 'high' }) =>
+      mutationFn: (input: {
+        taskId: string;
+        model?: string;
+        effort?: 'low' | 'medium' | 'high';
+        /** WP-159: the person typed an id the model list does not carry (*Other…*). */
+        allowUnlistedModel?: boolean;
+      }) =>
         endpoints.retryRun(runId, {
           ...(input.model === undefined || input.model === '' ? {} : { model: input.model }),
           ...(input.effort === undefined ? {} : { effort: input.effort }),
+          ...(input.allowUnlistedModel === true && input.model !== undefined && input.model !== ''
+            ? { allow_unlisted_model: true }
+            : {}),
         }),
       onSuccess: async (_result, input) => {
         await invalidate();

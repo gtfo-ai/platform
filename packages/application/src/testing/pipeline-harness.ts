@@ -66,7 +66,7 @@ import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import type { StageExecuteData } from '../pipeline/jobs.js';
 import { createStageRunPlanner, SKILLS_BY_ROLE } from '../pipeline/planner.js';
 import { createPipelineRuntime, type PipelineRuntime } from '../pipeline/runtime.js';
-import type { ProjectSettings } from '../pipeline/settings.js';
+import type { ProjectSettings, ProjectSettingsPort } from '../pipeline/settings.js';
 import {
   defaultProjectSettings,
   ProjectSettingsInvalidError,
@@ -130,6 +130,17 @@ import { createMemoryShadowStore, type MemoryShadowStore } from './memory-shadow
 const MAX_DISPATCHES = 500;
 
 /** The one organisation the harness has; `cost_rollup_daily` is keyed by one (technical/03). */
+/**
+ * The model ids migration 0009 seeds into `price_list` — the harness's default model list (WP-159).
+ * `test/integration/server/model-list.integration.test.ts` holds the seed to the shipped defaults.
+ */
+export const SEEDED_MODEL_IDS: readonly string[] = [
+  'claude-fable-5-1',
+  'claude-haiku-4-5',
+  'claude-opus-5',
+  'claude-sonnet-5',
+];
+
 export const HARNESS_ORG_ID = '00000000-0000-4000-8000-00000000e001' as Id;
 
 /** A clock a test moves by hand; ISO-8601 because that is what the domain speaks. */
@@ -633,6 +644,11 @@ export interface HarnessOptions {
    * states, leaves them queued.
    */
   readonly runsAgents?: boolean;
+  /**
+   * The model ids the human commands' catalogue lists (WP-159). Absent is {@link SEEDED_MODEL_IDS},
+   * what migration 0009 seeds.
+   */
+  readonly listedModels?: readonly string[];
   readonly settings?: Partial<Omit<ProjectSettings, 'projectId'>>;
   /**
    * The project's **stored** settings layer (`projects.config`), parsed at every read the way the
@@ -1648,6 +1664,38 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   // The composition root's own sink; the pipeline wraps it exactly as `apps/server` will.
   const sink = stopReasons.observe({ append: async () => {} });
 
+  /** One settings port for the executor and the human commands (WP-159: a retry reads the stage's model). */
+  const settingsPort: ProjectSettingsPort = {
+    forProject: async (id, tx) => {
+      const stored = options.storedSettings;
+      const base = await staticProjectSettings(() => settings).forProject(id, tx);
+      const dialled =
+        options.storedAutonomy === undefined
+          ? base
+          : { ...base, autonomy: options.storedAutonomy() };
+      const read =
+        options.storedDefaultBranch === undefined
+          ? dialled
+          : { ...dialled, defaultBranch: options.storedDefaultBranch() };
+      if (stored === undefined) {
+        return read;
+      }
+      try {
+        // The production reading; nothing to redact, the clauses are the harness's own.
+        const layer = projectSettingsLayerFrom(id, stored({ job: activeJob }), (value) => value);
+        return { ...read, config: layer.values };
+      } catch (error) {
+        if (!(error instanceof ProjectSettingsInvalidError)) throw error;
+        return {
+          ...read,
+          config: {},
+          configRefusal: error.message,
+          wip: REFUSED_CONFIGURATION_WIP_LIMITS,
+        };
+      }
+    },
+  };
+
   const runtime = createPipelineRuntime({
     store,
     repositoryFiles: options.repositoryFiles ?? noCiRepository,
@@ -1671,36 +1719,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         ...holdOf(options.maintenanceHeldRuns ?? [], reserveUsd),
       }),
     },
-    settings: {
-      forProject: async (id, tx) => {
-        const stored = options.storedSettings;
-        const base = await staticProjectSettings(() => settings).forProject(id, tx);
-        const dialled =
-          options.storedAutonomy === undefined
-            ? base
-            : { ...base, autonomy: options.storedAutonomy() };
-        const read =
-          options.storedDefaultBranch === undefined
-            ? dialled
-            : { ...dialled, defaultBranch: options.storedDefaultBranch() };
-        if (stored === undefined) {
-          return read;
-        }
-        try {
-          // The production reading; nothing to redact, the clauses are the harness's own.
-          const layer = projectSettingsLayerFrom(id, stored({ job: activeJob }), (value) => value);
-          return { ...read, config: layer.values };
-        } catch (error) {
-          if (!(error instanceof ProjectSettingsInvalidError)) throw error;
-          return {
-            ...read,
-            config: {},
-            configRefusal: error.message,
-            wip: REFUSED_CONFIGURATION_WIP_LIMITS,
-          };
-        }
-      },
-    },
+    settings: settingsPort,
     jobs,
     ...(options.runsAgents === undefined ? {} : { runsAgents: options.runsAgents }),
     notifications,
@@ -1968,6 +1987,11 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     eventStore: memory.store,
     // The cap this harness's task cap reads, so a raise is compared against the same figure.
     defaultTaskCapUsd: settings.taskBudgetUsd,
+    // WP-159: the seed's four ids unless a case names its own list (`listedModels`).
+    models: {
+      isListed: async (modelId) => (options.listedModels ?? SEEDED_MODEL_IDS).includes(modelId),
+    },
+    settings: settingsPort,
     logger: silentLogger,
   };
 

@@ -21,6 +21,7 @@
 import {
   CommandsUnavailableError,
   IterationLimitReachedError,
+  ModelNotListedError,
   NoGateFeedbackError,
   RunNotLiveError,
   StageNotCurrentError,
@@ -757,6 +758,12 @@ describe('what each refusal maps to', () => {
       status: 409,
       code: 'not_paused_by_task_cap',
     },
+    {
+      // WP-159 ruling (b): a retry's model nobody chose on purpose.
+      error: new ModelNotListedError('claude-opsu-5'),
+      status: 409,
+      code: 'model_not_listed',
+    },
   ];
 
   for (const entry of cases) {
@@ -1185,6 +1192,28 @@ describe('the routes’ own answers', () => {
     });
     await post(world, `/api/runs/${RUN}/retry`, { effort: 'low' }, 'm-2');
     expect(world.calls[1]?.input).toEqual({ runId: RUN, userId: USER, effort: 'low' });
+    // WP-159: the deliberate way past the model list reaches the command, by name.
+    await post(
+      world,
+      `/api/runs/${RUN}/retry`,
+      { model: 'claude-next-fake', allow_unlisted_model: true },
+      'm-3',
+    );
+    expect(world.calls[2]?.input).toEqual({
+      runId: RUN,
+      userId: USER,
+      model: 'claude-next-fake',
+      allowUnlistedModel: true,
+    });
+  });
+
+  it('answers a retry on an unlisted model 409 model_not_listed and audits nothing (WP-159)', async () => {
+    world.throws = new ModelNotListedError('claude-opsu-5');
+    const reply = await post(world, `/api/runs/${RUN}/retry`, { model: 'claude-opsu-5' }, 'typo');
+    expect(reply.status).toBe(409);
+    expect(reply.body.error?.code).toBe('model_not_listed');
+    expect(reply.body.error?.message).toContain('"claude-opsu-5"');
+    expect(world.actions).toEqual([]);
   });
 
   it('passes the feedback’s optional fields only when the client sent them', async () => {

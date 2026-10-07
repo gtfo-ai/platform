@@ -2322,14 +2322,34 @@ export const retryRunRequestSchema = z.strictObject({
   /**
    * The model to run the new attempt on, bounded at 128 characters (WP-15i).
    *
-   * The platform publishes no list of model ids — `agenticConfigSchema`'s `model` is a free string,
-   * because a project may pin a model this build has never heard of — so the override cannot be an
-   * enum. The bound is the cost ledger's own: `MAX_LEDGER_MODEL_ID_LENGTH` is 128, and a name past
-   * it is refused a price row, so a longer one would produce a run whose spend cannot be ledgered.
+   * The platform publishes its list of model ids since WP-159 — `GET /api/org/models`, the open
+   * windows of `price_list` — and the server refuses an id outside it with `409 model_not_listed`,
+   * unless the id is the run's own model, the stage's configured model, or
+   * {@link retryRunRequestSchema}'s `allow_unlisted_model` is true. The field still cannot be an
+   * enum: `agenticConfigSchema`'s `model` is a free string, because a project may pin a model this
+   * build has never heard of, and a model can run before its price row exists. The bound is the
+   * cost ledger's own: `MAX_LEDGER_MODEL_ID_LENGTH` is 128, and a name past it is refused a price
+   * row, so a longer one would produce a run whose spend cannot be ledgered.
    */
   model: nonEmptyStringSchema.max(128).optional(),
+  /**
+   * Admit a `model` the list does not carry (WP-159 ruling (b)): a custom or not-yet-priced id a
+   * person chose on purpose — the SPA's *Other…*. Absent or false, such an id is refused.
+   */
+  allow_unlisted_model: z.boolean().optional(),
   effort: effortSchema.optional(),
   budget_usd: usdSchema.optional(),
+});
+
+/**
+ * `GET /api/org/models` (WP-159 ruling (a)): the distinct `price_list.model_id`s whose price window
+ * is open now (`effective_from <= now` and `effective_to` null or later), ordered by id, with no
+ * prices. It is the ledger's own definition of a model the platform can charge, maintained by the
+ * operator, so the SPA keeps no list of its own.
+ */
+export const orgModelsResponseSchema = z.strictObject({
+  // The retry's own bound: an id past 128 characters is not listed (`queries/cost-queries.ts`).
+  models: z.array(z.strictObject({ model_id: nonEmptyStringSchema.max(128) })),
 });
 
 export const agentsResponseSchema = z.strictObject({
@@ -2882,6 +2902,7 @@ export type KbDocResponse = z.infer<typeof kbDocResponseSchema>;
 export type KbProposalsResponse = z.infer<typeof kbProposalsResponseSchema>;
 export type KbHealthResponse = z.infer<typeof kbHealthResponseSchema>;
 export type AgentsResponse = z.infer<typeof agentsResponseSchema>;
+export type OrgModelsResponse = z.infer<typeof orgModelsResponseSchema>;
 export type KbSearchResponse = z.infer<typeof kbSearchResponseSchema>;
 export type DecideKbProposalRequest = z.infer<typeof decideKbProposalRequestSchema>;
 export type SseTopic = z.infer<typeof sseTopicSchema>;

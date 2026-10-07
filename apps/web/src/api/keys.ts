@@ -17,6 +17,8 @@ export const queryKeys = {
   orgIdentities: ['org', 'identities'] as const,
   audit: (filters: Readonly<Record<string, unknown>> = {}) => ['org', 'audit', filters] as const,
   agents: ['org', 'agents'] as const,
+  /** WP-159: the model list, under the org prefix so an `org` frame refreshes it. */
+  orgModels: ['org', 'models'] as const,
   inbox: ['org', 'inbox'] as const,
   integrations: ['integrations'] as const,
   integrationProviders: ['integration-providers'] as const,

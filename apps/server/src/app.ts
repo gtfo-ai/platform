@@ -78,7 +78,7 @@ import { routeLabel } from './metrics.js';
 import type { OnboardingCommands } from './onboarding.js';
 import type { ProjectConfigCommands } from './project-config.js';
 import { listHistoryBootstraps } from './queries/bootstrap-queries.js';
-import { listOrgBudgets, writeBudget } from './queries/cost-queries.js';
+import { listedModelIds, listOrgBudgets, writeBudget } from './queries/cost-queries.js';
 import { claimCommandAttempt, releaseCommandAttempt } from './queries/idempotency-queries.js';
 import type { Database } from './queries/identity-queries.js';
 import {
@@ -523,6 +523,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         listCandidates: async () => listIdentityCandidates(options.database),
         recordAction: async (input) => recordHumanAction(options.database, input),
       },
+      // WP-159: open now, by this process's clock — the instant the retry's check reads too.
+      models: async () => listedModelIds(options.database, new Date()),
     });
     // WP-95, backlog 126: the operator's two instruments over the events WP-49 dead-lettered.
     await registerDeadLetterRoutes(app, {

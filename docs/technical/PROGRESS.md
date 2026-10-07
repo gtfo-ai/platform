@@ -14712,7 +14712,7 @@ passes R13. The docblock at `:295-296` points to the shared reader.
 
 **Depends on** WP-153.
 
-### 511. **A builtin or wrapper that runs a *string* as code is not read by the command scanner, so `trap 'git push origin HEAD:main' EXIT` is `unattended_auto` and bash runs the push behind a line the policy reads as one `trap` command** (TODO, **major — the same consequence class as backlog 509: under `unattended: auto` it is a path for an arbitrary hidden command past the block list and the git boundary, which rule 1 says is read (*"the script a shell wrapper is handed"*). By reading it is `auto`-only: every spelling below is an unmatched line, so `deny` and the attended policy refuse or ask, unlike 509, which reached `allow`. What bounds the consequence is what bounds 481's residual and 509 (the credential answered for the project's repository path only since `860be46a`, the egress allow-list, the run container). Reachable by a model told to write it (BD-022), not by an ordinary command**. WP-158's *Discovered work*, session 13, verified by the refiner against WP-158's uncommitted tree on `deee26e6`. **No work package owns it**: WP-158's ruling (e) scoped it out as a named residual (the module docblock and technical/05's WP-158 amendment both name it, the latter as *"a different class, filed as Discovered work"*, which this entry is), and none of WP-154…WP-157 or WP-159 touches `packages/domain/src/policies/`. **It needs its own row, first in the remaining M9 queue after WP-158** (security, as 509 was placed), parallel-safe with every other row for the reason WP-153 and WP-158 were. Backlog **512** and **513** are candidate folds: same module, same shell oracle)
+### 511. **A builtin or wrapper that runs a *string* as code is not read by the command scanner, so `trap 'git push origin HEAD:main' EXIT` is `unattended_auto` and bash runs the push behind a line the policy reads as one `trap` command** (TODO, **major — the same consequence class as backlog 509: under `unattended: auto` it is a path for an arbitrary hidden command past the block list and the git boundary, which rule 1 says is read (*"the script a shell wrapper is handed"*). By reading it is `auto`-only: every spelling below is an unmatched line, so `deny` and the attended policy refuse or ask, unlike 509, which reached `allow`. What bounds the consequence is what bounds 481's residual and 509 (the credential answered for the project's repository path only since `860be46a`, the egress allow-list, the run container). Reachable by a model told to write it (BD-022), not by an ordinary command**. WP-158's *Discovered work*, session 13, verified by the refiner against WP-158's uncommitted tree on `deee26e6`. **Owner WP-160** (rulings (a)–(e), architect's third M9 amendment, 2026-10-07: item 3, `bash -lc`, measured already refused and only pinned; `find -exec` and `git rebase -x` added by the same measurement). Before that, no work package owned it: WP-158's ruling (e) scoped it out as a named residual (the module docblock and technical/05's WP-158 amendment both name it, the latter as *"a different class, filed as Discovered work"*, which this entry is), and none of WP-154…WP-157 or WP-159 touches `packages/domain/src/policies/`. **It needs its own row, first in the remaining M9 queue after WP-158** (security, as 509 was placed), parallel-safe with every other row for the reason WP-153 and WP-158 were. Backlog **512** and **513** are candidate folds: same module, same shell oracle)
 
 **The measurement (WP-158's implementer, bash 5.2.37 from `platform-runtime:wp151`).** Quoted from the
 row's notes: *"`trap 'git push origin HEAD:main' EXIT` is `unattended_auto`, and bash 5.2 ran the trap
@@ -14792,7 +14792,7 @@ read. That is the shape 509 was graded major for.
 
 **Depends on** WP-158 (the same module; the row starts from its committed tree). Nothing else.
 
-### 512. **WP-153's glob-named script reader fires on any segment whose first word holds `*`, `?`, `[` or `{` — an assignment such as `x='b[1]'`, and by reading also `[ … ]`, `[[ … ]]` and a `{ …; }` group — so every quoted here-document body at that level is read as a script** (TODO, **nit — an over-read, so it fails closed: the cost is a body (`cat <<'EOF'` + PHP, say) read as commands and refused or asked, which is the pre-WP-153 behaviour backlog 482 closed, and a test that uses a bare assignment hides the body detector behind the walk. No security consequence.** WP-153's review round 1 nit 3 (*"A reader named by a glob or a brace (`| /bin/s?`, `| /bin/{sh,x}`) now counts as a script reader in command position. It over-reads, which costs only the old reading"*), its reach found by WP-158's implementer, session 13, verified by the refiner on `deee26e6` plus WP-158's diff. **No work package owns it.** Candidate fold for backlog **511**'s row, which edits the same function's neighbour)
+### 512. **WP-153's glob-named script reader fires on any segment whose first word holds `*`, `?`, `[` or `{` — an assignment such as `x='b[1]'`, and by reading also `[ … ]`, `[[ … ]]` and a `{ …; }` group — so every quoted here-document body at that level is read as a script** (TODO, **nit — an over-read, so it fails closed: the cost is a body (`cat <<'EOF'` + PHP, say) read as commands and refused or asked, which is the pre-WP-153 behaviour backlog 482 closed, and a test that uses a bare assignment hides the body detector behind the walk. No security consequence.** WP-153's review round 1 nit 3 (*"A reader named by a glob or a brace (`| /bin/s?`, `| /bin/{sh,x}`) now counts as a script reader in command position. It over-reads, which costs only the old reading"*), its reach found by WP-158's implementer, session 13, verified by the refiner on `deee26e6` plus WP-158's diff. **Owner WP-160** (ruling (g), architect's third M9 amendment, 2026-10-07; reproduced for `x='b[1]';`, `[ -d x ] &&` and `{ … }`))
 
 **What is wrong (read, not run — rule 66).** `feedsScriptReader`
 (`packages/domain/src/policies/command-policy.ts:2227-2232`) asks, of each pipeline stage,
@@ -14825,7 +14825,7 @@ WP-158's `export` setters may then go back to bare assignments (optional).
 
 **Depends on** WP-153. Nothing else.
 
-### 513. **`HERE_DOCUMENT_CONTEXT` is matched against the whole text before the operator, so one comment, one closed `${…}`, one `((`/`$[`/`[[` anywhere earlier — a `#!/bin/sh` line, or `git commit -m "fix #12"` — stops every later here-document in a multi-line command from being recognised** (TODO, **nit — a convenience loss that fails closed for an unquoted delimiter since WP-158, and fails *towards the old reading* for a quoted one; a hypothesis below would raise it if measured. WP-158's *Discovered work*, session 13, verified by the refiner on `deee26e6` plus WP-158's diff. **No work package owns it.** Candidate fold for **511**'s row; it needs its own shell-oracle cases)
+### 513. **`HERE_DOCUMENT_CONTEXT` is matched against the whole text before the operator, so one comment, one closed `${…}`, one `((`/`$[`/`[[` anywhere earlier — a `#!/bin/sh` line, or `git commit -m "fix #12"` — stops every later here-document in a multi-line command from being recognised** (TODO, **nit — a convenience loss that fails closed for an unquoted delimiter since WP-158, and fails *towards the old reading* for a quoted one; a hypothesis below would raise it if measured. WP-158's *Discovered work*, session 13, verified by the refiner on `deee26e6` plus WP-158's diff. **Regraded major and owned by WP-160** (rulings (e) and (f), architect's third M9 amendment, 2026-10-07): the hypothesis line is `unattended_auto` with a push and with `sudo id` in every baseline, and bash 5.2, dash and bash 3.2 each ran the payload)
 
 **What is wrong (read, not run — rule 66).** `HERE_DOCUMENT_CONTEXT`
 (`packages/domain/src/policies/command-policy.ts:1766`, `/\$\{|\$\[|\(\(|\[\[|(?:^|[\s;&|()<>])#/`)
@@ -14873,6 +14873,57 @@ pairing is refused (an unrecognised operator whose would-be body has an odd quot
 uncertain) before the convenience fix.
 
 **Depends on** WP-158 (`unrecognisedUnquotedOperator`, ruling (f)).
+
+### 514. **When the run being retried was itself a retry override (say Sonnet on a stage configured for Opus), *Retry run* preselects Sonnet, but an unchanged submit sends no `model`, so the new run is planned on Opus: the screen implies "Sonnet again" and runs the configured model** (TODO, **minor — UX. No wrong model is charged without a person pressing the button, and the run screen shows the model that ran, but a person who accepts the preselection gets a model they did not see selected. Live once WP-159 lands, for every retry of a run that was an override.** WP-159's review, session 13, verified by the refiner against WP-159's uncommitted tree on `9a96d763`. **Working as ruled, so it needs a ruling, not a fix**: WP-159 ruling (c) mandates both halves (`docs/technical/13-implementation-plan.md:472`, *"with the run's `record.model` preselected. Submitting without a change sends **no** `model`"*). **No work package owns it**: no M9 row touches `run-retry-model.tsx` after WP-159, and WP-160 is the command scanner)
+
+**What is wrong (read, not run — rule 66).** `retryModelRequest`
+(`apps/web/src/features/run-retry-model.tsx:44-53`) returns `{}` when the selection equals `current`,
+and `run-detail.tsx:272-275` and `:293-298` pass `record.model` as `current`, which is the model the
+run **ran**, override included. With no `model`, `retryRunCommand`
+(`packages/application/src/pipeline/commands.ts:1816-1819`) records no override, so the stage job
+plans from the project's configuration (the configured model is read the same way at `:1864-1866`:
+`stages.<stage>.model`, else `stageAgentDefaults(stage).model`). The comment at `run-detail.tsx:267-271`
+says *"An unchanged field means "as before""*, which is true only when the run was not an override. The
+user guide's sentence is accurate but reads as the same thing to a person (`docs/user-guide.md:555-558`,
+*"with this run's own model selected, and leaving it unchanged re-plans the new run from the project's
+configuration"*). **The effort select has the same shape** (read): its empty option is labelled
+`Effort (${record.effort})` and sends nothing, so a run retried at `high` on a stage configured `medium`
+shows *high* and runs *medium*. One cause, one entry. Not measured: no ui case retries an override run.
+Read, not checked: whether the run DTO or `runs.settings_snapshot` lets the SPA tell an override run
+from a configured one; the snapshot is frozen at the run's creation, so it can be stale either way.
+
+**Options.**
+- **(a) Send the run's model when it differs from the configured one.** Needs the configured model on
+  the client (a field on the run read, or the settings read), and that value can move between render
+  and submit.
+- **(b) Have the server treat an unchanged retry as "as before"**: an absent `model` on retry means the
+  run's own model, and *Use configured* is an explicit option. Changes ruling (c)'s comment, the user
+  guide and technical/08's DTO meaning; a project whose configuration moved since the run would no
+  longer pick up the change by default.
+- **(c) Preselect an explicit *Configured (…)* option** naming what an unchanged submit will run, with
+  the run's model listed as an ordinary choice. Same configured-model read as (a).
+- **(d) Label only**: keep the behaviour, add a line under the select when `record.model` is not the
+  stage's configured model (*"unchanged runs the configured model, X"*).
+
+**Recommendation: (c).** It makes the default say what it does, keeps ruling (c)'s *send nothing
+unless changed* intact (the server stays the one place the configured model is resolved, at the job),
+and a person who wants the override again picks it once. Apply the same to effort. (b) is rejected
+because "retry" re-reading configuration is the behaviour a person who just edited `.agentic/config.yml`
+relies on; (d) leaves the misleading preselection in place.
+
+**What it costs to leave.** A person retrying a failed Sonnet override to "try again" silently gets
+Opus, at Opus's price, and may conclude the override did not take. Bounded by the run screen showing
+the new run's model and by the budget caps.
+
+**Done when** the default option names the model an unchanged submit will run, for model **and**
+effort; ui cases: an override run (record model differs from the configured one) preselects the
+configured option and an unchanged submit sends no `model`; choosing the run's own model sends it.
+**Canary**: preselect `record.model` again and the override case fails. The comment at
+`run-detail.tsx:267-271` and the user guide's sentence are amended (rule 83).
+
+**Depends on** WP-159 landing, and on a read the SPA can take the stage's effective configured model
+(and effort) from — **needs measurement**: whether an existing read carries it; if none does, a field
+on the run read beside `record.model` is the smallest addition.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -18623,7 +18674,7 @@ file, or the first work package that touches upgrade behaviour.
 disposition of every open backlog heading is § "Architect ruling (M9, session 12)" at the end of this
 file). Recommended order is the table's. WP-153 is parallel-safe with WP-150, WP-154 and WP-155;
 WP-154 and WP-155 are parallel-safe with everything but each other. Migrations take the next free
-number from **0085** in the order rows land. Read the backlog entry a row folds before planning it. *Amended 2026-10-06 (second amendment)*: WP-158 and WP-159 were added, and the order of the rows still open is WP-158, WP-159, WP-154, WP-155, WP-156, WP-157 (§ "Architect ruling (M9, session 12)", second amendment). The next free migration number is **0087**.
+number from **0085** in the order rows land. Read the backlog entry a row folds before planning it. *Amended 2026-10-06 (second amendment)*: WP-158 and WP-159 were added, and the order of the rows still open is WP-158, WP-159, WP-154, WP-155, WP-156, WP-157 (§ "Architect ruling (M9, session 12)", second amendment). The next free migration number is **0087**. *Amended 2026-10-07 (third amendment)*: WP-160 was added, and the order of the rows still open is WP-159, WP-160, WP-154, WP-155, WP-156, WP-157. WP-160 is parallel-safe with every open row (§ "Architect ruling (M9, session 12)", third amendment). The next free migration number is still **0087**.
 
 | WP | Title | Status | Commit | Notes |
 |---|---|---|---|---|
@@ -18637,6 +18688,7 @@ number from **0085** in the order rows land. Read the backlog entry a row folds 
 | WP-157 | **One broken organisation account named once, and the listings, fakes and poll state that disagree with production** | TODO | — | Folds **413**, **414**, **431**, **430**, **434**, **435** (docs), **447**. No deps. No migration |
 | WP-158 | **The command scanner refuses an expansion that runs a variable's text as code, and readiness reads hook here-documents with the scanner's reader** | DONE | `ebd2ecd3` | Folds **509**, **510**. Deps WP-153. No migration. **Built:** measured ~100 forms first (bash 5.2 and dash from the run image, bash 3.2; table in the notes); `UNCERTAINTY.evaluatedText` fires on every form that evaluates a variable's text (subscripts, `${x@op}`, `${!x}`, offsets, `$[`, `((`, `let`, `declare -i`, `[[ -eq`, and the folded name-taking builtins) outside single quotes, in double quotes, in redirection targets and in unquoted bodies, after joining continuations and behind wrapper options and `coproc`; decimal and `@`/`*` subscripts stay literal; `ls ${y[$(cat f)]}` had been `allow` in every mode. Beyond the row: a WP-153 bypass (a would-be body after a closed `${…}`, a comment or a CRLF delimiter) and `coproc` added to `ARGV0_WRAPPERS` (a block-list bypass). The husky reader uses the shared reader (510). **Review:** two rounds — round 1 **REQUEST-CHANGES** on three majors (a redirection target, a continuation inside `${…}`, `let` behind `command -p`/`coproc`, each run by bash); round 2 **APPROVE** with a dead-clause nit fixed by the orchestrator. Six reviewer canaries round 1 and five round 2, all dead. **Orchestrator verification:** round 0 `PASS: verify` (11855), `PASS: verify:integration` (846), `PASS: verify:e2e` twice (290, `:wp151` run image); round 1 `PASS: verify`, `PASS: verify:e2e` (290); after the nit `PASS: verify` (11898). Filed **511** (major: a builtin or wrapper that runs a string as code), 512, 513. CI on `ebd2ecd3`: `ci` `37599958320`, `image` `37599958373`. |
 | WP-159 | **Retry run offers the platform's own model list instead of a free-text box, and refuses a model nobody chose on purpose** | TODO | — | Folds **498** (the product owner's request). No migration. New read route `GET /api/org/models` over `price_list`, held by the client census. Serial with WP-154, WP-155 and WP-157; parallel-safe with WP-158 and WP-156 |
+| WP-160 | **The command scanner reads, or refuses, a command handed over as a string (a trap, a prompt, a callback, a shell it does not name, a `find -exec`), and a here-document it cannot recognise no longer hides the lines after it** | TODO | — | Folds **511** (major, security), **513** (regraded major: the architect's measurement ran its hidden command in bash 5.2, dash and bash 3.2), **512** (nit, same function). Deps WP-158. No migration. Measure first (ruling (a)); backlog 511's item 3 (`bash -lc`) is already refused, so it is pinned, not built. Next after WP-159; parallel-safe with every open row, WP-159 included. The orchestrator may split (f) and (g) into a follow-up row; it may not split (a)–(e) |
 
 ## WP notes (decisions, assumptions, reviewer findings)
 
@@ -43990,6 +44042,65 @@ filed **498** during WP-150. None of WP-154…WP-157 can own them, so each needs
 - **Disposition:** 498 → WP-159; 509 → WP-158 (a)–(e) and (g); 510 → WP-158 (f). The other
   headings filed since the first pass (499, 501, 504–508) are not dispositioned here.
 
+**Third amendment (2026-10-07, architect, session 13): WP-160 is added, and it runs next after
+WP-159.** Backlog **511** (major, security) came out of WP-158's *Discovered work*. **512** and **513**
+came from the same notes and name 511's row as the place to fold them. None of WP-154…WP-157 or WP-159
+touches `packages/domain/src/policies/`, so they need a row of their own.
+- **Measured before ruling, because the backlog's grades depended on it.** This pass ran no test and
+  changed no source. A scratchpad script imported the domain sources through
+  `scripts/ts-source-resolver.mjs`. It called `decideUnattendedCommand` under `auto` and `deny` for
+  the `read_only`, `verification` and `implementation` baselines (each with the shipped ask and
+  block lists, as the planner composes them, `packages/application/src/pipeline/planner.ts:231-240`),
+  and it planted two payloads: a `git push origin HEAD:main` and `sudo id`. Shell runs used bash
+  5.2.37 and dash (`/bin/sh`) from `platform-runtime:wp151` (`--rm --network none`) and the macOS
+  bash 3.2. The full list is in the plan row's ruling (a). Four results changed the ruling:
+  1. **511's item 3 is falsified.** `bash -lc`, `sh -ec`, `bash -cl`, `bash --login -c`, and the same
+     behind `exec`, `timeout` and `nohup`, were the backlog's *strongest reason this is major*. They are
+     already `git_boundary` with the push and `block_list` with `sudo id`. So are `su -c`,
+     `flock -c`, `watch`, `env -S` and `xargs … sh -c`. Nothing is built for them, only pinned (criterion
+     (3)), because no test uses a combined flag today.
+  2. **511 is still major, for the forms that remain.** These are `unattended_auto` with **both**
+     payloads, in every baseline, which is a pass past the block list and the git boundary under
+     `auto`: `trap`, `PS4`, `mapfile -C`, `alias`, `PROMPT_COMMAND`, `bind -x`, `complete -C`,
+     `rbash -c` and `script -c` (both shipped in the run image), `ksh -c`/`busybox sh -c` (not
+     shipped), a pipe or process substitution into a shell, and two that the backlog did not list:
+     **`find -exec/-execdir/-ok` with any command** and **`git rebase -x`** (`--exec` is already a
+     hazard and `-x` is not). bash 5.2 ran `PS4` under `set -x`, `mapfile -C` and `trap … ERR`. Under
+     `deny` and attended, every one of them is refused or asked, so 511's *"`auto`-only"* holds.
+  3. **513 is regraded major by its own *Done when*.** The hypothesis line (`# note`, then a quoted
+     here-document whose body is `a'`, then the payload, then `'`) is `unattended_auto` with both
+     payloads. bash 5.2, dash and bash 3.2 each **ran the payload** and only then failed on the
+     unmatched quote. This is a hidden-command shape in the 509/511 class, and since WP-153 it is
+     reachable whenever any comment, closed `${…}` or `[[` appears earlier in a multi-line command.
+     Its pairing half is ruling (e), written first. Its convenience half is ruling (f).
+  4. **512 reproduces** for `x='b[1]';`, `[ -d x ] &&` and `{ … }`: each makes an apostrophe body
+     `uncertain`. It is folded as ruling (g) because (c)'s stdin readers edit the same function,
+     `feedsScriptReader`. Editing it twice in two rows would be the larger cost.
+- **What the row does, in one line per family** (plan row, rulings (b)–(g)): read what can be read
+  and refuse what cannot (rule 1, then rule 5). A literal `trap` action, a shell's `-c` string,
+  `script -c`, a literal here-string into a shell and `find -exec`'s argv are **parsed**, so the block
+  list and the git boundary judge what would run, and `trap 'rm -f "$tmp"' EXIT` stays usable.
+  A stored prompt, alias or callback, a non-literal trap action and a script read from a pipe are
+  **uncertain**, under one new entry worded for the model. `git rebase -x` joins `--exec`'s hazard.
+  511's item 2 (the interactive-only forms) fails closed **without** measuring whether the CLI's Bash
+  tool is interactive. Those forms have no use in an unattended run, so the measurement could only
+  price a cost of nil. The question is recorded `[unverified]` in the row notes rather than made a
+  criterion, as WP-158's (g) did.
+- **Order.** The rows still open run as WP-159 (in progress), **WP-160**, WP-154, WP-155, WP-156,
+  WP-157. Placing it right after the row in flight follows the second amendment's reasoning for 509:
+  an allow path under `auto` for a hidden command comes before anything a person sees. It is
+  **parallel-safe with every open row, WP-159 included**: it touches only
+  `packages/domain/src/policies/` and technical/05, and ruling (f) deliberately leaves
+  `packages/domain/src/readiness/recheck.ts` alone. So it may start beside WP-159 if a second
+  implementer is free. It depends only on WP-158 (`ebd2ecd3`). **No migration.** The next free number
+  is still **0087**.
+- **Size.** Three entries in one module family, each with shell-oracle rows. That is as wide as WP-158,
+  which landed in one review round plus a nit. The split clause (ruling (i)) lets the orchestrator
+  move (f) and (g) to a follow-up row if review runs long. Both fail closed today. (a)–(e) may not
+  be moved.
+- **Disposition:** 511 → WP-160 (a)–(e); 513 → WP-160 (a), (e) (security half) and (f); 512 →
+  WP-160 (g). No other heading is dispositioned here.
+
 ## WP notes — session 12 (M9)
 
 #### WP-150
@@ -44475,3 +44586,44 @@ The reviewer's two mutants were re-run and both are killed. `isWriteTarget(targe
   - `coproc` dropped from the stage walk: killed by 1 when measured, but the clause was dead once `coproc` joined `ARGV0_WRAPPERS` (`isWrapperToken` covers it; the reviewer's round-2 removal survived the unit tier), so the orchestrator deleted it as round 2's nit;
   - `coproc` dropped from `ARGV0_WRAPPERS`: killed by 4.
 - **Swept sentences:** technical/05's *"outside single quotes (…)"* now names a redirection's target and continuations, and the amendment names `coproc`; the module docblock's *A variable's text is code* paragraph says where the detector runs. Load: every tier started under 12, but one `here-documents.shell.test.ts` run started at 12.7.
+
+#### WP-159
+
+**Retry run offers the platform's own model list instead of a free-text box, and refuses a model nobody chose on purpose**: rulings (a)–(d) (plan row), backlog 498. Built on `9a96d763`. No migration.
+
+**What changed.**
+- **(a) The list.** `listedModelIds` (`apps/server/src/queries/cost-queries.ts`) is the one query: distinct `price_list.model_id` with `effective_from <= at` and `effective_to` null or later than `at`, ordered by id. `GET /api/org/models` (`apps/server/src/routes/org.ts`, `run.read`) publishes it as `orgModelsResponseSchema` (`packages/contracts/src/api.ts`), bound in `apps/server/src/app.ts` at `new Date()`. **Assumption:** an id longer than 128 characters is left out of the list, because the retry's `model` refuses it at 400 and the response schema bounds `model_id` at 128 (a longer operator row would otherwise make the route answer 500). The ruling says nothing about it.
+- **(b) The refusal.** `retryRunCommand` (`packages/application/src/pipeline/commands.ts`) calls `admitRetryModel` before `writeTask`, so a refusal writes nothing. It admits, cheapest first, the run's own model, a listed id (`HumanCommandDependencies.models`, a `ModelCatalogue` port), and the stage's effective configured model (`settings.config.stages[stage].model`, else `stageAgentDefaults(stage).model`, read through `HumanCommandDependencies.settings` with no transaction open). Otherwise it throws `ModelNotListedError`, which `commandRefusal` (`apps/server/src/errors.ts`) answers `409 model_not_listed` with the id quoted. `allow_unlisted_model: true` (`retryRunRequestSchema`) skips the check. **The two new dependencies are required**, so a composition cannot leave the check out (rule 31). `apps/server/src/runtime.ts` binds the catalogue to the same `listedModelIds` with `only`, so the select and the refusal share one definition. The pipeline harness answers `SEEDED_MODEL_IDS` unless a case passes `listedModels`, and its settings port is now one object shared by the executor and the human commands. **Assumption:** "the stage's current effective configured model" includes the template default when the project names none. That is what the planner would run, and criterion (5) keeps every default listed anyway. The settings read is a new unguarded `forProject` read, so it is declared in `config-refusal-readers.test.ts`: on a refused configuration it admits only the template default, so a model only the unreadable document pinned is refused (closed), and the attempt would be refused at admission anyway.
+- **(c) The SPA.** `apps/web/src/features/run-retry-model.tsx` holds the select and its two pure halves (`retryModelRequest`, `retryModelOptions`). `run-detail.tsx` renders it. `useOrgModels` is in `apps/web/src/app/queries.ts` (`retry: false`, key `['org', 'models']`). *Other…* is the select value `''`, which no model id can be. While the list has not answered, the run's model shows unlabelled; once it answers without it, the model is labelled *(not priced)*. A refused retry now shows the server's message under *That retry was refused.*
+- **(d) Census and docs.** `client-census.test.ts` names the route positively, asserts its 401, and asserts the client's sweep finds the path. `endpoint-callers.test.ts` holds `useOrgModels` to its caller unchanged. technical/08 (the *Models* row and the retry DTO), technical/09's run-detail row, and the route's own OpenAPI description were updated. The web-e2e fake backend serves `/api/org/models`, and `screens.spec.ts` selects instead of filling.
+- **(e)** `[unverified]`: what a typo does at run time on a real CLI (backlog 498 item 6) was not measured, because there is no model credential here. By (b), the select path can no longer send one.
+
+**Tests.**
+- `packages/application/src/pipeline/human-commands.test.ts` › "retry a run: the model list (WP-159)": six cases. A typo is refused, and the attempt counter, events and specs are unchanged after a drain. The same typo with the flag runs on it. A listed id, the run's own unlisted model, the stage's configured unlisted model and the template default are each admitted. The census of the module's domain imports gained `stageAgentDefaults`.
+- `apps/server/src/routes/commands.test.ts`: `allowUnlistedModel` passes through; › "answers a retry on an unlisted model 409 model_not_listed and audits nothing (WP-159)"; and a row in the refusal table.
+- `apps/server/src/routes/org.test.ts` › "serves the model list to a viewer, as ids with no prices (WP-159)" and › "refuses the model list to an anonymous caller (WP-159)".
+- `test/integration/server/model-list.integration.test.ts`, five cases on the migrated database: the route over the real query answers the seed. A closed window and a later window are absent, and a superseded id is listed once. The `only` form agrees. An id over 128 characters is not listed. › "lists every shipped default model, so a default cannot fall out of the list (criterion 5)".
+- `apps/web/src/features/run-retry.test.tsx`: eight ui cases through `createApp` and a fake API, covering criterion (4) and the two pure halves.
+
+**Canaries** (each run on the file it mutates: copied to the scratchpad, mutated in place, `cp` back, `diff` empty):
+- `useOrgModels()` removed from its caller: killed by `endpoint-callers.test.ts` › "calls every read hook `app/queries.ts` exports from somewhere outside it" (criterion 2).
+- The `admitRetryModel` call removed: killed by 2 (› "refuses a typo nobody chose on purpose, and records nothing": the promise resolved, so the typo started an attempt; and the configured-model case's closing refusal) (criterion 3).
+- `retryModelRequest` always sends the selection: killed by 4 ui cases.
+- The `ModelNotListedError` mapping disabled: killed by 2 route cases.
+- `DEFAULT_ASK_MODEL` set to an unseeded id: killed by the criterion-5 case.
+
+**Sentences falsified (rule 83), swept.**
+- `api.ts`'s *"The platform publishes no list of model ids"*: rewritten. The list exists and is checked, and the field still cannot be an enum, for the reason the docblock now gives.
+- `docs/user-guide.md`'s retry sentence: it now describes the select, *not priced*, *Other…* and `model_not_listed`.
+- technical/08's `POST /api/runs/:id/retry` (model/effort override): it now states the refusal and the flag.
+- technical/09's *"retry with model"*: it now names the select.
+- *"free string"*: the remaining hit is `agenticConfigSchema`'s `model` in the same docblock, still true; configuration is not validated by this row (ruling (b)).
+- `run-detail.tsx`'s comment at the retry controls: rewritten, because the model field is no longer empty by default.
+- `org.ts`'s module docblock and `org.test.ts`'s "not driven here" paragraph now name the route.
+- History rows in PROGRESS (backlog 498's own text, the plan row) are left as written.
+
+**Verification.** Every tier started at a one-minute load under 12, except the final `verify`, which started at 60.6. That load was the tail of the first `verify` run, which failed on `config-refusal-readers.test.ts`, the census the new settings read has to be declared in. `PASS: verify` (11 909 tests, 22 skipped; lint at the baseline's 44 warnings; `PASS: coverage:ratchet`), with `.claude/scheduled_tasks.lock` moved aside for the run and put back. `vitest --project ui`: 57 files, 581 tests, passed. The new integration file passed (5); its Testcontainers reaper was gone afterwards, and no container of mine is left. `pnpm run -s schemas` reported 22 documents already up to date: the API DTOs are not among the generated schemas. Not run here (the orchestrator's): the full integration, e2e and web-e2e tiers. `test/web-e2e/screens.spec.ts` changed and is unrun.
+
+**Review round 1** (APPROVE-with-nits, tests only). (1) [major] The canary that drops the run's-own admission survived, because the case's `claude-opus-5` is also refinement's template default. The case now first retries with `allowUnlistedModel` on `claude-custom-x`, then retries that run on the same id without the flag. Re-run: the canary is killed by › "admits the run’s own model when the list does not carry it". (2) A half-open window case: an `effective_to` exactly at the instant is absent, and 1 ms earlier it is listed. (3) `screens.spec.ts` waits for a listed option before asserting the preselection (rule 87). Not run: Playwright is the orchestrator's.
+
+**Discovered work:** none.

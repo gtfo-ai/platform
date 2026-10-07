@@ -22,6 +22,7 @@ import {
   BreakdownRefusedError,
   CommandsUnavailableError,
   IterationLimitReachedError,
+  ModelNotListedError,
   NoGateFeedbackError,
   RunNotLiveError,
   StageNotCurrentError,
@@ -183,6 +184,10 @@ export const commandRefusal = (error: unknown): HttpError | null => {
   if (error instanceof NoGateFeedbackError) {
     // WP-152 ruling (b): a ticked box with nothing behind it is refused, never dropped.
     return new HttpError(409, 'no_gate_feedback', error.message);
+  }
+  if (error instanceof ModelNotListedError) {
+    // WP-159 ruling (b): a retry's model nobody chose on purpose, refused before anything is recorded.
+    return new HttpError(409, 'model_not_listed', error.message);
   }
   if (error instanceof StageNotReachedError) {
     // PROGRESS backlog 483: a return goes to a stage the task has run, at or before its own.

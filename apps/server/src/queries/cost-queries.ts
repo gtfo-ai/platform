@@ -17,9 +17,9 @@ import { budgetWindowStart, resolveBudgetTimezone } from '@platform/application'
 import type { BudgetRecord, Id, IsoDateTime } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
 import type { SQL } from 'drizzle-orm';
-import { and, eq, inArray, isNull, or } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 
-const { budgets, budgetWindows, organizations, projects } = dbAdapters.schema;
+const { budgets, budgetWindows, organizations, priceList, projects } = dbAdapters.schema;
 
 export type Database = dbAdapters.Database;
 
@@ -248,4 +248,33 @@ export const listOrgBudgets = async (
     .limit(1);
   const { timezone } = resolveBudgetTimezone(zone[0]?.timezone ?? null);
   return budgetsWithSpend(database, eq(budgets.scope, 'org'), at, timezone);
+};
+
+/**
+ * The organisation's model list (WP-159 ruling (a)): the distinct `price_list.model_id`s whose price
+ * window is open at `at` — `effective_from <= at` and `effective_to` null or later — ordered by id.
+ *
+ * **One arbiter for both halves**: `GET /api/org/models` publishes this list and the retry command's
+ * `ModelCatalogue` asks it whether one id is on it (`only`), so the select and the refusal cannot
+ * disagree about what "listed" means. An id longer than 128 characters is not listed: the retry's
+ * `model` refuses it (`MAX_LEDGER_MODEL_ID_LENGTH`), so offering it would offer a 400.
+ */
+export const listedModelIds = async (
+  database: Database,
+  at: Date,
+  only?: string,
+): Promise<readonly string[]> => {
+  const rows = await database
+    .selectDistinct({ modelId: priceList.modelId })
+    .from(priceList)
+    .where(
+      and(
+        lte(priceList.effectiveFrom, at),
+        or(isNull(priceList.effectiveTo), gt(priceList.effectiveTo, at)),
+        sql`char_length(${priceList.modelId}) between 1 and 128`,
+        only === undefined ? undefined : eq(priceList.modelId, only),
+      ),
+    )
+    .orderBy(asc(priceList.modelId));
+  return rows.map((row) => row.modelId);
 };

@@ -553,7 +553,13 @@ CLI refuses any other.
   previous run's.
 
 You can **cancel** the run (member), **retry** it with a different model or effort (member — this
-creates a *new* run rather than changing this one), and leave **feedback** scoped to the stage.
+creates a *new* run rather than changing this one), and leave **feedback** scoped to the stage. The
+model is a list, not a box to type into: it offers the models the platform has a price for (the
+operator's `price_list`) with this run's own model selected, and leaving it unchanged re-plans the
+new run from the project's configuration. A model the list does not carry — say one your project
+pins — is shown as its own entry marked *not priced* and stays selected. *Other…* lets you type any
+id, and the platform runs it because you chose it there; an unlisted id sent without that choice is
+refused (`model_not_listed`), so a typo never reaches a run.
 
 **A Developer run that stops without finishing keeps its work.** When it runs out of turns, out of
 budget, out of time, stalls or crashes, the platform commits what it had changed as one

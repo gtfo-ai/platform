@@ -74,9 +74,11 @@ describe('toWireIdentityMapping (WP-31, PROGRESS backlog 79)', () => {
  * wrong-role refusal, the upsert, the `unknown_user` 409, and the `human_actions` row the write
  * owes — which it did not write at all until this round.
  *
- * The four organisation **reads** on the same file are not driven here: they take `database`
- * directly and are asserted on the integration tier, which is the pattern `routes/onboarding.ts`
- * already states for a database-backed route.
+ * The four organisation **reads** on the same file that take `database` are not driven here: they
+ * are asserted on the integration tier, which is the pattern `routes/onboarding.ts`
+ * already states for a database-backed route. WP-159's `GET /api/org/models` takes a bound function
+ * rather than `database`, so its guard and its shape are driven here; its query is measured in
+ * `test/integration/server/model-list.integration.test.ts`.
  */
 describe('the identity routes (WP-31 round 2)', () => {
   const USER = '00000000-0000-4000-8000-0000000000a1';
@@ -102,6 +104,8 @@ describe('the identity routes (WP-31 round 2)', () => {
     known: Set<string>;
     mappings: IdentityMappingRecord[];
     candidates: IdentityCandidate[];
+    /** What `GET /api/org/models` answers (WP-159). */
+    models: string[];
   }
 
   const build = async (): Promise<IdentityWorld> => {
@@ -115,6 +119,7 @@ describe('the identity routes (WP-31 round 2)', () => {
       known: new Set([USER]),
       mappings: [],
       candidates: [],
+      models: ['claude-haiku-4-5', 'claude-opus-5'],
     } as unknown as IdentityWorld;
 
     const app = fastify();
@@ -167,6 +172,7 @@ describe('the identity routes (WP-31 round 2)', () => {
           actions.push({ ...input });
         },
       },
+      models: async () => world.models,
     });
     await app.ready();
     (world as { app: FastifyInstance }).app = app;
@@ -416,5 +422,21 @@ describe('the identity routes (WP-31 round 2)', () => {
     expect(listed.json().items).toEqual([
       expect.objectContaining({ external_id: 'acct-ada', kind: 'machine', user_id: null }),
     ]);
+  });
+
+  it('serves the model list to a viewer, as ids with no prices (WP-159)', async () => {
+    world.role = 'viewer';
+    const response = await world.app.inject({ method: 'GET', url: '/api/org/models' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      models: [{ model_id: 'claude-haiku-4-5' }, { model_id: 'claude-opus-5' }],
+    });
+  });
+
+  it('refuses the model list to an anonymous caller (WP-159)', async () => {
+    world.signedIn = false;
+    const response = await world.app.inject({ method: 'GET', url: '/api/org/models' });
+    expect(response.statusCode).toBe(401);
+    expect(response.json().error.code).toBe('unauthenticated');
   });
 });

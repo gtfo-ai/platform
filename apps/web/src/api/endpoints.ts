@@ -68,6 +68,7 @@ import {
   kbProposalsResponseSchema,
   kbTreeResponseSchema,
   orgAuditResponseSchema,
+  orgModelsResponseSchema,
   orgSettingsResponseSchema,
   orgStatsResponseSchema,
   orgUsersResponseSchema,
@@ -201,6 +202,8 @@ export interface Endpoints {
     readonly project_id?: string;
   }) => Promise<z.output<typeof orgStatsResponseSchema>>;
   readonly agents: () => Promise<z.output<typeof agentsResponseSchema>>;
+  /** `GET /api/org/models` (WP-159): the model ids *Retry run* offers, from `price_list`. */
+  readonly orgModels: () => Promise<z.output<typeof orgModelsResponseSchema>>;
   readonly inbox: () => Promise<z.output<typeof inboxResponseSchema>>;
   readonly integrations: () => Promise<z.output<typeof integrationsResponseSchema>>;
   /**
@@ -626,6 +629,7 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     orgStats: (query) =>
       client.get('/api/org/stats', { schema: orgStatsResponseSchema, query: { ...query } }),
     agents: () => client.get('/api/org/agents', { schema: agentsResponseSchema }),
+    orgModels: () => client.get('/api/org/models', { schema: orgModelsResponseSchema }),
     inbox: () => client.get('/api/org/inbox', { schema: inboxResponseSchema }),
     integrations: () => client.get('/api/integrations', { schema: integrationsResponseSchema }),
     integrationProviders: () =>

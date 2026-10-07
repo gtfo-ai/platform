@@ -320,6 +320,22 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
   });
 
+  it('serves the model list WP-159 added, guarded, and the client calls it', async () => {
+    // Both directions, named (standing rule 10): the router serves it and refuses an anonymous
+    // caller, and the client's own sweep finds the path *Retry run* reads its options from.
+    const probed = await probe('/api/org/models');
+    expect(probed.served).toBe(true);
+    expect(probed.status).toBe(401);
+    expect(probed.code).toBe('unauthenticated');
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readSource(path),
+      })),
+    );
+    expect(paths).toContain('/api/org/models');
+  });
+
   it('serves the seven reads WP-15h part 2 took off the gap list', async () => {
     // The other direction of the equality above, named (standing rule 10): "not in the gap list"
     // is also satisfied by a path the client sweep failed to find at all.

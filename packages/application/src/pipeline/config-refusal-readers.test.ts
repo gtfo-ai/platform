@@ -97,6 +97,11 @@ const DECLARED: Readonly<Record<string, { readonly count: number; readonly reaso
     reason:
       'the ceiling shown on the button and the new discovery task; the run is refused at admission',
   },
+  'packages/application/src/pipeline/commands.ts': {
+    count: 1,
+    reason:
+      'the retry’s model check (WP-159) admits the stage’s configured model; on the defaults that is the template default, which is listed anyway, and a model only the unreadable document pinned is refused `model_not_listed` (closed); the attempt it would start is refused at admission',
+  },
   'packages/application/src/pipeline/delivery-measures.ts': {
     count: 1,
     reason:

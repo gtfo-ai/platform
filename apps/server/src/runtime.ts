@@ -102,6 +102,7 @@ import {
   type PipelineComposition,
 } from './pipeline.js';
 import { createProjectConfigCommands } from './project-config.js';
+import { listedModelIds } from './queries/cost-queries.js';
 import { countStaleCommandClaims } from './queries/idempotency-queries.js';
 import { listRunMessages } from './queries/pipeline-queries.js';
 import { createReadinessCheck } from './readiness.js';
@@ -819,7 +820,17 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      * by a composition root that builds none.
      */
     const taskCommands = capabilities.api
-      ? createTaskCommands({ eventing, jobs, logger: loggerPort })
+      ? createTaskCommands({
+          eventing,
+          jobs,
+          // WP-159: the retry's model check asks the query `GET /api/org/models` publishes.
+          models: {
+            isListed: async (modelId, at) =>
+              (await listedModelIds(database.db, new Date(at), modelId)).length > 0,
+          },
+          settings: createProjectSettingsPort(database.pool, loggerPort),
+          logger: loggerPort,
+        })
       : null;
 
     /**

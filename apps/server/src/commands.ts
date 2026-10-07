@@ -39,7 +39,13 @@
  * one `createIntegrationProber` passes as its `platformRedactor`.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import type { HumanCommandDependencies, Jobs, Logger } from '@platform/application';
+import type {
+  HumanCommandDependencies,
+  Jobs,
+  Logger,
+  ModelCatalogue,
+  ProjectSettingsPort,
+} from '@platform/application';
 import {
   answerTaskQuestion,
   cancelRunCommand,
@@ -147,6 +153,8 @@ export interface TaskCommands {
     readonly userId: string;
     readonly model?: string;
     readonly effort?: Effort;
+    /** WP-159: the person chose an id the model list does not carry, on purpose. */
+    readonly allowUnlistedModel?: boolean;
   }): Promise<{ readonly taskId: string; readonly stage: string }>;
   /**
    * TD-028 decision 11 (WP-101): with a live lease, **records** the stop for the process holding the
@@ -201,6 +209,10 @@ export interface TaskCommandOptions {
   readonly eventing: ReturnType<typeof eventingAdapters.createEventing>;
   /** `null` on a process that runs no workers; see the module note. */
   readonly jobs: Jobs | null;
+  /** WP-159: the organisation's model list, which a retry's `model` is checked against. */
+  readonly models: ModelCatalogue;
+  /** WP-159: the project's effective settings, for the stage's configured model. */
+  readonly settings: ProjectSettingsPort;
   readonly logger: Logger;
 }
 
@@ -250,6 +262,8 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
     // `packages/application/src/pipeline/settings.ts`): the task cap has no configuration key in
     // this build, so its default is the one figure a raise is compared against (WP-131).
     defaultTaskCapUsd: DEFAULT_TASK_BUDGET_USD,
+    models: options.models,
+    settings: options.settings,
     logger: options.logger,
   };
 
@@ -338,6 +352,9 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
         userId: id(input.userId),
         ...(input.model === undefined ? {} : { model: input.model }),
         ...(input.effort === undefined ? {} : { effort: input.effort }),
+        ...(input.allowUnlistedModel === undefined
+          ? {}
+          : { allowUnlistedModel: input.allowUnlistedModel }),
       }),
     cancelRun: async (input) =>
       cancelRunCommand(deps, {

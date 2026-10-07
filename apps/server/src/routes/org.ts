@@ -3,7 +3,8 @@
  *
  * `GET /api/org/users` needs `org.read` (viewer and above), `GET /api/org/audit` needs
  * `org.audit.read` (maintainer and above, Q36), and the two WP-15h part 2 added — `GET
- * /api/org/agents` (`run.read`) and `GET /api/org/inbox` (`task.read`) — are both viewer. So one
+ * /api/org/agents` (`run.read`) and `GET /api/org/inbox` (`task.read`) — are both viewer, as is
+ * WP-159's `GET /api/org/models` (`run.read`, the model list *Retry run* offers). So one
  * signed-in `member` still sees both sides of the RBAC decision on this file alone, which is why
  * these live together: a guard that only appears in its own unit test is a guard nobody has watched
  * refuse a live request.
@@ -42,6 +43,7 @@ import {
   inboxResponseSchema,
   orgAuditQuerySchema,
   orgAuditResponseSchema,
+  orgModelsResponseSchema,
   orgUsersResponseSchema,
 } from '@platform/contracts';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -121,6 +123,11 @@ export interface IdentityQueries {
 export interface OrgRoutesOptions {
   readonly database: Database;
   readonly identities: IdentityQueries;
+  /**
+   * The organisation's model list now (WP-159): bound by the composition root to
+   * `listedModelIds` (`queries/cost-queries.ts`), the same query the retry's refusal asks.
+   */
+  readonly models: () => Promise<readonly string[]>;
 }
 
 /**
@@ -242,6 +249,23 @@ export const registerOrgRoutes = async (
       },
     },
     async () => listRunningAgents(options.database),
+  );
+
+  typed.get(
+    '/api/org/models',
+    {
+      // `run.read`, as `/api/org/agents`: the list is what *Retry run* offers, and a model id is
+      // metadata the run record already publishes. No prices are served.
+      preHandler: requirePermission(guard, 'run.read'),
+      schema: {
+        summary: 'The model ids this organisation can run and charge',
+        description:
+          'The distinct `price_list` model ids whose price window is open now (`effective_from` at or before now, `effective_to` null or later), ordered by id, without prices (WP-159). The operator maintains `price_list`; *Retry run* offers exactly this list, and `POST /api/runs/:run_id/retry` refuses a model outside it with `409 model_not_listed` unless it is the run’s own, the stage’s configured one, or `allow_unlisted_model` is true.',
+        tags: ['org'],
+        response: { 200: orgModelsResponseSchema },
+      },
+    },
+    async () => ({ models: (await options.models()).map((model_id) => ({ model_id })) }),
   );
 
   typed.get(

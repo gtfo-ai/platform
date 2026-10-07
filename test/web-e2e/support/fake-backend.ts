@@ -612,6 +612,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         '/api/org/users': fixtures.orgUsers,
         '/api/org/audit': fixtures.audit,
         '/api/org/agents': fixtures.agents,
+        '/api/org/models': fixtures.orgModels,
         '/api/org/inbox': {
           questions: fixtures.inbox.questions.filter((item) => !answeredQuestions.has(item.id)),
           approvals: fixtures.inbox.approvals,

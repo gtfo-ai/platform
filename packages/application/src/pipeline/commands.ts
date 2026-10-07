@@ -56,6 +56,7 @@ import {
   READY_FOR_MERGE_STAGE,
   recordFeedback,
   resetAgentIterations,
+  stageAgentDefaults,
   stageOf,
   steerRun,
   TaskMergedError,
@@ -78,6 +79,7 @@ import {
   type ReadyHeadCheckData,
 } from './jobs.js';
 import { type RunCommandWakeUp, runCommandsTopic } from './run-commands.js';
+import type { ProjectSettingsPort } from './settings.js';
 import type { StageExecutionJob } from './stage-executor.js';
 import type {
   LockedRun,
@@ -363,7 +365,46 @@ export interface HumanCommandDependencies extends TaskCommandDependencies {
    * harness at a 20 USD cap was refused a raise to 50 against a hard-coded 50 — measured).
    */
   readonly defaultTaskCapUsd: number;
+  /**
+   * Which model ids the platform lists (WP-159, backlog 498): `price_list`'s open windows, the
+   * ledger's own definition of a model it can charge. {@link retryRunCommand} refuses an override
+   * nobody chose on purpose against it. Required, so a composition cannot forget the check (rule 31).
+   */
+  readonly models: ModelCatalogue;
+  /**
+   * The project's effective settings, for the stage's **configured** model a retry may always name
+   * (WP-159 ruling (b)). Read with no transaction open, so the port's own guard applies.
+   */
+  readonly settings: ProjectSettingsPort;
   readonly logger?: Logger;
+}
+
+/**
+ * The organisation's list of model ids (WP-159 ruling (a)): the distinct `price_list.model_id`s
+ * whose price window is open at `at` (`effective_from <= at` and `effective_to` null or later).
+ * `GET /api/org/models` publishes the same list; one query answers both (`queries/cost-queries.ts`).
+ */
+export interface ModelCatalogue {
+  isListed(modelId: string, at: IsoDateTime): Promise<boolean>;
+}
+
+/**
+ * A retry named a model that has no open price window, is not the run's own and is not the stage's
+ * configured one, and the caller did not say `allow_unlisted_model` (WP-159 ruling (b)). Fail closed
+ * on a mutation: a typo is refused at the write rather than at the CLI, and nothing is recorded.
+ */
+export class ModelNotListedError extends Error {
+  override readonly name = 'ModelNotListedError';
+  readonly model: string;
+
+  constructor(model: string) {
+    super(
+      `the model ${JSON.stringify(model)} is not in this organisation's model list (no open price_list ` +
+        "window), and it is neither this run's model nor the stage's configured one. Pick a listed " +
+        'model, or send `allow_unlisted_model: true` to run on an id the platform cannot price',
+    );
+    this.model = model;
+  }
 }
 
 /** A command that needs a queue, on a process that composed none. */
@@ -1735,6 +1776,11 @@ const wallMsSince = (startedAt: IsoDateTime | null, now: IsoDateTime): number =>
  * a run that has not ended yet cannot be retried (cancel it first — `run.retry`'s own subject rule
  * in `can()` says the same thing), and a run whose stage the task has already left is a
  * {@link StageNotCurrentError}, because re-entering it would be a return.
+ *
+ * A third, before anything is written (WP-159 ruling (b)): a `model` that has no open price window,
+ * is not the run's own model and is not the stage's effective configured model is a
+ * {@link ModelNotListedError} unless `allowUnlistedModel` is true — no `human_actions` row, no
+ * attempt. The cheap questions are asked first; the settings read is the last.
  */
 export const retryRunCommand = async (
   deps: HumanCommandDependencies,
@@ -1743,6 +1789,8 @@ export const retryRunCommand = async (
     readonly userId: Id;
     readonly model?: string;
     readonly effort?: Effort;
+    /** The person chose an id the list does not carry, on purpose (the SPA's *Other…*). */
+    readonly allowUnlistedModel?: boolean;
   },
 ): Promise<{ readonly taskId: Id; readonly stage: Slug }> => {
   requireJobs(deps);
@@ -1761,6 +1809,9 @@ export const retryRunCommand = async (
       'run.stage',
       `run ${run.id} is linked to no stage attempt, so there is no stage to run again`,
     );
+  }
+  if (input.model !== undefined && input.allowUnlistedModel !== true) {
+    await admitRetryModel(deps, { model: input.model, run, stage });
   }
   const overrides = {
     ...(input.model === undefined ? {} : { model: input.model }),
@@ -1791,6 +1842,32 @@ export const retryRunCommand = async (
     },
   );
   return { taskId: run.taskId, stage };
+};
+
+/**
+ * WP-159 ruling (b)'s three admissions, cheapest first; outside every transaction, because the
+ * catalogue and the settings port each borrow their own connection.
+ *
+ * @throws {ModelNotListedError} when none of the three holds.
+ */
+const admitRetryModel = async (
+  deps: HumanCommandDependencies,
+  input: { readonly model: string; readonly run: StoredRun; readonly stage: Slug },
+): Promise<void> => {
+  if (input.model === input.run.model) {
+    return;
+  }
+  const at = deps.context(input.run.taskId).clock.now();
+  if (await deps.models.isListed(input.model, at)) {
+    return;
+  }
+  const settings = await deps.settings.forProject(input.run.projectId);
+  const configured =
+    settings.config.stages?.[input.stage]?.model ?? stageAgentDefaults(input.stage).model;
+  if (input.model === configured) {
+    return;
+  }
+  throw new ModelNotListedError(input.model);
 };
 
 // ── Steer, take over, hand back (WP-27) ──────────────────────────────────────

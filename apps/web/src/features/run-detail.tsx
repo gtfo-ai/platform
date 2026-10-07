@@ -51,6 +51,12 @@ import { CodeText, DownloadLink, UntrustedText } from '../ui/untrusted.js';
 import { FeedbackForm } from './feedback.js';
 import { RunCommandLog } from './run-command-log.js';
 import { RunNotStartedPanel } from './run-not-started.js';
+import {
+  initialRetryModelChoice,
+  type RetryModelChoice,
+  RetryModelField,
+  retryModelRequest,
+} from './run-retry-model.js';
 import { RunSavedWorkLine } from './run-saved-work.js';
 import { RunSettingsLine, RunSettingsPanel } from './run-settings.js';
 import { TakeOverPanel } from './take-over.js';
@@ -133,7 +139,8 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
   const commandLog = useRunCommandLog(runId);
   const [tab, setTab] = useState<Tab>('transcript');
   const [steer, setSteer] = useState('');
-  const [retryModel, setRetryModel] = useState('');
+  // WP-159: `null` until the person touches the field, so it starts on the run's own model.
+  const [retryModel, setRetryModel] = useState<RetryModelChoice | null>(null);
   const [retryEffort, setRetryEffort] = useState<'low' | 'medium' | 'high' | ''>('');
 
   // The run's task, for the take-over control: `taken_over` lives on the task, not on a run.
@@ -259,16 +266,13 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {/* Retry creates a new run with an overridden model or effort (technical/08
-              `POST /api/runs/:id/retry`); empty fields mean "as before", which is why neither is
-              defaulted here to this run's own values. */}
-          <input
-            aria-label="Retry with model"
-            value={retryModel}
-            onChange={(event) => {
-              setRetryModel(event.target.value);
-            }}
-            placeholder={`Model (default ${record.model})`}
-            className="w-56 rounded-md border border-line bg-surface px-2 py-1 text-sm"
+              `POST /api/runs/:id/retry`). An unchanged field means "as before": the model select
+              starts on this run's own model and sends nothing unless it is changed (WP-159), and
+              the effort's empty option sends nothing either. */}
+          <RetryModelField
+            current={record.model}
+            choice={retryModel ?? initialRetryModelChoice(record.model)}
+            onChange={setRetryModel}
           />
           <select
             aria-label="Retry with effort"
@@ -288,7 +292,10 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
             onClick={() => {
               commands.retry.mutate({
                 taskId: record.task_id,
-                ...(retryModel.trim() === '' ? {} : { model: retryModel.trim() }),
+                ...retryModelRequest(
+                  record.model,
+                  retryModel ?? initialRetryModelChoice(record.model),
+                ),
                 ...(retryEffort === '' ? {} : { effort: retryEffort }),
               });
             }}
@@ -315,7 +322,9 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
             : 'Cancel accepted — the process running the agent stops the session and ends the run with what it cost; the commands below say when it was applied.'}
         </p>
       ) : null}
-      {commands.retry.isError ? <ErrorNotice title="That retry was refused." /> : null}
+      {commands.retry.isError ? (
+        <ErrorNotice title="That retry was refused." detail={commands.retry.error.message} />
+      ) : null}
       {commands.retry.isSuccess ? (
         <p className="text-xs text-fg-muted">
           A new run was requested; it appears in the task's run list.

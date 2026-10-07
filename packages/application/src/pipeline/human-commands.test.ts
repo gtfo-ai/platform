@@ -52,6 +52,7 @@ import {
   decideTaskApproval,
   handBackTaskCommand,
   IterationLimitReachedError,
+  ModelNotListedError,
   NoGateFeedbackError,
   pauseTaskCommand,
   RunNotLiveError,
@@ -2209,6 +2210,133 @@ describe('retry a run', () => {
   });
 });
 
+/**
+ * WP-159 ruling (b): a retry's `model` is admitted when it is listed, the run's own, or the stage's
+ * configured one, or when the person said `allowUnlistedModel`; anything else is refused before a
+ * single write. The `human_actions` half is the route's (`apps/server/src/routes/commands.test.ts`).
+ */
+describe('retry a run: the model list (WP-159)', () => {
+  /** Everything a refused retry could have written: the attempt counter, a wake-up, an event. */
+  const footprint = (harness: PipelineHarness) => ({
+    attempts: taskOf(harness).task.stageAttempts.refinement,
+    events: harness.events().length,
+    specs: harness.specs.length,
+  });
+
+  it('refuses a typo nobody chose on purpose, and records nothing', async () => {
+    const harness = await asking();
+    const completed = harness.specs.at(-1)?.runId as Id;
+    const before = footprint(harness);
+    await expect(
+      retryRunCommand(harness.humanCommands, {
+        runId: completed,
+        userId: USER,
+        model: 'claude-opsu-5',
+      }),
+    ).rejects.toThrow(ModelNotListedError);
+    await harness.drain();
+    expect(footprint(harness)).toEqual(before);
+    expect(before.attempts).toBe(1);
+  });
+
+  it('admits the same typo when the person said so, and the attempt runs on it', async () => {
+    const harness = await asking();
+    const completed = harness.specs.at(-1)?.runId as Id;
+    await retryRunCommand(harness.humanCommands, {
+      runId: completed,
+      userId: USER,
+      model: 'claude-opsu-5',
+      allowUnlistedModel: true,
+    });
+    expect(taskOf(harness).task.stageAttempts.refinement).toBe(2);
+    await harness.drain();
+    expect(harness.specs.at(-1)?.model).toBe('claude-opsu-5');
+  });
+
+  it('admits a listed id without the flag', async () => {
+    const harness = await asking({ listedModels: ['claude-fake-listed'] });
+    const completed = harness.specs.at(-1)?.runId as Id;
+    await retryRunCommand(harness.humanCommands, {
+      runId: completed,
+      userId: USER,
+      model: 'claude-fake-listed',
+    });
+    expect(taskOf(harness).task.stageAttempts.refinement).toBe(2);
+  });
+
+  it('admits the run’s own model when the list does not carry it', async () => {
+    // Review round 1: a model that is neither listed nor configured, so only the run's-own branch
+    // can admit it (the template default would be admitted by the configured-model branch).
+    const harness = await asking({ listedModels: [] });
+    const first = harness.specs.at(-1);
+    await retryRunCommand(harness.humanCommands, {
+      runId: first?.runId as Id,
+      userId: USER,
+      model: 'claude-custom-x',
+      allowUnlistedModel: true,
+    });
+    await harness.drain();
+    const second = harness.specs.at(-1);
+    expect(second?.model).toBe('claude-custom-x');
+    await retryRunCommand(harness.humanCommands, {
+      runId: second?.runId as Id,
+      userId: USER,
+      model: 'claude-custom-x',
+    });
+    expect(taskOf(harness).task.stageAttempts.refinement).toBe(3);
+  });
+
+  it('admits the stage’s configured model when the list does not carry it and the run was not on it', async () => {
+    const harness = await asking({
+      listedModels: ['claude-fake-listed'],
+      settings: { config: { stages: { refinement: { model: 'claude-custom-pinned' } } } },
+    });
+    const first = harness.specs.at(-1);
+    expect(first?.model).toBe('claude-custom-pinned');
+    // A second run on a listed model, so the configured one is no longer the run's own.
+    await retryRunCommand(harness.humanCommands, {
+      runId: first?.runId as Id,
+      userId: USER,
+      model: 'claude-fake-listed',
+    });
+    await harness.drain();
+    const second = harness.specs.at(-1);
+    expect(second?.model).toBe('claude-fake-listed');
+    await retryRunCommand(harness.humanCommands, {
+      runId: second?.runId as Id,
+      userId: USER,
+      model: 'claude-custom-pinned',
+    });
+    expect(taskOf(harness).task.stageAttempts.refinement).toBe(3);
+    // …and the stage's **default** is the configured model of a stage that names none.
+    await expect(
+      retryRunCommand(harness.humanCommands, {
+        runId: second?.runId as Id,
+        userId: USER,
+        model: 'claude-opus-5',
+      }),
+    ).rejects.toThrow(ModelNotListedError);
+  });
+
+  it('admits the template default as the configured model of a stage the project does not configure', async () => {
+    const harness = await asking({ listedModels: ['claude-fake-listed'] });
+    const first = harness.specs.at(-1);
+    await retryRunCommand(harness.humanCommands, {
+      runId: first?.runId as Id,
+      userId: USER,
+      model: 'claude-fake-listed',
+    });
+    await harness.drain();
+    const second = harness.specs.at(-1);
+    await retryRunCommand(harness.humanCommands, {
+      runId: second?.runId as Id,
+      userId: USER,
+      model: 'claude-opus-5',
+    });
+    expect(taskOf(harness).task.stageAttempts.refinement).toBe(3);
+  });
+});
+
 describe('a command that loses every race', () => {
   it('answers the caller rather than escalating the task (WP-15e’s ending, inverted)', async () => {
     const harness = await walked();
@@ -3313,6 +3441,7 @@ describe('a human’s way into Ready (WP-79)', () => {
         'READY_FOR_MERGE_STAGE',
         'recordFeedback', // no state change
         'resetAgentIterations', // pure
+        'stageAgentDefaults', // data: a retry's admitted default model (WP-159)
         'stageOf', // pure
         'steerRun', // no state change
         'TaskMergedError', // a refusal (WP-152)

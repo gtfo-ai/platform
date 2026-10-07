@@ -993,7 +993,7 @@ export const registerCommandRoutes = async (
       schema: {
         summary: 'Run this run’s stage again, optionally on another model',
         description:
-          'Creates a **new attempt** of the stage rather than a second run of the same one: technical/02 allows a task one active run. A run that has not ended yet is refused (cancel it first), and so is one whose stage the task has already left. `budget_usd` is refused: raising a run’s cap is the budget approval of BD-006, which WP-28 owns.',
+          'Creates a **new attempt** of the stage rather than a second run of the same one: technical/02 allows a task one active run. A run that has not ended yet is refused (cancel it first), and so is one whose stage the task has already left. A `model` that has no open price window (`GET /api/org/models`), is not this run’s own and is not the stage’s configured model is refused `409 model_not_listed` and nothing is recorded, unless `allow_unlisted_model` is true (WP-159). `budget_usd` is refused: raising a run’s cap is the budget approval of BD-006, which WP-28 owns.',
         tags: ['runs'],
         params: runParamsSchema,
         body: retryRunRequestSchema,
@@ -1024,6 +1024,9 @@ export const registerCommandRoutes = async (
           run_id: runId,
           ...(body.model === undefined ? {} : { model: body.model }),
           ...(body.effort === undefined ? {} : { effort: body.effort }),
+          ...(body.allow_unlisted_model === undefined
+            ? {}
+            : { allow_unlisted_model: body.allow_unlisted_model }),
         },
         // What the retry produced is where the task comes from: the path names a run.
         taskId: (result) => result.taskId,
@@ -1034,6 +1037,9 @@ export const registerCommandRoutes = async (
             userId,
             ...(body.model === undefined ? {} : { model: body.model }),
             ...(body.effort === undefined ? {} : { effort: body.effort }),
+            ...(body.allow_unlisted_model === undefined
+              ? {}
+              : { allowUnlistedModel: body.allow_unlisted_model }),
           });
         },
         answer: async ({ performed }) => ({ ...(await runPositionOf(runId)), performed }),

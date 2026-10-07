@@ -38,6 +38,7 @@ import {
   kbProposalsResponseSchema,
   kbTreeResponseSchema,
   orgAuditResponseSchema,
+  orgModelsResponseSchema,
   orgSettingsResponseSchema,
   orgStatsResponseSchema,
   orgUsersResponseSchema,
@@ -804,6 +805,15 @@ export const runContextPack = contextPackRecordSchema.parse({
 });
 
 // ── Org-level lists ──────────────────────────────────────────────────────────
+
+/** WP-159: what *Retry run* offers — the seed's ids, which include the run's own model. */
+export const orgModels = orgModelsResponseSchema.parse({
+  models: [
+    { model_id: 'claude-haiku-4-5' },
+    { model_id: 'claude-opus-5' },
+    { model_id: 'claude-sonnet-5' },
+  ],
+});
 
 export const agents = agentsResponseSchema.parse({
   items: [
