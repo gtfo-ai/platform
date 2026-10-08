@@ -69,6 +69,18 @@ describe('the grades table', () => {
 });
 
 describe('the keys a file may not apply', () => {
+  it('drops `human_returns` and reports it, because an added word loosens a return (WP-170)', () => {
+    expect(REPOSITORY_KEY_GRADES.human_returns).toBe('not_applied');
+    const { values, notApplied } = withoutNotAppliedKeys({
+      human_returns: { acknowledgements: ['danke'] },
+      status_mapping: { done: 'Finished' },
+    });
+    expect(values).toEqual({ status_mapping: { done: 'Finished' } });
+    expect(notApplied).toHaveLength(1);
+    expect(notApplied[0]?.key).toBe('human_returns');
+    expect(notApplied[0]?.reason).toMatch(/acknowledgement vocabulary/);
+  });
+
   it('drops probation_tasks, auto_apply, the dial and a feature switch, and reports each', () => {
     const { values, notApplied } = withoutNotAppliedKeys({
       policies: {

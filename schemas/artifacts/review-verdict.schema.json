@@ -112,6 +112,20 @@
           "type": "null"
         }
       ]
+    },
+    "resolved_threads": {
+      "anyOf": [
+        {
+          "maxItems": 100,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_fff8dfda"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -195,6 +209,10 @@
     "Slug": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "anon_fff8dfda": {
+      "maxLength": 255,
+      "$ref": "#/$defs/NonEmptyString"
     }
   }
 }

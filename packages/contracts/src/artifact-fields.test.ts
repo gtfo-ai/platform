@@ -112,15 +112,28 @@ const artifactTypes = Object.keys(artifactDataSchemas) as (keyof typeof artifact
  * answer. That is the shape `packages/domain/src/permissions.test.ts` already uses for
  * `PERMISSION_REQUIREMENTS`, and the reason it is worth its upkeep is the same: **which** class a
  * field is in is the security decision, and an enumeration nothing pins is one a refactor can
- * quietly rewrite. Prose is the majority and is left to the union check; this names the thirty-one
- * paths where a wrong answer is a wrong *action* (a provider call, a commit, a lookup).
+ * quietly rewrite. Prose is the majority and is left to the union check; this names every path
+ * where a wrong answer is a wrong *action* (a provider call, a commit, a lookup) — thirty-nine at
+ * WP-170, which added the two conversation ids (the docblock said thirty-one, already stale).
  */
 const IDENTIFIERS: Record<keyof typeof artifactDataSchemas, readonly string[]> = {
   RefinedSpec: ['kb_citations[].commit_sha', 'kb_citations[].path'],
   RootCauseAnalysis: [],
   ImplementationPlan: ['files_to_change[].path', 'protected_path_changes[].path'],
-  ImplementationNotes: ['mr.branch', 'mr.head_sha', 'mr.project_path', 'mr.provider', 'mr.url'],
-  ReviewVerdict: ['findings[].file', 'findings[].id', 'protected_path_changes_confirmed[]'],
+  ImplementationNotes: [
+    'mr.branch',
+    'mr.head_sha',
+    'mr.project_path',
+    'mr.provider',
+    'mr.url',
+    'thread_replies[].thread_id',
+  ],
+  ReviewVerdict: [
+    'findings[].file',
+    'findings[].id',
+    'protected_path_changes_confirmed[]',
+    'resolved_threads[]',
+  ],
   AcceptanceVerdict: [],
   RetroReport: [
     'cost_summary.by_stage[].stage',

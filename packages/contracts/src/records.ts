@@ -590,6 +590,13 @@ export const taskConflictSchema = z.strictObject({
 
 export type TaskConflict = z.infer<typeof taskConflictSchema>;
 
+/** The task DTO's view of `tasks.ticket_claim` (WP-170 ruling (d)). */
+export const taskTicketClaimSchema = z.strictObject({
+  status: z.enum(['confirmed', 'shadow']),
+  claimed_at: isoDateTimeSchema,
+  released_at: isoDateTimeSchema.nullable(),
+});
+
 export const taskRecordSchema = z.strictObject({
   id: idSchema,
   project_id: idSchema,
@@ -737,6 +744,21 @@ export const taskRecordSchema = z.strictObject({
   created_at: isoDateTimeSchema,
   updated_at: isoDateTimeSchema,
   completed_at: isoDateTimeSchema.nullish(),
+  /**
+   * The task's claim on its ticket, projected off `tasks.ticket_claim` (TD-029 decision 5,
+   * technical/03's migration 0088): `status` is the record's own (`confirmed`, or `shadow` for a
+   * claim whose writes were `would_have`), `released_at` is when the release gave the ticket back.
+   * `null` means the task never claimed — a binding with no lifecycle block, a task with no ticket,
+   * a row older than the column. **Absent** until the server publishes it (WP-181), which a reader
+   * must not read as `null`.
+   */
+  ticket_claim: taskTicketClaimSchema.nullable().optional(),
+  /**
+   * Whether this task's pipeline has the human `qa` stage — `tasks.qa_stage`, frozen at creation
+   * from the binding's `lifecycle.qa` (TD-029 decision 9). **Absent** until the server publishes it
+   * (WP-181).
+   */
+  qa_stage: z.boolean().optional(),
 });
 
 /** A `sha256` digest as lowercase hex — what `runs.settings_hash` stores (WP-91). */

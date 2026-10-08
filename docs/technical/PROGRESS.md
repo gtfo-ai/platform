@@ -19420,10 +19420,10 @@ WP-181 follows WP-177 and WP-180, WP-182 follows WP-181, and WP-183 runs last. W
 | WP-175 | **Domain: the `conversation` data block** | TODO | — | Folds **537**. Deps WP-170. No migration. Parallel with WP-171…WP-174. |
 | WP-176 | **Prompts: every role reads the conversation, the Developer answers each thread, and the Reviewer resolves only what it re-checked** | TODO | — | Folds **537**. Deps WP-170, WP-175. No migration. Eval cases and `ROLE_PROMPT_VERSIONS`. |
 | WP-177 | **Application: the claim, the release, the intake skip, the lifecycle transitions, and `status_mapping` superseded** | TODO | — | Folds **535** (c), **536**. Deps WP-171, WP-174. **Migration 0088** (`tasks.ticket_claim`, `tasks.qa_stage`). Serial with WP-178 and WP-179. |
-| WP-178 | **Application: one human-return window over four signals, at `qa` and at `ready_for_merge`, and the QA stage's endings** | TODO | — | Folds **535** (d), **537** (d). Deps WP-173, WP-174, WP-177. No migration. Measured: today's window drops a `resolvable: false` general note. |
+| WP-178 | **Application: one human-return window over four signals, at `qa` and at `ready_for_merge`, and the QA stage's endings** | TODO | — | Folds **535** (d), **537** (d). Deps WP-173, WP-174, WP-177. No migration. Measured: today's window drops a `resolvable: false` general note. Criterion (11): reads `human_returns.acknowledgements`, unreported at the settings write until then (WP-170 discovered work). |
 | WP-179 | **Application: the review conversation on the merge request — findings, replies and resolutions** | TODO | — | Folds **537** (a), (b). Deps WP-170, WP-173, WP-178. No migration. Renderer shared with review-only. |
 | WP-180 | **Application: every agent stage gets the conversation in its prompt, and the tool's port answers the same** | TODO | — | Folds **537** (c). Deps WP-171, WP-173, WP-175. No migration. Parallel with WP-177…WP-179. |
-| WP-181 | **Server: the statuses read, the binding's check, the effective configuration, the readiness notes and the `get_conversation` tool** | TODO | — | Folds **535** (b), **537** (c). Deps WP-171, WP-177, WP-180. No migration. |
+| WP-181 | **Server: the statuses read, the binding's check, the effective configuration, the readiness notes and the `get_conversation` tool** | TODO | — | Folds **535** (b), **537** (c). Deps WP-171, WP-177, WP-180. No migration. Criterion (6): `ticket_claim`, `qa_stage` and `status_mapping_superseded` become required (WP-170 left them optional). |
 | WP-182 | **Web: the slots as pick lists in the wizard and in project settings; the claim and the QA stage on the task page** | TODO | — | Folds **535** (b). Deps WP-181. No migration. User-guide sweep (rule 83). |
 | WP-183 | **End to end, with fake Claude: the full flow with every slot mapped, a QA return in each form, and a project with nothing mapped** | TODO | — | Folds **535**, **536**, **537**. Deps WP-170…WP-182. No migration. The product owner's flows (i)–(iii). |
 | WP-163 | **A stop that lands while the spawn marker commits holds no money, and a stop the platform made logs no fault** | TODO | — | Folds **501**, **506**. Deps WP-150, WP-151, WP-154. No migration. BD-010's 2026-10-08 amendment. Parallel-safe with WP-162. |
@@ -46573,3 +46573,48 @@ Then WP-163…WP-169, in their table order.
 **Discovered work.**
 - `check-ignored.mjs`'s failure line still says *".gitignore hides …"* and *"Anchor the offending pattern"*, but the `-v` line it prints can name `.git/info/exclude` or `core.excludesFile`. The words are wrong for those two sources; minor, wording only.
 - The (d) reproduction runs the **unit-tier** git-fixture suites only. The integration and e2e files that spawn `git` are held to the helper by the census and by the setup file, but no run puts them under a hostile `GIT_DIR`.
+
+## WP notes — session 15 (M10 head)
+
+#### WP-170
+
+**Status: implemented, awaiting review.** Base `9dd45048`, no migration. Contracts ring, plus `repository-grades.ts` and `consumption.ts` as the row says.
+
+**What changed.**
+- **(a)** `ticketLifecycleSchema` in `packages/contracts/src/config.ts` (beside `status_mapping`, although it is a binding block and not a key of `.agentic/config.yml`): strict, every slot optional, names `nonEmptyStringSchema.max(255)`, `returned` at most 10, `claim` and `take_assigned_tickets` optional booleans. One `superRefine` holds the single slots pairwise distinct and `returned` disjoint from them **and** free of repeats, each compared by `lifecycleStatusKey` (trimmed, lower-cased — the Jira adapter's `equalsStatus`). `LIFECYCLE_SINGLE_SLOTS` and `lifecycleStatusKey` are exported for WP-174's validator and WP-181's membership check. `MAX_LIFECYCLE_STATUS_NAME_CHARS` lives in `common.ts`, because `events.ts` importing it from `config.ts` hit a module-initialisation cycle (`ReferenceError` under `pnpm schemas`).
+- **(b)** Five events in `events.ts`: `ticket.claimed {task, ticket, account_id, in_progress_written, shadow}`, `ticket.claim.refused {task, ticket, reason, assignee | null}`, `ticket.released {task, ticket, unassigned, pick_up_from_written, cause}`, `ticket.intake.skipped {project, ticket, reason: 'assigned'}`, `task.human_return {task, from_stage: qa|ready_for_merge, forms[], counts{mr_diff, mr_note, ticket_comment}, status | null}`. `task.human_return`'s payload carries a refinement: forms unique, `status` non-null exactly when `status` is a form, each count above zero exactly when its form is listed. All five are `unconsumed` in `consumption.ts` with owner `null` (technical/02's `—`). `ticket.status.changed` stays `unconsumed`, and its owner is now **`WP-178`** (it was `null`, *"Task sync; no owner"*), so the ledger check fails the day WP-178 is DONE without flipping it.
+- **(c)** `ImplementationNotes.thread_replies` and `ReviewVerdict.resolved_threads` in `artifacts.ts`, both `.nullish()` like the other model-written optional fields (`split_proposal`, `criteria`), with the ruling's bounds. `artifact-fields.ts` classes `thread_replies[].thread_id` and `resolved_threads[]` as **identifiers** (the platform addresses a discussion with them at WP-179) and `reply`/`person` as prose; the independent pin in `artifact-fields.test.ts` moved with them.
+- **(d)** `ticketStatusCategorySchema` and `ticketStatusSchema` in `common.ts` (the port at WP-171 can reuse them); `ticketStatusesResponseSchema` and `lifecycleErrorCodeSchema` in `api.ts`; `status_mapping_superseded` on `effectiveConfigResponseSchema`; `taskTicketClaimSchema {status: confirmed|shadow, claimed_at, released_at}` and `qa_stage` on `taskRecordSchema`.
+- **(e)** `human_returns: {acknowledgements?: string[≤50] of 1–40}` in `agenticConfigSchema`; graded `not_applied` with a reason in `repository-grades.ts`.
+- `schemas/` regenerated (six files; `agentic-pipeline.schema.json` changes only because its event-name enum grew). technical/12's artifact lines, its grade table and its unread-keys list are amended (below).
+
+**Criteria → tests.**
+- (1) `packages/contracts/src/config.test.ts` › "refuses two single slots naming one status, naming the second slot"
+- (1) `packages/contracts/src/config.test.ts` › "refuses a case-only or whitespace-only difference as the same status"
+- (1) `packages/contracts/src/config.test.ts` › "takes a full block, an empty block and a block with only `claim: false`"
+- (1) **Canary**, run as a diffed edit and restored (`cmp`-checked): with the `returned`-overlap lookup replaced by `undefined`, `packages/contracts/src/config.test.ts` › "refuses `returned` overlapping any single slot, case-insensitively" fails (1 of 54).
+- (2) `packages/contracts/src/artifacts.test.ts` › "still parses notes and a verdict recorded before the fields existed" — the file's `DATA` fixtures, unchanged since before this row. The shipped eval cases parse too (`packages/prompts` suites, unchanged and green).
+- (3) `pnpm schemas` wrote 6 changed files; `schemas:check` is a step of `verify`.
+- (4) `packages/application/src/events/consumption.test.ts` › "declares handled exactly what this build registers, so neither side drifts"
+- (4) `packages/application/src/events/consumption.test.ts` › "addresses every unconsumed row, and only those"
+- (5) `packages/application/src/config/repository-grades.test.ts` › "grades every key the schema accepts, and nothing it does not"
+- (5) `packages/application/src/config/repository-grades.test.ts` › "drops `human_returns` and reports it, because an added word loosens a return (WP-170)"
+
+**Decisions and assumptions.**
+- **The three task/config DTO fields are optional, not nullable-and-required** (`ticket_claim`, `qa_stage`, `status_mapping_superseded`). Standing rules 16/18 prefer required-and-null, but the columns arrive at WP-177 (migration 0088) and the server publishes them at WP-181; a required field now would fail `apps/server`'s typecheck, which is outside this row. Each docblock says *absent is not `false`/`null`*. **WP-181 should make them required.**
+- **`ticket_claim.status` is the record's `confirmed | shadow`** (technical/03), not a derived `stale`/`released`: the ruling lists three fields and `released_at` already carries the release.
+- **`returned: []` is accepted** (the ruling sets a maximum, no minimum) and means *unmapped*.
+- `task.human_return` names its stage field `from_stage`, as `task.stage.returned` does; technical/02's column says *"stage left"*. `counts` has no `status` key, because a status is one fact, carried in `status`.
+- `ticket.claimed.account_id` and `ticketStatusSchema.id` are bounded at 255 (provider strings); `raw_category` is nullable.
+
+**Sentences falsified (rule 83).**
+- technical/12 § "Artifact schemas", the ImplementationNotes and ReviewVerdict lines: listed neither field. Amended.
+- technical/12's grade table (*not applied* row): did not list `human_returns`. Amended.
+- technical/12 § "Keys that parse and are not read on this build": says every such key is reported at the settings write. `human_returns.acknowledgements` parses, has no reader until WP-178, and is **not** reported (`SETTINGS_UNREAD_KEYS` is outside this row). Stated there as the exception; filed below.
+- `consumption.ts`'s `ticket.status.changed` comment (*"Task sync; no owner"*) and `UNCONSUMED_OWNERS`' docblock (*"`null` today for every row"*). Rewritten.
+- `artifact-fields.test.ts`'s *"thirty-one paths"* was already stale (37 before this row); it now says thirty-nine at WP-170.
+- Checked and left: technical/02's catalogue rows (already state the M10 payloads), technical/08 (the route is WP-181's to add), `consumption.ts`'s *"49 of 50"* paragraph (a historical reading of the column, stale before this row and not made more false by `—` rows).
+
+**Discovered work.**
+- `settings-grades.ts`: `human_returns.acknowledgements` stored through `PUT …/config` before WP-178 is accepted and unread, with no `not_applied` line. Either WP-178 lands it in the same release or `SETTINGS_UNREAD_KEYS` gains the key until then (its test restricts patterns to `pipeline`/`stages`, so that test changes too).
+- WP-181: tighten `ticket_claim`, `qa_stage` and `status_mapping_superseded` to required once the server publishes them.

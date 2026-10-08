@@ -1,6 +1,14 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { type Artifact, artifactDataSchemas, artifactSchema } from './artifacts.js';
+import {
+  type Artifact,
+  artifactDataSchemas,
+  artifactSchema,
+  MAX_RESOLVED_THREADS,
+  MAX_THREAD_REPLIES,
+  MAX_THREAD_REPLY_CHARS,
+  MAX_THREAD_REPLY_PERSON_CHARS,
+} from './artifacts.js';
 import { type ArtifactType, artifactTypeSchema } from './common.js';
 import { PROPERTY_TEST_TIMEOUT_MS } from './testing/property.js';
 
@@ -397,5 +405,58 @@ describe('artifacts', () => {
         proposals: retro.proposals.map((p) => ({ ...p, significance: 1.5 })),
       }).success,
     ).toBe(false);
+  });
+});
+
+/**
+ * WP-170 ruling (c), criterion (2): the conversation's two artifact fields. They are optional, so
+ * the notes and the verdict this file has carried since before WP-170 (`DATA`, unchanged) still
+ * parse, and so do the shipped eval cases, which `packages/prompts/src/evals.test.ts` holds to the
+ * same schemas.
+ */
+describe('the conversation fields (BD-031, TD-029 decision 10)', () => {
+  const notes = DATA.ImplementationNotes as Record<string, unknown>;
+  const verdict = DATA.ReviewVerdict as Record<string, unknown>;
+  const reply = { thread_id: 'a1b2c3d4', kind: 'fixed', reply: 'Renamed as asked.' };
+  const notesWith = (thread_replies: unknown) =>
+    artifactDataSchemas.ImplementationNotes.safeParse({ ...notes, thread_replies }).success;
+  const verdictWith = (resolved_threads: unknown) =>
+    artifactDataSchemas.ReviewVerdict.safeParse({ ...verdict, resolved_threads }).success;
+
+  it('still parses notes and a verdict recorded before the fields existed', () => {
+    expect('thread_replies' in notes).toBe(false);
+    expect('resolved_threads' in verdict).toBe(false);
+    expect(artifactDataSchemas.ImplementationNotes.parse(notes)).toEqual(notes);
+    expect(artifactDataSchemas.ReviewVerdict.parse(verdict)).toEqual(verdict);
+  });
+
+  it('takes every reply kind, a named person, null and the bounds', () => {
+    for (const kind of ['fixed', 'documented', 'needs_person', 'not_changed']) {
+      expect(notesWith([{ ...reply, kind }]), kind).toBe(true);
+    }
+    expect(notesWith([{ ...reply, kind: 'needs_person', person: '@someone' }])).toBe(true);
+    expect(notesWith(null)).toBe(true);
+    expect(notesWith([])).toBe(true);
+    expect(notesWith(Array.from({ length: MAX_THREAD_REPLIES }, () => reply))).toBe(true);
+    expect(notesWith([{ ...reply, reply: 'x'.repeat(MAX_THREAD_REPLY_CHARS) }])).toBe(true);
+    expect(verdictWith(['a1b2c3d4'])).toBe(true);
+    expect(verdictWith(null)).toBe(true);
+    expect(verdictWith(Array.from({ length: MAX_RESOLVED_THREADS }, (_, i) => `t${i}`))).toBe(true);
+  });
+
+  it('refuses an unknown kind or key, an empty id and anything past a bound', () => {
+    expect(notesWith([{ ...reply, kind: 'ignored' }])).toBe(false);
+    expect(notesWith([{ ...reply, resolved: true }])).toBe(false);
+    expect(notesWith([{ ...reply, thread_id: '' }])).toBe(false);
+    expect(notesWith([{ ...reply, reply: '' }])).toBe(false);
+    expect(notesWith(Array.from({ length: MAX_THREAD_REPLIES + 1 }, () => reply))).toBe(false);
+    expect(notesWith([{ ...reply, reply: 'x'.repeat(MAX_THREAD_REPLY_CHARS + 1) }])).toBe(false);
+    expect(notesWith([{ ...reply, person: 'x'.repeat(MAX_THREAD_REPLY_PERSON_CHARS + 1) }])).toBe(
+      false,
+    );
+    expect(verdictWith([''])).toBe(false);
+    expect(verdictWith(Array.from({ length: MAX_RESOLVED_THREADS + 1 }, (_, i) => `t${i}`))).toBe(
+      false,
+    );
   });
 });

@@ -96,6 +96,36 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     from: 'To Do',
     to: 'In Refinement',
   },
+  // WP-170: the claim, the release and the intake skip (TD-029 decision 5). Status names are
+  // invented; an account id is the provider's opaque string.
+  'ticket.claimed': {
+    ...taskScoped,
+    ticket,
+    account_id: '5b10ac8d82e05b22cc7d4ef5',
+    in_progress_written: true,
+    shadow: false,
+  },
+  'ticket.claim.refused': {
+    ...taskScoped,
+    ticket,
+    reason: 'ticket_assigned_elsewhere',
+    assignee: { ...identity, provider: 'jira' },
+  },
+  'ticket.released': {
+    ...taskScoped,
+    ticket,
+    unassigned: true,
+    pick_up_from_written: false,
+    cause: 'cancelled',
+  },
+  'ticket.intake.skipped': { ...projectScoped, ticket, reason: 'assigned' },
+  'task.human_return': {
+    ...taskScoped,
+    from_stage: 'qa',
+    forms: ['status', 'mr_note', 'ticket_comment'],
+    counts: { mr_diff: 0, mr_note: 2, ticket_comment: 1 },
+    status: 'Sent back',
+  },
   'task.created': { ...taskScoped, ticket, template: 'feature', mode: 'normal', estimate_usd: 12 },
   'task.queued': { ...taskScoped, reason: 'wip' },
   'task.dequeued': { ...taskScoped, reason: 'wip' },
@@ -563,6 +593,83 @@ describe('run.finished’s start_failure (WP-154 (b′))', () => {
       domainEventSchema.safeParse(withPayload({ start_failure: { ...cause, extra: true } }))
         .success,
     ).toBe(false);
+  });
+});
+
+/**
+ * WP-170 ruling (b): the five M10-head events. The catalogue's round trip above covers the shape;
+ * these are the payload rules a round trip of one fixture cannot show.
+ */
+describe('the claim and human-return events (BD-031, TD-029)', () => {
+  const withPayload = (type: DomainEventType, payload: Record<string, unknown>) => ({
+    ...eventOf(type, 0),
+    payload,
+  });
+  const humanReturn = PAYLOADS['task.human_return'];
+
+  it('takes a refused claim with no known assignee, and refuses an unknown reason', () => {
+    const refused = PAYLOADS['ticket.claim.refused'];
+    expect(
+      domainEventSchema.safeParse(
+        withPayload('ticket.claim.refused', {
+          ...refused,
+          reason: 'ticket_claim_failed',
+          assignee: null,
+        }),
+      ).success,
+    ).toBe(true);
+    expect(
+      domainEventSchema.safeParse(
+        withPayload('ticket.claim.refused', { ...refused, reason: 'busy' }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it('refuses a release cause and an intake-skip reason outside the decided sets', () => {
+    expect(
+      domainEventSchema.safeParse(
+        withPayload('ticket.released', { ...PAYLOADS['ticket.released'], cause: 'escalated' }),
+      ).success,
+    ).toBe(false);
+    expect(
+      domainEventSchema.safeParse(
+        withPayload('ticket.intake.skipped', {
+          ...PAYLOADS['ticket.intake.skipped'],
+          reason: 'closed',
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it('takes a return made only of words, with no status', () => {
+    expect(
+      domainEventSchema.safeParse(
+        withPayload('task.human_return', {
+          ...humanReturn,
+          from_stage: 'ready_for_merge',
+          forms: ['mr_diff'],
+          counts: { mr_diff: 1, mr_note: 0, ticket_comment: 0 },
+          status: null,
+        }),
+      ).success,
+    ).toBe(true);
+  });
+
+  it('refuses a return whose forms, counts and status disagree, or that left an agent stage', () => {
+    for (const payload of [
+      { ...humanReturn, status: null },
+      { ...humanReturn, forms: ['mr_note', 'ticket_comment'] },
+      { ...humanReturn, counts: { mr_diff: 0, mr_note: 0, ticket_comment: 1 } },
+      { ...humanReturn, counts: { mr_diff: 3, mr_note: 2, ticket_comment: 1 } },
+      { ...humanReturn, forms: ['status', 'mr_note', 'mr_note', 'ticket_comment'] },
+      { ...humanReturn, forms: [], counts: { mr_diff: 0, mr_note: 0, ticket_comment: 0 } },
+      { ...humanReturn, from_stage: 'code_review' },
+    ]) {
+      expect(
+        domainEventSchema.safeParse(withPayload('task.human_return', payload)).success,
+        JSON.stringify(payload),
+      ).toBe(false);
+    }
   });
 });
 

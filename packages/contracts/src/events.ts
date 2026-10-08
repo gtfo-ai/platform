@@ -24,6 +24,7 @@ import {
   httpUrlSchema,
   idSchema,
   isoDateTimeSchema,
+  MAX_LIFECYCLE_STATUS_NAME_CHARS,
   mergeRequestRefSchema,
   modelUsageSchema,
   nonEmptyStringSchema,
@@ -216,6 +217,75 @@ export const ticketStatusChangedEvent = defineEvent('ticket.status.changed', {
   to: z.string(),
 });
 
+// ── The ticket claim and the intake skip (BD-031, TD-029 decision 5) ─────────
+
+/**
+ * The bound on a status name an event carries — the same as a lifecycle slot's
+ * ({@link MAX_LIFECYCLE_STATUS_NAME_CHARS}), because it is one of those names or the tracker's
+ * answer about one. Provider text (BD-022).
+ */
+const lifecycleStatusNameSchema = nonEmptyStringSchema.max(MAX_LIFECYCLE_STATUS_NAME_CHARS);
+
+/**
+ * The platform claimed the task's ticket before an agent run was admitted (`ensureTicketClaim`,
+ * WP-177): it assigned the ticket to the binding's own account and, when the `in_progress` slot is
+ * mapped, moved it there. `account_id` is that account's provider id. `shadow` is a claim whose
+ * writes were `would_have` (shadow mode), recorded as such and never as confirmed. technical/02's
+ * catalogue row; the task DTO reads the claim off `tasks.ticket_claim`, not off this event.
+ */
+export const ticketClaimedEvent = defineEvent('ticket.claimed', {
+  ...taskScoped,
+  ticket: ticketRefSchema,
+  account_id: nonEmptyStringSchema.max(255),
+  in_progress_written: z.boolean(),
+  shadow: z.boolean(),
+});
+
+/** Why a claim was refused (TD-029 decision 5); each is also the escalation's reason. */
+export const ticketClaimRefusalSchema = z.enum([
+  'ticket_assigned_elsewhere',
+  'ticket_claim_failed',
+]);
+
+/**
+ * The claim was refused and no run started: somebody else holds the ticket, or the provider
+ * refused the assign. `assignee` is the identity the re-read found, `null` when none is known
+ * (always so for `ticket_claim_failed`'s refused write). The escalation it causes is its own
+ * `task.escalated`.
+ */
+export const ticketClaimRefusedEvent = defineEvent('ticket.claim.refused', {
+  ...taskScoped,
+  ticket: ticketRefSchema,
+  reason: ticketClaimRefusalSchema,
+  assignee: externalIdentitySchema.nullable(),
+});
+
+/**
+ * The `ticket_release` duty gave the ticket back (WP-177), on the task's cancellation or a person's
+ * *Rework*. `unassigned` is false when the assignee was no longer the binding's own account, which
+ * is left alone; `pick_up_from_written` is whether the ticket was moved back to the pick-up status
+ * (only when that is mapped).
+ */
+export const ticketReleasedEvent = defineEvent('ticket.released', {
+  ...taskScoped,
+  ticket: ticketRefSchema,
+  unassigned: z.boolean(),
+  pick_up_from_written: z.boolean(),
+  cause: z.enum(['cancelled', 'rework']),
+});
+
+/**
+ * Intake read a matched ticket and created **no** task (`runIntakeCheck`, WP-177): on a claiming
+ * binding the ticket is assigned to somebody other than the binding's own account and
+ * `take_assigned_tickets` is not set. Project-scoped, because there is no task. An audit record;
+ * nothing consumes it.
+ */
+export const ticketIntakeSkippedEvent = defineEvent('ticket.intake.skipped', {
+  ...projectScoped,
+  ticket: ticketRefSchema,
+  reason: z.enum(['assigned']),
+});
+
 // ── Task lifecycle ───────────────────────────────────────────────────────────
 
 export const taskCreatedEvent = defineEvent('task.created', {
@@ -256,6 +326,71 @@ export const taskStageReturnedEvent = defineEvent('task.stage.returned', {
   reason: nonEmptyStringSchema,
   feedback_ref: idSchema.nullish(),
   iteration: z.int().positive(),
+});
+
+/**
+ * The forms a person's word at a human stage takes (TD-029 decision 7): the ticket's status moved
+ * to a return status, a note on a diff discussion, a general note on the merge request, a ticket
+ * comment.
+ */
+export const humanReturnFormSchema = z.enum(['status', 'mr_diff', 'mr_note', 'ticket_comment']);
+
+/** The human stages a person's word returns a task from (TD-029 decisions 7 and 9). */
+export const humanReturnStageSchema = z.enum(['qa', 'ready_for_merge']);
+
+const humanReturnPayloadSchema = z
+  .strictObject({
+    ...taskScoped,
+    from_stage: humanReturnStageSchema,
+    /** Each form that contributed, once. */
+    forms: z.array(humanReturnFormSchema).min(1).max(humanReturnFormSchema.options.length),
+    /**
+     * How many **contributing** words of each form the window read past the horizon: an
+     * acknowledgement (TD-029 decision 8) is not counted, so a status return with only a newer
+     * "thanks" note records `mr_note: 0` and no `mr_note` form. A count is above zero exactly when
+     * its form is listed — WP-178 writes it to that invariant.
+     */
+    counts: z.strictObject({
+      mr_diff: z.int().nonnegative(),
+      mr_note: z.int().nonnegative(),
+      ticket_comment: z.int().nonnegative(),
+    }),
+    /** The ticket's status when the status returned the task, else `null`. Provider text. */
+    status: lifecycleStatusNameSchema.nullable(),
+  })
+  .superRefine((payload, ctx) => {
+    if (new Set(payload.forms).size !== payload.forms.length) {
+      ctx.addIssue({ code: 'custom', path: ['forms'], message: 'each form is listed once' });
+    }
+    if (payload.forms.includes('status') !== (payload.status !== null)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['status'],
+        message: 'status is named exactly when the status form returned the task',
+      });
+    }
+    for (const form of ['mr_diff', 'mr_note', 'ticket_comment'] as const) {
+      if (payload.forms.includes(form) !== payload.counts[form] > 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['counts', form],
+          message: `counts.${form} is above zero exactly when ${form} is a form`,
+        });
+      }
+    }
+  });
+
+/**
+ * A person's word returned the task from a human stage — the human-return window (WP-178),
+ * appended in the return's own transaction. The return itself is `task.stage.returned` (the
+ * interpreter's signal is `mr.review.comment` for every form, TD-029 decision 7); this records
+ * **which** forms caused it, which that event cannot say. Its payload is checked for agreement
+ * between `forms`, `counts` and `status`, so a record cannot claim a form it counted none of.
+ */
+export const taskHumanReturnEvent = z.strictObject({
+  ...eventEnvelopeShape,
+  type: z.literal('task.human_return'),
+  payload: humanReturnPayloadSchema,
 });
 
 export const taskQuestionAskedEvent = defineEvent('task.question.asked', {
@@ -944,12 +1079,17 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   ticketUpdatedEvent,
   ticketCommentAddedEvent,
   ticketStatusChangedEvent,
+  ticketClaimedEvent,
+  ticketClaimRefusedEvent,
+  ticketReleasedEvent,
+  ticketIntakeSkippedEvent,
   taskCreatedEvent,
   taskQueuedEvent,
   taskDequeuedEvent,
   taskStageEnteredEvent,
   taskStageCompletedEvent,
   taskStageReturnedEvent,
+  taskHumanReturnEvent,
   taskQuestionAskedEvent,
   taskQuestionAnsweredEvent,
   taskQuestionExpiredEvent,

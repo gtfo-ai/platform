@@ -170,7 +170,16 @@ export const ARTIFACT_FIELD_POLICIES = {
     // The five that made this a per-field policy rather than a blanket redaction:
     // `recordMergeRequest` copies them onto `tasks` and the git provider is then addressed with
     // them. A `[REDACTED:integration:…]` here is a value the platform queries GitLab with.
-    identifiers: ['mr.branch', 'mr.head_sha', 'mr.project_path', 'mr.provider', 'mr.url'],
+    // `thread_replies[].thread_id` (WP-170) is the discussion or comment the platform posts the
+    // reply into (WP-179), so a redacted id would address another thread.
+    identifiers: [
+      'mr.branch',
+      'mr.head_sha',
+      'mr.project_path',
+      'mr.provider',
+      'mr.url',
+      'thread_replies[].thread_id',
+    ],
     prose: [
       'commands_run[].command',
       'commands_run[].summary',
@@ -180,13 +189,21 @@ export const ARTIFACT_FIELD_POLICIES = {
       'known_gaps[]',
       'summary',
       'tests_added[]',
+      'thread_replies[].person',
+      'thread_replies[].reply',
     ],
   },
   ReviewVerdict: {
     // `findings[].id` and `.file` are two thirds of `reviewFindingSignature`, which decides whether
     // a re-review repeated itself and escalates the task (product/04 S5); the confirmed paths are
     // compared with the plan's protected-path declarations.
-    identifiers: ['findings[].file', 'findings[].id', 'protected_path_changes_confirmed[]'],
+    // `resolved_threads[]` (WP-170) names the discussions the platform resolves (WP-179).
+    identifiers: [
+      'findings[].file',
+      'findings[].id',
+      'protected_path_changes_confirmed[]',
+      'resolved_threads[]',
+    ],
     // WP-45: `checklists_applied` is the platform's own record (the executor overwrites the
     // model's), and nothing addresses anything with it. `criteria[].id` is joined by the shadow
     // report with the agent's AcceptanceVerdict — see that entry for why a join for a published

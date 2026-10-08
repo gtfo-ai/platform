@@ -135,6 +135,28 @@ describe('records', () => {
       estimate_accuracy: null,
     };
     expect(taskRecordSchema.parse(unestimated)).toEqual(unestimated);
+    // WP-170 ruling (d): the claim and the QA flag. **Optional** until WP-181 publishes them, so a
+    // DTO built before then parses; once present they are held to their shapes.
+    const claimed = {
+      ...task,
+      ticket_claim: { status: 'shadow', claimed_at: AT, released_at: null },
+      qa_stage: true,
+    };
+    expect(taskRecordSchema.parse(claimed)).toEqual(claimed);
+    expect(taskRecordSchema.parse({ ...task, ticket_claim: null })).toEqual({
+      ...task,
+      ticket_claim: null,
+    });
+    expect(
+      taskRecordSchema.safeParse({
+        ...task,
+        ticket_claim: { status: 'stale', claimed_at: AT, released_at: null },
+      }).success,
+    ).toBe(false);
+    expect(
+      taskRecordSchema.safeParse({ ...task, ticket_claim: { status: 'confirmed', claimed_at: AT } })
+        .success,
+    ).toBe(false);
     const { estimate_basis: _dropped, ...withoutBasis } = task;
     expect(taskRecordSchema.safeParse(withoutBasis).success).toBe(false);
     /**

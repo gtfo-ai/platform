@@ -24,6 +24,7 @@ import {
   durationSchema,
   effortSchema,
   idSchema,
+  MAX_LIFECYCLE_STATUS_NAME_CHARS,
   MAX_ROUTED_REVIEWERS,
   nonEmptyStringSchema,
   pathPatternSchema,
@@ -944,6 +945,142 @@ export const featuresConfigSchema = z.strictObject({
  */
 export const statusMappingSchema = z.record(slugSchema, nonEmptyStringSchema);
 
+// ── the ticket lifecycle (a task-management binding's block, not a key of this file) ──
+
+/** How many names the `returned` slot may hold (TD-029 decision 1). */
+export const MAX_LIFECYCLE_RETURNED_STATUSES = 10;
+
+/** The slots that name **one** status each, in the order a ticket normally passes them. */
+export const LIFECYCLE_SINGLE_SLOTS = [
+  'in_progress',
+  'in_review',
+  'approved',
+  'qa',
+  'done',
+] as const;
+export type LifecycleSingleSlot = (typeof LIFECYCLE_SINGLE_SLOTS)[number];
+
+/**
+ * How two status names are compared: trimmed and lower-cased, the comparison the Jira adapter's
+ * `transition` already makes (`equalsStatus`, TD-029 decision 1). Exported so the binding's own
+ * check (`pick_up_from` against the slots) and the server's membership check compare the same way.
+ */
+export const lifecycleStatusKey = (name: string): string => name.trim().toLowerCase();
+
+const lifecycleStatusNameSchema = nonEmptyStringSchema
+  .max(MAX_LIFECYCLE_STATUS_NAME_CHARS)
+  .refine((name) => name.trim().length > 0, { message: 'a status name is not only whitespace' });
+
+/**
+ * The ticket lifecycle a project maps onto its tracker — BD-031, TD-029 decision 1, technical/12's
+ * M10-head amendment.
+ *
+ * **It is not a key of `.agentic/config.yml`.** It is a block of the task-management **binding**'s
+ * configuration overlay, beside `pickup_status` (which *is* the `pick_up_from` slot) and
+ * `pickup_label`, and every task-management provider's binding schema is to embed this one
+ * definition (Jira's at WP-172; no binding schema embeds it yet).
+ * It lives in this module because it is configuration the operator writes, and in one place
+ * because two copies of a slot list drift.
+ *
+ * **Every name is the tracker's own**, so nothing here — no default, no example — names a status.
+ * Every slot is optional; an unmapped slot writes nothing (TD-029 decision 4).
+ *
+ * What the schema checks, and what it cannot:
+ *  - the single slots are pairwise distinct, and `returned` is disjoint from them and holds each
+ *    name once — all compared by {@link lifecycleStatusKey}, because the tracker compares that way
+ *    and two slots that differ only in case would name one status;
+ *  - **not** distinctness from `pickup_status`, which is a sibling key of the binding: the binding
+ *    schema that embeds this block checks it (the server's check, WP-181);
+ *  - **not** membership in the tracker's statuses, which a schema cannot know: that is the server's
+ *    `422 lifecycle_status_unknown` / `503 lifecycle_statuses_unavailable` at save (WP-181).
+ *
+ * `claim` defaults to **true when the block is present** and is read by the claim (WP-177); a
+ * binding with no block never claims. `take_assigned_tickets` lets intake take a ticket assigned to
+ * somebody else. Neither carries a `.default()`, because published schemas carry none (the package
+ * convention) — the reader applies the default.
+ */
+export const ticketLifecycleSchema = z
+  .strictObject({
+    in_progress: lifecycleStatusNameSchema.optional(),
+    in_review: lifecycleStatusNameSchema.optional(),
+    approved: lifecycleStatusNameSchema.optional(),
+    qa: lifecycleStatusNameSchema.optional(),
+    returned: z.array(lifecycleStatusNameSchema).max(MAX_LIFECYCLE_RETURNED_STATUSES).optional(),
+    done: lifecycleStatusNameSchema.optional(),
+    claim: z.boolean().optional(),
+    take_assigned_tickets: z.boolean().optional(),
+  })
+  .superRefine((block, ctx) => {
+    const seen = new Map<string, string>();
+    for (const slot of LIFECYCLE_SINGLE_SLOTS) {
+      const name = block[slot];
+      if (name === undefined) continue;
+      const key = lifecycleStatusKey(name);
+      const holder = seen.get(key);
+      if (holder !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [slot],
+          message: `the ${slot} slot names "${name}", which the ${holder} slot already names; each slot is a different status`,
+        });
+        continue;
+      }
+      seen.set(key, slot);
+    }
+    const returned = new Set<string>();
+    for (const [index, name] of (block.returned ?? []).entries()) {
+      const key = lifecycleStatusKey(name);
+      const holder = seen.get(key);
+      if (holder !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['returned', index],
+          message: `returned names "${name}", which the ${holder} slot names; a returned status is never another slot's`,
+        });
+      }
+      if (returned.has(key)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['returned', index],
+          message: `returned names "${name}" twice`,
+        });
+      }
+      returned.add(key);
+    }
+  });
+
+export type TicketLifecycle = z.infer<typeof ticketLifecycleSchema>;
+
+// ── human returns ────────────────────────────────────────────────────────────
+
+/** How many words a project may add to the acknowledgement vocabulary (technical/12). */
+export const MAX_ACKNOWLEDGEMENT_WORDS = 50;
+/** The longest such word. */
+export const MAX_ACKNOWLEDGEMENT_WORD_CHARS = 40;
+
+/**
+ * `human_returns` — how a person's word at a human stage is read (BD-031, TD-029 decision 8).
+ *
+ * `acknowledgements` **adds** words in the project's own language to the shipped acknowledgement
+ * vocabulary; it can never remove a shipped word. A comment made only of acknowledgement words
+ * does not return a task, so an added word **loosens** what the agent is held to — which is why
+ * the repository file's value is graded *not applied* (`repository-grades.ts`) and only the
+ * settings layer (`project.settings.write`) may set it. Its reader is the human-return window
+ * (WP-178).
+ */
+export const humanReturnsConfigSchema = z.strictObject({
+  acknowledgements: z
+    .array(
+      // One token: decision 8 matches a normalised comment token by token, so an entry with
+      // whitespace in it could never match and is refused rather than kept as a dead word.
+      nonEmptyStringSchema
+        .max(MAX_ACKNOWLEDGEMENT_WORD_CHARS)
+        .refine((word) => !/\s/u.test(word), { message: 'an acknowledgement is one word' }),
+    )
+    .max(MAX_ACKNOWLEDGEMENT_WORDS)
+    .optional(),
+});
+
 // ── the file ─────────────────────────────────────────────────────────────────
 
 export const agenticConfigSchema = z.strictObject({
@@ -956,6 +1093,7 @@ export const agenticConfigSchema = z.strictObject({
   verification: verificationConfigSchema.optional(),
   features: featuresConfigSchema.optional(),
   status_mapping: statusMappingSchema.optional(),
+  human_returns: humanReturnsConfigSchema.optional(),
 });
 
 export type AgenticConfig = z.infer<typeof agenticConfigSchema>;
@@ -971,6 +1109,7 @@ export type CommandPolicy = z.infer<typeof commandPolicySchema>;
 export type FeaturesConfig = z.infer<typeof featuresConfigSchema>;
 export type VerificationConfig = z.infer<typeof verificationConfigSchema>;
 export type StatusMapping = z.infer<typeof statusMappingSchema>;
+export type HumanReturnsConfig = z.infer<typeof humanReturnsConfigSchema>;
 
 // ── the organisation settings document (WP-93) ───────────────────────────────
 

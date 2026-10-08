@@ -138,6 +138,33 @@ export const implementationPlanDataSchema = z.strictObject({
  */
 export const IMPLEMENTATION_NOTES_SUMMARY_MAX_CHARS = 4_000;
 
+/** The bounds on `ImplementationNotes.thread_replies` (WP-170 ruling (c)). */
+export const MAX_THREAD_REPLIES = 50;
+export const MAX_THREAD_REPLY_CHARS = 2_000;
+export const MAX_THREAD_REPLY_PERSON_CHARS = 128;
+/** The bound on `ReviewVerdict.resolved_threads` (WP-170 ruling (c)). */
+export const MAX_RESOLVED_THREADS = 100;
+/**
+ * A conversation thread's id as the platform hands it to the model in the conversation block — a
+ * merge-request discussion id or a ticket comment id (TD-029 decisions 10 and 11). Bounded because
+ * the platform addresses the provider with it.
+ */
+const conversationThreadIdSchema = nonEmptyStringSchema.max(255);
+
+/**
+ * One reply the Developer asks the platform to post in a thread of the conversation (TD-029
+ * decision 10): `fixed` (the change is made), `documented` (explained, not changed),
+ * `needs_person` (a person must act — `person` names who, and the platform states it has not
+ * done the action) or `not_changed` (declined, with the reason in `reply`). The platform validates
+ * `thread_id` against a fresh read before posting and drops an unknown one (WP-179).
+ */
+export const threadReplySchema = z.strictObject({
+  thread_id: conversationThreadIdSchema,
+  kind: z.enum(['fixed', 'documented', 'needs_person', 'not_changed']),
+  reply: nonEmptyStringSchema.max(MAX_THREAD_REPLY_CHARS),
+  person: nonEmptyStringSchema.max(MAX_THREAD_REPLY_PERSON_CHARS).nullish(),
+});
+
 export const implementationNotesDataSchema = z.strictObject({
   summary: nonEmptyStringSchema.max(IMPLEMENTATION_NOTES_SUMMARY_MAX_CHARS),
   deviations_from_plan: z.array(
@@ -154,6 +181,11 @@ export const implementationNotesDataSchema = z.strictObject({
   known_gaps: z.array(nonEmptyStringSchema),
   followup_tickets: z.array(nonEmptyStringSchema),
   mr: mergeRequestRefSchema,
+  /**
+   * Replies to the review conversation's threads (BD-031, TD-029 decision 10). **Optional**, so a
+   * set of notes recorded before WP-170 still parses; absent, `null` and `[]` all mean *"no reply"*.
+   */
+  thread_replies: z.array(threadReplySchema).max(MAX_THREAD_REPLIES).nullish(),
 });
 
 export const reviewFindingSchema = z.strictObject({
@@ -215,6 +247,14 @@ export const reviewVerdictDataSchema = z.strictObject({
    * review: a pipeline review's criteria are the Acceptance Tester's to judge.
    */
   criteria: z.array(criterionJudgementSchema).nullish(),
+  /**
+   * The `thread_id`s of the Reviewer's **own** finding threads a re-review confirms fixed (TD-029
+   * decision 10). The platform resolves only a named thread whose first note opens with this task's
+   * review-finding marker, never a person's (WP-179). **Optional** (`null` and absent both mean
+   * *"none"*, the shape of the other model-written optional fields), so a verdict recorded before
+   * WP-170 still parses.
+   */
+  resolved_threads: z.array(conversationThreadIdSchema).max(MAX_RESOLVED_THREADS).nullish(),
 });
 
 export const acceptanceVerdictDataSchema = z.strictObject({

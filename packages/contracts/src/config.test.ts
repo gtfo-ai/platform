@@ -1,11 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { patchOrgSettingsRequestSchema } from './api.js';
 import {
+  MAX_RESOLVED_THREADS,
+  MAX_THREAD_REPLIES,
+  MAX_THREAD_REPLY_CHARS,
+  MAX_THREAD_REPLY_PERSON_CHARS,
+} from './artifacts.js';
+import { MAX_LIFECYCLE_STATUS_NAME_CHARS } from './common.js';
+import {
   agenticConfigSchema,
   commandPolicySchema,
   DEFAULT_CI_TIMEOUT_MINUTES,
+  LIFECYCLE_SINGLE_SLOTS,
+  lifecycleStatusKey,
+  MAX_ACKNOWLEDGEMENT_WORD_CHARS,
+  MAX_ACKNOWLEDGEMENT_WORDS,
   MAX_CI_TIMEOUT_MINUTES,
   MAX_CONTEXT_BUDGET_TOKENS,
+  MAX_LIFECYCLE_RETURNED_STATUSES,
   MAX_WIP_PARALLEL_TASKS,
   MAX_WIP_TASKS_IN_PIPELINE,
   MIN_CI_TIMEOUT_MINUTES,
@@ -14,6 +26,7 @@ import {
   policiesConfigSchema,
   riskClassSchema,
   statusMappingSchema,
+  ticketLifecycleSchema,
 } from './config.js';
 
 /**
@@ -574,5 +587,133 @@ describe('the organisation settings document (WP-93)', () => {
     ).toBe(true);
     expect(patchOrgSettingsRequestSchema.safeParse({}).success).toBe(false);
     expect(patchOrgSettingsRequestSchema.safeParse({ timezone: 'UTC' }).success).toBe(false);
+  });
+});
+
+/**
+ * WP-170 ruling (a), criterion (1): the ticket lifecycle block, in both directions. Every status
+ * name below is invented (the product owner's rule: a name is the tracker's own, never a default).
+ */
+describe('ticketLifecycleSchema', () => {
+  const FULL = {
+    in_progress: 'Doing',
+    in_review: 'Waiting for review',
+    approved: 'Reviewed',
+    qa: 'Testing',
+    returned: ['Sent back', 'Reopened by someone'],
+    done: 'Finished',
+    claim: true,
+    take_assigned_tickets: false,
+  };
+  const issues = (block: unknown) => {
+    const result = ticketLifecycleSchema.safeParse(block);
+    return result.success ? [] : result.error.issues.map((issue) => issue.path.join('.'));
+  };
+
+  it('takes a full block, an empty block and a block with only `claim: false`', () => {
+    expect(ticketLifecycleSchema.parse(FULL)).toEqual(FULL);
+    expect(ticketLifecycleSchema.parse({})).toEqual({});
+    expect(ticketLifecycleSchema.parse({ claim: false })).toEqual({ claim: false });
+    expect(ticketLifecycleSchema.parse({ returned: [] })).toEqual({ returned: [] });
+  });
+
+  it('refuses two single slots naming one status, naming the second slot', () => {
+    expect(issues({ in_review: 'Waiting', qa: 'Waiting' })).toEqual(['qa']);
+    expect(issues({ in_progress: 'Doing', done: 'Doing' })).toEqual(['done']);
+  });
+
+  it('refuses a case-only or whitespace-only difference as the same status', () => {
+    expect(issues({ in_review: 'Waiting for review', approved: 'waiting FOR review' })).toEqual([
+      'approved',
+    ]);
+    expect(issues({ qa: 'Testing', done: ' testing ' })).toEqual(['done']);
+    expect(issues({ returned: ['Sent back', 'SENT BACK'] })).toEqual(['returned.1']);
+  });
+
+  it('refuses `returned` overlapping any single slot, case-insensitively', () => {
+    for (const slot of LIFECYCLE_SINGLE_SLOTS) {
+      expect(issues({ [slot]: 'Testing', returned: ['Sent back', 'testing'] }), slot).toEqual([
+        'returned.1',
+      ]);
+    }
+  });
+
+  it('refuses an unknown key, an empty or over-long name and too many returned names', () => {
+    expect(ticketLifecycleSchema.safeParse({ pick_up_from: 'Ready' }).success).toBe(false);
+    expect(ticketLifecycleSchema.safeParse({ qa: '' }).success).toBe(false);
+    const long = 'x'.repeat(MAX_LIFECYCLE_STATUS_NAME_CHARS);
+    expect(ticketLifecycleSchema.safeParse({ qa: long }).success).toBe(true);
+    expect(ticketLifecycleSchema.safeParse({ qa: `${long}x` }).success).toBe(false);
+    const names = (n: number) => Array.from({ length: n }, (_, i) => `Back ${i}`);
+    expect(
+      ticketLifecycleSchema.safeParse({ returned: names(MAX_LIFECYCLE_RETURNED_STATUSES) }).success,
+    ).toBe(true);
+    expect(
+      ticketLifecycleSchema.safeParse({ returned: names(MAX_LIFECYCLE_RETURNED_STATUSES + 1) })
+        .success,
+    ).toBe(false);
+    expect(ticketLifecycleSchema.safeParse({ claim: 'yes' }).success).toBe(false);
+  });
+
+  it('refuses a name that is only whitespace, in a single slot and in `returned`', () => {
+    expect(issues({ qa: '   ' })).toEqual(['qa']);
+    expect(issues({ returned: ['Sent back', '\t'] })).toEqual(['returned.1']);
+  });
+
+  it('compares names trimmed and lower-cased', () => {
+    expect(lifecycleStatusKey('  Waiting For Review ')).toBe('waiting for review');
+  });
+
+  it('is not a key of `.agentic/config.yml`', () => {
+    expect(
+      agenticConfigSchema.safeParse({ version: 1, lifecycle: { qa: 'Testing' } }).success,
+    ).toBe(false);
+  });
+});
+
+/** WP-170 ruling (e): the acknowledgement words a project adds (TD-029 decision 8). */
+describe('human_returns', () => {
+  const parse = (acknowledgements: unknown) =>
+    agenticConfigSchema.safeParse({ version: 1, human_returns: { acknowledgements } }).success;
+
+  it('takes up to the bound of words of 1–40 characters', () => {
+    expect(parse(['danke', 'díky', '🙌'])).toBe(true);
+    expect(parse([])).toBe(true);
+    expect(parse(Array.from({ length: MAX_ACKNOWLEDGEMENT_WORDS }, (_, i) => `w${i}`))).toBe(true);
+    expect(parse(['x'.repeat(MAX_ACKNOWLEDGEMENT_WORD_CHARS)])).toBe(true);
+    expect(agenticConfigSchema.safeParse({ version: 1, human_returns: {} }).success).toBe(true);
+  });
+
+  it('refuses an empty word, an over-long word, too many words and an unknown key', () => {
+    expect(parse([''])).toBe(false);
+    expect(parse(['x'.repeat(MAX_ACKNOWLEDGEMENT_WORD_CHARS + 1)])).toBe(false);
+    expect(parse(Array.from({ length: MAX_ACKNOWLEDGEMENT_WORDS + 1 }, (_, i) => `w${i}`))).toBe(
+      false,
+    );
+    expect(
+      agenticConfigSchema.safeParse({ version: 1, human_returns: { remove: ['thanks'] } }).success,
+    ).toBe(false);
+  });
+  it('refuses an entry with whitespace in it, which a token-by-token match could never meet', () => {
+    expect(parse(['thank you'])).toBe(false);
+    expect(parse(['ok\t'])).toBe(false);
+  });
+});
+
+/**
+ * The bounds as numbers. Every case above reads them through their constants, so a constant
+ * moved by one keeps those cases green and no generated schema carries the lifecycle block —
+ * these pins are what fails (WP-170 review).
+ */
+describe('the M10-head bounds, pinned', () => {
+  it('holds each bound at the value technical/12 and WP-170 rule', () => {
+    expect(MAX_LIFECYCLE_STATUS_NAME_CHARS).toBe(255);
+    expect(MAX_LIFECYCLE_RETURNED_STATUSES).toBe(10);
+    expect(MAX_ACKNOWLEDGEMENT_WORDS).toBe(50);
+    expect(MAX_ACKNOWLEDGEMENT_WORD_CHARS).toBe(40);
+    expect(MAX_THREAD_REPLIES).toBe(50);
+    expect(MAX_THREAD_REPLY_CHARS).toBe(2_000);
+    expect(MAX_THREAD_REPLY_PERSON_CHARS).toBe(128);
+    expect(MAX_RESOLVED_THREADS).toBe(100);
   });
 });

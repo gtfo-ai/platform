@@ -462,6 +462,313 @@
         },
         "type": {
           "type": "string",
+          "const": "ticket.claimed"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "task_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "ticket": {
+              "$ref": "#/$defs/TicketRef"
+            },
+            "account_id": {
+              "maxLength": 255,
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "in_progress_written": {
+              "type": "boolean"
+            },
+            "shadow": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "project_id",
+            "task_id",
+            "ticket",
+            "account_id",
+            "in_progress_written",
+            "shadow"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "stream_type",
+        "stream_id",
+        "stream_seq",
+        "actor",
+        "occurred_at",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_type": {
+          "$ref": "#/$defs/StreamType"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "cause_event_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "type": {
+          "type": "string",
+          "const": "ticket.claim.refused"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "task_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "ticket": {
+              "$ref": "#/$defs/TicketRef"
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "ticket_assigned_elsewhere",
+                "ticket_claim_failed"
+              ]
+            },
+            "assignee": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ExternalIdentity"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "project_id",
+            "task_id",
+            "ticket",
+            "reason",
+            "assignee"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "stream_type",
+        "stream_id",
+        "stream_seq",
+        "actor",
+        "occurred_at",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_type": {
+          "$ref": "#/$defs/StreamType"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "cause_event_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "type": {
+          "type": "string",
+          "const": "ticket.released"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "task_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "ticket": {
+              "$ref": "#/$defs/TicketRef"
+            },
+            "unassigned": {
+              "type": "boolean"
+            },
+            "pick_up_from_written": {
+              "type": "boolean"
+            },
+            "cause": {
+              "type": "string",
+              "enum": [
+                "cancelled",
+                "rework"
+              ]
+            }
+          },
+          "required": [
+            "project_id",
+            "task_id",
+            "ticket",
+            "unassigned",
+            "pick_up_from_written",
+            "cause"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "stream_type",
+        "stream_id",
+        "stream_seq",
+        "actor",
+        "occurred_at",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_type": {
+          "$ref": "#/$defs/StreamType"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "cause_event_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "type": {
+          "type": "string",
+          "const": "ticket.intake.skipped"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "ticket": {
+              "$ref": "#/$defs/TicketRef"
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "assigned"
+              ]
+            }
+          },
+          "required": [
+            "project_id",
+            "ticket",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "stream_type",
+        "stream_id",
+        "stream_seq",
+        "actor",
+        "occurred_at",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_type": {
+          "$ref": "#/$defs/StreamType"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "cause_event_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "type": {
+          "type": "string",
           "const": "task.created"
         },
         "payload": {
@@ -874,6 +1181,82 @@
             "to_stage",
             "reason",
             "iteration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "stream_type",
+        "stream_id",
+        "stream_seq",
+        "actor",
+        "occurred_at",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_type": {
+          "$ref": "#/$defs/StreamType"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "cause_event_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "type": {
+          "type": "string",
+          "const": "task.human_return"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "task_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "from_stage": {
+              "$ref": "#/$defs/anon_d46e0a69"
+            },
+            "forms": {
+              "$ref": "#/$defs/anon_c9a07109"
+            },
+            "counts": {
+              "$ref": "#/$defs/anon_12b7c6bb"
+            },
+            "status": {
+              "$ref": "#/$defs/anon_68965646"
+            }
+          },
+          "required": [
+            "project_id",
+            "task_id",
+            "from_stage",
+            "forms",
+            "counts",
+            "status"
           ],
           "additionalProperties": false
         }
@@ -6323,6 +6706,32 @@
         }
       ]
     },
+    "anon_12b7c6bb": {
+      "type": "object",
+      "properties": {
+        "mr_diff": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "mr_note": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "ticket_comment": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "mr_diff",
+        "mr_note",
+        "ticket_comment"
+      ],
+      "additionalProperties": false
+    },
     "anon_227546fa": {
       "maxLength": 64,
       "$ref": "#/$defs/NonEmptyString"
@@ -6330,6 +6739,26 @@
     "anon_3adc8ad5": {
       "maxLength": 128,
       "$ref": "#/$defs/NonEmptyString"
+    },
+    "anon_68965646": {
+      "anyOf": [
+        {
+          "maxLength": 255,
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "anon_a837b7a4": {
+      "type": "string",
+      "enum": [
+        "status",
+        "mr_diff",
+        "mr_note",
+        "ticket_comment"
+      ]
     },
     "anon_c983d978": {
       "type": "object",
@@ -6358,6 +6787,21 @@
         "pushed"
       ],
       "additionalProperties": false
+    },
+    "anon_c9a07109": {
+      "minItems": 1,
+      "maxItems": 4,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/anon_a837b7a4"
+      }
+    },
+    "anon_d46e0a69": {
+      "type": "string",
+      "enum": [
+        "qa",
+        "ready_for_merge"
+      ]
     },
     "anon_def33f2f": {
       "type": "boolean"

@@ -503,6 +503,19 @@
       "additionalProperties": {
         "$ref": "#/$defs/NonEmptyString"
       }
+    },
+    "human_returns": {
+      "type": "object",
+      "properties": {
+        "acknowledgements": {
+          "maxItems": 50,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_002883dc"
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "required": [
@@ -658,6 +671,12 @@
     "Usd": {
       "type": "number",
       "minimum": 0
+    },
+    "anon_002883dc": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40,
+      "$ref": "#/$defs/NonEmptyString"
     },
     "anon_02e7dfb8": {
       "type": "string",

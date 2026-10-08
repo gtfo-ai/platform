@@ -13,6 +13,7 @@ import {
   exportProjectConfigResponseSchema,
   integrationsResponseSchema,
   kbHealthResponseSchema,
+  lifecycleErrorCodeSchema,
   listTasksQuerySchema,
   MAX_TICKET_KEY_CHARS,
   orgAuditQuerySchema,
@@ -33,6 +34,7 @@ import {
   startShadowRunsRequestSchema,
   steerRunRequestSchema,
   tasksResponseSchema,
+  ticketStatusesResponseSchema,
   updateProjectConfigRequestSchema,
   updateSubscriptionsRequestSchema,
   webhookDeliverySchema,
@@ -237,6 +239,16 @@ describe('response DTOs', () => {
       },
     };
     expect(effectiveConfigResponseSchema.parse(response)).toEqual(response);
+    // WP-170 ruling (d): `status_mapping_superseded`, optional until WP-181 publishes it.
+    for (const superseded of [true, false]) {
+      expect(
+        effectiveConfigResponseSchema.parse({ ...response, status_mapping_superseded: superseded }),
+      ).toEqual({ ...response, status_mapping_superseded: superseded });
+    }
+    expect(
+      effectiveConfigResponseSchema.safeParse({ ...response, status_mapping_superseded: 'yes' })
+        .success,
+    ).toBe(false);
     // A requirement this build cannot act on is refused **by name**, here as everywhere else
     // (PROGRESS backlog 73 (d)): the offer a screen renders goes through the same schema.
     expect(
@@ -857,5 +869,46 @@ describe('PATCH /api/integrations/:id (WP-100)', () => {
     expect(patchIntegrationRequestSchema.safeParse({ config: {}, secret_refs: {} }).success).toBe(
       false,
     );
+  });
+});
+
+/** WP-170 ruling (d): the tracker's statuses and the lifecycle block's two refusals. */
+describe('ticket statuses', () => {
+  const status = {
+    id: '10001',
+    name: 'Testing',
+    category: 'in_progress',
+    raw_category: 'indeterminate',
+  };
+
+  it('publishes a status with its category and the provider key it came from', () => {
+    const response = {
+      items: [status, { id: '3', name: 'Sent back', category: 'unknown', raw_category: null }],
+    };
+    expect(ticketStatusesResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it('refuses a category outside the four, an empty name and an unknown key', () => {
+    for (const item of [
+      { ...status, category: 'indeterminate' },
+      { ...status, name: '' },
+      { ...status, colour: 'blue' },
+      { id: status.id, name: status.name, category: status.category },
+    ]) {
+      expect(
+        ticketStatusesResponseSchema.safeParse({ items: [item] }).success,
+        JSON.stringify(item),
+      ).toBe(false);
+    }
+  });
+
+  it('names the two refusals as error codes the envelope carries', () => {
+    expect(lifecycleErrorCodeSchema.options).toEqual([
+      'lifecycle_status_unknown',
+      'lifecycle_statuses_unavailable',
+    ]);
+    for (const code of lifecycleErrorCodeSchema.options) {
+      expect(apiErrorSchema.safeParse({ error: { code, message: 'x' } }).success).toBe(true);
+    }
   });
 });

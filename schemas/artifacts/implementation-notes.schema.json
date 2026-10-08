@@ -72,6 +72,20 @@
     },
     "mr": {
       "$ref": "#/$defs/MergeRequestRef"
+    },
+    "thread_replies": {
+      "anyOf": [
+        {
+          "maxItems": 50,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_d43ea36b"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -154,6 +168,45 @@
     "Url": {
       "type": "string",
       "format": "uri"
+    },
+    "anon_d43ea36b": {
+      "type": "object",
+      "properties": {
+        "thread_id": {
+          "maxLength": 255,
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "fixed",
+            "documented",
+            "needs_person",
+            "not_changed"
+          ]
+        },
+        "reply": {
+          "maxLength": 2000,
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "person": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "thread_id",
+        "kind",
+        "reply"
+      ],
+      "additionalProperties": false
     }
   }
 }

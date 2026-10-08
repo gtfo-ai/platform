@@ -209,9 +209,22 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
 
   // ── Declared unconsumed in this build, with the work package that changes it ──
   // Review-only mode does **not** read it — it has no ticket at all (WP-24) — so the owner this
-  // line used to name was wrong as well as pending. Task sync is technical/02's consumer and no
-  // work package owns it; PROGRESS's discovered work says so.
-  'ticket.status.changed': 'unconsumed', // Task sync (technical/02); no owner.
+  // line used to name was wrong as well as pending. Since the M10-head amendment technical/02's
+  // consumer is the human-return window at 10 (BD-031, TD-029 decision 7), and WP-178 flips this
+  // row (its criterion (f)); until then it was "Task sync, no owner".
+  'ticket.status.changed': 'unconsumed', // The human-return window; WP-178.
+
+  // ── The ticket claim, the release, the intake skip and the human return (BD-031, TD-029) ──
+  // technical/02's column is `—` for all five: each is a record of something the producer has
+  // already done in the same transaction, so nothing is left for a consumer. The task DTO reads the
+  // claim off `tasks.ticket_claim`; the escalation a refusal causes is its own `task.escalated`;
+  // the return itself is `task.stage.returned`. Declared at WP-170, before any producer exists
+  // (WP-177 and WP-178 append them), so the sweep never meets a type this table cannot answer.
+  'ticket.claimed': 'unconsumed',
+  'ticket.claim.refused': 'unconsumed',
+  'ticket.released': 'unconsumed',
+  'ticket.intake.skipped': 'unconsumed',
+  'task.human_return': 'unconsumed',
 
   // technical/02's UI band. These five named WP-20 as their owner until WP-73, and WP-20 was DONE
   // without them — the run screen reads rows, not these events — so they have no owner (backlog 1).
@@ -357,13 +370,20 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
  * to `handled` asserts {@link unconsumedRowsOwnedBy} is empty for itself — the check is held by the
  * work package that owns the row rather than by a list somebody maintains beside it.
  *
- * `null` today for every row: none of them has a consumer scheduled. A row whose consumer gets a
- * plan row names it here, and that row's own DONE is then what fails the test until it flips.
+ * `null` for every row but one: `ticket.status.changed` names WP-178, the human-return window
+ * (BD-031), since WP-170. A row whose consumer gets a plan row names it here, and that row's own
+ * DONE is then what fails the test until it flips.
  */
 export const UNCONSUMED_OWNERS: Readonly<Partial<Record<DomainEventType, `WP-${string}` | null>>> =
   {
     'task.dequeued': null,
-    'ticket.status.changed': null,
+    'ticket.status.changed': 'WP-178',
+    // `—` in technical/02 for all five, by design rather than by omission: audit records.
+    'ticket.claimed': null,
+    'ticket.claim.refused': null,
+    'ticket.released': null,
+    'ticket.intake.skipped': null,
+    'task.human_return': null,
     'run.created': null,
     'run.started': null,
     'workspace.provisioned': null,

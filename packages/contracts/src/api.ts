@@ -42,6 +42,7 @@ import {
   taskStateSchema,
   templateIdSchema,
   ticketRefSchema,
+  ticketStatusSchema,
   unitIntervalSchema,
   urlSchema,
   usdSchema,
@@ -531,6 +532,14 @@ export const effectiveConfigResponseSchema = z.strictObject({
    */
   ignored_allow_commands: z.array(nonEmptyStringSchema),
   /**
+   * `true` when the project's task-management binding maps a lifecycle slot other than
+   * `pick_up_from`, so `status_mapping` is **not applied at all** (TD-029 decision 3, technical/12's
+   * M10-head amendment); the screen shows a warning beside the key. `false` when it is applied as
+   * before. **Absent** until the server publishes it (WP-181), which a reader must not read as
+   * `false`.
+   */
+  status_mapping_superseded: z.boolean().optional(),
+  /**
    * Risk classes **proposed** for this project and not applied — product/18:52, WP-37.
    *
    * product/18 makes risk classes a wizard step rather than a default, so `policies.risk_classes`
@@ -763,6 +772,26 @@ export const projectBindingsResponseSchema = z.strictObject({
 export const putProjectBindingsRequestSchema = z.strictObject({
   items: z.array(z.strictObject({ integration_id: idSchema, config: jsonObjectSchema.optional() })),
 });
+
+/**
+ * `GET /api/projects/:project_id/ticket-statuses` — the statuses of the project's tracker, as the
+ * task-management binding's `listStatuses()` answers them (WP-170 ruling (d); served at WP-181).
+ * They are what the lifecycle slots may name. Untrusted provider text (BD-022).
+ */
+export const ticketStatusesResponseSchema = z.strictObject({
+  items: z.array(ticketStatusSchema),
+});
+
+/**
+ * The refusals of a `lifecycle` block at `PUT /api/projects/:project_id/bindings` (TD-029
+ * decision 1): `422 lifecycle_status_unknown` names the slot and the name the tracker does not
+ * have; `503 lifecycle_statuses_unavailable` says the tracker could not be read, and nothing was
+ * saved. The codes travel in {@link apiErrorSchema}'s `error.code`.
+ */
+export const lifecycleErrorCodeSchema = z.enum([
+  'lifecycle_status_unknown',
+  'lifecycle_statuses_unavailable',
+]);
 
 /**
  * `POST /api/projects/:id/discovery` — the wizard's step 2.
@@ -2878,6 +2907,8 @@ export type SetDefaultBranchRequest = z.infer<typeof setDefaultBranchRequestSche
 export type ProjectRepositoryResponse = z.infer<typeof projectRepositoryResponseSchema>;
 export type CiConfigLocationDto = z.infer<typeof ciConfigLocationSchema>;
 export type PutProjectBindingsRequest = z.infer<typeof putProjectBindingsRequestSchema>;
+export type TicketStatusesResponse = z.infer<typeof ticketStatusesResponseSchema>;
+export type LifecycleErrorCode = z.infer<typeof lifecycleErrorCodeSchema>;
 export type StartDiscoveryResponse = z.infer<typeof startDiscoveryResponseSchema>;
 export type RediscoveryGateResponse = z.infer<typeof rediscoveryGateResponseSchema>;
 export type BusinessInterviewRequest = z.infer<typeof businessInterviewRequestSchema>;

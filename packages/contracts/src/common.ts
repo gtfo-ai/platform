@@ -732,6 +732,34 @@ export const ticketRefSchema = z.strictObject({
   id: ticketIdSchema.nullish(),
 });
 
+/**
+ * The longest tracker status name the platform accepts — a lifecycle slot's (WP-170 ruling (a)), a
+ * listed status's, and one an event carries.
+ */
+export const MAX_LIFECYCLE_STATUS_NAME_CHARS = 255;
+
+/**
+ * The platform's category of a tracker status (TD-029 decision 2). The provider's own key is kept
+ * beside it as `raw_category`, because a tracker documents no closed set of them (research/15 J1a,
+ * J3) and anything the platform does not recognise is `unknown`, never a guess.
+ */
+export const ticketStatusCategorySchema = z.enum(['todo', 'in_progress', 'done', 'unknown']);
+
+/**
+ * One status of the project's tracker, as `listStatuses()` answers it and
+ * `GET /api/projects/:project_id/ticket-statuses` publishes it (WP-170 ruling (d)).
+ *
+ * `name` is the tracker's own display name and is what a lifecycle slot names; it is untrusted
+ * provider text (BD-022), bounded like a slot's name. `raw_category` is `null` when the provider
+ * answered none.
+ */
+export const ticketStatusSchema = z.strictObject({
+  id: nonEmptyStringSchema.max(255),
+  name: nonEmptyStringSchema.max(MAX_LIFECYCLE_STATUS_NAME_CHARS),
+  category: ticketStatusCategorySchema,
+  raw_category: nonEmptyStringSchema.max(255).nullable(),
+});
+
 /** `tasks.mr_ref` (technical/03) and the `mr` field of ImplementationNotes (technical/12). */
 export const mergeRequestRefSchema = z.strictObject({
   provider: nonEmptyStringSchema.nullish(),
@@ -1068,6 +1096,8 @@ export type ArtifactType = z.infer<typeof artifactTypeSchema>;
 export type ExternalIdentity = z.infer<typeof externalIdentitySchema>;
 export type Actor = z.infer<typeof actorSchema>;
 export type TicketRef = z.infer<typeof ticketRefSchema>;
+export type TicketStatusCategory = z.infer<typeof ticketStatusCategorySchema>;
+export type TicketStatus = z.infer<typeof ticketStatusSchema>;
 export type MergeRequestRef = z.infer<typeof mergeRequestRefSchema>;
 export type WorkpadRef = z.infer<typeof workpadRefSchema>;
 export type TicketSnapshotComment = z.infer<typeof ticketSnapshotCommentSchema>;

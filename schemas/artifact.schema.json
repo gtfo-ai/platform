@@ -557,6 +557,20 @@
             },
             "mr": {
               "$ref": "#/$defs/MergeRequestRef"
+            },
+            "thread_replies": {
+              "anyOf": [
+                {
+                  "maxItems": 50,
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/anon_2ba14e92"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -691,6 +705,20 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/$defs/anon_b54c33b5"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "resolved_threads": {
+              "anyOf": [
+                {
+                  "maxItems": 100,
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/anon_fff8dfda"
                   }
                 },
                 {
@@ -2342,6 +2370,44 @@
         "doc-update"
       ]
     },
+    "anon_2ba14e92": {
+      "type": "object",
+      "properties": {
+        "thread_id": {
+          "$ref": "#/$defs/anon_fff8dfda"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "fixed",
+            "documented",
+            "needs_person",
+            "not_changed"
+          ]
+        },
+        "reply": {
+          "maxLength": 2000,
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "person": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "thread_id",
+        "kind",
+        "reply"
+      ],
+      "additionalProperties": false
+    },
     "anon_4682db72": {
       "type": "string"
     },
@@ -2577,6 +2643,10 @@
         "url"
       ],
       "additionalProperties": false
+    },
+    "anon_fff8dfda": {
+      "maxLength": 255,
+      "$ref": "#/$defs/NonEmptyString"
     }
   }
 }
