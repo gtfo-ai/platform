@@ -558,7 +558,12 @@ export const breakdownDecidedHandler = (options: EpicSplitOptions): EventHandler
     if (payload.remaining > 0 || stored.task.currentStage !== SPIKE_HUMAN_STAGE) {
       return;
     }
-    const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+    const pipeline = compilePipeline(
+      stored.task.template,
+      stored.template,
+      stored.pipelineDial,
+      false,
+    );
     const applied = await applyDecision({
       store: options.store,
       pipeline,

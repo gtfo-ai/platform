@@ -731,7 +731,7 @@ const revalidate = (
     };
   }
   const stage = stageOf(
-    compilePipeline(task.template, stored.template, stored.pipelineDial),
+    compilePipeline(task.template, stored.template, stored.pipelineDial, false),
     job.stage,
   );
   if (stage === null || stage.kind !== 'agent' || stage.role === null) {

@@ -15627,6 +15627,18 @@ an inherited environment, or when the measurement above shows `rebase --exec` or
 
 **Depends on** WP-177.
 
+### 539. **`BUILTIN_STAGE_IDS` does not list `qa`, while the application reads `qa` by its id** (TODO, **nit. Nothing reads the list at a boundary, so no wrong behaviour follows today.** Found by the orchestrator at WP-174, session 15. **No work package owns it.** It is best done in WP-177 or WP-178, the first rows that compare a stage id with `'qa'` in `packages/application`)
+
+**What is wrong.** `BUILTIN_STAGE_IDS` (`packages/contracts/src/common.ts:657-673`) lists fifteen ids, and `qa` is not one of them. Its docblock (`:643-648`) gives it one job: to list the ids the platform gives a meaning of its own, so that *"a template must not rename them"*. WP-174 added `qa` to the shared merge tail (`packages/domain/src/pipeline/templates.ts`). WP-177 and WP-178 then read it by id: the `qa` lifecycle moment fires on entry into `qa`, and every *"waiting at a human stage"* check is widened to `qa` (technical/02's M10-head amendment). By the list's own definition, `qa` belongs in it.
+
+**Evidence.** Grep, session 15: the only code consumers of the list are its uniqueness and slug test (`packages/contracts/src/common.test.ts:201-204`) and a type-level `satisfies` (`packages/domain/src/knowledge/retrieval.ts:100`). `stageIdSchema` is `slugSchema` (`common.ts:641`), so no boundary refuses `qa`. Adding it is safe: WP-174 gave `STAGE_EMPHASIS` a `qa` row (`retrieval.ts`, uncommitted at the time of writing), so the `satisfies` still holds. The task state is not affected either. A task at `qa` is `active` by decision (technical/02, M10-head amendment), so `packages/application/src/pipeline/transitions.ts` needs no `qa` entry.
+
+**Cost of leaving it.** The list stops saying what its docblock claims, and a reader who relies on it to know which ids are safe to rename gets a wrong answer. Nothing fails.
+
+**Done when.** `qa` is in `BUILTIN_STAGE_IDS`, next to `rebase_gate` and `ready_for_merge`, and `common.test.ts` still passes. No new test is needed: the list has no consumer for a canary to break.
+
+**Depends on** WP-174.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -19420,7 +19432,7 @@ WP-181 follows WP-177 and WP-180, WP-182 follows WP-181, and WP-183 runs last. W
 | WP-175 | **Domain: the `conversation` data block** | TODO | — | Folds **537**. Deps WP-170. No migration. Parallel with WP-171…WP-174. |
 | WP-176 | **Prompts: every role reads the conversation, the Developer answers each thread, and the Reviewer resolves only what it re-checked** | TODO | — | Folds **537**. Deps WP-170, WP-175. No migration. Eval cases and `ROLE_PROMPT_VERSIONS`. |
 | WP-177 | **Application: the claim, the release, the intake skip, the lifecycle transitions, and `status_mapping` superseded** | TODO | — | Folds **535** (c), **536**. Deps WP-171, WP-174. **Migration 0088** (`tasks.ticket_claim`, `tasks.qa_stage`). Serial with WP-178 and WP-179. |
-| WP-178 | **Application: one human-return window over four signals, at `qa` and at `ready_for_merge`, and the QA stage's endings** | TODO | — | Folds **535** (d), **537** (d). Deps WP-173, WP-174, WP-177. No migration. Measured: today's window drops a `resolvable: false` general note. Criterion (11): reads `human_returns.acknowledgements`, unreported at the settings write until then (WP-170 discovered work). Criterion (12): `task.human_return` counts contributing words only, `> 0` exactly when the form is listed (WP-170 review). |
+| WP-178 | **Application: one human-return window over four signals, at `qa` and at `ready_for_merge`, and the QA stage's endings** | TODO | — | Folds **535** (d), **537** (d). Deps WP-173, WP-174, WP-177. No migration. Measured: today's window drops a `resolvable: false` general note. Criterion (11): reads `human_returns.acknowledgements`, unreported at the settings write until then (WP-170 discovered work). Criterion (12): `task.human_return` counts contributing words only, `> 0` exactly when the form is listed (WP-170 review). Criterion (13): `isPlatformNote` uses the domain's merge-request marker test, so the marker regex has one copy (found at WP-174). Criteria (14)–(16) (refiner, session 15): a `qa` pass needs a recorded `ticket.status.changed` whose `from` is the `qa` slot (`HumanReturnInput.leftQa`); ticket-comment markers count only at the start, and the ask mirror's marker moves to the first line; the dependency gate's Q91 post-review set gains `qa`. |
 | WP-179 | **Application: the review conversation on the merge request — findings, replies and resolutions** | TODO | — | Folds **537** (a), (b). Deps WP-170, WP-173, WP-178. No migration. Renderer shared with review-only. Criterion (8): `replyToDiscussion` gets a docblock (GitLab's fallback answers a new discussion id); later reads match by marker, never the returned id (WP-173 finding). |
 | WP-180 | **Application: every agent stage gets the conversation in its prompt, and the tool's port answers the same** | TODO | — | Folds **537** (c). Deps WP-171, WP-173, WP-175. No migration. Parallel with WP-177…WP-179. |
 | WP-181 | **Server: the statuses read, the binding's check, the effective configuration, the readiness notes and the `get_conversation` tool** | TODO | — | Folds **535** (b), **537** (c). Deps WP-171, WP-177, WP-180. No migration. Criterion (6): `ticket_claim`, `qa_stage` and `status_mapping_superseded` become required (WP-170 left them optional). |
@@ -46725,3 +46737,91 @@ The five clauses are written once in the shared suite and run by `test/contract/
 - The default fake workflow (`DEFAULT_FAKE_STATUS_SEEDS`) keeps real-looking status names. Renaming them to neutral ones touches the pipeline tests that seed them, which is outside this row.
 
 **Criterion (5), by the orchestrator.** The row gained it after the implementer's worktree was cut, and the resumed implementer lost its shell when the orchestrator removed that worktree (the orchestrator's error: a worktree is removed only after its agent has stopped for good). `fakeTaskManagementConfigSchema` (`packages/integrations/src/bindings/fake-registrations.ts`) gains `lifecycle: ticketLifecycleSchema.optional()`, the contracts definition itself. Nothing in the fake reads it yet; WP-177 is its reader. Held by `packages/integrations/src/bindings/fake-registrations.test.ts › the fake task manager’s lifecycle key (WP-171 criterion 5) › refuses through the shared definition: two slots naming one status`.
+
+#### WP-174 — Domain: the `qa` stage, the acknowledgement rule, the slot rules, the lifecycle moments and the return decision
+
+Implementer, session 15, from `88c38f2a`, in its own worktree. Not committed.
+
+**What changed.**
+- `packages/domain/src/pipeline/templates.ts`: `QA_STAGE_ID` and `QA_STAGE` (human, `enabled: false`,
+  technical/02's four edges) in `mergeTail` between `rebase_gate` and `ready_for_merge`;
+  `rebase_gate.pass_to: 'qa'`. Spike, epic split, review-only, discovery, ticket lint and history
+  bootstrap are unchanged (they have no merge tail).
+- `packages/domain/src/pipeline/interpreter.ts`: `compilePipeline(templateId, template, dial, qaStage)`;
+  `CompiledPipeline.qaStage`; `RETURN_LOOPS.qa = human_rounds`; `RETURN_LOOPS_BY_EDGE.qa = {rebase_gate:
+  rebase_rechecks}`.
+- **The one cross-ring touch**: every `compilePipeline` call outside the domain (application, apps, tests)
+  gains the argument `false` and nothing else — 31 production sites, unchanged in number. WP-177 replaces
+  each with `stored`/`current.qaStage` once migration 0088 writes the column. `compile-sites.test.ts` now
+  holds the fourth argument too (`FROZEN_QA_STAGE`: a frozen read, or the literal `false`, which is
+  admitted until WP-177 and should then leave the list), and its canary plants a site that derives QA
+  from the lifecycle and one that omits the argument.
+- `packages/domain/src/lifecycle/` (new): `acknowledgement.ts` (`isAcknowledgement`,
+  `SHIPPED_ACKNOWLEDGEMENT_VOCABULARY`, `MAX_ACKNOWLEDGEMENT_CHARS`), `validate.ts` (`validateLifecycle`
+  → typed `LifecycleIssue[]`), `moments.ts` (`lifecycleMomentFor`, `lastEnabledAgentReviewStage`),
+  `human-return.ts` (`humanReturnDecision`, `isPlatformWord`, `contributingWords`). Exported from the
+  domain barrel.
+- `packages/domain/src/ask/ask.ts`: `PLATFORM_COMMENT_MARKERS` gains `agentic:claim-refused:` and
+  `agentic:reply:`.
+- `packages/domain/src/knowledge/retrieval.ts`: a chosen `qa` row in `STAGE_EMPHASIS`
+  (`implementation`, as `ready_for_merge`), because the table is held key for key to
+  `SHIPPED_STAGE_IDS`, which now contains `qa`.
+
+**Criteria.**
+- (1) `stage-sequence.golden.test.ts` against `stage-sequence.golden.json`, **recorded from the tree at
+  `88c38f2a` before any code change** (the enabled stage order, `start`, and every signal at every
+  stage of every shipped template, under no dial and under business review off). The file was later
+  reformatted by biome (short arrays on one line); its parsed content is identical to the recording.
+  **Canary**: `enabled: qaStage || true` in `compilePipeline` → 6 of 18 golden cases fail (feature, bug,
+  chore × both dials; `"gate:pass": "enter qa"`). Reverted.
+- (2) `pipeline/qa-stage.test.ts`, per ticket template.
+- (3) `lifecycle/acknowledgement.test.ts`, with two fast-check properties (a foreign letter token is
+  never an acknowledgement; vocabulary, mentions and punctuation within 80 characters always are).
+  **Canary**: the length bound dropped → *"is not an acknowledgement past 80 characters"* fails. Reverted.
+- (4) `lifecycle/validate.test.ts`. (5) `lifecycle/moments.test.ts`. (6) `lifecycle/human-return.test.ts`.
+
+**Decisions and assumptions.**
+- **Emoji are tokens, not removed** (decision 8 lists both *"empty (emoji only …)"* and four emoji in
+  the vocabulary, which cannot both hold). Removing every emoji would make ❌ or 🐛 an acknowledgement and
+  lose the objection; the vocabulary's emoji would then mean nothing. So 👍 ✅ 🎉 🙏 are acknowledgements
+  because the vocabulary names them, another emoji returns the task — decision 8's chosen failure
+  direction. Skin-tone modifiers, variation selectors and ZWJ are dropped first (`👍🏽` is `👍`). `+1`
+  survives because `+` is `\p{Sm}`, not punctuation. Punctuation becomes a separator (`ok,thanks` is two
+  tokens). Length is counted in code points.
+- **`RETURN_LOOPS_BY_EDGE.qa = {rebase_gate: rebase_rechecks}`**: the row names only `qa → human_rounds`;
+  without the edge entry a default-branch move during QA would spend a human round — the WP-26 defect
+  for `ready_for_merge`. One line added to technical/02's M10-head amendment says so.
+- `qa_stage` decides the stage in **both** directions (true enables, false disables) and touches only a
+  `human` stage with id `qa`; a project template's agent stage named `qa` keeps its declaration.
+- `humanReturnDecision` returns `{kind:'return', from, forms, counts, status}` — the fields
+  `task.human_return` needs, with its invariants (a count above zero exactly when its form is listed;
+  `status` exactly when the status form returned). Return wins over pass. A word whose timestamp (or a
+  horizon that) cannot be parsed counts; `horizon: null` counts every word. Pass needs a mapped `qa` slot
+  and a readable status. Platform words: a merge-request note that **opens** with
+  `<!-- agentic:<kind>:<id> -->` (the `isPlatformNote` shape, duplicated as a domain regex), a ticket
+  comment with a `marker_id` or carrying a `PLATFORM_COMMENT_MARKERS` entry (the ask classifier's rule).
+- `lifecycleMomentFor` names `in_progress` by **role** (`developer` agent stage), the others by stage id;
+  `approved` is the last enabled of `code_review`/`business_review` (kind `agent`) completing with
+  `approve`. A disabled or unknown stage writes nothing. The claim's and release's moments are WP-177's.
+- `validateLifecycle(slots, pickupStatus, loadedNames)` reports `duplicate_slot`, `returned_overlap`,
+  `returned_duplicate`, `unknown_status`; a name differing from a loaded status only in case is that
+  status.
+
+**Sentences falsified (rule 83).**
+- `docs/technical/12-configuration-and-schemas.md`'s `.agentic/pipeline.yml` example shows
+  `rebase_gate; pass_to: ready_for_merge` and no `qa`: a paragraph under it now states the difference
+  (the YAML is transcribed into `packages/contracts/src/pipeline.test.ts`, so it was left as written).
+- `templates.ts`'s merge-tail and feature-template docblocks, `RETURN_LOOPS`' (*"Two entries"*) and
+  `RETURN_LOOPS_BY_EDGE`'s (*"one entry"*), `compile-sites.test.ts`'s (*"the third argument of every
+  call"*), `PLATFORM_COMMENT_MARKERS`' and `retrieval.test.ts`'s *"four stages it does not name"* —
+  rewritten in place.
+- product/04 S6c/S7 and technical/02's amendment already describe the built behaviour; nothing there is
+  falsified.
+
+**Discovered work.**
+- `BUILTIN_STAGE_IDS` (`packages/contracts/src/common.ts`) does not list `qa`, though it is a ticket-flow
+  stage; `retrieval.test.ts` now pins it among the shipped stages outside that list. Adding it is a
+  contracts change (WP-170's ring), not this row's.
+- `isPlatformNote` (`packages/application/src/pipeline/review-threads.ts`) and the domain's
+  `isPlatformWord` carry the same merge-request marker regex; WP-178 should make the application read
+  the domain's.

@@ -208,7 +208,12 @@ export const openDiscoveryTask = async (
    * sets one), and the org and project **budgets** still apply — the admission guard the stage
    * executor consults before creating the run is untouched.
    */
-  const pipeline = compilePipeline(DISCOVERY_TEMPLATE_ID, stored.template, stored.pipelineDial);
+  const pipeline = compilePipeline(
+    DISCOVERY_TEMPLATE_ID,
+    stored.template,
+    stored.pipelineDial,
+    false,
+  );
   const applied = await applyDecision({
     store: options.store,
     pipeline,

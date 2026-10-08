@@ -101,7 +101,12 @@ const mergeRequestPipelineHandler = (options: PipelineSagaOptions): EventHandler
     if (stored === null) {
       return;
     }
-    const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+    const pipeline = compilePipeline(
+      stored.task.template,
+      stored.template,
+      stored.pipelineDial,
+      false,
+    );
     if (stageOf(pipeline, event.payload.stage)?.produces !== IMPLEMENTATION_ARTIFACT) {
       return;
     }
@@ -133,7 +138,12 @@ const mergeRequestDraftStateHandler = (options: PipelineSagaOptions): EventHandl
     if ((stored.task.stageAttempts[READY_FOR_MERGE_STAGE] ?? 0) < 1) {
       return;
     }
-    const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+    const pipeline = compilePipeline(
+      stored.task.template,
+      stored.template,
+      stored.pipelineDial,
+      false,
+    );
     if (stageOf(pipeline, event.payload.stage)?.kind !== 'agent') {
       return;
     }

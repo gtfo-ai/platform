@@ -581,6 +581,7 @@ const scheduleProject = async (
         MAINTENANCE_TEMPLATE_ID,
         stored.template,
         stored.pipelineDial,
+        false,
       );
       const applied = await applyDecision({
         store: options.store,

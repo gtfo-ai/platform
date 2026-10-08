@@ -75,11 +75,11 @@ describe('the stage emphasis table is parameterised over the stage catalogue', (
 
   it('covers exactly the stages of the shipped templates and nothing else', () => {
     expect(Object.keys(STAGE_EMPHASIS).sort()).toEqual([...SHIPPED_STAGE_IDS].sort());
-    // …which is the ticket flow's list plus the four stages it does not name. Pinned so that the
+    // …which is the ticket flow's list plus the five stages it does not name (`qa` since WP-174). Pinned so that the
     // difference is a fact somebody reads rather than a set nobody looks at.
     expect(
       SHIPPED_STAGE_IDS.filter((id) => !(BUILTIN_STAGE_IDS as readonly string[]).includes(id)),
-    ).toEqual(['discovery', 'history_mining', 'human_review', 'ticket_lint']);
+    ).toEqual(['discovery', 'history_mining', 'human_review', 'qa', 'ticket_lint']);
   });
 
   it('gives the readiness lint the business emphasis and discovery a chosen technical one', () => {

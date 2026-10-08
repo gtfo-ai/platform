@@ -42,7 +42,28 @@ import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES, TICKET_TEMPLATES } from './templat
  */
 const TEMPLATES: readonly [string, PipelineTemplate][] = Object.entries(SHIPPED_TEMPLATES);
 
-const compiled = TEMPLATES.map(([id, template]) => compilePipeline(id, template, null));
+const compiled = TEMPLATES.map(([id, template]) => compilePipeline(id, template, null, false));
+
+/**
+ * The ticket templates again with the human `qa` stage enabled (WP-174, TD-029 decision 9), so the
+ * properties below hold for a task that has QA as well as for one that does not. Only the ticket
+ * templates carry the merge tail the stage lives in.
+ */
+const compiledWithQa = Object.entries(TICKET_TEMPLATES).map(([id, template]) =>
+  compilePipeline(id, template, null, true),
+);
+
+/** `[label, pipeline]` for every compiled pipeline the invariants are asserted over. */
+const labelled = (pipelines: readonly CompiledPipeline[]) =>
+  pipelines.map(
+    (pipeline) =>
+      [
+        pipeline.qaStage ? `${pipeline.templateId} with qa` : pipeline.templateId,
+        pipeline,
+      ] as const,
+  );
+
+const EVERY_COMPILED = labelled([...compiled, ...compiledWithQa]);
 
 /**
  * Every stage id of a template, plus ids that are not in it.
@@ -100,6 +121,7 @@ const signalArbitrary = (pipeline: CompiledPipeline): fc.Arbitrary<PipelineSigna
         'mr.merged' as const,
         'mr.review.comment' as const,
         'default_branch.moved' as const,
+        'ticket.status.changed' as const,
         'ci.pipeline.finished' as const,
         'task.paused' as const,
       ),
@@ -125,101 +147,99 @@ const namedStage = (decision: PipelineDecision): string | null => {
   }
 };
 
-describe.each(compiled.map((pipeline) => [pipeline.templateId, pipeline] as const))(
-  'interpreter properties — %s',
-  (_id, pipeline) => {
-    const known = new Set(pipeline.stages.map((stage) => stage.id));
+describe.each(EVERY_COMPILED)('interpreter properties — %s', (_id, pipeline) => {
+  const known = new Set(pipeline.stages.map((stage) => stage.id));
 
-    it(
-      'answers every signal with a decision and never throws',
-      () => {
-        fc.assert(
-          fc.property(signalArbitrary(pipeline), (signal) => {
-            const decision = interpret(pipeline, signal);
-            expect(
-              ['enter', 'return', 'wait', 'escalate', 'complete'].includes(decision.kind),
-            ).toBe(true);
-          }),
-        );
-      },
-      PROPERTY_TEST_TIMEOUT_MS,
-    );
+  it(
+    'answers every signal with a decision and never throws',
+    () => {
+      fc.assert(
+        fc.property(signalArbitrary(pipeline), (signal) => {
+          const decision = interpret(pipeline, signal);
+          expect(['enter', 'return', 'wait', 'escalate', 'complete'].includes(decision.kind)).toBe(
+            true,
+          );
+        }),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 
-    it(
-      'never names a stage the template does not contain',
-      () => {
-        fc.assert(
-          fc.property(signalArbitrary(pipeline), (signal) => {
-            const stage = namedStage(interpret(pipeline, signal));
-            if (stage !== null) {
-              expect(known.has(stage)).toBe(true);
+  it(
+    'never names a stage the template does not contain',
+    () => {
+      fc.assert(
+        fc.property(signalArbitrary(pipeline), (signal) => {
+          const stage = namedStage(interpret(pipeline, signal));
+          if (stage !== null) {
+            expect(known.has(stage)).toBe(true);
+          }
+        }),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'only ever returns backwards, and always to a counted loop',
+    () => {
+      const indexOf = (id: string) => pipeline.stages.findIndex((stage) => stage.id === id);
+      fc.assert(
+        fc.property(signalArbitrary(pipeline), (signal) => {
+          const decision = interpret(pipeline, signal);
+          if (decision.kind !== 'return') {
+            return;
+          }
+          expect(indexOf(decision.to)).toBeLessThan(indexOf(decision.from));
+          expect(ITERATION_LOOPS).toContain(decision.loop);
+          expect(decision.escalationBrief.length).toBeGreaterThan(0);
+        }),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'never enters a disabled stage, whichever stages are disabled',
+    () => {
+      const template = SHIPPED_TEMPLATES[pipeline.templateId] as PipelineTemplate;
+      fc.assert(
+        fc.property(
+          fc.subarray(template.stages.map((stage) => stage.id)),
+          signalArbitrary(pipeline),
+          (disabled, signal) => {
+            // Since WP-120 (backlog 338) a template whose `ci_gate` runs without `rebase_gate`
+            // after it is refused at compile, so disabling the rebase gate disables CI with it.
+            const disabledSet = new Set(
+              disabled.includes('rebase_gate') ? [...disabled, 'ci_gate'] : disabled,
+            );
+            const variant = compilePipeline(
+              pipeline.templateId,
+              {
+                stages: template.stages.map((stage) =>
+                  disabledSet.has(stage.id) ? { ...stage, enabled: false } : stage,
+                ),
+              },
+              null,
+              pipeline.qaStage,
+            );
+            const decision = interpret(variant, signal);
+            const target =
+              decision.kind === 'enter'
+                ? decision.stage
+                : decision.kind === 'return'
+                  ? decision.to
+                  : null;
+            if (target !== null) {
+              expect(stageOf(variant, target)?.enabled).toBe(true);
             }
-          }),
-        );
-      },
-      PROPERTY_TEST_TIMEOUT_MS,
-    );
-
-    it(
-      'only ever returns backwards, and always to a counted loop',
-      () => {
-        const indexOf = (id: string) => pipeline.stages.findIndex((stage) => stage.id === id);
-        fc.assert(
-          fc.property(signalArbitrary(pipeline), (signal) => {
-            const decision = interpret(pipeline, signal);
-            if (decision.kind !== 'return') {
-              return;
-            }
-            expect(indexOf(decision.to)).toBeLessThan(indexOf(decision.from));
-            expect(ITERATION_LOOPS).toContain(decision.loop);
-            expect(decision.escalationBrief.length).toBeGreaterThan(0);
-          }),
-        );
-      },
-      PROPERTY_TEST_TIMEOUT_MS,
-    );
-
-    it(
-      'never enters a disabled stage, whichever stages are disabled',
-      () => {
-        const template = SHIPPED_TEMPLATES[pipeline.templateId] as PipelineTemplate;
-        fc.assert(
-          fc.property(
-            fc.subarray(template.stages.map((stage) => stage.id)),
-            signalArbitrary(pipeline),
-            (disabled, signal) => {
-              // Since WP-120 (backlog 338) a template whose `ci_gate` runs without `rebase_gate`
-              // after it is refused at compile, so disabling the rebase gate disables CI with it.
-              const disabledSet = new Set(
-                disabled.includes('rebase_gate') ? [...disabled, 'ci_gate'] : disabled,
-              );
-              const variant = compilePipeline(
-                pipeline.templateId,
-                {
-                  stages: template.stages.map((stage) =>
-                    disabledSet.has(stage.id) ? { ...stage, enabled: false } : stage,
-                  ),
-                },
-                null,
-              );
-              const decision = interpret(variant, signal);
-              const target =
-                decision.kind === 'enter'
-                  ? decision.stage
-                  : decision.kind === 'return'
-                    ? decision.to
-                    : null;
-              if (target !== null) {
-                expect(stageOf(variant, target)?.enabled).toBe(true);
-              }
-            },
-          ),
-        );
-      },
-      PROPERTY_TEST_TIMEOUT_MS,
-    );
-  },
-);
+          },
+        ),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
+});
 
 /**
  * A whole task, walked.
@@ -351,8 +371,13 @@ describe('a whole task, walked with arbitrary verdicts', () => {
        * so "the walk skipped it" and "the template lost it" cannot look the same.
        */
       const backwardsOnly = ['conflict_resolution'];
+      // Enabled stages only: `qa` is declared in every ticket template and disabled unless the
+      // task's `qa_stage` enables it (WP-174), and a disabled stage is one no walk enters.
       expect(visited).toEqual(
-        pipeline.stages.map((stage) => stage.id).filter((id) => !backwardsOnly.includes(id)),
+        pipeline.stages
+          .filter((stage) => stage.enabled)
+          .map((stage) => stage.id)
+          .filter((id) => !backwardsOnly.includes(id)),
       );
       expect({
         template: pipeline.templateId,
@@ -369,7 +394,7 @@ describe('a whole task, walked with arbitrary verdicts', () => {
     },
   );
 
-  it.each(compiled.map((pipeline) => [pipeline.templateId, pipeline] as const))(
+  it.each(EVERY_COMPILED)(
     'terminates on %s without any counter passing its limit',
     (_id, pipeline) => {
       fc.assert(

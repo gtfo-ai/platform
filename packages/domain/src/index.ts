@@ -52,6 +52,12 @@ export * from './knowledge/retrieval.js';
 export * from './knowledge/sanitise.js';
 export * from './knowledge/term-statistics.js';
 export * from './knowledge/tokens.js';
+// The ticket lifecycle: the acknowledgement rule, the slot rules, the moments and the human return
+// (BD-031, TD-029, WP-174)
+export * from './lifecycle/acknowledgement.js';
+export * from './lifecycle/human-return.js';
+export * from './lifecycle/moments.js';
+export * from './lifecycle/validate.js';
 // The maintenance pipeline's chore catalogue and its brief — product/18:31 (WP-36)
 export * from './maintenance/chores.js';
 export * from './permissions.js';

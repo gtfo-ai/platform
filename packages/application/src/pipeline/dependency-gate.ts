@@ -191,7 +191,12 @@ const dependencyGateHandler = (options: PipelineSagaOptions): EventHandler => ({
     if (stored === null) {
       return;
     }
-    const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+    const pipeline = compilePipeline(
+      stored.task.template,
+      stored.template,
+      stored.pipelineDial,
+      false,
+    );
     if (stageOf(pipeline, event.payload.stage)?.produces !== IMPLEMENTATION_ARTIFACT) {
       return;
     }
@@ -855,7 +860,12 @@ const returnNow = async (
   if (from === null || from === input.stage) {
     return null;
   }
-  const pipeline = compilePipeline(current.task.template, current.template, current.pipelineDial);
+  const pipeline = compilePipeline(
+    current.task.template,
+    current.template,
+    current.pipelineDial,
+    false,
+  );
   const applied = await applyDecision({
     store: options.store,
     pipeline,

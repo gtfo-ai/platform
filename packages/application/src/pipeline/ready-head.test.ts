@@ -57,17 +57,26 @@ const without = (template: PipelineTemplate, ids: readonly string[]): PipelineTe
 
 describe('gateToReenter', () => {
   it('is ci_gate on the shipped ticket templates', () => {
-    expect(gateToReenter(compilePipeline('feature', FEATURE_TEMPLATE, null))).toBe('ci_gate');
-    expect(gateToReenter(compilePipeline('chore', CHORE_TEMPLATE, null))).toBe('ci_gate');
+    expect(gateToReenter(compilePipeline('feature', FEATURE_TEMPLATE, null, false))).toBe(
+      'ci_gate',
+    );
+    expect(gateToReenter(compilePipeline('chore', CHORE_TEMPLATE, null, false))).toBe('ci_gate');
   });
 
   it('falls back to the rebase gate when a project disabled CI, and to none when it disabled both', () => {
     expect(
-      gateToReenter(compilePipeline('feature', without(FEATURE_TEMPLATE, ['ci_gate']), null)),
+      gateToReenter(
+        compilePipeline('feature', without(FEATURE_TEMPLATE, ['ci_gate']), null, false),
+      ),
     ).toBe('rebase_gate');
     expect(
       gateToReenter(
-        compilePipeline('feature', without(FEATURE_TEMPLATE, ['ci_gate', 'rebase_gate']), null),
+        compilePipeline(
+          'feature',
+          without(FEATURE_TEMPLATE, ['ci_gate', 'rebase_gate']),
+          null,
+          false,
+        ),
       ),
     ).toBeNull();
   });
@@ -78,7 +87,7 @@ describe('gateToReenter', () => {
  * gate on every template that runs it; Ready directly only where there is no rebase gate to re-read.
  */
 describe('readyEntryFor', () => {
-  const feature = compilePipeline('feature', FEATURE_TEMPLATE, null);
+  const feature = compilePipeline('feature', FEATURE_TEMPLATE, null, false);
   const ready = { kind: 'ready', sha: JUDGED } as const;
   const again = { kind: 'judge_again', reason: 'the branch head moved' } as const;
 
@@ -88,7 +97,7 @@ describe('readyEntryFor', () => {
       gate: true,
       reason: REBASE_RECHECK_REASON,
     });
-    expect(readyEntryFor(compilePipeline('chore', CHORE_TEMPLATE, null), ready).stage).toBe(
+    expect(readyEntryFor(compilePipeline('chore', CHORE_TEMPLATE, null, false), ready).stage).toBe(
       'rebase_gate',
     );
   });
@@ -106,12 +115,13 @@ describe('readyEntryFor', () => {
     // pipeline is compiled (`assertValidTemplate`), so the only template that runs no rebase gate
     // is one that runs no CI gate either, and nothing on it excused a path to confirm.
     expect(() =>
-      compilePipeline('feature', without(FEATURE_TEMPLATE, ['rebase_gate']), null),
+      compilePipeline('feature', without(FEATURE_TEMPLATE, ['rebase_gate']), null, false),
     ).toThrow(/"rebase_gate" is disabled while "ci_gate" is enabled/);
     const neither = compilePipeline(
       'feature',
       without(FEATURE_TEMPLATE, ['ci_gate', 'rebase_gate']),
       null,
+      false,
     );
     expect(readyEntryFor(neither, ready)).toEqual({
       stage: 'ready_for_merge',

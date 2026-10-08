@@ -131,8 +131,19 @@ export const ASK_TRIGGERS = ['@agentic ask', '@agentic why'] as const;
  * which maps to no platform user and is therefore **unverified**; and the body carries one of these
  * markers. The marker check is here because it is the one that still holds on the day somebody
  * gives the bot account a `user_identities` row.
+ *
+ * Since WP-174 (BD-031, TD-029 decisions 5, 6 and 10) the list also names the claim refusal's
+ * comment (`agentic:claim-refused:<task>`, posted when the ticket is assigned elsewhere) and the
+ * reply the platform posts on a ticket comment that asked for something
+ * (`agentic:reply:<task>.<run>.<n>`). A comment carrying any of these is the platform's, so it is
+ * neither an ask nor a person's word that returns a task (`humanReturnDecision`).
  */
-export const PLATFORM_COMMENT_MARKERS = ['agentic:task:', 'agentic:ask:'] as const;
+export const PLATFORM_COMMENT_MARKERS = [
+  'agentic:task:',
+  'agentic:ask:',
+  'agentic:claim-refused:',
+  'agentic:reply:',
+] as const;
 
 /** How a ticket comment reached the classifier, and what the platform did with it. */
 export type TicketCommentVerdict =

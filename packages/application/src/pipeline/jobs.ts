@@ -715,7 +715,7 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
       }
       return {
         stage: stageOf(
-          compilePipeline(stored.task.template, stored.template, stored.pipelineDial),
+          compilePipeline(stored.task.template, stored.template, stored.pipelineDial, false),
           request.stage,
         ),
         stored,
@@ -1249,7 +1249,12 @@ const settle = async (
         );
         return null;
       }
-      const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+      const pipeline = compilePipeline(
+        stored.task.template,
+        stored.template,
+        stored.pipelineDial,
+        false,
+      );
       const converged =
         signal.kind === 'gate_settled' && !signal.passed && signal.ciSignature !== undefined
           ? await ciConvergence(options, scope, stored, signal.stage, signal.ciSignature)
@@ -1595,6 +1600,7 @@ const reviewWindowWork = (options: PipelineJobOptions): JobHandler<ReviewWindowD
           current.task.template,
           current.template,
           current.pipelineDial,
+          false,
         );
         const decision = interpret(pipeline, {
           kind: 'event',

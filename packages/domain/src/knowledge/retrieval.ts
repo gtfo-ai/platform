@@ -68,6 +68,11 @@ export const STAGE_EMPHASIS = {
   code_review: 'technical',
   business_review: 'business',
   rebase_gate: 'implementation',
+  /**
+   * The optional human QA stage (WP-174, product/04 S6c) runs no agent, so no pack is built for it;
+   * it takes the emphasis of `ready_for_merge`, the other human stage of the merge tail.
+   */
+  qa: 'implementation',
   ready_for_merge: 'implementation',
   merged_gate: 'implementation',
   retrospective: 'history',

@@ -19,7 +19,9 @@
  * a job's transaction, and not the rest. That is the property this census enforces — the third
  * argument of every call is a read of the frozen copy — so a site that reached for the project's
  * current settings instead would fail here by name, and would also be the defect the freeze
- * exists to prevent (a dial moved mid-task moving the task).
+ * exists to prevent (a dial moved mid-task moving the task). Since WP-174 the fourth argument,
+ * `qa_stage`, is held to the same rule (see `FROZEN_QA_STAGE` below for the one literal admitted
+ * until WP-177 writes the column).
  *
  * ## Scope, and what it cannot see
  *
@@ -129,6 +131,19 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
  */
 const FROZEN_COPY = [/^(?:stored|current)\.pipelineDial$/, /^dial === null \? null : dial\.data$/];
 
+/**
+ * The fourth argument, `qa_stage` (WP-174, TD-029 decision 9): whether the task has the human `qa`
+ * stage, frozen on the task at creation (`tasks.qa_stage`, migration 0088). The same rule as the
+ * dial — a read of the loaded row, never the project's current settings, because a mapping changed
+ * mid-task must not reshape a task in flight.
+ *
+ * **The literal `false` is admitted, and that admission is temporary and stated**: WP-174 added the
+ * argument before the column exists, so every production site passes `false` and compiles exactly
+ * the pipeline it compiled before (`stage-sequence.golden.test.ts`). WP-177 writes the column and
+ * replaces each `false` with `stored`/`current.qaStage`; the literal should then leave this list.
+ */
+const FROZEN_QA_STAGE = [/^(?:stored|current)\.qaStage$/, /^false$/];
+
 const sources = (): string[] => censusPaths(REPO_ROOT, { pathspecs: ['*.ts', '*.tsx'] });
 
 const isTestTier = (file: string): boolean =>
@@ -179,11 +194,16 @@ const census = (): Map<string, string[][]> => {
   return found;
 };
 
-/** Every call whose dial is not a read of the frozen copy, by file and argument. */
+/** Every call whose dial or `qa_stage` is not a read of the frozen copy, by file and argument. */
 export const unfrozenCalls = (found: ReadonlyMap<string, string[][]>): string[] =>
   [...found].flatMap(([file, calls]) =>
     calls
-      .filter((args) => !FROZEN_COPY.some((pattern) => pattern.test(args[2] ?? '')))
+      .filter(
+        (args) =>
+          args.length !== 4 ||
+          !FROZEN_COPY.some((pattern) => pattern.test(args[2] ?? '')) ||
+          !FROZEN_QA_STAGE.some((pattern) => pattern.test(args[3] ?? '')),
+      )
       .map((args) => `${file}: compilePipeline(${args.join(', ')})`),
   );
 
@@ -208,7 +228,7 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
     }
   });
 
-  it('passes every site the task’s frozen copy, so none asks the settings port', () => {
+  it('passes every site the task’s frozen copy of the dial and of qa_stage, so none asks the settings port', () => {
     expect(unfrozenCalls(census())).toEqual([]);
   });
 
@@ -216,9 +236,9 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
     // Until WP-96 this file dropped only whole comment lines, so a trailing comment inside a call
     // rode into the argument text; the shared scanner removes it and keeps the string's `//`.
     const planted =
-      "const u = 'https://x'; compilePipeline(t, stored.template, // the dial\n  pipelineDialFor(settings));";
+      "const u = 'https://x'; compilePipeline(t, stored.template, // the dial\n  pipelineDialFor(settings), false);";
     expect(compileCalls(withoutComments(planted))).toEqual([
-      ['t', 'stored.template', 'pipelineDialFor(settings)'],
+      ['t', 'stored.template', 'pipelineDialFor(settings)', 'false'],
     ]);
   });
 
@@ -227,22 +247,42 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
       [
         'packages/application/src/pipeline/planted.ts',
         compileCalls(
-          'const p = compilePipeline(stored.task.template, stored.template, pipelineDialFor(settings));',
+          'const p = compilePipeline(stored.task.template, stored.template, pipelineDialFor(settings), false);',
         ),
       ],
       [
         'packages/application/src/pipeline/routed.ts',
-        compileCalls('compilePipeline(stored.task.template, stored.template, live.pipelineDial)'),
+        compileCalls(
+          'compilePipeline(stored.task.template, stored.template, live.pipelineDial, false)',
+        ),
       ],
       [
         'packages/application/src/pipeline/also-planted.ts',
         compileCalls('compilePipeline(stored.task.template, stored.template)'),
       ],
+      [
+        'packages/application/src/pipeline/qa-asked.ts',
+        compileCalls(
+          'compilePipeline(stored.task.template, stored.template, stored.pipelineDial, lifecycle.qa !== undefined)',
+        ),
+      ],
+      [
+        'packages/application/src/pipeline/qa-missing.ts',
+        compileCalls('compilePipeline(stored.task.template, stored.template, stored.pipelineDial)'),
+      ],
+      [
+        'packages/application/src/pipeline/qa-frozen.ts',
+        compileCalls(
+          'compilePipeline(stored.task.template, stored.template, stored.pipelineDial, stored.qaStage)',
+        ),
+      ],
     ]);
     expect(unfrozenCalls(planted)).toEqual([
-      'packages/application/src/pipeline/planted.ts: compilePipeline(stored.task.template, stored.template, pipelineDialFor(settings))',
-      'packages/application/src/pipeline/routed.ts: compilePipeline(stored.task.template, stored.template, live.pipelineDial)',
+      'packages/application/src/pipeline/planted.ts: compilePipeline(stored.task.template, stored.template, pipelineDialFor(settings), false)',
+      'packages/application/src/pipeline/routed.ts: compilePipeline(stored.task.template, stored.template, live.pipelineDial, false)',
       'packages/application/src/pipeline/also-planted.ts: compilePipeline(stored.task.template, stored.template)',
+      'packages/application/src/pipeline/qa-asked.ts: compilePipeline(stored.task.template, stored.template, stored.pipelineDial, lifecycle.qa !== undefined)',
+      'packages/application/src/pipeline/qa-missing.ts: compilePipeline(stored.task.template, stored.template, stored.pipelineDial)',
     ]);
   });
 });

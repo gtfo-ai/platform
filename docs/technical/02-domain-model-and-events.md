@@ -143,7 +143,9 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > | `default_branch.moved` | `rebase_gate` | the default branch moved |
 > | `mr.merged` | `merged_gate` | a person merged during QA |
 >
-> `RETURN_LOOPS` gains `qa → human_rounds`. A reader that asks *"is this task waiting at a human stage
+> `RETURN_LOOPS` gains `qa → human_rounds`, and `RETURN_LOOPS_BY_EDGE` gains `qa → rebase_gate:
+> rebase_rechecks` (WP-174), so a default-branch move during QA spends the re-check, not a human
+> round, exactly as it does from `ready_for_merge` (WP-26). A reader that asks *"is this task waiting at a human stage
 > where a person's word returns it"* asks for the current stage `qa` or `ready_for_merge`. It never asks
 > only for `state === 'ready_for_merge'`. Today that check is in several places, and each is widened
 > to `qa`:
@@ -171,7 +173,7 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > reason `ticket_assigned_elsewhere` or `ticket_claim_failed`. Release follows `task.cancelled` and the
 > *Rework* command; escalation and take-over keep the claim. Built across WP-170…WP-183.
 
-*Which* limit a `returned` spends is decided by the transition and not only by the stage it leaves (WP-26). `ready_for_merge` has two outgoing returns — a human's comment, which is BD-008's `human_rounds`, and the default branch moving, which re-enters the rebase gate — and attributing the second to the first escalated a task with *"human_rounds iteration limit of 3 reached: main moved to …"* after three merges to `main` under a waiting merge request. The edges that need their own loop are enumerated in `RETURN_LOOPS_BY_EDGE` (`packages/domain/src/pipeline/interpreter.ts`); everything else is attributed by the stage, and an edge in neither table cannot return at all.
+*Which* limit a `returned` spends is decided by the transition and not only by the stage it leaves (WP-26). `ready_for_merge` has two outgoing returns (and since WP-174 the optional `qa` stage has the same two, spending the same two loops) — a human's comment, which is BD-008's `human_rounds`, and the default branch moving, which re-enters the rebase gate — and attributing the second to the first escalated a task with *"human_rounds iteration limit of 3 reached: main moved to …"* after three merges to `main` under a waiting merge request. The edges that need their own loop are enumerated in `RETURN_LOOPS_BY_EDGE` (`packages/domain/src/pipeline/interpreter.ts`); everything else is attributed by the stage, and an edge in neither table cannot return at all.
 
 > **`paused → ready_for_merge` and `paused → merged` were added at WP-73** (PROGRESS backlog 244,
 > Q104). `ready_for_merge` has always had an edge **into** `paused` — the header's **Pause**, and

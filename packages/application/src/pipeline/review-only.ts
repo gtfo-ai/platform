@@ -884,7 +884,12 @@ export const insertReviewTask = async (
    * the spend is the budget guard the run goes through like every other, and product/18's own
    * `max_findings`. `onboarding/discovery.ts` made the same call for the same reason.
    */
-  const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+  const pipeline = compilePipeline(
+    stored.task.template,
+    stored.template,
+    stored.pipelineDial,
+    false,
+  );
   const applied = await applyDecision({
     store: options.store,
     pipeline,

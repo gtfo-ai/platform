@@ -54,7 +54,7 @@ import type {
 } from '@platform/contracts';
 import { stageVerdictSchema } from '@platform/contracts';
 import type { IterationLoop } from '../policies/iteration-limits.js';
-import { assertValidTemplate } from './templates.js';
+import { assertValidTemplate, QA_STAGE_ID } from './templates.js';
 
 // ── The normalised stage ─────────────────────────────────────────────────────
 
@@ -107,6 +107,11 @@ export interface CompiledPipeline {
    * one thing {@link interpret} reads from here.
    */
   readonly dial: TaskPipelineDial | null;
+  /**
+   * Whether the task has the human `qa` stage (`tasks.qa_stage`, TD-029 decision 9, WP-174). Already
+   * folded into `stages`; carried so a reader can say which pipeline it compiled.
+   */
+  readonly qaStage: boolean;
 }
 
 /** The stage the dial's `businessReview` policy switches (product/19 §11, `templates.ts`). */
@@ -164,6 +169,21 @@ const normaliseCustomStage = (stage: CustomStage): PipelineStage => ({
   custom: true,
 });
 
+/** The two facts frozen on the task that switch a declared stage: the dial's and `qa_stage`. */
+const applyTaskFacts = (
+  stage: PipelineStage,
+  dial: TaskPipelineDial | null,
+  qaStage: boolean,
+): PipelineStage => {
+  if (dial?.business_review === false && stage.id === BUSINESS_REVIEW_STAGE_ID) {
+    return { ...stage, enabled: false };
+  }
+  if (stage.id === QA_STAGE_ID && stage.kind === 'human') {
+    return { ...stage, enabled: qaStage };
+  }
+  return stage;
+};
+
 /**
  * Validates and normalises a template once, so the interpreter never re-parses and a malformed
  * template fails at task start rather than three stages in — **and applies the task's dial**
@@ -186,22 +206,27 @@ const normaliseCustomStage = (stage: CustomStage): PipelineStage => ({
  *
  * `null` is *"no dial applies"* and compiles the template exactly as it was before WP-62.
  *
+ * **`qaStage`** (WP-174, TD-029 decision 9) is the task's frozen `tasks.qa_stage`, required beside
+ * the dial for the same reason: the signature change is the census, and `compile-sites.test.ts`
+ * holds that no site asks the settings port for it. It decides the human `qa` stage in both
+ * directions — enabled when `true`, disabled when `false` — so whether a task has QA is the task's
+ * fact, never the template's or the project's current setting. Only a `human` stage with the id
+ * `qa` is touched; a project template's own stage of another kind under that id keeps its
+ * declaration. With `false`, every shipped template compiles to the pipeline it compiled to before
+ * the stage existed (`stage-sequence.golden.test.ts`).
+ *
  * @throws {PolicyViolationError} when the shape or the graph is invalid (see `assertValidTemplate`).
  */
 export const compilePipeline = (
   templateId: Slug,
   template: PipelineTemplate,
   dial: TaskPipelineDial | null,
+  qaStage: boolean,
 ): CompiledPipeline => {
   assertValidTemplate(templateId, template);
   const stages: PipelineStage[] = [];
   for (const stage of template.stages) {
-    const normalised = normaliseStage(stage);
-    stages.push(
-      dial?.business_review === false && normalised.id === BUSINESS_REVIEW_STAGE_ID
-        ? { ...normalised, enabled: false }
-        : normalised,
-    );
+    stages.push(applyTaskFacts(normaliseStage(stage), dial, qaStage));
     for (const extra of template.custom ?? []) {
       // A custom stage declares `after`, so it lands beside its predecessor rather than at the
       // end: `security_scan` after `ci_gate` has to run before `code_review`, and fall-through is
@@ -216,6 +241,7 @@ export const compilePipeline = (
     stages,
     byId: new Map(stages.map((stage) => [stage.id, stage])),
     dial,
+    qaStage,
   };
 };
 
@@ -227,7 +253,7 @@ export const stageOf = (pipeline: CompiledPipeline, id: Slug): PipelineStage | n
 /**
  * Which bounded loop a return *from* each shipped stage belongs to.
  *
- * BD-008 names six cycles; product/04 adds the rebase gate's "bounded, default 2 attempts". Two
+ * BD-008 names six cycles; product/04 adds the rebase gate's "bounded, default 2 attempts". Three
  * entries deserve their reasoning stated, because they share a counter with another stage:
  *
  *  - `implementation → architecture` and `architecture → refinement` both count as
@@ -236,6 +262,9 @@ export const stageOf = (pipeline: CompiledPipeline, id: Slug): PipelineStage | n
  *    rounds BD-008 allows for planning.
  *  - `investigation → refinement` joins them for the same reason (the bug template's
  *    investigation is its planning stage).
+ *  - `qa` and `ready_for_merge` both count as `human_rounds` (BD-031, TD-029 decision 9): a
+ *    person's word returns the task from either human stage, and BD-008's bound on human MR rounds
+ *    is one budget for both, so a task cannot get twice the rounds by passing QA.
  *
  * A stage that is **not** in this table cannot return: see the module docblock. That is the
  * fail-closed direction, and it is what a project's custom stage gets until the config schema
@@ -250,15 +279,17 @@ export const RETURN_LOOPS: Readonly<Record<string, IterationLoop>> = {
   code_review: 'code_review',
   business_review: 'business_review',
   rebase_gate: 'rebase',
+  qa: 'human_rounds',
   ready_for_merge: 'human_rounds',
 } as const;
 
 /**
  * The edges where the loop is a property of the **transition** rather than of the stage it leaves
- * — WP-26, and one entry.
+ * — WP-26, and two entries since WP-174.
  *
  * `RETURN_LOOPS` above attributes by `from`, which is right whenever a stage has one reason to send
- * a task back. `ready_for_merge` has two, and they are not the same budget:
+ * a task back. `ready_for_merge` has two, and they are not the same budget — and so has `qa`
+ * (TD-029 decision 9), whose default-branch edge is the same re-check:
  *
  *  - a human comments on the merge request → `implementation`, which is BD-008's *human MR rounds*;
  *  - the **default branch moves** → `rebase_gate`, which is product/04 S6b's re-check and costs one
@@ -276,6 +307,7 @@ export const RETURN_LOOPS_BY_EDGE: Readonly<
   Record<string, Readonly<Record<string, IterationLoop>>>
 > = {
   ready_for_merge: { rebase_gate: 'rebase_rechecks' },
+  qa: { rebase_gate: 'rebase_rechecks' },
 } as const;
 
 /**

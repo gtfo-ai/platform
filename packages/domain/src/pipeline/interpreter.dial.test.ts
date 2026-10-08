@@ -47,10 +47,15 @@ describe('businessReview — the compile step switches the stage (backlog 72 (b)
   });
 
   it('disables business_review when the dial says so, so code review approves past it', () => {
-    const off = compilePipeline('feature', FEATURE_TEMPLATE, {
-      ...dialAt('supervised'),
-      business_review: false,
-    });
+    const off = compilePipeline(
+      'feature',
+      FEATURE_TEMPLATE,
+      {
+        ...dialAt('supervised'),
+        business_review: false,
+      },
+      false,
+    );
     expect(stageOf(off, BUSINESS_REVIEW_STAGE_ID)?.enabled).toBe(false);
     expect(interpret(off, approved('code_review'))).toEqual({
       kind: 'enter',
@@ -60,7 +65,7 @@ describe('businessReview — the compile step switches the stage (backlog 72 (b)
 
   it('runs business_review at Supervised and when no dial applies (the other side)', () => {
     for (const dial of [dialAt('supervised'), dialAt('autonomous'), null]) {
-      const pipeline = compilePipeline('feature', FEATURE_TEMPLATE, dial);
+      const pipeline = compilePipeline('feature', FEATURE_TEMPLATE, dial, false);
       expect(stageOf(pipeline, BUSINESS_REVIEW_STAGE_ID)?.enabled, String(dial?.level)).toBe(true);
       expect(interpret(pipeline, approved('code_review'))).toEqual({
         kind: 'enter',
@@ -70,8 +75,10 @@ describe('businessReview — the compile step switches the stage (backlog 72 (b)
   });
 
   it('touches no other stage, and keeps the dial on the compiled pipeline', () => {
-    const off = compilePipeline('feature', FEATURE_TEMPLATE, dialAt('assist'));
-    const on = compilePipeline('feature', FEATURE_TEMPLATE, null);
+    // `qa_stage` true, so the one stage declared disabled (`qa`, WP-174) is switched on and the
+    // dial's own effect is the only disabled stage left to see.
+    const off = compilePipeline('feature', FEATURE_TEMPLATE, dialAt('assist'), true);
+    const on = compilePipeline('feature', FEATURE_TEMPLATE, null, true);
     expect(off.stages.filter((stage) => !stage.enabled).map((stage) => stage.id)).toEqual([
       BUSINESS_REVIEW_STAGE_ID,
     ]);
@@ -82,8 +89,8 @@ describe('businessReview — the compile step switches the stage (backlog 72 (b)
 });
 
 describe('stopAfterStage — Assist parks after architecture (Q79)', () => {
-  const assist = compilePipeline('feature', FEATURE_TEMPLATE, dialAt('assist'));
-  const supervised = compilePipeline('feature', FEATURE_TEMPLATE, dialAt('supervised'));
+  const assist = compilePipeline('feature', FEATURE_TEMPLATE, dialAt('assist'), false);
+  const supervised = compilePipeline('feature', FEATURE_TEMPLATE, dialAt('supervised'), false);
 
   it('escalates instead of entering implementation, with a brief that names the policy', () => {
     const decision = interpret(assist, approved('architecture'));
@@ -105,7 +112,10 @@ describe('stopAfterStage — Assist parks after architecture (Q79)', () => {
     });
     for (const dial of [dialAt('autonomous'), null]) {
       expect(
-        interpret(compilePipeline('feature', FEATURE_TEMPLATE, dial), approved('architecture')),
+        interpret(
+          compilePipeline('feature', FEATURE_TEMPLATE, dial, false),
+          approved('architecture'),
+        ),
       ).toEqual({ kind: 'enter', stage: 'implementation' });
     }
   });
@@ -129,7 +139,7 @@ describe('stopAfterStage — Assist parks after architecture (Q79)', () => {
   it('does not halt a template whose next stage is already a human one (the spike)', () => {
     // `architecture → human_review` is "a human decides" already; parking it in `needs_human`
     // instead would report a finished spike as a fault.
-    const spike = compilePipeline('spike', SPIKE_TEMPLATE, dialAt('assist'));
+    const spike = compilePipeline('spike', SPIKE_TEMPLATE, dialAt('assist'), false);
     expect(interpret(spike, approved('architecture'))).toEqual({
       kind: 'enter',
       stage: SPIKE_HUMAN_STAGE,
@@ -137,7 +147,7 @@ describe('stopAfterStage — Assist parks after architecture (Q79)', () => {
   });
 
   it('parks a template that never runs the stop stage before anything runs (fail closed)', () => {
-    const chore = compilePipeline('chore', CHORE_TEMPLATE, dialAt('assist'));
+    const chore = compilePipeline('chore', CHORE_TEMPLATE, dialAt('assist'), false);
     const decision = interpret(chore, { kind: 'start' });
     expect(decision).toMatchObject({
       kind: 'escalate',
@@ -148,7 +158,9 @@ describe('stopAfterStage — Assist parks after architecture (Q79)', () => {
     expect(decision.blockerBrief).toContain('Hand the task back at "refinement"');
     // The other side: the same chore at Supervised starts normally.
     expect(
-      interpret(compilePipeline('chore', CHORE_TEMPLATE, dialAt('supervised')), { kind: 'start' }),
+      interpret(compilePipeline('chore', CHORE_TEMPLATE, dialAt('supervised'), false), {
+        kind: 'start',
+      }),
     ).toEqual({ kind: 'enter', stage: 'intake' });
   });
 
@@ -161,6 +173,7 @@ describe('stopAfterStage — Assist parks after architecture (Q79)', () => {
         ),
       },
       dialAt('assist'),
+      false,
     );
     expect(interpret(withoutArchitecture, { kind: 'start' })).toMatchObject({ kind: 'escalate' });
   });
@@ -174,7 +187,7 @@ describe('stopAfterStage — Assist parks after architecture (Q79)', () => {
 describe('no shipped template runs past the scope at Assist', () => {
   const verdicts = ['approve', 'request_changes', 'reject', 'questions', null, 'nonsense'];
   const compiled: readonly CompiledPipeline[] = Object.entries(SHIPPED_TEMPLATES).map(
-    ([id, template]) => compilePipeline(id, template, dialAt('assist')),
+    ([id, template]) => compilePipeline(id, template, dialAt('assist'), false),
   );
 
   it('never enters an agent or gate stage from architecture', () => {

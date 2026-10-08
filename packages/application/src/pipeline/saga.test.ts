@@ -1848,7 +1848,7 @@ describe('the budget-approval gate (product/09, WP-28, Q71)', () => {
       if (shipped === undefined) {
         throw new Error(`no shipped template "${template}"`);
       }
-      return compilePipeline(template, shipped, null);
+      return compilePipeline(template, shipped, null, false);
     };
 
     const specStageOf = (template: string): Slug => {

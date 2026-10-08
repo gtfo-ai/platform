@@ -123,6 +123,10 @@ export const stageAgentDefaults = (stage: Slug): StageAgentDefaults =>
  * `ready_for_merge` is where the task sleeps: "While waiting, nothing runs. The task sleeps and is
  * woken only by events (comment, approval, CI result, merge)". Its `on` list is that sentence as
  * data — a comment returns it to `implementation` (batched, BD-007), a merge advances it.
+ *
+ * Since WP-174 the tail also declares the optional human `qa` stage between `rebase_gate` and
+ * `ready_for_merge` (product/04 S6c), disabled unless the task's frozen `qa_stage` enables it — see
+ * {@link QA_STAGE}.
  */
 const BUSINESS_REVIEW_STAGE: Stage = {
   id: 'business_review',
@@ -190,9 +194,47 @@ const CONFLICT_RESOLUTION_STAGE: Stage = {
   requires: ['ImplementationNotes'],
 };
 
+/** The optional human QA stage's id (BD-031, TD-029 decision 9). */
+export const QA_STAGE_ID: Slug = 'qa';
+
+/**
+ * product/04 S6c — QA, a person's test of a branch that already applies (BD-031, TD-029 decision 9,
+ * technical/02's M10-head amendment). WP-174.
+ *
+ * **Declared `enabled: false`**, and `rebase_gate.pass_to` names it: with the stage disabled the
+ * interpreter's walk over a disabled target lands on `ready_for_merge`, exactly as the gate passed
+ * before the stage existed (`stage-sequence.golden.test.ts` holds that against a table recorded
+ * before the change). `compilePipeline` enables it only for a task whose frozen `qa_stage` is
+ * true — set at creation when the binding maps a `qa` status — so no template edit and no project
+ * setting reshapes a task in flight.
+ *
+ * Its four edges are technical/02's table:
+ *  - `mr.review.comment` → `implementation`: **every** form of a human return (a status moved to a
+ *    return status, a diff thread, a general note, a ticket comment) reaches the interpreter as
+ *    this one signal, because per-task template snapshots already carry it (TD-029 decision 7). It
+ *    spends `human_rounds` (`RETURN_LOOPS.qa`), the same bound as at Ready for merge (BD-008);
+ *  - `ticket.status.changed` → `ready_for_merge`: QA passed — the ticket left the `qa` status for a
+ *    status that is not a return status (the human-return window decides which, WP-178);
+ *  - `default_branch.moved` → `rebase_gate`: the re-check, which spends `rebase_rechecks` rather than
+ *    a human round (`RETURN_LOOPS_BY_EDGE.qa`), as it does from Ready for merge;
+ *  - `mr.merged` → `merged_gate`: a person merged during QA.
+ */
+const QA_STAGE: Stage = {
+  id: QA_STAGE_ID,
+  kind: 'human',
+  enabled: false,
+  on: [
+    { on: 'mr.review.comment', to: 'implementation' },
+    { on: 'ticket.status.changed', to: 'ready_for_merge' },
+    { on: 'default_branch.moved', to: 'rebase_gate' },
+    { on: 'mr.merged', to: 'merged_gate' },
+  ],
+};
+
 const mergeTail = (options: { readonly businessReview: boolean }): readonly Stage[] => [
   ...(options.businessReview ? [BUSINESS_REVIEW_STAGE] : []),
-  { id: 'rebase_gate', kind: 'gate', pass_to: 'ready_for_merge', fail_to: 'conflict_resolution' },
+  { id: 'rebase_gate', kind: 'gate', pass_to: QA_STAGE_ID, fail_to: 'conflict_resolution' },
+  QA_STAGE,
   {
     id: 'ready_for_merge',
     kind: 'human',
@@ -227,7 +269,9 @@ const mergeTail = (options: { readonly businessReview: boolean }): readonly Stag
  *
  * `conflict_resolution` is declared between `implementation` and `ci_gate` and is **not** in that
  * sentence, which is the point: nothing advances into it, and only `rebase_gate.fail_to` enters it
- * (WP-26 — see {@link CONFLICT_RESOLUTION_STAGE}).
+ * (WP-26 — see {@link CONFLICT_RESOLUTION_STAGE}). Nor is `qa` (product/04 S6c, WP-174), declared
+ * between the rebase gate and Ready for merge and enabled only for a task whose `qa_stage` is true
+ * (see {@link QA_STAGE}).
  */
 export const FEATURE_TEMPLATE: PipelineTemplate = {
   stages: [

@@ -594,7 +594,12 @@ export const runTicketLintCheck = async (
      * pushes nothing, and a queued lint task has no producer to dequeue it. What bounds the spend is
      * the budget guard every run goes through and `DEFAULT_STAGE_RUN_BUDGET_USD.ticket_lint`.
      */
-    const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+    const pipeline = compilePipeline(
+      stored.task.template,
+      stored.template,
+      stored.pipelineDial,
+      false,
+    );
     const applied = await applyDecision({
       store: options.store,
       pipeline,

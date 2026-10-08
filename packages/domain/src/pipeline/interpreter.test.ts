@@ -10,9 +10,9 @@ import {
 } from './interpreter.js';
 import { BUG_TEMPLATE, CHORE_TEMPLATE, FEATURE_TEMPLATE } from './templates.js';
 
-const feature = compilePipeline('feature', FEATURE_TEMPLATE, null);
-const bug = compilePipeline('bug', BUG_TEMPLATE, null);
-const chore = compilePipeline('chore', CHORE_TEMPLATE, null);
+const feature = compilePipeline('feature', FEATURE_TEMPLATE, null, false);
+const bug = compilePipeline('bug', BUG_TEMPLATE, null, false);
+const chore = compilePipeline('chore', CHORE_TEMPLATE, null, false);
 
 const completed = (stage: string, verdict: string | null): PipelineSignal => ({
   kind: 'stage_completed',
@@ -56,6 +56,7 @@ describe('compilePipeline', () => {
         custom: [{ id: 'security_scan', kind: 'gate', after: 'ci_gate', command: 'trivy fs .' }],
       },
       null,
+      false,
     );
     const ids = withCustom.stages.map((stage) => stage.id);
     expect(ids.indexOf('security_scan')).toBe(ids.indexOf('ci_gate') + 1);
@@ -74,6 +75,7 @@ describe('compilePipeline', () => {
           stages: [{ id: 'refinement', kind: 'agent', role: 'product_manager', next: 'nowhere' }],
         },
         null,
+        false,
       ),
     ).toThrow(/nowhere/);
   });
@@ -426,6 +428,7 @@ describe('what escalates instead of transitioning', () => {
         ],
       },
       null,
+      false,
     );
     expect(
       escalationOf(
@@ -465,6 +468,7 @@ describe('what escalates instead of transitioning', () => {
         stages: [{ id: 'refinement', kind: 'agent', role: 'product_manager', enabled: false }],
       },
       null,
+      false,
     );
     expect(escalationOf(interpret(disabled, { kind: 'start' }))).toContain('no enabled stage');
   });
@@ -499,7 +503,7 @@ describe('disabled stages (product/04 § "Customisation model")', () => {
       stage.id === 'business_review' ? { ...stage, enabled: false } : stage,
     ),
   };
-  const pipeline = compilePipeline('feature', withoutBusinessReview, null);
+  const pipeline = compilePipeline('feature', withoutBusinessReview, null, false);
 
   it('walks past a disabled stage a transition names by hand', () => {
     // `code_review.approve_to` still says `business_review`; the task must land on the gate beyond.
@@ -518,6 +522,7 @@ describe('disabled stages (product/04 § "Customisation model")', () => {
         ),
       },
       null,
+      false,
     );
     expect(interpret(noArchitecture, completed('refinement', 'approve'))).toEqual({
       kind: 'enter',
@@ -534,6 +539,7 @@ describe('disabled stages (product/04 § "Customisation model")', () => {
         ),
       },
       null,
+      false,
     );
     expect(interpret(stopAfterRetro, completed('retrospective', 'approve'))).toEqual({
       kind: 'complete',
@@ -553,6 +559,7 @@ describe('disabled stages (product/04 § "Customisation model")', () => {
         ),
       },
       null,
+      false,
     );
     expect(interpret(noLibrarian, completed('retrospective', 'approve'))).toEqual({
       kind: 'enter',
@@ -570,6 +577,7 @@ describe('disabled stages (product/04 § "Customisation model")', () => {
         ],
       },
       null,
+      false,
     );
     const decision = interpret(brokenReturn, completed('code_review', 'request_changes'));
     expect(decision.kind).toBe('escalate');

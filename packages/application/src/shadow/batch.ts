@@ -420,7 +420,12 @@ export const startShadowBatch = async (
        * instead is the **separate shadow budget** (`features.shadow_mode.budget_usd`, checked at
        * every run's admission by the stage executor) and `MAX_SHADOW_BATCH_TICKETS`.
        */
-      const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+      const pipeline = compilePipeline(
+        stored.task.template,
+        stored.template,
+        stored.pipelineDial,
+        false,
+      );
       const applied = await applyDecision({
         store: options.store,
         pipeline,

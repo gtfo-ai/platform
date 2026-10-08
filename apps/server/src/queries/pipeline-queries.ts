@@ -1516,7 +1516,7 @@ const compiledPipelineOf = (task: CompilableTask): CompiledPipeline | null => {
     return null;
   }
   try {
-    return compilePipeline(task.template, template, dial === null ? null : dial.data);
+    return compilePipeline(task.template, template, dial === null ? null : dial.data, false);
   } catch {
     return null;
   }

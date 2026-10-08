@@ -174,7 +174,12 @@ const step = async (
   stored: StoredTask,
   signal: PipelineSignal,
 ): Promise<StoredTask> => {
-  const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+  const pipeline = compilePipeline(
+    stored.task.template,
+    stored.template,
+    stored.pipelineDial,
+    false,
+  );
   const decision = await withVerdictFindings(
     options,
     context,
@@ -591,7 +596,12 @@ export const runIntakeCheck = async (
       return null;
     }
 
-    const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+    const pipeline = compilePipeline(
+      stored.task.template,
+      stored.template,
+      stored.pipelineDial,
+      false,
+    );
     const applied = await applyDecision({
       store: options.store,
       pipeline,
@@ -939,7 +949,12 @@ const planApprovalGate = async (
   }
   // On the handler's own connection (WP-73, backlogs 19 and 221): no borrow inside the dispatch.
   const settings = await options.settings.forProject(stored.task.projectId, context.scope.tx);
-  const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+  const pipeline = compilePipeline(
+    stored.task.template,
+    stored.template,
+    stored.pipelineDial,
+    false,
+  );
   const completed = stageOf(pipeline, stage);
   if (completed?.produces !== 'ImplementationPlan') {
     return false;
@@ -1090,7 +1105,7 @@ const budgetApprovalGate = async (
   }
   if (
     !spendIsStillAhead(
-      compilePipeline(stored.task.template, stored.template, stored.pipelineDial),
+      compilePipeline(stored.task.template, stored.template, stored.pipelineDial, false),
       stage,
     )
   ) {
@@ -1186,7 +1201,12 @@ const recordMergeRequest = async (
   stored: StoredTask,
   stage: Slug,
 ): Promise<StoredTask> => {
-  const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+  const pipeline = compilePipeline(
+    stored.task.template,
+    stored.template,
+    stored.pipelineDial,
+    false,
+  );
   if (stageOf(pipeline, stage)?.produces !== 'ImplementationNotes') {
     return stored;
   }
@@ -1476,7 +1496,12 @@ const ciHandler = (options: PipelineSagaOptions): EventHandler => ({
     if (stage === null) {
       return;
     }
-    const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+    const pipeline = compilePipeline(
+      stored.task.template,
+      stored.template,
+      stored.pipelineDial,
+      false,
+    );
     const waiting = stageOf(pipeline, stage);
     if (
       waiting?.kind !== 'gate' ||

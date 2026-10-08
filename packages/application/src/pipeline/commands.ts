@@ -680,7 +680,7 @@ const applyHumanDecisionRecorded = async (
   }
   const applied = await applyDecision({
     store: deps.store,
-    pipeline: compilePipeline(stored.task.template, stored.template, stored.pipelineDial),
+    pipeline: compilePipeline(stored.task.template, stored.template, stored.pipelineDial, false),
     tx: scope.tx,
     stored,
     decision,
@@ -914,7 +914,12 @@ const resumeTargetOf = (stored: StoredTask, stage: Slug): Slug => {
   ) {
     return stage;
   }
-  const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+  const pipeline = compilePipeline(
+    stored.task.template,
+    stored.template,
+    stored.pipelineDial,
+    false,
+  );
   const next = pipeline.stages.find(
     (entry) => entry.enabled && POST_MERGE_STAGES.includes(entry.id),
   );
@@ -1121,7 +1126,12 @@ export class StageNotReachedError extends Error {
  * so is any earlier stage the task ran, whichever loop brought it there.
  */
 const assertReturnTarget = (stored: StoredTask, from: Slug, to: Slug): void => {
-  const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+  const pipeline = compilePipeline(
+    stored.task.template,
+    stored.template,
+    stored.pipelineDial,
+    false,
+  );
   const enabled = pipeline.stages.filter((entry) => entry.enabled);
   const target = enabled.findIndex((entry) => entry.id === to);
   if (target === -1) {
@@ -1198,7 +1208,12 @@ const keepGateFeedback = async (
   from: Slug,
   requested: boolean | undefined,
 ): Promise<boolean> => {
-  const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+  const pipeline = compilePipeline(
+    stored.task.template,
+    stored.template,
+    stored.pipelineDial,
+    false,
+  );
   if (stored.task.state !== 'needs_human' || stageOf(pipeline, from)?.kind !== 'gate') {
     if (requested === true) {
       throw new NoGateFeedbackError(
@@ -2288,7 +2303,12 @@ export const handBackTaskCommand = async (
       if (input.stage === MERGED_GATE_STAGE) {
         throw new IllegalTransitionError('task', stored.task.state, `${input.stage} (hand-back)`);
       }
-      const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
+      const pipeline = compilePipeline(
+        stored.task.template,
+        stored.template,
+        stored.pipelineDial,
+        false,
+      );
       const target = stageOf(pipeline, input.stage);
       if (target === null || !target.enabled) {
         throw new StageNotInTemplateError(

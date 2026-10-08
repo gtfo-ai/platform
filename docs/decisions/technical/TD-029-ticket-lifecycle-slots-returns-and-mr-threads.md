@@ -167,6 +167,20 @@ Vendor facts are in `docs/research/15-tracker-lifecycle-and-mr-conversation.md`.
    acknowledgement the rule does not recognise returns the task, which costs one run and at most one
    question. A request misread as thanks would be lost. A model classifier was rejected because it
    cannot be tested exhaustively and spends money on every comment.
+
+   > **Amendment, orchestrator ruling at WP-174, 2026-10-08.** The paragraph above says both that an
+   > emoji-only text is **empty** after normalisation and that 👍 ✅ 🎉 🙏 are in the vocabulary. Both
+   > cannot hold: if emoji were removed, every emoji-only comment (❌ and 🐛 included) would be an
+   > acknowledgement, the person's objection would be lost, and the four listed emoji would mean
+   > nothing. The ruling, accepting WP-174's reading: **an emoji is a token, not something removed.**
+   > A text is an acknowledgement only when **every** token is in the vocabulary (shipped or added).
+   > So 👍 ✅ 🎉 🙏 are acknowledgements, and any other emoji returns the task. That is the failure
+   > direction this decision already chose: an unrecognised thank-you costs one run. *Empty* now
+   > means only a text with no token left once @-mentions, punctuation and whitespace are removed
+   > (a mention only, punctuation only). An emoji's skin-tone modifiers, variation selectors and
+   > joiners are dropped before tokenising, so `👍🏽` reads as `👍`. Built in
+   > `packages/domain/src/lifecycle/acknowledgement.ts` (WP-174). The paragraph above is left as
+   > written, and this note supersedes its words *"(emoji only, mentions only)"*.
 9. **The `qa` stage's shape.** It is a `kind: 'human'` stage in the shared merge tail, declared
    `enabled: false` between `rebase_gate` and `ready_for_merge`. `rebase_gate.pass_to` becomes `qa`, and the
    interpreter's walk over a disabled target lands on `ready_for_merge` exactly as before
@@ -189,6 +203,10 @@ Vendor facts are in `docs/research/15-tracker-lifecycle-and-mr-conversation.md`.
 
    `RETURN_LOOPS` gains `qa → human_rounds`. The merge request stays a draft through `qa` and is
    marked ready at `ready_for_merge`, as product/04 S7 says.
+
+   *As built at WP-174:* `RETURN_LOOPS_BY_EDGE` also gains `qa → rebase_gate: rebase_rechecks`
+   (`packages/domain/src/pipeline/interpreter.ts:310`). A default-branch move during QA spends the
+   re-check and not a human round, as it does from `ready_for_merge` (WP-26).
 10. **The review conversation on the merge request.**
     - **Findings:** after `code_review` completes, a `review_findings_post` duty posts each finding as a
       thread through the executor, anchored where both `file` and `line` are present. If GitLab refuses

@@ -180,7 +180,7 @@ export const isDrivenStage = (stored: StoredTask | null, row: StrandedStage): bo
   if (!STAGE_STATES.has(task.state) || task.currentStage !== row.stage) return false;
   if ((task.stageAttempts[row.stage] ?? 1) !== row.attempt) return false;
   const stage = stageOf(
-    compilePipeline(task.template, stored.template, stored.pipelineDial),
+    compilePipeline(task.template, stored.template, stored.pipelineDial, false),
     row.stage,
   );
   return stage !== null && (stage.kind === 'agent' || stage.kind === 'gate');

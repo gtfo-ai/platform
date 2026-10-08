@@ -26,7 +26,9 @@
  * moved to …"*, an escalation naming a loop no human had been round. Sharing `rebase` instead would
  * be worse in the other direction: one default-branch move would eat one of the two resolution
  * attempts product/04 promises. So there are two counters, and the edge that spends this one is
- * named in `RETURN_LOOPS_BY_EDGE` (`../pipeline/interpreter.js`).
+ * named in `RETURN_LOOPS_BY_EDGE` (`../pipeline/interpreter.js`). Since WP-174 the optional `qa`
+ * stage, which waits on the same open merge request, has the same edge into the gate and spends
+ * this loop the same way.
  *
  * **Since WP-79 review round 2 it bounds a second re-check of the same kind** (PROGRESS backlog
  * 275): a passing rebase gate whose head is not the one CI passed sends the task **forward** into

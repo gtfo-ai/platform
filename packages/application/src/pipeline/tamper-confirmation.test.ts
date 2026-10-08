@@ -123,7 +123,7 @@ if (FEATURE === undefined) {
 }
 
 describe('unconfirmedTamperReturn', () => {
-  const feature = compilePipeline('feature', FEATURE, null);
+  const feature = compilePipeline('feature', FEATURE, null, false);
 
   it('makes the return ci_gate would have made, from the rebase gate, on ci_fix', () => {
     const decision = unconfirmedTamperReturn(feature, stored(['src/legacy.test.ts']), [
@@ -155,6 +155,7 @@ describe('unconfirmedTamperReturn', () => {
         }),
       },
       null,
+      false,
     );
     const decision = unconfirmedTamperReturn(noFailTo, stored(['src/legacy.test.ts']), [
       'src/legacy.test.ts',

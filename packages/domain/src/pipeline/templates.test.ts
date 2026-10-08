@@ -61,6 +61,8 @@ describe('the shipped templates', () => {
       'code_review',
       'business_review',
       'rebase_gate',
+      // product/04 S6c (WP-174): declared disabled, enabled only by the task's `qa_stage`.
+      'qa',
       'ready_for_merge',
       'merged_gate',
       'retrospective',
@@ -258,7 +260,7 @@ describe('the shipped templates', () => {
     expect(stage?.kind === 'agent' ? stage.role : null).toBe('reviewer');
     expect(stage?.kind === 'agent' ? stage.produces : null).toBe('ReviewVerdict');
 
-    const pipeline = compilePipeline('review_only', REVIEW_ONLY_TEMPLATE, null);
+    const pipeline = compilePipeline('review_only', REVIEW_ONLY_TEMPLATE, null, false);
     for (const verdict of ['approve', 'request_changes'] as const) {
       const decision = interpret(pipeline, {
         kind: 'stage_completed',
@@ -315,8 +317,9 @@ describe('the shipped templates', () => {
   it('sends every ticket template through the same merge tail', () => {
     for (const template of Object.values(TICKET_TEMPLATES)) {
       const ids = template.stages.map((stage) => stage.id);
-      expect(ids.slice(-6)).toEqual([
+      expect(ids.slice(-7)).toEqual([
         'rebase_gate',
+        'qa',
         'ready_for_merge',
         'merged_gate',
         'retrospective',
@@ -457,7 +460,7 @@ describe('the rebase gate behind every CI gate (WP-81, Q109)', () => {
       ),
     ),
   )('%s (dial %s) runs rebase_gate after an enabled ci_gate', (id, _label, template, dial) => {
-    const { stages } = compilePipeline(id, template, dial);
+    const { stages } = compilePipeline(id, template, dial, false);
     const ci = stages.findIndex((stage) => stage.id === 'ci_gate' && stage.enabled);
     if (ci === -1) {
       return;
@@ -506,7 +509,7 @@ describe('a CI excuse nothing would confirm is refused (WP-120, PROGRESS backlog
 
   it('refuses it at compilePipeline too, which every reader of a task’s template goes through', () => {
     expect(() =>
-      compilePipeline('feature', disabling(FEATURE_TEMPLATE, ['rebase_gate']), null),
+      compilePipeline('feature', disabling(FEATURE_TEMPLATE, ['rebase_gate']), null, false),
     ).toThrow(/"rebase_gate" is disabled while "ci_gate" is enabled/);
   });
 
@@ -519,7 +522,7 @@ describe('a CI excuse nothing would confirm is refused (WP-120, PROGRESS backlog
           if (stage.id === 'business_review') {
             return { ...stage, approve_to: 'ready_for_merge' } as Stage;
           }
-          if (stage.kind === 'human' && stage.id === 'ready_for_merge') {
+          if (stage.kind === 'human' && (stage.id === 'ready_for_merge' || stage.id === 'qa')) {
             return { ...stage, on: stage.on.filter((edge) => edge.to !== 'rebase_gate') };
           }
           return stage;

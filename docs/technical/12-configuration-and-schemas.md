@@ -376,6 +376,8 @@ templates:
 ```
 (`;`-separated inline form shown for brevity; real files use nested YAML.) The platform validates: every `requires` artifact is produced upstream; every transition target exists; no unbounded cycles without an iteration limit.
 
+**The shipped templates differ from this example by one stage since WP-174** (BD-031, TD-029 decision 9): the merge tail declares a human `qa` stage between `rebase_gate` and `ready_for_merge`, `enabled: false`, with `rebase_gate.pass_to: qa` and the edges `mr.review.comment -> implementation`, `ticket.status.changed -> ready_for_merge`, `default_branch.moved -> rebase_gate`, `mr.merged -> merged_gate`. The example above stays as written (it is transcribed into `packages/contracts/src/pipeline.test.ts`), and it is the same pipeline for a task without QA: with the stage disabled, the gate's pass walks on to `ready_for_merge`. A task's own `qa_stage` enables it (`compilePipeline`'s fourth argument).
+
 **`conflict_resolution` is declared between `implementation` and `ci_gate` and is reached only backwards** (WP-26, product/04 S6b). Declaration order is the pipeline, so `implementation` names `approve_to: ci_gate` explicitly and the forward path steps over the stage; the only way in is `rebase_gate.fail_to`, which — being a transition to an *earlier* stage — is a **return** and therefore spends a round of the `rebase` loop (`limits.rebase_attempts`, default 2). The resolution's own fall-through is `ci_gate`, which is how *"re-run CI"* is expressed without a branch in the interpreter.
 
 ## Artifact schemas (structured JSON, validated on stage completion)

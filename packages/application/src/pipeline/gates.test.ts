@@ -253,7 +253,7 @@ const MR: StoredTask['mr'] = {
 };
 
 const templateStage = (id: Slug): PipelineStage => {
-  const stage = stageOf(compilePipeline('feature', FEATURE_TEMPLATE, null), id);
+  const stage = stageOf(compilePipeline('feature', FEATURE_TEMPLATE, null, false), id);
   if (stage === null) {
     throw new Error(`the feature template has no stage "${id}"`);
   }
@@ -1271,7 +1271,7 @@ describe('the head the rebase gate judged (WP-79)', () => {
 
 /** WP-79 review round 2 (backlog 275): Ready only for the head CI passed. */
 describe('rebaseAgainstCi', () => {
-  const feature = compilePipeline('feature', FEATURE_TEMPLATE, null);
+  const feature = compilePipeline('feature', FEATURE_TEMPLATE, null, false);
   const pushed = 'c'.repeat(40);
 
   it('agrees for exactly the head CI passed', () => {
@@ -1297,6 +1297,7 @@ describe('rebaseAgainstCi', () => {
         ),
       },
       null,
+      false,
     );
     expect(rebaseAgainstCi(noCi, null, pushed)).toEqual({ kind: 'agree' });
   });
