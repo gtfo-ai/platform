@@ -15560,7 +15560,7 @@ an inherited environment, or when the measurement above shows `rebase --exec` or
 - `ready_for_merge` is a `kind: 'human'` stage (`packages/domain/src/pipeline/templates.ts:197-204`).
 
 **What is missing.**
-- No port method lists a provider's statuses or transitions (`packages/application/src/ports/integrations/task-management.ts:298-386`), so no screen can offer them. Neither the wizard nor the web UI touches `status_mapping` or `pickup_status`. A mistyped status name is found on the first transition, as a failure, not at setup.
+- No port method lists a provider's statuses or transitions (`packages/application/src/ports/integrations/task-management.ts:298-386`), so no screen can offer them *(true when filed; WP-171 added `listStatuses` and `listTransitions` to the port, implemented by the fake and refused by name by Jira until WP-172)*. Neither the wizard nor the web UI touches `status_mapping` or `pickup_status`. A mistyped status name is found on the first transition, as a failure, not at setup.
 - There is no stage or state for **after merge**: no QA / HITL status the task waits in, and the post-merge transition is marked *(future)* in `docs/product/04-pipeline.md:92`.
 - "Agent takes the ticket → In progress" is reachable only by mapping a stage id. Nothing guarantees the transition happens **before** the first run starts, which item 536 needs.
 
@@ -19425,7 +19425,7 @@ WP-181 follows WP-177 and WP-180, WP-182 follows WP-181, and WP-183 runs last. W
 | WP-180 | **Application: every agent stage gets the conversation in its prompt, and the tool's port answers the same** | TODO | — | Folds **537** (c). Deps WP-171, WP-173, WP-175. No migration. Parallel with WP-177…WP-179. |
 | WP-181 | **Server: the statuses read, the binding's check, the effective configuration, the readiness notes and the `get_conversation` tool** | TODO | — | Folds **535** (b), **537** (c). Deps WP-171, WP-177, WP-180. No migration. Criterion (6): `ticket_claim`, `qa_stage` and `status_mapping_superseded` become required (WP-170 left them optional). |
 | WP-182 | **Web: the slots as pick lists in the wizard and in project settings; the claim and the QA stage on the task page** | TODO | — | Folds **535** (b). Deps WP-181. No migration. User-guide sweep (rule 83). |
-| WP-183 | **End to end, with fake Claude: the full flow with every slot mapped, a QA return in each form, and a project with nothing mapped** | TODO | — | Folds **535**, **536**, **537**. Deps WP-170…WP-182. No migration. The product owner's flows (i)–(iii). |
+| WP-183 | **End to end, with fake Claude: the full flow with every slot mapped, a QA return in each form, and a project with nothing mapped** | TODO | — | Folds **535**, **536**, **537**. Deps WP-170…WP-182. No migration. The product owner's flows (i)–(iii), and **(v)**: the fake task manager's default workflow gets invented names (WP-171's discovered work, refined session 15). |
 | WP-163 | **A stop that lands while the spawn marker commits holds no money, and a stop the platform made logs no fault** | TODO | — | Folds **501**, **506**. Deps WP-150, WP-151, WP-154. No migration. BD-010's 2026-10-08 amendment. Parallel-safe with WP-162. |
 | WP-164 | **An `xargs` that feeds a project-command verb is uncertain, and the verbs come from the floors themselves** | TODO | — | Folds **530**. Deps WP-161. No migration. Touches only `packages/domain/src/policies/` and technical/05. Parallel-safe with every row. |
 | WP-165 | **A merged task is never paused or taken over, so a merged task always has its way to the retrospective** | TODO | — | Folds **508** (Q117 (a)). Deps WP-152. No migration. technical/02's M10 amendment. Serial with WP-167. |
@@ -46676,3 +46676,52 @@ non-individual thread throws `invalid_request` with no fallback; a `404` on a mi
 - The port's `replyToDiscussion` (`packages/application/src/ports/integrations/git-provider.ts`) has no
   docblock; it should say a provider may answer a reply to an individual note with a new discussion
   (GitLab divergence 8, fake divergence 31) before WP-179 calls it.
+
+#### WP-171
+
+**Status: implemented, awaiting review.** Base `d8c2a252`, no migration. Port, fake and the task-management contract support, plus the Jira adapter's refusals, as the brief says.
+
+**What changed.**
+- **(a)** `TaskManagementPort` gains `listStatuses`, `listTransitions`, `selfIdentity`, `assignToSelf`, `unassign` and `listComments`. `TaskManagementCapabilities` gains `lifecycleStatuses`, `transitionsRead`, `assign` and `commentsRead`. `LIFECYCLE_MEMBER_CAPABILITY` maps each member to its flag (`assign` declares the three claim members). The schemas are `lifecycleStatusSchema` (the contracts' `ticketStatusSchema`, reused), `ticketTransitionSchema`, `assignResultSchema`, `unassignResultSchema`, `listCommentsOptionsSchema` and `commentPageSchema`, plus `MAX_LIST_COMMENTS_LIMIT = 100`.
+- **(b)** `normaliseStatusCategory(raw)` → `{category, raw_category}`, in the port module.
+- **(c)** The shared suite gains § "the ticket lifecycle (WP-171)". Each clause runs its behaviour when the member is declared and `expectRefusedByName` when it is not (`unsupported_capability`, `action` = the member, the message names it). The clauses are exported functions, so the canary can call them. The refusing stub is `test/contract/support/integrations/task-management-refusing-stub.ts`. The runner runs the whole suite against it, and keeps the canary as two permanent tests.
+- **(d)** The fake takes status seeds with a `rawCategory`, a `self` account (default `agentic-bot`), a seeded `assignee`, dated seeded `comments`, and the test control `assignTo(key, id)`. Its register gains entries 12–16: no transition rules, no permissions, one workflow rather than a union, comment dating and ties, and the self account.
+- **Jira:** the four flags are `false` and the six members throw `IntegrationUnsupportedError` naming the member, which is WP-172's to replace. `registration.test.ts`'s capability object and `emitted-secrets.test.ts`'s member census are updated for this. The census records each refusal as what the member emits.
+
+**Criteria → tests.**
+The five clauses are written once in the shared suite and run by `test/contract/integrations/task-management.contract.test.ts` as "TaskManagement contract — in-memory fake › the ticket lifecycle (WP-171)" (behaviour branch), as "… — refusing stub (no lifecycle member, BD-017) › …" (refusal branch) and, through `jira-cloud.contract.test.ts`, against Jira (refusal branch).
+- (1) `test/contract/support/integrations/task-management-contract-suite.ts` › "lists the tracker’s statuses with normalised categories"
+- (1) `test/contract/support/integrations/task-management-contract-suite.ts` › "claims the ticket as selfIdentity, shown by readTicket, and releases it"
+- (1) `test/contract/support/integrations/task-management-contract-suite.ts` › "leaves another person’s assignment untouched on unassign (changed: false)"
+- (1) `test/contract/support/integrations/task-management-contract-suite.ts` › "lists only the comments newer than `since`, newest first"
+- (1) `test/contract/support/integrations/task-management-contract-suite.ts` › "lists the ticket’s transitions by their target status"
+- (2) `test/contract/support/integrations/task-management-contract-suite.ts` › "refuses by name every lifecycle member its flags do not declare" (against the stub and Jira, plus the five clauses above in their refusal branch).
+- (2) **Canary**, permanent: `test/contract/integrations/task-management.contract.test.ts` › "fails the refusal branch when the flag is off"
+- (2) **Canary**, permanent: `test/contract/integrations/task-management.contract.test.ts` › "fails the statuses clause when the flag is on"
+- (2) **Canary**, by hand, as a diffed edit restored with `cmp`: with the fake's `listStatuses` answering `[]`, the fake runner fails 1 of 68 (the statuses clause).
+- (3) `packages/application/src/ports/integrations/task-management.test.ts` › "normaliseStatusCategory (WP-171 ruling (b), research/15 J1a, J3)" (a table of eleven keys, with `undefined`, `some-fourth-key`, `DONE`, `New`, ` done`, `todo` and `in_progress` all `unknown` with the key kept).
+- (3) `packages/application/src/ports/integrations/task-management.test.ts` › "answers unknown with no raw key for %j" (`null`, `undefined`, `''`).
+- (4) technical/06's M10-head signatures were compared with the built port member by member, and they match. The as-built paragraph and the TaskManagement block's `capabilities()` line are amended (below).
+- The fake's register: `packages/integrations/src/task-management/fake.test.ts` › "the ticket lifecycle (WP-171, divergences 12–16)".
+
+**Decisions and assumptions.**
+- **The refusal code is the port's existing `unsupported_capability`.** The plan row, technical/06 and TD-029 write `IntegrationError('unsupported')`, but no such code exists. `IntegrationUnsupportedError(provider, member)` sets `action` to the member's name, and that is what "naming the member" is asserted as. technical/06 says so; TD-029 is outside this row's reach (`docs/decisions`), so its wording stands, and the meaning is the same.
+- **`normaliseStatusCategory` matches exactly**, with no case folding or trimming: `DONE` and `New` are `unknown`. The ruling lists four keys and says anything else is `unknown`. A spelling that is never seen is better visible than guessed. The empty string is treated as no key (`raw_category: null`), because `ticketStatusSchema` refuses an empty key.
+- **`listComments`' window is on `created_at`, strictly after `since`, newest first.** "Newer" is read as created, not edited, so an edited old comment is outside the window. WP-178 should know this: an edit made after the horizon to a comment written before it is not re-read. `total` is the window's count (after `since`), not the thread's.
+- **`listTransitions`' `to` has `{name, category}` only**, exactly as technical/06's signature says, with no `raw_category`. WP-172 decides whether the raw key is worth adding there, and amends technical/06 first if it is.
+- **`assignToSelf` overwrites another assignee.** TD-029 decision 5's claim re-reads the ticket to see who won, and intake's `take_assigned_tickets` is the place that refuses an assigned ticket. The port does not duplicate either.
+- **The fake's self account** is `agentic-bot`, the id the fake already wrote its comments under, and the comments now follow `self`. `selfIdentity()` answers `verified: false`, while comments keep `verified: true` as before. That inconsistency predates this row and is left alone.
+- **The default fake workflow's names** (`Backlog`, `In Progress`, `Done`, …) predate BD-031's neutral-name rule and are kept, because pipeline tests seed them. Only their category keys are new. The contract runner now uses invented names (`To pick up`, `Doing`, `Waiting for review`, `Testing`, `Sent back`, `Finished`).
+
+**Sentences falsified (rule 83).**
+- technical/06 § TaskManagement, the `capabilities()` line listed seven flags. It now lists eleven, with a line naming the six members. Amended.
+- technical/06's M10-head amendment: *"throws `IntegrationError('unsupported')`"* and *"Jira Cloud implements all six (WP-172)"* (still the target). An "As built at WP-171" paragraph now states the real code, the ordering and the `since` semantics, and that Jira refuses all six until WP-172.
+- PROGRESS backlog 535, *"No port method lists a provider's statuses or transitions"*: annotated as true when filed and answered here.
+- TD-029 decision 2's `IntegrationError('unsupported')`: not edited (`docs/decisions` is off limits for this row). Filed below.
+- Checked and left: `ticketStatusSchema`'s docblock (*"as `listStatuses()` answers it"*, now true), the fake's opening paragraph (*"Everything the port promises is implemented here"*, still true), and the Jira adapter's docblock (*"the constant message of an `IntegrationUnsupportedError`"* already covers the new throws).
+
+**Discovered work.**
+- TD-029 decision 2 and the WP-171 plan row say `IntegrationError('unsupported')`. The code is `unsupported_capability`. A one-word amendment for whoever may edit `docs/decisions`.
+- The default fake workflow (`DEFAULT_FAKE_STATUS_SEEDS`) keeps real-looking status names. Renaming them to neutral ones touches the pipeline tests that seed them, which is outside this row.
+
+**Criterion (5), by the orchestrator.** The row gained it after the implementer's worktree was cut, and the resumed implementer lost its shell when the orchestrator removed that worktree (the orchestrator's error: a worktree is removed only after its agent has stopped for good). `fakeTaskManagementConfigSchema` (`packages/integrations/src/bindings/fake-registrations.ts`) gains `lifecycle: ticketLifecycleSchema.optional()`, the contracts definition itself. Nothing in the fake reads it yet; WP-177 is its reader. Held by `packages/integrations/src/bindings/fake-registrations.test.ts › the fake task manager’s lifecycle key (WP-171 criterion 5) › refuses through the shared definition: two slots naming one status`.

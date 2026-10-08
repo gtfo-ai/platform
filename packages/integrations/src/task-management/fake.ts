@@ -79,17 +79,54 @@
  *     `since` being exact (the poller's first "read again from the cursor" did) fails here as it
  *     would against Jira. The two differ in *where* in that minute the window starts, never in
  *     whether the fake returns less.
+ * 12. **Kinder — there are no per-status transition rules** (WP-171). Every status of the workflow
+ *     is reachable from every other: `transition` moves to any of them and `listTransitions` lists
+ *     every status but the current one. A real workflow allows only some moves from each status,
+ *     so a slot that is not reachable from where the ticket stands fails there and passes here.
+ *     The transitions' own names (`Move to <status>`) deliberately differ from their targets, so a
+ *     caller that resolved a transition by its name rather than by `to.name` fails here as it would
+ *     against a tracker that names its transitions its own way.
+ * 13. **Kinder — there are no permissions** (WP-171). Jira refuses an assign without *Assign
+ *     Issues* and lists no transitions without *Transition issues* (research/15 J3, J4); this fake
+ *     has no permission to lack. A refused claim is scripted (`script.failNext('assign_to_self',
+ *     …)`), never reached by configuration.
+ * 14. **Different — `listStatuses` is one workflow, not a union over issue types** (WP-171). The
+ *     fake has one status set for every issue type, so the union the port promises is the set
+ *     itself, and a workflow that names a status twice (case-insensitively) is refused at
+ *     construction. Category keys are the seed's own (`rawCategory`), normalised by the port's
+ *     `normaliseStatusCategory` as a real adapter's are; a status seeded as a plain name has no key
+ *     and is `unknown`.
+ * 15. **Different — comments are dated by the seed or by the fake's clock** (WP-171). A seeded
+ *     comment carries its own `createdAt`, so a test can place it either side of a window's
+ *     horizon; a comment written through the port is stamped by the fake clock, which steps a
+ *     second per read. `listComments` keeps comments created strictly after `since` and orders them
+ *     newest first, a tie broken by the later write first (Jira documents no tie order). Its
+ *     `total` is always the window's whole count, where Jira's is answered only for a short page.
+ * 16. **Different — the binding's own account is `agentic-bot`** unless `self` names another
+ *     (WP-171): `selfIdentity()` answers it unverified (only the platform's mapping verifies), and it
+ *     is the account `assignToSelf` writes and `unassign` recognises. The comments the fake writes
+ *     through the port carry the same account id, as a tracker attributes them to the credential.
  */
 import {
+  type AssignResult,
+  assignResultSchema,
+  type CommentPage,
   type CommentRef,
+  commentPageSchema,
   type ExternalIdentity,
   type HealthProbe,
   type InboundContext,
   type InboundNormaliser,
   type IntegrationRef,
   IntegrationUnsupportedError,
+  LIFECYCLE_MEMBER_CAPABILITY,
+  type LifecycleMember,
+  type LifecycleStatus,
+  lifecycleStatusSchema,
+  listCommentsOptionsSchema,
   type NormalisedDelivery,
   type NormalisedEvent,
+  normaliseStatusCategory,
   type TaskManagementCapabilities,
   type TaskManagementInboundEvent,
   type TaskManagementPort,
@@ -100,9 +137,14 @@ import {
   type TicketMatchRule,
   type TicketPollPlan,
   type TicketRefInput,
+  type TicketTransition,
   type TransitionResult,
+  ticketCommentSchema,
   ticketPollPlanSchema,
   ticketSchema,
+  ticketTransitionSchema,
+  type UnassignResult,
+  unassignResultSchema,
   type WebhookDelivery,
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
@@ -121,16 +163,46 @@ import {
 const PROVIDER = 'fake-task-management';
 const ACTION = 'task_management';
 
-/** The workflow a seeded fake uses when the caller does not name one. */
-export const DEFAULT_FAKE_STATUSES = [
-  'Backlog',
-  'Ready for agent',
-  'In Refinement',
-  'Waiting for input',
-  'In Progress',
-  'In Review',
-  'Done',
-] as const;
+/**
+ * One status of the fake's workflow (WP-171): its name, the provider's category key — passed
+ * through the port's `normaliseStatusCategory` as a real adapter's is — and an optional id.
+ */
+export interface FakeStatusSeed {
+  readonly name: string;
+  /** The provider's own category key (`new`, `indeterminate`, `done`, …); absent is none. */
+  readonly rawCategory?: string | null;
+  readonly id?: string;
+}
+
+/**
+ * The workflow a seeded fake uses when the caller does not name one, with the category keys a
+ * tracker reports (research/15 J1a). The names predate BD-031's neutral-name rule and stay because
+ * the pipeline tests seed them; a new test names its own neutral statuses.
+ */
+export const DEFAULT_FAKE_STATUS_SEEDS: readonly FakeStatusSeed[] = [
+  { name: 'Backlog', rawCategory: 'new' },
+  { name: 'Ready for agent', rawCategory: 'new' },
+  { name: 'In Refinement', rawCategory: 'indeterminate' },
+  { name: 'Waiting for input', rawCategory: 'indeterminate' },
+  { name: 'In Progress', rawCategory: 'indeterminate' },
+  { name: 'In Review', rawCategory: 'indeterminate' },
+  { name: 'Done', rawCategory: 'done' },
+];
+
+/** The default workflow's names. */
+export const DEFAULT_FAKE_STATUSES: readonly string[] = DEFAULT_FAKE_STATUS_SEEDS.map(
+  (seed) => seed.name,
+);
+
+/** A comment seeded with its own date (WP-171), so a test can place it either side of a horizon. */
+export interface FakeCommentSeed {
+  readonly authorId: string;
+  readonly body: string;
+  readonly createdAt: string;
+}
+
+/** The account a fake binding acts as when the caller names none (divergence 16). */
+export const FAKE_SELF_ACCOUNT_ID = 'agentic-bot';
 
 export interface FakeTicketSeed {
   readonly key: string;
@@ -150,6 +222,10 @@ export interface FakeTicketSeed {
    * Jira adapter answers it (only the platform's mapping can verify an account). Absent is `null`.
    */
   readonly reporter?: string;
+  /** The provider account the ticket is assigned to (WP-171); absent is unassigned. */
+  readonly assignee?: string;
+  /** Comments already on the ticket, each with its own date (WP-171). */
+  readonly comments?: readonly FakeCommentSeed[];
 }
 
 export interface FakeIdentitySeed {
@@ -161,8 +237,14 @@ export interface FakeIdentitySeed {
 export interface FakeTaskManagementOptions {
   readonly integrationId: Id;
   readonly baseUrl?: string;
-  readonly statuses?: readonly string[];
+  /** The workflow: plain names, or seeds with a category key (WP-171). A plain name has no key. */
+  readonly statuses?: readonly (string | FakeStatusSeed)[];
   readonly tickets?: readonly FakeTicketSeed[];
+  /**
+   * The account this binding acts as — `selfIdentity()` (WP-171, divergence 16).
+   * {@link FAKE_SELF_ACCOUNT_ID} with the display name `Agentic Bot` when absent.
+   */
+  readonly self?: FakeIdentitySeed;
   readonly identities?: readonly FakeIdentitySeed[];
   readonly capabilities?: Partial<TaskManagementCapabilities>;
   readonly webhookSecret?: string;
@@ -213,6 +295,7 @@ interface StoredTicket {
   siblings: { key: string; title: string; state: string }[];
   attachments_text: string[];
   reporter: string | null;
+  assignee: string | null;
   updated_at: string;
 }
 
@@ -277,6 +360,11 @@ export interface FakeTaskManagement extends TaskManagementPort {
   seedTicket(seed: FakeTicketSeed): TicketRefInput;
   /** The raw stored ticket, for assertions the port deliberately does not expose. */
   peek(key: string): StoredTicket | undefined;
+  /**
+   * Somebody assigns the ticket in the tracker (WP-171): a provider user id, or `null` to clear it.
+   * A test control, not a port call — the platform's own writes are `assignToSelf` and `unassign`.
+   */
+  assignTo(key: string, providerUserId: string | null): void;
   emitCommentAdded(input: {
     readonly ticketKey: string;
     readonly authorId: string;
@@ -331,7 +419,29 @@ export const createFakeTaskManagement = (
     ...(options.clockStart === undefined ? {} : { clockStart: options.clockStart }),
   });
   const baseUrl = options.baseUrl ?? 'https://tickets.example.test';
-  const statuses = [...(options.statuses ?? DEFAULT_FAKE_STATUSES)];
+  const statusSet: readonly LifecycleStatus[] = (options.statuses ?? DEFAULT_FAKE_STATUS_SEEDS).map(
+    (seed, index) => {
+      const status: FakeStatusSeed = typeof seed === 'string' ? { name: seed } : seed;
+      // Divergence 1: a status the port's schema would refuse fails at construction.
+      return lifecycleStatusSchema.parse({
+        id: status.id ?? `s-${index + 1}`,
+        name: status.name,
+        ...normaliseStatusCategory(status.rawCategory),
+      });
+    },
+  );
+  const statuses = statusSet.map((status) => status.name);
+  if (new Set(statuses.map((name) => name.toLowerCase())).size !== statuses.length) {
+    // Divergence 14: one entry per status, as the port's union promises.
+    throw new TypeError('a fake workflow names each status once, compared case-insensitively');
+  }
+  const self: ExternalIdentity = {
+    provider: PROVIDER,
+    external_id: options.self?.providerUserId ?? FAKE_SELF_ACCOUNT_ID,
+    email: options.self?.email ?? null,
+    display_name: options.self === undefined ? 'Agentic Bot' : (options.self.displayName ?? null),
+    verified: false,
+  };
   const capabilities: TaskManagementCapabilities = {
     webhooks: true,
     epics: true,
@@ -340,6 +450,10 @@ export const createFakeTaskManagement = (
     adf: false,
     createTicket: true,
     attachments: true,
+    lifecycleStatuses: true,
+    transitionsRead: true,
+    assign: true,
+    commentsRead: true,
     ...options.capabilities,
   };
 
@@ -354,7 +468,8 @@ export const createFakeTaskManagement = (
   let createdCounter = 0;
 
   const identityOf = (providerUserId: string): ExternalIdentity =>
-    identities.get(providerUserId) ?? {
+    identities.get(providerUserId) ??
+    (providerUserId === self.external_id ? self : undefined) ?? {
       provider: PROVIDER,
       external_id: providerUserId,
       email: null,
@@ -384,8 +499,23 @@ export const createFakeTaskManagement = (
       siblings: [...(seed.siblings ?? [])].map((sibling) => ({ ...sibling })),
       attachments_text: [...(seed.attachmentsText ?? [])],
       reporter: seed.reporter ?? null,
+      assignee: seed.assignee ?? null,
       updated_at: core.clock.now(),
     });
+    const stored = tickets.get(seed.key) as StoredTicket;
+    for (const comment of seed.comments ?? []) {
+      // Divergence 15: a seeded comment keeps its own date, validated like everything the fake emits.
+      commentCounter += 1;
+      stored.comments.push({
+        id: `c-${commentCounter}`,
+        author: identityOf(comment.authorId),
+        body: comment.body,
+        created_at: ticketCommentSchema.shape.created_at.parse(comment.createdAt),
+        updated_at: null,
+        marker_id: null,
+        url: `${stored.url}#comment-${commentCounter}`,
+      });
+    }
     return { provider: PROVIDER, key: seed.key, url: ticketUrl(seed.key) };
   };
 
@@ -427,7 +557,8 @@ export const createFakeTaskManagement = (
       epic: stored.epic === null ? null : snapshot(stored.epic),
       siblings: snapshot(stored.siblings),
       attachments_text: [...stored.attachments_text],
-      assignee: null,
+      assignee:
+        stored.assignee === null ? null : { ...identityOf(stored.assignee), verified: false },
       reporter:
         stored.reporter === null ? null : { ...identityOf(stored.reporter), verified: false },
       updated_at: stored.updated_at,
@@ -458,13 +589,8 @@ export const createFakeTaskManagement = (
     commentCounter += 1;
     const comment: StoredComment = {
       id: `c-${commentCounter}`,
-      author: {
-        provider: PROVIDER,
-        external_id: 'agentic-bot',
-        email: null,
-        display_name: 'Agentic Bot',
-        verified: true,
-      },
+      // Divergence 16: the binding's own account; `verified` as this fake has always answered it.
+      author: { ...self, verified: true },
       body,
       created_at: core.clock.now(),
       updated_at: null,
@@ -641,6 +767,99 @@ export const createFakeTaskManagement = (
     },
   };
 
+  /**
+   * Enters a lifecycle member, refusing **by name** when its capability flag is off (BD-017) — the
+   * branch the shared suite asserts for every adapter that does not implement one.
+   */
+  const enterLifecycle = (member: LifecycleMember, action: string): void => {
+    core.enter(action);
+    if (!capabilities[LIFECYCLE_MEMBER_CAPABILITY[member]]) {
+      throw new IntegrationUnsupportedError(PROVIDER, member);
+    }
+  };
+
+  const lifecycle = {
+    listStatuses: async (): Promise<readonly LifecycleStatus[]> => {
+      enterLifecycle('listStatuses', 'list_statuses');
+      return statusSet.map((status) => ({ ...status }));
+    },
+
+    listTransitions: async (ticketRef: TicketRefInput): Promise<readonly TicketTransition[]> => {
+      enterLifecycle('listTransitions', 'list_transitions');
+      const ticket = requireTicket('list_transitions', ticketRef.key);
+      // Divergence 12: every other status is one move away, under a name that is not its target's.
+      return statusSet
+        .filter((status) => status.name !== ticket.status)
+        .map((status) =>
+          ticketTransitionSchema.parse({
+            id: `t-${status.id}`,
+            name: `Move to ${status.name}`,
+            to: { name: status.name, category: status.category },
+          }),
+        );
+    },
+
+    selfIdentity: async (): Promise<ExternalIdentity> => {
+      enterLifecycle('selfIdentity', 'self_identity');
+      return { ...self };
+    },
+
+    assignToSelf: async (ticketRef: TicketRefInput): Promise<AssignResult> => {
+      enterLifecycle('assignToSelf', 'assign_to_self');
+      const ticket = requireTicket('assign_to_self', ticketRef.key);
+      const changed = ticket.assignee !== self.external_id;
+      if (changed) {
+        ticket.assignee = self.external_id;
+        ticket.updated_at = core.clock.now();
+      }
+      return assignResultSchema.parse({ changed, assignee: { ...self } });
+    },
+
+    unassign: async (ticketRef: TicketRefInput): Promise<UnassignResult> => {
+      enterLifecycle('unassign', 'unassign');
+      const ticket = requireTicket('unassign', ticketRef.key);
+      // Somebody else's assignment, or none, is never touched (TD-029 decision 2).
+      if (ticket.assignee !== self.external_id) {
+        return unassignResultSchema.parse({ changed: false });
+      }
+      ticket.assignee = null;
+      ticket.updated_at = core.clock.now();
+      return unassignResultSchema.parse({ changed: true });
+    },
+
+    listComments: async (
+      ticketRef: TicketRefInput,
+      listOptions: Parameters<TaskManagementPort['listComments']>[1],
+    ): Promise<CommentPage> => {
+      enterLifecycle('listComments', 'list_comments');
+      const parsed = listCommentsOptionsSchema.safeParse(listOptions);
+      if (!parsed.success) {
+        throw invalidRequest(
+          PROVIDER,
+          'list_comments',
+          parsed.error.issues[0]?.message ?? 'bad options',
+        );
+      }
+      const ticket = requireTicket('list_comments', ticketRef.key);
+      const since = parsed.data.since ?? null;
+      // Divergence 15: strictly after `since`, newest first, the later write first on a tie.
+      const window = ticket.comments
+        .map((comment, order) => ({ comment, order }))
+        .filter(
+          ({ comment }) => since === null || Date.parse(comment.created_at) > Date.parse(since),
+        )
+        .toSorted(
+          (left, right) =>
+            Date.parse(right.comment.created_at) - Date.parse(left.comment.created_at) ||
+            right.order - left.order,
+        );
+      return commentPageSchema.parse({
+        comments: window.slice(0, parsed.data.limit).map(({ comment }) => snapshot(comment)),
+        total: window.length,
+      });
+    },
+  } satisfies Pick<TaskManagementPort, LifecycleMember>;
+
   let deliveryCounter = 0;
   const nextDeliveryId = (): string => {
     deliveryCounter += 1;
@@ -794,10 +1013,17 @@ export const createFakeTaskManagement = (
       return null;
     },
 
+    ...lifecycle,
+
     inbound,
 
     seedTicket,
     peek: (key) => tickets.get(key),
+    assignTo: (key, providerUserId) => {
+      const ticket = requireTicket(ACTION, key);
+      ticket.assignee = providerUserId;
+      ticket.updated_at = core.clock.now();
+    },
 
     emitCommentAdded: (input) => {
       const ticket = requireTicket(ACTION, input.ticketKey);

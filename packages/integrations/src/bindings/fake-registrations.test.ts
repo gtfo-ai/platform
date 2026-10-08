@@ -91,6 +91,27 @@ describe('the fake git registration (backlog 260)', () => {
   });
 });
 
+describe('the fake task manager’s lifecycle key (WP-171 criterion 5)', () => {
+  const parse = (lifecycle?: unknown) =>
+    fakeTaskManagementRegistration({
+      port: createFakeTaskManagement({ integrationId: INTEGRATION_ID }),
+      token: TOKEN,
+    }).configSchema.safeParse(
+      lifecycle === undefined ? { token: TOKEN } : { token: TOKEN, lifecycle },
+    );
+
+  it('takes a valid block and no block at all', () => {
+    expect(parse().success).toBe(true);
+    expect(parse({ in_progress: 'Doing', qa: 'Testing', returned: ['Sent back'] }).success).toBe(
+      true,
+    );
+  });
+
+  it('refuses through the shared definition: two slots naming one status', () => {
+    expect(parse({ in_review: 'Waiting', qa: 'waiting' }).success).toBe(false);
+  });
+});
+
 /**
  * WP-110: the binding's config decides whether a fake polls, as GitLab's and Jira's do — so a tier
  * switches polling on in `bindings.config` and the sweep's query over that column is on the path.

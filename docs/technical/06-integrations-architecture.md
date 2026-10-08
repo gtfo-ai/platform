@@ -19,7 +19,8 @@ linkMergeRequest(ref, mrUrl)
 createTicket(draft) -> TicketRef                     # scope-creep valve, epic split
 resolveIdentity(providerUserId|email) -> UserIdentity
 inbound: InboundNormaliser                           # see below; ticket.matched|comment.added|status.changed
-capabilities() -> {webhooks, epics, links, customFields, adf, createTicket, attachments}
+capabilities() -> {webhooks, epics, links, customFields, adf, createTicket, attachments, lifecycleStatuses, transitionsRead, assign, commentsRead}   # the last four: WP-171, below
+listStatuses() ; listTransitions(ref) ; selfIdentity() ; assignToSelf(ref) ; unassign(ref) ; listComments(ref, {since?, limit})   # WP-171: the M10-head amendment below
 testConnection() -> HealthProbe                      # read-only probe (product/08 § Health and setup)
 ```
 Markdown → provider format converter (ADF for Jira Cloud, wiki markup for DC) lives in the provider module.
@@ -81,6 +82,19 @@ Markdown → provider format converter (ADF for Jira Cloud, wiki markup for DC) 
 > **Category normalisation:** `new` → `todo`; `indeterminate` and `in-flight` → `in_progress`;
 > `done` → `done`; anything else → `unknown`, with `raw_category` kept. The vendor documents no enum,
 > and the product owner observed the first three keys live (backlog 535).
+>
+> **As built at WP-171.** The six members and four flags are on the port
+> (`packages/application/src/ports/integrations/task-management.ts`), with the signatures above. The
+> refusal is `IntegrationUnsupportedError`, whose code is `unsupported_capability` (the error code the
+> port already had; there is no `unsupported` code) and whose `action` is the member's name;
+> `LIFECYCLE_MEMBER_CAPABILITY` maps each member to its flag (`assign` declares `selfIdentity`,
+> `assignToSelf` and `unassign`). `normaliseStatusCategory` is the port's one pure function and matches
+> the keys **exactly** — `DONE` is `unknown`. `listComments` keeps comments **created strictly after**
+> `since`, answers them **newest first** (`orderBy=-created`), takes `limit` 1–100 (Jira's default
+> page), and `total` is the window's count, never below `comments.length`, or `null`. `assignToSelf`
+> takes the ticket whoever holds it; the claim's re-read decides who won. Until WP-172, the **Jira
+> adapter declares the four flags `false` and refuses all six by name**, so the shared suite runs its
+> refusal branch against Jira as well as against the stub.
 >
 > **The binding's `lifecycle` block** (TD-029 decision 1) is part of every task-management provider's
 > binding schema. It is defined once in `packages/contracts`, and `pickup_status` is its `pick_up_from`.

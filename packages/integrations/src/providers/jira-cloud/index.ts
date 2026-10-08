@@ -76,6 +76,7 @@ import {
   IntegrationError,
   type IntegrationRef,
   IntegrationUnsupportedError,
+  type LifecycleMember,
   parseProviderData,
   type RateLimitPolicy,
   type SecretRedactor,
@@ -403,6 +404,16 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     createTicket: true,
     // Nothing downloads an attachment or extracts its text: `attachments_text` is always empty.
     attachments: false,
+    // The lifecycle members are WP-172's (research/15 J1–J6); until then each refuses by name.
+    lifecycleStatuses: false,
+    transitionsRead: false,
+    assign: false,
+    commentsRead: false,
+  };
+
+  /** WP-172 implements these; until then each throws `unsupported_capability` naming itself (BD-017). */
+  const unsupported = (member: LifecycleMember) => async (): Promise<never> => {
+    throw new IntegrationUnsupportedError(PROVIDER_ID, member);
   };
 
   const context = (): JiraActionContext => options.actionContext();
@@ -1288,6 +1299,12 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     linkMergeRequest,
     createTicket,
     resolveIdentity,
+    listStatuses: unsupported('listStatuses'),
+    listTransitions: unsupported('listTransitions'),
+    selfIdentity: unsupported('selfIdentity'),
+    assignToSelf: unsupported('assignToSelf'),
+    unassign: unsupported('unassign'),
+    listComments: unsupported('listComments'),
     // One guard, not two (standing rule 9). Round 1 wrapped `verify` in `capabilities.webhooks &&`
     // while the verifier itself accepted anything signed with the empty key: deleting the wrapper
     // killed no test, because the wrapper was the only thing working. Both facts are derived from

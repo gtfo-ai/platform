@@ -252,3 +252,139 @@ describe('the minute-grained window (divergence 11, WP-87 review round 2)', () =
     expect(await port.matchTickets(rule, { since: '2026-06-01T10:01:00.000Z' })).toEqual([]);
   });
 });
+
+describe('the ticket lifecycle (WP-171, divergences 12–16)', () => {
+  const WORKFLOW = [
+    { name: 'To pick up', rawCategory: 'new' },
+    { name: 'Doing', rawCategory: 'indeterminate' },
+    { name: 'Sent back', rawCategory: 'a-key-nobody-documented' },
+    { name: 'Finished', rawCategory: 'done' },
+    'Parked',
+  ] as const;
+  const lifecycle = (options: Partial<Options> = {}) =>
+    build({
+      statuses: WORKFLOW,
+      tickets: [{ key: 'FAKE-1', title: 'Totals are wrong', status: 'To pick up' }],
+      ...options,
+    });
+
+  it('lists its workflow with normalised categories, keeping an unknown key and a missing one', async () => {
+    expect(await lifecycle().listStatuses()).toEqual([
+      { id: 's-1', name: 'To pick up', category: 'todo', raw_category: 'new' },
+      { id: 's-2', name: 'Doing', category: 'in_progress', raw_category: 'indeterminate' },
+      {
+        id: 's-3',
+        name: 'Sent back',
+        category: 'unknown',
+        raw_category: 'a-key-nobody-documented',
+      },
+      { id: 's-4', name: 'Finished', category: 'done', raw_category: 'done' },
+      { id: 's-5', name: 'Parked', category: 'unknown', raw_category: null },
+    ]);
+  });
+
+  it('refuses a workflow that names a status twice, case-insensitively (divergence 14)', () => {
+    expect(() => build({ statuses: ['Doing', 'doing'], tickets: [] })).toThrow(/once/);
+  });
+
+  it('lists every other status as a transition named unlike its target (divergence 12)', async () => {
+    const transitions = await lifecycle().listTransitions(REF);
+    expect(transitions.map((transition) => transition.to.name)).toEqual([
+      'Doing',
+      'Sent back',
+      'Finished',
+      'Parked',
+    ]);
+    for (const transition of transitions) {
+      expect(transition.name).not.toBe(transition.to.name);
+    }
+    expect(transitions[0]?.to.category).toBe('in_progress');
+  });
+
+  it('acts as agentic-bot unless `self` names another account (divergence 16)', async () => {
+    expect(await lifecycle().selfIdentity()).toMatchObject({
+      external_id: 'agentic-bot',
+      verified: false,
+    });
+    const other = lifecycle({ self: { providerUserId: 'svc-9', displayName: 'Service' } });
+    expect(await other.selfIdentity()).toMatchObject({
+      external_id: 'svc-9',
+      display_name: 'Service',
+    });
+    const comment = await other.addComment(REF, 'hello');
+    const read = await other.readTicket(REF);
+    expect(read.comments.find((c) => c.id === comment.comment_id)?.author.external_id).toBe(
+      'svc-9',
+    );
+  });
+
+  it('answers a seeded assignee, leaves it on unassign, and assigning over it takes the ticket', async () => {
+    const port = lifecycle({
+      tickets: [{ key: 'FAKE-1', title: 'Taken', status: 'Doing', assignee: 'user-1' }],
+    });
+    expect((await port.readTicket(REF)).assignee).toMatchObject({
+      external_id: 'user-1',
+      verified: false,
+    });
+    expect(await port.unassign(REF)).toEqual({ changed: false });
+    expect((await port.readTicket(REF)).assignee?.external_id).toBe('user-1');
+    expect((await port.assignToSelf(REF)).changed).toBe(true);
+    expect((await port.readTicket(REF)).assignee?.external_id).toBe('agentic-bot');
+  });
+
+  it('dates seeded comments, keeps only those strictly after `since`, newest first (divergence 15)', async () => {
+    const port = lifecycle({
+      tickets: [
+        {
+          key: 'FAKE-1',
+          title: 'Talked about',
+          status: 'Doing',
+          comments: [
+            { authorId: 'user-1', body: 'first', createdAt: '2026-06-01T09:00:00.000Z' },
+            { authorId: 'user-1', body: 'at the horizon', createdAt: '2026-06-01T10:00:00.000Z' },
+            { authorId: 'user-1', body: 'tie, earlier', createdAt: '2026-06-01T11:00:00.000Z' },
+            { authorId: 'user-1', body: 'tie, later', createdAt: '2026-06-01T11:00:00.000Z' },
+          ],
+        },
+      ],
+    });
+    const page = await port.listComments(REF, { since: '2026-06-01T10:00:00.000Z', limit: 10 });
+    expect(page.comments.map((comment) => comment.body)).toEqual(['tie, later', 'tie, earlier']);
+    expect(page.total).toBe(2);
+    expect(page.comments[0]?.author.verified).toBe(true);
+    const cut = await port.listComments(REF, { limit: 1 });
+    expect(cut.comments.map((comment) => comment.body)).toEqual(['tie, later']);
+    expect(cut.total).toBe(4);
+  });
+
+  it('refuses a page size outside 1–100 as invalid_request', async () => {
+    await expect(lifecycle().listComments(REF, { limit: 101 })).rejects.toMatchObject({
+      code: 'invalid_request',
+    });
+  });
+
+  it.each([
+    ['lifecycleStatuses', 'listStatuses'],
+    ['transitionsRead', 'listTransitions'],
+    ['assign', 'assignToSelf'],
+    ['assign', 'unassign'],
+    ['assign', 'selfIdentity'],
+    ['commentsRead', 'listComments'],
+  ] as const)('refuses by name with %s off: %s', async (flag, member) => {
+    const port = lifecycle({ capabilities: { [flag]: false } });
+    const call = {
+      listStatuses: () => port.listStatuses(),
+      listTransitions: () => port.listTransitions(REF),
+      assignToSelf: () => port.assignToSelf(REF),
+      unassign: () => port.unassign(REF),
+      selfIdentity: () => port.selfIdentity(),
+      listComments: () => port.listComments(REF, { limit: 1 }),
+    }[member];
+    const error = await call().then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(IntegrationError);
+    expect(error).toMatchObject({ code: 'unsupported_capability', action: member });
+  });
+});

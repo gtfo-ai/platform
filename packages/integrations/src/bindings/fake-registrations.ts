@@ -35,6 +35,7 @@ import {
   type TicketPollPlan,
   type WebhookDelivery,
 } from '@platform/application';
+import { ticketLifecycleSchema } from '@platform/contracts';
 import * as z from 'zod';
 import { isFakeLogSelector } from '../logs/fake.js';
 import type { AnyProviderRegistration } from '../registry.js';
@@ -228,6 +229,12 @@ const fakeTaskManagementConfigSchema = z.strictObject({
    * `ticketScope` answers from, so a tier can set it the way an operator does.
    */
   project_keys: z.array(z.string().min(1)).default([]),
+  /**
+   * WP-171 criterion (5): the ticket lifecycle (BD-031, TD-029 decision 1) — **the** contracts
+   * definition, not a copy, so a tier configures the fake's lifecycle the way an operator configures
+   * Jira's. Nothing in the fake reads it yet; its reader is the application (WP-177).
+   */
+  lifecycle: ticketLifecycleSchema.optional(),
 });
 
 /** The plan the binding's config states — `null` unless it switched polling on. */

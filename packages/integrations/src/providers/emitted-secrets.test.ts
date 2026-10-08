@@ -1076,6 +1076,13 @@ const JIRA_SCENARIOS: Readonly<Record<string, string>> = {
   link_merge_request: 'linkMergeRequest',
   create_ticket: 'createTicket',
   resolve_identity: 'resolveIdentity',
+  // WP-171: refused by name until WP-172 implements them; the refusal is what they emit.
+  list_statuses: 'listStatuses',
+  list_transitions: 'listTransitions',
+  self_identity: 'selfIdentity',
+  assign_to_self: 'assignToSelf',
+  unassign: 'unassign',
+  list_comments: 'listComments',
   verify_delivery: 'inbound.verify',
   delivery_key: 'inbound.deliveryKey',
   normalise_delivery: 'inbound.normalise',
@@ -1146,6 +1153,22 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
       labels: [],
     });
     emitted.resolve_identity = await port.resolveIdentity({ email: 'dana@example.test' });
+    // WP-171: the six lifecycle members refuse by name until WP-172, so what each emits is its
+    // refusal, serialised as a log line would carry it. WP-172 replaces these with real calls.
+    const refusal = async (call: () => Promise<unknown>): Promise<string> => {
+      try {
+        await call();
+      } catch (error) {
+        return serialiseLikePino(error);
+      }
+      throw new Error('a lifecycle member answered where this build expects a refusal');
+    };
+    emitted.list_statuses = await refusal(() => port.listStatuses());
+    emitted.list_transitions = await refusal(() => port.listTransitions(ref));
+    emitted.self_identity = await refusal(() => port.selfIdentity());
+    emitted.assign_to_self = await refusal(() => port.assignToSelf(ref));
+    emitted.unassign = await refusal(() => port.unassign(ref));
+    emitted.list_comments = await refusal(() => port.listComments(ref, { limit: 10 }));
     emitted.link_merge_request = await port.linkMergeRequest(
       ref,
       // The MR url is the platform's own text, and it is published to the ticket as a remote link.

@@ -16,12 +16,24 @@ import type {
   ExternalIdentity,
   IgnoredDelivery,
   InboundContext,
+  LifecycleMember,
   TaskManagementPort,
   TicketRefInput,
   WebhookDelivery,
 } from '@platform/application';
-import { ticketPollPlanSchema, ticketSchema } from '@platform/application';
-import type { Id } from '@platform/contracts';
+import {
+  assignResultSchema,
+  commentPageSchema,
+  externalIdentitySchema,
+  LIFECYCLE_MEMBER_CAPABILITY,
+  lifecycleStatusSchema,
+  normaliseStatusCategory,
+  ticketPollPlanSchema,
+  ticketSchema,
+  ticketTransitionSchema,
+  unassignResultSchema,
+} from '@platform/application';
+import type { Id, TicketStatusCategory } from '@platform/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { expectCatalogueEvent, expectIntegrationError } from './shared.js';
 
@@ -84,9 +96,29 @@ export interface TaskManagementContractContext {
    * nobody labelled or move the poller's cursor past tickets it never read.
    */
   readonly polling: { readonly port: TaskManagementPort; readonly intervalSeconds: number };
+  /**
+   * The ticket lifecycle's half (WP-171), **required** when the provider declares any of the four
+   * lifecycle flags and unread otherwise — a provider that declares none is held to the refusal
+   * branch alone. The context's `ticket` starts **unassigned**.
+   */
+  readonly lifecycle?: TaskManagementLifecycleContext;
   readonly projectId: Id;
   readonly integrationId: Id;
   cleanup(): Promise<void>;
+}
+
+export interface TaskManagementLifecycleContext {
+  /**
+   * Status names the tracker has and the category each must normalise to — at least one, and the
+   * harness's own invented names (BD-031: no real tracker's names in a test). What keeps an adapter
+   * from answering every status `unknown`.
+   */
+  readonly expectedCategories: Readonly<Record<string, TicketStatusCategory>>;
+  /**
+   * Somebody other than the binding's own account takes the context's ticket in the tracker, out of
+   * band; answers that person's provider id.
+   */
+  assignElsewhere(): Promise<string>;
 }
 
 export interface TaskManagementContractHarness {
@@ -95,6 +127,210 @@ export interface TaskManagementContractHarness {
 }
 
 const WORKPAD_MARKER = 'agentic:workpad';
+
+// ── The ticket lifecycle (WP-171) ───────────────────────────────────────────
+//
+// Exported as plain async checks, not only as `it` blocks, so the canary in the runner can call one
+// against a port that is wrong in a known way and assert that it **rejects** — a permanent proof
+// that the clause can fail, rather than a one-off edit somebody once made and reverted.
+
+/** The one call per member the refusal branch makes, with arguments any provider accepts. */
+const callMember = (
+  context: TaskManagementContractContext,
+  member: LifecycleMember,
+): Promise<unknown> => {
+  const { port, ticket } = context;
+  switch (member) {
+    case 'listStatuses':
+      return port.listStatuses();
+    case 'listTransitions':
+      return port.listTransitions(ticket);
+    case 'selfIdentity':
+      return port.selfIdentity();
+    case 'assignToSelf':
+      return port.assignToSelf(ticket);
+    case 'unassign':
+      return port.unassign(ticket);
+    case 'listComments':
+      return port.listComments(ticket, { limit: 10 });
+  }
+};
+
+/** Whether the provider declares `member` (`LIFECYCLE_MEMBER_CAPABILITY`). */
+const declares = (port: TaskManagementPort, member: LifecycleMember): boolean =>
+  port.capabilities()[LIFECYCLE_MEMBER_CAPABILITY[member]];
+
+/**
+ * BD-017's *refuse by name, never silently*: a member the provider does not declare throws
+ * `unsupported_capability` whose `action` and message name the member — never an empty answer.
+ */
+export const expectRefusedByName = async (
+  context: TaskManagementContractContext,
+  member: LifecycleMember,
+): Promise<void> => {
+  const error = await expectIntegrationError(
+    () => callMember(context, member),
+    'unsupported_capability',
+  );
+  expect(error.action, 'the refusal names the member').toBe(member);
+  expect(error.message, 'the refusal names the member').toContain(member);
+};
+
+const lifecycleOf = (context: TaskManagementContractContext): TaskManagementLifecycleContext => {
+  expect(
+    context.lifecycle,
+    'a provider that declares a lifecycle flag supplies the lifecycle context',
+  ).toBeDefined();
+  return context.lifecycle as TaskManagementLifecycleContext;
+};
+
+const sameName = (left: string, right: string): boolean =>
+  left.toLowerCase() === right.toLowerCase();
+
+/** `listStatuses`: the tracker's statuses, once each, with the port's own normalised categories. */
+export const checkListStatuses = async (context: TaskManagementContractContext): Promise<void> => {
+  const statuses = (await context.port.listStatuses()).map((status) =>
+    lifecycleStatusSchema.parse(status),
+  );
+  expect(
+    statuses.length,
+    'a tracker with statuses answers them, never an empty list',
+  ).toBeGreaterThan(0);
+  for (const status of statuses) {
+    // The category is the port's function of the raw key, so no adapter keeps a table of its own.
+    expect(
+      { category: status.category, raw_category: status.raw_category },
+      `status ${status.name}`,
+    ).toEqual(normaliseStatusCategory(status.raw_category));
+  }
+  const names = statuses.map((status) => status.name.toLowerCase());
+  expect(new Set(names).size, 'the union over issue types names each status once').toBe(
+    names.length,
+  );
+  for (const name of [context.statuses.initial, context.statuses.target]) {
+    expect(
+      statuses.some((status) => sameName(status.name, name)),
+      `the workflow's status ${name} is listed`,
+    ).toBe(true);
+  }
+  const expected = Object.entries(lifecycleOf(context).expectedCategories);
+  expect(expected.length, 'the harness names at least one category to expect').toBeGreaterThan(0);
+  for (const [name, category] of expected) {
+    expect(
+      statuses.find((status) => sameName(status.name, name))?.category,
+      `the category of ${name}`,
+    ).toBe(category);
+  }
+};
+
+/** `listTransitions`: the moves the ticket can take, each naming its target status and category. */
+export const checkListTransitions = async (
+  context: TaskManagementContractContext,
+): Promise<void> => {
+  const transitions = (await context.port.listTransitions(context.ticket)).map((transition) =>
+    ticketTransitionSchema.parse(transition),
+  );
+  expect(
+    transitions.some((transition) => sameName(transition.to.name, context.statuses.target)),
+    'the legal target is reachable, named by its status',
+  ).toBe(true);
+};
+
+/** `selfIdentity` + `assignToSelf` + `unassign`: the claim lands on the binding's own account and is released. */
+export const checkClaimAndRelease = async (
+  context: TaskManagementContractContext,
+): Promise<void> => {
+  const { port, ticket } = context;
+  const self = externalIdentitySchema.parse(await port.selfIdentity());
+
+  const first = assignResultSchema.parse(await port.assignToSelf(ticket));
+  expect(first.changed, 'an unassigned ticket is claimed').toBe(true);
+  expect(first.assignee.external_id).toBe(self.external_id);
+  expect((await port.readTicket(ticket)).assignee?.external_id, 'the ticket shows the claim').toBe(
+    self.external_id,
+  );
+  expect(assignResultSchema.parse(await port.assignToSelf(ticket)).changed, 'idempotent').toBe(
+    false,
+  );
+
+  expect(unassignResultSchema.parse(await port.unassign(ticket)).changed).toBe(true);
+  expect((await port.readTicket(ticket)).assignee ?? null, 'released').toBeNull();
+  expect(unassignResultSchema.parse(await port.unassign(ticket)).changed, 'idempotent').toBe(false);
+};
+
+/** `unassign` never touches somebody else's assignment. */
+export const checkUnassignLeavesOthers = async (
+  context: TaskManagementContractContext,
+): Promise<void> => {
+  const other = await lifecycleOf(context).assignElsewhere();
+  const self = await context.port.selfIdentity();
+  expect(other, 'the harness assigns somebody other than the binding').not.toBe(self.external_id);
+  expect(unassignResultSchema.parse(await context.port.unassign(context.ticket))).toEqual({
+    changed: false,
+  });
+  expect((await context.port.readTicket(context.ticket)).assignee?.external_id).toBe(other);
+};
+
+/** `listComments`: only comments created after `since`, newest first, bounded by `limit`. */
+export const checkListComments = async (context: TaskManagementContractContext): Promise<void> => {
+  const { port, ticket } = context;
+  const horizon = await port.addComment(ticket, 'before the horizon');
+  const horizonAt = (await port.readTicket(ticket)).comments.find(
+    (comment) => comment.id === horizon.comment_id,
+  )?.created_at;
+  expect(horizonAt, 'the comment written through the port is read back').toBeDefined();
+  const older = await port.addComment(ticket, 'after the horizon, first');
+  const newer = await port.addComment(ticket, 'after the horizon, second');
+
+  const window = commentPageSchema.parse(
+    await port.listComments(ticket, { since: horizonAt as string, limit: 10 }),
+  );
+  expect(
+    window.comments.map((comment) => comment.id),
+    'only the newer comments, newest first',
+  ).toEqual([newer.comment_id, older.comment_id]);
+  if (window.total !== null) {
+    expect(window.total).toBeGreaterThanOrEqual(window.comments.length);
+  }
+
+  const page = commentPageSchema.parse(
+    await port.listComments(ticket, { since: horizonAt as string, limit: 1 }),
+  );
+  expect(
+    page.comments.map((comment) => comment.id),
+    'a limit cuts the oldest',
+  ).toEqual([newer.comment_id]);
+  if (page.total !== null) {
+    expect(page.total, 'a total never undercounts the window').toBeGreaterThanOrEqual(2);
+  }
+
+  const whole = commentPageSchema.parse(await port.listComments(ticket, { limit: 100 }));
+  expect(whole.comments.map((comment) => comment.id)).toContain(horizon.comment_id);
+  const instants = whole.comments.map((comment) => Date.parse(comment.created_at));
+  expect(instants, 'the whole thread is newest first too').toEqual(
+    instants.toSorted((left, right) => right - left),
+  );
+};
+
+/**
+ * Runs `check` when the provider declares `member`, and the refusal branch when it does not — so
+ * every clause is asserted one way or the other, never skipped (BD-017).
+ */
+const eitherBranch = async (
+  context: TaskManagementContractContext,
+  members: readonly LifecycleMember[],
+  check: (context: TaskManagementContractContext) => Promise<void>,
+): Promise<void> => {
+  const declared = members.filter((member) => declares(context.port, member));
+  if (declared.length === members.length) {
+    await check(context);
+    return;
+  }
+  // A clause spanning several members needs all of them; each undeclared one must refuse by name.
+  for (const member of members.filter((candidate) => !declared.includes(candidate))) {
+    await expectRefusedByName(context, member);
+  }
+};
 
 export const runTaskManagementContract = (harness: TaskManagementContractHarness): void => {
   describe(`TaskManagement contract — ${harness.name}`, () => {
@@ -134,6 +370,10 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
             'adf',
             'createTicket',
             'attachments',
+            'lifecycleStatuses',
+            'transitionsRead',
+            'assign',
+            'commentsRead',
           ]),
         );
       });
@@ -452,6 +692,45 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
           result.ignored[0]?.detail.length,
           'and a detail, because a silent drop is undebuggable',
         ).toBeGreaterThan(0);
+      });
+    });
+
+    /**
+     * WP-171 (TD-029 decision 2, technical/06's M10-head amendment): each clause runs its behaviour
+     * when the provider declares the member and the refusal branch when it does not, so neither an
+     * unimplemented member nor a silent empty answer can pass.
+     */
+    describe('the ticket lifecycle (WP-171)', () => {
+      it('refuses by name every lifecycle member its flags do not declare', async () => {
+        for (const member of Object.keys(LIFECYCLE_MEMBER_CAPABILITY) as LifecycleMember[]) {
+          if (!declares(port, member)) {
+            await expectRefusedByName(context, member);
+          }
+        }
+      });
+
+      it('lists the tracker’s statuses with normalised categories', async () => {
+        await eitherBranch(context, ['listStatuses'], checkListStatuses);
+      });
+
+      it('lists the ticket’s transitions by their target status', async () => {
+        await eitherBranch(context, ['listTransitions'], checkListTransitions);
+      });
+
+      it('claims the ticket as selfIdentity, shown by readTicket, and releases it', async () => {
+        await eitherBranch(
+          context,
+          ['selfIdentity', 'assignToSelf', 'unassign'],
+          checkClaimAndRelease,
+        );
+      });
+
+      it('leaves another person’s assignment untouched on unassign (changed: false)', async () => {
+        await eitherBranch(context, ['selfIdentity', 'unassign'], checkUnassignLeavesOthers);
+      });
+
+      it('lists only the comments newer than `since`, newest first', async () => {
+        await eitherBranch(context, ['listComments'], checkListComments);
       });
     });
 

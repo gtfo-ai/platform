@@ -70,6 +70,7 @@ Vendor facts are in `docs/research/15-tracker-lifecycle-and-mr-conversation.md`.
    the shared contract suite asserts both branches. Jira uses research J1, J3, J4, J5 and J6, never J2.
    The git port gains no method: its `listDiscussions` contract is tightened so that a general note is
    listed as its own discussion whatever `resolvable` says.
+   > **Amendment, as built at WP-171 (2026-10-08):** no `IntegrationError('unsupported')` exists; the refusal is the port's existing `IntegrationUnsupportedError(provider, member)`, code `unsupported_capability`, with `action` set to the member's name, which is how "naming the method" is asserted (technical/06, "As built at WP-171").
 3. **Relation to `status_mapping`.** When a binding maps any slot other than `pick_up_from`, the slots are
    the project's ticket lifecycle and **`status_mapping` is not applied at all**. The effective-config
    read publishes `status_mapping_superseded: true` and a warning. A project with no slot mapped applies

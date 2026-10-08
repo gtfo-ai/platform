@@ -17,9 +17,13 @@
  */
 import {
   isoDateTimeSchema,
+  MAX_LIFECYCLE_STATUS_NAME_CHARS,
   nonEmptyStringSchema,
+  type TicketStatusCategory,
   ticketIdSchema,
   ticketRefSchema,
+  ticketStatusCategorySchema,
+  ticketStatusSchema,
   urlSchema,
   workpadRefSchema,
 } from '@platform/contracts';
@@ -236,6 +240,133 @@ export const ticketDraftSchema = z.strictObject({
   priority: nonEmptyStringSchema.nullish(),
 });
 
+// ── The ticket lifecycle (WP-171, TD-029 decision 2) ────────────────────────
+
+/**
+ * One status of the tracker, as {@link TaskManagementPort.listStatuses} answers it — the contracts'
+ * `ticketStatusSchema`, named here so the port reads as one document. `name` is the tracker's own
+ * display name (untrusted provider text, BD-022); `category` is {@link normaliseStatusCategory}'s
+ * answer over `raw_category`, the provider's own key.
+ */
+export const lifecycleStatusSchema = ticketStatusSchema;
+
+/**
+ * What {@link normaliseStatusCategory} answers: the platform's category and the provider's own
+ * key, kept verbatim so a spelling nobody documented is visible rather than silently mapped.
+ */
+export interface NormalisedStatusCategory {
+  readonly category: TicketStatusCategory;
+  readonly raw_category: string | null;
+}
+
+/**
+ * The provider category keys the platform recognises, and what each means (research/15 J1a, J3).
+ * The vendor documents **no** closed set: `new`, `indeterminate` and `done` were observed live
+ * (backlog 535) and `in-flight` is the transitions endpoint's own documented example — so this table
+ * is what is known, and every other key is `unknown`.
+ */
+const STATUS_CATEGORY_BY_KEY: ReadonlyMap<string, TicketStatusCategory> = new Map([
+  ['new', 'todo'],
+  ['indeterminate', 'in_progress'],
+  ['in-flight', 'in_progress'],
+  ['done', 'done'],
+]);
+
+/**
+ * The provider's status-category key → the platform's category (WP-171 ruling (b)). Pure.
+ *
+ * **Exact match**, no case folding or trimming: a key the table does not hold — a fourth spelling,
+ * an upper-case variant, the empty string, or no key at all — is `unknown`, never a guess. The raw
+ * key is kept as given (`null` when the provider answered none, or answered the empty string, which
+ * `ticketStatusSchema` would refuse as a key).
+ */
+export const normaliseStatusCategory = (
+  rawKey: string | null | undefined,
+): NormalisedStatusCategory => {
+  const raw = rawKey === undefined || rawKey === null || rawKey === '' ? null : rawKey;
+  return {
+    category: (raw === null ? undefined : STATUS_CATEGORY_BY_KEY.get(raw)) ?? 'unknown',
+    raw_category: raw,
+  };
+};
+
+/**
+ * One transition a ticket can take now (research/15 J3), as
+ * {@link TaskManagementPort.listTransitions} answers it. `name` is the **transition's** own label,
+ * which a tracker may spell differently from its target (emoji, verbs) — so nothing resolves a
+ * transition by it: `transition` targets `to.name`, the status.
+ */
+export const ticketTransitionSchema = z.strictObject({
+  id: nonEmptyStringSchema.max(255),
+  name: nonEmptyStringSchema.max(255),
+  to: z.strictObject({
+    name: nonEmptyStringSchema.max(MAX_LIFECYCLE_STATUS_NAME_CHARS),
+    category: ticketStatusCategorySchema,
+  }),
+});
+
+/**
+ * What {@link TaskManagementPort.assignToSelf} did. `changed: false` means the binding's own account
+ * already held the ticket; `assignee` is the account that holds it afterwards — the binding's own.
+ */
+export const assignResultSchema = z.strictObject({
+  changed: z.boolean(),
+  assignee: externalIdentitySchema,
+});
+
+/**
+ * What {@link TaskManagementPort.unassign} did. `changed: false` means nothing was written: the
+ * ticket was unassigned already, or **somebody else holds it**, whom the platform never unassigns.
+ */
+export const unassignResultSchema = z.strictObject({
+  changed: z.boolean(),
+});
+
+/** The most comments one {@link TaskManagementPort.listComments} call answers — Jira's default page (research/15 J5). */
+export const MAX_LIST_COMMENTS_LIMIT = 100;
+
+/** {@link TaskManagementPort.listComments}' options: the window's horizon and the page size. */
+export const listCommentsOptionsSchema = z.strictObject({
+  /** Only comments **created strictly after** this instant; absent or `null` is the whole thread. */
+  since: isoDateTimeSchema.nullish(),
+  limit: z.int().min(1).max(MAX_LIST_COMMENTS_LIMIT),
+});
+
+/**
+ * {@link TaskManagementPort.listComments}' answer. `comments` is newest first; `total` is how many
+ * comments the window holds in all — never below `comments.length` — or `null` when the provider
+ * did not say, which a reader takes as "possibly more", never "no more" (standing rule 16, the
+ * rule `Ticket.comment_total` states).
+ */
+export const commentPageSchema = z.strictObject({
+  comments: z.array(ticketCommentSchema),
+  total: z.int().nonnegative().nullable(),
+});
+
+/**
+ * The six lifecycle members (WP-171 ruling (a)) and the capability flag that declares each. An
+ * adapter whose flag is `false` throws `IntegrationUnsupportedError` (`unsupported_capability`)
+ * **naming the member** — `action` is the member's name — and never answers an empty list in its
+ * place (BD-017). The shared contract suite runs both branches from this table.
+ */
+export const LIFECYCLE_MEMBER_CAPABILITY = {
+  listStatuses: 'lifecycleStatuses',
+  listTransitions: 'transitionsRead',
+  selfIdentity: 'assign',
+  assignToSelf: 'assign',
+  unassign: 'assign',
+  listComments: 'commentsRead',
+} as const satisfies Record<string, keyof TaskManagementCapabilities>;
+
+export type LifecycleMember = keyof typeof LIFECYCLE_MEMBER_CAPABILITY;
+
+export type LifecycleStatus = z.infer<typeof lifecycleStatusSchema>;
+export type TicketTransition = z.infer<typeof ticketTransitionSchema>;
+export type AssignResult = z.infer<typeof assignResultSchema>;
+export type UnassignResult = z.infer<typeof unassignResultSchema>;
+export type ListCommentsOptions = z.input<typeof listCommentsOptionsSchema>;
+export type CommentPage = z.infer<typeof commentPageSchema>;
+
 export type TicketLink = z.infer<typeof ticketLinkSchema>;
 export type TicketComment = z.infer<typeof ticketCommentSchema>;
 export type Ticket = z.infer<typeof ticketSchema>;
@@ -267,6 +398,14 @@ export interface TaskManagementCapabilities {
   readonly createTicket: boolean;
   /** Attachment text extraction. */
   readonly attachments: boolean;
+  /** `listStatuses` — the tracker's statuses with their categories (WP-171). */
+  readonly lifecycleStatuses: boolean;
+  /** `listTransitions` — the transitions a ticket can take now (WP-171). */
+  readonly transitionsRead: boolean;
+  /** `selfIdentity`, `assignToSelf` and `unassign` — the claim (WP-171, TD-029 decision 5). */
+  readonly assign: boolean;
+  /** `listComments` — the human-return window's re-read (WP-171, TD-029). */
+  readonly commentsRead: boolean;
 }
 
 /** Catalogue events a task-management delivery can produce (technical/02). */
@@ -387,6 +526,48 @@ export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabi
     readonly providerUserId?: string;
     readonly email?: string;
   }) => Promise<ExternalIdentityValue | null>;
+
+  // ── The ticket lifecycle (WP-171, technical/06's M10-head amendment) ──────
+  // Each member is declared by a capability flag (`LIFECYCLE_MEMBER_CAPABILITY`); with the flag
+  // off it throws `IntegrationUnsupportedError` naming the member, never answers an empty value.
+
+  /**
+   * The tracker's statuses, each with its normalised category — **the union over issue types**,
+   * one entry per status. What a lifecycle slot may name and what the setup check validates
+   * against. Never empty for a tracker that has statuses: an empty answer is a refusal wearing a
+   * result's clothes. A read.
+   */
+  readonly listStatuses: () => Promise<readonly LifecycleStatus[]>;
+
+  /** The transitions the ticket can take **now** (research/15 J3) — diagnosis and the setup check. A read. */
+  readonly listTransitions: (ref: TicketRefInput) => Promise<readonly TicketTransition[]>;
+
+  /** The account the binding's credential acts as — the claim's "me". A read. */
+  readonly selfIdentity: () => Promise<ExternalIdentityValue>;
+
+  /**
+   * Assigns the ticket to {@link selfIdentity}, whoever held it — the claim's write (TD-029
+   * decision 5), whose caller re-reads the ticket to see who won. Idempotent: already held is
+   * `{changed: false}`. A mutation, through the executor.
+   */
+  readonly assignToSelf: (ref: TicketRefInput) => Promise<AssignResult>;
+
+  /**
+   * Unassigns the ticket **only when the binding's own account holds it**; anybody else's
+   * assignment, or none, is `{changed: false}` and nothing is written. A mutation, through the
+   * executor.
+   */
+  readonly unassign: (ref: TicketRefInput) => Promise<UnassignResult>;
+
+  /**
+   * The ticket's comments created strictly after `since` (the whole thread when absent), **newest
+   * first** — Jira's `orderBy=-created` — at most `limit` ({@link MAX_LIST_COMMENTS_LIMIT}), with
+   * the window's `total` or `null`. Ordered by `created_at`, never by id (ids are opaque). A read.
+   */
+  readonly listComments: (
+    ref: TicketRefInput,
+    options: ListCommentsOptions,
+  ) => Promise<CommentPage>;
 
   readonly inbound: InboundNormaliser<TaskManagementInboundEvent>;
 }
