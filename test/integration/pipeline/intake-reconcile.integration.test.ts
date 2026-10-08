@@ -2,7 +2,7 @@
  * The query behind PROGRESS backlog **20**, against a real PostgreSQL 18 — WP-15c.
  *
  * The pass itself is unit-tested against a store double; the store *is* the interesting part, and
- * it is SQL over the partitioned event log joined against `tasks`. Four predicates, each of which
+ * it is SQL over the partitioned event log joined against `tasks`. Five predicates, each of which
  * fails a different way if it is wrong:
  *
  *  - **no task row** for `(project, provider, key, mode = 'normal')` — the tuple
@@ -12,7 +12,9 @@
  *  - **not already re-emitted** by this component, which bounds the recovery to one attempt per
  *    ticket and is what stops an event log growing behind a permanently failing intake;
  *  - **one row per ticket**, because a ticket legitimately matches more than once (a poll that
- *    overlapped a webhook) and two rows would enqueue two doomed intakes.
+ *    overlapped a webhook) and two rows would enqueue two doomed intakes;
+ *  - **the latest match not answered by a skip** (backlog 542): a `ticket.intake.skipped` whose
+ *    `cause_event_id` is that match is intake's answer, not a lost wake-up.
  */
 import { randomUUID } from 'node:crypto';
 import {
@@ -81,6 +83,39 @@ const appendMatch = async (options: {
     ],
   );
   return id;
+};
+
+/** What `saga.ts`'s `recordIntakeSkip` appends: the skip, caused by the match intake read. */
+const appendSkip = async (options: {
+  readonly key: string;
+  readonly causeEventId: string;
+  readonly minutesAgo?: number;
+}): Promise<void> => {
+  streamSeq += 1;
+  const occurredAt = new Date(Date.now() - (options.minutesAgo ?? 29) * 60_000).toISOString();
+  await pool.query(
+    `insert into events (id, stream_type, stream_id, stream_seq, type, payload, actor, occurred_at,
+                         cause_event_id)
+       values ($1, 'project', $2, $3, 'ticket.intake.skipped', $4::jsonb, $5::jsonb,
+               $6::timestamptz, $7)`,
+    [
+      randomUUID(),
+      projectId,
+      streamSeq,
+      JSON.stringify({
+        project_id: projectId,
+        ticket: {
+          provider: 'jira-cloud',
+          key: options.key,
+          url: `https://acme.atlassian.net/browse/${options.key}`,
+        },
+        reason: 'assigned',
+      }),
+      JSON.stringify({ kind: 'system', component: 'pipeline' }),
+      occurredAt,
+      options.causeEventId,
+    ],
+  );
 };
 
 const insertTask = async (key: string, mode = 'normal', ticketId: string | null = null) => {
@@ -215,6 +250,49 @@ describe('finding the tickets nothing started', () => {
     const found = await find();
     expect(found).toHaveLength(1);
     expect(ticketKeyOf(found[0])).toBe('ACME-1');
+  });
+});
+
+/**
+ * Backlog 542: since WP-177 a matched ticket with no task row is not always a lost wake-up — intake
+ * may have read it, found it assigned to somebody else and recorded `ticket.intake.skipped`, caused
+ * by that match. The skip answers **that** match and no other.
+ */
+describe('a match intake skipped (backlog 542)', () => {
+  it('does not report a match whose intake recorded a skip caused by it', async () => {
+    const match = await appendMatch({ key: 'ACME-1', minutesAgo: 30 });
+    await appendSkip({ key: 'ACME-1', causeEventId: match, minutesAgo: 29 });
+
+    expect(await find(), 'the skip is intake answering, not a wake-up lost').toEqual([]);
+  });
+
+  it('still reports a later match of a skipped ticket whose wake-up was lost', async () => {
+    const skipped = await appendMatch({ key: 'ACME-1', minutesAgo: 30 });
+    await appendSkip({ key: 'ACME-1', causeEventId: skipped, minutesAgo: 29 });
+    const lost = await appendMatch({ key: 'ACME-1', minutesAgo: 20 });
+
+    const found = await find();
+    expect(found, 'the skip names the first match, not the ticket').toHaveLength(1);
+    expect(found[0]).toMatchObject({ eventId: lost, projectId });
+  });
+
+  it('does not reach behind a skipped latest match to an older one', async () => {
+    await appendMatch({ key: 'ACME-1', minutesAgo: 30 });
+    const latest = await appendMatch({ key: 'ACME-1', minutesAgo: 20 });
+    await appendSkip({ key: 'ACME-1', causeEventId: latest, minutesAgo: 19 });
+
+    expect(
+      await find(),
+      "intake answered the ticket's newest announcement; re-emitting an older one reads it again",
+    ).toEqual([]);
+  });
+
+  it('keeps a skip of one ticket from hiding another', async () => {
+    const skipped = await appendMatch({ key: 'ACME-1' });
+    await appendSkip({ key: 'ACME-1', causeEventId: skipped });
+    await appendMatch({ key: 'ACME-2' });
+
+    expect((await find()).map(ticketKeyOf)).toEqual(['ACME-2']);
   });
 });
 

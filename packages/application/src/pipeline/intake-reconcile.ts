@@ -25,7 +25,9 @@
  *
  * The two criteria coexist because **they name different units**: dedup is a statement about a
  * *delivery*, recovery is a statement about a *task*. So this finds matched tickets with no task
- * row and appends a **new** `ticket.matched`, leaving the inbox untouched. It is safe to run blind
+ * row — and no `ticket.intake.skipped` answering the latest match, since WP-177 intake may decline a
+ * ticket on purpose (backlog 542) — and appends a **new** `ticket.matched`, leaving the inbox
+ * untouched. It is safe to run blind
  * because intake is idempotent on `tasks_project_id_ticket_key_mode` (`saga.ts`'s `findByTicket`).
  *
  * ## Bounded on purpose: once per ticket
@@ -85,7 +87,8 @@ export interface UnstartedMatch {
 export interface IntakeReconciliationStore {
   /**
    * Matched tickets older than `olderThan` with no `mode: 'normal'` task row, excluding any this
-   * component has already re-emitted.
+   * component has already re-emitted and any whose latest match intake answered with a
+   * `ticket.intake.skipped` caused by it (WP-177's assigned-elsewhere skip, PROGRESS backlog 542).
    *
    * @param limit bounds one pass, so a backlog cannot turn into one enormous transaction.
    */
