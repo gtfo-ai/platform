@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { censusFiles } from '../../../../scripts/census-files.mjs';
+import { initScratchRepository } from '../../../../scripts/git-scratch-env.mjs';
 
 /** The adapter, and nothing else. Tests are excluded by the file filter below. */
 const WRITER_SITES_ALLOWED = new Set(['packages/infrastructure/src/stats/postgres-stats-store.ts']);
@@ -69,10 +70,10 @@ describe('the census that keeps each statistics projection to one writer', () =>
   it('names a planted writer whether it is tracked or merely untracked, and skips an ignored one', () => {
     const temporary = mkdtempSync(join(tmpdir(), 'stats-census-'));
     try {
+      const env = initScratchRepository(temporary);
       const git = (...args: string[]): void => {
-        execFileSync('git', args, { cwd: temporary, stdio: 'ignore' });
+        execFileSync('git', args, { cwd: temporary, stdio: 'ignore', env });
       };
-      git('init', '-q');
       writeFileSync(join(temporary, '.gitignore'), 'ignored.ts\n');
       // Assembled rather than written out: a literal of the matched form would make *this* file a
       // writer site when the cases above read it, which is how the pool census first failed

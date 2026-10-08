@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
 import { afterAll, describe, expect, it } from 'vitest';
+import { checkoutGitEnv } from './git-scratch-env.mjs';
 import { isProgram } from './is-program.mjs';
 
 /**
@@ -28,7 +29,8 @@ const run = (script: string, ...args: string[]) =>
   spawnSync(process.execPath, [join(linked, script), ...args], {
     cwd: scratch,
     encoding: 'utf8',
-    env: { ...process.env, GITHUB_OUTPUT: '' },
+    // The scripts read this checkout (their own location names it), never a repository `GIT_DIR` names.
+    env: { ...checkoutGitEnv(), GITHUB_OUTPUT: '' },
   });
 
 describe('the "am I the program?" guard through a symlink (backlog 258)', () => {

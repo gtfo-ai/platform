@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
+import { initScratchRepository, scratchGitEnv } from './git-scratch-env.mjs';
 
 /**
  * `check-conflict.mjs` against **real** repositories built with git.
@@ -46,18 +47,13 @@ import { afterAll, describe, expect, it } from 'vitest';
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 
 /** The host's git configuration is not part of these fixtures (see `check-ignored.test.ts`). */
-const GIT_ENV = {
-  ...process.env,
-  GIT_CONFIG_GLOBAL: '/dev/null',
-  GIT_CONFIG_SYSTEM: '/dev/null',
-  GIT_AUTHOR_NAME: 'Conflict Guard Fixture',
-  GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
-  GIT_COMMITTER_NAME: 'Conflict Guard Fixture',
-  GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
-};
+const FIXTURE_AUTHOR = { name: 'Conflict Guard Fixture', email: 'fixture@example.invalid' };
+/** `scratchGitEnv` (WP-162): no inherited `GIT_*`, no host configuration, no hooks, a ceiling. */
+const gitEnv = (root: string): Record<string, string> =>
+  scratchGitEnv(root, { author: FIXTURE_AUTHOR });
 
 const git = (cwd: string, ...args: readonly string[]): string => {
-  const result = spawnSync('git', [...args], { cwd, env: GIT_ENV, encoding: 'utf8' });
+  const result = spawnSync('git', [...args], { cwd, env: gitEnv(cwd), encoding: 'utf8' });
   if (result.error !== undefined || result.status !== 0) {
     throw new Error(
       `fixture setup failed: git ${args.join(' ')} exited ${result.status}: ${result.stderr}`,
@@ -68,7 +64,7 @@ const git = (cwd: string, ...args: readonly string[]): string => {
 
 /** For the one command that is *expected* to fail: the merge that produces the conflict. */
 const gitMayFail = (cwd: string, ...args: readonly string[]): number | null =>
-  spawnSync('git', [...args], { cwd, env: GIT_ENV, encoding: 'utf8' }).status;
+  spawnSync('git', [...args], { cwd, env: gitEnv(cwd), encoding: 'utf8' }).status;
 
 const roots: string[] = [];
 
@@ -112,7 +108,7 @@ const repository = (files: Record<string, string | Uint8Array>): string => {
     writeFileSync(full, contents);
   }
   installGuard(root);
-  git(root, 'init', '-q', '-b', 'main', '.');
+  initScratchRepository(root, { author: FIXTURE_AUTHOR, initArgs: ['-b', 'main', '.'] });
   excludeGuard(root);
   git(root, 'add', '-A', '--', ...Object.keys(files));
   git(root, 'commit', '-q', '-m', 'fixture');
@@ -122,7 +118,7 @@ const repository = (files: Record<string, string | Uint8Array>): string => {
 const runGuard = (root: string): { status: number | null; stdout: string; stderr: string } => {
   const result = spawnSync(process.execPath, [join(root, 'scripts', 'check-conflict.mjs')], {
     cwd: root,
-    env: GIT_ENV,
+    env: gitEnv(root),
     encoding: 'utf8',
   });
   if (result.error !== undefined) {
@@ -510,7 +506,7 @@ describe('check-conflict.mjs', () => {
       roots.push(root);
       symlinkSync('nowhere', join(root, 'link'));
       installGuard(root);
-      git(root, 'init', '-q', '-b', 'main', '.');
+      initScratchRepository(root, { author: FIXTURE_AUTHOR, initArgs: ['-b', 'main', '.'] });
       excludeGuard(root);
       git(root, 'add', '-A', '--', 'link');
       git(root, 'commit', '-q', '-m', 'fixture');
@@ -531,7 +527,7 @@ describe('check-conflict.mjs', () => {
       const root = realpathSync(mkdtempSync(join(tmpdir(), 'conflict-check-')));
       roots.push(root);
       installGuard(root);
-      git(root, 'init', '-q', '-b', 'main', '.');
+      initScratchRepository(root, { author: FIXTURE_AUTHOR, initArgs: ['-b', 'main', '.'] });
       excludeGuard(root);
 
       const result = runGuard(root);

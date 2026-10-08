@@ -39,6 +39,7 @@ import {
   composeKnowledgeIndexing,
 } from '../../../apps/server/src/knowledge.js';
 import { createProjectSettingsPort } from '../../../apps/server/src/pipeline.js';
+import { scratchGitEnv } from '../../../scripts/git-scratch-env.mjs';
 import { createTestDatabase, createTestPool, type TestDatabase } from '../support/postgres.js';
 
 const execFileAsync = promisify(execFile);
@@ -88,7 +89,11 @@ let beforeStart: {
 let unreadable: { projectId: Id };
 
 const git = async (args: readonly string[]): Promise<string> => {
-  const { stdout } = await execFileAsync('git', [...args], { maxBuffer: 8 * 1024 * 1024 });
+  // WP-162: every repository this file builds is under `workspace`; no inherited `GIT_*`.
+  const { stdout } = await execFileAsync('git', [...args], {
+    env: scratchGitEnv(workspace),
+    maxBuffer: 8 * 1024 * 1024,
+  });
   return stdout.trim();
 };
 

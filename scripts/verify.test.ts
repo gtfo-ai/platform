@@ -2,7 +2,11 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import vitestConfig, { PROCESS_SUITES } from '../vitest.config.js';
+import vitestConfig, {
+  GIT_FIXTURE_ISOLATION_SUITE,
+  PROCESS_SUITES,
+  STRUCTURAL_WAIT_SUITES,
+} from '../vitest.config.js';
 import { censusFiles } from './census-files.mjs';
 import { TARGETS, VERIFY_GROUPS } from './verify-targets.js';
 
@@ -236,12 +240,13 @@ describe('the vitest projects and the verification targets', () => {
 });
 
 /**
- * The `process` project holds exactly the test files that use a structural wait (WP-69).
+ * The `process` project holds exactly the test files that use a structural wait (WP-69), plus the
+ * one suite of WP-162 (d) that starts a whole vitest run (`GIT_FIXTURE_ISOLATION_SUITE`).
  *
  * A structural wait takes its deadline from the running test's budget, and that budget is only
  * right in the project whose scheduling it was chosen for. So the membership is read off what the
  * files import rather than kept by hand: a new file that imports `structural-wait.js` and is not in
- * `PROCESS_SUITES` runs in the parallel group — the class this row closed — and fails here instead.
+ * `STRUCTURAL_WAIT_SUITES` runs in the parallel group — the class this row closed — and fails here instead.
  * What it cannot see (review round 1): a dynamic `import()` of the module, and a test that reaches it
  * through a non-test helper file.
  */
@@ -257,7 +262,14 @@ describe('the process project’s membership', () => {
       .map((file) => file.path)
       .sort();
     expect(importers.length, 'no test file imports structural-wait.js').toBeGreaterThan(0);
-    expect(importers).toEqual([...PROCESS_SUITES].sort());
+    expect(importers).toEqual([...STRUCTURAL_WAIT_SUITES].sort());
+  });
+
+  it('is the structural waits and the git-fixture reproduction, and nothing else (WP-162)', () => {
+    expect([...PROCESS_SUITES].sort()).toEqual(
+      [...STRUCTURAL_WAIT_SUITES, GIT_FIXTURE_ISOLATION_SUITE].sort(),
+    );
+    expect(STRUCTURAL_WAIT_SUITES).not.toContain(GIT_FIXTURE_ISOLATION_SUITE);
   });
 
   it('recognises the import spellings a test file uses, and not a mention in prose', () => {

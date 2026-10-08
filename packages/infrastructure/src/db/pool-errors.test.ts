@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import type { LogFields, Logger } from '@platform/application';
 import { describe, expect, it } from 'vitest';
 import { censusFiles } from '../../../../scripts/census-files.mjs';
+import { initScratchRepository } from '../../../../scripts/git-scratch-env.mjs';
 import { createDatabasePool } from './client.js';
 import { CONNECTION_LOSS_CODES, errorCode, isConnectionLoss } from './pool-errors.js';
 
@@ -181,10 +182,10 @@ describe('the census that keeps every pool guarded', () => {
     // them is wanted.
     const root = mkdtempSync(join(tmpdir(), 'pool-census-'));
     try {
+      const env = initScratchRepository(root);
       const git = (...args: string[]): void => {
-        execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+        execFileSync('git', args, { cwd: root, stdio: 'ignore', env });
       };
-      git('init', '-q');
       writeFileSync(join(root, '.gitignore'), 'ignored.ts\n');
       // Assembled rather than written out: a literal of the matched form would make *this* file a
       // pool site when the case above reads it, which is the exact way this census first failed.
@@ -280,10 +281,10 @@ describe('the census that keeps every bare client owned by the harness', () => {
   it('names a planted client whether it is tracked or merely untracked, and skips an ignored one', () => {
     const root = mkdtempSync(join(tmpdir(), 'client-census-'));
     try {
+      const env = initScratchRepository(root);
       const git = (...args: string[]): void => {
-        execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+        execFileSync('git', args, { cwd: root, stdio: 'ignore', env });
       };
-      git('init', '-q');
       writeFileSync(join(root, '.gitignore'), 'ignored.ts\n');
       const constructed = `import pg from 'pg';\nexport const c = new pg.${'Client'}({});\n`;
       const imported = `import { ${'Client'} as Bare } from '${'pg'}';\nexport const c = new Bare();\n`;

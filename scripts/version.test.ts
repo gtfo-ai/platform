@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { ParsedCommit } from './changelog.mjs';
+import { initScratchRepository, scratchGitEnv } from './git-scratch-env.mjs';
 import {
   compareVersions,
   FIRST_VERSION,
@@ -175,13 +176,13 @@ const git = (cwd: string, ...args: string[]): string =>
       'core.hooksPath=/dev/null',
       ...args,
     ],
-    { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    { cwd, env: scratchGitEnv(cwd), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
   );
 
 const repositoryWith = (steps: readonly string[]): string => {
   const dir = mkdtempSync(join(tmpdir(), 'version-'));
   scratches.push(dir);
-  git(dir, 'init', '-q', '-b', 'main');
+  initScratchRepository(dir, { initArgs: ['-b', 'main'] });
   for (const step of steps) {
     if (step.startsWith('tag:')) git(dir, 'tag', step.slice(4));
     else git(dir, 'commit', '--allow-empty', '--no-verify', '-q', '-m', step);
@@ -230,7 +231,7 @@ describe('nextVersionOf (a repository’s tags and history)', () => {
     const origin = repositoryWith(['feat: one', 'tag:v0.1.0', 'fix: two']);
     const clone = mkdtempSync(join(tmpdir(), 'version-shallow-'));
     scratches.push(clone);
-    git(tmpdir(), 'clone', '-q', '--depth', '1', `file://${origin}`, clone);
+    git(clone, 'clone', '-q', '--depth', '1', `file://${origin}`, '.');
     expect(() => nextVersionOf(clone)).toThrow(/refusing to compute a version in a shallow clone/);
     // …and the full history answers.
     expect(nextVersionOf(origin).version).toBe('0.1.1');

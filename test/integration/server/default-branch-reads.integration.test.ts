@@ -36,6 +36,7 @@ import { createProjectSettingsPort } from '../../../apps/server/src/pipeline.js'
 import { createProjectConfigCommands } from '../../../apps/server/src/project-config.js';
 import type { Database } from '../../../apps/server/src/queries/identity-queries.js';
 import { writeProjectDefaultBranch } from '../../../apps/server/src/queries/onboarding-queries.js';
+import { scratchGitEnv } from '../../../scripts/git-scratch-env.mjs';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestPool } from '../support/postgres.js';
 
@@ -55,15 +56,11 @@ let developHead: string;
 
 const git = async (args: readonly string[]): Promise<string> => {
   const { stdout } = await execFileAsync('git', [...args], {
-    env: {
-      PATH: process.env.PATH ?? '/usr/bin:/bin',
-      HOME: root,
-      GIT_CONFIG_NOSYSTEM: '1',
-      GIT_AUTHOR_NAME: 'Fixture',
-      GIT_AUTHOR_EMAIL: 'fixture@example.test',
-      GIT_COMMITTER_NAME: 'Fixture',
-      GIT_COMMITTER_EMAIL: 'fixture@example.test',
-    },
+    // WP-162: `scratchGitEnv` over a parent that inherits nothing but `PATH`.
+    env: scratchGitEnv(root, {
+      parent: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: root },
+      author: { name: 'Fixture', email: 'fixture@example.test' },
+    }),
   });
   return stdout.trim();
 };

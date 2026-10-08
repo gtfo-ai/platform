@@ -46,6 +46,7 @@
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { censusFiles, censusPaths } from '../../../scripts/census-files.mjs';
+import { checkoutGitEnv } from '../../../scripts/git-scratch-env.mjs';
 import { withoutComments } from '../../../scripts/source-scanner.mjs';
 
 const REPO_ROOT = process.cwd();
@@ -177,7 +178,7 @@ describe('TD-021: exactly one component reaches the Docker daemon', () => {
     const untracked = execFileSync(
       'git',
       ['ls-files', '--others', '--exclude-standard', '-z', '--', ...SOURCE_PATHSPECS],
-      { cwd: REPO_ROOT, encoding: 'utf8' },
+      { cwd: REPO_ROOT, env: checkoutGitEnv(), encoding: 'utf8' },
     )
       .split('\0')
       .filter((file) => file.length > 0);

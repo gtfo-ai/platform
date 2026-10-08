@@ -46,6 +46,7 @@ import {
   knowledgeCompleteness,
 } from '@platform/domain';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { scratchGitEnv } from '../../../scripts/git-scratch-env.mjs';
 import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
 import {
   inboundEvent,
@@ -107,7 +108,11 @@ let repo: string;
 let repoPath: string;
 
 const git = async (args: readonly string[]): Promise<string> => {
-  const { stdout } = await execFileAsync('git', [...args], { maxBuffer: 8 * 1024 * 1024 });
+  // WP-162: every repository this file builds is under `workspace`; no inherited `GIT_*`.
+  const { stdout } = await execFileAsync('git', [...args], {
+    env: scratchGitEnv(workspace),
+    maxBuffer: 8 * 1024 * 1024,
+  });
   return stdout.trim();
 };
 

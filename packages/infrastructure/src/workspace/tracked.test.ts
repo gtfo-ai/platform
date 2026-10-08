@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 import { MAX_EXISTING_PROTECTED_PATHS, MAX_TRACKED_ENTRIES } from '@platform/application';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { initScratchRepository } from '../../../../scripts/git-scratch-env.mjs';
 import { guardWritePath } from '../runner/path-guard.js';
 import {
   decodeGitPath,
@@ -187,17 +188,21 @@ describe('trackedListingScript', () => {
   it('lists the tree at the merge base with the default branch, plus the task branch’s own links', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'agentic-wp99-tracked-'));
     try {
+      const env = initScratchRepository(directory, { initArgs: ['-b', 'main'] });
       const git = (...args: string[]) =>
-        run('git', [
-          '-C',
-          directory,
-          '-c',
-          'user.name=Fixture',
-          '-c',
-          'user.email=fixture@example.test',
-          ...args,
-        ]);
-      await git('init', '-q', '-b', 'main');
+        run(
+          'git',
+          [
+            '-C',
+            directory,
+            '-c',
+            'user.name=Fixture',
+            '-c',
+            'user.email=fixture@example.test',
+            ...args,
+          ],
+          { env },
+        );
       await mkdir(join(directory, 'src'));
       await writeFile(join(directory, 'src', 'totals.test.ts'), 'x\n');
       await writeFile(join(directory, 'src', 'straße.test.ts'), 'x\n');
@@ -217,7 +222,7 @@ describe('trackedListingScript', () => {
         parseTrackedListing(
           (
             await run('/bin/sh', ['-c', trackedListingScript(directory)], {
-              env: { ...process.env, BASE_REF: baseRef },
+              env: { ...env, BASE_REF: baseRef },
             })
           ).stdout,
           PATTERNS,

@@ -24,6 +24,7 @@ import {
   upgradeNote,
   versionRefusal,
 } from './changelog.mjs';
+import { checkoutGitEnv, initScratchRepository, scratchGitEnv } from './git-scratch-env.mjs';
 
 /**
  * `changelog.mjs` — the changelog preview and a release's notes (WP-42, WP-71, TD-019).
@@ -122,6 +123,7 @@ describe('groupBySection', () => {
 /** A throwaway repository with exactly the history a test needs, newest commit last. */
 const repositoryWith = (messages: readonly string[]): string => {
   const dir = scratch();
+  const env = initScratchRepository(dir, { initArgs: ['-b', 'main'] });
   const git = (...args: string[]): void => {
     execFileSync(
       'git',
@@ -137,10 +139,9 @@ const repositoryWith = (messages: readonly string[]): string => {
         'core.hooksPath=/dev/null',
         ...args,
       ],
-      { cwd: dir, stdio: 'ignore' },
+      { cwd: dir, stdio: 'ignore', env },
     );
   };
-  git('init', '-q', '-b', 'main');
   for (const message of messages)
     git('commit', '--allow-empty', '--no-verify', '-q', '-m', message);
   return dir;
@@ -196,6 +197,7 @@ describe('readCommits', () => {
     expect(
       execFileSync('git', ['rev-parse', '--is-shallow-repository'], {
         cwd: join(import.meta.dirname, '..'),
+        env: checkoutGitEnv(),
         encoding: 'utf8',
       }).trim(),
       'this test reads the repository history and needs a full clone (ci.yml unit job: fetch-depth 0)',
@@ -480,6 +482,7 @@ describe('pnpm changelog, as a program, around the first release', () => {
       join(root, 'packages/infrastructure/src/db/migrations/0001_a.sql'),
       'select 1;\n',
     );
+    const env = initScratchRepository(root, { initArgs: ['-b', 'main'] });
     const git = (...args: string[]): void => {
       execFileSync(
         'git',
@@ -496,10 +499,9 @@ describe('pnpm changelog, as a program, around the first release', () => {
           'core.hooksPath=/dev/null',
           ...args,
         ],
-        { cwd: root, stdio: 'ignore' },
+        { cwd: root, stdio: 'ignore', env },
       );
     };
-    git('init', '-q', '-b', 'main');
     git('remote', 'add', 'origin', 'https://github.test/owner/repo.git');
     git('add', '-A');
     for (const step of steps) {
@@ -513,7 +515,7 @@ describe('pnpm changelog, as a program, around the first release', () => {
     spawnSync(process.execPath, [join(root, 'scripts/changelog.mjs'), ...args], {
       cwd: root,
       encoding: 'utf8',
-      env: { PATH: process.env.PATH ?? '' },
+      env: scratchGitEnv(root, { parent: { PATH: process.env.PATH ?? '' } }),
     });
 
   it('prints the preview under FIRST_VERSION before any release exists, and writes no file', () => {

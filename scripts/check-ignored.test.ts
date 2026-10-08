@@ -14,6 +14,8 @@ import { dirname, join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
+import { initScratchRepository, scratchGitEnv } from './git-scratch-env.mjs';
+import { isLocalToolPath, LOCAL_TOOL_PATHS } from './os-artefacts.mjs';
 
 /**
  * `check-ignored.mjs` against a **real** repository that contains other checkouts.
@@ -45,18 +47,13 @@ const OS_ARTEFACTS_MODULE = join(dirname(fileURLToPath(import.meta.url)), 'os-ar
  * template or a signing key would otherwise leak into it and make the test fail for reasons that
  * have nothing to do with the guard.
  */
-const GIT_ENV = {
-  ...process.env,
-  GIT_CONFIG_GLOBAL: '/dev/null',
-  GIT_CONFIG_SYSTEM: '/dev/null',
-  GIT_AUTHOR_NAME: 'Ignore Guard Fixture',
-  GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
-  GIT_COMMITTER_NAME: 'Ignore Guard Fixture',
-  GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
-};
+const FIXTURE_AUTHOR = { name: 'Ignore Guard Fixture', email: 'fixture@example.invalid' };
+/** `scratchGitEnv` (WP-162): no inherited `GIT_*`, no host configuration, no hooks, a ceiling. */
+const gitEnv = (root: string): Record<string, string> =>
+  scratchGitEnv(root, { author: FIXTURE_AUTHOR });
 
 const git = (cwd: string, ...args: readonly string[]): void => {
-  const result = spawnSync('git', [...args], { cwd, env: GIT_ENV, encoding: 'utf8' });
+  const result = spawnSync('git', [...args], { cwd, env: gitEnv(cwd), encoding: 'utf8' });
   if (result.error !== undefined || result.status !== 0) {
     throw new Error(
       `fixture setup failed: git ${args.join(' ')} exited ${result.status}: ${result.stderr}`,
@@ -73,7 +70,7 @@ const write = (path: string, contents: string): void => {
 const runGuard = (root: string): { status: number | null; stdout: string; stderr: string } => {
   const result = spawnSync(process.execPath, [join(root, 'scripts', 'check-ignored.mjs')], {
     cwd: root,
-    env: GIT_ENV,
+    env: gitEnv(root),
     encoding: 'utf8',
   });
   if (result.error !== undefined) {
@@ -127,7 +124,7 @@ describe('check-ignored.mjs', () => {
       mkdirSync(join(root, 'scripts'), { recursive: true });
       copyFileSync(GUARD, join(root, 'scripts', 'check-ignored.mjs'));
       copyFileSync(OS_ARTEFACTS_MODULE, join(root, 'scripts', 'os-artefacts.mjs'));
-      git(root, 'init', '-q', '-b', 'main', '.');
+      initScratchRepository(root, { author: FIXTURE_AUTHOR, initArgs: ['-b', 'main', '.'] });
       git(root, 'add', '-A');
       git(root, 'commit', '-q', '-m', 'fixture');
 
@@ -138,7 +135,7 @@ describe('check-ignored.mjs', () => {
       git(root, 'worktree', 'add', '-q', '--detach', linked);
       const cloned = join(root, 'agent', 'worktrees', 'cloned');
       mkdirSync(cloned, { recursive: true });
-      git(cloned, 'init', '-q', '-b', 'main', '.');
+      initScratchRepository(cloned, { author: FIXTURE_AUTHOR, initArgs: ['-b', 'main', '.'] });
       write(join(cloned, 'src', 'other.ts'), 'export const other = 2;\n');
 
       // The fixture is what it claims to be. Without these three, "nothing was reported" is
@@ -155,7 +152,7 @@ describe('check-ignored.mjs', () => {
       const ignoredInside = spawnSync(
         'git',
         ['check-ignore', '--no-index', '-q', 'agent/worktrees/linked/src/app.ts'],
-        { cwd: root, env: GIT_ENV, encoding: 'utf8' },
+        { cwd: root, env: gitEnv(root), encoding: 'utf8' },
       );
       expect(
         ignoredInside.status,
@@ -184,7 +181,7 @@ describe('check-ignored.mjs', () => {
 
       expect(
         reportedPaths(swallowed.stderr),
-        'the guard stopped naming source files .gitignore hides',
+        'the guard stopped naming source files an exclude rule hides',
       ).toEqual(['agent/worktrees/stray.ts', 'src/data/queries.ts']);
       expect(swallowed.stdout.trim()).toBe('FAIL: ignored:check');
       expect(swallowed.status).toBe(1);
@@ -204,7 +201,7 @@ describe('check-ignored.mjs', () => {
       mkdirSync(join(root, 'scripts'), { recursive: true });
       copyFileSync(GUARD, join(root, 'scripts', 'check-ignored.mjs'));
       copyFileSync(OS_ARTEFACTS_MODULE, join(root, 'scripts', 'os-artefacts.mjs'));
-      git(root, 'init', '-q', '-b', 'main', '.');
+      initScratchRepository(root, { author: FIXTURE_AUTHOR, initArgs: ['-b', 'main', '.'] });
       git(root, 'add', '-A');
       git(root, 'commit', '-q', '-m', 'fixture');
 
@@ -220,7 +217,7 @@ describe('check-ignored.mjs', () => {
         expect(
           spawnSync('git', ['check-ignore', '--no-index', '-q', path], {
             cwd: root,
-            env: GIT_ENV,
+            env: gitEnv(root),
             encoding: 'utf8',
           }).status,
           `${path} is not ignored by the fixture, so this test would prove nothing`,
@@ -237,4 +234,82 @@ describe('check-ignored.mjs', () => {
     },
     FIXTURE_TIMEOUT_MS,
   );
+
+  /**
+   * WP-162 (f), backlog 532: the harness's own files in `.claude/` are not hidden source, by
+   * **root-anchored path** — the same name elsewhere still fails, and a tracked file under `.claude/`
+   * is still checked whatever its name.
+   */
+  it(
+    'does not report a local tool’s file at its root path, and still reports the name elsewhere and a tracked file',
+    () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'ignored-check-tools-')));
+      roots.push(root);
+
+      // `.claude/` and `apps/` are source roots because something under each is tracked.
+      write(join(root, '.claude', 'agents', 'implementer.md'), '# an agent\n');
+      write(join(root, 'apps', 'server', 'src', 'app.ts'), 'export const app = 1;\n');
+      // What the repository's own `.gitignore` says, plus a planted unanchored rule that swallows
+      // the tracked agent definition — the defect this guard exists for, under `.claude/`.
+      write(join(root, '.gitignore'), '/.claude/settings.local.json\nagents/\n');
+      mkdirSync(join(root, 'scripts'), { recursive: true });
+      copyFileSync(GUARD, join(root, 'scripts', 'check-ignored.mjs'));
+      copyFileSync(OS_ARTEFACTS_MODULE, join(root, 'scripts', 'os-artefacts.mjs'));
+      initScratchRepository(root, { author: FIXTURE_AUTHOR, initArgs: ['-b', 'main', '.'] });
+      git(root, 'add', '-f', '-A');
+      git(root, 'commit', '-q', '-m', 'fixture');
+
+      // What the harness writes into `.git/info/exclude` (unanchored, under `**/.claude/`), and a
+      // planted unanchored rule for the same file name anywhere.
+      write(
+        join(root, '.git', 'info', 'exclude'),
+        '**/.claude/scheduled_tasks.lock\n**/.claude/checkpoints/\nscheduled_tasks.lock\n',
+      );
+      write(join(root, '.claude', 'scheduled_tasks.lock'), '{"pid":1}\n');
+      write(join(root, '.claude', 'settings.local.json'), '{}\n');
+      write(join(root, '.claude', 'checkpoints', 'one.json'), '{}\n');
+      write(join(root, 'apps', 'server', 'src', 'scheduled_tasks.lock'), 'not the harness\n');
+
+      const ignored = [
+        '.claude/agents/implementer.md',
+        '.claude/scheduled_tasks.lock',
+        '.claude/settings.local.json',
+        '.claude/checkpoints/one.json',
+        'apps/server/src/scheduled_tasks.lock',
+      ];
+      for (const path of ignored) {
+        expect(
+          spawnSync('git', ['check-ignore', '--no-index', '-q', path], {
+            cwd: root,
+            env: gitEnv(root),
+            encoding: 'utf8',
+          }).status,
+          `${path} is not ignored by the fixture, so this test would prove nothing`,
+        ).toBe(0);
+      }
+
+      const result = runGuard(root);
+
+      expect(reportedPaths(result.stderr)).toEqual([
+        '.claude/agents/implementer.md',
+        'apps/server/src/scheduled_tasks.lock',
+      ]);
+      expect(result.stdout.trim()).toBe('FAIL: ignored:check');
+      expect(result.status).toBe(1);
+    },
+    FIXTURE_TIMEOUT_MS,
+  );
+
+  it('holds the local tools’ paths to the root: a name is not an entry', () => {
+    expect(isLocalToolPath('.claude/scheduled_tasks.lock')).toBe(true);
+    expect(isLocalToolPath('.claude/settings.local.json')).toBe(true);
+    expect(isLocalToolPath('.claude/routines/.state/x')).toBe(true);
+    expect(isLocalToolPath('.claude/mailbox/a/b')).toBe(true);
+    expect(isLocalToolPath('scheduled_tasks.lock')).toBe(false);
+    expect(isLocalToolPath('apps/server/src/scheduled_tasks.lock')).toBe(false);
+    expect(isLocalToolPath('apps/.claude/scheduled_tasks.lock')).toBe(false);
+    expect(isLocalToolPath('.claude/checkpoints')).toBe(false);
+    expect(isLocalToolPath('.claude/agents/implementer.md')).toBe(false);
+    expect([...LOCAL_TOOL_PATHS].every((entry) => entry.startsWith('.claude/'))).toBe(true);
+  });
 });

@@ -25,6 +25,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
+import { initScratchRepository } from '../../../scripts/git-scratch-env.mjs';
 import { inboundEvent, type PipelineE2E, startPipeline } from '../support/pipeline.js';
 import { featureScenarios, TICKETS } from '../support/scenarios.js';
 
@@ -51,17 +52,21 @@ const writeFixtureRepository = async (): Promise<string> => {
   await writeFile(join(directory, 'src', 'totals.ts'), 'export const total = 0;\n');
   await writeFile(join(directory, 'src', 'totals.test.ts'), ORIGINAL);
   await writeFile(join(directory, 'src', 'legacy.test.ts'), ORIGINAL);
+  const env = initScratchRepository(directory);
   const git = (...args: string[]) =>
-    run('git', [
-      '-C',
-      directory,
-      '-c',
-      'user.name=Fixture',
-      '-c',
-      'user.email=fixture@example.test',
-      ...args,
-    ]);
-  await git('init', '-q');
+    run(
+      'git',
+      [
+        '-C',
+        directory,
+        '-c',
+        'user.name=Fixture',
+        '-c',
+        'user.email=fixture@example.test',
+        ...args,
+      ],
+      { env },
+    );
   await git('add', '-A');
   await git('commit', '-q', '-m', 'fixture');
   return directory;

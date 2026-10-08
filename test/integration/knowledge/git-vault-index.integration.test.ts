@@ -47,6 +47,7 @@ import {
   type ComposedKnowledgeIndexing,
   composeKnowledgeIndexing,
 } from '../../../apps/server/src/knowledge.js';
+import { scratchGitEnv } from '../../../scripts/git-scratch-env.mjs';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestPool } from '../support/postgres.js';
 
@@ -86,7 +87,11 @@ const recordingLogger = (): Logger => ({
 });
 
 const git = async (args: readonly string[]): Promise<string> => {
-  const { stdout } = await execFileAsync('git', [...args], { maxBuffer: 8 * 1024 * 1024 });
+  // WP-162: every repository this file builds is under `workspace`; no inherited `GIT_*`.
+  const { stdout } = await execFileAsync('git', [...args], {
+    env: scratchGitEnv(workspace),
+    maxBuffer: 8 * 1024 * 1024,
+  });
   return stdout.trim();
 };
 

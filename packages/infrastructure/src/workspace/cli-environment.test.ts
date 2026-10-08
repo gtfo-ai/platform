@@ -18,6 +18,7 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { type WorkspaceCliEnvironment, WorkspaceError } from '@platform/application';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { scratchGitEnv } from '../../../../scripts/git-scratch-env.mjs';
 import { detectSecrets } from '../redaction/pattern-redaction.js';
 import { runSpecFixture } from '../runner/fixtures.js';
 import { cliEnvironment } from '../runner/options.js';
@@ -310,7 +311,13 @@ describe('a real git sends the helper the path under the composed list (backlog 
 
   const git = async (env: Record<string, string>, args: readonly string[]): Promise<void> => {
     await new Promise<void>((resolve) => {
-      execFile('git', [...args], { env, timeout: 20_000 }, () => resolve());
+      // WP-162: the fixture's own environment over `scratchGitEnv`'s, never the worker's.
+      execFile(
+        'git',
+        [...args],
+        { env: scratchGitEnv(workDir, { parent: {}, env }), timeout: 20_000 },
+        () => resolve(),
+      );
     });
   };
 

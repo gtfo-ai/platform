@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { censusPaths } from './census-files.mjs';
 import { changelogHeadingProblems, MVP_EXIT_CRITERIA } from './changelog.mjs';
+import { initScratchRepository } from './git-scratch-env.mjs';
 
 /**
  * The release mechanism, asserted against the files that decide it (WP-42, WP-71, TD-019,
@@ -368,6 +369,7 @@ describe('the shell that tags the images and cuts the release', () => {
     const directory = stubDirectory();
     try {
       // The step runs in a checkout; this one has a commit, and optionally the tag at issue.
+      const env = initScratchRepository(directory, { initArgs: ['-b', 'main'] });
       const git = (...args: string[]) =>
         execFileSync(
           'git',
@@ -384,9 +386,8 @@ describe('the shell that tags the images and cuts the release', () => {
             'core.hooksPath=/dev/null',
             ...args,
           ],
-          { cwd: directory, stdio: 'ignore' },
+          { cwd: directory, stdio: 'ignore', env },
         );
-      git('init', '-q', '-b', 'main');
       git('commit', '--allow-empty', '--no-verify', '-q', '-m', 'feat: a fixture');
       if (scenario.existingTag !== undefined) git('tag', scenario.existingTag);
 

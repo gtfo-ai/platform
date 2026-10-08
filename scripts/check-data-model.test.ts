@@ -19,6 +19,7 @@ import {
   UNDOCUMENTED_TABLES,
   withoutCommentsAndLiterals,
 } from './check-data-model.mjs';
+import { checkoutGitEnv, initScratchRepository, scratchGitEnv } from './git-scratch-env.mjs';
 
 /**
  * `check-data-model.mjs` (WP-97, PROGRESS backlog 124) — its parser, its comparison, and the whole
@@ -196,6 +197,7 @@ describe('this repository', () => {
   it('prints one PASS line and exits 0', () => {
     const run = spawnSync(process.execPath, [join(SCRIPTS, 'check-data-model.mjs')], {
       cwd: repositoryRoot,
+      env: checkoutGitEnv(),
       encoding: 'utf8',
     });
     expect(run.status).toBe(0);
@@ -211,17 +213,12 @@ describe('the script in a repository built here', () => {
     for (const root of roots) rmSync(root, { recursive: true, force: true });
   });
 
-  const GIT_ENV = {
-    ...process.env,
-    GIT_CONFIG_GLOBAL: '/dev/null',
-    GIT_CONFIG_SYSTEM: '/dev/null',
-    GIT_AUTHOR_NAME: 'Data Model Fixture',
-    GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
-    GIT_COMMITTER_NAME: 'Data Model Fixture',
-    GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
-  };
+  const FIXTURE_AUTHOR = { name: 'Data Model Fixture', email: 'fixture@example.invalid' };
+  /** `scratchGitEnv` (WP-162): no inherited `GIT_*`, no host configuration, no hooks, a ceiling. */
+  const gitEnv = (root: string): Record<string, string> =>
+    scratchGitEnv(root, { author: FIXTURE_AUTHOR });
   const git = (cwd: string, ...args: string[]): void => {
-    const result = spawnSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' });
+    const result = spawnSync('git', args, { cwd, env: gitEnv(cwd), encoding: 'utf8' });
     if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`);
   };
   const write = (root: string, path: string, contents: string): void => {
@@ -246,7 +243,7 @@ describe('the script in a repository built here', () => {
       DATA_MODEL_PAGE,
       '- `tasks(id)`\n- `platform_migrations(name)`\n- `feedback(id)` — specified, unbuilt.\n',
     );
-    git(root, 'init', '-q', '-b', 'main', '.');
+    initScratchRepository(root, { author: FIXTURE_AUTHOR, initArgs: ['-b', 'main', '.'] });
     git(root, 'add', '-A');
     git(root, 'commit', '-q', '-m', 'fixture');
     return root;
@@ -254,7 +251,7 @@ describe('the script in a repository built here', () => {
   const run = (root: string) =>
     spawnSync(process.execPath, [join(root, 'scripts', 'check-data-model.mjs')], {
       cwd: root,
-      env: GIT_ENV,
+      env: gitEnv(root),
       encoding: 'utf8',
     });
 

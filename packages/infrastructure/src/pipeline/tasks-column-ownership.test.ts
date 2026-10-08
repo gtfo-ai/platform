@@ -45,6 +45,7 @@ import {
   censusPaths,
   readCensus,
 } from '../../../../scripts/census-files.mjs';
+import { checkoutGitEnv } from '../../../../scripts/git-scratch-env.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 
@@ -305,6 +306,7 @@ const allStatements = (): Statement[] => {
 const isTracked = (file: string): boolean =>
   execFileSync('git', ['ls-files', '--error-unmatch', '--', file], {
     cwd: REPO_ROOT,
+    env: checkoutGitEnv(),
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
   })

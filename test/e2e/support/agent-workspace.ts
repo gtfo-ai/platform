@@ -31,6 +31,7 @@ import {
   runner as runnerAdapters,
   workspace as workspaceAdapters,
 } from '@platform/infrastructure';
+import { scratchGitEnv } from '../../../scripts/git-scratch-env.mjs';
 
 /**
  * The model credential the instance is started with, and the value every redaction assertion looks
@@ -167,7 +168,8 @@ const listCheckout = async (
   const { stdout } = await promisify(execFile)(
     '/bin/sh',
     ['-c', workspaceAdapters.trackedListingScript(workdir)],
-    { env: { ...process.env, BASE_REF: 'HEAD' } },
+    // WP-162: the fixture checkout's own environment, never the worker's `GIT_*`.
+    { env: { ...scratchGitEnv(workdir), BASE_REF: 'HEAD' } },
   );
   return workspaceAdapters.parseTrackedListing(stdout, patterns);
 };

@@ -51,6 +51,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { censusFiles } from '../../../../scripts/census-files.mjs';
+import { initScratchRepository } from '../../../../scripts/git-scratch-env.mjs';
 import { repositoryRoot, withoutComments } from '../routes/web-sources.js';
 
 /**
@@ -151,10 +152,10 @@ describe('the writers of integrations.config (backlog 130)', () => {
     // against the table that writes no config, and the ignored file is not a source file.
     const root = mkdtempSync(join(tmpdir(), 'config-writers-'));
     try {
+      const env = initScratchRepository(root);
       const git = (...args: string[]): void => {
-        execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+        execFileSync('git', args, { cwd: root, stdio: 'ignore', env });
       };
-      git('init', '-q');
       const plant = (path: string, source: string): void => {
         mkdirSync(dirname(join(root, path)), { recursive: true });
         writeFileSync(join(root, path), source);

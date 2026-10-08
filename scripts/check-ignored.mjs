@@ -43,7 +43,10 @@
  * Until then the defence in both cases is the anchoring convention in `CLAUDE.md` and reading
  * `.gitignore` diffs.
  *
- * Anything git names is a bug in `.gitignore`, not in the file.
+ * Anything git names is a bug in `.gitignore`, not in the file — or in `.git/info/exclude` or the
+ * user's global excludes, which `git check-ignore` reads too. Two classes of untracked file are not
+ * walked for that reason, both named in `os-artefacts.mjs`: an operating system's artefacts, by
+ * name, and the local tools' own files, by root-anchored path (WP-162, backlog 532).
  *
  * Prints exactly one `PASS: ignored:check` / `FAIL: ignored:check` line on stdout, like every
  * other verification step (docs/technical/14-orchestration-protocol.md).
@@ -53,7 +56,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { extname, join, relative, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { OS_ARTEFACT_NAMES } from './os-artefacts.mjs';
+import { isLocalToolPath, OS_ARTEFACT_NAMES } from './os-artefacts.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -182,8 +185,13 @@ const walk = (directory) => {
       // An OS artefact is not source, and reporting one as hidden source is a false positive that
       // turns `main` red for a file nobody wrote. `OS_ARTEFACT_NAMES` is shared with the
       // fixture-provenance walk so the two guards cannot answer this question differently again.
-      // Every other name still fails loudly; a tracked path is checked regardless of its name.
-      found.push(relative(repositoryRoot, full).split(sep).join('/'));
+      // A local tool's file (`LOCAL_TOOL_PATHS`, root-anchored: the harness's session lock) is the
+      // same answer by path. Every other file still fails loudly; a tracked path is checked
+      // regardless of its name, because `trackedPaths` is in the set whatever the walk skips.
+      const path = relative(repositoryRoot, full).split(sep).join('/');
+      if (!isLocalToolPath(path)) {
+        found.push(path);
+      }
     }
   }
   return found;
@@ -232,7 +240,7 @@ const ignored = result.stdout
 
 if (ignored.length > 0) {
   process.stderr.write(
-    `.gitignore hides ${ignored.length} source file(s). git would not commit them, and every local check would still pass:\n`,
+    `An exclude rule hides ${ignored.length} source file(s) (the line below names the file and pattern: .gitignore, .git/info/exclude or core.excludesFile). git would not commit them, and every local check would still pass:\n`,
   );
   for (const path of ignored) {
     const why = spawnSync('git', ['check-ignore', '--no-index', '-v', path], {
@@ -242,7 +250,7 @@ if (ignored.length > 0) {
     process.stderr.write(`  ${why.stdout.trim() || path}\n`);
   }
   process.stderr.write(
-    'Anchor the offending pattern to the repository root (a leading "/") or narrow it.\n',
+    'Anchor the offending pattern to the repository root (a leading "/") or narrow it, in the file named above.\n',
   );
   process.stdout.write('FAIL: ignored:check\n');
   process.exit(1);

@@ -53,8 +53,20 @@ const excludeEverywhere = [
 export const PROPERTY_SEED_SETUP = 'test/support/property-seed.ts';
 
 /**
+ * The setup file that drops every inherited `GIT_*` name from a test worker's environment (WP-162,
+ * PROGRESS backlog 499): run by a linked worktree's hook, a fixture's in-process `git` would
+ * otherwise act on the repository `GIT_DIR` names rather than on its scratch root. In **every**
+ * project, for the reason {@link excludeEverywhere} is one constant; `scripts/git-scratch-env-census.test.ts`
+ * holds that.
+ */
+export const GIT_ENVIRONMENT_SETUP = 'test/support/git-environment.ts';
+
+/** Every project's setup files: the two above, in this order. */
+const SETUP_FILES = [PROPERTY_SEED_SETUP, GIT_ENVIRONMENT_SETUP];
+
+/**
  * The suites that start **real processes** and wait on them structurally (WP-69, PROGRESS backlog
- * 25) — the `process` project's whole membership.
+ * 25) — with {@link GIT_FIXTURE_ISOLATION_SUITE}, the `process` project's whole membership.
  *
  * A structural wait asserts that something happens (a socket is bound, a pid file is written, a pid
  * disappears), and how long it takes is **process scheduling**: exactly the quantity the parallel
@@ -71,11 +83,23 @@ export const PROPERTY_SEED_SETUP = 'test/support/property-seed.ts';
  * holds that every project here is run by some verification target, and that this list is exactly
  * the test files importing `structural-wait.js` — so the list cannot drift from what uses it.
  */
-export const PROCESS_SUITES = [
+export const STRUCTURAL_WAIT_SUITES = [
   'packages/infrastructure/src/runlet/conformance.contract.test.ts',
   'packages/infrastructure/src/runlet/shim.test.ts',
   'packages/infrastructure/src/runlet/structural-wait.test.ts',
 ];
+
+/**
+ * The second kind of process suite (WP-162 (d), PROGRESS backlog 499): it starts a **whole vitest
+ * run** of the git-fixture suites with `GIT_DIR` pointed at a throwaway repository and asserts the
+ * repository is byte-identical afterwards. It belongs here for the reason the structural waits do —
+ * it owns a real process whose duration is the host's — and because a vitest run inside the
+ * parallel `unit` group would compete with the group it is measuring. `scripts/verify.test.ts`
+ * holds the membership as exactly these two kinds.
+ */
+export const GIT_FIXTURE_ISOLATION_SUITE = 'scripts/git-fixture-isolation.test.ts';
+
+export const PROCESS_SUITES = [...STRUCTURAL_WAIT_SUITES, GIT_FIXTURE_ISOLATION_SUITE];
 
 /** What coverage measures: the source rings the `unit`, `contract` and `process` projects reach. */
 export const COVERAGE_INCLUDE = [
@@ -316,7 +340,7 @@ export default defineConfig({
       {
         test: {
           name: 'unit',
-          setupFiles: [PROPERTY_SEED_SETUP],
+          setupFiles: SETUP_FILES,
           environment: 'node',
           include: [
             'packages/*/src/**/*.test.ts',
@@ -342,7 +366,7 @@ export default defineConfig({
       {
         test: {
           name: 'contract',
-          setupFiles: [PROPERTY_SEED_SETUP],
+          setupFiles: SETUP_FILES,
           environment: 'node',
           include: ['packages/*/src/**/*.contract.test.ts', 'test/contract/**/*.test.ts'],
           exclude: [...excludeEverywhere, ...PROCESS_SUITES],
@@ -351,7 +375,7 @@ export default defineConfig({
       {
         test: {
           name: 'process',
-          setupFiles: [PROPERTY_SEED_SETUP],
+          setupFiles: SETUP_FILES,
           environment: 'node',
           include: PROCESS_SUITES,
           exclude: excludeEverywhere,
@@ -370,7 +394,7 @@ export default defineConfig({
       {
         test: {
           name: 'integration',
-          setupFiles: [PROPERTY_SEED_SETUP],
+          setupFiles: SETUP_FILES,
           environment: 'node',
           include: ['**/*.integration.test.ts', 'test/integration/**/*.test.ts'],
           exclude: excludeEverywhere,
@@ -384,7 +408,7 @@ export default defineConfig({
       {
         test: {
           name: 'e2e-fake-claude',
-          setupFiles: [PROPERTY_SEED_SETUP],
+          setupFiles: SETUP_FILES,
           environment: 'node',
           include: ['**/*.e2e.test.ts', 'test/e2e/**/*.test.ts'],
           exclude: excludeEverywhere,
@@ -405,7 +429,7 @@ export default defineConfig({
       {
         test: {
           name: 'ui',
-          setupFiles: [PROPERTY_SEED_SETUP],
+          setupFiles: SETUP_FILES,
           environment: 'happy-dom',
           include: ['apps/web/src/**/*.test.ts', 'apps/web/src/**/*.test.tsx'],
           exclude: excludeEverywhere,

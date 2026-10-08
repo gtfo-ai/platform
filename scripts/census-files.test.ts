@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CensusUnreadableError, censusFiles, censusPaths, readCensus } from './census-files.mjs';
+import { initScratchRepository, scratchGitEnv } from './git-scratch-env.mjs';
 
 /**
  * The one answer every census gives to "which files" and "what if I cannot read one", against a
@@ -31,14 +32,10 @@ afterEach(() => {
 const repository = (): string => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'census-files-')));
   roots.push(root);
+  const env = initScratchRepository(root);
   const git = (...args: string[]): void => {
-    execFileSync('git', args, {
-      cwd: root,
-      stdio: 'ignore',
-      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
-    });
+    execFileSync('git', args, { cwd: root, stdio: 'ignore', env });
   };
-  git('init', '-q');
   writeFileSync(join(root, '.gitignore'), '/ignored.ts\n');
   mkdirSync(join(root, 'src'));
   for (const name of ['tracked.ts', 'staged.ts', 'untracked.ts', 'ignored.ts', 'src/deep.ts']) {
@@ -146,9 +143,10 @@ describe('censusFiles', () => {
  * tracked **and** untracked files (standing rule 85), and its planted case below is the calibration.
  */
 // `source-scanner.mjs` (WP-96, backlog 269) has the same re-allowance in `biome.json` and the same
-// narrowing here: the comment stripper every census reads.
+// narrowing here: the comment stripper every census reads. So has `git-scratch-env.mjs` (WP-162,
+// backlog 499), the environment of every git child a test spawns.
 const IMPORTS_CENSUS_HELPER =
-  /(?:from|import\()\s*['"][^'"]*\/(?:census-files|source-scanner)\.mjs['"]/;
+  /(?:from|import\()\s*['"][^'"]*\/(?:census-files|source-scanner|git-scratch-env)\.mjs['"]/;
 const IMPORTS_WEB_SOURCES = /(?:from|import\()\s*['"][^'"]*\/web-sources\.js['"]/;
 const TEST_SOURCE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const CENSUS_HELPER_SEAM = 'apps/server/src/routes/web-sources.ts';
@@ -175,8 +173,9 @@ describe('who may import census-files.mjs', () => {
 
   it('refuses a planted production import, tracked or untracked, and admits a test', () => {
     const root = repository();
+    const env = scratchGitEnv(root);
     const git = (...args: string[]): void => {
-      execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+      execFileSync('git', args, { cwd: root, stdio: 'ignore', env });
     };
     mkdirSync(join(root, 'packages/domain/src'), { recursive: true });
     mkdirSync(join(root, 'apps/server/src/routes'), { recursive: true });
@@ -188,6 +187,10 @@ describe('who may import census-files.mjs', () => {
       join(root, 'packages/domain/src/scanner.ts'),
       "import { withoutComments } from '../../../scripts/source-scanner.mjs';\n",
     );
+    writeFileSync(
+      join(root, 'packages/domain/src/scratch.ts'),
+      "import { scratchGitEnv } from '../../../scripts/git-scratch-env.mjs';\n",
+    );
     writeFileSync(join(root, CENSUS_HELPER_SEAM), helper);
     writeFileSync(
       join(root, 'apps/server/src/leak.ts'),
@@ -197,6 +200,7 @@ describe('who may import census-files.mjs', () => {
     expect(productionImporters(root)).toEqual([
       'apps/server/src/leak.ts',
       'packages/domain/src/scanner.ts',
+      'packages/domain/src/scratch.ts',
       'packages/domain/src/tracked.ts',
       'packages/domain/src/untracked.ts',
     ]);

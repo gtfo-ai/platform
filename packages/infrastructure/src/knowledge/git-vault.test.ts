@@ -29,6 +29,7 @@ import {
 import type { Id } from '@platform/contracts';
 import { READINESS_TREE_PATHS } from '@platform/domain';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { assertScratchRepository, scratchGitEnv } from '../../../../scripts/git-scratch-env.mjs';
 import {
   createGitRepositoryFileSource,
   createGitVaultSource,
@@ -59,9 +60,16 @@ let mirrorRoot: string;
 let secretFile: string;
 const SECRET_MARKER = 'MARKER-THE-SYMLINK-TARGET-MUST-NOT-BE-READ';
 
+const FIXTURE_AUTHOR = { name: 'Fixture', email: 'fixture@example.test' };
+
 const git = async (args: readonly string[]): Promise<string> => {
   const { stdout } = await execFileAsync('git', [...args], {
-    env: { ...gitEnvironment(), GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z' },
+    // Every repository this file builds is under `root` (WP-162: no inherited `GIT_*`, no hooks).
+    env: scratchGitEnv(root, {
+      parent: gitEnvironment(),
+      author: FIXTURE_AUTHOR,
+      env: { GIT_TERMINAL_PROMPT: '0', GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z' },
+    }),
     maxBuffer: 8 * 1024 * 1024,
   });
   return stdout.trim();
@@ -97,6 +105,7 @@ beforeEach(async () => {
   await writeFile(secretFile, `${SECRET_MARKER}\n`, 'utf8');
 
   await git(['init', '-q', '-b', 'main', origin]);
+  assertScratchRepository(origin);
   await write(origin, 'CLAUDE.md', '# Claude\n');
   await write(origin, 'AGENTS.md', '# Agents\n');
   await write(origin, `${KNOWLEDGE_DIR}/index.md`, '# Index\n');

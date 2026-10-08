@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PROCESS_SUITES } from '../vitest.config.js';
 import { censusPaths } from './census-files.mjs';
+import { initScratchRepository, scratchGitEnv } from './git-scratch-env.mjs';
 import { escapeGlob, findNestedCheckouts, isSeparateCheckout } from './nested-checkouts.js';
 
 /**
@@ -78,18 +79,13 @@ let mirrorRoot = '';
  * The host's git configuration is not part of these fixtures. A global `core.hooksPath`, a commit
  * template or a signing key would otherwise make the test fail for reasons unrelated to the walk.
  */
-const GIT_ENV = {
-  ...process.env,
-  GIT_CONFIG_GLOBAL: '/dev/null',
-  GIT_CONFIG_SYSTEM: '/dev/null',
-  GIT_AUTHOR_NAME: 'Nested Checkout Fixture',
-  GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
-  GIT_COMMITTER_NAME: 'Nested Checkout Fixture',
-  GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
-};
+const FIXTURE_AUTHOR = { name: 'Nested Checkout Fixture', email: 'fixture@example.invalid' };
+/** `scratchGitEnv` (WP-162): no inherited `GIT_*`, no host configuration, no hooks, a ceiling. */
+const gitEnv = (root: string): Record<string, string> =>
+  scratchGitEnv(root, { author: FIXTURE_AUTHOR });
 
 const git = (cwd: string, ...args: readonly string[]): void => {
-  const result = spawnSync('git', [...args], { cwd, env: GIT_ENV, encoding: 'utf8' });
+  const result = spawnSync('git', [...args], { cwd, env: gitEnv(cwd), encoding: 'utf8' });
   if (result.error !== undefined || result.status !== 0) {
     const detail = result.stderr ?? result.error?.message ?? '';
     throw new Error(
@@ -166,6 +162,7 @@ const MIRROR_OWN_FILES: readonly string[] = [
 ];
 const MIRROR_SUPPORT_FILES: readonly string[] = [
   'test/support/property-seed.ts',
+  'test/support/git-environment.ts',
   'test/integration/support/global-setup.ts',
 ];
 
@@ -178,7 +175,7 @@ const buildMirror = (): string => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'nested-checkout-mirror-')));
   // Assigned before anything can throw, so `afterAll` removes a mirror whose population failed.
   mirrorRoot = root;
-  git(root, 'init', '--quiet');
+  initScratchRepository(root, { author: FIXTURE_AUTHOR });
   writeFileSync(
     join(root, 'package.json'),
     `${JSON.stringify({ name: 'nested-checkout-mirror', private: true, type: 'module' })}\n`,
@@ -282,7 +279,7 @@ beforeAll(() => {
 
   // A repository of its own, so the linked worktrees below belong to somebody else — see above.
   scratchRepository = mkdtempSync(join(tmpdir(), 'nested-checkout-scratch-'));
-  git(scratchRepository, 'init', '--quiet');
+  initScratchRepository(scratchRepository, { author: FIXTURE_AUTHOR });
   writeFileSync(join(scratchRepository, 'README.md'), 'scratch\n', 'utf8');
   git(scratchRepository, 'add', 'README.md');
   git(scratchRepository, 'commit', '--quiet', '--no-verify', '-m', 'scratch');
@@ -295,7 +292,7 @@ beforeAll(() => {
   /** A nested clone: `.git` is a directory. */
   const nestedClone = (path: string): void => {
     mkdirSync(path, { recursive: true });
-    git(path, 'init', '--quiet');
+    initScratchRepository(path, { author: FIXTURE_AUTHOR });
   };
 
   nestedClone(fixtures.nestedPackage);

@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
+import { initScratchRepository, scratchGitEnv } from './git-scratch-env.mjs';
 import {
   bytesScanned,
   containerArgs,
@@ -43,17 +44,10 @@ import {
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY = join(SCRIPTS, '..');
 
-const GIT_ENV = {
-  ...process.env,
-  GIT_CONFIG_GLOBAL: '/dev/null',
-  GIT_CONFIG_SYSTEM: '/dev/null',
-  GIT_AUTHOR_NAME: 'Secret Scan Fixture',
-  GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
-  GIT_COMMITTER_NAME: 'Secret Scan Fixture',
-  GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
-  // The fixture decides which scanner runs; a CI variable would only change the not-run branch.
-  CI: '',
-};
+const FIXTURE_AUTHOR = { name: 'Secret Scan Fixture', email: 'fixture@example.invalid' };
+/** `scratchGitEnv` (WP-162): no inherited `GIT_*`, no host configuration, no hooks, a ceiling. */
+const gitEnv = (root: string): Record<string, string> =>
+  scratchGitEnv(root, { author: FIXTURE_AUTHOR, env: { CI: '' } });
 
 /**
  * What the container fallback printed in a linked worktree, measured at WP-68 with a staged
@@ -74,7 +68,7 @@ const MEASURED_EMPTY_SCAN = [
 const PLANTED = `${['gh', 'p_'].join('')}${'x7Kq9Lm2Pz4Rt8Vw1Yb6Nc3Hd5Jf0Gs2Ae9U'}`;
 
 const git = (cwd: string, ...args: readonly string[]): string => {
-  const result = spawnSync('git', [...args], { cwd, env: GIT_ENV, encoding: 'utf8' });
+  const result = spawnSync('git', [...args], { cwd, env: gitEnv(cwd), encoding: 'utf8' });
   if (result.error !== undefined || result.status !== 0) {
     throw new Error(`fixture setup failed: git ${args.join(' ')}: ${result.stderr}`);
   }
@@ -99,7 +93,7 @@ const linkedWorktree = (): { main: string; worktree: string } => {
   roots.push(base);
   const main = join(base, 'main');
   mkdirSync(main);
-  git(main, 'init', '-q', '-b', 'main', '.');
+  initScratchRepository(main, { author: FIXTURE_AUTHOR, initArgs: ['-b', 'main', '.'] });
   copyFileSync(join(REPOSITORY, '.gitleaks.toml'), join(main, '.gitleaks.toml'));
   writeFileSync(join(main, 'README.md'), '# fixture\n');
   writeFileSync(join(main, '.gitignore'), '/node_modules/\n/scripts/\n');
@@ -135,7 +129,7 @@ const preCommitScan = (
   const result = spawnSync(
     process.execPath,
     [join(worktree, 'scripts', 'gitleaks.mjs'), 'git', '--staged', '--require'],
-    { cwd: worktree, env: GIT_ENV, encoding: 'utf8' },
+    { cwd: worktree, env: gitEnv(worktree), encoding: 'utf8' },
   );
   if (result.error !== undefined) {
     throw new Error(`could not run the scan: ${result.error.message}`);
@@ -344,7 +338,11 @@ describe('the container fallback’s own view of the index (backlog 246)', () =>
     const result = spawnSync(
       process.execPath,
       [join(worktree, 'scripts', 'gitleaks.mjs'), 'git', '--staged', '--require'],
-      { cwd: worktree, env: { ...GIT_ENV, PATH: `${stub}:/usr/bin:/bin` }, encoding: 'utf8' },
+      {
+        cwd: worktree,
+        env: { ...gitEnv(worktree), PATH: `${stub}:/usr/bin:/bin` },
+        encoding: 'utf8',
+      },
     );
     return { status: result.status, stdout: result.stdout, stderr: result.stderr };
   };
