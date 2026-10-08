@@ -44,6 +44,9 @@ export interface RolePrompt {
    * It is **not** the only protection against an edit that forgot to bump: `promptVersionOf` in
    * `@platform/domain` appends a digest of the assembled system prompt, so the audit can tell a
    * forgotten bump from a real one. The declared number is what a changelog and a human read.
+   * Since WP-176 a forgotten bump also fails the build: `ROLE_PROMPT_DIGESTS`
+   * (`prompt-digests.ts`) records the file's digest under each version, and its census refuses a
+   * `prompt.md` that no longer matches its declared version.
    */
   readonly version: string;
   readonly text: string;
@@ -59,19 +62,23 @@ export interface RolePrompt {
 export const ROLE_PROMPT_VERSIONS = {
   // WP-73 (backlog 142): the type mapping is a `type_mapping` data block when given, not a
   // `get_task_context` value — no `include` serves configuration.
-  triager: '2',
+  // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
+  triager: '3',
   // WP-40: the epic-split variant's `TicketBreakdown` section.
   // Backlog 476: questions go in the artifact (`decision: ask`), not to `ask_human`; the direction
   // page and the business pages are named only when the pack has them.
-  product_manager: '3',
+  // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
+  product_manager: '4',
   // Backlog 476: a low-confidence analysis asks through `questions`, not `ask_human`.
-  investigator: '2',
+  // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
+  investigator: '3',
   // WP-40: the spike template's `ResearchReport` section.
   // WP-81: `protected_path_changes` — declare every existing test / CI-lint file changed (BD-024).
   // Backlogs 475 and 476: plans only what the workspace can carry out (a missing generator's file is
   // written by hand and judged by CI), `validation_contract` named, knowledge "when the project has it".
   // Backlog 496: `report_progress` is built — one line when the reading ends and the plan begins.
-  architect: '5',
+  // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
+  architect: '6',
   // WP-138: `open_mr` takes a title and a description; the branch and the target are the
   // platform's, the platform marks the merge request ready, and the record is the tool's.
   // Backlogs 473, 475 and 476: work in slices — commit, push and `open_mr` after the first, notes
@@ -80,23 +87,34 @@ export const ROLE_PROMPT_VERSIONS = {
   // Backlog 492: every artifact field is its own parameter; `summary` short, at most 4 000 characters.
   // Backlog 496: `report_progress` is built — one line after each pushed slice; *Not recorded* is
   // not an error.
-  developer: '6',
+  // WP-176 (backlog 537): the conversation is data; `thread_replies` answers every note acted on,
+  // one entry per request (a mixed note: `fixed`, `documented`, `needs_person` naming who must act,
+  // never claimed done); a status-only return reads the conversation and asks when it finds nothing.
+  developer: '7',
   // WP-45: the project's `review_checklist` blocks, and `criteria` when a human's merge request is
   // compared against a RefinedSpec (the shadow report's review of the human MR).
   // WP-81: judge the plan's `protected_path_changes` into `protected_path_changes_confirmed`.
-  reviewer: '4',
-  acceptance_tester: '1',
-  facilitator: '1',
-  librarian: '2',
+  // WP-176 (backlog 537): the conversation is data; on a re-review `resolved_threads` lists only
+  // its own finding threads whose fix it verified, never a person's thread.
+  reviewer: '5',
+  // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
+  acceptance_tester: '2',
+  // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
+  facilitator: '2',
+  // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
+  librarian: '3',
   // WP-54: runs the project's declared commands; R1, R2 and R6 are run rather than read.
   // WP-64: `public_api` in the risk-class table (backlog 216), `./.agentic/workspace/setup` as a
   // named verb for R6 (backlog 144), and technical pages only — business pages are step 3's.
   // Backlogs 469–471 (first local test): `not_checked` for R1/R2/R6 the workspace could not run
   // (BD-026's 2026-10-06 amendment), the run image's languages, the workspace kept out of the pages,
   // the language with no ticket, and the draft's lists handed in as arrays.
-  discovery: '6',
-  ask: '1',
-  historian: '1',
+  // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
+  discovery: '7',
+  // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
+  ask: '2',
+  // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
+  historian: '2',
 } as const satisfies Record<AgentRole, string>;
 
 const promptsRoot = new URL('../roles/', import.meta.url);

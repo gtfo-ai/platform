@@ -153,7 +153,7 @@ const conversationThreadIdSchema = nonEmptyStringSchema.max(255);
 
 /**
  * One reply the Developer asks the platform to post in a thread of the conversation (TD-029
- * decision 10): `fixed` (the change is made), `documented` (explained, not changed),
+ * decision 10): `fixed` (the change is made), `documented` (answered with a documentation-only change — the MR description or a doc file — and no code changed; WP-176),
  * `needs_person` (a person must act — `person` names who, and the platform states it has not
  * done the action) or `not_changed` (declined, with the reason in `reply`). The platform validates
  * `thread_id` against a fresh read before posting and drops an unknown one (WP-179).

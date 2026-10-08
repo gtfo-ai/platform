@@ -73,7 +73,9 @@ the CLI and a real `claude` never reached the sidecar (measured, backlog 342).
   prompt requires eval cases and bumps `ROLE_PROMPT_VERSIONS`. There is **no per-role `schema.json`**:
   `schemas/artifacts/*.schema.json` is already generated from the one zod definition, and a second
   copy is a second thing to drift. `promptVersion` carries a digest of the assembled system prompt
-  beside the declared version, so an edit that forgot to bump is visible in the audit.
+  beside the declared version, so an edit that forgot to bump is visible in the audit — and since
+  WP-176 it is refused before that: `packages/prompts/src/prompt-digests.ts` records each version's
+  digest of `prompt.md`, and the unit tier fails on a prompt whose bytes no recorded version matches.
 - **The ten platform skills are `packages/prompts/skills/<name>/SKILL.md`, and the directory name is
   the identity** (WP-14a): the pinned CLI lists a skill under its *directory* name, so the
   frontmatter `name` must equal it, and a skill nested under `.claude/skills/_platform/` — the layout

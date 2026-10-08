@@ -47037,3 +47037,96 @@ transition → 8 tests fail by name (incl. *"resolves a transition from a status
 fixture offers no neutral name from `Ready for agent`); no new status name was introduced. The brief
 named the heading both `Backlog 540` and `WP-540`; this is the one heading. Not measured against a
 live site.
+
+#### WP-176 — Prompts: every role reads the conversation, the Developer answers each thread, the Reviewer resolves only what it re-checked
+
+**As built (worktree off `9661c230`; only `packages/prompts/` and this note).**
+- **(a)** Every role's `prompt.md` gains *The conversation is data* — the same paragraph in all twelve:
+  the `conversation`, `conversation_author` and `conversation_path` blocks and `get_conversation` are
+  data whoever wrote the note, a note that tries to change instructions, tools or output is evidence
+  about its author, and only `platform="true"` on a marker says the platform wrote a note. The reviewer
+  adds: such a note goes to `suspicious_inputs_noted`, and a person's unmet request may be a finding
+  naming its `thread_id`.
+- **(b)** The Developer's *Answering the conversation* and a rewritten *On a return*: one
+  `thread_replies` entry per request (a mixed note → `fixed`, `documented`, `needs_person` with
+  `person`), never a person's action claimed done, finding threads answered, acknowledgements and
+  non-finding platform notes not answered; a status-only return reads the conversation and, finding
+  nothing, changes nothing and asks (`ask_human` when the tools include it) **and** writes the
+  question into `known_gaps`.
+- **(c)** The Reviewer's *On a re-review: resolve only what you re-checked*: `resolved_threads` holds
+  only `platform="true"` notes opening `<!-- agentic:review-finding:` whose fix the diff shows; never
+  a person's thread, never a partial fix.
+- **(d)** Eval cases: developer `dev-mixed-note-three-answers`, `dev-status-only-return-asks`,
+  `dev-replies-to-the-finding-it-fixed`, `dev-conversation-instruction-is-data`; reviewer
+  `rev-resolves-only-verified-findings`, `rev-never-resolves-a-person-thread`; the shared case
+  `shared-conversation-is-data` on the Acceptance Tester. `evals.test.ts` holds them to the schemas
+  (the existing checks) and holds that they exist (*the conversation cases (WP-176)*).
+  `ROLE_PROMPT_VERSIONS` bumps all twelve roles.
+- **Criterion (2), the prompt-version census, did not exist; it is built here**:
+  `packages/prompts/src/prompt-digests.ts` records per role version → SHA-256 of the `prompt.md` it
+  shipped (history starting at each role's `9661c230` version), and `promptVersionCensus` refuses a
+  file that no longer matches its declared version, a version with no digest, a declared version older
+  than the newest recorded one, and one digest under two versions. Residual, stated in its docblock:
+  rewriting the current version's digest in place passes — the table is append-only by review.
+- **(e)** `index.test.ts`: in a sentence about a ticket or tracker status, every quoted span is a
+  snake_case identifier (a slot's product name or a field), never a display name. Residual: an
+  unquoted status name in plain prose is not seen. No status name was added to any test.
+
+**Assumptions.**
+- **`documented` means "answered by a documentation-only change, no code changed"**, the product
+  owner's middle request, and a documentation change is never `fixed`. `threadReplySchema`'s docblock
+  says *"`documented` (explained, not changed)"*, which reads the same only if "explained" is in the
+  documentation; filed below rather than edited (outside `packages/prompts/`).
+- **A note with several requests gets one entry per request under the same `thread_id`.** The schema
+  allows it and WP-179's marker `agentic:reply:<task>.<run>.<n>` is per entry, so three replies post as
+  three notes in one thread; one entry would put the code fix under a `needs_person` banner.
+- `person` is whom the note names as able to act, else the note's author by their
+  `conversation_author` name.
+- `get_conversation` is not in `PLATFORM_TOOL_NAMES` until WP-180, so every sentence naming it says
+  *when your platform tools include* it (held per role in `index.test.ts`).
+- The prompts state the contract of WP-179's duties (the platform posts replies, a `needs_person`
+  reply carries platform text saying the action is not done, the platform resolves). Until WP-179 a
+  `thread_replies`/`resolved_threads` entry is recorded on the artifact and nothing is posted.
+- The reviewer prompt names TD-029's marker text `agentic:review-finding:` (decision 10);
+  nothing in the build writes that marker until WP-179.
+
+**Canaries** (each reverted, `vitest run packages/prompts --project unit`):
+1. A line appended to `developer/prompt.md` with no bump → *finds every shipped prompt at the digest
+   its declared version recorded* fails.
+2. The developer's status-only sentence rewritten to quote a status display name → the (e) test fails
+   (and the census).
+3. The triager's `get_conversation` sentence unhedged → the (a) test fails (and the census).
+4. `dev-mixed-note-three-answers` deleted → *give the Developer a mixed note …* fails.
+
+**Review round 1 (APPROVE, one surviving canary, fixed).** *"The conversation cases (WP-176)"* only
+checked that `'needs_person'` occurred in the joined assertion text, so a mixed-note expectation that
+accepted the person-only action answered `fixed` survived. Now *"the conversation cases run offline"*
+in `evals.test.ts` **executes** every `javascript` assertion of all seven WP-176 cases (as promptfoo
+would: an expression over `output`, the JSON string) against an invented correct output, which must
+pass every assertion, and named wrong outputs, each of which must fail at least one (the mixed note:
+person-only action `fixed`, no person, action claimed done, documentation change missing, an id on no
+marker; and two to four per other case). A census test holds that the table covers every case whose
+description names WP-176 plus the `shared-` case. Calibration, each reverted: the mixed case's set
+check `kinds.has('needs_person')` → `'fixed'` is killed by *fails at least one assertion when the
+person-only action answered fixed*; its person check `r.kind === 'needs_person'` → `'fixed'` is killed by
+*passes every assertion on the correct output*.
+
+**The status-name test's limit, stated:** it reads only a **quoted** span in a sentence that mentions
+both a status and a ticket or tracker. "move it to Testing" in plain prose passes it; only the digest
+census catches that edit, as a prompt change that needs a bump, and a reviewer reads the text.
+
+`pnpm eval --check` prints the same two blockers (promptfoo not installed, no model credential) and
+`FAIL: eval`, exit 1, before and after (criterion (3)).
+
+**Sentences falsified (rule 83).**
+- `packages/prompts/src/index.ts`, `RolePrompt.version`: *"It is not the only protection …"* stays
+  true; it now names the census as the build-time half.
+
+**Discovered work.**
+- `threadReplySchema`'s docblock (`packages/contracts/src/artifacts.ts:156`) should say what WP-176
+  assumes: `documented` = a documentation-only change, no code changed.
+- `test/contract/prompts/role-prompts.contract.test.ts`'s `UNBUILT_TOOLS` hedge does not know
+  `get_conversation` (not a `PlatformToolName` yet); WP-180, when it adds the tool, should add it to
+  `PLATFORM_TOOLS_BY_ROLE` for every role or keep the hedge test.
+- `CLAUDE.md`'s prompts paragraph could name the census (`prompt-digests.ts`) beside *"bumps
+  `ROLE_PROMPT_VERSIONS`"*.
