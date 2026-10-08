@@ -19429,12 +19429,12 @@ WP-181 follows WP-177 and WP-180, WP-182 follows WP-181, and WP-183 runs last. W
 | WP-172 | **Jira Cloud implements the six members, against documented fixtures** | IN_PROGRESS | — | Folds **535** (a), **536** (a). Deps WP-171. No migration. research/15 J1–J6, never J2. Neutral status names. Criterion (6): the Jira binding schema embeds `ticketLifecycleSchema` as `lifecycle`; `pickup_status` stays the `pick_up_from` slot (WP-170 review). |
 | WP-173 | **GitLab: every note is a discussion whatever `resolvable` says, and a reply reaches a general note** | DONE | `066768f7` | Folds **537** (the listing half). No deps. No migration. Reply to an individual note **[unverified]**, fallback built. Built in a worktree beside WP-170 and applied onto `d8c2a252`. **One review round, APPROVE-with-nits**; six canaries all dead; nits fixed by the orchestrator (the body-match and retry residuals stated for WP-179, a provider URL holding `)` or whitespace kept out of the link, TD-029's *unverified* sentence). Refiner: WP-172 (6), WP-171 (5), WP-178 (12), WP-179 (8), three doc citations moved. Orchestrator: `verify` PASS (twice). No Docker tier: the change is the adapter, the fake and the contract suite, which `verify` runs. `ci` `37798904164`, `image` `37798902297` **PENDING**. |
 | WP-174 | **Domain: the `qa` stage, the acknowledgement rule, the slot rules, the lifecycle moments and the return decision** | DONE | `d54bd901` | Folds **535**, **537** (d). Deps WP-170. No migration. TD-029 decisions 4, 8 and 9. Parallel with WP-171, WP-173, WP-175. Built in a worktree from `88c38f2a`. **One review round, APPROVE-with-nits**; six canaries all dead, and the reviewer re-ran the golden against the old code (19/19). The orchestrator ruled TD-029 decision 8's emoji contradiction (emoji are tokens; only the listed four are acknowledgements). Nits fixed by the orchestrator: configured words read through the comment's own pipeline, two incomplete per-edge-loop sentences. Refiner: TD-029 amended twice, backlog 539 (nit), WP-178 (13)–(16). Orchestrator: `verify` PASS (twice), `verify:integration` PASS, `verify:e2e` PASS twice (load ≤ 9.8 at each start; volumes 131 after). `ci` `37806041084`, `image` `37806041107` **PENDING**. |
-| WP-175 | **Domain: the `conversation` data block** | IN_PROGRESS | — | Folds **537**. Deps WP-170. No migration. Parallel with WP-171…WP-174. |
+| WP-175 | **Domain: the `conversation` data block** | IN_PROGRESS | — | Folds **537**. Deps WP-170. No migration. Parallel with WP-171…WP-174. Criterion (4) added by the architect's ruling (TD-029 decision 11, WP-175 amendment, 2026-10-08): `author_ref`/`path_ref` on the marker, and the raw values in `conversation_author`/`conversation_path` blocks. |
 | WP-176 | **Prompts: every role reads the conversation, the Developer answers each thread, and the Reviewer resolves only what it re-checked** | TODO | — | Folds **537**. Deps WP-170, WP-175. No migration. Eval cases and `ROLE_PROMPT_VERSIONS`. |
 | WP-177 | **Application: the claim, the release, the intake skip, the lifecycle transitions, and `status_mapping` superseded** | TODO | — | Folds **535** (c), **536**. Deps WP-171, WP-174. **Migration 0088** (`tasks.ticket_claim`, `tasks.qa_stage`). Serial with WP-178 and WP-179. |
 | WP-178 | **Application: one human-return window over four signals, at `qa` and at `ready_for_merge`, and the QA stage's endings** | TODO | — | Folds **535** (d), **537** (d). Deps WP-173, WP-174, WP-177. No migration. Measured: today's window drops a `resolvable: false` general note. Criterion (11): reads `human_returns.acknowledgements`, unreported at the settings write until then (WP-170 discovered work). Criterion (12): `task.human_return` counts contributing words only, `> 0` exactly when the form is listed (WP-170 review). Criterion (13): `isPlatformNote` uses the domain's merge-request marker test, so the marker regex has one copy (found at WP-174). Criteria (14)–(16) (refiner, session 15): a `qa` pass needs a recorded `ticket.status.changed` whose `from` is the `qa` slot (`HumanReturnInput.leftQa`); ticket-comment markers count only at the start, and the ask mirror's marker moves to the first line; the dependency gate's Q91 post-review set gains `qa`. |
 | WP-179 | **Application: the review conversation on the merge request — findings, replies and resolutions** | TODO | — | Folds **537** (a), (b). Deps WP-170, WP-173, WP-178. No migration. Renderer shared with review-only. Criterion (8): `replyToDiscussion` gets a docblock (GitLab's fallback answers a new discussion id); later reads match by marker, never the returned id (WP-173 finding). |
-| WP-180 | **Application: every agent stage gets the conversation in its prompt, and the tool's port answers the same** | TODO | — | Folds **537** (c). Deps WP-171, WP-173, WP-175. No migration. Parallel with WP-177…WP-179. |
+| WP-180 | **Application: every agent stage gets the conversation in its prompt, and the tool's port answers the same** | TODO | — | Folds **537** (c). Deps WP-171, WP-173, WP-175. No migration. Parallel with WP-177…WP-179. Criterion (6) (TD-029 decision 11, WP-175 amendment): pass the stable handle and the display name separately, so a Jira display name, an `accountId` or a path with a space never omits an entry. |
 | WP-181 | **Server: the statuses read, the binding's check, the effective configuration, the readiness notes and the `get_conversation` tool** | TODO | — | Folds **535** (b), **537** (c). Deps WP-171, WP-177, WP-180. No migration. Criterion (6): `ticket_claim`, `qa_stage` and `status_mapping_superseded` become required (WP-170 left them optional). |
 | WP-182 | **Web: the slots as pick lists in the wizard and in project settings; the claim and the QA stage on the task page** | TODO | — | Folds **535** (b). Deps WP-181. No migration. User-guide sweep (rule 83). |
 | WP-183 | **End to end, with fake Claude: the full flow with every slot mapped, a QA return in each form, and a project with nothing mapped** | TODO | — | Folds **535**, **536**, **537**. Deps WP-170…WP-182. No migration. The product owner's flows (i)–(iii), and **(v)**: the fake task manager's default workflow gets invented names (WP-171's discovered work, refined session 15). |
@@ -46825,3 +46825,58 @@ Implementer, session 15, from `88c38f2a`, in its own worktree. Not committed.
 - `isPlatformNote` (`packages/application/src/pipeline/review-threads.ts`) and the domain's
   `isPlatformWord` carry the same merge-request marker regex; WP-178 should make the application read
   the domain's.
+
+#### WP-175 — Domain: the `conversation` data block
+
+Built in a worktree from `2ffeb3c2`. `packages/domain/src/prompt/conversation.ts` (new) holds the entry
+types, `conversationRef` and `conversationBlocks`. `packages/domain/src/prompt/sha256.ts` (new) is a
+pure SHA-256. `assembly.ts` gains the optional `PromptTask.conversation`, the inventory line,
+`CONVERSATION_INSTRUCTION` in the task section, and the attribute table's rows. Tests:
+`conversation.test.ts` (43 cases, three of them fast-check properties) and `sha256.test.ts` (FIPS
+vectors, padding boundaries, and a property against `node:crypto`).
+
+**Pre-review round: the architect's ruling** (TD-029 decision 11's WP-175 amendment, criterion (4)). My
+first build refused an entry whose `author` or `path` was outside the marker set, and I filed that as a
+risk: a Jira display name or `accountId` would have dropped nearly every comment. As built now:
+- The entry has `author` (the display name) and `authorHandle` (the provider's stable handle). The
+  marker carries `author_ref`, derived from the handle and never from the name, and `path_ref` for a
+  diff note. A ref is verbatim when it passes the marker rule, is at most 64 characters and is not
+  digest-shaped (`^[ap]-[0-9a-f]{16}$`, either prefix). Otherwise it is `a-`/`p-` plus the first 16
+  hex characters of SHA-256.
+- `conversation_author` blocks (body: the newest entry's display name for that ref, cut at 256
+  characters, with `truncated` and `original_chars` on the marker) and `conversation_path` blocks
+  (body: the raw path) come one per distinct ref, before the entries, and only when the marker does not
+  already show the raw value.
+- An entry is refused only for an unsafe `thread_id`/`comment_id`, an unparsable `created_at`, or an
+  invalid `line`. Ids are never digested.
+- **SHA-256 in the domain:** the domain had no SHA-256. Its production sources import no `node:`
+  module, and its two hashes are FNV-1a because "`node:crypto` is I/O-adjacent" (`focusHash`,
+  `promptVersionOf`). biome's dependency rule does **not** forbid `node:crypto`. I wrote a pure
+  FIPS 180-4 implementation (about 60 lines, no import), because a port would make a ref depend on its
+  adapter. The test checks it against `node:crypto`.
+
+Canaries, each killed: refuse the entry on an unsafe author (5 failures), derive the ref from the
+display name (4), digest an unsafe id instead of refusing (11), no name cap (1), oldest name instead of
+newest (1), no `truncated` (3), no sort (2). In the first round: escape instead of refuse, body edit.
+
+Assumptions (the row leaves them open):
+- **One block per entry, all of kind `conversation`** (now recorded in TD-029's amendment). The
+  conversation-wide `entries`, `omitted` and `truncated` are repeated on every entry's marker. A
+  conversation that was read and has nothing renderable is **one** empty block with `entries="0"` and
+  no name or path block. An absent conversation is no block.
+- **`created_at` is re-rendered, never passed through**, as ISO 8601 basic UTC
+  (`20261008T091523.000Z`), because `:` and `+` are outside the marker set. A value that is not an
+  anchored extended-format instant refuses the entry.
+- A `line` with no `path`, or a line that is not a positive safe integer, refuses the entry.
+  `platform` is a boolean the caller decides by marker (`isPlatformWord`).
+- `PromptTask.conversation` is **optional** (as `previousAttempt` is), so every caller before WP-180
+  keeps a byte-identical prompt. That is asserted.
+- Entries are sorted oldest first by parsed instant (stable). No note is cut here, because WP-180
+  bounds and redacts. Only the display name is cut, at 256 characters.
+- `CONVERSATION_INSTRUCTION` sits in the task section. It says how to resolve `author_ref`/`path_ref`
+  through their blocks, and to quote only `thread_id` (or, to answer a ticket comment, `comment_id`).
+  No `PLATFORM_PROMPT_VERSION` bump, because only the user prompt changed.
+
+Discovered work:
+- WP-180 must supply `authorHandle` (GitLab `author.username`, Jira `author.accountId`) and a redacted
+  display name for each entry.

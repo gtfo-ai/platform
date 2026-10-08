@@ -83,6 +83,7 @@ export * from './policies/unattended-commands.js';
 export * from './policies/wip.js';
 // Prompt assembly and the data-block contract for untrusted text (WP-17, BD-022)
 export * from './prompt/assembly.js';
+export * from './prompt/conversation.js';
 export * from './prompt/data-block.js';
 export * from './prompt/environment.js';
 export * from './prompt/read-data-blocks.js';

@@ -233,9 +233,57 @@ Vendor facts are in `docs/research/15-tracker-lifecycle-and-mr-conversation.md`.
     merge request's discussions (every note, from bots and people, with system notes left out and
     platform notes labelled `platform: true`) and the ticket's comments. They are redacted, bounded
     newest-first and presented oldest-first, and each carries its `thread_id` or comment id. The planner
-    adds a `conversation` data block to every agent stage's prompt for a task with a merge request or a
-    ticket. It is bounded, its truncation is announced on the marker (never in the body), and it lists the
-    `thread_id`s that decision 10's replies and resolutions must use. Both are untrusted data (BD-022).
+    adds the conversation's data blocks (one `conversation` block per entry, plus the author and path
+    blocks; amendment below) to every agent stage's prompt for a task with a merge request or a
+    ticket. They are bounded, a truncation is announced on the markers (never in a body), and their
+    markers carry the `thread_id`s that decision 10's replies and resolutions must use. Both are untrusted data (BD-022).
+
+    > **Amendment, architect ruling at WP-175, 2026-10-08: how an author and a path are carried.**
+    > *As built at WP-175:* the conversation is **one `conversation` block per entry**, not one block.
+    > Each entry's ids and facts are marker attributes, because a separator line inside a shared body
+    > could be forged by the note above it, and `platform` must be unforgeable (technical/07). The
+    > conversation-wide `entries`, `omitted` and `truncated` are repeated on every entry's marker. A
+    > conversation that was read and has nothing renderable is one empty block with `entries="0"`.
+    >
+    > *The defect it exposed:* the marker rule (a value outside `A–Z a–z 0–9 . _ - /` is refused, never
+    > escaped) applied to `author` and `path` refuses the **whole entry**. A Jira display name
+    > (`Jane Doe`), a Jira `accountId` (`557058:<uuid>`, research/15 J4–J6) or a diff path with a space
+    > is outside the set. Nearly every Jira comment would then never reach the agent, which breaks BD-031
+    > rulings 4 and 6.
+    >
+    > *The ruling.* The marker rule stays as it is. No untrusted value is escaped, and no platform text
+    > is written inside a body.
+    > 1. **The marker carries refs, not names.** Each entry's marker has `author_ref` and, for a diff
+    >    note, `path_ref`, in place of `author` and `path`. A ref is the platform's own value. It is the
+    >    raw value verbatim when that value passes the marker rule, is at most 64 characters, and does
+    >    not have the digest shape. Otherwise it is `a-` (author) or `p-` (path) followed by the first 16
+    >    hex characters of the SHA-256 of the raw value. The author ref is derived from the provider's
+    >    **stable handle**, never from the display name: GitLab `author.username`, Jira
+    >    `author.accountId`. So one person has one ref across the whole conversation, and two people who
+    >    share a display name keep two refs.
+    > 2. **The raw values travel in their own data blocks.** A `conversation_author` block has the marker
+    >    attribute `author_ref`, and its body is the display name exactly as the caller supplied it
+    >    (redacted, at most 256 characters, newest entry's name for that ref). A `conversation_path`
+    >    block has `path_ref`, and its body is the raw path. A block like this exists **exactly when the
+    >    marker does not already carry the raw value**: one per distinct ref, emitted once, before the
+    >    entry blocks. This satisfies the rule *every byte is platform text or inside a data block*:
+    >    the markers are platform text, and each body is one untrusted value, byte-identical, with
+    >    nothing around it.
+    > 3. **Refusing an entry** is now left for values the platform must quote back or cannot place: a
+    >    `thread_id` or `comment_id` outside the set, an unparsable `created_at`, or an invalid `line`.
+    >    GitLab discussion ids are 40 hex characters and Jira comment ids are decimal strings in the
+    >    vendors' documented examples `[unverified]` as a guarantee (`docs/TODO.md`). Both are inside the
+    >    set, so the refusal is a backstop and not a filter. An id is never digested, because decision 10
+    >    validates the quoted id against a fresh `listDiscussions`.
+    > 4. **Rejected options.** A platform-written header at the start of the entry's body was rejected:
+    >    the body must stay byte-identical, and a name holding a newline could forge the header.
+    >    `author_omitted` was rejected because the agent could no longer tell who wrote what, nor whom a
+    >    `needs_person` reply names.
+    >
+    > The instruction (WP-175 (b), WP-176) tells the agent to read `author_ref` and `path_ref` through
+    > their blocks, and to quote only `thread_id` and `comment_id`. `get_conversation` (WP-180, WP-181)
+    > answers the raw author and path as JSON fields. JSON escaping is the tool result's encoding, not a
+    > marker, so the tool keeps both values.
 12. **Two installations sharing one service account** are **filed, not built**, as PROGRESS backlog
     **538** (minor). The assignee settles every case BD-031 names: a person; two projects bound with
     different accounts; two installations with different accounts. The shared account is the one case it
