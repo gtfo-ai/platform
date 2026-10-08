@@ -76,15 +76,26 @@
  * or read its script from a pipe or a process substitution — the line is `UNCERTAINTY.handedCommand`
  * (`storesCommand`, and `wrappedScript`'s standard-input reader).
  *
+ * **What it reads as uncertain instead** (WP-161, backlog 516–523): more than eight wrappers,
+ * assignments or nested substitutions (`UNCERTAINTY.tooDeep`), a command name — or a wrapper's —
+ * the shell expands by a glob or a brace (`expandedName`), a name `hash -p` rebinds
+ * (`reboundName`), and an `xargs` that hands its input to a wrapper, `find -exec` or `git`
+ * (`xargsArguments`). A line continuation is joined before any word is classified, inside a word
+ * as between words (`normaliseCommand`), and git's abbreviated long options are resolved by git's
+ * rule (`HAZARDOUS_ARGUMENTS`).
+ *
  * **What it still does not read:** a script in a file (`bash file`, `bash < file`, `. ./x.sh` — a
  * file the run wrote, backlog 481's residual and the unattended module's), an interpreter that is not
  * a shell (`python3 -c`, `perl -e`), a command a program assembles from its input where no string on
- * the line names it (`parallel`; and argv `xargs` reads from standard input into a command that
- * runs its arguments, `echo 'sudo id ;' | xargs find . -exec` — backlog 523, WP-161), a prompt variable or an alias set by a start-up file, an option's
- * value attached to its option (`read -aNAME`), a name taken by a builtin it does not list
- * (`getopts`, `wait -p`, `exec {var}>…`), an attribute (`-i`, `-n`) given to a variable outside
- * the line, and a line continuation **inside** a word (`su\⏎do id` — WP-161; one between words is
- * joined before every reader here reads, review round 1).
+ * the line names it (`parallel`; and `xargs` feeding a command that is not a wrapper, `find -exec`,
+ * `git` or a shell — `xargs make`, whose input names targets), a prompt variable or an alias set by
+ * a start-up file, an option's value attached to its option (`read -aNAME`), a name taken by a
+ * builtin it does not list (`getopts`, `wait -p`, `exec {var}>…`), an attribute (`-i`, `-n`) given
+ * to a variable outside the line, a name bound outside the line (`hash -p` in an earlier call, if
+ * the CLI's Bash tool keeps a shell — not measured), and the leading operand of a wrapper that
+ * `WRAPPER_OPERAND` does not list when a globbed command name follows it (an option's value is
+ * always read as one — backlog 531 — and the operand of `timeout`, `taskset`, `chrt`, `flock`, `su`
+ * and `runuser` whatever its shape, WP-161 review round 2).
  *
  * **Quoting is honoured in one place and ignored in the other, on purpose.** The scanner
  * (`scan`, and so the redirection floor) honours it: `ls "> out"` is not a redirection, because
@@ -110,6 +121,7 @@
 import type { CommandPolicy, UnattendedCommandMode, VerificationMode } from '@platform/contracts';
 import { DEFAULT_UNATTENDED_COMMAND_MODE } from '@platform/contracts';
 import { PolicyViolationError } from '../errors.js';
+import { GIT_LONG_OPTIONS, type GitLongOptionTable } from './git-long-options.generated.js';
 
 export type CommandVerdict = 'allow' | 'ask' | 'block';
 
@@ -170,6 +182,29 @@ export const UNCERTAINTY = {
   handedCommand:
     'a command handed over as a string — a trap action, an eval or sh -c script that is not literal, a prompt or hook variable (PS4, PROMPT_COMMAND), an alias, a callback (mapfile -C, bind -x, complete -C or -W, fc), or a script piped or process-substituted into a shell — write the command itself; the platform cannot read a command stored in a trap, a prompt, an alias or a callback',
   evaluatedText: `an expansion or command that evaluates a variable's text as code (a subscript or offset that is not a plain number, \${x@…}, \${!x}, $[…], ((…)), let, declare -i or -n, a [[ … -eq … ]] or -v test, a variable name built from an expansion) — write the value literally; the platform cannot read an expansion that evaluates a variable's text`,
+  /**
+   * WP-161 (d), backlog 516: past {@link MAX_WRAPPER_DEPTH} the argv peel and the substitution walk
+   * stop reading, so a command behind a ninth wrapper or assignment, or inside a substitution nested
+   * past the bound, was judged by nothing. Each site now says so instead (rule 5).
+   */
+  tooDeep:
+    'more than eight wrappers, assignments or nested substitutions in front of a command — write the command with fewer wrappers, assignments or nested substitutions; the platform reads eight',
+  /**
+   * WP-161 (f), backlog 518: a command word holding an unquoted `*`, `?`, `[` or a brace expansion
+   * (`,` or `..`) is a name the shell expands — `/usr/bin/g[i]t` ran git 2.47.3 in the run image —
+   * so the block list and the git boundary, which match the name as written, never saw it.
+   */
+  expandedName:
+    "a command name with a glob (*, ?, [) or a brace expansion ({a,b}, {a..b}) in it — write the command's name literally; the platform cannot read a name the shell expands",
+  /** WP-161 criterion (12), backlog 522: `hash -p FILE NAME` makes `NAME` run `FILE`. */
+  reboundName:
+    'hash -p, which binds a command name to another program — run the program by its own name; the platform reads a command by the name it is written with',
+  /**
+   * WP-161 criterion (13), backlog 523: `xargs` appends the words it reads to its command, so a
+   * command that runs its arguments — a wrapper, `find -exec`, `git` — runs what the pipe said.
+   */
+  xargsArguments:
+    'xargs handing the words it reads from its input to a command that runs its arguments (a wrapper such as env, nice, nohup or timeout, find with -exec, or git) — write the command and its arguments on the line; the platform cannot read arguments xargs supplies from its input',
 } as const;
 
 export type UncertaintyReason = (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY];
@@ -747,6 +782,8 @@ export interface HazardousArgument {
     readonly name: string;
     readonly flags: readonly string[];
     readonly positional: readonly string[];
+    /** Every word after the name, dequoted, in order (WP-161: git's subcommand is read off these). */
+    readonly words: readonly string[];
   }) => boolean;
 }
 
@@ -874,6 +911,163 @@ const COV_REPORT_DEST = new RegExp(`^(?:${COV_REPORT_DEST_KINDS}):`);
 const COV_REPORT_ATTACHED_DEST = new RegExp(`^--cov-report=(?:${COV_REPORT_DEST_KINDS}):`);
 
 /**
+ * The long spellings of `HAZARDOUS_ARGUMENTS`' git entries, each with its entry's kind (WP-161 (b),
+ * PROGRESS backlog 515). git maps a long word `--t` to an option when `t` is a prefix of one of that
+ * option's spellings, and git 2.47.3 (the run image's) did so for every parse-options table:
+ * `git commit --no-verif` and `--no-veri` skipped a failing pre-commit hook, `git fetch --upload-p=`
+ * and `--upload=`, `git ls-remote --upload-p=` and `git push --receive-p=`, `--exe=` and `--ex=` ran
+ * the value, and `git cat-file --te` and `--text` ran the repository's textconv driver (measured,
+ * PROGRESS § WP-161). So being a prefix of one of these is the **necessary** condition for an
+ * abbreviation to reach a hazard, and it is the floor (`gitAbbreviationFloor`).
+ */
+export interface GitAbbreviationHazard {
+  /** The long option's name, without `--`. */
+  readonly spelling: string;
+  readonly kind: HazardKind;
+  readonly hazard: string;
+}
+
+export const GIT_ABBREVIATION_HAZARDS: readonly GitAbbreviationHazard[] = [
+  {
+    spelling: 'no-verify',
+    kind: 'trust',
+    hazard:
+      'skips the pre-commit, pre-merge, pre-push and commit-msg hooks, which is where a repository runs its secret scan (BD-002) and its formatter',
+  },
+  {
+    spelling: 'upload-pack',
+    kind: 'command',
+    hazard: 'git runs the --upload-pack value as a shell command, on this machine for a local path',
+  },
+  {
+    spelling: 'receive-pack',
+    kind: 'command',
+    hazard: 'git push runs the value as a shell command',
+  },
+  {
+    spelling: 'exec',
+    kind: 'command',
+    hazard:
+      'git push and fetch-pack run --exec as their pack program, and git rebase runs it after each commit',
+  },
+  {
+    spelling: 'extcmd',
+    kind: 'command',
+    hazard: 'git difftool runs --extcmd once per changed file',
+  },
+  {
+    spelling: 'ext-diff',
+    kind: 'command',
+    hazard: "runs the external diff driver the repository's own config names (BD-022)",
+  },
+  {
+    spelling: 'textconv',
+    kind: 'command',
+    hazard: "runs the textconv filter the repository's config names (BD-022)",
+  },
+  { spelling: 'output', kind: 'path', hazard: "git's diff family writes --output to any path" },
+];
+
+const GIT_HAZARD_SPELLINGS: ReadonlySet<string> = new Set(
+  GIT_ABBREVIATION_HAZARDS.map((entry) => entry.spelling),
+);
+
+/**
+ * The option git resolves the long word `--t` to in `table`, by its own rule (`parse_long_opt`): an
+ * exact spelling wins; otherwise a prefix that matches the spellings of exactly one option (its
+ * positive and `no-` forms are one option) wins; otherwise nothing — an ambiguous or unknown word,
+ * which git refuses. Answers the matched spelling, a hazardous one first, or `null`. With no table
+ * (an alias, `git-foo`, `mergetool`, anything unknown) it resolves nothing, so the floor stays.
+ */
+export const gitResolvesLongOption = (
+  table: GitLongOptionTable | undefined,
+  word: string,
+): string | null => {
+  if (table === undefined) {
+    return null;
+  }
+  if (table.abbreviates.includes(word) || table.exact.includes(word)) {
+    return word;
+  }
+  const matches = table.abbreviates.filter((spelling) => spelling.startsWith(word));
+  const options = new Set(matches.map((spelling) => spelling.replace(/^no-/, '')));
+  if (options.size !== 1) {
+    return null;
+  }
+  return matches.find((spelling) => GIT_HAZARD_SPELLINGS.has(spelling)) ?? (matches[0] as string);
+};
+
+/** Global options of `git` itself that take the next word as their value (git(1)). */
+export const GIT_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--config-env',
+  '--super-prefix',
+  '--attr-source',
+]);
+
+/** The subcommand of a `git` argv (`name` is `git` or `git-<sub>`), past git's own options. */
+const gitSubcommandOf = (name: string, words: readonly string[]): string | null => {
+  if (name !== 'git') {
+    return name.slice('git-'.length);
+  }
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index] as string;
+    if (GIT_GLOBAL_VALUE_OPTIONS.has(word)) {
+      index += 1;
+    } else if (word === '--') {
+      return words[index + 1] ?? null;
+    } else if (!word.startsWith('-')) {
+      return word;
+    }
+  }
+  return null;
+};
+
+/** The table of a subcommand, if the generated data has one (never an inherited property). */
+const gitTableOf = (subcommand: string | null): GitLongOptionTable | undefined =>
+  subcommand !== null && Object.hasOwn(GIT_LONG_OPTIONS, subcommand)
+    ? GIT_LONG_OPTIONS[subcommand]
+    : undefined;
+
+/**
+ * WP-161 (b): the floor for every abbreviation of one hazardous spelling. A git word `--t` or `--t=v`
+ * before a bare `--`, in any argv candidate (so behind any wrapper), is floored at the hazard's kind
+ * whenever `t` is a prefix of `spelling` — **unless** git's own resolution of `t` against the
+ * subcommand's table (`GIT_LONG_OPTIONS`, generated from the run image's git) answers exactly one
+ * option and that option is not hazardous (`git diff --text`, `git commit --verify`). If it answers
+ * another hazardous spelling, that spelling's entry floors it instead. The table can only remove a
+ * floor, and only by git's rule; an ambiguous `t` stays floored, which costs nothing because git
+ * refuses it. Short options are not read here (`-n` and `rebase -x` have entries of their own).
+ */
+const gitAbbreviationFloor = ({
+  spelling,
+  kind,
+  hazard,
+}: GitAbbreviationHazard): HazardousArgument => ({
+  pattern: `git --${spelling} abbreviated (any prefix of it git could resolve to it, e.g. --${spelling.slice(0, Math.max(2, spelling.length - 2))})`,
+  kind,
+  hazard: `git accepts any unambiguous prefix of a long option, so this is --${spelling}: ${hazard}`,
+  tokens: ({ name, flags, words }) => {
+    if (name !== 'git' && !name.startsWith('git-')) {
+      return false;
+    }
+    const table = gitTableOf(gitSubcommandOf(name, words));
+    return flags.some((flag) => {
+      const word = /^--([^=]+)/.exec(flag)?.[1];
+      if (word === undefined || !spelling.startsWith(word)) {
+        return false;
+      }
+      const resolved = gitResolvesLongOption(table, word);
+      return resolved === null || resolved === spelling;
+    });
+  },
+});
+
+/**
  * Arguments that turn an allow-listed verb into something else: the `find … -exec` hazard, gone
  * looking for on the rest of the shipped verbs instead of waiting for it to be reported.
  *
@@ -892,6 +1086,17 @@ const COV_REPORT_ATTACHED_DEST = new RegExp(`^--cov-report=(?:${COV_REPORT_DEST_
  * Verified against the real tools rather than assumed (git 2.50.1, throwaway repository): a
  * `--upload-pack`/`--receive-pack`/`--exec` payload really is executed, and `git diff --output=`
  * and `git log --output=` really do write a path no redirection rule can see.
+ *
+ * **git abbreviates long options, so every git entry is matched by git's rule too** (WP-161 (b),
+ * backlog 515). git 2.47.3 — the run image's — maps `--t` to an option whenever `t` is an
+ * unambiguous prefix of one of its spellings in a parse-options table: `git commit --no-verif`
+ * skipped a failing hook and `git fetch --upload-p=` ran its value (measured), while diff, revision
+ * and global options are exact-only (`git diff --ext-dif` and `git log --textco` were refused). The
+ * full-spelling entries below stay; beside them, one `gitAbbreviationFloor` per hazardous spelling
+ * (`GIT_ABBREVIATION_HAZARDS`) floors any long word that is a prefix of it, unless git's own
+ * resolution against the subcommand's generated table (`git-long-options.generated.ts`) answers one
+ * option that is not hazardous. Short options are not abbreviations; `-n`, `rebase -x` and
+ * `difftool -x` have entries of their own.
  */
 export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   // ── hands the verb an arbitrary command ──
@@ -924,10 +1129,22 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
         ((name === 'git-rebase' || positional.includes('rebase')) &&
           flags.some((flag) => /^-[^-]*x/.test(flag)))),
   },
+  /**
+   * `--extcmd`, and since WP-161 criterion (11) `git difftool`'s short spelling, `-x`: attached
+   * (`-xCMD`), separate, or last in a cluster (`-yx`) — git 2.47.3 ran the command for each (PROGRESS
+   * § WP-161). `git mergetool` rejects both `-x` and `--extcmd` (measured), so this names difftool
+   * only; the hazard text said *"difftool and mergetool"* until WP-161. A token predicate for
+   * `--exec`'s reason: a glob cannot read a cluster.
+   */
   {
     pattern: 'git * --extcmd*',
     kind: 'command',
-    hazard: 'git difftool and mergetool run --extcmd (-x) once per changed file',
+    hazard: 'git difftool runs --extcmd (-x) once per changed file',
+    tokens: ({ name, flags, positional }) =>
+      (name === 'git' || name.startsWith('git-')) &&
+      (flags.some((flag) => flag.startsWith('--extcmd')) ||
+        ((name === 'git-difftool' || positional.includes('difftool')) &&
+          flags.some((flag) => /^-[^-]*x/.test(flag)))),
   },
   {
     pattern: 'git * --ext-diff*',
@@ -1013,6 +1230,8 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
       'skips the pre-commit, pre-merge and commit-msg hooks, which is where a repository runs its secret scan (BD-002) and its formatter',
   },
   { pattern: 'git commit* -n*', kind: 'trust', hazard: 'the short spelling of --no-verify' },
+  // WP-161 (b): every abbreviation git resolves to one of the long spellings above.
+  ...GIT_ABBREVIATION_HAZARDS.map(gitAbbreviationFloor),
   /**
    * The two merge strategy flags, floored because product/19 §3's conflict-resolution bullet says
    * they are `ask` *"never allow"* and the closed allow set only answers for the position before
@@ -1337,12 +1556,90 @@ export const DEFAULT_COMMAND_POLICY: ResolvedCommandPolicy = {
   block: DEFAULT_BLOCKED_COMMANDS,
 };
 
+/**
+ * Every git subcommand a shipped allow, ask or block entry names (WP-161 (c)): the generator reads
+ * a long-option table for each, and the census in `command-policy.test.ts` holds that each has one
+ * or is listed as table-less (`GIT_TABLELESS_SUBCOMMANDS`).
+ */
+export const POLICY_GIT_SUBCOMMANDS: readonly string[] = [
+  ...new Set(
+    [
+      ...DEFAULT_READ_ONLY_ALLOW,
+      ...LOCKFILE_INSTALL_ALLOW,
+      ...PROJECT_COMMAND_ALLOW,
+      ...DEFAULT_IMPLEMENTATION_ALLOW,
+      ...WORKSPACE_SETUP_ALLOW,
+      ...DEFAULT_VERIFICATION_ALLOW,
+      ...CI_VERIFICATION_BLOCK,
+      ...CONFLICT_RESOLUTION_EXTRA_ALLOW,
+      ...DEFAULT_IMPLEMENTATION_ASK,
+      ...DEFAULT_BLOCKED_COMMANDS,
+    ].flatMap((entry) => {
+      const subcommand = /^git\s+([a-z][a-z0-9-]*)/.exec(entry)?.[1];
+      return subcommand === undefined ? [] : [subcommand];
+    }),
+  ),
+].sort();
+
 // ── pattern matching ─────────────────────────────────────────────────────────
 
 const REGEX_SPECIALS = /[.+^${}()|[\]\\]/g;
 
-/** Collapses whitespace so `npm  test` and `npm test` are the same command. */
-export const normaliseCommand = (command: string): string => command.trim().replace(/\s+/g, ' ');
+/**
+ * `text` with every line continuation (`\` + newline) outside single quotes taken out — once, as
+ * bash takes it out before it splits words (WP-161 criterion (10), backlog 520). `su\⏎do id` is
+ * `sudo id` to bash, and read with the backslash kept it was `su` and `do` to every classifier here,
+ * so the block list, the git boundary and the hazard floor never saw it. Inside single quotes the
+ * pair is two literal characters; an escaped backslash (`\\`) is kept whole, so the newline after
+ * it stays a newline. A here-document body is not in the text this reads: the scanner cuts a body
+ * that is data out of every fragment, and a body a shell runs is joined by that shell too.
+ */
+/**
+ * Whether an unquoted `#` at `index` opens a comment: it begins a word — the text's start, or after a
+ * blank or an operator character — as bash requires (`a#b` and `$#` are words, not comments).
+ */
+const startsComment = (text: string, index: number): boolean =>
+  index === 0 || /[\s;&|()<>]/.test(text[index - 1] as string);
+
+const joinQuotedContinuations = (text: string): string => {
+  if (!text.includes('\\\n')) {
+    return text;
+  }
+  let out = '';
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] as string;
+    if (quote === null && char === '#' && startsComment(text, index)) {
+      // A comment runs to the newline, and a backslash in it is not a continuation (WP-161
+      // criterion (14)): `ls # x \⏎sudo id` runs `sudo id` in bash 3.2, 5.2 and dash.
+      const end = text.indexOf('\n', index);
+      out += text.slice(index, end === -1 ? text.length : end);
+      index = (end === -1 ? text.length : end) - 1;
+    } else if (quote === "'") {
+      quote = char === "'" ? null : quote;
+      out += char;
+    } else if (char === '\\') {
+      if (text[index + 1] !== '\n') {
+        out += text.slice(index, index + 2);
+      }
+      index += 1;
+    } else {
+      if (char === '"' || char === "'") {
+        quote = quote === char ? null : quote === null ? char : quote;
+      }
+      out += char;
+    }
+  }
+  return out;
+};
+
+/**
+ * Collapses whitespace so `npm  test` and `npm test` are the same command, after taking out the
+ * line continuations bash takes out (`joinQuotedContinuations`): every word this module classifies
+ * is split from here (`tokenise`), so a continuation is removed before any word is read.
+ */
+export const normaliseCommand = (command: string): string =>
+  joinQuotedContinuations(command).trim().replace(/\s+/g, ' ');
 
 const globToRegExp = (glob: string): RegExp =>
   new RegExp(
@@ -1573,11 +1870,67 @@ const tokenise = (text: string): readonly string[] =>
     .filter((token) => token.length > 0);
 
 /**
- * How many suffixes to try past a wrapper prefix; a shell line is never this deep in practice. It is
- * also how deep a handed-over script is parsed, and one nested past it is uncertain (WP-160). The
- * suffix walk past a prefix is **not** fail-closed at the bound — PROGRESS § WP-160, Discovered work.
+ * How much of a line the peel and the nesting walk read: eight wrappers or assignments in front of
+ * a command (and up to eight words of a wrapper's options and operands after each), and eight
+ * levels of nested substitution or handed-over script. A shell line is never this deep in practice.
+ * **Past it, every site is uncertain** (WP-161 (d), backlog 516): the argv peel
+ * (`walkCommandStarts`, for `argv0Candidates` and `commandPositions`) adds `UNCERTAINTY.tooDeep`,
+ * the substitution walk and a script reader's here-document past the bound do too, and a script
+ * handed over past it is `UNCERTAINTY.handedCommand` (WP-160). Before WP-161 the first two dropped
+ * what lay past the bound with nothing said, so `nice` ×9 `git push --force origin main` and
+ * `A=1 … I=9 sudo id` read as unmatched commands and ran under `auto`. One constant, one rule: an
+ * unbounded peel was considered and not chosen, because the substitution recursion needs a bound
+ * anyway.
  */
 const MAX_WRAPPER_DEPTH = 8;
+
+/** Where the command of a word list may start, and whether the peel stopped at its bound. */
+interface CommandStarts {
+  readonly starts: readonly number[];
+  readonly tooDeep: boolean;
+}
+
+/**
+ * The positions a command may start at, for words whose first is a wrapper or an assignment (`chain`
+ * says which): every later word, because a wrapper's options and operands sit between it and the
+ * command (`nice -n 5 sudo id`, `timeout -s KILL 5 git push …`). The walk reads eight words past
+ * the last wrapper or assignment it met, and two past an option (its value, then the next word),
+ * and stops — **uncertain** — at a ninth wrapper or assignment (WP-161 (d)). The window is counted
+ * from the last wrapper rather than from the first word, so three `nice -n 5` in a row (nine words)
+ * no longer hide the tenth word (measured `unattended_auto` before WP-161). `flag` says what an
+ * option is.
+ */
+const walkCommandStarts = (
+  words: readonly string[],
+  chain: (word: string) => boolean,
+  flag: (word: string) => boolean,
+): CommandStarts => {
+  const starts = [0];
+  const head = words[0];
+  if (head === undefined || !chain(head)) {
+    return { starts, tooDeep: false };
+  }
+  let peeled = 1;
+  let limit = MAX_WRAPPER_DEPTH;
+  for (let index = 1; index < words.length && index <= limit; index += 1) {
+    starts.push(index);
+    const word = words[index] as string;
+    if (chain(word)) {
+      peeled += 1;
+      if (peeled > MAX_WRAPPER_DEPTH) {
+        return { starts, tooDeep: true };
+      }
+      limit = index + MAX_WRAPPER_DEPTH;
+    } else if (flag(word)) {
+      limit = Math.max(limit, index + 2);
+    }
+  }
+  return { starts, tooDeep: false };
+};
+
+/** The peel of `argv0Candidates` over written tokens. */
+const argvStarts = (tokens: readonly string[]): CommandStarts =>
+  walkCommandStarts(tokens, isWrapperToken, (token) => isFlagToken(unquoteToken(token)));
 
 /**
  * The command with leading environment wrappers removed, when there are any. Returns nothing when
@@ -1617,20 +1970,14 @@ const stripEnvironmentPrefix = (text: string): readonly string[] => {
 /**
  * The token lists a command could really be, for block matching: itself with argv[0] reduced to a
  * basename, plus — when it starts with a wrapper or an assignment — every suffix after it, because
- * a wrapper's own flags and their values (`nice -n 5 sudo id`) sit between the two commands.
+ * a wrapper's own flags and their values (`nice -n 5 sudo id`) sit between the two commands. How
+ * far that goes is `walkCommandStarts`'s, and past its bound the line is uncertain (WP-161 (d)).
  */
 const argv0Candidates = (tokens: readonly string[]): readonly (readonly string[])[] => {
   const withBasename = (list: readonly string[]): readonly string[] =>
     list.length === 0 ? list : [argv0Name(list[0] as string), ...list.slice(1)];
 
-  const candidates: (readonly string[])[] = [withBasename(tokens)];
-  const head = tokens[0];
-  if (head !== undefined && isWrapperToken(head)) {
-    for (let start = 1; start < tokens.length && start <= MAX_WRAPPER_DEPTH; start += 1) {
-      candidates.push(withBasename(tokens.slice(start)));
-    }
-  }
-  return candidates;
+  return argvStarts(tokens).starts.map((start) => withBasename(tokens.slice(start)));
 };
 
 // ── block matching (token-aware, plus the whole-line glob) ───────────────────
@@ -1723,6 +2070,7 @@ const carriesHazard =
             name,
             flags,
             positional,
+            words: rest.map(unquoteToken),
           });
         });
 
@@ -2396,7 +2744,13 @@ const ELEMENT_ASSIGNMENT = /^(?:[A-Za-z_][A-Za-z0-9_]*)?\[([\s\S]*)\]\+?=/;
  * variable.
  */
 const wordsOf = (stage: string): readonly string[] =>
-  scan(stage, [' ', '\t']).segments.filter((word) => !/^[0-9]*[<>&]/.test(word));
+  scan(stage, [' ', '\t']).segments.filter(
+    (word, index, all) =>
+      !/^[0-9]*[<>&]/.test(word) &&
+      // The target of an operator written apart from it (`<<< 'x'`, `> out`) is not a name either
+      // (WP-161 (g), backlog 519: `read -r X <<< 'x'` was `evaluatedText`).
+      !/^[0-9]*(?:<<<|<<-?|<>|<&|>&|>>|>\||&>>|&>|<|>)$/.test(all[index - 1] ?? ''),
+  );
 
 /** The words a name-taking builtin reads as names: every non-option, except an option's value. */
 const namesOf = (args: readonly string[], valueOption: RegExp | null): readonly string[] => {
@@ -2823,6 +3177,17 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       continue;
     }
 
+    // A comment runs to the newline, which still separates commands: a `\` before that newline is
+    // part of the comment, not a continuation (WP-161 criterion (14) — `ls # x \⏎sudo id` was one
+    // segment, `ls`, and `allow_list` in every baseline while bash ran `sudo id`).
+    if (char === '#' && startsComment(command, index)) {
+      const end = command.indexOf('\n', index);
+      const stop = end === -1 ? command.length : end;
+      current += command.slice(index, stop);
+      index = stop;
+      continue;
+    }
+
     // An arithmetic command, `((…))` or `for ((…))` (WP-158). `$((` and `<((` never reach here:
     // both are consumed above. Read here and not per stage, because the list split cuts at `(`.
     if (/^\((?:\\\n)*\(/.test(rest)) {
@@ -2894,6 +3259,17 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       }
       current += command.slice(index, cursor);
       index = cursor;
+      continue;
+    }
+
+    // `<&N`, `<&N-` and `<&-` duplicate, move or close a descriptor: one redirection, whose `&` is
+    // not a background operator (WP-161 (g), backlog 519 — `git status <&3` split into `git status <`
+    // and `3`). Reading standard input is not a write; a shell reading it is `wrappedScript`'s.
+    // Only the operator is consumed: the word after it is read on as any other (a `$(…)` there is
+    // still a substitution).
+    if (rest.startsWith('<&')) {
+      current += '<&';
+      index += 2;
       continue;
     }
 
@@ -3167,21 +3543,253 @@ const optionWords = (args: readonly ShellWord[]): readonly string[] =>
 /**
  * Where the command of a stage may start: past its assignments, and — when that word is a wrapper
  * — every later word too, as `argv0Candidates` tries them (a wrapper's options and arguments sit
- * between it and the command).
+ * between it and the command). The walk is `walkCommandStarts`, so it has the same bound and says
+ * when it stopped at it (WP-161 (d)).
  */
-const commandPositions = (argv: readonly ShellWord[]): readonly number[] => {
+const commandPositions = (argv: readonly ShellWord[]): CommandStarts => {
   let start = 0;
   while (start < argv.length && isAssignment((argv[start] as ShellWord).raw)) {
     start += 1;
   }
-  const positions = [start];
-  if (start < argv.length && ARGV0_WRAPPERS.has(argv0Name((argv[start] as ShellWord).raw))) {
-    for (let next = start + 1; next < argv.length && next <= start + MAX_WRAPPER_DEPTH; next += 1) {
-      positions.push(next);
+  const walk = walkCommandStarts(
+    argv.map((word) => word.raw),
+    isWrapperToken,
+    (raw) => isFlagToken(unquoteToken(raw)),
+  );
+  const isWrapper =
+    start < argv.length && ARGV0_WRAPPERS.has(argv0Name((argv[start] as ShellWord).raw));
+  return {
+    starts: (isWrapper ? walk.starts.filter((position) => position >= start) : [start]).filter(
+      (position) => position < argv.length,
+    ),
+    tooDeep: walk.tooDeep,
+  };
+};
+
+// ── WP-161 (f): a command name the shell expands (backlog 518) ───────────────
+
+/**
+ * Whether a word as written holds something bash expands into another word before it runs it: an
+ * unquoted `*`, `?` or `[` (pathname expansion), or a brace expansion — an unquoted `{…}` with a
+ * `,` or a `..` at its own level (`{a,b}`, `{i..i}`). `${…}` is a parameter expansion, not a brace,
+ * and `{x}` and `{}` expand to nothing else. A `[` with no `]` is literal to bash and read as a glob
+ * here, which can only over-read.
+ */
+const expandsAsName = (word: string): boolean => {
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < word.length; index += 1) {
+    const char = word[index] as string;
+    if (quote === "'") {
+      quote = char === "'" ? null : quote;
+    } else if (char === '\\') {
+      index += 1;
+    } else if (char === '"') {
+      quote = quote === '"' ? null : '"';
+    } else if (quote === null && char === "'") {
+      quote = "'";
+    } else if (quote === null && /[*?[]/.test(char)) {
+      return true;
+    } else if (char === '$' && word[index + 1] === '{') {
+      index = closingBraceEnd(word, index + 1) - 1;
+    } else if (quote === null && char === '{' && bracesExpand(word, index)) {
+      return true;
     }
   }
-  return positions.filter((position) => position < argv.length);
+  return false;
 };
+
+/** Whether the unquoted `{` at `open` starts a brace expansion: a `,` or `..` at its own level. */
+const bracesExpand = (word: string, open: number): boolean => {
+  let depth = 0;
+  let quote: '"' | "'" | null = null;
+  for (let index = open; index < word.length; index += 1) {
+    const char = word[index] as string;
+    if (quote !== null) {
+      quote = char === quote ? null : quote;
+    } else if (char === '\\') {
+      index += 1;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return false;
+      }
+    } else if (depth === 1 && (char === ',' || word.startsWith('..', index))) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/** A wrapper's option value or leading operand that is plainly not a command: a number, a duration, a mask, a signal. */
+const WRAPPER_VALUE_WORD = /^(?:[0-9][0-9.]*[smhd]?|0x[0-9a-fA-F]+|[A-Z][A-Z0-9]*)$/;
+/**
+ * Per wrapper, the options that take no value (GNU coreutils' and util-linux's `--help`), so the word
+ * after one is the command or another option. Any option not listed — and every option of a wrapper
+ * not listed — is read as taking a value (backlog 531, failing closed).
+ */
+const WRAPPER_FLAGS_WITHOUT_VALUE: Readonly<Record<string, ReadonlySet<string>>> = {
+  env: new Set(['-i', '-0', '--ignore-environment', '--null', '-v', '--debug']),
+  timeout: new Set(['--preserve-status', '--foreground', '-v', '--verbose']),
+  time: new Set(['-p', '-v', '--portability', '--verbose']),
+  command: new Set(['-p', '-v', '-V']),
+  exec: new Set(['-c', '-l']),
+  setsid: new Set(['-c', '-f', '-w', '--ctty', '--fork', '--wait']),
+};
+/**
+ * Wrappers whose first operand is not the command (`flock FILE cmd`, `su USER …`, `timeout DURATION
+ * cmd`, `taskset MASK cmd`, `chrt PRIORITY cmd`): that operand is listed and the walk goes on, whatever
+ * its shape — `timeout inf` and `taskset ff` were taken for the command (WP-161 review round 2).
+ */
+const WRAPPER_OPERAND: ReadonlySet<string> = new Set([
+  'flock',
+  'su',
+  'runuser',
+  'timeout',
+  'taskset',
+  'chrt',
+]);
+
+/**
+ * The words of a stage in **command position** (WP-161 (f)): past its assignments, the first word,
+ * and — while that word is a wrapper — the next command word after the wrapper's options, their
+ * plain values and its leading operand (each of those is listed too, since the policy does not
+ * know a wrapper's grammar). Never an assignment (backlog 512's lesson), never a `[`/`[[` test or
+ * what is inside it, and never an argument of the command itself: `nice ls *.ts` lists `nice` and
+ * `ls`, not `*.ts`.
+ */
+const commandNameWords = (tokens: readonly string[]): readonly string[] => {
+  const words: string[] = [];
+  let operand = false;
+  let wrapper = '';
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] as string;
+    const value = unquoteToken(token);
+    const afterWrapper = words.length > 0;
+    // An assignment, an element assignment (`y[x]=1`, `[x]=1` inside `y=( … )`) or a wrapper's `--`.
+    if (isAssignment(token) || ELEMENT_ASSIGNMENT.test(value) || (afterWrapper && value === '--')) {
+      continue;
+    }
+    if (value === '[' || value === '[[') {
+      break;
+    }
+    if (afterWrapper && isFlagToken(value)) {
+      // Fail closed (backlog 531, folded into WP-161): an option written without `=` may take the
+      // next word as its value whatever its shape (`env -u foo`, `taskset -c 0-3`, `timeout -s
+      // kill`), so that word is listed — tested by `expandsAsName` — and the walk goes on to the one
+      // after it. Only an option known to take no value (`WRAPPER_FLAGS_WITHOUT_VALUE`) does not
+      // spend the next word. The over-ask, stated: `nice -x ls *.ts` (an option the table does not
+      // know) reads `*.ts` as a command word.
+      const next = tokens[index + 1];
+      if (
+        !value.includes('=') &&
+        next !== undefined &&
+        !isFlagToken(unquoteToken(next)) &&
+        !(WRAPPER_FLAGS_WITHOUT_VALUE[wrapper]?.has(value) ?? false)
+      ) {
+        words.push(next);
+        index += 1;
+      }
+      continue;
+    }
+    if (afterWrapper && (operand || WRAPPER_VALUE_WORD.test(value))) {
+      words.push(token);
+      operand = false;
+      continue;
+    }
+    words.push(token);
+    const name = argv0Name(token);
+    if (!ARGV0_WRAPPERS.has(name) || expandsAsName(token)) {
+      break;
+    }
+    operand = WRAPPER_OPERAND.has(name);
+    wrapper = name;
+  }
+  return words;
+};
+
+/**
+ * Names a glob may never stand for while being read as a shell: what the policy judges by its name
+ * (git, the block list's binaries, every wrapper that is not a shell, `hash`, `find`, `script`).
+ */
+const NAMES_THE_POLICY_JUDGES: readonly string[] = [
+  ...new Set([
+    'git',
+    'sudo',
+    'hash',
+    'find',
+    'script',
+    'xargs',
+    ...DEFAULT_BLOCKED_COMMANDS.map((pattern) => pattern.split(' ')[0] as string),
+    ...[...ARGV0_WRAPPERS].filter((name) => !SCRIPT_SHELLS.has(name)),
+  ]),
+];
+
+/** A glob or brace word's last path segment as a regular expression, or `null` when it cannot say. */
+const expansionPattern = (word: string): RegExp | null => {
+  const segment = word.split('/').at(-1) ?? '';
+  if (/["'\\$]/.test(word) || /[{}]/.test(segment.replace(/\{[^{}/]*\}/g, ''))) {
+    return null;
+  }
+  let pattern = '';
+  for (let index = 0; index < segment.length; index += 1) {
+    const char = segment[index] as string;
+    if (char === '*') {
+      pattern += '[\\s\\S]*';
+    } else if (char === '?') {
+      pattern += '[\\s\\S]';
+    } else if (char === '[') {
+      const close = segment.indexOf(']', index + 2);
+      if (close === -1) {
+        return null;
+      }
+      const body = segment.slice(index + 1, close).replace(/^!/, '^');
+      pattern += `[${body.replace(/[\\\]]/g, '\\$&')}]`;
+      index = close;
+    } else if (char === '{') {
+      const close = segment.indexOf('}', index);
+      const inner = segment.slice(index + 1, close);
+      pattern += inner.includes('..')
+        ? '[\\s\\S]*'
+        : `(?:${inner
+            .split(',')
+            .map((part) => part.replace(REGEX_SPECIALS, '\\$&'))
+            .join('|')})`;
+      index = close;
+    } else {
+      pattern += char.replace(REGEX_SPECIALS, '\\$&');
+    }
+  }
+  try {
+    return new RegExp(`^${pattern}$`);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * WP-160 reads a command whose name the shell expands as a shell (`/bin/[r]bash -c '…'`), and so
+ * judges the script it is handed; that reading keeps its verdict (WP-161 (f)) when the expansion
+ * can be a shell and cannot be anything the policy judges by name. `/usr/bin/[gs][ih]* -c …` can
+ * be `git`, so it is not exempt.
+ */
+const expandsOnlyToAShell = (word: string): boolean => {
+  const pattern = expansionPattern(word);
+  return (
+    pattern !== null &&
+    [...SCRIPT_SHELLS].some((shell) => pattern.test(shell)) &&
+    !NAMES_THE_POLICY_JUDGES.some((name) => pattern.test(name))
+  );
+};
+
+/** Does this stage run a command whose name — or a wrapper's — the shell expands (WP-161 (f))? */
+const expandsCommandName = (stage: string): boolean =>
+  commandNameWords(tokenise(stage)).some(
+    (word) => expandsAsName(word) && !expandsOnlyToAShell(word),
+  );
 
 /** A script a stage hands over, and the string an enclosing `find -exec`/`xargs -I` replaces in it. */
 export interface HandedScript {
@@ -3193,6 +3801,8 @@ export interface HandedScript {
 interface HandedScripts {
   readonly scripts: readonly HandedScript[];
   readonly uncertain: boolean;
+  /** What else the walk of the stage's command positions could not read (WP-161). */
+  readonly reasons: readonly UncertaintyReason[];
 }
 
 /** How a stage's standard input is reached, for a shell that reads its script from it. */
@@ -3204,6 +3814,60 @@ interface StageInput {
   /** The text an enclosing `find -exec` or `xargs -I` replaces when it runs this (`{}`). */
   readonly replace: string | null;
 }
+
+/** xargs' short options that take the next word (or the rest of their word) as a value: GNU and BSD. */
+const XARGS_VALUE_SHORT = 'adEILnPsJRS';
+/** xargs' long options that take a value, `=`-attached or the next word (GNU findutils). */
+const XARGS_VALUE_LONG: ReadonlySet<string> = new Set([
+  '--arg-file',
+  '--delimiter',
+  '--max-args',
+  '--max-procs',
+  '--max-chars',
+  '--process-slot-var',
+]);
+
+/**
+ * Index in `args` (the words after `xargs`) of the command xargs runs, past its own options and
+ * their values, or -1 when it names none (xargs then runs `echo`).
+ */
+const xargsCommandIndex = (args: readonly ShellWord[]): number => {
+  for (let index = 0; index < args.length; index += 1) {
+    const value = unquoteToken((args[index] as ShellWord).raw);
+    if (value === '--') {
+      return index + 1 < args.length ? index + 1 : -1;
+    }
+    if (!value.startsWith('-') || value === '-') {
+      return index;
+    }
+    if (value.startsWith('--')) {
+      index += XARGS_VALUE_LONG.has(value) ? 1 : 0;
+      continue;
+    }
+    for (let at = 1; at < value.length; at += 1) {
+      if (XARGS_VALUE_SHORT.includes(value[at] as string)) {
+        index += at === value.length - 1 ? 1 : 0;
+        break;
+      }
+    }
+  }
+  return -1;
+};
+
+/**
+ * Whether an xargs command runs the words xargs appends as a command, or decides from them what to
+ * run (WP-161 criterion (13), backlog 523): a wrapper (`env`, `nohup`, `timeout`, `nice`, …) —
+ * not a shell, whose `-c` WP-160 reads (`fedByXargs`) — `find` with `-exec`/`-execdir`/`-ok`/
+ * `-okdir`, whose command the input completes, or `git`, whose subcommand and refspec it supplies.
+ * `echo 'sudo id ;' | xargs find . -maxdepth 0 -exec`, `| xargs env` and `| xargs nohup` ran their
+ * payload in the run image (WP-160's review round 2).
+ */
+const xargsRunsItsInput = (name: string, args: readonly ShellWord[]): boolean =>
+  (ARGV0_WRAPPERS.has(name) && !SCRIPT_SHELLS.has(name)) ||
+  name === 'git' ||
+  name.startsWith('git-') ||
+  (name === 'find' &&
+    args.some((word) => /^-(?:exec|execdir|ok|okdir)$/.test(unquoteToken(word.raw))));
 
 /** `xargs -I R`, `-iR`, `-i`, `--replace[=R]`, `-J R`: the string xargs replaces, if it does. */
 const xargsReplace = (args: readonly ShellWord[]): string | null => {
@@ -3461,7 +4125,12 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
     }
   };
 
-  for (const position of commandPositions(argv)) {
+  const reasons = new Set<UncertaintyReason>();
+  const positions = commandPositions(argv);
+  if (positions.tooDeep) {
+    reasons.add(UNCERTAINTY.tooDeep);
+  }
+  for (const position of positions.starts) {
     for (const word of argv.slice(0, position)) {
       // `coproc bash` reads a pipe the line writes into later.
       piped ||= argv0Name(word.raw) === 'coproc';
@@ -3518,9 +4187,18 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
       }
     } else if (name === 'find') {
       readFind(args);
+    } else if (name === 'xargs') {
+      const at = xargsCommandIndex(args);
+      const run = args[at];
+      if (run !== undefined && xargsRunsItsInput(argv0Name(run.raw), args.slice(at + 1))) {
+        reasons.add(UNCERTAINTY.xargsArguments);
+      }
+    } else if (name === 'hash' && optionWords(args).some((option) => /^-[A-Za-z]*p/.test(option))) {
+      // `hash -p FILE NAME` makes `NAME` run `FILE` (WP-161 criterion (12), backlog 522).
+      reasons.add(UNCERTAINTY.reboundName);
     }
   }
-  return { scripts, uncertain };
+  return { scripts, uncertain, reasons: [...reasons] };
 };
 
 /** Variables bash runs the text of later — as a prompt, a hook, a startup file (WP-160 (b)). */
@@ -3563,7 +4241,7 @@ const storesCommand = (stage: string): boolean => {
     return true;
   }
   const argv = shellWords(stage).filter((word) => word.redirect === undefined);
-  const positions = commandPositions(argv);
+  const positions = commandPositions(argv).starts;
   const assigns = (word: ShellWord): boolean =>
     STORED_COMMAND_ASSIGNMENT.test(unquoteToken(word.raw));
   if (argv.slice(0, positions[0] ?? argv.length).some(assigns)) {
@@ -3678,6 +4356,9 @@ const parseCommand = (
       for (const reason of nested.uncertainty) {
         uncertainty.add(reason);
       }
+    } else if (readsScripts) {
+      // A script reader's body nested past the bound: not read, so not certain (WP-161 (d)).
+      uncertainty.add(UNCERTAINTY.tooDeep);
     }
   }
   if (!readsScripts) {
@@ -3700,6 +4381,14 @@ const parseCommand = (
     for (const stage of pipeline.segments) {
       if (stageEvaluatesText(stage, test)) {
         uncertainty.add(UNCERTAINTY.evaluatedText);
+      }
+      // WP-161 (d) and (f): the peel the block list reads stopped at its bound, or the command's
+      // name — or a wrapper's — is one the shell expands.
+      if (argvStarts(tokenise(stage)).tooDeep) {
+        uncertainty.add(UNCERTAINTY.tooDeep);
+      }
+      if (expandsCommandName(stage)) {
+        uncertainty.add(UNCERTAINTY.expandedName);
       }
     }
     // Every stage is a command in its own right, pushed whether or not there are two of them: a
@@ -3738,6 +4427,9 @@ const parseCommand = (
       });
       if (handed.uncertain) {
         uncertainty.add(UNCERTAINTY.handedCommand);
+      }
+      for (const reason of handed.reasons) {
+        uncertainty.add(reason);
       }
       for (const { script, replace: inner } of handed.scripts) {
         if (depth >= MAX_WRAPPER_DEPTH) {
@@ -3794,7 +4486,10 @@ const parseCommand = (
         uncertainty.add(reason);
       }
     } else {
+      // Nested past the bound: kept as a fragment, but its own substitutions, lists and wrappers
+      // are not read, so the line is not certain (WP-161 (d), backlog 516 — ten `$(` hid `sudo id`).
       fragments.push(substitution);
+      uncertainty.add(UNCERTAINTY.tooDeep);
     }
   }
 

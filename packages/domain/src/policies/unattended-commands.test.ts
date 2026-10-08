@@ -9,7 +9,9 @@ import { describe, expect, it } from 'vitest';
 import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   DEFAULT_COMMAND_POLICY,
+  DEFAULT_IMPLEMENTATION_ALLOW,
   DEFAULT_READ_ONLY_ALLOW,
+  DEFAULT_VERIFICATION_ALLOW,
   evaluateCommand,
   HAZARDOUS_ARGUMENTS,
   type ResolvedCommandPolicy,
@@ -1133,6 +1135,8 @@ describe('WP-160 — a command handed over as a string, and a here-document the 
    * baseline; bash 5.2 ran the `xargs`, `-W` and `find` forms (PROGRESS § WP-160, review round 1).
    */
   describe('review round 1 — xargs’s script, -W, and continuations', () => {
+    /** WP-161 criterion (13): `xargs env` and `xargs su` also hand `env`/`su` argv from the pipe. */
+    const HANDS_ARGV = new Set([`echo "'%P'" | xargs env bash -c`, `echo "'%P'" | xargs su -c`]);
     it.each<readonly [string, string]>([
       [`echo "'%P'" | xargs bash -c`, '`xargs bash -c`, the script from the pipe'],
       [`echo "'%P'" | xargs -L1 bash -c`, '`xargs -L1`'],
@@ -1152,7 +1156,8 @@ describe('WP-160 — a command handed over as a string, and a here-document the 
       ["echo '%P' | \\\nbash", 'a continuation after the pipe'],
       ["exec \\\n<<<'%P'; bash", 'a continuation after `exec`'],
     ])('refuses %j (%s)', (form) => {
-      refuses(plant(form, PUSH), 'uncertain', [UNCERTAINTY.handedCommand]);
+      const also = HANDS_ARGV.has(form) ? [UNCERTAINTY.xargsArguments] : [];
+      refuses(plant(form, PUSH), 'uncertain', [UNCERTAINTY.handedCommand, ...also]);
       for (const mode of modes) {
         const decision = decideUnattendedCommand({ command: plant(form, SUDO) }, policy, mode);
         expect(decision.decision, mode).toBe('deny');
@@ -1278,4 +1283,423 @@ describe('the setting only tightens across layers', () => {
         .unattended,
     ).toBe('deny');
   });
+});
+
+/**
+ * WP-161 (PROGRESS backlog 515–523): the scanner resolves git's abbreviated long options the way git
+ * does, fails closed past its depth bound, judges every `git push` a line contains, and refuses a
+ * command name the shell expands — in all three baselines, attended and both modes. Each cell is
+ * `attended verdict / auto rule / deny rule`, the row notes' table shape (PROGRESS § WP-161), and a
+ * row's three baselines agree unless it says otherwise.
+ */
+describe('WP-161 — abbreviations, the depth bound, every push, and an expanded name', () => {
+  const BASELINES: Readonly<Record<'ro' | 'ver' | 'impl', ResolvedCommandPolicy>> = {
+    ro: { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_READ_ONLY_ALLOW },
+    ver: { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_VERIFICATION_ALLOW },
+    impl: { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_IMPLEMENTATION_ALLOW },
+  };
+  const SHORT: Readonly<Record<string, string>> = {
+    allow_list: 'allow',
+    unattended_auto: 'auto',
+    unattended_deny: 'deny',
+    block_list: 'block',
+    hazardous_argument: 'hazard',
+    git_boundary: 'git',
+    uncertain: 'uncertain',
+  };
+  const cell = (command: string, given: ResolvedCommandPolicy): string =>
+    [
+      evaluateCommand({ command }, given).verdict,
+      SHORT[decideUnattendedCommand({ command }, given, 'auto').rule],
+      SHORT[decideUnattendedCommand({ command }, given, 'deny').rule],
+    ].join(' / ');
+  /** The cell in every baseline: one string for all three, or one per baseline. */
+  const expectCells = (
+    command: string,
+    expected: string | Record<'ro' | 'ver' | 'impl', string>,
+  ) => {
+    for (const [name, given] of Object.entries(BASELINES)) {
+      const want =
+        typeof expected === 'string' ? expected : expected[name as 'ro' | 'ver' | 'impl'];
+      expect(cell(command, given), `${name}: ${JSON.stringify(command)}`).toBe(want);
+    }
+  };
+  const IMPL_ONLY = (impl: string) => ({ ro: 'ask / auto / deny', ver: 'ask / auto / deny', impl });
+
+  describe('criterion (2), backlog 515: an abbreviation git resolves to a hazard is floored', () => {
+    it.each([
+      // `allow / allow_list` in the implementation baseline before WP-161, attended included.
+      ['git commit --no-verif -m x', 'ask / hazard / hazard'],
+      ['git commit --no-veri -m x', 'ask / hazard / hazard'],
+      ['git fetch origin --upload-p=x', 'ask / hazard / hazard'],
+      ['git fetch origin --upload=x', 'ask / hazard / hazard'],
+      ['nice git commit --no-verif -m x', 'ask / hazard / hazard'],
+      ['git commit --no-verif -- x', 'ask / hazard / hazard'],
+      // `ask / unattended_auto` before.
+      ['git ls-remote --upload-p=x origin', 'ask / hazard / hazard'],
+      ['git cat-file --text HEAD:a', 'ask / hazard / hazard'],
+      ['git cat-file --te HEAD:a', 'ask / hazard / hazard'],
+      ['git difftool --extc=x', 'ask / hazard / hazard'],
+      ['git ci --no-verif -m x', 'ask / hazard / hazard'],
+      ['git -C . commit --no-verif -m x', 'ask / hazard / hazard'],
+      // Ambiguous to git (`--no-verbose`, `--no-verify-signatures`), so refused by it; floored here.
+      ['git commit --no-ver -m x', 'ask / hazard / hazard'],
+      ['git merge --no-verif origin/main', 'ask / hazard / hazard'],
+      // Refused by git (diff and revision options are exact-only), so the floor costs nothing.
+      ['git diff --ext-dif', 'ask / hazard / hazard'],
+      ['git log --textco', 'ask / hazard / hazard'],
+      ['git diff --outp=/tmp/x', 'ask / auto / deny'],
+      // A push is the boundary's before it is the floor's (both refuse).
+      ['git push --no-verif origin agentic/x', 'ask / git / git'],
+      ['git push --receive-p=x origin agentic/x', 'ask / git / git'],
+      ['git push --exe=x origin agentic/x', 'ask / git / git'],
+      ['git push --ex=x origin agentic/x', 'ask / git / git'],
+    ])('%j → %s', (command, expected) => {
+      expectCells(command, expected);
+    });
+
+    it.each([
+      ['git diff --text', 'allow / allow / allow'],
+      ['git log -p --text', 'allow / allow / allow'],
+      ['git log --no-walk', 'allow / allow / allow'],
+      ['git commit --verify -m x', IMPL_ONLY('allow / allow / allow')],
+      ['git merge --verify-signatures origin/main', 'ask / auto / deny'],
+      ['git commit -m "--no-verify is a flag"', 'ask / hazard / hazard'],
+      ['git commit -- --no-verif', IMPL_ONLY('allow / allow / allow')],
+      ['git commit --no-verify -m x', 'ask / hazard / hazard'],
+    ] as const)('keeps %j at its verdict (rule 42)', (command, expected) => {
+      expectCells(command, expected);
+    });
+  });
+
+  describe('criterion (4), backlog 516: the bound fails closed at each site', () => {
+    const SUDO = 'sudo id';
+    const FORCE = 'git push --force origin main';
+    const nested = (levels: number, inner: string) =>
+      `${'echo $('.repeat(levels)}${inner}${')'.repeat(levels)}`;
+    const SITES = [
+      ['the peel by wrapper', (payload: string, n: number) => `${'nice '.repeat(n)}${payload}`],
+      [
+        'the peel by assignment',
+        (payload: string, n: number) =>
+          `${Array.from({ length: n }, (_, i) => `V${i}=${i}`).join(' ')} ${payload}`,
+      ],
+      // A substitution is read nine deep: the ninth body is a fragment of its own.
+      ['the substitution', (payload: string, n: number) => nested(n + 1, payload)],
+    ] as const;
+
+    it.each(SITES)('%s: at the bound the line is still read', (_site, line) => {
+      for (const payload of [SUDO, FORCE]) {
+        expectCells(line(payload, 8), 'block / block / block');
+      }
+    });
+
+    it.each(SITES)('%s: one past it is refused, with the new entry', (_site, line) => {
+      for (const payload of [SUDO, FORCE]) {
+        const command = line(payload, 9);
+        expectCells(command, 'ask / uncertain / uncertain');
+        for (const mode of ['auto', 'deny'] as const) {
+          const decision = decideUnattendedCommand({ command }, policy, mode);
+          expect(decision.evaluation.uncertainty, mode).toContain(UNCERTAINTY.tooDeep);
+          expect(decision.reason).toContain('the platform reads eight');
+        }
+      }
+    });
+
+    it.each([
+      `${'env '.repeat(9)}sudo id`,
+      `${'command '.repeat(9)}sudo id`,
+      `${'timeout 5 '.repeat(9)}sudo id`,
+    ])('refuses %j past the bound, whichever wrapper', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+    });
+
+    it('reads a wrapper’s options without spending the bound on them', () => {
+      // Three `nice -n 5` are nine words: the tenth was past the old word bound, unread.
+      expectCells(`${'nice -n 5 '.repeat(3)}sudo id`, 'block / block / block');
+      expectCells(
+        'timeout -s KILL -k 5 --preserve-status --foreground -v 180 sudo id',
+        'block / block / block',
+      );
+    });
+  });
+
+  describe('criterion (5), backlog 517: every `git push` a line contains is judged', () => {
+    it.each([
+      'git push origin main; m',
+      'm; git push origin main',
+      'git push origin main | m',
+      'git push origin main && o',
+      'git push --mirror origin; i',
+    ])('%j is git_boundary', (command) => {
+      expectCells(command, 'ask / git / git');
+    });
+
+    it('still lets backlog 488’s pipeline through the boundary', () => {
+      expect(gitBoundaryViolation('git push origin agentic/x 2>&1 | tail -5')).toBeNull();
+      expectCells('git push origin agentic/x 2>&1 | tail -5', IMPL_ONLY('allow / allow / allow'));
+    });
+
+    it(
+      'a line the boundary refuses is still refused with a one-word command before or after it',
+      () => {
+        const word = fc.constantFrom(
+          'push',
+          'fetch',
+          'pull',
+          'ls-remote',
+          'remote',
+          'add',
+          'origin',
+          'main',
+          'agentic/x',
+          'HEAD:main',
+          '--mirror',
+          '--tags',
+          '-u',
+          'https://example.invalid/r.git',
+          '2>&1',
+          'x',
+        );
+        const refused = fc
+          .tuple(
+            fc.constantFrom('', 'env ', 'nice ', 'GIT_TRACE=1 ', 'timeout 5 '),
+            fc.array(word, { minLength: 1, maxLength: 5 }),
+          )
+          .map(([prefix, words]) => `${prefix}git ${words.join(' ')}`)
+          .filter((line) => gitBoundaryViolation(line) !== null);
+        fc.assert(
+          fc.property(
+            refused,
+            fc.constantFrom('m', 'i', 'o', 'a', 'ls', 'true'),
+            fc.constantFrom(';', '&&', '|'),
+            fc.boolean(),
+            (line, one, operator, before) => {
+              const combined = before ? `${one} ${operator} ${line}` : `${line} ${operator} ${one}`;
+              expect(gitBoundaryViolation(combined), combined).not.toBeNull();
+            },
+          ),
+          { numRuns: 1_000 },
+        );
+      },
+      PROPERTY_TEST_TIMEOUT_MS,
+    );
+  });
+
+  describe('criterion (6), backlog 518: a command name the shell expands is uncertain', () => {
+    it.each([
+      '/usr/bin/g[i]t push origin main',
+      '/usr/bin/gi? push --force origin main',
+      '/usr/bin/g{i..i}t status',
+      '{sudo,x} id',
+      '/usr/bin/sud? id',
+      '/usr/bin/[s]udo id',
+      'g?t push origin main',
+      '/usr/bin/ni?e git push origin main',
+      'nice /usr/bin/g[i]t push origin main',
+      'nice -n 5 /usr/bin/g[i]t push origin main',
+      'timeout -s KILL 5 /usr/bin/g[i]t push origin main',
+      'flock /tmp/l /usr/bin/g[i]t push origin main',
+      'X=1 /usr/bin/g[i]t push origin main',
+      // Backlog 531, folded: an option's value of any shape, and `exec -a` (review round 1).
+      'env -u foo /usr/bin/g?t push origin HEAD:main',
+      'env -C . /usr/bin/g?t push origin HEAD:main',
+      'taskset -c 0-3 /usr/bin/g?t push origin main',
+      'timeout -s kill 5 /usr/bin/g?t push origin main',
+      'env -u foo /usr/bin/g?t commit --no-verify -m x',
+      'env -u foo /usr/bin/[s]udo id',
+      'exec -a x /usr/bin/g?t push origin main',
+      'env -u FOO /usr/bin/g?t push origin main',
+      // Review round 2: a wrapper's leading operand of any shape.
+      'timeout inf /usr/bin/g?t push origin main',
+      'timeout 1e2 /usr/bin/g?t push origin main',
+      'taskset ff /usr/bin/g?t push origin main',
+      'taskset ff /usr/bin/[s]udo id',
+      'chrt 10 /usr/bin/g?t push origin main',
+      'timeout -s KILL inf /usr/bin/g?t push origin main',
+    ])('%j', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.expandedName]);
+      expect(auto(command).reason).toContain("write the command's name literally");
+    });
+
+    it.each([
+      ['[ -d x ]', 'ask / auto / deny'],
+      ['[[ -d x ]]', 'ask / auto / deny'],
+      ['[[ -f *.ts ]]', 'ask / auto / deny'],
+      ['{ ls; }', 'ask / auto / deny'],
+      ["x='b[1]'", 'ask / auto / deny'],
+      ['{x} y', 'ask / auto / deny'],
+      ['y[1]=2', 'ask / auto / deny'],
+      ['nice ls *.ts', 'allow / allow / allow'],
+      ['nice -n 5 ls *.ts', 'ask / auto / deny'],
+      ['env -u foo ls *.ts', 'ask / auto / deny'],
+      ['env -i ls *.ts', 'ask / auto / deny'],
+      ['env -u foo git push origin main', 'ask / git / git'],
+      ['timeout 5 ls *.ts', 'ask / auto / deny'],
+      ['timeout inf ls *.ts', 'ask / auto / deny'],
+      ['taskset ff ls *.ts', 'ask / auto / deny'],
+      ['timeout 60 ls src/*.ts', 'ask / auto / deny'],
+      ['echo x | xargs -I{} cat {}', 'ask / uncertain / uncertain'],
+      // The quote-removal and globbed-argument rows of (a), pinned.
+      ['g\\it push origin main', 'ask / git / git'],
+      ["'git' push origin main", 'ask / git / git'],
+      ['"g"it push origin main', 'ask / git / git'],
+      ['g""it push origin main', 'ask / git / git'],
+      ['git push origin ma?n', 'ask / git / git'],
+      ['git push origin {main,}', 'ask / git / git'],
+      ['git push origin m{a,}in', 'ask / git / git'],
+    ])('keeps %j at %s', (command, expected) => {
+      expectCells(command, expected);
+      if (expected !== 'ask / uncertain / uncertain') {
+        expect(auto(command).evaluation.uncertainty).toEqual([]);
+      }
+    });
+
+    it('keeps WP-160’s reading of a shell named by a glob, unless the glob can be git', () => {
+      refusesIn("/bin/[r]bash -c 'git push origin HEAD:main'", 'git_boundary');
+      refusesIn('/usr/bin/[gs][ih]* -c core.hooksPath=x push origin main', 'uncertain');
+    });
+  });
+
+  describe('criterion (8), backlog 519: a redirection word', () => {
+    it.each([
+      ["read -r X <<< 'x'", 'ask / auto / deny'],
+      ['git status <&3', 'allow / allow / allow'],
+      ['git status <&-', 'allow / allow / allow'],
+      ['cat <&3', 'allow / allow / allow'],
+    ])('%j → %s', (command, expected) => {
+      expectCells(command, expected);
+      expect(auto(command).evaluation.uncertainty).toEqual([]);
+    });
+
+    it('still reads a substitution after `<&`', () => {
+      expectCells('cat <&$(sudo id)', 'block / block / block');
+    });
+  });
+
+  describe('criterion (10), backlog 520: a line continuation is removed before any word is read', () => {
+    it.each([
+      ['su\\\ndo id', 'block / block / block'],
+      ['s\\\nudo id', 'block / block / block'],
+      ['nice su\\\ndo id', 'block / block / block'],
+      ['git pu\\\nsh origin HEAD:main', 'ask / git / git'],
+      ['en\\\nv git push origin HEAD:main', 'ask / git / git'],
+      ["git rebase -\\\nx 'sudo id' main", 'ask / hazard / hazard'],
+      ['git commit --no-ver\\\nify -m x', 'ask / hazard / hazard'],
+      // Closed by WP-160 already; their refusal is kept.
+      ["git rebase --ex\\\nec='sudo id' main", 'ask / hazard / hazard'],
+      ['find . -ex\\\nec sudo id ;', 'block / block / block'],
+      ["tr\\\nap 'sudo id' EXIT", 'block / block / block'],
+    ])('%j → %s', (command, expected) => {
+      expectCells(command, expected);
+    });
+
+    it.each([
+      ['git status \\\n--short', 'allow / allow / allow'],
+      ['git sta\\\ntus', 'allow / allow / allow'],
+      ["echo 'a\\\nb'", 'ask / auto / deny'],
+      ["echo 'su\\\ndo id'", 'ask / auto / deny'],
+    ])('reads %j as bash does → %s', (command, expected) => {
+      expectCells(command, expected);
+    });
+  });
+
+  describe('criterion (14), review round 1: a backslash in a comment is not a continuation', () => {
+    it.each([
+      ['ls # x \\\nsudo id', 'block / block / block'],
+      ['ls # x \\\ngit push origin HEAD:main', 'ask / git / git'],
+      ['ls # x\nsudo id', 'block / block / block'],
+      // Review round 2: rows the scanner's comment rule alone decides (without it each is
+      // `allow / allow_list / allow_list`, measured by mutation, PROGRESS § WP-161).
+      ['ls # x \\\ngit commit --no-verify -m x', 'ask / hazard / hazard'],
+      ['ls # x \\\ndocker ps', 'block / block / block'],
+      ['git status # x \\\ngit push origin main', 'ask / git / git'],
+    ])('%j → %s, as without the comment', (command, expected) => {
+      expectCells(command, expected);
+    });
+
+    it.each([
+      ['echo a#b \\\nc', 'ask / auto / deny'],
+      ["echo 'a # b \\\nc'", 'ask / auto / deny'],
+      ['echo $# x', 'ask / auto / deny'],
+    ])('keeps %j at %s (not a comment)', (command, expected) => {
+      expectCells(command, expected);
+    });
+  });
+
+  describe('criterion (11), backlog 521: `git difftool -x` is `--extcmd`', () => {
+    it.each([
+      "git difftool -x 'sudo id' HEAD",
+      "git difftool -x'sudo id' HEAD",
+      "git difftool -yx 'sudo id' HEAD",
+      "git -c diff.tool=x difftool -x 'sudo id' HEAD",
+      "git difftool --extcmd='sudo id' HEAD",
+    ])('%j is hazardous_argument', (command) => {
+      expectCells(command, 'ask / hazard / hazard');
+      expect(auto(command).reason).toContain('git * --extcmd*');
+    });
+
+    it.each([
+      ['git diff -x', 'allow / allow / allow'],
+      ['git log -x', 'allow / allow / allow'],
+    ])('keeps %j at %s', (command, expected) => {
+      expectCells(command, expected);
+    });
+  });
+
+  describe('criterion (12), backlog 522: `hash -p` rebinds a name', () => {
+    it.each([
+      'hash -p /usr/bin/sudo ls; ls',
+      'hash -p /usr/bin/git ls; ls push origin HEAD:main',
+      'hash -rp /usr/bin/git ls; ls push origin HEAD:main',
+    ])('%j is uncertain', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.reboundName]);
+    });
+
+    it.each(['hash', 'hash -r', 'hash ls', 'hash -d ls'])('keeps %j', (command) => {
+      expectCells(command, 'ask / auto / deny');
+    });
+  });
+
+  describe('criterion (13), backlog 523: xargs feeding a command that runs its arguments', () => {
+    it.each([
+      "echo 'sudo id ;' | xargs find . -maxdepth 0 -exec",
+      "echo 'sudo id' | xargs env",
+      "echo 'sudo id' | xargs nohup",
+      "echo 'sudo id' | xargs timeout 5",
+      "echo 'sudo id' | xargs nice",
+      "echo 'sudo id' | xargs command",
+      "echo 'sudo id' | xargs exec",
+      "echo 'sudo id' | xargs xargs",
+      "echo 'sudo id' | xargs git",
+      "echo 'push origin HEAD:main' | xargs git",
+      "echo 'push origin HEAD:main' | xargs -n 3 git",
+      "echo 'push origin HEAD:main' | xargs -- git",
+    ])('%j is uncertain', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.xargsArguments]);
+    });
+
+    it.each([
+      ['echo x | xargs grep x', 'ask / auto / deny'],
+      ['echo x | xargs rm -f', 'ask / auto / deny'],
+      ['echo x | xargs -I{} cat {}', 'ask / uncertain / uncertain'],
+      ['find . -name x | xargs wc -l', 'ask / auto / deny'],
+      ['echo x | xargs grep -l env', 'ask / auto / deny'],
+    ])('keeps %j at %s', (command, expected) => {
+      expectCells(command, expected);
+    });
+  });
+
+  /** Both modes, the implementation baseline: the rule a line is refused under. */
+  const refusesIn = (command: string, rule: string): void => {
+    for (const mode of ['auto', 'deny'] as const) {
+      expect(decideUnattendedCommand({ command }, policy, mode), mode).toMatchObject({
+        decision: 'deny',
+        rule,
+      });
+    }
+  };
 });

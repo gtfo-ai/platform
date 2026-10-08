@@ -54,6 +54,7 @@ import {
   commandWords,
   commandWriteTargets,
   evaluateCommand,
+  GIT_GLOBAL_VALUE_OPTIONS,
   type HazardousArgument,
   type HereDocumentOperator,
   hazardousArguments,
@@ -421,18 +422,6 @@ const checkSubmodule = (args: readonly string[]): string | null => {
 const REMOTE_PLUMBING =
   /^(?:send-pack|fetch-pack|http-push|http-fetch|upload-pack|receive-pack|upload-archive|remote-.+)$/;
 
-/** Global options of `git` itself that take the next word as their value. */
-const GIT_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
-  '-C',
-  '-c',
-  '--git-dir',
-  '--work-tree',
-  '--namespace',
-  '--config-env',
-  '--super-prefix',
-  '--attr-source',
-]);
-
 /** Subcommands whose remote is judged by name — and so must be the workspace's repository's. */
 const REMOTE_VERBS: ReadonlySet<string> = new Set(['push', 'fetch', 'pull', 'ls-remote', 'remote']);
 
@@ -752,15 +741,27 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
   // in it (WP-153 (b)), so a body line `GIT_DIR=x` or `git push --force` is not judged here.
   const fragments = [withoutHereDocumentBodies(command), ...splitCommandSegments(command)];
   /**
-   * A fragment that **contains another fragment** — the whole line, or a pipeline the splitter
-   * also returns whole so `curl * | sh` still matches the block list — is not one program's argv:
-   * read as one, a pipe's right-hand side became the push's options (`git push origin agentic/x
-   * 2>&1 | tail -5` was refused for "the push option `-5`", first local test, backlog 488). Its
-   * parts are judged on their own; the assignment check below still reads it whole.
+   * A fragment **made of other fragments** — the whole line, or a pipeline the splitter also
+   * returns whole so `curl * | sh` still matches the block list — is not one program's argv: read
+   * as one, a pipe's right-hand side became the push's options (`git push origin agentic/x 2>&1 |
+   * tail -5` was refused for "the push option `-5`", first local test, backlog 488). Its parts are
+   * judged on their own; the assignment check below still reads it whole.
+   *
+   * Decided by **structure, never by substring** (WP-161 (e), backlog 517): a fragment is composite
+   * when the splitter, run on it, finds more than one part. The test was `fragment.includes(other)`
+   * until WP-161, so `git push origin main; m` skipped the push — `m` is inside `main` — and ran
+   * under `auto`. The parts of a composite are added to the walk, so none is judged only as part of
+   * something skipped.
    */
-  const composite = (fragment: string): boolean =>
-    fragments.some((other) => other !== fragment && other.length > 0 && fragment.includes(other));
-  for (const fragment of fragments) {
+  const parts = (fragment: string): readonly string[] => splitCommandSegments(fragment);
+  const queue = [...fragments];
+  const seen = new Set<string>();
+  for (let next = 0; next < queue.length; next += 1) {
+    const fragment = queue[next] as string;
+    if (seen.has(fragment)) {
+      continue;
+    }
+    seen.add(fragment);
     const assignment = commandWords(fragment).find((word) => GUARDED_GIT_ENVIRONMENT.test(word));
     if (assignment !== undefined) {
       return {
@@ -768,7 +769,9 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
         detail: `\`${assignment.split('=')[0]}\` configures git’s transport, its configuration or its repository from the environment, and a run may not change where git connects or what it runs`,
       };
     }
-    if (composite(fragment)) {
+    const pieces = parts(fragment);
+    if (pieces.length > 1) {
+      queue.push(...pieces);
       continue;
     }
     for (const candidate of commandArgvCandidates(fragment)) {

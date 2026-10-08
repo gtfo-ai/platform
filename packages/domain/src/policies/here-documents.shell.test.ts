@@ -24,13 +24,18 @@
  * runs the rest and CI's bash runs all of it.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import fc from 'fast-check';
 import { afterAll, describe, expect, it } from 'vitest';
 import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
-import { commandUncertainty, splitCommandSegments, UNCERTAINTY } from './command-policy.js';
+import {
+  commandUncertainty,
+  commandWords,
+  splitCommandSegments,
+  UNCERTAINTY,
+} from './command-policy.js';
 
 const SCRATCH = mkdtempSync(join(tmpdir(), 'wp153-shells-'));
 afterAll(() => {
@@ -464,6 +469,111 @@ describe('WP-160 — a string a shell runs is judged, or the line is uncertain',
     for (const line of ['trap - EXIT', "trap '' INT", "trap 'echo RAN_1' EXIT; trap - EXIT"]) {
       expect(executed(run('bash', line).stdout), line).toEqual([]);
       expect(commandUncertainty(line), line).toEqual([]);
+    }
+  });
+});
+
+/**
+ * WP-161 criteria (7), (10), (12) and (13): the shapes the row closes, run by bash — **marker only**.
+ * Each payload is `echo RAN_1` or `./mark`, a script planted in this file's temporary directory that
+ * prints `RAN_1` and does nothing else; nothing here runs outside that directory. bash runs the
+ * marker through each shape (so the shape is a reach), and the policy reads the line as uncertain
+ * with the row's new entry — or, for a continuation, reads the joined name.
+ */
+describe('WP-161 — what bash runs past the bound, through an expanded or rebound name, and from xargs', () => {
+  const MARK = join(SCRATCH, 'mark');
+  writeFileSync(MARK, '#!/bin/sh\necho RAN_1\n');
+  chmodSync(MARK, 0o755);
+  const has = (program: string): boolean => run('bash', `command -v ${program}`).stdout !== '';
+  const nested = (levels: number, inner: string) =>
+    `${'echo $('.repeat(levels)}${inner}${')'.repeat(levels)}`;
+
+  it.each<readonly [string, string, string]>([
+    [`${'nice '.repeat(9)}./mark`, UNCERTAINTY.tooDeep, 'nine wrappers'],
+    [
+      `${Array.from({ length: 9 }, (_, i) => `V${i}=${i}`).join(' ')} ./mark`,
+      UNCERTAINTY.tooDeep,
+      'nine assignments',
+    ],
+    [nested(10, './mark'), UNCERTAINTY.tooDeep, 'ten nested substitutions'],
+    ['./m[a]rk', UNCERTAINTY.expandedName, 'a bracket glob in the name'],
+    ['./ma?k', UNCERTAINTY.expandedName, 'a `?` glob in the name'],
+    ['./{mark,x}', UNCERTAINTY.expandedName, 'a brace with a comma'],
+    ['./m{a..a}rk', UNCERTAINTY.expandedName, 'a brace sequence'],
+    ['nice ./m[a]rk', UNCERTAINTY.expandedName, 'a glob behind a wrapper'],
+    ['hash -p ./mark ls; ls', UNCERTAINTY.reboundName, '`hash -p`'],
+    ['echo ./mark | xargs env', UNCERTAINTY.xargsArguments, '`xargs env`'],
+    ['echo ./mark | xargs nohup', UNCERTAINTY.xargsArguments, '`xargs nohup`'],
+    ['echo ./mark | xargs nice', UNCERTAINTY.xargsArguments, '`xargs nice`'],
+    [
+      "echo './mark ;' | xargs find . -maxdepth 0 -exec",
+      UNCERTAINTY.xargsArguments,
+      '`xargs find -exec`',
+    ],
+  ])('bash runs the marker through %j, and the policy is uncertain (%s, %s)', (line, reason) => {
+    expect(executed(run('bash', line).stdout)).toEqual(['1']);
+    expect(commandUncertainty(line)).toContain(reason);
+  });
+
+  it.skipIf(!has('timeout'))('bash runs the marker through `xargs timeout 5` (coreutils)', () => {
+    const line = 'echo ./mark | xargs timeout 5';
+    expect(executed(run('bash', line).stdout)).toEqual(['1']);
+    expect(commandUncertainty(line)).toContain(UNCERTAINTY.xargsArguments);
+  });
+
+  it.skipIf(!has('/usr/bin/nice'))(
+    'bash expands a wrapper’s own globbed name (`/usr/bin/ni?e`)',
+    () => {
+      const line = '/usr/bin/ni?e ./mark';
+      expect(executed(run('bash', line).stdout)).toEqual(['1']);
+      expect(commandUncertainty(line)).toContain(UNCERTAINTY.expandedName);
+    },
+  );
+
+  it.each([
+    ['./ma\\\nrk', './mark', 'a continuation inside the name'],
+    ['ec\\\nho RAN_1', 'echo', 'a continuation inside a builtin’s name'],
+    ['nice ./m\\\nark', 'nice', 'a continuation behind a wrapper'],
+  ])('bash joins %j, and the policy reads the joined word (%s, criterion (10))', (line, first) => {
+    expect(executed(run('bash', line).stdout)).toEqual(['1']);
+    expect(commandUncertainty(line)).toEqual([]);
+    const words = splitCommandSegments(line).map(commandWords);
+    expect(words.some((argv) => argv[0] === first)).toBe(true);
+    expect(words.flat()).toContain(first === 'echo' ? 'echo' : './mark');
+  });
+
+  it('bash runs the line after a comment ending in a backslash, and the policy judges it (criterion (14))', () => {
+    const line = 'ls >/dev/null # x \\\necho RAN_1';
+    for (const shell of SHELLS) {
+      expect(executed(run(shell, line).stdout), shell).toEqual(['1']);
+    }
+    expect(judged(splitCommandSegments(line), '1')).toBe(true);
+  });
+
+  /** Backlog 531, folded: an option's value of any shape before a globbed name (marker only). */
+  const present = (needs: string): boolean =>
+    needs === 'bash' ||
+    (needs === 'env -C' ? run('bash', 'env -C . true && echo ok').stdout === 'ok\n' : has(needs));
+  describe.each([
+    ['env -u foo ./m?rk', 'env'],
+    ['exec -a x ./m?rk', 'bash'],
+    ['env -C . ./m?rk', 'env -C'],
+    ['taskset -c 0 ./m?rk', 'taskset'],
+    ['timeout -s kill 5 ./m?rk', 'timeout'],
+  ])('backlog 531: %j', (line, needs) => {
+    it('is uncertain with the expanded-name entry', () => {
+      expect(commandUncertainty(line)).toContain(UNCERTAINTY.expandedName);
+    });
+    it.skipIf(!present(needs))(`bash runs the marker through it (skipped without ${needs})`, () => {
+      expect(executed(run('bash', line).stdout)).toEqual(['1']);
+    });
+  });
+
+  it('runs nothing at the bound that the policy does not read', () => {
+    // Eight wrappers and nine substitutions are read: the marker is a fragment the policy judges.
+    for (const line of [`${'nice '.repeat(8)}echo RAN_1`, nested(9, 'echo RAN_1')]) {
+      expect(executed(run('bash', line).stdout), line).toEqual(['1']);
+      expect(judged(splitCommandSegments(line), '1'), line).toBe(true);
     }
   });
 });

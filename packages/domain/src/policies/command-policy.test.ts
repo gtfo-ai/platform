@@ -17,12 +17,15 @@ import {
   DEFAULT_VERIFICATION_ALLOW,
   dequoteCommand,
   evaluateCommand,
+  GIT_ABBREVIATION_HAZARDS,
   GO_PATH_WRITING_BINARY_FLAGS,
   GO_PATH_WRITING_BUILD_FLAGS,
   GO_PATH_WRITING_TEST_FLAGS,
+  gitResolvesLongOption,
   HAZARDOUS_ARGUMENTS,
   hasOutputRedirection,
   hazardousArgument,
+  hazardousArguments,
   intersectWithOrganisationMaximum,
   isProjectCommandEntry,
   LOCKFILE_INSTALL_ALLOW,
@@ -30,6 +33,7 @@ import {
   matchesCommandPattern,
   narrowCommandPolicy,
   normaliseCommand,
+  POLICY_GIT_SUBCOMMANDS,
   PRECISE_ALLOW_ENTRIES,
   PROJECT_COMMAND_ALLOW,
   type ResolvedCommandPolicy,
@@ -45,6 +49,11 @@ import {
   withoutHereDocumentBodies,
   withVerificationMode,
 } from './command-policy.js';
+import {
+  GIT_LONG_OPTIONS,
+  GIT_LONG_OPTIONS_SOURCE,
+  GIT_TABLELESS_SUBCOMMANDS,
+} from './git-long-options.generated.js';
 
 const verdict = (command: string, policy?: ResolvedCommandPolicy): string =>
   evaluateCommand({ command }, policy).verdict;
@@ -2306,5 +2315,231 @@ describe('WP-160 — a body stays data beside an assignment, a test, a group or 
   ])('recognises the operator after %j (%s)', (before) => {
     const text = `${before}<<EOF`;
     expect(readHereDocumentOperator(text, before.length, before)).not.toBeNull();
+  });
+});
+
+/**
+ * WP-161 (b) and (c), PROGRESS backlog 515: git's abbreviated long options, resolved by git's own
+ * rule against the tables `scripts/git-long-options.mjs` read out of the run image's git.
+ */
+describe('WP-161 — git’s abbreviated long options and the generated tables', () => {
+  const BASELINES: readonly (readonly [string, ResolvedCommandPolicy])[] = [
+    ['read_only', { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_READ_ONLY_ALLOW }],
+    ['verification', { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_VERIFICATION_ALLOW }],
+    ['implementation', { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_IMPLEMENTATION_ALLOW }],
+  ];
+  const floorOf = (spelling: string) =>
+    HAZARDOUS_ARGUMENTS.find((entry) => entry.pattern.startsWith(`git --${spelling} abbreviated`));
+
+  describe('the generated tables (criterion (3))', () => {
+    it('records the git it was read from', () => {
+      expect(GIT_LONG_OPTIONS_SOURCE.git).toMatch(/^git version \d+\.\d+\.\d+/);
+      expect(GIT_LONG_OPTIONS_SOURCE.image).toMatch(/^platform-runtime:/);
+    });
+
+    it('is one table per subcommand: bare spellings, no `--`, no `=`, no duplicates', () => {
+      for (const [subcommand, table] of Object.entries(GIT_LONG_OPTIONS)) {
+        expect(subcommand).toMatch(/^[a-z][a-z-]*$/);
+        expect(table.abbreviates.length, subcommand).toBeGreaterThan(0);
+        for (const spelling of [...table.abbreviates, ...table.exact]) {
+          expect(spelling, subcommand).toMatch(/^[a-z0-9][a-z0-9-]*$/);
+        }
+        expect(new Set(table.abbreviates).size, subcommand).toBe(table.abbreviates.length);
+        expect(table.exact.filter((spelling) => table.abbreviates.includes(spelling))).toEqual([]);
+      }
+      // Diff's spellings are exact-only under log, show and whatchanged, and only there.
+      for (const [subcommand, table] of Object.entries(GIT_LONG_OPTIONS)) {
+        expect(table.exact.length > 0, subcommand).toBe(
+          ['log', 'show', 'whatchanged'].includes(subcommand),
+        );
+      }
+      expect(GIT_LONG_OPTIONS.log?.exact).toContain('text');
+    });
+
+    it('holds every hazardous spelling in at least one table', () => {
+      expect(GIT_ABBREVIATION_HAZARDS.map((hazard) => hazard.spelling).sort()).toEqual(
+        [
+          'exec',
+          'ext-diff',
+          'extcmd',
+          'no-verify',
+          'output',
+          'receive-pack',
+          'textconv',
+          'upload-pack',
+        ].sort(),
+      );
+      for (const { spelling } of GIT_ABBREVIATION_HAZARDS) {
+        expect(
+          Object.values(GIT_LONG_OPTIONS).some((table) => table.abbreviates.includes(spelling)),
+          spelling,
+        ).toBe(true);
+      }
+    });
+
+    it('has a table, or says it has none, for every subcommand a shipped entry names — and nothing else is table-less', () => {
+      expect(POLICY_GIT_SUBCOMMANDS).toEqual(
+        expect.arrayContaining(['commit', 'push', 'fetch', 'merge', 'rebase', 'diff', 'log']),
+      );
+      for (const subcommand of POLICY_GIT_SUBCOMMANDS) {
+        expect(
+          Object.hasOwn(GIT_LONG_OPTIONS, subcommand) ||
+            GIT_TABLELESS_SUBCOMMANDS.includes(subcommand),
+          subcommand,
+        ).toBe(true);
+      }
+      expect([...GIT_TABLELESS_SUBCOMMANDS].sort()).toEqual([
+        'fetch-pack',
+        'mergetool',
+        'submodule',
+      ]);
+      for (const subcommand of GIT_TABLELESS_SUBCOMMANDS) {
+        expect(Object.hasOwn(GIT_LONG_OPTIONS, subcommand), subcommand).toBe(false);
+      }
+      // The other direction: every table is for a named subcommand, one of diff's family, or one
+      // that holds a hazardous spelling (ruling (c)).
+      const hazards = GIT_ABBREVIATION_HAZARDS.map((hazard) => hazard.spelling);
+      for (const [subcommand, table] of Object.entries(GIT_LONG_OPTIONS)) {
+        expect(
+          POLICY_GIT_SUBCOMMANDS.includes(subcommand) ||
+            ['log', 'show', 'whatchanged'].includes(subcommand) ||
+            table.abbreviates.some((spelling) => hazards.includes(spelling)),
+          subcommand,
+        ).toBe(true);
+      }
+    });
+  });
+
+  describe('git’s resolution rule (ruling (b))', () => {
+    it.each([
+      ['commit', 'no-verify', 'no-verify'],
+      ['commit', 'no-verif', 'no-verify'],
+      ['commit', 'verify', 'verify'],
+      ['commit', 'no-ver', null],
+      ['commit', 'e', 'edit'],
+      ['merge', 'no-verif', null],
+      ['fetch', 'upload', 'upload-pack'],
+      ['fetch', 'up', null],
+      ['push', 'ex', 'exec'],
+      ['cat-file', 'te', 'textconv'],
+      ['cat-file', 'text', 'textconv'],
+      ['diff', 'text', 'text'],
+      ['diff', 'te', null],
+      ['log', 'text', 'text'],
+      ['log', 'textco', null],
+      ['difftool', 'extc', 'extcmd'],
+    ] as const)('git %s --%s resolves to %s', (subcommand, word, expected) => {
+      expect(gitResolvesLongOption(GIT_LONG_OPTIONS[subcommand], word)).toBe(expected);
+    });
+
+    it('resolves nothing without a table, so the floor stays (an alias, mergetool, anything unknown)', () => {
+      expect(gitResolvesLongOption(undefined, 'text')).toBeNull();
+      // A subcommand named like an inherited property reads no table either.
+      expect(hazardousArguments('git constructor --text')).toContain(
+        HAZARDOUS_ARGUMENTS.find((entry) => entry.pattern.startsWith('git --textconv abbreviated')),
+      );
+    });
+  });
+
+  it.each([
+    ['git commit --no-verif -m x', 'no-verify'],
+    ['git commit --no-veri -m x', 'no-verify'],
+    ['git commit --no-ver -m x', 'no-verify'],
+    ['git ci --no-verif -m x', 'no-verify'],
+    ['git push --no-verif origin agentic/x', 'no-verify'],
+    ['git fetch origin --upload-p=x', 'upload-pack'],
+    ['git fetch origin --upload=x', 'upload-pack'],
+    ['git ls-remote --upload-p=x origin', 'upload-pack'],
+    ['git push --receive-p=x origin agentic/x', 'receive-pack'],
+    ['git push --exe=x origin agentic/x', 'exec'],
+    ['git push --ex=x origin agentic/x', 'exec'],
+    ['git cat-file --text HEAD:a', 'textconv'],
+    ['git difftool --extc=x', 'extcmd'],
+    ['nice -n 5 git commit --no-verif -m x', 'no-verify'],
+    ['git commit --no-ver\\\nify -m x', 'no-verify'],
+  ])(
+    'floors %j by the --%s abbreviation entry, attended, in every baseline (criterion (2))',
+    (command, spelling) => {
+      const entry = floorOf(spelling);
+      expect(entry).toBeDefined();
+      expect(hazardousArguments(command)).toContain(entry);
+      for (const [name, policy] of BASELINES) {
+        expect(evaluateCommand({ command }, policy).verdict, name).toBe('ask');
+      }
+    },
+  );
+
+  it.each([
+    'git diff --text',
+    'git log -p --text',
+    'git log --no-walk',
+    'git commit --verify -m x',
+    'git merge --verify-signatures origin/main',
+    'git commit -- --no-verif',
+    'git log --oneline',
+    'git diff --name-only',
+    'git commit --edit -m x',
+  ])(
+    'lets %j through the abbreviation floor (git resolves it to an option that is not hazardous)',
+    (command) => {
+      expect(
+        hazardousArguments(command).filter((entry) => entry.pattern.includes(' abbreviated ')),
+      ).toEqual([]);
+    },
+  );
+
+  it('floors a long word on the prefix alone for a subcommand with no table', () => {
+    expect(hazardousArguments('git mergetool --no-v')).toContain(floorOf('no-verify'));
+    expect(hazardousArguments('git-foo --t')).toContain(floorOf('textconv'));
+  });
+});
+
+/** WP-161 (d), (f), (g) and criteria (10), (12), (13): what the scanner reports. */
+describe('WP-161 — the scanner’s new uncertainty and what it reads', () => {
+  it.each([
+    [`${'nice '.repeat(9)}sudo id`, UNCERTAINTY.tooDeep],
+    [`${'A=1 '.repeat(9)}sudo id`, UNCERTAINTY.tooDeep],
+    [`${'echo $('.repeat(10)}sudo id${')'.repeat(10)}`, UNCERTAINTY.tooDeep],
+    ['/usr/bin/g[i]t push origin main', UNCERTAINTY.expandedName],
+    ['{sudo,x} id', UNCERTAINTY.expandedName],
+    ['hash -p /usr/bin/git ls; ls push origin HEAD:main', UNCERTAINTY.reboundName],
+    ["echo 'push origin HEAD:main' | xargs git", UNCERTAINTY.xargsArguments],
+  ])('%j is uncertain', (command, reason) => {
+    expect(commandUncertainty(command)).toEqual([reason]);
+    expect(evaluateCommand({ command }).verdict).not.toBe('allow');
+  });
+
+  it.each([
+    `${'nice '.repeat(8)}sudo id`,
+    `${'A=1 '.repeat(8)}sudo id`,
+    `${'echo $('.repeat(8)}sudo id${')'.repeat(8)}`,
+    '[ -d x ]',
+    '[[ -f *.ts ]]',
+    '{ ls; }',
+    "x='b[1]'",
+    "read -r X <<< 'x'",
+    'git status <&3',
+    'hash -r',
+    'echo x | xargs grep x',
+  ])('%j is not', (command) => {
+    expect(commandUncertainty(command)).toEqual([]);
+  });
+
+  it('reads a line continuation out of a word before classifying it (criterion (10))', () => {
+    expect(normaliseCommand('su\\\ndo id')).toBe('sudo id');
+    expect(normaliseCommand("echo 'a\\\nb'")).toBe("echo 'a\\ b'");
+    expect(evaluateCommand({ command: 'su\\\ndo id' })).toMatchObject({ verdict: 'block' });
+    expect(evaluateCommand({ command: "git rebase -\\\nx 'sudo id' main" }).verdict).toBe('ask');
+  });
+
+  it('ends a comment at its newline, before any join (criterion (14))', () => {
+    expect(splitCommandSegments('ls # x \\\nsudo id')).toEqual(['ls # x \\', 'sudo id']);
+    expect(normaliseCommand('ls # x \\\nsudo id')).toBe('ls # x \\ sudo id');
+    expect(normaliseCommand('echo a#b \\\nc')).toBe('echo a#b c');
+    expect(evaluateCommand({ command: 'ls # x \\\nsudo id' }).verdict).toBe('block');
+  });
+
+  it('splits `<&3` nowhere (criterion (8))', () => {
+    expect(splitCommandSegments('git status <&3')).toEqual(['git status <&3']);
   });
 });

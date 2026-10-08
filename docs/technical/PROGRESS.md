@@ -15346,6 +15346,132 @@ signature match and both expiry cases read *"not recorded"* or *"threw Error"* a
 
 **Depends on** WP-156 landing (`EXPIRY_SIGNATURES` is uncommitted).
 
+### 530. **`echo 'X=$(shell id)' | xargs make` is `unattended_auto` after WP-161: `xargs` hands `make` a variable assignment from the pipe, so WP-54's `make VAR=value` floor, which refuses the same assignment written on the line, never sees it** (TODO, **minor, security, `auto` only. Attended asks and `deny` refuses. No form reaches `allow`. This is backlog 523's residual: WP-161 reads an `xargs` that feeds a wrapper, `find -exec` or `git`, and not one that feeds a project-command verb.** WP-161's *Discovered work*, session 14, measured by the refiner through `evaluateCommand` and `decideUnattendedCommand` on WP-161's uncommitted tree over `2ece3dc6`. No shell ran the payload. **No work package owns it.** WP-161's criterion (13) owns 523, and its own docblock names this case as *"still not read"*, so it is out of that row's scope unless the orchestrator folds it in)
+
+**What is wrong (read, then measured without a shell, rule 66).** WP-54's floor
+*make VAR=value (a positional containing `=`)* (`packages/domain/src/policies/command-policy.ts:1286-1292`) is token-scoped: it fires when
+the command named `make` has a positional with `=`. Its hazard text names the case this entry is about, *"`X:=$(shell …)`"*. Its kind is
+`command`, which is **refused** under `auto` (`:755-760`). Through `xargs` the assignment arrives on standard input, so the line's `make` has no
+positional and the floor does not fire. WP-161's `xargsRunsItsInput` (`:3805-3810`) makes an `xargs` uncertain only when its command is a
+non-shell wrapper, `git`/`git-*`, or `find` with `-exec`/`-execdir`/`-ok`/`-okdir`. `make` is none of these. The module docblock already lists
+this case under *"What it still does not read"* (`:87-91`), but it describes it as *"`xargs make`, whose input names targets"*. That
+understates it: the input can also name assignments and `--eval`.
+
+**Evidence** (refiner, scratch probe importing `scripts/ts-source-resolver.mjs`. Each cell is attended verdict / `auto` rule / `deny` rule.
+The read-only, verification and implementation baselines agree on every line):
+
+| line | all three baselines |
+|---|---|
+| `make 'X=$(shell id)'` (control) | `ask / hazardous_argument / hazardous_argument` |
+| `echo 'X=$(shell id)' \| xargs make` | `ask / unattended_auto / unattended_deny` |
+| `echo 'X:=$(shell git push origin HEAD:main)' \| xargs make test` | `ask / unattended_auto / unattended_deny` |
+| `echo '--eval=x:=$(shell id)' \| xargs make`, `echo -E 'x' \| xargs make` | `ask / unattended_auto / unattended_deny` |
+| `xargs make < f` | `ask / unattended_auto / unattended_deny` |
+| `echo 'X=$(shell id)' \| xargs nice make` (control: a wrapper first) | `ask / uncertain / uncertain` |
+| `echo '-toolexec=/tmp/x' \| xargs go test`, `echo '--config=x' \| xargs cargo test`, `echo 'X=1' \| xargs npm test` | `ask / unattended_auto / unattended_deny` |
+| `echo '--script-shell=/tmp/x' \| xargs npm test` | `ask / hazardous_argument / hazardous_argument`, because the flag's text is on the line. A payload read from a file would not be (not measured) |
+
+So the same shape also escapes the `go -toolexec` and `cargo --config` floors. Those are `command`-kind floors too.
+
+**Needs measurement (a shell, in the run image).** (i) Whether `make` is in `platform-runtime` at all. (ii) Whether GNU make evaluates a
+command-line `X:=$(shell …)` or a `--eval` when no makefile uses `X`, and when there is no makefile at all. Simple expansion (`:=`) suggests
+it does, but that is not checked. (iii) The same check for the `go` and `cargo` forms. Until then, the reach is a hypothesis: a model
+runs any program the block list or the git boundary would refuse, such as a push to `main`, by writing it into `make`'s input.
+
+**What it costs to leave.** Under the default `auto` mode, the same reach 523 recorded (grade minor) through one more verb. `make` is on
+every baseline that runs project commands (`PROJECT_COMMAND_ALLOW`, `:542-543`), so a model reaches for it often.
+
+**Done when** an `xargs` whose command (after xargs' own options and the wrapper peel) is a verb with a token-scoped `command`-kind entry
+on `HAZARDOUS_ARGUMENTS` is `uncertain` under `auto` and `deny`. The set of verbs is **derived from that table, not listed a second time**, so
+a new floor covers its `xargs` spelling the day it is added. Today that is at least `make`, `go`, `cargo`, `npm` and `pnpm`. Whether `pytest`'s
+`-c`/`@file` floors belong in the set is the implementer's call, and it should be stated either way. The over-ask is real and should be named
+where the rule is: `find . -name '*_test.py' | xargs pytest` and `git ls-files '*.go' | xargs go vet` stop running under `auto`. The
+`xargsArguments` reason (`:205-206`) names the verbs. Cases: the five `unattended_auto` rows above are uncertain. `xargs grep x`,
+`xargs rm -f` and 523's pinned cases keep their verdicts (rule 42). **Canary:** drop the derived set and `echo 'X=$(shell id)' | xargs make`
+reads `unattended_auto`. The docblock's *"`xargs make`, whose input names targets"* is corrected in the same change.
+
+**Depends on** WP-161 landing (`xargsRunsItsInput` is uncommitted).
+
+### 531. **A globbed command name behind a wrapper option whose value the reader does not recognise escapes WP-161's ruling (f): `env -u foo /usr/bin/g?t push origin HEAD:main`, `env -C . /usr/bin/g?t push origin HEAD:main` and `taskset -c 0-3 /usr/bin/g?t push origin main` are `unattended_auto`** (TODO, **major by backlog 518's measure, security, `auto` only. Attended asks and `deny` refuses. The reach is the one 518 was regraded major for: a push past the git boundary under the default mode. It needs a deliberately odd spelling, but so did 518.** WP-161's implementer stated the limit in the module docblock and its *Discovered work*, session 14, and wrote *"no case measured reaching anything"*. The refiner measured the verdicts on WP-161's uncommitted tree over `2ece3dc6`. No shell ran the lines. **No work package owns it.** It is a gap in WP-161's own ruling (f), so that row is the cheapest home if the orchestrator holds it open)
+
+**What is wrong (read).** `commandNameWords` (`packages/domain/src/policies/command-policy.ts:3615-3650`) walks past a wrapper's options. It
+skips an option's next word only when that word matches `WRAPPER_VALUE_WORD` (`:3603`): a number, a duration, a hex mask, or an
+all-capitals name. It reads one operand only for `flock`, `su` and `runuser` (`WRAPPER_OPERAND`, `:3605`). Any other value is taken as the
+command word, the wrapper peel stops there, and the real command name after it is never tested by `expandsAsName`. The git boundary and the
+block list still judge the written token, `g?t`, so neither sees `git`. The docblock states the limit (`:95-97`), and WP-161's *Discovered
+work* repeats it without a measured case.
+
+**Evidence** (refiner, the same scratch probe as 530. Each cell is attended / `auto` / `deny`, identical in all three baselines):
+
+| line | verdict |
+|---|---|
+| `g?t push origin main` (control, ruling (f)) | `ask / uncertain / uncertain` |
+| `env -u FOO /usr/bin/g?t push origin main` (control, capitals) | `ask / uncertain / uncertain` |
+| `taskset -c 0 …`, `ionice -c 2 -n 7 …` (controls, numbers) | `ask / uncertain / uncertain` |
+| `env -u foo git push origin main` (control, literal name) | `ask / git_boundary / git_boundary` |
+| `env -u foo /usr/bin/g?t push origin HEAD:main` | `ask / unattended_auto / unattended_deny` |
+| `env -C . /usr/bin/g?t push origin HEAD:main` | `ask / unattended_auto / unattended_deny` |
+| `taskset -c 0-3 /usr/bin/g?t push origin main` | `ask / unattended_auto / unattended_deny` |
+| `timeout -s kill 5 /usr/bin/g?t push origin main` | `ask / unattended_auto / unattended_deny` |
+| `env -u foo /usr/bin/g?t commit --no-verify -m x` | `ask / unattended_auto / unattended_deny` |
+| `env -u foo /usr/bin/[s]udo id` | `ask / unattended_auto / unattended_deny` |
+
+**What is measured and what is not.** The expansion half is measured: 518's refiner run had bash in the run image expand `/usr/bin/g[i]t`
+to git 2.47.3. Not measured: that GNU `env -u`/`-C` and `taskset -c` in the image accept these spellings and exec the result, and whether
+GNU `timeout` takes a lower-case signal name. `env -u NAME` and `env -C DIR` are documented coreutils options, so the first two rows are
+the likeliest to run. **Needs measurement:** one shell row per form in `here-documents.shell.test.ts`'s oracle before the fix is called done.
+
+**What it costs to leave.** WP-161's ruling (f) closes 518 for a bare or a known-shaped wrapper prefix, and leaves it open behind one
+lower-case option value. A model that hits the `expandedName` refusal is told why, so the next spelling is one step away.
+
+**Done when** the reader knows each wrapper's value-taking options: a table per wrapper in `ARGV0_WRAPPERS`, in the shape of
+`XARGS_VALUE_SHORT` (`:3759`). Examples are `env -u/-C/-S`, `taskset -c`, `timeout -s/-k`, `nice -n`, `ionice -c/-n`, `chrt -p`, `stdbuf -i/-o/-e`,
+`nsenter -t`, `doas -u`, `strace -e/-o/-p/-s` and `watch -n`. A word after a known value option is skipped whatever its shape. An option the
+table does not know fails closed: every remaining word up to the next known command is tested by `expandsAsName`. The over-ask from
+that fallback is stated where the rule is. Cases: the six `unattended_auto` rows above are uncertain. `env -u foo ls *.ts` (today
+`ask / unattended_auto / unattended_deny`), `nice -n 5 ls *.ts` and the WP-161 controls keep their verdicts. **Canary:** remove `env`'s `-u` from
+the table and the first row reads `unattended_auto`. The docblock's limit sentence (`:95-97`) is narrowed to what stays open.
+
+**Depends on** WP-161 landing (`commandNameWords` is uncommitted).
+
+### 532. **`ignored:check`, and so `verify`, fails locally whenever Claude Code's scheduled wake-up is armed: the harness writes `.claude/scheduled_tasks.lock` and an unanchored `**/.claude/scheduled_tasks.lock` into `.git/info/exclude`, and because `.claude/` holds tracked files the guard walks it and reports the lock as hidden source** (TODO, **minor, tooling. There is no product effect and CI never sees it. It blocks the orchestrator's own `verify` verdict line and has cost a workaround in three sessions.** The orchestrator, session 14. It was first recorded only in session notes: session 11 (`PROGRESS.md:27`), session 12 (`:25`, *"move it aside for a `verify` and put it back"*) and a row's verify log (`:40338`). It was never a backlog entry. **No work package owns it**)
+
+**What is wrong.** `scripts/check-ignored.mjs` walks every top-level directory git tracks anything in (`sourceRoots`). `.claude/` qualifies
+because of `.claude/agents/*.md` and `.claude/skills/orchestrate/SKILL.md`. The walk then asks `git check-ignore --no-index` about every file
+it finds, and `git check-ignore` reads **every** exclude source: `.gitignore`, `.git/info/exclude` and `core.excludesFile`. The guard was written
+for the first source. Its docblock says *"Anything git names is a bug in `.gitignore`"*, and its failure line says *".gitignore hides"*. The
+harness's own exclude lines are not a `.gitignore` bug, so the check reports a defect the repository cannot have.
+
+**Evidence** (the orchestrator. The refiner re-read it with `git check-ignore --no-index -v` only).
+- `.git/info/exclude:8:**/.claude/scheduled_tasks.lock .claude/scheduled_tasks.lock` (tab shown as a space). The harness wrote ten unanchored lines there:
+  `scheduled_tasks.lock`, `scheduled_tasks.json`, `routines/.state/`, `worktrees/`, `checkpoints/`, `mailbox/`, `agent-registry.json`,
+  `agent-memory-local`, `first-run` and `assistant-daemon-state.json`, each under `**/.claude/`. Any of them that exists as a file outside
+  a nested checkout trips the guard the same way.
+- An anchored `/.claude/scheduled_tasks.lock` added to `.gitignore` does not help. The guard then names the `.gitignore` line, because a
+  deliberately ignored file under a source root is exactly what it reports (the orchestrator's measurement).
+- **The same class is latent in the repository's own `.gitignore` (read, not run).** `.gitignore:54` ignores `/.claude/settings.local.json`
+  on purpose. `git check-ignore --no-index -v .claude/settings.local.json` names that line, and the walk would report the file the day a
+  developer creates it. It is absent on this machine.
+- CI never has the harness's files or its exclude lines, so `main`'s verdict is unaffected.
+
+**What it costs to leave.** Every local `verify` while a wake-up is armed reads `FAIL`. The workaround, moving the lock aside, touches
+a file the harness is holding as a session lock. A red guard that everybody knows to ignore is how a guard gets switched off.
+
+**Done when** the walk exempts the harness's local files the way `scripts/os-artefacts.mjs` exempts an OS's. **Recommended: a path list, not
+a source filter.** `OS_ARTEFACT_NAMES`' reasoning applies directly. A list *"only ever removes failures for files git would not track anyway,
+and everything else … still fails loudly"*, while a derivation trades a loud false positive for a quiet false negative. Concretely, a
+`LOCAL_TOOL_PATHS` set of **root-anchored** paths: `.claude/scheduled_tasks.lock`, `.claude/scheduled_tasks.json`, `.claude/settings.local.json`,
+and the directories `.claude/routines/.state/`, `.claude/checkpoints/` and `.claude/mailbox/`. It is consulted only for the **untracked** walk
+results, as `OS_ARTEFACT_NAMES` is, so a tracked path is still checked whatever its name, and a `scheduled_tasks.lock` anywhere else still
+fails. Its docblock says the list follows the harness, and that a new harness file name turns local `verify` red again until it is added.
+That is the loud direction. **The alternative, considered and not recommended:** report only matches whose source in `check-ignore -v`
+is a committed `.gitignore`. It needs no list, but it silences every private exclude, which is the original bug class (a hidden file
+nobody commits). CI would catch that only later, as a compile failure. Cases, in a unit test of the exemption: the lock and
+`settings.local.json` are exempt, `apps/server/src/scheduled_tasks.lock` is not, and a tracked `.claude/agents/*.md` matched by a pattern still
+fails. **Canary:** empty the set and the lock is reported again. The session-12 workaround sentence then becomes history.
+
+**Depends on** nothing.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -19479,6 +19605,11 @@ independent corpora disagreed by 3,624 cases here.
   moved allow→ask as a side effect of scoping the git verbs — read-only and harmless; add explicit allow
   entries if agents start hitting them. `MAX_WRAPPER_DEPTH = 8` means nine or more stacked `nice -n 5`
   wrappers escape token block-matching and land on `ask` rather than `allow` — pre-existing and fail-safe.
+  **Corrected 2026-10-08 (WP-161, rule 83):** not fail-safe once `commands.unattended: auto` existed (BD-025,
+  2026-10-06) — an `ask` runs under `auto`, so `nice` ×9 `git push --force origin main` and `A=1 … I=9 sudo id`
+  ran (backlog 516); and the bound was in words, not wrappers, so three `nice -n 5` (nine words) already hid
+  the tenth. Since WP-161 the line is `UNCERTAINTY.tooDeep` past eight wrappers, assignments or nested
+  substitutions, refused in both unattended modes.
 - Property-test timeouts now cover `packages/contracts` too (6 `fc.assert` calls that had none — the same
   5s CI flake surface the ci-fix was written for, in the package the ci-fix had not audited). `contracts` is
   the innermost ring and the dependency rule gives it no workspace import, so its `testing/property.ts` is a
@@ -45553,6 +45684,211 @@ The reviewer's two mutants were re-run and both are killed. `isWriteTarget(targe
 | `echo x \| xargs grep x` | ask / auto / deny |
 | `echo x \| xargs rm -f` | ask / auto / deny |
 | `echo x \| xargs -I{} cat {}` | ask / uncertain / uncertain |
+
+**Resumed, session 14** (implementer, on `2ece3dc6`; static half first, then the generated table, then marker-only shell rows — nothing the harness's classifier stopped, so nothing below was left unrun except as stated). **No migration.**
+
+**Rulings built.**
+- **(b), backlog 515.** `GIT_ABBREVIATION_HAZARDS` (the eight long spellings, each with its entry's kind) and one `gitAbbreviationFloor` per spelling beside the existing globs in `HAZARDOUS_ARGUMENTS` (`packages/domain/src/policies/command-policy.ts`). A long word `--t`/`--t=v` before a bare `--`, in every argv candidate (so behind any wrapper), is floored when `t` is a prefix of the spelling, unless `gitResolvesLongOption` — an exact spelling, else a prefix matching one option's spellings (`X` and `no-X` are one option) — answers one option that is not hazardous; if it answers another hazardous spelling, that spelling's entry floors it. No table (an alias, `git-foo`, `mergetool`, `fetch-pack`, `submodule`, an unknown or `constructor`-named subcommand) resolves nothing. `HazardousArgument.tokens` gained `words` (the dequoted argv in order) so the subcommand is read past git's global options; `GIT_GLOBAL_VALUE_OPTIONS` moved to `command-policy.ts` and the git boundary imports it.
+- **(c).** `packages/domain/src/policies/git-long-options.generated.ts` (pure data, 30 tables, `git version 2.47.3`, `platform-runtime:wp151`) written by `scripts/git-long-options.mjs`, which runs only `git --list-cmds=builtins`, `git --version` and `git <sub> --git-completion-helper-all` (stdin `/dev/null`, `timeout 5`) in a throwaway repository, `docker run --rm --network none`. It covers `POLICY_GIT_SUBCOMMANDS` (every subcommand a shipped allow, ask or block entry names: add, blame, branch, commit, diff, fetch, log, merge, push, rebase, reset, show, status), every probed builtin whose table holds a hazardous spelling, and `log`/`show`/`whatchanged` with diff's spellings as exact-only. It refuses a named subcommand with no table, a table-less one that grows a table, and a hazardous spelling no table holds. `node scripts/git-long-options-check.mjs` regenerates and diffs, and runs the pinned-git oracle row.
+- **(d), backlog 516.** One walk, `walkCommandStarts`, for `argv0Candidates` and `commandPositions`: it reads eight words past the **last** wrapper or assignment it met (two past an option) and stops, `UNCERTAINTY.tooDeep`, at a ninth wrapper or assignment. The substitution walk past the bound and a script reader's here-document past it add the same entry; the handed-string branch keeps `handedCommand`. `MAX_WRAPPER_DEPTH`'s docblock no longer says *"not fail-closed"*.
+- **(e), backlog 517.** `gitBoundaryViolation` skips a fragment only when `splitCommandSegments` run on it finds more than one part, and queues those parts; no `includes`.
+- **(f), backlog 518.** `commandNameWords` (the stage's command word, and while it is a wrapper the next command word past the wrapper's options, their plain values and `flock`/`su`/`runuser`'s operand — never an assignment, an element assignment, a `[`/`[[` test or an argument of the command) and `expandsAsName` (unquoted `*`, `?`, `[`, or a brace with `,`/`..` at its level; `${…}` is not a brace) → `UNCERTAINTY.expandedName`, worded *"write the command's name literally; the platform cannot read a name the shell expands"*.
+- **(g), backlog 519 (built).** `scan` consumes `<&` as one operator (only the operator: the word after it is scanned on, so `cat <&$(sudo id)` is still `block`), and `wordsOf` drops the target of an operator written apart from it.
+- **Criteria (10)–(13).** `normaliseCommand` removes `\` + newline outside single quotes before it collapses whitespace (`joinQuotedContinuations`), and every classifier tokenises from it; the `--extcmd` entry is a token predicate reading `difftool`'s `-x` attached, separate or last in a cluster, and its text no longer says *"and mergetool"*; `hash` with `-p` in an option word is `UNCERTAINTY.reboundName`; an `xargs` whose command (past its options and their values, or `--`) is an `ARGV0_WRAPPERS` name that is not a shell, `find` with `-exec`/`-execdir`/`-ok`/`-okdir`, or `git`/`git-*` is `UNCERTAINTY.xargsArguments`.
+- **(h).** `HAZARDOUS_ARGUMENTS`' docblock states git's abbreviation rule and git 2.47.3; the module docblock gains *"What it reads as uncertain instead"* and its *"What it still does not read"* loses the mid-word continuation and the stdin-fed `xargs` it now reads (narrowed to `xargs make` and kin); WP-02a's *"pre-existing and fail-safe"* has a dated correction; technical/05 § "Command and tool policy" has the WP-161 amendment, and its WP-160 amendment's two *"WP-161's"* clauses point at it.
+
+**Decisions and assumptions (each a reading of the row, not a re-opened ruling).**
+- **The bound is counted in wrappers, not words** (ruling (d) says *"the platform reads eight"* wrappers, assignments or substitutions). Measured on `2ece3dc6`: `nice -n 5 nice -n 5 nice -n 5 sudo id` (three wrappers, nine words) was `ask / unattended_auto`, because the old walk stopped at the eighth word. The window now restarts at each wrapper, so that line is `block_list`, and `timeout -s KILL -k 5 --preserve-status --foreground -v 180 sudo id` too. Still one constant.
+- **A substitution past the bound is uncertain unconditionally**, so a nine-deep `$(git push origin main)` without `--force` is `uncertain`, not `git_boundary` (both refuse); a nine-deep `sudo id` or forced push still reads `block_list`, because block is decided first. Criterion (4)'s *"at the bound"* rows use those two payloads.
+- **diff's own words abbreviate in the table**, as ruling (c) writes it, though git's `diff` parser is exact-only (`--ext-dif` and `--outp=` were refused). A table that holds a hazardous spelling can never resolve a prefix of it to anything else, so this can only drop a floor for a word git refuses (`git diff --u`).
+- **WP-160's globbed-shell reading keeps its verdict only when the glob cannot also be a name the policy judges** (git, the block list's binaries, every non-shell wrapper, `hash`, `find`, `script`): `/bin/[r]bash -c '…push…'` stays `git_boundary`, `/usr/bin/[gs][ih]* -c core.hooksPath=x push origin main` is `uncertain` (`git` sorts before `sh`).
+- **A shell under `xargs` is WP-160's**, so `xargs bash -c` keeps exactly `handedCommand`; `xargs env bash -c` and `xargs su -c` now also carry `xargsArguments` — the two WP-160 rows in `packages/domain/src/policies/unattended-commands.test.ts` › "review round 1 — xargs’s script, -W, and continuations" expect both (same rule, `uncertain`).
+- **`git sta\⏎tus` is now `allow`** (bash runs `git status`), and `git diff --outp=x` is a `path` hazard (`ask / auto / deny`), as `--output=` is.
+- **The generator does not probe** the credential helpers, daemons, `remote-ext`/`remote-fd`, the server sides that read a protocol on standard input, `fast-import`, `index-pack`, `mailinfo`/`mailsplit`, `unpack-objects`, `checkout--worker` and `submodule--helper` (`NOT_PROBED`); none is a verb a run writes or carries a floored option.
+- **`ignored:check` is red on this machine for a file that is not this row's**: `.claude/scheduled_tasks.lock` (created 01:58, before this session's first edit), matched by `.git/info/exclude:8`. Every other step of `verify` was run on its own and passed (below).
+
+**Criteria → tests.**
+- (2): `packages/domain/src/policies/unattended-commands.test.ts` › "criterion (2), backlog 515: an abbreviation git resolves to a hazard is floored" (every listed line, three baselines, attended / `auto` / `deny`, and the six rule-42 rows); `packages/domain/src/policies/command-policy.test.ts` › "WP-161 — git’s abbreviated long options and the generated tables" and › "floors a long word on the prefix alone for a subcommand with no table".
+- (3): `packages/domain/src/policies/command-policy.test.ts` › "the generated tables (criterion (3))", › "holds every hazardous spelling in at least one table" and › "has a table, or says it has none, for every subcommand a shipped entry names — and nothing else is table-less"; the Docker check below.
+- (4): `packages/domain/src/policies/unattended-commands.test.ts` › "criterion (4), backlog 516: the bound fails closed at each site" and › "reads a wrapper’s options without spending the bound on them".
+- (5): `packages/domain/src/policies/unattended-commands.test.ts` › "criterion (5), backlog 517: every `git push` a line contains is judged", › "still lets backlog 488’s pipeline through the boundary" and the property › "a line the boundary refuses is still refused with a one-word command before or after it" (1 000 runs).
+- (6): `packages/domain/src/policies/unattended-commands.test.ts` › "criterion (6), backlog 518: a command name the shell expands is uncertain" and › "keeps WP-160’s reading of a shell named by a glob, unless the glob can be git".
+- (7), (10), (12), (13) shell rows: `packages/domain/src/policies/here-documents.shell.test.ts` › "WP-161 — what bash runs past the bound, through an expanded or rebound name, and from xargs" and › "runs nothing at the bound that the policy does not read".
+- (8): `packages/domain/src/policies/unattended-commands.test.ts` › "criterion (8), backlog 519: a redirection word" and › "still reads a substitution after `<&`"; `packages/domain/src/policies/command-policy.test.ts` › "splits `<&3` nowhere (criterion (8))".
+- (9): no golden changed; `pnpm run -s verify:tests` passed with them untouched.
+- (10): `packages/domain/src/policies/unattended-commands.test.ts` › "criterion (10), backlog 520: a line continuation is removed before any word is read"; `packages/domain/src/policies/command-policy.test.ts` › "reads a line continuation out of a word before classifying it (criterion (10))".
+- (11): `packages/domain/src/policies/unattended-commands.test.ts` › "criterion (11), backlog 521: `git difftool -x` is `--extcmd`".
+- (12): `packages/domain/src/policies/unattended-commands.test.ts` › "criterion (12), backlog 522: `hash -p` rebinds a name".
+- (13): `packages/domain/src/policies/unattended-commands.test.ts` › "criterion (13), backlog 523: xargs feeding a command that runs its arguments".
+- The new entries one by one: `packages/domain/src/policies/command-policy.test.ts` › "WP-161 — the scanner’s new uncertainty and what it reads".
+
+**Canaries (rule 77/88: each mutation applied to the file, the verdict script run on the named line, the file restored and compared byte for byte with a saved copy).** Drop the abbreviation floors → `git commit --no-verif -m x` reads `allow / allow_list / allow_list` in the implementation baseline. Resolve against no table → `git diff --text` reads `ask / hazardous_argument`. `walkCommandStarts` never too deep → nine `nice` and nine assignments before `sudo id` read `unattended_auto`. The substitution else-branch certain → ten `$(` around `sudo id` reads `unattended_auto`. Restore `includes` → `git push origin main; m` reads `unattended_auto`. Drop the expanded-name check → `/usr/bin/g[i]t push origin main` reads `unattended_auto`. Split at the `&` of `<&` → `git status <&3` reads `unattended_auto`. Skip the join → `su\⏎do id` reads `unattended_auto`. Drop the `-x` predicate → `git difftool -x 'sudo id' HEAD` reads `unattended_auto`. Drop the `hash` check → `hash -p /usr/bin/git ls; ls push origin HEAD:main` reads `unattended_auto`. Drop the `xargs` check → `echo 'push origin HEAD:main' | xargs git` reads `unattended_auto`.
+
+**The Docker check** (`node scripts/git-long-options-check.mjs`, 2026-10-08, against `platform-runtime:wp151`), quoted:
+
+```
+PASS: table is current — regenerated from platform-runtime:wp151, identical
+PASS: a failing pre-commit hook refuses a plain commit — exit 1
+PASS: git commit --no-verif commits past it (git resolved --no-verify) — exit 0, git version 2.47.3
+PASS: git commit --no-ver is refused as ambiguous — exit 129
+PASS: the policy floors git commit --no-verif
+PASS: the table resolves no-ver to nothing (ambiguous, as git does)
+PASS: git-long-options-check
+```
+
+No container was left (`docker ps -a --filter ancestor=platform-runtime:wp151` empty) and the volume count stayed at 130 (the brief's baseline said 131; it was 130 before this session's first container).
+
+**Verify.** `pnpm run -s verify` ends `FAIL: verify`, at `FAIL: ignored:check` for `.claude/scheduled_tasks.lock` alone (above); each later step run on its own passed: lint, `PASS: nul:check`, `PASS: conflict:check`, `PASS: data-model:check`, `PASS: verify:types`, `PASS: verify:bundle`, and `PASS: verify:tests` (541 files, 12 440 tests, `PASS: coverage:ratchet`). The integration and e2e tiers were not run (the orchestrator's).
+
+**What was not run, and why.** The (a) measurement stage was not re-run (the brief); the table's *before* column is the verdict script on `2ece3dc6`, which matches session 13's table cell for cell. No git command ran except the generator's read of the option tables and the oracle row above. The shell rows are marker-only: `echo RAN_1`, or `./mark`, a script in the test's temporary directory that prints `RAN_1`; `xargs timeout 5` is skipped where coreutils' `timeout` is absent (this Mac), and runs on CI and in the image. `xargs git` has no shell row (it would run git); its verdict is the unit row's.
+
+**The (a) table, before and after** (verdicts attended / `auto` / `deny`; `ro`/`ver`/`impl` where the baselines differ; ⏎ is a newline after the backslash; the after column is the same verdict script, which executes no shell):
+
+| line | before (`2ece3dc6`) | after |
+|---|---|---|
+| `git commit --no-verify -m x` | ask / hazard / hazard | same |
+| `git commit --no-verif -m x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / allow / allow | **ask / hazard / hazard** |
+| `git commit --no-veri -m x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / allow / allow | **ask / hazard / hazard** |
+| `git commit --no-ver -m x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / allow / allow | **ask / hazard / hazard** |
+| `git push --no-verif origin agentic/x` | ask / git / git | same |
+| `git fetch origin --upload-p=x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / allow / allow | **ask / hazard / hazard** |
+| `git fetch origin --upload=x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / allow / allow | **ask / hazard / hazard** |
+| `git ls-remote --upload-p=x origin` | ask / auto / deny | **ask / hazard / hazard** |
+| `git push --receive-p=x origin agentic/x` | ask / git / git | same |
+| `git push --exe=x origin agentic/x` | ask / git / git | same |
+| `git push --ex=x origin agentic/x` | ask / git / git | same |
+| `git cat-file --text HEAD:a` | ask / auto / deny | **ask / hazard / hazard** |
+| `git cat-file --te HEAD:a` | ask / auto / deny | **ask / hazard / hazard** |
+| `git difftool --extc=x` | ask / auto / deny | **ask / hazard / hazard** |
+| `git ci --no-verif -m x` | ask / auto / deny | **ask / hazard / hazard** |
+| `git merge --no-verif origin/main` | ask / auto / deny | **ask / hazard / hazard** |
+| `git diff --ext-dif` | allow / allow / allow | **ask / hazard / hazard** |
+| `git log --textco` | allow / allow / allow | **ask / hazard / hazard** |
+| `git diff --outp=/tmp/x` | allow / allow / allow | **ask / auto / deny** |
+| `git diff --text` | allow / allow / allow | same |
+| `git log -p --text` | allow / allow / allow | same |
+| `git log --no-walk` | allow / allow / allow | same |
+| `git commit --verify -m x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / allow / allow | same |
+| `git merge --verify-signatures origin/main` | ask / auto / deny | same |
+| `git commit -m "--no-verify is a flag"` | ask / hazard / hazard | same |
+| `nice git commit --no-verif -m x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / allow / allow | **ask / hazard / hazard** |
+| `git -C . commit --no-verif -m x` | ask / auto / deny | **ask / hazard / hazard** |
+| `git commit --no-verif -- x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / allow / allow | **ask / hazard / hazard** |
+| `git commit -- --no-verif` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / allow / allow | same |
+| `nice nice nice nice nice nice nice nice sudo id` | block / block / block | same |
+| `nice nice nice nice nice nice nice nice nice sudo id` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `nice nice nice nice nice nice nice nice git push --force origin main` | block / block / block | same |
+| `nice nice nice nice nice nice nice nice nice git push --force origin main` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `A=1 B=2 C=3 D=4 E=5 F=6 G=7 H=8 sudo id` | block / block / block | same |
+| `A=1 B=2 C=3 D=4 E=5 F=6 G=7 H=8 I=9 sudo id` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `A=1 B=2 C=3 D=4 E=5 F=6 G=7 H=8 git push --force origin main` | block / block / block | same |
+| `A=1 B=2 C=3 D=4 E=5 F=6 G=7 H=8 I=9 git push --force origin main` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `env env env env env env env env env sudo id` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `command command command command command command command command command sudo id` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 sudo id` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `nice -n 5 nice -n 5 nice -n 5 sudo id` | ask / auto / deny | **block / block / block** |
+| `echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(sudo id)))))))))` | block / block / block | same |
+| `echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(sudo id))))))))))` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(git push --force origin main)))))))))` | block / block / block | same |
+| `echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo $(git push --force origin main))))))))))` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `git push origin main` | ask / git / git | same |
+| `git push origin main; m` | ask / auto / deny | **ask / git / git** |
+| `m; git push origin main` | ask / auto / deny | **ask / git / git** |
+| `git push origin main \| m` | ask / auto / deny | **ask / git / git** |
+| `git push origin main && o` | ask / auto / deny | **ask / git / git** |
+| `git push --mirror origin; i` | ask / auto / deny | **ask / git / git** |
+| `git push origin HEAD:main && o` | ask / hazard / hazard | **ask / git / git** |
+| `git push origin agentic/x 2>&1 \| tail -5` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / allow / allow | same |
+| `/usr/bin/g[i]t push origin main` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `/usr/bin/gi? push --force origin main` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `/usr/bin/g{i..i}t status` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `{sudo,x} id` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `/usr/bin/sud? id` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `/usr/bin/[s]udo id` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `g?t push origin main` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `/usr/bin/ni?e git push origin main` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `nice /usr/bin/g[i]t push origin main` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `[ -d x ]` | ask / auto / deny | same |
+| `[[ -d x ]]` | ask / auto / deny | same |
+| `{ ls; }` | ask / auto / deny | same |
+| `x='b[1]'` | ask / auto / deny | same |
+| `{x} y` | ask / auto / deny | same |
+| `g\it push origin main` | ask / git / git | same |
+| `'git' push origin main` | ask / git / git | same |
+| `"g"it push origin main` | ask / git / git | same |
+| `g""it push origin main` | ask / git / git | same |
+| `git push origin ma?n` | ask / git / git | same |
+| `git push origin {main,}` | ask / git / git | same |
+| `git push origin m{a,}in` | ask / git / git | same |
+| `read -r X <<< 'x'` | ask / uncertain / uncertain | **ask / auto / deny** |
+| `git status <&3` | ask / auto / deny | **allow / allow / allow** |
+| `cat <&3` | ask / auto / deny | **allow / allow / allow** |
+| `ls <&3` | ask / auto / deny | **allow / allow / allow** |
+| `git status >&2` | allow / allow / allow | same |
+| `git status <&-` | ask / auto / deny | **allow / allow / allow** |
+| `git status >&3` | allow / allow / allow | same |
+| `su\⏎do id` | ask / auto / deny | **block / block / block** |
+| `s\⏎udo id` | ask / auto / deny | **block / block / block** |
+| `nice su\⏎do id` | ask / auto / deny | **block / block / block** |
+| `git pu\⏎sh origin HEAD:main` | ask / auto / deny | **ask / git / git** |
+| `en\⏎v git push origin HEAD:main` | ask / auto / deny | **ask / git / git** |
+| `git rebase -\⏎x 'sudo id' main` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / allow / allow | **ask / hazard / hazard** |
+| `git commit --no-ver\⏎ify -m x` | ro: ask / auto / deny; ver: ask / auto / deny; impl: allow / allow / allow | **ask / hazard / hazard** |
+| `git rebase --ex\⏎ec='sudo id' main` | ask / hazard / hazard | same |
+| `find . -ex\⏎ec sudo id ;` | block / block / block | same |
+| `tr\⏎ap 'sudo id' EXIT` | block / block / block | same |
+| `git sta\⏎tus` | ask / auto / deny | **allow / allow / allow** |
+| `git status \⏎--short` | allow / allow / allow | same |
+| `echo 'a\⏎b'` | ask / auto / deny | same |
+| `git difftool --extcmd='sudo id' HEAD` | ask / hazard / hazard | same |
+| `git difftool -x 'sudo id' HEAD` | ask / auto / deny | **ask / hazard / hazard** |
+| `git difftool -x'sudo id' HEAD` | ask / auto / deny | **ask / hazard / hazard** |
+| `git difftool -yx 'sudo id' HEAD` | ask / auto / deny | **ask / hazard / hazard** |
+| `git -c diff.tool=x difftool -x 'sudo id' HEAD` | ask / auto / deny | **ask / hazard / hazard** |
+| `git mergetool -x 'sudo id'` | ask / auto / deny | same |
+| `git diff -x` | allow / allow / allow | same |
+| `git log -x` | allow / allow / allow | same |
+| `hash -p /usr/bin/sudo ls; ls` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `hash -p /usr/bin/git ls; ls push origin HEAD:main` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `hash -rp /usr/bin/git ls; ls push origin HEAD:main` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `hash` | ask / auto / deny | same |
+| `hash -r` | ask / auto / deny | same |
+| `hash ls` | ask / auto / deny | same |
+| `hash -d ls` | ask / auto / deny | same |
+| `echo 'sudo id ;' \| xargs find . -maxdepth 0 -exec` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `echo 'sudo id' \| xargs env` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `echo 'sudo id' \| xargs nohup` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `echo 'sudo id' \| xargs timeout 5` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `echo 'sudo id' \| xargs nice` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `echo 'sudo id' \| xargs command` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `echo 'sudo id' \| xargs exec` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `echo 'sudo id' \| xargs xargs` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `echo 'sudo id' \| xargs git` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `echo 'push origin HEAD:main' \| xargs git` | ask / auto / deny | **ask / uncertain / uncertain** |
+| `echo x \| xargs grep x` | ask / auto / deny | same |
+| `echo x \| xargs rm -f` | ask / auto / deny | same |
+| `echo x \| xargs -I{} cat {}` | ask / uncertain / uncertain | same |
+| `find . -name x \| xargs wc -l` | ask / auto / deny | same |
+
+**Discovered work.**
+- **`xargs` feeding a project-command verb is still read as one** (not measured): `echo 'X=$(shell id)' | xargs make` is `ask / unattended_auto / unattended_deny`. WP-54's `make VAR=value` floor reads the assignment only when it is on the line; through `xargs` it comes from the pipe. The same shape reaches `xargs npm`/`pnpm` options. Candidate: extend `xargsRunsItsInput` to the verbs of `PROJECT_COMMAND_ALLOW`, after a shell row measures `xargs make`.
+- ~~A globbed command name behind a wrapper operand the reader does not know~~ — measured reaching git by the refiner (backlog 531) and **folded into WP-161** at review round 1, below.
+- **`GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS`** remains the defence in depth ruling (b) recorded and did not build.
+
+**Review round 1** (REQUEST_CHANGES: two majors, one minor; all fixed on the same tree).
+- **[major] Backlog 531, folded into WP-161 (ruling (f), which (i) forbids splitting).** `commandNameWords` skipped an option's next word only when it looked like a number, a duration, a mask or a capitalised signal, so `env -u foo /usr/bin/g?t push origin HEAD:main`, `env -C .`, `taskset -c 0-3`, `timeout -s kill 5` and `exec -a x` were `ask / unattended_auto / unattended_deny`. **Chosen: fail closed.** After a wrapper option written without `=`, the next word (unless it is itself an option) is listed — tested by `expandsAsName` — and the walk goes on to the word after it, which is then the command candidate; only an option in `WRAPPER_FLAGS_WITHOUT_VALUE` (per wrapper: `env -i/-0/-v`, `timeout --preserve-status/--foreground/-v`, `time -p/-v`, `command -p/-v/-V`, `exec -c/-l`, `setsid -c/-f/-w`) does not spend it; an option the table does not know, or any option of a wrapper it does not list, is read as taking a value. The over-ask, stated at the rule: an unknown boolean option followed by `ls *.ts` reads `*.ts` as a command word. `env -u foo ls *.ts`, `nice -n 5 ls *.ts`, `env -i ls *.ts` and `nice ls *.ts` keep their verdicts. The module docblock's limit is narrowed to a wrapper's positional operand it does not know (`taskset ff /usr/bin/g?t`).
+- **[major, pre-existing] criterion (14): a backslash-newline inside a comment was joined.** `ls # x \⏎sudo id` and `ls # x \⏎git push origin HEAD:main` were `allow / allow_list / allow_list` in every baseline (same on `2ece3dc6`); bash and dash run the next line. `scan` now consumes a word-initial unquoted `#` to its newline (`startsComment`: the text's start, or after a blank or an operator character), so the newline separates commands, and `joinQuotedContinuations` copies a comment through unjoined. The older `joinContinuations` is left as it is: it reads stage text the scanner has already split, and an unquoted here-document body, where `#` is not a comment. `echo a#b \⏎c` keeps its join and `echo 'a # b \⏎c'` is unchanged.
+- **[minor] `NAMES_THE_POLICY_JUDGES` gains `xargs`**, which this row judges by name.
+- **Tests:** `packages/domain/src/policies/unattended-commands.test.ts` › "criterion (6), backlog 518: a command name the shell expands is uncertain" (531's six rows, `exec -a`, the controls) and › "criterion (14), review round 1: a backslash in a comment is not a continuation"; `packages/domain/src/policies/command-policy.test.ts` › "ends a comment at its newline, before any join (criterion (14))"; `packages/domain/src/policies/here-documents.shell.test.ts` › "bash runs the line after a comment ending in a backslash, and the policy judges it (criterion (14))" (marker `echo RAN_1`, every shell present) and five 531 rows on `./mark` (`env -u foo`, `exec -a x` and `env -C .` ran the marker on this Mac; `taskset` and `timeout` are skipped here and named as skipped).
+- **Canaries** (same method): drop the comment rule (`startsComment` always false) → `ls # x \⏎sudo id` reads `allow / allow / allow`; never spend an option's value → `env -u foo /usr/bin/g?t push origin HEAD:main` reads `ask / auto / deny`. A first attempt at the comment canary wrote `false && a || b`, which disabled nothing and still read `block` — recorded so the canary is not read as having bitten then.
+- **Verify** (load 2.4): `PASS: verify:types`, `PASS: verify:tests` (541 files, 12 468 tests, `PASS: coverage:ratchet`); biome clean on the changed files. technical/05's WP-161 amendment names both fixes.
+- **Sentences falsified:** the module docblock's operand limit (narrowed, above); this section's own *Discovered work* line on the operand (struck through, folded); technical/05's *"a wrapper operand the reader does not know"* (narrowed to a positional operand).
+
+**Review round 2** (CHANGES, one major).
+- **[major] A wrapper's leading operand was judged by shape.** `timeout inf /usr/bin/g?t push origin main`, `timeout 1e2 …`, `taskset ff /usr/bin/g?t push origin main` and `taskset ff /usr/bin/[s]udo id` were `ask / unattended_auto / unattended_deny` in all three baselines: an operand that failed `WRAPPER_VALUE_WORD` was taken for the command. `WRAPPER_OPERAND` now lists `timeout`, `taskset` and `chrt` beside `flock`, `su` and `runuser`; their first non-option word is listed whatever its shape (tested by `expandsAsName`) and the walk goes on to the next. `chrt 10 …` and `timeout -s KILL inf …` are uncertain too; `timeout 5 ls *.ts`, `timeout inf ls *.ts` and `taskset ff ls *.ts` stay `ask / auto / deny`. Canary: take the three off `WRAPPER_OPERAND` and `timeout inf /usr/bin/g?t push origin main` and `taskset ff /usr/bin/[s]udo id` read `ask / auto / deny`. The module docblock and technical/05 now name the residual as a wrapper `WRAPPER_OPERAND` does not list.
+- **The comment canary, measured by branch.** Dropping the **scanner's** comment branch turns every criterion (14) row `allow / allow / allow` (`ls # x \⏎sudo id`, `… git push origin HEAD:main`, `… git push origin main`, `… git commit --no-verify -m x`, `… docker ps`, `git status # x \⏎git push origin main`). Dropping only the **join's** branch changes no verdict: once the scanner ends the comment at its newline, no fragment holds a comment followed by `\⏎`, and the whole-line candidate `ls # x sudo id` still begins with `ls`. So the reviewer's surviving rows were the join branch's, which is defence in depth (it keeps `normaliseCommand` faithful to bash) and is pinned only by `packages/domain/src/policies/command-policy.test.ts` › "ends a comment at its newline, before any join (criterion (14))". Three implementation-baseline rows the scanner's branch alone decides were added to `packages/domain/src/policies/unattended-commands.test.ts` › "criterion (14), review round 1: a backslash in a comment is not a continuation" (`hazardous_argument`, `block_list`, `git_boundary`).
+- **Tests:** the four lines plus `chrt` and `timeout -s KILL inf` in › "criterion (6), backlog 518: a command name the shell expands is uncertain"; the three controls beside them.
+- **Verify** (load 3.7): `PASS: verify:types`, `PASS: verify:tests` (12 480 tests, `PASS: coverage:ratchet`); the citations test and biome are clean.
 
 #### WP-154
 
