@@ -138,6 +138,7 @@ import {
   jiraProjectStatusesSchema,
   jiraRemoteLinkSchema,
   jiraSearchResultSchema,
+  jiraSubsetSearchResultSchema,
   jiraTransitionsSchema,
   jiraUserSchema,
   PROVIDER_ID,
@@ -486,9 +487,24 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
   const parse = <TSchema extends z.ZodType>(schema: TSchema, value: unknown, action: string) =>
     parseProviderData(schema, value, { provider: PROVIDER_ID, action });
 
-  const fetchIssue = async (key: string, fields: string, action: string) =>
+  /**
+   * `GET issue/{key}` asking for `fields`, parsed with the **caller's** schema (PROGRESS backlog 540).
+   *
+   * Jira answers only the fields asked for (the swagger's `fields` parameter, `SOURCES.md`), so a
+   * schema requiring a field the request did not name fails every real answer `invalid_response`
+   * — which is what the epic read, `transition` and `setLabels` did from WP-08 until backlog 540,
+   * when this took `jiraIssueWithUpdatedSchema` for every caller. There is no default: a subset read
+   * names {@link jiraIssueSchema}, and only a read whose `fields` include `updated` may name the
+   * stricter one. The replay honours `fields` (its divergence 15), so a mismatch fails a test.
+   */
+  const fetchIssue = async <TSchema extends z.ZodType>(
+    key: string,
+    fields: string,
+    schema: TSchema,
+    action: string,
+  ): Promise<z.infer<TSchema>> =>
     parse(
-      jiraIssueWithUpdatedSchema,
+      schema,
       await client.send({
         method: 'GET',
         path: `issue/${encodeURIComponent(key)}`,
@@ -650,7 +666,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     const key = ticketRef.key;
     return read('read_ticket', jsonPayload({ ticket_key: key }), async () => {
       const action = 'read_ticket';
-      const issue = await fetchIssue(key, FIELDS_FOR_TICKET, action);
+      const issue = await fetchIssue(key, FIELDS_FOR_TICKET, jiraIssueWithUpdatedSchema, action);
       const [commentPage, remoteLinks] = await Promise.all([
         fetchNewestComments(key, action),
         fetchRemoteLinks(key, action),
@@ -660,7 +676,12 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
         parentKey === null
           ? null
           : await (async () => {
-              const parent = await fetchIssue(parentKey, 'summary,description', action);
+              const parent = await fetchIssue(
+                parentKey,
+                'summary,description',
+                jiraIssueSchema,
+                action,
+              );
               return {
                 key: parentKey,
                 title: parent.fields.summary ?? '',
@@ -688,8 +709,9 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     selfKey: string,
     action: string,
   ): Promise<readonly { key: string; title: string; state: string }[]> => {
+    // `summary,status` only, so the page parses without the `updated` a match requires (backlog 540).
     const result = parse(
-      jiraSearchResultSchema,
+      jiraSubsetSearchResultSchema,
       await client.send({
         method: 'GET',
         path: 'search/jql',
@@ -892,7 +914,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
       jsonPayload({ ticket_key: key, target_status: targetStatusName }),
       async (): Promise<{ readonly from: string; readonly target: JiraTransition | null }> => {
         const action = 'resolve_transition';
-        const issue = await fetchIssue(key, 'status', action);
+        const issue = await fetchIssue(key, 'status', jiraIssueSchema, action);
         const listed = parse(
           jiraTransitionsSchema,
           await client.send({
@@ -1055,7 +1077,8 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     const current = await read(
       'read_labels',
       jsonPayload({ ticket_key: key }),
-      async () => (await fetchIssue(key, 'labels', 'read_labels')).fields.labels ?? [],
+      async () =>
+        (await fetchIssue(key, 'labels', jiraIssueSchema, 'read_labels')).fields.labels ?? [],
       (labels) => ({ label_count: labels.length }),
     );
     const next = new Set(current);
@@ -1092,7 +1115,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
           action,
         });
         // The edit returns 204 with no body, so the result is read back rather than assumed.
-        return (await fetchIssue(key, 'labels', action)).fields.labels ?? [];
+        return (await fetchIssue(key, 'labels', jiraIssueSchema, action)).fields.labels ?? [];
       },
       () => wanted,
       (labels) => ({ labels: [...labels] }),
@@ -1380,7 +1403,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
    * Who holds the ticket, beside the binding's own account — the read half of the claim and of the
    * release (WP-172 ruling (b)), so shadow mode stops before the write and a ticket somebody else
    * holds is never written to by `unassign`. `fields=assignee` only, parsed without the `updated`
-   * the mapped reads require (Jira returns only the fields asked for).
+   * the mapped reads require (Jira returns only the fields asked for; backlog 540).
    */
   const readAssignee = async (
     key: string,
@@ -1391,14 +1414,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
       jsonPayload({ ticket_key: key }),
       async () => {
         const [issue, self] = await Promise.all([
-          client
-            .send({
-              method: 'GET',
-              path: `issue/${encodeURIComponent(key)}`,
-              query: { fields: 'assignee' },
-              action,
-            })
-            .then((body) => parse(jiraIssueSchema, body, action)),
+          fetchIssue(key, 'assignee', jiraIssueSchema, action),
           requireSelf(action),
         ]);
         const accountId = issue.fields.assignee?.accountId;

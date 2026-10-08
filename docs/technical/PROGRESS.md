@@ -46999,3 +46999,41 @@ cases). Read J5's `total` → 3 failed. Drop the `pickup_status` refinement → 
 - TD-029 cites `jira-cloud/index.ts:520-529`, `:837-920` and `:1423-1424`, stale before this row and more
   so after it; `docs/decisions` is not an implementer's to edit.
 - `listStatuses` has no bound on how many statuses a project answers; nothing caps the union.
+
+#### Backlog 540 — `fetchIssue`'s schema follows its `fields` (WP-172 follow-up, session 15)
+
+Implementer, on `main` at `9661c230`. Not marked RESOLVED here; that is the reviewer's and orchestrator's.
+
+**What changed.**
+- (a) `fetchIssue` (`packages/integrations/src/providers/jira-cloud/index.ts`) takes its schema from
+  the caller and has no default. `readTicket`'s own read (`FIELDS_FOR_TICKET`, which names `updated`)
+  passes `jiraIssueWithUpdatedSchema`; the epic read, `transition`'s `resolve_transition`, both
+  `setLabels` reads and `readAssignee` (now routed through `fetchIssue`) pass `jiraIssueSchema`.
+- **A fifth instance the row did not list:** `fetchSiblings` asks `search/jql` for `summary,status`
+  and parsed `jiraSearchResultSchema`, whose issues require `updated`. Once the epic read stopped
+  failing, every ticket with a parent would have failed here instead. It now parses
+  `jiraSubsetSearchResultSchema` (`mapping.ts`, the same page over `jiraIssueSchema`). The other
+  `fields=` request, `searchUpTo`'s `FIELDS_FOR_MATCH`, names `updated` and keeps the strict schema.
+- (b) The replay honours `fields` on `GET issue/{key}` **and** on `search/jql` (divergence 15,
+  `projectIssueFields`): envelope (`id`, `key`, `self`) plus only the fields asked for; `*all`,
+  `*navigable`, `-field` and a repeated `fields` parameter as documented; `getIssue`'s default is all,
+  the search's is ids only. Stated simplification: every stored field counts as navigable.
+- (c) `SOURCES.md` cites the swagger's `fields` parameter for both operations (`info.version`
+  `…25c77f08…`, retrieved 2026-10-08, `documented`), quoted. `issue-acme-100-epic.json`'s note now
+  says the stored document keeps `updated` (the replay sorts searches by it) and that a real answer
+  to `summary,description` would not carry it.
+
+**Tests** (`test/contract/integrations/jira-cloud.contract.test.ts`, describe *"every issue read parses
+what its `fields` asked for (backlog 540)"*): the replay's projection (subset, `*all`, exclusion,
+`*navigable,-x`, repeated parameter, search default `id`); the epic and siblings read; `transition`
+from a status-only read; `setLabels` read and read-back; a census that every issue read and search
+the adapter made names its `fields`.
+
+**Canaries** (each reverted one caller to the `updated` schema with the replay change in place):
+transition → 8 tests fail by name (incl. *"resolves a transition from a status-only read"*); epic →
+12; `read_labels` → 5; read-back → 4; siblings → 12. Replay change with the adapter unfixed: 22 fail.
+
+**Assumptions.** The transition test targets the fixture's existing `In Review` (the transitions
+fixture offers no neutral name from `Ready for agent`); no new status name was introduced. The brief
+named the heading both `Backlog 540` and `WP-540`; this is the one heading. Not measured against a
+live site.

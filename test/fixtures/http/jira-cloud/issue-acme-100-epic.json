@@ -5,7 +5,7 @@
     "spec_version": "1001.0.0-SNAPSHOT-a6463b4310f8edea4a3e (info.version)",
     "retrieved": "2026-09-10",
     "evidence": "documented-adapted",
-    "note": "The parent issue as the adapter projects it. Same shape, two fields."
+    "note": "The parent issue as the replay stores it: the adapter asks for summary,description and the replay serves only those (its divergence 15, PROGRESS backlog 540). `updated` is kept so the stored issue sorts in a search like every other one; a real answer to this request would not carry it."
   },
   "response": {
     "status": 200,

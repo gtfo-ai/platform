@@ -58,6 +58,16 @@
  *     are, and any other project key `404`s, as J1 documents for a project the account cannot see.
  * 14. **Stricter — `PUT issue/{key}/assignee` answers `400` for an account its directory does not
  *     hold, and for a body with no `accountId` member** (research/15 J4); `null` unassigns.
+ * 15. **Documented — `fields` is honoured on `GET issue/{key}` and on `search/jql`** (PROGRESS
+ *     backlog 540): an issue is answered with `id`, `key`, `self` and **only** the fields asked for
+ *     ({@link projectIssueFields}), as the swagger's `fields` parameter documents for both
+ *     operations (`SOURCES.md`). Before this the double answered the whole stored issue whatever
+ *     was asked, so a read that asked for `status` and then required `updated` passed here and
+ *     failed `invalid_response` against a real site. Two simplifications, both stated: every
+ *     stored field counts as *navigable* (`*navigable` is `*all` here), and a search with no
+ *     `fields` answers no `fields` member at all but keeps the envelope's `key` and `self`, where
+ *     the documentation says *"Returns only issue IDs"*. No adapter call searches without naming
+ *     its fields, so nothing reads the difference.
  */
 import { readFileSync } from 'node:fs';
 import type { WebhookDelivery } from '@platform/application';
@@ -204,6 +214,44 @@ const JQL_IDS = /^\(?id in \(([0-9]+(?:, [0-9]+)*)\)/;
 const JQL_KEY_LITERAL = /"((?:[^"\\]|\\.)*)"/g;
 const JQL_KEY_EXCLUSION = /AND key != "([^"]+)"/;
 const JQL_WINDOW = /AND updated >= "-(\d+)m"/;
+
+/**
+ * Divergence 15 (PROGRESS backlog 540): the issue as Jira answers it for a `fields` request.
+ *
+ * The swagger's `fields` parameter (`getIssue` and `searchAndReconsileIssuesUsingJql`): a
+ * comma-separated list, `*all`, `*navigable`, or a field prefixed with a minus to exclude; a list
+ * of exclusions alone starts from the operation's default. `getIssue`'s default is `*all`, the
+ * search's is `id` — so `byDefault` is the operation's. `id`, `key` and `self` are the envelope
+ * and are always answered.
+ */
+export const projectIssueFields = (
+  issue: Record<string, unknown>,
+  asked: string | undefined,
+  byDefault: 'all' | 'id',
+): Record<string, unknown> => {
+  const { fields, ...envelope } = issue;
+  const stored = (fields ?? {}) as Record<string, unknown>;
+  const tokens = (asked ?? '')
+    .split(',')
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  const excluded = new Set(
+    tokens.filter((token) => token.startsWith('-')).map((token) => token.slice(1)),
+  );
+  const included = tokens.filter((token) => !token.startsWith('-'));
+  const everything =
+    included.includes('*all') ||
+    included.includes('*navigable') ||
+    (included.length === 0 && (tokens.length > 0 || byDefault === 'all'));
+  // `id` is the search's ids-only value, and the two wildcards are not field names.
+  const named = new Set(included.filter((token) => !['*all', '*navigable', 'id'].includes(token)));
+  const kept = Object.entries(stored).filter(
+    ([name]) => !excluded.has(name) && (everything || named.has(name)),
+  );
+  return !everything && named.size === 0
+    ? envelope
+    : { ...envelope, fields: Object.fromEntries(kept) };
+};
 
 export const createJiraReplay = (options: { readonly now?: string } = {}): JiraReplay => {
   const nowMs = Date.parse(options.now ?? JIRA_REPLAY_NOW);
@@ -414,7 +462,7 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
       const more = offset + size < found.length;
       return jsonResponse(200, {
         isLast: !more,
-        issues: page.map(clone),
+        issues: page.map((issue) => projectIssueFields(clone(issue), query.fields, 'id')),
         ...(more ? { nextPageToken: String(offset + size) } : {}),
       });
     }
@@ -452,7 +500,10 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
       const tail = segments.slice(2).join('/');
 
       if (method === 'GET' && tail === '') {
-        return jsonResponse(200, clone(issues.get(key)));
+        return jsonResponse(
+          200,
+          projectIssueFields(clone(issues.get(key)) ?? {}, query.fields, 'all'),
+        );
       }
       if (method === 'PUT' && tail === '') {
         const update = (
@@ -585,7 +636,9 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
     const path = url.pathname.replace(/^\/rest\/api\/3\//, '');
     const query: Record<string, string> = {};
     for (const [name, value] of url.searchParams) {
-      query[name] = value;
+      // `fields` "may be specified multiple times" (swagger, `getIssue`): the lists are one list.
+      query[name] =
+        name === 'fields' && query[name] !== undefined ? `${query[name]},${value}` : value;
     }
     const text = request.method === 'GET' ? '' : await request.text();
     const recorded: RecordedRequest = {

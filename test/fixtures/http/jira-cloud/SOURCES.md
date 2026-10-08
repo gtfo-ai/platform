@@ -113,6 +113,24 @@ a label and pointing the URL at a domain that does not exist changed no test at 
     records; `total` is not read by `listComments` (ambiguity 6 below).
   - **J6** `getCurrentUser` — `myself.json`, unchanged.
 
+- `https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json` again, `info.version`
+  `1001.0.0-SNAPSHOT-25c77f084cd5b3af3ca57b4c883ff311ffe3ca25`, retrieved **2026-10-08** for PROGRESS
+  backlog 540 — the `fields` query parameter, `documented`:
+  - `getIssue`, `GET /rest/api/3/issue/{issueIdOrKey}` — *"A list of fields to return for the
+    issue. This parameter accepts a comma-separated list. Use it to retrieve a subset of fields."*
+    Allowed values `*all`, `*navigable`, *"Any issue field, prefixed with a minus to exclude"*;
+    example *"`summary,comment` Returns only the summary and comments fields"*; it *"may be
+    specified multiple times"*; *"All fields are returned by default"*.
+  - `searchAndReconsileIssuesUsingJql`, `GET /rest/api/3/search/jql` — the same vocabulary plus
+    `id`, and *"The default is `id`"* (*"By default, this resource returns IDs only"*).
+
+  So a read that names a subset of `fields` is answered **only** those fields, and a schema that
+  requires one it did not name fails every real answer. The adapter passes each read's schema
+  beside its `fields` (`fetchIssue`, `index.ts`), and the replay projects every `GET issue/{key}`
+  and every search onto the `fields` asked for (its divergence 15). No fixture changes shape: the
+  stored issues stay whole, because they are the site's state, and the projection happens when
+  one is served. Not measured against a live site (no row calls a real Jira).
+
 ## What is deliberately **not** in a fixture
 
 - **Signatures.** A webhook fixture carries the delivery headers Atlassian documents but no

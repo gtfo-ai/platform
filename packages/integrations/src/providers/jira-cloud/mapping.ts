@@ -172,7 +172,11 @@ export const jiraIssueSchema = z.object({
 export type JiraIssue = z.infer<typeof jiraIssueSchema>;
 
 /**
- * An issue the adapter asked for `updated` on, which is every issue it maps.
+ * An issue the adapter asked for `updated` on, which is every issue it **maps** (`readTicket`'s own
+ * issue, a match, a webhook's issue). A read that asks for a subset of `fields` without `updated` —
+ * the epic, the siblings, the transition's status, the labels, the assignee — parses with
+ * {@link jiraIssueSchema} instead, because Jira answers only the fields asked for (PROGRESS backlog
+ * 540; `test/fixtures/http/jira-cloud/SOURCES.md`).
  *
  * `Ticket.updated_at` and `TicketMatch.updated_at` are required by the port and drive the polling
  * cursor; a fallback (the epoch, "now") would turn a projection mistake into a ticket that looks
@@ -183,12 +187,18 @@ export const jiraIssueWithUpdatedSchema = jiraIssueSchema.extend({
 });
 export type JiraIssueWithUpdated = z.infer<typeof jiraIssueWithUpdatedSchema>;
 
-/** `GET /rest/api/3/search/jql` — token paging, `isLast` on the final page. */
-export const jiraSearchResultSchema = z.object({
-  issues: z.array(jiraIssueWithUpdatedSchema).default([]),
-  nextPageToken: z.string().nullish(),
-  isLast: z.boolean().nullish(),
-});
+const searchResultOf = <TIssue extends z.ZodType>(issue: TIssue) =>
+  z.object({
+    issues: z.array(issue).default([]),
+    nextPageToken: z.string().nullish(),
+    isLast: z.boolean().nullish(),
+  });
+
+/** `GET /rest/api/3/search/jql` — token paging, `isLast` on the final page; `fields` with `updated`. */
+export const jiraSearchResultSchema = searchResultOf(jiraIssueWithUpdatedSchema);
+
+/** The same page for a search whose `fields` do not include `updated` (backlog 540). */
+export const jiraSubsetSearchResultSchema = searchResultOf(jiraIssueSchema);
 
 // ── Statuses (`getAllStatuses`, research/15 J1) ──────────────────────────────
 

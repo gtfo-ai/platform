@@ -1299,3 +1299,114 @@ describe('jira-cloud — reaching the provider', () => {
     });
   });
 });
+
+/**
+ * PROGRESS backlog 540: Jira answers only the `fields` a request names (the swagger's `fields`
+ * parameter, `SOURCES.md`), and the replay does too since its divergence 15. Before it the replay
+ * answered the whole stored issue, so a read that asked for `status` and parsed a schema requiring
+ * `updated` passed here and failed `invalid_response` against every real site — the epic read,
+ * `transition` and both `setLabels` reads, from WP-08 on.
+ *
+ * Each caller is driven through the port, and each asserts the `fields` it sent, so the replay's
+ * projection is what the parse met. The test at the end checks that the five port calls driven
+ * here each named their `fields`; a **new** read is held by the code, not by this test —
+ * `fetchIssue` has no default schema and its `fields` argument is required.
+ */
+describe('jira-cloud — every issue read parses what its `fields` asked for (backlog 540)', () => {
+  let binding: JiraBinding;
+
+  beforeEach(() => {
+    binding = createJiraBinding();
+  });
+
+  const issueReads = (replay: JiraReplay, key: string) =>
+    replay.requests.filter(
+      (request) => request.method === 'GET' && request.path === `issue/${key}`,
+    );
+
+  describe('the replay answers only the fields asked for', () => {
+    const fetchIssue = async (replay: JiraReplay, query: string) => {
+      const response = await replay.fetch(
+        `https://acme-example.atlassian.net/rest/api/3/issue/ACME-1${query}`,
+      );
+      return (await response.json()) as { id?: string; key?: string; fields?: object };
+    };
+
+    it('answers a named subset with the envelope and those fields alone', async () => {
+      const issue = await fetchIssue(createJiraReplay(), '?fields=status');
+      expect(Object.keys(issue).sort()).toEqual(['fields', 'id', 'key', 'self']);
+      expect(Object.keys(issue.fields ?? {})).toEqual(['status']);
+    });
+
+    it('reads *all, *navigable, an exclusion and a repeated parameter as documented', async () => {
+      const replay = createJiraReplay();
+      const all = Object.keys((await fetchIssue(replay, '')).fields ?? {});
+      expect(all).toContain('updated');
+      expect(Object.keys((await fetchIssue(replay, '?fields=*all')).fields ?? {})).toEqual(all);
+      expect(Object.keys((await fetchIssue(replay, '?fields=-description')).fields ?? {})).toEqual(
+        all.filter((name) => name !== 'description'),
+      );
+      expect(
+        Object.keys((await fetchIssue(replay, '?fields=*navigable,-updated')).fields ?? {}),
+      ).toEqual(all.filter((name) => name !== 'updated'));
+      expect(
+        Object.keys((await fetchIssue(replay, '?fields=labels&fields=status')).fields ?? {}),
+      ).toEqual(['status', 'labels']);
+    });
+
+    it('answers a search with no fields with no fields member — the documented default is id', async () => {
+      const response = await createJiraReplay().fetch(
+        'https://acme-example.atlassian.net/rest/api/3/search/jql?jql=labels+%3D+%22agentic%22',
+      );
+      const page = (await response.json()) as { issues: Record<string, unknown>[] };
+      expect(page.issues.length).toBeGreaterThan(0);
+      expect(page.issues.every((issue) => !('fields' in issue))).toBe(true);
+    });
+  });
+
+  it('reads the epic and its siblings with summary,description and summary,status', async () => {
+    const ticket = await binding.port.readTicket(JIRA_TICKET);
+    expect(ticket.epic).toMatchObject({ key: 'ACME-100', title: 'Billing' });
+    expect(ticket.epic?.description).toContain('Everything invoicing');
+    expect(issueReads(binding.replay, 'ACME-100').map((request) => request.query.fields)).toEqual([
+      'summary,description',
+    ]);
+    const siblings = binding.replay.requests.find((request) => request.path === 'search/jql');
+    expect(siblings?.query.fields).toBe('summary,status');
+    expect(ticket.siblings.map((sibling) => sibling.key)).toEqual(['ACME-2']);
+  });
+
+  it('resolves a transition from a status-only read, and moves the ticket', async () => {
+    const result = await binding.port.transition(JIRA_TICKET, 'In Review');
+    expect(result).toMatchObject({ changed: true, to: 'In Review' });
+    expect(issueReads(binding.replay, 'ACME-1').map((request) => request.query.fields)).toEqual([
+      'status',
+    ]);
+  });
+
+  it('reads the labels and reads them back with a labels-only read', async () => {
+    const labels = await binding.port.setLabels(JIRA_TICKET, ['triaged'], ['agentic']);
+    expect(labels).toEqual(['triaged']);
+    expect(issueReads(binding.replay, 'ACME-1').map((request) => request.query.fields)).toEqual([
+      'labels',
+      'labels',
+    ]);
+    expect(binding.audit.entriesFor('read_labels').map((entry) => entry.status)).toEqual(['ok']);
+    expect(binding.audit.entriesFor('set_labels').map((entry) => entry.status)).toEqual(['ok']);
+  });
+
+  it('names its fields on every issue read and every search it makes', async () => {
+    await binding.port.readTicket(JIRA_TICKET);
+    await binding.port.transition(JIRA_TICKET, 'In Review');
+    await binding.port.setLabels(JIRA_TICKET, ['triaged'], []);
+    await binding.port.matchTickets({ kind: 'label', label: JIRA_PICKUP_LABEL });
+    await binding.port.unassign(JIRA_TICKET);
+    const reads = binding.replay.requests.filter(
+      (request) =>
+        request.method === 'GET' &&
+        (request.path === 'search/jql' || /^issue\/[^/]+$/.test(request.path)),
+    );
+    expect(reads.length).toBeGreaterThanOrEqual(7);
+    expect(reads.filter((request) => (request.query.fields ?? '') === '')).toEqual([]);
+  });
+});
