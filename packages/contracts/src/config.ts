@@ -978,7 +978,9 @@ const lifecycleStatusNameSchema = nonEmptyStringSchema
  * **It is not a key of `.agentic/config.yml`.** It is a block of the task-management **binding**'s
  * configuration overlay, beside `pickup_status` (which *is* the `pick_up_from` slot) and
  * `pickup_label`, and every task-management provider's binding schema is to embed this one
- * definition (Jira's at WP-172; no binding schema embeds it yet).
+ * definition. Until WP-172 no binding schema embedded it (the docblock said *"Jira's at WP-172"*);
+ * since WP-172 `jiraCloudConfigSchema` does, as its `lifecycle` key, and refuses a slot that names
+ * its `pickup_status` — Jira Cloud being the only task-management provider this build ships.
  * It lives in this module because it is configuration the operator writes, and in one place
  * because two copies of a slot list drift.
  *
@@ -990,7 +992,7 @@ const lifecycleStatusNameSchema = nonEmptyStringSchema
  *    name once — all compared by {@link lifecycleStatusKey}, because the tracker compares that way
  *    and two slots that differ only in case would name one status;
  *  - **not** distinctness from `pickup_status`, which is a sibling key of the binding: the binding
- *    schema that embeds this block checks it (the server's check, WP-181);
+ *    schema that embeds this block checks it (Jira's since WP-172; the server's check, WP-181);
  *  - **not** membership in the tracker's statuses, which a schema cannot know: that is the server's
  *    `422 lifecycle_status_unknown` / `503 lifecycle_statuses_unavailable` at save (WP-181).
  *
@@ -1021,7 +1023,7 @@ export const ticketLifecycleSchema = z
         ctx.addIssue({
           code: 'custom',
           path: [slot],
-          message: `the ${slot} slot names "${name}", which the ${holder} slot already names; each slot is a different status`,
+          message: `the ${slot} slot names the status the ${holder} slot already names; each slot is a different status`,
         });
         continue;
       }
@@ -1035,14 +1037,14 @@ export const ticketLifecycleSchema = z
         ctx.addIssue({
           code: 'custom',
           path: ['returned', index],
-          message: `returned names "${name}", which the ${holder} slot names; a returned status is never another slot's`,
+          message: `a returned entry names the status the ${holder} slot names; a returned status is never another slot's`,
         });
       }
       if (returned.has(key)) {
         ctx.addIssue({
           code: 'custom',
           path: ['returned', index],
-          message: `returned names "${name}" twice`,
+          message: `returned names one status twice`,
         });
       }
       returned.add(key);

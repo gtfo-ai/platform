@@ -26,9 +26,13 @@ second copy: the platform will not answer "not there" about a thread it did not 
 
 ## 1. Create an API token
 
-1. Sign in as the account the platform should act as. A dedicated account (`agentic-bot@your-domain`)
-   is worth the licence: every comment and transition is attributed to it, and revoking it revokes
-   everything.
+1. Sign in as the account the platform should act as. Use **one dedicated account per platform
+   installation** (`agentic-bot@your-domain`), never a person's own and never one shared by two
+   installations. It is worth the licence: every comment, transition and assignment is attributed to
+   it, and revoking it revokes everything. It also matters to the claim: the platform claims a ticket
+   by assigning it to *this* account, so on a person's own account a ticket assigned to that person
+   reads as already claimed by the platform, and two installations sharing one account each see the
+   other's claim as their own (PROGRESS backlog 538, `docs/OPEN-QUESTIONS.md` Q118).
 2. Go to **Atlassian account → Security → API tokens → Create API token**.
 3. Copy the token. Atlassian shows it once.
 
@@ -41,14 +45,20 @@ In the project's **Project settings → People / Permissions**, the account need
 
 | Permission | Used by |
 |---|---|
-| Browse projects | reading tickets, and searching them — the poll (step 5) and the history bootstrap |
+| Browse projects | reading tickets, and searching them — the poll (step 5) and the history bootstrap — and reading the project's statuses (step 6) |
+| Assign issues | the claim: assigning a ticket to this account when work starts, and unassigning it only if this account still holds it |
 | Add comments | the workpad and questions |
 | Edit issues | labels |
-| Transition issues | status changes |
+| Transition issues | status changes; without it Jira lists no transitions at all |
 | Link issues | linking the merge request |
 | Create issues | the scope-creep valve and epic splitting (only if you enable them) |
 
-Nothing here needs Jira administration rights. If you would rather not grant *Create issues*, leave
+The first four — *Browse Projects*, *Assign Issues*, *Transition Issues* and *Add Comments* — are
+what the ticket lifecycle (step 6) needs. A missing *Assign Issues* is reported by name the first time
+the platform claims a ticket (`forbidden`, naming the permission), not as a bare `403`.
+
+Nothing here needs Jira administration rights: the platform reads a project's statuses through the
+endpoint any account with *Browse Projects* may call, never the administrators' status search. If you would rather not grant *Create issues*, leave
 it out: the platform reports the missing capability instead of failing halfway through a task.
 
 ## 3. Configure the binding
@@ -169,6 +179,14 @@ project's own workflow at the moment of the move, and fails loudly if the workfl
 that leads there — a silently ignored transition looks exactly like a working mapping until someone
 opens the board. The defaults are in product/19 §6; anything your workflow does not have, leave
 unmapped and the platform will leave the ticket alone.
+
+The **ticket lifecycle** (BD-031) is the binding's `lifecycle` block: `in_progress`, `in_review`,
+`approved`, `qa`, `returned` (a list) and `done`, each naming one of *your* statuses, plus `claim` and
+`take_assigned_tickets`. `pickup_status` stays where it is and is the lifecycle's *pick up from* slot,
+so no other slot may name the same status (compared ignoring case); the binding is refused if one
+does. The platform reads the statuses it may name from Jira itself — the union of every issue type's
+statuses in each project of `project_keys` — so **a binding that maps a lifecycle needs
+`project_keys`**: with none, there is no project to read statuses from and the read is refused.
 
 ## 7. Test the connection
 

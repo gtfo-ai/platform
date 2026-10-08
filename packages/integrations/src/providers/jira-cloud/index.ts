@@ -64,10 +64,22 @@
  * so the check passes, but the text came from an agent that reads attacker-controlled ticket
  * descriptions (BD-022) — "the bot wrote it" is not "the platform wrote it". `adf.ts` therefore
  * defuses any marker in caller-supplied markdown before appending the platform's own.
+ *
+ * ## The ticket lifecycle (WP-172)
+ *
+ * The six lifecycle members use research/15 J1 (`project/{key}/statuses`, per key in
+ * `project_keys`), J3, J4 (`PUT issue/{key}/assignee`), J5 (`orderBy=-created`) and J6 — never J2,
+ * which needs project administration. The claim and the release are split like `transition`: a
+ * `read_assignee` read and then, only when something must change, an `assign_to_self` or `unassign`
+ * mutation, so shadow mode performs the read and stops at the write, and `unassign` never writes a
+ * ticket somebody else holds. Each member's own docblock carries its rule.
  */
 import {
+  type AssignResult,
   bindingSecretRedactor,
+  type CommentPage,
   type CommentRef,
+  commentPageSchema,
   composeSecretRedactors,
   type ExternalIdentity,
   egressHostOf,
@@ -76,7 +88,11 @@ import {
   IntegrationError,
   type IntegrationRef,
   IntegrationUnsupportedError,
-  type LifecycleMember,
+  type LifecycleStatus,
+  type ListCommentsOptions,
+  lifecycleStatusSchema,
+  listCommentsOptionsSchema,
+  normaliseStatusCategory,
   parseProviderData,
   type RateLimitPolicy,
   type SecretRedactor,
@@ -89,10 +105,13 @@ import {
   type TicketPollPlan,
   type TicketRefInput,
   type TicketScopeVerdict,
+  type TicketTransition,
   type TransitionResult,
   ticketSchema,
+  ticketTransitionSchema,
+  type UnassignResult,
 } from '@platform/application';
-import type { Id, JsonObject, TaskMode } from '@platform/contracts';
+import { type Id, type JsonObject, lifecycleStatusKey, type TaskMode } from '@platform/contracts';
 import type { Clock } from '@platform/domain';
 import * as z from 'zod';
 import { adfMarkerId, adfToMarkdown, markdownToAdfDocument } from './adf.js';
@@ -108,17 +127,22 @@ import {
   identityOfUser,
   issueUrl,
   type JiraComment,
+  type JiraStatus,
   type JiraTransition,
+  type JiraUser,
   jiraCommentPageSchema,
   jiraCommentSchema,
   jiraCreatedIssueSchema,
+  jiraIssueSchema,
   jiraIssueWithUpdatedSchema,
+  jiraProjectStatusesSchema,
   jiraRemoteLinkSchema,
   jiraSearchResultSchema,
   jiraTransitionsSchema,
   jiraUserSchema,
   PROVIDER_ID,
   toTicket,
+  toTicketComment,
   toTicketMatch,
 } from './mapping.js';
 import { createJiraInboundNormaliser, type JiraPickupRule, projectKeyOf } from './webhook.js';
@@ -404,16 +428,11 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     createTicket: true,
     // Nothing downloads an attachment or extracts its text: `attachments_text` is always empty.
     attachments: false,
-    // The lifecycle members are WP-172's (research/15 J1–J6); until then each refuses by name.
-    lifecycleStatuses: false,
-    transitionsRead: false,
-    assign: false,
-    commentsRead: false,
-  };
-
-  /** WP-172 implements these; until then each throws `unsupported_capability` naming itself (BD-017). */
-  const unsupported = (member: LifecycleMember) => async (): Promise<never> => {
-    throw new IntegrationUnsupportedError(PROVIDER_ID, member);
+    // The ticket lifecycle (WP-172, research/15 J1, J3, J4, J5, J6 — never J2): all six members.
+    lifecycleStatuses: true,
+    transitionsRead: true,
+    assign: true,
+    commentsRead: true,
   };
 
   const context = (): JiraActionContext => options.actionContext();
@@ -530,6 +549,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
 
   /** The account this binding authenticates as. One request per adapter, then remembered. */
   let selfAccountId: string | null = null;
+  let selfUser: JiraUser | null = null;
   const fetchSelf = async (action: string) => {
     const myself = parse(
       jiraUserSchema,
@@ -537,6 +557,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
       action,
     );
     selfAccountId = myself.accountId ?? null;
+    selfUser = myself;
     return myself;
   };
   /**
@@ -1233,6 +1254,273 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     }
   };
 
+  // ── The ticket lifecycle (WP-172, research/15 J1, J3, J4, J5, J6 — never J2) ─────────────────
+
+  /**
+   * The binding's own account as an identity — remembered after the first `GET /myself`, like
+   * `requireSelfAccountId`, and a loud `invalid_response` when Jira names no `accountId` (rule 16):
+   * the claim compares against it, and comparing against nothing would read every ticket as free.
+   */
+  const requireSelf = async (action: string): Promise<ExternalIdentity> => {
+    const user = selfUser ?? (await fetchSelf(action));
+    const identity = identityOfUser(user);
+    if (identity === null) {
+      throw new IntegrationError(
+        'invalid_response',
+        PROVIDER_ID,
+        'GET /myself carried no accountId, so this binding cannot name the account it acts as',
+        { action },
+      );
+    }
+    return identity;
+  };
+
+  /**
+   * `listStatuses` — research/15 **J1**, `GET project/{key}/statuses`, once per key in
+   * `project_keys`, unioned over issue types (and projects) by name (WP-172 ruling (a)). **Never J2**
+   * (`statuses/search`), which needs project administration.
+   *
+   * J1 is per project, so a binding that declares no `project_keys` has no project to ask, and the
+   * answer is a refusal rather than an empty list (the port: an empty answer is a refusal wearing a
+   * result's clothes). A name seen with two categories answers the first; the second is recorded on
+   * the audit row (`category_conflicts`), which is this adapter's structured log — it holds no
+   * logger, and the row is the record an operator reads beside the call.
+   */
+  const listStatuses = async (): Promise<readonly LifecycleStatus[]> => {
+    const action = 'list_statuses';
+    const union = await read(
+      action,
+      jsonPayload({ project_keys: [...config.project_keys] }),
+      async () => {
+        if (config.project_keys.length === 0) {
+          throw new IntegrationError(
+            'invalid_request',
+            PROVIDER_ID,
+            'listStatuses reads a project’s statuses (GET project/{key}/statuses), and this binding declares no project_keys',
+            { action },
+          );
+        }
+        const issueTypes: z.infer<typeof jiraProjectStatusesSchema> = [];
+        for (const projectKey of config.project_keys) {
+          const answered = parse(
+            jiraProjectStatusesSchema,
+            await client.send({
+              method: 'GET',
+              path: `project/${encodeURIComponent(projectKey)}/statuses`,
+              action,
+            }),
+            action,
+          );
+          issueTypes.push(...answered);
+        }
+        const result = unionJiraStatuses(issueTypes.map((issueType) => issueType.statuses));
+        if (result.statuses.length === 0) {
+          throw new IntegrationError(
+            'invalid_response',
+            PROVIDER_ID,
+            `GET project/{key}/statuses answered no status the platform can name for ${config.project_keys.join(', ')}`,
+            { action },
+          );
+        }
+        return result;
+      },
+      (result) => ({
+        status_count: result.statuses.length,
+        skipped: result.skipped,
+        category_conflicts: result.conflicts
+          .slice(0, MAX_RECORDED_CATEGORY_CONFLICTS)
+          .map((conflict) => ({ ...conflict })),
+      }),
+    );
+    return union.statuses;
+  };
+
+  /**
+   * `listTransitions` — research/15 **J3**. The moves the ticket can take **now**: Jira lists only
+   * available ones by default (`includeUnavailableTransitions` is false), and one that says
+   * `isAvailable: false` is dropped as `resolveTransition` drops it. An entry the port's shape cannot
+   * carry (no target status name, a name past the bounds) is skipped and counted on the audit row,
+   * never invented around.
+   */
+  const listTransitions = async (
+    ticketRef: TicketRefInput,
+  ): Promise<readonly TicketTransition[]> => {
+    const key = ticketRef.key;
+    const action = 'list_transitions';
+    const listed = await read(
+      action,
+      jsonPayload({ ticket_key: key }),
+      async () =>
+        toTicketTransitions(
+          parse(
+            jiraTransitionsSchema,
+            await client.send({
+              method: 'GET',
+              path: `issue/${encodeURIComponent(key)}/transitions`,
+              action,
+            }),
+            action,
+          ).transitions,
+        ),
+      (result) => ({ transition_count: result.transitions.length, skipped: result.skipped }),
+    );
+    return listed.transitions;
+  };
+
+  /** `selfIdentity` — research/15 **J6**, `GET /myself`, read fresh through the executor. */
+  const selfIdentity = async (): Promise<ExternalIdentity> => {
+    const action = 'self_identity';
+    return read(action, jsonPayload({}), async () => {
+      selfUser = null;
+      return requireSelf(action);
+    });
+  };
+
+  /**
+   * Who holds the ticket, beside the binding's own account — the read half of the claim and of the
+   * release (WP-172 ruling (b)), so shadow mode stops before the write and a ticket somebody else
+   * holds is never written to by `unassign`. `fields=assignee` only, parsed without the `updated`
+   * the mapped reads require (Jira returns only the fields asked for).
+   */
+  const readAssignee = async (
+    key: string,
+  ): Promise<{ readonly assignee: string | null; readonly self: ExternalIdentity }> => {
+    const action = 'read_assignee';
+    return read(
+      action,
+      jsonPayload({ ticket_key: key }),
+      async () => {
+        const [issue, self] = await Promise.all([
+          client
+            .send({
+              method: 'GET',
+              path: `issue/${encodeURIComponent(key)}`,
+              query: { fields: 'assignee' },
+              action,
+            })
+            .then((body) => parse(jiraIssueSchema, body, action)),
+          requireSelf(action),
+        ]);
+        const accountId = issue.fields.assignee?.accountId;
+        return { assignee: accountId === undefined ? null : accountId, self };
+      },
+      (result) => ({
+        assigned: result.assignee !== null,
+        held_by_self: result.assignee === result.self.external_id,
+      }),
+    );
+  };
+
+  /** The one write both assign members make — research/15 **J4**, with ruling (d)'s 403. */
+  const putAssignee = async (key: string, accountId: string | null, action: string) => {
+    try {
+      await client.send({
+        method: 'PUT',
+        path: `issue/${encodeURIComponent(key)}/assignee`,
+        body: { accountId },
+        action,
+      });
+    } catch (error) {
+      throw assignRefusal(error, key, action);
+    }
+  };
+
+  /**
+   * `assignToSelf` — the claim's write (TD-029 decision 5): a read, then `PUT …/assignee` with the
+   * binding's own `accountId` **whoever held it** (the claim's re-read decides who won). Already
+   * held by this account is `{changed: false}` and nothing is written; a shadow task performs the
+   * read and records the write as `would_have`.
+   */
+  const assignToSelf = async (ticketRef: TicketRefInput): Promise<AssignResult> => {
+    const key = ticketRef.key;
+    const held = await readAssignee(key);
+    if (held.assignee === held.self.external_id) {
+      return { changed: false, assignee: held.self };
+    }
+    return mutate<AssignResult>(
+      'assign_to_self',
+      jsonPayload({ ticket_key: key, was_assigned: held.assignee !== null }),
+      async () => {
+        await putAssignee(key, held.self.external_id, 'assign_to_self');
+        return { changed: true, assignee: held.self };
+      },
+      () => ({ changed: false, assignee: held.self }),
+      (result) => ({ changed: result.changed }),
+    );
+  };
+
+  /**
+   * `unassign` — the release (WP-172 ruling (b)): the assignee is read first, and `{"accountId":
+   * null}` (J4's *"set to unassigned"*) is sent **only** when the binding's own account holds the
+   * ticket. Somebody else's assignment, or none, is `{changed: false}` with no `PUT`.
+   *
+   * The read and the write are two calls, and Jira has no conditional assign: a person who takes the
+   * ticket between them is unassigned by the `PUT`. The window is the gap between two requests of
+   * one release, and it is stated rather than closed (WP-172 review).
+   */
+  const unassign = async (ticketRef: TicketRefInput): Promise<UnassignResult> => {
+    const key = ticketRef.key;
+    const held = await readAssignee(key);
+    if (held.assignee !== held.self.external_id) {
+      return { changed: false };
+    }
+    return mutate<UnassignResult>(
+      'unassign',
+      jsonPayload({ ticket_key: key }),
+      async () => {
+        await putAssignee(key, null, 'unassign');
+        return { changed: true };
+      },
+      () => ({ changed: false }),
+      (result) => ({ changed: result.changed }),
+    );
+  };
+
+  /**
+   * `listComments` — research/15 **J5**: one page of `limit`, `orderBy=-created` (newest first), cut
+   * to `limit` whatever arrives, and only the comments **created strictly after** `since`.
+   *
+   * `total` (WP-172 ruling (c)): J5 documents `PageOfComments.total` as *"The number of items
+   * returned"*, which contradicts its name, so it is never read. The window's size is known only
+   * when the answered window is **shorter than requested** — the thread ran out, or a comment at or
+   * before `since` was reached inside the page — and is then that length; a full window is `null`,
+   * the port's "possibly more" (`ticket-snapshot.ts` has the same rule for `comment_total`).
+   */
+  const listComments = async (
+    ticketRef: TicketRefInput,
+    listOptions: ListCommentsOptions,
+  ): Promise<CommentPage> => {
+    const key = ticketRef.key;
+    const action = 'list_comments';
+    const asked = listCommentsOptionsSchema.safeParse(listOptions);
+    if (!asked.success) {
+      throw new IntegrationError(
+        'invalid_request',
+        PROVIDER_ID,
+        'listComments takes a limit of 1 to 100 and an ISO instant as since',
+        { action },
+      );
+    }
+    const { limit } = asked.data;
+    const since = asked.data.since ?? null;
+    return read(
+      action,
+      jsonPayload({ ticket_key: key, since, limit }),
+      async () => {
+        const page = await fetchCommentPage(key, action, { size: limit, orderBy: '-created' });
+        const comments = commentWindow(page.comments.slice(0, limit), since).map((comment) =>
+          toTicketComment(comment, { siteUrl, issueKey: key }),
+        );
+        return parse(
+          commentPageSchema,
+          { comments, total: comments.length < limit ? comments.length : null },
+          action,
+        );
+      },
+      (result) => ({ comment_count: result.comments.length, total: result.total }),
+    );
+  };
+
   const pickup: JiraPickupRule = pickupRuleOf(config);
 
   /**
@@ -1299,12 +1587,12 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     linkMergeRequest,
     createTicket,
     resolveIdentity,
-    listStatuses: unsupported('listStatuses'),
-    listTransitions: unsupported('listTransitions'),
-    selfIdentity: unsupported('selfIdentity'),
-    assignToSelf: unsupported('assignToSelf'),
-    unassign: unsupported('unassign'),
-    listComments: unsupported('listComments'),
+    listStatuses,
+    listTransitions,
+    selfIdentity,
+    assignToSelf,
+    unassign,
+    listComments,
     // One guard, not two (standing rule 9). Round 1 wrapped `verify` in `capabilities.webhooks &&`
     // while the verifier itself accepted anything signed with the empty key: deleting the wrapper
     // killed no test, because the wrapper was the only thing working. Both facts are derived from
@@ -1489,3 +1777,132 @@ const safeDetail = (secretRedactor: SecretRedactor, text: string): string => {
 };
 
 const adfDescription = (value: unknown): string => adfToMarkdown(value);
+
+// ── The ticket lifecycle's pure halves (WP-172), exported for their own tests ─────────────────
+
+/** How many category conflicts one `list_statuses` audit row names; the rest are counted. */
+export const MAX_RECORDED_CATEGORY_CONFLICTS = 20;
+
+/** A status name seen with two categories: the first answered, the second recorded. */
+export interface StatusCategoryConflict {
+  readonly name: string;
+  readonly kept: string | null;
+  readonly ignored: string | null;
+}
+
+/**
+ * The union of J1's per-issue-type status lists **by name** (WP-172 ruling (a)), compared as a
+ * lifecycle slot compares (`lifecycleStatusKey`: trimmed, case-insensitive), first spelling wins.
+ *
+ * A name seen again with a **different raw category key** keeps the first and reports the second as
+ * a conflict. A status the port's shape cannot carry — no id, no name, a name past
+ * `MAX_LIFECYCLE_STATUS_NAME_CHARS` (no slot could name it either), a category key past 255 — is
+ * skipped and counted, never cut or invented.
+ */
+export const unionJiraStatuses = (
+  groups: readonly (readonly JiraStatus[])[],
+): {
+  readonly statuses: LifecycleStatus[];
+  readonly conflicts: StatusCategoryConflict[];
+  readonly skipped: number;
+} => {
+  const byName = new Map<string, LifecycleStatus>();
+  const conflicts: StatusCategoryConflict[] = [];
+  let skipped = 0;
+  for (const status of groups.flat()) {
+    const candidate = lifecycleStatusSchema.safeParse({
+      id: status.id,
+      name: status.name,
+      ...normaliseStatusCategory(status.statusCategory?.key),
+    });
+    // `lifecycleStatusSchema` bounds the name at `MAX_LIFECYCLE_STATUS_NAME_CHARS`, a slot's own
+    // bound, so a status no slot could name is the one skipped here.
+    if (!candidate.success) {
+      skipped += 1;
+      continue;
+    }
+    const key = lifecycleStatusKey(candidate.data.name);
+    const seen = byName.get(key);
+    if (seen === undefined) {
+      byName.set(key, candidate.data);
+    } else if (seen.raw_category !== candidate.data.raw_category) {
+      conflicts.push({
+        name: seen.name,
+        kept: seen.raw_category,
+        ignored: candidate.data.raw_category,
+      });
+    }
+  }
+  return { statuses: [...byName.values()], conflicts, skipped };
+};
+
+/**
+ * J3's transitions in the port's shape: available ones only (an absent `isAvailable` reads as
+ * available, as `resolveTransition` reads it), each with its target status and that status's
+ * normalised category. An entry the shape cannot carry is skipped and counted.
+ */
+export const toTicketTransitions = (
+  transitions: readonly JiraTransition[],
+): { readonly transitions: TicketTransition[]; readonly skipped: number } => {
+  const mapped: TicketTransition[] = [];
+  let skipped = 0;
+  for (const transition of transitions) {
+    if (transition.isAvailable === false) {
+      continue;
+    }
+    const candidate = ticketTransitionSchema.safeParse({
+      id: transition.id,
+      name: transition.name,
+      to: {
+        name: transition.to?.name,
+        category: normaliseStatusCategory(transition.to?.statusCategory?.key).category,
+      },
+    });
+    if (candidate.success) {
+      mapped.push(candidate.data);
+    } else {
+      skipped += 1;
+    }
+  }
+  return { transitions: mapped, skipped };
+};
+
+/**
+ * The comments of a newest-first page created **strictly after** `since` (all of them when `since`
+ * is `null`), re-sorted newest first by `created` so the port's order does not rest on the page's.
+ */
+export const commentWindow = (
+  comments: readonly JiraComment[],
+  since: string | null,
+): JiraComment[] => {
+  const horizon = since === null ? null : Date.parse(since);
+  return comments
+    .filter((comment) => horizon === null || Date.parse(comment.created) > horizon)
+    .map((comment, index) => ({ comment, index }))
+    .sort(
+      (left, right) =>
+        Date.parse(right.comment.created) - Date.parse(left.comment.created) ||
+        left.index - right.index,
+    )
+    .map(({ comment }) => comment);
+};
+
+/**
+ * WP-172 ruling (d): a `403` on `PUT …/assignee` is `forbidden` **naming the permission** the
+ * account lacks — J4 requires *Browse Projects* and *Assign Issues* — with Jira's own detail after
+ * it. Thrown from inside the executor's `perform`, so the detail is scrubbed with every other.
+ */
+export const assignRefusal = (error: unknown, key: string, action: string): unknown => {
+  if (!(error instanceof IntegrationError) || error.code !== 'forbidden') {
+    return error;
+  }
+  const detail = error.message.startsWith(`${PROVIDER_ID}: `)
+    ? error.message.slice(PROVIDER_ID.length + 2)
+    : error.message;
+  return new IntegrationError(
+    'forbidden',
+    PROVIDER_ID,
+    `Jira refused to change the assignee of ${key}: the binding's account needs the Assign Issues permission (and Browse Projects) in that project — ${detail}`,
+    { action },
+  );
+};

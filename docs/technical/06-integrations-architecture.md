@@ -92,9 +92,30 @@ Markdown → provider format converter (ADF for Jira Cloud, wiki markup for DC) 
 > the keys **exactly** — `DONE` is `unknown`. `listComments` keeps comments **created strictly after**
 > `since`, answers them **newest first** (`orderBy=-created`), takes `limit` 1–100 (Jira's default
 > page), and `total` is the window's count, never below `comments.length`, or `null`. `assignToSelf`
-> takes the ticket whoever holds it; the claim's re-read decides who won. Until WP-172, the **Jira
-> adapter declares the four flags `false` and refuses all six by name**, so the shared suite runs its
-> refusal branch against Jira as well as against the stub.
+> takes the ticket whoever holds it; the claim's re-read decides who won. At WP-171 the **Jira
+> adapter declared the four flags `false` and refused all six by name**, so the shared suite ran its
+> refusal branch against Jira as well as against the stub. Since WP-172 that branch runs against the
+> stub alone.
+>
+> **As built at WP-172.** Jira Cloud declares the four flags `true` and implements the six members
+> (`packages/integrations/src/providers/jira-cloud/index.ts`). `listStatuses` asks J1 once per key in
+> the binding's `project_keys` and unions the answers by name (`lifecycleStatusKey`, first spelling
+> wins); a name seen with two category keys keeps the first and names the second on the
+> `list_statuses` audit row (`category_conflicts`), because the adapter holds no logger. A binding with
+> **no** `project_keys` has no project to ask J1 about, so `listStatuses` refuses it
+> (`invalid_request`) rather than answering an empty list; a project the account cannot see fails
+> the whole read (`not_found`). `assignToSelf` and `unassign` are a `read_assignee` read (`fields=assignee`)
+> and then, only when a write is needed, an `assign_to_self` / `unassign` mutation — so shadow mode
+> stops before the `PUT`, and `unassign` sends `{"accountId": null}` only when the binding's own
+> account holds the ticket. A `403` on the `PUT` is `forbidden` naming *Assign Issues*.
+> `listComments` asks J5 for `maxResults=limit&orderBy=-created`, cuts the page to `limit`, keeps the
+> comments created strictly after `since`, and never reads J5's `total`: the window's length is the
+> `total` when the window is shorter than `limit` (the thread ran out, or the horizon fell inside the
+> page), otherwise `null`. A status or transition the port's shape cannot carry (no id or name, a name
+> past `MAX_LIFECYCLE_STATUS_NAME_CHARS`) is skipped and counted on the audit row. The binding schema
+> embeds `ticketLifecycleSchema` as `lifecycle` and refuses a slot that names `pickup_status`; the
+> catalogue's credential-free schema rebuilds the object rather than `omit`ting it, because zod 4's
+> `omit` refuses an object schema with a refinement.
 >
 > **The binding's `lifecycle` block** (TD-029 decision 1) is part of every task-management provider's
 > binding schema. It is defined once in `packages/contracts`, and `pickup_status` is its `pick_up_from`.

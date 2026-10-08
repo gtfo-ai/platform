@@ -74,6 +74,9 @@ runTaskManagementContract({
   name: 'jira-cloud (recorded fixtures)',
   create: async (): Promise<TaskManagementContractContext> => {
     const binding = createJiraBinding();
+    // The lifecycle half's ticket starts unassigned (`TaskManagementLifecycleContext`); the issue
+    // fixture is assigned to the directory's developer, so the double releases it first.
+    binding.replay.assign(JIRA_TICKET.key, null);
     let deliveries = 0;
     const nextDeliveryId = (): string => {
       deliveries += 1;
@@ -147,6 +150,23 @@ runTaskManagementContract({
         port: createJiraBinding({ config: { poll_enabled: true, poll_interval_seconds: 90 } }).port,
         intervalSeconds: 90,
       },
+      /**
+       * WP-172: the lifecycle members against the documented J1 document
+       * (`project-statuses-acme.json`, invented neutral names) and the double's assignee.
+       */
+      lifecycle: {
+        expectedCategories: {
+          'Ready for agent': 'todo',
+          Doing: 'in_progress',
+          'Sent back': 'todo',
+          Done: 'done',
+          'Waiting for input': 'unknown',
+        },
+        assignElsewhere: async () => {
+          binding.replay.assign(JIRA_TICKET.key, DEV_ACCOUNT_ID);
+          return DEV_ACCOUNT_ID;
+        },
+      },
       projectId: JIRA_PROJECT_ID,
       integrationId: JIRA_INTEGRATION_ID,
       cleanup: async () => {},
@@ -200,6 +220,13 @@ describe('jira-cloud — reaching the provider', () => {
             JIRA_TICKET,
             'https://git.example.test/acme/api/-/merge_requests/7',
           ),
+      },
+      {
+        // WP-172 criterion 5: the claim. ACME-1 is the developer's in the fixture, so the binding
+        // takes it — one `PUT …/assignee` in normal mode, none in shadow.
+        name: 'assignToSelf',
+        action: 'assign_to_self',
+        run: (bound) => bound.port.assignToSelf(JIRA_TICKET),
       },
       {
         name: 'createTicket',
@@ -1150,6 +1177,91 @@ describe('jira-cloud — reaching the provider', () => {
       await expect(wrong.port.readTicket(JIRA_TICKET)).rejects.toMatchObject({
         code: 'invalid_response',
       });
+    });
+  });
+
+  describe('the ticket lifecycle against the documented fixtures (WP-172)', () => {
+    const SELF_ACCOUNT_ID = '557058:00000000-0000-4000-8000-0000000b0701';
+
+    it('reads J1 once per project, unions the issue types by name and never asks J2', async () => {
+      const statuses = await binding.port.listStatuses();
+      expect(binding.replay.requests.map((request) => request.path)).toEqual([
+        'project/ACME/statuses',
+      ]);
+      // `project-statuses-acme.json`: Task has eight statuses, Bug four, three of them shared.
+      expect(statuses).toHaveLength(9);
+      expect(statuses.filter((status) => status.name === 'Doing')).toEqual([
+        { id: '10010', name: 'Doing', category: 'in_progress', raw_category: 'indeterminate' },
+      ]);
+      expect(statuses.find((status) => status.name === 'Waiting for input')).toEqual({
+        id: '10007',
+        name: 'Waiting for input',
+        category: 'unknown',
+        raw_category: null,
+      });
+      expect(
+        binding.replay.requests.some((request) => request.path.startsWith('statuses')),
+        'never research/15 J2, which needs project administration',
+      ).toBe(false);
+    });
+
+    it('fails loudly for a project the account cannot see, rather than answering a partial union', async () => {
+      const other = createJiraBinding({ config: { project_keys: ['ACME', 'HIDDEN'] } });
+      await expect(other.port.listStatuses()).rejects.toMatchObject({ code: 'not_found' });
+      expect(other.audit.entriesFor('list_statuses').map((entry) => entry.status)).toEqual([
+        'failed',
+      ]);
+    });
+
+    it('reads the documented category keys off J3’s transitions (transitions-category-keys.json)', async () => {
+      binding.replay.script('transitions-category-keys.json');
+      expect(await binding.port.listTransitions(JIRA_TICKET)).toEqual([
+        { id: '51', name: 'Pick it up', to: { name: 'Doing', category: 'in_progress' } },
+        { id: '61', name: 'Hand to testing', to: { name: 'Testing', category: 'unknown' } },
+      ]);
+      expect(binding.replay.requests.map((request) => request.path)).toEqual([
+        'issue/ACME-1/transitions',
+      ]);
+    });
+
+    it('answers the binding’s own account from J6', async () => {
+      const self = await binding.port.selfIdentity();
+      expect(self.external_id).toBe(SELF_ACCOUNT_ID);
+      expect(binding.audit.entriesFor('self_identity').map((entry) => entry.status)).toEqual([
+        'ok',
+      ]);
+    });
+
+    it('unassigns its own claim with accountId null, and only its own', async () => {
+      binding.replay.assign(JIRA_TICKET.key, SELF_ACCOUNT_ID);
+      expect(await binding.port.unassign(JIRA_TICKET)).toEqual({ changed: true });
+      expect(
+        binding.replay.requests
+          .filter((request) => request.method === 'PUT')
+          .map((request) => [request.path, request.body]),
+      ).toEqual([['issue/ACME-1/assignee', { accountId: null }]]);
+      expect(binding.replay.peekIssue('ACME-1')?.fields).toMatchObject({ assignee: null });
+    });
+
+    it('records a shadow release as would_have and sends no PUT', async () => {
+      binding.replay.assign(JIRA_TICKET.key, SELF_ACCOUNT_ID);
+      binding.mode = 'shadow';
+      expect(await binding.port.unassign(JIRA_TICKET)).toEqual({ changed: false });
+      expect(binding.replay.requests.filter((request) => request.method === 'PUT')).toEqual([]);
+      expect(binding.audit.entriesFor('unassign').map((entry) => entry.status)).toEqual([
+        'would_have',
+      ]);
+    });
+
+    it('asks J5 for the newest page of the limit and never trusts its total', async () => {
+      // The seeded thread holds one comment, and the double's `total` is the thread's size; the
+      // page came back shorter than asked, so the window is whole and its length is the answer.
+      const page = await binding.port.listComments(JIRA_TICKET, { limit: 10 });
+      expect(page.total).toBe(page.comments.length);
+      const request = binding.replay.requests.find(
+        (entry) => entry.path === 'issue/ACME-1/comment',
+      );
+      expect(request?.query).toMatchObject({ orderBy: '-created', maxResults: '10' });
     });
   });
 

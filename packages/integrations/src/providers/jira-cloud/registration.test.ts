@@ -102,11 +102,11 @@ describe('createJiraCloudRegistration', () => {
       adf: true,
       createTicket: true,
       attachments: false,
-      // WP-171: the lifecycle members refuse by name until WP-172 implements them.
-      lifecycleStatuses: false,
-      transitionsRead: false,
-      assign: false,
-      commentsRead: false,
+      // WP-172: all six lifecycle members (research/15 J1, J3, J4, J5, J6).
+      lifecycleStatuses: true,
+      transitionsRead: true,
+      assign: true,
+      commentsRead: true,
     });
   });
 

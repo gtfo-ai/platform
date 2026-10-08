@@ -1052,6 +1052,23 @@ const jiraScript = (): Script => ({
     body: { id: '10002', key: 'ACME-2', self: `${SITE}/rest/api/3/issue/10002` },
   },
   'GET /user/search': { body: [jiraUser()] },
+  // WP-172: research/15 J1 and J4 — provider text planted in every status the union reads.
+  'GET /project/ACME/statuses': {
+    body: [
+      {
+        id: '10004',
+        name: `Task ${JIRA_TOKEN}`,
+        statuses: [
+          {
+            id: '3',
+            name: `Doing ${JIRA_TOKEN}`,
+            statusCategory: { key: `indeterminate-${JIRA_TOKEN}` },
+          },
+        ],
+      },
+    ],
+  },
+  [`PUT /issue/${KEY}/assignee`]: { status: 204, body: {} },
 });
 
 const JIRA_SECRETS = {
@@ -1076,7 +1093,7 @@ const JIRA_SCENARIOS: Readonly<Record<string, string>> = {
   link_merge_request: 'linkMergeRequest',
   create_ticket: 'createTicket',
   resolve_identity: 'resolveIdentity',
-  // WP-171: refused by name until WP-172 implements them; the refusal is what they emit.
+  // WP-172: the six lifecycle members, called for real (WP-171 recorded their refusals here).
   list_statuses: 'listStatuses',
   list_transitions: 'listTransitions',
   self_identity: 'selfIdentity',
@@ -1153,22 +1170,14 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
       labels: [],
     });
     emitted.resolve_identity = await port.resolveIdentity({ email: 'dana@example.test' });
-    // WP-171: the six lifecycle members refuse by name until WP-172, so what each emits is its
-    // refusal, serialised as a log line would carry it. WP-172 replaces these with real calls.
-    const refusal = async (call: () => Promise<unknown>): Promise<string> => {
-      try {
-        await call();
-      } catch (error) {
-        return serialiseLikePino(error);
-      }
-      throw new Error('a lifecycle member answered where this build expects a refusal');
-    };
-    emitted.list_statuses = await refusal(() => port.listStatuses());
-    emitted.list_transitions = await refusal(() => port.listTransitions(ref));
-    emitted.self_identity = await refusal(() => port.selfIdentity());
-    emitted.assign_to_self = await refusal(() => port.assignToSelf(ref));
-    emitted.unassign = await refusal(() => port.unassign(ref));
-    emitted.list_comments = await refusal(() => port.listComments(ref, { limit: 10 }));
+    // WP-172: the six lifecycle members, for real. The binding's own account (`GET /myself`) holds
+    // the ticket, so `assignToSelf` answers from the read and `unassign` writes — both halves.
+    emitted.list_statuses = await port.listStatuses();
+    emitted.list_transitions = await port.listTransitions(ref);
+    emitted.self_identity = await port.selfIdentity();
+    emitted.assign_to_self = await port.assignToSelf(ref);
+    emitted.unassign = await port.unassign(ref);
+    emitted.list_comments = await port.listComments(ref, { limit: 10 });
     emitted.link_merge_request = await port.linkMergeRequest(
       ref,
       // The MR url is the platform's own text, and it is published to the ticket as a remote link.

@@ -18,11 +18,11 @@ BD-031 states what the product does. This record decides how, against code read 
   `PUT /api/projects/:id/bindings` (`apps/server/src/routes/onboarding.ts:802`). No screen edits it or
   `status_mapping`.
 - `transition` takes a **target status name**. The Jira adapter resolves the transition by
-  `transition.to.name` (`jira-cloud/index.ts:837-920`, `:1444-1453`). So backlog 535's worry, that it
+  `transition.to.name` (`jira-cloud/index.ts:869-952`, `:1745-1754`; citations moved at WP-172, lines on its tree; first written as `:837-920`, `:1444-1453`). So backlog 535's worry, that it
   might match a transition label, is already answered in the code.
 - The port has no read of statuses, transitions or comments, and no assign
   (`packages/application/src/ports/integrations/task-management.ts:297-392`). The binding's own account
-  is fetched with `GET myself` inside the adapter only (`jira-cloud/index.ts:520-529`).
+  is fetched with `GET myself` inside the adapter only (`jira-cloud/index.ts:550-561`; citation moved at WP-172, lines on its tree; first written as `:520-529`).
 - The review window returns a `ready_for_merge` task only for **resolvable, unresolved** threads that
   hold a person's note (`packages/application/src/pipeline/review-threads.ts:104-105`,
   `packages/application/src/pipeline/jobs.ts:1539`). GitLab lists a general note as its own discussion,
@@ -48,7 +48,7 @@ Vendor facts are in `docs/research/15-tracker-lifecycle-and-mr-conversation.md`.
    today. Why the binding and not `.agentic/config.yml`: the names belong to the tracker, not to the
    repository. They change when the binding changes, the provider's schema can validate them, and intake
    already reads the binding. A status name is compared case-insensitively, as `transition` already does
-   (`jira-cloud/index.ts:1423-1424`).
+   (`jira-cloud/index.ts:1724-1725`; citation moved at WP-172, lines on its tree; first written as `:1423-1424`).
    - **Validation at save** (`PUT …/bindings`): the single slots are pairwise distinct and distinct from
      `pick_up_from`; `returned` is disjoint from all of them; and every named status is in the
      provider's loaded set (decision 2), read through the executor. A name outside the set is

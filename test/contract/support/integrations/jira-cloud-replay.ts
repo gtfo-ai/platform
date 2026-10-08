@@ -48,6 +48,16 @@
  *     (`search-jql-by-id-after-move.json`), and a held id answers the issue under the key it holds
  *     now; what Jira answers an unknown id is not measured, so the adapter's bisection is what
  *     reads past it.
+ * 12. **Different — a comment written through the double is stamped one second after the last one
+ *     it wrote**, starting at {@link JIRA_REPLAY_NOW}, where the fixture's own `created` is one fixed
+ *     instant (WP-172): the lifecycle's `listComments` keeps comments created strictly after a
+ *     horizon, so three comments written in one test must be three instants. Jira stamps the
+ *     server's clock; the order is the same.
+ * 13. **Different — the project's statuses are one document** (WP-172, research/15 J1):
+ *     `project/ACME/statuses` answers `project-statuses-acme.json` whatever the issues' own statuses
+ *     are, and any other project key `404`s, as J1 documents for a project the account cannot see.
+ * 14. **Stricter — `PUT issue/{key}/assignee` answers `400` for an account its directory does not
+ *     hold, and for a body with no `accountId` member** (research/15 J4); `null` unassigns.
  */
 import { readFileSync } from 'node:fs';
 import type { WebhookDelivery } from '@platform/application';
@@ -122,6 +132,11 @@ export interface JiraReplay {
    * under `to`, and `GET issue/{from}` answers it under `to` — Atlassian's redirect of a moved key.
    */
   moveIssue(from: string, to: string): void;
+  /**
+   * Sets the issue's assignee out of band, as a person would in the Jira UI (WP-172): an account id
+   * of the double's directory or the binding's own, or `null` for unassigned.
+   */
+  assign(key: string, accountId: string | null): void;
   /** How a search refuses a key it does not hold (divergence 9). */
   refuseUnknownKeysWith(wording: 'documented' | 'value' | 'opaque'): void;
   resetRequests(): void;
@@ -201,6 +216,13 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
   const moved = new Map<string, string>();
   let unknownKeyWording: 'documented' | 'value' | 'opaque' = 'documented';
   let nextId = 10_600;
+  /** Divergence 12: the next comment the double writes is stamped this many seconds after now. */
+  let commentClock = 0;
+  const nextCommentInstant = (): string => {
+    const instant = new Date(nowMs + commentClock * 1000).toISOString().replace('Z', '+0000');
+    commentClock += 1;
+    return instant;
+  };
 
   const transitionsFixture = bodyOf('transitions-acme-1.json') as {
     transitions: { id: string; to?: { name?: string } }[];
@@ -215,6 +237,11 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
   const emails = new Map<string, string>([
     [(directory[0] as { accountId: string }).accountId, 'dev@example.test'],
   ]);
+  /** Who an `accountId` names, for `PUT …/assignee` (divergence 14): the directory or the bot. */
+  const accountOf = (accountId: string): Record<string, unknown> | undefined =>
+    accountId === bot.accountId
+      ? { ...bot }
+      : directory.find((user) => user.accountId === accountId);
 
   const seed = (): void => {
     issues.set('ACME-1', bodyOf('issue-acme-1.json'));
@@ -329,6 +356,12 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
     if (method === 'GET' && path === 'user') {
       const account = directory.find((user) => user.accountId === query.accountId);
       return account === undefined ? notFound() : jsonResponse(200, account);
+    }
+    if (method === 'GET' && segments[0] === 'project' && segments[2] === 'statuses') {
+      // Divergence 13: one project, one document (research/15 J1).
+      return decodeURIComponent(segments[1] ?? '') === 'ACME'
+        ? jsonResponse(200, bodyOf('project-statuses-acme.json'))
+        : notFound();
     }
     if (method === 'GET' && path === 'user/search') {
       const wanted = (query.query ?? '').toLowerCase();
@@ -459,6 +492,7 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
       }
       if (method === 'POST' && tail === 'comment') {
         nextId += 1;
+        const instant = nextCommentInstant();
         const created: StoredComment = {
           ...(bodyOf('comment-created.json') as unknown as StoredComment),
           self: `${JIRA_REPLAY_SITE}/rest/api/3/issue/${key}/comment/${nextId}`,
@@ -466,6 +500,8 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
           author: bot,
           updateAuthor: bot,
           body: (request.body as { body: unknown }).body,
+          created: instant,
+          updated: instant,
         };
         comments.set(key, [...(comments.get(key) ?? []), created]);
         return jsonResponse(201, clone(created));
@@ -480,6 +516,23 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
         existing.body = (request.body as { body: unknown }).body;
         existing.updated = '2026-09-02T12:06:00.000+0000';
         return jsonResponse(200, clone(existing));
+      }
+      if (method === 'PUT' && tail === 'assignee') {
+        // Research/15 J4: `{"accountId": "…"}` assigns, `null` unassigns, 204 with no body.
+        const body = request.body as { accountId?: string | null } | undefined;
+        if (body === undefined || !Object.hasOwn(body, 'accountId')) {
+          return jsonResponse(400, { errorMessages: ['accountId is missing.'], errors: {} });
+        }
+        if (body.accountId === null) {
+          fieldsOf(key).assignee = null;
+          return new Response(null, { status: 204 });
+        }
+        const account = accountOf(String(body.accountId));
+        if (account === undefined) {
+          return jsonResponse(400, { errorMessages: ['The user was not found.'], errors: {} });
+        }
+        fieldsOf(key).assignee = account;
+        return new Response(null, { status: 204 });
       }
       if (method === 'GET' && tail === 'transitions') {
         const current = statusName(key);
@@ -616,6 +669,13 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
         }
       }
       moved.set(from, to);
+    },
+    assign: (key, accountId) => {
+      const account = accountId === null ? null : accountOf(accountId);
+      if (account === undefined) {
+        throw new Error(`jira replay: no account ${accountId} to assign`);
+      }
+      fieldsOf(key).assignee = account;
     },
     refuseUnknownKeysWith: (wording) => {
       unknownKeyWording = wording;

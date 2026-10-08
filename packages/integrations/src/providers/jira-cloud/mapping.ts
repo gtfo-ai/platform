@@ -190,13 +190,45 @@ export const jiraSearchResultSchema = z.object({
   isLast: z.boolean().nullish(),
 });
 
+// ── Statuses (`getAllStatuses`, research/15 J1) ──────────────────────────────
+
+/**
+ * A status's category. Only `key` is read, and it is typed `unknown`-tolerant: the vendor types it
+ * as a bare string with no enum (research/15 J1a), so a key the port does not know is kept raw and
+ * normalised to `unknown` by `normaliseStatusCategory`, never refused here.
+ */
+export const jiraStatusCategorySchema = z.object({ key: z.string().nullish() });
+
+/** `StatusDetails` — a status as `getAllStatuses` and a transition's `to` carry it. */
+export const jiraStatusSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().optional(),
+  /** Absent in the published `getAllStatuses` example, so absence is a documented state. */
+  statusCategory: jiraStatusCategorySchema.nullish(),
+});
+export type JiraStatus = z.infer<typeof jiraStatusSchema>;
+
+/** `IssueTypeWithStatus` — one issue type of the project and the statuses its workflow has. */
+export const jiraIssueTypeWithStatusSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().optional(),
+  statuses: z.array(jiraStatusSchema).default([]),
+});
+
+/** `GET /rest/api/3/project/{projectIdOrKey}/statuses` — an array, grouped by issue type. */
+export const jiraProjectStatusesSchema = z.array(jiraIssueTypeWithStatusSchema);
+
 // ── Transitions (`getTransitions`) ───────────────────────────────────────────
 
 export const jiraTransitionSchema = z.object({
   id: nonEmptyStringSchema,
   name: z.string().optional(),
-  /** The **status** the transition leads to. What a status mapping names (product/19 §6). */
-  to: jiraNamedSchema.nullish(),
+  /**
+   * The **status** the transition leads to. What a status mapping names (product/19 §6). Its
+   * `statusCategory` is read since WP-172 (`listTransitions`); the documented example carries
+   * `in-flight` and `completed` there (research/15 J3).
+   */
+  to: jiraStatusSchema.nullish(),
   /** Absent in Atlassian's own example, so "not stated" means available. */
   isAvailable: z.boolean().optional(),
 });

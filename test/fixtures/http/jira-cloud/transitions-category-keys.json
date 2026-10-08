@@ -1,0 +1,73 @@
+{
+  "source": {
+    "url": "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json",
+    "operation": "GET /rest/api/3/issue/{issueIdOrKey}/transitions (getTransitions)",
+    "spec_version": "1001.0.0-SNAPSHOT-25c77f084cd5b3af3ca57b4c883ff311ffe3ca25 (info.version)",
+    "retrieved": "2026-10-08",
+    "evidence": "documented-adapted",
+    "note": "Shape and both category keys from the Atlassian response example: its first transition's target carries \"statusCategory\":{\"key\":\"in-flight\",...} and its second's \"key\":\"completed\" (with no name member) — two spellings beside the three research/15 J1a records as observed, so in-flight normalises to in_progress and completed to unknown with its raw key kept (WP-171's table). The second transition omits isAvailable, as the example does. Content is this repository's scenario with invented, neutral names (BD-031); the third transition, isAvailable false, is the scenario transitions-acme-1.json already states for an unavailable move."
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "expand": "transitions",
+      "transitions": [
+        {
+          "id": "51",
+          "name": "Pick it up",
+          "to": {
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10010",
+            "id": "10010",
+            "name": "Doing",
+            "statusCategory": {
+              "colorName": "yellow",
+              "id": 1,
+              "key": "in-flight",
+              "name": "In Progress",
+              "self": "https://acme-example.atlassian.net/rest/api/3/statuscategory/1"
+            }
+          },
+          "hasScreen": false,
+          "isAvailable": true
+        },
+        {
+          "id": "61",
+          "name": "Hand to testing",
+          "to": {
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10012",
+            "id": "10012",
+            "name": "Testing",
+            "statusCategory": {
+              "colorName": "green",
+              "id": 9,
+              "key": "completed",
+              "self": "https://acme-example.atlassian.net/rest/api/3/statuscategory/9"
+            }
+          },
+          "hasScreen": true
+        },
+        {
+          "id": "71",
+          "name": "Send back",
+          "to": {
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10013",
+            "id": "10013",
+            "name": "Sent back",
+            "statusCategory": {
+              "colorName": "blue-gray",
+              "id": 2,
+              "key": "new",
+              "name": "To Do",
+              "self": "https://acme-example.atlassian.net/rest/api/3/statuscategory/2"
+            }
+          },
+          "hasScreen": false,
+          "isAvailable": false
+        }
+      ]
+    }
+  }
+}

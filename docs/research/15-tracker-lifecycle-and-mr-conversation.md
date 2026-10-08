@@ -23,7 +23,7 @@ comment `body` is Atlassian Document Format in v3 and a plain string in v2.
 | J3 | A ticket's available transitions | `GET /rest/api/3/issue/{issueIdOrKey}/transitions` | each transition has `id, name, to` (a status with `statusCategory`), `hasScreen, isAvailable, isConditional, isGlobal, isInitial, looped, fields`; `expand=transitions.fields`; `includeUnavailableTransitions` (default false). Without *Transition issues* the response *"will not list any transitions"*. The documented example carries `"statusCategory":{"key":"in-flight",…}`, a fourth spelling. | verified |
 | J4 | Assign | `PUT /rest/api/3/issue/{issueIdOrKey}/assignee` | body `{"accountId": "…"}`; `null` *"set to unassigned"*; `"-1"` *"assigned to the default assignee for the project"*; 204 on success, 400 for an unknown user or a missing `accountId`, also 403 and 404. Permission: *Browse Projects* and *Assign Issues*. | verified |
 | J5 | Comments | `GET /rest/api/3/issue/{issueIdOrKey}/comment` | `startAt` (default 0), `maxResults` (default 100), `orderBy` one of `created`, `-created`, `+created` (400 otherwise); `{startAt, maxResults, total, comments[]}`; a comment has `id, author (accountId …), body` (ADF), `created, updated`. The specification describes `total` as *"The number of items returned"*, which contradicts its name. | verified; `total`'s meaning **[unverified]** |
-| J6 | The binding's own account | `GET /rest/api/3/myself` | *"Returns details for the current user"*, example starts `{"accountId": …}`. The adapter already reads it (`jira-cloud/index.ts:520-529`). | verified |
+| J6 | The binding's own account | `GET /rest/api/3/myself` | *"Returns details for the current user"*, example starts `{"accountId": …}`. The adapter already reads it (`jira-cloud/index.ts:549-561` since WP-172; `520-529` when written). | verified |
 | J7 | Webhooks | <https://developer.atlassian.com/cloud/jira/platform/webhooks/> | `jira:issue_updated`; `comment_created`, `comment_updated`, `comment_deleted`; changelog items carry `field, fieldtype, from, fromString, to, toString`, *"one entry for each field that has been changed"*. | verified |
 
 Consequences for the design (TD-029):
@@ -34,7 +34,7 @@ Consequences for the design (TD-029):
   and `done`. An unrecognised key is `unknown` and keeps its raw value, so a fourth spelling is
   visible rather than silently mapped.
 - A transition is resolved by its **target status** (`to.name`), never by its own name. The adapter
-  already does this (`resolveTransition`, `packages/integrations/src/providers/jira-cloud/index.ts:1444-1453`).
+  already does this (`resolveTransition`, `packages/integrations/src/providers/jira-cloud/index.ts:1745-1754` since WP-172; `1444-1453` when written).
   Backlog 535 asked for exactly this check, because the product owner's tracker names transitions
   with emoji and differently from their target statuses.
 

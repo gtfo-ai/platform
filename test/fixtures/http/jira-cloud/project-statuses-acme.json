@@ -1,0 +1,195 @@
+{
+  "source": {
+    "url": "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json",
+    "operation": "GET /rest/api/3/project/{projectIdOrKey}/statuses (getAllStatuses)",
+    "spec_version": "1001.0.0-SNAPSHOT-25c77f084cd5b3af3ca57b4c883ff311ffe3ca25 (info.version)",
+    "retrieved": "2026-10-08",
+    "evidence": "documented-adapted",
+    "note": "Shape from the Atlassian response example: an array of IssueTypeWithStatus ({id, name, self, statuses[], subtask}), each status a StatusDetails ({description, iconUrl, id, name, self}). The published example omits statusCategory; StatusDetails documents it as a StatusCategory ({colorName, id, key, name, self}), so every status here carries one except \"Waiting for input\", which reproduces the omission. The keys new/indeterminate/done are the three research/15 J1a records as observed (backlog 535); the vendor documents no enum. Content is this repository's scenario with invented, neutral status names (BD-031): two issue types that share \"Ready for agent\", \"Doing\" and \"Done\", which the union by name (WP-172 ruling (a)) collapses."
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": [
+      {
+        "id": "10004",
+        "name": "Task",
+        "self": "https://acme-example.atlassian.net/rest/api/3/issueType/10004",
+        "statuses": [
+          {
+            "description": "Ready for the platform to pick up.",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "10002",
+            "name": "Ready for agent",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10002",
+            "statusCategory": {
+              "id": 2,
+              "key": "new",
+              "name": "To Do",
+              "colorName": "blue-gray",
+              "self": "https://acme-example.atlassian.net/rest/api/3/statuscategory/2"
+            }
+          },
+          {
+            "description": "Being worked on.",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "3",
+            "name": "In Progress",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/3",
+            "statusCategory": {
+              "id": 4,
+              "key": "indeterminate",
+              "name": "In Progress",
+              "colorName": "yellow",
+              "self": "https://acme-example.atlassian.net/rest/api/3/statuscategory/4"
+            }
+          },
+          {
+            "description": "Somebody is on it.",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "10010",
+            "name": "Doing",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10010",
+            "statusCategory": {
+              "id": 4,
+              "key": "indeterminate",
+              "name": "In Progress",
+              "colorName": "yellow",
+              "self": "https://acme-example.atlassian.net/rest/api/3/statuscategory/4"
+            }
+          },
+          {
+            "description": "A merge request is open.",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "10005",
+            "name": "In Review",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10005",
+            "statusCategory": {
+              "id": 4,
+              "key": "indeterminate",
+              "name": "In Progress",
+              "colorName": "yellow",
+              "self": "https://acme-example.atlassian.net/rest/api/3/statuscategory/4"
+            }
+          },
+          {
+            "description": "Done by the author, waiting for a reviewer.",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "10011",
+            "name": "Waiting for review",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10011",
+            "statusCategory": {
+              "id": 4,
+              "key": "indeterminate",
+              "name": "In Progress",
+              "colorName": "yellow",
+              "self": "https://acme-example.atlassian.net/rest/api/3/statuscategory/4"
+            }
+          },
+          {
+            "description": "Being tested.",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "10012",
+            "name": "Testing",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10012",
+            "statusCategory": {
+              "id": 4,
+              "key": "indeterminate",
+              "name": "In Progress",
+              "colorName": "yellow",
+              "self": "https://acme-example.atlassian.net/rest/api/3/statuscategory/4"
+            }
+          },
+          {
+            "description": "Returned to the author.",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "10013",
+            "name": "Sent back",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10013",
+            "statusCategory": {
+              "id": 2,
+              "key": "new",
+              "name": "To Do",
+              "colorName": "blue-gray",
+              "self": "https://acme-example.atlassian.net/rest/api/3/statuscategory/2"
+            }
+          },
+          {
+            "description": "Finished.",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "10009",
+            "name": "Done",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10009",
+            "statusCategory": {
+              "id": 3,
+              "key": "done",
+              "name": "Done",
+              "colorName": "green",
+              "self": "https://acme-example.atlassian.net/rest/api/3/statuscategory/3"
+            }
+          }
+        ],
+        "subtask": false
+      },
+      {
+        "id": "10001",
+        "name": "Bug",
+        "self": "https://acme-example.atlassian.net/rest/api/3/issueType/10001",
+        "statuses": [
+          {
+            "description": "Ready for the platform to pick up.",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "10002",
+            "name": "Ready for agent",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10002",
+            "statusCategory": {
+              "id": 2,
+              "key": "new",
+              "name": "To Do",
+              "colorName": "blue-gray",
+              "self": "https://acme-example.atlassian.net/rest/api/3/statuscategory/2"
+            }
+          },
+          {
+            "description": "Somebody is on it.",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "10010",
+            "name": "Doing",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10010",
+            "statusCategory": {
+              "id": 4,
+              "key": "indeterminate",
+              "name": "In Progress",
+              "colorName": "yellow",
+              "self": "https://acme-example.atlassian.net/rest/api/3/statuscategory/4"
+            }
+          },
+          {
+            "description": "Parked until somebody answers.",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "10007",
+            "name": "Waiting for input",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10007"
+          },
+          {
+            "description": "Finished.",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "10009",
+            "name": "Done",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10009",
+            "statusCategory": {
+              "id": 3,
+              "key": "done",
+              "name": "Done",
+              "colorName": "green",
+              "self": "https://acme-example.atlassian.net/rest/api/3/statuscategory/3"
+            }
+          }
+        ],
+        "subtask": false
+      }
+    ]
+  }
+}

@@ -355,11 +355,20 @@ describe('a configuration field’s declared kind', () => {
   });
 
   it('names every shipped field, so a new shape is noticed here rather than rendered as text', () => {
+    /**
+     * The fields that are `other` **on purpose**, each with its reason. WP-172: Jira's `lifecycle`
+     * is a block (`ticketLifecycleSchema`), written by the lifecycle's own setup surface and
+     * validated against the tracker's statuses (TD-029 decision 1); a generic form leaves it to the
+     * `PATCH`, which is what `other` means.
+     */
+    const DELIBERATELY_OTHER: Readonly<Record<string, readonly string[]>> = {
+      'jira-cloud': ['lifecycle'],
+    };
     for (const entry of SHIPPED_PROVIDERS) {
       expect(
         entry.configFields.filter((field) => field.kind === 'other').map((field) => field.name),
         entry.id,
-      ).toEqual([]);
+      ).toEqual(DELIBERATELY_OTHER[entry.id] ?? []);
     }
   });
 

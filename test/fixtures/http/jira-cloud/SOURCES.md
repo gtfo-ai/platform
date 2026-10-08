@@ -90,6 +90,29 @@ a label and pointing the URL at a domain that does not exist changed no test at 
   former key in JQL is **not measured** and nothing here relies on it: that is why the poll asks by
   id, and why the replay refuses an old key in `key in (…)` (divergence 10). No fixture.
 
+- `https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json` again, `info.version`
+  `1001.0.0-SNAPSHOT-25c77f084cd5b3af3ca57b4c883ff311ffe3ca25`, retrieved **2026-10-08** for WP-172
+  (the ticket lifecycle; `docs/research/15-tracker-lifecycle-and-mr-conversation.md` J1–J6):
+  - **J1** `getAllStatuses`, `GET /rest/api/3/project/{projectIdOrKey}/statuses` — *"Returns the
+    valid statuses for a project. The statuses are grouped by issue type"*; permission *Browse
+    Projects*; `200` an array of `IssueTypeWithStatus`, `404` for a project the account cannot see.
+    The example omits `statusCategory`, which `StatusDetails` documents. →
+    `project-statuses-acme.json` (`documented-adapted`). **J2** (`statuses/search`) is not used: it
+    requires project administration.
+  - **J3** `getTransitions` — the example's two target categories, `in-flight` and `completed`. →
+    `transitions-category-keys.json` (`documented-adapted`).
+  - **J4** `assignIssue`, `PUT /rest/api/3/issue/{issueIdOrKey}/assignee` — body `{"accountId": …}`,
+    `null` *"the issue is set to unassigned"*; permission *Browse Projects* and *Assign Issues*;
+    `204` with no body, `400` (user not found, `accountId` missing), `403` (*"the user does not have
+    the necessary permission"*, no example body), `404`. No fixture: a `204` has no document, and the
+    replay answers the write from its state (it refuses an account its directory does not hold with
+    `400`, as documented). The `403` is scripted inline in
+    `packages/integrations/src/providers/jira-cloud/lifecycle.test.ts`, as the `ErrorCollection`
+    every 4xx carries, in words of this repository's own.
+  - **J5** `getComments` with `orderBy=-created` — the envelope `comments-acme-1.json` already
+    records; `total` is not read by `listComments` (ambiguity 6 below).
+  - **J6** `getCurrentUser` — `myself.json`, unchanged.
+
 ## What is deliberately **not** in a fixture
 
 - **Signatures.** A webhook fixture carries the delivery headers Atlassian documents but no

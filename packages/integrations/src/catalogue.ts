@@ -47,7 +47,7 @@ import type {
   JsonObject,
   JsonValue,
 } from '@platform/contracts';
-import type { z } from 'zod';
+import * as z from 'zod';
 import { gitlabProviderRegistration } from './providers/gitlab/index.js';
 import {
   JIRA_CLOUD_AGENT_TOOLING,
@@ -237,16 +237,28 @@ const configFieldsOf = (schema: z.ZodObject, secretFields: readonly string[]): C
     }));
 
 /**
- * The schema with its credential fields omitted — `omit` keeps the object's strictness, so an
- * undeclared key is still refused. Only fields the shape declares are named: the mask's type is
- * the shape's own keys, which a list read at run time cannot state to `tsc`.
+ * The schema with its credential fields omitted — rebuilt with the original's own unknown-key rule
+ * (every shipped schema is strict, so an undeclared key is still refused) and its refinements.
+ *
+ * Rebuilt rather than `omit`ted since WP-172: zod 4's `omit` throws on an object schema that
+ * carries a refinement (*".omit() cannot be used on object schemas containing refinements"*,
+ * measured against zod 4.5.4), and Jira's schema now carries one — a `lifecycle` slot may not name
+ * `pickup_status`. The refinements are carried over so this schema refuses what the provider's
+ * refuses. **Precondition, stated:** a provider's object-level refinement never reads a credential
+ * field, because here that field is absent; Jira's reads `pickup_status` and `lifecycle` only.
  */
 const withoutCredentials = (schema: z.ZodObject, secretFields: readonly string[]): z.ZodObject => {
-  const mask: Record<string, true> = {};
-  for (const field of secretFields.filter((name) => name in schema.shape)) {
-    mask[field] = true;
-  }
-  return schema.omit(mask as Parameters<typeof schema.omit>[0]);
+  const shape = Object.fromEntries(
+    Object.entries(schema.shape).filter(([field]) => !secretFields.includes(field)),
+  );
+  const catchall = schema.def.catchall;
+  const rebuilt = catchall === undefined ? z.object(shape) : z.object(shape).catchall(catchall);
+  // The checks were written against the whole object's output; the rebuilt one's output is that
+  // object less the credential keys, which the precondition above says no check reads.
+  const checks = (schema.def.checks ?? []) as unknown as z.core.$ZodCheck<
+    Record<string, unknown>
+  >[];
+  return checks.length === 0 ? rebuilt : rebuilt.check(...checks);
 };
 
 /** The metadata half of a registration, plus the one fact a registration does not carry. */
@@ -344,8 +356,10 @@ export const configIssuesOf = (
   const document = Object.fromEntries(Object.entries(config).filter(([key]) => !secret.has(key)));
   const parsed = entry.accountConfigSchema.safeParse(document);
   if (parsed.success) {
-    // WP-137: the cross-field rules of a static run credential (decision 13 item 1), which a zod
-    // refinement cannot carry here — `omit` refuses an object schema that has one.
+    // WP-137: the cross-field rules of a static run credential (decision 13 item 1), kept out of
+    // the zod schema because `omit` refused an object schema that had a refinement. Since WP-172
+    // `withoutCredentials` rebuilds instead and carries refinements over (Jira's lifecycle rule);
+    // these rules stay where they were, a decision WP-172 did not revisit.
     return staticRunCredentialConfigIssues(entry.staticRunCredential ?? undefined, parsed.data);
   }
   return parsed.error.issues.flatMap((issue): ConfigIssue[] => {

@@ -15639,6 +15639,38 @@ an inherited environment, or when the measurement above shows `rebase --exec` or
 
 **Depends on** WP-174.
 
+### 540. **The Jira adapter's `fetchIssue` asks for a subset of `fields` and then requires `updated`, which it did not ask for: `transition`, `setLabels` and `readTicket`'s epic read fail `invalid_response` against a real site** (TODO, **major. Live today on any Jira binding**: every `status_mapping` transition fails, and every ticket with a parent is read without its text. Present since WP-08 (`af206c7e`). Found by WP-172's implementer, session 15, and confirmed by the refiner by reading the code. **No work package owns it.** Recommended: a WP-172 follow-up commit in the same files, closed **before WP-177 starts**. WP-177's row now depends on it)
+
+**What is wrong.** `fetchIssue` (`packages/integrations/src/providers/jira-cloud/index.ts:489-499`) sends `GET issue/{key}` with the caller's `fields` list and always parses the answer with `jiraIssueWithUpdatedSchema`. That schema makes `fields.updated` required (`packages/integrations/src/providers/jira-cloud/mapping.ts:181-183`, `fields: jiraIssueFieldsSchema.extend({ updated: jiraDateTimeSchema })`). Its docblock says it is *"An issue the adapter asked for `updated` on, which is every issue it maps"* (`mapping.ts:175`). Four of the five call sites do not ask for `updated`:
+
+| Call site (WP-172's tree) | `fields` requested | Live caller today |
+|---|---|---|
+| `index.ts:653` `readTicket` | `FIELDS_FOR_TICKET` (`:174-175`), **includes** `updated` | correct |
+| `index.ts:663` `readTicket`'s epic (parent) read | `'summary,description'` | `readTicketForTask` (`packages/application/src/pipeline/ticket-snapshot.ts:345`), at intake (`saga.ts:435`) and in `stage.execute` |
+| `index.ts:895` `transition`'s `resolve_transition` read | `'status'` | `statusMappingHandler` → `workpad.ts:485` → `integrations.ts:1496` |
+| `index.ts:1058` `setLabels`'s `read_labels` | `'labels'` | none in `packages/application` or `apps/server` (latent) |
+| `index.ts:1095` `setLabels`'s read-back | `'labels'` | none (latent) |
+
+The same lines at `HEAD` (`9f162f9f`) are `:642`, `:874`, `:1037`, `:1074`. WP-172 did not introduce the defect; WP-172's own new read (`readAssignee`, `index.ts:1385-1412`) avoids it on purpose. Its docblock says: *"`fields=assignee` only, parsed without the `updated` the mapped reads require (Jira returns only the fields asked for)"* (`index.ts:1382-1383`).
+
+**Evidence.**
+- Code reading (refiner, session 15): the four call sites and the schema line above. `git log -S` puts the schema into `index.ts` at `af206c7e` (WP-08).
+- **Why no test sees it.** The Jira replay (`test/contract/support/integrations/jira-cloud-replay.ts`) never reads `query.fields`. Its request handler destructures `query` (`:350`) and reads only `accountId`, `query`, `jql`, `maxResults` and `nextPageToken`. So `GET issue/{key}` answers the whole stored issue whatever `fields` says, and every stored issue carries `updated`.
+- **The provider behaviour is a hypothesis as far as this repository's evidence goes.** That a real site omits unrequested fields is stated in the implementer's report and in `readAssignee`'s docblock. It is not cited in `test/fixtures/http/jira-cloud/SOURCES.md`, and it was not measured against a live site (M10 head: no row calls a real Jira). *Needs citation:* the `fields` parameter of Atlassian's `getIssue` reference, with a retrieval date, in `SOURCES.md`.
+
+**What it costs to leave.**
+- A Jira project that configures `status_mapping` never has its ticket moved. Every attempt fails `invalid_response` on the `resolve_transition` read, before any write.
+- A ticket with a parent (an epic) fails the whole `readTicket`. `readTicketForTask` fails open (`ticket-snapshot.ts:330-343`, a `warn`, `null` snapshot), so every stage of that task runs **without the ticket's text**, and nothing tells the user.
+- WP-177's lifecycle transitions (`in_progress`, `in_review`, `approved`, `qa`, `done`, the release's `pick_up_from`) all go through `transition`. Its criteria run against the fake, so WP-177 would go green and fail on the first real Jira.
+
+**Done when.**
+- (a) Every `fetchIssue` call either asks for `updated` or parses with `jiraIssueSchema`. The fix keeps the schema's guarantee for the mapped reads (`readTicket`, search, webhook). Preferred: `fetchIssue` takes its schema from the caller, so a subset read cannot reach the `updated` schema by default.
+- (b) The replay honours `fields`: `GET issue/{key}` returns only the requested fields (plus `id`, `key`, `self`). **Canary:** with (b) in place and (a) reverted, the existing transition, label and epic cases fail by name.
+- (c) The `getIssue` `fields` citation is added to `SOURCES.md`.
+- Tiers: unit + contract (`verify`).
+
+**Depends on** nothing. It touches WP-172's files (`index.ts`, `jira-cloud-replay.ts`), so it lands after WP-172's commit.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -19431,13 +19463,13 @@ WP-181 follows WP-177 and WP-180, WP-182 follows WP-181, and WP-183 runs last. W
 | WP-174 | **Domain: the `qa` stage, the acknowledgement rule, the slot rules, the lifecycle moments and the return decision** | DONE | `d54bd901` | Folds **535**, **537** (d). Deps WP-170. No migration. TD-029 decisions 4, 8 and 9. Parallel with WP-171, WP-173, WP-175. Built in a worktree from `88c38f2a`. **One review round, APPROVE-with-nits**; six canaries all dead, and the reviewer re-ran the golden against the old code (19/19). The orchestrator ruled TD-029 decision 8's emoji contradiction (emoji are tokens; only the listed four are acknowledgements). Nits fixed by the orchestrator: configured words read through the comment's own pipeline, two incomplete per-edge-loop sentences. Refiner: TD-029 amended twice, backlog 539 (nit), WP-178 (13)–(16). Orchestrator: `verify` PASS (twice), `verify:integration` PASS, `verify:e2e` PASS twice (load ≤ 9.8 at each start; volumes 131 after). `ci` `37806041084`, `image` `37806041107` **PENDING**. |
 | WP-175 | **Domain: the `conversation` data block** | IN_PROGRESS | — | Folds **537**. Deps WP-170. No migration. Parallel with WP-171…WP-174. Criterion (4) added by the architect's ruling (TD-029 decision 11, WP-175 amendment, 2026-10-08): `author_ref`/`path_ref` on the marker, and the raw values in `conversation_author`/`conversation_path` blocks. |
 | WP-176 | **Prompts: every role reads the conversation, the Developer answers each thread, and the Reviewer resolves only what it re-checked** | TODO | — | Folds **537**. Deps WP-170, WP-175. No migration. Eval cases and `ROLE_PROMPT_VERSIONS`. |
-| WP-177 | **Application: the claim, the release, the intake skip, the lifecycle transitions, and `status_mapping` superseded** | TODO | — | Folds **535** (c), **536**. Deps WP-171, WP-174. **Migration 0088** (`tasks.ticket_claim`, `tasks.qa_stage`). Serial with WP-178 and WP-179. |
+| WP-177 | **Application: the claim, the release, the intake skip, the lifecycle transitions, and `status_mapping` superseded** | TODO | — | Folds **535** (c), **536**. Deps WP-171, WP-174, and backlog **540** closed first (a WP-172 follow-up, refined session 15). **Migration 0088** (`tasks.ticket_claim`, `tasks.qa_stage`). Serial with WP-178 and WP-179. |
 | WP-178 | **Application: one human-return window over four signals, at `qa` and at `ready_for_merge`, and the QA stage's endings** | TODO | — | Folds **535** (d), **537** (d). Deps WP-173, WP-174, WP-177. No migration. Measured: today's window drops a `resolvable: false` general note. Criterion (11): reads `human_returns.acknowledgements`, unreported at the settings write until then (WP-170 discovered work). Criterion (12): `task.human_return` counts contributing words only, `> 0` exactly when the form is listed (WP-170 review). Criterion (13): `isPlatformNote` uses the domain's merge-request marker test, so the marker regex has one copy (found at WP-174). Criteria (14)–(16) (refiner, session 15): a `qa` pass needs a recorded `ticket.status.changed` whose `from` is the `qa` slot (`HumanReturnInput.leftQa`); ticket-comment markers count only at the start, and the ask mirror's marker moves to the first line; the dependency gate's Q91 post-review set gains `qa`. |
 | WP-179 | **Application: the review conversation on the merge request — findings, replies and resolutions** | TODO | — | Folds **537** (a), (b). Deps WP-170, WP-173, WP-178. No migration. Renderer shared with review-only. Criterion (8): `replyToDiscussion` gets a docblock (GitLab's fallback answers a new discussion id); later reads match by marker, never the returned id (WP-173 finding). |
 | WP-180 | **Application: every agent stage gets the conversation in its prompt, and the tool's port answers the same** | TODO | — | Folds **537** (c). Deps WP-171, WP-173, WP-175. No migration. Parallel with WP-177…WP-179. Criterion (6) (TD-029 decision 11, WP-175 amendment): pass the stable handle and the display name separately, so a Jira display name, an `accountId` or a path with a space never omits an entry. |
-| WP-181 | **Server: the statuses read, the binding's check, the effective configuration, the readiness notes and the `get_conversation` tool** | TODO | — | Folds **535** (b), **537** (c). Deps WP-171, WP-177, WP-180. No migration. Criterion (6): `ticket_claim`, `qa_stage` and `status_mapping_superseded` become required (WP-170 left them optional). |
+| WP-181 | **Server: the statuses read, the binding's check, the effective configuration, the readiness notes and the `get_conversation` tool** | TODO | — | Folds **535** (b), **537** (c). Deps WP-171, WP-177, WP-180. No migration. Criterion (6): `ticket_claim`, `qa_stage` and `status_mapping_superseded` become required (WP-170 left them optional). Criterion (7): the statuses read is bounded (WP-172's discovered work, refined session 15). |
 | WP-182 | **Web: the slots as pick lists in the wizard and in project settings; the claim and the QA stage on the task page** | TODO | — | Folds **535** (b). Deps WP-181. No migration. User-guide sweep (rule 83). |
-| WP-183 | **End to end, with fake Claude: the full flow with every slot mapped, a QA return in each form, and a project with nothing mapped** | TODO | — | Folds **535**, **536**, **537**. Deps WP-170…WP-182. No migration. The product owner's flows (i)–(iii), and **(v)**: the fake task manager's default workflow gets invented names (WP-171's discovered work, refined session 15). |
+| WP-183 | **End to end, with fake Claude: the full flow with every slot mapped, a QA return in each form, and a project with nothing mapped** | TODO | — | Folds **535**, **536**, **537**. Deps WP-170…WP-182. No migration. The product owner's flows (i)–(iii), and **(v)**: the fake task manager's default workflow gets invented names (WP-171's discovered work, refined session 15), with the Jira contract runner's *Ready for agent* renamed in the same change (WP-172's discovered work). |
 | WP-163 | **A stop that lands while the spawn marker commits holds no money, and a stop the platform made logs no fault** | TODO | — | Folds **501**, **506**. Deps WP-150, WP-151, WP-154. No migration. BD-010's 2026-10-08 amendment. Parallel-safe with WP-162. |
 | WP-164 | **An `xargs` that feeds a project-command verb is uncertain, and the verbs come from the floors themselves** | TODO | — | Folds **530**. Deps WP-161. No migration. Touches only `packages/domain/src/policies/` and technical/05. Parallel-safe with every row. |
 | WP-165 | **A merged task is never paused or taken over, so a merged task always has its way to the retrospective** | TODO | — | Folds **508** (Q117 (a)). Deps WP-152. No migration. technical/02's M10 amendment. Serial with WP-167. |
@@ -46880,3 +46912,90 @@ Assumptions (the row leaves them open):
 Discovered work:
 - WP-180 must supply `authorHandle` (GitLab `author.username`, Jira `author.accountId`) and a redacted
   display name for each entry.
+
+#### WP-172
+
+**Jira Cloud implements the six lifecycle members** (backlog 535 (a), 536 (a)). Built in a worktree from
+`2ffeb3c2`. No migration. No Jira or GitLab instance was called; the Atlassian OpenAPI document was
+re-read on 2026-10-08 (`info.version` `…25c77f08…`) for J1, J3 and J4.
+
+**As built.**
+- `packages/integrations/src/providers/jira-cloud/index.ts`: the four flags `true`; `listStatuses` (J1
+  per key in `project_keys`, `unionJiraStatuses`), `listTransitions` (J3, `toTicketTransitions`),
+  `selfIdentity` (J6), `assignToSelf`/`unassign` (a `read_assignee` read, then an `assign_to_self` /
+  `unassign` mutation only when a write is needed; J4), `listComments` (J5, `orderBy=-created`,
+  `commentWindow`). `assignRefusal` maps a `403` on the `PUT` to `forbidden` naming *Assign Issues*.
+  Never J2.
+- `config.ts`: `lifecycle: ticketLifecycleSchema.optional()` (the contracts' schema itself, asserted by
+  identity) and a refinement refusing a slot or a `returned` entry that names `pickup_status`
+  (`lifecycleStatusKey`). `packages/contracts/src/config.ts`'s docblock rewritten as history.
+- `packages/integrations/src/catalogue.ts`: `withoutCredentials` **rebuilds** the object (keeping its
+  catchall and re-applying its checks) instead of `omit`, because zod 4.5.4's `omit` throws on an
+  object schema with a refinement (measured: the Jira contract suite failed to load). Precondition
+  stated at the function: an object-level refinement never reads a credential field.
+- `catalogue.test.ts`: `lifecycle` is the one shipped config field of kind `other`, named in the census
+  with its reason (a generic form leaves it to the `PATCH`).
+- Fixtures: `project-statuses-acme.json` and `transitions-category-keys.json`, both
+  `documented-adapted`, retrieved 2026-10-08, neutral invented names; `SOURCES.md` records J1–J6.
+  The replay gains `project/ACME/statuses`, `PUT issue/{key}/assignee`, `assign(key, id)` and distinct
+  comment instants (divergences 12–14).
+- Setup guide (ruling (f)): the permission table names *Assign Issues*; the four the lifecycle needs are
+  listed; one dedicated account per installation (backlog 538, Q118); the lifecycle block and its need
+  for `project_keys`.
+
+**Criteria → tests.** (1) `jira-cloud.contract.test.ts` runs the shared suite's declared branch for all
+six (88 → 96 cases with the new Jira-only describe *the ticket lifecycle against the documented
+fixtures (WP-172)*). (2) `fixture-provenance.contract.test.ts`, `delivery-key-redaction.test.ts`,
+`egress-host.test.ts`, `request-path.test.ts` pass; `emitted-secrets.test.ts` now calls the six members
+for real with planted credentials. (3) `lifecycle.test.ts` *answers a status shared by two issue types
+once, in its first spelling*. (4) *unassign on a ticket somebody else holds sends no PUT*. (5)
+*a shadow claim reads, records would_have, and sends no PUT (criterion 5)* and the runner's
+`assignToSelf` shadow case. (6) `config.test.ts` (eight cases, including the identity check and the
+catalogue's schema carrying the refusal).
+
+**Canaries (all killed).** Drop the assignee read in `unassign` → 2 failed (criterion 4's case by name).
+Union by entry instead of by name → 5 failed. Write before the shadow guard → 3 failed (criterion 5's
+cases). Read J5's `total` → 3 failed. Drop the `pickup_status` refinement → 3 failed.
+
+**Assumptions (decided here).**
+- Ruling (a)'s "logs the second": the adapter holds no logger, so the conflict is recorded on the
+  `list_statuses` audit row (`category_conflicts`, at most 20) — the adapter's structured record.
+  "Two categories" compares the **raw** keys, so `indeterminate` beside `in-flight` is a conflict too.
+- J1 is per project: a binding with **no** `project_keys` is refused (`invalid_request`), never answered
+  `[]`; a project the account cannot see fails the read (`not_found`) rather than a partial union.
+  Several keys are unioned like issue types.
+- Ruling (c): "the page is shorter than requested" is read as the **answered window** (after `since`):
+  `total = window.length` when `window.length < limit` — the thread ran out, or the horizon fell inside
+  the page — else `null`. J5's `total` is never read.
+- A status or transition the port's shape cannot carry (no id/name, a name past
+  `MAX_LIFECYCLE_STATUS_NAME_CHARS`) is skipped and counted on the audit row, never cut or invented.
+- `listTransitions`' `to` keeps `{name, category}` only (no `raw_category`); technical/06 unchanged on
+  that point.
+- `selfIdentity` reads `GET /myself` fresh each call; the claim reuses the adapter's remembered account.
+- The shared contract's `statuses.initial/target` stay `Ready for agent`/`In Progress`, the existing
+  invented fixture names; the new fixture adds the neutral ones (Doing, Waiting for review, Testing,
+  Sent back) beside them.
+
+**Sentences falsified (rule 83), each fixed.**
+- `packages/contracts/src/config.ts` *"(Jira's at WP-172; no binding schema embeds it yet)"* and the
+  *"the binding schema that embeds this block checks it"* bullet → history / "Jira's since WP-172".
+- technical/06 *"Until WP-172, the Jira adapter declares the four flags `false` and refuses all six by
+  name"* → past tense plus an "As built at WP-172" paragraph.
+- `catalogue.ts`'s WP-137 comment *"which a zod refinement cannot carry here — `omit` refuses"* →
+  history.
+- `emitted-secrets.test.ts` and `registration.test.ts` comments *"refused by name until WP-172"* →
+  rewritten.
+- `docs/TODO.md`'s Jira item *"the second is read only when the page is short"* → never read.
+- research/15's two line citations into `jira-cloud/index.ts` → current lines, with the original kept.
+
+**Discovered work.**
+- **`fetchIssue` asks Jira for a field subset but parses with `jiraIssueWithUpdatedSchema`, which
+  requires `fields.updated`.** `transition` (`fields=status`), `setLabels` (`fields=labels`, twice) and
+  `readTicket`'s epic read (`fields=summary,description`) would fail `invalid_response` against a real
+  site, which returns only the fields asked for; the replay returns the whole issue whatever `fields`
+  says, so no test sees it. Not fixed here (scope); the lifecycle's own read uses `jiraIssueSchema`.
+  Fix: add `updated` to those `fields` lists or parse them with `jiraIssueSchema`, and make the replay
+  honour `fields`.
+- TD-029 cites `jira-cloud/index.ts:520-529`, `:837-920` and `:1423-1424`, stale before this row and more
+  so after it; `docs/decisions` is not an implementer's to edit.
+- `listStatuses` has no bound on how many statuses a project answers; nothing caps the union.
