@@ -197,6 +197,49 @@ status_mapping:                  # task state -> ticket status name (provider-sp
   done: "Done"
 ```
 
+> **M10 head amendment (2026-10-08, BD-031 decided by the product owner, TD-029 decisions 1, 3 and 8).**
+> **The ticket lifecycle is not a key of this file.** Its slots live on the project's task-management
+> **binding**, written by `PUT /api/projects/:project_id/bindings` beside `pickup_status` and
+> `pickup_label`. The names belong to the tracker, change with the binding, and are what intake already
+> reads. The block is defined once in `packages/contracts` (`ticketLifecycleSchema`) and embedded in every
+> task-management provider's binding schema:
+> ```yaml
+> # binding config overlay (task-management), not .agentic/config.yml — names are the tracker's own
+> pickup_status: "Ready for the agent"   # = the pick_up_from slot; pickup_label still works instead
+> lifecycle:
+>   in_progress: "Doing"
+>   in_review: "Waiting for review"
+>   approved: "Reviewed"
+>   qa: "Testing"
+>   returned: ["Sent back"]            # one or more
+>   done: "Finished"
+>   claim: true                         # default true when the block exists; a binding with no block never claims
+>   take_assigned_tickets: false        # intake skips a ticket assigned to someone else unless true
+> ```
+> Every slot is optional, and the example's names are invented. At save, the single slots must be
+> pairwise distinct and distinct from `pickup_status`, and `returned` must be disjoint from them. Every
+> name must be in the provider's `listStatuses()`, compared case-insensitively:
+> - a name not in the list is `422 lifecycle_status_unknown`, naming the slot and the name;
+> - if the provider cannot be read, the answer is `503 lifecycle_statuses_unavailable` and nothing is saved.
+>
+> **`status_mapping` is superseded, not removed.** When the binding maps any slot other than
+> `pickup_status`, `status_mapping` is not applied at all. The effective-configuration read
+> (`GET /api/projects/:project_id/config`) publishes `status_mapping_superseded: true` and a warning. A
+> project with no slot mapped applies it exactly as before. The repository-key grade of `status_mapping`
+> (operational, below) is unchanged.
+>
+> **New settings key `human_returns.acknowledgements`** (a list of at most 50 words, each 1–40
+> characters). It **adds** words in a project's own language to the shipped acknowledgement vocabulary
+> (TD-029 decision 8). It is graded **not applied** when it comes from the repository file, because a
+> word added there makes a person's comment stop returning a task, which loosens what the agent is held
+> to. Only the settings layer (`project.settings.write`) may set it.
+>
+> **Artifact fields** (`schemas/artifacts/`, regenerated from `packages/contracts`):
+> - `ImplementationNotes.thread_replies[]`: `{thread_id, kind: fixed|documented|needs_person|not_changed, reply, person?}`;
+> - `ReviewVerdict.resolved_threads[]`: the `thread_id`s a re-review confirms fixed.
+>
+> Both are optional, so a verdict or a set of notes written before M10 still parses.
+
 **Path patterns** (`protected_paths`, `risk_classes.*.paths`, `features.review_only.paths`, a plan's `protected_path_changes` and a review's confirmations) share one syntax, compiled by `pathPatternToRegExp` in `packages/domain/src/policies/path-patterns.ts`: `*` and `?` stay inside one path segment; `**` crosses separators; **`**/` matches zero or more directories** (amended at WP-81 — until then it demanded at least one, so `**/*.test.*` missed a root-level `totals.test.ts`, and `src/**/*.ts` missed `src/index.ts`); and a pattern naming a directory (`infra`, `infra/`, `infra/**`) covers it and everything under it. The workspace's path guard folds case and Unicode on both sides before matching; the CI gate's tamper check and the review-only filter compare bytes.
 
 Secrets are never accepted from the repo. Unknown keys are errors (fail loudly, BD: product/12 validation). The UI shows the effective value per key with its source.

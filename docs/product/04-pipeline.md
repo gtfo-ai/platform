@@ -69,6 +69,14 @@ Intake ─► Refinement ─► Architecture ─► Implementation ─► CI gat
 - **Inputs:** diff, Plan, Refined Spec, technical KB, conventions/rules, security checklist. **Fresh context, different session, ideally different model family or at least different run** than the implementer (BD-005: independence of review).
 - **Focus (default checklist):** correctness vs plan; security (input validation, authz, secrets, injection, unsafe deserialisation, dependency changes); clean architecture (layering, boundaries, coupling, naming); tests (coverage of acceptance criteria, meaningful assertions); error handling and logging; performance smells; migrations safety; conventions from KB; MR hygiene (size, description, commits).
 - **Outputs:** **Review Verdict** artifact: `approve | request_changes` with findings (severity, file:line, explanation, suggested fix). Findings are posted as MR discussion threads (so a human can see and resolve them too).
+- *Amended 2026-10-08 (BD-031; until then this sentence was not built — backlog 537).*
+  - Each finding is a thread on the merge request, anchored to its file and line where the diff allows, and each review round adds one summary note.
+  - On the fix run, the Developer replies on every thread it addressed. A person's note may mix three kinds of request:
+    - a code change: the Developer does it;
+    - a documentation-only change: the Developer does it;
+    - an action only a person can take: the Developer answers on the merge request, names who must act, and never claims the action is done.
+  - The Reviewer resolves a finding's thread only after a re-review confirms the fix, and never resolves a person's thread.
+  - Every agent at every stage reads the whole merge-request conversation (diff threads and general notes, from bots and people) and the ticket's comments, through a read-only tool and its context pack, as untrusted data.
 - **Returns:** `request_changes` → Implementation (fast path: only address findings). Bounded: default 3 iterations, then escalate to `Needs human` (BD-008). **Convergence detection:** if a re-review reports the same findings as the previous round, stop immediately and escalate instead of burning the remaining iterations (research/01: pi-review-loop).
 
 ### S6 — Business review (*Acceptance Tester*)
@@ -81,21 +89,59 @@ Intake ─► Refinement ─► Architecture ─► Implementation ─► CI gat
 - Runs before Ready and again whenever the default branch moves while the MR waits: rebase (or merge, per project), resolve conflicts (bounded, default 2 attempts, by a short Implementation run), re-run CI. Escalates with a blocker brief when conflicts cannot be resolved. The board warns when two active tasks touch the same files.
 - Resolving a conflict changes the code, so each attempt re-enters CI and re-runs the review tail (code review, then business review): at the shipped defaults two attempts can commit up to $26 of stage caps against the $50 task default, and two re-reviews that return spend two of code review's three rounds — the derivation is beside `CONFLICT_RESOLUTION_STAGE` in `packages/domain/src/pipeline/templates.ts`. Whether a re-review of a merge commit typically returns is not yet measured.
 
+### S6c — QA (human, optional; BD-031, amended 2026-10-08)
+- **Active only when the project maps a `qa` status** (see § "Ticket lifecycle" below). It sits after the rebase gate and before Ready for merge, so a person tests a branch that already applies. With no `qa` status mapped, the task goes from the rebase gate straight to Ready for merge, as before.
+- The merge request stays open, and still a draft, while QA runs. The ticket is moved to the project's `qa` status.
+- **Ends** when the ticket leaves the `qa` status for a status that is not a return status. The task then goes on to Ready for merge and to a person's merge, as today. A person who merges during QA ends it too. A default-branch move sends it back through the rebase gate.
+- **Returns** to Implementation on any form of a human return (below). The same human-rounds bound applies as at Ready for merge (BD-008).
+
 ### S7 — Ready for merge (human)
 - MR is marked ready — it stays a **draft** until the task gets here, through CI and the review stages, and goes back to draft if the task returns to an agent stage (product owner, 2026-10-06: *"Not marking the MR ready until it is green and verified"*; this reversed WP-138's *ready before CI*); reviewers assigned from CODEOWNERS/project config; **risk classes** derived from touched paths (auth, payments, migrations, infra…) are labelled on the MR and can require a named reviewer, plan approval or a stricter checklist (BD-030); the Checks panel shows coverage delta and dependency status; ticket status → `In review`; Slack notification with summary and cost.
 - **Human MR comments** by mapped users create `mr.review.comment` events; unresolved threads are batched (2-minute window opened by the first comment, re-read when it fires — not an extending debounce; see WP-05) into one return to Implementation — the reviewers' own words go back to the Developer (redacted, one line per comment, inside the prompt's feedback data block; the chat notification carries only the thread count — WP-46) — then a fast Code review, then back to Ready (BD-007). `@agentic hold` pauses; `@agentic rework` restarts from Architecture.
 - **While waiting, nothing runs.** The task sleeps and is woken only by events (comment, approval, CI result, merge) — never by a polling agent (research/01: Cursor subscriptions, Devin sleeping sessions).
 - **Human rejection = reset, not patching.** If a human requests a fundamentally different approach (explicit `@agentic rework` or MR closed with a reason), the task returns to Architecture with the human's reasoning; the old MR is closed, a fresh branch is created and the new plan must state what will be done differently (research/01: Symphony). Ordinary review comments follow the fast path above. A human decision resets the agent-to-agent iteration counter (Paperclip).
 - **Human merge** (or MR close/decline → `Needs human` with reason; a closed MR after human comment "won't do" → task `Cancelled`).
+- *Amended 2026-10-08 (BD-031).* **Every form of a human return counts, here and at QA:**
+  - a person moves the ticket to one of the project's `returned` statuses, or back to its `in_progress` or `pick_up_from` status;
+  - new merge-request diff threads;
+  - new general notes on the merge request, including notes the provider marks as not resolvable;
+  - new comments on the ticket.
+
+  All of them are batched by the same window into one return to Implementation. The return carries every person's word since the last implementation run, as untrusted data. A status change with no new comment still returns the task: the Developer reads the conversation, and asks a question if it finds nothing to fix. A pure acknowledgement ("thanks", "LGTM") does not return the task, and the rule that decides this is TD-029 decision 8. Notes and comments the platform wrote never return a task.
 
 ### S8 — Merged gate (gate)
 - Trigger: `mr.merged`. Records merge time, final diff stats (LOC added/removed/changed), cycle time. Optional post-merge hook: transition ticket to a "deployed" status when a later CI event says so (future).
+- *Amended 2026-10-08 (BD-031).* When the project maps a `done` status, the ticket moves there when the task enters this gate. A merge is the fact the tracker records. Before this amendment the move to Done was at the retrospective (S9). The "deployed" hook stays future.
 
 ### S9 — Retrospective (*Retrospective Facilitator*)
 - **Inputs:** everything on the task: spec, plan, all runs' summaries, returns and their reasons, review findings, human comments, cost, time, flaky notes.
 - **Does:** writes a **Retro Report**: what went well, what caused returns/iterations, human corrections and why, and — the important part — **proposed knowledge updates**, split into *business* (domain facts, rules, glossary terms learned) and *technical* (architecture facts, conventions, gotchas, how-to). Each proposal is a small, deduplicated diff to the knowledge base with provenance (task key, run id).
 - **Outputs:** knowledge update proposal (MR or direct commit per project policy — BD-012), ticket → `Done`, Slack summary.
+  *Amended 2026-10-08 (BD-031):* the ticket's move to `done` now happens at S8, and only when the project maps a `done` status.
 - Followed by the **Librarian** (see [05](05-knowledge-base-and-memory.md)) which merges proposals into the KB structure and keeps it tidy.
+
+## Ticket lifecycle (BD-031, 2026-10-08)
+
+Status names belong to each tracker, and the platform assumes none. A project maps **slots** to its tracker's own statuses. It picks them from the list loaded from the tracker, and the mapping is checked against that list when saved. **Every slot is optional.** An unmapped slot means no transition at that point, and the stage still runs. A project that maps nothing behaves as before.
+
+| Slot | When the platform moves the ticket there |
+|---|---|
+| `pick_up_from` | Never. Intake starts only tickets in this status. A pick-up label still works instead. On cancel or rework the ticket is moved back here. |
+| `in_progress` | When the platform claims the ticket before its first run, and again every time a developer stage starts, including after a return. |
+| `in_review` | When the agent's code review starts. |
+| `approved` | When the agent's own review has passed and its findings are fixed: the last agent review stage approves. |
+| `qa` | When the task enters the QA stage (S6c). |
+| `returned` (one or more) | Never. A person moving the ticket into one of these statuses returns the task. |
+| `done` | When the task enters the merged gate (S8). |
+
+The common flow is *backlog → in progress → waiting for review → approved → QA → merge*. The platform resolves the transition into a status by itself, and never stores a transition's label.
+
+**Claim.** Before the first run is admitted, the platform:
+1. assigns the ticket to its own account;
+2. moves the ticket to `in_progress`, if that slot is mapped;
+3. reads the ticket again.
+
+If someone else holds the ticket, the task stops in `Needs human` with the reason *assigned elsewhere*, a comment is posted on the ticket, and no run starts. Intake skips a ticket that is already assigned to a person, unless the project opts in. On cancel or rework the platform unassigns itself and moves the ticket back to `pick_up_from`, if that slot is mapped. A project whose tracker binding was set up before 2026-10-08 does not claim until its lifecycle is saved once (TD-029 decision 1).
 
 ## Steering and taking over (any stage)
 - A maintainer or member can **steer** a running agent from the run page (a user turn injected into the session, audited).
@@ -130,6 +176,7 @@ A pipeline is data, not code. The platform ships the four templates above; a pro
 - **Change** model, effort, prompt (override or append), tools allowed, max iterations, timeouts, budget per stage.
 - **Add custom stages** declared as: trigger event, kind (`agent|gate|human|system`), prompt, required artifacts, produced artifact, success/return transitions. Example: a `Security scan` gate after CI, a `Docs update` agent before Ready, a `Translate strings` agent for i18n projects.
 - **Map** stage states to ticket statuses per project.
+  *Amended 2026-10-08 (BD-031):* the mapping is the ticket lifecycle's slots above. The free per-stage mapping (`status_mapping`) still applies to a project that maps no slot, and is not applied once any slot is mapped (TD-029 decision 3).
 
 Where: global defaults in platform settings → project settings in the UI → `.agentic/pipeline.yml` in the repository (highest precedence for non-secret settings; see [12](12-agentic-directory.md)). Every change is audited and every run stores the effective config it ran with.
 

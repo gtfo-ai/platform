@@ -53,6 +53,8 @@ Levels only *suggest* stricter or looser defaults; maintainers can override any 
 - **Onboarding wizard:** after technical discovery, the wizard shows the initial level and the three cheapest criteria to improve next, with a short how-to for each (no automated fixes).
 - **Statistics:** readiness level vs cost per merged task and first-pass acceptance rate across projects — the evidence that readiness pays.
 
+*Amended 2026-10-08 (BD-031).* The readiness output also lists the **unmapped ticket lifecycle slots** (product/04 § "Ticket lifecycle") as a **note**. A note is information: it is never a criterion, never a failure, and it changes no level. For example: *"in review, approved and QA are not mapped: the platform moves the ticket at no point after in progress, and the QA stage is off."* A project whose binding has no lifecycle block gets one note saying that the platform neither claims tickets nor moves them.
+
 ## What it is not
 
 - Not a code-quality score and not a judgement of the team.

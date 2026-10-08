@@ -56,6 +56,36 @@ Markdown → provider format converter (ADF for Jira Cloud, wiki markup for DC) 
 > needs an id, a stream and a `stream_seq`, which belong to the append the application ring makes
 > inside its transaction (TD-005).
 
+> **M10 head amendment (2026-10-08, BD-031 decided by the product owner, TD-029 decision 2).** The
+> port gains six members for the ticket lifecycle, the claim and the human-return window:
+> ```
+> listStatuses() -> [{id, name, category: todo|in_progress|done|unknown, raw_category}]   # read; union over issue types
+> listTransitions(ref) -> [{id, name, to: {name, category}}]                               # read; diagnosis and the setup check
+> selfIdentity() -> ExternalIdentity                                                     # read; the binding's own account
+> assignToSelf(ref) -> {changed, assignee}                                               # mutation (executor)
+> unassign(ref) -> {changed}                                                             # mutation; only when the assignee is the binding's own account
+> listComments(ref, {since?, limit}) -> {comments[], total|null}                         # read; the window's re-read
+> ```
+>
+> **Which providers implement them.** Jira Cloud implements all six (WP-172), using
+> `GET project/{key}/statuses`, `GET issue/{key}/transitions`, `GET myself`,
+> `PUT issue/{key}/assignee` and `GET issue/{key}/comment?orderBy=-created`. It never uses
+> `GET statuses/search`, which needs project administration
+> (`docs/research/15-tracker-lifecycle-and-mr-conversation.md` J1–J6). The fake implements them with a
+> configurable status set and assignee (WP-171). Jira Cloud is the only task-management adapter in this
+> build. Any later adapter either implements each member or throws
+> `IntegrationError('unsupported')` **naming the member**. The capability flags (`lifecycleStatuses`,
+> `transitionsRead`, `assign`, `commentsRead`) say which. The shared contract suite runs both branches,
+> the refusing one against a stub adapter in the suite, so a silent no-op cannot pass (BD-017).
+>
+> **Category normalisation:** `new` → `todo`; `indeterminate` and `in-flight` → `in_progress`;
+> `done` → `done`; anything else → `unknown`, with `raw_category` kept. The vendor documents no enum,
+> and the product owner observed the first three keys live (backlog 535).
+>
+> **The binding's `lifecycle` block** (TD-029 decision 1) is part of every task-management provider's
+> binding schema. It is defined once in `packages/contracts`, and `pickup_status` is its `pick_up_from`.
+> `PUT /api/projects/:id/bindings` validates it against `listStatuses()`, read through the executor.
+
 ### GitProvider
 ```
 cloneUrl(project, credential) ; mintCredential(project, scope: read|push:agentic/*, ttl) -> Credential
@@ -96,6 +126,25 @@ capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArt
 > the arithmetic `application/src/bootstrap/batch.ts` states and PROGRESS backlog **64** records.
 > `listCommits` is new at WP-35: product/19 §18 names commit messages as a bootstrap input and the
 > port had no read for them at all.
+
+> **M10 head amendment (2026-10-08, BD-031 decided by the product owner, TD-029 decisions 2, 6 and 10).**
+> The git port gains **no** method. Its contract is tightened in two places.
+>
+> - **`listDiscussions` lists every note.** A merge request's general (non-threaded) note is returned as
+>   a discussion of its own, whatever the provider says about `resolvable`. GitLab's documentation
+>   contradicts itself on that field (`docs/research/15-tracker-lifecycle-and-mr-conversation.md` G2),
+>   and the product owner's example review consists of exactly such notes. The GitLab adapter already
+>   does this (`packages/integrations/src/providers/gitlab/provider.ts:501-521`). WP-173 pins it in the
+>   shared contract suite, for the fake as well.
+> - **`replyToDiscussion` answers an individual note.** On GitLab, whether the reply endpoint accepts an
+>   `individual_note` discussion's id is **[unverified]**. WP-173 records it against a documented-adapted
+>   fixture. If it is refused, the adapter posts a new merge-request note that opens with the reply's
+>   platform marker and names the note it answers, and its docblock states the divergence.
+>
+> **Callers.** `replyToDiscussion` and `resolveDiscussion` get their first callers: the
+> `conversation_replies` and `review_threads_resolve` duties, through `IntegrationActionExecutor`
+> (WP-179). Whose note is the platform's is decided by the marker at the start of its body, never by
+> `authenticatedUser()`, because a binding may act as a person (TD-029 decision 6, Q118).
 
 Git operations (clone, branch, commit, rebase, push) are performed by the workspace manager with `git` and a credential helper, never by the agent with a raw token (BD-025).
 

@@ -20,6 +20,8 @@
 
 > **Note from the product owner — 2026-10-08, HIGH PRIORITY.** Backlog **535** (tracker statuses: the pick-up status, in progress, review, a human QA phase, loaded statuses and the mapping), **536** (an agent claims the ticket so no second instance works it) and **537** (code-review findings, answers and replies live on the merge request, and every agent reads them) go ahead of every other open entry when the next milestone is planned. The Autix + Jira example (AUT-6327, autix!2715) is recorded in 535 and 537.
 
+**Session 15 — 2026-10-08.** `main` opened at **`516d9044`**, tree clean. The PENDING runs of session 14's last docs commit are **PENDING — read them first**, and this session's runs too (the orchestrator fills the ids). **The product owner's priority for this session:** backlog **535**, **536** and **537** go ahead of every other open row, so **WP-170 onward run before WP-163…WP-169**. The product owner decided seven rulings on 2026-10-08, recorded as **BD-031**. The architect's M10-head pass (§ "Architect ruling (M10 head, session 15)") wrote **TD-029**, the 2026-10-08 amendments to product/04, /06 and /17 and technical/02, /03, /06 and /12, and the rows **WP-170…WP-183** (plan § "Milestone M10", sub-section "M10 head"). It filed backlog **538** (minor, no owner) and **Q118**. One migration, **0088**, is taken by WP-177, so the next free number after it is **0089**. No row calls the product owner's Jira or GitLab. Fixtures come from vendor documentation (`docs/research/15-tracker-lifecycle-and-mr-conversation.md`) and use invented status names. **The next row is WP-170** (contracts, alone). After it, WP-171, WP-173, WP-174 and WP-175 can run in parallel. Every brief carries the no-pattern-kill line and *any shell run gets `</dev/null` and a bound*. `verify:e2e` still runs with `WORKSPACE_E2E_RUNTIME_IMAGE=platform-runtime:wp151`.
+
 **Session 14 — 2026-10-08.** `main` opened at **`eaf3b236`**, tree clean; session 13's PENDING run read **completed success** (`d0b33fc6`'s `ci` `37656404246`), and `eaf3b236`'s `ci` `37659347633` and `image` `37659347530` **completed success**. `RELEASE_VERSIONING` unset. No notes from the person starting the session, which is started with *"do not ask me questions; act"*. Docker volume baseline **131**. **WP-161 is resumed (IN_PROGRESS)** by the path its BLOCKED status row names, taken as the orchestrator's decision rather than waited on: rulings (b)–(g) and their unit tests first, where nothing executes; the shell-oracle rows and the Docker check carry **marker-only** payloads (a planted script that writes a marker file, a hook that exits 1) — never `sudo`, `su` or a privilege command run anywhere; if the classifier stops the implementer again, the row's executed half is left to a person and the static half lands alone. `verify:e2e` still runs with `WORKSPACE_E2E_RUNTIME_IMAGE=platform-runtime:wp151`. **WP-161 is DONE at `d080c81f`** (`ci` `37725511106` and `image` `37725511098` **completed success**, `release` skipped; its docs commit `a6f75bd1` `ci` `37726627791` and `image` `37726627702` **completed success**) — 515–523 and 531 closed, criterion (14) (a backslash-newline inside a comment) added in review; three review rounds, the classifier did not stop the resumed implementer. 530 and 532 filed with no owner (532: `ignored:check` is red locally while the harness's ScheduleWakeup lock `.claude/scheduled_tasks.lock` exists, so the orchestrator quotes `verify`'s steps one by one). A reviewer's shell loop hung ≈ 2 h on `ksh -c` with an open stdin and was stopped and resumed: every brief now says `</dev/null` and a bound on any shell run. **M9 has no open row.** The architect's M10 pass ("Architect ruling (M10, session 14)") wrote **WP-162…WP-169** (499 + 532 first — the only major, and rule 95 serialises rows until it lands; WP-163 may run beside it); no migration in M10, so the next free number stays **0088**. M10's commit `f9e38239` `ci` `37727755922` and `image` `37727755870` **completed success**. **WP-162 is DONE at `19352601`** (`ci` `37732270412` and `image` `37732270355` **completed success**, `release` skipped; its docs commit's runs **PENDING — read them first**) — 499, 532 and 533 closed, **standing rule 95 retired** (worktree parallelism applies again), `CLAUDE.md` amended; `pnpm run -s verify` now reads `PASS` with the harness lock present, so the per-step workaround is over. 534 filed (nit). **Session 14 stopped at the person's request** (*"stop after the current row implementation"*, given while WP-162 was in review). For the next session: **WP-163** is next (backlog 501, 506; its brief can follow WP-161's and WP-162's shape); every brief carries the no-pattern-kill line and *any shell run gets `</dev/null` and a bound*; `verify:e2e` still runs with `WORKSPACE_E2E_RUNTIME_IMAGE=platform-runtime:wp151`.
 
 **Session 13 — 2026-10-07.** `main` opened at **`deee26e6`**, tree clean; the runs session 12 left PENDING read **completed success** (`e214edb1`'s `ci` `37513843413` and `image` `37513843330`; `deee26e6`'s `ci` `37514075082` and `image` `37514075031`). `RELEASE_VERSIONING` unset. No notes from the person starting the session. Docker volume count **190** at open and **131** after the first tiers (the drop is not this session's; 131 is the baseline now); `platform-runtime:dev` still predates WP-151's label, so `verify:e2e` runs with `WORKSPACE_E2E_RUNTIME_IMAGE=platform-runtime:wp151`. **WP-158 is DONE at `ebd2ecd3`** (`ci` `37599958320` and `image` `37599958373` **completed success**, `release` skipped; its docs commit `9a96d763` `ci` `37600197446` and `image` `37600197202` **completed success**) — 509 and 510 closed; **511** (**major**: builtins and wrappers that run a string as code — `trap`, `bash -lc`) filed with no owner and goes to an architect pass for a row; 512 and 513 filed (nits). The architect's third M9 amendment placed **511** as **WP-160** (folding 512 and 513, 513 regraded major) after WP-159. **WP-159 is DONE at `8f1569a3`** (`ci` `37606230322` and `image` `37606230370` **completed success**, `release` skipped; its docs commit `5217acc0` `ci` `37606385640` and `image` `37606385759` **completed success**) — 498 closed; 514 filed (minor UX). **WP-160 is DONE at `c3462354`** (`ci` `37616512104` and `image` `37616512076` **completed success**, `release` skipped; its docs commit `b88c238e` `image` `37616708426` success and `ci` `37616708262` **cancelled** by the next push's concurrency group, whose `ci` `37617522185` on `ecaafc00` **completed success**) — 511, 512 and 513 closed; 515–523 filed and folded by the architect's fourth amendment into **WP-161** (git's abbreviated long options, the fail-open depth bound, the git boundary's composite skip, expanded command names, mid-word continuations, `difftool -x`, `hash -p`, `xargs` argv). **WP-161 is BLOCKED** (paused for a human decision): its implementer was stopped twice by the harness's safety classifier during the measurement stage, before any code; the measurements are in its notes and its status row says how to resume. **WP-154 is DONE at `04029700`** (`ci` `37624851327` and `image` `37624851243` **completed success**, `release` skipped; its docs commit `473679f2` `ci` `37625050184` and `image` `37625050086` **completed success**) — 455, 487 and 502 closed; 524 filed. **WP-155 is DONE at `45f318e4`** (`ci` `37632423809` and `image` `37632423752` **completed success**, `release` skipped; its docs commit `8d962c30` `ci` `37632633031` and `image` `37632632848` **completed success**) — 450, 451 and 452 closed; 525–527 filed. **WP-156 is DONE at `65c79458`** (`ci` `37642640629` and `image` `37642640580` **completed success**, `release` skipped; its docs commit `1af50c24` `ci` `37642967714` and `image` `37642967808` **completed success**) — 420 and 421 closed; 528, 529 filed; migration 0087 used, so the next free number is **0088**. **WP-157 is DONE at `d8ae5e31`** (`ci` `37656021822` and `image` `37656021717` **completed success**, `release` skipped; its docs commit `d0b33fc6` `image` `37656403892` **completed success** and `ci` `37656404246` **completed success**, read by session 14) — 413, 414, 430, 431, 434, 435 and 447 closed. **An implementer's `pkill -f "cat"` took down Docker Desktop and the person's apps at ≈ 17:30** (standing rule **96**); the person restarted Docker and the session resumed. Standing rule **97** (reviewer copies) earned the same afternoon. **M9's only open row is WP-161 (BLOCKED)** — it waits for a person's decision on how to continue after the classifier stops; when M9's last row merges, the architect pass writes M10 from the open backlog (524–529 and the older unowned entries). **Session 13 stopped at the person's request** (*"stop your work after next row delivered"*, given while WP-157 was in flight) with WP-157 delivered (≈ 10 h). For the next session: (1) **WP-161** needs a person's decision first (its status row says how it can resume); (2) `platform-runtime:dev` still predates WP-151's label, so `verify:e2e` runs with `WORKSPACE_E2E_RUNTIME_IMAGE=platform-runtime:wp151`; (3) rules 95–97; (4) every brief carries the no-pattern-kill line.
@@ -15548,6 +15550,7 @@ an inherited environment, or when the measurement above shows `rebase --exec` or
 
 
 ### 535. **The tracker's statuses are not part of the platform's lifecycle: a project cannot name the one status the agents start from, see the provider's statuses when it sets up the mapping, or hand a finished task to a human QA status** (TODO, **HIGH PRIORITY, product owner, 2026-10-08.** The product owner's worked example from Autix is recorded at the end of this entry. Current state read by an Explore agent on `829fde12`, cited below, no test run. **No work package owns it**)
+> **M10 head (architect, session 15): folded into WP-170, WP-171, WP-172, WP-174, WP-177, WP-178, WP-181, WP-182 and WP-183** (BD-031, TD-029; § "Architect ruling (M10 head, session 15)").
 
 **What the product owner asked for.** Intake starts from **one status the project names**. When an agent takes the ticket it moves the ticket to *In progress* and owns it. When the agent is done it moves the ticket to *Review*, and after review to a further status that is a **QA phase with a human in the loop**. Setting this up probably needs the provider's statuses **loaded** and a **mapping** chosen from them.
 
@@ -15574,6 +15577,7 @@ an inherited environment, or when the measurement above shows `rebase --exec` or
 
 
 ### 536. **Nothing claims a ticket on the provider, so two platform installations, two projects bound to the same tracker project, or a human can work the same ticket in parallel with an agent** (TODO, **HIGH PRIORITY, product owner, 2026-10-08.** Current state read by an Explore agent on `829fde12`, no test run. **No work package owns it**)
+> **M10 head (architect, session 15): folded into WP-170, WP-171, WP-172, WP-177 and WP-183**. The two-installations label is filed as **538** (§ "Architect ruling (M10 head, session 15)").
 
 **What the product owner asked for.** An agent must be able to **lock the ticket on itself**, so that no other instance works on the same ticket at the same time.
 
@@ -15590,6 +15594,7 @@ an inherited environment, or when the measurement above shows `rebase --exec` or
 
 
 ### 537. **The normal pipeline's code review leaves no trace on the merge request, and no agent reads the MR's discussions: findings, answers and human replies should live on the MR as the record, and every agent should read them** (TODO, **HIGH PRIORITY, product owner, 2026-10-08.** Current state read by an Explore agent on `829fde12`, no test run. **No work package owns it**)
+> **M10 head (architect, session 15): folded into WP-170, WP-173, WP-174, WP-175, WP-176, WP-178, WP-179, WP-180, WP-181 and WP-183** (§ "Architect ruling (M10 head, session 15)").
 
 **What the product owner asked for.** The review agent writes its findings as **comments on the merge request** (GitLab first), as evidence and history, transparently. The developer agent **answers** them there. Agents should **always** keep the conversation in the MR and **read** it.
 
@@ -15609,6 +15614,18 @@ an inherited environment, or when the measurement above shows `rebase --exec` or
 
 **From the product owner's example** (`autix!2715`, see 535). The human review arrived as two **general notes with `resolvable: false`**, not diff discussions, plus checklist ticks in the MR description. A reader that keeps only unresolved resolvable threads sees **none** of it; this must be measured against `review-threads.ts` before a row is written. The notes mix three kinds of request: a code change, a documentation-only change ("do not change the behaviour, state it in the MR description"), and actions only a human can take (attach production command output to the ticket, a joint review). The agent must answer each note on the MR, do the first two, and hand the third back to a person by name rather than claim it done.
 
+
+### 538. **Two platform installations that share one tracker service account both see themselves as a ticket's assignee, so the claim (BD-031 ruling 5) does not stop them working the same ticket** (TODO, **minor. It needs an operator to bind two installations with one account, and the setup guide advises against that. The claim settles every other case BD-031 names: a person, two projects bound with different accounts, two installations with different accounts.** Filed by the architect's M10-head pass, session 15, from the product owner's ruling 5, which left it to the architect. **No work package owns it**)
+
+**What is wrong.** `ensureTicketClaim` (WP-177, TD-029 decision 5) compares the re-read assignee with the binding's own account (`selfIdentity`). Two installations authenticated as one account both find themselves as the assignee, so both claim, and both run.
+
+**Why it is not in M10.** The product owner's suggestion is a label naming the installation. A label interacts with the label pick-up rule (`pickup_label`, `packages/integrations/src/providers/jira-cloud/config.ts:53-59`): an installation that picks up by label could match another installation's marker. The label is visible on every board, and it needs a stable installation id that both the claim and the release can read. That is a design of its own, and the case it closes is an operator error that the setup guide (WP-172 (f)) and Q118 already address.
+
+**Done when.** One of these holds:
+- (a) a claim marker naming the installation (a label or an entity property), written with the assign, checked on the re-read, and removed on release, with a contract clause and a unit case per pick-up rule; or
+- (b) the founder rules that one account per installation is a stated requirement, and the readiness note says so.
+
+**Depends on** WP-177.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -19384,9 +19401,31 @@ WP-167 and WP-168 are serial with each other in that order, and WP-169 runs afte
 expected to need a migration. The next free number is **0088**. Read the backlog entry a row folds before
 planning it.
 
+**M10 head (architect, session 15; the product owner's priority of 2026-10-08).** Rows **WP-170…WP-183**
+go **first**: plan § "Milestone M10", sub-section "M10 head"; BD-031; TD-029; § "Architect ruling (M10 head, session
+15)" at the end of this file. WP-163…WP-169 follow them in their table order. WP-162 is DONE. Order of the
+head rows: WP-170 alone. Then WP-171, WP-173, WP-174 and WP-175 in parallel. WP-172 follows WP-171, and
+WP-176 follows WP-175. WP-177, WP-178 and WP-179 are serial, in that order. WP-180 runs beside them.
+WP-181 follows WP-177 and WP-180, WP-182 follows WP-181, and WP-183 runs last. WP-177 takes migration
+**0088**.
+
 | WP | Title | Status | Commit | Notes |
 |---|---|---|---|---|
 | WP-162 | **A test never writes into the repository it runs in, and the harness's own files do not turn `verify` red** | DONE | `19352601` | Folds **499**, **532** and, as a review nit, **533**. Built: `scripts/git-scratch-env.mjs` (prefix scrub, own config/hooksPath, `GIT_CEILING_DIRECTORIES`, `rev-parse` guard) taken by every git-spawning test; a vitest setup file scrubbing each worker (rule-27 correction to (b): the scripts are imported in-process); the census `scripts/git-scratch-env-census.test.ts`; the hostile-`GIT_DIR` process suite `scripts/git-fixture-isolation.test.ts` (fails on `f9e38239`: config, `main`, `side` and three tags changed); `LOCAL_TOOL_PATHS` in `check-ignored` (untracked only). (1) under lefthook 2.1.12: a linked worktree's hook adds `GIT_DIR` only; the incident's replaced main index not reproduced. Review: one round, **APPROVE-with-nits** (three docblock nits + 533, fixed by the orchestrator); six canaries dead (prefix list, ceiling, setup scrub, a reverted site, `rev-parse` guard, lock dropped). Orchestrator: rule 95 **retired** (e); `CLAUDE.md` bullet and the `PROCESS_SUITES` sentence (7). Verification: `PASS: verify` **with `.claude/scheduled_tasks.lock` present** (before and after the nits); `verify:integration` 868/868; `verify:e2e` 291/291 twice; `core.bare` false, no `v*` tags, volumes 131. CI on `19352601`: `ci` `37732270412`, `image` `37732270355` **completed success**, `release` skipped. Filed 534 (nit, no owner). | Folds **499** (major), **532**. No deps. No migration. Retires rule 95. Parallel-safe with every row but WP-169. |
+| WP-170 | **Contracts: the lifecycle block, the claim and return events, the conversation's artifact fields and DTOs** | TODO | — | Folds **535**, **536**, **537** (contracts half). No deps. No migration. Touches `repository-grades.ts` for the grade census only. Runs first and alone. |
+| WP-171 | **The task-management port reads statuses, transitions and comments, and claims and releases a ticket: port, fake and contract suite** | TODO | — | Folds **535** (a), **536** (a). Deps WP-170. No migration. Refusal-by-name branch (BD-017). Parallel with WP-173…WP-175. |
+| WP-172 | **Jira Cloud implements the six members, against documented fixtures** | TODO | — | Folds **535** (a), **536** (a). Deps WP-171. No migration. research/15 J1–J6, never J2. Neutral status names. |
+| WP-173 | **GitLab: every note is a discussion whatever `resolvable` says, and a reply reaches a general note** | TODO | — | Folds **537**. No deps. No migration. Reply to an individual note **[unverified]**, fallback built. Parallel with every row before WP-178. |
+| WP-174 | **Domain: the `qa` stage, the acknowledgement rule, the slot rules, the lifecycle moments and the return decision** | TODO | — | Folds **535**, **537** (d). Deps WP-170. No migration. TD-029 decisions 4, 8 and 9. Parallel with WP-171, WP-173, WP-175. |
+| WP-175 | **Domain: the `conversation` data block** | TODO | — | Folds **537**. Deps WP-170. No migration. Parallel with WP-171…WP-174. |
+| WP-176 | **Prompts: every role reads the conversation, the Developer answers each thread, and the Reviewer resolves only what it re-checked** | TODO | — | Folds **537**. Deps WP-170, WP-175. No migration. Eval cases and `ROLE_PROMPT_VERSIONS`. |
+| WP-177 | **Application: the claim, the release, the intake skip, the lifecycle transitions, and `status_mapping` superseded** | TODO | — | Folds **535** (c), **536**. Deps WP-171, WP-174. **Migration 0088** (`tasks.ticket_claim`, `tasks.qa_stage`). Serial with WP-178 and WP-179. |
+| WP-178 | **Application: one human-return window over four signals, at `qa` and at `ready_for_merge`, and the QA stage's endings** | TODO | — | Folds **535** (d), **537** (d). Deps WP-173, WP-174, WP-177. No migration. Measured: today's window drops a `resolvable: false` general note. |
+| WP-179 | **Application: the review conversation on the merge request — findings, replies and resolutions** | TODO | — | Folds **537** (a), (b). Deps WP-170, WP-173, WP-178. No migration. Renderer shared with review-only. |
+| WP-180 | **Application: every agent stage gets the conversation in its prompt, and the tool's port answers the same** | TODO | — | Folds **537** (c). Deps WP-171, WP-173, WP-175. No migration. Parallel with WP-177…WP-179. |
+| WP-181 | **Server: the statuses read, the binding's check, the effective configuration, the readiness notes and the `get_conversation` tool** | TODO | — | Folds **535** (b), **537** (c). Deps WP-171, WP-177, WP-180. No migration. |
+| WP-182 | **Web: the slots as pick lists in the wizard and in project settings; the claim and the QA stage on the task page** | TODO | — | Folds **535** (b). Deps WP-181. No migration. User-guide sweep (rule 83). |
+| WP-183 | **End to end, with fake Claude: the full flow with every slot mapped, a QA return in each form, and a project with nothing mapped** | TODO | — | Folds **535**, **536**, **537**. Deps WP-170…WP-182. No migration. The product owner's flows (i)–(iii). |
 | WP-163 | **A stop that lands while the spawn marker commits holds no money, and a stop the platform made logs no fault** | TODO | — | Folds **501**, **506**. Deps WP-150, WP-151, WP-154. No migration. BD-010's 2026-10-08 amendment. Parallel-safe with WP-162. |
 | WP-164 | **An `xargs` that feeds a project-command verb is uncertain, and the verbs come from the floors themselves** | TODO | — | Folds **530**. Deps WP-161. No migration. Touches only `packages/domain/src/policies/` and technical/05. Parallel-safe with every row. |
 | WP-165 | **A merged task is never paused or taken over, so a merged task always has its way to the retrospective** | TODO | — | Folds **508** (Q117 (a)). Deps WP-152. No migration. technical/02's M10 amendment. Serial with WP-167. |
@@ -46402,6 +46441,88 @@ Each row states its answer in its notes, and none of them blocks the row.
 **Next: WP-162**, with WP-163 beside it if two implementers are free, both working on the main
 checkout (rule 95), with their `verify` runs sequenced. The next free migration number is still
 **0088**, and no row is expected to take it.
+
+### Architect ruling (M10 head, session 15) — the tracker's lifecycle, the claim and the merge-request conversation go first
+
+Written 2026-10-08 at `516d9044`, with M10's WP-162 DONE and WP-163…WP-169 TODO. This pass covers backlog
+**535**, **536** and **537**, which the product owner marked high priority, and the product owner's seven
+rulings of the same day. It writes those rulings down as **BD-031** (decided by the product owner) and
+takes the technical choices as **TD-029** (architect, session 15). The two-installations question was left
+to the architect, who files it as **538**. No other open heading changed disposition: § "Architect ruling
+(M10, session 14)" above still holds for every entry it lists. Nothing was called on the product owner's
+Jira or GitLab. Vendor documentation was read and saved as `docs/research/15-tracker-lifecycle-and-mr-conversation.md`.
+
+**Measured by this pass** (read at `516d9044`, and one existing unit file run).
+
+1. **(a) A GitLab general note with `resolvable: false` is seen by the adapter and the poll, arms the window, and is then dropped.**
+   - The adapter lists it as its own discussion, since GitLab's discussions endpoint returns an individual note as one, and computes `resolvable` from its notes (`packages/integrations/src/providers/gitlab/provider.ts:501-511`). A general note maps to `resolvable: false`, as the documented fixture's `individual_note: true` entry does (`test/fixtures/http/gitlab/discussions.json:107-129`).
+   - The webhook path finds the note's thread and emits `mr.review.comment` with `resolved: false` (`packages/integrations/src/providers/gitlab/inbound.ts:311-339`). The poll path does the same for a task at Ready (`packages/application/src/pipeline/mr-poll.ts:611`, `:696-716`).
+   - The saga arms the window for a task at `ready_for_merge` (`packages/application/src/pipeline/saga.ts:1651-1690`). When the window fires, it keeps only `isOpenReviewThread`, which requires `resolvable` (`packages/application/src/pipeline/review-threads.ts:104-105`, used at `jobs.ts:1539`). So the general note returns nothing, counts as no thread, and never reaches the Developer.
+   - The behaviour is pinned by a test: `packages/application/src/pipeline/review-threads.test.ts` › "counts only resolvable threads, and a thread of system notes is not a review thread"
+   - **Run:** `pnpm exec vitest run packages/application/src/pipeline/review-threads.test.ts --project unit` read 8/8 passed (load 3.2).
+   - **The product owner's example review, which consisted of two such notes, would have returned nothing.**
+2. **(b) Diff discussions are seen, but only at Ready.** A resolvable, unresolved thread with a person's note returns the task, through the same path. The window acts only when `state === 'ready_for_merge'` (`jobs.ts:1518`, `:1591`; `saga.ts:1673`). A thread opened while an agent stage runs never returns anything, and no agent reads it: no platform tool reads discussions (`apps/server/src/platform-tools.ts:116-122`).
+3. **(c) Ticket comments never return a task.**
+   - The Jira webhook emits `ticket.comment.added` (`packages/integrations/src/providers/jira-cloud/webhook.ts:504-538`). Its only consumer is ask-the-task, which acts only on a trigger phrase from a mapped author (`packages/application/src/ask/commands.ts:239-259`, `packages/domain/src/ask/ask.ts:191-208`).
+   - Comments reach a prompt only through the ticket snapshot, which holds the newest 20 comments written by people (`packages/application/src/pipeline/ticket-snapshot.ts:162`, `:233-253`). The snapshot is re-read at an agent stage when `ticket.updated` stamped a newer signal (`:490-498`).
+   - `ticket.status.changed` is emitted by the webhook (`webhook.ts:576`) and declared unconsumed (`packages/application/src/events/consumption.ts:214`).
+4. **Transition resolution already targets the status.** Backlog 535 asked whether `transition` might match a transition label instead. `resolveTransition` matches `transition.to.name`, the target status (`packages/integrations/src/providers/jira-cloud/index.ts:1444-1453`). The slots can map to status names without a change there.
+5. **Vendor facts that changed the design** (research/15).
+   - GitLab's documentation contradicts itself on whether a general note is resolvable (G2), so no rule may depend on `resolvable`.
+   - The Note Hook carries no `discussion_id` (G7), which agrees with `webhook-payloads.ts:13-15`.
+   - Jira documents no status-category enum, and its transitions example uses a fourth key, `in-flight` (J1a, J3).
+   - Jira's newer `statuses/search` needs project administration, so the per-project read is used (J2).
+   - Whether GitLab's reply endpoint accepts an individual note's id is **[unverified]** (G4). WP-173 builds a fallback and adds a verification item to `docs/TODO.md`.
+
+**Rulings the brief left to the architect** (TD-029).
+- **The acknowledgement rule (decision 8).** A word is an acknowledgement only when it is short (≤ 80 characters) and, after normalisation, empty or made **only** of tokens from a closed vocabulary. A project may extend the vocabulary in its own language through a settings key that the repository file cannot set.
+  - **The failure direction is chosen:** a missed acknowledgement costs one run and at most a question, while a request read as thanks would be lost.
+  - A model classifier is rejected: it cannot be tested exhaustively and it spends money on every comment.
+  - It is tested in both directions at WP-174 (3), and end to end through WP-178 (2).
+- **The two-installations label: filed, not built** (backlog **538**, minor). The claim's assignee check settles a person, two projects and two installations with different accounts. A shared account is an operator's choice that the setup guide advises against (WP-172 (f)). A label naming the installation interacts with label pick-up rules and needs its own design.
+- **Where the slots live (decision 1).** They go on the task-management binding, beside `pickup_status`, which *is* `pick_up_from`. They do not go in `.agentic/config.yml`, because intake reads the binding and the names belong to the tracker.
+  - **The claim is on for a binding with a `lifecycle` block, and off for one without.** That honours ruling 5 for every project set up from now on, and ruling 2's *nothing mapped behaves as today* for every existing binding.
+- **`status_mapping` (decision 3)** is superseded, not merged: once any slot other than `pick_up_from` is mapped, it is not applied. This gives one writer per moment.
+- **The QA stage (decision 9)** sits after the rebase gate, so a person tests a branch that applies. It adds no task state: a task at `qa` is `active` at a human stage. Its presence is frozen per task (`tasks.qa_stage`, migration 0088). Every return form keeps the interpreter signal `mr.review.comment`, because per-task template snapshots already carry that edge. `task.human_return` records the forms.
+- **The horizon (decision 7)** is the start of the latest implementation run. A note written while the agent's review ran is then not lost, and a gate re-entering the human stage resets nothing.
+- **Whose note it is (decision 6)** is decided by the platform's marker, never by the author. The first local test's binding used a person's own token, and an author check would silence that person (Q118).
+- **Review threads (decision 10)** are found again by marker, not stored, as review-only and the conflict warning already do. The reviewer resolves only its own finding threads.
+
+**The rows, in order** (plan § "Milestone M10", sub-section "M10 head"):
+
+| Step | Rows | How |
+|---|---|---|
+| 1 | WP-170, the contracts | alone |
+| 2 | WP-171, the task-management port, fake and suite; WP-173, GitLab's every-note-is-a-discussion; WP-174, the domain; WP-175, the conversation block | in parallel |
+| 3 | WP-172, Jira, after WP-171; WP-176, the prompts, after WP-175 | each after its own dependency |
+| 4 | WP-177, claim, release, intake skip, lifecycle and migration 0088; WP-178, the return window; WP-179, the merge-request writes | serial, in that order |
+| 4 | WP-180, the conversation in every prompt | beside step 4's serial rows |
+| 5 | WP-181, the server | after WP-177 and WP-180 |
+| 6 | WP-182, the web | after WP-181 |
+| 7 | WP-183, the fake-Claude e2e flows (i)–(iii) | last |
+
+Then WP-163…WP-169, in their table order.
+
+**Decisions written by this pass.**
+- **BD-031** (accepted; rulings 1–7 decided by the product owner on 2026-10-08; amends BD-007).
+- **TD-029** (accepted; architect, session 15).
+- Amendments dated 2026-10-08:
+  - product/04: S5, S6c, S7, S8, S9, § "Ticket lifecycle" and the customisation sentence;
+  - product/06, step 1;
+  - product/17, the informational note;
+  - technical/02: the M10-head amendment and six catalogue rows;
+  - technical/03, migration 0088;
+  - technical/06: the task-management members and the git contract;
+  - technical/12: the binding block, the supersession, `human_returns` and the artifact fields.
+- The decisions index gained BD-023…BD-031. BD-023…BD-030 existed but were missing from the index.
+
+**Open questions.** **Q118** (new): should a task-management binding be required to authenticate as a dedicated account? *Recommendation: no refusal. A readiness note, plus the setup guide's advice.* No other open question changed.
+
+**Could not decide here, left to the rows:**
+- whether GitLab's reply endpoint accepts an individual note (WP-173 (c));
+- how Jira's `total` behaves on the comments read (WP-172 (c), which builds the safe reading either way).
+
+**Next: WP-170**, alone.
 
 ## WP notes — session 14 (M10)
 

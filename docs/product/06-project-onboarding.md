@@ -11,6 +11,19 @@ Populate the project's knowledge base with the context a senior colleague would 
 ### Step 1 — Connect (required)
 Repository, task-management binding (Jira project + pick-up rule), Slack channel, observability bindings. The platform clones the repository and validates access.
 
+*Amended 2026-10-08 (BD-031).* Once the task-management binding is connected, this step loads the tracker's statuses, each with its category, and offers the **ticket lifecycle slots** as pick lists:
+- *pick up from*;
+- *in progress*;
+- *in review*;
+- *approved*;
+- *QA*;
+- *returned* (one or more statuses);
+- *done*.
+
+It also offers a pick-up label instead of a pick-up status, and two switches: *claim tickets* (on) and *take tickets already assigned to someone* (off).
+
+Every slot may be left empty. The pick lists contain only statuses the tracker returned, and the save is checked against that list again. The pick lists are also on the project settings page, so the step can be skipped and finished later. If the statuses cannot be loaded, the slots cannot be saved, and the step says so rather than accepting names it cannot check. product/04 § "Ticket lifecycle" says what each slot does.
+
 ### Step 2 — Technical discovery (automatic, ~minutes, cheap)
 A **Discovery agent** (Sonnet 5, read-only, bounded budget) inspects the repository and drafts:
 - `technical/overview.md`: stack, top-level layout, boundaries it can *infer* with confidence markers; explicitly *not* a file listing.

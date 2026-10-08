@@ -32,3 +32,4 @@ Same template as business decisions (see `../README.md`). Index is filled during
 | [TD-026](TD-026-knowledge-vault-read-path.md) | Knowledge vault read path: platform-side bare mirror + git plumbing, never a working tree | accepted |
 | [TD-027](TD-027-stage-scoped-command-defaults.md) | Command defaults per stage: the merge is a `conflict_resolution` stage layer, never the implementation maximum | accepted |
 | [TD-028](TD-028-launcher-control-plane.md) | The launcher's transport is split: an authenticated HTTP control plane on an internal network, the run's stdio unchanged on TD-025's control socket | accepted |
+| [TD-029](TD-029-ticket-lifecycle-slots-returns-and-mr-threads.md) | Ticket lifecycle slots live on the task-management binding; one claim before admission; one human-return window over four signals; review threads found again by marker | accepted |

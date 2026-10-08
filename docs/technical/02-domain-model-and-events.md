@@ -126,6 +126,50 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > default branch, so there is nothing to take over, and a pause would stop a pipeline that
 > `needs_human` has already stopped. A merged task that was paused before this change keeps
 > *Cancel*, and none is known to exist. Built at WP-165.
+>
+> **M10 head amendment (2026-10-08, architect, session 15; BD-031 decided by the product owner,
+> TD-029): an optional human `qa` stage, a claimed ticket, and one human return over four signals.**
+>
+> **No new task state.** The `qa` stage is a `kind: 'human'` stage in the shared merge tail, between
+> `rebase_gate` and `ready_for_merge`, declared `enabled: false`. It is enabled for a task whose
+> `tasks.qa_stage` was set at creation, which happens when the binding maps a `qa` status (migration 0088).
+> A task at `qa` is `active` with current stage `qa`, as a spike task at `human_review` is. Its edges
+> are:
+>
+> | Event | Goes to | Meaning |
+> |---|---|---|
+> | `mr.review.comment` | `implementation` | every return form, `human_rounds` |
+> | `ticket.status.changed` | `ready_for_merge` | QA passed |
+> | `default_branch.moved` | `rebase_gate` | the default branch moved |
+> | `mr.merged` | `merged_gate` | a person merged during QA |
+>
+> `RETURN_LOOPS` gains `qa → human_rounds`. A reader that asks *"is this task waiting at a human stage
+> where a person's word returns it"* asks for the current stage `qa` or `ready_for_merge`. It never asks
+> only for `state === 'ready_for_merge'`. Today that check is in several places, and each is widened
+> to `qa`:
+> - the review window (`packages/application/src/pipeline/jobs.ts:1518`, `:1591`);
+> - the comment handler (`saga.ts:1673`);
+> - the merge handler (`saga.ts:1630`);
+> - the default-branch handler (`saga.ts:1725`);
+> - the merge-request poll's waiting set (`mr-poll.ts:623`).
+>
+> **Return signal.** One window, the `mr.comment.debounce` queue (BD-007's batching), now covers both
+> human stages. It is armed by four events: `mr.review.comment`, `ticket.comment.added`,
+> `ticket.status.changed`, and `ticket.updated` whose changed fields name the status. When it fires it
+> re-reads the ticket's status, the merge request's discussions and the ticket's comments, using TD-029's
+> rules:
+> - whose note it is: decision 6;
+> - the horizon (the start of the latest implementation run): decision 7;
+> - the acknowledgement rule: decision 8.
+>
+> Every form is passed to the interpreter as `mr.review.comment`, because per-task template snapshots
+> already carry that edge (TD-003). The forms themselves are recorded in `task.human_return`. A return
+> marks the ticket claim stale in its own transaction.
+>
+> **Claim.** The claim is not an aggregate transition. It is a precondition of an agent run's admission,
+> decided between the `stage.execute` job's transactions. A refusal is an ordinary escalation with the
+> reason `ticket_assigned_elsewhere` or `ticket_claim_failed`. Release follows `task.cancelled` and the
+> *Rework* command; escalation and take-over keep the claim. Built across WP-170…WP-183.
 
 *Which* limit a `returned` spends is decided by the transition and not only by the stage it leaves (WP-26). `ready_for_merge` has two outgoing returns — a human's comment, which is BD-008's `human_rounds`, and the default branch moving, which re-enters the rebase gate — and attributing the second to the first escalated a task with *"human_rounds iteration limit of 3 reached: main moved to …"* after three merges to `main` under a waiting merge request. The edges that need their own loop are enumerated in `RETURN_LOOPS_BY_EDGE` (`packages/domain/src/pipeline/interpreter.ts`); everything else is attributed by the stage, and an edge in neither table cannot return at all.
 
@@ -439,7 +483,12 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 | `ticket.created` | task-management adapter | ticket ref, issue type | Ticket readiness linter (10, WP-25), bug trace (120, WP-61 — the job decides whether the type is a bug) |
 | `ticket.updated` | task-management adapter (WP-60; emitted **beside** `ticket.matched`/`ticket.status.changed`, never instead) | ticket ref, the provider's `updated_at`, the changed field names (bounded, `truncated`), actor | Snapshot freshness (10, `pipeline.ticket.signal` — Q61 (b); since WP-145 it reaches a task by the ticket's stable id first and by the key only for a task with none, and moves a live task whose id it carries under another key to that key, appending `task.ticket.rekeyed`); bug re-trace (120, `pipeline.bug.retrace`, WP-90 — a ticket whose defect trace is not `linked` is traced again, PROGRESS backlog 192); re-lint on edit is **not** built (it waits on a measurement of update frequency); product/18:60's *"edited within 48 h"* is a statistics read over this event (WP-61, `lintEdits`), not a consumer |
 | `ticket.comment.added` | adapter | ticket, comment id, author identity, text | Question answering (20), Feedback intake (30) |
-| `ticket.status.changed` | adapter | ticket, from, to, actor | Task sync (20) |
+| `ticket.status.changed` | adapter (Jira's webhook since WP-60; declared unconsumed until M10) | ticket, from, to, actor | The human-return window (10, `pipeline.review.comment`, BD-031, from WP-178): it arms the window only for a task at `qa` or `ready_for_merge`, and the window decides between return and pass |
+| `ticket.claimed` | the claim (`ensureTicketClaim`, WP-177) | task, ticket, the binding's own account id, `in_progress` written or not, `shadow` | — (the task DTO reads the claim off the row, `tasks.ticket_claim`) |
+| `ticket.claim.refused` | the claim | task, ticket, reason (`ticket_assigned_elsewhere` \| `ticket_claim_failed`), the assignee's identity when known | — (the escalation it causes is `task.escalated`) |
+| `ticket.released` | the `ticket_release` duty (WP-177) | task, ticket, unassigned or not, `pick_up_from` written or not, cause (`cancelled` \| `rework`) | — |
+| `ticket.intake.skipped` | intake (`runIntakeCheck`, WP-177) | project, ticket, reason (`assigned`) | — (audit only) |
+| `task.human_return` | the human-return window (WP-178) | task, stage left (`qa` \| `ready_for_merge`), forms (`status` \| `mr_diff` \| `mr_note` \| `ticket_comment`), counts, the status when one returned it | — (the return itself is `task.stage.returned`) |
 | `task.created` | Intake | task, template, mode, estimate | Workpad (110), Slack notify (210), UI (220) |
 | `task.queued` / `task.dequeued` | Scheduler | task, reason (wip) | UI |
 | `task.stage.entered` | Pipeline | task, stage, attempt | Stage executor (10), status mapping (110), workpad (120) |
