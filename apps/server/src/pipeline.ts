@@ -81,6 +81,7 @@ import {
   createBudgetGuard,
   createCiConfigLocationReader,
   createContextPackAssembler,
+  createConversationReader,
   createDeadLetterEscalation,
   createInboundDecisionApplier,
   createIntegrationActionExecutor,
@@ -925,9 +926,10 @@ export interface ComposedPipeline {
    */
   readonly agentMissing: readonly string[];
   /**
-   * The nine in-process MCP tools this process composed, exposed so a caller can see what a run
-   * would be given. `kb_search`, `get_task_context` (WP-54), `open_mr` and `update_mr_description`
-   * (WP-138) are real; the other five refuse and say why (`./platform-tools.ts`).
+   * The ten in-process MCP tools this process composed, exposed so a caller can see what a run
+   * would be given. `report_progress` (backlog 496), `kb_search`, `get_task_context` (WP-54),
+   * `open_mr` and `update_mr_description` (WP-138) are real; the other five, `get_conversation`
+   * (WP-180, served at WP-181) among them, refuse and say why (`./platform-tools.ts`).
    */
   readonly platformTools: PlatformToolPort;
   stop(): Promise<void>;
@@ -1285,7 +1287,8 @@ export const composePipeline = async (
      * every other run this process starts: an ask is a run, so `POST /api/runs/:id/steer` and a
      * take-over reach it exactly as they reach a stage's. What is different is the planner — an ask has no stage and its prompt
      * is built from the audit trail (`createAskRunPlanner`) — and the tools, which
-     * `PLATFORM_TOOLS_BY_ROLE.ask` narrows to `get_task_context` and `kb_search`.
+     * `PLATFORM_TOOLS_BY_ROLE.ask` narrows to `get_task_context`, `get_conversation` and `kb_search`,
+     * intersected with what this build performs (`availablePlatformTools`).
      */
     ask: {
       asks: askAdapters.createPostgresAskStore(),
@@ -1297,6 +1300,9 @@ export const composePipeline = async (
       ),
       planner: createAskRunPlanner({
         workspacePath: (taskId: Id) => `/workspaces/${taskId}`,
+        // Backlog 476 (WP-180 review round 1): an ask is offered only what this build performs,
+        // as a stage run is, so `get_conversation` stays out until WP-181 serves it.
+        availablePlatformTools: IMPLEMENTED_PLATFORM_TOOLS,
         providerMode: options.agent.providerMode,
         claudeCodePath: options.agent.claudeBinary,
         env: runEnvironment.env,
@@ -1376,6 +1382,13 @@ export const composePipeline = async (
          * answers `unknown` and the CI gate's tamper check stays the backstop.
          */
         ciConfigLocation: createCiConfigLocationReader({ integrations }),
+        /**
+         * The conversation every agent stage's prompt carries (WP-180, TD-029 decision 11): the
+         * merge request's discussions and the ticket's comments, two reads through the executor per
+         * planned run, outside the executor's transactions, redacted with each binding's redactor and
+         * bounded. A failed read is logged and the run proceeds without the blocks.
+         */
+        readConversation: createConversationReader({ integrations }),
         /**
          * The data-block nonce (BD-022). `randomUUID` is a CSPRNG — 122 bits — rendered as the 32
          * hex characters `NONCE_PATTERN` requires; the delimiter contract rests on a document's

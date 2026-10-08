@@ -89,6 +89,9 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // WP-147: the planner's read of where the CI configuration lives — one resolution per planned
   // run, for one `get_repository_settings` read; no run-scoped credential exists yet.
   'ci-config-location.ts': 1,
+  // WP-180: the planner's conversation read — one resolution per planned run, for the merge
+  // request's discussions and the ticket's comments; no run-scoped credential exists yet.
+  'conversation-read.ts': 1,
   // WP-60 review round 2's `ci_settle` duty: one resolution for the merge request's live head, so
   // the CI gate is settled only for a pipeline that ran on it.
   'ci-settle.ts': 1,

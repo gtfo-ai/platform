@@ -4,7 +4,7 @@
  * > `kb_search` MCP tool exposes the same query for tier 2 (returns `path#heading` + snippet +
  * > score; never whole documents unless asked by path).
  *
- * It is one of the nine in-process MCP tools (`PlatformToolPort.kbSearch`), so **both ends are
+ * It is one of the in-process MCP tools (`PlatformToolPort.kbSearch`), so **both ends are
  * untrusted**: the query is written by the model, and the excerpt is written by whoever can push to
  * the project's repository. Three consequences, each of which is a line of code here:
  *

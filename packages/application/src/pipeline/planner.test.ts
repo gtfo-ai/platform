@@ -143,6 +143,7 @@ const planWith = async (taskText: string, ticketSnapshot: TicketSnapshot | null 
     prompts: prompts as never,
     skills: testSkills,
     boundSkills: async () => [],
+    readConversation: async () => null,
     ciConfigLocation: async () => null,
     nonce: { next: () => NONCE },
     contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
@@ -190,6 +191,7 @@ describe('`paths:` pages in production shape (WP-58, PROGRESS backlog 170)', () 
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      readConversation: async () => null,
       ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
@@ -267,6 +269,7 @@ describe('`paths:` pages in production shape (WP-58, PROGRESS backlog 170)', () 
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      readConversation: async () => null,
       ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
@@ -802,7 +805,11 @@ describe('the platform skills a stage is planned with', () => {
       expect(TOOLS_BY_ROLE[role], role).not.toContain('Write');
       expect(TOOLS_BY_ROLE[role], role).not.toContain('Edit');
     }
-    expect(PLATFORM_TOOLS_BY_ROLE.discovery).toEqual(['report_progress', 'kb_search']);
+    expect(PLATFORM_TOOLS_BY_ROLE.discovery).toEqual([
+      'report_progress',
+      'kb_search',
+      'get_conversation',
+    ]);
   });
 
   /**
@@ -877,6 +884,7 @@ describe('the platform skills a stage is planned with', () => {
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      readConversation: async () => null,
       ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({
@@ -962,6 +970,7 @@ describe('the platform skills a stage is planned with', () => {
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      readConversation: async () => null,
       ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({
@@ -1030,6 +1039,7 @@ describe('the platform skills a stage is planned with', () => {
         prompts: prompts as never,
         skills: { kb: testSkills['kb'] as SkillDefinition },
         boundSkills: async () => [],
+        readConversation: async () => null,
         ciConfigLocation: async () => null,
         nonce: { next: () => NONCE },
         contextPacks: { assemble: async () => ({}) as never },
@@ -1082,6 +1092,7 @@ describe('what the project decides about a run, within what the role allows', ()
         expect(projectId).toBe(PROJECT);
         return bound;
       },
+      readConversation: async () => null,
       ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({
@@ -1373,6 +1384,7 @@ describe('the review checklists a run is given (WP-45)', () => {
         prompts: prompts as never,
         skills: testSkills,
         boundSkills: async () => [],
+        readConversation: async () => null,
         ciConfigLocation: async () => null,
         nonce: { next: () => NONCE },
         contextPacks: createContextPackAssembler({
@@ -1511,6 +1523,7 @@ describe('the plan’s protected-path declarations in the run spec (WP-99)', () 
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      readConversation: async () => null,
       ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
@@ -1577,6 +1590,7 @@ describe('the provider’s CI path in the write-time path guard (WP-147)', () =>
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      readConversation: async () => null,
       ciConfigLocation: async (projectId, taskId) => {
         asked.push([projectId, taskId]);
         return typeof location === 'function' ? location() : location;
@@ -1709,6 +1723,7 @@ describe('the verdicts a returned stage is shown (WP-83)', () => {
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      readConversation: async () => null,
       ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
@@ -1805,6 +1820,7 @@ describe('an oversize merge request in a review run’s prompt (WP-83, Q54)', ()
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      readConversation: async () => null,
       ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
@@ -1868,6 +1884,7 @@ describe('the observability excerpts a run is given (WP-89)', () => {
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      readConversation: async () => null,
       ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
@@ -1929,6 +1946,7 @@ describe('the project prompt files a stage is given (WP-92)', () => {
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      readConversation: async () => null,
       ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
@@ -2106,6 +2124,7 @@ describe('a project that verifies on CI (BD-025, 2026-10-05; PROGRESS backlog 46
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      readConversation: async () => null,
       ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({
@@ -2296,6 +2315,7 @@ describe('an unsuccessful attempt’s saved work (backlog 467)', () => {
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      readConversation: async () => null,
       ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({
@@ -2422,6 +2442,7 @@ describe('what a run is told about itself (backlogs 473–476)', () => {
       prompts: prompts as never,
       skills: testSkills,
       boundSkills: async () => [],
+      readConversation: async () => null,
       ciConfigLocation: async () => null,
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({

@@ -34,6 +34,7 @@ import {
   IMPLEMENTED_PLATFORM_TOOLS,
   PlatformToolUnavailableError,
 } from './platform-tools.js';
+import { readSource, withoutComments } from './routes/web-sources.js';
 
 const CONTEXT: PlatformToolContext = {
   runId: '00000000-0000-4000-8000-0000000000d1' as Id,
@@ -50,6 +51,7 @@ const CALL: Readonly<Record<PlatformToolName, (tools: PlatformToolPort) => Promi
   notify_human: (tools) => tools.notifyHuman({ message: 'hello', severity: 'info' }, CONTEXT),
   report_progress: (tools) => tools.reportProgress({ summary: 'half way' }, CONTEXT),
   get_task_context: (tools) => tools.getTaskContext({ include: ['ticket'] }, CONTEXT),
+  get_conversation: (tools) => tools.getConversation({}, CONTEXT),
   kb_search: (tools) => tools.kbSearch({ query: 'session service' }, CONTEXT),
   add_ticket_comment: (tools) => tools.addTicketComment({ body: 'done' }, CONTEXT),
   open_mr: (tools) =>
@@ -256,4 +258,33 @@ describe('the production platform tools', () => {
       await expect(call).rejects.toThrow('the merge-request tool reached its task read');
     },
   );
+});
+
+/**
+ * **No production run is offered a tool this build refuses** (backlog 476; WP-180 review round 1).
+ * Both planners take `availablePlatformTools`, and a planner composed without it offers every tool in
+ * the role's row — since WP-180 that includes `get_conversation`, which only refuses here until
+ * WP-181. So both call sites in the composition root are held to passing it. A text census over
+ * `pipeline.ts` (comments stripped): a second call site is counted, and a spread is not seen.
+ */
+describe('the composition root offers only the tools this build performs', () => {
+  const source = withoutComments(readSource('apps/server/src/pipeline.ts'));
+  const callsOf = (factory: string): string[] =>
+    source
+      .split(`${factory}({`)
+      .slice(1)
+      .map((rest) => rest.slice(0, rest.indexOf('\n      }),')));
+
+  it.each(['createStageRunPlanner', 'createAskRunPlanner'])(
+    '%s is composed with availablePlatformTools: IMPLEMENTED_PLATFORM_TOOLS',
+    (factory) => {
+      const calls = callsOf(factory);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toContain('availablePlatformTools: IMPLEMENTED_PLATFORM_TOOLS');
+    },
+  );
+
+  it('leaves get_conversation out of what it composes, until WP-181 serves it', () => {
+    expect(IMPLEMENTED_PLATFORM_TOOLS as readonly string[]).not.toContain('get_conversation');
+  });
 });

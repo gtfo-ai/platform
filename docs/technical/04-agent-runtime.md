@@ -14,7 +14,8 @@ Runner service (infrastructure)  ── platform-side SDK host; the CLI itself r
    │         SubagentStart/Stop (nesting), PreCompact/PostCompact (boundary events), Stop
    ├─ canUseTool → platform Question ("ask" list) or deny
    ├─ in-process MCP "platform": ask_human, notify_human, report_progress, get_task_context,
-   │         kb_search, add_ticket_comment, open_mr, update_mr_description, create_followup_ticket
+   │         get_conversation, kb_search, add_ticket_comment, open_mr, update_mr_description,
+   │         create_followup_ticket
    ├─ sessionStore → transcript store (03); includePartialMessages → live stream to UI (08)
    └─ result: structured_output (artifact data) + usage/cost → run.finished
 ```

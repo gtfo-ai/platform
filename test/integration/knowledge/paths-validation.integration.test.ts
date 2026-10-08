@@ -166,6 +166,7 @@ describe('a `paths:` page with the production planner (WP-58, backlog 170)', () 
       skills,
       boundSkills: async () => [],
       ciConfigLocation: async () => null,
+      readConversation: async () => null,
       nonce: { next: () => '58a58a58a58a58a58a58a58a58a58a58' },
       contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
       headPaths: (id: Id) => store.readPathWitnesses(id),

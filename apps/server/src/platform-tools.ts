@@ -8,7 +8,7 @@
  * so `kb_search` had no home and the retrieval layer was reachable by nothing a run sees. This file
  * is the home.
  *
- * ## Five tools are real and four are refusals, and that is deliberate
+ * ## Five tools are real and five are refusals, and that is deliberate
  *
  * `kb_search` is wired to the PostgreSQL knowledge store, and **`get_task_context`** — since WP-54
  * (PROGRESS backlog 83) — to the read projections (`queries/task-context-queries.ts`), scoped to the
@@ -19,7 +19,8 @@
  * construction. **`report_progress`** is real since PROGRESS backlog 496: the runner hands every
  * run's tools a progress door over its own transcript door (`PlatformToolContext.progress`), so the
  * row gets the run's `seq`, redactor and sink, and `reportProgressTool` bounds the words and answers
- * the model. The other four need collaborators this build does not have — the Question aggregate's
+ * the model. **`get_conversation`** (WP-180) has its reader in `@platform/application` and is in every
+ * role's list, but this file serves it at WP-181, so until then it is the fifth refusal. The other four need collaborators this build does not have — the Question aggregate's
  * HTTP surface and a waiter for the human's answer, a channel bound to a live run, and a ticket
  * write from inside a run. Each is therefore a **named refusal**, exactly like
  * `unavailableClaudeRunner` beside it in `pipeline.ts`, and for the same reason: a null object that
@@ -33,7 +34,7 @@
  *
  * ## Why the port and not the MCP server
  *
- * `platform-mcp.ts` decides which of the nine a given run is *registered* with, from
+ * `platform-mcp.ts` decides which of the ten a given run is *registered* with, from
  * `RunSpec.platformTools` — a role that may not open a merge request never sees the tool, so the
  * mutating action is absent rather than refused (BD-021). This file has no opinion about that: it
  * answers for whichever ones a run was given.
@@ -110,6 +111,8 @@ const MISSING: Readonly<Record<Exclude<PlatformToolName, ImplementedTool>, strin
     'every outbound provider call goes through IntegrationActionExecutor, which the pipeline reaches from its `pipeline.outbound` job (WP-15d); a ticket comment from inside a run is unbuilt',
   create_followup_ticket:
     'every outbound provider call goes through IntegrationActionExecutor (WP-15d); filing a ticket from inside a run is unbuilt',
+  get_conversation:
+    'the conversation reader exists (`createConversationReader`, WP-180) and every role may call it, but this composition does not serve it yet: WP-181 reads the run task’s ticket and merge request and adds it to IMPLEMENTED_PLATFORM_TOOLS',
 };
 
 /** The tools this build actually performs. Read by the composition test, not by the runtime. */
@@ -208,6 +211,7 @@ export const composePlatformTools = (options: PlatformToolsOptions): PlatformToo
     logger: options.logger,
   });
   return {
+    getConversation: async () => refuse('get_conversation', options.logger),
     kbSearch: async (input: KbSearchInput, context: PlatformToolContext): Promise<JsonValue> =>
       // The **run's** project, never one the model named: `PlatformToolContext` is built by the
       // runner from the `RunSpec`, and the tool's own input schema has no project field. A model

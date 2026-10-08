@@ -157,7 +157,7 @@ export interface AgentRunnerOptions {
    * every row. Required: an optional redaction input is an absent one (standing rule 31).
    */
   readonly runSecrets: RunScopedSecrets;
-  /** The nine in-process MCP tools this process composed (`platform-tools.ts`). */
+  /** The ten in-process MCP tools this process composed (`platform-tools.ts`). */
   readonly tools: PlatformToolPort;
   /**
    * BD-004's two modes, and what each one authenticates a run with.

@@ -162,6 +162,7 @@ export interface AskRunPlannerOptions
     | 'secretEnvNames'
     | 'claudeCodePath'
     | 'clock'
+    | 'availablePlatformTools'
   > {
   readonly contextPacks: ContextPackAssembler;
   readonly clock: { now(): IsoDateTime };
@@ -325,7 +326,11 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
         },
         tools: [...(TOOLS_BY_ROLE[role] ?? [])],
         disallowedTools: [],
-        platformTools: [...platformToolsFor(role, ASK_PSEUDO_STAGE)],
+        // Backlog 476 for the ask too (WP-180 review round 1): the role's tools intersected with
+        // what this build performs, so a tool that would only refuse is absent from the run.
+        platformTools: [
+          ...platformToolsFor(role, ASK_PSEUDO_STAGE, options.availablePlatformTools),
+        ],
         commandPolicy: {
           allow: [...policy.policy.allow],
           ask: [...policy.policy.ask],

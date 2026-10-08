@@ -206,6 +206,7 @@ export const recordingTools = (overrides: Partial<PlatformToolPort> = {}): Recor
     notifyHuman: record('notify_human', undefined),
     reportProgress: record('report_progress', 'Progress recorded.'),
     getTaskContext: record('get_task_context', { ticket: 'PLAT-1' } as JsonValue),
+    getConversation: record('get_conversation', { available: false, entries: [] } as JsonValue),
     kbSearch: record('kb_search', { hits: [] } as JsonValue),
     addTicketComment: record('add_ticket_comment', { id: 'c1' } as JsonValue),
     openMergeRequest: record('open_mr', { iid: 1 } as JsonValue),

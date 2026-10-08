@@ -63,6 +63,7 @@ import {
   isPromptExcludedArtifact,
   type PromptArtifact,
   type PromptContextPack,
+  type PromptConversation,
   type PromptNonceSource,
   type PromptPreviousAttempt,
   type ResolvedCommandPolicy,
@@ -82,6 +83,7 @@ import {
   withVerificationMode,
 } from '@platform/domain';
 import { projectPromptsForStage } from '../config/project-prompts.js';
+import { TransactionOpenError } from '../events/open-transaction.js';
 import type { ContextPackAssembler, ContextPackDocument } from '../knowledge/context-pack.js';
 import { NOT_SEARCHED } from '../knowledge/text-search-record.js';
 import type { CiConfigLocation } from '../ports/integrations/git-provider.js';
@@ -96,6 +98,12 @@ import type {
 } from '../ports/runner.js';
 import { runLimitsDefaults } from '../ports/runner.js';
 import { qualifiedPlatformSkill, unlistedProtectedPaths } from '../ports/workspace.js';
+import {
+  ConversationReadError,
+  type ConversationReader,
+  type ConversationReadSource,
+} from './conversation-read.js';
+
 import { CONFLICT_RESOLUTION_STAGE } from './rebase.js';
 import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { ProjectSettings } from './settings.js';
@@ -120,39 +128,59 @@ const attachedFeedbackFor = (
  * Which platform tools a role may call (technical/04: "a run is given the subset its role needs:
  * a read-only stage never sees `open_mr`, so a mutating action is impossible rather than merely
  * refused"). This is BD-021's least privilege expressed as a table.
+ *
+ * **`get_conversation` is in every row** (WP-180, TD-029 decision 11, BD-031 ruling 6: every agent
+ * at every stage reads the conversation). It is a read of the run's own task, so it widens no role's
+ * reach; {@link PLATFORM_TOOLS_DENIED_BY_STAGE} denies it nowhere. Until WP-181 serves it, the
+ * composition root's `availablePlatformTools` leaves it out of every production run.
  */
 export const PLATFORM_TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly PlatformToolName[]>> = {
-  triager: ['report_progress', 'get_task_context'],
-  product_manager: ['ask_human', 'report_progress', 'get_task_context', 'kb_search'],
-  investigator: ['ask_human', 'report_progress', 'get_task_context', 'kb_search'],
-  architect: ['ask_human', 'report_progress', 'get_task_context', 'kb_search'],
+  triager: ['report_progress', 'get_task_context', 'get_conversation'],
+  product_manager: [
+    'ask_human',
+    'report_progress',
+    'get_task_context',
+    'get_conversation',
+    'kb_search',
+  ],
+  investigator: [
+    'ask_human',
+    'report_progress',
+    'get_task_context',
+    'get_conversation',
+    'kb_search',
+  ],
+  architect: ['ask_human', 'report_progress', 'get_task_context', 'get_conversation', 'kb_search'],
   developer: [
     'ask_human',
     'notify_human',
     'report_progress',
     'get_task_context',
+    'get_conversation',
     'kb_search',
     'add_ticket_comment',
     'open_mr',
     'update_mr_description',
     'create_followup_ticket',
   ],
-  reviewer: ['report_progress', 'get_task_context', 'kb_search'],
-  acceptance_tester: ['report_progress', 'get_task_context', 'kb_search'],
-  facilitator: ['report_progress', 'get_task_context', 'kb_search'],
-  librarian: ['report_progress', 'get_task_context', 'kb_search'],
-  discovery: ['report_progress', 'kb_search'],
+  reviewer: ['report_progress', 'get_task_context', 'get_conversation', 'kb_search'],
+  acceptance_tester: ['report_progress', 'get_task_context', 'get_conversation', 'kb_search'],
+  facilitator: ['report_progress', 'get_task_context', 'get_conversation', 'kb_search'],
+  librarian: ['report_progress', 'get_task_context', 'get_conversation', 'kb_search'],
+  discovery: ['report_progress', 'kb_search', 'get_conversation'],
   /**
    * Ask-the-task (WP-31, Q72 (b)): *"read-only over **platform** data, not the repository"*.
    *
-   * `get_task_context` and `kb_search`, and **not** `ask_human` — an ask is already a conversation
+   * `get_task_context`, `get_conversation` (WP-180) and `kb_search`, and **not** `ask_human` — an ask is already a conversation
    * with a human, and a run that asked a question back would park the *task* in `waiting_answers`
    * on a question about an explanation nobody is blocked on. `report_progress` is absent because an
    * ask is over in one turn and the person asking is reading the answer as it streams.
    */
-  ask: ['get_task_context', 'kb_search'],
+  ask: ['get_task_context', 'get_conversation', 'kb_search'],
   /**
-   * The history bootstrap's miner (WP-35): `kb_search` and `report_progress`, nothing else.
+   * The history bootstrap's miner (WP-35): `kb_search` and `report_progress`, and since WP-180
+   * `get_conversation`, which every role is given (it answers nothing for a bootstrap ticket, whose
+   * task has no merge request and no provider ticket).
    *
    * `kb_search` is what keeps it from proposing a page the vault already has — the dedupe
    * technical/07 step 2 asks for, made cheap at the source rather than left to the curator's index
@@ -160,7 +188,7 @@ export const PLATFORM_TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly Platfor
    * ticket behind it, so the tool would answer questions about a fiction. No `ask_human`, for
    * `discovery`'s reason — the run has no watcher and its output is a queue a human reads anyway.
    */
-  historian: ['report_progress', 'kb_search'],
+  historian: ['report_progress', 'kb_search', 'get_conversation'],
 };
 
 /**
@@ -537,7 +565,7 @@ export interface StageRunPlannerOptions {
    * refuse by name is absent from the run rather than offered and refused: on Autix every stage was
    * offered `report_progress` and `ask_human`, called them, and read a paragraph of internal jargon
    * back. Absent means every tool in the role's row, which is what the harness and the unit tests
-   * compose (their tool ports answer all nine). A skill that exists to drive a hidden tool is
+   * compose (their tool ports answer every name). A skill that exists to drive a hidden tool is
    * withheld with it ({@link SKILL_REQUIRES_PLATFORM_TOOL}).
    */
   readonly availablePlatformTools?: readonly PlatformToolName[];
@@ -618,6 +646,18 @@ export interface StageRunPlannerOptions {
    * pack's queries.
    */
   readonly ciConfigLocation: (projectId: Id, taskId: Id) => Promise<CiConfigLocation | null>;
+  /**
+   * **The conversation** — the merge request's discussions and the ticket's comments, redacted and
+   * bounded (WP-180, TD-029 decision 11; `createConversationReader`), which every agent stage's
+   * prompt carries as `conversation` data blocks. `null` is a task with neither source: no block.
+   *
+   * **Required** (standing rule 31): an absent reader would be every run silently without the
+   * conversation. Read between the executor's two transactions, like the pack's queries. A read
+   * that **fails** is not the plan's failure (ruling (b), rule 20): the run proceeds without the
+   * block, and the planner logs a named `warn`. `TransactionOpenError` is rethrown, because that is
+   * a moved call rather than a provider being down.
+   */
+  readonly readConversation: ConversationReader;
   /** `api` or `local` (BD-004); the composition root knows which one the instance runs. */
   readonly providerMode?: 'api' | 'local';
   /** Environment handed to the CLI. Never inherited (technical/04). */
@@ -1308,6 +1348,14 @@ const runModeFor = (task: StoredTask, stage: Slug): RunSpec['mode'] => {
   return RUN_MODE_BY_TEMPLATE[task.task.template] ?? RUN_MODE_BY_STAGE[stage] ?? 'normal';
 };
 
+/** The warning's words for each failed conversation read (WP-180 review round 1). */
+const CONVERSATION_SOURCE_LABEL: Readonly<Record<ConversationReadSource | 'unknown', string>> = {
+  bindings: "the project's bindings for the conversation",
+  mr: "the merge request's discussions",
+  ticket: "the ticket's comments",
+  unknown: 'the conversation',
+};
+
 export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRunPlanner => {
   const logger = options.logger ?? silentLogger;
   // At construction, not at the first run of the role that needs it: a skill the catalogue is
@@ -1375,6 +1423,44 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
       },
       runContextPack: pack.runContextPack,
     };
+  };
+
+  /**
+   * The conversation for this run (WP-180), or `null` — for a task with no merge request and no
+   * provider ticket, and for a read that failed, which is logged and never fails the plan (ruling
+   * (b)). Nothing is stored: the prompt that carries it is (`runs.user_prompt`, ruling (d)).
+   */
+  const readConversation = async (request: StageRunRequest): Promise<PromptConversation | null> => {
+    const { task } = request;
+    try {
+      return await options.readConversation({
+        projectId: task.task.projectId,
+        taskId: task.task.id,
+        ticket: task.task.ticket,
+        mr: task.mr,
+      });
+    } catch (error) {
+      if (error instanceof TransactionOpenError) throw error;
+      const source = error instanceof ConversationReadError ? error.source : 'unknown';
+      logger.warn(
+        {
+          project_id: task.task.projectId,
+          task_id: task.task.id,
+          run_id: request.runId,
+          stage: request.stage.id,
+          source,
+          error:
+            error instanceof ConversationReadError
+              ? error.causeName
+              : error instanceof Error
+                ? error.name
+                : 'unknown',
+          reason: error instanceof Error ? error.message : String(error),
+        },
+        `${CONVERSATION_SOURCE_LABEL[source]} could not be read; the run proceeds without its conversation blocks`,
+      );
+      return null;
+    }
   };
 
   return {
@@ -1461,6 +1547,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
       const skills = skillNames.map((name) => options.skills[name] as SkillDefinition);
 
       const pack = await resolvePack(request, stage.id, budgetTokens);
+      const conversation = await readConversation(request);
       // WP-45: only a Reviewer is given the project's checklists — a checklist is a review item,
       // and `ReviewVerdict.checklists_applied` is the one artifact that records it.
       const review = role === 'reviewer' ? reviewChecklistsOf(request) : null;
@@ -1571,6 +1658,8 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           previousAttempt,
           // Backlog 476: how the stage's last run ended, so "attempt 2" says why it exists.
           previousRun: previousRunFor(request),
+          // WP-180: the merge request's notes and the ticket's comments, or no block at all.
+          conversation,
         },
         artifactType: stage.produces,
         // The stage's narrower instruction, when it has one: platform text, typed as a closed set

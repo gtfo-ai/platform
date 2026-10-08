@@ -11,7 +11,7 @@ import {
   MAX_CONTEXT_BUDGET_TOKENS,
   RUN_START_FAILURE_DETAIL_MAX_CHARS,
 } from '@platform/contracts';
-import { materialiseAutonomy, resolveIterationLimits } from '@platform/domain';
+import { materialiseAutonomy, readDataBlocks, resolveIterationLimits } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { NO_HOLD } from '../cost/pending.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
@@ -231,6 +231,51 @@ describe('the prompt a run was started with', () => {
     // and the pack is a point-in-time read, so a re-assembled prompt is a different document.
     expect(rows[0]?.systemPrompt).toBe(spec?.systemPromptAppend);
     expect(rows[0]?.userPrompt).toBe(spec?.userPrompt);
+  });
+
+  /**
+   * WP-180 criterion (5): the conversation is not stored anywhere of its own (ruling (d)) — the
+   * recorded prompt holds it, read by the production reader over the harness's executor.
+   */
+  it('records the conversation blocks in the stored user prompt (WP-180)', async () => {
+    const harness = harnessWith({
+      runs: scripted,
+      readsConversation: true,
+      taskManagement: {
+        capabilities: () => ({ commentsRead: true }) as never,
+        listComments: async () => ({
+          comments: [
+            {
+              id: '10001',
+              author: {
+                provider: 'fake-jira',
+                external_id: '557058:1b2c3d4e-0000-4000-8000-00000000abcd',
+                email: null,
+                display_name: 'Jane Doe',
+                verified: false,
+              },
+              body: 'Could the export include totals?',
+              created_at: '2026-06-01T08:00:00.000Z',
+              updated_at: null,
+              marker_id: null,
+              url: null,
+            },
+          ],
+          total: 1,
+        }),
+      },
+    });
+    const rows = await capturedRun(harness);
+    const blocks = readDataBlocks(rows[0]?.userPrompt ?? '').blocks;
+    const entry = blocks.find((block) => block.kind === 'conversation');
+    expect(entry?.attributes).toMatchObject({
+      source: 'ticket',
+      comment_id: '10001',
+      omitted: '0',
+    });
+    expect(entry?.body).toBe('Could the export include totals?');
+    expect(blocks.find((block) => block.kind === 'conversation_author')?.body).toBe('Jane Doe');
+    expect(harness.audit.entriesFor('list_comments')).toHaveLength(1);
   });
 
   /**

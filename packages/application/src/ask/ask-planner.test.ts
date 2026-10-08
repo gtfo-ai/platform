@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest';
 import type { ContextPackAssembler } from '../knowledge/context-pack.js';
 import { defaultProjectSettings } from '../pipeline/settings.js';
 import type { StoredArtifact, StoredTask } from '../pipeline/store.js';
+import type { PlatformToolName } from '../ports/runner.js';
 import { createAskRunPlanner } from './planner.js';
 import type { AskAuditLine, AskRunLine, StoredAsk } from './store.js';
 
@@ -101,8 +102,12 @@ const plan = async (input: {
   readonly audit?: readonly AskAuditLine[];
   readonly artifacts?: readonly StoredArtifact[];
   readonly question?: string;
+  readonly availablePlatformTools?: readonly PlatformToolName[];
 }) => {
   const planner = createAskRunPlanner({
+    ...(input.availablePlatformTools === undefined
+      ? {}
+      : { availablePlatformTools: input.availablePlatformTools }),
     workspacePath: (taskId: Id) => `/workspaces/${taskId}`,
     prompts: prompts as never,
     skills,
@@ -137,8 +142,23 @@ describe('the ask run plan', () => {
     expect(spec.attempt).toBe(1);
     expect(spec.artifactType).toBe('AskAnswer');
     expect(spec.tools).toEqual(['Skill']);
-    expect(spec.platformTools).toEqual(['get_task_context', 'kb_search']);
+    expect(spec.platformTools).toEqual(['get_task_context', 'get_conversation', 'kb_search']);
     expect(spec.skills).toEqual(['agentic:kb']);
+  });
+
+  it('offers only the tools this build performs, so a production ask is not given get_conversation (WP-180 review round 1)', async () => {
+    // The production list's shape: `IMPLEMENTED_PLATFORM_TOOLS` in apps/server, which has no
+    // `get_conversation` until WP-181 serves it.
+    const { spec } = await plan({
+      availablePlatformTools: [
+        'report_progress',
+        'kb_search',
+        'get_task_context',
+        'open_mr',
+        'update_mr_description',
+      ],
+    });
+    expect(spec.platformTools).toEqual(['get_task_context', 'kb_search']);
   });
 
   it('takes the model and the cap from the project, and the platform defaults when it chose none', async () => {

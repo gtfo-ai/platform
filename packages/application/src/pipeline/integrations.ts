@@ -1185,11 +1185,13 @@ export const ticketReads = (integrations: PipelineIntegrations) => ({
   },
 
   /**
-   * The ticket's comments created strictly after `since`, newest first — the human-return window's
-   * re-read (WP-178, TD-029 decision 7) — or `null` for a project with no task-management binding or
-   * a ticket no provider issued. A read, so it is performed for a shadow task too. A provider that
-   * cannot list comments throws `IntegrationUnsupportedError` naming the member, which the caller
-   * decides about (BD-017: never an empty list in its place).
+   * The ticket's comments, newest first, one page (WP-171's `listComments`), strictly after
+   * `since` when it is given — the human-return window's re-read (WP-178) and the conversation
+   * reader's (WP-180) — or `null` for a project with no task-management binding, a ticket no
+   * provider issued, or a binding whose provider does not declare `commentsRead` (BD-017: the flag
+   * is asked, never a call that would throw `unsupported_capability`). A read, so it is performed
+   * for a shadow task too. Unredacted, like every read here: the caller redacts with the binding's
+   * redactor.
    */
   comments: async (
     ticket: TicketRefInput,
@@ -1197,7 +1199,11 @@ export const ticketReads = (integrations: PipelineIntegrations) => ({
     context: CallContext,
   ): Promise<CommentPage | null> => {
     const binding = integrations.taskManagement;
-    if (binding === null || !namesAProviderTicket(ticket)) {
+    if (
+      binding === null ||
+      !namesAProviderTicket(ticket) ||
+      binding.port.capabilities().commentsRead !== true
+    ) {
       return null;
     }
     return read(

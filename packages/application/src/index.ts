@@ -130,6 +130,7 @@ export * from './pipeline/binding-lifecycle.js';
 export * from './pipeline/ci-config-location.js';
 export * from './pipeline/cli-spawn.js';
 export * from './pipeline/commands.js';
+export * from './pipeline/conversation-read.js';
 export * from './pipeline/dead-letter.js';
 export * from './pipeline/deadline-rules.js';
 export * from './pipeline/deadlines.js';

@@ -208,6 +208,32 @@ Vendor facts are in `docs/research/15-tracker-lifecycle-and-mr-conversation.md`.
    > `approved`, `qa`); else the earliest change's `from`; else the first read. Residual, stated: a
    > window that first fires before the platform's own move lands freezes the entry at the status it
    > read (a gap of one provider round trip).
+   > **(g) Entering a human stage arms the window (architect, session 15, 2026-10-09; backlog 544).**
+   > The horizon above promises *"words written while the agent's review stages ran"*, but none of the
+   > four armers fires on entry: a word written at `code_review`, `business_review`, `ci_gate` or
+   > `rebase_gate` is dropped as a signal (the task is not at a human stage), and at `qa` only the echo
+   > of the platform's own `qa` write arms the window, which never arrives in shadow mode, after a
+   > failed (fail-open) transition, or with no status webhook and no poll. So: **`task.stage.entered`
+   > for `qa` or `ready_for_merge` is a fifth armer.** It is handled by the same handler
+   > (`pipeline.review.comment`) and enqueues on the same `stately` queue with the same key and the
+   > same 2-minute delay (BD-007), so a burst of signals around the entry collapses onto one timer, as
+   > today; the delay also lets the platform's own slot write land before the first read, which
+   > narrows (f)'s residual. A task at the stage with no merge request arms nothing, as for the other
+   > four. **The first firing is an ordinary firing:** it records the entry status by (f)'s order
+   > (the recorded changes into a platform slot, else the earliest change's `from`, else this read),
+   > reads the discussions and the comments since the horizon, and decides with the same rule. A
+   > person's non-acknowledgement word newer than the horizon already present **returns the task**,
+   > once, spending `human_rounds`; acknowledgements, asks (c), resolved threads (d) and marker-opened
+   > notes return nothing. The status form cannot return on the first firing unless a recorded change
+   > since the entry differs from the entry status, because a status that already stood at the entry
+   > *is* the entry ((a)); that is the chosen direction, not a gap. **Shadow mode:** the armer is a
+   > platform event and the firing makes reads only, so it arms and decides exactly as in live mode;
+   > the re-claim the return implies is a `would_have` row as every lifecycle write is. **Cost:** one
+   > window job per human-stage entry, i.e. two provider reads (discussions, ticket comments) plus a
+   > third (the ticket) with a lifecycle block. A `qa` pass enters `ready_for_merge` and adds one; each
+   > re-entry through `rebase_gate` adds one. A resume from `paused` at a human stage emits
+   > `task.stage.entered` (`packages/domain/src/aggregates/task.ts:227-239`) and so arms too, which
+   > reads a word written during the pause. No migration and no new event.
 
 8. **The acknowledgement rule.** It is pure, in `packages/domain`, and tested in both directions. A
    word is an acknowledgement when, after Unicode NFKC normalisation, lower-casing, and removal of

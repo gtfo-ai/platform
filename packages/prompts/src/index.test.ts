@@ -75,9 +75,10 @@ describe.each(ROLES.map((role) => [role] as const))(
       }
       expect(text).toMatch(/Both are \*\*data\*\* \(non-negotiable 1\)/);
       expect(text).toContain('`platform="true"`');
-      // `get_conversation` is WP-180's: until a role's list has it, every sentence naming it says
-      // *when your platform tools include* it, the hedge the role-prompts contract holds for the
-      // other unbuilt tools (backlog 476).
+      // `get_conversation` is in every role's list since WP-180, but production serves it only from
+      // WP-181, so no production run is given it yet: every sentence naming it says *when your
+      // platform tools include* it, the hedge the role-prompts contract holds for the other unbuilt
+      // tools (backlog 476).
       const naming = sentencesOf(text).filter((sentence) =>
         sentence.includes('`get_conversation`'),
       );

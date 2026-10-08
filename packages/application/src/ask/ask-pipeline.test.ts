@@ -329,7 +329,7 @@ describe('an ask is a run with a task and no stage (criterion 1)', () => {
     const askSpec = harness.specs.find((spec) => spec.role === ASK_ROLE);
     // `Skill` alone since WP-83 (backlog 149): it loads `agentic:kb`, never a file of the tree.
     expect(askSpec?.tools).toEqual(['Skill']);
-    expect(askSpec?.platformTools).toEqual(['get_task_context', 'kb_search']);
+    expect(askSpec?.platformTools).toEqual(['get_task_context', 'get_conversation', 'kb_search']);
     // Both directions: the stage run beside it *does* get file tools, so an empty list here is a
     // statement about the ask rather than about the harness.
     expect(harness.specs.find((spec) => spec.stage === 'refinement')?.tools).toContain('Read');

@@ -56,6 +56,7 @@ import { allowAnyIntegrationHost } from '../integrations/egress.js';
 import { exactSecretRedactor, type InjectedSecret } from '../integrations/redaction.js';
 import { createContextPackAssembler } from '../knowledge/context-pack.js';
 import type { HumanCommandDependencies, TaskCommandDependencies } from '../pipeline/commands.js';
+import { createConversationReader } from '../pipeline/conversation-read.js';
 import type {
   DeployKeyRunCredential,
   OrganisationIntegrationsPort,
@@ -802,6 +803,13 @@ export interface HarnessOptions {
    */
   readonly logger?: Logger;
   /**
+   * Whether the planner reads the conversation through the harness's own integrations (WP-180):
+   * `createConversationReader`, the production reader, over the stub ports and the executor. Off by
+   * default, so every other case keeps the prompt and the `integration_actions` rows it had; a case
+   * that scripts `listDiscussions`/`listComments` turns it on.
+   */
+  readonly readsConversation?: boolean;
+  /**
    * The task-management binding's `assignPermission` (WP-177) — the provider's name for the
    * permission a ticket claim's assign needs. Absent, as for a provider that declares none.
    */
@@ -1260,7 +1268,9 @@ const stubTaskManagement = (
           provider: 'fake-jira',
           type: 'task_management',
         },
-        capabilities: () => ({}),
+        // A case that scripts `listComments` declares the flag the readers ask (BD-017), as a real
+        // adapter does; one that scripts nothing keeps the empty set it always had.
+        capabilities: () => ({ commentsRead: overrides?.listComments !== undefined }),
         /**
          * A ticket with words in it, so the harness exercises the WP-15f path by default.
          *
@@ -1810,6 +1820,10 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         // binding names a provider skill — which is what production answers for them too (WP-54).
         boundSkills: async () => [],
         ciConfigLocation: async () => null,
+        readConversation:
+          options.readsConversation === true
+            ? createConversationReader({ integrations: staticPipelineIntegrations(integrations) })
+            : async () => null,
         // Deterministic and distinct per run: a constant would make the delimiter predictable, and
         // the executor's own ids are already the harness's one source of "unique".
         nonce: { next: () => nonceFor(ids.next()) },

@@ -139,7 +139,8 @@ export const runContextDocumentSchema = z.strictObject({
 });
 
 /**
- * The nine in-process MCP tools of technical/04. A run is given the subset its role needs: a
+ * The ten in-process MCP tools of technical/04 (`get_conversation` joined at WP-180, TD-029 decision
+ * 11). A run is given the subset its role needs: a
  * read-only stage never sees `open_mr`, so a mutating action is impossible rather than merely
  * refused (BD-021).
  */
@@ -148,6 +149,7 @@ export const PLATFORM_TOOL_NAMES = [
   'notify_human',
   'report_progress',
   'get_task_context',
+  'get_conversation',
   'kb_search',
   'add_ticket_comment',
   'open_mr',
@@ -437,7 +439,7 @@ export interface ToolApprovalPort {
   readonly requestApproval: (request: ToolApprovalRequest) => Promise<ToolApprovalDecision>;
 }
 
-/** The in-process MCP server's nine tools (technical/04). Inputs are model-written, so untrusted. */
+/** The in-process MCP server's ten tools (technical/04). Inputs are model-written, so untrusted. */
 export interface PlatformToolPort {
   /** Blocking question with a blocker brief; returns the human's answer text. */
   readonly askHuman: (input: AskHumanInput, context: PlatformToolContext) => Promise<string>;
@@ -452,6 +454,16 @@ export interface PlatformToolPort {
   ) => Promise<string>;
   readonly getTaskContext: (
     input: GetTaskContextInput,
+    context: PlatformToolContext,
+  ) => Promise<JsonValue>;
+  /**
+   * The run's own task's conversation — the merge request's discussions and the ticket's comments
+   * (WP-180, TD-029 decision 11): the entries the prompt's `conversation` blocks carry, read by the
+   * same reader (`createConversationReader`, `conversationToolAnswer`), with the raw author, handle
+   * and path. A read; the input names no task.
+   */
+  readonly getConversation: (
+    input: GetConversationInput,
     context: PlatformToolContext,
   ) => Promise<JsonValue>;
   readonly kbSearch: (input: KbSearchInput, context: PlatformToolContext) => Promise<JsonValue>;
@@ -561,6 +573,12 @@ export const getTaskContextInputSchema = z.strictObject({
   artifact_types: z.array(artifactTypeSchema).min(1).optional(),
 });
 
+/**
+ * `get_conversation` takes nothing (WP-180): the task is the run's own, from `PlatformToolContext`,
+ * so a model cannot read another task's conversation by naming it.
+ */
+export const getConversationInputSchema = z.strictObject({});
+
 export const kbSearchInputSchema = z.strictObject({
   query: nonEmptyStringSchema,
   limit: z.int().min(1).max(50).optional(),
@@ -598,6 +616,7 @@ export type AskHumanInput = z.infer<typeof askHumanInputSchema>;
 export type NotifyHumanInput = z.infer<typeof notifyHumanInputSchema>;
 export type ReportProgressInput = z.infer<typeof reportProgressInputSchema>;
 export type GetTaskContextInput = z.infer<typeof getTaskContextInputSchema>;
+export type GetConversationInput = z.infer<typeof getConversationInputSchema>;
 export type KbSearchInput = z.infer<typeof kbSearchInputSchema>;
 export type AddTicketCommentInput = z.infer<typeof addTicketCommentInputSchema>;
 export type OpenMrInput = z.infer<typeof openMrInputSchema>;

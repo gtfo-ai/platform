@@ -86,9 +86,24 @@ const assembleFor = (role: (typeof agentRoleSchema.options)[number], text: strin
  * given (PROGRESS backlog 476, `availablePlatformTools`) — must say *when your tools include it*:
  * an unconditional "use `ask_human`" sends every run to a tool its list does not have.
  * `report_progress` left this list when it was built (backlog 496); the test below holds a prompt
- * that names it to a role that is given it.
+ * that names it to a role that is given it. `get_conversation` joined it at WP-180: every role's
+ * `PLATFORM_TOOLS_BY_ROLE` entry has it, but production refuses it until WP-181 adds it to
+ * `IMPLEMENTED_PLATFORM_TOOLS`, so no production run's list carries it yet and the prompts keep the
+ * hedge.
  */
-const UNBUILT_TOOLS = ['ask_human', 'notify_human', 'add_ticket_comment', 'create_followup_ticket'];
+const UNBUILT_TOOLS = [
+  'ask_human',
+  'notify_human',
+  'add_ticket_comment',
+  'create_followup_ticket',
+  'get_conversation',
+];
+/**
+ * Unbuilt in production, but **given to every role** (WP-180 ruling (c)): its sentences keep the
+ * hedge above, and it is not exempt from *names only platform tools its role is given* — a role
+ * whose prompt names it and whose `PLATFORM_TOOLS_BY_ROLE` entry lacks it fails that case.
+ */
+const GIVEN_THOUGH_UNBUILT = ['get_conversation'];
 const HEDGE = /\b(when|if) your (platform )?tool(s| list)\b/i;
 const unhedgedToolSentences = (text: string): readonly string[] =>
   text
@@ -121,8 +136,10 @@ describe.each(agentRoleSchema.options.map((role) => [role] as const))(
       const named = PLATFORM_TOOL_NAMES.filter((tool) =>
         ROLE_PROMPTS[role].text.includes(`\`${tool}\``),
       );
+      const exempt = (tool: string) =>
+        UNBUILT_TOOLS.includes(tool) && !GIVEN_THOUGH_UNBUILT.includes(tool);
       const unhedged = named.filter(
-        (tool) => !UNBUILT_TOOLS.includes(tool) && !PLATFORM_TOOLS_BY_ROLE[role].includes(tool),
+        (tool) => !exempt(tool) && !PLATFORM_TOOLS_BY_ROLE[role].includes(tool),
       );
       expect(unhedged).toEqual([]);
     });
