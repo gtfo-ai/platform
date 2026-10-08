@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 14 — 2026-10-08.** `main` opened at **`eaf3b236`**, tree clean; session 13's PENDING run read **completed success** (`d0b33fc6`'s `ci` `37656404246`), and `eaf3b236`'s `ci` `37659347633` and `image` `37659347530` **completed success**. `RELEASE_VERSIONING` unset. No notes from the person starting the session, which is started with *"do not ask me questions; act"*. Docker volume baseline **131**. **WP-161 is resumed (IN_PROGRESS)** by the path its BLOCKED status row names, taken as the orchestrator's decision rather than waited on: rulings (b)–(g) and their unit tests first, where nothing executes; the shell-oracle rows and the Docker check carry **marker-only** payloads (a planted script that writes a marker file, a hook that exits 1) — never `sudo`, `su` or a privilege command run anywhere; if the classifier stops the implementer again, the row's executed half is left to a person and the static half lands alone. `verify:e2e` still runs with `WORKSPACE_E2E_RUNTIME_IMAGE=platform-runtime:wp151`. **WP-161 is DONE at `d080c81f`** (`ci` `37725511106` and `image` `37725511098` **completed success**, `release` skipped; its docs commit's runs **PENDING — read them first**) — 515–523 and 531 closed, criterion (14) (a backslash-newline inside a comment) added in review; three review rounds, the classifier did not stop the resumed implementer. 530 and 532 filed with no owner (532: `ignored:check` is red locally while the harness's ScheduleWakeup lock `.claude/scheduled_tasks.lock` exists, so the orchestrator quotes `verify`'s steps one by one). A reviewer's shell loop hung ≈ 2 h on `ksh -c` with an open stdin and was stopped and resumed: every brief now says `</dev/null` and a bound on any shell run. **M9 has no open row**; the architect pass writing M10 from the open backlog is next.
+**Session 14 — 2026-10-08.** `main` opened at **`eaf3b236`**, tree clean; session 13's PENDING run read **completed success** (`d0b33fc6`'s `ci` `37656404246`), and `eaf3b236`'s `ci` `37659347633` and `image` `37659347530` **completed success**. `RELEASE_VERSIONING` unset. No notes from the person starting the session, which is started with *"do not ask me questions; act"*. Docker volume baseline **131**. **WP-161 is resumed (IN_PROGRESS)** by the path its BLOCKED status row names, taken as the orchestrator's decision rather than waited on: rulings (b)–(g) and their unit tests first, where nothing executes; the shell-oracle rows and the Docker check carry **marker-only** payloads (a planted script that writes a marker file, a hook that exits 1) — never `sudo`, `su` or a privilege command run anywhere; if the classifier stops the implementer again, the row's executed half is left to a person and the static half lands alone. `verify:e2e` still runs with `WORKSPACE_E2E_RUNTIME_IMAGE=platform-runtime:wp151`. **WP-161 is DONE at `d080c81f`** (`ci` `37725511106` and `image` `37725511098` **completed success**, `release` skipped; its docs commit `a6f75bd1` `ci` `37726627791` and `image` `37726627702` **completed success**) — 515–523 and 531 closed, criterion (14) (a backslash-newline inside a comment) added in review; three review rounds, the classifier did not stop the resumed implementer. 530 and 532 filed with no owner (532: `ignored:check` is red locally while the harness's ScheduleWakeup lock `.claude/scheduled_tasks.lock` exists, so the orchestrator quotes `verify`'s steps one by one). A reviewer's shell loop hung ≈ 2 h on `ksh -c` with an open stdin and was stopped and resumed: every brief now says `</dev/null` and a bound on any shell run. **M9 has no open row.** The architect's M10 pass ("Architect ruling (M10, session 14)") wrote **WP-162…WP-169** (499 + 532 first — the only major, and rule 95 serialises rows until it lands; WP-163 may run beside it); no migration in M10, so the next free number stays **0088**. Next: **WP-162**.
 
 **Session 13 — 2026-10-07.** `main` opened at **`deee26e6`**, tree clean; the runs session 12 left PENDING read **completed success** (`e214edb1`'s `ci` `37513843413` and `image` `37513843330`; `deee26e6`'s `ci` `37514075082` and `image` `37514075031`). `RELEASE_VERSIONING` unset. No notes from the person starting the session. Docker volume count **190** at open and **131** after the first tiers (the drop is not this session's; 131 is the baseline now); `platform-runtime:dev` still predates WP-151's label, so `verify:e2e` runs with `WORKSPACE_E2E_RUNTIME_IMAGE=platform-runtime:wp151`. **WP-158 is DONE at `ebd2ecd3`** (`ci` `37599958320` and `image` `37599958373` **completed success**, `release` skipped; its docs commit `9a96d763` `ci` `37600197446` and `image` `37600197202` **completed success**) — 509 and 510 closed; **511** (**major**: builtins and wrappers that run a string as code — `trap`, `bash -lc`) filed with no owner and goes to an architect pass for a row; 512 and 513 filed (nits). The architect's third M9 amendment placed **511** as **WP-160** (folding 512 and 513, 513 regraded major) after WP-159. **WP-159 is DONE at `8f1569a3`** (`ci` `37606230322` and `image` `37606230370` **completed success**, `release` skipped; its docs commit `5217acc0` `ci` `37606385640` and `image` `37606385759` **completed success**) — 498 closed; 514 filed (minor UX). **WP-160 is DONE at `c3462354`** (`ci` `37616512104` and `image` `37616512076` **completed success**, `release` skipped; its docs commit `b88c238e` `image` `37616708426` success and `ci` `37616708262` **cancelled** by the next push's concurrency group, whose `ci` `37617522185` on `ecaafc00` **completed success**) — 511, 512 and 513 closed; 515–523 filed and folded by the architect's fourth amendment into **WP-161** (git's abbreviated long options, the fail-open depth bound, the git boundary's composite skip, expanded command names, mid-word continuations, `difftool -x`, `hash -p`, `xargs` argv). **WP-161 is BLOCKED** (paused for a human decision): its implementer was stopped twice by the harness's safety classifier during the measurement stage, before any code; the measurements are in its notes and its status row says how to resume. **WP-154 is DONE at `04029700`** (`ci` `37624851327` and `image` `37624851243` **completed success**, `release` skipped; its docs commit `473679f2` `ci` `37625050184` and `image` `37625050086` **completed success**) — 455, 487 and 502 closed; 524 filed. **WP-155 is DONE at `45f318e4`** (`ci` `37632423809` and `image` `37632423752` **completed success**, `release` skipped; its docs commit `8d962c30` `ci` `37632633031` and `image` `37632632848` **completed success**) — 450, 451 and 452 closed; 525–527 filed. **WP-156 is DONE at `65c79458`** (`ci` `37642640629` and `image` `37642640580` **completed success**, `release` skipped; its docs commit `1af50c24` `ci` `37642967714` and `image` `37642967808` **completed success**) — 420 and 421 closed; 528, 529 filed; migration 0087 used, so the next free number is **0088**. **WP-157 is DONE at `d8ae5e31`** (`ci` `37656021822` and `image` `37656021717` **completed success**, `release` skipped; its docs commit `d0b33fc6` `image` `37656403892` **completed success** and `ci` `37656404246` **completed success**, read by session 14) — 413, 414, 430, 431, 434, 435 and 447 closed. **An implementer's `pkill -f "cat"` took down Docker Desktop and the person's apps at ≈ 17:30** (standing rule **96**); the person restarted Docker and the session resumed. Standing rule **97** (reviewer copies) earned the same afternoon. **M9's only open row is WP-161 (BLOCKED)** — it waits for a person's decision on how to continue after the classifier stops; when M9's last row merges, the architect pass writes M10 from the open backlog (524–529 and the older unowned entries). **Session 13 stopped at the person's request** (*"stop your work after next row delivered"*, given while WP-157 was in flight) with WP-157 delivered (≈ 10 h). For the next session: (1) **WP-161** needs a person's decision first (its status row says how it can resume); (2) `platform-runtime:dev` still predates WP-151's label, so `verify:e2e` runs with `WORKSPACE_E2E_RUNTIME_IMAGE=platform-runtime:wp151`; (3) rules 95–97; (4) every brief carries the no-pattern-kill line.
 
@@ -13871,6 +13871,7 @@ WP-131's own docblock lists the held set as lease-swept, cancelled-in-place and 
 ### 408. **The board card prints `cost_actual_usd` with no "excludes N runs nobody measured", and titles it "Provider-reported cost"** **RESOLVED** at `1c8b6b1`, WP-134, session 11 — (TODO, **nit — display, rule 16's neighbour**. **Live** for any task with an unmeasured run. **Read. Unowned — for the orchestrator.** Found by WP-131, session 11) — `apps/web/src/features/board.tsx:103-105`. **403**'s *Done* named only the task page and the notification. The card is the third place the measured total appears. Its `TaskRecord` already carries `unmeasured_runs` (`packages/contracts/src/records.ts:641`), so this is a UI-only change. The `title` is also wrong in `local` mode, where the figure is priced rather than reported. **Done**: the card marks a total that excludes runs (a suffix or a title naming the count), plus a `test:ui` case in each direction. **Depends on** WP-131.
 
 ### 409. **`postgres-history-bootstrap-store.integration.test.ts` deletes each case's batch row at the end of the case rather than in `finally`, so one failure cascades into the next case as `history_bootstrap_batches_one_live` and names the wrong test** (TODO, **nit — test hygiene; seen once, under a WP-131 canary**. **Unowned — for the orchestrator.** Found by WP-131, session 11) — `test/integration/bootstrap/postgres-history-bootstrap-store.integration.test.ts` on the WP-131 tree: the cleanups at `:122`, `:198`, `:221`, `:318-320` and `:381` all run after the assertions, and the `finally` blocks at `:312` and `:378` do not cover them. WP-131 hit this when its `heldRunUsdSql` canary produced *"the ninth was the bootstrap file's next case cascading on an uncleaned batch row"*. **Done**: every case's row cleanup is in `finally`, or in an `afterEach` keyed on the ids the case created. A canary that fails one case then fails only that case. **Depends on** nothing.
+> **M10 (architect, session 14): owner WP-169 (b)** (§ "Architect ruling (M10, session 14)").
 > **M9 (architect, session 12): carried — the orchestrator may fix it in place.**
 
 ### 410. **RESOLVED** at `614cf050`, WP-150, session 12 — **A run cancelled or swept before its CLI process spawned is held at its reservation, and a task cap's hold never rolls over, so a task can be paused for budget by runs that cannot have spent anything until a human raises its cap** **ruled: the hold stays** at `cccb032`, WP-131, session 11 (no column proves a run never spawned; the per-task cap raise is the way out) — (TODO, **minor — accepted by the WP-131 ruling, filed with its trigger. Hypothesis: the frequency is not measured.** **Live** under the ruling. **Read off the WP-131 tree, not run. Unowned — for the orchestrator.** Found by WP-131, session 11)
@@ -13884,6 +13885,7 @@ WP-131's own docblock lists the held set as lease-swept, cancelled-in-place and 
 
 **Done** (if measurement shows it is common). A durable spawn marker: a column written in its own committed transaction **before** the launcher `create` is requested, which lets a run whose marker is absent count `0` as provably unspawned. The other option is a run-cancel command that releases a pre-spawn hold through the run aggregate with a `human_actions` row. Either way: a unit case where a run cancelled before its marker is not held, with a canary. **Depends on** WP-131 merged. A real install's provisioning time and cancel timing are WP-33's dogfood measurement.
 ### 411. **`test/e2e/workspace/docker-workspace.e2e.test.ts` › "the workspace has no route off its internal network, and the sidecar has two networks" once read a default-route count that did not end in `0` — unexplained** (TODO, **nit — an e2e failure seen once in a file no row touched, mechanism not measured**: in the orchestrator's second `verify:e2e` on WP-131's tree (session 11) the `nc` half held (`rc=1`) and the default-route count line did not end in `0` (the assertion reads the output's last character, so trailing text from the probe would fail it as well as a real route); the file then passed 80/80 twice alone. **Unowned — for the next architect pass**; found by the orchestrator, session 11)
+> **M10 (architect, session 14): owner WP-169 (c)** (§ "Architect ruling (M10, session 14)").
 > **M9 (architect, session 12): carried — next occurrence; the orchestrator may parse the probe per line in place.**
 
 **Seen again** (session 11, WP-124's tree): `test/e2e/workspace/docker-workspace.e2e.test.ts` › "keeps its network, volume, sidecar and a control socket the shim accepts — and `agentic:kb` on disk" failed once with `WorkspaceError: the run container is not running`, then passed in the next full tier — a second intermittent failure in the same file, so the file's container lifecycle under load is the thing to measure.
@@ -14439,6 +14441,7 @@ No log of the failing job codesniffer is included: the provider refused the log 
 **Depends on** nothing. **Row**: none of WP-150…WP-157 fits. WP-155 is the onboarding wizard, which asks for no model, and WP-154 touches `live-stage.tsx`/`transcript/view.tsx`, not `run-detail.tsx`. It needs a small SPA + read-route row of its own, or it rides with the next SPA row. Because of `apps/web/src/app/queries.ts` it is serial with WP-154 and WP-155.
 
 ### 499. **A push from a linked worktree ran the pre-push unit tier there, and the tests that build scratch git repositories wrote into the real one: `core.bare=true`, `refs/heads/main` moved to fixture commits, tags `v0.1.0`/`v0.5.0` and a branch `side` created, and the main checkout's index replaced** (TODO, **major — it silently corrupts a developer's repository and can create release-shaped tags that `scripts/version.mjs` reads. The cause is unmeasured.** Orchestrator's incident record, session 12, 2026-10-06 13:02–13:05. Refiner, session 12; **no work package owns it**: none of WP-150…WP-157 touches `scripts/` or the test harness)
+> **M10 (architect, session 14): owner WP-162 (a)–(e)** (§ "Architect ruling (M10, session 14)").
 
 **What happened (the orchestrator's record, quoted).**
 - *"Made a linked worktree (`git worktree add --detach <scratch>/wt-backlog origin/main`), `pnpm install --offline` there, committed backlog 498, `git push origin HEAD:main` -> lefthook pre-push ran unit tier IN THE LINKED WORKTREE."* The hook is `lefthook.yml:31-36` (`pnpm run -s conflict:check`, then `pnpm run -s test`).
@@ -14493,6 +14496,7 @@ Whether a tier run **directly** in a linked worktree (an ordinary shell, no hook
 **Depends on** WP-150.
 
 ### 501. **A stop that lands while the CLI spawn marker is committing leaves a run marked as having asked for its CLI, although no `spawn` frame was sent, so the run is held at its reservation as if it might have spent** (TODO, **minor — fail-closed (it over-holds and never under-holds), the window is one database round trip, and the frequency needs a real launcher to measure. The mechanism is read, not run.** WP-150's *Discovered work*, session 12. **No work package owns it**. It is what remains of backlog **410** after WP-150)
+> **M10 (architect, session 14): owner WP-163 (a)–(d)** (§ "Architect ruling (M10, session 14)").
 
 **What is wrong (read in WP-150's uncommitted tree on `9cc93a45`, not run).**
 - `sendSpawn` (`packages/infrastructure/src/runlet/spawn-adapter.ts:349-365`) awaits the gate (`:352`). The gate is `recordCliSpawn`'s `beforeCliSpawn` (`packages/application/src/pipeline/cli-spawn.ts:82-99`), which writes `runs.cli_spawn_requested_at` in its **own** transaction, committed before it returns.
@@ -14547,6 +14551,7 @@ Whether a tier run **directly** in a linked worktree (an ordinary shell, no hook
 **Depends on** nothing.
 
 ### 504. **A developer whose `platform-runtime` image predates WP-151 gets the label refusal once per Docker case instead of once at fixture start: `ensureImages` checks that the run image exists, never that it carries `com.agentic.runlet-protocol`** (TODO, **nit — the refusal is the intended answer and already says *rebuild*. The only problems are where it is said and how often. Local only: CI builds the images first (`.github/workflows/ci.yml:244-245`)**. WP-151's *Discovered work*, session 12, verified by the refiner. **No work package owns it.** **WP-157** is the candidate fold if its real-daemon case runs on `startDockerFixture`)
+> **M10 (architect, session 14): owner WP-169 (a)** (§ "Architect ruling (M10, session 14)").
 
 **What is wrong (read, not run).**
 - `ensureImages` (`test/e2e/support/docker-workspace.ts:227-246`) runs `docker image inspect`. For a missing `platform-*` tag it throws, naming `BUILD_IMAGES_COMMAND` (`:68`, `node scripts/build-images.mjs runtime egress`). A present image passes, whatever its labels.
@@ -14579,6 +14584,7 @@ Whether a tier run **directly** in a linked worktree (an ordinary shell, no hook
 **Depends on** WP-151 and a model credential.
 
 ### 506. **A stopped run whose interrupted turn wrote no `result` can still log `"level":50` *runlet transport failed* when the launcher's container stop beats the CLI's exit after the SIGTERM frame. This is the stop-path half of backlog 463, which WP-151 deliberately left as an error** (TODO, **nit — a hypothesis: the mechanism is read, not observed, and at worst it is log noise. It becomes worth doing if the next dogfood session shows the line on cancelled, taken-over, stalled, timed-out or shut-down runs**. WP-151's *Discovered work*, session 12. **No work package owns it**)
+> **M10 (architect, session 14): owner WP-163 (e)** (§ "Architect ruling (M10, session 14)").
 
 **What is wrong (read, not run).**
 - The stop path: `claude-runner.ts` interrupts the CLI and, for the causes in `READS_INTERRUPTED_RESULT` (`packages/infrastructure/src/runner/claude-runner.ts:221-253`), waits up to `INTERRUPT_GRACE_MS` (5 000 ms, `:1259`) for the interrupted turn's result. It then aborts (`:954`). The adapter turns the abort into a `signal{SIGTERM}` frame (`packages/infrastructure/src/runlet/spawn-adapter.ts:606-622`), and the workspace's release then stops the container. That is technical/04:591's documented order, so the race is designed in.
@@ -14594,6 +14600,7 @@ Whether a tier run **directly** in a linked worktree (an ordinary shell, no hook
 **Depends on** WP-151.
 
 ### 507. **`get_task_context`'s `feedback` section never shows the gate failure WP-152 attached to a person's return: it reads `return_reason` only, so an agent asking why the task came back sees the person's note labelled `cause: gate` and not the failing logs kept beside it** (TODO, **nit — the run the return causes already has the excerpt in its prompt; every later run (a second attempt after a code-review return, a reviewer reading the history) has no reader of it at all. Live for every role holding the tool once WP-152 lands**. WP-152's *Discovered work*, session 12, verified by the refiner against WP-152's uncommitted tree. **No work package owns it**: none of WP-153…WP-157 touches `task-context-queries.ts`. It is backlog **353**'s neighbour, not a duplicate: 353 is about the `other` cause, this is a column the select leaves out)
+> **M10 (architect, session 14): owner WP-166 (a)** (§ "Architect ruling (M10, session 14)").
 
 **What is wrong (read in the working tree on `3a980fbd` plus WP-152's diff, not run — rule 66).**
 - `listReturnFeedback` (`apps/server/src/queries/task-context-queries.ts:294-311`) selects `id`, `stage`, `attempt`, `returnedTo`, `returnReason` and `exitedAt`. It does not select `taskStages.attachedFeedback` or `attachedFeedbackOriginalChars`, the two columns migration 0086 added. The `feedback` case (`:529-543`) publishes `reason: row.reason` and nothing else from the row.
@@ -14611,6 +14618,7 @@ Whether a tier run **directly** in a linked worktree (an ordinary shell, no hook
 **Depends on** WP-152 (migration 0086). It is a sweep-sized change: one select, one field, one integration case.
 
 ### 508. **A merged task that is paused or taken over out of `needs_human` has no way forward but *Cancel*, and the take-over panel's hand-back picker offers every stage of the pipeline, all of which the route then refuses** (TODO, **minor — a dead end that loses the retrospective and the librarian's proposals for work that did merge. Latent: no merged task has escalated on a real install yet (backlog 497 *"not yet met on a real task"*). It becomes urgent the first time a retrospective or librarian run escalates and a person presses *Pause* or *Take over*, or cancels a live run on that task, before resuming. Needs a ruling: **Q117**.** WP-152's *Residuals* and *Discovered work* (the paused merged task and `hand_back_stages`), session 12, verified by the refiner against WP-152's uncommitted tree and filed as **one** entry because the picker is a symptom of the same missing rule. **No work package owns it**. The build is small whichever answer Q117 gets. **WP-154** is the nearest M9 row (a task-page SPA row), but it has no server-side task-state work, so this needs a small row of its own or a sweep after Q117 is answered)
+> **M10 (architect, session 14): owner WP-165 (Q117 (a))** (§ "Architect ruling (M10, session 14)").
 
 **What is wrong (read in the working tree on `3a980fbd` plus WP-152's diff, not run — rule 66).**
 - The table admits `needs_human → paused` (`packages/domain/src/aggregates/task-state-machine.ts:88`). Three commands take a parked task there, and **none of them checks for a merged task**:
@@ -14881,6 +14889,7 @@ uncertain) before the convenience fix.
 **Depends on** WP-158 (`unrecognisedUnquotedOperator`, ruling (f)).
 
 ### 514. **When the run being retried was itself a retry override (say Sonnet on a stage configured for Opus), *Retry run* preselects Sonnet, but an unchanged submit sends no `model`, so the new run is planned on Opus: the screen implies "Sonnet again" and runs the configured model** (TODO, **minor — UX. No wrong model is charged without a person pressing the button, and the run screen shows the model that ran, but a person who accepts the preselection gets a model they did not see selected. Live once WP-159 lands, for every retry of a run that was an override.** WP-159's review, session 13, verified by the refiner against WP-159's uncommitted tree on `9a96d763`. **Working as ruled, so it needs a ruling, not a fix**: WP-159 ruling (c) mandates both halves (`docs/technical/13-implementation-plan.md:472`, *"with the run's `record.model` preselected. Submitting without a change sends **no** `model`"*). **No work package owns it**: no M9 row touches `run-retry-model.tsx` after WP-159, and WP-160 is the command scanner)
+> **M10 (architect, session 14): owner WP-167 (a)** (§ "Architect ruling (M10, session 14)").
 
 **What is wrong (read, not run — rule 66).** `retryModelRequest`
 (`apps/web/src/features/run-retry-model.tsx:44-53`) returns `{}` when the selection equals `current`,
@@ -15161,6 +15170,7 @@ to what stays open.
 it is built after 516 is.
 
 ### 524. **`ErrorNotice` hides any notice whose title or detail *contains* the platform-updated sentence, so an error whose untrusted text carries that sentence renders nothing: no error and no banner** (TODO, **minor, BD-022, live once WP-154 lands. The only effect is a hidden error notice. Nothing is run, no markup is rendered, and the banner is not shown, because it is driven by the version check and not by the text. It needs an error message that holds the exact sentence, em dash included.** WP-154's review, session 13, read by the refiner against WP-154's uncommitted tree on `ecaafc00`. **No work package owns it**: no open M9 row (WP-155, WP-156, WP-157, WP-161) touches `apps/web/src/ui/kit.tsx` or `ErrorNotice`)
+> **M10 (architect, session 14): owner WP-167 (b)** (§ "Architect ruling (M10, session 14)").
 
 **What is wrong (read, not run — rule 66).** `ErrorNotice` (`apps/web/src/ui/kit.tsx:181-187`) returns
 `null` when `[title, detail].some((text) => text?.includes(PLATFORM_UPDATED_MESSAGE) === true)`.
@@ -15195,6 +15205,7 @@ WP-154's note at `PROGRESS.md:45421` are amended (rule 83).
 single `errorText`/marker helper keeps the change at one module plus the call sites' spelling.
 
 ### 525. **`last_discovery.escalation.brief` is published with no length bound: the read and the DTO take whatever string the newest `task.escalated` event carries, and neither the event schema nor `amendEscalation` bounds it** (TODO, **minor, live once WP-155 lands. It is the first DTO to publish `blocker_brief`. The review's *"keeps growing"* is not what the code does: an amendment is a new event with its own brief, and the read takes only the newest one, so nothing accumulates. What is unbounded is one brief.** WP-155's review, session 13, read by the refiner against WP-155's uncommitted tree on `473679f2`. **No work package owns it**: no open M9 row (WP-156, WP-157, WP-161) touches `apps/server/src/onboarding.ts` or the gate DTO)
+> **M10 (architect, session 14): owner WP-168 (a)** (§ "Architect ruling (M10, session 14)").
 
 **What is wrong (read, not run — rule 66).** `createDiscoveryEscalationRead` (`apps/server/src/onboarding.ts:386-410`)
 selects `payload->>'blocker_brief'` of the newest `task.escalated` event and returns it unchanged.
@@ -15223,6 +15234,7 @@ The reviewer's direction is the cap.
 **Depends on** WP-155 landing.
 
 ### 526. **The wizard's discovery status prints the gate's stale in-flight sentence after "It is waiting for a person" when the task's SSE update reaches `needs_human` before the gate is re-read** (TODO, **nit, live once WP-155 lands. It is transient, and it lasts until the gate refetches. The text is the platform's own, so it is wrong, not unsafe.** WP-155's review, session 13, read by the refiner against WP-155's uncommitted tree on `473679f2`. **No work package owns it**: no open M9 row touches `apps/web/src/features/discovery-status.tsx`)
+> **M10 (architect, session 14): owner WP-168 (b)** (§ "Architect ruling (M10, session 14)").
 
 **What is wrong (read, not run — rule 66).** In `apps/web/src/features/discovery-status.tsx:133-138`, the `needs_human`
 branch with no `escalation` renders the gate's `blocker.detail` after the fixed sentence. The phase comes from the task's own read
@@ -15244,6 +15256,7 @@ while the gate still holds the in-flight blocker, and the in-flight sentence is 
 **Depends on** WP-155 landing.
 
 ### 527. **A 503 from the rediscovery gate holds the wizard's *Save operating mode* busy for about a second, because the save's success handler awaits a project-wide invalidation that refetches the gate, and the gate inherits the app's `retry: 1`** (TODO, **minor, live once WP-155 lands. It only happens when the gate route fails, and the save is already performed when the button is held. It is a delay, not a lost write.** WP-155's review, session 13, observed in `apps/web/src/features/onboarding.test.tsx`'s fake; the mechanism was read by the refiner against WP-155's uncommitted tree on `473679f2`. **No work package owns it**: no open M9 row touches `apps/web/src/app/queries.ts` for this hook)
+> **M10 (architect, session 14): owner WP-168 (c)** (§ "Architect ruling (M10, session 14)").
 
 **What is wrong (read, not run — rule 66).** `useRediscoveryGate` (`apps/web/src/app/queries.ts:116-124`) sets no `retry`, so
 it takes the application default `retry: 1` (`apps/web/src/app/app.tsx:89`), and TanStack's default delay before that retry is about 1 s.
@@ -15267,6 +15280,7 @@ as soon as the PUT resolves. **Canary:** restore the default retry, or the await
 **Depends on** WP-155 landing.
 
 ### 528. **`knowledgeBranchName`'s eight-digit discriminator is written for uuidv7 ids, but every production `kb_proposals` id is a `randomUUID()` (v4): the silent loss WP-156 inferred is not reachable today, and WP-156's own docblock and integration test state a premise production does not have** (TODO, **minor, latent. The finding as reported is a major silent loss, and it would be one with uuidv7 ids. It is not reachable now because no production writer produces uuidv7 ids. It becomes reachable the day the `ids` port moves to uuidv7, which technical/03 says every entity key already is.** WP-156's discovered work, session 13, read by the refiner against WP-156's uncommitted tree on `8d962c30`. **No work package owns it**: no open M9 row (WP-157, WP-161) touches `packages/application/src/knowledge/apply.ts`. It does not need a row of its own)
+> **M10 (architect, session 14): owner WP-166 (c)** (§ "Architect ruling (M10, session 14)").
 
 **What is wrong (read, not run — rule 66).** `knowledgeBranchName` (`packages/application/src/knowledge/apply.ts:226-233`) names a batch
 `agentic/knowledge/<created_at date>-<first eight hex digits of the lowest id>` (`:231`), and both provider calls take their idempotency key
@@ -15322,6 +15336,7 @@ Whether technical/03:9 should say *"the column default is uuidv7; application-wr
 **Depends on** WP-156 landing, since it edits WP-156's docblock and test comment.
 
 ### 529. **`stranded_stage`'s failed-job brief cannot tell an expired `stage.execute` job from a thrown one: a supervisor expiry reads *"an error whose class was not recorded"*, and a worker-timer expiry reads *"threw Error"* for a handler that never threw** (TODO, **minor, live. It is wording in a brief a person reads. The person is told to look for an error, and the job actually hit its two-hour limit. Nothing is wrongly moved.** WP-156's discovered work, session 13. The supervisor half was measured by WP-156; the worker-timer half was read by the refiner. **No work package owns it**: no open M9 row touches `packages/application/src/recovery/stranded-stage.ts`)
+> **M10 (architect, session 14): owner WP-166 (b)** (§ "Architect ruling (M10, session 14)").
 
 **What is wrong (read, not run — rule 66).** The stranded-stage store reads a failed `stage.execute` job's class only from
 `output ->> 'name'`, `output ->> 'code'` and the same two under `cause` (`packages/infrastructure/src/recovery/postgres-stranded-stage-store.ts:120-123`).
@@ -15347,6 +15362,7 @@ signature match and both expiry cases read *"not recorded"* or *"threw Error"* a
 **Depends on** WP-156 landing (`EXPIRY_SIGNATURES` is uncommitted).
 
 ### 530. **`echo 'X=$(shell id)' | xargs make` is `unattended_auto` after WP-161: `xargs` hands `make` a variable assignment from the pipe, so WP-54's `make VAR=value` floor, which refuses the same assignment written on the line, never sees it** (TODO, **minor, security, `auto` only. Attended asks and `deny` refuses. No form reaches `allow`. This is backlog 523's residual: WP-161 reads an `xargs` that feeds a wrapper, `find -exec` or `git`, and not one that feeds a project-command verb.** WP-161's *Discovered work*, session 14, measured by the refiner through `evaluateCommand` and `decideUnattendedCommand` on WP-161's uncommitted tree over `2ece3dc6`. No shell ran the payload. **No work package owns it.** WP-161's criterion (13) owns 523, and its own docblock names this case as *"still not read"*, so it is out of that row's scope unless the orchestrator folds it in)
+> **M10 (architect, session 14): owner WP-164** (§ "Architect ruling (M10, session 14)").
 
 **What is wrong (read, then measured without a shell, rule 66).** WP-54's floor
 *make VAR=value (a positional containing `=`)* (`packages/domain/src/policies/command-policy.ts:1286-1292`) is token-scoped: it fires when
@@ -15435,6 +15451,7 @@ the table and the first row reads `unattended_auto`. The docblock's limit senten
 **Depends on** WP-161 landing (`commandNameWords` is uncommitted).
 
 ### 532. **`ignored:check`, and so `verify`, fails locally whenever Claude Code's scheduled wake-up is armed: the harness writes `.claude/scheduled_tasks.lock` and an unanchored `**/.claude/scheduled_tasks.lock` into `.git/info/exclude`, and because `.claude/` holds tracked files the guard walks it and reports the lock as hidden source** (TODO, **minor, tooling. There is no product effect and CI never sees it. It blocks the orchestrator's own `verify` verdict line and has cost a workaround in three sessions.** The orchestrator, session 14. It was first recorded only in session notes: session 11 (`PROGRESS.md:27`), session 12 (`:25`, *"move it aside for a `verify` and put it back"*) and a row's verify log (`:40338`). It was never a backlog entry. **No work package owns it**)
+> **M10 (architect, session 14): owner WP-162 (f)** (§ "Architect ruling (M10, session 14)").
 
 **What is wrong.** `scripts/check-ignored.mjs` walks every top-level directory git tracks anything in (`sourceRoots`). `.claude/` qualifies
 because of `.claude/agents/*.md` and `.claude/skills/orchestrate/SKILL.md`. The walk then asks `git check-ignore --no-index` about every file
@@ -19237,6 +19254,25 @@ number from **0085** in the order rows land. Read the backlog entry a row folds 
 | WP-159 | **Retry run offers the platform's own model list instead of a free-text box, and refuses a model nobody chose on purpose** | DONE | `8f1569a3` | Folds **498** (the product owner's request). No migration. **Built:** `GET /api/org/models` (`run.read`) over open `price_list` windows (half-open, distinct, ordered, no prices, ids over 128 characters left out); `retryRunCommand` refuses an unlisted id that is neither the run's own nor the stage's configured model with `409 model_not_listed` before any write, `allow_unlisted_model` admits it; the retry form is a select (run's model preselected, unchanged submit sends no `model`, *not priced* option kept, *Other…* sends the flag, a failed read keeps the run's model); censuses both directions; every shipped default held to an open window. **Review:** one round, **APPROVE-with-nits** — canary 2 (the run's-own-model admission) **survived** because the run's model was also the template default; the test now isolates it (dies), the half-open boundary and the web-e2e wait (rule 87) pinned; canaries 3–6 dead, 1 covered by the integration tier. Filed **514** (minor UX: the preselected model is not the one an unchanged retry plans on, effort likewise). **Orchestrator verification:** `PASS: verify`, `PASS: verify:ui` (581), `PASS: verify:web-e2e` (51), `PASS: verify:integration` (851), `PASS: verify:e2e` twice (290, `:wp151` run image); after the round's tests `PASS: verify` and `PASS: verify:web-e2e`. CI on `8f1569a3`: `ci` `37606230322`, `image` `37606230370`. |
 | WP-160 | **The command scanner reads, or refuses, a command handed over as a string, and a here-document it cannot recognise no longer hides the lines after it** | DONE | `c3462354` | Folds **511**, **512**, **513** (513 regraded major). Deps WP-158. No migration. **Built:** measured 132 forms first (103 `unattended_auto`, five `allow_list` in every mode, a shell ran 75; none after); `wrappedScript` parses a literal string as a script (trap's action, one shared `-c` shell set, `script -c`, `su`/`runuser -c`, `flock -c`, `watch`, `env -S`, literal here-strings to a shell, `find -exec` argv); `UNCERTAINTY.handedCommand` for a non-literal or stored command (prompt variables, `BASH_ENV`/`ENV`, `alias`, `mapfile -C`, `bind -x`, `complete`/`compgen -C`/`-W`, `fc`, pipes and process substitutions into a shell, a `-c` whose script `xargs` supplies); `git rebase -x` spellings join `--exec`'s hazard; a refused here-document's would-be body read to bash's terminator and the lines after it re-parsed; every reader reads continuation-joined stages; (f) and (g) landed in the row (no split). **Review:** two rounds — round 1 **REQUEST-CHANGES** on three majors, each run by bash (`xargs bash -c`, `compgen`/`complete -W`, continuations between words in the new readers; a fourth, `cat <<\⏎EOF`, found by the implementer's sweep); round 2 **APPROVE**, one pre-existing minor filed as 523 and named in the docblock by the orchestrator. Six reviewer canaries round 1 and five round 2, all dead; 27 implementer canaries, the separate (e) quote check removed after its canary survived (covered by the re-parse). **Orchestrator verification:** round 0 `PASS: verify`, `PASS: verify:integration` (851), `PASS: verify:e2e` twice (290, `:wp151` run image); round 1 `PASS: verify`, `PASS: verify:e2e`; final `PASS: verify` (12185). Filed 515–519 (refiner), 520–522 (review round 1) and 523 (round 2), all folded into **WP-161** by the architect's fourth amendment. CI on `c3462354`: `ci` `37616512104`, `image` `37616512076`. |
 | WP-161 | **The command scanner resolves git's abbreviated long options the way git does, fails closed past its depth bound, judges every `git push` a line contains, and refuses a command name the shell expands** | DONE | `d080c81f` | **Delivered, session 14**, resumed by the static half first with marker-only executed rows; the classifier did not stop it again. Folds 515–523 and, from review round 1, **531** (ruling (f)'s guarantee, (i) forbids splitting it) and criterion **(14)** (a backslash-newline inside a comment was joined: `ls # x \⏎sudo id` read `allow` attended, pre-existing). **Built:** git's prefix rule over `git-long-options.generated.ts` (30 tables, git 2.47.3; `node scripts/git-long-options-check.mjs` PASS against `platform-runtime:wp151`); the depth bound fails closed and counts wrappers, not words (reviewer: within (d), no line weaker); structural composite skip; expanded names uncertain incl. after a wrapper option (`WRAPPER_FLAGS_WITHOUT_VALUE`, unknown fails closed) and a wrapper's leading operand (`timeout`, `taskset`, `chrt`); (g) built; continuation join after comments end; `difftool -x`; `hash -p`; `xargs`. **Review:** three rounds — r1 531 + comment continuation + `xargs` in `NAMES_THE_POLICY_JUDGES`; r2 a wrapper's leading operand (`timeout inf /usr/bin/g?t …`, `taskset ff …`); r3 **APPROVE**, no nits. Canaries (empty table, substitution site, `includes`, `..` brace, join skipped, `difftool -x`, `hash -p`, option-value push, comment branch, `WRAPPER_OPERAND`) all dead by named tests (notes). **Orchestrator's verification** (final tree): every `verify` step PASS except `ignored:check`, red only on the harness's `.claude/scheduled_tasks.lock` (backlog **532**); `verify:integration` 868/868 PASS; `verify:e2e` 291/291 PASS twice (`WORKSPACE_E2E_RUNTIME_IMAGE=platform-runtime:wp151`); volumes 131. CI on `d080c81f`: `ci` `37725511106`, `image` `37725511098` **completed success**, `release` skipped. Filed 530, 532 (no owner). Previously: **Paused, session 13, for a human decision:** the implementer was stopped twice by the harness's safety classifier during the (a) measurement stage (planted payloads run in the run image), before any code; it did not retry around the flag. The before table and the git 2.47.3 measurements are in the notes (`#### WP-161`). To resume: write rulings (b)–(g) and the unit tests first (nothing executes), then the marker-only shell-oracle rows and the generator check, or have a person run those. | Folds **515** (major, security: `git commit --no-verif` is `allow` attended), **516** (major), **517** (major), **518** (regraded major: `/usr/bin/g[i]t push origin main` reaches git in the run image), **519** (nits, optional), and since WP-160's review round 1 **520** (major: a `\`-newline inside a word, `git commit --no-ver\⏎ify` is `allow` attended), **521** (major: `git difftool -x`) and **522** (minor: `hash -p`), criteria (10)–(12), and since review round 2 **523** (minor, pre-existing: stdin-fed `xargs git`/`env`/`find -exec`), criterion (13). Deps WP-160. No migration. Measure first (ruling (a)); git's prefix rule against a generated per-subcommand table, with a Docker check. Next after WP-160, serial with it; parallel-safe with WP-154…WP-157. The orchestrator may split (g) or leave 519 open; it may not split (b)–(f) |
+
+**M10 — what M9's own rows left behind** (architect, session 14; plan § "Milestone M10"; the
+disposition of every open backlog heading is § "Architect ruling (M10, session 14)" at the end of this
+file). Recommended order is the table's. WP-162 runs first, and WP-163 may start beside it on the main
+checkout (rule 95 holds until WP-162 lands). WP-164 and WP-166 are parallel-safe with every row. WP-165,
+WP-167 and WP-168 are serial with each other in that order, and WP-169 runs after WP-162. No row is
+expected to need a migration. The next free number is **0088**. Read the backlog entry a row folds before
+planning it.
+
+| WP | Title | Status | Commit | Notes |
+|---|---|---|---|---|
+| WP-162 | **A test never writes into the repository it runs in, and the harness's own files do not turn `verify` red** | TODO | — | Folds **499** (major), **532**. No deps. No migration. Retires rule 95. Parallel-safe with every row but WP-169. |
+| WP-163 | **A stop that lands while the spawn marker commits holds no money, and a stop the platform made logs no fault** | TODO | — | Folds **501**, **506**. Deps WP-150, WP-151, WP-154. No migration. BD-010's 2026-10-08 amendment. Parallel-safe with WP-162. |
+| WP-164 | **An `xargs` that feeds a project-command verb is uncertain, and the verbs come from the floors themselves** | TODO | — | Folds **530**. Deps WP-161. No migration. Touches only `packages/domain/src/policies/` and technical/05. Parallel-safe with every row. |
+| WP-165 | **A merged task is never paused or taken over, so a merged task always has its way to the retrospective** | TODO | — | Folds **508** (Q117 (a)). Deps WP-152. No migration. technical/02's M10 amendment. Serial with WP-167. |
+| WP-166 | **What the record tells its reader: a person's attached gate failure in `get_task_context`, an expired stage job named as expired, and a knowledge batch name that does not depend on the id's version** | TODO | — | Folds **507**, **529**, **528**. Deps WP-152, WP-156. No migration. TD-006's 2026-10-08 amendment. Parallel-safe with every row. |
+| WP-167 | **Retry run's default says what an unchanged submit will run, and an error notice is hidden by the error's type, never its text** | TODO | — | Folds **514**, **524**. Deps WP-154, WP-159. No migration. Serial with WP-165 and WP-168. |
+| WP-168 | **The wizard's discovery status agrees with itself: a bounded brief, no stale sentence, and no held button** | TODO | — | Folds **525**, **526**, **527**. Deps WP-155. No migration. Serial with WP-167. |
+| WP-169 | **The e2e fixture refuses a stale run image once, and two harness readings stop cascading or hiding their cause** | TODO | — | Folds **504**, **409**, **411**. Deps WP-151. No migration. Serial after WP-162. (a) and (c) want the Docker daemon. |
 
 ## WP notes (decisions, assumptions, reviewer findings)
 
@@ -46096,3 +46132,152 @@ No container was left (`docker ps -a --filter ancestor=platform-runtime:wp151` e
 
 
 **Review round 2 (orchestrator, nit).** APPROVE-with-nits: the reviewer's canary *a failed create does not clear its live mark* survived. The orchestrator added `packages/infrastructure/src/workspace/orphan-runs.test.ts` › "forgets a helper whose create failed, so a later orphan of its name is reaped" (the fake daemon's `fail` map refuses the create, then an orphan of the same `mirror-<key>` name older than an hour is planted and reaped); the canary (the `#liveHelpers.delete` in `#helper`'s create `catch` removed) is dead by it (1 failed, 18 passed), the file restored byte-identical.
+
+### Architect ruling (M10, session 14) — eight rows, and the tests that write into the wrong repository come first
+
+Written 2026-10-08 at `a6f75bd1`, M9 complete (WP-150…WP-161, the last at `d080c81f`). This pass covers
+**every open `### NNN.` heading** of § "Open findings backlog": 47 headings. That is the 31 the M9 pass
+carried and that are still open, plus the 16 filed since (499, 501, 504–508, 514, 524–530 and 532). Each new entry's claim was re-read against `a6f75bd1` by hand, at the lines its plan row cites.
+**Every scheduled defect is still in the tree.** One entry has partly moved: WP-156's final commit already
+corrected 528's two wrong premises (the solo-branch docblock and the split test's comment,
+`packages/application/src/knowledge/apply.ts:244-256`), and the code and technical/07's sentence remain.
+No test tier and no Docker ran. Two measurements were cheap enough to make, and both changed a ruling.
+
+**Measured by this pass.**
+1. **499's cause, in a throwaway repository** (git 2.54.0 Apple, plain git hooks, a local bare remote
+   and a linked worktree under the scratchpad, `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` set to `/dev/null`;
+   never this repository; deleted afterwards). A `pre-push` hook that wrote `env | grep '^GIT_'` read
+   `GIT_DIR=<main>/.git/worktrees/wt` when the push came from the linked worktree, and **no `GIT_DIR`**
+   when it came from the main checkout. A hook that ran `git init .` in a fresh scratch directory, then
+   committed and tagged `v0.1.0` there, left the scratch directory holding only its file. Afterwards the
+   shared configuration read `core.bare=true`, the tag was in the shared refs, the worktree's `HEAD` had
+   moved onto the fixture commit, and `git status` in the main checkout answered *this operation must be
+   run in a work tree*. **That is the incident's signature, so the hypothesis is the mechanism**: the
+   fixtures inherit `GIT_DIR` from the hook. The prefix scrub and the `rev-parse` guard of WP-162 (b) are
+   therefore the fix and not a guess. Lefthook's own environment was not measured, and WP-162 (1) measures it.
+2. **530 at `a6f75bd1`** (`decideUnattendedCommand` and `evaluateCommand` through
+   `scripts/ts-source-resolver.mjs`; the three baselines as the planner composes them; marker-only
+   payloads; nothing executed). Each cell is the attended verdict, then the `auto` rule, then the `deny`
+   rule, and the three baselines agree on every line:
+
+   | line | verdict |
+   |---|---|
+   | `make 'X=$(shell touch marker)'` (control) | ask / hazardous_argument / hazardous_argument |
+   | `echo 'X=$(shell touch marker)' \| xargs make` | ask / unattended_auto / unattended_deny |
+   | `echo '--eval=x:=$(shell touch marker)' \| xargs make` | ask / unattended_auto / unattended_deny |
+   | `xargs make < f`, `xargs -a f make`, `xargs --arg-file=f make` | ask / unattended_auto / unattended_deny |
+   | `echo '-toolexec=./marker.sh' \| xargs go test`, `echo '--config=x' \| xargs cargo test` | ask / unattended_auto / unattended_deny |
+   | `echo 'X=$(shell touch marker)' \| xargs nice make` (control: a wrapper) | ask / uncertain / uncertain |
+   | `env -u foo /usr/bin/g?t push origin HEAD:main` (531, closed) | ask / uncertain / uncertain |
+
+   The two `--arg-file` spellings are new. The stock run image ships no `make` (`docker/base.Dockerfile:43-50`
+   installs bash, ca-certificates, curl, git, jq, openssh-client and ripgrep on the Node image), but it does
+   ship `npm`, and a project's own image can ship `make`. So the grade stays **minor** and the row is built
+   to fail closed (WP-164).
+
+**Read, and it changed the money row.** A run that ends through `unspawnedStop` costs
+`MEASURED_ZERO_COST`, which is written to `usd_reported`
+(`packages/application/src/pipeline/cli-spawn.ts:48-52`). The hold predicate counts only a run with
+neither figure (`packages/infrastructure/src/cost/pending-run-spend.ts:72-75`). So 501's fix needs
+neither a migration nor a cleared marker: once the executor knows the frame was withheld, the existing
+measured-zero ending already releases the hold. The marker stays the true record of what the platform
+was about to do (BD-010's 2026-10-08 amendment, below).
+
+**The rows, in order** (plan § "Milestone M10"):
+1. **WP-162: a test never writes into the repository it runs in, and the harness's own files do not
+   turn `verify` red** (499, 532). 499 is the **only major** open. Until it lands, rule 95 forbids a
+   tier run or a push from a linked worktree, so no two rows can run in parallel. 532 is the same
+   family: the repository's own tooling reads the wrong repository's state. It is also the workaround
+   three sessions have paid for.
+2. **WP-163: a stop that lands while the spawn marker commits holds no money, and a stop the platform
+   made logs no fault** (501, 506). This is money, and it fails closed. 506 is folded **without** its
+   dogfood count, because the count prices only how often the line appears. The line is wrong every
+   time it appears, since the run's ending comes from the stop cause. The row reads every stop cause
+   first, and narrows the change if the `error` emit has an effect anywhere.
+3. **WP-164: an `xargs` that feeds a project-command verb is uncertain** (530). This is security
+   under `auto` only. The verbs are derived from the floors.
+4. **WP-165: a merged task is never paused or taken over** (508; Q117 built as its recommendation
+   (a)). This is the record: today one extra click turns a recoverable escalation into a lost
+   retrospective.
+5. **WP-166: what the record tells its reader** (507, 529, 528).
+6. **WP-167: *Retry run*'s default says what it runs, and an error notice is hidden by type** (514, 524).
+7. **WP-168: the wizard's discovery status agrees with itself** (525, 526, 527).
+8. **WP-169: the e2e fixture's image check and two harness readings** (504, 409, 411).
+
+**No provider row and no operations row.** No provider entry is open except 436 (bounded, fails open)
+and 446 (needs fakes a compose stack can reach). The operations entries, 505 and 506's frequency, need
+a real CLI.
+
+**Decisions written by this pass** (the docs win, so they come before the rows):
+- **BD-010, 2026-10-08 amendment.** A run whose spawn request the runner withheld after writing the
+  record is a measured zero. The record is kept. Only a process that died inside the window is still
+  held.
+- **TD-006, 2026-10-08 amendment.** `uuidv7()` is the column default. Application-written ids are v4.
+  No code may derive an order, a uniqueness claim or a time from an id's version or from a prefix of an
+  id.
+- **technical/02, M10 amendment.** A merged task is never paused and never taken over, and
+  `paused → retro` is not added (Q117 (a)).
+
+**Edited:** Q117 carries the scheduling note. `docs/technical/README.md` carries the status line.
+
+**Already resolved, for the orchestrator to mark** (not marked here): none in full. 528's docblock half
+was done at WP-156, as stated above. Its heading stays open for WP-166.
+
+#### Disposition — every open backlog heading
+
+| Entry | Grade | Disposition |
+|---|---|---|
+| 1 (blocker brief) | blocker for WP-17's evals | carried — a model credential (WP-33) |
+| 2 (blocker brief) | blocker for WP-78 | carried — an upstream StrykerJS release |
+| 7 (bullets 6, 7, 10) | declined (M5) | carried — unchanged, trigger-shaped |
+| 122, 123, 125, 145, 207, 219, 266, 305, 308, 313, 321, 345, 374, 397 | nit to small | carried, **closed** (M7). M9 brought no new evidence on any of them |
+| 353 | nit | carried, **closed** (M7). WP-166 (a) publishes the attached excerpt beside the return's `cause` and leaves `cause` alone, so 353's *other* stays what it is |
+| 132 | observation | carried — waits for its next occurrence (instrumented at WP-96) |
+| 171 | small-to-major | carried — the ledger still records no accepted page in the Autix vault, so there is nothing to measure on (rule 39) |
+| 232 | small | carried — the founder's, Q108 |
+| 238 | small | carried — no history-bootstrap batch has run on Autix |
+| 367 | nit | carried — latent below 50 waiting rows of one kind |
+| 409 | nit (test hygiene) | **→ WP-169 (b)** — the five cleanups are still outside `finally` at the cited lines |
+| 411 | nit | **→ WP-169 (c)** — the probe still reads the output's last character (`test/e2e/workspace/docker-workspace.e2e.test.ts:1013`) |
+| 422 | nit | carried — needs a `pgboss.job` with a year's retention |
+| 433 (`db-backup` grace) | nit | carried — no M9 row edited `compose.yml`, and `db-backup` still has no `stop_grace_period` (`compose.yml:470-487`). The next row that edits `compose.yml` measures it |
+| 436 | nit | carried — bounded and fails open |
+| 439 | nit | carried — a test-harness side effect with no failing case |
+| 440 | nit (flake) | carried — next occurrence, together with backlog 467's rebase-gate timeout |
+| 446 | minor | carried — needs fake providers reachable from a compose stack |
+| **499** | **major** | **→ WP-162 (a)–(e)** — cause measured by this pass (above). Rule 95 stays in force until WP-162 lands |
+| 501 | minor (money, fail-closed) | **→ WP-163 (a)–(d)** |
+| 504 | nit | **→ WP-169 (a)** — `ensureImages` still checks existence only (`test/e2e/support/docker-workspace.ts`) |
+| 505 | nit (measurement) | carried — needs a real CLI: the next dogfood session or a `--real-model` pre-flight under Q115 |
+| 506 | nit | **→ WP-163 (e)** — built without the count, for the reason above. Its frequency question goes with 505 |
+| 507 | nit | **→ WP-166 (a)** — `listReturnFeedback` still selects `return_reason` only (`apps/server/src/queries/task-context-queries.ts:294-311`) |
+| 508 | minor (a dead end that loses the record) | **→ WP-165**, Q117 (a) |
+| 514 | minor (UX) | **→ WP-167 (a)**, option (c). No read carries the configured model and effort today: the effective-configuration read omits the shipped stage defaults, so the row adds `retry_defaults` |
+| 524 | minor (BD-022, suppression) | **→ WP-167 (b)** |
+| 525 | minor | **→ WP-168 (a)** — a cap at the read, not a producer census |
+| 526 | nit | **→ WP-168 (b)** |
+| 527 | minor | **→ WP-168 (c)**, option (a) |
+| 528 | minor, latent | **→ WP-166 (c)**. The docblock half was done at WP-156, and the code still slices eight digits of the lowest id (`apply.ts:241`). TD-006 is amended |
+| 529 | minor | **→ WP-166 (b)** |
+| 530 | minor (security, `auto` only) | **→ WP-164** — measured above, and two new spellings were found |
+| 532 | minor (tooling) | **→ WP-162 (f)** |
+
+**499 is the one major entry, and it has a row. No entry is graded blocker except the two blocker
+briefs**, which wait on things outside the repository. Every row folds at most three entries. WP-162
+is the widest, because it carries a helper, a census and a process-tier reproduction. Its split clause:
+if review runs long, (f) (532) may move to a follow-up row, because it only blocks a local verdict.
+(a)–(e) may not move.
+
+**Open questions.** Q117 is scheduled as above. No other open question changed, and none is new. Q108
+(the storage panel) is still the founder's, and Q116 was built as (a) at WP-150.
+
+**Could not decide here, and left to the rows' measurements:**
+- Lefthook's hook environment (WP-162 (1)).
+- Whether any stop cause gives the `error` emit an effect beyond the log line (WP-163 (e)).
+- Whether a run can be live on a merged task parked in `needs_human` (WP-165 (3)).
+
+Each row states its answer in its notes, and none of them blocks the row.
+
+**Next: WP-162**, with WP-163 beside it if two implementers are free, both working on the main
+checkout (rule 95), with their `verify` runs sequenced. The next free migration number is still
+**0088**, and no row is expected to take it.

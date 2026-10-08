@@ -116,6 +116,16 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > `retry-stage` of `merged_gate` stays refused. **Residual:** a merged task escalated and then
 > **paused** or **taken over** is at a pause, not in `needs_human`, and `paused → retro` is not an
 > edge — such a task can only be cancelled.
+>
+> **M10 amendment (2026-10-08, architect, session 14; Q117 answered as its recommendation (a),
+> PROGRESS backlog 508): the residual is closed by closing the door into it, not by adding an
+> edge.** A merged task is **never paused and never taken over**. *Pause* and *Take over* refuse
+> it with `task_merged` and record nothing, and a run cancel on such a task stops the run and
+> leaves the task where it was. The take-over panel's hand-back picker offers no stage for a
+> merged task. `paused → retro` is **not** added. A merged task's branch is already in the
+> default branch, so there is nothing to take over, and a pause would stop a pipeline that
+> `needs_human` has already stopped. A merged task that was paused before this change keeps
+> *Cancel*, and none is known to exist. Built at WP-165.
 
 *Which* limit a `returned` spends is decided by the transition and not only by the stage it leaves (WP-26). `ready_for_merge` has two outgoing returns — a human's comment, which is BD-008's `human_rounds`, and the default branch moving, which re-enters the rebase gate — and attributing the second to the first escalated a task with *"human_rounds iteration limit of 3 reached: main moved to …"* after three merges to `main` under a waiting merge request. The edges that need their own loop are enumerated in `RETURN_LOOPS_BY_EDGE` (`packages/domain/src/pipeline/interpreter.ts`); everything else is attributed by the stage, and an edge in neither table cannot return at all.
 
