@@ -89,6 +89,7 @@ import type {
   StoredTask,
 } from './store.js';
 import { retryOnTaskConflict } from './task-conflict.js';
+import { releaseRequest } from './ticket-lifecycle.js';
 import {
   type ApplyOptions,
   applyDecision,
@@ -680,7 +681,12 @@ const applyHumanDecisionRecorded = async (
   }
   const applied = await applyDecision({
     store: deps.store,
-    pipeline: compilePipeline(stored.task.template, stored.template, stored.pipelineDial, false),
+    pipeline: compilePipeline(
+      stored.task.template,
+      stored.template,
+      stored.pipelineDial,
+      stored.qaStage,
+    ),
     tx: scope.tx,
     stored,
     decision,
@@ -918,7 +924,7 @@ const resumeTargetOf = (stored: StoredTask, stage: Slug): Slug => {
     stored.task.template,
     stored.template,
     stored.pipelineDial,
-    false,
+    stored.qaStage,
   );
   const next = pipeline.stages.find(
     (entry) => entry.enabled && POST_MERGE_STAGES.includes(entry.id),
@@ -1130,7 +1136,7 @@ const assertReturnTarget = (stored: StoredTask, from: Slug, to: Slug): void => {
     stored.task.template,
     stored.template,
     stored.pipelineDial,
-    false,
+    stored.qaStage,
   );
   const enabled = pipeline.stages.filter((entry) => entry.enabled);
   const target = enabled.findIndex((entry) => entry.id === to);
@@ -1212,7 +1218,7 @@ const keepGateFeedback = async (
     stored.task.template,
     stored.template,
     stored.pipelineDial,
-    false,
+    stored.qaStage,
   );
   if (stored.task.state !== 'needs_human' || stageOf(pipeline, from)?.kind !== 'gate') {
     if (requested === true) {
@@ -1423,6 +1429,26 @@ export const reworkStageCommand = async (
           supersededAt: context.clock.now() as IsoDateTime,
         });
       }
+      /**
+       * **The ticket is given back** (WP-177, BD-031 ruling 5, TD-029 decision 5): a held claim is
+       * marked stale here, in this transaction, so the reworked task's next agent admission claims
+       * again whichever of the two runs first — this release, or that claim — and the release, a
+       * `ticket_release` duty after the commit, unassigns and moves the ticket to `pick_up_from`
+       * unless that claim came first and cleared the mark (`runTicketRelease`).
+       */
+      const claim = await deps.store.tasks.ticketClaim(scope.tx, stored.task.id);
+      const release: PipelineOutboundData | null =
+        claim === null || claim.released_at !== null || cause === undefined
+          ? null
+          : releaseRequest({
+              projectId: stored.task.projectId,
+              taskId: stored.task.id,
+              causeEventId: cause as Id,
+              cause: 'rework',
+            });
+      if (release !== null && claim !== null) {
+        await deps.store.tasks.saveTicketClaim(scope.tx, stored.task.id, { ...claim, stale: true });
+      }
       const close: PipelineOutboundData | null =
         stored.mr === null || cause === undefined
           ? null
@@ -1439,13 +1465,16 @@ export const reworkStageCommand = async (
               ...(fresh === null ? {} : { new_branch: fresh }),
             };
       return {
-        result: close,
+        result: { close, release },
         work: applied.work === null ? null : { job: applied.work },
       };
     },
   );
-  if (superseded !== null) {
-    await enqueueOutbound(jobs, superseded);
+  if (superseded?.close != null) {
+    await enqueueOutbound(jobs, superseded.close);
+  }
+  if (superseded?.release != null) {
+    await enqueueOutbound(jobs, superseded.release);
   }
 };
 
@@ -2307,7 +2336,7 @@ export const handBackTaskCommand = async (
         stored.task.template,
         stored.template,
         stored.pipelineDial,
-        false,
+        stored.qaStage,
       );
       const target = stageOf(pipeline, input.stage);
       if (target === null || !target.enabled) {

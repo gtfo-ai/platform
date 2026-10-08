@@ -2,8 +2,9 @@
  * When each lifecycle slot is written — TD-029 decision 4 as a pure table (BD-031, WP-174 ruling
  * (d), product/04 § "Ticket lifecycle").
  *
- * The `ticket_lifecycle` duty (WP-177) asks this table on a task's stage events and transitions the
- * ticket to the slot it names, when the project maps that slot. The table names **slots, never
+ * The lifecycle handler (`ticketLifecycleHandler`, WP-177) asks this table on a task's stage events
+ * and, when the project maps the slot it names, its `ticket_lifecycle` duty transitions the ticket
+ * there. The table names **slots, never
  * statuses**: the status is the project's own name, read off the binding by the caller.
  *
  * | Signal | Slot |

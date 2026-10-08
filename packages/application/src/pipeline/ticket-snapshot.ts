@@ -322,6 +322,12 @@ export interface TicketSnapshotRequest {
 export interface TicketRead {
   readonly snapshot: TicketSnapshot;
   readonly reporter: ExternalIdentity | null;
+  /**
+   * Who the ticket is assigned to, or `null` for nobody (WP-177). Read for one question — intake's
+   * skip of a ticket assigned to somebody else on a claiming binding (TD-029 decision 5) — and,
+   * like the reporter, never stored.
+   */
+  readonly assignee: ExternalIdentity | null;
 }
 
 /**
@@ -366,6 +372,7 @@ export const readTicketForTask = async (
     return {
       snapshot: boundTicketSnapshot(ticket, resolved.taskManagement.redactor),
       reporter: ticket.reporter ?? null,
+      assignee: ticket.assignee ?? null,
     };
   } catch (error) {
     /**

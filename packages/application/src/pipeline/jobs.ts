@@ -71,11 +71,8 @@ import type { PipelineSagaOptions } from './saga.js';
 import type { StageExecutionJob, StageExecutor } from './stage-executor.js';
 import type { StoredTask } from './store.js';
 import { confirmExcusedPaths, unconfirmedTamperReturn } from './tamper-confirmation.js';
-import {
-  escalateTaskAfterConflict,
-  retryOnTaskConflict,
-  TaskConflictExhaustedError,
-} from './task-conflict.js';
+import { inTaskTransaction, type TaskTransactionOptions } from './task-transaction.js';
+import { ensureTicketClaim } from './ticket-claim.js';
 import { ensureTicketSnapshot, type RequesterOptions } from './ticket-snapshot.js';
 import { applyDecision } from './transitions.js';
 
@@ -274,7 +271,18 @@ export interface PipelineOutboundData {
      * WP-111, PROGRESS backlog 302: on a bug task's merge, resolve the issues its ticket links —
      * only on an errors binding that sets `resolve_on_merge` (`resolve-on-merge.ts`).
      */
-    | 'resolve_on_merge';
+    | 'resolve_on_merge'
+    /**
+     * WP-177 (TD-029 decision 4): move the ticket to the lifecycle slot a stage moment names —
+     * `in_review`, `approved`, `qa`, `done`, `in_progress` on a developer stage's entry. The handler
+     * decides the slot and the status (`ticketLifecycleHandler`); the duty calls.
+     */
+    | 'ticket_lifecycle'
+    /**
+     * WP-177 (TD-029 decision 5): give the ticket back on the task's cancellation or a person's
+     * *Rework* — unassign the binding's own account, move it to `pick_up_from` when mapped.
+     */
+    | 'ticket_release';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
@@ -318,6 +326,13 @@ export interface PipelineOutboundData {
    * movement and the board owes a human every move in order; see `statusMappingHandler`.
    */
   readonly status?: string;
+  /**
+   * `ticket_lifecycle` only (WP-177): the lifecycle slot the moment named, carried beside `status`
+   * so a failed write's log names the slot (TD-029 decision 4).
+   */
+  readonly lifecycle_slot?: string;
+  /** `ticket_release` only (WP-177): why the ticket is given back. */
+  readonly release_cause?: 'cancelled' | 'rework' | 'stopped';
   /** `ask_answer` only (WP-31): which ask was answered. The row holds everything else. */
   readonly ask_id?: string;
   /**
@@ -619,62 +634,10 @@ export interface PipelineJobOptions extends PipelineSagaOptions, RequesterOption
   readonly executor: StageExecutor;
 }
 
-/**
- * A job's own transaction that writes a task, on the conflict bound (WP-15e).
- *
- * A job owns its transaction, so it owns the retry: a `save` refused because another writer moved
- * the row re-runs the **whole** unit in a new transaction, which rolls back what the failed attempt
- * wrote and re-reads the task. Exhausting the bound escalates the task rather than dropping the
- * decision — the same ending the stage executor gives, and for the same reason (`task-conflict.ts`).
- *
- * **`null` means two different things and the signature cannot tell them apart**: either `fn`
- * itself returned `null` — "there is nothing to do", the shape both callers already use for a task
- * that moved — or the bound was spent and the task has just been **escalated**. Both callers want
- * the same behaviour today (enqueue no follow-up work), which is why this is one nullable return
- * rather than a discriminated result; the cost of the conflation is that a caller which one day
- * needs to act on the escalation cannot, and would have to widen this first. The escalation is
- * never silent either way: it is logged here and it is a `task.escalated` event.
- */
-/** What a job's own task transaction needs — no executor, so an outbound duty can settle too. */
-export type TaskTransactionOptions = PipelineSagaOptions & { readonly unitOfWork: UnitOfWork };
-
-export const inTaskTransaction = async <T>(
-  options: TaskTransactionOptions,
-  taskId: Id,
-  what: string,
-  fn: (scope: TransactionScope) => Promise<T>,
-): Promise<T | null> => {
-  try {
-    return await retryOnTaskConflict(
-      { taskId, what, ...(options.logger === undefined ? {} : { logger: options.logger }) },
-      async () => options.unitOfWork.transaction(fn),
-    );
-  } catch (error) {
-    if (!(error instanceof TaskConflictExhaustedError)) {
-      throw error;
-    }
-    (options.logger ?? silentLogger).error(
-      { task_id: taskId, what, attempts: error.attempts, err: error },
-      'a job lost every race writing this task; it is escalated',
-    );
-    await escalateTaskAfterConflict(
-      {
-        unitOfWork: options.unitOfWork,
-        store: options.store,
-        context: (id) => ({
-          ids: options.ids,
-          actor: { kind: 'system', component: 'pipeline' },
-          clock: options.clock as never,
-          correlationId: id,
-          causeEventId: null,
-        }),
-        ...(options.logger === undefined ? {} : { logger: options.logger }),
-      },
-      error,
-    );
-    return null;
-  }
-};
+// `inTaskTransaction` and its options live in `./task-transaction.js` since WP-177 (the ticket claim,
+// which `stage.execute` calls, needs it, and importing it from here closed a module cycle); they
+// are re-exported so every caller keeps its import.
+export { inTaskTransaction, type TaskTransactionOptions } from './task-transaction.js';
 
 /**
  * `stage.execute`: an agent stage runs, a platform gate is evaluated, anything else is skipped.
@@ -715,7 +678,12 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
       }
       return {
         stage: stageOf(
-          compilePipeline(stored.task.template, stored.template, stored.pipelineDial, false),
+          compilePipeline(
+            stored.task.template,
+            stored.template,
+            stored.pipelineDial,
+            stored.qaStage,
+          ),
           request.stage,
         ),
         stored,
@@ -732,6 +700,24 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
     }
 
     if (stage.kind === 'agent') {
+      /**
+       * **The ticket claim, before the run row exists** (WP-177, BD-031 ruling 5, TD-029 decision
+       * 5): between the transactions, before the executor creates the run and asks the admission
+       * guard. A refusal has already escalated the task (or found it moved on), so this wake-up
+       * starts nothing — no run row is created. Gates claim nothing. `ticket-claim.ts` has the rules.
+       */
+      const claimed = await ensureTicketClaim(options, admitted.stored, {
+        taskId: request.taskId,
+        stage: request.stage,
+        attempt: request.attempt,
+      });
+      if (claimed.kind === 'refused') {
+        logger.info(
+          { task_id: request.taskId, stage: request.stage, reason: claimed.reason },
+          'the ticket claim was refused; no run is started',
+        );
+        return;
+      }
       /**
        * **The ticket's own words, if this task still has none** (WP-15f).
        *
@@ -1253,7 +1239,7 @@ const settle = async (
         stored.task.template,
         stored.template,
         stored.pipelineDial,
-        false,
+        stored.qaStage,
       );
       const converged =
         signal.kind === 'gate_settled' && !signal.passed && signal.ciSignature !== undefined
@@ -1600,7 +1586,7 @@ const reviewWindowWork = (options: PipelineJobOptions): JobHandler<ReviewWindowD
           current.task.template,
           current.template,
           current.pipelineDial,
-          false,
+          current.qaStage,
         );
         const decision = interpret(pipeline, {
           kind: 'event',

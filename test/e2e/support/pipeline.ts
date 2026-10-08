@@ -585,6 +585,11 @@ export interface StartPipelineOptions {
     /** WP-110: the ticket's workflow status, for a binding whose pick-up rule is a status. */
     readonly status?: string;
   }[];
+  /**
+   * WP-177: the fake tracker's workflow — the statuses a lifecycle slot may name and `transition`
+   * accepts. Absent is the fake's own default workflow.
+   */
+  readonly ticketStatuses?: readonly string[];
   /** `projects.config` — technical/12's effective configuration, as the settings port reads it. */
   readonly config?: JsonObject;
   /**
@@ -997,6 +1002,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
   const tickets = createFakeTaskManagement({
     integrationId: TICKETS_INTEGRATION_ID,
     tickets: options.tickets ?? [],
+    ...(options.ticketStatuses === undefined ? {} : { statuses: options.ticketStatuses }),
   });
   // The chat provider the notification band posts through (WP-32). Only the far side of the HTTP
   // call is a double: the rows, the decryption, the strict config parse, the channel the loader

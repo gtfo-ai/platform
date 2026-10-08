@@ -68,9 +68,20 @@ export const JIRA_CLOUD_PROVIDER_METADATA = {
   configSchema: jiraCloudConfigSchema,
   secretFields: [...JIRA_CLOUD_SECRET_FIELDS],
   setupGuidePath: 'packages/integrations/src/providers/jira-cloud/setup-guide.md',
+  /**
+   * WP-177: the project permission `PUT issue/{key}/assignee` needs (research/15 J4), named in the
+   * brief of a refused ticket claim (TD-029 decision 5).
+   */
+  assignPermission: 'Assign Issues',
 } as const satisfies Pick<
   ProviderRegistration<'task_management'>,
-  'id' | 'type' | 'displayName' | 'configSchema' | 'secretFields' | 'setupGuidePath'
+  | 'id'
+  | 'type'
+  | 'displayName'
+  | 'configSchema'
+  | 'secretFields'
+  | 'setupGuidePath'
+  | 'assignPermission'
 >;
 
 export const createJiraCloudRegistration = (

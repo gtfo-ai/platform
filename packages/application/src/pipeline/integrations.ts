@@ -27,7 +27,7 @@
  * The place that answers "a transaction is open" is `events/open-transaction.ts`, which has the
  * measurement and the honest list of what the mechanism cannot see.
  */
-import type { DiffStats, Id, JsonObject, TaskMode } from '@platform/contracts';
+import type { DiffStats, ExternalIdentity, Id, JsonObject, TaskMode } from '@platform/contracts';
 import { assertOutsideTransaction } from '../events/open-transaction.js';
 import {
   type IdempotencyPlan,
@@ -87,6 +87,7 @@ import type {
   ObservabilityLogsPort,
 } from '../ports/integrations/observability-logs.js';
 import type {
+  AssignResult,
   CommentRef,
   TaskManagementPort,
   Ticket,
@@ -95,6 +96,7 @@ import type {
   TicketMatchRule,
   TicketRefInput,
   TransitionResult,
+  UnassignResult,
 } from '../ports/integrations/task-management.js';
 
 export interface GitBinding {
@@ -256,6 +258,14 @@ export interface TaskManagementBinding {
    * treated oppositely. Round 2 closed it; this is the sibling sentence that had to move with it.
    */
   readonly redactor: SecretRedactor;
+  /**
+   * The provider's own name for the permission the claim's assign needs (WP-177, TD-029 decision
+   * 5) — `Assign Issues` on Jira Cloud — declared by the provider's registration
+   * (`ProviderRegistration.assignPermission`) so the brief of a refused claim names it while this
+   * ring names no provider (the WP-107 precedent `GitBinding.mintingHints` set). Absent for a
+   * provider that declares none; the brief then speaks of *"the permission to assign tickets"*.
+   */
+  readonly assignPermission?: string;
 }
 
 /**
@@ -1142,6 +1152,21 @@ export const ticketReads = (integrations: PipelineIntegrations) => ({
    * the read **fails open** by design (rule 20), which is exactly why nobody noticed: it was
    * refused *by the provider*, which is not the same as being refused (rule 47).
    */
+  /**
+   * The account the binding's credential acts as — the claim's "me" (WP-177, TD-029 decision 5) —
+   * or `null` for a project with no task-management binding. A read, so it is performed for a
+   * shadow task too: the claim's comparison needs it in every mode.
+   */
+  selfIdentity: async (context: CallContext): Promise<ExternalIdentity | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null) {
+      return null;
+    }
+    return read(integrations, binding.ref, 'self_identity', {}, context, async () =>
+      binding.port.selfIdentity(),
+    );
+  },
+
   ticket: async (ticket: TicketRefInput, context: CallContext): Promise<Ticket | null> => {
     const binding = integrations.taskManagement;
     if (binding === null || !namesAProviderTicket(ticket)) {
@@ -1477,17 +1502,32 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
     );
   },
 
-  /** product/04: "Map stage states to ticket statuses per project" (`status_mapping`). */
+  /**
+   * product/04: "Map stage states to ticket statuses per project" (`status_mapping`), and since
+   * WP-177 the ticket lifecycle's slots (TD-029 decision 4): the claim's `in_progress`, the
+   * `ticket_lifecycle` duty's moments and the release's `pick_up_from`. Always **to a status name**,
+   * never a transition label — the adapter resolves the transition (`transition.to.name`).
+   *
+   * `idempotencyKey` is for a caller whose write is not the consequence of one event — the claim,
+   * made from the `stage.execute` job — and names the platform's own identity of the write (task,
+   * stage attempt, slot), never provider text. Absent, the key is the cause event's, as before.
+   * Answers what the provider did, or `null` when nothing was called.
+   */
   transition: async (
     ticket: TicketRefInput,
     status: string,
-    context: TicketWriteContext,
-  ): Promise<void> => {
+    context: TicketWriteContext & { readonly idempotencyKey?: string },
+  ): Promise<TransitionResult | null> => {
     const binding = integrations.taskManagement;
     if (binding === null || !namesAProviderTicket(ticket)) {
-      return;
+      return null;
     }
-    await mutate(
+    const key =
+      context.idempotencyKey ??
+      (context.causeEventId === null || context.taskId === null
+        ? undefined
+        : `transition_ticket:${context.taskId}:${context.causeEventId}`);
+    return mutate(
       integrations,
       binding.ref,
       'transition_ticket',
@@ -1496,11 +1536,103 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
       async () => binding.port.transition(ticket, status),
       () => ({ changed: false, from: status, to: status }),
       (result) => ({ changed: result.changed, from: result.from, to: result.to }),
-      context.causeEventId === null || context.taskId === null
-        ? undefined
-        : replayable<TransitionResult>(
-            `transition_ticket:${context.taskId}:${context.causeEventId}`,
-          ),
+      key === undefined ? undefined : replayable<TransitionResult>(key),
+    );
+  },
+
+  /**
+   * The claim's write (WP-177, TD-029 decision 5): assigns the ticket to the binding's own account,
+   * whoever held it — the caller re-reads the ticket to see who won. A shadow task assigns nothing
+   * and is answered `{changed: false, assignee: self}`, recorded `would_have` (BD-021).
+   * `idempotencyKey` is the caller's: the task and the stage attempt the claim admits.
+   */
+  assignToSelf: async (
+    ticket: TicketRefInput,
+    context: TicketWriteContext & {
+      readonly idempotencyKey: string;
+      /** The binding's own account, for the shadow answer. */
+      readonly self: ExternalIdentity;
+    },
+  ): Promise<AssignResult | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null || !namesAProviderTicket(ticket)) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      binding.ref,
+      'assign_to_self',
+      { ticket_key: ticket.key },
+      context,
+      async () => binding.port.assignToSelf(ticket),
+      () => ({ changed: false, assignee: context.self }),
+      (result) => ({ changed: result.changed }),
+      replayable<AssignResult>(context.idempotencyKey),
+    );
+  },
+
+  /**
+   * The release's write (WP-177): unassigns the ticket **only while the binding's own account
+   * holds it** — the port's own contract, so another person's assignment is answered
+   * `{changed: false}` and left alone. A shadow task writes nothing.
+   */
+  unassign: async (
+    ticket: TicketRefInput,
+    context: TicketWriteContext & { readonly idempotencyKey: string },
+  ): Promise<UnassignResult | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null || !namesAProviderTicket(ticket)) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      binding.ref,
+      'unassign',
+      { ticket_key: ticket.key },
+      context,
+      async () => binding.port.unassign(ticket),
+      () => ({ changed: false }),
+      (result) => ({ changed: result.changed }),
+      replayable<UnassignResult>(context.idempotencyKey),
+    );
+  },
+
+  /**
+   * The claim refusal's comment (WP-177, TD-029 decision 5): one per refused admission, opened by
+   * the marker `agentic:claim-refused:<task>` so the platform never reads it as a person's word.
+   * Platform text only — the caller writes no provider text into it — and redacted here anyway, at
+   * the call, the rule every comment this module posts follows.
+   */
+  claimRefusedComment: async (
+    ticket: TicketRefInput,
+    markdown: string,
+    context: CallContext & {
+      readonly mode: TaskMode;
+      readonly idempotencyKey: string;
+      readonly markerId: string;
+    },
+  ): Promise<CommentRef | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null || !namesAProviderTicket(ticket)) {
+      return null;
+    }
+    const redacted = binding.redactor.redactText(markdown).value;
+    return mutate(
+      integrations,
+      binding.ref,
+      'add_comment',
+      { ticket_key: ticket.key, marker_id: context.markerId },
+      context,
+      async () => binding.port.addComment(ticket, redacted, { markerId: context.markerId }),
+      () => ({
+        provider: ticket.provider,
+        ticket_key: ticket.key,
+        comment_id: 'would-have-claim-refused',
+        url: null,
+        marker_id: context.markerId,
+      }),
+      (result) => ({ comment_id: result.comment_id }),
+      replayable<CommentRef>(context.idempotencyKey),
     );
   },
 });

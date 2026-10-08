@@ -794,6 +794,11 @@ export interface HarnessOptions {
   readonly calendar?: WorkingCalendar;
   /** The binding's redactor, for a test that plants a secret in a ticket (WP-15f). */
   readonly ticketRedactor?: SecretRedactor;
+  /**
+   * The task-management binding's `assignPermission` (WP-177) — the provider's name for the
+   * permission a ticket claim's assign needs. Absent, as for a provider that declares none.
+   */
+  readonly ticketAssignPermission?: string;
   /** The **chat** binding's redactor, for a test that plants a secret in a notification (WP-32). */
   readonly chatRedactor?: SecretRedactor;
   /**
@@ -1551,6 +1556,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
             // `ticket-snapshot.test.ts`, because a test whose redactor is disarmed proves nothing
             // (standing rules 31 and 35).
             redactor: options.ticketRedactor ?? exactSecretRedactor([]),
+            ...(options.ticketAssignPermission === undefined
+              ? {}
+              : { assignPermission: options.ticketAssignPermission }),
           },
     communication:
       communication === null

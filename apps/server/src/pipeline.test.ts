@@ -130,7 +130,9 @@ describe('the project settings port', () => {
     const project = '00000000-0000-4000-8000-0000000000b1' as never;
 
     await port.forProject(project, { adapter: 'postgres', client } as never);
-    expect(client.query).toHaveBeenCalledTimes(1);
+    // Two reads, both on the caller's connection: the project row, and since WP-177 the
+    // task-management binding's lifecycle block (`readTicketLifecycle`).
+    expect(client.query).toHaveBeenCalledTimes(2);
     expect(pool.query).not.toHaveBeenCalled();
 
     await expect(withOpenTransaction(async () => port.forProject(project))).rejects.toThrow(
@@ -139,7 +141,53 @@ describe('the project settings port', () => {
     expect(pool.query).not.toHaveBeenCalled();
     // Outside every transaction the pool is the right connection, and it is used.
     await port.forProject(project);
-    expect(pool.query).toHaveBeenCalledTimes(1);
+    expect(pool.query).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * WP-177 (TD-029 decision 1): the task-management binding's `lifecycle` block reaches the
+   * pipeline as `ticketLifecycle`, the binding over the account and `pickup_status` beside it; no
+   * block, two bindings or a block that fails its schema is `null` — the pre-M10 behaviour.
+   */
+  it('reads the task-management binding’s lifecycle block into ticketLifecycle', async () => {
+    const project = '00000000-0000-4000-8000-0000000000b1' as never;
+    const portOver = (bindingRows: unknown[]) =>
+      createProjectSettingsPort({
+        query: vi.fn(async (text: string) =>
+          text.includes('from bindings')
+            ? { rows: bindingRows, rowCount: bindingRows.length }
+            : { rows: [{ config: {} }], rowCount: 1 },
+        ),
+      } as never);
+    const binding = (bindingConfig: unknown, integrationConfig: unknown = {}) => ({
+      provider: 'fake-task-management',
+      integration_config: integrationConfig,
+      binding_config: bindingConfig,
+    });
+
+    const mapped = await portOver([
+      binding(
+        { pickup_status: 'Ready for the agent', lifecycle: { in_progress: 'Doing' } },
+        { lifecycle: { in_progress: 'Account default' } },
+      ),
+    ]).forProject(project);
+    expect(mapped.ticketLifecycle).toEqual({
+      pickUpFrom: 'Ready for the agent',
+      slots: { in_progress: 'Doing' },
+    });
+
+    expect((await portOver([]).forProject(project)).ticketLifecycle).toBeNull();
+    expect((await portOver([binding({})]).forProject(project)).ticketLifecycle).toBeNull();
+    expect(
+      (await portOver([binding({}), binding({})]).forProject(project)).ticketLifecycle,
+    ).toBeNull();
+    expect(
+      (
+        await portOver([binding({ lifecycle: { in_progress: 'Doing', qa: 'doing' } })]).forProject(
+          project,
+        )
+      ).ticketLifecycle,
+    ).toBeNull();
   });
 
   /**

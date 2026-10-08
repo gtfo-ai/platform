@@ -32,10 +32,12 @@ import type {
   RunStartFailure,
   Size,
   Slug,
+  StoredTicketClaim,
   TaskStageState,
 } from '@platform/contracts';
 import {
   mergeRequestRefSchema,
+  storedTicketClaimSchema,
   taskCoverageSchema,
   taskDependenciesSchema,
   taskReviewersSchema,
@@ -292,6 +294,8 @@ export const createMemoryPipelineStore = (
   const askOfRun = new Map<Id, Id>();
   /** `tasks.budget_cap_usd` (WP-131 review round 1): not on `StoredTask`, as `save` never names it. */
   const budgetCaps = new Map<Id, number>();
+  /** `tasks.ticket_claim` (migration 0088, WP-177): not on `StoredTask`, as `save` never names it. */
+  const ticketClaims = new Map<Id, StoredTicketClaim>();
   /** `runs.reserve_usd` (WP-131): write-only on `NewRun`, so kept beside the row, as the SQL keeps it. */
   const reserves = new Map<Id, number | null>();
   /** `runs.provider_mode`, write-only on the port; read by {@link MemoryPipelineStore.providerModeOf}. */
@@ -787,6 +791,21 @@ export const createMemoryPipelineStore = (
         return null;
       }
       return newest.payload.budget_scope ?? null;
+    },
+    ticketClaim: async (_tx, taskId) => {
+      if (!tasks.has(taskId)) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      const stored = ticketClaims.get(taskId);
+      return stored === undefined ? null : structuredClone(stored);
+    },
+    saveTicketClaim: async (_tx, taskId, claim) => {
+      if (!tasks.has(taskId)) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      // Parsed on the way in as the SQL adapter parses it on the way out: a record the published
+      // shape refuses is refused at the write here rather than at the next read.
+      ticketClaims.set(taskId, storedTicketClaimSchema.parse(claim));
     },
     budgetCap: async (_tx, taskId) => {
       if (!tasks.has(taskId)) {

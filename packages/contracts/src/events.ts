@@ -271,7 +271,11 @@ export const ticketReleasedEvent = defineEvent('ticket.released', {
   ticket: ticketRefSchema,
   unassigned: z.boolean(),
   pick_up_from_written: z.boolean(),
-  cause: z.enum(['cancelled', 'rework']),
+  /**
+   * `stopped` (WP-177 review round 2, TD-029 decision 5 amendment (c)): the task stopped between the
+   * claim's assign and its record, so the assign is given back.
+   */
+  cause: z.enum(['cancelled', 'rework', 'stopped']),
 });
 
 /**

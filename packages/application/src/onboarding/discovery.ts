@@ -157,6 +157,8 @@ export const openDiscoveryTask = async (
     template: input.template,
     // WP-62: no dial — discovery is a one-off onboarding task, not a picked-up ticket.
     pipelineDial: null,
+    // WP-177: a one-off onboarding task has no ticket lifecycle, so no `qa` stage.
+    qaStage: false,
     // WP-106 (migration 0066): the limits above are the platform's defaults when the project's
     // configuration could not be read; the first admitted run takes them again.
     settingsRefreezePending: input.settings.configRefusal !== undefined,
@@ -212,7 +214,7 @@ export const openDiscoveryTask = async (
     DISCOVERY_TEMPLATE_ID,
     stored.template,
     stored.pipelineDial,
-    false,
+    stored.qaStage,
   );
   const applied = await applyDecision({
     store: options.store,

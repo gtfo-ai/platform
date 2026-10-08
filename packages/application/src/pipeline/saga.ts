@@ -31,11 +31,15 @@
  */
 import {
   type DomainEvent,
+  domainEventSchemasByType,
+  type ExternalIdentity,
   type Id,
   type IsoDateTime,
   type RiskClass,
   type Size,
   type Slug,
+  type TicketLifecycle,
+  type TicketRef,
   ticketRefSchema,
 } from '@platform/contracts';
 import type {
@@ -52,6 +56,7 @@ import {
   createTask,
   escalateTask,
   evaluateTaskAdmission,
+  intakeSkipsAssignedTicket,
   interpret,
   isRepeatOfPreviousRound,
   isRunnableTaskState,
@@ -69,6 +74,8 @@ import {
 } from '@platform/domain';
 import type { RepositoryFileSource } from '../config/repository-config.js';
 import type { EventHandler, HandlerContext } from '../events/handler.js';
+import { TransactionOpenError } from '../events/open-transaction.js';
+import type { EventStore } from '../ports/event-store.js';
 import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -77,13 +84,19 @@ import type { WorkingCalendar } from '../scheduling/working-calendar.js';
 import { escalateForConfigRefusalInHandler } from './config-refusal.js';
 import { questionDeadlineRule } from './deadline-rules.js';
 import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
-import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
+import {
+  gitReads,
+  integrationsForProject,
+  noRunScopedSecrets,
+  ticketReads,
+} from './integrations.js';
 import {
   enqueueOutbound,
   enqueueReviewCommentWindow,
   enqueueStage,
   type PipelineOutboundData,
 } from './jobs.js';
+import { appendOnProjectWithRetry } from './project-stream.js';
 import { refrozen, refrozenColumns } from './refreeze.js';
 import { isPlatformNote } from './review-threads.js';
 import type { ProjectSettingsPort } from './settings.js';
@@ -178,7 +191,7 @@ const step = async (
     stored.task.template,
     stored.template,
     stored.pipelineDial,
-    false,
+    stored.qaStage,
   );
   const decision = await withVerdictFindings(
     options,
@@ -335,6 +348,8 @@ const intakeHandler = (options: PipelineSagaOptions): EventHandler => ({
 /** What {@link runIntakeCheck} needs beyond the saga's own collaborators. */
 export interface IntakeCheckOptions extends PipelineSagaOptions, RequesterOptions {
   readonly unitOfWork: UnitOfWork;
+  /** The project stream's next sequence — `ticket.intake.skipped`'s append (WP-177). */
+  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
 }
 
 /**
@@ -439,6 +454,26 @@ export const runIntakeCheck = async (
   );
   const ticketSnapshot = ticketRead?.snapshot ?? null;
   /**
+   * **A ticket somebody else holds is not taken** (WP-177, BD-031 ruling 5, TD-029 decision 5).
+   *
+   * On a claiming binding, a ticket assigned to somebody who is neither nobody nor the binding's
+   * own account creates no task unless the binding's `take_assigned_tickets` is true; the skip is
+   * recorded as `ticket.intake.skipped` on the project's stream. Asked here, after the ticket read
+   * and before the insert, because the read is the one that already names the assignee. A ticket
+   * that could not be read is taken: the claim before its first run asks again and refuses by name.
+   */
+  if (
+    await skipsAssignedTicket(options, integrations, {
+      projectId,
+      ticket,
+      lifecycle: settings.ticketLifecycle?.slots,
+      assignee: ticketRead?.assignee ?? null,
+    })
+  ) {
+    await recordIntakeSkip(options, projectId, ticket, causeEventId);
+    return;
+  }
+  /**
    * **Who asked for this task** — the ticket's reporter, when an operator has mapped their account
    * (WP-79, PROGRESS backlog 243). Resolved here, outside the transaction, for the reason the read
    * above is: the directory is a pool query of its own. Only through `user_identities`; an
@@ -514,6 +549,9 @@ export const runIntakeCheck = async (
       // WP-62: the dial's two pipeline policies, frozen off the project's materialised preset — the
       // one creating site where they apply, because product/19 §11 sets them for picked-up tickets.
       pipelineDial: pipelineDialFor(settings),
+      // WP-177 (TD-029 decision 9): the human `qa` stage, frozen when the binding maps the `qa`
+      // slot — the one creating site that reads a ticket binding.
+      qaStage: settings.ticketLifecycle?.slots.qa !== undefined,
       // WP-106 (migration 0066): the limits and the dial above are the platform's defaults when the
       // project's configuration could not be read; the first admitted run takes them again.
       settingsRefreezePending: settings.configRefusal !== undefined,
@@ -600,7 +638,7 @@ export const runIntakeCheck = async (
       stored.task.template,
       stored.template,
       stored.pipelineDial,
-      false,
+      stored.qaStage,
     );
     const applied = await applyDecision({
       store: options.store,
@@ -633,6 +671,78 @@ export const runIntakeCheck = async (
   if (work !== null) {
     await enqueueStage(options.jobs, work);
   }
+};
+
+/**
+ * Intake's skip question (TD-029 decision 5), with the binding's own account read only when it can
+ * change the answer: a claiming binding that does not take assigned tickets, and a ticket that is
+ * assigned at all. An unreadable account is **not** a skip — the claim asks again before the first
+ * run and refuses by name — so a tracker blip never drops a ticket.
+ */
+const skipsAssignedTicket = async (
+  options: IntakeCheckOptions,
+  integrations: PipelineIntegrations,
+  question: {
+    readonly projectId: Id;
+    readonly ticket: TicketRef;
+    readonly lifecycle: TicketLifecycle | undefined;
+    readonly assignee: ExternalIdentity | null;
+  },
+): Promise<boolean> => {
+  const { projectId, ticket, lifecycle, assignee } = question;
+  // Asked once with the assignee standing in for "me": `true` only when the binding claims, does
+  // not take assigned tickets, and the ticket is assigned — the cases the account can change.
+  if (!intakeSkipsAssignedTicket({ lifecycle, self: null, assignee })) {
+    // Not claiming, opted in, or unassigned: nothing the binding's own account could change.
+    return false;
+  }
+  let self: ExternalIdentity | null;
+  try {
+    self = await ticketReads(integrations).selfIdentity({ projectId, taskId: null });
+  } catch (error) {
+    if (error instanceof TransactionOpenError) {
+      throw error;
+    }
+    (options.logger ?? silentLogger).warn(
+      { project_id: projectId, ticket_key: ticket.key, err: error },
+      'the binding’s own account could not be read at intake; the ticket is taken and the claim decides',
+    );
+    return false;
+  }
+  return self !== null && intakeSkipsAssignedTicket({ lifecycle, self, assignee });
+};
+
+/** `ticket.intake.skipped` on the project's stream (an audit record; nothing consumes it). */
+const recordIntakeSkip = async (
+  options: IntakeCheckOptions,
+  projectId: Id,
+  ticket: TicketRef,
+  causeEventId: Id,
+): Promise<void> => {
+  (options.logger ?? silentLogger).info(
+    { project_id: projectId, ticket_key: ticket.key },
+    'the ticket is assigned to somebody else and the binding does not take assigned tickets, so no task was created',
+  );
+  const eventId = options.ids.next();
+  await appendOnProjectWithRetry(
+    options,
+    { projectId, writer: 'intake_skip' },
+    async (scope, streamSeq) => {
+      const event = domainEventSchemasByType['ticket.intake.skipped'].parse({
+        id: eventId,
+        stream_type: 'project',
+        stream_id: projectId,
+        stream_seq: streamSeq,
+        cause_event_id: causeEventId,
+        correlation_id: null,
+        actor: PIPELINE_ACTOR,
+        occurred_at: options.clock.now(),
+        type: 'ticket.intake.skipped',
+        payload: { project_id: projectId, ticket: { ...ticket }, reason: 'assigned' },
+      }) as DomainEvent;
+      await scope.events.append([event]);
+    },
+  );
 };
 
 /**
@@ -953,7 +1063,7 @@ const planApprovalGate = async (
     stored.task.template,
     stored.template,
     stored.pipelineDial,
-    false,
+    stored.qaStage,
   );
   const completed = stageOf(pipeline, stage);
   if (completed?.produces !== 'ImplementationPlan') {
@@ -1105,7 +1215,7 @@ const budgetApprovalGate = async (
   }
   if (
     !spendIsStillAhead(
-      compilePipeline(stored.task.template, stored.template, stored.pipelineDial, false),
+      compilePipeline(stored.task.template, stored.template, stored.pipelineDial, stored.qaStage),
       stage,
     )
   ) {
@@ -1205,7 +1315,7 @@ const recordMergeRequest = async (
     stored.task.template,
     stored.template,
     stored.pipelineDial,
-    false,
+    stored.qaStage,
   );
   if (stageOf(pipeline, stage)?.produces !== 'ImplementationNotes') {
     return stored;
@@ -1500,7 +1610,7 @@ const ciHandler = (options: PipelineSagaOptions): EventHandler => ({
       stored.task.template,
       stored.template,
       stored.pipelineDial,
-      false,
+      stored.qaStage,
     );
     const waiting = stageOf(pipeline, stage);
     if (

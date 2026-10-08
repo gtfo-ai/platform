@@ -378,6 +378,8 @@ interface Built<TType extends IntegrationType> {
   readonly staticRunCredential?: StaticRunCredential;
   /** The integration's SSH deploy key (WP-146); absent unless it declares one. */
   readonly deployKeyRunCredential?: DeployKeyRunCredential;
+  /** The registration's claim permission name (WP-177); absent for a provider that declares none. */
+  readonly assignPermission?: string;
 }
 
 /**
@@ -561,6 +563,8 @@ export const createPipelineIntegrationsLoader = (
 
     try {
       const mintingHints = registration.credentialMinting?.hints;
+      // WP-177: the provider's own word for the claim's assign permission (task management only).
+      const assignPermission = registration.assignPermission;
       // WP-137 (TD-028 decision 13): read out of the validated document with its secrets merged in,
       // for the run-credential path alone — `create` below builds the adapter without the token.
       const declared = staticRunCredentialOf(
@@ -596,6 +600,7 @@ export const createPipelineIntegrationsLoader = (
       return {
         ...channels,
         ...(mintingHints === undefined ? {} : { mintingHints }),
+        ...(assignPermission === undefined ? {} : { assignPermission }),
         ...(staticRunCredential === undefined ? {} : { staticRunCredential }),
         ...(deployKeyRunCredential === undefined ? {} : { deployKeyRunCredential }),
         port: declineUndeclaredMinting(
@@ -766,6 +771,10 @@ export const createPipelineIntegrationsLoader = (
                 port: taskManagement.built.port,
                 ref: taskManagement.built.port.ref,
                 redactor: taskManagement.built.redactor,
+                // WP-177: named in the brief of a refused ticket claim (TD-029 decision 5).
+                ...(taskManagement.built.assignPermission === undefined
+                  ? {}
+                  : { assignPermission: taskManagement.built.assignPermission }),
               },
         communication:
           chat === null

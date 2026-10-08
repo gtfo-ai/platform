@@ -118,7 +118,7 @@ const shadowReportHandler = (options: ShadowReportOptions): EventHandler => ({
       stored.task.template,
       stored.template,
       stored.pipelineDial,
-      false,
+      stored.qaStage,
     );
     if (stageOf(pipeline, event.payload.stage)?.kind !== 'human') {
       return;

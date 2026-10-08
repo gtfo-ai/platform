@@ -73,6 +73,8 @@ import type {
 } from '@platform/application';
 import {
   assertSettingsReadOutsideTransaction,
+  type BindingLifecycle,
+  bindingLifecycleOf,
   composeSecretRedactors,
   costHandlers,
   createAskRunPlanner,
@@ -113,6 +115,7 @@ import {
 import type {
   Id,
   IsoDateTime,
+  JsonValue,
   MaterialisedAutonomy,
   OrganisationSettings,
 } from '@platform/contracts';
@@ -742,7 +745,11 @@ export const createProjectSettingsPort = (
       (refusal): refusal is string => refusal !== null,
     );
     const layered = projectConfigWithRepository(projectRead.values, snapshot);
+    const ticketLifecycle = await readTicketLifecycle(executor, projectId, logger);
     return defaultProjectSettings(projectId, {
+      // WP-177 (TD-029 decision 1): the task-management binding's `lifecycle` block, read on the
+      // caller's connection like the rest — the handlers that decide a lifecycle moment ask here.
+      ticketLifecycle,
       // WP-142: the stored branch is the one answer every pipeline reader takes.
       defaultBranch: row.default_branch,
       templates: SHIPPED_TEMPLATES,
@@ -785,6 +792,64 @@ export const createProjectSettingsPort = (
     });
   },
 });
+
+/**
+ * The ticket lifecycle the project's **task-management binding** declares (WP-177, TD-029 decision
+ * 1) — `bindings.config` over `integrations.config`, the overlay the binding repository makes
+ * (`overlayBindingConfig`, account-only keys dropped), read through `bindingLifecycleOf`.
+ *
+ * `null` for a project with no live task-management binding, for one whose binding has no
+ * `lifecycle` block, and — logged — for two bindings of the type (the loader refuses that project's
+ * every call) or a block that fails its schema (the loader refuses that binding's every call): the
+ * failure is loud on every provider call, so the lifecycle reads as absent here rather than
+ * throwing out of every handler that reads settings.
+ */
+const readTicketLifecycle = async (
+  executor: Pick<pg.Pool, 'query'> | eventingAdapters.SqlExecutor,
+  projectId: Id,
+  logger: Logger,
+): Promise<BindingLifecycle | null> => {
+  const { rows } = await (executor as eventingAdapters.SqlExecutor).query<{
+    provider: string;
+    integration_config: unknown;
+    binding_config: unknown;
+  }>(
+    `select i.provider, i.config as integration_config, b.config as binding_config
+       from bindings b
+       join integrations i on i.id = b.integration_id
+      where b.project_id = $1 and i.type = 'task_management' and i.retired_at is null`,
+    [projectId],
+  );
+  if (rows.length !== 1) {
+    if (rows.length > 1) {
+      logger.error(
+        { project_id: projectId, bindings: rows.length },
+        'the project has more than one task-management binding; no ticket lifecycle applies',
+      );
+    }
+    return null;
+  }
+  const row = rows[0] as (typeof rows)[number];
+  const asObject = (value: unknown): Record<string, JsonValue> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, JsonValue>)
+      : {};
+  const reading = bindingLifecycleOf(
+    secretAdapters.overlayBindingConfig(
+      asObject(row.integration_config),
+      asObject(row.binding_config),
+      accountOnlyFieldsOf(row.provider),
+    ),
+  );
+  if (reading.kind === 'invalid') {
+    logger.error(
+      { project_id: projectId, paths: reading.detail },
+      'the task-management binding’s lifecycle block fails its schema; no ticket lifecycle applies',
+    );
+    return null;
+  }
+  return reading.kind === 'lifecycle' ? reading.lifecycle : null;
+};
 
 /**
  * The project's settings layer for the port: parsed, or empty with the refusal's message (WP-106,

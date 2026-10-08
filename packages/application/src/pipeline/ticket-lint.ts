@@ -558,6 +558,8 @@ export const runTicketLintCheck = async (
       // WP-62: no dial — the linter is its own opt-in (`features.ticket_linter`) and its one
       // advisory stage is neither a business review nor a scope to stop after.
       pipelineDial: null,
+      // WP-177: the linter’s task has no ticket lifecycle, so no `qa` stage.
+      qaStage: false,
       priorityRank: priorityRankOf(null),
       createdAt: options.clock.now(),
       branch: null,
@@ -598,7 +600,7 @@ export const runTicketLintCheck = async (
       stored.task.template,
       stored.template,
       stored.pipelineDial,
-      false,
+      stored.qaStage,
     );
     const applied = await applyDecision({
       store: options.store,

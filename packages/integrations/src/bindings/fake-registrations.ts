@@ -232,7 +232,8 @@ const fakeTaskManagementConfigSchema = z.strictObject({
   /**
    * WP-171 criterion (5): the ticket lifecycle (BD-031, TD-029 decision 1) — **the** contracts
    * definition, not a copy, so a tier configures the fake's lifecycle the way an operator configures
-   * Jira's. Nothing in the fake reads it yet; its reader is the application (WP-177).
+   * Jira's. Nothing in the fake reads it; its reader is the application — the settings port's
+   * `ticketLifecycle`, since WP-177.
    */
   lifecycle: ticketLifecycleSchema.optional(),
 });
@@ -292,6 +293,9 @@ export const fakeTaskManagementRegistration = (
   secretFields: ['token'],
   setupGuidePath: 'packages/integrations/src/task-management/fake.ts',
   agentTooling: null,
+  // WP-177: the fake stands in for Jira Cloud, whose permission name it borrows, so a tier sees the
+  // refused claim's brief name the permission the way production does.
+  assignPermission: 'Assign Issues',
   create: ({ config, secrets, redactor }) => {
     refuseWrongToken(FAKE_TASK_MANAGEMENT_PROVIDER_ID, options.token, secrets.token);
     return withBindingConfig(withInboundRedactor(options.port, redactor), config);

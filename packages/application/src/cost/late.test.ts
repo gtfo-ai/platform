@@ -231,6 +231,7 @@ describe('the late cost releases the hold (WP-131)', () => {
     ticketSnapshot: null,
     reviewSubject: null,
     historySample: null,
+    qaStage: false,
     riskClasses: [],
     coverage: null,
     dependencies: null,

@@ -105,7 +105,7 @@ const mergeRequestPipelineHandler = (options: PipelineSagaOptions): EventHandler
       stored.task.template,
       stored.template,
       stored.pipelineDial,
-      false,
+      stored.qaStage,
     );
     if (stageOf(pipeline, event.payload.stage)?.produces !== IMPLEMENTATION_ARTIFACT) {
       return;
@@ -142,7 +142,7 @@ const mergeRequestDraftStateHandler = (options: PipelineSagaOptions): EventHandl
       stored.task.template,
       stored.template,
       stored.pipelineDial,
-      false,
+      stored.qaStage,
     );
     if (stageOf(pipeline, event.payload.stage)?.kind !== 'agent') {
       return;

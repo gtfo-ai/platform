@@ -123,6 +123,12 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     'stage_recovery_attempted_at',
   ],
   'packages/infrastructure/src/pipeline/postgres-pipeline-store.ts': [
+    // `saveTicketClaim` — the ticket claim (WP-177, migration 0088, TD-029 decision 5): its callers
+    // run beside the stage executor (the claim between the `stage.execute` job's transactions, the
+    // release in `pipeline.outbound`), so it is narrow for the reason every row here is. Its
+    // sibling column `qa_stage` has **no** update statement at all — the insert writes it and
+    // nothing else (technical/03's M10-head amendment), and this census does not read inserts.
+    'ticket_claim',
     // `saveTicketSnapshot`
     'ticket_snapshot',
     'ticket_snapshot_at',

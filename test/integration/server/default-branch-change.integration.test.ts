@@ -107,6 +107,7 @@ const storedTask = (projectId: Id): StoredTask =>
     ciExcusedPaths: [],
     requestedByUserId: null,
     pipelineDial: null,
+    qaStage: false,
     version: INITIAL_TASK_VERSION,
   }) as unknown as StoredTask;
 

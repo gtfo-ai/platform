@@ -107,6 +107,7 @@ export const runPipelineStoreConcurrencyContract = (
       ticketSnapshot: null,
       reviewSubject: null,
       historySample: null,
+      qaStage: false,
       ticketSnapshotAt: null,
       ticketSignalAt: null,
       riskClasses: [],

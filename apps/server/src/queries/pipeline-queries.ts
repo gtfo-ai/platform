@@ -1422,6 +1422,7 @@ const findTakenOver = async (
     readonly template: string;
     readonly templateSnapshot: unknown;
     readonly pipelineDial: unknown;
+    readonly qaStage: boolean;
   },
 ): Promise<TaskDetailResponse['taken_over']> => {
   const rows = await database
@@ -1491,6 +1492,8 @@ interface CompilableTask {
   readonly templateSnapshot: unknown;
   /** `tasks.pipeline_dial` (WP-62): a stage the dial disabled is not one a hand-back may name. */
   readonly pipelineDial: unknown;
+  /** `tasks.qa_stage` (migration 0088, WP-177): whether the frozen pipeline has the `qa` stage. */
+  readonly qaStage: boolean;
 }
 
 /**
@@ -1516,7 +1519,7 @@ const compiledPipelineOf = (task: CompilableTask): CompiledPipeline | null => {
     return null;
   }
   try {
-    return compilePipeline(task.template, template, dial === null ? null : dial.data, false);
+    return compilePipeline(task.template, template, dial === null ? null : dial.data, task.qaStage);
   } catch {
     return null;
   }

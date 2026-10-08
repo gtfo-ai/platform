@@ -121,6 +121,7 @@ const seedRun = async (reachedCli: boolean): Promise<Id> => {
       },
       template: FEATURE_TEMPLATE,
       pipelineDial: null,
+      qaStage: false,
       priorityRank: 2,
       createdAt: NOW,
       branch: null,

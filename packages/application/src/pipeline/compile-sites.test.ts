@@ -20,8 +20,8 @@
  * argument of every call is a read of the frozen copy — so a site that reached for the project's
  * current settings instead would fail here by name, and would also be the defect the freeze
  * exists to prevent (a dial moved mid-task moving the task). Since WP-174 the fourth argument,
- * `qa_stage`, is held to the same rule (see `FROZEN_QA_STAGE` below for the one literal admitted
- * until WP-177 writes the column).
+ * `qa_stage`, is held to the same rule (see `FROZEN_QA_STAGE` below: the literal `false` WP-174
+ * admitted until the column existed is refused since WP-177 wrote it).
  *
  * ## Scope, and what it cannot see
  *
@@ -112,6 +112,14 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
     sites: 1,
     how: "the stranded-stage recovery's question *is this an agent or gate stage?* (WP-108): the loaded row's `stored.pipelineDial`, as `stage.execute` itself compiles it",
   },
+  'packages/application/src/pipeline/ticket-claim.ts': {
+    sites: 1,
+    how: "the claim's refusal (WP-177), inside its own escalation transaction: the re-loaded row's `current.pipelineDial` — the escalation the claim raises closes the stage's row as every escalation does",
+  },
+  'packages/application/src/pipeline/ticket-lifecycle.ts': {
+    sites: 1,
+    how: "the lifecycle handler (WP-177), in the handler's own transaction: the loaded row's `stored.pipelineDial` — so the `approved` moment is the last review stage the dial left enabled",
+  },
   'apps/server/src/queries/pipeline-queries.ts': {
     sites: 1,
     how: 'the read side: `tasks.pipeline_dial` off the same row the page reads, parsed through `taskPipelineDialSchema` (a row that fails offers no hand-back stage)',
@@ -137,12 +145,12 @@ const FROZEN_COPY = [/^(?:stored|current)\.pipelineDial$/, /^dial === null \? nu
  * dial — a read of the loaded row, never the project's current settings, because a mapping changed
  * mid-task must not reshape a task in flight.
  *
- * **The literal `false` is admitted, and that admission is temporary and stated**: WP-174 added the
- * argument before the column exists, so every production site passes `false` and compiles exactly
- * the pipeline it compiled before (`stage-sequence.golden.test.ts`). WP-177 writes the column and
- * replaces each `false` with `stored`/`current.qaStage`; the literal should then leave this list.
+ * WP-174 added the argument before the column existed and admitted the literal `false` until the
+ * column did; **WP-177 wrote the column** (migration 0088) and replaced every `false` with
+ * `stored`/`current.qaStage`, so the literal is refused now. The read side's `task.qaStage` is the
+ * same column off the Drizzle row the page reads (`apps/server/src/queries/pipeline-queries.ts`).
  */
-const FROZEN_QA_STAGE = [/^(?:stored|current)\.qaStage$/, /^false$/];
+const FROZEN_QA_STAGE = [/^(?:stored|current)\.qaStage$/, /^task\.qaStage$/];
 
 const sources = (): string[] => censusPaths(REPO_ROOT, { pathspecs: ['*.ts', '*.tsx'] });
 
@@ -220,9 +228,9 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
     expect(counts).toEqual(expected);
   });
 
-  it('counts thirty-one — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152 — and states how each resolves the dial', () => {
+  it('counts thirty-three — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177 — and states how each resolves the dial', () => {
     const total = [...census().values()].reduce((sum, calls) => sum + calls.length, 0);
-    expect(total).toBe(31);
+    expect(total).toBe(33);
     for (const [file, entry] of Object.entries(EXPECTED_SITES)) {
       expect(entry.how.length, file).toBeGreaterThan(20);
     }
@@ -271,6 +279,12 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
         compileCalls('compilePipeline(stored.task.template, stored.template, stored.pipelineDial)'),
       ],
       [
+        'packages/application/src/pipeline/qa-literal.ts',
+        compileCalls(
+          'compilePipeline(stored.task.template, stored.template, stored.pipelineDial, false)',
+        ),
+      ],
+      [
         'packages/application/src/pipeline/qa-frozen.ts',
         compileCalls(
           'compilePipeline(stored.task.template, stored.template, stored.pipelineDial, stored.qaStage)',
@@ -283,6 +297,8 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
       'packages/application/src/pipeline/also-planted.ts: compilePipeline(stored.task.template, stored.template)',
       'packages/application/src/pipeline/qa-asked.ts: compilePipeline(stored.task.template, stored.template, stored.pipelineDial, lifecycle.qa !== undefined)',
       'packages/application/src/pipeline/qa-missing.ts: compilePipeline(stored.task.template, stored.template, stored.pipelineDial)',
+      // WP-177: the literal WP-174 admitted until the column existed is refused now.
+      'packages/application/src/pipeline/qa-literal.ts: compilePipeline(stored.task.template, stored.template, stored.pipelineDial, false)',
     ]);
   });
 });

@@ -108,6 +108,28 @@ Vendor facts are in `docs/research/15-tracker-lifecycle-and-mr-conversation.md`.
    escalates with `ticket_claim_failed` and a brief that names the permission. In shadow mode the writes
    are `would_have`, and the claim is recorded as `shadow`, not confirmed.
 
+   > **Amendment — orchestrator ruling at WP-177 review, 2026-10-08.** Two additions, both from the
+   > product owner's ruling 5 (*"If another assignee holds it, the task is refused"*), which step 2's
+   > *"whoever held it"* did not honour. **(a) Read before the write.** On a **first** claim (no claim
+   > recorded for the task), step 1 also reads the ticket's assignee; an assignee who is neither nobody
+   > nor the binding's own account refuses the task as `ticket_assigned_elsewhere` **without** the
+   > assign, unless the binding's `take_assigned_tickets` is true. A person who took the ticket between
+   > intake and the first run is therefore never overwritten. A **re-claim** after a human return
+   > (a stale claim) takes the ticket back as before, because BD-031 ruling 4 says a return re-claims it
+   > and the person who returned it — a QA tester, say — may well be its assignee. The re-read of
+   > step 4 still decides a race between two claimants. **(b) Only a task that can still run claims.**
+   > The claim asks the executor's own re-validation questions (the task's state is runnable, the stage
+   > and its attempt are the job's, the stage row is open) in its read transaction, and again in the
+   > transaction that records the claim; a task cancelled, paused or escalated after the job was
+   > enqueued makes no tracker call. **(c) Second ruling, WP-177 review round 2.** A claim the platform
+   > **released** (on Rework) counts as a **first** claim: the release put the ticket back in the
+   > pick-up pool, so a person who holds it afterwards took it from there and is never overwritten;
+   > only a **stale** claim (a human return) takes the ticket back. And a task that stops **between**
+   > the two questions — after a real assign, before the record — is not left holding the ticket:
+   > the record transaction that finds it stopped enqueues the release after its commit, which
+   > unassigns only while the ticket is still the binding's own. So a claim is never left behind on a
+   > task nothing will release.
+
    The record is `tasks.ticket_claim` (migration **0088**), written only by the claim and release
    functions through a narrow method. Two events record it: `ticket.claimed` and `ticket.claim.refused`.
    A human return (decision 7) marks the claim stale in the return's own transaction, so the next agent

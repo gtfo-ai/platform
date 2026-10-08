@@ -597,6 +597,33 @@ export const taskTicketClaimSchema = z.strictObject({
   released_at: isoDateTimeSchema.nullable(),
 });
 
+/**
+ * `tasks.ticket_claim` as stored (migration 0088, technical/03's M10-head amendment, TD-029
+ * decision 5) — written only by `TaskRepository.saveTicketClaim`, read back through this schema.
+ *
+ *  - `account_id` — the binding's own account the claim assigned the ticket to (provider text,
+ *    bounded as `ticket.claimed` bounds it);
+ *  - `status` — `confirmed` when the re-read found that account holding the ticket, `shadow` when
+ *    the writes were `would_have` (shadow mode), never confirmed;
+ *  - `in_progress_written` — whether the claim moved the ticket to the `in_progress` slot;
+ *  - `stale` — a later moment owes a re-claim (a person's *Rework*, WP-177; the human-return
+ *    window's return, WP-178): the next agent admission claims again;
+ *  - `released_at` / `release_cause` — the `ticket_release` duty gave the ticket back, on the task's
+ *    cancellation, a person's *Rework*, or a task that stopped between the claim's assign and its
+ *    record (`stopped`, TD-029 decision 5 amendment (c)).
+ */
+export const storedTicketClaimSchema = z.strictObject({
+  account_id: nonEmptyStringSchema.max(255),
+  claimed_at: isoDateTimeSchema,
+  status: z.enum(['confirmed', 'shadow']),
+  in_progress_written: z.boolean(),
+  stale: z.boolean(),
+  released_at: isoDateTimeSchema.nullable(),
+  release_cause: z.enum(['cancelled', 'rework', 'stopped']).nullable(),
+});
+
+export type StoredTicketClaim = z.infer<typeof storedTicketClaimSchema>;
+
 export const taskRecordSchema = z.strictObject({
   id: idSchema,
   project_id: idSchema,

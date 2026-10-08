@@ -550,6 +550,8 @@ const scheduleProject = async (
         // policies for picked-up tickets. The dial's *level* still binds it: at Observe no chore is
         // created at all (Q100, WP-94 — the skip above).
         pipelineDial: null,
+        // WP-177: a maintenance chore is not a picked-up ticket, so no `qa` stage.
+        qaStage: false,
         // Behind every ticket a human is waiting for: upkeep never jumps the delivery queue.
         priorityRank: 3,
         createdAt: options.clock.now(),
@@ -581,7 +583,7 @@ const scheduleProject = async (
         MAINTENANCE_TEMPLATE_ID,
         stored.template,
         stored.pipelineDial,
-        false,
+        stored.qaStage,
       );
       const applied = await applyDecision({
         store: options.store,

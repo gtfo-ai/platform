@@ -195,7 +195,7 @@ const dependencyGateHandler = (options: PipelineSagaOptions): EventHandler => ({
       stored.task.template,
       stored.template,
       stored.pipelineDial,
-      false,
+      stored.qaStage,
     );
     if (stageOf(pipeline, event.payload.stage)?.produces !== IMPLEMENTATION_ARTIFACT) {
       return;
@@ -864,7 +864,7 @@ const returnNow = async (
     current.task.template,
     current.template,
     current.pipelineDial,
-    false,
+    current.qaStage,
   );
   const applied = await applyDecision({
     store: options.store,

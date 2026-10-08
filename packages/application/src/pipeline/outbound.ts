@@ -79,6 +79,7 @@ import { runReviewThreadsRefresh } from './review-threads-refresh.js';
 import { type RiskRoutingOptions, runRiskRouting } from './risk-routing.js';
 import { type PipelineSagaOptions, runIntakeCheck } from './saga.js';
 import { runSupersededMergeRequestClose } from './superseded-mr.js';
+import { runTicketLifecycle, runTicketRelease } from './ticket-lifecycle.js';
 import { runTicketLintCheck, runTicketLintPost } from './ticket-lint.js';
 import { runStatusTransition, runWorkpadRender } from './workpad.js';
 
@@ -301,6 +302,13 @@ const dispatchOutbound =
         return;
       case 'mr_draft':
         await runMergeRequestDraft(options, data);
+        return;
+      // WP-177 (TD-029 decisions 4 and 5): the ticket lifecycle's moves and the release.
+      case 'ticket_lifecycle':
+        await runTicketLifecycle(options, data);
+        return;
+      case 'ticket_release':
+        await runTicketRelease(options, data);
         return;
       default:
         logger.warn(

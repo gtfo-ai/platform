@@ -228,6 +228,13 @@ status_mapping:                  # task state -> ticket status name (provider-sp
 > project with no slot mapped applies it exactly as before. The repository-key grade of `status_mapping`
 > (operational, below) is unchanged.
 >
+> *As built at WP-177:* the pipeline reads the block through the settings port
+> (`ProjectSettings.ticketLifecycle`, read off the task-management binding in the caller's transaction),
+> and `statusMappingHandler` returns before deciding anything when it maps a slot, so the mapping's
+> `status` duty is never enqueued; `ticketLifecycleHandler` moves the ticket instead. A slot that names
+> nothing moves nothing. `claim: false` turns the claim and the intake skip off and keeps the slots. The
+> effective-configuration field and its warning are WP-181's, and the save-time membership check too.
+>
 > **New settings key `human_returns.acknowledgements`** (a list of at most 50 words, each 1–40
 > characters). It **adds** words in a project's own language to the shipped acknowledgement vocabulary
 > (TD-029 decision 8). It is graded **not applied** when it comes from the repository file, because a

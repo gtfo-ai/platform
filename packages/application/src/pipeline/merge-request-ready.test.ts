@@ -154,6 +154,7 @@ const world = async (
       ciExcusedPaths: [],
       requestedByUserId: null,
       pipelineDial: null,
+      qaStage: false,
       ticketSnapshotAt: null,
       ticketSignalAt: null,
       version: 1,

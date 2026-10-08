@@ -17,6 +17,7 @@ import type {
   JsonValue,
   MergeRequestRef,
   MergeRequestSnapshot,
+  StoredTicketClaim,
   TaskCoverage,
   TaskDependencies,
   TaskPipelineDial,
@@ -134,6 +135,16 @@ export const tasks = pgTable('tasks', {
    * `can_create_tickets`), kept while the re-take is pending so the template is routed again.
    */
   refreezeRouting: jsonb('refreeze_routing').$type<JsonObject>(),
+  /**
+   * WP-177, migration 0088 (TD-029 decision 9): whether the task's pipeline has the human `qa`
+   * stage, frozen at creation from the binding's `lifecycle.qa` — written by the insert only.
+   */
+  qaStage: boolean('qa_stage').notNull().default(false),
+  /**
+   * WP-177, migration 0088 (TD-029 decision 5): the ticket claim, `storedTicketClaimSchema`;
+   * written only by `TaskRepository.saveTicketClaim`. `null` is "never claimed".
+   */
+  ticketClaim: jsonb('ticket_claim').$type<StoredTicketClaim>(),
   configSnapshotHash: text('config_snapshot_hash'),
   branch: text('branch'),
   mrRef: jsonb('mr_ref').$type<MergeRequestRef>(),

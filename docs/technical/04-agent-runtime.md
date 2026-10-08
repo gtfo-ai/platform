@@ -19,6 +19,33 @@ Runner service (infrastructure)  ── platform-side SDK host; the CLI itself r
    └─ result: structured_output (artifact data) + usage/cost → run.finished
 ```
 
+> **As built at WP-177 (BD-031 ruling 5, TD-029 decision 5): the ticket claim comes before the stage
+> executor.** For an **agent** stage, the `stage.execute` job asks `ensureTicketClaim`
+> (`packages/application/src/pipeline/ticket-claim.ts`) between its transactions, before
+> `ensureTicketSnapshot` and before the executor creates the run row and asks the admission guard.
+> It acts only when the task names a provider ticket, the project's task-management binding has a
+> `lifecycle` block whose `claim` is not `false`, and the task's claim (`tasks.ticket_claim`,
+> migration 0088) is absent, stale or released. It reads the binding's own account
+> (`selfIdentity`), assigns the ticket (`assignToSelf`), moves it to the `in_progress` slot when that
+> is mapped, re-reads the ticket, and records the claim and `ticket.claimed` in one transaction. The
+> run then proceeds. *Review amendment (TD-029 decision 5):* before any call it asks the executor's
+> re-validation questions (runnable state, the job's stage and attempt, an open stage row) and asks
+> them again where it records the claim. A task already cancelled, paused or escalated when the job
+> fires makes no tracker call; one that stops **between** the two questions, after a real assign, has
+> the claim recorded stale and a `ticket_release` (cause `stopped`) enqueued after the commit, which
+> unassigns only while the ticket is still the binding's own. A **first** claim — none recorded, or one
+> the platform released — reads the assignee before the assign: somebody else holding the ticket
+> refuses with no assign unless the binding sets `take_assigned_tickets`. Only a stale claim (a human
+> return) takes the ticket back. Somebody else holding the ticket on the re-read escalates the task with the
+> reason `ticket_assigned_elsewhere`, records `ticket.claim.refused`, and posts one ticket comment
+> marked `agentic:claim-refused:<task>`. A claim write the tracker refuses (for example a missing
+> permission, which the brief names from the provider's registration, `Assign Issues` on Jira Cloud)
+> escalates with `ticket_claim_failed`. After either refusal **no run row exists**. A tracker that is
+> unavailable or rate-limited past the executor's retries throws, so the job's retry policy and the
+> stranded-stage recovery own it. In shadow mode the writes are `would_have`, the re-read is skipped,
+> the claim is recorded `shadow`, and the run proceeds. Gates claim nothing. A binding with no
+> `lifecycle` block makes none of these calls, exactly as before M10.
+
 ## RunSpec (what the stage executor hands to the runner)
 
 | Field | Source |

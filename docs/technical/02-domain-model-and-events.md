@@ -170,7 +170,14 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 >
 > **Claim.** The claim is not an aggregate transition. It is a precondition of an agent run's admission,
 > decided between the `stage.execute` job's transactions. A refusal is an ordinary escalation with the
-> reason `ticket_assigned_elsewhere` or `ticket_claim_failed`. Release follows `task.cancelled` and the
+> reason `ticket_assigned_elsewhere` or `ticket_claim_failed`. *As built at WP-177, with TD-029's
+> review amendment:* the claim first asks the executor's re-validation questions (runnable state, the
+> job's stage and attempt, an open stage row), so a task that has already stopped makes no tracker
+> call. It asks again where it records the claim: a task that stopped **between** the two, after a real
+> assign, records the claim stale and enqueues the release (cause `stopped`), which unassigns only while
+> the ticket is still the binding's own. A **first** claim — none recorded, or one the platform
+> released — reads the assignee before it assigns and refuses, without the assign, a ticket somebody
+> else holds (unless `take_assigned_tickets`); only a stale claim (a human return) takes the ticket back. Release follows `task.cancelled` and the
 > *Rework* command; escalation and take-over keep the claim. Built across WP-170…WP-183.
 
 *Which* limit a `returned` spends is decided by the transition and not only by the stage it leaves (WP-26). `ready_for_merge` has two outgoing returns (and since WP-174 the optional `qa` stage has the same two, spending the same two loops) — a human's comment, which is BD-008's `human_rounds`, and the default branch moving, which re-enters the rebase gate — and attributing the second to the first escalated a task with *"human_rounds iteration limit of 3 reached: main moved to …"* after three merges to `main` under a waiting merge request. The edges that need their own loop are enumerated in `RETURN_LOOPS_BY_EDGE` (`packages/domain/src/pipeline/interpreter.ts`); everything else is attributed by the stage, and an edge in neither table cannot return at all.
@@ -486,9 +493,9 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 | `ticket.updated` | task-management adapter (WP-60; emitted **beside** `ticket.matched`/`ticket.status.changed`, never instead) | ticket ref, the provider's `updated_at`, the changed field names (bounded, `truncated`), actor | Snapshot freshness (10, `pipeline.ticket.signal` — Q61 (b); since WP-145 it reaches a task by the ticket's stable id first and by the key only for a task with none, and moves a live task whose id it carries under another key to that key, appending `task.ticket.rekeyed`); bug re-trace (120, `pipeline.bug.retrace`, WP-90 — a ticket whose defect trace is not `linked` is traced again, PROGRESS backlog 192); re-lint on edit is **not** built (it waits on a measurement of update frequency); product/18:60's *"edited within 48 h"* is a statistics read over this event (WP-61, `lintEdits`), not a consumer |
 | `ticket.comment.added` | adapter | ticket, comment id, author identity, text | Question answering (20), Feedback intake (30) |
 | `ticket.status.changed` | adapter (Jira's webhook since WP-60; declared unconsumed until M10) | ticket, from, to, actor | The human-return window (10, `pipeline.review.comment`, BD-031, from WP-178): it arms the window only for a task at `qa` or `ready_for_merge`, and the window decides between return and pass |
-| `ticket.claimed` | the claim (`ensureTicketClaim`, WP-177) | task, ticket, the binding's own account id, `in_progress` written or not, `shadow` | — (the task DTO reads the claim off the row, `tasks.ticket_claim`) |
+| `ticket.claimed` | the claim (`ensureTicketClaim`, WP-177) | task, ticket, the binding's own account id, `in_progress` written or not, `shadow` | — (the record is the row, `tasks.ticket_claim`; `GET /api/tasks/:id` publishes it from WP-181, criterion 6, and not before) |
 | `ticket.claim.refused` | the claim | task, ticket, reason (`ticket_assigned_elsewhere` \| `ticket_claim_failed`), the assignee's identity when known | — (the escalation it causes is `task.escalated`) |
-| `ticket.released` | the `ticket_release` duty (WP-177) | task, ticket, unassigned or not, `pick_up_from` written or not, cause (`cancelled` \| `rework`) | — |
+| `ticket.released` | the `ticket_release` duty (WP-177) | task, ticket, unassigned or not, `pick_up_from` written or not, cause (`cancelled` \| `rework` \| `stopped`, the last when the task stopped between the claim's assign and its record) | — |
 | `ticket.intake.skipped` | intake (`runIntakeCheck`, WP-177) | project, ticket, reason (`assigned`) | — (audit only) |
 | `task.human_return` | the human-return window (WP-178) | task, stage left (`qa` \| `ready_for_merge`), forms (`status` \| `mr_diff` \| `mr_note` \| `ticket_comment`), counts, the status when one returned it | — (the return itself is `task.stage.returned`) |
 | `task.created` | Intake | task, template, mode, estimate | Workpad (110), Slack notify (210), UI (220) |

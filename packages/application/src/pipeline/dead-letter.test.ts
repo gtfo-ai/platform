@@ -69,6 +69,7 @@ const task = (state: StoredTask['task']['state'] = 'active'): StoredTask => ({
   ticketSnapshot: null,
   reviewSubject: null,
   historySample: null,
+  qaStage: false,
   riskClasses: [],
   coverage: null,
   dependencies: null,

@@ -218,8 +218,9 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // technical/02's column is `—` for all five: each is a record of something the producer has
   // already done in the same transaction, so nothing is left for a consumer. The task DTO reads the
   // claim off `tasks.ticket_claim`; the escalation a refusal causes is its own `task.escalated`;
-  // the return itself is `task.stage.returned`. Declared at WP-170, before any producer exists
-  // (WP-177 and WP-178 append them), so the sweep never meets a type this table cannot answer.
+  // the return itself is `task.stage.returned`. Declared at WP-170, before any producer existed;
+  // WP-177 appends the first four (`ticket-claim.ts`, `ticket-lifecycle.ts`, intake) and WP-178
+  // `task.human_return`, so the sweep never meets a type this table cannot answer.
   'ticket.claimed': 'unconsumed',
   'ticket.claim.refused': 'unconsumed',
   'ticket.released': 'unconsumed',

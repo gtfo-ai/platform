@@ -48,6 +48,7 @@ import type { PromptsWithheld } from '../config/repository-config.js';
 import { assertOutsideTransaction } from '../events/open-transaction.js';
 import type { CiConfigLocation } from '../ports/integrations/git-provider.js';
 import type { Transaction } from '../ports/transaction.js';
+import type { BindingLifecycle } from './binding-lifecycle.js';
 
 export interface ProjectSettings {
   readonly projectId: Id;
@@ -86,6 +87,18 @@ export interface ProjectSettings {
    * for such a project and names that branch.
    */
   readonly autonomy: MaterialisedAutonomy | null;
+  /**
+   * **The ticket lifecycle the project's task-management binding declares** (BD-031, TD-029
+   * decision 1, WP-177) — its `lifecycle` block and `pickup_status` (the `pick_up_from` slot), or
+   * `null` when the project has no such binding, the binding has no block, or the block fails its
+   * schema (the loader then refuses the binding on every call, so that case is loud elsewhere).
+   *
+   * Not a key of `.agentic/config.yml`: the names belong to the tracker (technical/12's M10-head
+   * amendment). It rides on the settings because the settings port is the one reader the handlers
+   * may ask inside their transaction (`binding-lifecycle.ts` has the argument). `null` behaves
+   * exactly as before M10: no claim, no intake skip, `status_mapping` applied.
+   */
+  readonly ticketLifecycle: BindingLifecycle | null;
   /**
    * The organisation's `commands` — the maximum every run's baseline is intersected with before
    * the project narrows it (BD-025 §2, PROGRESS backlog 146, WP-63). Absent is *"the organisation
@@ -569,6 +582,8 @@ export const defaultProjectSettings = (
   templateByIssueType: DEFAULT_TEMPLATE_BY_ISSUE_TYPE,
   // Not a preset: "no project configuration" is not "the supervised dial was chosen". See the field.
   autonomy: null,
+  // No task-management binding declares a lifecycle: the pre-M10 behaviour (WP-177).
+  ticketLifecycle: null,
   ...overrides,
 });
 

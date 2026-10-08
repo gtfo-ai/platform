@@ -44,6 +44,7 @@ import type {
   RunTerminalReason,
   Size,
   Slug,
+  StoredTicketClaim,
   TaskCoverage,
   TaskDependencies,
   TaskMode,
@@ -110,6 +111,17 @@ export interface StoredTask {
    * written before the column existed — and compiles the template exactly as before WP-62.
    */
   readonly pipelineDial: TaskPipelineDial | null;
+  /**
+   * **Whether this task's pipeline has the human `qa` stage** (`tasks.qa_stage`, migration 0088,
+   * TD-029 decision 9, WP-177) — what every `compilePipeline` call over this task passes beside
+   * {@link StoredTask.pipelineDial}.
+   *
+   * Frozen at creation for the dial's reason: a lifecycle mapping changed while the task runs does
+   * not reshape it. Intake is the one creating site that reads a ticket binding, and it writes
+   * `true` when the binding maps the `qa` slot; every other creating site writes `false`. Written
+   * by the insert and by nothing else.
+   */
+  readonly qaStage: boolean;
   /**
    * **This task's frozen limits and dial were taken under a `configRefusal`** (WP-106, migration
    * 0066, PROGRESS backlogs 311 and 354): the project's stored configuration could not be read
@@ -634,6 +646,23 @@ export interface TaskRepository {
     taskId: Id,
     settlement: { readonly headSha: string | null; readonly excusedPaths: readonly string[] },
   ): Promise<void>;
+  /**
+   * `tasks.ticket_claim` (migration 0088, TD-029 decision 5, WP-177), or `null` when the task never
+   * claimed its ticket — a binding with no `lifecycle` block, a task with no provider ticket, or a
+   * row older than the column. Parsed through `storedTicketClaimSchema`, never cast.
+   */
+  ticketClaim(tx: Transaction, taskId: Id): Promise<StoredTicketClaim | null>;
+  /**
+   * Writes **only** `ticket_claim`, the whole record — the column's one statement (technical/03's
+   * M10-head amendment). Its callers: the claim (`ensureTicketClaim`, between the `stage.execute`
+   * job's transactions), the release (`ticket_release` duty), a person's *Rework* (marks it stale,
+   * in the command's own transaction) and, from WP-178, the human-return window's return (stale).
+   * No version bump: `save` does not name the column, so no whole-row write can put an older
+   * claim back.
+   *
+   * @throws when the task does not exist.
+   */
+  saveTicketClaim(tx: Transaction, taskId: Id, claim: StoredTicketClaim): Promise<void>;
   /**
    * Fills `requested_by_user_id` when it is still `null` — the column's first `update` writer
    * (WP-79, PROGRESS backlog 243).

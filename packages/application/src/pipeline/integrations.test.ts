@@ -144,6 +144,10 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // WP-59's `close_superseded_mr` duty: one resolution for the comment and the close of the merge
   // request a rework let go of.
   'superseded-mr.ts': 1,
+  // WP-177: the ticket claim, between the `stage.execute` job's transactions — outside any run.
+  'ticket-claim.ts': 1,
+  // WP-177: the `ticket_lifecycle` and `ticket_release` duties, one resolution each, in a job.
+  'ticket-lifecycle.ts': 2,
   // WP-25's two duties: the check before it creates the lint task, the post before it comments.
   'ticket-lint.ts': 2,
   // WP-87's poller: one resolution per poll of a binding, and one more when a failed poll re-reads

@@ -247,6 +247,15 @@ export interface ProviderRegistration<TType extends IntegrationType> {
    * holds it to that: no platform API call may carry the run token (decision 13 item 3).
    */
   readonly staticRunCredential?: StaticRunCredentialSupport;
+  /**
+   * For a `task_management` provider: its own name for the permission the ticket claim's assign
+   * needs (WP-177, TD-029 decision 5) — Jira Cloud's *Assign Issues* — carried to
+   * `TaskManagementBinding.assignPermission` by the binding loader, so the brief of a refused claim
+   * names it while the application ring names no provider (the `CredentialMintingDeclaration.hints`
+   * precedent, WP-107). Refused for any other type, and refused blank. Absent: the brief speaks of
+   * "the permission to assign tickets".
+   */
+  readonly assignPermission?: string;
   create(input: ProviderCreateInput): IntegrationPortByType[TType];
 }
 
@@ -418,6 +427,21 @@ export const createIntegrationRegistry = (
             `deploy key field "${deployKey.privateKeyField}" is not in secretFields; a private key would be stored and published as plain configuration (BD-002)`,
           );
         }
+      }
+    }
+    const assignPermission = registration.assignPermission;
+    if (assignPermission !== undefined) {
+      if (registration.type !== 'task_management') {
+        throw new ProviderRegistrationError(
+          registration.id,
+          `declares assignPermission but is a "${registration.type}" provider`,
+        );
+      }
+      if (assignPermission.trim().length === 0) {
+        throw new ProviderRegistrationError(
+          registration.id,
+          'declares a blank assignPermission; a refused claim’s brief would name nothing',
+        );
       }
     }
     const channels = registration.communicationChannels;

@@ -126,6 +126,7 @@ export * from './onboarding/record.js';
 export * from './onboarding/rediscovery.js';
 export * from './onboarding/runtime.js';
 // The pipeline (WP-15): interpreter-driven sagas, the stage executor and their ports
+export * from './pipeline/binding-lifecycle.js';
 export * from './pipeline/ci-config-location.js';
 export * from './pipeline/cli-spawn.js';
 export * from './pipeline/commands.js';
@@ -160,6 +161,8 @@ export * from './pipeline/stage-executor.js';
 export * from './pipeline/stop-reasons.js';
 export * from './pipeline/store.js';
 export * from './pipeline/task-conflict.js';
+export * from './pipeline/ticket-claim.js';
+export * from './pipeline/ticket-lifecycle.js';
 export * from './pipeline/ticket-poll.js';
 export * from './pipeline/ticket-snapshot.js';
 export * from './pipeline/transitions.js';

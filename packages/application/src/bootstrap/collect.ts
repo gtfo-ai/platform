@@ -336,6 +336,8 @@ export const collectHistory = async (
         template: template as PipelineTemplate,
         // WP-62: no dial — the platform's own one-stage mining task, not a picked-up ticket.
         pipelineDial: null,
+        // WP-177: the platform’s own mining task has no ticket lifecycle, so no `qa` stage.
+        qaStage: false,
         // WP-106 (migration 0066): the batch was started under a readable configuration, but a
         // chunk collected after it broke freezes the defaults' limits; its first run re-takes them.
         settingsRefreezePending: settings.configRefusal !== undefined,
@@ -392,7 +394,7 @@ export const collectHistory = async (
         HISTORY_BOOTSTRAP_TEMPLATE_ID,
         stored.template,
         stored.pipelineDial,
-        false,
+        stored.qaStage,
       );
       const applied = await applyDecision({
         store: options.store,

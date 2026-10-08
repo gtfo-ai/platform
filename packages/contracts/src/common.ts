@@ -653,6 +653,10 @@ export const stageIdSchema = slugSchema;
  * load-bearing. The emphasis table is now held to `SHIPPED_STAGE_IDS` in `@platform/domain`, which
  * is read off the templates, and every one of the four has a chosen row. So the omission here is
  * now only a statement about the ticket flow; nothing else rests on it.
+ *
+ * `qa` is listed since WP-177 (PROGRESS backlog 539): WP-174 put the human QA stage into the shared
+ * merge tail (BD-031 ruling 3), and the application reads it by its id — the `qa` lifecycle moment
+ * fires on entry into it (TD-029 decision 4) — so a template must not rename it either.
  */
 export const BUILTIN_STAGE_IDS = [
   'intake',
@@ -665,6 +669,7 @@ export const BUILTIN_STAGE_IDS = [
   'code_review',
   'business_review',
   'rebase_gate',
+  'qa',
   'ready_for_merge',
   'merged_gate',
   'retrospective',

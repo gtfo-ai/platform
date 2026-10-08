@@ -296,6 +296,7 @@ const insertPeer = async (
       ciExcusedPaths: [],
       requestedByUserId: null,
       pipelineDial: null,
+      qaStage: false,
       version: INITIAL_TASK_VERSION,
     };
     await harness.store.tasks.insert(scope.tx, stored);

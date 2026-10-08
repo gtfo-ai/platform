@@ -72,6 +72,7 @@ import {
   runSavedWorkSchema,
   runStatusSchema,
   runTerminalReasonSchema,
+  storedTicketClaimSchema,
   taskCoverageSchema,
   taskDependenciesSchema,
   taskPipelineDialSchema,
@@ -154,6 +155,7 @@ interface TaskRow extends Record<string, unknown> {
   ci_head_sha: string | null;
   ci_excused_paths: string[] | null;
   settings_refreeze_pending: boolean | null;
+  qa_stage: boolean | null;
   refreeze_routing: { issue_type: string | null; can_create_tickets: boolean } | null;
   version: number;
   created_at: Date;
@@ -169,7 +171,7 @@ const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.tic
     t.ticket_snapshot, t.ticket_snapshot_at, t.ticket_signal_at, t.review_subject, t.history_sample,
     t.risk_classes, t.coverage,
     t.dependencies, t.required_reviewers, t.review_threads,
-    t.requested_by_user_id, t.ready_head_sha, t.ci_head_sha, t.ci_excused_paths, t.settings_refreeze_pending, t.refreeze_routing, t.version,
+    t.requested_by_user_id, t.ready_head_sha, t.ci_head_sha, t.ci_excused_paths, t.settings_refreeze_pending, t.refreeze_routing, t.qa_stage, t.version,
     t.created_at,
     (select max(e.stream_seq) from events e where e.stream_type = 'task' and e.stream_id = t.id)
       as sequence`;
@@ -205,6 +207,8 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   },
   template,
   pipelineDial: pipelineDialOf(row),
+  // `not null default false` (migration 0088); the `=== true` is for a driver's `null`, as above.
+  qaStage: row.qa_stage === true,
   settingsRefreezePending: row.settings_refreeze_pending === true,
   refreezeRouting:
     row.refreeze_routing === null || row.refreeze_routing === undefined
@@ -476,10 +480,10 @@ export const createPostgresPipelineStore = (
                             cost_actual, estimate_usd, estimate_basis, estimate_samples,
                             ticket_snapshot, ticket_snapshot_at, review_subject, history_sample,
                             version, pipeline_dial, requested_by_user_id, settings_refreeze_pending,
-                            refreeze_routing, ticket_id)
+                            refreeze_routing, ticket_id, qa_stage)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13::jsonb, $14::jsonb,
                  $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20, $21, $22::jsonb, $23, $24::jsonb,
-                 $25::jsonb, $26, $27::jsonb, $28, $29, $30::jsonb, $31)`,
+                 $25::jsonb, $26, $27::jsonb, $28, $29, $30::jsonb, $31, $32)`,
         [
           task.id,
           task.projectId,
@@ -539,6 +543,9 @@ export const createPostgresPipelineStore = (
               }),
           // WP-134 (migration 0077): the provider's stable id, written once and never updated.
           task.ticket.id ?? null,
+          // WP-177 (migration 0088): whether the task has the `qa` stage, frozen here and written
+          // nowhere else — intake's answer from the binding's `lifecycle.qa`, `false` elsewhere.
+          stored.qaStage,
         ],
       );
     },
@@ -617,6 +624,50 @@ export const createPostgresPipelineStore = (
       ]);
       return { raised: true, previousCapUsd };
     },
+    /**
+     * `ticket_claim` (WP-177, migration 0088): read through its published schema, never cast — a
+     * record that fails it is refused by name, because the claim decides whether a run starts.
+     */
+    ticketClaim: async (tx, taskId) => {
+      const { rows } = await sqlOf(tx).query<{ ticket_claim: unknown }>(
+        'select ticket_claim from tasks where id = $1',
+        [taskId],
+      );
+      const row = rows[0];
+      if (row === undefined) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+      if (row.ticket_claim === null || row.ticket_claim === undefined) {
+        return null;
+      }
+      const parsed = storedTicketClaimSchema.safeParse(row.ticket_claim);
+      if (!parsed.success) {
+        throw new PipelineStoredStateError(
+          `task ${taskId} has a tasks.ticket_claim that does not match its schema`,
+        );
+      }
+      return parsed.data;
+    },
+
+    /**
+     * `ticket_claim` — one column, one statement, the whole record (WP-177, technical/03's M10-head
+     * amendment). Narrow for the reason every other narrow writer here is: its callers run beside
+     * the stage executor's transactions (the claim between the `stage.execute` job's, the release
+     * duty in `pipeline.outbound`), so a whole-row `save` from there would be a lost update. Parsed
+     * on the way in, so a record the published shape refuses is never stored.
+     */
+    saveTicketClaim: async (tx, taskId, claim) => {
+      const record = storedTicketClaimSchema.parse(claim);
+      const result = await sqlOf(tx).query(
+        `update tasks set ticket_claim = $2::jsonb, updated_at = now()
+          where id = $1`,
+        [taskId, JSON.stringify(record)],
+      );
+      if (result.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+    },
+
     saveTicketSnapshot: async (tx, taskId, snapshot, readAt) => {
       // Two columns, for the reason `saveWorkpad` is one: the backfill runs in the `stage.execute`
       // job beside the stage executor's transactions, and a whole-row write from there is a lost

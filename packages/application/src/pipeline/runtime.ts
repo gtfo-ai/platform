@@ -86,6 +86,7 @@ import {
   type StageExecutorBootstrapPort,
   type StageExecutorOptions,
 } from './stage-executor.js';
+import { ticketLifecycleHandlers } from './ticket-lifecycle.js';
 import { ticketLintHandlers } from './ticket-lint.js';
 
 export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptions {
@@ -368,6 +369,9 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       resolveOnMergeHandler(options),
       // WP-90 (backlog 210): a thread resolved without a comment re-counts the review threads.
       ...reviewThreadsRefreshHandlers(options),
+      // WP-177 (TD-029 decisions 4 and 5): the lifecycle's moments at 110, beside the status
+      // mapping they supersede, and the release on cancellation.
+      ...ticketLifecycleHandlers(options),
     ],
     executor,
     start: async () => {

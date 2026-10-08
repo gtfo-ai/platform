@@ -122,6 +122,16 @@ const DECLARED: Readonly<Record<string, { readonly count: number; readonly reaso
     reason:
       'intake fails open (the task is created, marked, and parked by its first decided step); the plan and budget approval gates run only behind the stage-completion guard in `stageCompletedHandler`; the scheduler admits under the schema floor `REFUSED_CONFIGURATION_WIP_LIMITS`, and an admitted task meets the named refusal at its first step; the default-branch handler (WP-142) reads only `defaultBranch`, the `projects.default_branch` column, which no configuration document carries',
   },
+  'packages/application/src/pipeline/ticket-claim.ts': {
+    count: 1,
+    reason:
+      'the ticket claim (WP-177) reads only `ticketLifecycle`, the task-management binding’s block, which no configuration document carries; the run it admits is still refused by name at `admit`',
+  },
+  'packages/application/src/pipeline/ticket-lifecycle.ts': {
+    count: 3,
+    reason:
+      'the lifecycle handler and its two duties (WP-177) read only `ticketLifecycle` — the task-management binding’s block, which no configuration document carries — and move the ticket, never the task',
+  },
   'packages/application/src/pipeline/workpad.ts': {
     count: 2,
     reason:

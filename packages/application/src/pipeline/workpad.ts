@@ -43,6 +43,7 @@
  * `transition` refuses a status the workflow does not have anyway (product/08).
  */
 import type { EstimateBasis, Id, Slug, TaskState } from '@platform/contracts';
+import { lifecycleMapsAnySlot } from '@platform/domain';
 import type { EventHandler } from '../events/handler.js';
 import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -338,6 +339,19 @@ export const statusMappingHandler = (options: WorkpadOptions): EventHandler => (
       return;
     }
     const settings = await options.settings.forProject(stored.task.projectId, context.scope.tx);
+    /**
+     * **Superseded by the ticket lifecycle** (TD-029 decision 3, WP-177): when the binding maps any
+     * slot other than `pick_up_from`, the slots are the project's lifecycle and `status_mapping` is
+     * not applied at all — one writer per moment, so no ordering between two queued duties to
+     * reason about. `ticketLifecycleHandler` decides instead.
+     */
+    if (lifecycleMapsAnySlot(settings.ticketLifecycle?.slots)) {
+      logger.debug(
+        { task_id: taskId },
+        'the binding maps the ticket lifecycle, which supersedes status_mapping; nothing is enqueued',
+      );
+      return;
+    }
     const status = mappedStatus(
       settings.config.status_mapping,
       stored.task.state,

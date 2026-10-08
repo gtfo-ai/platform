@@ -840,6 +840,8 @@ export const insertReviewTask = async (
     // one-stage template has neither a business review to switch nor a scope to stop after — a
     // copied `stop_after_stage` would park every review on an Assist project before it ran.
     pipelineDial: null,
+    // WP-177: a review-only task reviews a human merge request and has no `qa` stage.
+    qaStage: false,
     // WP-106 (migration 0066): a review task created under a `configRefusal` (the shadow
     // comparison's, `shadow/human-review.ts`) froze the defaults' limits; its first run re-takes them.
     settingsRefreezePending: input.settings.configRefusal !== undefined,
@@ -888,7 +890,7 @@ export const insertReviewTask = async (
     stored.task.template,
     stored.template,
     stored.pipelineDial,
-    false,
+    stored.qaStage,
   );
   const applied = await applyDecision({
     store: options.store,

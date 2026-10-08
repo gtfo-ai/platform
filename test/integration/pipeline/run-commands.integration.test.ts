@@ -160,6 +160,7 @@ const liveRun = async (): Promise<{ runId: Id; taskId: Id }> => {
     },
     template: FEATURE_TEMPLATE,
     pipelineDial: null,
+    qaStage: false,
     priorityRank: 2,
     createdAt: NOW,
     branch: null,

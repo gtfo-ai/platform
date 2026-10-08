@@ -309,7 +309,7 @@ export const runReadyHeadCheck = async (
         current.task.template,
         current.template,
         current.pipelineDial,
-        false,
+        current.qaStage,
       );
       const verdict = readyHeadVerdict(current.readyHeadSha, live);
       const entry = readyEntryFor(pipeline, verdict);

@@ -126,6 +126,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       },
       template: FEATURE_TEMPLATE,
       pipelineDial: null,
+      qaStage: false,
       priorityRank: 2,
       createdAt: '2026-06-01T09:00:00.000Z',
       branch: null,
@@ -222,6 +223,70 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         const none = task({}, 'ACME-NO-DIAL');
         await store.tasks.insert(tx, none);
         expect((await store.tasks.load(tx, none.task.id))?.pipelineDial).toBeNull();
+      });
+
+      /**
+       * WP-177 (TD-029 decision 9, migration 0088): `tasks.qa_stage` is frozen by the insert and
+       * written by nothing else — a lifecycle mapping changed mid-task must not reshape the task.
+       */
+      it('round-trips the qa_stage the insert froze, and a whole-row save never moves it (WP-177)', async () => {
+        const stored = task({ qaStage: true }, 'ACME-QA');
+        await store.tasks.insert(tx, stored);
+        const loaded = await store.tasks.load(tx, stored.task.id);
+        expect(loaded?.qaStage).toBe(true);
+        await store.tasks.save(tx, { ...(loaded as StoredTask), qaStage: false });
+        expect((await store.tasks.load(tx, stored.task.id))?.qaStage).toBe(true);
+
+        const none = task({}, 'ACME-NO-QA');
+        await store.tasks.insert(tx, none);
+        expect((await store.tasks.load(tx, none.task.id))?.qaStage).toBe(false);
+      });
+
+      /**
+       * WP-177 (TD-029 decision 5, migration 0088): `tasks.ticket_claim` has one writer,
+       * `saveTicketClaim`, which writes the whole record and nothing else; the insert and `save`
+       * never touch it, and a record the published shape refuses is refused at the write.
+       */
+      it('writes the ticket claim narrowly, round-trips it, and never by the insert or save (WP-177)', async () => {
+        const stored = task({}, 'ACME-CLAIM');
+        await store.tasks.insert(tx, stored);
+        expect(await store.tasks.ticketClaim(tx, stored.task.id)).toBeNull();
+
+        const claim = {
+          account_id: 'agentic-bot',
+          claimed_at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+          status: 'confirmed' as const,
+          in_progress_written: true,
+          stale: false,
+          released_at: null,
+          release_cause: null,
+        };
+        await store.tasks.saveTicketClaim(tx, stored.task.id, claim);
+        expect(await store.tasks.ticketClaim(tx, stored.task.id)).toEqual(claim);
+
+        // A whole-row save over a snapshot read before the claim does not put `null` back.
+        const loaded = (await store.tasks.load(tx, stored.task.id)) as StoredTask;
+        await store.tasks.save(tx, { ...loaded, branch: 'agentic/acme-claim' });
+        expect(await store.tasks.ticketClaim(tx, stored.task.id)).toEqual(claim);
+
+        const released = {
+          ...claim,
+          stale: true,
+          released_at: '2026-06-01T10:00:00.000Z' as IsoDateTime,
+          release_cause: 'rework' as const,
+        };
+        await store.tasks.saveTicketClaim(tx, stored.task.id, released);
+        expect(await store.tasks.ticketClaim(tx, stored.task.id)).toEqual(released);
+
+        await expect(
+          store.tasks.saveTicketClaim(tx, stored.task.id, {
+            ...claim,
+            status: 'pending' as never,
+          }),
+        ).rejects.toThrow();
+        expect(await store.tasks.ticketClaim(tx, stored.task.id)).toEqual(released);
+        await expect(store.tasks.saveTicketClaim(tx, nextId(), claim)).rejects.toThrow();
+        await expect(store.tasks.ticketClaim(tx, nextId())).rejects.toThrow();
       });
 
       /**

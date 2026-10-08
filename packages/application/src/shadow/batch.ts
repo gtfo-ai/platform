@@ -368,6 +368,8 @@ export const startShadowBatch = async (
         // stop product/19 §11 prints as "—" (does not apply); the task runs the template as it
         // stands, which is what the comparison with the human's delivery is about.
         pipelineDial: null,
+        // WP-177: shadow runs only at Observe and stops before the merge tail; no `qa` stage.
+        qaStage: false,
         priorityRank: 2,
         createdAt: options.clock.now(),
         branch: null,
@@ -424,7 +426,7 @@ export const startShadowBatch = async (
         stored.task.template,
         stored.template,
         stored.pipelineDial,
-        false,
+        stored.qaStage,
       );
       const applied = await applyDecision({
         store: options.store,

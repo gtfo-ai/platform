@@ -119,6 +119,9 @@ export type TaskStageState = z.infer<typeof taskStageStateSchema>;
  *    its return feedback (`resumeAtStage`, PROGRESS backlog 495);
  *  - `write_conflict`, `dead_lettered`, `repository_config_invalid` — a write that lost every race,
  *    an event that spent its dispatch bound, a repository file that does not parse;
+ *  - `ticket_assigned_elsewhere`, `ticket_claim_failed` — the ticket claim (BD-031 ruling 5, TD-029
+ *    decision 5, WP-177) refused an agent run before it was admitted: the re-read found the ticket
+ *    assigned to somebody other than the binding's own account, or the tracker refused a claim write;
  *  - `settings_config_invalid` — the project's stored settings (`projects.config`) do not parse
  *    under this release's schema, so the run was refused at admission (WP-106, PROGRESS backlog 311);
  *  - `context_budget_above_ceiling` — WP-83's refusal of a context budget above the ceiling. **No
@@ -165,6 +168,8 @@ export const taskStageOutcomeWordSchema = z.enum([
   'write_conflict',
   'dead_lettered',
   'repository_config_invalid',
+  'ticket_assigned_elsewhere',
+  'ticket_claim_failed',
   'settings_config_invalid',
   'context_budget_above_ceiling',
   'protected_paths_changed',

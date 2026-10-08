@@ -562,7 +562,7 @@ export const breakdownDecidedHandler = (options: EpicSplitOptions): EventHandler
       stored.task.template,
       stored.template,
       stored.pipelineDial,
-      false,
+      stored.qaStage,
     );
     const applied = await applyDecision({
       store: options.store,

@@ -646,7 +646,8 @@
               "type": "string",
               "enum": [
                 "cancelled",
-                "rework"
+                "rework",
+                "stopped"
               ]
             }
           },

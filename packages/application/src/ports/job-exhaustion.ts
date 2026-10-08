@@ -350,6 +350,14 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
     shape: 'notification_shaped',
     why: 'a merge request left ready while an agent changes it again; the next entry into ready_for_merge marks it ready anyway, and nobody waits on the draft',
   },
+  ticket_lifecycle: {
+    shape: 'notification_shaped',
+    why: 'one move of the ticket to a lifecycle slot (TD-029 decision 4): a failed write never blocks the stage, leaves its audit row and a warn naming the slot, and the next moment moves the ticket on',
+  },
+  ticket_release: {
+    shape: 'notification_shaped',
+    why: 'gives the ticket of a cancelled or reworked task, or of a task that stopped between its assign and its record (cause `stopped`), back (TD-029 decision 5); a lost release leaves the binding’s own account assigned until a person moves it, and a lost `stopped` release also leaves the claim stale, so the next claim is a re-claim that takes the ticket back from a person who took it meanwhile — the residual amendment (c) rules out, stated here and filed in the backlog',
+  },
   ready_head_check: {
     shape: 'bound_and_escalate',
     why: 'a person’s resume, hand-back or retry waits on it, and the task stays where the command found it with nothing saying why',

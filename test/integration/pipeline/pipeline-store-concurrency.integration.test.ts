@@ -164,6 +164,7 @@ describe('a spend written in a transaction that rolls back', () => {
         ciExcusedPaths: [],
         requestedByUserId: null,
         pipelineDial: null,
+        qaStage: false,
         version: INITIAL_TASK_VERSION,
       };
       await store.tasks.insert(tx, task);
