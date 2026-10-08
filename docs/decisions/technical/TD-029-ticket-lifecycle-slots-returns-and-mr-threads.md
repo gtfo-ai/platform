@@ -26,7 +26,7 @@ BD-031 states what the product does. This record decides how, against code read 
 - The review window returns a `ready_for_merge` task only for **resolvable, unresolved** threads that
   hold a person's note (`packages/application/src/pipeline/review-threads.ts:104-105`,
   `packages/application/src/pipeline/jobs.ts:1539`). GitLab lists a general note as its own discussion,
-  and the adapter maps it to `resolvable: false` (`packages/integrations/src/providers/gitlab/provider.ts:501-511`).
+  and the adapter maps it to `resolvable: false` (`packages/integrations/src/providers/gitlab/provider.ts:531-541`).
   So a general note arms the window (`saga.ts:1651-1690`) and is then dropped. A ticket comment reaches
   only ask-the-task (`packages/application/src/ask/commands.ts:239-259`), and `ticket.status.changed` is
   declared unconsumed (`packages/application/src/events/consumption.ts:214`).
@@ -262,4 +262,4 @@ Vendor facts are in `docs/research/15-tracker-lifecycle-and-mr-conversation.md`.
   - A binding on a person's own account claims as that person (Q118).
   - An unrecognised acknowledgement costs one run.
   - A webhook-only binding does not re-match a ticket that was unassigned.
-  - GitLab's reply to an individual note is **[unverified]** until WP-173 records it.
+  - GitLab's reply to an individual note remains **[unverified]**: WP-173 records the documented answer and a fallback to a new general note (divergence 8); the live check is in `docs/TODO.md`.

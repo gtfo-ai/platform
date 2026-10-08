@@ -26,6 +26,14 @@ import type { Id } from '@platform/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { expectCatalogueEvent, expectIntegrationError } from './shared.js';
 
+/** One general note a harness arranged: its merge request, its discussion and its note (WP-173). */
+export interface GeneralNoteFixture {
+  readonly iid: number;
+  readonly threadId: string;
+  readonly noteId: string;
+  readonly body: string;
+}
+
 export interface GitProviderContractContext {
   readonly port: GitProviderPort;
   readonly project: string;
@@ -182,6 +190,17 @@ export interface GitProviderContractContext {
     readonly human: { readonly threadId: string; readonly noteId: string; readonly at: string };
     readonly systemNoteId: string;
     readonly platformNoteId: string;
+  };
+  /**
+   * WP-173 (TD-029, research/15 G2): two merge requests, each holding **one** person's general
+   * (non-threaded) comment — one the provider calls not resolvable and one it calls resolvable,
+   * because the vendor's documentation shows both and the design must not depend on either. The
+   * suite asserts each is listed as a discussion of its own with one unanchored note, and that a
+   * reply to the first reaches the merge request.
+   */
+  readonly generalNotes: {
+    readonly unresolvable: GeneralNoteFixture;
+    readonly resolvable: GeneralNoteFixture;
   };
   /**
    * WP-138: the developer's `open_mr` adopts an existing open merge request only when it is the
@@ -891,6 +910,44 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
 
         const listed = await port.listDiscussions(ref);
         expect(listed.map((discussion) => discussion.id)).toContain(created.id);
+      });
+
+      /**
+       * WP-173 (TD-029 decision 6, technical/06's M10 head amendment): a person's general comment
+       * is a discussion of its own **whatever `resolvable` says**. The product owner's example
+       * review is two such notes; an adapter that kept only resolvable threads, or dropped
+       * individual notes, would hear none of it.
+       */
+      it('lists a general note as a discussion of its own, resolvable or not (WP-173)', async () => {
+        for (const [fixture, resolvable] of [
+          [context.generalNotes.unresolvable, false],
+          [context.generalNotes.resolvable, true],
+        ] as const) {
+          const listed = await port.listDiscussions(mrRef(fixture.iid));
+          const thread = listed.find((discussion) => discussion.id === fixture.threadId);
+          expect(thread, `general note ${fixture.noteId} is listed`).toBeDefined();
+          expect(thread?.notes.map((note) => note.id)).toEqual([fixture.noteId]);
+          const [note] = thread?.notes ?? [];
+          expect(note?.path).toBeNull();
+          expect(note?.line).toBeNull();
+          expect(note?.system).toBe(false);
+          expect(note?.body).toBe(fixture.body);
+          expect(thread?.resolvable, 'resolvable as the provider said').toBe(resolvable);
+          expect(thread?.resolved).toBe(false);
+        }
+      });
+
+      /**
+       * WP-173: a reply to a general note reaches the merge request. Where it lands is the
+       * provider's — in the note's own thread, or (GitLab's fallback, the fake's default) as a new
+       * general note — so the suite asserts what both shapes promise: the returned discussion
+       * carries the reply, its body opening with the platform's marker exactly as it was sent.
+       */
+      it('replies to a general note, the body opening with the platform marker (WP-173)', async () => {
+        const fixture = context.generalNotes.unresolvable;
+        const reply = '<!-- agentic:reply:00000000-0000-4000-8000-0000000000d1 -->\nRenamed.';
+        const replied = await port.replyToDiscussion(mrRef(fixture.iid), fixture.threadId, reply);
+        expect(replied.notes.some((note) => note.body.startsWith(reply))).toBe(true);
       });
 
       it('fails with not_found for an unknown discussion', async () => {

@@ -175,6 +175,23 @@ export const gitlabReplayContext = (
       systemNoteId: '3302',
       platformNoteId: '3303',
     },
+    // WP-173: `general-notes.json` records one person's general note on merge request 34
+    // (`resolvable: false`, the notes page's value) and one on 35 (`resolvable: true`, the
+    // discussions page's), plus the documented 201 of a reply to the first and the thread re-read.
+    generalNotes: {
+      unresolvable: {
+        iid: 34,
+        threadId: 'c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c401',
+        noteId: '3401',
+        body: 'Please split the totals change into its own commit.',
+      },
+      resolvable: {
+        iid: 35,
+        threadId: 'c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c501',
+        noteId: '3501',
+        body: 'Could the summary name the migration?',
+      },
+    },
     commits: {
       since: '2000-01-01T00:00:00.000Z',
       emptySince: '2026-09-20T00:00:00.000Z',

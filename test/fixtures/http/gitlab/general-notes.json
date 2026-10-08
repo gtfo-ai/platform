@@ -1,0 +1,196 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/34/discussions?per_page=100&page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c401",
+          "individual_note": true,
+          "notes": [
+            {
+              "id": 3401,
+              "type": null,
+              "body": "Please split the totals change into its own commit.",
+              "attachment": null,
+              "author": {
+                "id": 77,
+                "username": "dana.reviewer",
+                "name": "Dana Reviewer",
+                "state": "active",
+                "web_url": "https://gitlab.example.test/dana.reviewer",
+                "avatar_url": null
+              },
+              "created_at": "2026-06-03T10:05:00.000Z",
+              "updated_at": "2026-06-03T10:05:00.000Z",
+              "system": false,
+              "noteable_id": 155016034,
+              "noteable_type": "MergeRequest",
+              "project_id": 15513260,
+              "noteable_iid": 34,
+              "resolvable": false
+            }
+          ]
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/notes/",
+        "retrieved": "2026-10-08",
+        "kind": "documented-adapted",
+        "note": "WP-173 (research/15 G2): a merge request's general note listed as a discussion of its own, with resolvable: false. The discussion's shape (id, individual_note: true, one note with type null) is the individual-note entry of \"List all merge request discussion items\" on https://docs.gitlab.com/api/discussions/; the note's resolvable: false is the value the notes page's \"Retrieve a merge request note\" example carries for a merge-request comment, and that example has no resolved member, so none is recorded. Adapted: merge request 34 of this corpus, one invented neutral comment by the corpus's reviewer account, fake ids and instants. Not a recording: the two pages contradict each other on resolvable, which is why merge request 35 records the other value."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/35/discussions?per_page=100&page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": "c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c501",
+          "individual_note": true,
+          "notes": [
+            {
+              "id": 3501,
+              "type": null,
+              "body": "Could the summary name the migration?",
+              "attachment": null,
+              "author": {
+                "id": 77,
+                "username": "dana.reviewer",
+                "name": "Dana Reviewer",
+                "state": "active",
+                "web_url": "https://gitlab.example.test/dana.reviewer",
+                "avatar_url": null
+              },
+              "created_at": "2026-06-03T11:40:00.000Z",
+              "updated_at": "2026-06-03T11:40:00.000Z",
+              "system": false,
+              "noteable_id": 155016035,
+              "noteable_type": "MergeRequest",
+              "project_id": 15513260,
+              "noteable_iid": 35,
+              "resolvable": true,
+              "resolved": false,
+              "resolved_by": null
+            }
+          ]
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/discussions/",
+        "retrieved": "2026-10-08",
+        "kind": "documented-adapted",
+        "note": "WP-173 (research/15 G2): the individual-note entry of \"List all merge request discussion items\" as the page publishes it — individual_note: true, one note with type null, system false, resolvable: true and resolved: false. Adapted: merge request 35 of this corpus, one invented neutral comment by the corpus's reviewer account, fake ids and instants, and noteable_iid set where the page's example has null. The notes page shows resolvable: false for the same kind of comment (merge request 34 records that one)."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/merge_requests/34/discussions/c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c401/notes",
+      "status": 201,
+      "body": {
+        "id": 3402,
+        "type": null,
+        "body": "<!-- agentic:reply:00000000-0000-4000-8000-0000000000d1 -->\nRenamed.",
+        "attachment": null,
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "created_at": "2026-06-03T10:30:00.000Z",
+        "updated_at": "2026-06-03T10:30:00.000Z",
+        "system": false,
+        "noteable_id": 155016034,
+        "noteable_type": "MergeRequest",
+        "project_id": 15513260,
+        "noteable_iid": 34,
+        "resolvable": false
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/discussions/",
+        "retrieved": "2026-10-08",
+        "kind": "documented-adapted",
+        "note": "WP-173 (research/15 G4): \"Add note to a merge request thread\" answers 201 Created with the created note, and the page says the endpoint \"can also create a thread from a single comment\". The page shows no response body, so the note is the note shape of the list example. Whether a live instance accepts an individual_note discussion's id here is [unverified] (docs/TODO.md § Verification); this interaction records the documented answer, and the adapter's fallback for a 400 or a 404 is held by provider.test.ts with scripted responses, not by this corpus."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/34/discussions/c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c401",
+      "status": 200,
+      "body": {
+        "id": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c401",
+        "individual_note": false,
+        "notes": [
+          {
+            "id": 3401,
+            "type": null,
+            "body": "Please split the totals change into its own commit.",
+            "attachment": null,
+            "author": {
+              "id": 77,
+              "username": "dana.reviewer",
+              "name": "Dana Reviewer",
+              "state": "active",
+              "web_url": "https://gitlab.example.test/dana.reviewer",
+              "avatar_url": null
+            },
+            "created_at": "2026-06-03T10:05:00.000Z",
+            "updated_at": "2026-06-03T10:05:00.000Z",
+            "system": false,
+            "noteable_id": 155016034,
+            "noteable_type": "MergeRequest",
+            "project_id": 15513260,
+            "noteable_iid": 34,
+            "resolvable": false
+          },
+          {
+            "id": 3402,
+            "type": null,
+            "body": "<!-- agentic:reply:00000000-0000-4000-8000-0000000000d1 -->\nRenamed.",
+            "attachment": null,
+            "author": {
+              "id": 4242,
+              "username": "agentic-bot",
+              "name": "Agentic Bot",
+              "state": "active",
+              "web_url": "https://gitlab.example.test/agentic-bot",
+              "avatar_url": null
+            },
+            "created_at": "2026-06-03T10:30:00.000Z",
+            "updated_at": "2026-06-03T10:30:00.000Z",
+            "system": false,
+            "noteable_id": 155016034,
+            "noteable_type": "MergeRequest",
+            "project_id": 15513260,
+            "noteable_iid": 34,
+            "resolvable": false
+          }
+        ]
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/discussions/",
+        "retrieved": "2026-10-08",
+        "kind": "documented-adapted",
+        "note": "WP-173: \"Retrieve a merge request discussion item\" after the reply — the thread the page says a reply creates from a single comment, so individual_note is false and it carries the general note and the platform's reply (its body opening with the <!-- agentic:… --> marker). Adapted: the page's discussion shape with this corpus's two notes. That individual_note turns false after a reply is inferred from \"create a thread\", not measured."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/7/discussions/no-such-thread",
+      "status": 404,
+      "body": {
+        "message": "404 Discussion Not Found"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/rest/troubleshooting/",
+        "retrieved": "2026-10-08",
+        "kind": "documented",
+        "note": "WP-173: since the reply endpoint's 404 is answered rather than thrown, the adapter reads the thread to tell \"no such thread\" from \"an individual note it would not take\"; this is that read for the unknown thread discussions.json's POST already answers 404 for, with the status table's 404 and the same message."
+      }
+    }
+  ]
+}

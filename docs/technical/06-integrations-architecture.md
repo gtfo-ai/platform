@@ -134,7 +134,7 @@ capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArt
 >   a discussion of its own, whatever the provider says about `resolvable`. GitLab's documentation
 >   contradicts itself on that field (`docs/research/15-tracker-lifecycle-and-mr-conversation.md` G2),
 >   and the product owner's example review consists of exactly such notes. The GitLab adapter already
->   does this (`packages/integrations/src/providers/gitlab/provider.ts:501-521`). WP-173 pins it in the
+>   does this (`packages/integrations/src/providers/gitlab/provider.ts:531-551`). WP-173 pins it in the
 >   shared contract suite, for the fake as well.
 > - **`replyToDiscussion` answers an individual note.** On GitLab, whether the reply endpoint accepts an
 >   `individual_note` discussion's id is **[unverified]**. WP-173 records it against a documented-adapted

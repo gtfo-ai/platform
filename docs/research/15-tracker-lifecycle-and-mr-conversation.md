@@ -54,6 +54,8 @@ Consequences for the design (TD-029):
 
 - Because of G2, whether a human note returns a task is **never** decided by `resolvable`. A
   general note, a diff thread and a reply all count, by author and marker (TD-029 decision 6).
-- Whether G4 accepts an individual note's discussion id is measured by the GitLab row (WP-173)
-  against a recorded fixture. If it does not, the reply is a new general note that names the note it
-  answers.
+- Whether G4 accepts an individual note's discussion id is **not measured**. WP-173's fixture
+  (`test/fixtures/http/gitlab/general-notes.json`) records only the documented `201`, and the live
+  check is still open in `docs/TODO.md`. The GitLab adapter therefore tries G4 first and, on a `400`
+  or `404` for an individual note, posts a new general note that names the note it answers and
+  returns that note's discussion, whose id differs (divergence 8 in the adapter's docblock).

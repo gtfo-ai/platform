@@ -233,6 +233,21 @@
  *     time limit fires while a body is still being read, as a bare `TimeoutError` the adapter's
  *     `catch` never saw — a test of the second shape throws it itself. No request is made, so the
  *     executor's retry runs against the script, as against an adapter.
+ * 31. **Stricter — a reply to a general note arrives as a new general note by default** (WP-173,
+ *     TD-029, research/15 G2 and G4). `addGeneralNote` seeds a person's non-threaded comment: its own
+ *     discussion, one note, no `path`, and `resolvable` as the test says (GitLab's documentation shows
+ *     both values, so neither is the default a consumer may lean on — the seed's default is `false`,
+ *     the value the product owner's live read found). Replying to it (or to any individual note, which
+ *     a system note from `addHumanDiscussion` also is) does what the GitLab adapter's **fallback**
+ *     does (GitLab divergence 8): a new general note whose body is the reply followed by one platform
+ *     line naming the note answered, returned as its **own** discussion with a new id. A real GitLab
+ *     may instead accept the reply into the thread (`[unverified]`, `docs/TODO.md`); a caller that
+ *     copes with a new id copes with both, which is why this is the default. A tier that wants the
+ *     in-thread shape builds the fake with `individualNoteReplies: 'thread'`, and then the note joins
+ *     the thread and it stops being an individual note, as the discussions page says a reply makes
+ *     *"a thread from a single comment"*. A resolvable general note resolves like any thread; a
+ *     non-resolvable one refuses `resolveDiscussion` with `invalid_request`, as every non-resolvable
+ *     thread here does.
  */
 import {
   type BranchPushProtection,
@@ -342,6 +357,12 @@ export interface FakeGitOptions {
    * author of every merge request this fake opens (WP-138). @default `agentic-bot`.
    */
   readonly botUser?: string;
+  /**
+   * Where a reply to an individual note lands (WP-173, divergence 31). @default `'new_note'` — the
+   * GitLab adapter's fallback shape, a new general note with an id of its own; `'thread'` joins the
+   * note's own discussion.
+   */
+  readonly individualNoteReplies?: 'new_note' | 'thread';
 }
 
 interface StoredProject {
@@ -368,6 +389,8 @@ interface StoredDiscussion {
   id: string;
   project: string;
   iid: number;
+  /** GitLab's `individual_note`: a general note or a system note, not (yet) a thread (WP-173). */
+  individualNote: boolean;
   resolvable: boolean;
   resolved: boolean;
   notes: StoredNote[];
@@ -699,6 +722,18 @@ export interface FakeGitProvider extends GitProviderPort {
      */
     readonly system?: boolean;
   }): Discussion;
+  /**
+   * A person's **general** (non-threaded) comment on the merge request (WP-173, divergence 31): a
+   * discussion of its own with one note and no anchor. `resolvable` @default `false`.
+   */
+  addGeneralNote(input: {
+    readonly project: string;
+    readonly iid: number;
+    readonly authorId: string;
+    readonly text: string;
+    readonly resolvable?: boolean;
+    readonly createdAt?: string;
+  }): Discussion;
   emitMergeRequestEvent(input: {
     readonly event: 'mr.opened' | 'mr.updated' | 'mr.merged' | 'mr.closed';
     readonly project: string;
@@ -961,6 +996,53 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     display_name: externalId,
     verified: true,
   });
+
+  const individualNoteReplies = options.individualNoteReplies ?? 'new_note';
+
+  /** One general note as its own discussion — what `addGeneralNote` and divergence 31 store. */
+  const storeGeneralNote = (input: {
+    readonly project: string;
+    readonly iid: number;
+    readonly author: ExternalIdentity;
+    readonly body: string;
+    readonly resolvable: boolean;
+    readonly createdAt: string;
+  }): StoredDiscussion => {
+    discussionCounter += 1;
+    noteCounter += 1;
+    const discussion: StoredDiscussion = {
+      id: `disc-${discussionCounter}`,
+      project: input.project,
+      iid: input.iid,
+      individualNote: true,
+      resolvable: input.resolvable,
+      resolved: false,
+      notes: [
+        {
+          id: `n-${noteCounter}`,
+          author: input.author,
+          body: input.body,
+          created_at: input.createdAt,
+          path: null,
+          line: null,
+          system: false,
+        },
+      ],
+    };
+    discussions.push(discussion);
+    return discussion;
+  };
+
+  /** Divergence 31: the GitLab adapter's fallback shape — the reply first, then a platform line. */
+  const replyAsGeneralNote = (answered: StoredDiscussion, markdown: string): StoredDiscussion =>
+    storeGeneralNote({
+      project: answered.project,
+      iid: answered.iid,
+      author: identityOf('agentic-bot'),
+      body: `${markdown}\n\n_In reply to note ${answered.notes[0]?.id ?? answered.id}._`,
+      resolvable: false,
+      createdAt: core.clock.now(),
+    });
 
   const toDiscussion = (discussion: StoredDiscussion): Discussion => ({
     id: discussion.id,
@@ -1569,6 +1651,10 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       if (discussion === undefined) {
         throw notFound(PROVIDER, 'reply_to_discussion', `discussion ${discussionId}`);
       }
+      if (discussion.individualNote && individualNoteReplies === 'new_note') {
+        return toDiscussion(replyAsGeneralNote(discussion, markdown));
+      }
+      discussion.individualNote = false;
       noteCounter += 1;
       discussion.notes.push({
         id: `n-${noteCounter}`,
@@ -1629,6 +1715,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         id: `disc-${discussionCounter}`,
         project: mr.project,
         iid: mr.iid,
+        individualNote: false,
         resolvable: true,
         resolved: false,
         notes: [
@@ -2066,6 +2153,22 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       requireProject('set_provider_default_branch', project).defaultBranch = branch;
     },
 
+    addGeneralNote: (input) => {
+      if (findMr(input.project, input.iid) === undefined) {
+        throw notFound(PROVIDER, 'add_general_note', `merge request ${input.iid}`);
+      }
+      return toDiscussion(
+        storeGeneralNote({
+          project: input.project,
+          iid: input.iid,
+          author: identityOf(input.authorId),
+          body: input.text,
+          resolvable: input.resolvable ?? false,
+          createdAt: input.createdAt ?? core.clock.now(),
+        }),
+      );
+    },
+
     addHumanDiscussion: (input) => {
       const mr = findMr(input.project, input.iid);
       if (mr === undefined) {
@@ -2077,6 +2180,8 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         id: `disc-${discussionCounter}`,
         project: input.project,
         iid: input.iid,
+        // A system note is an individual note on GitLab; a person's thread is not (WP-173).
+        individualNote: input.system === true,
         resolvable: input.system !== true,
         resolved: false,
         notes: [

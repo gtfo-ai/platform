@@ -484,6 +484,95 @@ describe('FakeGitProvider discussions', () => {
     );
   });
 
+  describe('general notes (WP-173, divergence 31)', () => {
+    const REPLY = '<!-- agentic:reply:00000000-0000-4000-8000-0000000000d1 -->\nDone.';
+    const openNoted = async (port: ReturnType<typeof build>) => {
+      const mr = await port.openMergeRequest({
+        project: PROJECT,
+        branch: 'agentic/general-note',
+        target: 'main',
+        title: 'Draft',
+        description: '',
+        draft: true,
+        labels: [],
+        reviewers: [],
+        remove_source_branch: true,
+      });
+      return mr.ref;
+    };
+
+    it('lists a general note as its own unanchored discussion, not resolvable by default', async () => {
+      const port = build();
+      const ref = await openNoted(port);
+      const added = port.addGeneralNote({
+        project: PROJECT,
+        iid: ref.iid,
+        authorId: 'human-1',
+        text: 'Split it, please.',
+      });
+      const [listed] = await port.listDiscussions(ref);
+      expect(listed?.id).toBe(added.id);
+      expect(listed?.resolvable).toBe(false);
+      expect(listed?.notes).toHaveLength(1);
+      expect(listed?.notes[0]?.path).toBeNull();
+      await expect(port.resolveDiscussion(ref, added.id)).rejects.toMatchObject({
+        code: 'invalid_request',
+      });
+    });
+
+    it('resolves a resolvable general note', async () => {
+      const port = build();
+      const ref = await openNoted(port);
+      const added = port.addGeneralNote({
+        project: PROJECT,
+        iid: ref.iid,
+        authorId: 'human-1',
+        text: 'Name the migration?',
+        resolvable: true,
+      });
+      expect((await port.resolveDiscussion(ref, added.id)).resolved).toBe(true);
+    });
+
+    it('answers a reply with a new general note naming the one answered, by default', async () => {
+      const port = build();
+      const ref = await openNoted(port);
+      const added = port.addGeneralNote({
+        project: PROJECT,
+        iid: ref.iid,
+        authorId: 'human-1',
+        text: 'Split it, please.',
+      });
+      const replied = await port.replyToDiscussion(ref, added.id, REPLY);
+      expect(replied.id).not.toBe(added.id);
+      expect(replied.notes).toHaveLength(1);
+      expect(replied.notes[0]?.body.startsWith(REPLY)).toBe(true);
+      expect(replied.notes[0]?.body).toContain(added.notes[0]?.id ?? '?');
+      const listed = await port.listDiscussions(ref);
+      expect(listed.find((thread) => thread.id === added.id)?.notes).toHaveLength(1);
+      expect(listed).toHaveLength(2);
+    });
+
+    it("joins the note's own thread when built with individualNoteReplies: 'thread'", async () => {
+      const port = build({ individualNoteReplies: 'thread' });
+      const ref = await openNoted(port);
+      const added = port.addGeneralNote({
+        project: PROJECT,
+        iid: ref.iid,
+        authorId: 'human-1',
+        text: 'Split it, please.',
+      });
+      const replied = await port.replyToDiscussion(ref, added.id, REPLY);
+      expect(replied.id).toBe(added.id);
+      expect(replied.notes.map((note) => note.body)).toEqual(['Split it, please.', REPLY]);
+    });
+
+    it('refuses a general note on a merge request it does not have', () => {
+      expect(() =>
+        build().addGeneralNote({ project: PROJECT, iid: 999, authorId: 'h', text: 'x' }),
+      ).toThrow(/merge request 999/);
+    });
+  });
+
   it('normalises an mr.updated event and ignores one for an unknown merge request', async () => {
     const port = build();
     const mr = await port.openMergeRequest({

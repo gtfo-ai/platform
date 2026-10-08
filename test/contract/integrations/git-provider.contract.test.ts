@@ -150,6 +150,35 @@ runGitProviderContract({
       text: '<!-- agentic:conflict-warning:task-1 -->\nThis merge request overlaps another.',
     });
 
+    // WP-173: two merge requests, each with one person's general note — one the provider calls not
+    // resolvable (the default, and the product owner's live reading) and one it calls resolvable.
+    const generalNote = async (branch: string, text: string, resolvable: boolean) => {
+      const opened = await openOn(branch);
+      const thread = port.addGeneralNote({
+        project: PROJECT,
+        iid: opened.ref.iid,
+        authorId: 'dana',
+        text,
+        ...(resolvable ? { resolvable } : {}),
+      });
+      return {
+        iid: opened.ref.iid,
+        threadId: thread.id,
+        noteId: thread.notes[0]?.id ?? '',
+        body: text,
+      };
+    };
+    const unresolvableGeneralNote = await generalNote(
+      'agentic/general-note',
+      'Please split the totals change into its own commit.',
+      false,
+    );
+    const resolvableGeneralNote = await generalNote(
+      'agentic/general-note-resolvable',
+      'Could the summary name the migration?',
+      true,
+    );
+
     // WP-37: the one handle this fake resolves. Everything else answers `null` (divergence 11).
     port.seedUser('@dana-reviewer', '4242');
     // WP-137 (divergence 24): the static run credential's probe reads exactly these.
@@ -277,6 +306,7 @@ runGitProviderContract({
         systemNoteId: systemThread.notes[0]?.id ?? '',
         platformNoteId: platformThread.notes[0]?.id ?? '',
       },
+      generalNotes: { unresolvable: unresolvableGeneralNote, resolvable: resolvableGeneralNote },
       commits: {
         since: '2000-01-01T00:00:00.000Z',
         emptySince: '2026-09-20T00:00:00.000Z',

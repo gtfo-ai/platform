@@ -19413,15 +19413,15 @@ WP-181 follows WP-177 and WP-180, WP-182 follows WP-181, and WP-183 runs last. W
 |---|---|---|---|---|
 | WP-162 | **A test never writes into the repository it runs in, and the harness's own files do not turn `verify` red** | DONE | `19352601` | Folds **499**, **532** and, as a review nit, **533**. Built: `scripts/git-scratch-env.mjs` (prefix scrub, own config/hooksPath, `GIT_CEILING_DIRECTORIES`, `rev-parse` guard) taken by every git-spawning test; a vitest setup file scrubbing each worker (rule-27 correction to (b): the scripts are imported in-process); the census `scripts/git-scratch-env-census.test.ts`; the hostile-`GIT_DIR` process suite `scripts/git-fixture-isolation.test.ts` (fails on `f9e38239`: config, `main`, `side` and three tags changed); `LOCAL_TOOL_PATHS` in `check-ignored` (untracked only). (1) under lefthook 2.1.12: a linked worktree's hook adds `GIT_DIR` only; the incident's replaced main index not reproduced. Review: one round, **APPROVE-with-nits** (three docblock nits + 533, fixed by the orchestrator); six canaries dead (prefix list, ceiling, setup scrub, a reverted site, `rev-parse` guard, lock dropped). Orchestrator: rule 95 **retired** (e); `CLAUDE.md` bullet and the `PROCESS_SUITES` sentence (7). Verification: `PASS: verify` **with `.claude/scheduled_tasks.lock` present** (before and after the nits); `verify:integration` 868/868; `verify:e2e` 291/291 twice; `core.bare` false, no `v*` tags, volumes 131. CI on `19352601`: `ci` `37732270412`, `image` `37732270355` **completed success**, `release` skipped. Filed 534 (nit, no owner). | Folds **499** (major), **532**. No deps. No migration. Retires rule 95. Parallel-safe with every row but WP-169. |
 | WP-170 | **Contracts: the lifecycle block, the claim and return events, the conversation's artifact fields and DTOs** | TODO | — | Folds **535**, **536**, **537** (contracts half). No deps. No migration. Touches `repository-grades.ts` for the grade census only. Runs first and alone. |
-| WP-171 | **The task-management port reads statuses, transitions and comments, and claims and releases a ticket: port, fake and contract suite** | TODO | — | Folds **535** (a), **536** (a). Deps WP-170. No migration. Refusal-by-name branch (BD-017). Parallel with WP-173…WP-175. |
-| WP-172 | **Jira Cloud implements the six members, against documented fixtures** | TODO | — | Folds **535** (a), **536** (a). Deps WP-171. No migration. research/15 J1–J6, never J2. Neutral status names. |
+| WP-171 | **The task-management port reads statuses, transitions and comments, and claims and releases a ticket: port, fake and contract suite** | TODO | — | Folds **535** (a), **536** (a). Deps WP-170. No migration. Refusal-by-name branch (BD-017). Parallel with WP-173…WP-175. Criterion (5): the fake's binding config embeds `ticketLifecycleSchema` as its `lifecycle` key (WP-170 review). |
+| WP-172 | **Jira Cloud implements the six members, against documented fixtures** | TODO | — | Folds **535** (a), **536** (a). Deps WP-171. No migration. research/15 J1–J6, never J2. Neutral status names. Criterion (6): the Jira binding schema embeds `ticketLifecycleSchema` as `lifecycle`; `pickup_status` stays the `pick_up_from` slot (WP-170 review). |
 | WP-173 | **GitLab: every note is a discussion whatever `resolvable` says, and a reply reaches a general note** | TODO | — | Folds **537**. No deps. No migration. Reply to an individual note **[unverified]**, fallback built. Parallel with every row before WP-178. |
 | WP-174 | **Domain: the `qa` stage, the acknowledgement rule, the slot rules, the lifecycle moments and the return decision** | TODO | — | Folds **535**, **537** (d). Deps WP-170. No migration. TD-029 decisions 4, 8 and 9. Parallel with WP-171, WP-173, WP-175. |
 | WP-175 | **Domain: the `conversation` data block** | TODO | — | Folds **537**. Deps WP-170. No migration. Parallel with WP-171…WP-174. |
 | WP-176 | **Prompts: every role reads the conversation, the Developer answers each thread, and the Reviewer resolves only what it re-checked** | TODO | — | Folds **537**. Deps WP-170, WP-175. No migration. Eval cases and `ROLE_PROMPT_VERSIONS`. |
 | WP-177 | **Application: the claim, the release, the intake skip, the lifecycle transitions, and `status_mapping` superseded** | TODO | — | Folds **535** (c), **536**. Deps WP-171, WP-174. **Migration 0088** (`tasks.ticket_claim`, `tasks.qa_stage`). Serial with WP-178 and WP-179. |
-| WP-178 | **Application: one human-return window over four signals, at `qa` and at `ready_for_merge`, and the QA stage's endings** | TODO | — | Folds **535** (d), **537** (d). Deps WP-173, WP-174, WP-177. No migration. Measured: today's window drops a `resolvable: false` general note. Criterion (11): reads `human_returns.acknowledgements`, unreported at the settings write until then (WP-170 discovered work). |
-| WP-179 | **Application: the review conversation on the merge request — findings, replies and resolutions** | TODO | — | Folds **537** (a), (b). Deps WP-170, WP-173, WP-178. No migration. Renderer shared with review-only. |
+| WP-178 | **Application: one human-return window over four signals, at `qa` and at `ready_for_merge`, and the QA stage's endings** | TODO | — | Folds **535** (d), **537** (d). Deps WP-173, WP-174, WP-177. No migration. Measured: today's window drops a `resolvable: false` general note. Criterion (11): reads `human_returns.acknowledgements`, unreported at the settings write until then (WP-170 discovered work). Criterion (12): `task.human_return` counts contributing words only, `> 0` exactly when the form is listed (WP-170 review). |
+| WP-179 | **Application: the review conversation on the merge request — findings, replies and resolutions** | TODO | — | Folds **537** (a), (b). Deps WP-170, WP-173, WP-178. No migration. Renderer shared with review-only. Criterion (8): `replyToDiscussion` gets a docblock (GitLab's fallback answers a new discussion id); later reads match by marker, never the returned id (WP-173 finding). |
 | WP-180 | **Application: every agent stage gets the conversation in its prompt, and the tool's port answers the same** | TODO | — | Folds **537** (c). Deps WP-171, WP-173, WP-175. No migration. Parallel with WP-177…WP-179. |
 | WP-181 | **Server: the statuses read, the binding's check, the effective configuration, the readiness notes and the `get_conversation` tool** | TODO | — | Folds **535** (b), **537** (c). Deps WP-171, WP-177, WP-180. No migration. Criterion (6): `ticket_claim`, `qa_stage` and `status_mapping_superseded` become required (WP-170 left them optional). |
 | WP-182 | **Web: the slots as pick lists in the wizard and in project settings; the claim and the QA stage on the task page** | TODO | — | Folds **535** (b). Deps WP-181. No migration. User-guide sweep (rule 83). |
@@ -46618,3 +46618,61 @@ Then WP-163…WP-169, in their table order.
 **Discovered work.**
 - `settings-grades.ts`: `human_returns.acknowledgements` stored through `PUT …/config` before WP-178 is accepted and unread, with no `not_applied` line. Either WP-178 lands it in the same release or `SETTINGS_UNREAD_KEYS` gains the key until then (its test restricts patterns to `pipeline`/`stages`, so that test changes too).
 - WP-181: tighten `ticket_claim`, `qa_stage` and `status_mapping_superseded` to required once the server publishes them.
+
+#### WP-173
+
+**Built.** (a) The shared git contract suite gains two clauses, in `discussions`: *"lists a general
+note as a discussion of its own, resolvable or not (WP-173)"* and *"replies to a general note, the body
+opening with the platform marker (WP-173)"*. The context gains `generalNotes: {unresolvable,
+resolvable}` (iid, thread id, note id, body). The GitLab replay reads them from the new
+`test/fixtures/http/gitlab/general-notes.json` (five interactions, retrieved 2026-10-08, four
+`documented-adapted` and one `documented`, cited in `SOURCES.md`'s new WP-173 section): merge request
+34's general note with `resolvable: false` (the notes page's value), 35's with `resolvable: true` (the
+discussions page's), the documented `201` of a reply to 34's note and the thread re-read, and the
+`404` thread read for `no-such-thread`. (b) `FakeGitProvider.addGeneralNote`, `individualNote` on the
+stored discussion, and divergence **31**: a reply to an individual note becomes a new general note by
+default (the GitLab fallback's shape, stricter), and `individualNoteReplies: 'thread'` joins the
+thread instead; a resolvable general note resolves, a non-resolvable one is `invalid_request`. (c)
+`replyToDiscussion` on GitLab: `client.addDiscussionNote` answers `400`/`404` instead of throwing, the
+thread is read, and only an existing `individual_note: true` thread falls back to `POST
+…/merge_requests/:iid/notes` (new `client.createMergeRequestNote`) with the caller's body first and
+`generalNoteReplyLine` after it; GitLab divergence **8** in `provider.ts` states it.
+
+**Criteria.** (1) Both clauses pass on the fake and on the replay. **Canary**: `.filter((d) =>
+d.individual_note !== true)` planted in the adapter's `listDiscussions` (on the file, restored from a
+copy) failed *"lists a general note as a discussion of its own"* (`general note 3401 is listed:
+expected undefined to be defined`), and WP-123's notes clause with it. (2)
+`packages/integrations/src/providers/gitlab/provider.test.ts` › *"replying to a general note (WP-173)"*: a `404` posts exactly one general note whose body starts with
+the marker and links `#note_3401`; a `400` also falls back and finds the note by body when the `201`
+carries no id; a `500` throws `unavailable` with the reply POST the only call; a `400` on a
+non-individual thread throws `invalid_request` with no fallback; a `404` on a missing thread is
+`not_found`. (3) `fixture-provenance.contract.test.ts` passes.
+
+**Assumptions.**
+- The reply now always makes one extra request on refusal (the thread read) and, on success, the same
+  re-read as before; a refused post on an unknown thread is `not_found` through that read rather than
+  through the POST's own `404`.
+- The fallback answers the **new** note's discussion (its id is not the one asked for). The port's
+  `replyToDiscussion` docblock (application) says nothing about which discussion comes back; WP-179's
+  callers must not assume the id is unchanged. Not edited here (outside the row's paths).
+- The `POST …/notes` response has no documented example, so the created id is read when present and the
+  note is otherwise found by its exact body (newest match).
+- The platform line is `_In reply to note [<id>](<mr url>#note_<id>)._`, or without the link when the
+  reference carries no URL.
+- `docs/TODO.md` already carried the G4 live check (and G2's); not duplicated.
+
+**Sentences falsified (rule 83).**
+- `docs/technical/06-integrations-architecture.md:137` and `docs/decisions/technical/TD-029-…:29` cite
+  `provider.ts:501-521` / `:501-511` for `toDiscussion`; it is now **`provider.ts:531-551`**. Not edited
+  (outside the brief's paths; TD-029 is a decision record).
+- `docs/research/15-tracker-lifecycle-and-mr-conversation.md:57` says G4 *"is measured by the GitLab row
+  (WP-173) against a recorded fixture"*: nothing was measured; the fixture records the documented
+  `201`, and the measurement is the open `docs/TODO.md` item. Suggested fix: *"…is recorded against a
+  documented-adapted fixture; the live check is in docs/TODO.md"*.
+- The `replyToDiscussion` comment in `provider.ts` that said an unknown discussion is *"a 404 on the
+  POST"* — rewritten in place.
+
+**Discovered work.**
+- The port's `replyToDiscussion` (`packages/application/src/ports/integrations/git-provider.ts`) has no
+  docblock; it should say a provider may answer a reply to an individual note with a new discussion
+  (GitLab divergence 8, fake divergence 31) before WP-179 calls it.

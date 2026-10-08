@@ -64,6 +64,19 @@
  *     requests a minute and answers `429` with `Retry-After` in seconds; the *mapping* of that
  *     response is exercised by a recorded 429 fixture driven through the executor, but no test
  *     here reaches a real quota.
+ *  8. **A reply to a general note may arrive as a new note rather than in the thread** (WP-173,
+ *     TD-029, research/15 G4). A merge request's general (non-threaded) comment is listed as a
+ *     discussion of its own with `individual_note: true`, and `listDiscussions` returns it whatever
+ *     its `resolvable` says (G2: the documentation shows both values). The discussions page says
+ *     the add-note endpoint *"can also create a thread from a single comment"*, but whether
+ *     `POST …/discussions/:discussion_id/notes` accepts such an id is **[unverified]** against a
+ *     live instance (`docs/TODO.md` § Verification). `replyToDiscussion` posts there first; on a
+ *     `400` or a `404` **for a discussion that exists and is an individual note** it posts
+ *     `POST …/merge_requests/:iid/notes` instead — the caller's body unchanged at the start (so it
+ *     still opens with the platform marker) and one platform line after it naming the note it
+ *     answers — and returns the **new** note's discussion, whose id is not the one asked for. A
+ *     `400`/`404` for a thread that is not an individual note, and every other failure, throws as
+ *     before; a `404` for a thread that does not exist is `not_found`.
  */
 import {
   bindingSecretRedactor,
@@ -274,6 +287,25 @@ const gitlabRoleName = (level: number): string =>
       50: 'Owner',
     }) as Readonly<Record<number, string>>
   )[level] ?? `access level ${level}`;
+
+/**
+ * The platform line divergence 8's fallback appends to a reply posted as a new general note: it
+ * names the note answered, and links it when the merge request's URL is known (GitLab anchors a note
+ * at `#note_<id>` on the merge request page). Platform text, except the URL: it is GitLab's own
+ * `web_url` for the merge request, provider-sourced, and a URL holding `)` or whitespace is dropped
+ * rather than put inside the link. The note id is GitLab's integer.
+ */
+export const generalNoteReplyLine = (
+  noteId: number | null,
+  mergeRequestUrl: string | null,
+): string => {
+  if (noteId === null) {
+    return '_In reply to a general note of this merge request._';
+  }
+  return mergeRequestUrl === null || /[\s()]/u.test(mergeRequestUrl)
+    ? `_In reply to note ${noteId}._`
+    : `_In reply to note [${noteId}](${mergeRequestUrl}#note_${noteId})._`;
+};
 
 export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProvider => {
   const { config, clock } = options;
@@ -518,6 +550,46 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         system: note.system,
       })),
     };
+  };
+
+  /**
+   * Divergence 8's fallback: the reply as a new general note — the caller's body first, so it still
+   * opens with the platform marker, then one platform line naming the note it answers. The new
+   * note's discussion is found by re-reading the list, by the created id when GitLab returned one
+   * and otherwise by the newest discussion whose first note is exactly this body.
+   *
+   * Two residuals, stated rather than closed here. The body match does not check the author, so a
+   * person who posts the identical text, marker included, after this POST is taken for the reply —
+   * which is why WP-179 decides ownership by marker **and** author. And the post is not idempotent:
+   * a re-read that throws after a successful POST leaves the note posted, and a retry posts a
+   * second one, exactly as the in-thread path's POST-then-read does; the guard is the executor's
+   * idempotency record at WP-179.
+   */
+  const replyAsGeneralNote = async (
+    project: string,
+    mrRef: { readonly iid: number; readonly url?: string | null },
+    answered: GitLabDiscussion,
+    markdown: string,
+  ): Promise<Discussion> => {
+    const answeredNote = answered.notes?.[0]?.id ?? null;
+    const body = `${markdown}\n\n${generalNoteReplyLine(answeredNote, mrRef.url ?? null)}`;
+    const createdId = await client.createMergeRequestNote(project, mrRef.iid, body);
+    const discussions = await client.listDiscussions(project, mrRef.iid);
+    const created =
+      createdId === null
+        ? discussions.findLast((discussion) => discussion.notes?.[0]?.body === body)
+        : discussions.find((discussion) =>
+            (discussion.notes ?? []).some((note) => note.id === createdId),
+          );
+    if (created === undefined) {
+      throw new IntegrationError(
+        'invalid_response',
+        GITLAB_PROVIDER_ID,
+        `the reply posted as a note of ${project}!${mrRef.iid} is not among its discussions`,
+        { action: 'reply_to_discussion' },
+      );
+    }
+    return toDiscussion(created);
   };
 
   const requireDiscussion = async (
@@ -1043,30 +1115,37 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
 
     listDiscussions: async (mrRef) => {
       const project = projectOf(mrRef, 'list_discussions');
+      // Every discussion, an `individual_note` (a general comment) included and whatever its
+      // `resolvable` says (WP-173, research/15 G2) — the shared contract suite pins it, and a
+      // filter here is the canary that suite was written to kill.
       return (await client.listDiscussions(project, mrRef.iid)).map(toDiscussion);
     },
 
     replyToDiscussion: async (mrRef, discussionId, markdown) => {
       const project = projectOf(mrRef, 'reply_to_discussion');
       // The documented response of POST …/notes is the created *note*, not the thread, so the
-      // thread is re-read. That also makes an unknown discussion a 404 on the POST, which is the
-      // `not_found` the contract suite asserts.
-      try {
-        await client.addDiscussionNote(project, mrRef.iid, discussionId, markdown);
-      } catch (error) {
-        if (error instanceof IntegrationError && error.code === 'not_found') {
-          throw new IntegrationError(
-            'not_found',
-            GITLAB_PROVIDER_ID,
-            `discussion ${discussionId} of ${project}!${mrRef.iid} does not exist`,
-            { action: 'reply_to_discussion' },
-          );
-        }
-        throw error;
-      }
-      return toDiscussion(
-        await requireDiscussion(project, mrRef.iid, discussionId, 'reply_to_discussion'),
+      // thread is re-read. A 400 or a 404 is answered rather than thrown, and the thread read
+      // decides what it meant (divergence 8): an unknown discussion is still the `not_found` the
+      // contract suite asserts.
+      const outcome = await client.addDiscussionNote(project, mrRef.iid, discussionId, markdown);
+      const thread = await requireDiscussion(
+        project,
+        mrRef.iid,
+        discussionId,
+        'reply_to_discussion',
       );
+      if (outcome === 'created') {
+        return toDiscussion(thread);
+      }
+      if (thread.individual_note !== true) {
+        throw new IntegrationError(
+          outcome === 404 ? 'not_found' : 'invalid_request',
+          GITLAB_PROVIDER_ID,
+          `discussion ${discussionId} of ${project}!${mrRef.iid} refused a reply (${outcome})`,
+          { action: 'reply_to_discussion' },
+        );
+      }
+      return replyAsGeneralNote(project, mrRef, thread, markdown);
     },
 
     resolveDiscussion: async (mrRef, discussionId) => {

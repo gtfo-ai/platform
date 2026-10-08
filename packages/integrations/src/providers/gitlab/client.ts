@@ -224,13 +224,27 @@ export interface GitLabClient {
     body: string,
     position?: DiffNotePosition,
   ): Promise<z.output<typeof gitlabDiscussionSchema>>;
-  /** § "Add note to a merge request thread" — returns the created *note*, so the caller re-reads. */
+  /**
+   * § "Add note to a merge request thread" — returns the created *note*, so the caller re-reads.
+   *
+   * A `400` or a `404` is **answered** rather than thrown (WP-173): whether GitLab accepts an
+   * `individual_note` discussion's id here is [unverified] (research/15 G4), so the provider decides
+   * from the discussion itself whether the refusal is "no such thread" or "not a thread you can
+   * reply to". Every other failure throws as it always did.
+   */
   addDiscussionNote(
     project: string,
     iid: number,
     discussionId: string,
     body: string,
-  ): Promise<void>;
+  ): Promise<'created' | 400 | 404>;
+  /**
+   * <https://docs.gitlab.com/api/notes/> § "Create new merge request note" —
+   * `POST /projects/:id/merge_requests/:merge_request_iid/notes` (WP-173, the reply fallback).
+   * The page shows no response example, so the created note's `id` is read when it is there and
+   * `null` is answered otherwise; the caller finds the note by re-reading the discussions.
+   */
+  createMergeRequestNote(project: string, iid: number, body: string): Promise<number | null>;
   /** § "Resolve a merge request thread". */
   resolveDiscussion(
     project: string,
@@ -584,12 +598,26 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
       ),
 
     addDiscussionNote: async (project, iid, discussionId, body) => {
-      await http.request({
+      const response = await http.request({
         method: 'POST',
         path: `${mrPath(project, iid)}/discussions/${encodeURIComponent(discussionId)}/notes`,
         json: { body },
         action: 'reply_to_discussion',
+        answerStatuses: [400, 404],
       });
+      const status = response?.status;
+      return status === 400 || status === 404 ? status : 'created';
+    },
+
+    createMergeRequestNote: async (project, iid, body) => {
+      const response = await http.request({
+        method: 'POST',
+        path: `${mrPath(project, iid)}/notes`,
+        json: { body },
+        action: 'reply_to_discussion',
+      });
+      const created = z.object({ id: z.int() }).safeParse(response?.body);
+      return created.success ? created.data.id : null;
     },
 
     resolveDiscussion: async (project, iid, discussionId) =>

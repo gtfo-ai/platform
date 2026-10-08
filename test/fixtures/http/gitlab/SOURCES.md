@@ -418,3 +418,33 @@ instance.
   alternative SSH endpoint `altssh.gitlab.com` on port `443` (the platform's constant, not a fixture;
   `packages/integrations/src/providers/gitlab/ssh-route.ts` carries the citation and the measurement).
 
+
+## Pages read for WP-173 — `general-notes.json`
+
+Retrieved **2026-10-08**, without a GitLab credential; nothing was recorded against a real instance
+(research/15 G2 and G4, TD-029).
+
+- `https://docs.gitlab.com/api/discussions/` § "List all merge request discussion items" — the
+  individual-note entry of the page's example: `individual_note: true`, one note with `type: null`,
+  `system: false`, **`resolvable: true`** and `resolved: false`. Merge request 35's listing is that
+  entry with this corpus's values (`documented-adapted`).
+- `https://docs.gitlab.com/api/notes/` § "Retrieve a merge request note" — the same kind of comment
+  with **`resolvable: false`** and no `resolved` member. Merge request 34's listing carries that value
+  in the discussions page's shape (`documented-adapted`). The two pages contradict each other, which
+  is G2; the contract clause therefore asserts both and the platform decides nothing from the field.
+- `https://docs.gitlab.com/api/discussions/` § "Add note to a merge request thread" — `201 Created`
+  and the created note, no example body, and the sentence that the endpoint *"can also create a
+  thread from a single comment"*. The reply to merge request 34's general note records that answer
+  and the thread re-read after it (`individual_note: false`, inferred from "create a thread").
+  **Whether a live instance accepts an `individual_note` discussion's id there is still
+  `[unverified]`** (`docs/TODO.md` § Verification): the adapter's fallback to
+  `POST …/merge_requests/:iid/notes` (GitLab divergence 8 in `provider.ts`) is held by
+  `provider.test.ts` with scripted `400`/`404`/`500` answers, not by this corpus.
+- `https://docs.gitlab.com/api/notes/` § "Create new merge request note" — the fallback's endpoint:
+  `body` required, no response example. The adapter reads the created note's `id` when it is there
+  and otherwise finds the note by its body; no fixture records this endpoint.
+- `https://docs.gitlab.com/api/rest/troubleshooting/` — the `404` of the thread read for an unknown
+  discussion id, which the reply now makes after a refused post.
+
+The comments are invented and neutral, by this corpus's reviewer account; no text comes from a
+customer's merge request.

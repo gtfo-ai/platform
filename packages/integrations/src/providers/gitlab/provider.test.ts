@@ -18,7 +18,12 @@ import { describe, expect, it } from 'vitest';
 import { gitlabConfigSchema } from './config.js';
 import type { GitLabFetch } from './http.js';
 import { gitlabProviderRegistration } from './index.js';
-import { createGitLabProvider, type GitLabProvider, gitlabBranchRuleMatches } from './provider.js';
+import {
+  createGitLabProvider,
+  type GitLabProvider,
+  generalNoteReplyLine,
+  gitlabBranchRuleMatches,
+} from './provider.js';
 
 const AT = '2026-06-01T08:00:00.000Z';
 const HOST = 'https://gitlab.example.test';
@@ -1070,5 +1075,127 @@ describe('gitlabBranchRuleMatches (WP-141)', () => {
     ['rel(*)', 'rel(x)', true],
   ])('%s against %s is %s', (rule, branch, expected) => {
     expect(gitlabBranchRuleMatches(rule, branch)).toBe(expected);
+  });
+});
+
+/**
+ * WP-173 (research/15 G4, divergence 8): whether GitLab's reply endpoint takes an `individual_note`
+ * discussion's id is unverified, so a `400`/`404` for one falls back to a new general note. What is
+ * pinned: the fallback posts exactly one note whose body opens with the caller's marker; a refusal
+ * for a real thread, a thread that does not exist and a `5xx` are never a fallback.
+ */
+describe('replying to a general note (WP-173)', () => {
+  it('links the answered note only through a URL with no whitespace or parenthesis', () => {
+    expect(generalNoteReplyLine(7, 'https://git.example.test/g/p/-/merge_requests/1')).toBe(
+      '_In reply to note [7](https://git.example.test/g/p/-/merge_requests/1#note_7)._',
+    );
+    expect(generalNoteReplyLine(7, 'https://git.example.test/a)b')).toBe('_In reply to note 7._');
+    expect(generalNoteReplyLine(7, 'https://git.example.test/a b')).toBe('_In reply to note 7._');
+    expect(generalNoteReplyLine(null, null)).toBe(
+      '_In reply to a general note of this merge request._',
+    );
+  });
+
+  const THREAD = 'c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c401';
+  const REPLY = '<!-- agentic:reply:00000000-0000-4000-8000-0000000000d1 -->\nRenamed.';
+  const author = { id: 77, username: 'dana.reviewer', name: 'Dana Reviewer' };
+  const note = (id: number, body: string) => ({
+    id,
+    type: null,
+    body,
+    author,
+    created_at: AT,
+    updated_at: AT,
+    system: false,
+    resolvable: false,
+  });
+  const generalNote = {
+    id: THREAD,
+    individual_note: true,
+    notes: [note(3401, 'Split it, please.')],
+  };
+  const replyPath = `POST /projects/${P}/merge_requests/7/discussions/${THREAD}/notes`;
+  const threadPath = `GET /projects/${P}/merge_requests/7/discussions/${THREAD}`;
+  const notesPath = `POST /projects/${P}/merge_requests/7/notes`;
+  const listPath = `GET /projects/${P}/merge_requests/7/discussions?per_page=100&page=1`;
+
+  it('posts one general note opening with the marker when the reply endpoint answers 404', async () => {
+    const posted = note(3402, `${REPLY}\n\n${generalNoteReplyLine(3401, mrRef().url)}`);
+    const { port, calls } = build({
+      [replyPath]: { status: 404, body: { message: '404 Not found' } },
+      [threadPath]: { status: 200, body: generalNote },
+      [notesPath]: { status: 201, body: posted },
+      [listPath]: {
+        status: 200,
+        body: [generalNote, { id: 'c4c4-new', individual_note: true, notes: [posted] }],
+      },
+    });
+
+    const replied = await port.replyToDiscussion(mrRef(), THREAD, REPLY);
+
+    const generalPosts = calls.filter((call) => `${call.method} ${call.path}` === notesPath);
+    expect(generalPosts).toHaveLength(1);
+    const body = (JSON.parse(generalPosts[0]?.body ?? '{}') as { body: string }).body;
+    expect(body.startsWith(REPLY), 'the body opens with the reply and its marker').toBe(true);
+    expect(body).toContain(`${mrRef().url}#note_3401`);
+    expect(replied.id).toBe('c4c4-new');
+    expect(replied.notes.map((entry) => entry.id)).toEqual(['3402']);
+  });
+
+  it('falls back on a 400 too, and finds the note by its body when GitLab returns no id', async () => {
+    const posted = note(3403, `${REPLY}\n\n${generalNoteReplyLine(3401, mrRef().url)}`);
+    const { port, calls } = build({
+      [replyPath]: { status: 400, body: { message: '400 Bad request' } },
+      [threadPath]: { status: 200, body: generalNote },
+      [notesPath]: { status: 201, body: {} },
+      [listPath]: {
+        status: 200,
+        body: [generalNote, { id: 'c4c4-new', individual_note: true, notes: [posted] }],
+      },
+    });
+    expect((await port.replyToDiscussion(mrRef(), THREAD, REPLY)).id).toBe('c4c4-new');
+    expect(calls.filter((call) => `${call.method} ${call.path}` === notesPath)).toHaveLength(1);
+  });
+
+  it('does not fall back on a 500: it throws and posts no general note', async () => {
+    const { port, calls } = build({
+      [replyPath]: { status: 500, body: { message: '500 Internal Server Error' } },
+    });
+    await expect(port.replyToDiscussion(mrRef(), THREAD, REPLY)).rejects.toMatchObject({
+      code: 'unavailable',
+    });
+    expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([replyPath]);
+  });
+
+  it('does not fall back for a thread that is not an individual note', async () => {
+    const { port, calls } = build({
+      [replyPath]: { status: 400, body: { message: '400 Bad request' } },
+      [threadPath]: { status: 200, body: { ...generalNote, individual_note: false } },
+    });
+    await expect(port.replyToDiscussion(mrRef(), THREAD, REPLY)).rejects.toMatchObject({
+      code: 'invalid_request',
+    });
+    expect(calls.some((call) => `${call.method} ${call.path}` === notesPath)).toBe(false);
+  });
+
+  it('answers not_found for a thread that does not exist, posting nothing else', async () => {
+    const { port, calls } = build({
+      [replyPath]: { status: 404, body: { message: '404 Discussion Not Found' } },
+      [threadPath]: { status: 404, body: { message: '404 Discussion Not Found' } },
+    });
+    await expect(port.replyToDiscussion(mrRef(), THREAD, REPLY)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    expect(calls.some((call) => `${call.method} ${call.path}` === notesPath)).toBe(false);
+  });
+
+  it('names the note it answers, with a link only when the merge request URL is known', () => {
+    expect(generalNoteReplyLine(3401, null)).toBe('_In reply to note 3401._');
+    expect(
+      generalNoteReplyLine(3401, 'https://gitlab.example.test/acme/api/-/merge_requests/7'),
+    ).toBe(
+      '_In reply to note [3401](https://gitlab.example.test/acme/api/-/merge_requests/7#note_3401)._',
+    );
+    expect(generalNoteReplyLine(null, null)).toContain('general note');
   });
 });
