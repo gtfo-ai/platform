@@ -95,6 +95,7 @@ import {
   LIBRARIAN_STAGE,
   MERGED_GATE_STAGE,
   openQuestion,
+  QA_STAGE_ID,
   READY_FOR_MERGE_STAGE,
   RETROSPECTIVE_STAGE,
   stageOf,
@@ -724,7 +725,10 @@ const isHumanOwnedStop = (state: TaskState): boolean =>
 
 /**
  * The stages a task is at once it has **passed review** — Q91's `ready_for_merge`, `merged`, `retro`,
- * as the stage ids a stopped task still carries in `current_stage`.
+ * as the stage ids a stopped task still carries in `current_stage` — and, since WP-178 (criterion
+ * (16)), the optional human `qa` stage, which sits after the agent's review and the rebase gate
+ * (TD-029 decision 9). A task waiting there is waiting on a person testing it; a blocking dependency
+ * question put to it then is the interruption Q91 refuses.
  *
  * Needed because a stop hides the state it was taken from (WP-67 review round 1): a task paused at
  * `ready_for_merge` is `paused`, and `resume` on it re-enters `ready_for_merge` — never `active`
@@ -734,6 +738,7 @@ const isHumanOwnedStop = (state: TaskState): boolean =>
  * the entry into `ready_for_merge` emits `task.resumed`, and `ready_for_merge → returned` is an edge.
  */
 const PAST_REVIEW_STAGES: ReadonlySet<string> = new Set([
+  QA_STAGE_ID,
   READY_FOR_MERGE_STAGE,
   MERGED_GATE_STAGE,
   RETROSPECTIVE_STAGE,
@@ -901,6 +906,12 @@ const returnNow = async (
  *  - **`ready_for_merge`, `merged`, `retro`** (Q91, answered): the question is **refused and the
  *    record kept**. A task that passed review is not interrupted with a question the platform could
  *    have asked earlier, and the panel says `not asked` with that reason.
+ *
+ * **`qa` is past review too** (WP-178 criterion (16)), and it is the one such stage where the task
+ * is still `active` — a human stage that adds no state (technical/02's M10-head amendment). So the
+ * `active` branch asks the stage as well: a task at `qa` is refused and the record kept, exactly as
+ * one at `ready_for_merge`, rather than given a blocking question while a person tests it; a task
+ * paused at `qa` is refused rather than deferred, through {@link PAST_REVIEW_STAGES}.
  */
 const askAboutDependencies = async (
   options: DependencyGateOptions,
@@ -917,7 +928,7 @@ const askAboutDependencies = async (
       if (current === null) {
         return;
       }
-      if (current.task.state !== 'active') {
+      if (current.task.state !== 'active' || isPastReview(current.task.currentStage)) {
         const deferred =
           isHumanOwnedStop(current.task.state) && !isPastReview(current.task.currentStage);
         await options.store.tasks.saveDependencies(
@@ -1043,7 +1054,8 @@ const blockForDependencies = async (
  *  - the merge request's head moved away from the revision the record was read at → the deferral
  *    is dropped: that diff is no longer the change, and the gate re-runs when the Developer stage
  *    that moved it completes;
- *  - a deferred `ask` on a task that is no longer `active` → dropped, Q91's answer;
+ *  - a deferred `ask` on a task that is no longer `active`, or whose resume lands at `qa` (WP-178
+ *    criterion (16): `active` at a human stage past review) → dropped, Q91's answer;
  *  - a task that is `merged`, `retro` or `done` — a merge made on the provider ended its pause
  *    (Q104) → dropped, because a merged task cannot be returned;
  *  - otherwise the ending is performed, and the deferral cleared **in the same transaction** — the
@@ -1118,7 +1130,7 @@ export const runDependencyGateResume = async (
         );
       }
       if (record.decision === 'ask' && record.question_id === null) {
-        if (state !== 'active') {
+        if (state !== 'active' || isPastReview(current.task.currentStage)) {
           return clear(
             'dependency gate: the task had passed review before the deferred dependency question could be asked, so nobody was asked (Q91)',
           );

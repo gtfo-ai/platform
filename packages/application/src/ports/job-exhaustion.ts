@@ -356,7 +356,7 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
   },
   ticket_release: {
     shape: 'notification_shaped',
-    why: 'gives the ticket of a cancelled or reworked task, or of a task that stopped between its assign and its record (cause `stopped`), back (TD-029 decision 5); a lost release leaves the binding’s own account assigned until a person moves it, and a lost `stopped` release also leaves the claim stale, so the next claim is a re-claim that takes the ticket back from a person who took it meanwhile — the residual amendment (c) rules out, stated here and filed in the backlog',
+    why: 'gives the ticket of a cancelled task, or of a task that stopped between its assign and its record (cause `stopped`), back (TD-029 decision 5); a lost release leaves the binding’s own account assigned until a person moves it. Until WP-178 a lost `stopped` release also left the claim stale, so the next claim was a re-claim that took the ticket back from a person who took it meanwhile (PROGRESS backlog 543); since then the claim records `stale_cause: stopped` and that claim is a first claim whether or not the release ran. A Rework no longer enqueues this duty: its release runs in the next agent admission, before the claim (backlog 541)',
   },
   ready_head_check: {
     shape: 'bound_and_escalate',

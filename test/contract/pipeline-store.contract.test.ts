@@ -24,6 +24,9 @@ runPipelineStoreContract({
         // WP-90: the defect-trace cases write the project's stream.
         projectEvents: (project) =>
           log.filter((event) => event.stream_type === 'project' && event.stream_id === project),
+        // WP-178: the human-return window's status changes, ordered across streams by position.
+        committedLog: () =>
+          log.map((event, index) => ({ position: index + 1, causeEventPosition: null, event })),
         humanActions: (taskId) =>
           actions
             .filter((row) => row.taskId === taskId)

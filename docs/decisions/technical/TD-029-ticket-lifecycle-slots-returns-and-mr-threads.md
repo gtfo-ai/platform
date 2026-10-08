@@ -136,7 +136,10 @@ Vendor facts are in `docs/research/15-tracker-lifecycle-and-mr-conversation.md`.
    admission re-claims.
 
    **Release** is a `ticket_release` duty, on `task.cancelled` and on the person's *Rework* command
-   (`reworkStageCommand`, `packages/application/src/pipeline/commands.ts:1343`). It unassigns (only when
+   (`reworkStageCommand`, `packages/application/src/pipeline/commands.ts:1343`). *(As built at WP-178, backlog 541 option (a): the
+   Rework release runs inside the next agent admission, immediately before its claim, so the release
+   and the re-claim cannot race; a reworked ticket stays assigned to the binding's own account until
+   that admission — on the normal path within the same job.)* It unassigns (only when
    the assignee is still the binding's own account) and transitions to `pick_up_from` if that is mapped.
    It records `ticket.released`. An escalation and a take-over keep the claim.
 
@@ -175,6 +178,37 @@ Vendor facts are in `docs/research/15-tracker-lifecycle-and-mr-conversation.md`.
      the tool (decision 11).
    - A **status signal at an agent stage** is logged and ignored. That includes the echo of the
      platform's own `in_progress`, which arrives after the task has left the human stage.
+   > **Amendment — orchestrator rulings at WP-178 review, 2026-10-08.** **(a) The status form is a
+   > change, never a state.** BD-031 ruling 2 speaks of a person *moving* the ticket, and every slot is
+   > optional, so a project that maps `in_progress` but not `in_review` or `approved` reaches a human
+   > stage with the ticket still at a status the form counts. The window therefore records the
+   > ticket's status **at the human stage's entry** (the first read after entering `qa` or
+   > `ready_for_merge`), and the status form returns the task only when the current status is a
+   > `returned` status, or the `in_progress` / `pick_up_from` status, **and differs from that entry
+   > status**. A ticket left where it was when the stage began never returns the task by its status,
+   > and an acknowledgement then returns nothing, as ruling 4 says. **(b) The pass reads the same
+   > record:** a ticket whose entry status was the `qa` slot (or that was later seen at it) and whose
+   > current status is neither `qa` nor a return status has left QA — which is how a poll-only
+   > binding, which records no `from`, passes QA by status too. **(c) Asks are not return words**
+   > (Q119, answered by its recommendation): a comment that is an `@agentic ask` is answered by
+   > ask-the-task and never returns the task. **(d) As built:** a thread the provider marks resolved
+   > gives no word (BD-007's batching window, unchanged); a GitLab *comment and resolve* is therefore
+   > not a return, which is stated rather than closed.
+   > **(e) Which status is the entry (WP-178 review round 2).** When a recorded change since the
+   > stage's entry moved the ticket **into the stage's own slot** (the platform's `qa` move, echoed back
+   > by a webhook), its `to` is the entry status; otherwise the earliest recorded change's `from`;
+   > otherwise the status the window reads first. A person moving the ticket out of `qa` back to the
+   > `in_progress` status therefore returns the task on a webhook binding exactly as on a poll-only one.
+   > Residual, stated: a move a person makes before the window first reads the ticket, with no change
+   > recorded, becomes the entry, and only a later move is a change.
+   > **(f) Ruling (e) widened (WP-178 review round 3).** The platform writes more than the stage's own
+   > slot on the way to a human stage — `in_review` and `approved` before `ready_for_merge`, and `qa`
+   > after them — and any of those echoes can be recorded after the stage's entry. So the entry is the
+   > `to` of the **latest** recorded change into **any slot the platform writes** (`in_review`,
+   > `approved`, `qa`); else the earliest change's `from`; else the first read. Residual, stated: a
+   > window that first fires before the platform's own move lands freezes the entry at the status it
+   > read (a gap of one provider round trip).
+
 8. **The acknowledgement rule.** It is pure, in `packages/domain`, and tested in both directions. A
    word is an acknowledgement when, after Unicode NFKC normalisation, lower-casing, and removal of
    @-mentions, punctuation and whitespace, it is **empty** (emoji only, mentions only) or **every**

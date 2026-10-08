@@ -119,6 +119,19 @@ describe('the project settings port', () => {
   });
 
   /**
+   * WP-178 criterion (11): `human_returns.acknowledgements` saved through the settings write
+   * (`PUT /api/projects/:id/config`, the `projects.config` column) reaches the pipeline as
+   * `config.human_returns`, where the human-return window reads it (`jobs.ts`). Until WP-178 the
+   * key was accepted and read by nothing.
+   */
+  it('reads human_returns.acknowledgements off the project row, for the human-return window', async () => {
+    const settings = await createProjectSettingsPort(
+      poolOf([{ config: { version: 1, human_returns: { acknowledgements: ['díky', 'super'] } } }]),
+    ).forProject('00000000-0000-4000-8000-0000000000b1' as never);
+    expect(settings.config.human_returns?.acknowledgements).toEqual(['díky', 'super']);
+  });
+
+  /**
    * WP-73, PROGRESS backlogs 19 and 221: the read runs on the caller's transaction when it is
    * handed one, and a read with **no** transaction is refused while one is open — the borrow that
    * made a dispatch's peak three connections is a failure rather than a sentence.

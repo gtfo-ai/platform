@@ -451,6 +451,7 @@ describe('a poll-only binding’s rows (WP-123, migration 0074)', () => {
     expect(await store().defaultHeadOf(gone)).toBeNull();
   });
 
+  // WP-178 (9): "Ready" here is both human stages — `ready_for_merge`, and `qa` (the case below).
   it('lists the project’s tasks waiting at Ready with a merge request, by their current entry, oldest first', async () => {
     const { projectId: project, integrationId: integration } = await bind({});
     const mrRef = (iid: number) => ({
@@ -464,26 +465,28 @@ describe('a poll-only binding’s rows (WP-123, migration 0074)', () => {
       state: string,
       mr: JsonObject | null,
       entries: readonly string[],
+      stage = 'ready_for_merge',
     ): Promise<string> => {
       const inserted = await pool.query<{ id: string }>(
         `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, mode,
                             state, current_stage, stage_attempts, mr_ref)
            values ($1, 'fake-task-management', $2, 'https://tickets.example.test/x', 'feature',
-                   'normal', $3, 'ready_for_merge', $4::jsonb, $5::jsonb)
+                   'normal', $3, $6, $4::jsonb, $5::jsonb)
            returning id`,
-        [project, key, state, JSON.stringify({ ready_for_merge: entries.length }), mr],
+        [project, key, state, JSON.stringify({ [stage]: entries.length }), mr, stage],
       );
       const id = inserted.rows[0]?.id as string;
       for (const [index, at] of entries.entries()) {
         await pool.query(
           `insert into task_stages (task_id, stage, attempt, state, entered_at, exited_at)
-             values ($1, 'ready_for_merge', $2, $3, $4::timestamptz, $5)`,
+             values ($1, $6, $2, $3, $4::timestamptz, $5)`,
           [
             id,
             index + 1,
             index + 1 === entries.length ? 'running' : 'returned',
             at,
             index + 1 === entries.length ? null : at,
+            stage,
           ],
         );
       }
@@ -497,12 +500,19 @@ describe('a poll-only binding’s rows (WP-123, migration 0074)', () => {
     const first = await task('ACME-2', 'ready_for_merge', mrRef(2), ['2026-06-01T09:00:00.000Z']);
     await task('ACME-3', 'active', mrRef(3), ['2026-06-01T07:00:00.000Z']);
     await task('ACME-4', 'ready_for_merge', null, ['2026-06-01T07:00:00.000Z']);
+    // WP-178 criterion (9): a task waiting at the optional `qa` stage — `active`, the stage `qa` —
+    // is waiting at a human stage too, so a poll-only binding reads its notes; one paused there, or
+    // at an agent stage, is not.
+    const atQa = await task('ACME-5', 'active', mrRef(5), ['2026-06-01T09:30:00.000Z'], 'qa');
+    await task('ACME-6', 'paused', mrRef(6), ['2026-06-01T06:00:00.000Z'], 'qa');
+    await task('ACME-7', 'active', mrRef(7), ['2026-06-01T06:00:00.000Z'], 'code_review');
 
     const binding = { projectId: project, integrationId: integration };
     const ready = await store().readyMergeRequests(binding, 10);
 
     expect(ready.map((entry) => [entry.taskId, entry.mr.iid, entry.enteredAt])).toEqual([
       [first, 2, '2026-06-01T09:00:00.000000Z'],
+      [atQa, 5, '2026-06-01T09:30:00.000000Z'],
       // The database's own microseconds, never a `Date`'s milliseconds.
       [twice, 1, '2026-06-01T10:00:00.123456Z'],
     ]);

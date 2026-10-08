@@ -20,6 +20,7 @@ import { resolveIterationLimits } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { IntegrationError } from '../ports/integrations/common.js';
 import type { TaskManagementPort, TicketRefInput } from '../ports/integrations/task-management.js';
+import { JOB_QUEUES } from '../ports/jobs.js';
 import {
   createPipelineHarness,
   type HarnessOptions,
@@ -31,7 +32,6 @@ import { staticPipelineIntegrations } from './integrations.js';
 import { staticProjectSettings } from './settings.js';
 import { INITIAL_TASK_VERSION, type StoredTask } from './store.js';
 import { CLAIM_REFUSED_COMMENT, ensureTicketClaim } from './ticket-claim.js';
-import { runTicketRelease } from './ticket-lifecycle.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
 const USER = '00000000-0000-4000-8000-0000000000e9' as Id;
@@ -60,6 +60,8 @@ interface TrackerOptions {
   readonly forbidAssign?: boolean;
   /** Runs right after the platform's assign lands — a person's action racing the claim's record. */
   readonly afterAssign?: () => Promise<void>;
+  /** Runs before the platform's unassign reads the assignee — a release racing a re-claim. */
+  readonly beforeUnassign?: () => Promise<void>;
 }
 
 /** One ticket's assignee, status and comments, and every lifecycle call made on it, in order. */
@@ -111,6 +113,7 @@ const tracker = (options: TrackerOptions = {}) => {
     },
     unassign: async () => {
       calls.push('unassign');
+      await options.beforeUnassign?.();
       if (state.assignee !== SELF_ID) {
         return { changed: false };
       }
@@ -631,24 +634,30 @@ describe('the WP-177 review amendment to TD-029 decision 5', () => {
     await harness.publish([ticketMatched()]);
     expect(taskOf(harness).task.state).toBe('ready_for_merge');
     const id = taskOf(harness).task.id;
-    // The release runs before the reworked stage's job: the job is held back while it does.
+    const assignsBefore = ticket.calls.filter((call) => call === 'assignToSelf').length;
+    // Since WP-178 the Rework enqueues no release: it marks the claim stale (`rework`), and the
+    // reworked stage's own job releases and then claims (backlog 541).
     await reworkStageCommand(harness.humanCommands, {
       taskId: id,
       userId: USER,
       stage: 'implementation' as Slug,
       instructions: 'take the other approach',
     });
-    const release = harness.jobs.enqueued.find(
-      (job) => (job.data as { duty?: string }).duty === 'ticket_release',
-    );
-    expect(release).toBeDefined();
-    await runTicketRelease(claimOptions(harness), release?.data as never);
-    expect(ticket.state.assignee).toBeNull();
+    expect(
+      harness.jobs.enqueued.filter(
+        (job) => (job.data as { duty?: string }).duty === 'ticket_release',
+      ),
+    ).toEqual([]);
+    expect(await claimOf(harness)).toMatchObject({ stale: true, stale_cause: 'rework' });
+    // A person takes the ticket before the reworked stage's job runs.
     ticket.state.assignee = 'jane';
-    const assignsBefore = ticket.calls.filter((call) => call === 'assignToSelf').length;
     await harness.drain();
 
     expect(ticket.calls.filter((call) => call === 'assignToSelf')).toHaveLength(assignsBefore);
+    expect(eventsOf(harness, 'ticket.released').at(-1)?.payload).toMatchObject({
+      cause: 'rework',
+      unassigned: false,
+    });
     expect(ticket.state.assignee).toBe('jane');
     expect(taskOf(harness).task.state).toBe('needs_human');
     const refused = eventsOf(harness, 'ticket.claim.refused');
@@ -1040,5 +1049,142 @@ describe('the release (TD-029 decision 5)', () => {
     // The release ran (it records itself) or found the task already re-claimed (it does nothing);
     // either way the agent never works an unassigned ticket.
     expect(ticket.calls.filter((call) => call === 'assignToSelf').length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+/**
+ * WP-178 criterion (17) — PROGRESS backlog 541 and 543: the release and the claim agree about who
+ * holds the ticket. One record (`tasks.ticket_claim`), one pair of functions (`ensureTicketClaim`,
+ * the release).
+ */
+describe('the release and the claim agree about who holds the ticket (WP-178 (17))', () => {
+  /**
+   * (i), backlog 541. The fake `unassign` blocks until a concurrent claim has assigned (or, when no
+   * claim runs beside it, until a short real-time bound passes) — the interleaving that undid a
+   * re-claim while the Rework's release was a duty on another queue. Every job due after the
+   * Rework is run **concurrently**, as two workers would run them. Serialised, the release runs in
+   * the reworked stage's own job before its claim, so the ticket ends with the binding's account.
+   */
+  it('(17)(i) a Rework’s release cannot undo the re-claim: the ticket ends assigned and the claim held', async () => {
+    let racing = false;
+    let assignedWhileRacing: () => void = () => {};
+    const assigned = new Promise<void>((resolve) => {
+      assignedWhileRacing = resolve;
+    });
+    const ticket = tracker({
+      afterAssign: async () => {
+        if (racing) assignedWhileRacing();
+      },
+      beforeUnassign: async () => {
+        if (!racing) return;
+        // Wait for a concurrent assign, or give up after a short real-time bound when none comes.
+        await Promise.race([assigned, new Promise((resolve) => setTimeout(resolve, 50))]);
+      },
+    });
+    const harness = harnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+
+    await reworkStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'implementation' as Slug,
+      instructions: 'take the other approach',
+    });
+    racing = true;
+    const due = [JOB_QUEUES.pipelineOutbound, JOB_QUEUES.stageExecute].flatMap((queue) =>
+      harness.jobs.takeDue(queue, harness.clock.epochMs).map((request) => ({ queue, request })),
+    );
+    expect(due.some(({ queue }) => queue === JOB_QUEUES.stageExecute)).toBe(true);
+    await Promise.all(
+      due.map(({ queue, request }) =>
+        harness.jobs.handlers.get(queue)?.({
+          id: `job-${queue}`,
+          queue,
+          data: request.data as never,
+          signal: AbortSignal.abort(),
+        }),
+      ),
+    );
+    racing = false;
+    await harness.drain();
+
+    expect(ticket.state.assignee).toBe(SELF_ID);
+    expect(await claimOf(harness)).toMatchObject({
+      stale: false,
+      released_at: null,
+      status: 'confirmed',
+    });
+    // Released, then claimed — in that order, by the reworked stage's job.
+    const types = harness.types();
+    expect(types.lastIndexOf('ticket.released')).toBeLessThan(types.lastIndexOf('ticket.claimed'));
+  });
+
+  /**
+   * (ii), backlog 543. A task that stops between the claim's assign and its record leaves a claim
+   * stale with `stale_cause: 'stopped'`. Its `stopped` release then never runs — exhausted, as a
+   * `notification_shaped` job leaves nothing behind — and a person takes the ticket. The resumed
+   * task's admission is a **first** claim: it reads the assignee and refuses, without an assign.
+   */
+  it('(17)(ii) after an exhausted stopped release, a resumed task is refused ticket_assigned_elsewhere without an assign', async () => {
+    let harness: PipelineHarness | null = null;
+    let taskId: Id | null = null;
+    let pauseOnAssign = true;
+    const ticket = tracker({
+      afterAssign: async () => {
+        if (!pauseOnAssign) return;
+        const of = harness as PipelineHarness;
+        await of.memory.transaction(async (scope) => {
+          const current = (await of.store.tasks.load(scope.tx, taskId as Id)) as StoredTask;
+          await of.store.tasks.save(scope.tx, {
+            ...current,
+            task: { ...current.task, state: 'paused' },
+          });
+        });
+      },
+    });
+    harness = harnessFor(ticket, lifecycle({ in_progress: 'Doing' }, null));
+    const stored = await insertTask(harness);
+    taskId = stored.task.id;
+    expect(
+      await ensureTicketClaim(claimOptions(harness), stored, { taskId, ...REFINEMENT_1 }),
+    ).toEqual({ kind: 'proceed' });
+    expect(await claimRecordOf(harness, taskId)).toMatchObject({
+      stale: true,
+      stale_cause: 'stopped',
+      released_at: null,
+    });
+    // The `stopped` release is enqueued and then exhausted: it never runs.
+    const releases = harness.jobs
+      .take(JOB_QUEUES.pipelineOutbound)
+      .filter((job) => (job.data as { duty?: string }).duty === 'ticket_release');
+    expect(releases).toHaveLength(1);
+    expect(ticket.state.assignee).toBe(SELF_ID);
+
+    // A person takes the ticket, and the task is resumed: its stage is entered again (attempt 2),
+    // so the claim's writes carry a new idempotency key rather than replaying the first assign.
+    ticket.state.assignee = 'jane';
+    pauseOnAssign = false;
+    const resumed = await harness.memory.transaction(async (scope) => {
+      const current = (await harness?.store.tasks.load(scope.tx, taskId as Id)) as StoredTask;
+      return harness?.store.tasks.save(scope.tx, {
+        ...current,
+        task: {
+          ...current.task,
+          state: 'active',
+          stageAttempts: { ...current.task.stageAttempts, refinement: 2 },
+        },
+      });
+    });
+    const assignsBefore = ticket.calls.filter((call) => call === 'assignToSelf').length;
+    expect(
+      await ensureTicketClaim(claimOptions(harness), resumed as StoredTask, {
+        taskId,
+        stage: 'refinement' as Slug,
+        attempt: 2,
+      }),
+    ).toEqual({ kind: 'refused', reason: 'ticket_assigned_elsewhere' });
+    expect(ticket.calls.filter((call) => call === 'assignToSelf')).toHaveLength(assignsBefore);
+    expect(ticket.state.assignee).toBe('jane');
   });
 });

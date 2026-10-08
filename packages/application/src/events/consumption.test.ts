@@ -284,6 +284,31 @@ describe('the declared table against the composed registrations', () => {
     }
   });
 
+  /**
+   * WP-178 criterion (10)/(f): the human-return window consumes `ticket.status.changed`, and every
+   * type its handler declares is `handled` — the four lines, copied. Read off the registered
+   * handler by name, so the set is the code's.
+   */
+  it('has no type left unconsumed that the human-return window itself handles (WP-178)', () => {
+    const window = createPipelineHarness({ runs: {} }).runtime.handlers.find(
+      (handler) => handler.name === 'pipeline.review.comment',
+    );
+    const owned = window === undefined || window.eventTypes === 'all' ? [] : [...window.eventTypes];
+    expect([...owned].sort()).toEqual([
+      'mr.review.comment',
+      'ticket.comment.added',
+      'ticket.status.changed',
+      'ticket.updated',
+    ]);
+    expect(unconsumedRowsOwnedBy('WP-178')).toEqual([]);
+    for (const type of owned) {
+      expect({ type, consumption: EVENT_CONSUMPTION[type] }).toEqual({
+        type,
+        consumption: 'handled',
+      });
+    }
+  });
+
   /** Every `unconsumed` row has an owner entry, and no owner entry is for a `handled` row. */
   it('addresses every unconsumed row, and only those', () => {
     const unconsumed = Object.entries(EVENT_CONSUMPTION)

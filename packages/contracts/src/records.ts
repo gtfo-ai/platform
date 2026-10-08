@@ -610,7 +610,14 @@ export const taskTicketClaimSchema = z.strictObject({
  *    window's return, WP-178): the next agent admission claims again;
  *  - `released_at` / `release_cause` — the `ticket_release` duty gave the ticket back, on the task's
  *    cancellation, a person's *Rework*, or a task that stopped between the claim's assign and its
- *    record (`stopped`, TD-029 decision 5 amendment (c)).
+ *    record (`stopped`, TD-029 decision 5 amendment (c));
+ *  - `stale_cause` — **why** the claim is stale (WP-178 criterion (17), PROGRESS backlog 541 and
+ *    543): `stopped` (a task that stopped between the claim's assign and its record — never held by
+ *    a running task, so its next claim is a **first** claim whether or not its release ran),
+ *    `rework` (a person's *Rework*: the next agent admission performs the release before it claims),
+ *    or `human_return` (the human-return window: the next claim takes the ticket back). Optional
+ *    because a claim written before WP-178 has none, and reads exactly as it did: stale with no
+ *    cause. `null` on a claim that is not stale. No migration: the column is `jsonb`.
  */
 export const storedTicketClaimSchema = z.strictObject({
   account_id: nonEmptyStringSchema.max(255),
@@ -620,6 +627,7 @@ export const storedTicketClaimSchema = z.strictObject({
   stale: z.boolean(),
   released_at: isoDateTimeSchema.nullable(),
   release_cause: z.enum(['cancelled', 'rework', 'stopped']).nullable(),
+  stale_cause: z.enum(['stopped', 'rework', 'human_return']).nullish(),
 });
 
 export type StoredTicketClaim = z.infer<typeof storedTicketClaimSchema>;

@@ -207,12 +207,18 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
    */
   'ticket.comment.added': 'handled',
 
-  // ── Declared unconsumed in this build, with the work package that changes it ──
-  // Review-only mode does **not** read it — it has no ticket at all (WP-24) — so the owner this
-  // line used to name was wrong as well as pending. Since the M10-head amendment technical/02's
-  // consumer is the human-return window at 10 (BD-031, TD-029 decision 7), and WP-178 flips this
-  // row (its criterion (f)); until then it was "Task sync, no owner".
-  'ticket.status.changed': 'unconsumed', // The human-return window; WP-178.
+  // ── The human-return window (WP-178), registered by `pipelineHandlers` at 10 ──
+  /**
+   * The ticket's status moved — the fourth signal of the human-return window (BD-031 ruling 4 (a),
+   * TD-029 decision 7). `pipeline.review.comment` arms the window for a task at `qa` or
+   * `ready_for_merge`, and the window decides between a return and a pass; at an agent stage the
+   * event is logged and nothing else (the echo of the platform's own `in_progress`).
+   *
+   * This row read `'unconsumed'` from WP-15c until WP-178: first as *"Task sync, no owner"*, then —
+   * since the M10-head amendment named the window its consumer — with WP-178 as its owner
+   * (`UNCONSUMED_OWNERS`). Review-only mode never read it: it has no ticket at all (WP-24).
+   */
+  'ticket.status.changed': 'handled',
 
   // ── The ticket claim, the release, the intake skip and the human return (BD-031, TD-029) ──
   // technical/02's column is `—` for all five: each is a record of something the producer has
@@ -371,14 +377,13 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
  * to `handled` asserts {@link unconsumedRowsOwnedBy} is empty for itself — the check is held by the
  * work package that owns the row rather than by a list somebody maintains beside it.
  *
- * `null` for every row but one: `ticket.status.changed` names WP-178, the human-return window
- * (BD-031), since WP-170. A row whose consumer gets a plan row names it here, and that row's own
- * DONE is then what fails the test until it flips.
+ * `null` for every row today. `ticket.status.changed` named WP-178, the human-return window
+ * (BD-031), from WP-170 until WP-178 flipped it to `handled`. A row whose consumer gets a plan row
+ * names it here, and that row's own DONE is then what fails the test until it flips.
  */
 export const UNCONSUMED_OWNERS: Readonly<Partial<Record<DomainEventType, `WP-${string}` | null>>> =
   {
     'task.dequeued': null,
-    'ticket.status.changed': 'WP-178',
     // `—` in technical/02 for all five, by design rather than by omission: audit records.
     'ticket.claimed': null,
     'ticket.claim.refused': null,

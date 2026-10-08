@@ -21,6 +21,7 @@ import {
  *    │           ├─► waiting_answers ─► active
  *    │           ├─► waiting_approval ─► active | needs_human
  *    │           ├─► paused(budget|manual|taken_over) ─► active | ready_for_merge | merged
+ *    │           ├─► merged (a merge during the human `qa` stage)
  *    │           └─► needs_human ─► active | cancelled | retro (a merged task)
  *    └─► cancelled
  * ```
@@ -37,8 +38,9 @@ import {
 const EXPECTED_TASK_EDGES = {
   // "queued ─► active" and "queued └─► cancelled"; plus escalation, which is universal.
   queued: ['active', 'needs_human', 'cancelled'],
-  // "active ─► …" plus the four branches under it, the stage-to-stage self edge, and — since
-  // WP-21 — the edge a template with no merge ends on (discovery, and product/04's spike).
+  // "active ─► …" plus the four branches under it, the stage-to-stage self edge, — since WP-21 —
+  // the edge a template with no merge ends on (discovery, and product/04's spike), and — since
+  // WP-178 — "active ─► merged (a person merged during the human `qa` stage)".
   active: [
     'active',
     'returned',
@@ -47,6 +49,7 @@ const EXPECTED_TASK_EDGES = {
     'paused',
     'needs_human',
     'ready_for_merge',
+    'merged',
     'done',
     'cancelled',
   ],
@@ -126,12 +129,14 @@ describe('Task transition table', () => {
     }
   });
 
-  it('lets a template with no merge finish, and still refuses the merge shortcut', () => {
+  it('lets a template with no merge finish, and still refuses the retrospective shortcut', () => {
     // WP-21: `active → done` is what a one-stage template (discovery) and product/04's spike need.
     // Both directions (rule 42): the edge exists, and the edges BD-007 rests on are unchanged —
     // nothing may reach `merged` or `retro` without passing through the stage that produces it.
     expect(canTransitionTask('active', 'done')).toBe(true);
-    expect(canTransitionTask('active', 'merged')).toBe(false);
+    // Since WP-178 `active → merged` is an edge for a merge during the human `qa` stage; the
+    // aggregate refuses it from any other stage (`task.model.test.ts` holds that guard).
+    expect(canTransitionTask('active', 'merged')).toBe(true);
     expect(canTransitionTask('active', 'retro')).toBe(false);
     expect(canTransitionTask('ready_for_merge', 'done')).toBe(false);
   });

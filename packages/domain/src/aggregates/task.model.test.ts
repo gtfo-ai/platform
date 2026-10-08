@@ -63,7 +63,7 @@ const TASK_ID = '00000000-0000-4000-8000-0000000000aa';
 const PROJECT_ID = '00000000-0000-4000-8000-0000000000bb';
 const RUN_ID = '00000000-0000-4000-8000-0000000000f1';
 const USER_ID = '00000000-0000-4000-8000-0000000000e9';
-const STAGES = ['refinement', 'architecture', 'implementation', 'code_review'] as const;
+const STAGES = ['refinement', 'architecture', 'implementation', 'code_review', 'qa'] as const;
 
 /**
  * One id source and one clock per world, so ids stay unique and timestamps advance across the
@@ -237,6 +237,13 @@ const pausedTailEdgeAllowed = (model: TaskModel, target: TaskState): boolean =>
   model.currentStage === 'ready_for_merge';
 
 /**
+ * The same kind of guard for `active → merged` (WP-178): an edge only for a task waiting at the
+ * human `qa` stage, where a person's merge is the decision QA waits on.
+ */
+const activeMergeEdgeAllowed = (model: TaskModel, target: TaskState): boolean =>
+  model.state !== 'active' || target !== 'merged' || model.currentStage === 'qa';
+
+/**
  * The guard the edge table cannot state for `needs_human → retro` (WP-152): a merged task, and a
  * person. Every other source state is the table's alone.
  */
@@ -257,6 +264,7 @@ const transition = (
   if (
     !canTransitionTask(model.state, target) ||
     !pausedTailEdgeAllowed(model, target) ||
+    !activeMergeEdgeAllowed(model, target) ||
     !escalatedRetroEdgeAllowed(model, target, by)
   ) {
     expect(command).toThrow(IllegalTransitionError);

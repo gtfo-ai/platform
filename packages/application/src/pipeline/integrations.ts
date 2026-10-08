@@ -88,7 +88,9 @@ import type {
 } from '../ports/integrations/observability-logs.js';
 import type {
   AssignResult,
+  CommentPage,
   CommentRef,
+  ListCommentsOptions,
   TaskManagementPort,
   Ticket,
   TicketDraft,
@@ -1179,6 +1181,32 @@ export const ticketReads = (integrations: PipelineIntegrations) => ({
       { ticket_key: ticket.key },
       context,
       async () => binding.port.readTicket(ticket),
+    );
+  },
+
+  /**
+   * The ticket's comments created strictly after `since`, newest first — the human-return window's
+   * re-read (WP-178, TD-029 decision 7) — or `null` for a project with no task-management binding or
+   * a ticket no provider issued. A read, so it is performed for a shadow task too. A provider that
+   * cannot list comments throws `IntegrationUnsupportedError` naming the member, which the caller
+   * decides about (BD-017: never an empty list in its place).
+   */
+  comments: async (
+    ticket: TicketRefInput,
+    options: ListCommentsOptions,
+    context: CallContext,
+  ): Promise<CommentPage | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null || !namesAProviderTicket(ticket)) {
+      return null;
+    }
+    return read(
+      integrations,
+      binding.ref,
+      'list_comments',
+      { ticket_key: ticket.key, since: options.since ?? null, limit: options.limit },
+      context,
+      async () => binding.port.listComments(ticket, options),
     );
   },
 });

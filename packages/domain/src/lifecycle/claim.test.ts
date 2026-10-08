@@ -16,6 +16,7 @@ import {
   lifecycleMapsAnySlot,
   sameAccount,
   ticketClaimHeld,
+  ticketClaimIsFirst,
   ticketClaimNeeded,
 } from './claim.js';
 
@@ -172,6 +173,27 @@ describe('the claim record', () => {
         },
       ),
     );
+  });
+
+  /**
+   * WP-178 criterion (17) (ii), PROGRESS backlog 543: a claim stale because its task stopped between
+   * the assign and the record was never held by a running task, so the next claim is a first one
+   * whether or not the `stopped` release ran. Only a human return's stale claim takes the ticket back.
+   */
+  it('(17) treats no claim, a released claim and a claim stale because its task stopped as a first claim', () => {
+    expect(ticketClaimIsFirst(null)).toBe(true);
+    expect(
+      ticketClaimIsFirst(
+        claim({ released_at: '2026-10-08T10:00:00.000Z', release_cause: 'rework' }),
+      ),
+    ).toBe(true);
+    expect(ticketClaimIsFirst(claim({ stale: true, stale_cause: 'stopped' }))).toBe(true);
+    // A re-claim: a human return's stale claim, and one written before the cause existed.
+    expect(ticketClaimIsFirst(claim({ stale: true, stale_cause: 'human_return' }))).toBe(false);
+    expect(ticketClaimIsFirst(claim({ stale: true }))).toBe(false);
+    expect(ticketClaimIsFirst(claim({ stale: true, stale_cause: 'rework' }))).toBe(false);
+    // A held claim is no claim at all to make.
+    expect(ticketClaimIsFirst(claim())).toBe(false);
   });
 
   it('reads the re-read back: held only when the binding’s own account holds the ticket', () => {

@@ -8,6 +8,7 @@
  *    │           ├─► waiting_answers ─► active
  *    │           ├─► waiting_approval ─► active | needs_human
  *    │           ├─► paused(budget|manual|taken_over) ─► active | ready_for_merge | merged
+ *    │           ├─► merged (a merge during the human `qa` stage, WP-178)
  *    │           └─► needs_human ─► active | cancelled | retro (a merged task, WP-152)
  *    └─► cancelled
  * ```
@@ -68,6 +69,13 @@ import { IllegalTransitionError } from '../errors.js';
  *    human merge. technical/02's diagram is amended with the same sentence (standing rule 8: docs
  *    win, so the doc changes rather than the code being written around it).
  */
+/*
+ *  - **`active → merged` was added at WP-178** (technical/02's amendment under the diagram): a
+ *    person merging during the optional human `qa` stage — `active` at the stage `qa`, a stage
+ *    that adds no state — is the decision QA waits on, and `qa`'s `mr.merged` edge leads to
+ *    `merged_gate`. The table cannot say *"only from `qa`"*, so the **aggregate** does
+ *    (`enterTerminalStage` in `task.ts`).
+ */
 export const TASK_TRANSITIONS = {
   queued: ['active', 'needs_human', 'cancelled'],
   active: [
@@ -78,6 +86,7 @@ export const TASK_TRANSITIONS = {
     'paused',
     'needs_human',
     'ready_for_merge',
+    'merged',
     'done',
     'cancelled',
   ],

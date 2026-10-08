@@ -30,6 +30,7 @@ import type {
 import { IllegalTransitionError, InvariantViolationError, TaskMergedError } from '../errors.js';
 import { type CommandContext, type Decision, eventRecorder, FIRST_STREAM_SEQ } from '../events.js';
 import { assertCan } from '../permissions.js';
+import { QA_STAGE_ID } from '../pipeline/templates.js';
 import {
   evaluateIteration,
   type IterationCounters,
@@ -811,6 +812,12 @@ const enterTerminalStage = (
   // the task at Ready past CI and rebase, or recorded a merge that never happened.
   if (task.state === 'paused' && task.currentStage !== READY_FOR_MERGE_STAGE) {
     throw new IllegalTransitionError('Task', task.state, state);
+  }
+  // `active → merged` exists for a task waiting at the human `qa` stage only (WP-178): a person
+  // merged during QA. The table cannot say "from this stage", so the aggregate does — a merge of a
+  // task at any other `active` stage is not the decision a human stage waits on.
+  if (task.state === 'active' && state === 'merged' && task.currentStage !== QA_STAGE_ID) {
+    throw new IllegalTransitionError('Task', task.state, `${state} (only from the qa stage)`);
   }
   // `needs_human → retro` (WP-152, technical/02's M9 amendment, PROGRESS backlog 497) is a person's
   // way to finish a task escalated **after its merge**, and nothing else: the table cannot say

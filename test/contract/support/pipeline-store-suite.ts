@@ -2977,6 +2977,73 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         ).toBeNull();
       });
 
+      /**
+       * WP-178's horizon (TD-029 decision 7): when the stage's latest run started, whatever its
+       * status — a live run is the latest as much as an ended one.
+       */
+      it('answers when the stage’s latest run started, live or ended, and null before any (WP-178)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        for (const attempt of [1, 2]) {
+          await store.tasks.recordStageEntered(tx, {
+            taskId: stored.task.id,
+            stage: 'implementation' as Slug,
+            attempt,
+            causedByEventId: null,
+          });
+        }
+        const startedAt = () =>
+          store.runs.latestStartedAt(tx, {
+            taskId: stored.task.id,
+            stage: 'implementation' as Slug,
+          });
+        expect(await startedAt()).toBeNull();
+        const runAt = async (attempt: number, createdAt: string) => {
+          await store.runs.insert(tx, {
+            id: nextId(),
+            taskId: stored.task.id,
+            projectId,
+            stage: 'implementation' as Slug,
+            role: 'developer',
+            mode: 'normal',
+            attempt,
+            model: 'claude-opus-5',
+            effort: 'medium',
+            promptVersion: 'basic@1+developer',
+            systemPrompt: null,
+            userPrompt: null,
+            redactionCount: 0,
+            contextPack: null,
+            settings: null,
+            reserveUsd: null,
+            promptsWithheld: null,
+            providerMode: 'api',
+            status: 'running',
+            terminalReason: null,
+            sessionId: null,
+            numTurns: 0,
+            usage: null,
+            cost: null,
+            wallMs: 0,
+            createdAt: createdAt as IsoDateTime,
+            startedAt: null,
+          });
+        };
+        await runAt(1, '2026-06-01T09:00:00.000Z');
+        const first = await startedAt();
+        expect(first).not.toBeNull();
+        await runAt(2, '2026-06-01T10:00:00.000Z');
+        const second = await startedAt();
+        expect(second).not.toBeNull();
+        expect(Date.parse(second ?? '')).toBeGreaterThanOrEqual(Date.parse(first ?? ''));
+        expect(
+          await store.runs.latestStartedAt(tx, {
+            taskId: stored.task.id,
+            stage: 'refinement' as Slug,
+          }),
+        ).toBeNull();
+      });
+
       it('keeps the estimate and the reported figure apart, in the two columns they belong to', async () => {
         const reported = await liveRun();
         await store.runs.finish(tx, {
@@ -3942,6 +4009,159 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           eventId: ids[2],
           at: '2026-06-05T09:00:02.000Z',
         });
+      });
+    });
+
+    /**
+     * WP-178 criterion (14): the status changes a task's ticket went through since its latest entry
+     * into a stage, newest first — what `HumanReturnInput.leftQa` is read from. Ordered across the
+     * task's stream and the project's by the log's position.
+     */
+    /**
+     * WP-178 review (TD-029 decision 7's amendment (a) and (b), migration 0089): the ticket's status
+     * at a human stage's entry is written once and never moved; a sighting at `qa` is never cleared.
+     */
+    it('records a human stage entry’s ticket status once, and keeps a sighting at qa (WP-178 review)', async () => {
+      const stored = task();
+      await store.tasks.insert(tx, stored);
+      const taskId = stored.task.id;
+      await store.tasks.recordStageEntered(tx, {
+        taskId,
+        stage: 'qa' as Slug,
+        attempt: 1,
+        causedByEventId: null,
+      });
+      const observe = (entryStatus: string, seenAtQa: boolean, attempt = 1) =>
+        store.tasks.observeHumanStageStatus(tx, {
+          taskId,
+          stage: 'qa' as Slug,
+          attempt,
+          entryStatus,
+          seenAtQa,
+        });
+      expect(await observe('Reviewed', false)).toEqual({
+        entryStatus: 'Reviewed',
+        seenAtQa: false,
+      });
+      expect(await observe('Testing', true)).toEqual({ entryStatus: 'Reviewed', seenAtQa: true });
+      expect(await observe('Finished', false)).toEqual({ entryStatus: 'Reviewed', seenAtQa: true });
+      // An attempt with no row records nothing.
+      expect(await observe('Finished', false, 2)).toBeNull();
+    });
+
+    describe('the ticket status changes since a stage entry (WP-178)', () => {
+      const ticketEvent = (key: string, from: string, to: string, id: string | null = null) => ({
+        project_id: projectId,
+        task_id: null,
+        ticket: { ...TICKET(key), ...(id === null ? {} : { id }) },
+        from,
+        to,
+      });
+
+      it('answers the changes after the newest entry, newest first, for this ticket only', async () => {
+        const stored = task({}, 'QA-1');
+        await store.tasks.insert(tx, stored);
+        const taskId = stored.task.id;
+        let projectSeq = 0;
+        let taskSeq = 0;
+        const onTask = async (stage: string) => {
+          taskSeq += 1;
+          await appendTaskEvent({
+            id: nextId(),
+            taskId,
+            seq: taskSeq,
+            type: 'task.stage.entered',
+            payload: { project_id: projectId, task_id: taskId, stage, attempt: taskSeq },
+            occurredAt: `2026-06-05T09:00:0${taskSeq}.000Z` as IsoDateTime,
+          });
+        };
+        const onProject = async (payload: Readonly<Record<string, unknown>>) => {
+          projectSeq += 1;
+          await appendTaskEvent({
+            id: nextId(),
+            taskId: projectId,
+            streamType: 'project',
+            seq: projectSeq,
+            type: 'ticket.status.changed',
+            payload,
+            occurredAt: `2026-06-05T10:00:0${projectSeq}.000Z` as IsoDateTime,
+          });
+        };
+        expect(
+          await store.tasks.ticketStatusChangesSinceEntry(tx, { taskId, stage: 'qa', limit: 10 }),
+        ).toEqual([]);
+        await onTask('qa');
+        await onProject(ticketEvent('QA-1', 'Reviewed', 'Testing'));
+        await onTask('implementation');
+        await onTask('qa');
+        await onProject(ticketEvent('QA-1', 'Reviewed', 'Testing'));
+        await onProject(ticketEvent('QA-2', 'Testing', 'Finished'));
+        await onProject(ticketEvent('QA-1', 'Testing', 'Finished'));
+        expect(
+          await store.tasks.ticketStatusChangesSinceEntry(tx, { taskId, stage: 'qa', limit: 10 }),
+        ).toEqual([
+          { from: 'Testing', to: 'Finished' },
+          { from: 'Reviewed', to: 'Testing' },
+        ]);
+        expect(
+          await store.tasks.ticketStatusChangesSinceEntry(tx, { taskId, stage: 'qa', limit: 1 }),
+        ).toEqual([{ from: 'Testing', to: 'Finished' }]);
+        // WP-178 review round 2: oldest first, bounded from the entry's side.
+        expect(
+          await store.tasks.ticketStatusChangesSinceEntry(tx, {
+            taskId,
+            stage: 'qa',
+            limit: 1,
+            order: 'oldest_first',
+          }),
+        ).toEqual([{ from: 'Reviewed', to: 'Testing' }]);
+        // Never entered: nothing, whatever the project's stream holds.
+        expect(
+          await store.tasks.ticketStatusChangesSinceEntry(tx, {
+            taskId,
+            stage: 'ready_for_merge',
+            limit: 10,
+          }),
+        ).toEqual([]);
+      });
+
+      it('matches the ticket by its stable id when both carry one, as a signal is matched', async () => {
+        const stored = task({}, 'QA-3');
+        const withId = {
+          ...stored,
+          task: { ...stored.task, ticket: { ...stored.task.ticket, id: '10003' } },
+        };
+        await store.tasks.insert(tx, withId);
+        const taskId = withId.task.id;
+        await appendTaskEvent({
+          id: nextId(),
+          taskId,
+          seq: 1,
+          type: 'task.stage.entered',
+          payload: { project_id: projectId, task_id: taskId, stage: 'qa', attempt: 1 },
+          occurredAt: '2026-06-05T09:00:00.000Z' as IsoDateTime,
+        });
+        let seq = 0;
+        for (const payload of [
+          // The issue moved to a new key: the id still names it.
+          ticketEvent('NEW-9', 'Testing', 'Finished', '10003'),
+          // Another issue that now holds the old key: not this ticket.
+          ticketEvent('QA-3', 'Testing', 'Sent back', '20004'),
+        ]) {
+          seq += 1;
+          await appendTaskEvent({
+            id: nextId(),
+            taskId: projectId,
+            streamType: 'project',
+            seq,
+            type: 'ticket.status.changed',
+            payload,
+            occurredAt: `2026-06-05T10:00:0${seq}.000Z` as IsoDateTime,
+          });
+        }
+        expect(
+          await store.tasks.ticketStatusChangesSinceEntry(tx, { taskId, stage: 'qa', limit: 10 }),
+        ).toEqual([{ from: 'Testing', to: 'Finished' }]);
       });
     });
 

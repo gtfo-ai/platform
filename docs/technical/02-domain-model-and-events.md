@@ -44,10 +44,20 @@ queued ─► active(stage=…) ─► … ─► ready_for_merge ─► merged 
    │           ├─► waiting_answers ─► active
    │           ├─► waiting_approval ─► active | needs_human
    │           ├─► paused(budget|manual|taken_over) ─► active | ready_for_merge | merged
+   │           ├─► merged (a person merged during the human `qa` stage, WP-178)
    │           └─► needs_human ─► active | cancelled | retro (a merged task, from a person's command)
    └─► cancelled
 ```
 Guards: WIP limits on `queued → active`; iteration limits on any `returned`; budget on every `active` entry; readiness/autonomy policies on approvals.
+
+> **`active → merged` was added at WP-178** (the M10-head amendment below, TD-029 decision 9). The
+> optional `qa` stage adds no state — a task there is `active` at the stage `qa` — and its
+> `mr.merged` edge leads to `merged_gate`, which the aggregate enters with the state `merged`.
+> Without the edge the first merge made during QA escalated the task with *"illegal transition
+> active -> merged"* (measured while building WP-178). The table cannot say *"only from `qa`"*, so
+> the **aggregate** does, as it does for a pause (`enterTerminalStage` in `task.ts`): an `active`
+> task enters `merged` only from the stage `qa`; every other merge of an `active` task is still
+> escalated by the merge handler (*"merged before the pipeline marked it ready"*, WP-73b).
 
 > **A person may send an escalated task back** (amended 2026-10-06, PROGRESS backlog 483). The
 > diagram's `needs_human ─► active | cancelled` let a person resume a parked task only *at the
@@ -155,6 +165,13 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > - the default-branch handler (`saga.ts:1725`);
 > - the merge-request poll's waiting set (`mr-poll.ts:623`).
 >
+> *As built at WP-178:* each of them asks `humanReturnStageOf`
+> (`packages/application/src/pipeline/human-stage.ts`) — `ready_for_merge`, or `active` at the stage
+> `qa` — and the poll's waiting set is the store's `readyMergeRequests` query
+> (`postgres-ticket-poll.ts`). A merge during QA needed one state-machine edge, `active → merged`,
+> which the aggregate allows from the stage `qa` only (the amendment under the diagram above). The
+> dependency gate's Q91 set (`PAST_REVIEW_STAGES`) names `qa` too (WP-178 criterion (16)).
+>
 > **Return signal.** One window, the `mr.comment.debounce` queue (BD-007's batching), now covers both
 > human stages. It is armed by four events: `mr.review.comment`, `ticket.comment.added`,
 > `ticket.status.changed`, and `ticket.updated` whose changed fields name the status. When it fires it
@@ -168,6 +185,35 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > already carry that edge (TD-003). The forms themselves are recorded in `task.human_return`. A return
 > marks the ticket claim stale in its own transaction.
 >
+> *As built at WP-178:* the window is `reviewWindowHandler` (`jobs.ts`); the words are read by
+> `mergeRequestWords` and `ticketCommentWords` and quoted by `humanReturnFeedback`
+> (`review-threads.ts`). Two readings the paragraph above leaves open are decided there: a discussion
+> the provider reports **resolved** gives no word (BD-007's *"a human resolved the threads inside the
+> window"*, kept because the batching window is unchanged), and the horizon is the latest
+> `implementation` run's `started_at` (`created_at` for a run that never started). The claim is marked
+> stale with `stale_cause: human_return`, the one cause whose next claim takes the ticket back.
+>
+> *Amended at WP-178's review (TD-029 decision 7's amendment (a)–(d), migration 0089):* **the status
+> form is a change, never a state.** The window records the ticket's status at the human stage's
+> entry on the stage attempt's row (`task_stages.entry_ticket_status`, amendments (e) and (f): the `to`
+> of the latest change recorded since the entry into any slot the platform writes — `in_review`,
+> `approved`, `qa`, the platform's own moves echoed by a webhook — else the `from` of the earliest
+> change recorded since the entry, else the first status it reads there; a second visit to the stage
+> is a new row and records afresh) and returns the task by its
+> status only when the current status is a return status **and differs from that entry status** — so
+> a partially mapped project whose ticket reaches the stage at its `in_progress` or pick-up status is
+> not returned by every acknowledgement. **The pass reads the same record:** at `qa`, a ticket whose
+> entry status was the `qa` slot, or that was seen there since (`ticket_seen_at_qa`), and whose
+> current status is neither `qa` nor a return status passes — beside a recorded change out of `qa`
+> (`leftQa`). A person moving the ticket out of `qa` back to the `in_progress` status therefore
+> returns the task on a webhook binding exactly as on a poll-only one, and a binding that only polls
+> passes QA by status too. Two residuals: a move a person makes before the window first reads the
+> ticket, with no change recorded, becomes the entry, and only a later move is a change (e); and a
+> window that first fires before the platform's own move lands freezes the entry at the status it
+> read — a gap of one provider round trip (f). **An `@agentic ask` ticket comment is not a return word** (Q119):
+> ask-the-task answers it. **A discussion the provider reports resolved gives no word**, so a GitLab
+> *comment and resolve* is not a return — stated, not closed.
+>
 > **Claim.** The claim is not an aggregate transition. It is a precondition of an agent run's admission,
 > decided between the `stage.execute` job's transactions. A refusal is an ordinary escalation with the
 > reason `ticket_assigned_elsewhere` or `ticket_claim_failed`. *As built at WP-177, with TD-029's
@@ -179,6 +225,11 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > released — reads the assignee before it assigns and refuses, without the assign, a ticket somebody
 > else holds (unless `take_assigned_tickets`); only a stale claim (a human return) takes the ticket back. Release follows `task.cancelled` and the
 > *Rework* command; escalation and take-over keep the claim. Built across WP-170…WP-183.
+> *As built at WP-178 (PROGRESS backlogs 541 and 543):* a *Rework*'s release runs in the reworked
+> task's next agent admission, **before** its claim, so a re-claim can no longer be undone by a
+> release on another queue; and the stored claim records **why** it is stale (`stale_cause`:
+> `stopped`, `rework`, `human_return`), so a claim stale because its task stopped between the assign
+> and the record is a first claim whether or not its release ran.
 
 *Which* limit a `returned` spends is decided by the transition and not only by the stage it leaves (WP-26). `ready_for_merge` has two outgoing returns (and since WP-174 the optional `qa` stage has the same two, spending the same two loops) — a human's comment, which is BD-008's `human_rounds`, and the default branch moving, which re-enters the rebase gate — and attributing the second to the first escalated a task with *"human_rounds iteration limit of 3 reached: main moved to …"* after three merges to `main` under a waiting merge request. The edges that need their own loop are enumerated in `RETURN_LOOPS_BY_EDGE` (`packages/domain/src/pipeline/interpreter.ts`); everything else is attributed by the stage, and an edge in neither table cannot return at all.
 
@@ -490,9 +541,9 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 |---|---|---|---|
 | `ticket.matched` | task-management adapter | ticket ref, rule, priority, type, epic, links | Intake (10) |
 | `ticket.created` | task-management adapter | ticket ref, issue type | Ticket readiness linter (10, WP-25), bug trace (120, WP-61 — the job decides whether the type is a bug) |
-| `ticket.updated` | task-management adapter (WP-60; emitted **beside** `ticket.matched`/`ticket.status.changed`, never instead) | ticket ref, the provider's `updated_at`, the changed field names (bounded, `truncated`), actor | Snapshot freshness (10, `pipeline.ticket.signal` — Q61 (b); since WP-145 it reaches a task by the ticket's stable id first and by the key only for a task with none, and moves a live task whose id it carries under another key to that key, appending `task.ticket.rekeyed`); bug re-trace (120, `pipeline.bug.retrace`, WP-90 — a ticket whose defect trace is not `linked` is traced again, PROGRESS backlog 192); re-lint on edit is **not** built (it waits on a measurement of update frequency); product/18:60's *"edited within 48 h"* is a statistics read over this event (WP-61, `lintEdits`), not a consumer |
-| `ticket.comment.added` | adapter | ticket, comment id, author identity, text | Question answering (20), Feedback intake (30) |
-| `ticket.status.changed` | adapter (Jira's webhook since WP-60; declared unconsumed until M10) | ticket, from, to, actor | The human-return window (10, `pipeline.review.comment`, BD-031, from WP-178): it arms the window only for a task at `qa` or `ready_for_merge`, and the window decides between return and pass |
+| `ticket.updated` | task-management adapter (WP-60; emitted **beside** `ticket.matched`/`ticket.status.changed`, never instead) | ticket ref, the provider's `updated_at`, the changed field names (bounded, `truncated`), actor | Snapshot freshness (10, `pipeline.ticket.signal` — Q61 (b); since WP-145 it reaches a task by the ticket's stable id first and by the key only for a task with none, and moves a live task whose id it carries under another key to that key, appending `task.ticket.rekeyed`); bug re-trace (120, `pipeline.bug.retrace`, WP-90 — a ticket whose defect trace is not `linked` is traced again, PROGRESS backlog 192); re-lint on edit is **not** built (it waits on a measurement of update frequency); product/18:60's *"edited within 48 h"* is a statistics read over this event (WP-61, `lintEdits`), not a consumer; the human-return window (10, `pipeline.review.comment`, WP-178) — armed for a task at `qa` or `ready_for_merge` when the changed fields name the status, **or are empty or truncated**: a polled edit names no field, and on a binding that only polls it is the one signal a ticket comment or a status move produces |
+| `ticket.comment.added` | adapter | ticket, comment id, author identity, text | The human-return window (10, `pipeline.review.comment`, WP-178): arms it for a task at `qa` or `ready_for_merge`, unless the comment opens with a platform marker; Question answering (20), Feedback intake (30) |
+| `ticket.status.changed` | adapter (Jira's webhook since WP-60; declared unconsumed until WP-178) | ticket, from, to, actor | The human-return window (10, `pipeline.review.comment`, BD-031, since WP-178): it arms the window only for a task at `qa` or `ready_for_merge`, and the window decides between return and pass — a pass needs a recorded change whose `from` is the `qa` slot (`leftQa`, WP-178 criterion (14)); at an agent stage the event is logged and nothing else |
 | `ticket.claimed` | the claim (`ensureTicketClaim`, WP-177) | task, ticket, the binding's own account id, `in_progress` written or not, `shadow` | — (the record is the row, `tasks.ticket_claim`; `GET /api/tasks/:id` publishes it from WP-181, criterion 6, and not before) |
 | `ticket.claim.refused` | the claim | task, ticket, reason (`ticket_assigned_elsewhere` \| `ticket_claim_failed`), the assignee's identity when known | — (the escalation it causes is `task.escalated`) |
 | `ticket.released` | the `ticket_release` duty (WP-177) | task, ticket, unassigned or not, `pick_up_from` written or not, cause (`cancelled` \| `rework` \| `stopped`, the last when the task stopped between the claim's assign and its record) | — |
@@ -526,7 +577,7 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 | `workspace.provisioned` / `.destroyed` / `.exported` | Workspace manager | workspace | UI |
 | `mr.opened` / `mr.updated` / `mr.merged` / `mr.closed` | git adapter | mr ref, actor, draft, head sha, diff stats | Pipeline (10; on `updated`, since WP-60, the recorded head follows a push the platform did not make, **forward only** by the provider's `updated_at`, which `mr.updated` alone carries — PROGRESS backlog 182; what bounds the ordering residual is that the CI gate does not read the recorded head at all but asks the provider for the live one, on its poll and in `ci_settle`), review-only (10 on `opened`, 120 on `merged`/`closed`, WP-24), merge measure (120 on `merged`, WP-61), resolve on merge (120 on `merged`, a bug task only, WP-111 — enqueues the `resolve_on_merge` duty, which resolves the ticket's linked Sentry issues on a binding that sets `resolve_on_merge`), review-thread refresh (120 on `updated` carrying `blocking_threads_resolved`, WP-90 — GitLab's `changes.blocking_discussions_resolved`, sent only by a project that requires resolved threads; a count-only re-read, never the return decision, PROGRESS backlog 210), stats (230) |
 | `mr.approved` | git adapter (WP-60; GitLab's `approval` action only) | mr ref, approver identity, the provider's instant (`null` before GitLab 18.10) | Human time (230, the review window's *"approval"* anchor — PROGRESS backlog 90) |
-| `mr.review.comment` | git adapter | mr, thread id, author identity, text, resolved | Batching/debounce (10), feedback intake (30), review-thread refresh (120 on `resolved: true`, WP-90 — the count only), human time (230, WP-29) |
+| `mr.review.comment` | git adapter | mr, thread id, author identity, text, resolved | Batching/debounce (10) — the human-return window, at `qa` or `ready_for_merge` since WP-178, whatever the note's `resolvable`, feedback intake (30), review-thread refresh (120 on `resolved: true`, WP-90 — the count only), human time (230, WP-29) |
 | `ci.pipeline.finished` | git adapter | mr, head sha, status, failed jobs, log refs, coverage | CI gate (10 decides, and since WP-60 review round 2 the `ci_settle` duty settles **only** a pipeline that ran on the merge request's live head, read from the provider outside the transaction), flaky detector (15) |
 | `default_branch.moved` | git adapter | project, new head | Rebase gate (10), KB index (40) |
 | `budget.threshold.reached` / `budget.exhausted` / `budget.reset` | Budget projection | scope, window, pct | Scheduler (10), Slack (210, WP-32 — `reset` excepted: a window rolling over is not news; an **organisation** window, which has no project, goes to the organisation's own chat account's channel since WP-65 — the flagged one, `notifications.organisation_default`, when there are several, and inside the organisation's quiet hours a threshold waits for the organisation's digest while an exhaustion does not, since WP-93) |

@@ -188,6 +188,19 @@ does. The platform reads the statuses it may name from Jira itself — the union
 statuses in each project of `project_keys` — so **a binding that maps a lifecycle needs
 `project_keys`**: with none, there is no project to read statuses from and the read is refused.
 
+**QA by status, with or without the webhook.** With a `qa` slot mapped, a task waits at the human QA
+stage after the agent's review, and it passes QA when somebody moves the ticket **out of** the `qa`
+status to one that is not a return status. The platform records the ticket's status when the task
+enters a human stage, and decides by **changes** from it: a ticket left where it was never returns the
+task by its status. With the webhook, every move names the status it came from. A binding that only
+polls (step 5) sees the ticket only as it is at each poll, so one thing differs there: a move a person
+makes before the platform first reads the ticket at that stage — within a poll interval and the
+two-minute batching window of the task arriving — is taken as where the stage began, and returns or
+passes nothing by itself; move it again, or leave a comment. Returning the task works either way — a
+return status, the `in_progress` or pick-up status, a ticket comment or a note on the merge request
+each sends it back to the agent. A comment that asks the agent (`@agentic ask …`) is answered and does
+not send the task back.
+
 ## 7. Test the connection
 
 *Test connection* performs one read-only call (`GET /rest/api/3/myself`) and reports the account it

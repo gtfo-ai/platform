@@ -272,6 +272,14 @@ export const taskStages = pgTable('task_stages', {
    * (`task_stages_attached_feedback_sent_has_text`).
    */
   attachedFeedbackSent: boolean('attached_feedback_sent').notNull().default(false),
+  /**
+   * The ticket's status when the human-return window first read it during this entry into a human
+   * stage (WP-178 review, migration 0089, TD-029 decision 7's amendment (a)). Null on every other
+   * row. Written once (`coalesce`) by `observeHumanStageStatus`.
+   */
+  entryTicketStatus: text('entry_ticket_status'),
+  /** Whether the window saw the ticket at the `qa` slot during this entry (amendment (b), 0089). */
+  ticketSeenAtQa: boolean('ticket_seen_at_qa').notNull().default(false),
   /** Convergence detection's stable key; nothing else writes it (WP-15, migration 0012). */
   signature: text('signature'),
   causedByEventId: uuid('caused_by_event_id'),

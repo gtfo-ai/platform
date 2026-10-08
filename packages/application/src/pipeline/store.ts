@@ -655,8 +655,10 @@ export interface TaskRepository {
   /**
    * Writes **only** `ticket_claim`, the whole record — the column's one statement (technical/03's
    * M10-head amendment). Its callers: the claim (`ensureTicketClaim`, between the `stage.execute`
-   * job's transactions), the release (`ticket_release` duty), a person's *Rework* (marks it stale,
-   * in the command's own transaction) and, from WP-178, the human-return window's return (stale).
+   * job's transactions), the release (`releaseTicket`, `ticket-release.ts` — from the
+   * `ticket_release` duty, and since WP-178 from the claiming job itself for a *Rework*), a person's
+   * *Rework* (marks it stale, in the command's own transaction) and, from WP-178, the human-return
+   * window's return (stale) — each stale mark with its `stale_cause`.
    * No version bump: `save` does not name the column, so no whole-row write can put an older
    * claim back.
    *
@@ -1178,6 +1180,64 @@ export interface TaskRepository {
    * follow **state** rather than whichever wake-up happened to carry the payload.
    */
   takenOver(tx: Transaction, taskId: Id): Promise<TakeOverRecord | null>;
+  /**
+   * The `ticket.status.changed` events recorded for this task's ticket **after its latest entry into
+   * `stage`** (its newest `task.stage.entered` naming it), at most `limit`, **newest first** or —
+   * with `order: 'oldest_first'` — oldest first, or `[]` when the task never entered the stage.
+   * WP-178 criterion (14): the human-return window reads the newest at `qa` for
+   * `HumanReturnInput.leftQa` — the newest change whose `from` is the `qa` slot — and, since WP-178's
+   * review, the oldest at both human stages for the entry status (TD-029 decision 7's amendment (e)),
+   * so a bound of `limit` never hides the changes the entry is read from.
+   *
+   * The ticket is the task's by WP-145's rule (`findByTicketSignal`'s): by the stable id when both
+   * the event and the row carry one, by the key otherwise, of the task's provider. Ordered by the
+   * log's `position`, which is the order both streams were committed in. A read of the append-only
+   * log; it writes nothing.
+   */
+  ticketStatusChangesSinceEntry(
+    tx: Transaction,
+    query: {
+      readonly taskId: Id;
+      readonly stage: Slug;
+      readonly limit: number;
+      /** Absent is `newest_first`. */
+      readonly order?: 'newest_first' | 'oldest_first';
+    },
+  ): Promise<readonly TicketStatusChange[]>;
+  /**
+   * Records what the human-return window saw of the ticket's status during one entry into a human
+   * stage — `task_stages.entry_ticket_status` and `ticket_seen_at_qa` on the `(task, stage,
+   * attempt)` row (migration 0089, WP-178 review, TD-029 decision 7's amendment (a) and (b)) — and
+   * answers the row's values after the write. `entryStatus` is written **only while the column is
+   * null** (the entry is the first reading, never moved); `seenAtQa` is **or**-ed in (a sighting is
+   * never cleared). `null` when the row does not exist. One statement, so two firings of the window
+   * cannot both write the entry.
+   */
+  observeHumanStageStatus(
+    tx: Transaction,
+    entry: {
+      readonly taskId: Id;
+      readonly stage: Slug;
+      readonly attempt: number;
+      readonly entryStatus: string;
+      readonly seenAtQa: boolean;
+    },
+  ): Promise<HumanStageStatus | null>;
+}
+
+/** What {@link TaskRepository.observeHumanStageStatus} answers: the row's record after the write. */
+export interface HumanStageStatus {
+  /** Provider text (BD-022). */
+  readonly entryStatus: string;
+  readonly seenAtQa: boolean;
+}
+
+/** One `ticket.status.changed`, as {@link TaskRepository.ticketStatusChangesSinceEntry} reads it. */
+export interface TicketStatusChange {
+  /** Provider text (BD-022). */
+  readonly from: string;
+  /** Provider text (BD-022). */
+  readonly to: string;
 }
 
 /**
@@ -1667,6 +1727,19 @@ export interface RunRepository {
     tx: Transaction,
     query: { readonly taskId: Id; readonly stage: Slug },
   ): Promise<EndedRun | null>;
+  /**
+   * When the **latest run** of this task at this stage started — its `started_at`, or its
+   * `created_at` for a run that never reached `started` — or `null` when the stage has no run.
+   * Latest by `created_at`, then `id` (uuidv7), whatever the run's status.
+   *
+   * WP-178's horizon (TD-029 decision 7): the human-return window counts only the words written
+   * after the start of the task's latest `implementation` run, so the words a run was already
+   * given, and the words written while the agent's review stages ran, are told apart.
+   */
+  latestStartedAt(
+    tx: Transaction,
+    query: { readonly taskId: Id; readonly stage: Slug },
+  ): Promise<IsoDateTime | null>;
   /**
    * How many of this **ask's** runs ended `shutdown` (WP-149, PROGRESS backlog 445) — the ask's
    * hand-back bound (`MAX_ASK_HAND_BACKS`), counted from the runs' own end reasons through

@@ -11,7 +11,7 @@
  * that would have used one.
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
-import { askCommentMarker } from '@platform/domain';
+import { askCommentMarker, opensWithPlatformCommentMarker } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { renderAskComment } from './mirror.js';
 import type { StoredAsk } from './store.js';
@@ -47,8 +47,11 @@ describe('renderAskComment', () => {
   it('carries the answer, the marker and a link back to the thread', () => {
     const body = renderAskComment(ask(), 'https://agentic.example.test/');
     expect(body).toContain('Because a join on every read would be worse.');
-    // The marker is what stops the platform reading its own answer back as a new question.
-    expect(body).toContain(askCommentMarker(ASK_ID));
+    // The marker is what stops the platform reading its own answer back as a new question — and,
+    // since WP-178 (criterion (15)), as a person's word that returns the task. A marker counts at
+    // the start only, so the body **opens** with it and the visible heading follows.
+    expect(body.startsWith(`${askCommentMarker(ASK_ID)}\n**Asked and answered**`)).toBe(true);
+    expect(opensWithPlatformCommentMarker(body)).toBe(true);
     // The trailing slash of the base URL is trimmed rather than doubled.
     expect(body).toContain(`https://agentic.example.test/tasks/${TASK_ID}`);
     expect(body).not.toContain('.test//tasks');

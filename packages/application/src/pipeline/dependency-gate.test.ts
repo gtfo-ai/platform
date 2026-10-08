@@ -35,6 +35,7 @@ import {
   type PipelineHarness,
 } from '../testing/pipeline-harness.js';
 import { FAKE_DEPLOY_KEY } from '../testing/ssh-deploy-key-fixtures.js';
+import type { BindingLifecycle } from './binding-lifecycle.js';
 import { pauseTaskCommand, resumeTaskCommand } from './commands.js';
 import { deployKeyLeaks, runDependencyGate } from './dependency-gate.js';
 import { type DeployKeyRunCredential, staticPipelineIntegrations } from './integrations.js';
@@ -217,6 +218,8 @@ interface StartOptions {
   readonly staticRunToken?: string;
   /** WP-146: the git binding's deploy key. */
   readonly deployKey?: DeployKeyRunCredential;
+  /** WP-178: the binding's lifecycle block — a `qa` slot gives the task the human `qa` stage. */
+  readonly ticketLifecycle?: BindingLifecycle;
 }
 
 const start = async (options: StartOptions = {}): Promise<PipelineHarness> => {
@@ -227,6 +230,9 @@ const start = async (options: StartOptions = {}): Promise<PipelineHarness> => {
       config: {
         policies: options.policy === undefined ? {} : { dependency_policy: options.policy },
       },
+      ...(options.ticketLifecycle === undefined
+        ? {}
+        : { ticketLifecycle: options.ticketLifecycle }),
     },
     runs: {
       refinement: completedRun(REFINED_SPEC),
@@ -908,6 +914,54 @@ describe('a decision that meets a stop a human owns is deferred to the resume (W
     stored = await storedTask(harness);
     expect(stored?.task.state).toBe('ready_for_merge');
     expect(questionsAsked(harness)).toHaveLength(0);
+  });
+
+  /**
+   * WP-178 criterion (16): the optional human `qa` stage is past review too (Q91), and a task there
+   * is `active` — so the `active` branch asks the stage as well. The gate's `ask` ending fires for a
+   * task waiting on a person testing it: no `questions` row, and the record says *not asked*.
+   */
+  it('(16) asks nothing of a task waiting at qa, and keeps the record (Q91)', async () => {
+    const harness = await start({
+      policy: 'allow',
+      // `claim: false`: the case is about the gate, and the harness's tracker stub cannot assign.
+      ticketLifecycle: { pickUpFrom: null, slots: { qa: 'Testing', claim: false } },
+    });
+    const task = taskIdOf(harness);
+    const waiting = await storedTask(harness);
+    // Confirmed while building (the row asked): a task at `qa` is `active`, at the stage `qa`.
+    expect([waiting?.task.state, waiting?.task.currentStage]).toEqual(['active', 'qa']);
+
+    await runDependencyGate(
+      {
+        store: harness.store,
+        settings: staticProjectSettings(() => ({
+          ...harness.settings,
+          config: { ...harness.settings.config, policies: { dependency_policy: 'ask' } },
+        })),
+        jobs: harness.jobs,
+        calendar: harness.calendar,
+        integrations: staticPipelineIntegrations(harness.integrations),
+        ids: harness.ids,
+        clock: { now: () => harness.clock.now() },
+        unitOfWork: markTransactions(harness.memory),
+      },
+      {
+        duty: 'dependency_gate',
+        project_id: PROJECT,
+        task_id: task,
+        cause_event_id: '00000000-0000-4000-9000-0000000000ab',
+        stage: 'implementation',
+      },
+    );
+    await harness.drain();
+
+    expect(questionsAsked(harness)).toHaveLength(0);
+    const stored = await storedTask(harness);
+    expect([stored?.task.state, stored?.task.currentStage]).toEqual(['active', 'qa']);
+    expect(stored?.dependencies?.decision).toBe('ask');
+    expect(stored?.dependencies?.question_id).toBeNull();
+    expect(stored?.dependencies?.deferred_stage).toBeNull();
   });
 
   it('defers a block at a paused ready_for_merge and returns the task when it resumes (backlog 244)', async () => {

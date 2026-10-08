@@ -80,21 +80,38 @@ describe('classifyTicketComment', () => {
   });
 
   it.each(PLATFORM_COMMENT_MARKERS)(
-    'refuses the platform’s own comment, which carries %s, even when it is triggered',
+    'refuses the platform’s own comment, which opens with %s, even when it is triggered',
+    (marker) => {
+      expect(
+        verified(`${marker}0199a0b0-1111-7000-8000-000000000001\n@agentic ask what is going on?`),
+      ).toEqual({ kind: 'not_an_ask', reason: 'platform_comment' });
+    },
+  );
+
+  /**
+   * WP-178 criterion (15): a marker counts **at the start only** (TD-029 decision 6), in the ask
+   * classifier as in the human-return window — one test, `opensWithPlatformCommentMarker`. A person
+   * who asks while quoting a platform comment is asking.
+   */
+  it.each(PLATFORM_COMMENT_MARKERS)(
+    'reads a person’s ask that quotes %s after the trigger as an ask (markers at the start only)',
     (marker) => {
       expect(
         verified(`@agentic ask what is going on? ${marker}0199a0b0-1111-7000-8000-000000000001`),
-      ).toEqual({ kind: 'not_an_ask', reason: 'platform_comment' });
+      ).toEqual({
+        kind: 'ask',
+        question: `what is going on? ${marker}0199a0b0-1111-7000-8000-000000000001`,
+      });
     },
   );
 
   it('checks the platform marker before the trigger, so a loop cannot be read as a question', () => {
     // The ordering is the fail-closed one and it is asserted directly: the workpad and a mirrored
     // ask are both platform comments, and an answer read back as a new question is a budget that
-    // empties itself.
-    const workpad = `**Asked and answered** — ${askCommentMarker('0199a0b0-1111-7000-8000-000000000002')}\n@agentic ask and what about this?`;
-    expect(verified(workpad).kind).toBe('not_an_ask');
-    expect(verified(workpad)).toEqual({ kind: 'not_an_ask', reason: 'platform_comment' });
+    // empties itself. The mirror's comment opens with its marker since WP-178.
+    const mirrored = `${askCommentMarker('0199a0b0-1111-7000-8000-000000000002')}\n**Asked and answered**\n@agentic ask and what about this?`;
+    expect(verified(mirrored).kind).toBe('not_an_ask');
+    expect(verified(mirrored)).toEqual({ kind: 'not_an_ask', reason: 'platform_comment' });
   });
 
   it('refuses an unverified author — which on this build is every unmapped account (BD-022, Q10)', () => {

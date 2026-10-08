@@ -1421,6 +1421,56 @@ export const createPostgresPipelineStore = (
             }),
       };
     },
+    observeHumanStageStatus: async (tx, entry) => {
+      // WP-178 review, migration 0089: the entry written once, the sighting never cleared — one
+      // statement, so two firings of the window cannot both write the entry.
+      const { rows } = await sqlOf(tx).query<{
+        entry_ticket_status: string | null;
+        ticket_seen_at_qa: boolean;
+      }>(
+        `update task_stages
+            set entry_ticket_status = coalesce(entry_ticket_status, $4),
+                ticket_seen_at_qa = ticket_seen_at_qa or $5
+          where task_id = $1 and stage = $2 and attempt = $3
+          returning entry_ticket_status, ticket_seen_at_qa`,
+        [entry.taskId, entry.stage, entry.attempt, entry.entryStatus, entry.seenAtQa],
+      );
+      const row = rows[0];
+      return row === undefined || row.entry_ticket_status === null
+        ? null
+        : { entryStatus: row.entry_ticket_status, seenAtQa: row.ticket_seen_at_qa };
+    },
+    ticketStatusChangesSinceEntry: async (tx, query) => {
+      // WP-178 criterion (14). The entry is the task's newest `task.stage.entered` naming the stage
+      // (its own stream, the stream index); the changes are the project stream's after it in the
+      // log's position order, matched to the task's ticket by `findByTicketSignal`'s predicate.
+      const { rows } = await sqlOf(tx).query<{ from: string; to: string }>(
+        `select e.payload ->> 'from' as "from", e.payload ->> 'to' as "to"
+           from tasks t
+           join lateral (
+             select max(x.position) as position
+               from events x
+              where x.stream_type = 'task' and x.stream_id = t.id
+                and x.type = 'task.stage.entered' and x.payload ->> 'stage' = $2
+           ) entry on entry.position is not null
+           join events e
+             on e.stream_type = 'project' and e.stream_id = t.project_id
+            and e.type = 'ticket.status.changed' and e.position > entry.position
+            and e.payload -> 'ticket' ->> 'provider' = t.ticket_provider
+            and (case when e.payload -> 'ticket' ->> 'id' is not null and t.ticket_id is not null
+                      then e.payload -> 'ticket' ->> 'id' = t.ticket_id
+                      else e.payload -> 'ticket' ->> 'key' = t.ticket_key end)
+          where t.id = $1
+          order by e.position ${query.order === 'oldest_first' ? 'asc' : 'desc'}
+          limit $3`,
+        [query.taskId, query.stage, query.limit],
+      );
+      return rows.flatMap((row) =>
+        typeof row.from === 'string' && typeof row.to === 'string'
+          ? [{ from: row.from, to: row.to }]
+          : [],
+      );
+    },
     takenOver: async (tx, taskId) => {
       // One indexed read of the task's own stream (WP-56): the newest boundary event decides, the
       // same projection `apps/server`'s read model makes over two of these types. A payload that
@@ -1827,6 +1877,20 @@ export const createPostgresPipelineStore = (
       };
     },
     /** Backlog 476: `lastSavedWork`'s query, however the run ended. */
+    latestStartedAt: async (tx, query) => {
+      // WP-178's horizon: the latest run of the stage, whatever its status, by `lastEnded`'s order.
+      const { rows } = await sqlOf(tx).query<{ at: string }>(
+        `select to_char(coalesce(r.started_at, r.created_at) at time zone 'UTC',
+                        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as at
+           from runs r
+           join task_stages s on s.id = r.task_stage_id
+          where r.task_id = $1 and s.stage = $2
+          order by r.created_at desc, r.id desc
+          limit 1`,
+        [query.taskId, query.stage],
+      );
+      return (rows[0]?.at ?? null) as IsoDateTime | null;
+    },
     lastEnded: async (tx, query) => {
       const { rows } = await sqlOf(tx).query<{
         id: string;

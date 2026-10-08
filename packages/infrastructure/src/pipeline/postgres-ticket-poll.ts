@@ -145,11 +145,12 @@ export const createPostgresMergeRequestPollStore = (
     );
   },
   /**
-   * Tasks at `ready_for_merge` with a merge request, joined to their **current** stage row (the
-   * attempt `stage_attempts` names, as the stranded-stage read joins it) for its `entered_at`, in
-   * the database's own microsecond rendering. Oldest entry first. A row whose `mr_ref` fails the
-   * contract's schema is left out rather than thrown on (rule 20: one bad row must not stop every
-   * other task's notes).
+   * Tasks waiting at a **human stage** — `ready_for_merge`, or `active` at the optional `qa` stage
+   * since WP-178 (`humanReturnStageOf`'s two answers, technical/02's M10-head amendment) — with a
+   * merge request, joined to their **current** stage row (the attempt `stage_attempts` names, as
+   * the stranded-stage read joins it) for its `entered_at`, in the database's own microsecond
+   * rendering. Oldest entry first. A row whose `mr_ref` fails the contract's schema is left out
+   * rather than thrown on (rule 20: one bad row must not stop every other task's notes).
    */
   readyMergeRequests: async (binding, limit) => {
     const { rows } = await options.sql.query<ReadyRow>(
@@ -159,7 +160,9 @@ export const createPostgresMergeRequestPollStore = (
          join task_stages s
            on s.task_id = t.id and s.stage = t.current_stage
           and s.attempt = coalesce((t.stage_attempts ->> t.current_stage)::int, 1)
-        where t.project_id = $1 and t.state = 'ready_for_merge' and t.mr_ref is not null
+        where t.project_id = $1
+          and (t.state = 'ready_for_merge' or (t.state = 'active' and t.current_stage = 'qa'))
+          and t.mr_ref is not null
         order by s.entered_at, t.id
         limit $2`,
       [binding.projectId, limit],

@@ -94,7 +94,8 @@
  *    platform requires forbids. The first read records **no**
  *    event: a poll that never saw the branch cannot say it moved. One read per interval, always —
  *    the knowledge index and the readiness re-check consume the event too, not only a waiting task.
- *  - **(b) the notes of each merge request waiting at Ready**, at most
+ *  - **(b) the notes of each merge request waiting at Ready** — and, since WP-178, at the optional
+ *    `qa` stage, the other human stage (`humanReturnStageOf`) — at most
  *    {@link MR_POLL_REVIEW_TASKS_LIMIT} tasks per poll (one `listDiscussions` read each, the window
  *    handler's own read). A note is recorded as `mr.review.comment` — the webhook's event, with the
  *    thread's id and its `resolved` — when a person wrote it (not a provider **system** note, not
@@ -108,10 +109,11 @@
  * A provider clock behind the platform's can then not lose a note written just after the entry; the
  * cost is the other direction — a person's note written up to five minutes **before** the entry is
  * recorded too, where a webhook would have arrived while the task was elsewhere and armed nothing.
- * It arms the same window a later comment would have, and that window acts on the merge request's
- * open threads whenever it fires. So it can return a Ready task for a thread that is still open and
- * that, on a webhook binding, no later comment would have armed — at most one extra return per such
- * note, and never for a resolved thread (WP-123 review round 1: "never whether" was too strong).
+ * It arms the same window a later comment would have, and that window acts on every person's word
+ * newer than its horizon whenever it fires (WP-178; until then, on the merge request's open
+ * threads). So it can return a waiting task for a note that, on a webhook binding, no later comment
+ * would have armed — at most one extra return per such note, and never for a resolved thread
+ * (WP-123 review round 1: "never whether" was too strong).
  *
  * **Only for a poll-only binding**, by the ruling: a binding a webhook can reach gets both events
  * from its deliveries and makes neither read, so no event arrives by two doors and no cross-door
@@ -202,19 +204,20 @@ export interface MergeRequestPollStore {
    */
   recordDefaultHead(binding: PolledBinding, sha: string, branch: string): Promise<void>;
   /**
-   * The binding's project's tasks **at `ready_for_merge`** that have a merge request, with the
-   * instant their current Ready stage row was entered (`task_stages.entered_at`) — oldest entry
-   * first, at most `limit` (WP-123).
+   * The binding's project's tasks **at a human stage** — `ready_for_merge`, and since WP-178 the
+   * optional `qa` stage (`humanReturnStageOf`) — that have a merge request, with the instant their
+   * current stage row was entered (`task_stages.entered_at`) — oldest entry first, at most `limit`
+   * (WP-123). The name is WP-123's, from when Ready was the only such stage.
    */
   readyMergeRequests(binding: PolledBinding, limit: number): Promise<readonly ReadyMergeRequest[]>;
 }
 
-/** A task waiting at Ready, as the review-note read needs it (WP-123). */
+/** A task waiting at a human stage, as the review-note read needs it (WP-123, WP-178). */
 export interface ReadyMergeRequest {
   readonly taskId: Id;
   /** `tasks.mr_ref` — the platform's own record of the merge request. */
   readonly mr: MergeRequestRef;
-  /** The current `ready_for_merge` stage row's `entered_at`, on the database's clock. */
+  /** The current human stage row's `entered_at`, on the database's clock. */
   readonly enteredAt: IsoDateTime;
 }
 
@@ -611,7 +614,9 @@ const pollDefaultBranch = async (
 const isPersonsNote = (note: DiscussionNote): boolean => !note.system && !isPlatformNote(note);
 
 /**
- * WP-123 (b): the notes of each merge request waiting at Ready, written after the task entered it.
+ * WP-123 (b): the notes of each merge request waiting at a human stage — Ready, and since WP-178
+ * `qa` — written after the task entered it. Each becomes the `mr.review.comment` that arms the
+ * human-return window, whatever its `resolvable`.
  */
 const pollReviewNotes = async (
   options: MergeRequestPollerOptions,

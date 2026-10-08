@@ -91,6 +91,7 @@ import type {
   WorkRequest,
 } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
+import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import {
   type OrganisationSettingsPort,
@@ -795,6 +796,12 @@ export interface HarnessOptions {
   /** The binding's redactor, for a test that plants a secret in a ticket (WP-15f). */
   readonly ticketRedactor?: SecretRedactor;
   /**
+   * The pipeline runtime's logger (WP-178), for a case whose countable effect is a named log line —
+   * a status signal at an agent stage, which TD-029 decision 7 says is logged and nothing else.
+   * Absent is silent, as before.
+   */
+  readonly logger?: Logger;
+  /**
    * The task-management binding's `assignPermission` (WP-177) — the provider's name for the
    * permission a ticket claim's assign needs. Absent, as for a provider that declares none.
    */
@@ -1311,6 +1318,11 @@ const stubTaskManagement = (
          * tickets nobody scripted would make a test about the ticket half green without one.
          */
         matchTickets: async () => [],
+        /**
+         * The human-return window's comment read (WP-178), defaulted to *"no comment since the
+         * horizon"* for `matchTickets`' reason: a test about a ticket comment scripts it.
+         */
+        listComments: async () => ({ comments: [], total: 0 }),
         ...overrides,
       } as unknown as TaskManagementPort);
 
@@ -1383,6 +1395,8 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       memory.log
         .map((row) => row.event)
         .filter((event) => event.stream_type === 'project' && event.stream_id === projectId),
+    // WP-178: `ticketStatusChangesSinceEntry` orders two streams by the log's position.
+    committedLog: () => memory.log,
   });
   const jobs = recordingJobs();
   const audit = createMemoryAuditLog();
@@ -1785,6 +1799,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     ...(options.reviewCommentWindowMs === undefined
       ? {}
       : { reviewCommentWindowMs: options.reviewCommentWindowMs }),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     execution: {
       runner: wrapRunner(runner, scripts, () => clock, sink),
       planner: createStageRunPlanner({

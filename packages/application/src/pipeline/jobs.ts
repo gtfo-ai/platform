@@ -16,24 +16,44 @@
  *
  * What does work is a `stately` queue plus a singleton key per merge request and a `startAfter` two
  * minutes out: `stately` admits one *queued* job per key, so a burst of comments collapses onto the
- * first one's timer, and the handler re-reads **every unresolved thread** when it fires rather than
- * acting on the comment that scheduled it. If a comment arrived inside the last window, the handler
- * schedules another one instead of returning the task — which is what makes it a real debounce
- * ("wait until they stop") built out of a timer that cannot be cancelled.
+ * first one's timer, and the handler re-reads **every signal** when it fires — since WP-178 the
+ * merge request's notes, the ticket's comments and its status; until then every unresolved thread —
+ * rather than acting on the comment that scheduled it. If a person wrote inside the last window,
+ * the handler schedules another one instead of returning the task — which is what makes it a real
+ * debounce ("wait until they stop") built out of a timer that cannot be cancelled.
  *
  * `coalesced` is a success, not an error: it means the window this comment belongs to is already
  * scheduled.
  */
-import type { Id, Slug, TaskStageOutcome, TaskState } from '@platform/contracts';
-import { effortSchema } from '@platform/contracts';
+import type { DomainEvent, Id, Slug, TaskStageOutcome, TaskState } from '@platform/contracts';
+import {
+  domainEventSchemasByType,
+  effortSchema,
+  lifecycleStatusKey,
+  MAX_LIFECYCLE_STATUS_NAME_CHARS,
+  type TicketLifecycle,
+} from '@platform/contracts';
 import {
   compilePipeline,
+  type HumanReturnDecision,
+  type HumanReturnStage,
   hasIdenticalFailureStreak,
+  humanReturnDecision,
   interpret,
   isRunnableTaskState,
+  personsWordsSince,
+  QA_STAGE_ID,
+  READY_FOR_MERGE_STAGE,
   stageOf,
 } from '@platform/domain';
 import * as z from 'zod';
+import { composeSecretRedactors } from '../integrations/redaction.js';
+import type { SecretRedactor } from '../ports/integrations/audit.js';
+import { IntegrationUnsupportedError } from '../ports/integrations/common.js';
+import {
+  MAX_LIST_COMMENTS_LIMIT,
+  type TicketComment,
+} from '../ports/integrations/task-management.js';
 import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { EnqueueResult, JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
@@ -57,19 +77,28 @@ import {
   MAX_GATE_CHECKS,
   rebaseAgainstCi,
 } from './gates.js';
-import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
+import { humanReturnStageOf } from './human-stage.js';
+import {
+  gitReads,
+  integrationsForProject,
+  noRunScopedSecrets,
+  type PipelineIntegrations,
+  ticketReads,
+} from './integrations.js';
 import { type ExhaustedJob, escalatingOnLastTry } from './job-escalation.js';
 import { prefetchObservability } from './observability-prefetch.js';
 import { REBASE_GATE_STAGE, recordRebaseCheck } from './rebase.js';
 import { reviewedMergeRequestPaths } from './review-paths.js';
 import {
-  isOpenReviewThread,
+  humanReturnFeedback,
+  mergeRequestWords,
   reviewThreadCounts,
-  reviewThreadsReturnReason,
+  ticketCommentWords,
+  type WindowWord,
 } from './review-threads.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { StageExecutionJob, StageExecutor } from './stage-executor.js';
-import type { StoredTask } from './store.js';
+import type { StoredTask, TicketStatusChange } from './store.js';
 import { confirmExcusedPaths, unconfirmedTamperReturn } from './tamper-confirmation.js';
 import { inTaskTransaction, type TaskTransactionOptions } from './task-transaction.js';
 import { ensureTicketClaim } from './ticket-claim.js';
@@ -1462,19 +1491,36 @@ const distinctPipelines = (
 };
 
 /**
- * `mr.comment.debounce`: the window closed — read every unresolved thread and act once.
+ * `mr.comment.debounce`: the **human-return window** closed — read the four signals and act once
+ * (WP-178, TD-029 decisions 6–9, BD-031 ruling 4, the amendment to BD-007).
  *
- * Three endings, and the first two are the reason this is not a coalesced job:
- *  - nothing unresolved → nothing to do (a human resolved the threads inside the window);
- *  - a comment arrived inside the window → open another window instead of returning the task;
- *  - otherwise → one `task.stage.returned`, whatever the number of threads.
+ * Until WP-178 this window read only the merge request's **resolvable, unresolved** threads, at
+ * `ready_for_merge` only, and returned the task on their count: a GitLab general note
+ * (`resolvable: false`) armed it and was then dropped, and a ticket comment or a status change never
+ * reached it (PROGRESS § "Architect ruling (M10 head, session 15)", measurements 1–3). It now covers
+ * both human stages, `qa` and `ready_for_merge` ({@link humanReturnStageOf}), and when it fires it
+ * re-reads the ticket's status, every discussion of the merge request and the ticket's comments
+ * since the **horizon** — the start of the task's latest `implementation` run — and decides with the
+ * domain's `humanReturnDecision`. Four endings, and the first two are the reason this is not a
+ * coalesced job:
+ *
+ *  - nothing returns and nothing passes → nothing (an acknowledgement, a resolved thread, a word
+ *    older than the horizon, the platform's own note);
+ *  - a person wrote inside the last window → open another window instead of deciding now;
+ *  - **return** → one `interpret` with `mr.review.comment` (every form, decision 7) carrying the
+ *    redacted feedback, `task.human_return` naming the forms, and the ticket claim marked stale —
+ *    all in one transaction;
+ *  - **pass** (only at `qa`) → one `interpret` with `ticket.status.changed`, which leads to
+ *    `ready_for_merge` (decision 9).
+ *
+ * Every ending records the thread counts the Checks panel reads, as before (WP-46).
  */
 export const reviewWindowHandler = (options: PipelineJobOptions): JobHandler<ReviewWindowData> =>
   /**
    * **Bound and escalate** (WP-124, TD-004's M7 amendment, PROGRESS backlog 366): a window whose
-   * every try failed used to leave the task at `ready_for_merge` with the reviewer's comments
-   * unanswered and only an administrator's failed-jobs list saying so. Its last try now escalates
-   * the task with a brief first (`job-escalation.ts`), and the throw still ends the job.
+   * every try failed used to leave the task at its human stage with the people's words unanswered
+   * and only an administrator's failed-jobs list saying so. Its last try now escalates the task
+   * with a brief first (`job-escalation.ts`), and the throw still ends the job.
    */
   escalatingOnLastTry(options, reviewWindowWork(options), (job) =>
     describeExhaustedReviewWindow(job.data),
@@ -1498,126 +1544,405 @@ export const describeExhaustedReviewWindow = (
     'The comments are on the merge request; read them, then return the task to the stage that should answer them, or hand it back at Ready.',
 });
 
+/** The stage whose latest run's start is the window's horizon (TD-029 decision 7). */
+const HORIZON_STAGE = 'implementation' as Slug;
+/** How many of the ticket's status changes since its entry into the human stage the window reads. */
+const MAX_WINDOW_STATUS_CHANGES = 50;
+
+/** What the window read inside its first transaction. */
+interface WindowRead {
+  readonly stored: StoredTask;
+  readonly stage: HumanReturnStage;
+  readonly horizon: string | null;
+  /** The ticket's status changes since the stage's entry, newest first (`leftQa`). */
+  readonly statusChanges: readonly TicketStatusChange[];
+  /** The same changes oldest first, bounded from the entry's side — what the entry is read from. */
+  readonly earliestChanges: readonly TicketStatusChange[];
+}
+
 const reviewWindowWork = (options: PipelineJobOptions): JobHandler<ReviewWindowData> => {
   const logger: Logger = options.logger ?? silentLogger;
 
   return async (job) => {
     const windowMs = options.reviewCommentWindowMs ?? 2 * 60_000;
-    const stored = await options.unitOfWork.transaction(async (scope) =>
-      options.store.tasks.load(scope.tx, job.data.task_id),
-    );
-    if (stored === null || stored.task.state !== 'ready_for_merge' || stored.mr === null) {
+    const read = await options.unitOfWork.transaction(async (scope): Promise<WindowRead | null> => {
+      const stored = await options.store.tasks.load(scope.tx, job.data.task_id);
+      const stage = stored === null ? null : humanReturnStageOf(stored);
+      if (stored === null || stage === null || stored.mr === null) {
+        return null;
+      }
+      return {
+        stored,
+        stage,
+        horizon: await options.store.runs.latestStartedAt(scope.tx, {
+          taskId: stored.task.id,
+          stage: HORIZON_STAGE,
+        }),
+        statusChanges: await options.store.tasks.ticketStatusChangesSinceEntry(scope.tx, {
+          taskId: stored.task.id,
+          stage: stage === 'qa' ? QA_STAGE_ID : READY_FOR_MERGE_STAGE,
+          limit: MAX_WINDOW_STATUS_CHANGES,
+        }),
+        // Both stages since the WP-178 review: the entry is read from the earliest changes, so the
+        // bound is taken from the entry's side (TD-029 decision 7's amendment (e)).
+        earliestChanges: await options.store.tasks.ticketStatusChangesSinceEntry(scope.tx, {
+          taskId: stored.task.id,
+          stage: stage === 'qa' ? QA_STAGE_ID : READY_FOR_MERGE_STAGE,
+          limit: MAX_WINDOW_STATUS_CHANGES,
+          order: 'oldest_first',
+        }),
+      };
+    });
+    if (read === null || read.stored.mr === null) {
       logger.debug({ task_id: job.data.task_id }, 'review window found nothing to do');
       return;
     }
-
+    const { stored, stage, horizon } = read;
+    const mr = read.stored.mr;
+    const settings = await options.settings.forProject(stored.task.projectId);
     // The window closes outside any run, so the call's scope holds no minted credential (Q55).
     const integrations = await integrationsForProject(
       options.integrations,
       stored.task.projectId,
       noRunScopedSecrets(),
     );
-    const git = integrations.git;
-    if (git === null) {
-      // Nothing to read, and nothing to record: `{open: 0}` would say the threads were read.
-      logger.debug({ task_id: job.data.task_id }, 'review window has no git binding to read');
+    const context = { projectId: stored.task.projectId, taskId: stored.task.id };
+    const discussions =
+      integrations.git === null ? null : await gitReads(integrations).discussions(mr, context);
+    if (discussions !== null) {
+      /**
+       * **The count, kept where it was computed** (WP-46, PROGRESS backlog 95 item 3): the Checks
+       * panel's *"review threads open/resolved"*. Written on **every** ending of the window — a
+       * window that finds everything resolved is the reading a maintainer most wants to see — in a
+       * transaction of its own, through the narrow writer, because this job runs beside the stage
+       * executor (standing rule 79). Written before any decision so an ending that does not return
+       * still records what it read. A project with no git binding records nothing: `{open: 0}`
+       * would say the threads were read.
+       */
+      await options.unitOfWork.transaction(async (scope) =>
+        options.store.tasks.saveReviewThreads(
+          scope.tx,
+          job.data.task_id,
+          reviewThreadCounts(discussions, options.clock.now()),
+        ),
+      );
+    }
+    const lifecycle = settings.ticketLifecycle;
+    const ticket =
+      lifecycle === null
+        ? null
+        : await ticketReads(integrations).ticket(stored.task.ticket, context);
+    const observed =
+      ticket === null || lifecycle === null
+        ? null
+        : await observeEntryStatus(options, read, ticket.status, lifecycle.slots);
+    const comments = await windowComments(integrations, stored, horizon, logger);
+    if (discussions === null && ticket === null && comments === null) {
+      logger.debug({ task_id: job.data.task_id }, 'review window has no binding to read');
       return;
     }
-    const discussions = await gitReads(integrations).discussions(stored.mr, {
-      projectId: stored.task.projectId,
-      taskId: stored.task.id,
-    });
-    const unresolved = discussions.filter(isOpenReviewThread);
-
-    /**
-     * **The count, kept where it was computed** (WP-46, PROGRESS backlog 95 item 3): the Checks
-     * panel's *"review threads open/resolved"*. Written on **every** ending of the window — a
-     * window that finds everything resolved is the reading a maintainer most wants to see — in a
-     * transaction of its own, through the narrow writer, because this job runs beside the stage
-     * executor (standing rule 79). Written before the return below so the two endings that do not
-     * return still record what they read.
-     */
-    await options.unitOfWork.transaction(async (scope) =>
-      options.store.tasks.saveReviewThreads(
-        scope.tx,
-        job.data.task_id,
-        reviewThreadCounts(discussions, options.clock.now()),
-      ),
-    );
-    if (unresolved.length === 0) {
-      return;
-    }
+    const words = [...mergeRequestWords(discussions ?? []), ...ticketCommentWords(comments ?? [])];
 
     const now = new Date(options.clock.now());
-    const newest = unresolved
-      .flatMap((discussion) => discussion.notes.filter((note) => !note.system))
-      .map((note) => Date.parse(note.created_at))
+    const newest = personsWordsSince(words, horizon)
+      .map((word) => Date.parse(word.at))
       .reduce((latest, at) => (Number.isNaN(at) ? latest : Math.max(latest, at)), 0);
     if (newest > 0 && now.getTime() - newest < windowMs) {
-      // Somebody is still typing. Open another window rather than bouncing the task now: this is
-      // the extending half of the debounce, built from a timer that cannot be cancelled.
+      // Somebody is still typing. Open another window rather than deciding now: this is the
+      // extending half of the debounce, built from a timer that cannot be cancelled.
       await enqueueReviewCommentWindow(options.jobs, {
         taskId: stored.task.id,
         projectId: stored.task.projectId,
-        iid: stored.mr.iid,
+        iid: mr.iid,
         windowMs,
         now,
       });
       return;
     }
 
-    const feedback = reviewThreadsReturnReason(unresolved, git.redactor);
-    if (feedback.redactions > 0) {
-      logger.info(
-        { task_id: job.data.task_id, redactions: feedback.redactions },
-        'redacted secrets from review comments before storing them as a return reason',
+    const slots = { lifecycle: lifecycle?.slots ?? {}, pickUpFrom: lifecycle?.pickUpFrom ?? null };
+    const decision = humanReturnDecision({
+      stage,
+      slots,
+      status: ticket?.status ?? null,
+      words,
+      horizon,
+      // Criterion (11): the words a project added through the settings write (technical/12). The
+      // repository file's value never reaches `config` — it is graded not applied.
+      extraAcks: settings.config.human_returns?.acknowledgements ?? [],
+      leftQa: leftQaOf(read.statusChanges, slots.lifecycle.qa),
+      entryStatus: observed?.entryStatus ?? null,
+      seenAtQa: observed?.seenAtQa ?? false,
+    });
+    if (decision.kind === 'none') {
+      logger.debug(
+        { task_id: stored.task.id, stage },
+        'review window: no person’s word or status returns the task, and nothing passes it',
       );
+      return;
     }
-    const work = await inTaskTransaction(
-      options,
-      job.data.task_id,
-      'returning a task for review comments',
-      async (scope) => {
-        const current = await options.store.tasks.load(scope.tx, job.data.task_id);
-        if (current === null || current.task.state !== 'ready_for_merge') {
-          return null;
-        }
-        const pipeline = compilePipeline(
-          current.task.template,
-          current.template,
-          current.pipelineDial,
-          current.qaStage,
-        );
-        const decision = interpret(pipeline, {
-          kind: 'event',
-          stage: current.task.currentStage ?? 'ready_for_merge',
-          event: 'mr.review.comment',
-          // The reviewer's own words, not only their number (WP-46, the human half of backlog
-          // 159): redacted, one line per comment and bounded — `review-threads.ts` has the rules.
-          detail: feedback.reason,
-        });
-        const applied = await applyDecision({
-          store: options.store,
-          pipeline,
-          tx: scope.tx,
-          stored: current,
-          decision,
-          context: {
-            ids: options.ids,
-            actor: { kind: 'system', component: 'pipeline' },
-            clock: options.clock as never,
-            correlationId: current.task.id,
-            causeEventId: null,
-          },
-          causedByEventId: null,
-          ...(options.logger === undefined ? {} : { logger: options.logger }),
-        });
-        await scope.events.append(applied.events);
-        return applied.work;
-      },
-    );
+    const work =
+      decision.kind === 'return'
+        ? await returnForHumanWords(options, read, integrations, words, decision)
+        : await passQa(options, read);
     if (work !== null) {
       await enqueueStage(options.jobs, work);
     }
   };
+};
+
+/**
+ * **The ticket's status at the human stage's entry** (WP-178 review, TD-029 decision 7's amendment
+ * (a), (b), (e) and (f), migration 0089): recorded on the stage attempt's row the first time the
+ * window reads the ticket there, and never moved. Amendment (f)'s order: the `to` of the **latest**
+ * change recorded since the entry into **any slot the platform writes** (`in_review`, `approved`,
+ * `qa` — the platform's own moves, echoed back by a webhook after the entry); otherwise the `from` of
+ * the earliest change recorded since the entry, so a move a person made before the first firing is
+ * still a change; otherwise the status this firing read.
+ *
+ * History: until round 2 of WP-178's review the earliest `from` came first, so the `qa` echo's
+ * `from` (`in_progress`) became the entry and a person's move back to `in_progress` equalled it;
+ * round 2's (e) put the stage's own slot first, which still left `ready_for_merge` exposed to the
+ * `approved` echo; (f) names every slot the platform writes.
+ *
+ * **Residuals, stated:** a window that first fires before the platform's own move lands freezes the
+ * entry at the status it read (one provider round trip); on a binding that only polls (no recorded
+ * `from`), a move made before the window's first firing there is the entry, so it returns nothing by
+ * status — a comment or note still does. The sighting at `qa` is or-ed in: this firing's status, or a
+ * recorded change's `from` or `to`.
+ */
+const observeEntryStatus = async (
+  options: PipelineJobOptions,
+  read: WindowRead,
+  status: string,
+  slots: TicketLifecycle,
+): Promise<{ readonly entryStatus: string; readonly seenAtQa: boolean } | null> => {
+  const qa = slots.qa;
+  const is = (slot: string | undefined, name: string): boolean =>
+    slot !== undefined && lifecycleStatusKey(name) === lifecycleStatusKey(slot);
+  const atQa = (name: string): boolean => is(qa, name);
+  const platformWrites = (name: string): boolean =>
+    is(slots.in_review, name) || is(slots.approved, name) || is(qa, name);
+  // `statusChanges` is newest first, so `find` is the latest such change.
+  const intoPlatformSlot = read.statusChanges.find((change) => platformWrites(change.to));
+  const entryStatus = intoPlatformSlot?.to ?? read.earliestChanges[0]?.from ?? status;
+  const stageId = read.stage === 'qa' ? QA_STAGE_ID : READY_FOR_MERGE_STAGE;
+  const attempt = read.stored.task.stageAttempts[stageId] ?? 0;
+  return options.unitOfWork.transaction(async (scope) =>
+    options.store.tasks.observeHumanStageStatus(scope.tx, {
+      taskId: read.stored.task.id,
+      stage: stageId,
+      attempt,
+      entryStatus: entryStatus.slice(0, MAX_LIFECYCLE_STATUS_NAME_CHARS),
+      seenAtQa:
+        read.stage === 'qa' &&
+        (atQa(status) || read.statusChanges.some((change) => atQa(change.from) || atQa(change.to))),
+    }),
+  );
+};
+
+/**
+ * The ticket's comments since the horizon, or `null` when the project reads no ticket. A provider
+ * that cannot list comments is **said**, never read as "no comments" (BD-017): the window then
+ * decides on the other signals and the log names the member.
+ */
+const windowComments = async (
+  integrations: PipelineIntegrations,
+  stored: StoredTask,
+  horizon: string | null,
+  logger: Logger,
+): Promise<readonly TicketComment[] | null> => {
+  try {
+    const page = await ticketReads(integrations).comments(
+      stored.task.ticket,
+      { since: horizon, limit: MAX_LIST_COMMENTS_LIMIT },
+      { projectId: stored.task.projectId, taskId: stored.task.id },
+    );
+    return page === null ? null : page.comments;
+  } catch (error) {
+    if (!(error instanceof IntegrationUnsupportedError)) {
+      throw error;
+    }
+    logger.warn(
+      { task_id: stored.task.id, action: error.action },
+      'review window: the tracker cannot list a ticket’s comments, so ticket comments cannot return this task',
+    );
+    return null;
+  }
+};
+
+/**
+ * Where the ticket went when it was last seen leaving the `qa` status (WP-178 criterion (14)): the
+ * newest recorded change whose `from` is the `qa` slot. `null` when none was recorded — including on
+ * a binding that only polls, whose re-read records `ticket.updated` with no previous status. Until
+ * WP-178's review that meant such a ticket never passed `qa` by status; since then the entry record
+ * (`observeEntryStatus`) is the second way through (TD-029 decision 7's amendment (b)).
+ */
+const leftQaOf = (changes: readonly TicketStatusChange[], qa: string | undefined): string | null =>
+  qa === undefined
+    ? null
+    : (changes.find((change) => lifecycleStatusKey(change.from) === lifecycleStatusKey(qa))?.to ??
+      null);
+
+/**
+ * The return: `task.human_return`, one `interpret` with `mr.review.comment` carrying the feedback,
+ * and the claim marked stale — one transaction (WP-178 (c), TD-029 decisions 5 and 7). A task that
+ * left its human stage meanwhile is left alone.
+ */
+const returnForHumanWords = async (
+  options: PipelineJobOptions,
+  read: WindowRead,
+  integrations: PipelineIntegrations,
+  words: readonly WindowWord[],
+  decision: Extract<HumanReturnDecision, { kind: 'return' }>,
+): Promise<StageExecutionJob | null> => {
+  const logger: Logger = options.logger ?? silentLogger;
+  const redactor = composeSecretRedactors(
+    ...[integrations.git?.redactor, integrations.taskManagement?.redactor].filter(
+      (redactor): redactor is SecretRedactor => redactor !== undefined,
+    ),
+  );
+  const feedback = humanReturnFeedback({
+    stage: read.stage,
+    forms: decision.forms,
+    status: decision.status,
+    words,
+    horizon: read.horizon,
+    redactor,
+  });
+  if (feedback.redactions > 0) {
+    logger.info(
+      { task_id: read.stored.task.id, redactions: feedback.redactions },
+      'redacted secrets from the people’s words before storing them as a return reason',
+    );
+  }
+  const taskId = read.stored.task.id;
+  return inTaskTransaction(
+    options,
+    taskId,
+    'returning a task for a person’s words',
+    async (scope) => {
+      const current = await options.store.tasks.load(scope.tx, taskId);
+      if (current === null || humanReturnStageOf(current) !== read.stage) {
+        return null;
+      }
+      const pipeline = compilePipeline(
+        current.task.template,
+        current.template,
+        current.pipelineDial,
+        current.qaStage,
+      );
+      const interpreted = interpret(pipeline, {
+        kind: 'event',
+        stage: current.task.currentStage ?? read.stage,
+        event: 'mr.review.comment',
+        // The people's own words, not only their number (WP-46, the human half of backlog 159):
+        // redacted, one line per word and bounded — `review-threads.ts` has the rules.
+        detail: feedback.reason,
+      });
+      // Criterion (12): parsed through the contracts schema, so a writer that counted an
+      // acknowledgement, or named a form it counted none of, fails here rather than in a reader.
+      const recorded = domainEventSchemasByType['task.human_return'].parse({
+        id: options.ids.next(),
+        stream_type: 'task',
+        stream_id: taskId,
+        stream_seq: current.task.sequence,
+        correlation_id: taskId,
+        cause_event_id: null,
+        actor: { kind: 'system', component: 'pipeline' },
+        occurred_at: options.clock.now(),
+        type: 'task.human_return',
+        payload: {
+          project_id: current.task.projectId,
+          task_id: taskId,
+          from_stage: decision.from,
+          forms: [...decision.forms],
+          counts: { ...decision.counts },
+          status: decision.status === null ? null : redactor.redactText(decision.status).value,
+        },
+      }) as DomainEvent;
+      const applied = await applyDecision({
+        store: options.store,
+        pipeline,
+        tx: scope.tx,
+        // The record first on the stream, the return it causes after it.
+        stored: { ...current, task: { ...current.task, sequence: current.task.sequence + 1 } },
+        decision: interpreted,
+        context: {
+          ids: options.ids,
+          actor: { kind: 'system', component: 'pipeline' },
+          clock: options.clock as never,
+          correlationId: taskId,
+          causeEventId: null,
+        },
+        causedByEventId: null,
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
+      });
+      /**
+       * **A return re-claims the ticket** (BD-031 ruling 4, TD-029 decision 5): the claim is marked
+       * stale here, in the return's own transaction, with the cause `human_return` — the one cause
+       * whose next claim takes the ticket back, because the person who returned it may hold it. No
+       * release is enqueued, so backlog 541's window does not open here.
+       */
+      const claim = await options.store.tasks.ticketClaim(scope.tx, taskId);
+      if (claim !== null && claim.released_at === null) {
+        await options.store.tasks.saveTicketClaim(scope.tx, taskId, {
+          ...claim,
+          stale: true,
+          stale_cause: 'human_return',
+        });
+      }
+      await scope.events.append([recorded, ...applied.events]);
+      return applied.work;
+    },
+  );
+};
+
+/** The pass at `qa`: one `interpret` with `ticket.status.changed`, to `ready_for_merge`. */
+const passQa = async (
+  options: PipelineJobOptions,
+  read: WindowRead,
+): Promise<StageExecutionJob | null> => {
+  const taskId = read.stored.task.id;
+  (options.logger ?? silentLogger).info(
+    { task_id: taskId },
+    'review window: the ticket left the qa status and nobody asked for anything; QA passed',
+  );
+  return inTaskTransaction(options, taskId, 'passing the qa stage', async (scope) => {
+    const current = await options.store.tasks.load(scope.tx, taskId);
+    if (current === null || humanReturnStageOf(current) !== 'qa') {
+      return null;
+    }
+    const pipeline = compilePipeline(
+      current.task.template,
+      current.template,
+      current.pipelineDial,
+      current.qaStage,
+    );
+    const decision = interpret(pipeline, {
+      kind: 'event',
+      stage: QA_STAGE_ID,
+      event: 'ticket.status.changed',
+      // Platform text: the status name is provider text and is not needed to say what happened.
+      detail: 'the ticket left the qa status',
+    });
+    const applied = await applyDecision({
+      store: options.store,
+      pipeline,
+      tx: scope.tx,
+      stored: current,
+      decision,
+      context: {
+        ids: options.ids,
+        actor: { kind: 'system', component: 'pipeline' },
+        clock: options.clock as never,
+        correlationId: taskId,
+        causeEventId: null,
+      },
+      causedByEventId: null,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+    });
+    await scope.events.append(applied.events);
+    return applied.work;
+  });
 };

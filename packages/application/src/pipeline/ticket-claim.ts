@@ -62,6 +62,7 @@ import {
   compilePipeline,
   isRunnableTaskState,
   lifecycleClaims,
+  ticketClaimIsFirst,
   ticketClaimNeeded,
 } from '@platform/domain';
 import { TransactionOpenError } from '../events/open-transaction.js';
@@ -81,6 +82,7 @@ import {
 import type { OutboundJobData } from './jobs.js';
 import { PIPELINE_ACTOR, type StoredTask } from './store.js';
 import { inTaskTransaction, type TaskTransactionOptions } from './task-transaction.js';
+import { releaseTicket } from './ticket-release.js';
 import { applyDecision } from './transitions.js';
 
 /** The two reasons a claim refuses (technical/02's catalogue, `ticketClaimRefusalSchema`). */
@@ -136,12 +138,38 @@ export const ensureTicketClaim = async (
     return PROCEED;
   }
   /**
-   * A first claim reads before it writes (the amendment's (a)); only a **stale** claim — a human
-   * return — takes the ticket back. A claim the platform **released** (a Rework, a stopped task)
-   * counts as first (the amendment's (c)): the release put the ticket back in the pick-up pool, so a
-   * person who holds it afterwards took it from there and is never overwritten.
+   * **A Rework's release, then the claim — in this job, in that order** (WP-178 criterion (17)
+   * (i), PROGRESS backlog 541). The *Rework* command marks the claim stale with `stale_cause:
+   * 'rework'` and enqueues nothing; the release runs here, on the task's `stage.execute` path, so a
+   * re-claim can no longer land between the release's check and its `unassign` and be undone by it.
+   * The release then reads the claim released, and the claim below is a first one (amendment (c)).
    */
-  const first = read.claim === null || read.claim.released_at !== null;
+  let claimNow = read.claim;
+  if (
+    claimNow?.stale === true &&
+    claimNow.stale_cause === 'rework' &&
+    claimNow.released_at === null
+  ) {
+    await releaseTicket(options, {
+      taskId: task.id,
+      cause: 'rework',
+      // One release per stage entry: a redelivered job replays its writes.
+      keySuffix: `rework:${request.stage}:${String(request.attempt)}`,
+      causeEventId: null,
+    });
+    claimNow = await options.unitOfWork.transaction(async (scope) =>
+      options.store.tasks.ticketClaim(scope.tx, task.id),
+    );
+  }
+  /**
+   * A first claim reads before it writes (the amendment's (a)); only a claim stale for a **human
+   * return** takes the ticket back. A claim the platform **released** (a Rework, a cancellation)
+   * counts as first (the amendment's (c)): the release put the ticket back in the pick-up pool, so a
+   * person who holds it afterwards took it from there and is never overwritten — and so, since
+   * WP-178, does a claim stale because its task **stopped** between the assign and the record,
+   * whether or not its `stopped` release ran (`ticketClaimIsFirst`, PROGRESS backlog 543).
+   */
+  const first = ticketClaimIsFirst(claimNow);
   // Outside a run: the claim holds no minted credential (Q55).
   const integrations = await integrationsForProject(
     options.integrations,
@@ -356,6 +384,7 @@ const recordClaim = async (
     stale: false,
     released_at: null,
     release_cause: null,
+    stale_cause: null,
   };
   const stopped = await inTaskTransaction(
     options,
@@ -384,7 +413,13 @@ const recordClaim = async (
         if (attempt.shadow) {
           return null;
         }
-        await options.store.tasks.saveTicketClaim(scope.tx, task.id, { ...record, stale: true });
+        // `stale_cause: 'stopped'` (WP-178, backlog 543): the next claim is a first claim even if
+        // this release is lost, so a person who took the ticket meanwhile is never overwritten.
+        await options.store.tasks.saveTicketClaim(scope.tx, task.id, {
+          ...record,
+          stale: true,
+          stale_cause: 'stopped',
+        });
         return 'stopped' as const;
       }
       await options.store.tasks.saveTicketClaim(scope.tx, task.id, record);

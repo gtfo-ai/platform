@@ -131,8 +131,9 @@ export const decideNotification = (event: DomainEvent): Decided | null => {
         subject: null,
         // **The reason's first line only** (WP-46 review round 1, PROGRESS backlog 211), and what
         // that first line *is* depends on who returned the task (WP-65, backlog 215):
-        //  - a **human-comment** return: platform text — the thread count, every comment below it
-        //    collapsed onto a line of its own (`review-threads.ts`);
+        //  - a **human** return: platform text — the stage and the forms that returned the task
+        //    (WP-178; the thread count until then), every person's word below it collapsed onto a
+        //    line of its own (`review-threads.ts`);
         //  - a **review-verdict** return: `[summary] ` is the platform's tag and everything after
         //    it is the reviewer **model's** summary (`verdicts.ts`, `verdictReturnReason`);
         //  - an **acceptance-verdict** return: a `[not met]` line carrying the model's evidence;

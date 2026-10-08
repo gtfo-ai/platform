@@ -89,7 +89,6 @@ import type {
   StoredTask,
 } from './store.js';
 import { retryOnTaskConflict } from './task-conflict.js';
-import { releaseRequest } from './ticket-lifecycle.js';
 import {
   type ApplyOptions,
   applyDecision,
@@ -1431,23 +1430,23 @@ export const reworkStageCommand = async (
       }
       /**
        * **The ticket is given back** (WP-177, BD-031 ruling 5, TD-029 decision 5): a held claim is
-       * marked stale here, in this transaction, so the reworked task's next agent admission claims
-       * again whichever of the two runs first — this release, or that claim — and the release, a
-       * `ticket_release` duty after the commit, unassigns and moves the ticket to `pick_up_from`
-       * unless that claim came first and cleared the mark (`runTicketRelease`).
+       * marked stale here, in this transaction, with `stale_cause: 'rework'`, and the reworked
+       * task's next agent admission **releases it and then claims** — unassigns, moves the ticket
+       * to `pick_up_from`, and claims afresh as a first claim (`ensureTicketClaim`).
+       *
+       * Until WP-178 this command enqueued the release as a `ticket_release` duty after its commit,
+       * and the next admission claimed on another queue; a re-claim that landed between the
+       * release's check and its `unassign` was undone by it, and the claim then read held over an
+       * unassigned ticket (PROGRESS backlog 541). Running both in one job serialises them per task.
+       * A task cancelled before that admission is released by the cancellation's own duty.
        */
       const claim = await deps.store.tasks.ticketClaim(scope.tx, stored.task.id);
-      const release: PipelineOutboundData | null =
-        claim === null || claim.released_at !== null || cause === undefined
-          ? null
-          : releaseRequest({
-              projectId: stored.task.projectId,
-              taskId: stored.task.id,
-              causeEventId: cause as Id,
-              cause: 'rework',
-            });
-      if (release !== null && claim !== null) {
-        await deps.store.tasks.saveTicketClaim(scope.tx, stored.task.id, { ...claim, stale: true });
+      if (claim !== null && claim.released_at === null && cause !== undefined) {
+        await deps.store.tasks.saveTicketClaim(scope.tx, stored.task.id, {
+          ...claim,
+          stale: true,
+          stale_cause: 'rework',
+        });
       }
       const close: PipelineOutboundData | null =
         stored.mr === null || cause === undefined
@@ -1465,16 +1464,13 @@ export const reworkStageCommand = async (
               ...(fresh === null ? {} : { new_branch: fresh }),
             };
       return {
-        result: { close, release },
+        result: { close },
         work: applied.work === null ? null : { job: applied.work },
       };
     },
   );
   if (superseded?.close != null) {
     await enqueueOutbound(jobs, superseded.close);
-  }
-  if (superseded?.release != null) {
-    await enqueueOutbound(jobs, superseded.release);
   }
 };
 

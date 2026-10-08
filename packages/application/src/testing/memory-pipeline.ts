@@ -20,6 +20,7 @@
  * | 9 | `runCommands` (WP-85): `lockRun`/`lockLiveRunOf`/`markApplied` take no lock, `admitSteer` (WP-101) takes no advisory lock and reads `created_at` off {@link MemoryPipelineStoreOptions.now} rather than the database's clock, and `LockedRun.sessionId` is the run row's `sessionId` where PostgreSQL reads the run's `system`/`init` transcript entry (this store keeps no transcript). | **kinder** on ordering, **same** on predicates | The `for share` ordering between a command and the run's ending is a property of two concurrent transactions, which a single-threaded store cannot interleave; it is asserted against PostgreSQL in `test/integration/pipeline/run-commands.integration.test.ts`, both orders — and the steer window's lock there by a second transaction that must wait (WP-101). Every predicate — live run, this owner's lease, still pending, closed `run_ended` by the winning `finish` — is the SQL's, and the contract suite drives each against both stores. |
  * | 10 | `bugTraces.latest` (WP-90) reads the **committed** project log through {@link MemoryPipelineStoreOptions.projectEvents}, in stream order; PostgreSQL orders by `occurred_at` then `position` and also sees the calling transaction's own staged appends. Unwired, it answers `null`. | **same, when wired** | Its one caller, the `ticket.updated` handler, asks in the dispatcher's transaction about traces an earlier job committed; a trace appended in the asking transaction does not exist, because no handler appends one. Stream order and `occurred_at` order agree for every trace the duty writes, which appends with the platform clock in sequence. The contract suite drives both. |
  * | 11 | `runs.markCliSpawnRequested` (WP-150) refuses a run that has ended and a run already marked, exactly as the SQL's `where cli_spawn_requested_at is null and status = any(active)`; `load` answers the marker and `insert` drops one a caller passed; the held set (`heldFor`, `totalsFor`'s `unmeasuredRuns`) excludes an unmarked run, as `unmeasuredEndedRunSql` does. What it cannot show is the marker **committed before** the `spawn` frame is sent — divergence 4's isolation. | **same** on predicates, **kinder** on commit order | The commit order is asserted against PostgreSQL from a second connection in `test/integration/pipeline/cli-spawn-marker.integration.test.ts`, and the predicates by the shared suite against both stores. |
+ * | 12 | `tasks.ticketStatusChangesSinceEntry` (WP-178) reads the **committed** log through {@link MemoryPipelineStoreOptions.committedLog}, ordered by `position`; PostgreSQL's query also sees the calling transaction's own staged appends. Unwired, it answers `[]`. | **same, when wired** | Its one caller, the human-return window, asks in a job's own transaction about events earlier transactions committed (the task's entry into `qa`, a webhook's status change); the predicate — the newest entry, the project stream, the ticket by id or key — is the SQL's, and the contract suite drives it against both stores. |
  */
 import type {
   ArtifactType,
@@ -81,6 +82,7 @@ import {
   TAKE_OVER_BOUNDARY_EVENTS,
   TaskConcurrentModificationError,
 } from '../pipeline/store.js';
+import type { StoredEvent } from '../ports/event-store.js';
 import type {
   DeadlineRecoveryStore,
   HeldTask,
@@ -111,6 +113,10 @@ interface StageRow {
   attachedFeedbackOriginalChars: number | null;
   /** Whether the next run is handed `attachedFeedback` (migration 0086). */
   attachedFeedbackSent: boolean;
+  /** The ticket's status at this human stage's entry (WP-178 review, migration 0089). */
+  entryTicketStatus?: string | null;
+  /** Whether the window saw the ticket at the `qa` slot during this entry (migration 0089). */
+  ticketSeenAtQa?: boolean;
   signature: string | null;
   enteredAt: number;
   /**
@@ -265,6 +271,14 @@ export interface MemoryPipelineStoreOptions {
    * `createPipelineHarness` wires it.
    */
   readonly projectEvents?: (projectId: Id) => readonly DomainEvent[];
+  /**
+   * The **committed** log across every stream, in `position` order — what
+   * `TaskRepository.ticketStatusChangesSinceEntry` reads (WP-178), because it orders a project
+   * stream's event against a task stream's, which only the log's position can. Optional for
+   * {@link streamSequence}'s reason. **Unwired, it answers `[]`** — divergence 12: a store built
+   * without the log has seen no status change, and says so. `createPipelineHarness` wires it.
+   */
+  readonly committedLog?: () => readonly StoredEvent[];
   /**
    * The clock `run_commands.created_at` is stamped by and the steer window reads (WP-101) — the
    * database's `now()` in PostgreSQL. Defaults to `Date.now`.
@@ -1053,6 +1067,67 @@ export const createMemoryPipelineStore = (
         lastActivityAt: lastAction ?? newest.occurred_at,
       };
     },
+    observeHumanStageStatus: async (_tx, entry) => {
+      // The SQL statement's `coalesce` and `or`, over the attempt's row.
+      const row = [...stages]
+        .reverse()
+        .find(
+          (candidate) =>
+            candidate.taskId === entry.taskId &&
+            candidate.stage === entry.stage &&
+            candidate.attempt === entry.attempt,
+        );
+      if (row === undefined) {
+        return null;
+      }
+      row.entryTicketStatus = row.entryTicketStatus ?? entry.entryStatus;
+      row.ticketSeenAtQa = (row.ticketSeenAtQa ?? false) || entry.seenAtQa;
+      return { entryStatus: row.entryTicketStatus, seenAtQa: row.ticketSeenAtQa };
+    },
+    ticketStatusChangesSinceEntry: async (_tx, query) => {
+      // The SQL store's predicate over the committed log (divergence 12).
+      const task = tasks.get(query.taskId);
+      const log = options.committedLog?.() ?? [];
+      if (task === undefined) {
+        return [];
+      }
+      const entry = log
+        .filter(
+          ({ event }) =>
+            event.stream_type === 'task' &&
+            event.stream_id === query.taskId &&
+            event.type === 'task.stage.entered' &&
+            event.payload.stage === query.stage,
+        )
+        .at(-1)?.position;
+      if (entry === undefined) {
+        return [];
+      }
+      const ticket = task.task.ticket;
+      const matched = log
+        .flatMap(({ position, event }) =>
+          event.type === 'ticket.status.changed' ? [{ position, event }] : [],
+        )
+        .filter(({ position, event }) => {
+          if (
+            position <= entry ||
+            event.stream_type !== 'project' ||
+            event.stream_id !== task.task.projectId ||
+            event.payload.ticket.provider !== ticket.provider
+          ) {
+            return false;
+          }
+          const id = event.payload.ticket.id ?? null;
+          return id !== null && (ticket.id ?? null) !== null
+            ? id === ticket.id
+            : event.payload.ticket.key === ticket.key;
+        })
+        .map(({ event }) => ({ from: event.payload.from, to: event.payload.to }));
+      return (query.order === 'oldest_first' ? matched : [...matched].reverse()).slice(
+        0,
+        query.limit,
+      );
+    },
     lastReturnReason: async (_tx, taskId, stage, attempt) => {
       // The SQL store's rule, over the write sequence where the SQL uses `clock_timestamp()`.
       const previous = stages
@@ -1309,6 +1384,13 @@ export const createMemoryPipelineStore = (
       };
     },
     /** Backlog 476: {@link lastSavedWork}'s row, however it ended. */
+    latestStartedAt: async (_tx, query) => {
+      // Insertion order is `created_at` order here, as in `lastEnded`.
+      const latest = [...runs.values()]
+        .filter((run) => run.taskId === query.taskId && run.stage === query.stage)
+        .at(-1);
+      return latest === undefined ? null : (latest.startedAt ?? latest.createdAt);
+    },
     lastEnded: async (_tx, query) => {
       const latest = [...runs.values()]
         .filter(

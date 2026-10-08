@@ -70,6 +70,24 @@ export const ticketClaimNeeded = (claim: StoredTicketClaim | null): boolean =>
   claim === null || claim.stale || claim.released_at !== null;
 
 /**
+ * Whether the next claim is a **first** claim (TD-029 decision 5, amendments (a) and (c)) — one that
+ * reads the assignee before it assigns and refuses, without the assign, a ticket somebody else holds:
+ *
+ *  - no claim was ever recorded;
+ *  - the platform **released** it (a *Rework*, a cancellation, a stopped task): the release put the
+ *    ticket back in the pick-up pool, so a person who holds it afterwards took it from there;
+ *  - it is stale because its task **stopped** between the assign and the record (`stale_cause:
+ *    'stopped'`, WP-178 criterion (17) (ii), PROGRESS backlog 543) — whether or not its `stopped`
+ *    release ran. Such a claim was never held by a running task, so a person who took the ticket
+ *    meanwhile — after an exhausted release, or before a pending one — is never overwritten.
+ *
+ * Only a claim stale for a **human return** (or one written before `stale_cause` existed) is a
+ * re-claim, which takes the ticket back: the person who returned it may well hold it.
+ */
+export const ticketClaimIsFirst = (claim: StoredTicketClaim | null): boolean =>
+  claim === null || claim.released_at !== null || (claim.stale && claim.stale_cause === 'stopped');
+
+/**
  * Whether the task holds its ticket now — what the lifecycle duty asks before it moves a ticket on
  * a claiming binding, so it never moves a ticket somebody else may hold.
  */

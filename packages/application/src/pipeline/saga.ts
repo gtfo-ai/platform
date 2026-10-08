@@ -61,7 +61,9 @@ import {
   isRepeatOfPreviousRound,
   isRunnableTaskState,
   markQuestionEscalated,
+  opensWithPlatformCommentMarker,
   orderQueue,
+  QA_STAGE_ID,
   queueTask,
   READY_FOR_MERGE_STAGE,
   requestApproval,
@@ -83,6 +85,7 @@ import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { WorkingCalendar } from '../scheduling/working-calendar.js';
 import { escalateForConfigRefusalInHandler } from './config-refusal.js';
 import { questionDeadlineRule } from './deadline-rules.js';
+import { humanReturnStageOf } from './human-stage.js';
 import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
 import {
   gitReads,
@@ -1738,6 +1741,17 @@ const mergeRequestHandler = (options: PipelineSagaOptions): EventHandler => ({
       );
       return;
     }
+    if (humanReturnStageOf(stored) === 'qa') {
+      // WP-178 (TD-029 decision 9): a person merged during QA. `qa`'s own edge leads to
+      // `merged_gate`, as `ready_for_merge`'s does — the merge is the human decision QA waits on.
+      await step(options, context, stored, {
+        kind: 'event',
+        stage,
+        event: 'mr.merged',
+        detail: 'the merge request was merged',
+      });
+      return;
+    }
     if (
       state === 'active' ||
       state === 'returned' ||
@@ -1775,54 +1789,130 @@ const mergeRequestHandler = (options: PipelineSagaOptions): EventHandler => ({
 });
 
 /**
- * BD-007's batching, the enqueue half.
+ * BD-007's batching, the enqueue half — since WP-178 the **human-return window**'s (TD-029 decision
+ * 7, BD-031 ruling 4).
  *
  * The window is a **delayed wake-up with re-validation**, not a coalesced job: both of the Jobs
- * port's coalescing modes are leading-edge, so the first comment would bounce the task back to
- * Implementation while the human was still typing. The queue is `stately` per merge request, so a
- * burst collapses onto the first comment's timer; `jobs.ts` re-reads every unresolved thread when
- * it fires.
+ * port's coalescing modes are leading-edge, so the first word would bounce the task back to
+ * Implementation while the person was still typing. The queue is `stately` per merge request, so a
+ * burst collapses onto the first word's timer; `jobs.ts` re-reads every signal when it fires.
+ *
+ * **Four events arm it** (WP-178 (b)), for a task waiting at `qa` or `ready_for_merge`
+ * ({@link humanReturnStageOf}) — until WP-178 one event, for `ready_for_merge` only:
+ *
+ *  - `mr.review.comment` — a note on a diff discussion or a general note, **whatever its
+ *    `resolvable`**; a note in a thread already resolved arms nothing (the window would not count
+ *    it), nor does the platform's own note;
+ *  - `ticket.comment.added` — a person's ticket comment (one that opens with a platform marker arms
+ *    nothing, `opensWithPlatformCommentMarker`);
+ *  - `ticket.status.changed` — the ticket's status moved. **At an agent stage it is logged and
+ *    ignored** (decision 7), which includes the echo of the platform's own `in_progress` write;
+ *  - `ticket.updated` whose changed fields name the status — and one whose list is **empty or
+ *    truncated**, which does not say the status did *not* change: a polled edit carries no field
+ *    names (`ticket-poll.ts`), and on a binding that only polls it is the one signal a ticket comment
+ *    or a status move produces. Arming costs one re-read; not arming loses the person's word (rule
+ *    16's *absent is unknown*, decision 8's failure direction).
  */
 const reviewCommentHandler = (options: PipelineSagaOptions): EventHandler => ({
   name: 'pipeline.review.comment',
   priority: 10,
-  eventTypes: ['mr.review.comment'],
+  eventTypes: [
+    'mr.review.comment',
+    'ticket.comment.added',
+    'ticket.status.changed',
+    'ticket.updated',
+  ],
   handle: async (context) => {
     const event = context.event.event;
-    if (event.type !== 'mr.review.comment') {
+    const logger = options.logger ?? silentLogger;
+    let stored: StoredTask | null;
+    if (event.type === 'mr.review.comment') {
+      if (event.payload.resolved) {
+        return;
+      }
+      if (isPlatformNote({ body: event.payload.text })) {
+        // The platform's own note — a conflict warning, a review finding, a reply — arriving back
+        // as a Note hook is not a person speaking, so it arms no window (WP-73, backlog 214). The
+        // window's own decision ignores it too, so this is the cheaper half, not the only one.
+        return;
+      }
+      stored = await options.store.tasks.findByMergeRequest(context.scope.tx, {
+        projectId: event.payload.project_id,
+        iid: event.payload.mr.iid,
+      });
+    } else if (
+      event.type === 'ticket.comment.added' ||
+      event.type === 'ticket.status.changed' ||
+      event.type === 'ticket.updated'
+    ) {
+      if (
+        event.type === 'ticket.comment.added' &&
+        opensWithPlatformCommentMarker(event.payload.text)
+      ) {
+        return;
+      }
+      if (event.type === 'ticket.updated' && !mayNameTheStatus(event.payload)) {
+        return;
+      }
+      // By the issue's stable id first, as every ticket signal is matched (WP-148).
+      stored = await options.store.tasks.findByTicketSignal(context.scope.tx, {
+        projectId: event.payload.project_id,
+        provider: event.payload.ticket.provider,
+        ticketKey: event.payload.ticket.key,
+        ticketId: event.payload.ticket.id ?? null,
+        mode: 'normal',
+      });
+    } else {
       return;
     }
-    if (event.payload.resolved) {
+    if (stored === null) {
       return;
     }
-    if (isPlatformNote({ body: event.payload.text })) {
-      // The platform's own note — a conflict warning, a review-only finding — arriving back as a
-      // Note hook is not a reviewer speaking, so it arms no window (WP-73, backlog 214). The
-      // window's own predicate ignores it too, so this is the cheaper half, not the only one.
+    if (humanReturnStageOf(stored) === null) {
+      if (event.type === 'ticket.status.changed') {
+        // TD-029 decision 7: a status signal at an agent stage returns nothing — the echo of the
+        // platform's own `in_progress` arrives after the task has left the human stage.
+        logger.info(
+          { task_id: stored.task.id, state: stored.task.state, stage: stored.task.currentStage },
+          'the ticket’s status changed while the task is not at a human stage; nothing is returned',
+        );
+      }
       return;
     }
-    const stored = await options.store.tasks.findByMergeRequest(context.scope.tx, {
-      projectId: event.payload.project_id,
-      iid: event.payload.mr.iid,
-    });
-    if (stored === null || stored.task.state !== 'ready_for_merge') {
+    const mr = stored.mr;
+    if (mr === null) {
+      logger.warn(
+        { task_id: stored.task.id, event: event.type },
+        'a task at a human stage has no merge request, so no human-return window is armed',
+      );
       return;
     }
     const windowMs = options.reviewCommentWindowMs ?? DEFAULT_REVIEW_COMMENT_WINDOW_MS;
     const taskId = stored.task.id;
     const projectId = stored.task.projectId;
-    const iid = event.payload.mr.iid;
     context.afterCommit(async () => {
       await enqueueReviewCommentWindow(options.jobs, {
         taskId,
         projectId,
-        iid,
+        iid: mr.iid,
         windowMs,
         now: new Date(options.clock.now()),
       });
     });
   },
 });
+
+/**
+ * Whether a `ticket.updated` may have moved the status: its changed fields name it, or say nothing
+ * (empty or truncated) — see {@link reviewCommentHandler}.
+ */
+const mayNameTheStatus = (payload: {
+  readonly changed_fields: readonly string[];
+  readonly truncated: boolean;
+}): boolean =>
+  payload.truncated ||
+  payload.changed_fields.length === 0 ||
+  payload.changed_fields.some((field) => field.trim().toLowerCase() === 'status');
 
 const defaultBranchHandler = (options: PipelineSagaOptions): EventHandler => ({
   name: 'pipeline.default.branch',
@@ -1851,21 +1941,25 @@ const defaultBranchHandler = (options: PipelineSagaOptions): EventHandler => ({
       );
       return;
     }
-    const waiting = await options.store.tasks.listAtStage(
-      context.scope.tx,
-      event.payload.project_id,
-      'ready_for_merge',
-    );
-    for (const stored of waiting) {
-      if (stored.task.state !== 'ready_for_merge') {
-        continue;
+    // Both human stages wait on a branch that must still apply (WP-178): `qa`'s edge leads back to
+    // the rebase gate exactly as `ready_for_merge`'s does, spending `rebase_rechecks` (WP-174).
+    for (const at of [QA_STAGE_ID, READY_FOR_MERGE_STAGE] as const) {
+      const waiting = await options.store.tasks.listAtStage(
+        context.scope.tx,
+        event.payload.project_id,
+        at,
+      );
+      for (const stored of waiting) {
+        if (humanReturnStageOf(stored) !== at) {
+          continue;
+        }
+        await step(options, context, stored, {
+          kind: 'event',
+          stage: at,
+          event: 'default_branch.moved',
+          detail: `${event.payload.branch} moved to ${event.payload.new_head}`,
+        });
       }
-      await step(options, context, stored, {
-        kind: 'event',
-        stage: 'ready_for_merge',
-        event: 'default_branch.moved',
-        detail: `${event.payload.branch} moved to ${event.payload.new_head}`,
-      });
     }
   },
 });

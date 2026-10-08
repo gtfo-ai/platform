@@ -15,6 +15,12 @@ Keeps accountability with the team; turns the MR into the natural feedback chann
 ## Alternatives considered
 - Auto-merge on green + approvals — maybe later for `chore` template once trust metrics exist (TODO).
 
+> **Amended by BD-031 (2026-10-08), as built at WP-178.** The return is no longer "every unresolved MR
+> discussion thread": every human word since the last run — MR diff threads, MR general notes whatever
+> `resolvable` says, ticket comments, and a person's status change — returns the task from any human
+> stage (`qa` or Ready), batched in the same window; an acknowledgement alone and the platform's own
+> notes do not (TD-029 decisions 6–8).
+
 ## Consequences
 - Git provider integration must deliver MR comment and merge events (webhooks) — research/03 verifies GitLab supports this.
 - A human comment loop counts toward iteration limits separately (default 3 human rounds before `Needs human`, to avoid an endless polite ping-pong).

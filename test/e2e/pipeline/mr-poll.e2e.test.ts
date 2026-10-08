@@ -365,6 +365,15 @@ describe('a poll-only binding (WP-123)', () => {
         where task_id = $1 and stage = 'ready_for_merge' and exited_at is null`,
       [task.id],
     );
+    // WP-178: a word returns the task only when it is newer than the start of the task's latest
+    // implementation run (TD-029 decision 7's horizon). The notes below are written "three minutes
+    // ago", so the run is moved back with the Ready entry, as if the walk had taken ten minutes.
+    await pipeline.query(
+      `update runs set created_at = now() - interval '11 minutes',
+                       started_at = now() - interval '11 minutes'
+        where task_id = $1`,
+      [task.id],
+    );
     const threeMinutesAgo = () => new Date(Date.now() - 3 * 60_000).toISOString();
     const systemThread = pipeline.git.addHumanDiscussion({
       project: GIT_PROJECT,

@@ -278,10 +278,11 @@ read; `settingsNotApplied`, `packages/application/src/config/settings-grades.ts`
   project's `.agentic/pipeline.yml` is not read either (next section).
 - **`stages.<id>.prompt`** and **`stages.<id>.prompt_append`** **are read since WP-92** (next paragraph); what
   is still reported is a value naming a file outside `.agentic/prompts/`.
-- **`human_returns.acknowledgements`** (WP-170) parses and has **no reader until WP-178** (the human-return
-  window), and — the one exception to the sentence above — the settings write does **not** report it:
-  `SETTINGS_UNREAD_KEYS` was not widened, because WP-170 touches only the contracts ring and the repository grade.
-  A word stored before WP-178 lands is applied from then on. Recorded as discovered work under WP-170 in PROGRESS.
+- **`human_returns.acknowledgements`** is **read since WP-178**, by the human-return window (`jobs.ts`), from the
+  settings layer only (the repository file's value is *not applied*, per the grading table below). From WP-170
+  until WP-178 it parsed and had no reader, and — the one exception to the sentence above in that window — the
+  settings write did not report it, because `SETTINGS_UNREAD_KEYS` was not widened; a word stored then is applied
+  from WP-178 on. It is therefore no longer in this list's subject, and is kept here as history.
 
 **Verification on CI: `verification.mode` (BD-025's 2026-10-05 amendment, PROGRESS backlog 460).** `local`
 (the default, and every build before the key) keeps the shipped behaviour: the Developer, Reviewer, Acceptance

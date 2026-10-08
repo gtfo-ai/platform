@@ -128,9 +128,19 @@ const DECLARED: Readonly<Record<string, { readonly count: number; readonly reaso
       'the ticket claim (WP-177) reads only `ticketLifecycle`, the task-management binding’s block, which no configuration document carries; the run it admits is still refused by name at `admit`',
   },
   'packages/application/src/pipeline/ticket-lifecycle.ts': {
-    count: 3,
+    count: 2,
     reason:
-      'the lifecycle handler and its two duties (WP-177) read only `ticketLifecycle` — the task-management binding’s block, which no configuration document carries — and move the ticket, never the task',
+      'the lifecycle handler and its duty (WP-177) read only `ticketLifecycle` — the task-management binding’s block, which no configuration document carries — and move the ticket, never the task',
+  },
+  'packages/application/src/pipeline/ticket-release.ts': {
+    count: 1,
+    reason:
+      'the ticket release (WP-177, its own module since WP-178) reads only `ticketLifecycle`’s `pick_up_from` — the binding’s, which no configuration document carries — and moves the ticket, never the task',
+  },
+  'packages/application/src/pipeline/jobs.ts': {
+    count: 1,
+    reason:
+      'the human-return window (WP-178) reads `ticketLifecycle` — the binding’s, which no configuration document carries — and `human_returns.acknowledgements`, whose default is no added word: acting on the defaults reads fewer words as thanks, so it returns the task where the project’s words would not, which is the failure direction TD-029 decision 8 chose',
   },
   'packages/application/src/pipeline/workpad.ts': {
     count: 2,

@@ -66,7 +66,10 @@ export const renderAskComment = (ask: StoredAsk, baseUrl: string): string => {
     return `- knowledge: \`${citation.reference ?? '(unnamed)'}\``;
   });
   return [
-    `**Asked and answered** — ${askCommentMarker(ask.id)}`,
+    // The marker opens the body (WP-178 criterion (15)): a marker counts at the start only, so the
+    // platform's own comment must open with it. The visible heading follows on the next line.
+    askCommentMarker(ask.id),
+    '**Asked and answered**',
     '',
     ask.answer ?? '',
     ...(citations.length === 0 ? [] : ['', 'Based on:', ...citations]),

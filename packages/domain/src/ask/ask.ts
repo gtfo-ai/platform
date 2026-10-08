@@ -128,14 +128,15 @@ export const ASK_TRIGGERS = ['@agentic ask', '@agentic why'] as const;
  * A comment the platform posted comes back through the provider's webhook exactly like a human's,
  * and answering our own workpad would be a loop that spends a budget per render. Two mechanisms
  * stop it and both are wanted: the author of a platform comment is the integration's bot account,
- * which maps to no platform user and is therefore **unverified**; and the body carries one of these
- * markers. The marker check is here because it is the one that still holds on the day somebody
+ * which maps to no platform user and is therefore **unverified**; and the body opens with one of
+ * these markers (since WP-178; until then *carries*, anywhere — {@link opensWithPlatformCommentMarker}
+ * has why it narrowed). The marker check is here because it is the one that still holds on the day somebody
  * gives the bot account a `user_identities` row.
  *
  * Since WP-174 (BD-031, TD-029 decisions 5, 6 and 10) the list also names the claim refusal's
  * comment (`agentic:claim-refused:<task>`, posted when the ticket is assigned elsewhere) and the
  * reply the platform posts on a ticket comment that asked for something
- * (`agentic:reply:<task>.<run>.<n>`). A comment carrying any of these is the platform's, so it is
+ * (`agentic:reply:<task>.<run>.<n>`). A comment opening with any of these is the platform's, so it is
  * neither an ask nor a person's word that returns a task (`humanReturnDecision`).
  */
 export const PLATFORM_COMMENT_MARKERS = [
@@ -144,6 +145,29 @@ export const PLATFORM_COMMENT_MARKERS = [
   'agentic:claim-refused:',
   'agentic:reply:',
 ] as const;
+
+/**
+ * Whether a ticket comment's body **opens with** one of {@link PLATFORM_COMMENT_MARKERS} — optional
+ * leading whitespace, then the marker — which is how TD-029 decision 6 reads *"the body opens with
+ * one"* (WP-178 criterion (15)), and the same shape as the merge-request test
+ * (`isPlatformMergeRequestNote`).
+ *
+ * **At the start only**, never anywhere in the body. Until WP-178 both readers asked `includes`, so a
+ * person who quoted a platform comment while asking for a change was read as the platform and
+ * silenced — the failure direction TD-029 decision 8 rejects. The ask classifier
+ * ({@link classifyTicketComment}) is the second reader and is narrowed the same way: one test, so
+ * the ask door and the human-return window cannot disagree about whose comment it is.
+ *
+ * Every platform comment this build posts opens with its marker or carries it as the provider's
+ * `marker_id` (the Jira adapter's trailing marker node, read back as `TicketComment.marker_id`).
+ * The ask mirror's comment carried its marker mid-line until WP-178 (`**Asked and answered** —
+ * agentic:ask:<id>`); one posted before then is still the platform's through its `marker_id`, and is
+ * older than any horizon the window reads in practice.
+ */
+export const opensWithPlatformCommentMarker = (text: string): boolean => {
+  const body = text.trimStart();
+  return PLATFORM_COMMENT_MARKERS.some((marker) => body.startsWith(marker));
+};
 
 /** How a ticket comment reached the classifier, and what the platform did with it. */
 export type TicketCommentVerdict =
@@ -155,7 +179,7 @@ export type TicketCommentVerdict =
 export type NotAnAskReason =
   /** No `@agentic ask` / `@agentic why` at the start of the comment — an ordinary remark. */
   | 'no_trigger'
-  /** The platform's own comment: the body carries a marker this platform writes. */
+  /** The platform's own comment: the body opens with a marker this platform writes (WP-178). */
   | 'platform_comment'
   /** The trigger with nothing after it. */
   | 'empty_question'
@@ -181,6 +205,13 @@ const startsWithTrigger = (text: string): string | null => {
   return null;
 };
 
+/**
+ * Whether a comment opens with an ask trigger (`@agentic ask`, `@agentic why`) — the classifier's
+ * own test, exported for the human-return window, which leaves such a comment out of the words that
+ * return a task (TD-029 decision 7's WP-178 review amendment (c), Q119): ask-the-task answers it.
+ */
+export const opensWithAskTrigger = (text: string): boolean => startsWithTrigger(text) !== null;
+
 export interface TicketCommentInput {
   /** The comment's body, verbatim. Untrusted (BD-022). */
   readonly text: string;
@@ -200,7 +231,7 @@ export interface TicketCommentInput {
  * ask" when the truth is that the platform was talking to itself.
  */
 export const classifyTicketComment = (input: TicketCommentInput): TicketCommentVerdict => {
-  if (PLATFORM_COMMENT_MARKERS.some((marker) => input.text.includes(marker))) {
+  if (opensWithPlatformCommentMarker(input.text)) {
     return { kind: 'not_an_ask', reason: 'platform_comment' };
   }
   const rest = startsWithTrigger(input.text);

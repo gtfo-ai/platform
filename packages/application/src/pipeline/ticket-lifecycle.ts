@@ -13,8 +13,9 @@
  *   mapping's reason: a transition is a movement, and a task that moved twice owes the board both
  *   moves in order.
  * - `pipeline.ticket.release` (110) reads `task.cancelled` and enqueues `ticket_release` for a task
- *   that holds a claim. A person's *Rework* enqueues the same duty from its command
- *   (`reworkStageCommand`), after its commit.
+ *   that holds a claim. A person's *Rework* enqueued the same duty from its command until WP-178;
+ *   since then it marks the claim stale (`stale_cause: 'rework'`) and the reworked task's next agent
+ *   admission performs the release before it claims (`ticket-release.ts`, PROGRESS backlog 541).
  *
  * **One writer per moment** (decision 3): when the binding maps any slot other than `pick_up_from`,
  * `statusMappingHandler` returns before it decides anything, so the two never race on one ticket.
@@ -28,8 +29,7 @@
  * duty logs a `warn` naming the slot, and the next moment moves the ticket on — `JOB_EXHAUSTION`'s
  * `notification_shaped` row.
  */
-import type { DomainEvent, Id, IsoDateTime } from '@platform/contracts';
-import { domainEventSchemasByType } from '@platform/contracts';
+import type { Id } from '@platform/contracts';
 import {
   compilePipeline,
   type LifecycleSignal,
@@ -48,14 +48,9 @@ import {
   noRunScopedSecrets,
   ticketWrites,
 } from './integrations.js';
-import {
-  enqueueOutbound,
-  inTaskTransaction,
-  type PipelineOutboundData,
-  type TaskTransactionOptions,
-} from './jobs.js';
+import { enqueueOutbound, type PipelineOutboundData, type TaskTransactionOptions } from './jobs.js';
 import type { PipelineSagaOptions } from './saga.js';
-import { PIPELINE_ACTOR } from './store.js';
+import { releaseTicket } from './ticket-release.js';
 
 /** The handler that decides a lifecycle moment (TD-005 integrations band, beside the mapping). */
 export const TICKET_LIFECYCLE_HANDLER = 'pipeline.ticket.lifecycle';
@@ -163,7 +158,10 @@ export const ticketReleaseHandler = (options: PipelineSagaOptions): EventHandler
   },
 });
 
-/** The `ticket_release` wake-up — one shape for the cancellation handler and the rework command. */
+/**
+ * The `ticket_release` wake-up — the cancellation handler's (and, until WP-178, the rework command's;
+ * `ensureTicketClaim` writes the `stopped` one out by hand).
+ */
 export const releaseRequest = (input: {
   readonly projectId: Id;
   readonly taskId: Id;
@@ -240,20 +238,18 @@ export const runTicketLifecycle = async (
 };
 
 /**
- * `pipeline.outbound` duty **ticket_release**: unassign the binding's own account and move the
- * ticket to `pick_up_from` when that is mapped, then record `released_at` and `ticket.released`.
+ * `pipeline.outbound` duty **ticket_release**: give the ticket back ({@link releaseTicket}).
  *
- * A *Rework*'s release that finds the claim **no longer stale** — the rework marked it stale in
- * its own transaction, and only a re-claim clears that, so the reworked task's next agent stage
- * claimed again first — does nothing: undoing that claim would leave the agent working an
- * unassigned ticket. No clock is compared; the stale mark is the token. Each provider step fails open with a `warn`; what happened
- * is recorded either way.
+ * Its wake-ups are `task.cancelled` ({@link ticketReleaseHandler}) and a task that stopped between
+ * the claim's assign and its record (`ensureTicketClaim`, cause `stopped`). A person's *Rework* no
+ * longer enqueues it (WP-178 criterion (17) (i), PROGRESS backlog 541): the reworked task's next
+ * agent admission performs that release itself, before it claims, so the two cannot interleave. A
+ * `rework` wake-up enqueued before WP-178 is still performed here, with the race it always had.
  */
 export const runTicketRelease = async (
   options: TaskTransactionOptions,
   data: PipelineOutboundData,
 ): Promise<void> => {
-  const logger: Logger = options.logger ?? silentLogger;
   const taskId = data.task_id as Id | undefined;
   const cause = data.release_cause;
   if (
@@ -262,119 +258,12 @@ export const runTicketRelease = async (
   ) {
     return;
   }
-  const read = await options.unitOfWork.transaction(async (scope) => {
-    const stored = await options.store.tasks.load(scope.tx, taskId);
-    return stored === null
-      ? null
-      : { stored, claim: await options.store.tasks.ticketClaim(scope.tx, taskId) };
-  });
-  if (read === null || read.claim === null || read.claim.released_at !== null) {
-    return;
-  }
-  const { stored, claim } = read;
-  // A Rework and a stopped claim marked the claim stale; a re-claim clears it (the token).
-  if (cause !== 'cancelled' && !claim.stale) {
-    logger.info(
-      { task_id: taskId, cause },
-      'the task claimed its ticket again after the release was decided; the release leaves it held',
-    );
-    return;
-  }
-  const { task } = stored;
-  const settings = await options.settings.forProject(task.projectId);
-  const pickUpFrom = settings.ticketLifecycle?.pickUpFrom ?? null;
-  const writeContext = {
-    projectId: task.projectId,
+  await releaseTicket(options, {
     taskId,
-    mode: task.mode,
-    causeEventId: data.cause_event_id as Id,
-  };
-  const integrations = await integrationsForProject(
-    options.integrations,
-    task.projectId,
-    noRunScopedSecrets(),
-  );
-  const shadow = task.mode === 'shadow';
-  const unassigned = await failingOpen(logger, taskId, 'unassign', async () => {
-    const result = await ticketWrites(integrations).unassign(task.ticket, {
-      ...writeContext,
-      idempotencyKey: `ticket_release_unassign:${taskId}:${data.cause_event_id}`,
-    });
-    return result?.changed === true && !shadow;
+    cause,
+    keySuffix: String(data.cause_event_id),
+    // A `stopped` release has no cause event (the claim enqueued it from a job, with a fresh id
+    // standing as its wake-up identity), so the envelope names none.
+    causeEventId: cause === 'stopped' ? null : (data.cause_event_id as Id),
   });
-  const pickUpFromWritten =
-    pickUpFrom !== null &&
-    (await failingOpen(logger, taskId, 'pick_up_from', async () => {
-      const result = await ticketWrites(integrations).transition(task.ticket, pickUpFrom, {
-        ...writeContext,
-        idempotencyKey: `ticket_release_pick_up_from:${taskId}:${data.cause_event_id}`,
-      });
-      return result !== null && !shadow;
-    }));
-
-  await inTaskTransaction(options, taskId, 'recording the ticket release', async (scope) => {
-    await options.store.tasks.bumpVersion(scope.tx, taskId);
-    const current = await options.store.tasks.load(scope.tx, taskId);
-    const latest = await options.store.tasks.ticketClaim(scope.tx, taskId);
-    // A re-claim that landed while the provider calls ran is not marked released. Its assignment may
-    // have been undone by the unassign above, and nothing puts it back: the claim still reads held,
-    // so no admission re-claims it until it is next marked stale (backlog 541).
-    if (
-      current === null ||
-      latest === null ||
-      latest.released_at !== null ||
-      (cause !== 'cancelled' && !latest.stale)
-    ) {
-      return null;
-    }
-    await options.store.tasks.saveTicketClaim(scope.tx, taskId, {
-      ...latest,
-      released_at: options.clock.now() as IsoDateTime,
-      release_cause: cause,
-    });
-    const event = domainEventSchemasByType['ticket.released'].parse({
-      id: options.ids.next(),
-      stream_type: 'task',
-      stream_id: taskId,
-      stream_seq: current.task.sequence,
-      correlation_id: taskId,
-      // A `stopped` release has no cause event (the claim enqueued it from a job, with a fresh id
-      // standing as its wake-up identity), so the envelope names none.
-      cause_event_id: cause === 'stopped' ? null : data.cause_event_id,
-      actor: PIPELINE_ACTOR,
-      occurred_at: options.clock.now(),
-      type: 'ticket.released',
-      payload: {
-        project_id: task.projectId,
-        task_id: taskId,
-        ticket: { ...current.task.ticket },
-        unassigned,
-        pick_up_from_written: pickUpFromWritten,
-        cause,
-      },
-    }) as DomainEvent;
-    await scope.events.append([event]);
-    return null;
-  });
-};
-
-/** One provider step of the release: its answer, or `false` with a `warn` naming the step. */
-const failingOpen = async (
-  logger: Logger,
-  taskId: Id,
-  step: 'unassign' | 'pick_up_from',
-  perform: () => Promise<boolean>,
-): Promise<boolean> => {
-  try {
-    return await perform();
-  } catch (error) {
-    if (error instanceof TransactionOpenError) {
-      throw error;
-    }
-    logger.warn(
-      { task_id: taskId, step, err: error },
-      'a step of the ticket release failed; the release is recorded with what it did',
-    );
-    return false;
-  }
 };
