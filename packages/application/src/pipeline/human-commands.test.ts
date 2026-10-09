@@ -881,7 +881,10 @@ describe('rework', () => {
     await harness.drain();
 
     expect(closed).toEqual([7]);
-    const note = comments.find((entry) => entry.iid === 7);
+    // By its marker: since WP-179 the code review's summary note is on the same merge request.
+    const note = comments.find(
+      (entry) => entry.iid === 7 && entry.markdown.startsWith('<!-- agentic:superseded:'),
+    );
     expect(note?.markdown).toContain('agentic/ACME-1-r2');
     expect(note?.markdown).toContain(`<!-- agentic:superseded:${before.task.id} -->`);
     expect(harness.audit.entriesFor('close_merge_request').map((entry) => entry.status)).toEqual([

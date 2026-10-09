@@ -76,6 +76,7 @@ import { mergeRequestReadyHandlers } from './merge-request-ready.js';
 import { type PipelineOutboundOptions, pipelineOutboundHandler } from './outbound.js';
 import { providerSignalHandlers } from './provider-signals.js';
 import { resolveOnMergeHandler } from './resolve-on-merge.js';
+import { reviewConversationHandlers } from './review-conversation.js';
 import { reviewOnlyHandlers } from './review-only.js';
 import { reviewThreadsRefreshHandlers } from './review-threads-refresh.js';
 import { riskRoutingHandlers } from './risk-routing.js';
@@ -335,6 +336,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     handlers: [
       ...pipelineHandlers(options),
       ...reviewOnlyHandlers(options),
+      // WP-179 (TD-029 decision 10): the review conversation — findings, replies, resolutions.
+      ...reviewConversationHandlers(options),
       ...ticketLintHandlers(options),
       ...conflictWarningHandlers(options),
       // WP-37: the rebase gate's other duty — classify the diff, route the reviewers.

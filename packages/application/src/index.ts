@@ -152,6 +152,9 @@ export * from './pipeline/outbound.js';
 export * from './pipeline/planner.js';
 export * from './pipeline/progress-tool.js';
 export * from './pipeline/project-stream.js';
+// WP-179: the review conversation's duties and its markers (the contract tier drives them over the fake).
+export * from './pipeline/review-conversation.js';
+export * from './pipeline/review-notes.js';
 export * from './pipeline/run-commands.js';
 export * from './pipeline/run-redaction.js';
 export * from './pipeline/runtime.js';

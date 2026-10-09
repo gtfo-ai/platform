@@ -287,7 +287,8 @@ describe('the declared table against the composed registrations', () => {
   /**
    * WP-178 criterion (10)/(f): the human-return window consumes `ticket.status.changed`, and every
    * type its handler declares is `handled` — the four lines, copied. Read off the registered
-   * handler by name, so the set is the code's.
+   * handler by name, so the set is the code's. WP-179 (TD-029 decision 7 amendment (g)) added the
+   * fifth armer, `task.stage.entered`.
    */
   it('has no type left unconsumed that the human-return window itself handles (WP-178)', () => {
     const window = createPipelineHarness({ runs: {} }).runtime.handlers.find(
@@ -296,6 +297,7 @@ describe('the declared table against the composed registrations', () => {
     const owned = window === undefined || window.eventTypes === 'all' ? [] : [...window.eventTypes];
     expect([...owned].sort()).toEqual([
       'mr.review.comment',
+      'task.stage.entered',
       'ticket.comment.added',
       'ticket.status.changed',
       'ticket.updated',

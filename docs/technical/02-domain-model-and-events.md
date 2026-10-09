@@ -173,8 +173,10 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > dependency gate's Q91 set (`PAST_REVIEW_STAGES`) names `qa` too (WP-178 criterion (16)).
 >
 > **Return signal.** One window, the `mr.comment.debounce` queue (BD-007's batching), now covers both
-> human stages. It is armed by four events: `mr.review.comment`, `ticket.comment.added`,
-> `ticket.status.changed`, and `ticket.updated` whose changed fields name the status. When it fires it
+> human stages. It is armed by five events: `mr.review.comment`, `ticket.comment.added`,
+> `ticket.status.changed`, `ticket.updated` whose changed fields name the status, and — since WP-179
+> (TD-029 decision 7 amendment (g)) — `task.stage.entered` for `qa` or `ready_for_merge`, so a word
+> written while the review stages or the gates ran is decided on entry (WP-178 had the first four). When it fires it
 > re-reads the ticket's status, the merge request's discussions and the ticket's comments, using TD-029's
 > rules:
 > - whose note it is: decision 6;
@@ -551,8 +553,8 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 | `task.human_return` | the human-return window (WP-178) | task, stage left (`qa` \| `ready_for_merge`), forms (`status` \| `mr_diff` \| `mr_note` \| `ticket_comment`), counts, the status when one returned it | — (the return itself is `task.stage.returned`) |
 | `task.created` | Intake | task, template, mode, estimate | Workpad (110), Slack notify (210), UI (220) |
 | `task.queued` / `task.dequeued` | Scheduler | task, reason (wip) | UI |
-| `task.stage.entered` | Pipeline | task, stage, attempt | Stage executor (10), status mapping (110), workpad (120) |
-| `task.stage.completed` | Stage executor | task, stage, artifact ids, verdict | Pipeline transition (10), custom stages (300+) |
+| `task.stage.entered` | Pipeline | task, stage, attempt | Stage executor (10), the human-return window's fifth armer for `qa` and `ready_for_merge` (10, `pipeline.review.comment`, WP-179), status mapping (110), workpad (120) |
+| `task.stage.completed` | Stage executor | task, stage, artifact ids, verdict | Pipeline transition (10), the review conversation's three duties on a `ReviewVerdict` or `ImplementationNotes` (120, `pipeline.review.conversation`, WP-179, TD-029 decision 10), custom stages (300+) |
 | `task.stage.returned` | Pipeline | task, from, to, reason, feedback ref, iteration | Stage executor (10), workpad (120), Slack (210) |
 | `task.question.asked` | Stage executor | question | Ticket comment (110), Slack (210), UI inbox (220), timer (15 — the expiry and, since WP-84, the reminder) |
 | `task.question.answered` | Question | question, answer, author, channel | Pipeline resume (10), other channels update (110) |
@@ -617,7 +619,7 @@ the job. There is no re-queue from that list in 0.1.
 | **recovery row** | a row of `recovery/stranded.ts`'s table finds the lost effect by its database trace, re-enqueues it once under a mark, then makes it visible | `deadline.sweep`, `task.ask`, `knowledge.proposals`, `bootstrap.history`, **`knowledge.apply`** (`knowledge_apply`: the proposal reads `apply_failed`), **`onboarding.discovery`** (`discovery_record`: the discovery task escalates with a brief) |
 | **bound and escalate** | the job carries a task a person waits on; its **last** try escalates the task with a brief (or, for a task already `done`, tells its people by an escalation notification — Q113) before the throw ends the job (`pipeline/job-escalation.ts`). A last try that **expires** never throws — pg-boss fails it from the worker's own timer or from the supervisor (measured at WP-156, backlog 421) — so the `expired_job` row of `recovery/stranded.ts`'s table escalates its task instead, once per job id (`expired_job_escalations`, migration 0087), and never re-enqueues it. Every such queue declares its `expireInSeconds` | `stage.execute` (the archetype: its own start bound, then `stranded_stage`; its expiry is the `run_lease` and `stranded_stage` rows'), **`mr.comment.debounce`** |
 | **notification-shaped** | listed only: the next transition or tick re-derives the effect, or what is lost is a notification (rule 20) | `pipeline.intake.reconcile`, `ticket.poll`, `mr.poll`, `knowledge.index`, `knowledge.hygiene`, `notify.digest`, `maintenance.schedule`, `price.list.maintain`, `db.partitions.maintain` |
-| **per duty** | `pipeline.outbound` carries thirty-two duties of all three shapes, declared one by one in `OUTBOUND_DUTY_EXHAUSTION` | recovery rows: `intake_check`, `notify`, `notify_organisation`, `close_superseded_mr`, `revoke_run_credential`, `dependency_gate_resume`; bound and escalate: `review_only_post`, `ticket_lint_post`, `spike_report`, `breakdown_create`, `dependency_gate`, `ready_head_check`, `mr_pipeline`, `mr_ready` (backlog 486; `mr_draft` is notification-shaped); notification-shaped: the rest, among them `workpad` and `status` |
+| **per duty** | `pipeline.outbound` carries thirty-seven duties of all three shapes (since WP-179, whose `review_findings_post`, `conversation_replies` and `review_threads_resolve` are notification-shaped), declared one by one in `OUTBOUND_DUTY_EXHAUSTION` | recovery rows: `intake_check`, `notify`, `notify_organisation`, `close_superseded_mr`, `revoke_run_credential`, `dependency_gate_resume`; bound and escalate: `review_only_post`, `ticket_lint_post`, `spike_report`, `breakdown_create`, `dependency_gate`, `ready_head_check`, `mr_pipeline`, `mr_ready` (backlog 486; `mr_draft` is notification-shaped); notification-shaped: the rest, among them `workpad` and `status` |
 
 `pipeline.outbound` polls at its own **0.5 s** (`PIPELINE_OUTBOUND_POLLING_INTERVAL_SECONDS`, WP-124,
 PROGRESS backlog 392); every other queue keeps `APP_JOBS_POLL_INTERVAL_SECONDS`. A worker takes one job

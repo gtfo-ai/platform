@@ -818,6 +818,27 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
   readonly getMergeRequestDiffStats: (ref: MergeRequestRefInput) => Promise<DiffStats | null>;
 
   readonly listDiscussions: (ref: MergeRequestRefInput) => Promise<readonly Discussion[]>;
+  /**
+   * A reply in the discussion `discussionId` names — the platform's answer on a review thread or a
+   * person's note (WP-179, TD-029 decision 10).
+   *
+   * **The discussion that comes back may not be the one asked for.** A provider may not accept a
+   * reply into an individual (non-threaded) note's discussion, and the GitLab adapter's fallback
+   * then posts a new merge-request note and returns *that* note's discussion, whose id differs
+   * (GitLab divergence 8, research/15 G4 still `[unverified]` live; the fake's divergence 31 makes
+   * that the default). What an implementation **does** keep is the caller's `markdown` **at the
+   * start** of the note it writes, unchanged — the fallback appends one platform line after it — so
+   * a body that opens with a platform marker still opens with it. A caller therefore finds its own
+   * reply again **by the marker its body opens with**, across every discussion, and never by the id
+   * this call returned: matching by the returned id misses a reply that landed in a new discussion
+   * and posts it a second time on a replay.
+   *
+   * **It is a mutation**, so every call goes through `IntegrationActionExecutor`. It is not
+   * idempotent by itself (the fallback is a POST and then a read), so the caller keys it and checks
+   * the marker before a retry posts again.
+   *
+   * @throws {IntegrationError} `not_found` when the discussion does not exist on the merge request.
+   */
   readonly replyToDiscussion: (
     ref: MergeRequestRefInput,
     discussionId: string,

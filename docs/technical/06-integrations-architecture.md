@@ -178,8 +178,13 @@ capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArt
 >
 > **Callers.** `replyToDiscussion` and `resolveDiscussion` get their first callers: the
 > `conversation_replies` and `review_threads_resolve` duties, through `IntegrationActionExecutor`
-> (WP-179). Whose note is the platform's is decided by the marker at the start of its body, never by
-> `authenticatedUser()`, because a binding may act as a person (TD-029 decision 6, Q118).
+> (WP-179). Whether a note is a **person's word** is decided by the marker at the start of its body,
+> never by `authenticatedUser()`, because a binding may act as a person (TD-029 decision 6, Q118).
+> The opposite question — is this note **the platform's own**, so a reply need not be posted again or
+> a finding thread may be resolved — asks the marker **and** that the note's author is
+> `authenticatedUser()` (WP-179): both narrow a mutation the platform would make, so neither can
+> silence a person. A reply is found again by its marker across every discussion, never by the
+> discussion `replyToDiscussion` returned, whose id may differ (the port's docblock).
 
 Git operations (clone, branch, commit, rebase, push) are performed by the workspace manager with `git` and a credential helper, never by the agent with a raw token (BD-025).
 

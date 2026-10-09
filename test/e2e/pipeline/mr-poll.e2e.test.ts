@@ -391,13 +391,29 @@ describe('a poll-only binding (WP-123)', () => {
       createdAt: threeMinutesAgo(),
     });
 
+    // The entry into Ready arms a window of its own (WP-179, TD-029 decision 7 amendment (g)), and
+    // it is enqueued by the dispatcher's `task.stage.entered` handler **after** the state that
+    // `toReady` settles on is committed — so under load it lands after any instant read here.
+    // Wait for that effect, and take the baseline from it.
+    const debounceJobs = async () =>
+      (
+        await pipeline.query<{ id: string }>(
+          `select id from pgboss.job where name = 'mr.comment.debounce' order by created_on`,
+        )
+      ).map((row) => row.id);
+    await pipeline.waitFor('the window the entry into Ready armed', async () => {
+      return (await debounceJobs()).length === 1;
+    });
+    const entryWindow = await debounceJobs();
+
     const notesAdded = await dbNow(pipeline);
     await pollOnlyOn(pipeline);
     await pollCompletedAfter(pipeline, notesAdded, 'a poll after the two notes');
+    // Neither note is a person's word, so the poll records no comment, and no window but the
+    // entry's exists. (The `stately` queue would refuse a second window while the entry's waits, so
+    // the recorded comment above is the load-bearing half; the job list is the second.)
     expect(await ofType(pipeline, 'mr.review.comment')).toEqual([]);
-    expect(
-      await pipeline.query(`select id from pgboss.job where name = 'mr.comment.debounce'`),
-    ).toEqual([]);
+    expect(await debounceJobs()).toEqual(entryWindow);
     expect((await pipeline.task()).state).toBe('ready_for_merge');
 
     const humanThread = pipeline.git.addHumanDiscussion({
@@ -407,8 +423,14 @@ describe('a poll-only binding (WP-123)', () => {
       text: 'Please rename totals before this merges.',
       createdAt: threeMinutesAgo(),
     });
-    await pipeline.waitFor('the task returned to implementation for the polled note', async () => {
+    // The poll records the note first, and only then is the window nudged: since WP-179 the entry
+    // into Ready armed a window of its own, which reads the discussions directly and would return
+    // the task on this note before the poll had recorded it (TD-029 decision 7 amendment (g)).
+    await pipeline.waitFor('the poll recorded the person’s note', async () => {
       await nudge(pipeline, 'mr.poll');
+      return (await ofType(pipeline, 'mr.review.comment')).length > 0;
+    });
+    await pipeline.waitFor('the task returned to implementation for the polled note', async () => {
       await nudge(pipeline, 'mr.comment.debounce');
       return (await ofType(pipeline, 'task.stage.returned')).some(
         (event) =>

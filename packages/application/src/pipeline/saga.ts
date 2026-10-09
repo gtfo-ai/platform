@@ -1797,8 +1797,9 @@ const mergeRequestHandler = (options: PipelineSagaOptions): EventHandler => ({
  * Implementation while the person was still typing. The queue is `stately` per merge request, so a
  * burst collapses onto the first word's timer; `jobs.ts` re-reads every signal when it fires.
  *
- * **Four events arm it** (WP-178 (b)), for a task waiting at `qa` or `ready_for_merge`
- * ({@link humanReturnStageOf}) — until WP-178 one event, for `ready_for_merge` only:
+ * **Five events arm it** (WP-178 (b), and since WP-179 TD-029 decision 7 amendment (g)), for a task
+ * waiting at `qa` or `ready_for_merge` ({@link humanReturnStageOf}) — until WP-178 one event, for
+ * `ready_for_merge` only, and WP-178's four until WP-179:
  *
  *  - `mr.review.comment` — a note on a diff discussion or a general note, **whatever its
  *    `resolvable`**; a note in a thread already resolved arms nothing (the window would not count
@@ -1811,7 +1812,15 @@ const mergeRequestHandler = (options: PipelineSagaOptions): EventHandler => ({
  *    truncated**, which does not say the status did *not* change: a polled edit carries no field
  *    names (`ticket-poll.ts`), and on a binding that only polls it is the one signal a ticket comment
  *    or a status move produces. Arming costs one re-read; not arming loses the person's word (rule
- *    16's *absent is unknown*, decision 8's failure direction).
+ *    16's *absent is unknown*, decision 8's failure direction);
+ *  - `task.stage.entered` for `qa` or `ready_for_merge` — a resume from `paused` at either
+ *    included, which emits it (WP-179, amendment (g), PROGRESS backlog 544). Before it, a word
+ *    written at `code_review`, `business_review` or a gate was dropped as a signal (the task was not
+ *    at a human stage) and nothing fired on entry, so it waited for the next signal; and at `qa`
+ *    only the echo of the platform's own `qa` write armed the window, which never comes in shadow
+ *    mode, after a failed transition or with no status webhook. Same queue, same key, same delay,
+ *    so a signal within the delay of the entry collapses onto the entry's timer. The first firing
+ *    is an ordinary one: it records the entry status and decides with the same rule.
  */
 const reviewCommentHandler = (options: PipelineSagaOptions): EventHandler => ({
   name: 'pipeline.review.comment',
@@ -1821,12 +1830,24 @@ const reviewCommentHandler = (options: PipelineSagaOptions): EventHandler => ({
     'ticket.comment.added',
     'ticket.status.changed',
     'ticket.updated',
+    'task.stage.entered',
   ],
   handle: async (context) => {
     const event = context.event.event;
     const logger = options.logger ?? silentLogger;
     let stored: StoredTask | null;
-    if (event.type === 'mr.review.comment') {
+    if (event.type === 'task.stage.entered') {
+      // WP-179 (TD-029 decision 7 amendment (g)): entering a human stage arms the window, so a
+      // word written while the review stages or the gates ran is decided now, not at the next
+      // signal. Only for the stage the task is still at when this dispatch reads it.
+      if (event.payload.stage !== QA_STAGE_ID && event.payload.stage !== READY_FOR_MERGE_STAGE) {
+        return;
+      }
+      stored = await options.store.tasks.load(context.scope.tx, event.payload.task_id);
+      if (stored !== null && humanReturnStageOf(stored) !== event.payload.stage) {
+        return;
+      }
+    } else if (event.type === 'mr.review.comment') {
       if (event.payload.resolved) {
         return;
       }

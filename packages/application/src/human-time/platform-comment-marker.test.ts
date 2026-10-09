@@ -3,7 +3,7 @@
  *
  * `PLATFORM_COMMENT_MARKER_PREFIX` is how the projector tells its own merge-request comments from a
  * person's, and a prefix asserted against a copy of itself asserts nothing (standing rule 7). So
- * this reads the four builders that actually post on a merge request or a ticket and checks each
+ * this reads the builders that actually post on a merge request or a ticket and checks each
  * one starts with it — a new marker that forgot the prefix fails here, in the file that explains
  * why the prefix exists, rather than by quietly inflating somebody's review minutes.
  *
@@ -15,6 +15,11 @@
 import type { Id } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { conflictWarningMarker } from '../pipeline/conflict-warning.js';
+import {
+  conversationReplyNoteMarker,
+  reviewFindingMarkerFor,
+  reviewFindingSummaryMarkerFor,
+} from '../pipeline/review-notes.js';
 import { reviewMarkerFor, reviewSummaryMarkerFor } from '../pipeline/review-only.js';
 import { LINT_COMMENT_MARKER } from '../pipeline/ticket-lint.js';
 import {
@@ -32,9 +37,13 @@ describe('the platform’s own comment marker', () => {
       reviewSummaryMarkerFor(TASK),
       conflictWarningMarker(TASK),
       LINT_COMMENT_MARKER,
+      // WP-179: the pipeline review's finding, summary and reply markers.
+      reviewFindingMarkerFor(TASK, 'run-1', 'f1'),
+      reviewFindingSummaryMarkerFor(TASK, 'run-1'),
+      conversationReplyNoteMarker(TASK, 'run-1', 0),
     ];
     // Read off the builders, not restated: the assertion is about the strings the platform really
-    // writes, so it fails on the commit that introduces a fifth marker without the prefix.
+    // writes, so it fails on the commit that introduces a new marker without the prefix.
     for (const marker of markers) {
       expect({ marker, prefixed: marker.startsWith(PLATFORM_COMMENT_MARKER_PREFIX) }).toEqual({
         marker,

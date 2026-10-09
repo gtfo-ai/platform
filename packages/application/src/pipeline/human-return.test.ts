@@ -612,7 +612,8 @@ describe.each(HUMAN_STAGES)('at %s, what does not return the task', (stage) => {
     const windows = waiting.harness.jobs.enqueued.filter(
       (request) => request.queue === JOB_QUEUES.mrCommentDebounce,
     );
-    expect(windows).toHaveLength(2);
+    // The entry's window (WP-179, TD-029 decision 7 amendment (g)) and the two notes'.
+    expect(windows).toHaveLength(3);
     waiting.harness.clock.advance(WINDOW + 1);
     await waiting.harness.drain();
 
@@ -1173,5 +1174,183 @@ describe('(e) a second visit to the human stage records a fresh entry', () => {
     later(waiting.harness);
     await fire(waiting.harness, polledEdit(waiting.harness));
     expect(returnsFrom(waiting.harness, 'ready_for_merge')).toHaveLength(2);
+  });
+});
+
+// ── (9) WP-179: entering a human stage arms the window ─────────────────────
+
+/**
+ * TD-029 decision 7 amendment (g), PROGRESS backlog 544: `task.stage.entered` for `qa` or
+ * `ready_for_merge` is the window's fifth armer — same handler, same `stately` queue and key, same
+ * delay. Canary (PROGRESS WP-179): with the `task.stage.entered` branch removed from
+ * `reviewCommentHandler`, the first two cases wait and return nothing.
+ */
+describe('(9) entering a human stage arms the window (WP-179)', () => {
+  /** A person's general note, written once while the agent's review stages ran. */
+  const writtenDuringReview = (body: string) => {
+    let wrote = false;
+    return (harness: PipelineHarness, discussions: Discussion[]) => {
+      if (wrote) return;
+      wrote = true;
+      later(harness);
+      discussions.push(generalNote(harness, body));
+      later(harness);
+    };
+  };
+  /** The entry's window comes due; no signal is published. */
+  const entryFires = async (harness: PipelineHarness) => {
+    harness.clock.advance(WINDOW + 1);
+    await harness.drain();
+  };
+  const windowsOf = (harness: PipelineHarness) =>
+    harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.mrCommentDebounce);
+
+  it('a note written during code_review returns the task once after it enters ready_for_merge, with no further signal', async () => {
+    const waiting = await waitingAt('ready_for_merge', {
+      onCiCheck: writtenDuringReview('The totals row is still off by one on page two.'),
+    });
+    expect(returnsFrom(waiting.harness, 'ready_for_merge')).toHaveLength(0);
+    expect(windowsOf(waiting.harness)).toHaveLength(1);
+
+    await entryFires(waiting.harness);
+    expect(returnsFrom(waiting.harness, 'ready_for_merge')).toHaveLength(1);
+    expect(feedbackBlock(waiting.harness)).toContain(
+      '[mr note 1] — The totals row is still off by one on page two.',
+    );
+    // It came back round, and the re-entry's own window reads the new horizon: nothing more.
+    expect(at(waiting.harness)).toEqual(['ready_for_merge', 'ready_for_merge']);
+    await entryFires(waiting.harness);
+    expect(returnsFrom(waiting.harness, 'ready_for_merge')).toHaveLength(1);
+  });
+
+  it('the same at qa in shadow mode, where no echo of the qa write ever comes', async () => {
+    const waiting = await waitingAt('qa', {
+      onCiCheck: writtenDuringReview('The header is wrong too.'),
+    });
+    const { harness } = waiting;
+    // Shadow from here on: the window's reads are made, its writes are would_have rows.
+    await harness.memory.transaction(async (scope) => {
+      const stored = taskOf(harness);
+      await harness.store.tasks.save(scope.tx, {
+        ...stored,
+        task: { ...stored.task, mode: 'shadow' },
+      });
+    });
+    const status = waiting.ticket.state.status;
+
+    await entryFires(harness);
+    expect(returnsFrom(harness, 'qa')).toHaveLength(1);
+    expect(eventsOf(harness, 'task.human_return')[0]?.payload.forms).toEqual(['mr_note']);
+    // Nothing the return implies reached the tracker: the move back to `in_progress` is would_have.
+    expect(waiting.ticket.state.status).toBe(status);
+    expect(
+      harness.audit.entriesFor('transition_ticket').some((entry) => entry.status === 'would_have'),
+    ).toBe(true);
+  });
+
+  it.each(HUMAN_STAGES)(
+    'at %s, an entry with no new word, or only an acknowledgement, returns nothing and records the counts and the entry status',
+    async (stage) => {
+      for (const ack of [null, 'LGTM 👍']) {
+        const waiting = await waitingAt(stage, {
+          ...(ack === null ? {} : { onCiCheck: writtenDuringReview(ack) }),
+        });
+        await entryFires(waiting.harness);
+
+        expect(eventsOf(waiting.harness, 'task.stage.returned'), String(ack)).toHaveLength(0);
+        expect(taskOf(waiting.harness).reviewThreads, String(ack)).toMatchObject({
+          open: 0,
+          resolved: 0,
+        });
+        const row = waiting.harness.store.stageRows.find(
+          (candidate) =>
+            candidate.stage === stage && candidate.taskId === taskOf(waiting.harness).task.id,
+        );
+        expect(row?.entryTicketStatus, String(ack)).toBe(waiting.ticket.state.status);
+      }
+    },
+  );
+
+  it('a signal arriving within the delay of the entry collapses onto the entry’s job', async () => {
+    const waiting = await waitingAt('ready_for_merge');
+    const { harness } = waiting;
+    later(harness);
+    waiting.discussions.push(generalNote(harness, 'Rename the helper, please.'));
+    await harness.publish([noteArrived(harness, 'Rename the helper')]);
+
+    // Both ask for the same `stately` slot: the queue, the key, and a start inside the same delay.
+    const windows = windowsOf(harness);
+    expect(windows).toHaveLength(2);
+    expect(new Set(windows.map((request) => `${request.queue}|${request.singletonKey}`)).size).toBe(
+      1,
+    );
+    expect(windows.every((request) => request.coalesce === undefined)).toBe(true);
+    // The queue admits one queued job per key (`stately`, held by the jobs contract suite), so the
+    // second request is refused there; this harness records both, so it is taken off here.
+    const [entry] = harness.jobs.take(JOB_QUEUES.mrCommentDebounce);
+    await harness.jobs.enqueue(entry as never);
+
+    await entryFires(harness);
+    expect(returnsFrom(harness, 'ready_for_merge')).toHaveLength(1);
+    expect(eventsOf(harness, 'task.human_return')).toHaveLength(1);
+  });
+});
+
+// ── WP-179: the review conversation, decided by the pipeline's own completions ──
+
+describe('the review conversation through the pipeline (WP-179)', () => {
+  const dutiesOf = (harness: PipelineHarness) =>
+    harness.jobs.history
+      .map((request) => request.data as { duty?: string; artifact_id?: string })
+      .filter((data) =>
+        ['review_findings_post', 'conversation_replies', 'review_threads_resolve'].includes(
+          data.duty ?? '',
+        ),
+      );
+
+  it('posts the review’s findings and summary after code_review, and asks for replies only when the Developer wrote some', async () => {
+    const finding = {
+      id: 'f1',
+      severity: 'major',
+      category: 'correctness',
+      file: 'src/totals.ts',
+      line: 12,
+      explanation: 'The footer sums the visible rows.',
+      suggestion: null,
+    };
+    const waiting = await waitingAt('ready_for_merge', {
+      harness: { runs: { ...RUNS, code_review: completed({ ...REVIEW, findings: [finding] }) } },
+    });
+    const { harness } = waiting;
+
+    expect(dutiesOf(harness).map((data) => data.duty)).toEqual(['review_findings_post']);
+    // One finding thread and one summary note, both through the executor.
+    expect(harness.audit.entriesFor('create_discussion').map((entry) => entry.status)).toEqual([
+      'ok',
+      'ok',
+    ]);
+
+    harness.script(
+      'implementation',
+      completed({
+        ...NOTES,
+        thread_replies: [{ thread_id: 'gone-thread', kind: 'fixed', reply: 'Summed every row.' }],
+      }),
+    );
+    harness.script('code_review', completed({ ...REVIEW, resolved_threads: ['gone-thread'] }));
+    later(harness);
+    waiting.discussions.push(generalNote(harness, 'One more change, please.'));
+    await fire(harness, noteArrived(harness, 'One more change'));
+
+    expect(dutiesOf(harness).map((data) => data.duty)).toEqual([
+      'review_findings_post',
+      'conversation_replies',
+      'review_findings_post',
+      'review_threads_resolve',
+    ]);
+    // The reply's target is on neither the merge request nor the ticket, so nothing was posted,
+    // and the resolution found no finding thread of its own to resolve.
+    expect(harness.audit.entriesFor('reply_to_discussion')).toEqual([]);
+    expect(harness.audit.entriesFor('resolve_discussion')).toEqual([]);
   });
 });

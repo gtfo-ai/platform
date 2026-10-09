@@ -109,6 +109,7 @@ import {
   reviewWrites,
 } from './integrations.js';
 import { enqueueOutbound, enqueueStage, type PipelineOutboundData } from './jobs.js';
+import { renderFinding, reviewMarkerFor, reviewSummaryMarkerFor } from './review-notes.js';
 import type { PipelineSagaOptions } from './saga.js';
 import { priorityRankOf } from './saga.js';
 import type { ProjectSettings } from './settings.js';
@@ -181,34 +182,11 @@ export const reviewedIidOf = (ticketKey: string): number => {
 export const AGENT_BRANCH_PREFIX = 'agentic/';
 
 /**
- * The marker every **finding** thread carries, so the observation can tell its own threads from a
- * human's.
- *
- * BD-023's workpad marker in the same spirit, with the task id so two reviews of two merge requests
- * never read each other's threads. **A human can type it**, which is stated rather than implied:
- * a spoofed thread would be counted in the metric below. It costs a wrong number in a statistic and
- * nothing else — nothing branches on it — which is why an HMAC would be machinery bought for the
- * wrong risk.
+ * The finding renderer and review-only's two markers live in `review-notes.ts` since WP-179, shared
+ * with the pipeline's review conversation (TD-029 decision 10: *"rendering is shared with
+ * review-only, never copied"*). Re-exported so every caller of this module is unchanged.
  */
-export const reviewMarkerFor = (taskId: Id): string => `<!-- agentic:review-only:${taskId} -->`;
-
-/**
- * The marker the **summary** thread carries, and it is deliberately a different string (WP-24
- * review round 2).
- *
- * product/18:59 counts *findings* — "findings accepted (thread resolved with change) vs dismissed"
- * — and the summary is not one: it is the platform's own framing, posted un-anchored, and a human
- * resolving it has said nothing about any finding. While both threads carried
- * {@link reviewMarkerFor}, `threads_posted` was findings **plus one** for every review, measured as
- * `threads_posted: 2` for a single posted finding in `test/e2e/pipeline/review-only.e2e.test.ts`.
- *
- * It is a *distinct* string rather than a suffix a substring match would also accept:
- * `body.includes(reviewMarkerFor(id))` must be false for a summary, which `-summary:` before the id
- * gives. Anything that wants *everything* this mode posted — the e2e's own reader does — matches on
- * the shared `agentic:review-only` prefix.
- */
-export const reviewSummaryMarkerFor = (taskId: Id): string =>
-  `<!-- agentic:review-only-summary:${taskId} -->`;
+export { renderFinding, reviewMarkerFor, reviewSummaryMarkerFor } from './review-notes.js';
 
 /**
  * The idempotency key of the thread carrying the finding that stood at `index` in the artifact.
@@ -428,31 +406,6 @@ export const REVIEW_SUMMARY_PREAMBLE =
   'This is an automated review from the Agentic platform, running in **review-only** mode. ' +
   'It is advisory: it does not approve or reject this merge request and it does not block the merge. ' +
   'Resolve a thread when you have dealt with it, or when you disagree — both are useful signals.';
-
-const SEVERITY_LABEL: Readonly<Record<Severity, string>> = {
-  blocker: 'blocker',
-  major: 'major',
-  minor: 'minor',
-  nit: 'nit',
-};
-
-/**
- * One finding as a thread body.
- *
- * The platform writes the heading and the marker; everything else is the model's. Nothing here
- * decides anything, so a model that wrote a heading of its own can confuse a reader and can do
- * nothing more — the same trade the prompt's data blocks make in the other direction.
- */
-export const renderFinding = (taskId: Id, finding: ReviewFinding): string =>
-  [
-    reviewMarkerFor(taskId),
-    `**${SEVERITY_LABEL[finding.severity]} · ${finding.category}**`,
-    '',
-    finding.explanation,
-    ...(finding.suggestion == null || finding.suggestion === ''
-      ? []
-      : ['', '**Suggestion**', '', finding.suggestion]),
-  ].join('\n');
 
 /**
  * The neutral summary: the platform's framing, the counts it knows, then the model's paragraph.

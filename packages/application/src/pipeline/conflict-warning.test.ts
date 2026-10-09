@@ -215,7 +215,11 @@ const startHarness = (options: {
         return paths.map(fileDiff);
       },
       createDiscussion: async (ref, note) => {
-        posted.push({ iid: ref.iid, markdown: note.markdown });
+        // The conflict warnings only: since WP-179 the code review's summary note is posted on the
+        // same merge request (`review_findings_post`), and this suite counts the warnings.
+        if (note.markdown.startsWith('<!-- agentic:conflict-warning:')) {
+          posted.push({ iid: ref.iid, markdown: note.markdown });
+        }
         return {
           id: `disc-${posted.length}`,
           resolvable: true,

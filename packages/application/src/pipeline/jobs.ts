@@ -311,7 +311,16 @@ export interface PipelineOutboundData {
      * WP-177 (TD-029 decision 5): give the ticket back on the task's cancellation or a person's
      * *Rework* — unassign the binding's own account, move it to `pick_up_from` when mapped.
      */
-    | 'ticket_release';
+    | 'ticket_release'
+    /**
+     * WP-179 (TD-029 decision 10): the review conversation on the merge request — the Reviewer's
+     * findings and summary after `code_review`, the Developer's `thread_replies` after a developer
+     * stage, and the Reviewer's own finding threads resolved after a re-review
+     * (`review-conversation.ts`).
+     */
+    | 'review_findings_post'
+    | 'conversation_replies'
+    | 'review_threads_resolve';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
@@ -360,6 +369,11 @@ export interface PipelineOutboundData {
    * so a failed write's log names the slot (TD-029 decision 4).
    */
   readonly lifecycle_slot?: string;
+  /**
+   * The three review-conversation duties (WP-179): the artifact whose completion woke them — a
+   * `ReviewVerdict` or an `ImplementationNotes` — re-read when the job fires.
+   */
+  readonly artifact_id?: string;
   /** `ticket_release` only (WP-177): why the ticket is given back. */
   readonly release_cause?: 'cancelled' | 'rework' | 'stopped';
   /** `ask_answer` only (WP-31): which ask was answered. The row holds everything else. */
@@ -1501,8 +1515,12 @@ const distinctPipelines = (
  * both human stages, `qa` and `ready_for_merge` ({@link humanReturnStageOf}), and when it fires it
  * re-reads the ticket's status, every discussion of the merge request and the ticket's comments
  * since the **horizon** — the start of the task's latest `implementation` run — and decides with the
- * domain's `humanReturnDecision`. Four endings, and the first two are the reason this is not a
- * coalesced job:
+ * domain's `humanReturnDecision`. **Five events arm it** (`reviewCommentHandler`, `saga.ts`): the
+ * four signals' own (`mr.review.comment`, `ticket.comment.added`, `ticket.status.changed`,
+ * `ticket.updated`) and, since WP-179 (TD-029 decision 7 amendment (g), PROGRESS backlog 544), the
+ * task's entry into `qa` or `ready_for_merge` — so a word written while the review stages or the
+ * gates ran is decided by the entry's firing rather than waiting for the next signal; WP-178 had the
+ * four alone. Four endings, and the first two are the reason this is not a coalesced job:
  *
  *  - nothing returns and nothing passes → nothing (an acknowledgement, a resolved thread, a word
  *    older than the horizon, the platform's own note);

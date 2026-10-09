@@ -74,6 +74,11 @@ import {
 } from './merge-request-ready.js';
 import { runReadyHeadCheck } from './ready-head.js';
 import { runResolveOnMerge } from './resolve-on-merge.js';
+import {
+  runConversationReplies,
+  runReviewFindingsPost,
+  runReviewThreadsResolve,
+} from './review-conversation.js';
 import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
 import { runReviewThreadsRefresh } from './review-threads-refresh.js';
 import { type RiskRoutingOptions, runRiskRouting } from './risk-routing.js';
@@ -309,6 +314,16 @@ const dispatchOutbound =
         return;
       case 'ticket_release':
         await runTicketRelease(options, data);
+        return;
+      // WP-179 (TD-029 decision 10): the review conversation on the merge request.
+      case 'review_findings_post':
+        await runReviewFindingsPost(options, data);
+        return;
+      case 'conversation_replies':
+        await runConversationReplies(options, data);
+        return;
+      case 'review_threads_resolve':
+        await runReviewThreadsResolve(options, data);
         return;
       default:
         logger.warn(

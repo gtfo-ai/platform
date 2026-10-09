@@ -133,6 +133,9 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   'ready-head.ts': 1,
   // WP-24's three duties each resolve the project's bindings once: the check before it creates the
   // task, the post before it writes the threads, the observation before it reads them back.
+  // WP-179's three review-conversation duties (`review_findings_post`, `conversation_replies`,
+  // `review_threads_resolve`): one resolution each, in a job, outside every transaction and any run.
+  'review-conversation.ts': 3,
   'review-only.ts': 3,
   // WP-37's `risk_route` duty: one resolution for the classification and the reviewer routing,
   // which are one wake-up and share every read.

@@ -3472,10 +3472,23 @@ describe('a gate whose provider does not answer (backlog 490)', () => {
  */
 const AFTER_IMPLEMENTATION = '2026-06-01T09:00:00.001Z';
 
+/**
+ * The window the task's entry into `ready_for_merge` armed (WP-179, TD-029 decision 7 amendment
+ * (g)), taken off the queue so a case counts the windows its own comments arm. One, exactly.
+ */
+const takeEntryWindow = (harness: ReturnType<typeof harnessWith>) => {
+  expect(harness.jobs.take(JOB_QUEUES.mrCommentDebounce)).toHaveLength(1);
+};
+
+/** The windows armed so far, on the history (WP-128) — the baseline a case subtracts. */
+const armedWindows = (harness: ReturnType<typeof harnessWith>) =>
+  harness.jobs.history.filter((request) => request.queue === JOB_QUEUES.mrCommentDebounce).length;
+
 describe('human merge-request comments (BD-007)', () => {
   it('opens one batch window per merge request, two minutes out, and never coalesces', async () => {
     const harness = harnessWith();
     await harness.publish([ticketMatched()]);
+    takeEntryWindow(harness);
 
     await harness.publish([comment('one moment'), comment('actually, two things')]);
 
@@ -3614,6 +3627,7 @@ describe('human merge-request comments (BD-007)', () => {
       },
     });
     await harness.publish([ticketMatched()]);
+    takeEntryWindow(harness);
     await harness.publish([comment('one')]);
 
     harness.clock.advance(DEFAULT_REVIEW_COMMENT_WINDOW_MS + 1);
@@ -3629,6 +3643,7 @@ describe('human merge-request comments (BD-007)', () => {
   it('ignores a comment on a resolved thread', async () => {
     const harness = harnessWith();
     await harness.publish([ticketMatched()]);
+    const entered = armedWindows(harness);
     await harness.publish([
       event('mr.review.comment', {
         project_id: PROJECT,
@@ -3647,10 +3662,8 @@ describe('human merge-request comments (BD-007)', () => {
       }),
     ]);
     // On the history (WP-128, backlog 352): `publish` drains, and a window drain had run would be
-    // gone from `enqueued`.
-    expect(
-      harness.jobs.history.filter((request) => request.queue === JOB_QUEUES.mrCommentDebounce),
-    ).toHaveLength(0);
+    // gone from `enqueued`. Less the entry's own window (WP-179).
+    expect(armedWindows(harness) - entered).toBe(0);
   });
 
   /**
@@ -3678,18 +3691,19 @@ describe('human merge-request comments (BD-007)', () => {
         text,
         resolved: false,
       });
-    // On the history (WP-128, backlog 352), for the reason the case above gives.
-    const armed = () =>
-      harness.jobs.history.filter((request) => request.queue === JOB_QUEUES.mrCommentDebounce);
+    // On the history (WP-128, backlog 352), for the reason the case above gives — less the window
+    // the entry into `ready_for_merge` armed (WP-179).
+    const entered = armedWindows(harness);
+    const armed = () => armedWindows(harness) - entered;
     await harness.publish([
       comment(
         `${conflictWarningMarker(taskOf(harness).task.id)}\nAnother open merge request changes src/totals.ts.`,
       ),
     ]);
     // With the handler's marker check removed (md5-confirmed revert) this armed one window.
-    expect(armed()).toHaveLength(0);
+    expect(armed()).toBe(0);
     await harness.publish([comment('please rename the helper')]);
-    expect(armed()).toHaveLength(1);
+    expect(armed()).toBe(1);
   });
 });
 

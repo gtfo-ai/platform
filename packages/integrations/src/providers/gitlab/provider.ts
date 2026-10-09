@@ -562,8 +562,12 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
    * person who posts the identical text, marker included, after this POST is taken for the reply —
    * which is why WP-179 decides ownership by marker **and** author. And the post is not idempotent:
    * a re-read that throws after a successful POST leaves the note posted, and a retry posts a
-   * second one, exactly as the in-thread path's POST-then-read does; the guard is the executor's
-   * idempotency record at WP-179.
+   * second one, exactly as the in-thread path's POST-then-read does. This used to say the guard
+   * would be the executor's idempotency record at WP-179; it cannot be, because a call that threw
+   * stored no answer to replay. Since WP-179 the guard is the `conversation_replies` duty's own
+   * check, which finds the reply on the merge request by its marker and author before a retry posts
+   * again (`review-conversation.ts`). What it does not cover, stated: a failure the executor itself
+   * retries (`unavailable`, a 5xx, a timeout) re-runs the POST inside one call, before any check.
    */
   const replyAsGeneralNote = async (
     project: string,

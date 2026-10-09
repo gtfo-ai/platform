@@ -977,6 +977,34 @@ const noCiRepository: RepositoryFileSource = {
   }),
 };
 
+let harnessDiscussionCounter = 0;
+/** {@link stubGit}'s echo of a note the platform posted (WP-179): its own discussion, its own id. */
+const harnessDiscussion = (markdown: string, path: string | null, line: number | null) => {
+  harnessDiscussionCounter += 1;
+  return {
+    id: `harness-discussion-${String(harnessDiscussionCounter)}`,
+    resolvable: true,
+    resolved: false,
+    notes: [
+      {
+        id: `harness-note-${String(harnessDiscussionCounter)}`,
+        author: {
+          provider: 'fake-git',
+          external_id: 'agentic-bot',
+          email: null,
+          display_name: 'agentic-bot',
+          verified: true,
+        },
+        body: markdown,
+        created_at: '2026-01-01T00:00:00.000Z',
+        path,
+        line,
+        system: false,
+      },
+    ],
+  };
+};
+
 const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitProviderPort | null =>
   overrides === null
     ? null
@@ -1004,6 +1032,33 @@ const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitPro
           throw new Error('the test did not script getMergeRequest');
         },
         listDiscussions: async () => [],
+        /**
+         * WP-179's writes, defaulted for WP-138's reason: the review conversation posts the code
+         * review's summary note on every `code_review` completion of a task with a merge request,
+         * so every walk past the review makes the call whether the case cares or not. The answer
+         * is the honest echo — the note as written, by the binding's own account, in a discussion
+         * of its own — and it is **not stored**: `listDiscussions` still answers what the case
+         * scripted, so a case about the window is not handed the platform's own notes. A case about
+         * the conversation scripts all four.
+         */
+        createDiscussion: async (
+          _ref: unknown,
+          note: {
+            readonly path?: string | null;
+            readonly line?: number | null;
+            readonly markdown: string;
+          },
+        ) => harnessDiscussion(note.markdown, note.path ?? null, note.line ?? null),
+        replyToDiscussion: async (_ref: unknown, discussionId: string, markdown: string) => ({
+          ...harnessDiscussion(markdown, null, null),
+          id: discussionId,
+        }),
+        resolveDiscussion: async (_ref: unknown, discussionId: string) => ({
+          id: discussionId,
+          resolvable: true,
+          resolved: true,
+          notes: [],
+        }),
         /**
          * WP-37's three reads, defaulted rather than left missing.
          *

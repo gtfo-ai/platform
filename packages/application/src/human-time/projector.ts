@@ -99,8 +99,9 @@ export const HUMAN_TIME_PRIORITY = 230;
 /**
  * The marker every comment this platform posts on a merge request carries.
  *
- * `reviewMarkerFor`, `reviewSummaryMarkerFor` (WP-24), `conflictWarningMarker` (WP-26) and the
- * ticket linter's `LINT_COMMENT_MARKER` (WP-25) all start with it, which
+ * `reviewMarkerFor`, `reviewSummaryMarkerFor` (WP-24), `conflictWarningMarker` (WP-26), the
+ * ticket linter's `LINT_COMMENT_MARKER` (WP-25) and the pipeline review's finding, summary and reply
+ * markers (WP-179, `review-notes.ts`) all start with it, which
  * `platform-comment-marker.test.ts` asserts against those builders rather than against a copy of
  * the string — so a new marker that forgot the prefix fails there.
  *

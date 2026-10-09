@@ -28,6 +28,7 @@
  * measurement and the honest list of what the mechanism cannot see.
  */
 import type { DiffStats, ExternalIdentity, Id, JsonObject, TaskMode } from '@platform/contracts';
+import { isPlatformMergeRequestNote, opensWithPlatformCommentMarker } from '@platform/domain';
 import { assertOutsideTransaction } from '../events/open-transaction.js';
 import {
   type IdempotencyPlan,
@@ -875,6 +876,26 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
   },
 
   /**
+   * The account the git binding's credential acts as (`authenticatedUser`), or `null` for a project
+   * with no git binding — what the review conversation compares a marked note's author with before
+   * it counts the note as its own (WP-179). A read, so it is performed in every mode.
+   */
+  self: async (context: CallContext): Promise<ExternalIdentity | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return read(
+      integrations,
+      git.ref,
+      'authenticated_user',
+      { project: git.project },
+      context,
+      async () => git.port.authenticatedUser(),
+    );
+  },
+
+  /**
    * Is the branch the agent will open its merge request against protected?
    *
    * The compensating control for Q40: a GitLab project access token has no branch scoping, so the
@@ -1669,7 +1690,75 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
       replayable<CommentRef>(context.idempotencyKey),
     );
   },
+
+  /**
+   * The Developer's answer to a ticket comment that asked for something (WP-179, TD-029 decision
+   * 10: *"a reply to a ticket-comment request is a ticket comment with the same marker"*). A fifth
+   * sibling of {@link lintComment}, for the reason those are siblings: the key names *this* reply
+   * (`conversationReplyIdempotencyKeyFor`, the task, the run and the entry's position — no model
+   * text). The body is redacted here and **must open with its marker** — the bare
+   * `agentic:reply:…` that `opensWithPlatformCommentMarker` reads — which is refused rather than
+   * repaired (`assertOpensWithMarker`), so the platform's own reply can never be read back as a
+   * person's word that returns the task (decision 6).
+   */
+  replyComment: async (
+    ticket: TicketRefInput,
+    markdown: string,
+    context: CallContext & {
+      readonly mode: TaskMode;
+      readonly idempotencyKey: string;
+      readonly markerId: string;
+    },
+  ): Promise<CommentRef | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null || !namesAProviderTicket(ticket)) {
+      return null;
+    }
+    const redacted = binding.redactor.redactText(markdown).value;
+    assertOpensWithMarker('ticket', redacted, 'add_comment');
+    return mutate(
+      integrations,
+      binding.ref,
+      'add_comment',
+      { ticket_key: ticket.key, marker_id: context.markerId },
+      context,
+      async () => binding.port.addComment(ticket, redacted, { markerId: context.markerId }),
+      () => ({
+        provider: ticket.provider,
+        ticket_key: ticket.key,
+        comment_id: 'would-have-reply',
+        url: null,
+        marker_id: context.markerId,
+      }),
+      (result) => ({ comment_id: result.comment_id }),
+      replayable<CommentRef>(context.idempotencyKey),
+    );
+  },
 });
+
+/**
+ * **A note the platform posts opens with its marker, or it is not posted** (WP-179, TD-029
+ * decision 6: *"every platform write path opens its body with a marker"*). Asked of the redacted
+ * body — what is sent — by every merge-request note write (`reviewWrites.thread`, `reply`) and by
+ * the ticket reply; `platform-marker-census.test.ts` holds the renderers to the same rule, so this is
+ * the backstop for a caller that renders by hand. A refusal throws before the executor is reached:
+ * no provider call and no audit row, because nothing was attempted.
+ */
+export const assertOpensWithMarker = (
+  surface: 'merge_request' | 'ticket',
+  body: string,
+  action: string,
+): void => {
+  const marked =
+    surface === 'merge_request'
+      ? isPlatformMergeRequestNote(body)
+      : opensWithPlatformCommentMarker(body);
+  if (!marked) {
+    throw new Error(
+      `the platform refused to ${action}: a body it posts on a ${surface === 'ticket' ? 'ticket' : 'merge request'} must open with a platform marker (TD-029 decision 6)`,
+    );
+  }
+};
 
 /**
  * The writes the **Librarian** makes (WP-18b): a knowledge commit and the merge request that offers
@@ -2003,6 +2092,8 @@ export const reviewWrites = (integrations: PipelineIntegrations) => ({
       return null;
     }
     const markdown = git.redactor.redactText(input.markdown).value;
+    // WP-179: every note the platform posts opens with its marker (TD-029 decision 6).
+    assertOpensWithMarker('merge_request', markdown, 'create_discussion');
     return mutate(
       integrations,
       git.ref,
@@ -2024,6 +2115,74 @@ export const reviewWrites = (integrations: PipelineIntegrations) => ({
       // fixed in `reviewers` above.
       (result) => (result === null ? null : { discussion_id: result.id }),
       replayable<Discussion>(input.idempotencyKey),
+    );
+  },
+
+  /**
+   * One reply in an existing discussion (WP-179, TD-029 decision 10) — the Developer's answer to a
+   * finding or to a person's note, posted by the platform.
+   *
+   * **The discussion that comes back may not be the one asked for** (`replyToDiscussion`'s
+   * docblock; GitLab divergence 8): a reply to an individual note can arrive as a new general
+   * note with an id of its own. So nothing may find this reply again by the returned id; the caller
+   * finds it by the marker its body opens with, which the provider keeps at the start. A mutation
+   * with the caller's idempotency key, the body redacted with the git binding's redactor and
+   * refused unless it opens with a platform marker.
+   */
+  reply: async (
+    input: {
+      readonly ref: MergeRequestRefInput;
+      readonly discussionId: string;
+      readonly markdown: string;
+      readonly idempotencyKey: string;
+    },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<Discussion | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    const markdown = git.redactor.redactText(input.markdown).value;
+    assertOpensWithMarker('merge_request', markdown, 'reply_to_discussion');
+    return mutate(
+      integrations,
+      git.ref,
+      'reply_to_discussion',
+      // The thread, never the body (`create_discussion`'s rule).
+      { project: git.project, iid: input.ref.iid, discussion_id: input.discussionId },
+      context,
+      async () =>
+        git.port.replyToDiscussion(addressed(git, input.ref), input.discussionId, markdown),
+      () => null as unknown as Discussion,
+      (result) => (result === null ? null : { discussion_id: result.id }),
+      replayable<Discussion>(input.idempotencyKey),
+    );
+  },
+
+  /**
+   * Resolves a discussion (WP-179, TD-029 decision 10) — only ever one of the Reviewer's own finding
+   * threads, which the caller has checked by marker. A mutation **without** an idempotency key: the
+   * port's resolve is idempotent (an already-resolved thread succeeds and changes nothing), and the
+   * caller skips a thread it read as resolved.
+   */
+  resolve: async (
+    input: { readonly ref: MergeRequestRefInput; readonly discussionId: string },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<Discussion | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      git.ref,
+      'resolve_discussion',
+      { project: git.project, iid: input.ref.iid, discussion_id: input.discussionId },
+      context,
+      async () => git.port.resolveDiscussion(addressed(git, input.ref), input.discussionId),
+      () => null as unknown as Discussion,
+      (result) =>
+        result === null ? null : { discussion_id: result.id, resolved: result.resolved },
     );
   },
 });

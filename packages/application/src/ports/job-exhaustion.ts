@@ -45,7 +45,8 @@
  *    effect, or what is lost is a notification (rule 20). The workpad, the status and
  *    `notify.digest` are the ruling's examples.
  *
- * `pipeline.outbound` carries thirty-two duties of all three shapes, so it is the one queue whose
+ * `pipeline.outbound` carries thirty-seven duties of all three shapes since WP-179 (this sentence said
+ * thirty-two through three additions), so it is the one queue whose
  * shape is **`per_duty`**: {@link OUTBOUND_DUTY_EXHAUSTION} declares each, and it is typed as a
  * record over the duty union, so a duty added to `OutboundJobData` without a row fails the build.
  *
@@ -357,6 +358,18 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
   ticket_release: {
     shape: 'notification_shaped',
     why: 'gives the ticket of a cancelled task, or of a task that stopped between its assign and its record (cause `stopped`), back (TD-029 decision 5); a lost release leaves the binding’s own account assigned until a person moves it. Until WP-178 a lost `stopped` release also left the claim stale, so the next claim was a re-claim that took the ticket back from a person who took it meanwhile (PROGRESS backlog 543); since then the claim records `stale_cause: stopped` and that claim is a first claim whether or not the release ran. A Rework no longer enqueues this duty: its release runs in the next agent admission, before the claim (backlog 541)',
+  },
+  review_findings_post: {
+    shape: 'notification_shaped',
+    why: 'the Reviewer’s findings and summary as merge-request threads (TD-029 decision 10): the verdict already moved the task and is on the task page, and the next run reads the findings from the artifact; a lost post is a conversation a person reads elsewhere',
+  },
+  conversation_replies: {
+    shape: 'notification_shaped',
+    why: 'the Developer’s answers on the threads it addressed: the change itself is pushed and the answers are on the task page in the ImplementationNotes; a lost post leaves a thread unanswered, which the next review or a person reads',
+  },
+  review_threads_resolve: {
+    shape: 'notification_shaped',
+    why: 'resolves the Reviewer’s own finding threads a re-review confirmed fixed: nothing waits on it, and a thread left open is one a person resolves by hand',
   },
   ready_head_check: {
     shape: 'bound_and_escalate',
