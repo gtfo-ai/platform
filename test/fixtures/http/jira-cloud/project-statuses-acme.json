@@ -5,7 +5,7 @@
     "spec_version": "1001.0.0-SNAPSHOT-25c77f084cd5b3af3ca57b4c883ff311ffe3ca25 (info.version)",
     "retrieved": "2026-10-08",
     "evidence": "documented-adapted",
-    "note": "Shape from the Atlassian response example: an array of IssueTypeWithStatus ({id, name, self, statuses[], subtask}), each status a StatusDetails ({description, iconUrl, id, name, self}). The published example omits statusCategory; StatusDetails documents it as a StatusCategory ({colorName, id, key, name, self}), so every status here carries one except \"Waiting for input\", which reproduces the omission. The keys new/indeterminate/done are the three research/15 J1a records as observed (backlog 535); the vendor documents no enum. Content is this repository's scenario with invented, neutral status names (BD-031): two issue types that share \"Ready for agent\", \"Doing\" and \"Done\", which the union by name (WP-172 ruling (a)) collapses."
+    "note": "Shape from the Atlassian response example: an array of IssueTypeWithStatus ({id, name, self, statuses[], subtask}), each status a StatusDetails ({description, iconUrl, id, name, self}). The published example omits statusCategory; StatusDetails documents it as a StatusCategory ({colorName, id, key, name, self}), so every status here carries one except \"Waiting for input\", which reproduces the omission. The keys new/indeterminate/done are the three research/15 J1a records as observed (backlog 535); the vendor documents no enum. Content is this repository's scenario with invented, neutral status names (BD-031): two issue types that share \"To pick up\", \"Doing\" and \"Done\", which the union by name (WP-172 ruling (a)) collapses."
   },
   "response": {
     "status": 200,
@@ -22,7 +22,7 @@
             "description": "Ready for the platform to pick up.",
             "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
             "id": "10002",
-            "name": "Ready for agent",
+            "name": "To pick up",
             "self": "https://acme-example.atlassian.net/rest/api/3/status/10002",
             "statusCategory": {
               "id": 2,
@@ -142,7 +142,7 @@
             "description": "Ready for the platform to pick up.",
             "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
             "id": "10002",
-            "name": "Ready for agent",
+            "name": "To pick up",
             "self": "https://acme-example.atlassian.net/rest/api/3/status/10002",
             "statusCategory": {
               "id": 2,

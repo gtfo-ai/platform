@@ -87,7 +87,7 @@ runTaskManagementContract({
       port: binding.port,
       ticket: JIRA_TICKET,
       missingTicketKey: 'ACME-404',
-      statuses: { initial: 'Ready for agent', target: 'In Progress' },
+      statuses: { initial: 'To pick up', target: 'In Progress' },
       unknownStatus: 'Shipped To Mars',
       pickupLabel: JIRA_PICKUP_LABEL,
       knownAuthor: { providerUserId: DEV_ACCOUNT_ID, email: 'dev@example.test' },
@@ -156,7 +156,7 @@ runTaskManagementContract({
        */
       lifecycle: {
         expectedCategories: {
-          'Ready for agent': 'todo',
+          'To pick up': 'todo',
           Doing: 'in_progress',
           'Sent back': 'todo',
           Done: 'done',

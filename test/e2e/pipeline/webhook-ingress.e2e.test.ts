@@ -61,7 +61,7 @@ describe('a signed webhook delivery', () => {
       tickets: TICKETS,
       config: {
         version: 1,
-        status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' },
+        status_mapping: { refinement: 'Doing', ready_for_merge: 'Waiting for review' },
       },
     });
     harness = pipeline;

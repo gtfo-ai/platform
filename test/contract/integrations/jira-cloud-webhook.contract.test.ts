@@ -237,7 +237,7 @@ describe('jira-cloud webhooks', () => {
       expect(result.ignored).toEqual([]);
       const event = result.events[0] as NonNullable<(typeof result.events)[0]>;
       const { payload } = expectCatalogueEvent(event, 'ticket.status.changed');
-      expect(payload.from).toBe('Ready for agent');
+      expect(payload.from).toBe('To pick up');
       expect(payload.to).toBe('In Progress');
       expect(event.actor).toEqual({
         kind: 'integration',

@@ -21,7 +21,7 @@
           "fields": {
             "summary": "Totals are wrong in the invoice export",
             "issuetype": { "id": "10004", "name": "Bug", "subtask": false },
-            "status": { "id": "10002", "name": "Ready for agent" },
+            "status": { "id": "10002", "name": "To pick up" },
             "priority": { "id": "3", "name": "High" },
             "labels": ["agentic"],
             "created": "2026-08-30T09:00:00.000+0000",

@@ -81,8 +81,8 @@ describe('buildJql', () => {
     expect(buildJql({ kind: 'label', label: 'agentic' }, null, NOW)).toBe(
       'labels = "agentic" ORDER BY updated ASC',
     );
-    expect(buildJql({ kind: 'status', status: 'Ready for agent' }, null, NOW)).toBe(
-      'status = "Ready for agent" ORDER BY updated ASC',
+    expect(buildJql({ kind: 'status', status: 'To pick up' }, null, NOW)).toBe(
+      'status = "To pick up" ORDER BY updated ASC',
     );
     // `parent` "works for both team-managed and company-managed spaces" (JQL fields reference).
     expect(buildJql({ kind: 'epic', epic_key: 'ACME-100' }, null, NOW)).toBe(
@@ -122,9 +122,9 @@ describe('buildJql', () => {
 
 describe('pickupRuleOf', () => {
   it('prefers the status, because it is the narrower statement', () => {
-    expect(pickupRuleOf({ pickup_label: 'agentic', pickup_status: 'Ready for agent' })).toEqual({
+    expect(pickupRuleOf({ pickup_label: 'agentic', pickup_status: 'To pick up' })).toEqual({
       kind: 'status',
-      status: 'Ready for agent',
+      status: 'To pick up',
     });
   });
 

@@ -82,7 +82,7 @@ describe('a feature ticket, end to end', () => {
       // technical/12's `status_mapping`, so the ticket's own status moves with the task.
       config: {
         version: 1,
-        status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' },
+        status_mapping: { refinement: 'Doing', ready_for_merge: 'Waiting for review' },
       },
     });
     harness = pipeline;
@@ -129,7 +129,7 @@ describe('a feature ticket, end to end', () => {
     expect(new Set(hashes.slice(0, 5)).size).toBe(1);
     expect(new Set(hashes.slice(5)).size).toBe(1);
     expect(hashes[5]).not.toBe(hashes[0]);
-    expect(frozen[0]?.settings_snapshot.effective.status_mapping?.refinement).toBe('In Progress');
+    expect(frozen[0]?.settings_snapshot.effective.status_mapping?.refinement).toBe('Doing');
     expect(frozen[0]?.settings_snapshot.effective.pipeline.limits.ci_fix_iterations).toBe(3);
     expect(frozen[6]?.settings_snapshot.effective.pipeline.limits.ci_fix_iterations).toBe(5);
     // Six agent stages at 0.40 USD each, on the row a human would read: the feature five, the
@@ -161,7 +161,7 @@ describe('a feature ticket, end to end', () => {
       tickets: TICKETS,
       config: {
         version: 1,
-        status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' },
+        status_mapping: { refinement: 'Doing', ready_for_merge: 'Waiting for review' },
       },
       // The interleaving this test used to fail on about one run in five, forced. Since WP-15d the
       // delay lands on the render's `pipeline.outbound` job rather than inside the dispatch — the
@@ -193,7 +193,7 @@ describe('a feature ticket, end to end', () => {
         const seen = pipeline.tickets.peek('ACME-1');
         return (
           seen?.comments[0]?.body.startsWith(WORKPAD_HEADER) === true &&
-          seen?.status === 'In Review'
+          seen?.status === 'Waiting for review'
         );
       },
     );
@@ -207,7 +207,7 @@ describe('a feature ticket, end to end', () => {
     // the only part of the body that reports where the task actually is.
     expect(ticket?.comments[0]?.body.split('\n')[0]).toBe(WORKPAD_HEADER);
     // The last mapped state the task passed through.
-    expect(ticket?.status).toBe('In Review');
+    expect(ticket?.status).toBe('Waiting for review');
   });
 
   it('leaves a readable trail: a stage row per attempt and an artifact per stage', async () => {
@@ -250,7 +250,7 @@ describe('BD-003: the instance audits its own outbound calls (WP-15b)', () => {
       tickets: TICKETS,
       config: {
         version: 1,
-        status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' },
+        status_mapping: { refinement: 'Doing', ready_for_merge: 'Waiting for review' },
       },
     });
     harness = pipeline;

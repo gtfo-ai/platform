@@ -29,7 +29,7 @@ describe('jiraCloudConfigSchema’s lifecycle block (WP-172 criterion 6)', () =>
   it('parses a config with a lifecycle block beside pickup_status', () => {
     const parsed = jiraCloudConfigSchema.parse({
       ...BASE,
-      pickup_status: 'Ready for agent',
+      pickup_status: 'To pick up',
       lifecycle: {
         in_progress: 'Doing',
         in_review: 'Waiting for review',
@@ -40,7 +40,7 @@ describe('jiraCloudConfigSchema’s lifecycle block (WP-172 criterion 6)', () =>
       },
     });
     expect(parsed.lifecycle?.in_review).toBe('Waiting for review');
-    expect(parsed.pickup_status).toBe('Ready for agent');
+    expect(parsed.pickup_status).toBe('To pick up');
   });
 
   it('parses a config with no lifecycle block, as every binding written before M10 is', () => {

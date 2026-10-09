@@ -58,7 +58,7 @@
           "to": {
             "self": "https://acme-example.atlassian.net/rest/api/3/status/10001",
             "id": "10001",
-            "name": "Ready for agent"
+            "name": "To pick up"
           },
           "isAvailable": true
         }

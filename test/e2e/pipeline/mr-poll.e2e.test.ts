@@ -158,7 +158,7 @@ describe('the merge-request poller', () => {
       tickets: TICKETS,
       config: {
         version: 1,
-        status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' },
+        status_mapping: { refinement: 'Doing', ready_for_merge: 'Waiting for review' },
       },
       env: { APP_POLL_SWEEP_INTERVAL_MS: '500' },
     });

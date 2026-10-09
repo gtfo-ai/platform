@@ -175,7 +175,7 @@ const start = async (
        */
       policies: { knowledge_apply: { auto_apply: true } },
       // The platform has no definition of "closed" that is not the project's own status mapping.
-      status_mapping: { done: 'Done' },
+      status_mapping: { done: 'Finished' },
       // Two merge requests per run, so the batch is more than one chunk and each run's sample can
       // be shown to be its own slice.
       stages: { history_mining: { budget_usd: 2 } },
@@ -278,7 +278,7 @@ const seedHistory = (pipeline: PipelineE2E): void => {
   pipeline.tickets.seedTicket({
     key: 'ACME-CLOSED',
     title: 'Rounding happened twice',
-    status: 'Done',
+    status: 'Finished',
     description: 'The invoice footer disagreed with the rows by a cent.',
   });
 };

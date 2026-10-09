@@ -488,7 +488,7 @@ describe('a poll of one binding', () => {
  */
 describe('the live tasks’ tickets, whatever the rule says (WP-110)', () => {
   const STATUS_PLAN: TicketPollPlan = {
-    rule: { kind: 'status', status: 'Ready for agent' },
+    rule: { kind: 'status', status: 'To pick up' },
     interval_seconds: 60,
   };
 
@@ -564,7 +564,7 @@ describe('the live tasks’ tickets, whatever the rule says (WP-110)', () => {
   it('asks a live task’s ticket by its id when the task recorded one, and records the moved issue under its new key (WP-145)', async () => {
     const harness = harnessFor();
     harness.world.plan = {
-      rule: { kind: 'status', status: 'Ready for agent' },
+      rule: { kind: 'status', status: 'To pick up' },
       interval_seconds: 60,
     };
     // The task was created as OLD-1 (id 10001); the issue moved and answers as NEW-5 now.
@@ -621,7 +621,7 @@ describe('a live task whose ticket is gone (WP-134, backlog 375)', () => {
       } as never,
     };
     harness.world.plan = {
-      rule: { kind: 'status', status: 'Ready for agent' },
+      rule: { kind: 'status', status: 'To pick up' },
       interval_seconds: 60,
     };
     harness.world.others = [
@@ -738,8 +738,8 @@ describe('the ticket.poll queue', () => {
 describe('the rule a polled match names', () => {
   it('spells each rule the way the webhook does', () => {
     expect(ticketMatchRuleText({ kind: 'label', label: 'agentic' })).toBe('label = "agentic"');
-    expect(ticketMatchRuleText({ kind: 'status', status: 'Ready for agent' })).toBe(
-      'status = "Ready for agent"',
+    expect(ticketMatchRuleText({ kind: 'status', status: 'To pick up' })).toBe(
+      'status = "To pick up"',
     );
     expect(ticketMatchRuleText({ kind: 'epic', epic_key: 'ACME-100' })).toBe('epic = "ACME-100"');
     expect(ticketMatchRuleText({ kind: 'query', query: 'project = ACME' })).toBe('project = ACME');

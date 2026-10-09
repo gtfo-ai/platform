@@ -371,7 +371,7 @@ describe('an instance with no launcher configuration', () => {
       label: 'no-agent',
       tickets: TICKETS,
       agent: 'none',
-      config: { version: 1, status_mapping: { refinement: 'In Progress' } },
+      config: { version: 1, status_mapping: { refinement: 'Doing' } },
     });
     harness = pipeline;
 
@@ -410,7 +410,7 @@ describe('an instance with no launcher configuration', () => {
     expect(parked.ticket_snapshot?.title).toBe(TICKET_TITLE);
     await pipeline.waitFor('the workpad and the ticket status', async () => {
       const seen = pipeline.tickets.peek('ACME-1');
-      return seen?.comments[0]?.body.includes('ACME-1') === true && seen?.status === 'In Progress';
+      return seen?.comments[0]?.body.includes('ACME-1') === true && seen?.status === 'Doing';
     });
     // The audit row is written by the executor **after** the provider call returns (BD-003, in a
     // transaction of its own), so a workpad visible on the ticket does not mean the row exists yet —

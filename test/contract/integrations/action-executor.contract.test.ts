@@ -63,7 +63,7 @@ const cases: readonly ExecutorCase[] = [
     create: async () => {
       const port = createFakeTaskManagement({
         integrationId: INTEGRATION_ID,
-        tickets: [{ key: 'FAKE-1', title: 'Totals are wrong', status: 'Ready for agent' }],
+        tickets: [{ key: 'FAKE-1', title: 'Totals are wrong', status: 'To pick up' }],
       });
       const ref = {
         provider: port.ref.provider,

@@ -8,7 +8,7 @@
 import { IntegrationError, IntegrationRateLimitedError } from '@platform/application';
 import { MAX_TICKET_STATUSES } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
-import { createFakeTaskManagement } from './fake.js';
+import { createFakeTaskManagement, DEFAULT_FAKE_STATUSES } from './fake.js';
 
 const INTEGRATION_ID = '00000000-0000-4000-8000-0000000000a1';
 const PROJECT_ID = '00000000-0000-4000-8000-0000000000b1';
@@ -28,11 +28,11 @@ const build = (options: Partial<Options> = {}) =>
       {
         key: 'FAKE-1',
         title: 'Totals are wrong',
-        status: 'Ready for agent',
+        status: 'To pick up',
         labels: ['agentic'],
         epic: { key: 'EPIC-1', title: 'Billing', description: '' },
       },
-      { key: 'FAKE-2', title: 'Unrelated', status: 'Backlog', labels: [] },
+      { key: 'FAKE-2', title: 'Unrelated', status: 'Not started', labels: [] },
     ],
     ...options,
   });
@@ -42,9 +42,7 @@ describe('FakeTaskManagement', () => {
     const port = build();
 
     expect(
-      (await port.matchTickets({ kind: 'status', status: 'Ready for agent' })).map(
-        (m) => m.ref.key,
-      ),
+      (await port.matchTickets({ kind: 'status', status: 'To pick up' })).map((m) => m.ref.key),
     ).toEqual(['FAKE-1']);
     expect(
       (await port.matchTickets({ kind: 'epic', epic_key: 'EPIC-1' })).map((m) => m.ref.key),
@@ -55,7 +53,7 @@ describe('FakeTaskManagement', () => {
       ),
     ).toEqual(['FAKE-1']);
     expect(
-      (await port.matchTickets({ kind: 'query', query: 'status = "Backlog"' })).map(
+      (await port.matchTickets({ kind: 'query', query: 'status = "Not started"' })).map(
         (m) => m.ref.key,
       ),
     ).toEqual(['FAKE-2']);
@@ -139,6 +137,41 @@ describe('FakeTaskManagement', () => {
     expect(await port.resolveIdentity({})).toBeNull();
   });
 
+  /**
+   * WP-183 (v): the default workflow is invented, so a test that passes on it proves that nothing
+   * it exercises assumes a status name (BD-031 ruling 1). Neither Jira's shipped defaults nor
+   * GitLab's issue statuses, compared as the platform compares a status name.
+   */
+  it('(v) names no shipped Jira or GitLab status in its default workflow', async () => {
+    const shipped = ['to do', 'in progress', 'done', "won't do", 'duplicate', 'backlog'];
+    const names = (await build({ tickets: [] }).listStatuses()).map((status) => status.name);
+    expect(names).toEqual(DEFAULT_FAKE_STATUSES);
+    expect(names.filter((name) => shipped.includes(name.trim().toLowerCase()))).toEqual([]);
+  });
+
+  it('dates a person’s comment by the instant the test states, else by its own clock (WP-183)', async () => {
+    const port = build();
+    port.emitCommentAdded({
+      ticketKey: 'FAKE-1',
+      authorId: 'user-1',
+      text: 'dated',
+      createdAt: '2030-01-02T03:04:05.000Z',
+    });
+    port.emitCommentAdded({ ticketKey: 'FAKE-1', authorId: 'user-1', text: 'undated' });
+    const page = await port.listComments(REF, { since: '2030-01-01T00:00:00.000Z', limit: 10 });
+    expect(page.comments.map((comment) => [comment.body, comment.created_at])).toEqual([
+      ['dated', '2030-01-02T03:04:05.000Z'],
+    ]);
+    expect(() =>
+      port.emitCommentAdded({
+        ticketKey: 'FAKE-1',
+        authorId: 'user-1',
+        text: 'x',
+        createdAt: 'not a date',
+      }),
+    ).toThrow();
+  });
+
   it('ignores a delivery about a ticket it does not have', async () => {
     const port = build();
     const delivery = port.emitCommentAdded({
@@ -169,7 +202,7 @@ describe('FakeTaskManagement', () => {
     };
 
     const status = await port.inbound.normalise(
-      port.emitStatusChanged({ ticketKey: 'FAKE-1', from: 'Ready for agent', to: 'In Progress' }),
+      port.emitStatusChanged({ ticketKey: 'FAKE-1', from: 'To pick up', to: 'Doing' }),
       context,
     );
     // The status event first and the edit beside it (WP-60), the way Jira's delivery reads.

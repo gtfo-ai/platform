@@ -594,7 +594,7 @@ describe('a ticket the pipeline is already delivering', () => {
 
   it('is not linted when the project picks tickets up by status', async () => {
     const { harness, posted, counters } = lintHarness({ delivering: true });
-    await harness.publish(deliveredAndCreated('status = "Ready for agent"'));
+    await harness.publish(deliveredAndCreated('status = "To pick up"'));
 
     // One task, and it is the delivery's. Before the fix: `feature:ACME-2` *and*
     // `ticket_lint:lint!ACME-2`.
@@ -657,7 +657,7 @@ describe('a ticket the pipeline is already delivering', () => {
       },
     });
     deliver = async () => {
-      await harness.publish([matched('status = "Ready for agent"')]);
+      await harness.publish([matched('status = "To pick up"')]);
     };
 
     await harness.publish([created()]);

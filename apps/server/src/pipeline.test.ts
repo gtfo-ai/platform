@@ -106,9 +106,9 @@ describe('the project settings port', () => {
 
   it('reads the effective configuration off the project row', async () => {
     const settings = await createProjectSettingsPort(
-      poolOf([{ config: { version: 1, status_mapping: { refinement: 'In Progress' } } }]),
+      poolOf([{ config: { version: 1, status_mapping: { refinement: 'Doing' } } }]),
     ).forProject('00000000-0000-4000-8000-0000000000b1' as never);
-    expect(settings.config.status_mapping).toEqual({ refinement: 'In Progress' });
+    expect(settings.config.status_mapping).toEqual({ refinement: 'Doing' });
     // The shipped seven since WP-35 added `history_bootstrap` beside WP-25's `ticket_lint`,
     // WP-24's `review_only` and WP-21's `discovery`; a project's own `.agentic/pipeline.yml` needs
     // a workspace to read.

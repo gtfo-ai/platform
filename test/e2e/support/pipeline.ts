@@ -714,6 +714,21 @@ export interface StartPipelineOptions {
    */
   readonly onAgentSpec?: (spec: RunSpec) => void | Promise<void>;
   /**
+   * In `fake-runner` mode, work the fake model does **before it reports** (WP-183): the scenario is
+   * picked, and the run's outcome settles, only once the promise does. `undefined` reports at once,
+   * as before.
+   *
+   * A fake run ends in milliseconds and a real one takes minutes, and two things a real run does in
+   * those minutes have no other seam in this mode. It may **call a platform tool** — the production
+   * `PlatformToolPort` is passed here, as the harness already calls `open_mr` and `kb_search` through
+   * it (the fake runner calls none, its divergence 6) — so a scenario can answer from what
+   * `get_conversation` said. And a case can act **while a stage runs** — a person's comment written
+   * during `code_review` — by holding that one run until its effect has landed. Both are effects
+   * the case waits for, never a sleep (standing rule 2). {@link onAgentSpec} is the other mode's
+   * knob.
+   */
+  readonly beforeReport?: (spec: RunSpec, tools: PlatformToolPort) => Promise<void> | undefined;
+  /**
    * Start against a database another instance already used, and do not seed it again.
    *
    * One test needs this: the handover that shows an uncomposed instance **queued** a
@@ -1288,6 +1303,19 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
             )
             .then((result: JsonValue) => ({ stage: spec.stage ?? '', result })),
         );
+      }
+      const before = options.beforeReport?.(spec, tools);
+      if (before !== undefined) {
+        // The scenario is picked when the fake starts, so the fake starts once the model's own
+        // work is done; the handle stands in for it until then.
+        const started = before.then(() => fake.start(spec, hooks));
+        return {
+          runId: spec.runId,
+          sessionId: null,
+          outcome: opened.then(() => started).then((handle) => handle.outcome),
+          steer: async (message) => (await started).steer(message),
+          stop: async (stop) => (await started).stop(stop),
+        };
       }
       if (!opens && !(spec.mode === 'shadow' && (options.shadowMergeRequests ?? '').length > 0)) {
         return fake.start(spec, hooks);

@@ -153,9 +153,9 @@ describe('the fake registrations’ poll plans (WP-110)', () => {
         redactor: noSecretsRedactor(),
       }) as typeof tickets;
     expect(create({}).pollPlan()?.rule).toEqual({ kind: 'label', label: 'agentic' });
-    expect(create({ pickup_status: 'Ready for agent' }).pollPlan()?.rule).toEqual({
+    expect(create({ pickup_status: 'To pick up' }).pollPlan()?.rule).toEqual({
       kind: 'status',
-      status: 'Ready for agent',
+      status: 'To pick up',
     });
   });
 });

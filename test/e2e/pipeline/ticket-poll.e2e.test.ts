@@ -160,7 +160,7 @@ describe('the ticket poller', () => {
 /**
  * **WP-110 criterion 4, PROGRESS backlog 298: a status-rule binding sees an edit to a ticket the
  * platform has moved on.** The pick-up rule is a **status** (`pickup_status`), and the project's
- * status mapping moves the ticket to *In Progress* at refinement — after which the rule no longer
+ * status mapping moves the ticket to *Doing* at refinement — after which the rule no longer
  * matches it. The poll's second read, the live tasks' tickets whatever the rule says, is what
  * records the human's edit; it records it as `ticket.updated` only, and WP-60's ticket signal
  * stamps the live task.
@@ -170,10 +170,10 @@ describe('the ticket poller, on a status-rule binding (WP-110)', () => {
     const pipeline = await startPipeline({
       scenarios: featureScenarios,
       label: 'poll-status-rule',
-      tickets: [{ ...(LABELLED[0] as (typeof LABELLED)[number]), status: 'Ready for agent' }],
+      tickets: [{ ...(LABELLED[0] as (typeof LABELLED)[number]), status: 'To pick up' }],
       config: {
         version: 1,
-        status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' },
+        status_mapping: { refinement: 'Doing', ready_for_merge: 'Waiting for review' },
       },
       env: { APP_POLL_SWEEP_INTERVAL_MS: '500' },
     });
@@ -182,7 +182,7 @@ describe('the ticket poller, on a status-rule binding (WP-110)', () => {
     const sql = pool;
     await sql.query(
       `update bindings
-          set config = config || '{"poll_enabled": true, "poll_interval_seconds": 30, "pickup_status": "Ready for agent"}'::jsonb,
+          set config = config || '{"poll_enabled": true, "poll_interval_seconds": 30, "pickup_status": "To pick up"}'::jsonb,
               poll_cursor = $3::timestamptz
         where project_id = $1 and integration_id = $2`,
       [pipeline.projectId, TICKETS_INTEGRATION_ID, FAKE_EPOCH],
@@ -191,7 +191,7 @@ describe('the ticket poller, on a status-rule binding (WP-110)', () => {
     await pipeline.settle('the task a poll started', (task) => task.id.length > 0);
     await pipeline.waitFor(
       'the status mapping moved the ticket off the pick-up status',
-      async () => pipeline.tickets.peek('ACME-1')?.status === 'In Progress',
+      async () => pipeline.tickets.peek('ACME-1')?.status === 'Doing',
     );
     const matchedBefore = (await pipeline.events()).filter(
       (event) => event.type === 'ticket.matched',

@@ -314,13 +314,13 @@ describe('a status-rule binding’s live tasks (WP-110, backlog 298)', () => {
     const binding = { projectId, integrationId };
     await pool.query(
       `update bindings
-          set config = config || '{"pickup_status": "Ready for agent"}'::jsonb
+          set config = config || '{"pickup_status": "To pick up"}'::jsonb
         where project_id = $1 and integration_id = $2`,
       [projectId, integrationId],
     );
     try {
-      // The platform already moved ACME-7 on: it is In Progress, so the status rule finds nothing.
-      tickets.seedTicket({ key: 'ACME-7', title: 'Moved on', status: 'In Progress' });
+      // The platform already moved ACME-7 on: it is Doing, so the status rule finds nothing.
+      tickets.seedTicket({ key: 'ACME-7', title: 'Moved on', status: 'Doing' });
       await pool.query(
         `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state, current_stage)
            values ($1, $2, 'ACME-7', 'https://tickets.example.test/browse/ACME-7', 'feature', 'active', 'implementation')`,

@@ -98,8 +98,9 @@
  *     and is `unknown`. A workflow longer than `MAX_TICKET_STATUSES` is refused at the read
  *     (`invalid_response`), as the Jira adapter refuses a union past it (WP-181).
  * 15. **Different — comments are dated by the seed or by the fake's clock** (WP-171). A seeded
- *     comment carries its own `createdAt`, so a test can place it either side of a window's
- *     horizon; a comment written through the port is stamped by the fake clock, which steps a
+ *     comment carries its own `createdAt`, and so may one a person writes through
+ *     `emitCommentAdded` (WP-183), so a test can place it either side of a window's horizon; a
+ *     comment written through the port, or emitted with no date, is stamped by the fake clock, which steps a
  *     second per read. `listComments` keeps comments created strictly after `since` and orders them
  *     newest first, a tie broken by the later write first (Jira documents no tie order). Its
  *     `total` is always the window's whole count, where Jira's is answered only for a short page.
@@ -178,17 +179,19 @@ export interface FakeStatusSeed {
 
 /**
  * The workflow a seeded fake uses when the caller does not name one, with the category keys a
- * tracker reports (research/15 J1a). The names predate BD-031's neutral-name rule and stay because
- * the pipeline tests seed them; a new test names its own neutral statuses.
+ * tracker reports (research/15 J1a). **Every name is invented** (BD-031 ruling 1, WP-183 (v)): no
+ * shipped default of Jira or GitLab and no real tracker's workflow, so a test that passes against
+ * this default proves that nothing it exercises assumes a status name. Until WP-183 these were a
+ * real tracker's names; a test that asserts a status seeds its own workflow, or names one of these.
  */
 export const DEFAULT_FAKE_STATUS_SEEDS: readonly FakeStatusSeed[] = [
-  { name: 'Backlog', rawCategory: 'new' },
-  { name: 'Ready for agent', rawCategory: 'new' },
-  { name: 'In Refinement', rawCategory: 'indeterminate' },
-  { name: 'Waiting for input', rawCategory: 'indeterminate' },
-  { name: 'In Progress', rawCategory: 'indeterminate' },
-  { name: 'In Review', rawCategory: 'indeterminate' },
-  { name: 'Done', rawCategory: 'done' },
+  { name: 'Not started', rawCategory: 'new' },
+  { name: 'To pick up', rawCategory: 'new' },
+  { name: 'Being shaped', rawCategory: 'indeterminate' },
+  { name: 'Waiting on someone', rawCategory: 'indeterminate' },
+  { name: 'Doing', rawCategory: 'indeterminate' },
+  { name: 'Waiting for review', rawCategory: 'indeterminate' },
+  { name: 'Finished', rawCategory: 'done' },
 ];
 
 /** The default workflow's names. */
@@ -371,6 +374,12 @@ export interface FakeTaskManagement extends TaskManagementPort {
     readonly ticketKey: string;
     readonly authorId: string;
     readonly text: string;
+    /**
+     * The comment's `created_at` (WP-183). @default the fake's own clock, which starts at
+     * `FAKE_EPOCH`; a tier that compares the comment with a platform instant — the human-return
+     * window's horizon, the start of a real run — states the instant instead (divergence 15).
+     */
+    readonly createdAt?: string;
     readonly deliveryId?: string;
   }): WebhookDelivery;
   emitStatusChanged(input: {
@@ -482,7 +491,7 @@ export const createFakeTaskManagement = (
   const ticketUrl = (key: string): string => `${baseUrl}/browse/${key}`;
 
   const seedTicket = (seed: FakeTicketSeed): TicketRefInput => {
-    const status = seed.status ?? statuses[0] ?? 'Backlog';
+    const status = seed.status ?? statuses[0] ?? 'Not started';
     if (!statuses.includes(status)) {
       throw new TypeError(`seed status "${status}" is not in this fake's workflow`);
     }
@@ -1044,7 +1053,10 @@ export const createFakeTaskManagement = (
         id: `c-${commentCounter}`,
         author: identity,
         body: input.text,
-        created_at: core.clock.now(),
+        created_at:
+          input.createdAt === undefined
+            ? core.clock.now()
+            : ticketCommentSchema.shape.created_at.parse(input.createdAt),
         updated_at: null,
         marker_id: null,
         url: `${ticket.url}#comment-${commentCounter}`,

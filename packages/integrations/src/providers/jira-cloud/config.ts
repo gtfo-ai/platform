@@ -58,7 +58,7 @@ export const jiraCloudConfigSchema = z
      * poller passes this one through `pollPlan()`, and the history bootstrap passes its own.
      *
      * `pickup_status` wins when both are set, because a status is the narrower statement: a project
-     * that moves tickets into "Ready for agent" has said when the ticket is ready, where a label can
+     * that moves tickets into "To pick up" has said when the ticket is ready, where a label can
      * sit on a ticket for weeks before it is. Both empty means this binding picks up no ticket, by
      * webhook or by poll (`pollPlan()` is then `null` even with `poll_enabled`).
      */

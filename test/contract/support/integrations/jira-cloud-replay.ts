@@ -478,7 +478,7 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
           summary: fields.summary,
           description: fields.description ?? null,
           issuetype: { id: '10004', name: (fields.issuetype as { name: string }).name },
-          status: { id: '10001', name: 'Ready for agent' },
+          status: { id: '10001', name: 'To pick up' },
           priority: fields.priority ?? null,
           labels: fields.labels ?? [],
           created: '2026-09-02T12:05:00.000+0000',
