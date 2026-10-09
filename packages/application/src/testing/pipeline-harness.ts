@@ -67,6 +67,7 @@ import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import type { StageExecuteData } from '../pipeline/jobs.js';
 import { createStageRunPlanner, SKILLS_BY_ROLE } from '../pipeline/planner.js';
 import { createPipelineRuntime, type PipelineRuntime } from '../pipeline/runtime.js';
+import type { PipelineSagaOptions } from '../pipeline/saga.js';
 import type { ProjectSettings, ProjectSettingsPort } from '../pipeline/settings.js';
 import {
   defaultProjectSettings,
@@ -211,8 +212,15 @@ export interface RecordingJobs extends Jobs {
    */
   readonly crons: readonly CronScheduleDefinition[];
   take(queue: string): readonly EnqueueRequest[];
-  /** Only the jobs whose `startAfter` has passed on the test's clock. */
-  takeDue(queue: string, nowMs: number): readonly EnqueueRequest[];
+  /**
+   * Only the jobs whose `startAfter` has passed on the test's clock — and, with `held`, not the
+   * ones it answers `true` for, which stay pending (WP-184: a case that holds an outbound duty).
+   */
+  takeDue(
+    queue: string,
+    nowMs: number,
+    held?: (request: EnqueueRequest) => boolean,
+  ): readonly EnqueueRequest[];
 }
 
 export const recordingJobs = (): RecordingJobs => {
@@ -257,11 +265,12 @@ export const recordingJobs = (): RecordingJobs => {
       }
       return taken;
     },
-    takeDue: (queue, nowMs) => {
+    takeDue: (queue, nowMs, held) => {
       const taken = enqueued.filter(
         (request) =>
           request.queue === queue &&
-          (request.startAfter === undefined || request.startAfter.getTime() <= nowMs),
+          (request.startAfter === undefined || request.startAfter.getTime() <= nowMs) &&
+          held?.(request) !== true,
       );
       for (const request of taken) {
         enqueued.splice(enqueued.indexOf(request), 1);
@@ -751,6 +760,8 @@ export interface HarnessOptions {
    */
   readonly maintenanceHeldRuns?: readonly (number | null)[];
   readonly git?: Partial<GitProviderPort> | null;
+  /** The task duty lease's test seams (WP-184, `duty-lease.ts`); absent, production's defaults. */
+  readonly dutyLease?: PipelineSagaOptions['dutyLease'];
   /**
    * The default branch's files as the platform's mirror reads them (WP-138 ruling (f)). @default a
    * repository with **no** CI file — every path absent — so a head with no pipeline still reads as
@@ -943,6 +954,12 @@ export interface PipelineHarness {
    * {@link UnscriptedRunError}.
    */
   drain(): Promise<void>;
+  /**
+   * Holds back every `pipeline.outbound` job whose payload `predicate` answers `true` for — they
+   * stay pending, and `drain` runs everything else — until it is called again with `null` (WP-184:
+   * the stage job runs before the duty it races in production).
+   */
+  holdOutbound(predicate: ((data: Record<string, unknown>) => boolean) | null): void;
   /** Every event in the log, in position order. */
   events(): readonly DomainEvent[];
   types(): readonly string[];
@@ -1785,6 +1802,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
 
   const runtime = createPipelineRuntime({
     store,
+    ...(options.dutyLease === undefined ? {} : { dutyLease: options.dutyLease }),
     repositoryFiles: options.repositoryFiles ?? noCiRepository,
     shadow,
     bootstrap,
@@ -1993,6 +2011,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     }
   };
 
+  /** WP-184: the outbound duties a case holds back, so the stage job runs before them. */
+  let outboundHold: ((data: Record<string, unknown>) => boolean) | null = null;
+
   /**
    * Plays the worker for one queue: runs every job whose timer has come, and no others.
    *
@@ -2004,7 +2025,13 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     if (handler === undefined) {
       return 0;
     }
-    const requests = jobs.takeDue(queue, clock.epochMs);
+    const requests = jobs.takeDue(
+      queue,
+      clock.epochMs,
+      queue === JOB_QUEUES.pipelineOutbound && outboundHold !== null
+        ? (request) => outboundHold?.((request.data ?? {}) as Record<string, unknown>) === true
+        : undefined,
+    );
     for (const request of requests) {
       activeJob = queue;
       try {
@@ -2129,6 +2156,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       await drain();
     },
     drain,
+    holdOutbound: (predicate) => {
+      outboundHold = predicate;
+    },
     events: () => memory.log.map((row) => row.event),
     types: () => memory.log.map((row) => row.event.type),
   };

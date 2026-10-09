@@ -370,6 +370,14 @@ export interface PipelineOutboundData {
    */
   readonly lifecycle_slot?: string;
   /**
+   * `ticket_lifecycle` on a stage **entry** only (WP-184): the write's idempotency key —
+   * `ticket_lifecycle:<task>:<stage>:<attempt>`, the stage attempt's identity rather than the cause
+   * event's, because the `stage.execute` job performs the same move before it plans the stage
+   * (`owed-duties.ts`) and has no event id to name. Absent (a completion's `approved`, or a wake-up
+   * written before WP-184), the key is the cause event's, as before.
+   */
+  readonly lifecycle_key?: string;
+  /**
    * The three review-conversation duties (WP-179): the artifact whose completion woke them — a
    * `ReviewVerdict` or an `ImplementationNotes` — re-read when the job fires.
    */
@@ -688,7 +696,19 @@ export { inTaskTransaction, type TaskTransactionOptions } from './task-transacti
  * Every path re-validates: the task may have moved on, been paused or been cancelled between the
  * enqueue and the fire, and none of those is an error (TD-004 has no cancel).
  */
-export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<StageExecuteData> => {
+export const stageExecuteHandler = (
+  options: PipelineJobOptions,
+  /**
+   * The duties the stage being entered is owed, performed before it is planned (WP-184,
+   * `owed-duties.ts`'s `performOwedDuties`). A parameter rather than an import because that module
+   * imports the review conversation's duties, which import this one (`enqueueOutbound`); the
+   * runtime composes it, and it is required, so a composition cannot leave it out.
+   */
+  performOwedDuties: (
+    stored: StoredTask,
+    entry: { readonly stage: string; readonly attempt: number },
+  ) => Promise<void>,
+): JobHandler<StageExecuteData> => {
   const logger: Logger = options.logger ?? silentLogger;
   const gates = createGateEvaluator(options);
 
@@ -780,6 +800,18 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
        * provider being down.
        */
       const snapshot = await ensureTicketSnapshot(options, admitted.stored);
+      /**
+       * **What this stage is owed, before the plan reads it** (WP-184, TD-029 decisions 4 and 11):
+       * the entry's lifecycle move and the review conversation's posts for the latest completed
+       * agent run — the findings a `code_review` return left, the replies a fix wrote. Here for the
+       * snapshot's reason: the planner reads the conversation once, at plan time, and the outbound
+       * duties that also post them sit on a queue nothing orders against this one. Never a throw for
+       * a provider; a `TransactionOpenError` comes out (`owed-duties.ts`).
+       */
+      await performOwedDuties(admitted.stored, {
+        stage: request.stage,
+        attempt: request.attempt,
+      });
       // WP-73, backlog 218: a Reviewer is matched on the merge request's files too, read here for
       // the same reason as the ticket — outside every transaction, before the plan. It rethrows
       // `TransactionOpenError` as the ticket read does (WP-105, backlog 303).

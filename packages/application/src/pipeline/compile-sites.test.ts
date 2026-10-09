@@ -117,8 +117,8 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
     how: "the claim's refusal (WP-177), inside its own escalation transaction: the re-loaded row's `current.pipelineDial` — the escalation the claim raises closes the stage's row as every escalation does",
   },
   'packages/application/src/pipeline/ticket-lifecycle.ts': {
-    sites: 1,
-    how: "the lifecycle handler (WP-177), in the handler's own transaction: the loaded row's `stored.pipelineDial` — so the `approved` moment is the last review stage the dial left enabled",
+    sites: 2,
+    how: "the lifecycle handler (WP-177), in the handler's own transaction, and the entry move the `stage.execute` job performs before the plan (WP-184), off the row that job's first transaction loaded: `stored.pipelineDial` in both — so the `approved` moment is the last review stage the dial left enabled, and an entry the dial disabled moves nothing",
   },
   'apps/server/src/queries/pipeline-queries.ts': {
     sites: 1,
@@ -228,9 +228,9 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
     expect(counts).toEqual(expected);
   });
 
-  it('counts thirty-four — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178 — and states how each resolves the dial', () => {
+  it('counts thirty-five — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178, thirty-four before WP-184 — and states how each resolves the dial', () => {
     const total = [...census().values()].reduce((sum, calls) => sum + calls.length, 0);
-    expect(total).toBe(34);
+    expect(total).toBe(35);
     for (const [file, entry] of Object.entries(EXPECTED_SITES)) {
       expect(entry.how.length, file).toBeGreaterThan(20);
     }

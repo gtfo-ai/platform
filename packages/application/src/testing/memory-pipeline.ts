@@ -74,6 +74,7 @@ import type {
   StoredTask,
   SupersededMergeRequest,
   SupersededMergeRequestOutcome,
+  TaskDutyLeaseRepository,
   TaskRepository,
 } from '../pipeline/store.js';
 import {
@@ -1922,7 +1923,44 @@ export const createMemoryPipelineStore = (
     },
   };
 
+  /** `task_duty_leases` (migration 0091, WP-184), keyed `(task_id, lease)` like its primary key. */
+  const dutyLeases = new Map<string, { holder: string; expiresAt: number }>();
+  const dutyLeaseRepository: TaskDutyLeaseRepository = {
+    claim: async (_tx, input) => {
+      const key = `${input.taskId}#${input.lease}`;
+      const held = dutyLeases.get(key);
+      if (
+        held !== undefined &&
+        held.holder !== input.holder &&
+        held.expiresAt > Date.parse(input.now)
+      ) {
+        return false;
+      }
+      dutyLeases.set(key, { holder: input.holder, expiresAt: Date.parse(input.expiresAt) });
+      return true;
+    },
+    renew: async (_tx, input) => {
+      const held = dutyLeases.get(`${input.taskId}#${input.lease}`);
+      if (
+        held === undefined ||
+        held.holder !== input.holder ||
+        held.expiresAt <= Date.parse(input.now)
+      ) {
+        return false;
+      }
+      held.expiresAt = Date.parse(input.expiresAt);
+      return true;
+    },
+    release: async (_tx, input) => {
+      const key = `${input.taskId}#${input.lease}`;
+      if (dutyLeases.get(key)?.holder === input.holder) {
+        dutyLeases.delete(key);
+      }
+    },
+  };
+
   return {
+    dutyLeases: dutyLeaseRepository,
     deadlineRecovery,
     supersededRecovery,
     supersededRows: () => [...superseded.values()].map((row) => clone(row)),

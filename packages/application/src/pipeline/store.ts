@@ -2183,7 +2183,61 @@ export interface BugTraceRepository {
   ): Promise<LatestBugTrace | null>;
 }
 
+/**
+ * One task's **duty lease** — WP-184, migration 0091: who is performing a group of the task's
+ * outbound duties right now, across every process (`task_duty_leases`).
+ *
+ * The `IntegrationActionExecutor`'s idempotency record is written **after** the call (its step 5),
+ * so two performers of one key that overlap both call the provider — measured in WP-184's unit
+ * suite, and the reason this exists. The `stage.execute` job performs the review conversation's
+ * owed duties before it plans the next agent stage, and the `pipeline.outbound` duty that also
+ * fires performs the same ones; the lease makes them take turns, and the idempotency keys make the
+ * second turn a replay that calls nothing.
+ *
+ * A lease **expires**: a holder renews it while it works and deletes it when it is done, so a
+ * holder whose process died blocks the group for at most one lease length. The instant is the
+ * caller's clock, in both halves, so a test's clock decides expiry as production's does.
+ */
+export interface TaskDutyLeaseRepository {
+  /**
+   * Takes the lease when nobody holds it, when its holder's lease has expired, or when `holder`
+   * already holds it (a renewal). Answers whether `holder` holds it now.
+   */
+  claim(
+    tx: Transaction,
+    input: {
+      readonly taskId: Id;
+      readonly lease: string;
+      readonly holder: string;
+      readonly now: IsoDateTime;
+      readonly expiresAt: IsoDateTime;
+    },
+  ): Promise<boolean>;
+  /**
+   * Extends `holder`'s **own** live row and nothing else (WP-184 review round 1): it never inserts,
+   * so a renewal that lands after the holder's release cannot bring the row back. Answers whether
+   * a row was extended.
+   */
+  renew(
+    tx: Transaction,
+    input: {
+      readonly taskId: Id;
+      readonly lease: string;
+      readonly holder: string;
+      readonly now: IsoDateTime;
+      readonly expiresAt: IsoDateTime;
+    },
+  ): Promise<boolean>;
+  /** Gives the lease back — only `holder`'s; somebody else's lease is left alone. */
+  release(
+    tx: Transaction,
+    input: { readonly taskId: Id; readonly lease: string; readonly holder: string },
+  ): Promise<void>;
+}
+
 export interface PipelineStore {
+  /** WP-184's per-task duty lease (migration 0091). */
+  readonly dutyLeases: TaskDutyLeaseRepository;
   readonly tasks: TaskRepository;
   readonly artifacts: ArtifactRepository;
   readonly runs: RunRepository;

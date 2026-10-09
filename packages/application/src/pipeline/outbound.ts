@@ -72,6 +72,7 @@ import {
   runMergeRequestPipeline,
   runMergeRequestReady,
 } from './merge-request-ready.js';
+import { underReviewConversationLease } from './owed-duties.js';
 import { runReadyHeadCheck } from './ready-head.js';
 import { runResolveOnMerge } from './resolve-on-merge.js';
 import {
@@ -309,21 +310,31 @@ const dispatchOutbound =
         await runMergeRequestDraft(options, data);
         return;
       // WP-177 (TD-029 decisions 4 and 5): the ticket lifecycle's moves and the release.
+      // WP-184: the entry moves are performed by the stage job too, so they take the task's lease.
       case 'ticket_lifecycle':
-        await runTicketLifecycle(options, data);
+        await underReviewConversationLease(options, data, () => runTicketLifecycle(options, data));
         return;
       case 'ticket_release':
         await runTicketRelease(options, data);
         return;
-      // WP-179 (TD-029 decision 10): the review conversation on the merge request.
+      // WP-179 (TD-029 decision 10): the review conversation on the merge request — under the
+      // task's duty lease since WP-184, because the stage job performs the same duties before it
+      // plans the next agent stage (`owed-duties.ts`) and the executor's key is recorded only after
+      // its call.
       case 'review_findings_post':
-        await runReviewFindingsPost(options, data);
+        await underReviewConversationLease(options, data, () =>
+          runReviewFindingsPost(options, data),
+        );
         return;
       case 'conversation_replies':
-        await runConversationReplies(options, data);
+        await underReviewConversationLease(options, data, () =>
+          runConversationReplies(options, data),
+        );
         return;
       case 'review_threads_resolve':
-        await runReviewThreadsResolve(options, data);
+        await underReviewConversationLease(options, data, () =>
+          runReviewThreadsResolve(options, data),
+        );
         return;
       default:
         logger.warn(

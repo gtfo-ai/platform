@@ -28,6 +28,13 @@
  *    named thread whose **first** note opens with this task's `review-finding` marker is resolved;
  *    a person's thread never is.
  *
+ * **The stage job performs them too** (WP-184, `owed-duties.ts`): the next agent stage's
+ * `stage.execute` job runs the duties its latest completed agent run owes before it plans, because
+ * the planner reads the conversation once and nothing orders this queue against that one. The two
+ * performers take turns under the task's `review_conversation` lease (`duty-lease.ts`, taken in
+ * `outbound.ts` for these duties), since the executor records a key only after its call; whichever
+ * runs second replays.
+ *
  * A dial level at which a stage does not run never completes it, so nothing is posted for it. A
  * review-only task (`REVIEW_ONLY_TEMPLATE_ID`) has duties of its own and is skipped here, and a task
  * with no merge request has nothing to post on.
@@ -100,6 +107,18 @@ import {
 import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { StoredArtifact, StoredTask } from './store.js';
+
+/**
+ * What the three duties read of their wake-up: which duty, which task, which artifact. Narrower
+ * than `PipelineOutboundData` because the `stage.execute` job runs them too (WP-184) and has no
+ * cause event to name — so it passes none rather than an invented id.
+ */
+export type ConversationDutyData = Pick<
+  PipelineOutboundData,
+  'duty' | 'task_id' | 'artifact_id'
+> & {
+  readonly [key: string]: unknown;
+};
 
 /** The duties need a transaction of their own; the handler runs inside the dispatcher's. */
 export interface ReviewConversationOptions
@@ -204,7 +223,7 @@ interface DutySubject {
  */
 const subjectOf = async (
   options: ReviewConversationOptions,
-  data: PipelineOutboundData,
+  data: ConversationDutyData,
   logger: Logger,
 ): Promise<DutySubject | null> => {
   const taskId = data.task_id as Id | undefined;
@@ -268,7 +287,7 @@ const mayBeAnchorRefusal = (error: unknown): boolean =>
  */
 export const runReviewFindingsPost = async (
   options: ReviewConversationOptions,
-  data: PipelineOutboundData,
+  data: ConversationDutyData,
 ): Promise<void> => {
   const logger = options.logger ?? silentLogger;
   const subject = await subjectOf(options, data, logger);
@@ -482,7 +501,7 @@ const opensWithExactly = (body: string, markerId: string): boolean => {
  */
 export const runConversationReplies = async (
   options: ReviewConversationOptions,
-  data: PipelineOutboundData,
+  data: ConversationDutyData,
 ): Promise<void> => {
   const logger = options.logger ?? silentLogger;
   const subject = await subjectOf(options, data, logger);
@@ -585,7 +604,7 @@ export const runConversationReplies = async (
  */
 export const runReviewThreadsResolve = async (
   options: ReviewConversationOptions,
-  data: PipelineOutboundData,
+  data: ConversationDutyData,
 ): Promise<void> => {
   const logger = options.logger ?? silentLogger;
   const subject = await subjectOf(options, data, logger);

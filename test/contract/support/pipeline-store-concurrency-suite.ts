@@ -475,6 +475,96 @@ export const runPipelineStoreConcurrencyContract = (
       expect(counted.tasksInPipeline).toBe(before.tasksInPipeline + 1);
     });
 
+    /**
+     * WP-184's duty lease (migration 0091): two performers of one task's duty group, each claiming
+     * in a transaction of its own and committing it — the shape `withTaskDutyLease` uses.
+     */
+    describe('the task duty lease (WP-184)', () => {
+      const AT = '2026-06-01T09:00:00.000Z' as IsoDateTime;
+      const plus = (ms: number) => new Date(Date.parse(AT) + ms).toISOString() as IsoDateTime;
+      const claim = async (
+        taskId: Id,
+        holder: string,
+        now: IsoDateTime,
+        expiresAt: IsoDateTime,
+      ) => {
+        const scope = await begin();
+        const held = await store.dutyLeases.claim(scope.tx, {
+          taskId,
+          lease: 'review_conversation',
+          holder,
+          now,
+          expiresAt,
+        });
+        await scope.commit();
+        return held;
+      };
+      const release = async (taskId: Id, holder: string) => {
+        const scope = await begin();
+        await store.dutyLeases.release(scope.tx, { taskId, lease: 'review_conversation', holder });
+        await scope.commit();
+      };
+
+      it('lets one holder in, refuses a second while the lease is live, and renews the first', async () => {
+        const { task } = await givenCommittedTask();
+        expect(await claim(task.id, 'duty:a', AT, plus(120_000))).toBe(true);
+        expect(await claim(task.id, 'duty:b', plus(1_000), plus(121_000))).toBe(false);
+        // The holder's own renewal pushes the expiry out, so the second is still refused after
+        // the first lease would have lapsed.
+        expect(await claim(task.id, 'duty:a', plus(60_000), plus(180_000))).toBe(true);
+        expect(await claim(task.id, 'duty:b', plus(150_000), plus(270_000))).toBe(false);
+      });
+
+      it('hands the lease on at a release, and only its holder’s release counts', async () => {
+        const { task } = await givenCommittedTask();
+        expect(await claim(task.id, 'duty:a', AT, plus(120_000))).toBe(true);
+        await release(task.id, 'duty:b');
+        expect(await claim(task.id, 'duty:b', plus(1_000), plus(121_000))).toBe(false);
+        await release(task.id, 'duty:a');
+        expect(await claim(task.id, 'duty:b', plus(2_000), plus(122_000))).toBe(true);
+      });
+
+      it('takes over a lease whose holder stopped renewing once it expires', async () => {
+        const { task } = await givenCommittedTask();
+        expect(await claim(task.id, 'duty:dead', AT, plus(120_000))).toBe(true);
+        expect(await claim(task.id, 'duty:b', plus(119_000), plus(239_000))).toBe(false);
+        expect(await claim(task.id, 'duty:b', plus(120_000), plus(240_000))).toBe(true);
+        // The dead holder's late renewal is refused: the lease is the new holder's now.
+        expect(await claim(task.id, 'duty:dead', plus(121_000), plus(241_000))).toBe(false);
+      });
+
+      it('renews only its holder’s live row, and never brings a released one back (review round 1)', async () => {
+        const { task } = await givenCommittedTask();
+        const renew = async (holder: string, now: IsoDateTime, expiresAt: IsoDateTime) => {
+          const scope = await begin();
+          const renewed = await store.dutyLeases.renew(scope.tx, {
+            taskId: task.id,
+            lease: 'review_conversation',
+            holder,
+            now,
+            expiresAt,
+          });
+          await scope.commit();
+          return renewed;
+        };
+        expect(await claim(task.id, 'duty:a', AT, plus(120_000))).toBe(true);
+        expect(await renew('duty:b', plus(1_000), plus(121_000))).toBe(false);
+        expect(await renew('duty:a', plus(60_000), plus(180_000))).toBe(true);
+        expect(await claim(task.id, 'duty:b', plus(150_000), plus(270_000))).toBe(false);
+        await release(task.id, 'duty:a');
+        // The renewal that lands after the release finds nothing to extend and inserts nothing.
+        expect(await renew('duty:a', plus(61_000), plus(181_000))).toBe(false);
+        expect(await claim(task.id, 'duty:b', plus(62_000), plus(182_000))).toBe(true);
+      });
+
+      it('keeps one lease per task', async () => {
+        const first = await givenCommittedTask();
+        const second = await givenCommittedTask();
+        expect(await claim(first.task.id, 'duty:a', AT, plus(120_000))).toBe(true);
+        expect(await claim(second.task.id, 'duty:b', AT, plus(120_000))).toBe(true);
+      });
+    });
+
     it('still refuses a save for a task that does not exist, and not as a conflict', async () => {
       // Rule 42's other side. Both failures are "the update matched no row", and collapsing them
       // into one would make a caller retry for ever against a task that was deleted — so the

@@ -93,6 +93,12 @@ Vendor facts are in `docs/research/15-tracker-lifecycle-and-mr-conversation.md`.
 
    An unmapped slot writes nothing, and the stage runs. A failed write does not block the stage. It
    leaves its audit row and a `warn` log naming the slot.
+   > **As built at WP-184 (2026-10-09).** An entry's move (`in_progress`, `in_review`) is also
+   > performed by the stage's own `stage.execute` job before its plan, keyed per stage attempt, so the
+   > ticket reads the stage's status before the stage's run starts; the `ticket_lifecycle` duty
+   > replays it under the task's duty lease (migration 0091). A failed write still logs and the stage
+   > runs.
+
 5. **The claim.** It happens in the `stage.execute` job, between its transactions, before any **agent**
    run is admitted, beside `ensureTicketSnapshot` (`packages/application/src/pipeline/jobs.ts:753`).
    Gates claim nothing. `ensureTicketClaim` acts when the task has a ticket and a claiming binding, and
@@ -366,6 +372,13 @@ Vendor facts are in `docs/research/15-tracker-lifecycle-and-mr-conversation.md`.
     > their blocks, and to quote only `thread_id` and `comment_id`. `get_conversation` (WP-180, WP-181)
     > answers the raw author and path as JSON fields. JSON escaping is the tool result's encoding, not a
     > marker, so the tool keeps both values.
+   > **As built at WP-184 (2026-10-09).** The planner reads the conversation once, at plan time, so the
+   > conversation duties a stage is owed (the review's findings, the fix run's replies, the
+   > resolutions) are performed by its `stage.execute` job before the plan (`owed-duties.ts`): a
+   > returned stage's prompt carries the threads it must answer. The outbound duties still fire and
+   > replay under the task's duty lease, because the executor records an idempotency key only after
+   > its call and two overlapping performs under one key would both post.
+
 12. **Two installations sharing one service account** are **filed, not built**, as PROGRESS backlog
     **538** (minor). The assignee settles every case BD-031 names: a person; two projects bound with
     different accounts; two installations with different accounts. The shared account is the one case it

@@ -47,6 +47,24 @@ Runner service (infrastructure)  ── platform-side SDK host; the CLI itself r
 > the claim is recorded `shadow`, and the run proceeds. Gates claim nothing. A binding with no
 > `lifecycle` block makes none of these calls, exactly as before M10.
 
+> **As built at WP-184 (TD-029 decisions 4 and 11): what a stage is owed is done before it is
+> planned.** The planner reads the conversation once, at plan time, and the outbound duties that post
+> to it sit on `pipeline.outbound`, which nothing orders against `stage.execute` — so after a
+> `code_review` return the fix run was planned before the findings existed (3.0 s apart on the e2e
+> clock, WP-183) and its prompt carried no `conversation` block to answer, and the ticket read *in
+> review* after the review's run had started. After the claim and the ticket snapshot, the
+> `stage.execute` job of an **agent** stage now calls `performOwedDuties`
+> (`packages/application/src/pipeline/owed-duties.ts`): the lifecycle move the stage's entry owes
+> (`in_progress` for a developer stage, `in_review` for `code_review`, keyed
+> `ticket_lifecycle:<task>:<stage>:<attempt>`), then `review_findings_post`, `review_threads_resolve`
+> and `conversation_replies` for the artifacts of the task's latest completed agent run — the duties'
+> own functions and idempotency keys. The outbound duties still fire and stay the durable path; the
+> executor records a key only after its call, so both performers take turns under the task's
+> `review_conversation` lease (`task_duty_leases`, migration 0091, `duty-lease.ts`) and the second
+> turn replays. It never fails the stage: a provider failure or a lease held for the whole wait is a
+> `warn` and the run is planned without that entry. A shadow task is skipped (its writes post
+> nothing, and a second `would_have` row per write would double the report).
+
 ## RunSpec (what the stage executor hands to the runner)
 
 | Field | Source |

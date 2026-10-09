@@ -635,6 +635,23 @@ export const expiredJobEscalations = pgTable('expired_job_escalations', {
 });
 
 /**
+ * WP-184's per-task duty lease (migration 0091): who performs a group of one task's outbound duties
+ * right now. Claimed before the first provider call, renewed while its holder works, deleted when it
+ * is done; the instants are the claimant's clock. The migration's header carries the reasoning.
+ */
+export const taskDutyLeases = pgTable(
+  'task_duty_leases',
+  {
+    taskId: uuid('task_id').notNull(),
+    lease: text('lease').notNull(),
+    holder: text('holder').notNull(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.taskId, table.lease] })],
+);
+
+/**
  * The ask-the-task thread (WP-31, migration 0024).
  *
  * `citations` is the model's own list after the application dropped the entries that name another
@@ -737,4 +754,5 @@ export type RunCommandRow = typeof runCommands.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
 export type TaskAsk = typeof taskAsks.$inferSelect;
 export type ExpiredJobEscalation = typeof expiredJobEscalations.$inferSelect;
+export type TaskDutyLease = typeof taskDutyLeases.$inferSelect;
 export type TicketBreakdownItem = typeof ticketBreakdownItems.$inferSelect;

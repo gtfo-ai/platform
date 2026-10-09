@@ -64,8 +64,10 @@ describe('Drizzle schema', () => {
     // the artifact as `knowledge_curations` is (migration 0075, WP-124, backlog 366), plus
     // `expired_job_escalations` — the expired-last-try recovery's once-per-job-id mark, which
     // pg-boss's own table cannot carry because the platform does not write it (migration 0087,
-    // WP-156, backlog 421).
-    expect(tables.length).toBe(71);
+    // WP-156, backlog 421), plus `task_duty_leases` — who performs a group of one task's outbound
+    // duties right now, which the executor's idempotency record cannot answer because it is written
+    // after the call (migration 0091, WP-184).
+    expect(tables.length).toBe(72);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

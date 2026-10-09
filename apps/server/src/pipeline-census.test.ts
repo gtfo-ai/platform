@@ -77,6 +77,8 @@ const OPTION_SOURCES: Readonly<Record<string, string>> = {
  * too (standing rule 7's corollary — a list that only suppressed failures goes stale silently).
  */
 const ADMITTED_OMISSIONS: Readonly<Record<string, string>> = {
+  dutyLease:
+    'the task duty lease’s test seams (WP-184, `duty-lease.ts`): the poll interval, the lease length, the renewal schedule and the canary’s `disarmed`. Production takes every default — a two-minute lease renewed every thirty seconds — so there is nothing for this root to decide, and `disarmed` must never be reachable from it.',
   reviewCommentWindowMs:
     'BD-007’s batch window for human merge-request comments, whose default (2 minutes, DEFAULT_REVIEW_COMMENT_WINDOW_MS) is the shipped behaviour. It is a number with a stated default rather than a collaborator whose absence changes what the pipeline can do, so there is nothing for this root to decide until it becomes configuration.',
 };

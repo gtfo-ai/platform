@@ -25,6 +25,12 @@
  * the claim — or after a refused one — the ticket may be somebody else's, and the claim writes its
  * own `in_progress`. A binding whose block sets `claim: false` moves the ticket without a claim.
  *
+ * **An entry's move is performed by the stage job too** (WP-184): the `stage.execute` job of an
+ * agent stage moves the ticket before it plans the stage ({@link performEntryLifecycleMove}), so
+ * `in_review` is set when the review starts rather than whenever the outbound queue gets to it. The
+ * entry's duty carries the same key ({@link entryLifecycleKeyFor}) and runs under the same task
+ * lease (`outbound.ts`), so it replays the move.
+ *
  * **A failed write does not block anything** (decision 4): the executor leaves its audit row, the
  * duty logs a `warn` naming the slot, and the next moment moves the ticket on — `JOB_EXHAUSTION`'s
  * `notification_shaped` row.
@@ -50,6 +56,7 @@ import {
 } from './integrations.js';
 import { enqueueOutbound, type PipelineOutboundData, type TaskTransactionOptions } from './jobs.js';
 import type { PipelineSagaOptions } from './saga.js';
+import type { StoredTask } from './store.js';
 import { releaseTicket } from './ticket-release.js';
 
 /** The handler that decides a lifecycle moment (TD-005 integrations band, beside the mapping). */
@@ -61,8 +68,20 @@ interface TaskEventPayload {
   readonly task_id?: Id;
   readonly project_id?: Id;
   readonly stage?: string;
+  /** `task.stage.entered`'s attempt — the entry move's idempotency identity (WP-184). */
+  readonly attempt?: number;
   readonly verdict?: string | null;
 }
+
+/**
+ * The idempotency key of the move a stage **entry** owes (WP-184): the task and the stage attempt,
+ * so the `stage.execute` job — which performs the move before it plans the stage
+ * ({@link performEntryLifecycleMove}) — and the `ticket_lifecycle` duty the entry also enqueued
+ * name one write, and whichever runs second replays it. A completion's move (`approved`) keeps the
+ * cause event's key: nothing performs it but the duty.
+ */
+export const entryLifecycleKeyFor = (taskId: Id, stage: string, attempt: number): string =>
+  `ticket_lifecycle:${taskId}:${stage}:${String(attempt)}`;
 
 /** The moment a stage event is, or `null` for an event of another type. */
 const signalOf = (type: string, payload: TaskEventPayload): LifecycleSignal | null => {
@@ -121,6 +140,9 @@ export const ticketLifecycleHandler = (options: PipelineSagaOptions): EventHandl
       cause_event_id: event.id,
       status,
       lifecycle_slot: slot,
+      ...(signal.kind === 'stage_entered' && payload.attempt !== undefined
+        ? { lifecycle_key: entryLifecycleKeyFor(stored.task.id, signal.stage, payload.attempt) }
+        : {}),
     };
     context.afterCommit(async () => {
       await enqueueOutbound(options.jobs, data);
@@ -189,12 +211,76 @@ export const runTicketLifecycle = async (
   options: TaskTransactionOptions,
   data: PipelineOutboundData,
 ): Promise<void> => {
-  const logger: Logger = options.logger ?? silentLogger;
   const taskId = data.task_id as Id | undefined;
   const status = data.status;
   if (taskId === undefined || typeof status !== 'string' || status === '') {
     return;
   }
+  await moveTicket(options, {
+    taskId,
+    status,
+    slot: data.lifecycle_slot,
+    causeEventId: data.cause_event_id as Id,
+    ...(typeof data.lifecycle_key === 'string' ? { idempotencyKey: data.lifecycle_key } : {}),
+  });
+};
+
+/**
+ * **The move a stage entry owes, performed by the `stage.execute` job before it plans the stage**
+ * (WP-184 criterion (8), BD-031 ruling 2: `in_review` is *"set when the agent's code-review stage
+ * starts"*). The entry's `ticket_lifecycle` duty sits on `pipeline.outbound`, which nothing orders
+ * against the stage's own queue, so it landed after the run had started — once after the next
+ * stage's had. Here it lands before the plan; the duty that also fires carries the same key
+ * ({@link entryLifecycleKeyFor}) and replays it.
+ *
+ * The same rules as the duty: an unmapped slot makes no call, a claiming binding moves only a
+ * ticket the task holds, and a failed write is a `warn` and the stage runs regardless (TD-029
+ * decision 4). The caller holds the task's duty lease, so the duty waits for this move rather than
+ * overlapping it.
+ */
+export const performEntryLifecycleMove = async (
+  options: TaskTransactionOptions,
+  stored: StoredTask,
+  entry: { readonly stage: string; readonly attempt: number },
+): Promise<void> => {
+  if (!namesAProviderTicket(stored.task.ticket)) {
+    return;
+  }
+  const settings = await options.settings.forProject(stored.task.projectId);
+  const lifecycle = settings.ticketLifecycle;
+  if (lifecycle === null || !lifecycleMapsAnySlot(lifecycle.slots)) {
+    return;
+  }
+  const slot = lifecycleMomentFor(
+    { kind: 'stage_entered', stage: entry.stage },
+    compilePipeline(stored.task.template, stored.template, stored.pipelineDial, stored.qaStage),
+  );
+  const status = slot === null ? undefined : lifecycle.slots[slot];
+  if (slot === null || status === undefined) {
+    return;
+  }
+  await moveTicket(options, {
+    taskId: stored.task.id,
+    status,
+    slot,
+    causeEventId: null,
+    idempotencyKey: entryLifecycleKeyFor(stored.task.id, entry.stage, entry.attempt),
+  });
+};
+
+/** One lifecycle move — the duty's and the stage job's. Never throws for the provider. */
+const moveTicket = async (
+  options: TaskTransactionOptions,
+  move: {
+    readonly taskId: Id;
+    readonly status: string;
+    readonly slot: string | undefined;
+    readonly causeEventId: Id | null;
+    readonly idempotencyKey?: string;
+  },
+): Promise<void> => {
+  const logger: Logger = options.logger ?? silentLogger;
+  const { taskId, status } = move;
   const read = await options.unitOfWork.transaction(async (scope) => {
     const stored = await options.store.tasks.load(scope.tx, taskId);
     return stored === null
@@ -209,7 +295,7 @@ export const runTicketLifecycle = async (
   const lifecycle = settings.ticketLifecycle;
   if (lifecycle !== null && lifecycleClaims(lifecycle.slots) && !ticketClaimHeld(claim)) {
     logger.debug(
-      { task_id: taskId, slot: data.lifecycle_slot, status },
+      { task_id: taskId, slot: move.slot, status },
       'the task does not hold its ticket, so the lifecycle leaves the ticket alone; the claim moves it',
     );
     return;
@@ -224,14 +310,15 @@ export const runTicketLifecycle = async (
       projectId: stored.task.projectId,
       taskId,
       mode: stored.task.mode,
-      causeEventId: data.cause_event_id as Id,
+      causeEventId: move.causeEventId,
+      ...(move.idempotencyKey === undefined ? {} : { idempotencyKey: move.idempotencyKey }),
     });
   } catch (error) {
     if (error instanceof TransactionOpenError) {
       throw error;
     }
     logger.warn(
-      { task_id: taskId, slot: data.lifecycle_slot, err: error },
+      { task_id: taskId, slot: move.slot, err: error },
       'the ticket could not be moved to its lifecycle slot; the stage runs regardless, and the next moment moves the ticket on',
     );
   }

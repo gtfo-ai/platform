@@ -34,6 +34,7 @@ import type {
   StoredBreakdownItem,
   StoredRun,
   StoredTask,
+  TaskDutyLeaseRepository,
   TaskRepository,
   Transaction,
 } from '@platform/application';
@@ -2232,6 +2233,7 @@ export const createPostgresPipelineStore = (
   };
 
   return {
+    dutyLeases: postgresDutyLeases,
     tasks,
     artifacts,
     runs,
@@ -2285,6 +2287,46 @@ const postgresBugTraces: BugTraceRepository = {
       throw new PipelineStoredStateError(`ticket.bug.traced carries an unknown outcome ${outcome}`);
     }
     return { outcome, filedAt: row.filed_at as IsoDateTime };
+  },
+};
+
+/**
+ * WP-184's per-task duty lease (migration 0091). One statement each way: the claim inserts, or takes
+ * over a row whose lease has expired, or renews the caller's own — `on conflict … do update … where`
+ * updates nothing when somebody else holds a live lease, and `returning` then answers no row. The
+ * instants are the caller's clock, never `now()`, so a test's clock decides expiry as production's
+ * does and the two halves of one comparison come from one clock.
+ */
+const postgresDutyLeases: TaskDutyLeaseRepository = {
+  claim: async (tx, input) => {
+    const { rows } = await sqlOf(tx).query<{ holder: string }>(
+      `insert into task_duty_leases (task_id, lease, holder, claimed_at, expires_at)
+            values ($1, $2, $3, $4, $5)
+       on conflict (task_id, lease) do update
+             set holder = excluded.holder, claimed_at = excluded.claimed_at,
+                 expires_at = excluded.expires_at
+           where task_duty_leases.holder = excluded.holder
+              or task_duty_leases.expires_at <= excluded.claimed_at
+       returning holder`,
+      [input.taskId, input.lease, input.holder, input.now, input.expiresAt],
+    );
+    return rows.length === 1;
+  },
+  renew: async (tx, input) => {
+    // An `update`, never an `insert`: a renewal that lands after its holder's release finds no row
+    // and brings none back (WP-184 review round 1).
+    const result = await sqlOf(tx).query(
+      `update task_duty_leases set expires_at = $5
+        where task_id = $1 and lease = $2 and holder = $3 and expires_at > $4`,
+      [input.taskId, input.lease, input.holder, input.now, input.expiresAt],
+    );
+    return result.rowCount === 1;
+  },
+  release: async (tx, input) => {
+    await sqlOf(tx).query(
+      'delete from task_duty_leases where task_id = $1 and lease = $2 and holder = $3',
+      [input.taskId, input.lease, input.holder],
+    );
   },
 };
 

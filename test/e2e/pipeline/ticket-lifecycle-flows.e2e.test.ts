@@ -22,19 +22,19 @@
  *
  * ## What the fake Claude reads, and what it answers
  *
- * The Developer's `thread_replies` and the Reviewer's `resolved_threads` quote thread ids the fake
- * model read through the **production `get_conversation` tool** (the harness's `beforeReport`),
- * the read a real run makes when its prompt tells it to, and the only ids a model could quote back:
- * a flow that passes proves that the platform handed the run the threads it then answered (TD-029
- * decisions 10 and 11). A run that answers the Reviewer's findings first waits until they are on
- * the merge request — the effect it reads, never a sleep. **Why not the prompt's own
- * `conversation` blocks** (measured here, filed as discovered work in PROGRESS under WP-183): the
- * Developer's re-run after a review return, and the re-review after it, are planned before the
- * `review_findings_post` duty has posted the findings — on the e2e clock the duty ran three
- * seconds after the review, after `implementation`, `code_review` and `business_review` had all
- * been planned — so their prompts carried no merge-request entry at all. A real run takes
- * minutes and can call the tool; the fake run takes milliseconds, so it calls it. Which stage
- * attempt replies to what is the flows' script, stated at {@link scenarioFor}.
+ * The Developer's `thread_replies` and the Reviewer's `resolved_threads` quote thread ids the
+ * fake model read off the platform: the fix run after the review return answers the finding
+ * threads named by its **prompt's own `conversation` blocks** (TD-029 decision 11), and the other
+ * answering runs read the **production `get_conversation` tool** (the harness's `beforeReport`),
+ * the read a real run makes when its prompt tells it to. Those are the only ids a model could quote
+ * back, so a flow that passes proves that the platform handed the run the threads it then answered
+ * (decisions 10 and 11). **Nothing waits for the findings** (WP-184): until then the fix run and
+ * the re-review were planned before the `review_findings_post` duty had posted — on the e2e clock
+ * the duty ran three seconds after the review — so the prompts carried no merge-request entry and
+ * the fake model had to wait for the post before it read. Since WP-184 the `stage.execute` job
+ * performs the owed posts before it plans the stage, and the flows assert the fix run's recorded
+ * prompt instead. Which stage attempt replies to what is the flows' script, stated at
+ * {@link scenarioFor}.
  *
  * ## Two harness moves, stated (the same ones `mr-poll.e2e.test.ts` makes)
  *
@@ -52,6 +52,7 @@
  */
 import type { RunSpec } from '@platform/application';
 import type { DomainEvent } from '@platform/contracts';
+import { readDataBlocks } from '@platform/domain';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   GIT_PROJECT,
@@ -140,6 +141,23 @@ const findingThreadsIn = (entries: readonly ConversationEntry[]): readonly strin
   ),
 ];
 
+/**
+ * The Reviewer's finding threads among the `conversation` blocks of the run's **prompt** — the ids
+ * TD-029 decision 11 says the markers carry, and the only ones the fix run answers (WP-184 (5)).
+ */
+const findingThreadsInPrompt = (spec: RunSpec): readonly string[] => [
+  ...new Set(
+    readDataBlocks(spec.userPrompt)
+      .blocks.filter(
+        (block) =>
+          block.kind === 'conversation' &&
+          block.attributes.source === 'mr' &&
+          block.body.trimStart().startsWith(FINDING_MARKER),
+      )
+      .map((block) => block.attributes.thread_id ?? ''),
+  ),
+];
+
 /** The runs that read the conversation before they report: the ones that answer it (below). */
 const readsConversation = (spec: RunSpec): boolean =>
   (spec.stage === 'implementation' && spec.attempt >= 2) ||
@@ -193,7 +211,7 @@ const scenarioFor = (spec: RunSpec, world: SeededWorld): ScenarioSpec | undefine
     const read = readingOf(spec);
     const replies =
       spec.attempt === 2
-        ? findingThreadsIn(read).map((thread) => ({
+        ? findingThreadsInPrompt(spec).map((thread) => ({
             thread_id: thread,
             kind: 'fixed',
             reply: 'Fixed: the footer sums the invoice model, and a test covers a hidden row.',
@@ -476,18 +494,10 @@ const mergeRequestDiscussions = (pipeline: PipelineE2E) =>
     url: pipeline.world.mr.url,
   });
 
-/** The Reviewer's findings of `code_review` attempt 1 are on the merge request. */
-const findingsPosted = (pipeline: PipelineE2E) =>
-  pipeline.waitFor('the review findings on the merge request', async () =>
-    (await mergeRequestDiscussions(pipeline)).some((discussion) =>
-      discussion.notes[0]?.body.trimStart().startsWith(FINDING_MARKER),
-    ),
-  );
-
 /**
  * The fake model's work before it reports (`beforeReport`): a run that answers the conversation
- * reads it through `get_conversation` — the second-round runs once the findings are posted — and a
- * run the case holds waits for the case.
+ * reads it through `get_conversation` at once — nothing waits for the findings since WP-184, which
+ * posts them before the stage is planned — and a run the case holds waits for the case.
  */
 const fakeModelWork =
   (
@@ -508,7 +518,6 @@ const fakeModelWork =
       if (!spec.platformTools.includes('get_conversation')) {
         throw new Error(`the ${spec.stage ?? 'unstaged'} run is not given get_conversation`);
       }
-      if (spec.attempt === 2) await findingsPosted(pipeline);
       const answer = await tools.getConversation(
         {},
         {
@@ -619,9 +628,30 @@ const expectReviewConversation = async (
   expect(opened?.iid).toBe(pipeline.world.mr.iid);
   expect(stepAt(log, 'open_mr')).toBeGreaterThan(runAt(log, 'implementation', 1));
   expect(stepAt(log, 'open_mr')).toBeLessThan(runAt(log, 'code_review', 1));
+  const findingThreads = discussions.filter((discussion) =>
+    discussion.notes[0]?.body.trimStart().startsWith(FINDING_MARKER),
+  );
+  expect(findingThreads).toHaveLength(2);
+  // (5) WP-184: the fix run's **recorded** prompt names both finding threads in its `conversation`
+  // blocks — the stage job posted them before it planned the run, so nothing waits for them.
+  const fixPrompts = await pipeline.query<{ user_prompt: string }>(
+    `select r.user_prompt from runs r join task_stages s on s.id = r.task_stage_id
+      where s.stage = 'implementation' and s.attempt = 2`,
+  );
+  expect(fixPrompts).toHaveLength(1);
+  const promptThreads = readDataBlocks(fixPrompts[0]?.user_prompt ?? '')
+    .blocks.filter((block) => block.kind === 'conversation' && block.attributes.source === 'mr')
+    .map((block) => block.attributes.thread_id);
+  for (const thread of findingThreads) {
+    expect(promptThreads, `implementation:2's prompt names finding thread ${thread.id}`).toContain(
+      thread.id,
+    );
+  }
   // The findings are posted after the review that wrote them; each finding thread is answered by
   // the fix run, and resolved only after the re-review started **and** after its reply landed.
   expect(stepAt(log, 'thread', 'review-finding')).toBeGreaterThan(runAt(log, 'code_review', 1));
+  // …and both are on the merge request before the fix run starts (WP-184).
+  expect(stepAt(log, 'thread', 'review-finding', 1)).toBeLessThan(runAt(log, 'implementation', 2));
   const reReview = runAt(log, 'code_review', 2);
   const resolves = log.flatMap((step, index) => (step.kind === 'resolve' ? [{ step, index }] : []));
   expect(resolves).toHaveLength(2);
@@ -728,11 +758,12 @@ const expectLifecycleOnTheTracker = async (
   expect(claimedAt[0]).toBeLessThan(startOf(1));
   expect(claimedAt[1]).toBeGreaterThan(startOf(2));
   expect(claimedAt[1]).toBeLessThan(startOf(3));
-  // (d) Each `in_review` write lands at or after its `code_review` entry. **Not** before that
-  // stage's run starts: the write is a `pipeline.outbound` duty that never blocks the stage (TD-029
-  // decision 4), and on this tier's instant runs it landed after the review's run had started in
-  // every flow (measured, WP-183 review round 1). The order against the other writes is the
-  // sequence above.
+  // (d) Each `in_review` write lands at or after its `code_review` entry **and before that stage's
+  // run starts** (WP-184 criterion (8), BD-031 ruling 2: *"set when the agent's code-review stage
+  // starts"*). Until WP-184 the write was only a `pipeline.outbound` duty, and on this tier's
+  // instant runs it landed after the review's run had started in every flow (WP-183 review round
+  // 1); the `stage.execute` job now performs the move before it plans the stage, and the duty
+  // replays it. The order against the other writes is the sequence above.
   // `occurred_at` is read off the table: the harness's event reader does not select it.
   const reviewEntries = await pipeline.query<{ at: Date }>(
     `select occurred_at as at from events
@@ -748,6 +779,10 @@ const expectLifecycleOnTheTracker = async (
   for (const [k, { step, index }] of inReview.entries()) {
     expect(step.at).toBeGreaterThanOrEqual(reviewEntries[k]?.at.getTime() ?? Number.NaN);
     expect(index).toBeGreaterThan(runAt(log, 'implementation', k + 1));
+    expect(
+      index,
+      `in_review #${String(k)} before code_review:${String(k + 1)} starts`,
+    ).toBeLessThan(runAt(log, 'code_review', k + 1));
   }
   expect(stepAt(log, 'open_mr')).toBeLessThan(inReview[0]?.index ?? -1);
   const ticket = pipeline.tickets.peek(TICKET_KEY);

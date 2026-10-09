@@ -128,9 +128,9 @@ const DECLARED: Readonly<Record<string, { readonly count: number; readonly reaso
       'the ticket claim (WP-177) reads only `ticketLifecycle`, the task-management binding’s block, which no configuration document carries; the run it admits is still refused by name at `admit`',
   },
   'packages/application/src/pipeline/ticket-lifecycle.ts': {
-    count: 2,
+    count: 3,
     reason:
-      'the lifecycle handler and its duty (WP-177) read only `ticketLifecycle` — the task-management binding’s block, which no configuration document carries — and move the ticket, never the task',
+      'the lifecycle handler and its duty (WP-177), and the entry move the `stage.execute` job performs before the plan (WP-184), read only `ticketLifecycle` — the task-management binding’s block, which no configuration document carries — and move the ticket, never the task',
   },
   'packages/application/src/pipeline/ticket-release.ts': {
     count: 1,

@@ -33,8 +33,15 @@ import {
   createVirtualTimer,
 } from '../testing/memory-integrations.js';
 import { createMemoryPipelineStore } from '../testing/memory-pipeline.js';
+import {
+  OUTBOUND_DUTY_LEASE_WAIT_MS,
+  TASK_DUTY_LEASE_WAIT_MS,
+  TaskDutyLeaseBusyError,
+  withTaskDutyLease,
+} from './duty-lease.js';
 import { staticPipelineIntegrations } from './integrations.js';
 import type { PipelineOutboundData } from './jobs.js';
+import { performOwedDuties, underReviewConversationLease } from './owed-duties.js';
 import {
   type ReviewConversationOptions,
   runConversationReplies,
@@ -48,7 +55,10 @@ import {
   reviewFindingSummaryMarkerFor,
 } from './review-notes.js';
 import { mergeRequestWords, ticketCommentWords } from './review-threads.js';
+import type { PipelineSagaOptions } from './saga.js';
+import { defaultProjectSettings, staticProjectSettings } from './settings.js';
 import type { StoredTask } from './store.js';
+import type { TaskTransactionOptions } from './task-transaction.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000017a1' as Id;
 const TASK = '00000000-0000-4000-8000-0000000017a2' as Id;
@@ -173,6 +183,10 @@ const world = async (
     readonly discussions?: readonly Discussion[];
     readonly comments?: readonly TicketComment[];
     readonly artifacts?: readonly { id: Id; type: string; run: Id; data: unknown }[];
+    /** Every post yields first, so two performers really overlap (WP-184's concurrent case). */
+    readonly slowWrites?: boolean;
+    /** The duty lease's seams (WP-184); the lease is armed unless a case disarms it. */
+    readonly dutyLease?: PipelineSagaOptions['dutyLease'];
   } = {},
 ) => {
   const discussions: (Discussion & { individual?: boolean })[] = (options.discussions ?? []).map(
@@ -201,6 +215,9 @@ const world = async (
       _ref: unknown,
       input: { path?: string | null; line?: number | null; markdown: string },
     ) => {
+      if (options.slowWrites === true) {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
       if (options.refuseAnchors === true && input.path != null) {
         throw new IntegrationError(
           'invalid_request',
@@ -417,7 +434,39 @@ const world = async (
     cause_event_id: '00000000-0000-4000-9000-0000000017a1',
     artifact_id: artifactId,
   });
+  /**
+   * What the `stage.execute` job's pre-plan step and the outbound queue's lease wrapper need
+   * (WP-184): the conversation's options plus the lease's clock and ids, and a settings port with
+   * no lifecycle, so the step is about the conversation alone.
+   */
+  let leaseCounter = 0;
+  const taskOptions = {
+    ...conversationOptions,
+    settings: staticProjectSettings(() => defaultProjectSettings(PROJECT)),
+    ids: {
+      next: () => {
+        leaseCounter += 1;
+        return `00000000-0000-4000-8000-${leaseCounter.toString(16).padStart(12, '0')}` as Id;
+      },
+    },
+    clock: { now: () => NOW },
+    dutyLease: { pollMs: 1, ...options.dutyLease },
+  } as unknown as TaskTransactionOptions;
+  const loadTask = async (): Promise<StoredTask> => {
+    const stored = await memory.transaction(async (scope) => store.tasks.load(scope.tx, TASK));
+    if (stored === null) throw new Error('the world has no task');
+    return stored;
+  };
   return {
+    taskOptions,
+    loadTask,
+    /** The outbound queue's `review_findings_post`, as `outbound.ts` runs it: under the lease. */
+    outboundFindings: () =>
+      underReviewConversationLease(
+        taskOptions,
+        data('review_findings_post', VERDICT_ID),
+        async () => runReviewFindingsPost(taskOptions, data('review_findings_post', VERDICT_ID)),
+      ),
     findings: () =>
       runReviewFindingsPost(conversationOptions, data('review_findings_post', VERDICT_ID)),
     replies: () =>
@@ -863,5 +912,113 @@ describe('(5) a shadow task', () => {
     expect(w.auditLog.entriesFor('reply_to_discussion')).toHaveLength(1);
     expect(w.auditLog.entriesFor('add_comment')).toHaveLength(1);
     expect(w.auditLog.entriesFor('resolve_discussion')).toHaveLength(1);
+  });
+});
+
+// ── WP-184: the stage job's turn and the outbound duty's, on one key ───────────
+
+describe('WP-184: the pre-plan step and the outbound duty take turns under the task’s lease', () => {
+  const entry = { stage: 'implementation', attempt: 2 } as const;
+
+  it('(2) both at once post each finding once and one summary — the second turn replays', async () => {
+    const w = await world({ artifacts: [reviewArtifact()], slowWrites: true });
+    const stored = await w.loadTask();
+    await Promise.all([performOwedDuties(w.taskOptions, stored, entry), w.outboundFindings()]);
+
+    // Three findings and one summary: one call each, whichever performer ran first.
+    expect(w.recorded.created).toHaveLength(4);
+    const statuses = w.auditLog.entriesFor('create_discussion').map((row) => row.status);
+    expect(statuses.filter((status) => status === 'ok')).toHaveLength(4);
+    expect(statuses.filter((status) => status === 'replayed')).toHaveLength(4);
+  });
+
+  it('needs the lease: the executor records a key only after its call, so an overlap posts twice', async () => {
+    // The reading the WP-184 row asked for, kept as a case: with the lease disarmed, both
+    // performers miss the idempotency record and both call. The memory store then refuses the
+    // second record (its divergence 2), which the outbound turn throws; the posts happened.
+    const w = await world({
+      artifacts: [reviewArtifact()],
+      slowWrites: true,
+      dutyLease: { disarmed: true },
+    });
+    const stored = await w.loadTask();
+    await Promise.allSettled([
+      performOwedDuties(w.taskOptions, stored, entry),
+      w.outboundFindings(),
+    ]);
+    expect(w.recorded.created.length).toBeGreaterThan(4);
+  });
+
+  it('(6) a shadow task: the pre-plan step makes no write, so each finding has one would_have row', async () => {
+    const w = await world({ mode: 'shadow', artifacts: [reviewArtifact()] });
+    await performOwedDuties(w.taskOptions, await w.loadTask(), entry);
+    expect(w.auditLog.entriesFor('create_discussion')).toEqual([]);
+
+    await w.outboundFindings();
+    const rows = w.auditLog.entriesFor('create_discussion');
+    // Three findings and the summary: one row each.
+    expect(rows.map((row) => row.status)).toEqual([
+      'would_have',
+      'would_have',
+      'would_have',
+      'would_have',
+    ]);
+    expect(w.recorded.created).toEqual([]);
+  });
+
+  it('an outbound duty that finds the lease held gives up after the short wait, and its retry posts', async () => {
+    const w = await world({ artifacts: [reviewArtifact()] });
+    const holder = {
+      taskId: TASK,
+      lease: 'review_conversation',
+      holder: 'duty:stage-job',
+    } as const;
+    await w.taskOptions.unitOfWork.transaction(async (scope) =>
+      w.taskOptions.store.dutyLeases.claim(scope.tx, {
+        ...holder,
+        now: NOW,
+        expiresAt: '2026-06-01T09:02:00.000Z' as IsoDateTime,
+      }),
+    );
+    const started = Date.now();
+    // The turn pg-boss runs: refused by name after OUTBOUND_DUTY_LEASE_WAIT_MS, nothing posted —
+    // so the one outbound worker is held for the short wait, not the stage job's thirty seconds.
+    await expect(w.outboundFindings()).rejects.toBeInstanceOf(TaskDutyLeaseBusyError);
+    expect(Date.now() - started).toBeLessThan(TASK_DUTY_LEASE_WAIT_MS);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(OUTBOUND_DUTY_LEASE_WAIT_MS - 50);
+    expect(w.recorded.created).toEqual([]);
+
+    // The holder finishes; the job's retry is the next turn.
+    await w.taskOptions.unitOfWork.transaction(async (scope) =>
+      w.taskOptions.store.dutyLeases.release(scope.tx, holder),
+    );
+    await w.outboundFindings();
+    expect(w.recorded.created).toHaveLength(4);
+  });
+
+  it('a lease another performer holds for the whole wait is refused by name, and nothing is posted', async () => {
+    const w = await world({ artifacts: [reviewArtifact()] });
+    // Another performer holds the lease and never lets go within the wait.
+    await w.taskOptions.unitOfWork.transaction(async (scope) =>
+      w.taskOptions.store.dutyLeases.claim(scope.tx, {
+        taskId: TASK,
+        lease: 'review_conversation',
+        holder: 'duty:elsewhere',
+        now: NOW,
+        expiresAt: '2026-06-01T09:02:00.000Z' as IsoDateTime,
+      }),
+    );
+    const quick = {
+      ...w.taskOptions,
+      dutyLease: { pollMs: 1 },
+    } as TaskTransactionOptions;
+    await expect(
+      withTaskDutyLease(
+        quick,
+        { taskId: TASK, lease: 'review_conversation', waitMs: 10 },
+        async () => {},
+      ),
+    ).rejects.toBeInstanceOf(TaskDutyLeaseBusyError);
+    expect(w.recorded.created).toEqual([]);
   });
 });

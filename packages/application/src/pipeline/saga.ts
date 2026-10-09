@@ -29,6 +29,7 @@
  * result for a commit the task has moved past is not a failure; treating it as one would park a
  * task for a human every time somebody re-ran an old pipeline.
  */
+
 import {
   type DomainEvent,
   domainEventSchemasByType,
@@ -85,6 +86,7 @@ import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { WorkingCalendar } from '../scheduling/working-calendar.js';
 import { escalateForConfigRefusalInHandler } from './config-refusal.js';
 import { questionDeadlineRule } from './deadline-rules.js';
+import type { TaskDutyLeaseOptions } from './duty-lease.js';
 import { humanReturnStageOf } from './human-stage.js';
 import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
 import {
@@ -151,6 +153,11 @@ export interface PipelineSagaOptions {
    * that answers the file absent.
    */
   readonly repositoryFiles?: RepositoryFileSource;
+  /**
+   * The task duty lease's test seams (WP-184, `duty-lease.ts`). Absent in production, which takes
+   * every default; a unit case shortens the wait or disarms the lease for its canary.
+   */
+  readonly dutyLease?: TaskDutyLeaseOptions['dutyLease'];
 }
 
 /** BD-007, technical/02 § ReviewCommentBatcher: "debounces `mr.review.comment` for 2 minutes". */

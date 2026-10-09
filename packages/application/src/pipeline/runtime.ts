@@ -74,6 +74,7 @@ import {
 import type { LiveRuns } from './live-runs.js';
 import { mergeRequestReadyHandlers } from './merge-request-ready.js';
 import { type PipelineOutboundOptions, pipelineOutboundHandler } from './outbound.js';
+import { performOwedDuties } from './owed-duties.js';
 import { providerSignalHandlers } from './provider-signals.js';
 import { resolveOnMergeHandler } from './resolve-on-merge.js';
 import { reviewConversationHandlers } from './review-conversation.js';
@@ -388,7 +389,10 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
         workers.push(
           await options.jobs.work<StageExecuteData>({
             queue: JOB_QUEUES.stageExecute,
-            handler: stageExecuteHandler(jobOptions),
+            // WP-184: the owed duties run before the plan, with the job's own options.
+            handler: stageExecuteHandler(jobOptions, (stored, entry) =>
+              performOwedDuties(jobOptions, stored, entry),
+            ),
             concurrency: options.stageConcurrency ?? 1,
           }),
         );
@@ -449,6 +453,13 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
            * delays the ticket writes of everything behind it. That is a throughput knob, not a
            * correctness one, and it is deliberately not exposed until something measures a need
            * for it: each unit of concurrency is another connection in `requiredPoolConnections`.
+           *
+           * **A duty never waits long here for a task's duty lease** (WP-184 review round 1): the
+           * review conversation's three duties and `ticket_lifecycle` take the task's lease, which
+           * the `stage.execute` job may hold while it posts before a plan. Waiting for it would stall
+           * every project's outbound work behind one task, so they wait
+           * `OUTBOUND_DUTY_LEASE_WAIT_MS` (2 s) and then throw into the job's retry, whose next turn
+           * replays what the holder recorded (`duty-lease.ts`).
            */
           concurrency: 1,
         }),

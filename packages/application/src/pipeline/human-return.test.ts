@@ -1324,10 +1324,14 @@ describe('the review conversation through the pipeline (WP-179)', () => {
     const { harness } = waiting;
 
     expect(dutiesOf(harness).map((data) => data.duty)).toEqual(['review_findings_post']);
-    // One finding thread and one summary note, both through the executor.
+    // One finding thread and one summary note, both through the executor — and, since WP-184,
+    // replayed once by the other performer: the outbound duty and the `business_review` job's
+    // pre-plan step name the same keys, so the second turn makes no call.
     expect(harness.audit.entriesFor('create_discussion').map((entry) => entry.status)).toEqual([
       'ok',
       'ok',
+      'replayed',
+      'replayed',
     ]);
 
     harness.script(

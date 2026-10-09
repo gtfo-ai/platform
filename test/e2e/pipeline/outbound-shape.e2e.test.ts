@@ -182,11 +182,33 @@ describe('when the same wake-up is delivered twice', () => {
     // delivery would simply post again and no `replayed` row would ever appear — the failure is
     // then this named wait, not a count taken against a queue that is still draining.
     await pipeline.waitFor('the re-delivered wake-up was audited as a replay', async () =>
-      (await pipeline.auditRows()).some((row) => row.status === 'replayed'),
+      (await pipeline.auditRows()).some(
+        (row) => row.status === 'replayed' && row.action === 'upsert_workpad',
+      ),
+    );
+    // The conversation's second turn, by name: the assertion below needs its row, and the
+    // workpad's replay says nothing about whether the summary's second performer has run yet.
+    await pipeline.waitFor('the code review summary was audited as a replay', async () =>
+      (await pipeline.auditRows()).some(
+        (row) => row.status === 'replayed' && row.action === 'create_discussion',
+      ),
     );
 
-    const replayed = (await pipeline.auditRows()).filter((row) => row.status === 'replayed');
-    expect(replayed.map((row) => row.action)).toEqual(['upsert_workpad']);
+    // Since WP-184 the walk itself replays too: the code review's summary note is posted by the
+    // next agent stage's job before the plan and replayed by the `review_findings_post` duty that
+    // also fires (or the other way round). Those are the conversation's, never the workpad's.
+    const rows = await pipeline.auditRows();
+    const replayed = rows.filter(
+      (row) => row.status === 'replayed' && row.action === 'upsert_workpad',
+    );
+    expect(replayed).toHaveLength(1);
+    expect([
+      ...new Set(
+        rows
+          .filter((row) => row.status === 'replayed' && row.action !== 'upsert_workpad')
+          .map((row) => row.action),
+      ),
+    ]).toEqual(['create_discussion']);
     // `attempts: 0` is the audit log's own statement that nothing was sent — a performed call
     // records at least 1, which the row above it in this file asserts.
     expect(replayed[0]?.attempts).toBe(0);

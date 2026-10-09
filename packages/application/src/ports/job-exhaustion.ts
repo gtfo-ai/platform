@@ -353,7 +353,7 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
   },
   ticket_lifecycle: {
     shape: 'notification_shaped',
-    why: 'one move of the ticket to a lifecycle slot (TD-029 decision 4): a failed write never blocks the stage, leaves its audit row and a warn naming the slot, and the next moment moves the ticket on',
+    why: 'one move of the ticket to a lifecycle slot (TD-029 decision 4): a failed write never blocks the stage, leaves its audit row and a warn naming the slot, and the next moment moves the ticket on; since WP-184 it runs under the task’s duty lease and, finding the lease held past a 2 s wait, throws into its retry rather than holding the one outbound worker, and the retry replays what the holder recorded',
   },
   ticket_release: {
     shape: 'notification_shaped',
@@ -361,15 +361,15 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
   },
   review_findings_post: {
     shape: 'notification_shaped',
-    why: 'the Reviewer’s findings and summary as merge-request threads (TD-029 decision 10): the verdict already moved the task and is on the task page, and the next run reads the findings from the artifact; a lost post is a conversation a person reads elsewhere',
+    why: 'the Reviewer’s findings and summary as merge-request threads (TD-029 decision 10): the verdict already moved the task and is on the task page, and the next run reads the findings from the artifact; a lost post is a conversation a person reads elsewhere; since WP-184 it runs under the task’s duty lease and, finding the lease held past a 2 s wait, throws into its retry rather than holding the one outbound worker, and the retry replays what the holder recorded; residual, stated: a stage job that holds the lease through all three of this duty’s tries (a slow provider, about 3 minutes) leaves it failed, and the findings are not posted unless the stage job’s own post succeeded',
   },
   conversation_replies: {
     shape: 'notification_shaped',
-    why: 'the Developer’s answers on the threads it addressed: the change itself is pushed and the answers are on the task page in the ImplementationNotes; a lost post leaves a thread unanswered, which the next review or a person reads',
+    why: 'the Developer’s answers on the threads it addressed: the change itself is pushed and the answers are on the task page in the ImplementationNotes; a lost post leaves a thread unanswered, which the next review or a person reads; since WP-184 it runs under the task’s duty lease and, finding the lease held past a 2 s wait, throws into its retry rather than holding the one outbound worker, and the retry replays what the holder recorded',
   },
   review_threads_resolve: {
     shape: 'notification_shaped',
-    why: 'resolves the Reviewer’s own finding threads a re-review confirmed fixed: nothing waits on it, and a thread left open is one a person resolves by hand',
+    why: 'resolves the Reviewer’s own finding threads a re-review confirmed fixed: nothing waits on it, and a thread left open is one a person resolves by hand; since WP-184 it runs under the task’s duty lease and, finding the lease held past a 2 s wait, throws into its retry rather than holding the one outbound worker, and the retry replays what the holder recorded',
   },
   ready_head_check: {
     shape: 'bound_and_escalate',
