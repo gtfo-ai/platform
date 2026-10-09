@@ -36,17 +36,42 @@
  * (`gitlab/provider.ts`: "Putting the executor *inside* the adapter would … which is the whole of
  * standing rule 14"), and the pipeline wraps every call in the executor itself
  * (`pipeline/integrations.ts`). WP-08's Jira adapter does the opposite: it takes an executor and
- * wraps its own calls. So a ticket write through a Jira binding passes through **two** executors —
- * two `integration_actions` rows for one action, and two rate-limit acquisitions from one budget.
- * Nothing is unsafe (the outer executor refuses a shadow mutation before the inner one is reached),
- * and nothing here can fix it: the fix is Jira adopting GitLab's shape, which is an adapter change
- * with its own contract suite. It is filed in `docs/technical/PROGRESS.md` under discovered work.
+ * wraps its own calls. So a ticket call through a Jira binding enters the executor **twice**, from
+ * inside itself, on one `integrations.id`.
+ *
+ * **This note used to say "nothing is unsafe", and it was wrong** (PROGRESS backlog 550). It was
+ * about shadow mode — the outer executor does refuse a shadow mutation before the inner one is
+ * reached — and never considered the concurrency slot: the limiter holds one across `perform` and a
+ * waiter has no deadline, so `maxConcurrent` concurrent outer calls held every slot while their
+ * inner calls waited for one, and every later Jira call of that binding in that process hung. The
+ * executor now runs a call nested in another's `perform` on the same integration under the outer
+ * call's lease, with one attempt (`action-executor.ts`, the module docblock's last section), so a
+ * Jira call spends one slot and one token. What is **left** is the audit: still two
+ * `integration_actions` rows for one action, the pipeline's and the adapter's. Removing it is Jira
+ * adopting GitLab's shape — an adapter change with its own contract suite, which takes the
+ * `fixedActionContext('normal')` seam below with it — and backlog 550 is where it is filed.
+ *
+ * ## The rate-limit policy each provider gets
+ *
+ * {@link pipelineRateLimitPolicy} is the executor's `rateLimits` resolver: Jira Cloud's own
+ * {@link JIRA_CLOUD_RATE_LIMIT_POLICY}, every other provider the executor's default. It was declared
+ * at WP-08 and never wired until backlog 550, which is also what made wiring it safe — at
+ * `maxConcurrent: 3` the deadlock above needed one fewer caller.
  */
-import type { IntegrationActionExecutor, IntegrationTimer } from '@platform/application';
+import {
+  DEFAULT_RATE_LIMIT_POLICY,
+  type IntegrationActionExecutor,
+  type IntegrationRef,
+  type IntegrationTimer,
+  type RateLimitPolicy,
+} from '@platform/application';
 import type { Clock } from '@platform/domain';
 import { gitlabProviderRegistration } from '../providers/gitlab/index.js';
-import { fixedActionContext } from '../providers/jira-cloud/index.js';
-import { createJiraCloudRegistration } from '../providers/jira-cloud/registration.js';
+import { fixedActionContext, JIRA_CLOUD_RATE_LIMIT_POLICY } from '../providers/jira-cloud/index.js';
+import {
+  createJiraCloudRegistration,
+  JIRA_CLOUD_PROVIDER_METADATA,
+} from '../providers/jira-cloud/registration.js';
 import { createLokiRegistration } from '../providers/loki/index.js';
 import { createSentryRegistration } from '../providers/sentry/index.js';
 import { createSlackRegistration, type SocketConnect } from '../providers/slack/index.js';
@@ -74,6 +99,16 @@ export interface PipelineProviderRegistryOptions {
    */
   readonly slackConnect?: SocketConnect;
 }
+
+/**
+ * The production executor's `rateLimits` resolver (backlog 550): a provider that declared its own
+ * policy gets it, every other the executor's default. Keyed by the ref's provider id, and still one
+ * limiter per `integrations.id` — two Jira bindings are two budgets (`rate-limiter.ts`).
+ */
+export const pipelineRateLimitPolicy = (ref: IntegrationRef): RateLimitPolicy =>
+  ref.provider === JIRA_CLOUD_PROVIDER_METADATA.id
+    ? JIRA_CLOUD_RATE_LIMIT_POLICY
+    : DEFAULT_RATE_LIMIT_POLICY;
 
 export const createPipelineProviderRegistry = (
   options: PipelineProviderRegistryOptions,

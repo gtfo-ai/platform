@@ -153,6 +153,7 @@ import {
   createPipelineIntegrationsLoader,
   createPipelineProviderRegistry,
   type PipelineProviderRegistryOptions,
+  pipelineRateLimitPolicy,
 } from '@platform/integrations';
 import { PLATFORM_SKILLS, ROLE_PROMPTS } from '@platform/prompts';
 import type pg from 'pg';
@@ -552,6 +553,9 @@ export const composeIntegrationStack = (
     redactor: platformRedactor,
     timer: processTimer,
     clock: { now: nowIso },
+    // Jira Cloud's own policy, every other provider the default (backlog 550: wired once a Jira
+    // call stopped taking a second slot from inside its first).
+    rateLimits: pipelineRateLimitPolicy,
     /**
      * Also unconditional. WP-07 made the executor's option optional and nothing ever supplied one,
      * so until this line every retried job re-performed a mutation the provider had already seen.

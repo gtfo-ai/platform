@@ -24,7 +24,8 @@
  * decided to do — and it makes the rate limiter count port calls, which is why
  * `JIRA_CLOUD_RATE_LIMIT_POLICY` below is deliberately far under Jira's own budget.
  *
- * A port method that *resolves* something before mutating spends two actions, and that is on
+ * A port method that *resolves* something before mutating spends two actions (two audit rows; under
+ * the pipeline's executor one token since backlog 550, the inner calls being re-entrant), and that is on
  * purpose: `transition` records a `resolve_transition` read and then, only if a move is actually
  * needed, a `transition` write. A shadow task performs the first and stops at the second — which
  * is what shadow mode means — and an unknown target status still fails loudly in shadow mode,
@@ -167,7 +168,8 @@ export * from './webhook.js';
  * quota per hour plus per-second burst limits, with `429` and `Retry-After` when either is spent.
  * Nobody has measured this platform's cost profile against a real site, and one action here is up
  * to five requests, so the budget is set where a mistake costs latency rather than a quota cut.
- * A binding that knows better passes its own policy through the executor's `rateLimits` resolver.
+ * It is the production executor's policy for every Jira Cloud binding since backlog 550
+ * (`pipelineRateLimitPolicy`, `bindings/shipped-registry.ts`); there is no per-binding override.
  */
 export const JIRA_CLOUD_RATE_LIMIT_POLICY: RateLimitPolicy = {
   capacity: 5,

@@ -16,11 +16,23 @@
  *    account, not per endpoint, so a flood of comments must slow transitions down too.
  *  - **the concurrency slot** — held from the moment a caller starts waiting for a token until it
  *    releases, not just during the HTTP call. That is stricter than "cap the in-flight requests",
- *    deliberately: it stops a hundred waiters from all firing the instant the bucket refills.
+ *    deliberately: it stops a hundred waiters from all firing the instant the bucket refills. A
+ *    holder must therefore never `acquire` a second slot of the same limiter before releasing its
+ *    first; the executor guarantees that for a call nested in another's `perform` (backlog 550).
  *  - **`blockedUntil`** — set by `penalise` from a provider's `Retry-After`. It applies to the
  *    whole limiter, because a 429 is the account's, not the request's.
  *  - **`active`** — the number of held slots. A lease releases at most once (a second `release()`
  *    is a no-op), because a double release would hand out one slot too many, for ever.
+ *
+ * **A waiting caller has no deadline, and that is decided** (PROGRESS backlog 550). A wait ends
+ * when a holder releases, so it is bounded by the holders: a holder spends its slot on a provider
+ * request, which every shipped adapter's transport bounds with its own request timeout, plus the
+ * retry and `Retry-After` sleeps between attempts. The one way a holder waited on *another waiter*
+ * — a `perform` acquiring a second slot of the same limiter, which deadlocked at `maxConcurrent`
+ * concurrent callers — is removed in the executor, which runs such a call under the outer lease
+ * (`action-executor.ts`, the module docblock's last section). A deadline here would not have fixed
+ * that either: it would have turned the hang into failed jobs, and it would fail a legitimate wait
+ * behind a long `Retry-After` the same way, which is a queue turned into escalated tasks.
  *
  * The limiter is scoped by the executor to one `integrations.id`, not to a provider name: two
  * bindings of one provider are two accounts with two quotas. A provider whose quota really is
@@ -42,8 +54,10 @@ export interface RateLimitPolicy {
  * A deliberately cautious default for a provider nobody has measured yet.
  *
  * Jira Cloud's cost-based limits, GitLab's 2000 requests/minute/user and Slack's per-method tiers
- * are all more generous than this; a provider that knows its own budget passes its own policy at
- * registration (WP-08…WP-11). Being slower than the provider allows costs latency; being faster
+ * are all more generous than this; a provider that knows its own budget declares its own policy,
+ * and the pipeline's executor reads it through `pipelineRateLimitPolicy`
+ * (`packages/integrations/src/bindings/shipped-registry.ts`, backlog 550) — before that nothing
+ * passed it, whatever the registration said. Being slower than the provider allows costs latency; being faster
  * costs a 429 storm and, on Slack, a warning about the app's behaviour.
  */
 export const DEFAULT_RATE_LIMIT_POLICY: RateLimitPolicy = {

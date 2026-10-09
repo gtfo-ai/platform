@@ -162,7 +162,45 @@
  *
  * The key half gets the other answer — refusal — and `idempotencyScopeFor` is where that argument
  * lives, because the asymmetry is the part a reader will not guess.
+ *
+ * ## A call made from inside another call's `perform` (PROGRESS backlog 550)
+ *
+ * The limiter holds a concurrency slot for the whole of `perform`, and a caller waiting for a slot
+ * waits without a deadline. So a `perform` that calls `execute` again **on the same integration**
+ * — which every pipeline call through a Jira binding does, because the pipeline wraps the port
+ * (`pipeline/integrations.ts`) and WP-08's adapter wraps its own members in the same executor
+ * instance under the same `integrations.id` — used to wait for a second slot while holding the
+ * first. `maxConcurrent` such outer calls held every slot and each waited for a slot only its own
+ * completion would free: every later call on that integration in that process queued behind them
+ * for ever (`action-executor.test.ts` › *"re-entrant calls on one integration (backlog 550)"*).
+ *
+ * So the executor remembers, in an `AsyncLocalStorage` of its own, which integrations the current
+ * async context is inside a `perform` of, and a call on one of those is **re-entrant**:
+ *
+ *  - it takes **no slot and no token** — it runs under the lease the outer call holds, so one
+ *    **port** call spends one slot and one token, never two. That is per port call, not per
+ *    provider request: a Jira member that makes two adapter actions (`transition`, `upsertWorkpad`,
+ *    `setLabels`, `assignToSelf`/`unassign`) spent three tokens before and spends one now. And a
+ *    `perform` that started several nested calls at once would run them all under its one slot;
+ *    nothing does that today;
+ *  - it makes **one attempt**: the outer call owns the retry schedule, so a retryable failure
+ *    leaves the inner call (recorded `failed`, the same error object, so `instanceof` and
+ *    `Retry-After` survive) and the outer call penalises the limiter, sleeps and retries — each
+ *    retry with a token of its own. Retrying at both layers multiplied the attempts (three times
+ *    three) and the inner retries spent no budget at all;
+ *  - **everything else is unchanged and still runs**: the action name, the egress check, the
+ *    shadow guard, the idempotency record and the audit row. A re-entrant call therefore still
+ *    writes its own `integration_actions` row, so a Jira port call made by the pipeline is still
+ *    **two rows for one action**, as it was before — no audited call disappears, and removing the
+ *    duplicate is the adapter change backlog 550 prefers (Jira adopting GitLab's shape), not this.
+ *
+ * What the marker cannot see is what `AsyncLocalStorage` cannot: work detached from the async
+ * context. The failure direction of *losing* the mark is the old behaviour (a second slot); the
+ * direction of *keeping* it is a promise started inside `perform`, left unawaited, that calls the
+ * same integration after the outer call released its slot — it then runs with no slot. Nothing in
+ * this repository does that, and an unawaited provider call is a defect of its own.
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   type Id,
   type JsonObject,
@@ -197,8 +235,12 @@ import {
   createRateLimiter,
   DEFAULT_RATE_LIMIT_POLICY,
   type RateLimiter,
+  type RateLimitLease,
   type RateLimitPolicy,
 } from './rate-limiter.js';
+
+/** The lease a re-entrant call holds: the outer call's, which the outer call releases. */
+const UNDER_OUTER_LEASE: RateLimitLease = { release: () => {} };
 
 // ── The request ──────────────────────────────────────────────────────────────
 
@@ -695,6 +737,23 @@ export const createIntegrationActionExecutor = (
     return created;
   };
 
+  // The integrations the current async context is inside a `perform` of (backlog 550; the module
+  // docblock's last section). One store per executor: a second executor has its own limiters, so
+  // a call into it from here is not re-entrant on anything.
+  const performing = new AsyncLocalStorage<ReadonlySet<Id>>();
+  const isReentrant = (ref: IntegrationRef): boolean =>
+    performing.getStore()?.has(ref.integrationId) === true;
+  const performHolding = <TResult>(
+    ref: IntegrationRef,
+    perform: () => Promise<TResult>,
+  ): Promise<TResult> => {
+    const outer = performing.getStore();
+    if (outer?.has(ref.integrationId) === true) {
+      return perform();
+    }
+    return performing.run(new Set([...(outer ?? []), ref.integrationId]), perform);
+  };
+
   const record = async (entry: IntegrationActionEntry): Promise<void> => {
     await options.auditLog.record(entry);
   };
@@ -976,18 +1035,23 @@ export const createIntegrationActionExecutor = (
     }
 
     // 3 — Attempts, through the rate limiter, with backoff on 429 and on transient failures.
+    //     A re-entrant call (backlog 550) runs under the outer call's lease and makes one attempt;
+    //     the module docblock's last section has why.
     const limiter = limiterFor(request.integration);
+    const reentrant = isReentrant(request.integration);
     let attempt = 0;
 
     for (;;) {
       attempt += 1;
-      const lease = await limiter.acquire();
+      const lease: RateLimitLease = reentrant ? UNDER_OUTER_LEASE : await limiter.acquire();
       let result: TResult;
       try {
-        result = await request.perform({ attempt, action: request.action });
+        result = await performHolding(request.integration, () =>
+          request.perform({ attempt, action: request.action }),
+        );
       } catch (error) {
         lease.release();
-        const delay = retryDelayMs(error, attempt);
+        const delay = reentrant ? null : retryDelayMs(error, attempt);
         if (delay === null) {
           // 4 — Audit before the throw: an action nobody recorded is an action nobody can audit.
           const durationMs = options.timer.now() - startedAt;

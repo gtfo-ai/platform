@@ -22780,6 +22780,8 @@ question…"*) — which had **no** test until the mutation was run.
   fix is Jira adopting GitLab's shape, which is an adapter change with its own contract suite, so WP-15a
   registered it and wrote the duplication down at
   `packages/integrations/src/bindings/shipped-registry.ts` instead of quietly shipping it.
+  *"Nothing is unsafe"* was wrong: the two acquisitions deadlocked at `maxConcurrent` concurrent calls —
+  this item is backlog **550**, where the slot half is fixed and the two rows stay open.
 - **`IntegrationAuditLog` and `IdempotencyStore` have no Postgres adapter, and `integration_actions` is
   missing three columns for one (found at WP-15a).** BD-003's whole outbound-audit claim rests on a port
   WP-07 shipped and nothing implements. Migration 0007's table has no `project_id`, `redaction_count` or
@@ -47608,3 +47610,22 @@ Implementer, session 15, in a worktree at `1bfddbf0`. No migration. No Jira or G
 
 
 **Round 3 (post-review fix, the orchestrator verifies).** The column write and the join now have a PostgreSQL case: `test/integration/server/onboarding.integration.test.ts` › "writes account_identity, updates it in place, and joins it only with a live person" — save with an identity and read the column back, re-save with `null` on the same row, and the join true for a `person` with a user and false unmapped, for a `machine`, and for a retired integration. The file passes alone (41 tests, Testcontainers PostgreSQL). **Calibrated:** the reviewer's mutation (d2), `accountIdentity` removed from both `.values` and `set`, makes that case die by name (1 failed / 40 passed); restored byte-for-byte.
+
+#### Backlog 550
+
+Implementer, session 15, at `eeef4874` (worktree). Not marked RESOLVED; the audit half stays open.
+
+**Measured first.** `packages/application/src/integrations/action-executor.test.ts` › "maxConcurrent + 1 nested calls all settle, spending one slot and one token each" and `packages/integrations/src/bindings/shipped-registry.test.ts` › "maxConcurrent + 1 concurrent reads on one binding all settle, one slot and one token each" (the pipeline's `ticketReads.selfIdentity` over the Jira adapter built by `createPipelineProviderRegistry`, one real executor, the production resolver, a virtual timer, a stubbed `fetch`). Both race the calls against a 2 s wall-clock bound and fail on `'deadlocked'`. With the nested acquisition restored (`isReentrant` answering `false`) both fail by that name — the deadlock is reproduced, deterministically, at 5 callers on `maxConcurrent: 4` and at 4 on Jira's 3. Reachability under real traffic (part (b) of the entry) was not measured.
+
+**Fix: the cheaper interim the entry names, chosen over the adapter change.** The executor keeps an `AsyncLocalStorage` of the integrations the current async context is inside a `perform` of (one store per executor instance). A call on one of those is *re-entrant*: it takes **no slot and no token** (it runs under the outer lease) and makes **one attempt** — the outer call owns the retry schedule, so a retryable inner failure is recorded `failed` and rethrown as the same object, and the outer call penalises, sleeps and retries with a token per attempt (before, retries multiplied, three times three, and inner retries spent no budget). Everything else still runs for the inner call: action name, egress, shadow guard, idempotency, audit row.
+- **Audit, stated:** unchanged — a pipeline call through a Jira binding still writes **two** `integration_actions` rows (the pipeline's and the adapter's), so no audited call disappears and the existing suites' row counts hold. The entry's "one audit row each" is **not** met; it needs the adapter change (Jira adopting GitLab's shape), which stays the open half of 550.
+- **Residual, stated in the docblock:** a promise started inside `perform`, left unawaited, that calls the same integration after the outer call released would run without a slot. Nothing does that.
+- **The wait gets no deadline** (decided, `rate-limiter.ts` docblock): holders are bounded by every shipped adapter's request timeout plus retry/`Retry-After` sleeps, and a deadline would turn a long `Retry-After` queue into failed jobs and escalated tasks, while not having fixed the deadlock either.
+- **`JIRA_CLOUD_RATE_LIMIT_POLICY` is wired** (`pipelineRateLimitPolicy` in `shipped-registry.ts`, passed by `apps/server/src/pipeline.ts`): safe now that a Jira call spends one slot, and close to neutral in throughput — before, a port call spent two of `DEFAULT`'s tokens (2.5 calls/s sustained, effective concurrency 2); now one of Jira's (2/s, concurrency 3).
+- `packages/application/src/pipeline/integrations.ts` is **not touched**.
+
+**Tests.** The two reproductions above; a retry case (inner `429` → one outer `Retry-After` sleep, inner rows `failed`/`ok` at one attempt each, outer row at two); a shadow re-entrant mutation is still `would_have`; a call inside `perform` on **another** integration still waits for that integration's slot; the resolver gives Jira its policy and GitLab the default. Canaries: `isReentrant` → `false` fails both reproductions (`'deadlocked'`) and the retry case (sleeps `[1000, 2500]`); letting a re-entrant call retry fails the retry case on its rows.
+
+**Sentences falsified (rule 83), each fixed.** `shipped-registry.ts`'s duplication note (*"Nothing is unsafe … two rate-limit acquisitions"*) rewritten; the WP-15a discovered-work item points here; technical/06 *"a provider that knows better passes its own policy at registration"* (it was never wired) now names the resolver and the re-entrant rule; `jira-cloud/index.ts` *"A binding that knows better passes its own policy through the executor's `rateLimits` resolver"* now says it is wired for every Jira binding with no per-binding override; `rate-limiter.ts` gains the no-deadline decision and the never-acquire-twice rule.
+
+**Risk.** The e2e tier (not run, Docker) now runs Jira bindings at capacity 5 / 2 per s rather than 10 / 5: an e2e that makes many Jira calls in a burst sleeps for refills on the wall clock.

@@ -1159,6 +1159,167 @@ describe('IntegrationActionExecutor', () => {
   });
 
   /**
+   * Backlog 550: a `perform` that calls the executor again on the same integration — the shape of
+   * every pipeline call through a Jira binding, because the pipeline wraps the port and the adapter
+   * wraps its own members in the same executor. The limiter holds a slot across `perform` and a
+   * waiter has no deadline, so before the fix `maxConcurrent` outer calls held every slot while
+   * their inner calls waited for one: a deadlock, which these cases bound with a wall-clock race
+   * so that it fails by name rather than on vitest's timeout.
+   *
+   * **Canaries:** make `isReentrant` answer `false` (the inner call acquires a slot of its own
+   * again) and the first case fails on `'deadlocked'` and the second on its sleeps; keep the slot
+   * but let a re-entrant call retry (`retryDelayMs` for it too) and the second fails on its rows.
+   */
+  describe('re-entrant calls on one integration (backlog 550)', () => {
+    const DEADLOCK_BOUND_MS = 2_000;
+
+    /** Resolves to the calls' outcome, or to `'deadlocked'` when they have not settled in time. */
+    const settledWithin = async <T>(calls: Promise<T>): Promise<T | 'deadlocked'> => {
+      let bound: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<'deadlocked'>((resolve) => {
+        bound = setTimeout(() => resolve('deadlocked'), DEADLOCK_BOUND_MS);
+      });
+      try {
+        return await Promise.race([calls, deadline]);
+      } finally {
+        clearTimeout(bound);
+      }
+    };
+
+    /** An outer read whose `perform` makes an inner read on the same integration, as Jira's does. */
+    const nestedRead = (index: number, inner: Record<string, unknown> = {}) =>
+      readTicket({
+        action: 'pipeline_read_ticket',
+        payload: { ticket_key: `FAKE-${index}` },
+        perform: async () =>
+          (
+            await executor.execute(
+              readTicket({ payload: { ticket_key: `FAKE-${index}` }, ...inner }),
+            )
+          ).result,
+      });
+
+    it('maxConcurrent + 1 nested calls all settle, spending one slot and one token each', async () => {
+      const maxConcurrent = 4;
+      // Exactly one token per outer call: an inner call that spent a token of its own would have
+      // to sleep for the refill, which `timer.sleeps` records.
+      executor = build({
+        rateLimits: { capacity: maxConcurrent + 1, refillPerSecond: 1, maxConcurrent },
+      });
+
+      const settled = await settledWithin(
+        Promise.all(
+          Array.from({ length: maxConcurrent + 1 }, (_, index) =>
+            executor.execute(nestedRead(index)),
+          ),
+        ),
+      );
+
+      expect(settled, 'every nested call settles').not.toBe('deadlocked');
+      expect(performed).toBe(maxConcurrent + 1);
+      expect(timer.sleeps, 'no call waited for a token').toEqual([]);
+      // The audit is unchanged by the fix: one row for the outer call and one for the inner.
+      expect(auditLog.entriesFor('pipeline_read_ticket')).toHaveLength(maxConcurrent + 1);
+      expect(auditLog.entriesFor('read_ticket')).toHaveLength(maxConcurrent + 1);
+      expect(auditLog.entries.every((entry) => entry.status === 'ok')).toBe(true);
+    });
+
+    it('retries a retryable failure once, at the outer call, with a token per attempt', async () => {
+      executor = build({ rateLimits: { capacity: 1, refillPerSecond: 1, maxConcurrent: 4 } });
+      let innerAttempts = 0;
+
+      const settled = await settledWithin(
+        executor.execute(
+          nestedRead(1, {
+            perform: async () => {
+              innerAttempts += 1;
+              if (innerAttempts === 1) {
+                throw new IntegrationRateLimitedError(INTEGRATION.provider, 'slow down', {
+                  retryAfterMs: 2500,
+                });
+              }
+              return { status: 'Doing' };
+            },
+          }),
+        ),
+      );
+
+      expect(settled).not.toBe('deadlocked');
+      expect(innerAttempts).toBe(2);
+      // The outer call's `Retry-After` and nothing else: the second attempt's token refilled during
+      // that sleep (2.5 s at 1/s), and the inner calls spent none.
+      expect(timer.sleeps).toEqual([2500]);
+      expect(
+        auditLog.entriesFor('read_ticket').map((entry) => [entry.status, entry.attempts]),
+      ).toEqual([
+        ['failed', 1],
+        ['ok', 1],
+      ]);
+      expect(auditLog.entriesFor('pipeline_read_ticket').map((entry) => entry.attempts)).toEqual([
+        2,
+      ]);
+    });
+
+    it('still applies the shadow guard to a re-entrant mutation', async () => {
+      await executor.execute(
+        readTicket({
+          action: 'pipeline_read_ticket',
+          perform: async () =>
+            (await executor.execute(addComment({ mode: 'shadow' as TaskMode }))).result,
+        }),
+      );
+
+      expect(performed).toBe(0);
+      expect(auditLog.entriesFor('add_comment').map((entry) => entry.status)).toEqual([
+        'would_have',
+      ]);
+    });
+
+    it('is re-entrant only on the integration it is inside: another one takes its own slot', async () => {
+      executor = build({ rateLimits: { capacity: 10, refillPerSecond: 10, maxConcurrent: 1 } });
+      const order: string[] = [];
+      const gate = Promise.withResolvers<void>();
+      const holding = Promise.withResolvers<void>();
+
+      const holder = executor.execute(
+        readTicket({
+          integration: OTHER_INTEGRATION,
+          perform: async () => {
+            holding.resolve();
+            await gate.promise;
+            order.push('other:holder');
+            return { status: 'Doing' };
+          },
+        }),
+      );
+      await holding.promise;
+      const outer = executor.execute(
+        readTicket({
+          action: 'pipeline_read_ticket',
+          perform: async () =>
+            (
+              await executor.execute(
+                readTicket({
+                  integration: OTHER_INTEGRATION,
+                  perform: async () => {
+                    order.push('other:inner');
+                    return { status: 'Testing' };
+                  },
+                }),
+              )
+            ).result,
+        }),
+      );
+
+      await flushMicrotasks();
+      expect(order, 'the inner call waits for the other integration’s slot').toEqual([]);
+      gate.resolve();
+      await Promise.all([holder, outer]);
+      expect(order).toEqual(['other:holder', 'other:inner']);
+    });
+  });
+
+  /**
    * The **call-time** half of WP-51's allow-list (PROGRESS backlog 48).
    *
    * The write-time half lives at `POST /api/integrations` and is asserted there; this one is what a
