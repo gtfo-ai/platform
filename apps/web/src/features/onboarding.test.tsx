@@ -251,6 +251,8 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
         ignored_allow_commands: [],
         // WP-113: which prompt file each stage would be given — none.
         stage_prompts: [],
+        // WP-181: no lifecycle slot is mapped, so `status_mapping` applies.
+        status_mapping_superseded: false,
         // WP-37: what the server offers for `policies.risk_classes`. The project has **none** and
         // the offer is not empty, which is the whole shape of "proposed, not applied".
         risk_class_proposal: {

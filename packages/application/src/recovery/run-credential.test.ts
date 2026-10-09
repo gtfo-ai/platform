@@ -118,6 +118,9 @@ const harness = (
     forObservability: async () => {
       throw new Error('the recovery duty read the project’s observability bindings');
     },
+    forProposedTaskManagement: async () => {
+      throw new Error('the recovery duty built a proposed binding');
+    },
   };
   const store: UnrevokedRunCredentialStore = {
     unrevokedRunCredentials: async () => [],

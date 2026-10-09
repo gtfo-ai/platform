@@ -32,7 +32,9 @@ second copy: the platform will not answer "not there" about a thread it did not 
    it, and revoking it revokes everything. It also matters to the claim: the platform claims a ticket
    by assigning it to *this* account, so on a person's own account a ticket assigned to that person
    reads as already claimed by the platform, and two installations sharing one account each see the
-   other's claim as their own (PROGRESS backlog 538, `docs/OPEN-QUESTIONS.md` Q118).
+   other's claim as their own (PROGRESS backlog 538, `docs/OPEN-QUESTIONS.md` Q118). A person's own
+   account still works — a first trial often starts on one — and the project's readiness output
+   then carries a note saying so whenever that account is mapped to a platform user (Q118 (a)).
 2. Go to **Atlassian account → Security → API tokens → Create API token**.
 3. Copy the token. Atlassian shows it once.
 

@@ -73,7 +73,24 @@ const ADMITTED_GAPS: Readonly<Record<string, string>> = {
   // WP-43 gave it a screen, and WP-27's `take-over`/`hand-back` and WP-40's breakdown pair left it
   // when WP-44 did, so the comparison above now sees all of them. A route added without a caller
   // is invisible here again, and nothing but a hand-written case would say so. WP-112's task export
-  // was that case until WP-122 gave it the task page's *Download JSON*; the list is empty again.
+  // was that case until WP-122 gave it the task page's *Download JSON*; since WP-181 such a route is
+  // listed in `SERVED_BEFORE_ITS_CALLER` below, with the row that gives it one.
+};
+
+/**
+ * Routes this server serves that **no screen calls yet**, each with the row that adds its caller —
+ * the reverse of {@link ADMITTED_GAPS}, which the comparison above cannot see by itself (a route no
+ * client names is simply absent from the client's half).
+ *
+ * Asserted in both directions like every list here: each entry must be served **and guarded**
+ * (401 to an anonymous caller) and must **not** be named by the client yet, so the day its caller
+ * lands the entry fails until it is removed — and a route added with no caller and no entry is still
+ * the one class this census cannot see, stated rather than implied.
+ */
+const SERVED_BEFORE_ITS_CALLER: Readonly<Record<string, string>> = {
+  // WP-181 ruling (a): the tracker's statuses, what a lifecycle slot may name. Its caller is
+  // WP-182's pick lists in the wizard's step 1 and the project settings.
+  '/api/projects/{}/ticket-statuses': 'WP-182',
 };
 
 /**
@@ -275,6 +292,26 @@ describe('the client’s endpoint list against the server’s router', () => {
     expect(
       Object.keys(ADMITTED_GAPS).filter((path) => served.has(path) || !known.has(path)),
     ).toEqual([]);
+  });
+
+  it('serves each route listed before its caller, guarded, and no client names it yet (WP-181)', async () => {
+    const paths = new Set(
+      clientPaths(
+        webSourceFiles().map((path) => ({
+          path,
+          source: readSource(path),
+        })),
+      ),
+    );
+    expect(Object.keys(SERVED_BEFORE_ITS_CALLER)).toContain('/api/projects/{}/ticket-statuses');
+    for (const [path, caller] of Object.entries(SERVED_BEFORE_ITS_CALLER)) {
+      const probed = await probe(path);
+      expect(probed.served, path).toBe(true);
+      expect(probed.status, path).toBe(401);
+      expect(probed.code, path).toBe('unauthenticated');
+      // Direction 2: once `caller` gives it one, the client names the path and this entry must go.
+      expect(paths.has(path), `${path} is called now (${caller}); remove its entry`).toBe(false);
+    }
   });
 
   it('serves this iteration’s five endpoints', async () => {

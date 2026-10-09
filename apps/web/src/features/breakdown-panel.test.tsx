@@ -66,6 +66,8 @@ const TASK_DETAIL: TaskDetailResponse = {
     created_at: '2026-09-13T04:00:00.000Z',
     updated_at: '2026-09-13T04:00:00.000Z',
     completed_at: null,
+    ticket_claim: null,
+    qa_stage: false,
   },
   taken_over: null,
   can_raise_budget: false,

@@ -202,6 +202,14 @@ export const bindings = pgTable('bindings', {
    * (migration 0074, WP-123); `null` until the first such poll.
    */
   mrPollDefaultHead: text('mr_poll_default_head'),
+  /**
+   * The account a task-management binding's credential acts as, `{provider, external_id}`, read at
+   * the binding's save (migration 0090, WP-181, Q118 (a)); `null` is unknown.
+   */
+  accountIdentity: jsonb('account_identity').$type<{
+    readonly provider: string;
+    readonly external_id: string;
+  }>(),
 });
 
 /**

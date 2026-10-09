@@ -39,6 +39,7 @@ import {
   updateSubscriptionsRequestSchema,
   webhookDeliverySchema,
 } from './api.js';
+import { MAX_TICKET_STATUSES } from './common.js';
 
 const uuid = (n: number) => `0199aa11-2b3c-7d4e-8f90-${String(n).padStart(12, '0')}`;
 const AT = '2026-09-09T10:15:30Z';
@@ -237,9 +238,10 @@ describe('response DTOs', () => {
           },
         ],
       },
+      // WP-170 ruling (d), required since WP-181 (criterion (6)).
+      status_mapping_superseded: false,
     };
     expect(effectiveConfigResponseSchema.parse(response)).toEqual(response);
-    // WP-170 ruling (d): `status_mapping_superseded`, optional until WP-181 publishes it.
     for (const superseded of [true, false]) {
       expect(
         effectiveConfigResponseSchema.parse({ ...response, status_mapping_superseded: superseded }),
@@ -249,6 +251,9 @@ describe('response DTOs', () => {
       effectiveConfigResponseSchema.safeParse({ ...response, status_mapping_superseded: 'yes' })
         .success,
     ).toBe(false);
+    // WP-181 criterion (6): required — an answer that omits it is refused, never read as `false`.
+    const { status_mapping_superseded: _omitted, ...withoutSuperseded } = response;
+    expect(effectiveConfigResponseSchema.safeParse(withoutSuperseded).success).toBe(false);
     // A requirement this build cannot act on is refused **by name**, here as everywhere else
     // (PROGRESS backlog 73 (d)): the offer a screen renders goes through the same schema.
     expect(
@@ -574,6 +579,9 @@ describe('the list envelopes and the KB health report', () => {
       estimate_accuracy: null,
       created_at: AT,
       updated_at: AT,
+      // Required since WP-181 (criterion (6)).
+      ticket_claim: null,
+      qa_stage: false,
     };
     expect(
       tasksResponseSchema.parse({ items: [task], next_cursor: null, can_start_task: true }),
@@ -900,6 +908,21 @@ describe('ticket statuses', () => {
         JSON.stringify(item),
       ).toBe(false);
     }
+  });
+
+  it('holds the list at MAX_TICKET_STATUSES: the bound passes, one past it is refused (WP-181 (7))', () => {
+    const many = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        ...status,
+        id: String(index),
+        name: `S${index}`,
+      }));
+    expect(
+      ticketStatusesResponseSchema.safeParse({ items: many(MAX_TICKET_STATUSES) }).success,
+    ).toBe(true);
+    expect(
+      ticketStatusesResponseSchema.safeParse({ items: many(MAX_TICKET_STATUSES + 1) }).success,
+    ).toBe(false);
   });
 
   it('names the two refusals as error codes the envelope carries', () => {

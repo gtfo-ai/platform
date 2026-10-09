@@ -277,6 +277,8 @@ const baseTask = {
   created_at: now,
   updated_at: now,
   completed_at: null,
+  ticket_claim: null,
+  qa_stage: false,
 } as const;
 
 export const featureTask = taskRecordSchema.parse({
@@ -1059,6 +1061,8 @@ export const effectiveConfig = effectiveConfigResponseSchema.parse({
   ignored_allow_commands: [],
   // WP-113: which prompt file each stage would be given — none.
   stage_prompts: [],
+  // WP-181: no lifecycle slot is mapped, so `status_mapping` applies.
+  status_mapping_superseded: false,
   // WP-37: the platform's own suggestion, because no discovery run has proposed one here. The
   // project's `policies.risk_classes` is absent above — proposed is not applied.
   risk_class_proposal: {

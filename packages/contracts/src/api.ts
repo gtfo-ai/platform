@@ -29,6 +29,7 @@ import {
   isoDateTimeSchema,
   knowledgeProposalStatusSchema,
   MAX_PROPOSAL_DELTA_BYTES,
+  MAX_TICKET_STATUSES,
   mergeRequestRefSchema,
   nonEmptyStringSchema,
   pathPatternSchema,
@@ -535,10 +536,10 @@ export const effectiveConfigResponseSchema = z.strictObject({
    * `true` when the project's task-management binding maps a lifecycle slot other than
    * `pick_up_from`, so `status_mapping` is **not applied at all** (TD-029 decision 3, technical/12's
    * M10-head amendment); the screen shows a warning beside the key. `false` when it is applied as
-   * before. **Absent** until the server publishes it (WP-181), which a reader must not read as
-   * `false`.
+   * before — which includes a project with no task-management binding, two of them, or a block that
+   * fails its schema, the three cases the pipeline's own reading treats as *no lifecycle* (WP-181).
    */
-  status_mapping_superseded: z.boolean().optional(),
+  status_mapping_superseded: z.boolean(),
   /**
    * Risk classes **proposed** for this project and not applied — product/18:52, WP-37.
    *
@@ -775,18 +776,21 @@ export const putProjectBindingsRequestSchema = z.strictObject({
 
 /**
  * `GET /api/projects/:project_id/ticket-statuses` — the statuses of the project's tracker, as the
- * task-management binding's `listStatuses()` answers them (WP-170 ruling (d); served at WP-181).
- * They are what the lifecycle slots may name. Untrusted provider text (BD-022).
+ * task-management binding's `listStatuses()` answers them (WP-170 ruling (d); served since WP-181,
+ * through `IntegrationActionExecutor`). They are what the lifecycle slots may name. Untrusted
+ * provider text (BD-022). At most {@link MAX_TICKET_STATUSES}: a tracker with more is refused at the
+ * port, so this answers `503 lifecycle_statuses_unavailable` rather than a cut list.
  */
 export const ticketStatusesResponseSchema = z.strictObject({
-  items: z.array(ticketStatusSchema),
+  items: z.array(ticketStatusSchema).max(MAX_TICKET_STATUSES),
 });
 
 /**
  * The refusals of a `lifecycle` block at `PUT /api/projects/:project_id/bindings` (TD-029
  * decision 1): `422 lifecycle_status_unknown` names the slot and the name the tracker does not
  * have; `503 lifecycle_statuses_unavailable` says the tracker could not be read, and nothing was
- * saved. The codes travel in {@link apiErrorSchema}'s `error.code`.
+ * saved. The codes travel in {@link apiErrorSchema}'s `error.code`. Since WP-181 the second is also
+ * `GET …/ticket-statuses`' answer when the tracker cannot be read: one code for one fact.
  */
 export const lifecycleErrorCodeSchema = z.enum([
   'lifecycle_status_unknown',
@@ -955,12 +959,24 @@ export const businessInterviewResponseSchema = z.strictObject({
   ),
 });
 
-/** The codes of {@link readinessResponseSchema}'s `notices` (WP-143); the domain names the same two. */
+/**
+ * The codes of {@link readinessResponseSchema}'s `notices` (WP-143). The first three are stored on an
+ * evaluation and the domain's `READINESS_NOTICE_CODES` names them; the lifecycle notes and the
+ * binding-account note (WP-181) are computed at the read and never stored, so the stored list does
+ * not name them.
+ */
 export const readinessNoticeCodeSchema = z.enum([
   'ci_rules_skip_agent_branch',
   'ci_rules_not_seen',
   // BD-026's 2026-10-06 amendment: a criterion was not checked and the project has CI to read it from.
   'verification_mode_ci_suggested',
+  // BD-031 ruling 7, product/17's 2026-10-08 amendment (WP-181): one note per unmapped ticket
+  // lifecycle slot, and one for a task-management binding with no lifecycle block at all. Computed
+  // at the read from the binding, never stored on the evaluation.
+  'lifecycle_slot_unmapped',
+  'lifecycle_not_configured',
+  // Q118 (a), answered at WP-181's review: the task-management binding acts as a mapped person.
+  'binding_account_is_a_person',
 ]);
 export type ReadinessNoticeCode = z.infer<typeof readinessNoticeCodeSchema>;
 
@@ -1016,6 +1032,15 @@ export const readinessResponseSchema = z.strictObject({
    * has a CI configuration `verification.mode: ci` would read it from (platform text only).
    * `message` quotes bounded job names and one rule from the project's CI file, redacted:
    * untrusted text (BD-022) — render it, never execute it. Empty for a row before migration 0079.
+   *
+   * Since WP-181 the read also appends the ticket lifecycle's **notes** (BD-031 ruling 7):
+   * `lifecycle_slot_unmapped` once per slot the project's task-management binding leaves empty, or
+   * one `lifecycle_not_configured` when the binding has no lifecycle block. They are computed from
+   * the binding **at the read**, so they follow a binding edit without a re-evaluation; they are
+   * platform text, always `note`, and change no level and no criterion. A project with no
+   * task-management binding gets none. And `binding_account_is_a_person` (Q118 (a)) when the
+   * binding's own account (`selfIdentity`, read through the executor) is mapped to a platform user
+   * as a person: allowed, and named.
    */
   notices: z
     .array(

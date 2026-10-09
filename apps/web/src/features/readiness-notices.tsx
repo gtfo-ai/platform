@@ -3,7 +3,9 @@
  * (`ci_rules_skip_agent_branch`: the default branch's CI rules give an `agentic/` branch no test
  * job) or the quieter **note** (`ci_rules_not_seen`: what the evaluator could not read), and the
  * note that suggests `verification.mode: ci` when a criterion was not checked and the project has
- * CI (`verification_mode_ci_suggested`, BD-026's 2026-10-06 amendment).
+ * CI (`verification_mode_ci_suggested`, BD-026's 2026-10-06 amendment) — and, since WP-181, the
+ * ticket lifecycle's notes (`lifecycle_slot_unmapped` once per empty slot, `lifecycle_not_configured`
+ * for a binding with no block; BD-031 ruling 7), which are platform text.
  *
  * One component for the three places product names — the readiness panel of the wizard's
  * discovery step and the project settings page — so the two cannot drift. A notice is never a
@@ -19,6 +21,12 @@ const LABEL: Record<ReadinessResponse['notices'][number]['code'], string> = {
   ci_rules_skip_agent_branch: 'CI rules skip agentic/ branches',
   ci_rules_not_seen: 'CI rules read in part',
   verification_mode_ci_suggested: 'Verify on CI?',
+  // WP-181 (BD-031 ruling 7): the ticket lifecycle's notes, one per unmapped slot. The pick lists
+  // that map them are WP-182's; here they are only labelled, so a served note is never unlabelled.
+  lifecycle_slot_unmapped: 'Ticket lifecycle slot not mapped',
+  lifecycle_not_configured: 'No ticket lifecycle',
+  // Q118 (a): the tracker binding acts as a person's own account.
+  binding_account_is_a_person: 'Tracker account is a person',
 };
 
 export const ReadinessNotices = ({
@@ -30,7 +38,8 @@ export const ReadinessNotices = ({
     <ul className="flex w-full flex-col gap-1" aria-label="Readiness notices">
       {notices.map((notice) => (
         <li
-          key={notice.code}
+          // WP-181: a code repeats (one `lifecycle_slot_unmapped` per slot, each its own sentence).
+          key={`${notice.code}:${notice.message}`}
           className="text-xs"
           role={notice.severity === 'warning' ? 'alert' : undefined}
         >

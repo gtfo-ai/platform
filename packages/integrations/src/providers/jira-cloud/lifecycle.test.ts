@@ -18,7 +18,11 @@ import {
   noSecretsRedactor,
   type TaskManagementPort,
 } from '@platform/application';
-import { MAX_LIFECYCLE_STATUS_NAME_CHARS, type TaskMode } from '@platform/contracts';
+import {
+  MAX_LIFECYCLE_STATUS_NAME_CHARS,
+  MAX_TICKET_STATUSES,
+  type TaskMode,
+} from '@platform/contracts';
 import { fixedClock } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import {
@@ -98,6 +102,51 @@ describe('unionJiraStatuses (WP-172 ruling (a), criterion 3)', () => {
     ]);
     expect(union.statuses.map((entry) => entry.name)).toEqual(['Done']);
     expect(union.skipped).toBe(3);
+  });
+});
+
+/** `count` distinct invented names, each with the given category key. */
+const named = (count: number, key: string, offset = 0): JiraStatus[] =>
+  Array.from({ length: count }, (_, index) =>
+    status(String(offset + index), `Status ${offset + index}`, key),
+  );
+
+describe('unionJiraStatuses is bounded at MAX_TICKET_STATUSES (WP-181 criterion (7))', () => {
+  it('answers exactly the bound, and stops with overflow one past it', () => {
+    const at = unionJiraStatuses([named(MAX_TICKET_STATUSES, 'new')]);
+    expect(at.statuses).toHaveLength(MAX_TICKET_STATUSES);
+    expect(at.overflow).toBe(false);
+    const past = unionJiraStatuses([named(MAX_TICKET_STATUSES + 1, 'new')]);
+    expect(past.overflow).toBe(true);
+    expect(past.statuses).toHaveLength(MAX_TICKET_STATUSES);
+  });
+
+  it('counts a repeated name once against the bound, whatever the issue type', () => {
+    // A thousand issue types sharing one workflow are one status set, not a thousand.
+    const groups = Array.from({ length: 3 }, () => named(MAX_TICKET_STATUSES, 'new'));
+    const union = unionJiraStatuses(groups);
+    expect(union.overflow).toBe(false);
+    expect(union.statuses).toHaveLength(MAX_TICKET_STATUSES);
+  });
+
+  it('records a conflict once per name, so the conflicts are bounded by the names: at the bound and past it', () => {
+    // Every name conflicts in every later issue type: before WP-181 that was one conflict per
+    // repetition, so the list grew with the issue types rather than with the names.
+    const atBound = unionJiraStatuses([
+      named(MAX_TICKET_STATUSES, 'new'),
+      named(MAX_TICKET_STATUSES, 'done'),
+      named(MAX_TICKET_STATUSES, 'indeterminate'),
+    ]);
+    expect(atBound.overflow).toBe(false);
+    expect(atBound.conflicts).toHaveLength(MAX_TICKET_STATUSES);
+    const pastBound = unionJiraStatuses([
+      named(MAX_TICKET_STATUSES, 'new'),
+      named(MAX_TICKET_STATUSES, 'done'),
+      named(1, 'new', MAX_TICKET_STATUSES),
+      named(MAX_TICKET_STATUSES, 'indeterminate'),
+    ]);
+    expect(pastBound.overflow).toBe(true);
+    expect(pastBound.conflicts.length).toBeLessThanOrEqual(MAX_TICKET_STATUSES);
   });
 });
 
@@ -436,6 +485,21 @@ describe('listStatuses (research/15 J1, never J2)', () => {
       readonly category_conflicts: readonly unknown[];
     };
     expect(row.category_conflicts).toHaveLength(MAX_RECORDED_CATEGORY_CONFLICTS);
+  });
+
+  it('answers MAX_TICKET_STATUSES statuses, and refuses one more rather than cutting the list (WP-181 (7))', async () => {
+    const names = (count: number) =>
+      Array.from({ length: count }, (_, index): [string, string] => [`Status ${index}`, 'new']);
+    const atBound = adapter({ 'GET project/ACME/statuses': statuses(names(MAX_TICKET_STATUSES)) });
+    expect(await atBound.port.listStatuses()).toHaveLength(MAX_TICKET_STATUSES);
+    const past = adapter({
+      'GET project/ACME/statuses': statuses(names(MAX_TICKET_STATUSES + 1)),
+    });
+    await expect(past.port.listStatuses()).rejects.toMatchObject({
+      code: 'invalid_response',
+      action: 'list_statuses',
+      message: expect.stringContaining(`more than ${MAX_TICKET_STATUSES} distinct statuses`),
+    });
   });
 
   it('refuses a project that answers no status it can name', async () => {

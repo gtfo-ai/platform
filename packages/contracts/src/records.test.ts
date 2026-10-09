@@ -118,6 +118,8 @@ describe('records', () => {
       created_at: AT,
       updated_at: AT,
       completed_at: null,
+      ticket_claim: null,
+      qa_stage: false,
     };
     expect(taskRecordSchema.parse(task)).toEqual(task);
     expect(taskRecordSchema.safeParse({ ...task, state: 'thinking' }).success).toBe(false);
@@ -135,8 +137,8 @@ describe('records', () => {
       estimate_accuracy: null,
     };
     expect(taskRecordSchema.parse(unestimated)).toEqual(unestimated);
-    // WP-170 ruling (d): the claim and the QA flag. **Optional** until WP-181 publishes them, so a
-    // DTO built before then parses; once present they are held to their shapes.
+    // WP-170 ruling (d): the claim and the QA flag, **required** since WP-181 (criterion (6)) —
+    // `ticket_claim` nullable ("never claimed"), `qa_stage` a boolean — and held to their shapes.
     const claimed = {
       ...task,
       ticket_claim: { status: 'shadow', claimed_at: AT, released_at: null },
@@ -147,6 +149,11 @@ describe('records', () => {
       ...task,
       ticket_claim: null,
     });
+    const { ticket_claim: _noClaim, ...withoutClaim } = task;
+    expect(taskRecordSchema.safeParse(withoutClaim).success).toBe(false);
+    const { qa_stage: _noQa, ...withoutQa } = task;
+    expect(taskRecordSchema.safeParse(withoutQa).success).toBe(false);
+    expect(taskRecordSchema.safeParse({ ...task, qa_stage: null }).success).toBe(false);
     expect(
       taskRecordSchema.safeParse({
         ...task,

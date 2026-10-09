@@ -48,6 +48,7 @@ import {
   writeIntegrationHealth,
   writeProjectConfig,
 } from '../../../apps/server/src/queries/onboarding-queries.js';
+import { findBindingAccountIsAPerson } from '../../../apps/server/src/queries/project-queries.js';
 import { runReadinessStoreContract } from '../../contract/support/readiness-store-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient, createTestPool } from '../support/postgres.js';
@@ -727,6 +728,69 @@ describe('bindings and configuration', () => {
       hash: 'x',
     });
     expect(result.status).toBe('not_found');
+  });
+});
+
+/**
+ * WP-181 round 3 (Q118 (a), migration 0090): the column the bindings write stores and the join the
+ * readiness note reads, on PostgreSQL — the two statements no other tier executes.
+ */
+describe('the binding’s stored account and the readiness join (WP-181, migration 0090)', () => {
+  const egress = allowAnyIntegrationHost();
+
+  it('writes account_identity, updates it in place, and joins it only with a live person', async () => {
+    const created = await pool.query<{ id: string }>(
+      `insert into integrations (org_id, type, provider, name)
+       values ($1, 'task_management', 'jira_cloud', 'wiz account') returning id`,
+      [orgId],
+    );
+    const integrationId = created.rows[0]?.id as string;
+    const person = { provider: 'acct-tracker', external_id: 'acct-person-0181' };
+    const machine = { provider: 'acct-tracker', external_id: 'acct-machine-0181' };
+    const stored = async () =>
+      (
+        await pool.query<{ id: string; account_identity: unknown }>(
+          'select id, account_identity from bindings where project_id = $1 and integration_id = $2',
+          [projectId, integrationId],
+        )
+      ).rows;
+    const save = async (accountIdentity: typeof person | null) =>
+      replaceProjectBindings(db, projectId, [{ integrationId, accountIdentity }], { egress });
+
+    // The write stores the handle.
+    await save(person);
+    const [first] = await stored();
+    expect(first?.account_identity).toEqual(person);
+    // Unmapped: no person to name.
+    expect(await findBindingAccountIsAPerson(db, projectId)).toBe(false);
+    await pool.query(
+      `insert into user_identities (provider, external_id, user_id, kind)
+       values ($1, $2, $3, 'person'), ($4, $5, null, 'machine')`,
+      [person.provider, person.external_id, userId, machine.provider, machine.external_id],
+    );
+    expect(await findBindingAccountIsAPerson(db, projectId)).toBe(true);
+
+    // A re-save that read nothing writes unknown, on the same row.
+    await save(null);
+    const [unknown] = await stored();
+    expect(unknown?.id).toBe(first?.id);
+    expect(unknown?.account_identity).toBeNull();
+    expect(await findBindingAccountIsAPerson(db, projectId)).toBe(false);
+
+    // A machine account names nobody.
+    await save(machine);
+    expect((await stored())[0]?.account_identity).toEqual(machine);
+    expect(await findBindingAccountIsAPerson(db, projectId)).toBe(false);
+
+    // A retired integration is not the project's live binding.
+    await save(person);
+    expect(await findBindingAccountIsAPerson(db, projectId)).toBe(true);
+    await pool.query('update integrations set retired_at = now() where id = $1', [integrationId]);
+    expect(await findBindingAccountIsAPerson(db, projectId)).toBe(false);
+
+    await pool.query('delete from bindings where integration_id = $1', [integrationId]);
+    await pool.query('delete from integrations where id = $1', [integrationId]);
+    await pool.query('delete from user_identities where provider = $1', [person.provider]);
   });
 });
 

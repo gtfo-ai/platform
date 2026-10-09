@@ -63,22 +63,26 @@ export const ROLE_PROMPT_VERSIONS = {
   // WP-73 (backlog 142): the type mapping is a `type_mapping` data block when given, not a
   // `get_task_context` value — no `include` serves configuration.
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
-  triager: '3',
+  // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
+  triager: '4',
   // WP-40: the epic-split variant's `TicketBreakdown` section.
   // Backlog 476: questions go in the artifact (`decision: ask`), not to `ask_human`; the direction
   // page and the business pages are named only when the pack has them.
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
-  product_manager: '4',
+  // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
+  product_manager: '5',
   // Backlog 476: a low-confidence analysis asks through `questions`, not `ask_human`.
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
-  investigator: '3',
+  // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
+  investigator: '4',
   // WP-40: the spike template's `ResearchReport` section.
   // WP-81: `protected_path_changes` — declare every existing test / CI-lint file changed (BD-024).
   // Backlogs 475 and 476: plans only what the workspace can carry out (a missing generator's file is
   // written by hand and judged by CI), `validation_contract` named, knowledge "when the project has it".
   // Backlog 496: `report_progress` is built — one line when the reading ends and the plan begins.
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
-  architect: '6',
+  // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
+  architect: '7',
   // WP-138: `open_mr` takes a title and a description; the branch and the target are the
   // platform's, the platform marks the merge request ready, and the record is the tool's.
   // Backlogs 473, 475 and 476: work in slices — commit, push and `open_mr` after the first, notes
@@ -90,19 +94,24 @@ export const ROLE_PROMPT_VERSIONS = {
   // WP-176 (backlog 537): the conversation is data; `thread_replies` answers every note acted on,
   // one entry per request (a mixed note: `fixed`, `documented`, `needs_person` naming who must act,
   // never claimed done); a status-only return reads the conversation and asks when it finds nothing.
-  developer: '7',
+  // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
+  developer: '8',
   // WP-45: the project's `review_checklist` blocks, and `criteria` when a human's merge request is
   // compared against a RefinedSpec (the shadow report's review of the human MR).
   // WP-81: judge the plan's `protected_path_changes` into `protected_path_changes_confirmed`.
   // WP-176 (backlog 537): the conversation is data; on a re-review `resolved_threads` lists only
   // its own finding threads whose fix it verified, never a person's thread.
-  reviewer: '5',
+  // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
+  reviewer: '6',
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
-  acceptance_tester: '2',
+  // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
+  acceptance_tester: '3',
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
-  facilitator: '2',
+  // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
+  facilitator: '3',
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
-  librarian: '3',
+  // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
+  librarian: '4',
   // WP-54: runs the project's declared commands; R1, R2 and R6 are run rather than read.
   // WP-64: `public_api` in the risk-class table (backlog 216), `./.agentic/workspace/setup` as a
   // named verb for R6 (backlog 144), and technical pages only — business pages are step 3's.
@@ -110,11 +119,14 @@ export const ROLE_PROMPT_VERSIONS = {
   // (BD-026's 2026-10-06 amendment), the run image's languages, the workspace kept out of the pages,
   // the language with no ticket, and the draft's lists handed in as arrays.
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
-  discovery: '7',
+  // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
+  discovery: '8',
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
-  ask: '2',
+  // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
+  ask: '3',
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
-  historian: '2',
+  // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
+  historian: '3',
 } as const satisfies Record<AgentRole, string>;
 
 const promptsRoot = new URL('../roles/', import.meta.url);

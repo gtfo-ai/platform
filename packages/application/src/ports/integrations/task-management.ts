@@ -535,7 +535,9 @@ export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabi
    * The tracker's statuses, each with its normalised category — **the union over issue types**,
    * one entry per status. What a lifecycle slot may name and what the setup check validates
    * against. Never empty for a tracker that has statuses: an empty answer is a refusal wearing a
-   * result's clothes. A read.
+   * result's clothes. **At most `MAX_TICKET_STATUSES`** (WP-181): an adapter whose union would be
+   * longer throws `IntegrationError('invalid_response')` rather than cutting it, because a cut list
+   * hides a status from the pick list and makes the save check refuse a name the tracker has. A read.
    */
   readonly listStatuses: () => Promise<readonly LifecycleStatus[]>;
 

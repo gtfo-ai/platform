@@ -71,6 +71,8 @@ const task = (overrides: Partial<TaskRecord>): TaskRecord =>
     created_at: '2026-06-01T09:00:00.000Z',
     updated_at: '2026-06-01T09:00:00.000Z',
     completed_at: null,
+    ticket_claim: null,
+    qa_stage: false,
     ...overrides,
   }) as TaskRecord;
 

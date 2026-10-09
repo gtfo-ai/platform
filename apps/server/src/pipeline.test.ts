@@ -8,18 +8,28 @@
  */
 import type { RunSpec } from '@platform/application';
 import {
+  allowAnyIntegrationHost,
   autonomyPresetFor,
   commandBaselineFor,
   countingStartHooks,
+  createIntegrationActionExecutor,
+  createMemoryAuditLog,
+  createVirtualTimer,
+  exactSecretRedactor,
   pipelineDialFor,
   settingsAdmission,
   silentLogger,
+  staticPipelineIntegrations,
   TransactionOpenError,
   withOpenTransaction,
 } from '@platform/application';
+import type { Id, IsoDateTime } from '@platform/contracts';
 import { materialiseAutonomy, runCommandPolicy } from '@platform/domain';
+import { createFakeTaskManagement } from '@platform/integrations';
+import type pg from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  composePipelinePlatformTools,
   createProjectSettingsPort,
   RunnerUnavailableError,
   repositoryPathOf,
@@ -418,5 +428,83 @@ describe('the project settings port', () => {
     ).forProject(project);
     expect(absent.autonomy).toBeNull();
     expect(quiet).toEqual([]);
+  });
+});
+
+/**
+ * WP-181 review round 2: the platform tools the pipeline composes read `get_conversation` through
+ * the pipeline's own integrations port — called here over fake integrations, so handing either half
+ * of `composePipelinePlatformTools` another port fails by name.
+ */
+describe('the composed get_conversation', () => {
+  it('answers the ticket’s comments through the integrations port it is given, redacted', async () => {
+    const PLANTED = 'FAKE-planted-pipeline-token-0181';
+    const tracker = createFakeTaskManagement({
+      integrationId: '00000000-0000-4000-8000-0000000001b2' as Id,
+      tickets: [
+        {
+          key: 'FAKE-9',
+          title: 'Totals',
+          comments: [
+            {
+              authorId: 'user-1',
+              body: `Rotate ${PLANTED}, please.`,
+              createdAt: '2026-10-08T09:00:00.000Z',
+            },
+          ],
+        },
+      ],
+    });
+    const integrations = staticPipelineIntegrations({
+      executor: createIntegrationActionExecutor({
+        egress: allowAnyIntegrationHost(),
+        auditLog: createMemoryAuditLog(),
+        redactor: exactSecretRedactor([]),
+        timer: createVirtualTimer({ autoAdvance: true }),
+        clock: { now: () => '2026-10-09T09:00:00.000Z' as IsoDateTime },
+      }),
+      git: null,
+      taskManagement: {
+        port: tracker,
+        ref: tracker.ref,
+        redactor: exactSecretRedactor([{ name: 'tracker_token', value: PLANTED }]),
+      },
+      communication: null,
+    });
+    const pool = {
+      query: async () => ({
+        rows: [
+          {
+            ticket_provider: tracker.ref.provider,
+            ticket_key: 'FAKE-9',
+            ticket_url: 'https://tickets.example.test/browse/FAKE-9',
+            ticket_id: null,
+            mr_ref: null,
+          },
+        ],
+      }),
+    } as unknown as pg.Pool;
+    const tools = composePipelinePlatformTools({
+      pool,
+      logger: silentLogger,
+      unitOfWork: { transaction: async () => Promise.reject(new Error('unreachable')) },
+      tasks: { recordMergeRequest: async () => Promise.reject(new Error('unreachable')) },
+      integrations,
+      agent: {} as Parameters<typeof composePipelinePlatformTools>[0]['agent'],
+    });
+    const answer = (await tools.getConversation(
+      {},
+      {
+        runId: '00000000-0000-4000-8000-0000000001b3' as Id,
+        taskId: '00000000-0000-4000-8000-0000000001b4' as Id,
+        projectId: '00000000-0000-4000-8000-0000000001b5' as Id,
+        mode: 'normal',
+        signal: new AbortController().signal,
+      },
+    )) as { available: boolean; entries: { source: string; body: string }[] };
+    expect(answer.available).toBe(true);
+    expect(answer.entries.map((entry) => entry.source)).toEqual(['ticket']);
+    expect(answer.entries[0]?.body).toBe('Rotate [REDACTED:integration:tracker_token], please.');
+    expect(JSON.stringify(answer)).not.toContain(PLANTED);
   });
 });

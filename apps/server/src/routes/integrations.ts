@@ -25,7 +25,7 @@
  * `integration.read` is `maintainer` (`packages/domain/src/permissions.ts`, Q36) and an integration
  * belongs to the organisation rather than to a project, so there is no project hook here: a binding
  * is what attaches one to a project, and `GET /api/projects/:id/bindings` is a different endpoint
- * (`routes/onboarding.ts` since WP-21) scoped by the project rather than by the organisation. The SPA already tells the reader as much — *"Reading integration configuration
+ * (`routes/onboarding.ts` from WP-21, `routes/project-bindings.ts` since WP-181) scoped by the project rather than by the organisation. The SPA already tells the reader as much — *"Reading integration configuration
  * needs the maintainer role (Q36)"* — so the level was fixed before the route existed.
  *
  * ## Nothing on either response is a credential, and that is enforced rather than promised

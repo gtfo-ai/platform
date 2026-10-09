@@ -42,6 +42,7 @@ import {
   MIN_SECRET_LENGTH,
 } from '../integrations/redaction.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import type { ProjectBinding } from '../ports/integrations/bindings.js';
 import { IntegrationError, type IntegrationRef } from '../ports/integrations/common.js';
 import type {
   ApprovalPost,
@@ -91,6 +92,7 @@ import type {
   AssignResult,
   CommentPage,
   CommentRef,
+  LifecycleStatus,
   ListCommentsOptions,
   TaskManagementPort,
   Ticket,
@@ -418,6 +420,27 @@ export interface PipelineIntegrationsPort {
     type: TType,
     scope: IntegrationCallScope,
   ): Promise<ObservabilityBinding<ObservabilityPortByType[TType]> | null>;
+  /**
+   * **A task-management binding that is not saved yet** — the one `PUT …/bindings` is about to
+   * write (WP-181, TD-029 decision 1). The lifecycle block's names are checked against the
+   * statuses of the binding **as proposed**: the account the request names with the overlay the
+   * request carries, because a request that also changes `project_keys` or the integration itself
+   * would otherwise be checked against the tracker it is replacing.
+   *
+   * Built by the same rules as a saved binding (credentials resolved, the redactor composed, the
+   * provider's strict schema, a retired integration refused), and answered as a project's
+   * integrations with **only** `taskManagement` set — `git` and `communication` are `null` — so
+   * `ticketReads` reads it as it reads any other. The caller composes `binding` (the overlay is
+   * the write's own); nothing here reads `bindings`.
+   *
+   * @throws when the binding cannot be built — the loader's *broken is not absent* (rule 20) —
+   * or when `binding.type` is not `task_management`.
+   */
+  forProposedTaskManagement(
+    projectId: Id,
+    binding: ProjectBinding,
+    scope: IntegrationCallScope,
+  ): Promise<PipelineIntegrations>;
 }
 
 /**
@@ -474,7 +497,30 @@ export const staticPipelineIntegrations = (
     integrations.git?.ref.integrationId === integrationId
       ? mintingIntegrationOf(integrations)
       : null,
+  // WP-181: the composed task-management binding stands in for any proposed one — the unit tier's
+  // single-binding world, where the proposal's overlay changes nothing the double can see.
+  forProposedTaskManagement: async () => ({
+    executor: integrations.executor,
+    git: null,
+    taskManagement: integrations.taskManagement,
+    communication: null,
+  }),
 });
+
+/**
+ * The door to {@link PipelineIntegrationsPort.forProposedTaskManagement} (WP-181), guarded like
+ * {@link integrationsForProject}: the statuses read it serves is a provider call, and none is made
+ * inside a transaction.
+ */
+export const proposedTaskManagementFor = async (
+  port: PipelineIntegrationsPort,
+  projectId: Id,
+  binding: ProjectBinding,
+  scope: IntegrationCallScope,
+): Promise<PipelineIntegrations> => {
+  assertOutsideTransaction('integrations.forProposedTaskManagement');
+  return port.forProposedTaskManagement(projectId, binding, scope);
+};
 
 /**
  * The door to {@link PipelineIntegrationsPort.forMintingIntegration}, guarded like
@@ -1159,6 +1205,27 @@ export const ticketReads = (integrations: PipelineIntegrations) => ({
             ? {}
             : { onUnreadableKeys: options.onUnreadableKeys }),
         }),
+    );
+  },
+
+  /**
+   * The tracker's statuses (WP-171's `listStatuses`) — what a lifecycle slot may name — or `null`
+   * for a project with no task-management binding. Two readers since WP-181, both in
+   * `apps/server`: `GET …/ticket-statuses` (the pick list) and the lifecycle check at
+   * `PUT …/bindings`. A read, outside every transaction and outside any run.
+   *
+   * The capability flag is **not** asked first: a provider that does not declare
+   * `lifecycleStatuses` throws `IntegrationUnsupportedError` naming the member, which is an
+   * `IntegrationError` both readers answer as *the tracker cannot be read* — a `null` here would
+   * read as *no tracker*, which is a different answer (rule 20).
+   */
+  statuses: async (context: CallContext): Promise<readonly LifecycleStatus[] | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null) {
+      return null;
+    }
+    return read(integrations, binding.ref, 'list_statuses', {}, context, async () =>
+      binding.port.listStatuses(),
     );
   },
 

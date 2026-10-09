@@ -1098,3 +1098,58 @@ describe('a project’s binding credentials, for a reading (WP-107)', () => {
     expect(JSON.stringify(states)).not.toContain('v1:old');
   });
 });
+
+/**
+ * WP-181: the binding `PUT …/bindings` is about to write, built from the row the caller composed —
+ * never from `bindings` — by the same rules a saved one gets.
+ */
+describe('a proposed task-management binding (WP-181)', () => {
+  const proposed: ProjectBinding = {
+    bindingId: '00000000-0000-4000-8000-00000000a181' as Id,
+    integrationId: '00000000-0000-4000-8000-00000000a181' as Id,
+    type: 'task_management',
+    provider: 'jira-cloud',
+    name: 'acme jira',
+    config: {
+      site_url: 'https://acme-example.atlassian.net',
+      user_email: 'bot@example.test',
+      project_keys: ['ACME'],
+    },
+    secretIds: [],
+    retired: false,
+  };
+
+  it('is built from the given row alone, with only taskManagement set', async () => {
+    // The repository holds a git binding only: a loader that read `bindings` would answer it.
+    const integrations = await loaderFor({
+      secrets: { api_token: 'FAKE-jira-token-0001' },
+    }).forProposedTaskManagement(PROJECT, proposed, outsideARun);
+    expect(integrations.git).toBeNull();
+    expect(integrations.communication).toBeNull();
+    expect(integrations.taskManagement?.ref).toMatchObject({
+      integrationId: proposed.integrationId,
+      provider: 'jira-cloud',
+      host: 'acme-example.atlassian.net',
+    });
+  });
+
+  it('refuses what a saved binding is refused: a config the provider’s schema refuses, a retired account, another type', async () => {
+    const loader = loaderFor({ secrets: { api_token: 'FAKE-jira-token-0001' } });
+    await expect(
+      loader.forProposedTaskManagement(
+        PROJECT,
+        {
+          ...proposed,
+          config: { ...proposed.config, lifecycle: { qa: 'Testing', done: 'testing' } },
+        },
+        outsideARun,
+      ),
+    ).rejects.toThrow(BindingLoadError);
+    await expect(
+      loader.forProposedTaskManagement(PROJECT, { ...proposed, retired: true }, outsideARun),
+    ).rejects.toThrow(/retired/);
+    await expect(
+      loader.forProposedTaskManagement(PROJECT, gitBinding(), outsideARun),
+    ).rejects.toThrow(/only a task-management binding/);
+  });
+});

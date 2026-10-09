@@ -85,6 +85,7 @@ import {
   promptsWithheldSchema,
   runSavedWorkSchema,
   runStartFailureSchema,
+  storedTicketClaimSchema,
   taskPipelineDialSchema,
   taskStageOutcomeSchema,
   taskStageStateSchema,
@@ -1289,7 +1290,39 @@ const toTaskRecord = (
   created_at: isoRequired(row.createdAt),
   updated_at: isoRequired(row.updatedAt),
   completed_at: iso(row.completedAt),
+  // WP-181 ruling (f): the claim and the QA flag, read straight off the two columns WP-177 added
+  // (migration 0088). The claim column has one writer, which parses it at the write, so it is parsed
+  // here at the read rather than trusted (a row that fails is a fault, never "never claimed").
+  ticket_claim: ticketClaimViewOf(row.id, row.ticketClaim),
+  qa_stage: row.qaStage,
 });
+
+/**
+ * `tasks.ticket_claim` as the task DTO publishes it (WP-170 ruling (d), WP-181 ruling (f)): the
+ * record's own `status`, when it was claimed and when it was released — `null` for a task that never
+ * claimed. `stale`, the account and the causes are the pipeline's bookkeeping and stay off the wire.
+ *
+ * A stored claim that fails its schema is refused like its neighbours — `UnprojectableRowError`,
+ * naming the task and the failing paths, never the values — rather than a raw `ZodError` (a 500), and
+ * never published as `null`, which would say the task never claimed (review round 1).
+ */
+export const ticketClaimViewOf = (taskId: string, stored: unknown): TaskRecord['ticket_claim'] => {
+  if (stored === null || stored === undefined) {
+    return null;
+  }
+  const parsed = storedTicketClaimSchema.safeParse(stored);
+  if (!parsed.success) {
+    const paths = parsed.error.issues
+      .map((issue) => (issue.path.length === 0 ? '(root)' : issue.path.join('.')))
+      .join(', ');
+    throw new UnprojectableRowError(
+      `task ${taskId}`,
+      `its recorded ticket claim (\`tasks.ticket_claim\`) does not parse at ${paths}`,
+    );
+  }
+  const claim = parsed.data;
+  return { status: claim.status, claimed_at: claim.claimed_at, released_at: claim.released_at };
+};
 
 const toQuestionRecord = (row: typeof questions.$inferSelect): QuestionRecord => {
   if (row.stage === null) {

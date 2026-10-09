@@ -247,7 +247,10 @@ export interface ConversationReaderOptions {
  * The production reader: the project's bindings resolved per call, both reads through
  * `IntegrationActionExecutor` (audited, rate-limited, refused inside a transaction). **No run-scoped
  * secret** is in scope: the planner reads before the run exists, so no credential has been minted
- * for it (the scope WP-181's tool needs is that row's decision).
+ * for it. WP-181's `get_conversation` tool reads through this same reader from inside a run and
+ * keeps that scope, decided there (`apps/server/src/platform-tools.ts`): the run's own credentials
+ * are ones the run already holds, so a note quoting one tells the model nothing it lacks, and the
+ * transcript that stores the tool's answer is redacted with them by the run's own redactor.
  */
 export const createConversationReader =
   (options: ConversationReaderOptions): ConversationReader =>

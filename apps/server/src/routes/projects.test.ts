@@ -15,10 +15,13 @@ import {
   agenticConfigSchema,
   effectiveConfigResponseSchema,
   MAX_CONTEXT_BUDGET_TOKENS,
+  type TicketLifecycle,
 } from '@platform/contracts';
 import { redaction as redactionAdapters } from '@platform/infrastructure';
 import { describe, expect, it } from 'vitest';
 import { HttpError } from '../errors.js';
+import { ticketLifecycleBindingsStatement } from '../ticket-lifecycle.js';
+import { withLifecycleNotes } from './project-readiness.js';
 import {
   decodeTaskCursor,
   describeConfigIssues,
@@ -31,6 +34,9 @@ import {
 } from './projects.js';
 
 const ID = '0199aa11-2b3c-7d4e-8f90-000000000001';
+
+/** A project with no task-management binding: no lifecycle, `status_mapping` applied (WP-181). */
+const NO_LIFECYCLE = { kind: 'no_binding' } as const;
 
 /**
  * The composition `apps/server/src/app.ts` gives this module — the real rules, not a stub.
@@ -322,7 +328,13 @@ describe('the effective configuration’s layers (WP-63)', () => {
   };
   const answer = (layers: Parameters<typeof effectiveConfigResponseOf>[0]['layers']) =>
     effectiveConfigResponseSchema.parse(
-      effectiveConfigResponseOf({ projectId: ID, row: row(SETTINGS), layers, redactText }),
+      effectiveConfigResponseOf({
+        ticketLifecycle: NO_LIFECYCLE,
+        projectId: ID,
+        row: row(SETTINGS),
+        layers,
+        redactText,
+      }),
     );
 
   it('lets the repository win where it states a key, and the settings where it does not', () => {
@@ -356,6 +368,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
   it('publishes the settings’ unread keys in `not_applied`, and nothing for a clean document', () => {
     const enabled = effectiveConfigResponseSchema.parse(
       effectiveConfigResponseOf({
+        ticketLifecycle: NO_LIFECYCLE,
         projectId: ID,
         row: row({
           version: 1,
@@ -379,6 +392,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
     const withWip = (orgSettings: unknown) =>
       effectiveConfigResponseSchema.parse(
         effectiveConfigResponseOf({
+          ticketLifecycle: NO_LIFECYCLE,
           projectId: ID,
           row: row({ version: 1, pipeline: { wip: { max_parallel_tasks: 3 } } }),
           layers: { ...repo('absent', null), orgSettings },
@@ -423,6 +437,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
     let thrown: unknown;
     try {
       effectiveConfigResponseOf({
+        ticketLifecycle: NO_LIFECYCLE,
         projectId: ID,
         row: row(SETTINGS),
         layers: repo('invalid', null, 'stages.refinement.max_turns (expected number)'),
@@ -447,6 +462,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
     let thrown: unknown;
     try {
       effectiveConfigResponseOf({
+        ticketLifecycle: NO_LIFECYCLE,
         projectId: ID,
         row: row({ version: 1, project: { context_budget_tokens: 200_000 } }),
         layers: null,
@@ -463,6 +479,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
     // …and the other side of the boundary answers (rule 42).
     const at = effectiveConfigResponseSchema.parse(
       effectiveConfigResponseOf({
+        ticketLifecycle: NO_LIFECYCLE,
         projectId: ID,
         row: row({ version: 1, project: { context_budget_tokens: MAX_CONTEXT_BUDGET_TOKENS } }),
         layers: null,
@@ -476,6 +493,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
     const refusal = (waitingCurations?: number): string => {
       try {
         effectiveConfigResponseOf({
+          ticketLifecycle: NO_LIFECYCLE,
           projectId: ID,
           row: row({ version: 1, project: { context_budget_tokens: 200_000 } }),
           layers: null,
@@ -503,6 +521,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
     // repository refusal with the key path rather than merging a value this release refuses.
     expect(() =>
       effectiveConfigResponseOf({
+        ticketLifecycle: NO_LIFECYCLE,
         projectId: ID,
         row: row(SETTINGS),
         layers: repo('valid', { project: { context_budget_tokens: 200_000 } }),
@@ -514,6 +533,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
   it('refuses an organisation command maximum it cannot parse rather than reading none', () => {
     expect(() =>
       effectiveConfigResponseOf({
+        ticketLifecycle: NO_LIFECYCLE,
         projectId: ID,
         row: row(SETTINGS),
         layers: { ...repo('absent', null), orgSettings: { commands: { allow: 'git *' } } },
@@ -540,6 +560,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
   it('applies what the file tightens and reports, without applying, what it loosens', () => {
     const response = effectiveConfigResponseSchema.parse(
       effectiveConfigResponseOf({
+        ticketLifecycle: NO_LIFECYCLE,
         projectId: ID,
         row: row({ version: 1, commands: { allow: ['npm test'] } }),
         layers: {
@@ -573,6 +594,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
     const of = (config: Record<string, unknown>, layers: Parameters<typeof repo>[1] = null) =>
       effectiveConfigResponseSchema.parse(
         effectiveConfigResponseOf({
+          ticketLifecycle: NO_LIFECYCLE,
           projectId: ID,
           row: row({ version: 1, ...config }),
           layers: layers === null ? null : repo('valid', layers),
@@ -605,6 +627,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
   it('publishes the dial the project runs, not a cap nobody set', () => {
     const response = effectiveConfigResponseSchema.parse(
       effectiveConfigResponseOf({
+        ticketLifecycle: NO_LIFECYCLE,
         projectId: ID,
         row: row({ version: 1, policies: { autonomy: 'autonomous' } }),
         layers: null,
@@ -670,6 +693,7 @@ describe('the project prompt files the configuration read publishes (WP-113)', (
   ) =>
     effectiveConfigResponseSchema.parse(
       effectiveConfigResponseOf({
+        ticketLifecycle: NO_LIFECYCLE,
         projectId: ID,
         row: row(config),
         layers: layers(prompts, mark),
@@ -796,5 +820,90 @@ describe('the project prompt files the configuration read publishes (WP-113)', (
     expect(response.repository.prompts_withheld).toEqual(withheld);
     // And nothing withheld is `null`, never an empty record.
     expect(answer({ version: 1 }, STORED).repository.prompts_withheld).toBeNull();
+  });
+});
+
+/**
+ * WP-181 rulings (c) and (d): `status_mapping_superseded` says what the pipeline decides, and the
+ * readiness read appends the lifecycle's notes. Status names are invented and neutral.
+ */
+describe('the ticket lifecycle on the configuration and readiness reads (WP-181)', () => {
+  const row = {
+    config: { version: 1, status_mapping: { implementation: 'Doing' } },
+    configSource: {},
+    configHash: 'h1',
+    updatedAt: new Date('2026-10-09T10:00:00.000Z'),
+    proposedRiskClasses: null,
+  };
+  const superseded = (ticketLifecycle: Parameters<typeof withLifecycleNotes>[1]) =>
+    effectiveConfigResponseSchema.parse(
+      effectiveConfigResponseOf({ projectId: ID, row, layers: null, redactText, ticketLifecycle }),
+    ).status_mapping_superseded;
+  const lifecycle = (slots: TicketLifecycle, pickUpFrom: string | null = null) =>
+    ({ kind: 'lifecycle', lifecycle: { pickUpFrom, slots } }) as const;
+
+  it('(3) publishes status_mapping_superseded true exactly when a slot other than pick_up_from is mapped', () => {
+    expect(superseded(lifecycle({ in_review: 'Waiting for review' }))).toBe(true);
+    expect(superseded(lifecycle({ returned: ['Sent back'] }))).toBe(true);
+    // `pick_up_from` alone, `claim` alone, an empty `returned`: the mapping still applies.
+    expect(superseded(lifecycle({ claim: true, returned: [] }, 'Ready for the agent'))).toBe(false);
+    // The readings the pipeline treats as no lifecycle at all.
+    expect(superseded(NO_LIFECYCLE)).toBe(false);
+    expect(superseded({ kind: 'none' })).toBe(false);
+    expect(superseded({ kind: 'ambiguous', bindings: 2 })).toBe(false);
+    expect(superseded({ kind: 'invalid', detail: 'lifecycle.qa' })).toBe(false);
+  });
+
+  const evaluated = {
+    level: 2,
+    evaluated_at: '2026-10-09T10:00:00.000Z',
+    criteria: [],
+    source: 'discovery',
+    next_improvements: [],
+    notices: [
+      { code: 'ci_rules_not_seen' as const, severity: 'note' as const, message: 'stored note' },
+    ],
+  };
+
+  it('(3) appends one note per unmapped slot after the stored notices, and changes nothing else', () => {
+    const answer = withLifecycleNotes(
+      evaluated,
+      lifecycle({ in_progress: 'Doing', done: 'Finished' }, 'Ready for the agent'),
+    );
+    expect(answer.level).toBe(2);
+    expect(answer.next_improvements).toEqual([]);
+    expect(answer.notices[0]?.message).toBe('stored note');
+    const notes = answer.notices.slice(1);
+    expect(notes.map((note) => note.code)).toEqual(Array(4).fill('lifecycle_slot_unmapped'));
+    expect(notes.every((note) => note.severity === 'note')).toBe(true);
+    expect(notes.map((note) => note.message.split(' is not mapped')[0])).toEqual([
+      'The ticket lifecycle slot in review',
+      'The ticket lifecycle slot approved',
+      'The ticket lifecycle slot QA',
+      'The ticket lifecycle slot returned',
+    ]);
+  });
+
+  it('(3) appends the one not-configured note for a binding with no block, and none without a tracker', () => {
+    expect(withLifecycleNotes(evaluated, { kind: 'none' }).notices.slice(1)).toEqual([
+      expect.objectContaining({ code: 'lifecycle_not_configured', severity: 'note' }),
+    ]);
+    for (const reading of [
+      NO_LIFECYCLE,
+      { kind: 'ambiguous', bindings: 2 } as const,
+      { kind: 'invalid', detail: 'lifecycle.qa' } as const,
+    ]) {
+      expect(withLifecycleNotes(evaluated, reading).notices).toEqual(evaluated.notices);
+    }
+  });
+});
+
+describe('the ticket lifecycle statement (WP-181 review round 1)', () => {
+  it('binds the project id as a parameter rather than splicing it into the text', () => {
+    const hostile = "x' or '1'='1";
+    const statement = ticketLifecycleBindingsStatement(hostile);
+    expect(statement.values).toEqual([hostile]);
+    expect(statement.text).toContain('b.project_id = $1');
+    expect(statement.text).not.toContain(hostile);
   });
 });

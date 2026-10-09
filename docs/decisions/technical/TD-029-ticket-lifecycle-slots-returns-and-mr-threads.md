@@ -15,7 +15,7 @@ BD-031 states what the product does. This record decides how, against code read 
   `:262-274`, `:324-366`).
 - The pick-up rule lives on the Jira **binding**, where `pickup_status` wins over `pickup_label`
   (`packages/integrations/src/providers/jira-cloud/config.ts:53-59`). It is written by
-  `PUT /api/projects/:id/bindings` (`apps/server/src/routes/onboarding.ts:802`). No screen edits it or
+  `PUT /api/projects/:id/bindings` (`apps/server/src/routes/onboarding.ts:802` when this was written; `apps/server/src/routes/project-bindings.ts` since WP-181). No screen edits it or
   `status_mapping`.
 - `transition` takes a **target status name**. The Jira adapter resolves the transition by
   `transition.to.name` (`jira-cloud/index.ts:869-952`, `:1745-1754`; citations moved at WP-172, lines on its tree; first written as `:837-920`, `:1444-1453`). So backlog 535's worry, that it

@@ -7,8 +7,7 @@
  *   PATCH /api/integrations/:integration_id     the repair of a refused configuration (WP-100)
  *   POST /api/integrations/:integration_id/secrets  re-seal the credentials (WP-114)
  *   DELETE /api/integrations/:integration_id    retire: credentials destroyed, row kept (WP-114)
- *   GET  /api/projects/:project_id/bindings     step 1
- *   PUT  /api/projects/:project_id/bindings     step 1
+ *   (the bindings pair, step 1, moved to `./project-bindings.ts` at WP-181 beside the statuses read)
  *   POST /api/projects/:project_id/discovery    step 2, "technical discovery"
  *   POST /api/projects/:project_id/interview    step 3, "business interview" (WP-64)
  *   PUT  /api/projects/:project_id/config       step 4, "operating mode and features"
@@ -87,9 +86,7 @@ import {
   integrationSummarySchema,
   type JsonObject,
   patchIntegrationRequestSchema,
-  projectBindingsResponseSchema,
   projectRecordSchema,
-  putProjectBindingsRequestSchema,
   resealIntegrationSecretsRequestSchema,
   resealIntegrationSecretsResponseSchema,
   retireIntegrationResponseSchema,
@@ -126,10 +123,8 @@ import {
   ForbiddenSecretNameError,
   findIdempotentAttempt,
   findProjectById,
-  listProjectBindings,
   MissingSecretError,
   recordHumanAction,
-  replaceProjectBindings,
   resealIntegrationSecrets,
   retireIntegration,
   updateIntegrationConfig,
@@ -774,69 +769,6 @@ export const registerOnboardingRoutes = async (
         destroyed_secrets: result.status === 'retired' ? result.destroyedSecrets : 0,
         performed: result.status === 'retired',
       };
-    },
-  );
-
-  typed.get(
-    '/api/projects/:project_id/bindings',
-    {
-      preValidation: requirePermission(guard, 'project.read', { project: projectOf }),
-      schema: {
-        summary: 'The integrations this project is bound to',
-        description:
-          'Non-secret binding configuration only — a credential belongs to the integration, never to the binding. The provider’s declared credential fields are removed here (a row stored before the write refused them), and a binding of a provider this build does not ship publishes an empty `config`.',
-        tags: ['projects'],
-        params: projectParamsSchema,
-        response: { 200: projectBindingsResponseSchema, 404: apiErrorSchema },
-      },
-    },
-    async (request) => {
-      const projectId = request.params.project_id;
-      if ((await findProjectById(options.database, projectId)) === null) {
-        throw new NotFoundError(`project ${projectId}`);
-      }
-      return { items: [...(await listProjectBindings(options.database, projectId))] };
-    },
-  );
-
-  typed.put(
-    '/api/projects/:project_id/bindings',
-    {
-      preValidation: requirePermission(guard, 'project.settings.write', { project: projectOf }),
-      schema: {
-        summary: 'Replace this project’s integration bindings',
-        description:
-          'The **whole** set: a binding missing from the request is removed. That is what makes the wizard’s step 1 re-submittable and what lets a mistake be corrected without a second endpoint. One transaction, so a project is never left with no bindings at all. Each binding of a shipped provider is checked like an integration’s own configuration (WP-100): a credential field is `400 credential_in_config`, a URL outside `APP_INTEGRATION_HOSTS` is `403 integration_host_not_permitted`, an account whose own configuration no longer parses is `409 invalid_integration_config`, and an account-plus-overlay document the provider’s schema refuses is `400 invalid_binding_config`. A retired integration is `409 integration_retired` (WP-114). The answer publishes no credential field.',
-        tags: ['projects'],
-        params: projectParamsSchema,
-        body: putProjectBindingsRequestSchema,
-        response: { 200: projectBindingsResponseSchema, 400: apiErrorSchema, 404: apiErrorSchema },
-      },
-    },
-    async (request) => {
-      const projectId = request.params.project_id;
-      const actor = actorOf(request);
-      if ((await findProjectById(options.database, projectId)) === null) {
-        throw new NotFoundError(`project ${projectId}`);
-      }
-      await replaceProjectBindings(
-        options.database,
-        projectId,
-        request.body.items.map((item) => ({
-          integrationId: item.integration_id,
-          ...(item.config === undefined ? {} : { config: item.config as JsonObject }),
-        })),
-        { egress },
-      );
-      await recordHumanAction(options.database, {
-        userId: actor.userId,
-        action: 'project.bindings.write',
-        params: {
-          project_id: projectId,
-          integration_ids: request.body.items.map((item) => item.integration_id),
-        },
-      });
-      return { items: [...(await listProjectBindings(options.database, projectId))] };
     },
   );
 

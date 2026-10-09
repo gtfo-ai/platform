@@ -232,8 +232,20 @@ status_mapping:                  # task state -> ticket status name (provider-sp
 > (`ProjectSettings.ticketLifecycle`, read off the task-management binding in the caller's transaction),
 > and `statusMappingHandler` returns before deciding anything when it maps a slot, so the mapping's
 > `status` duty is never enqueued; `ticketLifecycleHandler` moves the ticket instead. A slot that names
-> nothing moves nothing. `claim: false` turns the claim and the intake skip off and keeps the slots. The
-> effective-configuration field and its warning are WP-181's, and the save-time membership check too.
+> nothing moves nothing. `claim: false` turns the claim and the intake skip off and keeps the slots.
+>
+> *As built at WP-181:* the save-time check is `apps/server/src/lifecycle-check.ts`, run by
+> `PUT …/bindings` before the write: the write's own refusals first, then the block against
+> `pickup_status` (`400 invalid_binding_config`), then the statuses of the binding **as proposed**
+> (`listStatuses()` through the executor) — `422 lifecycle_status_unknown` with one `details` entry
+> per name (`lifecycle.<slot>`, `lifecycle.returned[i]`, `pickup_status`), or
+> `503 lifecycle_statuses_unavailable` with nothing saved. The check runs on every save whose block
+> names a status, an unchanged one included; a block that names none needs no read. The tracker's
+> list is bounded at `MAX_TICKET_STATUSES` (500) and refused past it, never cut.
+> `GET …/ticket-statuses` serves the same list for the pick lists. The effective-configuration read
+> publishes `status_mapping_superseded` from the reading the pipeline's settings port makes
+> (`apps/server/src/ticket-lifecycle.ts`), so the two cannot disagree; the warning beside the key is
+> the screen's, drawn from that field (WP-182).
 >
 > **New settings key `human_returns.acknowledgements`** (a list of at most 50 words, each 1–40
 > characters). It **adds** words in a project's own language to the shipped acknowledgement vocabulary

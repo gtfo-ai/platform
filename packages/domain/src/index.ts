@@ -58,6 +58,7 @@ export * from './lifecycle/acknowledgement.js';
 export * from './lifecycle/claim.js';
 export * from './lifecycle/human-return.js';
 export * from './lifecycle/moments.js';
+export * from './lifecycle/readiness-notes.js';
 export * from './lifecycle/validate.js';
 // The maintenance pipeline's chore catalogue and its brief — product/18:31 (WP-36)
 export * from './maintenance/chores.js';

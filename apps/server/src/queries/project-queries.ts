@@ -64,18 +64,27 @@ import {
   toWireAutonomyPolicies,
 } from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
-import { and, asc, desc, eq, gte, inArray, notInArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, notInArray, sql } from 'drizzle-orm';
 import * as z from 'zod';
 import { organisationSettingsForRequest } from '../config-layers.js';
+import {
+  type ProjectTicketLifecycle,
+  type TicketLifecycleBindingRow,
+  ticketLifecycleBindingsQuery,
+  ticketLifecycleOfRows,
+} from '../ticket-lifecycle.js';
 import { CLOSED_TASK_STATES } from './pipeline-queries.js';
 
 const {
+  bindings,
   costRollupDaily,
   humanActions,
+  integrations,
   organizations,
   projects,
   readinessEvaluations,
   tasks,
+  userIdentities,
   users,
 } = dbAdapters.schema;
 
@@ -288,6 +297,62 @@ export const findProjectReadiness = async (
       notices: noticesOf(newest.notices),
     }),
   };
+};
+
+/**
+ * The project's ticket lifecycle as the pipeline's settings port reads it (WP-181): the same
+ * statement and the same classification (`ticket-lifecycle.ts`), run through drizzle. The
+ * statement's one parameter is bound, never spliced.
+ */
+export const findProjectTicketLifecycle = async (
+  database: Database,
+  projectId: string,
+): Promise<ProjectTicketLifecycle> => {
+  const { rows } = await database.execute<TicketLifecycleBindingRow & Record<string, unknown>>(
+    ticketLifecycleBindingsQuery(projectId),
+  );
+  return ticketLifecycleOfRows(rows);
+};
+
+/**
+ * Whether the account the project's live task-management binding acts as — `bindings.account_identity`,
+ * read by its last save (migration 0090) — is mapped to a platform user **as a person** (Q118 (a),
+ * WP-181 review round 2): a `user_identities` row of `kind = 'person'` with a user. **A database read
+ * only**: the readiness read that asks makes no provider call. An unknown account (`null`, a binding
+ * saved before 0090 or whose read failed), an unmapped one and one an operator declared a `machine`
+ * — the dedicated account the setup guide asks for — answer `false`.
+ *
+ * `user_identities`' primary key is `(provider, external_id)` (its Drizzle `primaryKey`), so the join
+ * matches at most one identity per binding and `limit 1` after the `user_id is not null` filter
+ * cannot hide a person behind a machine row (review round 2's nit: the filter is in the statement,
+ * never after the limit).
+ */
+export const findBindingAccountIsAPerson = async (
+  database: Database,
+  projectId: string,
+): Promise<boolean> => {
+  const rows = await database
+    .select({ userId: userIdentities.userId })
+    .from(bindings)
+    .innerJoin(integrations, eq(integrations.id, bindings.integrationId))
+    .innerJoin(
+      userIdentities,
+      and(
+        eq(userIdentities.provider, sql<string>`${bindings.accountIdentity}->>'provider'`),
+        eq(userIdentities.externalId, sql<string>`${bindings.accountIdentity}->>'external_id'`),
+      ),
+    )
+    .where(
+      and(
+        eq(bindings.projectId, projectId),
+        eq(integrations.type, 'task_management'),
+        isNull(integrations.retiredAt),
+        eq(userIdentities.kind, 'person'),
+        isNotNull(userIdentities.userId),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
 };
 
 /** One stored notice, or `null` for an entry this build does not know (it is dropped, WP-143). */

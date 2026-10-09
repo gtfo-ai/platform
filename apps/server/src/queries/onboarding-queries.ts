@@ -1409,6 +1409,127 @@ export const assertBindingConfigsParse = (
 };
 
 /**
+ * The checks a binding write makes of the accounts it names, before anything is written — every
+ * named integration exists and is live, no overlay sets an account-only key, and every account and
+ * account-plus-overlay document parses (credential fields refused, hosts declared). One function for
+ * the write's own transaction and for the lifecycle check that runs **before** it (WP-181), which
+ * must refuse what the write would refuse before it asks a provider anything: a binding URL on an
+ * undeclared host is refused here, never read. Since WP-181's review round 1 that includes an
+ * integration named twice and WP-137's *a static integration is bound by this project alone*
+ * (`assertStaticIntegrationBindable`, which reads `bindings` through `executor`: the write's own
+ * transaction, or the database for the pre-check — where its advisory lock lasts one statement,
+ * and the write takes it again).
+ */
+export const assertBindingItemsWritable = async (
+  executor: Pick<Database, 'execute'>,
+  projectId: string,
+  items: readonly { readonly integrationId: string; readonly config?: JsonObject }[],
+  known: readonly {
+    readonly id: string;
+    readonly provider: string;
+    readonly config: JsonObject;
+    readonly retiredAt: Date | null;
+  }[],
+  egress: IntegrationEgressPolicy,
+): Promise<void> => {
+  assertNoRepeatedIntegration(items);
+  const missing = items
+    .map((item) => item.integrationId)
+    .filter((id) => !known.some((row) => row.id === id));
+  if (missing.length > 0) {
+    throw new HttpError(
+      400,
+      'invalid_request',
+      `no integration with id ${missing.join(', ')}; create the integration before binding it`,
+    );
+  }
+  for (const row of known) {
+    assertNotRetired(row.id, row.retiredAt);
+  }
+  assertNoAccountOnlyFields(items, known);
+  assertBindingConfigsParse(items, known, egress);
+  // WP-137 (TD-028 decision 13 item 1): a static integration is bound by this project alone.
+  for (const row of known) {
+    const provider = findShippedProvider(row.provider);
+    if (declaresDedicatedRunCredential(provider?.staticRunCredential ?? undefined, row.config)) {
+      await assertStaticIntegrationBindable(executor, row.id, projectId, 1);
+    }
+  }
+};
+
+/**
+ * One binding per (project, integration) — the table's unique key. Refused by name rather than left
+ * to the write's upsert, which would let the last overlay win silently.
+ */
+export const assertNoRepeatedIntegration = (
+  items: readonly { readonly integrationId: string }[],
+): void => {
+  const ids = items.map((item) => item.integrationId);
+  const repeated = ids.filter((id, index) => ids.indexOf(id) !== index);
+  if (repeated.length > 0) {
+    throw new HttpError(
+      400,
+      'invalid_request',
+      `integration ${[...new Set(repeated)].join(', ')} is named more than once; a project binds an integration once`,
+    );
+  }
+};
+
+/** `bindings.account_identity` (migration 0090): the stable handle, never a name or an email. */
+export interface BindingAccountIdentity {
+  readonly provider: string;
+  readonly external_id: string;
+}
+
+/** An account a binding write names, with what building its binding needs (WP-181). */
+export interface BindingAccountRow {
+  readonly id: Id;
+  readonly type: IntegrationType;
+  readonly provider: string;
+  readonly name: string;
+  readonly config: JsonObject;
+  readonly secretIds: readonly Id[];
+  readonly retiredAt: Date | null;
+}
+
+/**
+ * The accounts a binding write names — read **without** a lock, for the lifecycle check that runs
+ * before the write (WP-181). The write re-reads them under its own `for share` lock and repeats every
+ * check, so an account changed in between is judged again; the residual (a statuses read made
+ * against an account edited before the write commits) is stated in `lifecycle-check.ts`.
+ */
+export const findBindingAccounts = async (
+  database: Database,
+  ids: readonly string[],
+): Promise<readonly BindingAccountRow[]> => {
+  if (ids.length === 0) {
+    return [];
+  }
+  const rows = await database
+    .select({
+      id: integrations.id,
+      type: integrations.type,
+      provider: integrations.provider,
+      name: integrations.name,
+      config: integrations.config,
+      secretIds: integrations.secretIds,
+      retiredAt: integrations.retiredAt,
+    })
+    .from(integrations)
+    .where(inArray(integrations.id, [...ids]))
+    .orderBy(integrations.id);
+  return rows.map((row) => ({
+    id: row.id as Id,
+    type: row.type,
+    provider: row.provider,
+    name: row.name,
+    config: row.config as JsonObject,
+    secretIds: (row.secretIds ?? []) as Id[],
+    retiredAt: row.retiredAt,
+  }));
+};
+
+/**
  * Replaces a project's bindings with exactly the set given — a binding left out is deleted, one
  * already present is updated in place (keeping its poll state, WP-148), a new one is inserted.
  *
@@ -1418,21 +1539,21 @@ export const assertBindingConfigsParse = (
 export const replaceProjectBindings = async (
   database: Database,
   projectId: string,
-  items: readonly { readonly integrationId: string; readonly config?: JsonObject }[],
+  items: readonly {
+    readonly integrationId: string;
+    readonly config?: JsonObject;
+    /**
+     * The account a task-management binding acts as, read at this save (WP-181, migration 0090);
+     * `null`/absent is unknown and is written as `null` — the column always says what this save
+     * learned, never a stale reading of an account the overlay may have changed.
+     */
+    readonly accountIdentity?: BindingAccountIdentity | null;
+  }[],
   /** `APP_INTEGRATION_HOSTS` — required, for the reason `createIntegration` gives (WP-100). */
   options: { readonly egress: IntegrationEgressPolicy },
 ): Promise<void> => {
   const ids = items.map((item) => item.integrationId);
-  const repeated = ids.filter((id, index) => ids.indexOf(id) !== index);
-  if (repeated.length > 0) {
-    // One binding per (project, integration) — the table's unique key. Refused by name rather than
-    // left to the upsert below, which would let the last overlay win silently.
-    throw new HttpError(
-      400,
-      'invalid_request',
-      `integration ${[...new Set(repeated)].join(', ')} is named more than once; a project binds an integration once`,
-    );
-  }
+  assertNoRepeatedIntegration(items);
   await database.transaction(async (tx) => {
     if (ids.length > 0) {
       /**
@@ -1454,28 +1575,7 @@ export const replaceProjectBindings = async (
         .where(inArray(integrations.id, ids))
         .orderBy(integrations.id)
         .for('share');
-      const missing = ids.filter((id) => !known.some((row) => row.id === id));
-      if (missing.length > 0) {
-        throw new HttpError(
-          400,
-          'invalid_request',
-          `no integration with id ${missing.join(', ')}; create the integration before binding it`,
-        );
-      }
-      for (const row of known) {
-        assertNotRetired(row.id, row.retiredAt);
-      }
-      assertNoAccountOnlyFields(items, known);
-      assertBindingConfigsParse(items, known, options.egress);
-      // WP-137 (TD-028 decision 13 item 1): a static integration is bound by this project alone.
-      for (const row of known) {
-        const provider = findShippedProvider(row.provider);
-        if (
-          declaresDedicatedRunCredential(provider?.staticRunCredential ?? undefined, row.config)
-        ) {
-          await assertStaticIntegrationBindable(tx, row.id, projectId, 1);
-        }
-      }
+      await assertBindingItemsWritable(tx, projectId, items, known, options.egress);
     }
     // WP-148 (backlog 444): a binding whose identity — this project and that integration — is
     // unchanged is **updated in place**, so its poll state survives a re-save: `poll_cursor`,
@@ -1491,9 +1591,10 @@ export const replaceProjectBindings = async (
       .where(and(eq(bindings.projectId, projectId), notInArray(bindings.integrationId, ids)));
     for (const item of items) {
       const config = item.config ?? {};
+      const accountIdentity = item.accountIdentity ?? null;
       await tx
         .insert(bindings)
-        .values({ projectId, integrationId: item.integrationId, config })
+        .values({ projectId, integrationId: item.integrationId, config, accountIdentity })
         .onConflictDoUpdate({
           target: [bindings.projectId, bindings.integrationId],
           // Narrow: the overlay and its instant, never the two cursors (their writers are the
@@ -1504,6 +1605,8 @@ export const replaceProjectBindings = async (
           // record one spurious `default_branch.moved`; `null` takes a fresh baseline instead.
           set: {
             config,
+            // WP-181: what this save read of the account (`null` when unknown).
+            accountIdentity,
             mrPollDefaultHead: sql`case when ${bindings.config} = excluded.config then ${bindings.mrPollDefaultHead} else null end`,
             updatedAt: sql`now()`,
           },

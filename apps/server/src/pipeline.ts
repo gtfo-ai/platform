@@ -66,7 +66,9 @@ import type {
   ProjectSettingsPort,
   RunScopedSecrets,
   SecretRedactor,
+  TaskRepository,
   Transaction,
+  UnitOfWork,
   WebhookIngress,
   WebhookRateLimit,
   WorkingCalendar,
@@ -74,10 +76,8 @@ import type {
 import {
   assertSettingsReadOutsideTransaction,
   type BindingLifecycle,
-  bindingLifecycleOf,
   composeSecretRedactors,
   costHandlers,
-  createAskRunPlanner,
   createBudgetGuard,
   createCiConfigLocationReader,
   createContextPackAssembler,
@@ -92,7 +92,6 @@ import {
   createRunCommandInbox,
   createRunScopedSecrets,
   createRunStopReasons,
-  createStageRunPlanner,
   createUnreachableRunCredentialReports,
   createWebhookIngress,
   defaultProjectSettings,
@@ -116,7 +115,6 @@ import {
 import type {
   Id,
   IsoDateTime,
-  JsonValue,
   MaterialisedAutonomy,
   OrganisationSettings,
 } from '@platform/contracts';
@@ -169,7 +167,14 @@ import {
   repositorySnapshotFrom,
 } from './config-layers.js';
 import { composeKnowledgeMirror } from './knowledge.js';
-import { composePlatformTools, IMPLEMENTED_PLATFORM_TOOLS } from './platform-tools.js';
+import { composePlatformTools } from './platform-tools.js';
+import { createProductionAskPlanner, createProductionStagePlanner } from './run-planners.js';
+import {
+  appliedTicketLifecycle,
+  type TicketLifecycleBindingRow,
+  ticketLifecycleBindingsStatement,
+  ticketLifecycleOfRows,
+} from './ticket-lifecycle.js';
 
 /**
  * Who this process is, for the run lease it holds while a stage executes (WP-47, `lease.ts`).
@@ -810,46 +815,26 @@ const readTicketLifecycle = async (
   projectId: Id,
   logger: Logger,
 ): Promise<BindingLifecycle | null> => {
-  const { rows } = await (executor as eventingAdapters.SqlExecutor).query<{
-    provider: string;
-    integration_config: unknown;
-    binding_config: unknown;
-  }>(
-    `select i.provider, i.config as integration_config, b.config as binding_config
-       from bindings b
-       join integrations i on i.id = b.integration_id
-      where b.project_id = $1 and i.type = 'task_management' and i.retired_at is null`,
-    [projectId],
-  );
-  if (rows.length !== 1) {
-    if (rows.length > 1) {
-      logger.error(
-        { project_id: projectId, bindings: rows.length },
-        'the project has more than one task-management binding; no ticket lifecycle applies',
-      );
-    }
-    return null;
+  // WP-181: the statement and the classification are `ticket-lifecycle.ts`'s, shared with the
+  // effective-configuration read so `status_mapping_superseded` says what this decides.
+  const statement = ticketLifecycleBindingsStatement(projectId);
+  const { rows } = await (executor as eventingAdapters.SqlExecutor).query<
+    TicketLifecycleBindingRow & Record<string, unknown>
+  >(statement.text, statement.values);
+  const reading = ticketLifecycleOfRows(rows);
+  if (reading.kind === 'ambiguous') {
+    logger.error(
+      { project_id: projectId, bindings: reading.bindings },
+      'the project has more than one task-management binding; no ticket lifecycle applies',
+    );
   }
-  const row = rows[0] as (typeof rows)[number];
-  const asObject = (value: unknown): Record<string, JsonValue> =>
-    value !== null && typeof value === 'object' && !Array.isArray(value)
-      ? (value as Record<string, JsonValue>)
-      : {};
-  const reading = bindingLifecycleOf(
-    secretAdapters.overlayBindingConfig(
-      asObject(row.integration_config),
-      asObject(row.binding_config),
-      accountOnlyFieldsOf(row.provider),
-    ),
-  );
   if (reading.kind === 'invalid') {
     logger.error(
       { project_id: projectId, paths: reading.detail },
       'the task-management binding’s lifecycle block fails its schema; no ticket lifecycle applies',
     );
-    return null;
   }
-  return reading.kind === 'lifecycle' ? reading.lifecycle : null;
+  return appliedTicketLifecycle(reading);
 };
 
 /**
@@ -928,8 +913,8 @@ export interface ComposedPipeline {
   /**
    * The ten in-process MCP tools this process composed, exposed so a caller can see what a run
    * would be given. `report_progress` (backlog 496), `kb_search`, `get_task_context` (WP-54),
-   * `open_mr` and `update_mr_description` (WP-138) are real; the other five, `get_conversation`
-   * (WP-180, served at WP-181) among them, refuse and say why (`./platform-tools.ts`).
+   * `open_mr` and `update_mr_description` (WP-138) and `get_conversation` (WP-181) are real; the
+   * other four refuse and say why (`./platform-tools.ts`).
    */
   readonly platformTools: PlatformToolPort;
   stop(): Promise<void>;
@@ -1021,6 +1006,43 @@ export const createOrganisationIntegrationsPort = (options: {
     platformRedactor: options.stack.platformRedactor,
   });
 
+/**
+ * The platform tools a run of this pipeline is given, over the pipeline's **one** integrations port
+ * (WP-181 review round 2): `get_conversation` reads through it with the reader factory the stage
+ * planner's `conversation` blocks use, and the merge-request tools mutate through it. Its own
+ * function so `pipeline.test.ts` calls the composed `get_conversation` over fake integrations — a
+ * change to the port either half is handed fails there. What a unit test cannot see is
+ * `composePipeline` handing this function a different port than the planner's; both read the one
+ * `integrations` constant it builds.
+ */
+export const composePipelinePlatformTools = (options: {
+  readonly pool: pg.Pool;
+  readonly logger: Logger;
+  readonly unitOfWork: UnitOfWork;
+  readonly tasks: Pick<TaskRepository, 'recordMergeRequest'>;
+  readonly integrations: PipelineIntegrationsPort;
+  readonly agent: ComposePipelineOptions['agent'];
+}): PlatformToolPort =>
+  composePlatformTools({
+    pool: options.pool,
+    logger: options.logger,
+    conversation: { integrations: options.integrations },
+    mergeRequests: {
+      unitOfWork: options.unitOfWork,
+      tasks: options.tasks,
+      integrations: options.integrations,
+      // The model credential a run is given, as named secrets — the run's own redactor carries it
+      // too; the binding is resolved with it so the adapter's own redaction has it as well (Q55).
+      runScopedSecrets: () => {
+        const environment = agentRunEnvironment(options.agent);
+        return environment.secretEnvNames.flatMap((name) => {
+          const value = environment.env[name];
+          return value === undefined ? [] : [{ name, value }];
+        });
+      },
+    },
+  });
+
 export const composePipeline = async (
   options: ComposePipelineOptions,
 ): Promise<ComposedPipeline> => {
@@ -1067,23 +1089,13 @@ export const composePipeline = async (
     // A list read that skips a task with an unreadable `pipeline_dial` names it here (WP-62).
     logger: options.logger,
   });
-  const platformTools = composePlatformTools({
+  const platformTools = composePipelinePlatformTools({
     pool: options.pool,
     logger: options.logger,
-    mergeRequests: {
-      unitOfWork: options.eventing.unitOfWork,
-      tasks: store.tasks,
-      integrations,
-      // The model credential a run is given, as named secrets — the run's own redactor carries it
-      // too; the binding is resolved with it so the adapter's own redaction has it as well (Q55).
-      runScopedSecrets: () => {
-        const environment = agentRunEnvironment(options.agent);
-        return environment.secretEnvNames.flatMap((name) => {
-          const value = environment.env[name];
-          return value === undefined ? [] : [{ name, value }];
-        });
-      },
-    },
+    unitOfWork: options.eventing.unitOfWork,
+    tasks: store.tasks,
+    integrations,
+    agent: options.agent,
   });
 
   /**
@@ -1286,9 +1298,10 @@ export const composePipeline = async (
      * The **runner is the same instance**, wrapped in `liveRuns` and the run-command inbox like
      * every other run this process starts: an ask is a run, so `POST /api/runs/:id/steer` and a
      * take-over reach it exactly as they reach a stage's. What is different is the planner — an ask has no stage and its prompt
-     * is built from the audit trail (`createAskRunPlanner`) — and the tools, which
-     * `PLATFORM_TOOLS_BY_ROLE.ask` narrows to `get_task_context`, `get_conversation` and `kb_search`,
-     * intersected with what this build performs (`availablePlatformTools`).
+     * is built from the audit trail (`createAskRunPlanner`, composed through
+     * `createProductionAskPlanner`) — and the tools, which `PLATFORM_TOOLS_BY_ROLE.ask` narrows to
+     * `get_task_context`, `get_conversation` and `kb_search`, intersected with what this build
+     * performs (all three since WP-181).
      */
     ask: {
       asks: askAdapters.createPostgresAskStore(),
@@ -1298,11 +1311,10 @@ export const composePipeline = async (
       runner: observed(
         composition.runner?.(platformTools) ?? agent.runner ?? unavailableClaudeRunner(),
       ),
-      planner: createAskRunPlanner({
+      // Backlog 476: an ask is offered only what this build performs, as a stage run is — the
+      // production planner fixes `availablePlatformTools` itself (`run-planners.ts`, WP-181).
+      planner: createProductionAskPlanner({
         workspacePath: (taskId: Id) => `/workspaces/${taskId}`,
-        // Backlog 476 (WP-180 review round 1): an ask is offered only what this build performs,
-        // as a stage run is, so `get_conversation` stays out until WP-181 serves it.
-        availablePlatformTools: IMPLEMENTED_PLATFORM_TOOLS,
         providerMode: options.agent.providerMode,
         claudeCodePath: options.agent.claudeBinary,
         env: runEnvironment.env,
@@ -1332,7 +1344,7 @@ export const composePipeline = async (
       runner: observed(
         composition.runner?.(platformTools) ?? agent.runner ?? unavailableClaudeRunner(),
       ),
-      planner: createStageRunPlanner({
+      planner: createProductionStagePlanner({
         /**
          * Where the *planner* thinks the workspace is.
          *
@@ -1345,8 +1357,8 @@ export const composePipeline = async (
          */
         workspacePath: (taskId: Id) => `/workspaces/${taskId}`,
         // PROGRESS backlog 476: a run is registered only with the tools this process performs, so
-        // none is offered to be refused (and a skill about a withheld tool is withheld with it).
-        availablePlatformTools: IMPLEMENTED_PLATFORM_TOOLS,
+        // none is offered to be refused (and a skill about a withheld tool is withheld with it) —
+        // fixed by `createProductionStagePlanner` itself since WP-181, never passed here.
         // BD-004 and TD-021 phase 1: the mode decides whether `claudeCodePath` is honoured at all,
         // and the key travels as a named secret so TD-012 step 1 covers it in this run's transcript.
         providerMode: options.agent.providerMode,

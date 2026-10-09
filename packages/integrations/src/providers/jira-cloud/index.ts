@@ -111,7 +111,13 @@ import {
   ticketTransitionSchema,
   type UnassignResult,
 } from '@platform/application';
-import { type Id, type JsonObject, lifecycleStatusKey, type TaskMode } from '@platform/contracts';
+import {
+  type Id,
+  type JsonObject,
+  lifecycleStatusKey,
+  MAX_TICKET_STATUSES,
+  type TaskMode,
+} from '@platform/contracts';
 import type { Clock } from '@platform/domain';
 import * as z from 'zod';
 import { adfMarkerId, adfToMarkdown, markdownToAdfDocument } from './adf.js';
@@ -1337,6 +1343,16 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
           issueTypes.push(...answered);
         }
         const result = unionJiraStatuses(issueTypes.map((issueType) => issueType.statuses));
+        if (result.overflow) {
+          // WP-181 criterion (7): refused rather than cut — a cut list would make the save check
+          // call a status the tracker has unknown, and hide it from the pick list.
+          throw new IntegrationError(
+            'invalid_response',
+            PROVIDER_ID,
+            `GET project/{key}/statuses answered more than ${MAX_TICKET_STATUSES} distinct statuses for ${config.project_keys.join(', ')}; the platform reads at most ${MAX_TICKET_STATUSES}, so name fewer project_keys on this binding`,
+            { action },
+          );
+        }
         if (result.statuses.length === 0) {
           throw new IntegrationError(
             'invalid_response',
@@ -1811,9 +1827,14 @@ export interface StatusCategoryConflict {
  * lifecycle slot compares (`lifecycleStatusKey`: trimmed, case-insensitive), first spelling wins.
  *
  * A name seen again with a **different raw category key** keeps the first and reports the second as
- * a conflict. A status the port's shape cannot carry — no id, no name, a name past
- * `MAX_LIFECYCLE_STATUS_NAME_CHARS` (no slot could name it either), a category key past 255 — is
- * skipped and counted, never cut or invented.
+ * a conflict — **once per name** (WP-181 criterion (7)): a status shared by many issue types is one
+ * conflict, not one per issue type, so the list is bounded by the names it is about. A status the
+ * port's shape cannot carry — no id, no name, a name past `MAX_LIFECYCLE_STATUS_NAME_CHARS` (no slot
+ * could name it either), a category key past 255 — is skipped and counted, never cut or invented.
+ *
+ * **Bounded at `MAX_TICKET_STATUSES` distinct names** (WP-181 criterion (7)): past it the walk
+ * stops and answers `overflow`, which `listStatuses` refuses rather than cutting the list, so
+ * neither `statuses` nor `conflicts` ever holds more than the bound however much Jira answered.
  */
 export const unionJiraStatuses = (
   groups: readonly (readonly JiraStatus[])[],
@@ -1821,9 +1842,12 @@ export const unionJiraStatuses = (
   readonly statuses: LifecycleStatus[];
   readonly conflicts: StatusCategoryConflict[];
   readonly skipped: number;
+  /** More than `MAX_TICKET_STATUSES` distinct names: the walk stopped, and the read is refused. */
+  readonly overflow: boolean;
 } => {
   const byName = new Map<string, LifecycleStatus>();
   const conflicts: StatusCategoryConflict[] = [];
+  const conflicted = new Set<string>();
   let skipped = 0;
   for (const status of groups.flat()) {
     const candidate = lifecycleStatusSchema.safeParse({
@@ -1840,8 +1864,12 @@ export const unionJiraStatuses = (
     const key = lifecycleStatusKey(candidate.data.name);
     const seen = byName.get(key);
     if (seen === undefined) {
+      if (byName.size === MAX_TICKET_STATUSES) {
+        return { statuses: [...byName.values()], conflicts, skipped, overflow: true };
+      }
       byName.set(key, candidate.data);
-    } else if (seen.raw_category !== candidate.data.raw_category) {
+    } else if (seen.raw_category !== candidate.data.raw_category && !conflicted.has(key)) {
+      conflicted.add(key);
       conflicts.push({
         name: seen.name,
         kept: seen.raw_category,
@@ -1849,7 +1877,7 @@ export const unionJiraStatuses = (
       });
     }
   }
-  return { statuses: [...byName.values()], conflicts, skipped };
+  return { statuses: [...byName.values()], conflicts, skipped, overflow: false };
 };
 
 /**

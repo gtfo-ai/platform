@@ -705,9 +705,45 @@ export const createPipelineIntegrationsLoader = (
     return { executor: options.executor, port, ref: port.ref, redactor: chosen.built.redactor };
   };
 
+  /**
+   * The binding `PUT …/bindings` is about to write (WP-181): built from the row the caller composed
+   * — the account it names with the request's overlay — by the same {@link build} a saved binding
+   * goes through, so the credentials, the redactor, the strict schema and the refusals are the ones
+   * the pipeline gets once it is saved.
+   */
+  const forProposedTaskManagement = async (
+    projectId: Id,
+    binding: ProjectBinding,
+    scope: IntegrationCallScope,
+  ): Promise<PipelineIntegrations> => {
+    if (binding.type !== 'task_management') {
+      throw new BindingLoadError(
+        projectId,
+        null,
+        `a proposed binding of integration "${binding.name}" is a "${binding.type}" integration, and only a task-management binding is checked before it is saved`,
+        { integrationId: binding.integrationId },
+      );
+    }
+    const built = await build(projectId, binding, 'task_management', scope);
+    return {
+      executor: options.executor,
+      git: null,
+      taskManagement: {
+        port: built.port,
+        ref: built.port.ref,
+        redactor: built.redactor,
+        ...(built.assignPermission === undefined
+          ? {}
+          : { assignPermission: built.assignPermission }),
+      },
+      communication: null,
+    };
+  };
+
   return {
     forMintingIntegration,
     forObservability,
+    forProposedTaskManagement,
     forProject: async (
       projectId: Id,
       scope: IntegrationCallScope,

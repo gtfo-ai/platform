@@ -27,8 +27,10 @@ import {
   stageStateOf,
   startFailureOf,
   TERMINAL_RUN_STATUSES,
+  ticketClaimViewOf,
   ticketTitleOf,
   UnknownStageStateError,
+  UnprojectableRowError,
 } from './pipeline-queries.js';
 
 describe('the run-status partition behind GET /api/org/agents', () => {
@@ -226,5 +228,44 @@ describe('the latest progress line a run record publishes', () => {
     expect(() => latestProgressOfRow({ runId: RUN, seq: 9, ...row })).toThrow(
       `entry 9 of run ${RUN} cannot be returned`,
     );
+  });
+});
+
+/** WP-181 ruling (f), review round 1: the task DTO's view of `tasks.ticket_claim`. */
+describe('ticketClaimViewOf', () => {
+  const TASK = '00000000-0000-4000-8000-0000000001f1';
+  const stored = {
+    account_id: '557058:example',
+    claimed_at: '2026-10-08T09:00:00.000Z',
+    status: 'confirmed',
+    in_progress_written: true,
+    stale: false,
+    released_at: null,
+    release_cause: null,
+  };
+
+  it('publishes the status and the two instants, and null for a task that never claimed', () => {
+    expect(ticketClaimViewOf(TASK, stored)).toEqual({
+      status: 'confirmed',
+      claimed_at: '2026-10-08T09:00:00.000Z',
+      released_at: null,
+    });
+    expect(ticketClaimViewOf(TASK, null)).toBeNull();
+  });
+
+  it('refuses a corrupt claim by name, never a raw ZodError and never null', () => {
+    for (const corrupt of [{ ...stored, status: 'stale' }, 'not an object', { claimed_at: 'x' }]) {
+      const failure = (() => {
+        try {
+          return ticketClaimViewOf(TASK, corrupt);
+        } catch (error) {
+          return error;
+        }
+      })();
+      expect(failure, JSON.stringify(corrupt)).toBeInstanceOf(UnprojectableRowError);
+      expect((failure as UnprojectableRowError).code).toBe('row_not_projectable');
+      expect((failure as Error).message).toContain(`task ${TASK}`);
+      expect((failure as Error).message).toContain('tasks.ticket_claim');
+    }
   });
 });

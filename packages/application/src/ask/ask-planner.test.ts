@@ -146,9 +146,9 @@ describe('the ask run plan', () => {
     expect(spec.skills).toEqual(['agentic:kb']);
   });
 
-  it('offers only the tools this build performs, so a production ask is not given get_conversation (WP-180 review round 1)', async () => {
-    // The production list's shape: `IMPLEMENTED_PLATFORM_TOOLS` in apps/server, which has no
-    // `get_conversation` until WP-181 serves it.
+  it('offers only the tools this build performs: a build without get_conversation does not give it (WP-180 review round 1)', async () => {
+    // The production list's shape before WP-181 served `get_conversation`; production now performs
+    // it, and `apps/server/src/run-planners.test.ts` holds the production ask to all three.
     const { spec } = await plan({
       availablePlatformTools: [
         'report_progress',

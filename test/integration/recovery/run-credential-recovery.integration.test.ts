@@ -109,6 +109,9 @@ const integrationsOver = (git: FakeGitProvider): PipelineIntegrationsPort => {
       return { executor, port: git, ref: git.ref, redactor: noSecretsRedactor() };
     },
     forObservability: async () => null,
+    forProposedTaskManagement: async () => {
+      throw new Error('the recovery never builds a proposed binding');
+    },
   };
 };
 

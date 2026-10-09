@@ -174,6 +174,9 @@ const harness = (bindings: { errors?: Binding; logs?: Binding }, doubles: Double
       throw new Error('the pre-fetch must not resolve the pipeline’s bindings');
     },
     forMintingIntegration: async () => null,
+    forProposedTaskManagement: async () => {
+      throw new Error('the pre-fetch must not build a proposed binding');
+    },
     forObservability: async (_projectId: Id, type: 'errors' | 'logs') => {
       resolutions.push(type);
       const binding = bindings[type] ?? 'absent';

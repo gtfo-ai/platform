@@ -652,7 +652,7 @@ describe('review round 1', () => {
     expect(cut.endsWith('o')).toBe(true);
   });
 
-  it('a production-shaped stage run is not given get_conversation until WP-181 serves it', async () => {
+  it('a stage run whose build does not perform get_conversation is not given it, and still gets the blocks', async () => {
     const { port } = integrationsWith();
     const plan = await planWith(
       createConversationReader({ integrations: port }),

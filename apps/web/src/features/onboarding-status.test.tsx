@@ -158,6 +158,8 @@ const taskDetail = (state: TaskState, runs: readonly RunRecord[]): TaskDetailRes
     created_at: '2026-10-07T04:59:00.000Z',
     updated_at: '2026-10-07T04:59:00.000Z',
     completed_at: null,
+    ticket_claim: null,
+    qa_stage: false,
   },
   taken_over: null,
   can_raise_budget: false,

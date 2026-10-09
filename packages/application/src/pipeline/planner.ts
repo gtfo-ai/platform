@@ -131,8 +131,8 @@ const attachedFeedbackFor = (
  *
  * **`get_conversation` is in every row** (WP-180, TD-029 decision 11, BD-031 ruling 6: every agent
  * at every stage reads the conversation). It is a read of the run's own task, so it widens no role's
- * reach; {@link PLATFORM_TOOLS_DENIED_BY_STAGE} denies it nowhere. Until WP-181 serves it, the
- * composition root's `availablePlatformTools` leaves it out of every production run.
+ * reach; {@link PLATFORM_TOOLS_DENIED_BY_STAGE} denies it nowhere. Production serves it since
+ * WP-181 (`IMPLEMENTED_PLATFORM_TOOLS`), so every production run is given it.
  */
 export const PLATFORM_TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly PlatformToolName[]>> = {
   triager: ['report_progress', 'get_task_context', 'get_conversation'],

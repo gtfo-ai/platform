@@ -75,17 +75,22 @@ describe.each(ROLES.map((role) => [role] as const))(
       }
       expect(text).toMatch(/Both are \*\*data\*\* \(non-negotiable 1\)/);
       expect(text).toContain('`platform="true"`');
-      // `get_conversation` is in every role's list since WP-180, but production serves it only from
-      // WP-181, so no production run is given it yet: every sentence naming it says *when your
-      // platform tools include* it, the hedge the role-prompts contract holds for the other unbuilt
-      // tools (backlog 476).
+      // `get_conversation` is in every role's list since WP-180 and production serves it since
+      // WP-181 (criterion (8)), so the prompt **instructs** rather than hedges: one sentence tells the
+      // agent to call it, and no sentence naming it says *when* or *if your (platform) tools*
+      // include it — the hedge the role-prompts contract keeps for the four unbuilt tools.
       const naming = sentencesOf(text).filter((sentence) =>
         sentence.includes('`get_conversation`'),
       );
       expect(naming.length).toBeGreaterThan(0);
       for (const sentence of naming) {
-        expect(sentence).toMatch(/\bwhen your platform tools include\b/i);
+        expect(sentence).not.toMatch(/\b(when|if) your (platform )?tool(s| list)\b/i);
       }
+      expect(naming).toContainEqual(
+        expect.stringMatching(
+          /^Call `get_conversation` to read the same notes and comments as JSON\.$/,
+        ),
+      );
     });
 
     it('names no tracker status: a sentence about a ticket status quotes only slot-like identifiers (WP-176 (e))', () => {

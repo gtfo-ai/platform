@@ -95,7 +95,8 @@
  *     itself, and a workflow that names a status twice (case-insensitively) is refused at
  *     construction. Category keys are the seed's own (`rawCategory`), normalised by the port's
  *     `normaliseStatusCategory` as a real adapter's are; a status seeded as a plain name has no key
- *     and is `unknown`.
+ *     and is `unknown`. A workflow longer than `MAX_TICKET_STATUSES` is refused at the read
+ *     (`invalid_response`), as the Jira adapter refuses a union past it (WP-181).
  * 15. **Different — comments are dated by the seed or by the fake's clock** (WP-171). A seeded
  *     comment carries its own `createdAt`, so a test can place it either side of a window's
  *     horizon; a comment written through the port is stamped by the fake clock, which steps a
@@ -117,6 +118,7 @@ import {
   type HealthProbe,
   type InboundContext,
   type InboundNormaliser,
+  IntegrationError,
   type IntegrationRef,
   IntegrationUnsupportedError,
   LIFECYCLE_MEMBER_CAPABILITY,
@@ -147,7 +149,7 @@ import {
   unassignResultSchema,
   type WebhookDelivery,
 } from '@platform/application';
-import type { Id } from '@platform/contracts';
+import { type Id, MAX_TICKET_STATUSES } from '@platform/contracts';
 import * as z from 'zod';
 import {
   buildFakeDelivery,
@@ -781,6 +783,15 @@ export const createFakeTaskManagement = (
   const lifecycle = {
     listStatuses: async (): Promise<readonly LifecycleStatus[]> => {
       enterLifecycle('listStatuses', 'list_statuses');
+      if (statusSet.length > MAX_TICKET_STATUSES) {
+        // WP-181 criterion (7): refused as the Jira adapter refuses it, never cut.
+        throw new IntegrationError(
+          'invalid_response',
+          PROVIDER,
+          `the fake workflow has ${statusSet.length} statuses, more than the ${MAX_TICKET_STATUSES} the platform reads`,
+          { action: 'list_statuses' },
+        );
+      }
       return statusSet.map((status) => ({ ...status }));
     },
 

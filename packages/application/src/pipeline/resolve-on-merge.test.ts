@@ -137,6 +137,9 @@ const world = (binding: Binding, task: StoredTask | null = storedTask(), doubles
       throw new Error('resolve on merge must not resolve the pipeline’s bindings');
     },
     forMintingIntegration: async () => null,
+    forProposedTaskManagement: async () => {
+      throw new Error('resolve on merge must not build a proposed binding');
+    },
     forObservability: async (_projectId: Id, type: 'errors' | 'logs') => {
       resolutions.push(type);
       if (binding instanceof Error) throw binding;

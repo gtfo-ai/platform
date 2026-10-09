@@ -134,6 +134,9 @@ const portOver = (git: FakeGitProvider): PipelineIntegrationsPort => {
     forProject: async () => bound,
     forMintingIntegration: async () => null,
     forObservability: async () => null,
+    forProposedTaskManagement: async () => {
+      throw new Error('a run never builds a proposed binding');
+    },
   };
 };
 

@@ -190,6 +190,8 @@ const fetchFor = (
         ignored_allow_commands: [],
         // WP-113: which prompt file each stage would be given — none.
         stage_prompts: [],
+        // WP-181: no lifecycle slot is mapped, so `status_mapping` applies.
+        status_mapping_superseded: false,
         risk_class_proposal: { source: 'platform', classes: {}, checklists: [] },
         ...options.config,
       });

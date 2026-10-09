@@ -143,6 +143,8 @@ const detail = (runs: RunRecord[]): TaskDetailResponse =>
       created_at: AT,
       updated_at: AT,
       completed_at: null,
+      ticket_claim: null,
+      qa_stage: false,
     },
     taken_over: null,
     can_raise_budget: false,

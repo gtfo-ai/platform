@@ -765,6 +765,22 @@ export const ticketStatusSchema = z.strictObject({
   raw_category: nonEmptyStringSchema.max(255).nullable(),
 });
 
+/**
+ * The most statuses one `listStatuses()` answer may hold — the union over every issue type of every
+ * project a binding reads (WP-181 criterion (7)). One constant, enforced in four places: the port's
+ * answer (the Jira adapter and the fake **refuse** past it, `invalid_response`, rather than cut the
+ * list), the `GET …/ticket-statuses` DTO's `.max`, the union's recorded category conflicts, and the
+ * membership check at `PUT …/bindings`, which reads the same answer.
+ *
+ * **Refused, not truncated**, because the list has two readers and a cut list lies to both: the
+ * pick list would hide a status a person may want, and the save check would answer `422
+ * lifecycle_status_unknown` for a status the tracker has. A tracker past the bound gets a named 503
+ * at both doors instead. Five hundred is far above a workflow a team configures by hand (a Jira
+ * project's statuses are the union of its few workflows, typically tens), and low enough that the
+ * list stays a list a person can scroll and one DTO the platform can hold.
+ */
+export const MAX_TICKET_STATUSES = 500;
+
 /** `tasks.mr_ref` (technical/03) and the `mr` field of ImplementationNotes (technical/12). */
 export const mergeRequestRefSchema = z.strictObject({
   provider: nonEmptyStringSchema.nullish(),

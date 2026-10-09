@@ -114,6 +114,7 @@ import { SseHub } from './sse/hub.js';
 import { startTranscriptBridge } from './sse/transcript-bridge.js';
 import { createStorageSamplers } from './storage.js';
 import { createTaskStartCommands } from './task-start.js';
+import { createTicketStatusReader } from './ticket-statuses.js';
 import { BUNDLED_WEB_ROOT } from './web/bundle.js';
 import {
   composeOrphanWorkspaceReaper,
@@ -972,6 +973,24 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           })
         : null;
 
+    /**
+     * The tracker's statuses (WP-181): the pick-list read and the lifecycle check at the bindings
+     * write, through the process's one executor — the project-integrations port the configuration
+     * commands use. Composed where they are, for the same reason: an API process with no integration
+     * stack answers both by name (`503 lifecycle_statuses_unavailable`).
+     */
+    const ticketStatuses =
+      capabilities.api && stack !== null
+        ? createTicketStatusReader({
+            integrations: createProjectIntegrationsPort({
+              pool: database.pool,
+              secretKey: config.secretKey,
+              stack,
+            }),
+            logger: loggerPort,
+          })
+        : null;
+
     const knowledgeCommands = capabilities.api
       ? createKnowledgeCommands({
           pool: database.pool,
@@ -1124,6 +1143,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       shadow: shadowCommands,
       taskStart,
       projectConfig,
+      ticketStatuses,
       shadowGate,
       // WP-157 (a): one broken organisation chat account, named once on the integration list.
       organisationCredentials: createOrganisationAccountCredentials(

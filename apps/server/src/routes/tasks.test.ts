@@ -302,6 +302,8 @@ const TASK_RECORD: TaskRecord = {
   created_at: AT,
   updated_at: AT,
   completed_at: null,
+  ticket_claim: null,
+  qa_stage: false,
 } as TaskRecord;
 
 const RUN_RECORD = (settingsHash: string | null): RunRecord => ({

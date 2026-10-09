@@ -8,7 +8,7 @@
  * so `kb_search` had no home and the retrieval layer was reachable by nothing a run sees. This file
  * is the home.
  *
- * ## Five tools are real and five are refusals, and that is deliberate
+ * ## Six tools are real and four are refusals, and that is deliberate
  *
  * `kb_search` is wired to the PostgreSQL knowledge store, and **`get_task_context`** — since WP-54
  * (PROGRESS backlog 83) — to the read projections (`queries/task-context-queries.ts`), scoped to the
@@ -19,10 +19,12 @@
  * construction. **`report_progress`** is real since PROGRESS backlog 496: the runner hands every
  * run's tools a progress door over its own transcript door (`PlatformToolContext.progress`), so the
  * row gets the run's `seq`, redactor and sink, and `reportProgressTool` bounds the words and answers
- * the model. **`get_conversation`** (WP-180) has its reader in `@platform/application` and is in every
- * role's list, but this file serves it at WP-181, so until then it is the fifth refusal. The other four need collaborators this build does not have — the Question aggregate's
- * HTTP surface and a waiter for the human's answer, a channel bound to a live run, and a ticket
- * write from inside a run. Each is therefore a **named refusal**, exactly like
+ * the model. **`get_conversation`** is real since WP-181: the run task's ticket and merge request
+ * are read off its own `tasks` row (scoped to the run's project), and WP-180's reader answers them
+ * through the executor — the same bounded, redacted entries the prompt's `conversation` blocks hold,
+ * as JSON (`conversationToolAnswer`). The other four need collaborators this build does not have —
+ * the Question aggregate's HTTP surface and a waiter for the human's answer, a channel bound to a
+ * live run, and a ticket write from inside a run. Each is therefore a **named refusal**, exactly like
  * `unavailableClaudeRunner` beside it in `pipeline.ts`, and for the same reason: a null object that
  * returns `{}` is a tool the model believes it used.
  *
@@ -40,6 +42,8 @@
  * answers for whichever ones a run was given.
  */
 import type {
+  ConversationSubject,
+  GetConversationInput,
   GetTaskContextInput,
   InjectedSecret,
   KbSearchInput,
@@ -56,6 +60,9 @@ import type {
   UpdateMrDescriptionInput,
 } from '@platform/application';
 import {
+  ConversationReadError,
+  conversationToolAnswer,
+  createConversationReader,
   createKbSearchTool,
   createMergeRequestTools,
   reportProgressTool,
@@ -111,17 +118,20 @@ const MISSING: Readonly<Record<Exclude<PlatformToolName, ImplementedTool>, strin
     'every outbound provider call goes through IntegrationActionExecutor, which the pipeline reaches from its `pipeline.outbound` job (WP-15d); a ticket comment from inside a run is unbuilt',
   create_followup_ticket:
     'every outbound provider call goes through IntegrationActionExecutor (WP-15d); filing a ticket from inside a run is unbuilt',
-  get_conversation:
-    'the conversation reader exists (`createConversationReader`, WP-180) and every role may call it, but this composition does not serve it yet: WP-181 reads the run task’s ticket and merge request and adds it to IMPLEMENTED_PLATFORM_TOOLS',
 };
 
-/** The tools this build actually performs. Read by the composition test, not by the runtime. */
+/**
+ * The tools this build actually performs — the list the production planners offer a run
+ * (`run-planners.ts`, which fixes it since WP-181) and the one the tests hold this file to.
+ */
 export const IMPLEMENTED_PLATFORM_TOOLS = [
   'report_progress',
   'kb_search',
   'get_task_context',
   'open_mr',
   'update_mr_description',
+  // WP-181: the run task's conversation, through WP-180's reader.
+  'get_conversation',
 ] as const;
 
 type ImplementedTool = (typeof IMPLEMENTED_PLATFORM_TOOLS)[number];
@@ -137,6 +147,14 @@ const refuse = (tool: Exclude<PlatformToolName, ImplementedTool>, logger: Logger
 export interface PlatformToolsOptions {
   readonly pool: pg.Pool;
   readonly logger: Logger;
+  /**
+   * What `get_conversation` reads through (WP-181): the process's integrations port. The reader is
+   * built **here**, by the factory the stage planner's `conversation` blocks use
+   * (`createConversationReader`), so the tool and the blocks are one read of one shape — and so the
+   * wiring is inside what `platform-tools.test.ts` drives through the MCP registration over the fake
+   * tracker and git (review round 1: a reader injected from `pipeline.ts` was a seam no test saw).
+   */
+  readonly conversation: { readonly integrations: PipelineIntegrationsPort };
   /** The developer's merge request (WP-138): the store's narrow writer, the executor's door. */
   readonly mergeRequests: {
     readonly unitOfWork: UnitOfWork;
@@ -189,6 +207,51 @@ export const createMergeRequestToolReader = (): MergeRequestToolReader => ({
   },
 });
 
+/**
+ * What `get_conversation` reads about the run's task (WP-181): its ticket and its merge request, off
+ * the task's own row — **scoped to the run's project**, so a task id of another project answers
+ * nothing. One statement, so no transaction is needed for it to be one reading.
+ */
+export const readConversationSubject = async (
+  pool: Pick<pg.Pool, 'query'>,
+  context: Pick<PlatformToolContext, 'taskId' | 'projectId'>,
+): Promise<ConversationSubject> => {
+  const { rows } = await pool.query<{
+    ticket_provider: string;
+    ticket_key: string;
+    ticket_url: string;
+    ticket_id: string | null;
+    mr_ref: unknown;
+  }>(
+    `select ticket_provider, ticket_key, ticket_url, ticket_id, mr_ref
+       from tasks
+      where id = $1 and project_id = $2`,
+    [context.taskId, context.projectId],
+  );
+  const row = rows[0];
+  if (row === undefined) {
+    throw new Error(
+      `get_conversation found no task ${context.taskId} in project ${context.projectId}: the run's own task is the only one it reads`,
+    );
+  }
+  return {
+    projectId: context.projectId,
+    taskId: context.taskId,
+    ticket: {
+      provider: row.ticket_provider,
+      key: row.ticket_key,
+      url: row.ticket_url,
+      ...(row.ticket_id === null ? {} : { id: row.ticket_id }),
+    } as ConversationSubject['ticket'],
+    mr: row.mr_ref === null ? null : mergeRequestRefSchema.parse(row.mr_ref),
+  };
+};
+
+/** Thrown to the model when a provider read failed: one plain sentence (backlog 476). */
+export class ConversationUnavailableError extends Error {
+  override readonly name = 'ConversationUnavailableError';
+}
+
 const toolContextOf = (context: PlatformToolContext) => ({
   taskId: context.taskId,
   projectId: context.projectId,
@@ -202,6 +265,9 @@ export const composePlatformTools = (options: PlatformToolsOptions): PlatformToo
     store: new knowledgeAdapters.PostgresKnowledgeStore(options.pool),
     logger: options.logger,
   });
+  const readConversation = createConversationReader({
+    integrations: options.conversation.integrations,
+  });
   const mergeRequests = createMergeRequestTools({
     unitOfWork: options.mergeRequests.unitOfWork,
     reader: createMergeRequestToolReader(),
@@ -211,7 +277,38 @@ export const composePlatformTools = (options: PlatformToolsOptions): PlatformToo
     logger: options.logger,
   });
   return {
-    getConversation: async () => refuse('get_conversation', options.logger),
+    /**
+     * The run's own task, never one the model named (WP-181): the input schema is an empty object,
+     * and the subject is read off the task row the runner's context names. A provider failure is
+     * logged with its source and answered in one plain sentence — the prompt already carries the
+     * conversation blocks, or says it does not.
+     */
+    getConversation: async (
+      _input: GetConversationInput,
+      context: PlatformToolContext,
+    ): Promise<JsonValue> => {
+      const subject = await readConversationSubject(options.pool, context);
+      try {
+        return conversationToolAnswer(await readConversation(subject)) as JsonValue;
+      } catch (error) {
+        if (!(error instanceof ConversationReadError)) {
+          throw error;
+        }
+        options.logger.warn(
+          {
+            tool: 'get_conversation',
+            task_id: context.taskId,
+            run_id: context.runId,
+            source: error.source,
+            err: error,
+          },
+          'get_conversation could not read the conversation; the model was told to use its prompt’s blocks',
+        );
+        throw new ConversationUnavailableError(
+          'The conversation could not be read just now. Use the conversation blocks in your prompt, and say in your artifact that the tool failed.',
+        );
+      }
+    },
     kbSearch: async (input: KbSearchInput, context: PlatformToolContext): Promise<JsonValue> =>
       // The **run's** project, never one the model named: `PlatformToolContext` is built by the
       // runner from the `RunSpec`, and the tool's own input schema has no project field. A model

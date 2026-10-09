@@ -3,7 +3,7 @@
  *
  * Parameterised over the set rather than over the tools somebody remembered (standing rule 68), and
  * asserted in **both** directions (rule 42): the four that are not composed must refuse by name,
- * and the five that are must not — a port that threw for everything would pass the first half.
+ * and the six that are must not — a port that threw for everything would pass the first half.
  *
  * It also keeps {@link IMPLEMENTED_PLATFORM_TOOLS} honest, which matters because that constant is a
  * *claim about this file* and standing rule 11 is about justifications that name something which
@@ -18,18 +18,26 @@ import type {
   RunProgressReport,
 } from '@platform/application';
 import {
+  allowAnyIntegrationHost,
+  createIntegrationActionExecutor,
+  createMemoryAuditLog,
+  createVirtualTimer,
   exactSecretRedactor,
+  IntegrationError,
   MUTATING_PLATFORM_TOOLS,
   PLATFORM_TOOL_NAMES,
   RunProgressUnavailableError,
   silentLogger,
   staticPipelineIntegrations,
 } from '@platform/application';
-import type { Id } from '@platform/contracts';
+import type { Id, IsoDateTime } from '@platform/contracts';
 import { PROGRESS_SUMMARY_MAX_CHARS } from '@platform/contracts';
+import { runner as runnerAdapters } from '@platform/infrastructure';
+import { createFakeGitProvider, createFakeTaskManagement } from '@platform/integrations';
 import type pg from 'pg';
 import { describe, expect, it } from 'vitest';
 import {
+  ConversationUnavailableError,
   composePlatformTools,
   IMPLEMENTED_PLATFORM_TOOLS,
   PlatformToolUnavailableError,
@@ -95,6 +103,14 @@ describe('the production platform tools', () => {
   const tools = composePlatformTools({
     pool: refusingPool,
     logger: silentLogger,
+    conversation: {
+      integrations: staticPipelineIntegrations({
+        executor: { execute: async () => Promise.reject(new Error('unreachable')) },
+        git: null,
+        taskManagement: null,
+        communication: null,
+      }),
+    },
     mergeRequests: {
       unitOfWork: refusingUnitOfWork,
       tasks: {
@@ -119,6 +135,7 @@ describe('the production platform tools', () => {
       'get_task_context',
       'open_mr',
       'update_mr_description',
+      'get_conversation',
     ]);
     expect(PLATFORM_TOOL_NAMES).toContain('kb_search');
     expect(PLATFORM_TOOL_NAMES).toContain('get_task_context');
@@ -262,29 +279,190 @@ describe('the production platform tools', () => {
 
 /**
  * **No production run is offered a tool this build refuses** (backlog 476; WP-180 review round 1).
- * Both planners take `availablePlatformTools`, and a planner composed without it offers every tool in
- * the role's row — since WP-180 that includes `get_conversation`, which only refuses here until
- * WP-181. So both call sites in the composition root are held to passing it. A text census over
- * `pipeline.ts` (comments stripped): a second call site is counted, and a spread is not seen.
+ *
+ * Since WP-181 the tool list is fixed by the production planners themselves (`run-planners.ts`),
+ * and `run-planners.test.ts` plans a run through each and asserts the spec's `platformTools` — the
+ * behaviour WP-180's review asked for. What is left to text is only that the composition root
+ * builds its planners through those two functions and through nothing else: a direct
+ * `createStageRunPlanner(`/`createAskRunPlanner(` call in `pipeline.ts` (comments stripped) would be
+ * a planner whose tool list nobody fixed. An alias of either factory is not seen.
  */
-describe('the composition root offers only the tools this build performs', () => {
+describe('the composition root builds its planners only through the production planners', () => {
   const source = withoutComments(readSource('apps/server/src/pipeline.ts'));
-  const callsOf = (factory: string): string[] =>
-    source
-      .split(`${factory}({`)
-      .slice(1)
-      .map((rest) => rest.slice(0, rest.indexOf('\n      }),')));
+  const count = (call: string): number => source.split(`${call}(`).length - 1;
 
-  it.each(['createStageRunPlanner', 'createAskRunPlanner'])(
-    '%s is composed with availablePlatformTools: IMPLEMENTED_PLATFORM_TOOLS',
-    (factory) => {
-      const calls = callsOf(factory);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]).toContain('availablePlatformTools: IMPLEMENTED_PLATFORM_TOOLS');
-    },
-  );
+  it.each([
+    ['createProductionStagePlanner', 'createStageRunPlanner'],
+    ['createProductionAskPlanner', 'createAskRunPlanner'],
+  ])('composes %s once and never calls %s directly', (production, direct) => {
+    expect(count(production)).toBe(1);
+    expect(count(direct)).toBe(0);
+  });
+});
 
-  it('leaves get_conversation out of what it composes, until WP-181 serves it', () => {
-    expect(IMPLEMENTED_PLATFORM_TOOLS as readonly string[]).not.toContain('get_conversation');
+/**
+ * WP-181 criterion (4), review round 1: `get_conversation` **through the MCP registration a run is
+ * given** (`platformToolDefinitions`, the handler the SDK calls), over the **real** reader the tools
+ * build (`createConversationReader`) and the fake tracker and fake git — no reader is injected, so a
+ * composition that wired the tool to anything else fails here. The subject is the run's own task,
+ * read off its row scoped to the run's project. A credential planted in a note and in a comment is
+ * redacted by each binding's own redactor: the MCP runtime's redactor here is empty on purpose, so
+ * nothing downstream of the reader can be what removed it.
+ */
+describe('get_conversation through the MCP registration (WP-181)', () => {
+  const PLANTED = 'FAKE-planted-binding-token-0181';
+  const GIT_PROJECT = 'acme/api';
+  const NOTE_AT = '2026-10-08T09:00:00.000Z';
+  const bindingRedactor = () => exactSecretRedactor([{ name: 'tracker_token', value: PLANTED }]);
+  const noIntegrations = () =>
+    staticPipelineIntegrations({
+      executor: { execute: async () => Promise.reject(new Error('unreachable')) },
+      git: null,
+      taskManagement: null,
+      communication: null,
+    });
+
+  const world = async (options: { readonly gitFails?: boolean } = {}) => {
+    const git = createFakeGitProvider({
+      integrationId: '00000000-0000-4000-8000-0000000001a1' as Id,
+      projects: [{ path: GIT_PROJECT }],
+    });
+    const mr = await git.openMergeRequest({
+      project: GIT_PROJECT,
+      branch: 'agentic/fake-1',
+      target: 'main',
+      title: 'Draft: totals',
+      description: '',
+      draft: true,
+      labels: [],
+      reviewers: [],
+      remove_source_branch: true,
+    });
+    git.addHumanDiscussion({
+      project: GIT_PROJECT,
+      iid: mr.ref.iid,
+      authorId: 'user-1',
+      text: `Please rotate ${PLANTED} before merging.`,
+      createdAt: NOTE_AT,
+    });
+    const tracker = createFakeTaskManagement({
+      integrationId: '00000000-0000-4000-8000-0000000001a2' as Id,
+      tickets: [
+        {
+          key: 'FAKE-1',
+          title: 'Totals are wrong',
+          comments: [{ authorId: 'user-1', body: `The token was ${PLANTED}.`, createdAt: NOTE_AT }],
+        },
+      ],
+    });
+    const gitPort = options.gitFails
+      ? ({
+          ...git,
+          listDiscussions: async () => {
+            throw new IntegrationError('unavailable', 'fake-git', 'connection refused', {
+              action: 'list_discussions',
+            });
+          },
+        } as unknown as typeof git)
+      : git;
+    const integrations = staticPipelineIntegrations({
+      executor: createIntegrationActionExecutor({
+        egress: allowAnyIntegrationHost(),
+        auditLog: createMemoryAuditLog(),
+        redactor: exactSecretRedactor([]),
+        timer: createVirtualTimer({ autoAdvance: true }),
+        clock: { now: () => '2026-10-09T09:00:00.000Z' as IsoDateTime },
+      }),
+      git: { port: gitPort, ref: git.ref, project: GIT_PROJECT, redactor: bindingRedactor() },
+      taskManagement: { port: tracker, ref: tracker.ref, redactor: bindingRedactor() },
+      communication: null,
+    });
+    const queries: { text: string; values: unknown[] }[] = [];
+    const pool = {
+      query: async (text: string, values: unknown[]) => {
+        queries.push({ text, values });
+        return {
+          rows: [
+            {
+              ticket_provider: tracker.ref.provider,
+              ticket_key: 'FAKE-1',
+              ticket_url: 'https://tickets.example.test/browse/FAKE-1',
+              ticket_id: null,
+              mr_ref: mr.ref,
+            },
+          ],
+        };
+      },
+    } as unknown as pg.Pool;
+    const tools = composePlatformTools({
+      pool,
+      logger: silentLogger,
+      conversation: { integrations },
+      mergeRequests: {
+        unitOfWork: refusingUnitOfWork,
+        tasks: { recordMergeRequest: async () => Promise.reject(new Error('unreachable')) },
+        integrations,
+        runScopedSecrets: () => [],
+      },
+    });
+    const [definition] = runnerAdapters.platformToolDefinitions(
+      { tools, context: CONTEXT, redactor: exactSecretRedactor([]), onCall: () => {} },
+      ['get_conversation'],
+    ) as unknown as {
+      name: string;
+      handler: (args: unknown, extra: unknown) => Promise<unknown>;
+    }[];
+    const call = async () => {
+      const result = (await definition?.handler({}, {})) as {
+        content: { text: string }[];
+        isError?: boolean;
+      };
+      return { text: result.content.map((item) => item.text).join('\n'), isError: result.isError };
+    };
+    return { call, queries };
+  };
+
+  it('(4) answers the merge request’s note and the ticket’s comment, with the planted secret redacted', async () => {
+    const { call, queries } = await world();
+    const answer = await call();
+    expect(answer.isError).not.toBe(true);
+    expect(queries[0]?.values).toEqual([CONTEXT.taskId, CONTEXT.projectId]);
+    expect(queries[0]?.text).toMatch(/where id = \$1 and project_id = \$2/);
+    expect(answer.text).not.toContain(PLANTED);
+    const body = JSON.parse(answer.text) as {
+      available: boolean;
+      entries: { source: string; body: string }[];
+    };
+    expect(body.available).toBe(true);
+    expect(body.entries.map((entry) => entry.source).sort()).toEqual(['mr', 'ticket']);
+    for (const entry of body.entries) {
+      expect(entry.body).toContain('[REDACTED:integration:tracker_token]');
+    }
+  });
+
+  it('answers a failed provider read in one plain sentence, never the provider’s detail', async () => {
+    const { call } = await world({ gitFails: true });
+    const answer = await call();
+    expect(answer.isError).toBe(true);
+    expect(answer.text).toBe(
+      'get_conversation failed: The conversation could not be read just now. Use the conversation blocks in your prompt, and say in your artifact that the tool failed.',
+    );
+  });
+
+  it('refuses a task outside the run’s project rather than reading another project’s conversation', async () => {
+    const tools = composePlatformTools({
+      pool: { query: async () => ({ rows: [] }) } as unknown as pg.Pool,
+      logger: silentLogger,
+      conversation: { integrations: noIntegrations() },
+      mergeRequests: {
+        unitOfWork: refusingUnitOfWork,
+        tasks: { recordMergeRequest: async () => Promise.reject(new Error('unreachable')) },
+        integrations: noIntegrations(),
+        runScopedSecrets: () => [],
+      },
+    });
+    const failure = await tools.getConversation({}, CONTEXT).catch((error: unknown) => error);
+    expect((failure as Error).message).toMatch(/the run's own task is the only one it reads/);
+    expect(failure).not.toBeInstanceOf(ConversationUnavailableError);
   });
 });

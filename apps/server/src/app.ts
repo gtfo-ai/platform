@@ -54,6 +54,7 @@ import fastifySse from '@fastify/sse';
 import fastifySwagger from '@fastify/swagger';
 import underPressure from '@fastify/under-pressure';
 import type { DeadLetterCommands, WebhookIngress } from '@platform/application';
+import { createIntegrationEgressPolicy } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { redaction as redactionAdapters } from '@platform/infrastructure';
 import { type FastifyBaseLogger, type FastifyInstance, fastify, LogController } from 'fastify';
@@ -72,6 +73,7 @@ import type { ServerConfig } from './config.js';
 import { repositorySnapshotFrom } from './config-layers.js';
 import { toApiError } from './errors.js';
 import type { KnowledgeCommands } from './knowledge.js';
+import { checkProposedLifecycles, readProposedAccountIdentities } from './lifecycle-check.js';
 import { type PinoLogger, withLogContext } from './logging.js';
 import type { Metrics } from './metrics.js';
 import { routeLabel } from './metrics.js';
@@ -94,9 +96,13 @@ import {
   upsertIdentityMapping,
 } from './queries/identity-queries.js';
 import {
+  assertBindingItemsWritable,
+  findBindingAccounts,
   findProjectById,
   findProjectRepository,
+  listProjectBindings,
   recordHumanAction,
+  replaceProjectBindings,
   writeProjectAutonomy,
   writeProjectDefaultBranch,
 } from './queries/onboarding-queries.js';
@@ -115,8 +121,11 @@ import {
   listTaskEvents,
 } from './queries/pipeline-queries.js';
 import {
+  findBindingAccountIsAPerson,
   findLastConfigExport,
   findProjectAutonomy,
+  findProjectReadiness,
+  findProjectTicketLifecycle,
   listProjectAudit,
 } from './queries/project-queries.js';
 import {
@@ -138,7 +147,9 @@ import { registerKbRoutes } from './routes/kb.js';
 import { registerOnboardingRoutes } from './routes/onboarding.js';
 import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
 import { registerOrgRoutes } from './routes/org.js';
+import { registerProjectBindingRoutes } from './routes/project-bindings.js';
 import { registerProjectConfigRoutes } from './routes/project-config.js';
+import { registerProjectReadinessRoutes } from './routes/project-readiness.js';
 import { registerProjectRepositoryRoutes } from './routes/project-repository.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { type RediscoveryGateReader, registerRediscoveryRoutes } from './routes/rediscovery.js';
@@ -153,6 +164,7 @@ import type { ShadowCommands } from './shadow.js';
 import type { SseHub } from './sse/hub.js';
 import { registerSseRoutes } from './sse/routes.js';
 import type { TaskStartCommands } from './task-start.js';
+import type { TicketStatusReader } from './ticket-statuses.js';
 import { type ClientFallback, createClientFallback } from './web/fallback.js';
 
 /**
@@ -225,6 +237,14 @@ export interface BuildAppOptions {
    * composed none. Nullable like `shadow`; the routes answer `503` by name.
    */
   readonly projectConfig?: ProjectConfigCommands | null;
+  /**
+   * The tracker's statuses (WP-181): `GET …/ticket-statuses` and the lifecycle check at
+   * `PUT …/bindings`, or `null`/absent for a process that composed no integration stack. Optional
+   * like `projectConfig`; both routes are registered either way and answer
+   * `503 lifecycle_statuses_unavailable` by name — behind their guards, which the census probes. A
+   * bindings write whose lifecycle block names no status needs no reader and is served either way.
+   */
+  readonly ticketStatuses?: TicketStatusReader | null;
   /**
    * The manual start from a ticket key (WP-122), or `null`/absent for a process that composed no
    * integration stack. Optional like `projectConfig`: `app.test.ts` and the census build an app
@@ -566,6 +586,19 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       // operator typed, which can carry a pasted credential (`describeConfigIssues`).
       redactor: redactionAdapters.patternRedactor(),
     });
+    // WP-181 review round 2: the readiness read, its database reads bound here and no provider in
+    // reach — the binding-account note reads the account the bindings write stored (migration 0090).
+    await registerProjectReadinessRoutes(app, {
+      queries: {
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        readiness: async (projectId) => findProjectReadiness(options.database, projectId),
+        ticketLifecycle: async (projectId) =>
+          findProjectTicketLifecycle(options.database, projectId),
+        accountIsAPerson: async (projectId) =>
+          findBindingAccountIsAPerson(options.database, projectId),
+      },
+    });
     // WP-63: the configuration export and the repository re-read (Q94). The database reads and writes
     // are bound here so the route module names none of them (`ProjectConfigQueries`).
     await registerProjectConfigRoutes(app, {
@@ -622,6 +655,50 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
               }
               return commands.readNewDefaultBranch(projectId as Id);
             },
+    });
+    // WP-181: the bindings pair (moved out of the onboarding module) and the statuses read, with
+    // the lifecycle check the write makes before it saves anything.
+    const bindingEgress = createIntegrationEgressPolicy(config.integrationHosts);
+    const ticketStatuses = options.ticketStatuses ?? null;
+    await registerProjectBindingRoutes(app, {
+      queries: {
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        projectExists: async (projectId) =>
+          (await findProjectById(options.database, projectId)) !== null,
+        listBindings: async (projectId) => listProjectBindings(options.database, projectId),
+        replaceBindings: async (projectId, items) =>
+          replaceProjectBindings(options.database, projectId, items, { egress: bindingEgress }),
+        recordAction: async (input) => recordHumanAction(options.database, input),
+      },
+      checkLifecycles: async (projectId, items) =>
+        checkProposedLifecycles(projectId, items, {
+          accounts: async (ids) => findBindingAccounts(options.database, ids),
+          assertWritable: async (project, proposed, accounts) =>
+            assertBindingItemsWritable(
+              options.database,
+              project,
+              proposed,
+              accounts,
+              bindingEgress,
+            ),
+          statuses: ticketStatuses === null ? null : ticketStatuses.proposed,
+        }),
+      readAccountIdentities: async (projectId, items) =>
+        readProposedAccountIdentities(projectId, items, {
+          accounts: async (ids) => findBindingAccounts(options.database, ids),
+          assertWritable: async (project, proposed, accounts) =>
+            assertBindingItemsWritable(
+              options.database,
+              project,
+              proposed,
+              accounts,
+              bindingEgress,
+            ),
+          account: ticketStatuses === null ? null : ticketStatuses.proposedAccount,
+          logger: app.log,
+        }),
+      ticketStatuses: ticketStatuses === null ? null : ticketStatuses.current,
     });
     await registerOnboardingRoutes(app, {
       database: options.database,

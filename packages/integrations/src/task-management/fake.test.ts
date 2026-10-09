@@ -6,6 +6,7 @@
  * capability gate — because a register entry nothing exercises is a comment, not a guarantee.
  */
 import { IntegrationError, IntegrationRateLimitedError } from '@platform/application';
+import { MAX_TICKET_STATUSES } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { createFakeTaskManagement } from './fake.js';
 
@@ -281,6 +282,16 @@ describe('the ticket lifecycle (WP-171, divergences 12–16)', () => {
       { id: 's-4', name: 'Finished', category: 'done', raw_category: 'done' },
       { id: 's-5', name: 'Parked', category: 'unknown', raw_category: null },
     ]);
+  });
+
+  it('answers MAX_TICKET_STATUSES statuses and refuses one more, as the Jira adapter does (WP-181 (7))', async () => {
+    const workflow = (count: number) => Array.from({ length: count }, (_, index) => `S${index}`);
+    expect(
+      await build({ statuses: workflow(MAX_TICKET_STATUSES), tickets: [] }).listStatuses(),
+    ).toHaveLength(MAX_TICKET_STATUSES);
+    await expect(
+      build({ statuses: workflow(MAX_TICKET_STATUSES + 1), tickets: [] }).listStatuses(),
+    ).rejects.toMatchObject({ code: 'invalid_response', action: 'list_statuses' });
   });
 
   it('refuses a workflow that names a status twice, case-insensitively (divergence 14)', () => {

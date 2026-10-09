@@ -1,10 +1,11 @@
 /**
- * The project reads of technical/08: the list, the effective configuration, the budgets, the task
- * page and the readiness ladder.
+ * The project reads of technical/08: the list, the effective configuration, the budgets and the task
+ * page. (The readiness ladder, WP-15h part 2's, moved to `routes/project-readiness.ts` at WP-181's
+ * review, with its database reads injected.)
  *
  * `GET /api/projects/:project_id/config` is the effective configuration with per-key provenance
  * (technical/12 § "Effective configuration"), `…/budgets` is the projection WP-19's ledger folds
- * spend into, and WP-15h part 2 added `GET /api/projects`, `…/tasks` and `…/readiness`.
+ * spend into, and WP-15h part 2 added `GET /api/projects` and `…/tasks`.
  *
  * Project scoping is a property of the RBAC middleware that only a real project-scoped request can
  * demonstrate, and every route with a `:project_id` carries the same guard. `GET /api/projects` has
@@ -12,9 +13,10 @@
  * list: `project.read` is `viewer` at organisation level anyway, and a per-project filter here would
  * be the only place in the server that answers a different question from `can()`.
  *
- * **The writes moved next door.** `POST /api/projects`, `PUT …/config`, `GET/PUT …/bindings` and
- * `POST …/discovery` are served by `routes/onboarding.ts` since WP-21 — a command needs an audit
- * row and an `Idempotency-Key` a read does not — and `GET/PUT …/autonomy`, `PUT …/budgets` and
+ * **The writes moved next door.** `POST /api/projects`, `PUT …/config` and `POST …/discovery` are
+ * served by `routes/onboarding.ts` since WP-21 — a command needs an audit row and an
+ * `Idempotency-Key` a read does not — `GET/PUT …/bindings` (onboarding's from WP-21) and
+ * `GET …/ticket-statuses` by `routes/project-bindings.ts` since WP-181, and `GET/PUT …/autonomy`, `PUT …/budgets` and
  * `GET …/audit` by `routes/settings.ts` since WP-30, which is the same settings reached from the
  * other side of onboarding. `POST …/config/export` and `POST …/config/refresh` are
  * `routes/project-config.ts`'s since WP-63, which also made `GET …/config` merge what technical/12
@@ -56,7 +58,6 @@ import {
   projectsResponseSchema,
   type RepositoryConfigReading,
   type RiskClass,
-  readinessResponseSchema,
   riskClassSchema,
   slugSchema,
   tasksResponseSchema,
@@ -64,6 +65,7 @@ import {
 import {
   type ConfigValues,
   can,
+  lifecycleMapsAnySlot,
   MAX_PROJECT_PROMPT_CHARS,
   mergeProjectConfig,
   PROPOSED_REVIEW_CHECKLISTS,
@@ -91,9 +93,10 @@ import { listProjectTasks, type TaskCursor } from '../queries/pipeline-queries.j
 import {
   countCurationsWaitingOnSettings,
   findLastConfigExport,
-  findProjectReadiness,
+  findProjectTicketLifecycle,
   listProjectSummaries,
 } from '../queries/project-queries.js';
+import { appliedTicketLifecycle, type ProjectTicketLifecycle } from '../ticket-lifecycle.js';
 
 export interface ProjectRoutesOptions {
   readonly database: Database;
@@ -326,6 +329,12 @@ export const effectiveConfigResponseOf = (input: {
    * `invalid_stored_config` refusal. Omitted reads as none.
    */
   readonly waitingCurations?: number;
+  /**
+   * The project's ticket lifecycle as the pipeline reads it (`ticket-lifecycle.ts`, WP-181 ruling
+   * (c)) — required, because `status_mapping_superseded` must say what the pipeline decides, and an
+   * omitted reading would publish `false` for a project whose mapping the pipeline does not apply.
+   */
+  readonly ticketLifecycle: ProjectTicketLifecycle;
 }): EffectiveConfigResponse => {
   const { projectId, row } = input;
   const stored = storedSettingsForRequest(
@@ -417,6 +426,12 @@ export const effectiveConfigResponseOf = (input: {
       ),
     ],
     risk_class_proposal: riskClassProposalOf(row.proposedRiskClasses, stored),
+    // WP-181 ruling (c), TD-029 decision 3: `true` exactly when the pipeline's own reading maps a
+    // slot other than `pick_up_from` — `statusMappingHandler`'s early return, asked of the same
+    // reading (`appliedTicketLifecycle`), so the screen's warning and the pipeline cannot disagree.
+    status_mapping_superseded: lifecycleMapsAnySlot(
+      appliedTicketLifecycle(input.ticketLifecycle)?.slots,
+    ),
   };
 };
 
@@ -550,6 +565,7 @@ export const registerProjectRoutes = async (
         redactText: (value) => options.redactor.redactText(value).value,
         lastExport: lastExportOf(await findLastConfigExport(options.database, projectId)),
         waitingCurations: await countCurationsWaitingOnSettings(options.database, projectId),
+        ticketLifecycle: await findProjectTicketLifecycle(options.database, projectId),
       });
     },
   );
@@ -635,49 +651,6 @@ export const registerProjectRoutes = async (
         // the route would admit.
         can_start_task: role !== undefined && can(role, 'task.create'),
       };
-    },
-  );
-
-  typed.get(
-    '/api/projects/:project_id/readiness',
-    {
-      preHandler: requirePermission(guard, 'project.read', {
-        project: (request) => (request.params as { project_id: string }).project_id,
-      }),
-      schema: {
-        summary: 'The project’s readiness evaluation',
-        description:
-          'product/17’s fourteen criteria as the last evaluation found them, with the level they add up to and the three cheapest improvements next. `unlocks` is platform text; `evidence` is the Discovery agent’s own words for the eleven criteria it answers (BD-022) — render it, never execute it. Refuses with 409 `readiness_not_evaluated` for a project nothing has evaluated yet, which is a project whose discovery run has not happened.',
-        tags: ['projects'],
-        params: projectParamsSchema,
-        response: { 200: readinessResponseSchema, 409: apiErrorSchema },
-      },
-    },
-    async (request) => {
-      const projectId = request.params.project_id;
-      const readiness = await findProjectReadiness(options.database, projectId);
-      if (!readiness.found) {
-        throw new NotFoundError(`project ${projectId}`);
-      }
-      if (readiness.recorded) {
-        return readiness.response;
-      }
-      /**
-       * **The refusal is a statement about this project, not about the build.**
-       *
-       * It used to be the latter — nothing wrote `readiness_evaluations` at all — and WP-21's
-       * evaluator changed which sentence is true. What has not changed is why a projection is
-       * refused in its place: `readinessResponseSchema` publishes the criteria, the evidence and
-       * the instant of an evaluation, and `projects.readiness_level` carries none of those, so
-       * `{level: 0, evaluated_at: <now>, criteria: []}` would invent two of the three. The row
-       * count stays in the message because it is what distinguishes "nothing has evaluated this
-       * project" from "rows exist and this reader could not read them".
-       */
-      throw new HttpError(
-        409,
-        'readiness_not_evaluated',
-        `project ${projectId} has no readiness evaluation (${readiness.rows} readiness_evaluations rows): run discovery on it (POST /api/projects/${projectId}/discovery), which is what records one. The published record needs the criteria, the evidence and the instant of an evaluation, none of which projects.readiness_level carries`,
-      );
     },
   );
 };
