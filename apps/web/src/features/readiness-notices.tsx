@@ -22,7 +22,8 @@ const LABEL: Record<ReadinessResponse['notices'][number]['code'], string> = {
   ci_rules_not_seen: 'CI rules read in part',
   verification_mode_ci_suggested: 'Verify on CI?',
   // WP-181 (BD-031 ruling 7): the ticket lifecycle's notes, one per unmapped slot. The pick lists
-  // that map them are WP-182's; here they are only labelled, so a served note is never unlabelled.
+  // that map them are `ticket-lifecycle.tsx` (WP-182); here a note is labelled, rendered as a note
+  // and never as a failure (WP-182 ruling (b), `ticket-lifecycle.test.tsx`).
   lifecycle_slot_unmapped: 'Ticket lifecycle slot not mapped',
   lifecycle_not_configured: 'No ticket lifecycle',
   // Q118 (a): the tracker binding acts as a person's own account.

@@ -99,6 +99,7 @@ import { FeedbackForm } from './feedback.js';
 import { LiveStagePanel, liveStageRun } from './live-stage.js';
 import { type TimelineLink, timelineEntries } from './stage-timeline.js';
 import { TakeOverPanel } from './take-over.js';
+import { TicketClaimAndQa } from './ticket-claim.js';
 
 /**
  * **Raise this task's cap** (WP-131 review round 1) — shown on a task its budget paused, the one way
@@ -1517,6 +1518,9 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             </Button>
           </div>
         </div>
+
+        {/* WP-182 ruling (c): the ticket claim and the human QA stage (BD-031 rulings 3 and 5). */}
+        <TicketClaimAndQa task={task} />
 
         {commands.pause.isError || commands.resume.isError || commands.cancel.isError ? (
           <ErrorNotice title="That command was refused." />

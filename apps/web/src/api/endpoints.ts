@@ -127,6 +127,7 @@ import {
   taskDetailResponseSchema,
   tasksResponseSchema,
   testIntegrationResponseSchema,
+  ticketStatusesResponseSchema,
   updateProjectConfigRequestSchema,
   versionResponseSchema,
 } from '@platform/contracts';
@@ -302,6 +303,15 @@ export interface Endpoints {
   readonly projectBindings: (
     projectId: string,
   ) => Promise<z.output<typeof projectBindingsResponseSchema>>;
+  /**
+   * `GET /api/projects/:id/ticket-statuses` — the tracker's statuses, the only names a lifecycle
+   * slot's pick list offers (WP-181's read, WP-182's caller; BD-031 ruling 7). A maintainer's read:
+   * `409 no_task_management_binding` without a tracker, `503 lifecycle_statuses_unavailable` when
+   * the tracker cannot be read — never an empty list.
+   */
+  readonly ticketStatuses: (
+    projectId: string,
+  ) => Promise<z.output<typeof ticketStatusesResponseSchema>>;
 
   /**
    * The onboarding wizard's commands (WP-21, product/06).
@@ -734,6 +744,10 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     projectBindings: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/bindings`, {
         schema: projectBindingsResponseSchema,
+      }),
+    ticketStatuses: (projectId) =>
+      client.get(`/api/projects/${seg(projectId)}/ticket-statuses`, {
+        schema: ticketStatusesResponseSchema,
       }),
 
     // The wizard's commands. The three that **create** carry an `Idempotency-Key` (technical/08 §

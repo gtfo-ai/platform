@@ -93,6 +93,51 @@ run. A wrong token is therefore a failed test here rather than a failed run tomo
 You never paste a credential into the browser, at any point. What is named is the *environment
 variable* the server should read, and the server seals the value itself.
 
+#### The ticket lifecycle
+
+Once a ticket tracker is bound, step 1 shows **Ticket lifecycle**: the moments at which the platform
+moves a ticket, each a pick list of **your tracker's own statuses**, loaded from the tracker with each
+status's category beside its name. The platform assumes no status name; it offers only what the
+tracker lists. **Every slot may be left empty** (*Not mapped*): an empty slot means the ticket is not
+moved at that point, and the stage still runs.
+
+| Slot | What it does |
+|---|---|
+| **Pick up from** | Only tickets in this status are started (a pick-up label works instead). On cancel or rework the ticket is moved back here. |
+| **In progress** | The ticket is moved here when the platform claims it, and again each time a developer stage starts, a return included. |
+| **In review** | Moved here when the agent's code review starts. |
+| **Approved** | Moved here when the agent's own review has passed and its findings are fixed. |
+| **QA** | Mapped, tasks created from then on get a human **QA** stage before Ready for merge, and the ticket is moved here when the task enters it. |
+| **Returned** | One or more statuses, never set by the platform: a person moving the ticket into one of them returns the task to the agent. |
+| **Done** | Moved here when the merge request is merged. |
+
+Two switches sit under the slots. **Claim the ticket before the first run** (on unless you switch it
+off): before a task's first run the platform assigns the ticket to the tracker integration's own
+account, moves it to *In progress* if that slot is mapped, and reads the ticket again. If somebody
+else holds the ticket, the task stops in **Needs human** with the reason *assigned elsewhere*, no run
+starts, and the platform posts one comment on the ticket — *"The agent did not start work on this
+ticket: it is assigned to somebody else. A maintainer has been asked who should take it."* While
+claiming, a ticket already assigned to a person is not started at all, unless you tick **Also start
+tickets already assigned to a person**. On cancel or rework the platform unassigns itself (and moves
+the ticket back to *Pick up from*, if mapped).
+
+**Save the ticket lifecycle** checks every name against the tracker's statuses before anything is
+written. A name the tracker does not list is refused, the slot that names it is marked, and nothing
+is saved; if the tracker cannot be read at that moment, the form says the statuses could not be
+loaded and nothing was saved, and keeps your choices so you can save again. A name you saved earlier
+that the tracker no longer lists is shown above the slots as *Not listed*, and the slot is empty
+until you pick again. **Binding a tracker in this step for the first time also saves its lifecycle**
+with every slot empty and the claim on — the step says so under *Bind* before you press it — so a
+project set up here claims unless you switch the claim off. A binding that already has a lifecycle
+keeps it as it is. A tracker binding with no lifecycle saved (one bound before the lifecycle
+existed) neither claims nor moves tickets, and re-saving the bindings does not change that; saving
+this form once, even with every slot empty, turns the claim on unless you switch it off. Once
+a slot other than *Pick up from* is mapped, the project's older `status_mapping` configuration is not
+applied at all, and the form says so. The readiness panel (step 2) lists each empty slot as a
+**note** — information, never a failure, and it changes no level.
+
+Reading the tracker's statuses needs a maintainer; saving the bindings needs an administrator.
+
 ### Step 2 — Technical discovery
 
 Starts the **Discovery agent** on the repository. It is a normal agent run in every respect — it has
@@ -414,6 +459,15 @@ and the platform will not publish a document it cannot vouch for — it says so 
 this page shows, each run's record, the task's events and, for a maintainer, who did what — offered to
 a member or above. A viewer is not offered it; the export would refuse them.
 
+**The claim and the QA stage** show under the task's key when there is something to show (the
+project's ticket lifecycle, step 1). *ticket claimed* means the platform assigned the ticket to its
+own account and the tracker confirmed it; *claim (shadow)* means a shadow task recorded what it would
+have assigned and assigned nothing; *claim released* means the claim was given back — on a cancel, a
+rework, or a task that stopped between the assignment and its record — and the ticket is no longer
+the platform's. Each says when. A task that never claimed (no lifecycle saved, or a task older than
+the claim) shows nothing. **QA stage** means this task was created while the project mapped a *QA*
+status, so a person tests it before Ready for merge (below).
+
 ### What you can do from here
 
 The commands in the table below, plus **take over**, **hand back** and **ask the task** (after the
@@ -467,6 +521,48 @@ merge request from an `agentic/` branch. If its rules skip or hold jobs for a `D
 gate waits and says so — *"the merge request is a draft and pipeline … is held at manual job …"* —
 and the readiness panel's CI-rules warning names the rule it understood.
 
+### QA, and sending a task back from QA or Ready
+
+When the project maps a *QA* status, a task created afterwards gets a human **QA** stage after the
+rebase gate and before Ready for merge: the ticket moves to the QA status and the merge request
+stays open, and still a draft, while a person tests the branch. QA ends when the ticket leaves the
+QA status for a status that is not a return; the task then goes on to Ready for merge. Merging the
+merge request during QA ends it too, and a move of the default branch sends the task back through the
+rebase gate. With no *QA* status mapped, the task goes from the rebase gate straight to Ready.
+
+At **QA** and at **Ready for merge**, any of three things a person does returns the task to the
+Developer:
+
+- **a status** — moving the ticket to one of the *Returned* statuses, or back to *In progress* or
+  *Pick up from*;
+- **a ticket comment**;
+- **a merge-request note** — a comment on a diff line or a general note, including one GitLab does
+  not let you resolve.
+
+They are collected for two minutes from the first one and sent back as one return, carrying every
+person's word since the last implementation run; the Developer is told to read the conversation, and
+asks a question if a status change alone leaves it nothing to fix. A pure acknowledgement — *thanks*,
+*LGTM* and the like — does **not** return the task (the project's configuration can add words in its
+own language, `human_returns.acknowledgements`), and nothing the platform itself wrote ever does. Each
+return spends one of the human rounds, as review comments at Ready always have.
+
+### The conversation on the merge request
+
+The review is held **on the merge request**, where you read it:
+
+- **The Reviewer's findings.** Every code review of a task that has a merge request posts each finding
+  as its own thread, anchored to the file and line where the diff allows it (otherwise as a note that
+  names the location), and then **one summary note** stating the verdict — posted even when there
+  are no findings.
+- **The Developer's replies.** The fix run that follows replies on each thread it addressed, and
+  answers a ticket comment on the ticket. Where a note asks for something only a person can do, the
+  reply names who must act and says it is not done.
+- **Resolution.** The Reviewer resolves a thread only after a re-review confirms the fix, and only
+  **its own** finding threads: never a person's thread, and never another task's.
+
+Every agent stage also reads the merge request's notes and the ticket's comments, as data it is told
+not to obey. A shadow task posts none of this: each write is recorded as what it would have done.
+
 ### The checks panel
 
 The product defines eleven merge-readiness checks, and the panel shows **all eleven**:
@@ -479,7 +575,7 @@ The product defines eleven merge-readiness checks, and the panel shows **all ele
   or conflicts, *checking* while it decides, *not reached* before the task gets there, and
   *escalated (…)* with the reason when the gate stopped for a person.
 - **Review threads** — open and resolved human threads on the merge request, as the platform last
-  counted them. It counts when somebody comments while the task waits for merge, and again when the
+  counted them. It counts when somebody comments while the task waits at QA or Ready for merge, and again when the
   merge request reports every thread resolved — which GitLab sends only for a project that requires
   resolved threads before merging. A thread resolved without a comment while others stay open is
   not counted until one of those happens; until the first count it says *not read*, never zero.
@@ -887,6 +983,12 @@ again restores it. The provider
 mode (an environment setting) and feature flags (a project's own) are not organisation settings. A
 project's features are switched on its own settings page.
 
+**The ticket lifecycle** is a project's own setting too: the project settings page's *Connections*
+card carries the same form as the wizard's step 1 (§ 1, *The ticket lifecycle*) — every slot a pick
+list of the tracker's own statuses, every slot allowed to stay empty, the two claim switches, and the
+same check against the tracker when you save. Change it there at any time; a new *QA* mapping
+applies to tasks created afterwards.
+
 **Verification** is a project's own setting, on its settings page: *Agents run the checks* (the
 default) or *CI runs the checks*. Choose CI when the project's pipeline already runs the tests and
 static analysis on every merge request and the agents' workspace (2 CPUs, 4 GiB) is too small for
@@ -917,6 +1019,8 @@ In one place, so it is not spread across thirteen sections:
 | Editing a knowledge document or the pipeline in the browser | knowledge, pipeline |
 | Instance-wide feature flags and the provider mode as organisation settings (the provider mode is an environment setting; a project's features are its own) | settings |
 | The statistics the screen lists under *Not measured, and why* | statistics |
+| Moving a ticket to a *deployed* status once a deploy is seen (the *Done* slot moves it at the merge) | ticket lifecycle, onboarding step 1 |
+| A ticket lifecycle for a project with two ticket trackers bound (the form says the pipeline applies one only with exactly one) | ticket lifecycle, project settings |
 
 And one that is about the deployment rather than a screen: an agent stage runs only on an instance
 whose operator set `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN`, because those switch on the `runner`

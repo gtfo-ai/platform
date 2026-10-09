@@ -47706,3 +47706,62 @@ Implementer, session 15, on `main` at `18f092e3`. No migration. No Jira or GitLa
 - **[minor]** The fake model refuses to read through `get_conversation` unless the run's `platformTools` grant it, as the harness's `open_mr` path does.
 - **[nit]** `webhook-issue-updated-summary.json` is now `documented-adapted`, with a note naming the renamed status. (The other renamed Jira fixtures were already `documented-adapted`, `composed` or `inferred`.)
 - **Tiers (round 1).** The file alone twice, 5/5 each; `verify:e2e` **PASS** (67 files, 298 tests); `pnpm run -s verify` **PASS**; citations 13/13. Every start under a one-minute load of 12. Docker volumes 130.
+
+#### WP-182 — Web: the slots as pick lists in the wizard and in project settings; the claim and the QA stage on the task page
+
+Implementer, session 15, in a worktree at `c42edd62`. No migration, no server behaviour changed. No Jira or GitLab instance was called; every status name in the tests and fixtures is invented ("Doing", "Waiting for review", "Testing", "Sent back", "Finished"; "Signed off" for a stored name the tracker no longer lists).
+
+**What was built.**
+- **(a) `apps/web/src/features/ticket-lifecycle.tsx`** — one component, rendered in the wizard's step 1 and the settings page's *Connections* card (the mirror). It reads `GET …/ticket-statuses` (`endpoints.ticketStatuses`, `useTicketStatuses`, not retried: each read is a provider call and a 503 is an answer) only when exactly one task-management binding is stored, and offers each of the seven slots as a select over the loaded names with the category (`Doing (in progress)`); `returned` is a multi-select (≤ 10); the `claim` and `take_assigned_tickets` switches. *Save the ticket lifecycle* PUTs the **whole stored set**, every other binding's config unchanged (the notification channel's shape). A `422 lifecycle_status_unknown` marks each slot its `details[].path` names (`aria-invalid`, the server's sentence beside it); a `503` renders its notice and keeps the draft. A stored name the loaded set does not hold is named as *Not listed* and its select is empty. `status_mapping_superseded` is shown on the card and, per the contract's "a warning beside the key", on the pipeline screen beside every `status_mapping.*` source key.
+- **(b)** The readiness notes already rendered as *Note* badges (WP-181); a test now holds that each unmapped slot is a note, never a warning or an alert.
+- **(c) `apps/web/src/features/ticket-claim.tsx`** in the task header: *ticket claimed* / *claim (shadow)* / *claim released* with when, and *QA stage*; nothing for `ticket_claim: null` and no QA stage.
+- The census entry `SERVED_BEFORE_ITS_CALLER['/api/projects/{}/ticket-statuses']` is removed (it failed by name before the removal, as designed); the case now asserts positively that the client names the path.
+- The web-e2e fake serves `GET …/bindings`, `GET …/ticket-statuses` and a `PUT …/bindings` that parses the published schema and makes the server's membership check over the corpus's statuses.
+
+**Criteria → tests.**
+| Criterion | Test |
+|---|---|
+| (1) select offers only loaded names | `apps/web/src/features/ticket-lifecycle.test.tsx` › "offers only the loaded names, each with its category, in every slot" |
+| (1) empty sent as absent | › "sends an empty selection as absent, and every other binding as it was"; "sends an emptied pick-up slot as null when the integration itself names one" |
+| (1) 422 highlights its slot | › "marks the slot a 422 names, and only that slot" |
+| (1) 503 notice, form kept | › "renders the 503 notice on a save and keeps the form as it was"; the read's 503: "says the statuses could not be loaded when the read answers 503, and offers no pick list" |
+| (2) web-e2e | `test/web-e2e/screens.spec.ts` › "the wizard’s step 1 maps the ticket lifecycle from the tracker’s own statuses (WP-182)" |
+| (b) | `ticket-lifecycle.test.tsx` › "renders every unmapped slot as a note, never as a failure" |
+| (c) | `ticket-claim.test.tsx` (four cases: confirmed, shadow, released, QA/none); `task-record.test.tsx` › "the claim and the QA stage in the task header (WP-182 ruling (c))" (through the real task page) |
+| census | `apps/server/src/routes/client-census.test.ts` › "serves each route listed before its caller, guarded, and no client names it yet (WP-181)" |
+| (3), (4) | `docs/user-guide.md` § 1 *The ticket lifecycle*, § 4 (claim and QA stage, *QA, and sending a task back from QA or Ready*, *The conversation on the merge request*), § 11, § 13; `docs/operator-guide.md` § 4 |
+
+**Canaries (sed edits of `ticket-lifecycle.tsx`, restored byte-for-byte, `cmp` clean).** Every slot written whatever its value → the two "absent" cases and the overlay helper case die. An invented option added to every select → "offers only the loaded names" dies. The 422 detail mapping disabled → "marks the slot a 422 names" dies. The draft reset on a failed save → "renders the 503 notice … keeps the form" dies (`expected '' to be 'Finished'`). The census entry left in place → its case dies with "remove its entry".
+
+**Decisions and assumptions.**
+- **The lifecycle has its own save button**, separate from *Save bindings*, and writes the stored binding set (not the checkbox selection), so mapping slots can neither bind nor unbind anything.
+- **Saving writes the block as the form shows it**, `claim` and `take_assigned_tickets` always explicit. With no stored block, `claim` is seeded **on** (the block's default once present, and product/04's "does not claim until its lifecycle is saved once"); the card says so before the save.
+- **`pick_up_from` is `pickup_status`** in the overlay: empty is absent, or `null` when the integration's own configuration sets one — the overlay merge is shallow (`overlayBindingConfig`), so an absent key would let the account's value through and the emptied slot would not be empty.
+- **The seed is the effective configuration** (the account's config from `GET /api/integrations` with the binding's overlay on top), matched case-insensitively (`lifecycleStatusKey`) onto the loaded spelling.
+- **Two task-management bindings**: no form, a sentence (the pipeline applies a lifecycle only with exactly one).
+- **The superseded warning** is shown on the lifecycle card and beside the `status_mapping` keys on the pipeline screen (the contract's docblock: "the screen shows a warning beside the key").
+
+**Sentences falsified (rule 83), each fixed.** `readiness-notices.tsx` (*"The pick lists that map them are WP-182's; here they are only labelled"*); `onboarding.tsx`'s step-1 bullet and `project-settings.tsx`'s mirror table (neither named the lifecycle); `client-census.test.ts`'s `SERVED_BEFORE_ITS_CALLER` comment and its `toContain` line; `docs/operator-guide.md` § 4's *"a task waiting at Ready … each merge request waiting at Ready"* for a poll-only GitLab binding (WP-178 widened both to QA; now *QA or Ready*). The user guide had no sentence about the slots, the claim, `qa` or the conversation (criterion (4)); § 13 gained the *deployed* status and the two-trackers case. **Not fixed, not mine:** `apps/server/src/routes/project-bindings.ts:9` and `ticket-statuses.ts:6` name WP-182 as the pick lists' row, which is now true as written.
+
+**Discovered work.**
+- None left open: both items filed here at round 0 were fixed at review round 1 (below).
+
+Run here: `verify` PASS, `verify:ui` PASS (63 files, 631 tests), `verify:web-e2e` PASS (54), `scripts/citations.test.ts` PASS. Not run (the orchestrator's): `verify:integration`, `verify:e2e`.
+
+**Review round 1 (REQUEST_CHANGES), addressed.**
+- **[major, rule 83]** `docs/user-guide.md` § *The checks panel*, *Review threads*: *"while the task waits for merge"* → *"while the task waits at QA or Ready for merge"* (`humanReturnStageOf`, WP-178).
+- **[minor] Reseed on a tracker change.** The draft records the integration it was seeded from; a different tracker binding on the same page is seeded afresh (the form shows *Loading* until then). The statuses query is now keyed per tracker (`queryKeys.ticketStatuses(project, integration)`; the 3-element prefix still invalidates all of them), so the new tracker's names are never matched against the old tracker's cached list. Test: `ticket-lifecycle.test.tsx` › "seeds the form again when the tracker binding changes on the same page". **Canary:** `stale` forced `false` → it dies.
+- **[minor] The all-empty, claim-on save through the rendered form.** › "saves an untouched form as a block with every slot empty and the claim on, after saying so": the *not saved* warning is shown before any PUT, and the PUT carries `{lifecycle: {claim: true, take_assigned_tickets: false}}`.
+- **[minor] The `returned` note** (`packages/domain/src/lifecycle/readiness-notes.ts`) now reads *"returned is not mapped: no status of its own returns a task; a person moving the ticket back to the in progress or pick up from status still does, and so does a person’s ticket comment or merge request note"* (BD-031 4 (a); `human-return.test.ts` proves the move back). Test: `readiness-notes.test.ts` › "says truthfully what still returns a task when returned is empty (BD-031 ruling 4 (a))". **Canary:** the old sentence restored → it dies.
+- Re-run: `verify` PASS, `verify:ui` PASS (633 tests), `verify:web-e2e` PASS (54), citations PASS.
+
+**Review round 2 (REQUEST_CHANGES), addressed.**
+- **[major] The reseed test now tells one tracker's names from another's.** The fake's `ticket-statuses` answers the statuses of whichever tracker `state.bindings` holds — `STATUSES` for the first, `OTHER_STATUSES` (invented, disjoint names) for the second — and the save-path case asserts the new tracker's pick lists hold its own names and none of the first's. The save path alone cannot catch a project-only key: `onSuccess` invalidates the statuses right after the bindings, and the seed waits for `!isFetching`, so the refetched (correct) list arrives first — measured, the mutation survived it. So a second case drives the path that can: the bindings alone are read again (`app.queryClient.invalidateQueries(['project', id, 'bindings'])`, as after another administrator's rebinding) — `ticket-lifecycle.test.tsx` › "offers the new tracker its own names when only the bindings are read again (review round 2)". **Calibration:** the statuses query keyed by project alone → that case dies by name (`expected [ '', 'Doing', … ] to deeply equal [ '', 'Queued', … ]`); restored byte-for-byte (`cmp`).
+- **[nit]** `useTicketStatuses` with no tracker passes `undefined`, so the key is the 3-element prefix `keys.ts` documents rather than one ending in `''`.
+- Re-run: `verify` PASS, `verify:ui` PASS (634 tests), citations PASS.
+
+**Backlog 552 (folded in before commit, coordinator's request).** TD-029 decision 1's *"the setup surface writes a block for every project it saves"*: the wizard's *Bind* now sends `lifecycle: {claim: true, take_assigned_tickets: false}` (`DEFAULT_LIFECYCLE_BLOCK`, `wizardBindingConfig` in `ticket-lifecycle.tsx`) for a **task-management** integration the project does **not yet bind** and whose effective configuration has no block; a stored binding is sent as stored (a block untouched, a block-less pre-milestone binding left block-less — product/04:144), every other binding byte-identical, and the settings page's *Save bindings* is unchanged. The step says so under *Bind* before the press (`data-lifecycle="wizard-default"`). The block names no status, so the save-time check makes no provider call. The lifecycle card's *not saved* sentence is reworded (it now names the bindings that have no block), and the user guide's § 1 says the wizard saves the block.
+- Tests (`ticket-lifecycle.test.tsx` › "the wizard writes the default block for a tracker it binds (backlog 552)"): "(a) sends the block, claim on, with the first bind of a tracker, and says so before"; "(b) keeps a stored block as it is: a claim switched off stays off"; "(c) adds nothing on the settings page’s re-save of a binding with no block".
+- **Calibration:** the default dropped from `wizardBindingConfig` → (a) dies by name (1 failed / 20 passed); restored byte-for-byte.
+- **Web-e2e not extended:** its fixture's tracker is already bound, so its *Bind* is case (b); a first bind needs a corpus with no binding, which would change what the other screens' cases read. The UI tier drives all three through the real wizard and settings page.
+- Re-run: `verify` PASS, `verify:ui` PASS (637 tests), `verify:web-e2e` PASS (54), citations PASS.

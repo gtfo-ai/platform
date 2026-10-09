@@ -133,6 +133,23 @@ export const useProjectBindings = (projectId: string | null) => {
   });
 };
 
+/**
+ * `GET /api/projects/:id/ticket-statuses` (WP-182) — the tracker's statuses the lifecycle pick lists
+ * offer. Asked only when a task-management binding is stored (`trackerId`, which also keys the
+ * answer per tracker), since without one the answer is a 409. **Not retried**: every read is a provider call through the executor, and a 503 is
+ * the server's answer that the tracker cannot be read, not a transport hiccup to repeat.
+ */
+export const useTicketStatuses = (projectId: string | null, trackerId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.ticketStatuses(projectId ?? '', trackerId ?? undefined),
+    queryFn: () => endpoints.ticketStatuses(projectId ?? ''),
+    enabled: projectId !== null && trackerId !== null,
+    retry: false,
+    ...FOREVER,
+  });
+};
+
 /** `GET /api/projects/:id/repository` — the stored default branch and the provider's (WP-139). */
 export const useProjectRepository = (projectId: string | null) => {
   const { endpoints } = useServices();
@@ -1121,6 +1138,17 @@ export const useOnboardingCommands = (mint?: MintKey) => {
         });
         await queryClient.invalidateQueries({
           queryKey: queryKeys.projectBindings(input.projectId),
+        });
+        // WP-182: a different tracker binding lists different statuses, and the readiness notes
+        // and the superseded flag are read off the binding just written.
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.ticketStatuses(input.projectId),
+        });
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.projectReadiness(input.projectId),
+        });
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.projectConfig(input.projectId),
         });
       },
     }),

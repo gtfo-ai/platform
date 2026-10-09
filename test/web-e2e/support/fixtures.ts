@@ -43,6 +43,7 @@ import {
   orgStatsResponseSchema,
   orgUsersResponseSchema,
   projectAuditResponseSchema,
+  projectBindingsResponseSchema,
   projectSummarySchema,
   rediscoveryGateResponseSchema,
   runCommandsResponseSchema,
@@ -54,6 +55,7 @@ import {
   taskDetailResponseSchema,
   taskRecordSchema,
   testIntegrationResponseSchema,
+  ticketStatusesResponseSchema,
   transcriptEventSchema,
   versionResponseSchema,
 } from '@platform/contracts';
@@ -1191,3 +1193,37 @@ export const kbHealth = kbHealthResponseSchema.parse({
 export const tasksPage = { items: [featureTask, bugTask], next_cursor: null, can_start_task: true };
 
 export const projectsPage = { items: [project] };
+
+/**
+ * `GET /api/projects/:id/bindings` (WP-182): the project's one tracker binding, the integration
+ * above, with no lifecycle block yet — what the wizard's step 1 maps.
+ */
+export const projectBindings = projectBindingsResponseSchema.parse({
+  items: [
+    {
+      integration_id: IDS.integration,
+      type: 'task_management',
+      provider: 'jira-cloud',
+      name: 'Jira (fake)',
+      config: {},
+    },
+  ],
+});
+
+/**
+ * `GET /api/projects/:id/ticket-statuses` (WP-182): the tracker's statuses, **invented** for this
+ * corpus (BD-031 ruling 1: no status name is assumed anywhere but a fixture).
+ */
+export const ticketStatuses = ticketStatusesResponseSchema.parse({
+  items: [
+    { id: '10001', name: 'Doing', category: 'in_progress', raw_category: 'indeterminate' },
+    {
+      id: '10002',
+      name: 'Waiting for review',
+      category: 'in_progress',
+      raw_category: 'indeterminate',
+    },
+    { id: '10003', name: 'Testing', category: 'in_progress', raw_category: 'indeterminate' },
+    { id: '10004', name: 'Sent back', category: 'todo', raw_category: 'new' },
+  ],
+});

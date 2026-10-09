@@ -322,6 +322,51 @@ test('the wizard’s Test connection shows a failed result beside the integratio
   );
 });
 
+test('the wizard’s step 1 maps the ticket lifecycle from the tracker’s own statuses (WP-182)', async ({
+  page,
+  request,
+}) => {
+  // BD-031 ruling 7: the slots are pick lists loaded from the tracker. Against the built bundle, so
+  // this is the tier that shows the selects, the multi-select and the save work in a browser.
+  await page.goto('/onboarding');
+  const card = page.locator(`[data-ticket-lifecycle="${IDS.integration}"]`);
+  const qa = card.getByLabel('QA', { exact: true });
+  await expect(qa).toBeVisible();
+  // Only the loaded names, each with its category, after the empty choice.
+  await expect(qa.locator('option')).toHaveText([
+    'Not mapped',
+    'Doing (in progress)',
+    'Waiting for review (in progress)',
+    'Testing (in progress)',
+    'Sent back (to do)',
+  ]);
+  await card.getByLabel('In review', { exact: true }).selectOption('Waiting for review');
+  await qa.selectOption('Testing');
+  await card.getByLabel('Returned', { exact: true }).selectOption(['Sent back']);
+  await card.getByRole('button', { name: 'Save the ticket lifecycle' }).click();
+  // Waited on what the page writes last, then the log read as what it implies (rule 87).
+  await expect(card.getByText('The ticket lifecycle was saved.')).toBeVisible();
+  const puts = (await commandLog(request)).filter((entry) => entry.path.endsWith('/bindings'));
+  expect(puts).toHaveLength(1);
+  expect(puts[0]?.body).toEqual({
+    items: [
+      {
+        integration_id: IDS.integration,
+        // Every slot left empty is absent; the two switches are the form's.
+        config: {
+          lifecycle: {
+            in_review: 'Waiting for review',
+            qa: 'Testing',
+            returned: ['Sent back'],
+            claim: true,
+            take_assigned_tickets: false,
+          },
+        },
+      },
+    ],
+  });
+});
+
 test('the theme control switches the document theme', async ({ page }) => {
   await page.goto('/settings');
   await page.getByLabel('Theme preference').selectOption('dark');

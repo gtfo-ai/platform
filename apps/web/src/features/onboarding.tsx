@@ -18,7 +18,9 @@
  *   other, which is how a served endpoint ended up with no caller anywhere. Since WP-155 (backlog
  *   451) a *Test connection* shows its answer beside the integration it tested, through the
  *   Integrations screen's own component (`connection-test-result.tsx`); before it the wizard sent
- *   the probe and rendered nothing.
+ *   the probe and rendered nothing. Since WP-182 it also maps the tracker binding's **ticket
+ *   lifecycle** — each slot a pick list of the tracker's own statuses — through
+ *   `features/ticket-lifecycle.tsx`, the same component the project settings page renders.
  * - **Step 2 (technical discovery)** starts the Discovery agent and shows the readiness evaluation
  *   it produces, with product/17's three cheapest improvements — and, since WP-155 (backlog 452),
  *   where the discovery task is now (`discovery-status.tsx`), read back on load and followed live.
@@ -80,8 +82,13 @@ import { ConnectionTestResult } from './connection-test-result.js';
 import { DefaultBranch, DefaultBranchMismatch } from './default-branch.js';
 import { DiscoveryStatus } from './discovery-status.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
-import { bindingConfigOf, OperatingMode } from './operating-mode.js';
+import { OperatingMode } from './operating-mode.js';
 import { ReadinessNotices } from './readiness-notices.js';
+import {
+  TicketLifecycle,
+  wizardBindingConfig,
+  wizardWritesDefaultBlock,
+} from './ticket-lifecycle.js';
 
 const LEVEL_TONE: readonly BadgeTone[] = ['danger', 'warning', 'accent', 'success', 'success'];
 
@@ -284,9 +291,15 @@ export const OnboardingScreen = (): ReactElement => {
                     projectId: project.id,
                     // Each binding keeps the configuration it already has — the notification
                     // channel lives there (WP-32), and re-sending the set without it would erase it.
+                    // A tracker bound here for the first time also gets the default lifecycle
+                    // block, claim on (backlog 552, TD-029 decision 1); a stored one is untouched.
                     items: selected.map((id) => ({
                       integration_id: id,
-                      config: bindingConfigOf(bindings.data?.items ?? [], id),
+                      config: wizardBindingConfig({
+                        integration: integrations.items.find((item) => item.id === id) ?? null,
+                        stored: bindings.data?.items ?? [],
+                        integrationId: id,
+                      }),
                     })),
                   })
                 }
@@ -294,6 +307,21 @@ export const OnboardingScreen = (): ReactElement => {
                 Bind {selected.length} integration{selected.length === 1 ? '' : 's'}
               </Button>
             </div>
+            {/* Backlog 552: said before the save, as the lifecycle card says its own default. */}
+            {selected.some((id) =>
+              wizardWritesDefaultBlock({
+                integration: integrations.items.find((item) => item.id === id) ?? null,
+                stored: bindings.data?.items ?? [],
+                integrationId: id,
+              }),
+            ) ? (
+              <p className="text-xs text-fg-muted" data-lifecycle="wizard-default">
+                Binding a ticket tracker here also saves its ticket lifecycle with every slot empty
+                and the claim on: before a task’s first run the platform assigns the ticket to the
+                tracker integration’s own account. Map the slots, or switch the claim off, in the
+                ticket lifecycle form below.
+              </p>
+            ) : null}
             {bindings.isSuccess && bindings.data.items.length > 0 ? (
               <p className="text-xs text-fg-muted">
                 Bound: {bindings.data.items.map((item) => item.provider).join(', ')}
@@ -302,6 +330,12 @@ export const OnboardingScreen = (): ReactElement => {
             {/* WP-139: the provider's default branch, once a git binding is known — the same
                 component as the settings page's (product/18:55). */}
             <DefaultBranch projectId={project.id} />
+            {/* WP-182 ruling (a): the ticket lifecycle's slots, picked from the tracker's own
+                statuses — the same component as the settings page's (product/18:55). */}
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-semibold">Ticket lifecycle</p>
+              <TicketLifecycle projectId={project.id} />
+            </div>
           </div>
         )}
       </Step>

@@ -74,7 +74,8 @@ const ADMITTED_GAPS: Readonly<Record<string, string>> = {
   // when WP-44 did, so the comparison above now sees all of them. A route added without a caller
   // is invisible here again, and nothing but a hand-written case would say so. WP-112's task export
   // was that case until WP-122 gave it the task page's *Download JSON*; since WP-181 such a route is
-  // listed in `SERVED_BEFORE_ITS_CALLER` below, with the row that gives it one.
+  // listed in `SERVED_BEFORE_ITS_CALLER` below, with the row that gives it one — and that list is
+  // empty again since WP-182 gave `GET …/ticket-statuses` its pick lists.
 };
 
 /**
@@ -88,9 +89,8 @@ const ADMITTED_GAPS: Readonly<Record<string, string>> = {
  * the one class this census cannot see, stated rather than implied.
  */
 const SERVED_BEFORE_ITS_CALLER: Readonly<Record<string, string>> = {
-  // WP-181 ruling (a): the tracker's statuses, what a lifecycle slot may name. Its caller is
-  // WP-182's pick lists in the wizard's step 1 and the project settings.
-  '/api/projects/{}/ticket-statuses': 'WP-182',
+  // Empty. WP-181's `/api/projects/{}/ticket-statuses` (entered here with WP-182 as its caller)
+  // left when WP-182's lifecycle pick lists called it; the comparison above now holds it.
 };
 
 /**
@@ -303,7 +303,9 @@ describe('the client’s endpoint list against the server’s router', () => {
         })),
       ),
     );
-    expect(Object.keys(SERVED_BEFORE_ITS_CALLER)).toContain('/api/projects/{}/ticket-statuses');
+    // WP-182: the entry this list was written for has its caller, so the client names the path —
+    // asserted positively, so an empty list is not satisfied by a sweep that found nothing.
+    expect(paths.has('/api/projects/{}/ticket-statuses')).toBe(true);
     for (const [path, caller] of Object.entries(SERVED_BEFORE_ITS_CALLER)) {
       const probed = await probe(path);
       expect(probed.served, path).toBe(true);

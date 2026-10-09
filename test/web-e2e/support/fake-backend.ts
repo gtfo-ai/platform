@@ -39,8 +39,10 @@ import {
   cancelTaskRequestSchema,
   decideBreakdownRequestSchema,
   handBackRequestSchema,
+  lifecycleStatusKey,
   patchOrgSettingsRequestSchema,
   pauseTaskRequestSchema,
+  putProjectBindingsRequestSchema,
   resumeTaskRequestSchema,
   retryRunRequestSchema,
   retryStageRequestSchema,
@@ -512,6 +514,61 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       json(response, 200, fixtures.failedConnectionTest);
       return;
     }
+    // WP-182: the bindings write, parsed with the published schema and logged like every command.
+    // It makes the server's own membership check (`lifecycle-check.ts`) over this corpus's statuses,
+    // so a name the tracker does not list answers `422 lifecycle_status_unknown` naming its path.
+    if (path === `/api/projects/${fixtures.IDS.project}/bindings` && method === 'PUT') {
+      const parsed = putProjectBindingsRequestSchema.safeParse(await readBody(request));
+      if (!parsed.success) {
+        problem(response, 400, 'invalid_request', parsed.error.issues[0]?.message ?? 'invalid');
+        return;
+      }
+      const known = new Set(
+        fixtures.ticketStatuses.items.map((status) => lifecycleStatusKey(status.name)),
+      );
+      const named = parsed.data.items.flatMap((item) => {
+        const lifecycle = (item.config?.lifecycle ?? {}) as Record<string, unknown>;
+        return [
+          ...(typeof item.config?.pickup_status === 'string'
+            ? [{ path: 'pickup_status', name: item.config.pickup_status }]
+            : []),
+          ...Object.entries(lifecycle).flatMap(([slot, value]) =>
+            typeof value === 'string'
+              ? [{ path: `lifecycle.${slot}`, name: value }]
+              : Array.isArray(value)
+                ? value.map((name, index) => ({
+                    path: `lifecycle.${slot}[${index}]`,
+                    name: String(name),
+                  }))
+                : [],
+          ),
+        ];
+      });
+      const unknown = named.filter((entry) => !known.has(lifecycleStatusKey(entry.name)));
+      if (unknown.length > 0) {
+        json(response, 422, {
+          error: {
+            code: 'lifecycle_status_unknown',
+            message: 'a slot names a status the tracker does not list; nothing was saved',
+            details: unknown.map((entry) => ({
+              path: entry.path,
+              message: `"${entry.name}" is not among the tracker's statuses`,
+            })),
+          },
+        });
+        return;
+      }
+      commands.push({ path, body: parsed.data });
+      json(response, 200, {
+        items: parsed.data.items.map((item) => ({
+          ...(fixtures.projectBindings.items.find(
+            (bound) => bound.integration_id === item.integration_id,
+          ) ?? fixtures.projectBindings.items[0]),
+          config: item.config ?? {},
+        })),
+      });
+      return;
+    }
     // WP-93: `PATCH /api/org`, parsed with the published schema and logged like every command.
     if (path === '/api/org' && method === 'PATCH') {
       const parsed = patchOrgSettingsRequestSchema.safeParse(await readBody(request));
@@ -634,6 +691,9 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         },
         [`/api/projects/${fixtures.IDS.project}/config`]: fixtures.effectiveConfig,
         [`/api/projects/${fixtures.IDS.project}/budgets`]: fixtures.budgets,
+        // WP-182: the tracker binding and its statuses, which the lifecycle pick lists read.
+        [`/api/projects/${fixtures.IDS.project}/bindings`]: fixtures.projectBindings,
+        [`/api/projects/${fixtures.IDS.project}/ticket-statuses`]: fixtures.ticketStatuses,
         '/api/org/budgets': fixtures.orgBudgets,
         '/api/org': fixtures.orgSettings,
         '/api/org/identities': fixtures.orgIdentities,

@@ -57,7 +57,7 @@ const CONSEQUENCE: Readonly<Record<LifecycleNoteSlot, string>> = {
     'approved is not mapped: the platform does not move the ticket when the last agent review approves',
   qa: 'QA is not mapped: the platform does not move the ticket to QA, and new tasks have no QA stage',
   returned:
-    'returned is not mapped: moving the ticket to a status does not return a task; a person’s comment or merge request note still does',
+    'returned is not mapped: no status of its own returns a task; a person moving the ticket back to the in progress or pick up from status still does, and so does a person’s ticket comment or merge request note',
   done: 'done is not mapped: the platform does not move the ticket when the merge request is merged',
 };
 

@@ -59,6 +59,19 @@ describe('the ticket lifecycle’s readiness notes', () => {
     }
   });
 
+  it('says truthfully what still returns a task when returned is empty (BD-031 ruling 4 (a))', () => {
+    const [note] = lifecycleReadinessNotes({
+      pickUpFrom: 'Sent back',
+      slots: { ...FULL.slots, returned: [] },
+    });
+    expect(note?.slot).toBe('returned');
+    // A move back to in_progress or pick_up_from is a return whatever `returned` holds.
+    expect(note?.message).toContain(
+      'moving the ticket back to the in progress or pick up from status still does',
+    );
+    expect(note?.message).not.toMatch(/moving the ticket to a status does not return/);
+  });
+
   it('answers the one not-configured note for a binding with no block', () => {
     const notes = lifecycleReadinessNotes(null);
     expect(notes).toHaveLength(1);

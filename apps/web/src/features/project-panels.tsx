@@ -394,6 +394,10 @@ export const BudgetsScreen = ({ projectKey }: { readonly projectKey: string }): 
 
 // ── Pipeline / effective configuration ───────────────────────────────────────
 
+/** A source key that is `status_mapping` or one of its entries (`status_mapping.<stage>`). */
+const isStatusMappingKey = (key: string): boolean =>
+  key === 'status_mapping' || key.startsWith('status_mapping.');
+
 export const PipelineScreen = ({ projectKey }: { readonly projectKey: string }): ReactElement => {
   const projectId = useProjectId(projectKey);
   const config = useProjectConfig(projectId);
@@ -429,9 +433,22 @@ export const PipelineScreen = ({ projectKey }: { readonly projectKey: string }):
                   >
                     {source}
                   </Badge>
+                  {/* WP-182: TD-029 decision 3's warning beside the key the lifecycle supersedes. */}
+                  {config.data.status_mapping_superseded && isStatusMappingKey(key) ? (
+                    <Badge tone="warning">
+                      not applied — the ticket lifecycle maps the statuses
+                    </Badge>
+                  ) : null}
                 </li>
               ))}
             </ul>
+            {config.data.status_mapping_superseded ? (
+              <p className="pt-2 text-xs" data-status-mapping="superseded">
+                The project’s ticket lifecycle maps a slot other than <em>Pick up from</em>, so{' '}
+                <code>status_mapping</code> is not applied at all. The slots are on the project
+                settings page.
+              </p>
+            ) : null}
           </Card>
           <Card>
             <SectionHeading>Merged configuration</SectionHeading>

@@ -28,7 +28,10 @@ const SESSION: SessionResponse = {
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-const detail = (canExport: boolean): TaskDetailResponse =>
+const detail = (
+  canExport: boolean,
+  task: Partial<TaskDetailResponse['task']> = {},
+): TaskDetailResponse =>
   ({
     task: {
       id: TASK,
@@ -67,6 +70,7 @@ const detail = (canExport: boolean): TaskDetailResponse =>
       completed_at: null,
       ticket_claim: null,
       qa_stage: false,
+      ...task,
     },
     taken_over: null,
     can_raise_budget: false,
@@ -89,12 +93,13 @@ const detail = (canExport: boolean): TaskDetailResponse =>
 const open = (options: {
   readonly canExport: boolean;
   readonly audit?: { readonly status: number; readonly message: string };
+  readonly task?: Partial<TaskDetailResponse['task']>;
 }) => {
   const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input);
     const path = new URL(url, 'http://localhost').pathname;
     if (url.includes('/api/auth/get-session')) return json(SESSION);
-    if (path === `/api/tasks/${TASK}`) return json(detail(options.canExport));
+    if (path === `/api/tasks/${TASK}`) return json(detail(options.canExport, options.task));
     if (path === `/api/tasks/${TASK}/audit` && options.audit !== undefined) {
       return json(
         {
@@ -154,5 +159,26 @@ describe('Who did what, when its read fails (WP-122, backlog 385)', () => {
     open({ canExport: false, audit: { status: 403, message: 'role member may not read' } });
     expect(await screen.findByText('Not shown', {}, { timeout: 5_000 })).toBeTruthy();
     expect(document.body.textContent).toContain('reading the record needs the maintainer role');
+  });
+});
+
+describe('the claim and the QA stage in the task header (WP-182 ruling (c))', () => {
+  it('shows the claim the DTO publishes, and the QA stage', async () => {
+    const view = open({
+      canExport: false,
+      task: {
+        ticket_claim: { status: 'shadow', claimed_at: AT, released_at: null },
+        qa_stage: true,
+      },
+    });
+    expect(await view.findByText('claim (shadow)')).toBeTruthy();
+    expect(view.getByText('QA stage')).toBeTruthy();
+  });
+
+  it('shows neither for a task that never claimed and has no QA stage', async () => {
+    const view = open({ canExport: false });
+    await view.findByText('DEMO-1');
+    expect(view.container.querySelector('[data-ticket-claim]')).toBeNull();
+    expect(view.queryByText('QA stage')).toBeNull();
   });
 });

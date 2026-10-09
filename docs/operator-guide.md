@@ -590,7 +590,12 @@ origin"*. `Idempotency-Key`
 is required on the three commands that *create* something, so a retry is not a second integration.
 
 Then bind it to a project — in the wizard's step 1, or on the project's own settings page
-(`/projects/<key>/settings`), which mirrors every wizard step (product/18).
+(`/projects/<key>/settings`), which mirrors every wizard step (product/18). Both places also map a
+ticket tracker's **lifecycle** (WP-182; the user guide's § 1, *The ticket lifecycle*): each slot is a
+pick list of the statuses `GET /api/projects/<id>/ticket-statuses` reads from the tracker through
+the binding (a maintainer's read, one provider call per load), and the save checks every name
+against the same read — `422 lifecycle_status_unknown` naming the slot, or `503
+lifecycle_statuses_unavailable` when the tracker cannot be read, with nothing written in either case.
 
 ### The five providers that ship
 
@@ -653,7 +658,7 @@ merge-request listing. A GitLab binding with **no webhook secret at all** — ne
 `webhook_secret_token` nor `webhook_signing_token`, so no delivery can reach it — is **poll-only**, and
 its polls make two more reads (WP-123): the head of the project's stored **Default branch** (WP-142 —
 never GitLab's own default; changing the setting resets the comparison, so the next poll records no
-move), so a task waiting at Ready is re-checked for conflicts when it moves, and the comments on each merge request waiting at Ready
+move), so a task waiting at QA or Ready is re-checked for conflicts when it moves, and the comments on each merge request waiting at QA or Ready
 (at most twenty per poll), so a reviewer's comment returns the task to Implementation. A binding
 with a webhook secret makes neither read: its webhook carries both — and since WP-148 its push hook
 is judged against the stored **Default branch** too, whatever GitLab's own default says. Saving a

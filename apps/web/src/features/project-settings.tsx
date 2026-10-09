@@ -9,7 +9,7 @@
  *
  * | wizard step | here |
  * |---|---|
- * | 1 connect | integrations and bindings — the create and test controls live on the Integrations screen, which this page links to and whose buttons WP-30 added (PROGRESS backlog 55) |
+ * | 1 connect | integrations and bindings — the create and test controls live on the Integrations screen, which this page links to and whose buttons WP-30 added (PROGRESS backlog 55) — and the tracker's ticket lifecycle slots, `ticket-lifecycle.tsx`, the *same component* the wizard renders (WP-182) |
  * | 2 technical discovery | start discovery — a second start answers `started: false` and runs nothing — plus a maintainer's **re-evaluate**, which runs discovery again as a new task with its ceiling on the button (WP-94, Q107 (a); not a wizard control, since the wizard's step is the first run), and read the readiness level, which the post-merge re-check moves for the criteria it answers without a run |
  * | 3 business interview | `BusinessInterview`, the same component the wizard renders (WP-64) |
  * | 4 operating mode | `features/operating-mode.tsx`, the *same component* the wizard renders |
@@ -67,6 +67,7 @@ import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 import { ProjectPromptFiles } from './project-prompts.js';
 import { ReadinessNotices } from './readiness-notices.js';
 import { Rediscovery } from './rediscovery.js';
+import { TicketLifecycle } from './ticket-lifecycle.js';
 import { VerificationMode } from './verification-mode.js';
 
 /**
@@ -206,6 +207,11 @@ export const ProjectSettingsScreen = ({
             detail={String(commands.putBindings.error)}
           />
         ) : null}
+        {/* WP-182 ruling (a): the wizard's step-1 lifecycle slots, mirrored — the same component. */}
+        <div className="flex flex-col gap-2">
+          <p className="text-xs font-semibold">Ticket lifecycle</p>
+          <TicketLifecycle projectId={project.id} />
+        </div>
       </Card>
 
       {/* WP-139: the wizard's default branch, mirrored — the *same component* (product/18:55). */}

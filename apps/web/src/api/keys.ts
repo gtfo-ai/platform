@@ -41,6 +41,15 @@ export const queryKeys = {
   projectReadiness: (id: string) => ['project', id, 'readiness'] as const,
   rediscoveryGate: (id: string) => ['project', id, 'rediscovery'] as const,
   projectBindings: (id: string) => ['project', id, 'bindings'] as const,
+  /**
+   * WP-182: the tracker's statuses, under the project's prefix like the bindings they serve, and
+   * keyed by the tracker binding's integration when one is named, so another tracker bound on the
+   * same page is a different answer rather than a cached one. Without it, the prefix of all of them.
+   */
+  ticketStatuses: (id: string, integrationId?: string) =>
+    integrationId === undefined
+      ? (['project', id, 'ticket-statuses'] as const)
+      : (['project', id, 'ticket-statuses', integrationId] as const),
   /** WP-139: the stored default branch beside the git provider's answer. */
   projectRepository: (id: string) => ['project', id, 'repository'] as const,
   projectBudgets: (id: string) => ['project', id, 'budgets'] as const,
