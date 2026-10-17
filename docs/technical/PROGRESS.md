@@ -16195,6 +16195,77 @@ A plain inline link's destination is exempt since round 1. A bare `https://www.n
 
 **Depends on** WP-189.
 
+### 578. **`pnpm <cmd>` with no such pnpm command or script may fall back to running `<cmd>` itself, and the policy reads `pnpm sudo id` as a `pnpm` command under `auto`** (TODO, **latent — pnpm is not in the stock run image; major, fail-open past the block list, if the fallback is confirmed and pnpm is present**. Found by WP-196's implementer, session 16, in its *Discovered work*; **the fallback itself is a hypothesis — needs measurement against a real pnpm**. **No work package owns it.** No test run by the refiner)
+
+**What is wrong.** WP-196 reads pnpm through only in its exec forms: `RUNNER_EXEC_SUBCOMMANDS` (`packages/domain/src/policies/command-policy.ts:1803-1809`) holds `pnpm: new Set(['exec', 'dlx'])`, and `runnerSubcommandAt` (`:1949`) returns `null` at the first non-flag word that is not one of them. So `pnpm sudo id` is an ordinary `pnpm` command: neither peeled for the block list (`sudo *`) and the floors, nor read as a script. If pnpm runs an unknown `<cmd>` as a command when no script of that name exists, the block list does not hold for it.
+
+**Evidence.** Measured by WP-196's implementer, marker-only through `decideUnattendedCommand`: `pnpm sudo id` reads `ask / auto / deny` in all three baselines, unchanged by WP-196 (its notes' table, row *"Not changed by this row"*). For contrast, after WP-196 `npm exec -- sudo id` reads `block / block / block` and `pnpm exec git push --no-verify` reads `ask / git / git`. Measured by the same implementer in `platform-runtime`: `pnpm` and `pnpx` are absent (`command -v`); `docker/runtime.Dockerfile:100`'s `corepack enable pnpm` is in the build stage only. **Not measured (hypotheses):** (a) that pnpm falls back to executing `<cmd>` at all, and whether it resolves it only in `node_modules/.bin` or on the whole `PATH` (only the latter reaches `sudo`); (b) whether `corepack pnpm sudo id` — `corepack` *is* in the stock image, and WP-196 peels it as a wrapper — can fetch pnpm at run time, which depends on the run's egress admitting the npm registry.
+
+**What it costs to leave.** If (a) holds with `PATH` resolution: under `auto`, any blocked binary (`sudo`, `terraform`, …) runs by prefixing `pnpm` in a project whose image ships pnpm, or in the stock image if (b) holds. If it resolves only `node_modules/.bin`, it is the repository-content class BD-025 already accepts (see *not recorded* below) and this entry closes as working as designed.
+
+**Done when.**
+- Measured first, in a container with a real pnpm (the version `package.json`'s `packageManager` pins): `pnpm sudo id` with no `sudo` script, and `pnpm git status` — does each run, and from where. Then (b): `corepack pnpm --version` in `platform-runtime` under a run's egress list.
+- If the fallback reaches `PATH`: an architect ruling, as for 575 (the closed rule, rule 65) — either pnpm with a first word that is not a known pnpm subcommand is peeled as `pnpm exec`, or it is uncertain with a named reason. Rows in `unattended-commands.test.ts`, all three baselines: `pnpm sudo id` reads `block`, `corepack pnpm sudo id` reads `block`; controls `pnpm test`, `pnpm run build` and `pnpm install --frozen-lockfile` keep their cells. **Canary:** remove the rule and the rows fail by name.
+- technical/05's WP-196 bullet (which names this as *Not read*) is updated either way.
+
+**Depends on** WP-196 (`RUNNER_EXEC_SUBCOMMANDS`, `runnerSubcommandAt`). Related: 575, 579.
+
+### 579. **`bun exec '<string>'` runs the string in Bun's own shell, and the policy reads it as a `bun` command under `auto`** (TODO, **latent — bun is not in the stock run image and corepack does not provide it; major, fail-open (a shell string never read), wherever a project's image ships bun**. Found by WP-196's implementer, session 16, in its *Discovered work*; Bun's behaviour is from the implementer's reading, **not executed**. **No work package owns it.** No test run by the refiner)
+
+**What is wrong.** `RUNNER_EXEC_SUBCOMMANDS` (`packages/domain/src/policies/command-policy.ts:1803-1809`) holds `bun: new Set(['x'])`, so `bun exec` is not an exec form and `bun` is an ordinary command. The string reader `runnerCallsString` (`:4203`), reached through `runnerOptions` (`:4235`) at `:4570`, looks for an option (`-c`, a prefix of `--call` or `--shell-mode`); `bun exec` takes its string as a **positional** argument, so no option reader reaches it. The string is neither read as a script nor made uncertain.
+
+**Evidence.** Measured by WP-196's implementer, marker-only: `bun exec 'git push --no-verify'` reads `ask / auto / deny` in all three baselines, unchanged by WP-196. For contrast, `pnpm exec --shell-mode '…'` and `npm exec -c '…'` read `ask / uncertain / uncertain` (`npxCall`), and `bun x make 'X=1'` reads `ask / hazard / hazard`. Measured in `platform-runtime`: `bun` and `bunx` are absent. **Not measured:** that `bun exec` runs its argument in Bun Shell (stated by the implementer, not executed), and which other Bun subcommands take a string or a file to run (`bun run <file>`, `bun -e`) — needs measurement against a real bun.
+
+**What it costs to leave.** In a project whose run image ships bun, an agent under `auto` runs any shell string — `git push --no-verify`, a blocked binary — through `bun exec`, the same door 575 closed for npm and pnpm.
+
+**Done when.**
+- Measured first against a real bun: `bun exec 'echo x'` runs the string; the list of bun subcommands and flags that run text the model wrote.
+- Under the closed rule WP-196 used for strings: `bun exec` (and any other such spelling the measurement finds) makes the line `UNCERTAINTY.npxCall` and the string is never read. Rows, all three baselines: `bun exec 'git push --no-verify'` reads `uncertain`; controls `bun x make 'X=1'` (`hazard`) and `bunx git push --no-verify` (`git`) keep their cells. **Canary:** drop the rule and the rows fail by name.
+- technical/05's WP-196 bullet (which names this as *Not read*) is updated.
+
+**Depends on** WP-196 (`runnerCallsString`, `RUNNER_EXEC_SUBCOMMANDS`). Related: 575, 578.
+
+### 580. **npm spawns a program named by its own `editor`, `browser` and `viewer` settings, and the policy reads `npm edit zod --editor='sh -c id'` as an `npm` command under `auto`** (TODO, **major — fail-open: a model-written program runs past the block list and the floors; live wherever the run image has npm, which the stock one does**. Found by WP-196's reviewer, review round 3, session 16; traced through npm 11's source, **not executed**. **Needs an owner (architect).** No test run by the refiner)
+
+**What is wrong.** The sibling of the `--script-shell`/`--node-options` class. Those settings hand npm a program, so they are `hazard` floors (`packages/domain/src/policies/command-policy.ts:1435-1480`, prefixes included). Three more npm settings also name a program that npm spawns, and none is floored when given as an option on the line: `--editor`, `--browser` and `--viewer`. Their environment forms (`npm_config_editor`, …) are already uncertain through `UNCERTAINTY.npmEnvironment` (`:244`, applied at `:4965`). So this is the command-line half only.
+
+**Evidence.** Measured by the reviewer through `decideUnattendedCommand`, all three baselines, marker-only, nothing executed. Each line reads `ask / auto / deny`:
+- `npm edit zod --editor='sh -c id'`
+- `npm help npm --viewer=browser --browser='id;'`
+- `npm docs zod --browser='id;'`
+
+Traced in npm 11's source (fetched copies in the round's scratchpad; not checked in):
+- `lib/commands/edit.js:51-52` splits the `editor` value on whitespace and spawns the first word with the rest as arguments: `const [bin, ...spawnArgs] = this.npm.config.get('editor').split(/\s+/)`, then `cp.spawn(bin, …)`.
+- `docs` and `help` with `viewer=browser` go through `openUrl`, which calls promise-spawn's `open` with `shell: true`. So the `browser` value is a shell string. `help` reads local man pages, so it works offline.
+- The three settings are defined in npm 11's config definitions (the fetched copy is `defs.js`): `browser` at `:380`, `editor` at `:726`, `viewer` at `:2760`, default `man` off Windows.
+
+WP-196's round-3 notes left this class to the orchestrator and did not fix it. Its control row `npm edit x` (`ask / auto / deny`) has no option and stays correct.
+
+**What it costs to leave.** Under `auto`, any program runs through `npm edit`/`npm docs`/`npm help` with one option. That includes a blocked binary (`--editor='sudo id'`) and any shell string (`--browser='…;'`). It is the same door the `--script-shell` floor closed.
+
+**Done when.**
+- An architect ruling on the shape, under the closed rule (rule 65). The obvious one is three more `hazard` floors, `* --editor*`, `* --browser*`, `* --viewer*`, with the npm and pnpm unique-prefix forms the `--script-shell` floor carries. The prefixes need deriving from npm's option set as that floor's were (`--edit`, `--brow`, `--view` are guesses). The ruling should also say whether pnpm's `--config.editor=` and similar are already covered by the `--config.<key>=` floor (`:1477`).
+- Rows in `unattended-commands.test.ts`, all three baselines: the three lines above read `hazard` (or whatever the ruling names), plus one prefix spelling each. Controls: `npm edit x`, `npm docs zod` and `npm help npm` keep their cells. **Canary:** remove each floor and its rows fail by name.
+- technical/05's floor list and the `RUNNER_ENVIRONMENT_WORD` residual are updated.
+- **Needs measurement (optional, a container with npm 11):** that `npm help npm --viewer=browser --browser='id;'` runs `id` with no network.
+
+**Depends on** WP-196 (round 3's `npmEnvironment` wording). **No work package owns it.** Related: 581.
+
+### 581. **`yarn create vite -c 'git push --no-verify'` reads `auto`; it is not known whether Yarn 1's `create` passes `-c` on as a shell string** (TODO, **minor — a hypothesis; major (fail-open, a shell string never read) only if confirmed**. Found by WP-196's reviewer, review round 3, session 16. **Unconfirmed from source.** **Needs an owner (architect).** No test run by the refiner)
+
+**What is wrong (if it is).** WP-196 makes pnpm's `create -c` uncertain through the every-word scan of a pnpm line. For npm, `init`/`create` are uncertain through round 3's every-option scan. Yarn has no equivalent: `yarn create <pkg> -c '…'` is an ordinary `yarn` command.
+
+**Evidence.** Measured by the reviewer, marker-only: `yarn create vite -c 'git push --no-verify'` reads `auto` in the implementation baseline. The other two cells are not in the report; **needs measurement** (expected `ask / auto / deny`). **Not established:** whether Yarn 1's `create` gives `-c` to anything that runs it as a shell string. It may just hand it to the `create-vite` binary as an ordinary argument, and then this is working as designed.
+
+**What it costs to leave.** If `-c` is forwarded to a shell: under `auto`, any shell string runs through `yarn create`, in an image that ships Yarn. If not: nothing.
+
+**Done when.**
+- Read Yarn 1's `create` command source (`src/cli/commands/create.js` in the `yarnpkg/yarn` 1.x tree), or run it in a container with Yarn 1, to see where `-c` goes. Check Berry's `yarn dlx`-based `create` too.
+- If it is a shell string: the closed rule WP-196 used for pnpm. Every option word of a `yarn create` line is handed to `runnerCallsString`, and the line reads `uncertain` (`npxCall`) in all three baselines. Control `yarn create vite` keeps its cell. **Canary:** drop the rule and the row fails by name.
+- If it is not: close as working as designed, with the source line quoted.
+
+**Depends on** WP-196 (`runnerOptions`, `runnerCallsString`). **No work package owns it.** Related: 580.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -49196,3 +49267,173 @@ Implementer, session 16, on `main` at `932ed3bb`. No migration. No GitLab instan
 - **[minor]** The control covered only the in-thread POST. Added "control: a general-note fallback POST that itself fails with 503 is retried, and the reply lands" (two POSTs, `ok`, `attempts: 2`). **Canary:** the fallback's `createMergeRequestNote` wrapped in `afterPost` — *dead by* that case (the wrapped `invalid_response` thrown, `Tests 1 failed | 3 passed`); reverted with Edit, md5 `efefe0b1da6760c97736d8a3b33b99c5` before and after.
 - **[minor, the refiner's]** `paginate`'s quiet stop at `maxPages`: listed under Discovered work, not fixed.
 - `scripts/citations.test.ts` 13/13; `pnpm run -s verify` once, after `wp189-tiers-idle` appeared: exit 0, final line `PASS: verify`.
+
+#### WP-196
+
+**Every package runner is read through, a string any of them hands to a shell is never read, and an npm environment setting on the line is uncertain** (backlog 575). Implementer, session 16, on `main` at `e5806c4f`. No migration. **Status: implemented, awaiting review.** Nothing was executed: every row was evaluated through `evaluateCommand`/`decideUnattendedCommand` from a scratch script via `scripts/ts-source-resolver.mjs`, and nothing ran `sudo`.
+
+**(a) Measured first.** **The stock image** (`docker run --rm --network none platform-runtime:s16`, `command -v` of each name, Node v24.21.0): `npm`, `npx`, `corepack` (`/usr/local/lib/node_modules/corepack`), and **Yarn 1.22.22** as both `yarn` and `yarnpkg` (`/opt/yarn-v1.22.22/bin/`) are present. `pnpm`, `pnpx`, `bun` and `bunx` are absent. `docker/runtime.Dockerfile:100`'s `corepack enable pnpm` is in the `shim` build stage only. `yarnpkg` was not in the ruling's list; see the assumptions. Cells are `attended / auto rule / deny rule`, the same in the read-only, verification and implementation baselines unless stated.
+
+| Row | Before | After |
+|---|---|---|
+| `npm exec -- git push --no-verify`, `npm x -- git push --no-verify`, `npm --yes exec -- git push --no-verify`, `pnpm exec git push --no-verify`, `pnpx git push --no-verify`, `yarn exec git push --no-verify`, `yarn dlx git push --no-verify`, `bunx git push --no-verify`, `corepack pnpm exec git push --no-verify` | `ask / auto / deny` | `ask / git / git` |
+| `npm exec -- sudo id` | `ask / auto / deny` | `block / block / block` (matched `sudo *`) |
+| `bunx make 'X=1'`, `bun x make 'X=1'`, `pnpm dlx make 'X=1'`, `pnpx make 'X=1'`, `yarn dlx make 'X=1'`, `yarnpkg dlx make 'X=1'` | `ask / auto / deny` | `ask / hazard / hazard`, as `make 'X=1'` |
+| `npm exec -c 'git push --no-verify'`, `npm exec --call='…'`, `npm exec --call '…'`, `npm x -c '…'`, `pnpm exec -c '…'`, `pnpm exec --shell-mode '…'`, `pnpm dlx -c '…'`, `corepack npm exec -c '…'` | `ask / auto / deny` | `ask / uncertain / uncertain` (`npxCall` only) |
+| `npm exec --yes jest -c x` (the stated over-ask) | `ask / auto / deny` | `ask / uncertain / uncertain` (`npxCall`) |
+| `npm_config_call='git push --no-verify' npx`, `env npm_config_call=x npx`, `NPM_CONFIG_CALL=x npx`, `export npm_config_call=x; npx`, `npm_config_node_options='--require x' npx jest`, `NODE_OPTIONS='--require x' npx jest`, `read npm_config_call; npx`, `for npm_config_call in x; do npx; done`, `printf -v npm_config_call x; npx`, `printf -vNODE_OPTIONS x` | `ask / auto / deny` | `ask / uncertain / uncertain` (`npmEnvironment` only) |
+| `npm_config_loglevel=silent npm ci` (over-ask) | `ask / auto / deny` | `ask / uncertain / uncertain` |
+| `grep npm_config_ .npmrc` (over-ask) | `allow / allow / allow` | `ask / uncertain / uncertain` |
+| `declare -n r=NODE_OPTIONS` | `ask / uncertain / uncertain` (`evaluatedText`) | unchanged cell, `npmEnvironment` beside it |
+| `xargs yarn`, `xargs bunx`, `xargs pnpx`, `xargs bun x`, `xargs corepack pnpm`, `xargs yarn --version` (over-ask) | `ask / auto / deny` | `ask / uncertain / uncertain` (`xargsArguments`) |
+| `xargs npm exec`, `echo x \| xargs pnpm dlx` | `ask / uncertain / uncertain` (`npm`/`pnpm` are floored verbs) | unchanged |
+| Controls: `npm test`, `pnpm run build`, `npm ci`, `pnpm install --frozen-lockfile` | ro `ask / auto / deny`; ver, impl `allow / allow / allow` | unchanged |
+| Controls: `npx jest`, `npx jest -c jest.config.js`, `pnpm exec vitest run`, `npm exec jest`, `npm install`, `yarn install` | `ask / auto / deny` | unchanged |
+| Control: `npx --node-options='--require x' jest`; WP-188's `npx make 'X=1'`, `busybox make 'X=1'`, `xargs npx make X=1` | `hazard` / `hazard` / `uncertain` cells | unchanged |
+| Not changed by this row: `pnpm sudo id`, `yarn sudo id`, `bun exec 'git push --no-verify'` | `ask / auto / deny` | unchanged (see Residuals). *Review round 2: `pnpm sudo id` is now `block` and `bun exec …` is uncertain; `yarn sudo id` is unchanged.* |
+| `yarn exec 'git push --no-verify'` (one quoted word) | `ask / auto / deny` | `ask / git / git` |
+
+**What changed** (`packages/domain/src/policies/command-policy.ts`).
+- **(b) The peel.** `PACKAGE_RUNNER_COMMANDS` (`npx`, `pnpx`, `bunx`, `corepack`) is spread into `ARGV0_WRAPPERS`. `corepack` is a wrapper, so `corepack <pm> …` is read as `<pm> …`. `RUNNER_EXEC_SUBCOMMANDS` holds the exec subcommands: `npm` (`exec`, `x`), `pnpm` (`exec`, `dlx`), `yarn` and `yarnpkg` (`dlx`, `exec`), and `bun` (`x`). `runnerSubcommandAt` finds the subcommand past the runner's options with the value-may-follow rule. `isWrapperAt(words, index)` is a wrapper token, or a runner in its exec form. `walkCommandStarts`' chain now takes `(words, index)`, so `argvStarts` (the block list and the floors) and `commandPositions` (`wrappedScript`, `storesCommand`) read through it. `commandNameWords` (the expanded-name check) treats the runner and its subcommand as wrappers. `ENVIRONMENT_WRAPPERS` is unchanged: no runner joins the allow peel.
+- **(c) The string.** `npxCallsString` became `runnerCallsString`: a long option that is a prefix of `call` **or of `shell-mode`**. `runnerOptions` hands it a runner's words with its exec subcommand removed, so `npm -c x exec` is read too. It is checked at every command position in `wrappedScript` under `UNCERTAINTY.npxCall`, reworded to name package runners (the key is kept, as the ruling says).
+- **(d) The environment.** `UNCERTAINTY.npmEnvironment` is new. `namesRunnerEnvironment` tests every shell word of every stage (so a handed script and a substitution are covered by the recursion) against `/(?:^(?:-v)?|=)(?:npm_config_|NODE_OPTIONS)/i`.
+- **(e) xargs.** `xargsRunsItsInput` adds every `RUNNER_EXEC_SUBCOMMANDS` name. `npx`, `pnpx`, `bunx` and `corepack` already count, because they are in `ARGV0_WRAPPERS`. `UNCERTAINTY.xargsArguments` now names package runners.
+
+**Assumptions** (each in a docblock too).
+- **`yarnpkg`** is read as `yarn`. The stock image ships it as the same Yarn 1 binary (measured), and leaving it out would leave a measured alias open. The ruling's list did not name it.
+- **Case-insensitivity covers `NODE_OPTIONS` too.** The regex is one `/i`. The extra over-ask is a lowercase `node_options` word.
+- **The word rule also matches after `printf`'s attached `-v` and after an `=`.** The ruling names `printf -v`; `-vNAME` is its attached spelling. `declare -n r=NODE_OPTIONS` makes `r` that variable. Both match only in the closed direction.
+
+**Tests.** `packages/domain/src/policies/unattended-commands.test.ts`, describe *"WP-196: every package runner is read through, its string never, and npm’s environment"*, every row in all three baselines (criteria 1–5).
+
+**Canaries.** All three were applied at once with Edit and reverted in place with Edit; md5 `e43352b2e3c1f8660670857b704dc475` before and after. Failures were told apart by name, 22 failed:
+- (1) `'bunx'` dropped from `PACKAGE_RUNNER_COMMANDS`. *Dead by* `"bunx git push --no-verify" is read through the runner, at ask / git / git (criterion 1)`, `"bunx make 'X=1'" is read through the runner, at ask / hazard / hazard (criterion 1)` and `"xargs bunx" is uncertain (xargsArguments, criterion 4)`.
+- (2) `&& false` on the reader's condition in `wrappedScript`. *Dead by* each of the nine criterion-2 rows, `"npm exec -c 'git push --no-verify'" is uncertain (npxCall, criterion 2)` and the rest, and by WP-188's nine `… is uncertain (npxCall)` rows.
+- (3) `/i` dropped from `RUNNER_ENVIRONMENT_WORD`. *Dead by* `"NPM_CONFIG_CALL=x npx" is uncertain (npmEnvironment, criterion 3)`, alone.
+- None survived.
+
+**Residuals.**
+- An `.npmrc` the run writes (`call=`) and a variable name assembled at runtime are beyond any scanner.
+- `npm run <script>` runs the repository's own `package.json`, which is the `make`-target class and not this row.
+- `npm`, `pnpm`, `yarn` and `bun` under any other subcommand are unchanged, by ruling.
+
+**Discovered work** (for a refiner; measured marker-only and not fixed, each `ask / auto / deny` in all three baselines):
+- ~~`pnpm sudo id`: pnpm may fall back to running a bin when `<cmd>` is no pnpm command or script. **Needs measurement** against a real pnpm. pnpm is not in the stock image.~~ Filed as 578 and folded into this row at review round 2 (below).
+- ~~`bun exec 'git push --no-verify'`: Bun's `exec` runs a string in Bun Shell, a string runner the ruling's option reader does not reach. bun is not in the stock image.~~ Filed as 579 and folded into this row at review round 2 (below).
+- Yarn 1's `yarn <bin>` runs a `node_modules/.bin` entry (`yarn sudo id` finds none). This is the `make`-target class.
+
+**Sentences falsified** (rule 83). I grepped `docs/`, `CLAUDE.md` and the sources for `npxCallsString`, `exactly \`npx\``, `into \`busybox\` or \`npx\``, `package runner`, `npm exec`, `pnpm dlx`, `bunx`, `npm_config` and `NODE_OPTIONS`.
+- technical/05's WP-188 bullet named `npxCallsString`. It now names `runnerCallsString` as well and points to the new WP-196 bullet (criterion 6).
+- `UNCERTAINTY.npxCall`'s docblock and text are reworded.
+- `ENVIRONMENT_WRAPPERS`' docblock now says no package runner joins the allow peel.
+- Not mine and still true: `readiness/recheck.ts`'s runner list is a readiness detector, not the policy. `workspace/provider.ts`'s `NODE_OPTIONS` is an environment scrub list.
+
+**Checks.** Policy unit files with `planner.test.ts`: 21 files, 2428 passed, 5 skipped. `scripts/citations.test.ts`: 13/13. `pnpm run -s verify` ran once (one-minute load 2.3 at the start): exit 0, final line `PASS: verify`.
+
+**Review round 1** (REQUEST_CHANGES, four majors of one shape: the runner's subcommand was not identified, so the exec form was not read). **Orchestrator ruling (closed rule):** the subcommand is resolved the way the tool resolves it, where that is exact and cheap. Wherever it cannot be determined exactly, the line is uncertain under a named reason and never read as a command that runs nothing.
+- **Built** (`runnerSubcommandAt`, which now answers `number | null | 'unknown'`):
+  - **(1) npm's abbreviations.** npm 11's `deref` (`lib/utils/cmd-list.js`, read at `latest`) resolves an exact command, then an alias, then a unique prefix over commands and aliases. Its camelCase step always inserts a `-`, which `exec` has none of. So the only words that resolve to `exec` are a prefix of `exec` and `x`. Every non-empty prefix of `exec` is read as the exec form (`npmExecWord`). `e` and `ex` are ambiguous in npm (`edit`, `explain`, `explore`) and run nothing there, so reading them as exec is an over-read.
+  - **(2) A `--` before the subcommand is skipped**, for every runner.
+  - **(3) corepack's version pin.** `runnerName` takes `@…` off a runner's name, so `pnpm@9` is read as `pnpm`.
+  - **(4) Yarn's workspaces.** For `yarn`/`yarnpkg`, `workspace <name>` is skipped, because Yarn 1 runs `yarn workspace <name> <cmd>` as `yarn <cmd>`. `workspaces` is `'unknown'`, which gives the new `UNCERTAINTY.runnerSubcommand`; it is read through by the peel, so a block still blocks. **The over-ask, stated:** `yarn workspaces info`.
+  - `runnerOptions` now hands the reader the runner's options before the subcommand and every word after it, so `yarn workspace a dlx -c x`-shaped lines are read past the workspace name.
+- **(5) The residual** names the runner's own CLI spelling in the `RUNNER_ENVIRONMENT_WORD` docblock and in technical/05: `npm config set call x && npx`, `npm config set script-shell /tmp/s; npm test`, `pnpm config set …` and `yarn config set …` (the first two measured `ask / auto / deny`, unchanged).
+- **(6)** The WP-196 describe is now at the top level. The four cell helpers (`BASELINES`, `SHORT`, `cell`, `expectCells`) moved out of WP-161's describe to module scope, unchanged.
+
+**Measured before → after**, all three baselines, marker-only:
+
+| Row | Before | After |
+|---|---|---|
+| `npm exe -- git push --no-verify`, `npm -- exec git push --no-verify`, `yarn workspace a exec git push --no-verify` | `ask / auto / deny` | `ask / git / git` |
+| `npm exe -- sudo id`, `npm e -- sudo id`, `npm -- exec -- sudo id`, `yarnpkg workspace a dlx -- sudo id` | `ask / auto / deny` | `block / block / block` |
+| `npm exe make 'X=1'`, `yarn workspace a exec make 'X=1'` | `ask / auto / deny` | `ask / hazard / hazard` |
+| `npm exe -c 'git push --no-verify'`, `npm -- exec -c x`, `corepack pnpm@9 dlx -c x`, `corepack yarn@1 dlx -c x`, `corepack npm@11 exec -c x`, `corepack pnpx@9 -c x` | `ask / auto / deny` | `ask / uncertain / uncertain` (`npxCall`) |
+| `yarn workspaces foreach -A exec git push --no-verify`, `yarn workspaces info` | `ask / auto / deny` | `ask / uncertain / uncertain` (`runnerSubcommand`) |
+| `corepack npm@11 exec -- sudo id` | `block / block / block` (the `corepack` peel) | unchanged |
+| Controls: `yarn workspace a add left-pad`, `npm edit x`, `npx jest` | `ask / auto / deny` | unchanged |
+
+Every row of the first round's table reads as it did (its scratch measurement diffed equal).
+
+**Canaries.** Five were applied at once and reverted in place by the same tool (a scripted exact-string replace). The md5 was `1701d647f9521f85b5e4705eea80585f` before and after. 17 tests failed, told apart by spelling:
+- (1) `&& false` on `npmExecWord`. *Dead by* the four `npm exe`/`npm e` rows: `"npm exe -- git push --no-verify" reads its subcommand as the tool does, at ask / git / git (review round 1)` and its siblings, and `"npm exe -c 'git push --no-verify'" is uncertain (npxCall, review round 1)`.
+- (2) The `--` back to `return null`. *Dead by* `"npm -- exec git push --no-verify" …`, `"npm -- exec -- sudo id" …` and `"npm -- exec -c x" is uncertain (npxCall, review round 1)`.
+- (3) `runnerName` without the strip. *Dead by* the four `corepack …@… -c x` rows.
+- (4) `workspace` renamed away. *Dead by* the two `yarn workspace a exec …` rows and `"yarnpkg workspace a dlx -- sudo id" …`.
+- (5) `workspaces` renamed away. *Dead by* both `… is uncertain (runnerSubcommand, review round 1)` rows.
+- None survived.
+
+**Checks (round 1).** `unattended-commands.test.ts`: 956/956. `command-policy.test.ts` with `scripts/citations.test.ts`: 1029/1029. `pnpm run -s verify` ran once, after `wp196-tiers-idle` appeared (load 4.5 at the start): exit 0, final line `PASS: verify`.
+
+**Review round 2** (REQUEST_CHANGES; round 1's four were confirmed fixed). The orchestrator folded backlogs **578** (pnpm's unknown-command fallback) and **579** (`bun exec`) into this row. Sources were read at `main` and not executed: pnpm `pnpm11/pnpm/src/cmd/recursive.ts` (`commandNames = ['recursive', 'multi', 'm']`), `pnpm11/exec/commands/src/run.ts` (`handleMissingScript` → `exec` when `fallbackCommandUsed`; an explicit `pnpm run` never falls back), and `pnpm11/pnpm/src/cmd/index.ts`. Built in `runnerSubcommandAt`, which now also answers `'string'`:
+- **(1) `npm explore`.** Any prefix of `explore` is `'string'`, which gives the new `UNCERTAINTY.runnerString`; the string is never read. npm's `deref` resolves `explo` uniquely; `e`, `ex` and `exp` are ambiguous there, and this check comes before the exec one, so they read as `explore` (the closed side).
+- **(2) pnpm's `recursive`, `multi` and `m` are skipped**, as Yarn's `workspace <name>` is. `pnpm with …` is `'unknown'` (`runnerSubcommand`), because I did not confirm `with`'s syntax from its source (`@pnpm/engine.pm.commands`, not read).
+- **(3) 578, by ruling.** Any first positional that is not in `PNPM_BUILT_INS` is read as the exec form. The list is the ruling's minimal one (`exec` and `dlx` are read before it). It is not derived from pnpm, because pnpm 11's command names are spread over its command packages. **Residual, stated:** a built-in missing from the list is over-read, never under-read. For this implicit exec form, `runnerOptions` hands the string reader only the options *before* the command, so `pnpm jest -c jest.config.js` keeps `ask / auto / deny`. *(Superseded after round 3 by the orchestrator's probe: every option word of a pnpm line is read, so that line is uncertain; see below.)*
+- **(4) 579.** `bun exec` is `'string'` (`runnerString`).
+- **(5)** The new row `"ref=npm_config_call" names npm’s environment after an \`=\` (review round 2)` exercises only the `=` branch.
+
+**Measured before → after**, all three baselines, marker-only:
+
+| Row | Before | After |
+|---|---|---|
+| `npm explore foo -- sudo id`, `npm explo foo -- sudo id` | `ask / auto / deny` | `block / block / block` (`runnerString` beside it) |
+| `npm explore foo -- git push --no-verify`, `npm explore foo -- 'git push --no-verify'`, `npm explore foo`, `bun exec 'git push --no-verify'`, `bun exec echo hi` | `ask / auto / deny` | `ask / uncertain / uncertain` (`runnerString`) |
+| `pnpm recursive exec git push --no-verify`, `pnpm git push --no-verify` | `ask / auto / deny` | `ask / git / git` |
+| `pnpm m exec -- sudo id`, `pnpm multi exec -- sudo id`, `pnpm sudo id`, `pnpm -r sudo id`, `pnpm m sudo id` | `ask / auto / deny` | `block / block / block` |
+| `pnpm m exec -c 'git push --no-verify'`, `pnpm recursive exec --shell-mode '…'` | (not measured before) | `ask / uncertain / uncertain` (`npxCall`) |
+| `pnpm with current exec git push --no-verify` | `ask / auto / deny` | `ask / uncertain / uncertain` (`runnerSubcommand`) |
+| `pnpm with 9 exec -- sudo id` | `ask / auto / deny` | `block / block / block` |
+| Controls: `pnpm install --frozen-lockfile`, `pnpm run build`, `pnpm test` | ro `ask / auto / deny`; ver, impl `allow / allow / allow` | unchanged |
+| Controls: `pnpm recursive install`, `pnpm add zod`, `pnpm i`, `pnpm --filter foo install`, `pnpm jest -c jest.config.js`, `pnpm exec vitest run`, `bun install` | `ask / auto / deny` | unchanged (`pnpm jest -c …` is uncertain since the probe fix below) |
+| `r=NODE_OPTIONS`, `ref=npm_config_call` | `ask / uncertain / uncertain` (`npmEnvironment`) | unchanged |
+
+The first round's table, re-measured: only `pnpm sudo id` and `bun exec 'git push --no-verify'` changed (diffed).
+
+**Canaries.** Six were applied at once by a scripted exact-string replace and reverted by the same script; the md5 was `3330350e60de326bbdb1f5d8de73d4ef` before and after. 16 tests failed:
+- (1) `explore` `&& false`. *Dead by* the four `npm explore`/`npm explo` rows of `… is a string a runner hands to a shell, at … (runnerString, review round 2)`.
+- (4) `bun exec` `&& false`. *Dead by* `"bun exec 'git push --no-verify'" is a string a runner hands to a shell, at ask / uncertain / uncertain (runnerString, review round 2)`.
+- (`with`) renamed away. *Dead by* `"pnpm with current exec git push --no-verify" is uncertain (runnerSubcommand, review round 2)`.
+- (5) `|=` dropped from the regex. *Dead by* `"ref=npm_config_call" names npm’s environment after an \`=\` (review round 2)`.
+- (2) and (3) were then run **alone**, one at a time:
+  - (2) `PNPM_RECURSIVE` `&& false`. *Dead by* `"pnpm m exec -c 'git push --no-verify'" is uncertain (npxCall, review round 2)` and `"pnpm recursive exec --shell-mode 'git push --no-verify'" …`. **Survived:** the three `pnpm m`/`multi`/`recursive exec …` peel rows. With the skip gone, (3) reads `m` as an implicit exec and the peel reads through it anyway, so the skip matters only for the string reader. Stated, not a gap.
+  - (3) `PNPM_BUILT_INS` `&& false`. *Dead by* `"pnpm sudo id" …`, `"pnpm -r sudo id" …`, `"pnpm m sudo id" …` and `"pnpm git push --no-verify" reads its subcommand as pnpm does, at ask / git / git (review round 2)`.
+
+**Checks (round 2).** `unattended-commands.test.ts`: 977/977. `command-policy.test.ts` with `scripts/citations.test.ts`: 1029/1029. `pnpm run -s verify` ran once, after `wp196-tiers2-idle` appeared (load 4.4 at the start): exit 0, final line `PASS: verify`.
+
+**Review round 3** (the last; one blocker, one wording fix).
+- **(1) Blocker: npm's `-c`/`--call` under any subcommand.** `npm init` and `npm create` hand `-c`/`--call` to libnpmexec: npm 11 `lib/commands/init.js` `execCreate` → `libexec({...flatOptions})`, and `libnpmexec/lib/run-script.js` runs `call || args.shift()`, as the review cites.
+  - **Ruling (closed):** for `npm` with no exec form found (`runnerSubcommandAt` answers `null`), `runnerOptions` hands `runnerCallsString` every option word before the first `--`, under any subcommand or none.
+  - **The over-ask, stated:** `npm test -c x` is uncertain. `npm test -- -c x` is unchanged, because npm parses nothing after `--`.
+- **(2) Wording.** `UNCERTAINTY.npmEnvironment` no longer tells the agent to move the setting onto the command line. It now reads "run the command without it". The `--editor`/`--browser`/`--viewer` option class is the orchestrator's to file; it is not fixed here.
+
+**Measured before → after**, marker-only:
+
+| Row | Before | After |
+|---|---|---|
+| `npm init vite -c 'sudo id'`, `npm create vite -c 'git push --no-verify'`, `npm innit vite --call='git push --no-verify'`, `npm ini vite -c 'git push --no-verify'`, `npm --call 'git push --no-verify' init vite` | `ask / auto / deny` | `ask / uncertain / uncertain` (`npxCall`) |
+| `npm test -c x` (over-ask) | ro `ask / auto / deny`; ver, impl `allow / allow / allow` | `ask / uncertain / uncertain` |
+| Controls: `npm init -y` | `ask / auto / deny` | unchanged |
+| Controls: `npm test -- -c x`, `npm test`, `npm ci` | ro `ask / auto / deny`; ver, impl `allow / allow / allow` | unchanged |
+
+**Canary.** `&& false` was added to the new branch's condition with Edit and reverted with Edit; the md5 was `d735a40dfd1676c77d77622f444a1856` before and after. *Dead by* all six `… is uncertain (npxCall, review round 3)` rows, from `"npm init vite -c 'sudo id'"` through `"npm test -c x"`. The two `keeps … (review round 3)` controls passed.
+
+**Checks (round 3).** `unattended-commands.test.ts`: 985/985.
+
+**The orchestrator's probe of the round-3 tree** found a fail-open that round 2's built-in fallback introduced. A pnpm global option with a separate value had that value read as the first positional: not a built-in, so it was taken as an implicit exec form. The `exec -c …` after it was then never examined. `pnpm -C d exec -c x`, `pnpm --dir d exec -c x`, `pnpm -F a exec -c x` and `pnpm --filter a exec -c x` read `ask / auto / deny` in all three baselines; `--dir=d` was fine. **Ruling (closed):**
+- **Every word of a pnpm line is read.** `runnerOptions` hands `runnerCallsString` every option word of a `pnpm` line, whatever the subcommand reading concludes. **The over-ask, stated:** `pnpm jest -c jest.config.js` is now uncertain; it read `ask / auto / deny` before, and its round-2 control row was moved into the new uncertain rows.
+- **Known value options are skipped.** `PNPM_VALUE_OPTIONS` (`-C`, `--dir`, `-F`, `--filter`, `--workspace-dir`) has its separate value skipped by the first-positional reading. So `pnpm -C d install` reads `install` as the built-in it is, and `pnpm -C d exec -- sudo id` keeps `block`.
+
+**Measured after**, all three baselines:
+
+| Row | After |
+|---|---|
+| The four probe lines, `pnpm --reporter silent exec -c x`, `pnpm jest -c jest.config.js` | `ask / uncertain / uncertain` (`npxCall`) |
+| `pnpm -C d exec -- sudo id` | `block / block / block` |
+| `pnpm -C d install`, `pnpm --filter a test` | `ask / auto / deny` |
+
+**Canaries.** They were applied and reverted by one script's exact-string replace; the md5 was `71d360c1d287fa38ee2b2206ad3f19b0` before and after.
+- **(a) The every-word scan dropped (`&& false`).** *Dead by* `"pnpm --reporter silent exec -c x" is uncertain (npxCall, every word of a pnpm line)` and `"pnpm jest -c jest.config.js" …`. **Survived:** the four probe rows, because the value skip alone reads them.
+- **(a) and the value skip dropped together.** *Dead by* all six rows, the four probe lines included.
+
+`unattended-commands.test.ts`: 992/992. `command-policy.test.ts` with `scripts/citations.test.ts`: 1029/1029. `pnpm run -s verify` ran once, after `wp196-tiers3-idle` appeared (load 5.1 at the start): exit 0, final line `PASS: verify`.
+
+**Orchestrator's check after the round cap.** After round 3's fix the orchestrator ran the reviewers' probe cases (rounds 1–3, 180+ lines) through `decideUnattendedCommand` on the tree and found one regression introduced by round 2's pnpm built-in fallback: a separate value of a pnpm global option (`pnpm -C d exec -c x`, `--dir d`, `-F a`, `--filter a`) was read as the first positional, so `exec -c …` escaped (`ask / auto / deny`). Ruled closed (every option word of a `pnpm` line is scanned for shell mode, the known value options skipped); re-probed: every remaining `auto` row is a control, a stated residual (`npm config set …`, `.npmrc`, project scripts) or filed (580: `--editor`/`--browser`/`--viewer`; 581: `yarn create -c`).

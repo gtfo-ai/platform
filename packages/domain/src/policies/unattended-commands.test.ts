@@ -1319,6 +1319,35 @@ describe('the setting only tightens across layers', () => {
   });
 });
 
+/** Each cell is `attended verdict / auto rule / deny rule`, in all three baselines. */
+const BASELINES: Readonly<Record<'ro' | 'ver' | 'impl', ResolvedCommandPolicy>> = {
+  ro: { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_READ_ONLY_ALLOW },
+  ver: { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_VERIFICATION_ALLOW },
+  impl: { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_IMPLEMENTATION_ALLOW },
+};
+const SHORT: Readonly<Record<string, string>> = {
+  allow_list: 'allow',
+  unattended_auto: 'auto',
+  unattended_deny: 'deny',
+  block_list: 'block',
+  hazardous_argument: 'hazard',
+  git_boundary: 'git',
+  uncertain: 'uncertain',
+};
+const cell = (command: string, given: ResolvedCommandPolicy): string =>
+  [
+    evaluateCommand({ command }, given).verdict,
+    SHORT[decideUnattendedCommand({ command }, given, 'auto').rule],
+    SHORT[decideUnattendedCommand({ command }, given, 'deny').rule],
+  ].join(' / ');
+/** The cell in every baseline: one string for all three, or one per baseline. */
+const expectCells = (command: string, expected: string | Record<'ro' | 'ver' | 'impl', string>) => {
+  for (const [name, given] of Object.entries(BASELINES)) {
+    const want = typeof expected === 'string' ? expected : expected[name as 'ro' | 'ver' | 'impl'];
+    expect(cell(command, given), `${name}: ${JSON.stringify(command)}`).toBe(want);
+  }
+};
+
 /**
  * WP-161 (PROGRESS backlog 515–523): the scanner resolves git's abbreviated long options the way git
  * does, fails closed past its depth bound, judges every `git push` a line contains, and refuses a
@@ -1327,37 +1356,6 @@ describe('the setting only tightens across layers', () => {
  * row's three baselines agree unless it says otherwise.
  */
 describe('WP-161 — abbreviations, the depth bound, every push, and an expanded name', () => {
-  const BASELINES: Readonly<Record<'ro' | 'ver' | 'impl', ResolvedCommandPolicy>> = {
-    ro: { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_READ_ONLY_ALLOW },
-    ver: { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_VERIFICATION_ALLOW },
-    impl: { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_IMPLEMENTATION_ALLOW },
-  };
-  const SHORT: Readonly<Record<string, string>> = {
-    allow_list: 'allow',
-    unattended_auto: 'auto',
-    unattended_deny: 'deny',
-    block_list: 'block',
-    hazardous_argument: 'hazard',
-    git_boundary: 'git',
-    uncertain: 'uncertain',
-  };
-  const cell = (command: string, given: ResolvedCommandPolicy): string =>
-    [
-      evaluateCommand({ command }, given).verdict,
-      SHORT[decideUnattendedCommand({ command }, given, 'auto').rule],
-      SHORT[decideUnattendedCommand({ command }, given, 'deny').rule],
-    ].join(' / ');
-  /** The cell in every baseline: one string for all three, or one per baseline. */
-  const expectCells = (
-    command: string,
-    expected: string | Record<'ro' | 'ver' | 'impl', string>,
-  ) => {
-    for (const [name, given] of Object.entries(BASELINES)) {
-      const want =
-        typeof expected === 'string' ? expected : expected[name as 'ro' | 'ver' | 'impl'];
-      expect(cell(command, given), `${name}: ${JSON.stringify(command)}`).toBe(want);
-    }
-  };
   const IMPL_ONLY = (impl: string) => ({ ro: 'ask / auto / deny', ver: 'ask / auto / deny', impl });
 
   describe('criterion (2), backlog 515: an abbreviation git resolves to a hazard is floored', () => {
@@ -2127,4 +2125,273 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
       });
     }
   };
+});
+
+/**
+ * WP-196, backlog 575. Marker-only: nothing here runs a line. Every row below read
+ * `ask / auto / deny` in all three baselines before WP-196 (PROGRESS § WP-196), except the
+ * controls, which keep their cells, and `grep npm_config_ .npmrc`, which read `allow` everywhere.
+ */
+describe('WP-196: every package runner is read through, its string never, and npm’s environment', () => {
+  it.each([
+    ['npm exec -- git push --no-verify', 'ask / git / git'],
+    ['npm x -- git push --no-verify', 'ask / git / git'],
+    ['npm --yes exec -- git push --no-verify', 'ask / git / git'],
+    ['pnpm exec git push --no-verify', 'ask / git / git'],
+    ['pnpx git push --no-verify', 'ask / git / git'],
+    ['yarn exec git push --no-verify', 'ask / git / git'],
+    ['yarn dlx git push --no-verify', 'ask / git / git'],
+    ['bunx git push --no-verify', 'ask / git / git'],
+    ['corepack pnpm exec git push --no-verify', 'ask / git / git'],
+    ['npm exec -- sudo id', 'block / block / block'],
+    ["bunx make 'X=1'", 'ask / hazard / hazard'],
+    ["bun x make 'X=1'", 'ask / hazard / hazard'],
+    ["pnpm dlx make 'X=1'", 'ask / hazard / hazard'],
+    ["pnpx make 'X=1'", 'ask / hazard / hazard'],
+    ["yarn dlx make 'X=1'", 'ask / hazard / hazard'],
+    ["yarnpkg dlx make 'X=1'", 'ask / hazard / hazard'],
+  ])('%j is read through the runner, at %s (criterion 1)', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it('reads "npm exec -- sudo id" as the sudo it runs, and "bunx make \'X=1\'" as make (criterion 1)', () => {
+    expect(evaluateCommand({ command: 'npm exec -- sudo id' }, policy).matched).toBe('sudo *');
+    expectCells("make 'X=1'", 'ask / hazard / hazard');
+  });
+
+  it.each([
+    "npm exec -c 'git push --no-verify'",
+    "npm exec --call='git push --no-verify'",
+    "npm exec --call 'git push --no-verify'",
+    "npm x -c 'git push --no-verify'",
+    "pnpm exec -c 'git push --no-verify'",
+    "pnpm exec --shell-mode 'git push --no-verify'",
+    "pnpm dlx -c 'git push --no-verify'",
+    "corepack npm exec -c 'git push --no-verify'",
+    // The stated over-ask: `jest` may be `--yes`'s value, as for `npx`.
+    'npm exec --yes jest -c x',
+  ])('%j is uncertain (npxCall, criterion 2)', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.npxCall]);
+  });
+
+  it.each([
+    "npm_config_call='git push --no-verify' npx",
+    'env npm_config_call=x npx',
+    'NPM_CONFIG_CALL=x npx',
+    'export npm_config_call=x; npx',
+    "npm_config_node_options='--require x' npx jest",
+    "NODE_OPTIONS='--require x' npx jest",
+    'read npm_config_call; npx',
+    'for npm_config_call in x; do npx; done',
+    'printf -v npm_config_call x; npx',
+    'printf -vNODE_OPTIONS x; npx',
+    // The stated over-ask: a setting that runs nothing, and a word that sets nothing.
+    'npm_config_loglevel=silent npm ci',
+    'grep npm_config_ .npmrc',
+  ])('%j is uncertain (npmEnvironment, criterion 3)', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.npmEnvironment]);
+  });
+
+  it.each([
+    'xargs yarn',
+    'xargs bunx',
+    'echo x | xargs pnpm dlx',
+    'xargs pnpx',
+    'xargs bun x',
+    'xargs corepack pnpm',
+    // The stated over-ask: an xargs into a runner is uncertain whatever follows.
+    'xargs yarn --version',
+  ])('%j is uncertain (xargsArguments, criterion 4)', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.xargsArguments]);
+  });
+
+  it.each([
+    // Rule 42: the controls keep their cells, and a runner under any other subcommand is unchanged.
+    [
+      'npm test',
+      { ro: 'ask / auto / deny', ver: 'allow / allow / allow', impl: 'allow / allow / allow' },
+    ],
+    [
+      'pnpm run build',
+      { ro: 'ask / auto / deny', ver: 'allow / allow / allow', impl: 'allow / allow / allow' },
+    ],
+    ['npx jest', 'ask / auto / deny'],
+    ['npx jest -c jest.config.js', 'ask / auto / deny'],
+    ['pnpm exec vitest run', 'ask / auto / deny'],
+    ['npm exec jest', 'ask / auto / deny'],
+    ['yarn install', 'ask / auto / deny'],
+    ["npx --node-options='--require x' jest", 'ask / hazard / hazard'],
+  ])('keeps %j at %s (criterion 5)', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  /**
+   * Review round 1: the runner's subcommand is resolved as the tool resolves it, and where it cannot
+   * be determined exactly the line is uncertain. Every row read `ask / auto / deny` before the fix,
+   * except `corepack npm@11 exec -- sudo id`, blocked by the `corepack` peel already.
+   */
+  it.each([
+    // npm's unique-prefix resolution (`deref`): `exe` is `exec`.
+    ['npm exe -- git push --no-verify', 'ask / git / git'],
+    ['npm exe -- sudo id', 'block / block / block'],
+    ["npm exe make 'X=1'", 'ask / hazard / hazard'],
+    ['npm e -- sudo id', 'block / block / block'],
+    // A `--` before the subcommand: npm takes its command from the rest.
+    ['npm -- exec git push --no-verify', 'ask / git / git'],
+    ['npm -- exec -- sudo id', 'block / block / block'],
+    // corepack's version pin.
+    ['corepack npm@11 exec -- sudo id', 'block / block / block'],
+    // Yarn 1's `workspace <name> <cmd>` is `yarn <cmd>`.
+    ['yarn workspace a exec git push --no-verify', 'ask / git / git'],
+    ["yarn workspace a exec make 'X=1'", 'ask / hazard / hazard'],
+    ['yarnpkg workspace a dlx -- sudo id', 'block / block / block'],
+  ])('%j reads its subcommand as the tool does, at %s (review round 1)', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it.each([
+    "npm exe -c 'git push --no-verify'",
+    'npm -- exec -c x',
+    'corepack pnpm@9 dlx -c x',
+    'corepack yarn@1 dlx -c x',
+    'corepack npm@11 exec -c x',
+    'corepack pnpx@9 -c x',
+  ])('%j is uncertain (npxCall, review round 1)', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.npxCall]);
+  });
+
+  it.each([
+    'yarn workspaces foreach -A exec git push --no-verify',
+    // The stated over-ask: a `workspaces` subcommand that runs nothing.
+    'yarn workspaces info',
+  ])('%j is uncertain (runnerSubcommand, review round 1)', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.runnerSubcommand]);
+  });
+
+  it.each([
+    // Rule 42: a subcommand that is not an exec form is unchanged.
+    ['yarn workspace a add left-pad', 'ask / auto / deny'],
+    ['npm edit x', 'ask / auto / deny'],
+  ])('keeps %j at %s (review round 1)', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  /**
+   * Review round 2 (backlogs 578 and 579 folded). Every row read `ask / auto / deny` before the fix.
+   */
+  it.each([
+    ['npm explore foo -- sudo id', 'block / block / block'],
+    ['npm explo foo -- sudo id', 'block / block / block'],
+    ['npm explore foo -- git push --no-verify', 'ask / uncertain / uncertain'],
+    ["npm explore foo -- 'git push --no-verify'", 'ask / uncertain / uncertain'],
+    ["bun exec 'git push --no-verify'", 'ask / uncertain / uncertain'],
+  ])(
+    '%j is a string a runner hands to a shell, at %s (runnerString, review round 2)',
+    (command, expected) => {
+      expectCells(command, expected);
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.runnerString]);
+    },
+  );
+
+  it.each([
+    // pnpm's `recursive`, `multi` and `m` run the command after them.
+    ['pnpm recursive exec git push --no-verify', 'ask / git / git'],
+    ['pnpm m exec -- sudo id', 'block / block / block'],
+    ['pnpm multi exec -- sudo id', 'block / block / block'],
+    // pnpm runs a first positional that is no built-in as `exec` (578).
+    ['pnpm sudo id', 'block / block / block'],
+    ['pnpm -r sudo id', 'block / block / block'],
+    ['pnpm m sudo id', 'block / block / block'],
+    ['pnpm git push --no-verify', 'ask / git / git'],
+  ])('%j reads its subcommand as pnpm does, at %s (review round 2)', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it.each([
+    // `recursive` skipped: the string after `exec` is read as `pnpm exec`'s, not the command's.
+    "pnpm m exec -c 'git push --no-verify'",
+    "pnpm recursive exec --shell-mode 'git push --no-verify'",
+  ])('%j is uncertain (npxCall, review round 2)', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.npxCall]);
+  });
+
+  it('"pnpm with current exec git push --no-verify" is uncertain (runnerSubcommand, review round 2)', () => {
+    const command = 'pnpm with current exec git push --no-verify';
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.runnerSubcommand]);
+  });
+
+  it('"ref=npm_config_call" names npm’s environment after an `=` (review round 2)', () => {
+    expect(auto('ref=npm_config_call').evaluation.uncertainty).toContain(
+      UNCERTAINTY.npmEnvironment,
+    );
+  });
+
+  it.each([
+    // Rule 42: built-ins keep their cells.
+    [
+      'pnpm install --frozen-lockfile',
+      { ro: 'ask / auto / deny', ver: 'allow / allow / allow', impl: 'allow / allow / allow' },
+    ],
+    ['pnpm recursive install', 'ask / auto / deny'],
+    ['pnpm add zod', 'ask / auto / deny'],
+    ['bun install', 'ask / auto / deny'],
+  ])('keeps %j at %s (review round 2)', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  /** Review round 3: npm reads `-c`/`--call` under any subcommand. Each read `ask / auto / deny`. */
+  it.each([
+    "npm init vite -c 'sudo id'",
+    "npm create vite -c 'git push --no-verify'",
+    "npm innit vite --call='git push --no-verify'",
+    "npm ini vite -c 'git push --no-verify'",
+    "npm --call 'git push --no-verify' init vite",
+    // The stated over-ask: `ask / auto / deny` (ro) and `allow` (ver, impl) before.
+    'npm test -c x',
+  ])('%j is uncertain (npxCall, review round 3)', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.npxCall]);
+  });
+
+  it.each([
+    ['npm init -y', 'ask / auto / deny'],
+    [
+      'npm test -- -c x',
+      { ro: 'ask / auto / deny', ver: 'allow / allow / allow', impl: 'allow / allow / allow' },
+    ],
+  ])('keeps %j at %s (review round 3)', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  /**
+   * The orchestrator's round-3 probe: a pnpm global option's separate value was read as the first
+   * positional, which hid `exec -c …` after it. Each of the first four read `ask / auto / deny`.
+   */
+  it.each([
+    'pnpm -C d exec -c x',
+    'pnpm --dir d exec -c x',
+    'pnpm -F a exec -c x',
+    'pnpm --filter a exec -c x',
+    // An option whose value is not known: only the scan of every word reads it.
+    'pnpm --reporter silent exec -c x',
+    // The stated over-ask (`ask / auto / deny` before): a `-c` that is the command's own.
+    'pnpm jest -c jest.config.js',
+  ])('%j is uncertain (npxCall, every word of a pnpm line)', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.npxCall]);
+  });
+
+  it.each([
+    ['pnpm -C d exec -- sudo id', 'block / block / block'],
+    ['pnpm -C d install', 'ask / auto / deny'],
+  ])('keeps %j at %s (every word of a pnpm line)', (command, expected) => {
+    expectCells(command, expected);
+  });
 });

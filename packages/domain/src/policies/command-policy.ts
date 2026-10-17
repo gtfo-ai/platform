@@ -213,13 +213,36 @@ export const UNCERTAINTY = {
    * (`-I`) that is not literal, whose text the platform cannot know.
    */
   xargsArguments:
-    'xargs handing the words it reads from its input to a command that runs its arguments (a wrapper such as env, nice, nohup or timeout, a shell such as sh or bash, find with -exec, or git) or that a refused argument would make run a program (cargo, gmake, go, make, npm, pnpm, pytest or rg, or a name beginning with one), or replacing a string (-I) that is not literal — write the command and its arguments on the line; the platform cannot read arguments xargs supplies from its input',
+    'xargs handing the words it reads from its input to a command that runs its arguments (a wrapper such as env, nice, nohup or timeout, a shell such as sh or bash, a package runner such as npx, yarn, bun, bunx or corepack, find with -exec, or git) or that a refused argument would make run a program (cargo, gmake, go, make, npm, pnpm, pytest or rg, or a name beginning with one), or replacing a string (-I) that is not literal — write the command and its arguments on the line; the platform cannot read arguments xargs supplies from its input',
   /**
    * WP-188 review round 1: `npx -c '<string>'`/`--call=<string>` runs the string in a shell. It is
-   * never read as a script — the closed rule (rule 65), in every spelling (`npxCallsString`).
+   * never read as a script — the closed rule (rule 65), in every spelling (`runnerCallsString`).
+   * WP-196 (backlog 575): every package runner's exec form — `npm exec`/`x`, `pnpm exec`/`dlx`
+   * (`-c`/`--shell-mode`), `pnpx`, `yarn dlx`/`exec`, `bun x`, `bunx` — under the same reader.
    */
   npxCall:
-    'npx -c or --call, which runs a string in a shell — run the command itself; the platform does not read the string npx hands to a shell',
+    'a package runner given -c, --call or --shell-mode (npx, npm exec, pnpm exec or dlx, and the rest), which runs a string in a shell — run the command itself; the platform does not read the string a package runner hands to a shell',
+  /**
+   * WP-196 review round 1: a package runner whose subcommand the platform cannot determine exactly
+   * (`yarn workspaces foreach … exec`) is never read as a command that runs nothing.
+   */
+  runnerSubcommand:
+    'a package runner whose subcommand the platform cannot determine (yarn workspaces …), which may run a command — run the command itself; the platform reads a package runner only where it knows what it runs',
+  /**
+   * WP-196 review round 2 (backlog 579): `npm explore <pkg> -- <words>` joins its words into one
+   * string and runs it in a shell (npm 11 `lib/commands/explore.js`), and `bun exec '<string>'` runs
+   * its string in Bun Shell. The string is never read.
+   */
+  runnerString:
+    'npm explore or bun exec, which runs its words as a string in a shell — run the command itself; the platform does not read the string a package runner hands to a shell',
+  /**
+   * WP-196 (backlog 575): npm reads its configuration from the environment, case-insensitively, and
+   * node reads `NODE_OPTIONS`, so a setting there can hand either a program (`call`, `node-options`,
+   * `script-shell`, `--require`). A list of those settings would under-read (rule 65), so any word
+   * naming `npm_config_*` or `NODE_OPTIONS`, wherever it stands, is uncertain whatever the command.
+   */
+  npmEnvironment:
+    'a word naming an npm_config_* setting (in any case) or NODE_OPTIONS, which can hand npm or node a program to run — run the command without it; the platform does not read settings a line puts in the environment',
 } as const;
 
 export type UncertaintyReason = (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY];
@@ -1778,6 +1801,27 @@ export const basename = (binaryPath: string): string =>
     .at(-1) ?? binaryPath;
 
 /**
+ * The package runners that run a command by their name alone (WP-196, backlog 575): `npx`,
+ * `pnpx`, `bunx`, and `corepack <pm> …`, which runs `<pm> …`. Each is on {@link ARGV0_WRAPPERS};
+ * the runners that need a subcommand first are {@link RUNNER_EXEC_SUBCOMMANDS}.
+ */
+const PACKAGE_RUNNER_COMMANDS: readonly string[] = ['npx', 'pnpx', 'bunx', 'corepack'];
+
+/**
+ * A package runner's exec form (WP-196 (b), backlog 575): the subcommands after which it runs the
+ * command that follows (`npm exec -- sudo id`, `bun x make 'X=1'`). Under any other subcommand
+ * (`npm test`, `pnpm run build`) the runner is the command, as before. `yarnpkg` is the name the
+ * stock image ships beside `yarn` for the same binary (measured, `platform-runtime`).
+ */
+const RUNNER_EXEC_SUBCOMMANDS: Readonly<Record<string, ReadonlySet<string>>> = {
+  npm: new Set(['exec', 'x']),
+  pnpm: new Set(['exec', 'dlx']),
+  yarn: new Set(['dlx', 'exec']),
+  yarnpkg: new Set(['dlx', 'exec']),
+  bun: new Set(['x']),
+};
+
+/**
  * Words that stand in front of the command that actually runs: environment wrappers, shell
  * keywords and grouping tokens. A block pattern names the real binary, so these are peeled off
  * before matching — otherwise `env sudo id` and `then sudo id` read as `env` and `then` commands.
@@ -1811,8 +1855,9 @@ const ARGV0_WRAPPERS: ReadonlySet<string> = new Set([
   // An applet or package runner (WP-188, backlog 559): `busybox make 'X=1'` runs make's applet and
   // `npx make 'X=1'` a bin named `make`, so the floors and the block list read the word after it
   // as the command, and an `xargs` into either is an input-driven runner (`xargsRunsItsInput`).
+  // WP-196 (backlog 575): every package runner that needs no subcommand, read the way `npx` is.
   'busybox',
-  'npx',
+  ...PACKAGE_RUNNER_COMMANDS,
   'runuser',
   'su',
   'doas',
@@ -1908,6 +1953,149 @@ const isAssignment = (token: string): boolean =>
 const isWrapperToken = (token: string): boolean =>
   ARGV0_WRAPPERS.has(argv0Name(token)) || isAssignment(token);
 
+/**
+ * The name a package runner runs under: `argv0Name` with corepack's version pin taken off, so
+ * `corepack pnpm@9 dlx …` is a `pnpm` (WP-196 review round 1).
+ */
+const runnerName = (word: string): string => argv0Name(word).replace(/@[\s\S]*$/, '');
+
+/**
+ * pnpm's spellings of `recursive` (pnpm 11 `pnpm/src/cmd/recursive.ts`, `commandNames`), which run
+ * the command after them in every project (`pnpm m exec …`), so they are skipped as Yarn's
+ * `workspace <name>` is (WP-196 review round 2).
+ */
+/**
+ * pnpm's global options known to take a separate value (`-C`/`--dir`, `-F`/`--filter`,
+ * `--workspace-dir`), whose value the built-in fallback must not read as the command (WP-196, the
+ * orchestrator's round-3 probe). An option not listed is read as taking none, which over-reads
+ * its value as an implicit exec; the shell-mode string is read on every word of the line anyway.
+ */
+const PNPM_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  '-C',
+  '--dir',
+  '-F',
+  '--filter',
+  '--workspace-dir',
+]);
+
+const PNPM_RECURSIVE: ReadonlySet<string> = new Set(['recursive', 'multi', 'm']);
+
+/**
+ * pnpm's built-in commands this policy knows (WP-196 review round 2, backlog 578): pnpm runs a
+ * first positional that is no built-in as `exec` (pnpm 11 `exec/commands/src/run.ts`,
+ * `fallbackCommandUsed`), so **any other** first positional is read as the exec form — an over-read
+ * for a built-in missing here, never a fail-open. A minimal list, not pnpm's own: pnpm 11's command
+ * names are spread over its command packages (`pnpm/src/cmd/index.ts` imports them), and a word
+ * wrongly added here would fail open, so only common built-ins are listed. `exec`, `dlx`,
+ * `recursive` and `with` are read before this list.
+ */
+const PNPM_BUILT_INS: ReadonlySet<string> = new Set([
+  'install',
+  'i',
+  'add',
+  'remove',
+  'update',
+  'run',
+  'test',
+  'list',
+  'why',
+  'outdated',
+  'audit',
+  'store',
+  'config',
+  'init',
+  'publish',
+  'pack',
+  'link',
+  'unlink',
+  'import',
+  'rebuild',
+  'prune',
+  'fetch',
+  'deploy',
+  'env',
+  'setup',
+  'server',
+  'start',
+  'create',
+  'patch',
+  'patch-commit',
+  'licenses',
+  'root',
+  'bin',
+  'help',
+]);
+
+/** npm's exec form by its own resolution (npm 11 `lib/utils/cmd-list.js` `deref`), read closed. */
+const npmExecWord = (value: string): boolean => value === 'x' || 'exec'.startsWith(value);
+
+/**
+ * Where a package runner's exec subcommand stands, when `words[head]` is a runner (WP-196 (b)):
+ * the first word after the runner that is neither one of its options nor possibly an option's
+ * value (a word after an option with no `=`) — or such a value, read closed, so `npm --prefix exec
+ * jest` is read as an exec form. `null` for any other subcommand and any other word, and
+ * **`'unknown'` where the subcommand cannot be determined exactly** (review round 1's ruling), which
+ * `wrappedScript` makes `UNCERTAINTY.runnerSubcommand` and the peel reads through.
+ *
+ * Review round 1: a `--` before the subcommand is skipped (nopt puts the rest in `remain`, and npm
+ * takes its command from there: `npm -- exec …`); npm resolves its commands by unique prefix and
+ * one alias, so a non-empty prefix of `exec` and `x` are its exec form — the only words its `deref`
+ * can resolve to `exec` (`e` and `ex` are ambiguous there and run nothing: an over-read); Yarn 1
+ * runs `yarn workspace <name> <cmd>` as `yarn <cmd>`, so `workspace` and its name are skipped; and
+ * `yarn workspaces …` (`foreach … exec` in Yarn 2+, `run` in Yarn 1) is `'unknown'`.
+ */
+const runnerSubcommandAt = (
+  words: readonly string[],
+  head: number,
+): number | null | 'unknown' | 'string' => {
+  const name = runnerName(words[head] ?? '');
+  if (!Object.hasOwn(RUNNER_EXEC_SUBCOMMANDS, name)) {
+    return null;
+  }
+  const subcommands = RUNNER_EXEC_SUBCOMMANDS[name] as ReadonlySet<string>;
+  const yarn = name === 'yarn' || name === 'yarnpkg';
+  let valueMayFollow = false;
+  let option = '';
+  for (let index = head + 1; index < words.length; index += 1) {
+    const value = unquoteToken(words[index] as string);
+    if (value === '--') {
+      continue;
+    }
+    if (isFlagToken(value)) {
+      valueMayFollow = !value.includes('=');
+      option = value;
+    } else if (name === 'pnpm' && valueMayFollow && PNPM_VALUE_OPTIONS.has(option)) {
+      // The value of a pnpm global option (`pnpm -C d exec …`) is not its first positional.
+      valueMayFollow = false;
+    } else if (
+      (name === 'npm' && 'explore'.startsWith(value)) ||
+      (name === 'bun' && value === 'exec')
+    ) {
+      return 'string';
+    } else if (subcommands.has(value) || (name === 'npm' && npmExecWord(value))) {
+      return index;
+    } else if ((yarn && value === 'workspaces') || (name === 'pnpm' && value === 'with')) {
+      return 'unknown';
+    } else if (yarn && value === 'workspace') {
+      index += 1;
+      valueMayFollow = false;
+    } else if (name === 'pnpm' && PNPM_RECURSIVE.has(value)) {
+      valueMayFollow = false;
+    } else if (name === 'pnpm' && !PNPM_BUILT_INS.has(value)) {
+      return index;
+    } else if (valueMayFollow) {
+      valueMayFollow = false;
+    } else {
+      return null;
+    }
+  }
+  return null;
+};
+
+/** A wrapper at `index` of `words`: a wrapper token, or a package runner in its exec form. */
+const isWrapperAt = (words: readonly string[], index: number): boolean =>
+  isWrapperToken(words[index] as string) || runnerSubcommandAt(words, index) !== null;
+
 /** The name a token would run under: quoting off, then the last path segment. */
 const argv0Name = (token: string): string => basename(unquoteToken(token));
 
@@ -1952,7 +2140,7 @@ const SCRIPT_SHELLS: ReadonlySet<string> = new Set([
  *
  * `busybox` is here (WP-188, backlog 559): `busybox ls` runs the `ls` applet, so it keeps `ls`'s
  * verdict. `npx` is not: `npx make test` may fetch or run a package's bin named `make`, so it stays
- * peeled for the block list and the floors only.
+ * peeled for the block list and the floors only — and so does every package runner (WP-196).
  */
 const ENVIRONMENT_WRAPPERS: ReadonlySet<string> = new Set([
   'env',
@@ -2003,12 +2191,11 @@ interface CommandStarts {
  */
 const walkCommandStarts = (
   words: readonly string[],
-  chain: (word: string) => boolean,
+  chain: (words: readonly string[], index: number) => boolean,
   flag: (word: string) => boolean,
 ): CommandStarts => {
   const starts = [0];
-  const head = words[0];
-  if (head === undefined || !chain(head)) {
+  if (words[0] === undefined || !chain(words, 0)) {
     return { starts, tooDeep: false };
   }
   let peeled = 1;
@@ -2016,7 +2203,7 @@ const walkCommandStarts = (
   for (let index = 1; index < words.length && index <= limit; index += 1) {
     starts.push(index);
     const word = words[index] as string;
-    if (chain(word)) {
+    if (chain(words, index)) {
       peeled += 1;
       if (peeled > MAX_WRAPPER_DEPTH) {
         return { starts, tooDeep: true };
@@ -2031,7 +2218,7 @@ const walkCommandStarts = (
 
 /** The peel of `argv0Candidates` over written tokens. */
 const argvStarts = (tokens: readonly string[]): CommandStarts =>
-  walkCommandStarts(tokens, isWrapperToken, (token) => isFlagToken(unquoteToken(token)));
+  walkCommandStarts(tokens, isWrapperAt, (token) => isFlagToken(unquoteToken(token)));
 
 /**
  * The command with leading environment wrappers removed, when there are any. Returns nothing when
@@ -3688,13 +3875,12 @@ const commandPositions = (argv: readonly ShellWord[]): CommandStarts => {
   while (start < argv.length && isAssignment((argv[start] as ShellWord).raw)) {
     start += 1;
   }
-  const walk = walkCommandStarts(
-    argv.map((word) => word.raw),
-    isWrapperToken,
-    (raw) => isFlagToken(unquoteToken(raw)),
-  );
+  const raws = argv.map((word) => word.raw);
+  const walk = walkCommandStarts(raws, isWrapperAt, (raw) => isFlagToken(unquoteToken(raw)));
   const isWrapper =
-    start < argv.length && ARGV0_WRAPPERS.has(argv0Name((argv[start] as ShellWord).raw));
+    start < argv.length &&
+    (ARGV0_WRAPPERS.has(argv0Name(raws[start] as string)) ||
+      runnerSubcommandAt(raws, start) !== null);
   return {
     starts: (isWrapper ? walk.starts.filter((position) => position >= start) : [start]).filter(
       (position) => position < argv.length,
@@ -3802,6 +3988,7 @@ const commandNameWords = (tokens: readonly string[]): readonly string[] => {
   const words: string[] = [];
   let operand = false;
   let wrapper = '';
+  let runnerSubcommand: number | null = null;
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index] as string;
     const value = unquoteToken(token);
@@ -3839,9 +4026,16 @@ const commandNameWords = (tokens: readonly string[]): readonly string[] => {
     }
     words.push(token);
     const name = argv0Name(token);
-    if (!ARGV0_WRAPPERS.has(name) || expandsAsName(token)) {
+    // A package runner's exec form and its subcommand are wrappers too (WP-196 (b)).
+    const found = runnerSubcommandAt(tokens, index);
+    const subcommand = typeof found === 'number' ? found : null;
+    if (
+      !(ARGV0_WRAPPERS.has(name) || found !== null || index === runnerSubcommand) ||
+      expandsAsName(token)
+    ) {
       break;
     }
+    runnerSubcommand = subcommand ?? runnerSubcommand;
     operand = WRAPPER_OPERAND.has(name);
     wrapper = name;
   }
@@ -4109,6 +4303,8 @@ export const XARGS_FLOORED_VERBS: ReadonlySet<string> = new Set(
  */
 const xargsRunsItsInput = (name: string, args: readonly ShellWord[]): boolean =>
   (ARGV0_WRAPPERS.has(name) && !SCRIPT_SHELLS.has(name)) ||
+  // WP-196 (e): every package runner, whatever follows it — the input can be `exec` and a command.
+  Object.hasOwn(RUNNER_EXEC_SUBCOMMANDS, name) ||
   [...XARGS_FLOORED_VERBS].some((verb) => name.startsWith(verb)) ||
   name === 'git' ||
   name.startsWith('git-') ||
@@ -4116,14 +4312,17 @@ const xargsRunsItsInput = (name: string, args: readonly ShellWord[]): boolean =>
     args.some((word) => /^-(?:exec|execdir|ok|okdir)$/.test(unquoteToken(word.raw))));
 
 /**
- * Whether `npx` is given `-c`/`--call` (WP-188 review round 1): npm parses its own options before
- * the command, and `--call <string>` runs the string in a shell. Read **closed**, failing toward
- * uncertain: every option word up to the first word that is neither an option nor possibly an
- * option's value (a word after an option with no `=`) is checked, so `npx --yes jest -c x` is an
- * over-ask. A long option that is a prefix of `--call` (nopt's abbreviations) matches, separate,
+ * Whether a package runner is given a string to run in a shell (WP-188 review round 1 for `npx`;
+ * WP-196 (c), backlog 575, for every runner): npm's `-c`/`--call` and pnpm's `-c`/`--shell-mode`.
+ * One reader for every runner, so a runner whose options mean something else (`yarn dlx -c`) is
+ * read the same way. Read **closed**, failing toward uncertain: every option word up to the first
+ * word that is neither an option nor possibly an option's value (a word after an option with no
+ * `=`) is checked, so `npx --yes jest -c x` and `npm exec --yes jest -c x` are over-asks. A long
+ * option that is a prefix of `--call` or `--shell-mode` (nopt's abbreviations) matches, separate,
  * attached or with `=`; a short word matches when `c` is among its letters (`-c`, `-c'…'`, `-yc`).
+ * `args` are the runner's words after its name, its exec subcommand taken out (`npm -c x exec`).
  */
-const npxCallsString = (args: readonly ShellWord[]): boolean => {
+const runnerCallsString = (args: readonly ShellWord[]): boolean => {
   let valueMayFollow = false;
   for (const word of args) {
     const value = unquoteToken(word.raw);
@@ -4132,7 +4331,7 @@ const npxCallsString = (args: readonly ShellWord[]): boolean => {
     }
     if (value.startsWith('--')) {
       const name = value.slice(2).split('=')[0] as string;
-      if (name.length > 0 && 'call'.startsWith(name)) {
+      if (name.length > 0 && ('call'.startsWith(name) || 'shell-mode'.startsWith(name))) {
         return true;
       }
       valueMayFollow = !value.includes('=');
@@ -4148,6 +4347,44 @@ const npxCallsString = (args: readonly ShellWord[]): boolean => {
     }
   }
   return false;
+};
+
+/**
+ * The words a package runner reads its own options from (WP-196 (c)): every word after a runner
+ * that needs no subcommand (`npx`, `pnpx`, `bunx`), and those after `npm`/`pnpm`/`yarn`/`bun` in
+ * an exec form with the subcommand taken out. None for any other command or subcommand.
+ */
+const runnerOptions = (name: string, args: readonly ShellWord[]): readonly ShellWord[] => {
+  if (name !== 'corepack' && PACKAGE_RUNNER_COMMANDS.includes(runnerName(name))) {
+    return args;
+  }
+  if (runnerName(name) === 'pnpm') {
+    // The orchestrator's round-3 probe: every option word of a pnpm line, whatever the subcommand
+    // reading concludes, so a misread first positional cannot hide `exec -c …` after it. **The
+    // over-ask, stated:** `pnpm jest -c jest.config.js` is uncertain.
+    return args.filter((word) => isFlagToken(unquoteToken(word.raw)));
+  }
+  const at = runnerSubcommandAt([name, ...args.map((word) => word.raw)], 0);
+  if (at === null && runnerName(name) === 'npm') {
+    // Review round 3: `npm init`/`npm create` hand `-c`/`--call` to libnpmexec (npm 11
+    // `lib/commands/init.js` → `libnpmexec/lib/run-script.js`, `call || args.shift()`), so npm's
+    // option words under **any** subcommand, and with none, are read — up to the `--` npm stops
+    // parsing at. **The over-ask, stated:** `npm test -c x` is uncertain.
+    const end = args.findIndex((word) => unquoteToken(word.raw) === '--');
+    return args
+      .slice(0, end === -1 ? args.length : end)
+      .filter((word) => isFlagToken(unquoteToken(word.raw)));
+  }
+  if (typeof at !== 'number') {
+    return [];
+  }
+  // The runner's options before its subcommand (`npm -c x exec`), and every word after it — except
+  // for pnpm's implicit exec (`pnpm jest -c x`), whose later words are the command's own.
+  const before = args.slice(0, at - 1).filter((word) => isFlagToken(unquoteToken(word.raw)));
+  const implicit = !(RUNNER_EXEC_SUBCOMMANDS[runnerName(name)] as ReadonlySet<string>).has(
+    unquoteToken((args[at - 1] as ShellWord).raw),
+  );
+  return runnerName(name) === 'pnpm' && implicit ? before : [...before, ...args.slice(at)];
 };
 
 /**
@@ -4477,7 +4714,11 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
       ) {
         reasons.add(UNCERTAINTY.xargsArguments);
       }
-    } else if (name === 'npx' && npxCallsString(args)) {
+    } else if (runnerSubcommandAt([name, ...args.map((word) => word.raw)], 0) === 'unknown') {
+      reasons.add(UNCERTAINTY.runnerSubcommand);
+    } else if (runnerSubcommandAt([name, ...args.map((word) => word.raw)], 0) === 'string') {
+      reasons.add(UNCERTAINTY.runnerString);
+    } else if (runnerCallsString(runnerOptions(name, args))) {
       reasons.add(UNCERTAINTY.npxCall);
     } else if (name === 'hash' && optionWords(args).some((option) => /^-[A-Za-z]*p/.test(option))) {
       // `hash -p FILE NAME` makes `NAME` run `FILE` (WP-161 criterion (12), backlog 522).
@@ -4486,6 +4727,24 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
   }
   return { scripts, uncertain, reasons: [...reasons] };
 };
+
+/**
+ * A word naming npm's or node's environment configuration (WP-196 (d), backlog 575): its unquoted
+ * text begins with `npm_config_` or `NODE_OPTIONS` in any case — npm matches its prefix
+ * case-insensitively — as a prefix assignment, an `env`/`export`/`declare` operand, a bare
+ * assignment, a `read`/`for` name, or anything else; or after `printf`'s attached `-v`, or after an
+ * `=` (`declare -n r=NODE_OPTIONS` makes `r` that variable). Whatever the command, because which
+ * settings hand npm or node a program is a list, and a list under-reads (rule 65). **The over-ask,
+ * stated:** `npm_config_loglevel=silent npm ci` and `grep npm_config_ .npmrc` are uncertain.
+ * **Residual:** an `.npmrc` the run writes — by a redirection (`echo 'call=x' > .npmrc`) or by the
+ * runner's own CLI (`npm config set call x && npx`, `npm config set script-shell …; npm test`,
+ * `pnpm config set …`, `yarn config set …`, each `unattended_auto`, measured at review round 1) —
+ * and a name assembled at runtime (`"npm_$x"`).
+ */
+const RUNNER_ENVIRONMENT_WORD = /(?:^(?:-v)?|=)(?:npm_config_|NODE_OPTIONS)/i;
+
+const namesRunnerEnvironment = (stage: string): boolean =>
+  shellWords(stage).some((word) => RUNNER_ENVIRONMENT_WORD.test(unquoteToken(word.raw)));
 
 /** Variables bash runs the text of later — as a prompt, a hook, a startup file (WP-160 (b)). */
 const STORED_COMMAND_VARIABLES: ReadonlySet<string> = new Set([
@@ -4701,6 +4960,9 @@ const parseCommand = (
     for (const [stageIndex, stage] of stages.entries()) {
       if (storesCommand(stage)) {
         uncertainty.add(UNCERTAINTY.handedCommand);
+      }
+      if (namesRunnerEnvironment(stage)) {
+        uncertainty.add(UNCERTAINTY.npmEnvironment);
       }
       const stagePiped = piped || stageIndex > 0;
       const handed = wrappedScript(stage, {
