@@ -15868,7 +15868,7 @@ The same lines at `HEAD` (`9f162f9f`) are `:642`, `:874`, `:1037`, `:1074`. WP-1
 
 **Depends on** nothing.
 
-### 557. **The `make` floors match the command name three different ways, so `gmake` reaches no floor at all and `make-4.4` reaches the `--eval` glob but not the `VAR=value` or `-E` predicates — `gmake 'X=$(shell …)'` reads `auto` on the line itself** (TODO, **minor — a named hazard read as `auto` under an ordinary spelling (GNU make's own alias on BSD and macOS). Not major: these floors are stated to be an enumeration that narrows what the model authors, not the boundary (`command-policy.ts:1309-1313`), and a renamed copy (`./m`) is already a residual of the same reach. Whether the run image ships a `gmake` at all **needs measurement**. Found by WP-164's reviewer, round 1, and measured by WP-164's implementer, session 16. **No work package owns it**; it is a floor gap, not an `xargs` one. Read on the uncommitted WP-164 tree over `56b7854e`, no test run)
+### 557. **The `make` floors match the command name three different ways, so `gmake` reaches no floor at all and `make-4.4` reaches the `--eval` glob but not the `VAR=value` or `-E` predicates — `gmake 'X=$(shell …)'` reads `auto` on the line itself** (TODO, owned by **WP-186** — **minor — a named hazard read as `auto` under an ordinary spelling (GNU make's own alias on BSD and macOS). Not major: these floors are stated to be an enumeration that narrows what the model authors, not the boundary (`command-policy.ts:1309-1313`), and a renamed copy (`./m`) is already a residual of the same reach. Whether the run image ships a `gmake` at all **needs measurement**. Found by WP-164's reviewer, round 1, and measured by WP-164's implementer, session 16. **Owned by WP-186** (architect, session 16); it is a floor gap, not an `xargs` one, which is why it is not in WP-185. Read on the uncommitted WP-164 tree over `56b7854e`, no test run)
 
 **What is wrong.** Three `command`-kind floors are written for `make`, and they disagree on which names are `make`:
 - `make VAR=value` is a `tokens` predicate, `name === 'make' && positional.some((token) => token.includes('='))` (`packages/domain/src/policies/command-policy.ts:1320-1321`).
@@ -15887,7 +15887,7 @@ That was measured through `evaluateCommand` by the implementer. The `make-4.4 -E
 
 **Depends on** WP-164 (the `verbs` field and the derived set).
 
-### 558. **The verb census skips every `tokens` entry, so a floor written as a predicate can name the wrong verbs and no test notices** (TODO, **minor. A wrong `verbs` list silently drops a verb from the derived `XARGS_FLOORED_VERBS`, and `xargs <verb>` then reads `auto` for a floored hazard. Today every such verb is held some other way (below), so nothing is wrong now. WP-164's review round 1, kept as its residual, session 16. **No work package owns it**)
+### 558. **The verb census skips every `tokens` entry, so a floor written as a predicate can name the wrong verbs and no test notices** (TODO, owned by **WP-186** — **minor. A wrong `verbs` list silently drops a verb from the derived `XARGS_FLOORED_VERBS`, and `xargs <verb>` then reads `auto` for a floored hazard. Today every such verb is held some other way (below), so nothing is wrong now. WP-164's review round 1, kept as its residual, session 16. **Owned by WP-186** (architect, session 16))
 
 **What is wrong.** The census in `packages/domain/src/policies/command-policy.test.ts` checks a glob entry's first word against its `verbs` and skips an entry that has a predicate: `if (entry.tokens === undefined && first !== '' && !entry.verbs.includes(first))` (`:2566`). A predicate is a function, so it cannot read the verb from it. WP-164's canary section, quoted:
 
@@ -15928,7 +15928,7 @@ The result is consumed at `:4253`. A `null` there means `:4052` and `:4257` neve
 
 **Depends on** WP-164 (`XARGS_LONG_OPTIONS`, `xargsLongOption`).
 
-### 561. **A script shell fed by `xargs` runs a command its input chose, by two paths the handed-script reader does not see: a `-c` script that reads its positionals with no `$` name (`for a; do $a; done`, `getopts`, `select`), and a shell with no literal script on the line, whose `-c` arrives as input** (TODO, **major, fail-open. An arbitrary command reads `unattended_auto`. The two causes are separate and are named (a) and (b), but they share one path, a shell's `-c` handed through `xargs`, and one owner decision, so they are one entry. Predates WP-164: both also read `auto` at `56b7854e`. Found by WP-164's reviewer, round 3, session 16. The review was capped at three rounds, so this is filed, not fixed in WP-164. **Needs an owner (architect)**; no work package owns it. Read on the uncommitted WP-164 tree over `56b7854e`, no test run by the refiner)
+### 561. **A script shell fed by `xargs` runs a command its input chose, by two paths the handed-script reader does not see: a `-c` script that reads its positionals with no `$` name (`for a; do $a; done`, `getopts`, `select`), and a shell with no literal script on the line, whose `-c` arrives as input** (TODO, owned by **WP-185** — **major, fail-open. An arbitrary command reads `unattended_auto`. The two causes are separate and are named (a) and (b), but they share one path, a shell's `-c` handed through `xargs`, and one owner decision, so they are one entry. Predates WP-164: both also read `auto` at `56b7854e`. Found by WP-164's reviewer, round 3, session 16. The review was capped at three rounds, so this is filed, not fixed in WP-164. **Owned by WP-185** (architect ruling, M10, session 16: the **blanket** rule, below). Read on the uncommitted WP-164 tree over `56b7854e`, no test run by the refiner)
 
 **What is wrong.** Under `xargs` a script shell gets its input lines as arguments. `wrappedScript` reads the shell's words (`packages/domain/src/policies/command-policy.ts:4051`) and has two blind spots.
 
@@ -15964,7 +15964,7 @@ Controls keep their verdicts (rule 42): `sh -c 'for a; do echo "$a"; done'` with
 
 **Depends on** WP-164 (`fedByXargs` on the handed-script path). Related: 562 (the replace string on the same path).
 
-### 562. **A replace string that is not literal (`xargs -I"$R"`, `-I $R`, `--replace="$R"`) is read as its unexpanded text, so a handed script holding the expanded value reads as literal; and no test pins `-i` to taking only an attached value** (TODO, **minor. Fail-open, but only with `R` bound outside the line, a residual the module already states (`command-policy.ts:97`, *"a name bound outside the line"*). The test gap is a **nit**. Found by WP-164's reviewer, round 3, session 16; filed, not fixed (three-round cap). **No work package owns it**. Read on the uncommitted WP-164 tree, no test run by the refiner)
+### 562. **A replace string that is not literal (`xargs -I"$R"`, `-I $R`, `--replace="$R"`) is read as its unexpanded text, so a handed script holding the expanded value reads as literal; and no test pins `-i` to taking only an attached value** (TODO, owned by **WP-185** — **minor. Fail-open, but only with `R` bound outside the line, a residual the module already states (`command-policy.ts:97`, *"a name bound outside the line"*). The test gap is a **nit**. Found by WP-164's reviewer, round 3, session 16; filed, not fixed (three-round cap). **Owned by WP-185** (architect, session 16: same reader as 561, folded). Read on the uncommitted WP-164 tree, no test run by the refiner)
 
 **What is wrong.** `readXargsOptions` (`packages/domain/src/policies/command-policy.ts:3935`) takes the replace operand through `unquoteToken`, so `-I"$R"` records the string `$R`. A handed script `X` does not contain `$R`, so `hand` (`:4065`) does not mark it uncertain. At run time `R` expands to `X`, and xargs substitutes each input line into the script. The reviewer's probe lines (`scratchpad/wp164-rev3/c5.txt`; verdicts as reported, output not kept):
 
@@ -19818,6 +19818,8 @@ Decisions and assumptions:
   `noImplicitReturns`, `noUnusedLocals/Parameters`, `verbatimModuleSyntax`.
   `exactOptionalPropertyTypes` deliberately left **off** — it is not part of `strict` and it fights
   zod-inferred types; revisit in WP-01 if contracts tolerate it.
+| WP-185 | **A script shell fed by `xargs` is uncertain whatever its script, and a replace string that is not literal is uncertain too** | TODO | — | Folds **561** (major, fail-open under `auto`) and **562**. Deps WP-164. No migration. Added by the architect, session 16 (§ "Architect ruling (M10, session 16)"): the **blanket** rule — every script shell under `xargs` is uncertain, whatever its script — chosen over the narrow reader list, which review rounds 2 and 3 each found incomplete. Runs **next after WP-164**, before WP-165; serial with WP-186 on `command-policy.ts`, parallel-safe with every other row. Current verdicts measured first (rule 27). |
+| WP-186 | **The `make` floors agree on which names are `make`, and a `tokens` floor's declared verbs are checked against its predicate** | TODO | — | Folds **557**, **558**. Deps WP-164, WP-185. No migration. Minor; (a) measures whether the run image ships `gmake` before anything else. 559 stays carried, re-read after this row's name rule. |
 - **Whole-repo typecheck is one program** (`tsconfig.json`), so its `lib` includes DOM. Per-package
   `tsconfig.json` files keep the boundary honest for editors: only `apps/web` gets DOM. Project
   references were left out (the plan marks them optional).
@@ -46916,6 +46918,49 @@ Then WP-163…WP-169, in their table order.
 
 **Sentences falsified (rule 83).**
 - `PROGRESS.md`, the session-12 resume note's item (3) (*"move it aside for a `verify` and put it back"*): amended in place as history.
+### Architect ruling (M10, session 16) — a shell under `xargs` is uncertain whatever it says
+
+Written 2026-10-17 at `a5033ee9`, with WP-163 and WP-164 DONE and WP-165…WP-169 TODO. This pass covers
+the five headings WP-164's review and its refiner filed — **557**, **558**, **559**, **561**, **562** (560
+was folded into WP-164's round 2) — and nothing else: § "Architect ruling (M10, session 14)" and
+§ "Architect ruling (M10 head, session 15)" hold for every entry they list. No test tier and no Docker
+ran; the code was read at `a5033ee9` at the lines each entry cites, and the two readings this pass adds
+are marked as readings.
+
+**The rule for 561: blanket, not narrow.** Under `xargs` a script shell is uncertain whatever its own
+words — with a literal `-c` script, with `-c` and no operand, with no `-c`. The narrow rule (count
+`for NAME` without `in`, `getopts` and `select` as positional reads; a shell with no literal script is
+uncertain) enumerates the readers of the positionals, and that enumeration has been reopened at every
+reading: round 2 wrote `$@`, `$*`, `$N`, `${N}` (`namesPositional`); round 3 found `for NAME;`, `for
+NAME do`, `getopts`, `select`; this pass, by reading, adds `${!#}` (the last positional), `${!x}` with
+`x=1` bound in the same script, and bash's `BASH_ARGV` — none matched by `namesPositional`. A reader
+list in a security parser under-reads by construction (rule 65 asks for a superset); the blanket rule is
+closed. **The over-ask of each, named.** Narrow: `shift`, `$#`, `/proc/self/cmdline` and every reader
+found later must be listed, each over-asked, and (b) is still a second rule. Blanket: a shell under
+`xargs` whose script ignores what `xargs` feeds it — `xargs sh -c 'echo hi'`, `xargs -n1 bash -c
+'date'` — which is a shell with no reason to be under `xargs`; two round-2 controls flip and are
+re-pinned as uncertain with the reason named. The reason stays `UNCERTAINTY.xargsArguments`, so the
+refusal still says *write the command and its arguments on the line*.
+
+**Read, not measured, and handed to the row to measure first:** `find -exec` supplies a shell's
+operands the way `xargs` does, and a file name is text the run can choose, so `find . -exec sh -c 'for
+a; do $a; done' _ {} +` may have the same shape (WP-185 (d)).
+
+**Folded.** **561** and **562** into **WP-185**: one reader (`readXargsOptions` and `readShell`), one
+reviewer's round, and 562's fix is one `isLiteralWord`. **557** and **558** into **WP-186**, not
+WP-185: they are floor-side (which names three `make` entries test, and a census of predicates), 557 is
+not known live or latent until `gmake` is looked for in the run image, and a major fail-open fix should
+not wait on a dozen fixtures — WP-164 reached the three-round cap on parser detail, so WP-185 is kept
+to one rule. **559** stays carried: nit, latent (the image ships no busybox; `npx make` is a registry
+fetch the egress list bounds), re-read after WP-186's name rule.
+
+**Decisions.** None amended. BD-025's 2026-10-06 amendment, decision 2, already holds that a line the
+scanner is uncertain about stays `deny`; WP-185 widens what is uncertain, which that decision leaves to
+the scanner. technical/05's command-policy bullets are WP-185 criterion (6) and WP-186 criterion (5).
+The next free migration stays **0092**; neither row takes one.
+
+**Next: WP-185**, then WP-186, then WP-165…WP-169 in their table order.
+
 - Standing rule 95 and the session-12 note's item (2): left for the orchestrator, as (e) says.
 - `13-implementation-plan.md`'s M10 prose (*"until it lands standing rule 95 forbids a tier or a push from a linked worktree"*) and the architect ruling's *"both working on the main checkout (rule 95)"*: left for the orchestrator. Both are history once (e) lands.
 - `docs/technical/14-orchestration-protocol.md`'s worktree parallelism: (e), the orchestrator's.
