@@ -74,15 +74,7 @@ Level thresholds stay as in product/17; revisit after 20 dogfood tasks.
 
 ## 6. Jira defaults (product/08)
 - Pick-up label: `agentic`. State-hint labels (optional, off by default): `agentic:needs-human`, `agentic:drift`, `agentic:waiting`. Custom field alternative offered in setup for admins.
-- Default status mapping (applied only when the target status exists in the project's workflow; otherwise unchanged and shown in setup):
-| Task state | feature/bug | chore | spike |
-|---|---|---|---|
-| Refinement / Architecture / Investigation | "In Refinement" (fallback "In Progress") | "In Progress" | "In Progress" |
-| Waiting for answers / approval | "Waiting for input" (fallback unchanged) | same | same |
-| Implementation / CI / reviews / rebase | "In Progress" | "In Progress" | — |
-| Ready for merge | "In Review" | "In Review" | "In Review" (report attached) |
-| Merged / Retro / Done | "Done" | "Done" | "Done" |
-| Needs human / Cancelled | unchanged + comment | same | same |
+- **There is no default status mapping** (*amended 2026-10-17 by the architect under BD-031 ruling 1, PROGRESS backlog 551; the table this bullet replaced described a default the code never applied*). Every status name comes from the binding's lifecycle slots (TD-029 decision 1) or from the project's `status_mapping`, each chosen from the statuses loaded from that tracker. A slot or state nobody mapped leaves the ticket's status unchanged. One tracker's names (*In Progress*, *In Review*, *Done*) are one example among many; the platform's own documentation and fixtures use invented names (*Doing*, *Waiting for review*, *Reviewed*, *Testing*) so that no reader takes an example for a default.
 
 ## 7. MR description and commit conventions (product/13)
 - Title: `<type>(<scope>): <summary> [PROJ-123]` (Conventional Commits types; scope optional).

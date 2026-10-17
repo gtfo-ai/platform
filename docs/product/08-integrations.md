@@ -24,10 +24,10 @@ Every provider declares: `type`, `config_schema` (with secret fields marked), `c
 ## Providers for v1
 
 ### Jira (Task management)
-- Pick-up rules per project: label (default `agentic`), status (mapped "Ready for agent"), epic membership, or JQL; ticket type → template mapping (Bug → `bug`, Task/Story → `feature`, configurable); priority ordering for the queue.
+- Pick-up rules per project: label (default `agentic`), status (the binding's `pick_up_from` slot, chosen from the tracker's own statuses — no name is assumed, BD-031 ruling 1), epic membership, or JQL; ticket type → template mapping (Bug → `bug`, Task/Story → `feature`, configurable); priority ordering for the queue.
 - Inbound: Jira admin webhook with secret (or a per-project Automation rule "Send web request" when the operator has no site-admin) and a JQL poll fallback (every 60 s, configurable) so the platform works without a public URL.
 - Outbound via REST v3 (Cloud) / v2 (Data Center): transitions resolved at runtime by target status name with required fields supported; ADF comments generated from markdown; labels for state hints (`agentic:refinement`, `agentic:needs-human`) optional; custom-field alternative for admins.
-- Status mapping per project and template, e.g. `Refinement → "In Refinement"`, `Waiting for answers → "Waiting for input"`, `Implementation… → "In Progress"`, `Ready for merge → "In Review"`, `Done → "Done"`. Unmapped stages leave the status unchanged.
+- Status mapping per project and template, with names chosen from the tracker's loaded statuses — for example `Refinement → "Doing"`, `Waiting for answers → "Waiting for review"`, `Ready for merge → "Reviewed"`, `Done → "Finished"` (invented names; one tracker's *In Progress* / *In Review* / *Done* are one vocabulary among many, BD-031 ruling 1, amended 2026-10-17). Unmapped stages leave the status unchanged, and a binding with a `lifecycle` block supersedes `status_mapping` (TD-029 decision 3).
 - The platform maintains one **workpad** comment per ticket (BD-023); questions are posted as separate numbered comments so they notify; answers = a reply by a mapped user (or Slack/UI).
 - Agent tooling: `acli` (Cloud) or `jira-cli` (DC) behind a skill with 5–6 recipes; read-only scope plus comment.
 
