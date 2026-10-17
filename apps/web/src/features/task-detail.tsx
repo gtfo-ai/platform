@@ -1550,7 +1550,13 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           />
         </div>
 
-        <TakeOverPanel taskId={task.id} state={task.state} takenOver={takenOver} runs={runs} />
+        <TakeOverPanel
+          taskId={task.id}
+          state={task.state}
+          merged={stages.some((entry) => entry.stage === 'merged_gate')}
+          takenOver={takenOver}
+          runs={runs}
+        />
 
         <BreakdownPanel taskId={task.id} enabled={task.template === EPIC_SPLIT_TEMPLATE} />
 

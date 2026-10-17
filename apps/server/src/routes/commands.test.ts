@@ -668,6 +668,26 @@ describe('a return out of needs_human (backlog 483)', () => {
     expect(reply.body.error?.message).toContain('a merged task never goes back to work');
     expect(parked.actions).toEqual([]);
   });
+
+  /**
+   * WP-165 criterion (2), Q117 (a): a merged task parked in `needs_human` is never paused or taken
+   * over. The aggregate's refusal (and that it appends nothing) is `human-commands.test.ts`'s; this
+   * is the route's half — the code, the message, and no `human_actions` row.
+   */
+  for (const route of [
+    { name: 'pause', move: 'paused' as const },
+    { name: 'take-over', move: 'taken over' as const },
+  ]) {
+    it(`answers 409 task_merged for ${route.name} of a merged task, and audits nothing (WP-165)`, async () => {
+      const parked = await escalatedWorld();
+      parked.throws = new TaskMergedError('needs_human', 'paused', route.move);
+      const reply = await post(parked, `/api/tasks/${TASK}/${route.name}`, {}, `${route.name}-m-1`);
+      expect(`${reply.status} ${reply.body.error?.code ?? ''}`).toBe('409 task_merged');
+      expect(reply.body.error?.message).toContain(`cannot be ${route.move}`);
+      expect(parked.calls.map((call) => call.name)).toEqual([route.name]);
+      expect(parked.actions).toEqual([]);
+    });
+  }
 });
 
 describe('what each refusal maps to', () => {

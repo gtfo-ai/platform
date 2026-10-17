@@ -183,10 +183,12 @@ export const TakeOverDownloads = ({
 const HandBack = ({
   taskId,
   takenOver,
+  merged,
   commands,
 }: {
   readonly taskId: string;
   readonly takenOver: TakenOver;
+  readonly merged: boolean;
   readonly commands: ReturnType<typeof useTakeOverCommands>;
 }): ReactElement => {
   const options = takenOver.hand_back_stages;
@@ -195,10 +197,15 @@ const HandBack = ({
   );
   const [summary, setSummary] = useState('');
   if (options.length === 0) {
+    // WP-165 (Q117 (a)): the server offers a merged task nothing, and the reason is not the build.
     return (
       <EmptyState
         title="No stage to hand back to"
-        hint="This task’s pipeline cannot be read on this build, so there is no stage the hand-back would accept. Cancel the task, or ask an operator."
+        hint={
+          merged
+            ? 'This task was merged, so it never goes back to a stage before the merge, and a hand-back cannot reach its retrospective from here. Cancel the task — or, once it is waiting for a human, resume it into the retrospective.'
+            : 'This task’s pipeline cannot be read on this build, so there is no stage the hand-back would accept. Cancel the task, or ask an operator.'
+        }
       />
     );
   }
@@ -261,11 +268,14 @@ const HandBack = ({
 export const TakeOverPanel = ({
   taskId,
   state,
+  merged,
   takenOver,
   runs,
 }: {
   readonly taskId: string;
   readonly state: TaskState;
+  /** The task entered `merged_gate` (WP-152's test of the same fact): its hand-back offers nothing. */
+  readonly merged: boolean;
   readonly takenOver: TakenOver | null;
   readonly runs: readonly Pick<RunRecord, 'id' | 'started_at'>[];
 }): ReactElement | null => {
@@ -299,7 +309,7 @@ export const TakeOverPanel = ({
             </p>
           )}
           <TakeOverDownloads {...takeOverRunOf(takenOver, runs)} />
-          <HandBack taskId={taskId} takenOver={takenOver} commands={commands} />
+          <HandBack taskId={taskId} takenOver={takenOver} merged={merged} commands={commands} />
         </Card>
       </div>
     );

@@ -243,6 +243,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
         <TakeOverPanel
           taskId={task.data.task.id}
           state={task.data.task.state}
+          merged={task.data.stages.some((entry) => entry.stage === 'merged_gate')}
           takenOver={task.data.taken_over}
           runs={task.data.runs}
         />

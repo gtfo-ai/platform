@@ -20,6 +20,7 @@ import {
   createTask,
   enterStage,
   escalateTask,
+  handBackStages,
   handBackTask,
   isCurrentStageAttempt,
   isMergedTask,
@@ -612,6 +613,22 @@ describe('the tail of the pipeline', () => {
     expect(types(recordMerge(ready, context()).events)).toEqual(['task.stage.entered']);
   });
 
+  /**
+   * WP-165 (backlog 545, Q104 (a) extended): a pause at the human `qa` stage ends with the merge too,
+   * and still does not resume into Ready — QA's pass is the ticket's status, not a resume. A pause at
+   * a gate is refused both, as before.
+   */
+  it('ends a pause at qa with the merge, and refuses to resume it into ready_for_merge', () => {
+    const paused = pauseTask(activeTask('qa'), { reason: 'manual' }, context()).aggregate;
+    const merged = recordMerge(paused, context());
+    expect(merged.aggregate.state).toBe('merged');
+    expect(merged.aggregate.currentStage).toBe('merged_gate');
+    expect(types(merged.events)).toEqual(['task.resumed', 'task.stage.entered']);
+    expect(() => markReadyForMerge(paused, context())).toThrow(IllegalTransitionError);
+    const atGate = pauseTask(activeTask('ci_gate'), { reason: 'manual' }, context()).aggregate;
+    expect(() => recordMerge(atGate, context())).toThrow(IllegalTransitionError);
+  });
+
   it('refuses to skip from ready straight to done', () => {
     const ready = markReadyForMerge(activeTask(), context()).aggregate;
     expect(() => completeTask(ready, { outcome: 'merged', totals }, context())).toThrow(
@@ -654,6 +671,49 @@ describe('a merged task escalated after its merge (WP-152)', () => {
       context(),
     ).aggregate;
   };
+
+  /** WP-165 (Q117 (a)): nor paused, nor taken over — and a task that was not merged still is. */
+  it('refuses to pause or take over a merged task, by name, and pauses one that was not merged', () => {
+    const task = mergedThenEscalated();
+    expect(() => pauseTask(task, { reason: 'manual' }, person())).toThrow(/cannot be paused/);
+    expect(() =>
+      takeOverTask(
+        task,
+        { branch: 'agentic/PROJ-1', stage: 'retrospective', runId: null },
+        person(),
+      ),
+    ).toThrow(TaskMergedError);
+    const parked = escalateTask(
+      activeTask('ci_gate'),
+      { reason: 'r', blockerBrief: 'b' },
+      context(),
+    );
+    expect(pauseTask(parked.aggregate, { reason: 'manual' }, person()).aggregate.state).toBe(
+      'paused',
+    );
+  });
+
+  it('offers a merged task no hand-back stage, and an unmerged one only what the hand-back admits', () => {
+    const enabled = [
+      'refinement',
+      'implementation',
+      'ready_for_merge',
+      'merged_gate',
+      'retrospective',
+      'librarian',
+      'done',
+    ];
+    expect(handBackStages(mergedThenEscalated(), enabled)).toEqual([]);
+    const parked = escalateTask(
+      activeTask('ci_gate'),
+      { reason: 'r', blockerBrief: 'b' },
+      context(),
+    );
+    expect(handBackStages(parked.aggregate, enabled)).toEqual(['refinement', 'implementation']);
+    expect(
+      handBackStages(newTask({ state: 'paused', currentStage: 'ready_for_merge' }), enabled),
+    ).toEqual(['refinement', 'implementation', 'ready_for_merge']);
+  });
 
   it('is merged once it entered merged_gate, and not before', () => {
     expect(isMergedTask(activeTask())).toBe(false);
@@ -705,7 +765,9 @@ describe('a merged task escalated after its merge (WP-152)', () => {
 
   it('never takes a merged task to active, from any state it can be in', () => {
     const escalated = mergedThenEscalated();
-    const paused = pauseTask(escalated, { reason: 'manual' }, person()).aggregate;
+    // Built rather than paused: since WP-165 `pauseTask` refuses a merged task, so a paused one is
+    // the shape a pause recorded before it left.
+    const paused: Task = { ...escalated, state: 'paused' };
     for (const task of [escalated, paused]) {
       expect(() => enterStage(task, { stage: 'implementation' }, person()), task.state).toThrow(
         TaskMergedError,

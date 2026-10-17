@@ -477,8 +477,8 @@ error naming the transition, not as a silent no-op — and each accepted one lea
 
 | Command | Who | What it does |
 |---|---|---|
-| **Pause** | member | stops the task from entering another stage |
-| **Resume** | member | lets it continue. A task paused while it waited for its merge goes back to waiting for it — if its branch still has the commit the platform's gates judged, through the rebase gate, which checks it against the target branch as it is now (a default branch that moved during the pause is not re-checked while the task is paused) and warns about another task touching the same files, spending no iteration limit (WP-105); if somebody pushed while it was paused, it goes back through the CI gate first (WP-79). It reads *paused* for the moment the platform takes to check; merging the merge request on the git provider while it is paused ends the pause, and the retrospective runs as for any merge |
+| **Pause** | member | stops the task from entering another stage. Refused for a task that was **merged** (*task_merged*): there is nothing left to stop, and from a pause it could not reach its retrospective |
+| **Resume** | member | lets it continue. A task paused while it waited for its merge goes back to waiting for it — if its branch still has the commit the platform's gates judged, through the rebase gate, which checks it against the target branch as it is now (a default branch that moved during the pause is not re-checked while the task is paused) and warns about another task touching the same files, spending no iteration limit (WP-105); if somebody pushed while it was paused, it goes back through the CI gate first (WP-79). It reads *paused* for the moment the platform takes to check; merging the merge request on the git provider while it is paused ends the pause, and the retrospective runs as for any merge — and so does merging it while the task is paused at **QA**, on a project that has that stage (a pause at an earlier stage is escalated to a human instead). Resuming a task paused at QA takes it back to QA, not to Ready |
 | **Cancel** | maintainer | ends the task; it enters no further stage |
 | **Retry stage** | member | runs the current stage again, optionally with a reason. Costs a run. If the stage's run is still going, it is stopped first and the new attempt starts once it has ended; the screen says which attempt was queued and whether a run was stopped |
 | **Return to stage** | maintainer | sends the task back to an earlier stage it has already run; a reason is required, and that stage is given it. Costs an iteration of the loop. Works on a task in **Needs human** too — the way to send an escalated task to the stage that should run again. When the task stopped at a **gate** that recorded a failure — the CI gate after its fix loop ran out — the form shows a box, ticked, *Attach the gate's last failure* with its length in characters: the stage is then given the failing jobs' log excerpts as well as your reason, as two separate blocks, so you need not paste the logs. Untick it to send your reason alone. A task that was **merged** cannot be sent back to a stage before the merge |
@@ -492,8 +492,10 @@ going back to work: **Resume** runs the retrospective (a task stopped at the mer
 resumes into the retrospective, the move the gate would have made) and the task reaches done;
 **Retry stage** does the same when it stopped at the retrospective or the librarian, and is refused
 at the merge gate, because retrying that gate would record the merge again. Returning, reworking or handing it back to any stage before the merge is refused by name
-(*task_merged*), because its branch is already in the default branch. Pausing it first, or taking it
-over, leaves only **Cancel** (WP-152).
+(*task_merged*), because its branch is already in the default branch. **Pause** and **Take over** are
+refused the same way (WP-165): there is nothing to stop or hand over, and from a pause the task
+could not reach its retrospective. Cancelling a run on such a task — a question you asked it, say —
+stops the run and leaves the task waiting for a human, where **Resume** still finishes it.
 
 The stage list offered by *retry*, *return to stage* and *rework* comes from the task's **own**
 history rather than from the pipeline template, for the same reason as the board's columns; a task
@@ -624,10 +626,12 @@ such, and so are the failing jobs past the fifth.
   and the run screen shows whether the stop was applied. When no run was in flight, nothing was
   exported and the panel offers neither download; a take-over recorded before WP-73 names the run it
   *infers* and says so
-  — and **Hand back**, whose stage list is the task's own pipeline, so it offers nothing the platform
-  would refuse — except on a task that was **merged**, which is handed back only into the
-  retrospective or the librarian, and only out of *Needs human*; a merged task you took over is paused,
-  and from that pause it can only be cancelled (WP-152). Handing back to **Ready for merge** does not skip the checks: when the branch is not
+  — and **Hand back**, whose stage list is the stages of the task's own pipeline that a hand-back
+  would accept, so it offers nothing the platform would refuse: never the merge gate, the
+  retrospective, the librarian or done, and **Ready for merge** only when you took the task over at
+  Ready (WP-165). A task that was **merged** cannot be taken over at all; one taken over before that
+  rule existed is offered no stage, and the panel says it was merged — cancel it, or resume it into
+  its retrospective once it is waiting for a human. Handing back to **Ready for merge** does not skip the checks: when the branch is not
   the commit the platform's gates judged — you pushed, or the platform cannot read it — the task
   re-enters the CI gate and walks through review and the rebase gate to Ready again, spending none of
   its iteration limits; an unchanged branch goes back through the rebase gate alone — one

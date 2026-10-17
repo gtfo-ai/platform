@@ -97,6 +97,7 @@ import {
   compilePipeline,
   DEFAULT_TASK_BUDGET_USD,
   estimateAccuracy,
+  handBackStages,
   resumeCommands,
   SHIPPED_TEMPLATES,
 } from '@platform/domain';
@@ -1450,13 +1451,7 @@ const stoppedRunSession = async (
  */
 const findTakenOver = async (
   database: Database,
-  task: {
-    readonly id: string;
-    readonly template: string;
-    readonly templateSnapshot: unknown;
-    readonly pipelineDial: unknown;
-    readonly qaStage: boolean;
-  },
+  task: HandBackTask & { readonly id: string },
 ): Promise<TaskDetailResponse['taken_over']> => {
   const rows = await database
     .select({
@@ -1506,18 +1501,36 @@ const findTakenOver = async (
 };
 
 /**
- * The stages a hand-back may name — the task's compiled pipeline, enabled stages only (WP-44).
+ * The stages a hand-back may name — the task's compiled pipeline, enabled stages only (WP-44), as
+ * far as `handBackTaskCommand` admits them for this task (`handBackStages`, WP-165).
  *
  * The same computation `handBackTaskCommand` refuses against (`compilePipeline` over the task's
  * frozen template, falling back to the shipped one for a row written before snapshots, exactly as
  * the pipeline store loads it), so the picker and the route cannot disagree. A template this build
  * cannot compile answers `[]` — the screen then says the stages cannot be read — rather than a list
- * the route would refuse (standing rule 20's read side: refuse, never invent).
+ * the route would refuse (standing rule 20's read side: refuse, never invent). A **merged** task
+ * answers `[]` as well (Q117 (a)): it is never handed back before the merge, and from a pause it
+ * reaches nothing after it.
  */
-export const handBackStagesOf = (task: CompilableTask): string[] =>
-  (compiledPipelineOf(task)?.stages ?? [])
-    .filter((stage) => stage.enabled)
-    .map((stage) => stage.id);
+export const handBackStagesOf = (task: HandBackTask): string[] =>
+  handBackStages(
+    {
+      state: task.state as TaskState,
+      currentStage: task.currentStage,
+      stageAttempts: task.stageAttempts as Readonly<Record<string, number>>,
+    },
+    (compiledPipelineOf(task)?.stages ?? [])
+      .filter((stage) => stage.enabled)
+      .map((stage) => stage.id),
+  );
+
+/** What {@link handBackStagesOf} reads: the compiled pipeline's columns and the task's position. */
+interface HandBackTask extends CompilableTask {
+  readonly state: string;
+  readonly currentStage: string | null;
+  /** `tasks.stage_attempts`: a task that entered `merged_gate` was merged (`isMergedTask`). */
+  readonly stageAttempts: unknown;
+}
 
 /** The columns a task's compiled pipeline is made from. */
 interface CompilableTask {

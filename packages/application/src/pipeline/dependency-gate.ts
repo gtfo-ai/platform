@@ -717,8 +717,8 @@ const inTaskTransaction = async <T>(
  * Exactly the states `isRunnableTaskState` excludes minus the terminal pair — and exactly the
  * states the Task aggregate leaves with a `task.resumed` (`RESUMED_FROM`, read by `enterStage` and,
  * since WP-73, by the tail-stage entry too), which is what makes deferring to that event sound:
- * every task parked here comes back through it — or, paused at `ready_for_merge`, is merged on the
- * provider and comes back through the same event into `merged` (Q104).
+ * every task parked here comes back through it — or, paused at `ready_for_merge` (or at `qa` since
+ * WP-165), is merged on the provider and comes back through the same event into `merged` (Q104).
  */
 const isHumanOwnedStop = (state: TaskState): boolean =>
   !isRunnableTaskState(state) && !isTerminalTaskState(state);

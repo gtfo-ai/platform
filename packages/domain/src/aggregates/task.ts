@@ -41,6 +41,7 @@ import {
 } from '../policies/iteration-limits.js';
 import {
   assertTaskTransition,
+  canTransitionTask,
   isRunnableTaskState,
   isTerminalTaskState,
 } from './task-state-machine.js';
@@ -99,7 +100,7 @@ export const LIBRARIAN_STAGE = 'librarian' as const;
  * a person may take it out of an escalation only into the stages after the merge
  * ({@link enterTerminalStage}).
  */
-export const isMergedTask = (task: Task): boolean =>
+export const isMergedTask = (task: Pick<Task, 'stageAttempts'>): boolean =>
   task.stageAttempts[MERGED_GATE_STAGE] !== undefined;
 
 /**
@@ -109,6 +110,42 @@ export const isMergedTask = (task: Task): boolean =>
  * as `active`, which a merged task never is again.
  */
 export const POST_MERGE_STAGES: readonly Slug[] = [RETROSPECTIVE_STAGE, LIBRARIAN_STAGE];
+
+/**
+ * Stages a hand-back never enters: the merge (only the provider's `mr.merged` records one), the two
+ * after it (`retro` has no edge from `paused`, and from `needs_human` only for a merged task) and
+ * `done`, which has no edge from either.
+ */
+const NEVER_HANDED_BACK_INTO: readonly Slug[] = [MERGED_GATE_STAGE, ...POST_MERGE_STAGES, 'done'];
+
+/**
+ * **The stages the take-over panel's hand-back picker offers** — out of the task's enabled stages,
+ * the ones `handBackTaskCommand` admits for this task (WP-165, Q117 (a), criterion 4). Before it the
+ * picker offered every enabled stage, and for a merged task every one was refused (PROGRESS backlog
+ * 508); for any task the stages from the merge on were refused too, and `ready_for_merge` unless the
+ * task was paused there (`enterTerminalStage`; `needs_human → ready_for_merge` is not an edge).
+ *
+ * **A merged task is offered nothing**: it is never handed back before the merge, and from a pause
+ * — a take-over recorded before WP-165, the only way a merged task is held — nothing after it is
+ * reachable either, so its way forward is *Cancel*, or *Resume* once it is parked in `needs_human`.
+ * `human-commands.test.ts` holds this list to the command in both directions.
+ */
+export const handBackStages = (
+  task: Pick<Task, 'state' | 'currentStage' | 'stageAttempts'>,
+  enabled: readonly Slug[],
+): Slug[] => {
+  if (isMergedTask(task)) {
+    return [];
+  }
+  const readyAdmitted =
+    task.state === 'paused'
+      ? task.currentStage === READY_FOR_MERGE_STAGE
+      : canTransitionTask(task.state, 'ready_for_merge');
+  return enabled.filter(
+    (stage) =>
+      !NEVER_HANDED_BACK_INTO.includes(stage) && (stage !== READY_FOR_MERGE_STAGE || readyAdmitted),
+  );
+};
 
 // ── creation ─────────────────────────────────────────────────────────────────
 
@@ -527,6 +564,20 @@ export const requestApproval = (
 
 // ── pause, escalate, take over ───────────────────────────────────────────────
 
+/**
+ * **A merged task is never paused or taken over** (WP-165, Q117 (a), technical/02's M10 amendment,
+ * PROGRESS backlog 508). A pause stops a pipeline that `needs_human` has already stopped, and a
+ * take-over hands a person a branch that is already in the default branch; and from `paused` a
+ * merged task reaches none of the stages after the merge, so the pause left it only *Cancel*. The
+ * table admits `needs_human → paused`, and it cannot say "not for a merged task", so the aggregate
+ * does — before anything is recorded.
+ */
+const assertNotMergedForPause = (task: Task, move: 'paused' | 'taken over'): void => {
+  if (isMergedTask(task)) {
+    throw new TaskMergedError(task.state, 'paused', move);
+  }
+};
+
 export const pauseTask = (
   task: Task,
   input: {
@@ -536,6 +587,7 @@ export const pauseTask = (
   },
   context: CommandContext,
 ): TaskDecision => {
+  assertNotMergedForPause(task, 'paused');
   const next = withState(task, 'paused');
   const recorder = recorderFor(task, context);
   recorder.emit('task.paused', {
@@ -663,6 +715,7 @@ export const takeOverTask = (
   },
   context: CommandContext,
 ): TaskDecision => {
+  assertNotMergedForPause(task, 'taken over');
   const next = withState(task, 'paused');
   const recorder = recorderFor(task, context);
   recorder.emit('task.taken_over', {
@@ -806,11 +859,18 @@ const enterTerminalStage = (
   context: CommandContext,
   resumeReason: string | null = null,
 ): TaskDecision => {
-  // `paused → ready_for_merge` and `paused → merged` exist for a task paused **at**
-  // `ready_for_merge` only (WP-73, PROGRESS backlog 244, review round 1): the table cannot say
-  // "from this stage", so the aggregate does. Without it a hand-back from a pause at `ci_gate` put
-  // the task at Ready past CI and rebase, or recorded a merge that never happened.
-  if (task.state === 'paused' && task.currentStage !== READY_FOR_MERGE_STAGE) {
+  // `paused → ready_for_merge` and `paused → merged` exist for a task paused **at** a human stage
+  // only (WP-73, PROGRESS backlog 244, review round 1): the table cannot say "from this stage", so
+  // the aggregate does. Without it a hand-back from a pause at `ci_gate` put the task at Ready past
+  // CI and rebase, or recorded a merge that never happened. Since WP-165 (backlog 545, Q104 (a)
+  // extended) `paused → merged` is admitted from a pause at `qa` too — `qa` sits after the gates and
+  // the merge is the decision it waits on (TD-029 decision 9) — while `paused → ready_for_merge`
+  // stays a pause at Ready's alone: QA's pass is the ticket's status, not a resume.
+  if (
+    task.state === 'paused' &&
+    task.currentStage !== READY_FOR_MERGE_STAGE &&
+    !(state === 'merged' && task.currentStage === QA_STAGE_ID)
+  ) {
     throw new IllegalTransitionError('Task', task.state, state);
   }
   // `active → merged` exists for a task waiting at the human `qa` stage only (WP-178): a person

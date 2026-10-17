@@ -1725,10 +1725,16 @@ const mergeRequestHandler = (options: PipelineSagaOptions): EventHandler => ({
     if (stage === null) {
       return;
     }
-    if (stored.task.state === 'paused' && stage !== READY_FOR_MERGE_STAGE) {
-      // Q104: a merge of a task paused at any **other** stage is not the decision the pause was
-      // waiting for — the pipeline never got the change to Ready — so it is escalated with a brief
-      // rather than dropped, which is what this branch did before WP-73.
+    if (
+      stored.task.state === 'paused' &&
+      stage !== READY_FOR_MERGE_STAGE &&
+      stage !== QA_STAGE_ID
+    ) {
+      // Q104: a merge of a task paused at an agent or gate stage is not the decision the pause was
+      // waiting for — the gates never judged the change — so it is escalated with a brief rather
+      // than dropped, which is what this branch did before WP-73. A pause at a **human** stage
+      // (`ready_for_merge`, or `qa` since WP-165, backlog 545) is past the gates, and the merge is
+      // the decision it waits on; it resumes into the merge below.
       await escalateFor(
         'mr.merged',
         'the merge request was merged while the task was paused before it was ready',
@@ -1769,7 +1775,7 @@ const mergeRequestHandler = (options: PipelineSagaOptions): EventHandler => ({
       // towards Ready is not the decision `ready_for_merge` waits for. It used to be dropped here
       // — the task ran on against a merged merge request and never reached `retro` — and is now
       // escalated, as `mr.closed` is from every non-terminal state and as Q104 (c) escalates a
-      // merge of a task paused before Ready.
+      // merge of a task paused at an agent or gate stage.
       await escalateFor(
         'mr.merged',
         'the merge request was merged before the pipeline marked it ready',
@@ -1778,8 +1784,9 @@ const mergeRequestHandler = (options: PipelineSagaOptions): EventHandler => ({
       );
       return;
     }
-    // `paused` here is a task paused **at** `ready_for_merge` (Q104, answer (a)): the merge is the
-    // human decision the pause held the platform back for, so it ends the pause — `recordMerge`
+    // `paused` here is a task paused **at** `ready_for_merge` (Q104, answer (a)) or at `qa` (WP-165,
+    // backlog 545): the merge is the human decision the pause held the platform back for, so it ends
+    // the pause — `recordMerge`
     // emits `task.resumed` before the merge's own `task.stage.entered` (backlog 244). Every other
     // state left (`queued`, `merged`, `retro`, `done`, `cancelled`) has already moved past a merge
     // or never had a stage.

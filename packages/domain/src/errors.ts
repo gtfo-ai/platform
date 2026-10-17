@@ -49,7 +49,8 @@ export class IllegalTransitionError extends DomainError {
  * WP-152). A merged task never goes back to work: its branch is already in the default branch, so a
  * Developer run on it would re-do work that has shipped. The way forward from an escalation after
  * the merge is `resume` or `retry-stage` at the retrospective (or the librarian), a hand-back to
- * one of them, or `cancel`.
+ * one of them, or `cancel`. Since WP-165 (Q117 (a)) it is also what refuses a pause or a take-over
+ * of a merged task, which from `paused` would have had no way to the retrospective.
  *
  * An {@link IllegalTransitionError}, so every caller that already treats a refused move as one —
  * the saga escalates or drops it, a command answers 409 — keeps doing so; the HTTP surface names
@@ -60,12 +61,18 @@ export class TaskMergedError extends IllegalTransitionError {
   /** The stage the refused command aimed at. */
   readonly stage: string;
 
-  constructor(from: string, stage: string) {
+  /**
+   * `move` is set for a pause or a take-over (WP-165, Q117 (a)): neither sends the task to a stage,
+   * so the message names the move rather than a stage, and `stage` is the state it aimed at.
+   */
+  constructor(from: string, stage: string, move?: 'paused' | 'taken over') {
     super('Task', from, `${stage} (the task was merged)`);
     this.stage = stage;
     this.message =
-      `this task was merged, so it cannot be sent to "${stage}": a merged task never goes back to ` +
-      'work. Resume or retry its retrospective, hand it back to a stage after the merge, or cancel it';
+      (move === undefined
+        ? `this task was merged, so it cannot be sent to "${stage}": a merged task never goes back to work. `
+        : `this task was merged, so it cannot be ${move}: its branch is already in the default branch, so there is nothing to stop or hand over. `) +
+      'Resume or retry its retrospective, hand it back to a stage after the merge, or cancel it';
   }
 }
 

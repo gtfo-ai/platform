@@ -295,6 +295,36 @@ describe('a take-over in force', () => {
     );
     await screen.findByText('Taken over by a human');
     expect(container.textContent).toContain('No stage to hand back to');
+    expect(container.textContent).toContain('cannot be read on this build');
+    expect(screen.queryByRole('button', { name: 'Hand back' })).toBeNull();
+  });
+
+  /**
+   * WP-165 (Q117 (a)): the server offers a merged task no stage, and the empty state says why —
+   * the merge, not the build — rather than blaming a pipeline it read perfectly well.
+   */
+  it('says a merged task has nothing to hand back to because it was merged', async () => {
+    const mergedGate: TaskDetailResponse['stages'][number] = {
+      stage: 'merged_gate',
+      attempt: 1,
+      state: 'completed',
+      entered_at: '2026-09-13T06:00:00.000Z',
+      exited_at: '2026-09-13T06:00:00.000Z',
+      outcome: 'pass',
+    };
+    const { container } = render(
+      createApp({
+        fetchImpl: fetchFor(
+          detail({ stages: [mergedGate], taken_over: { ...TAKEN_OVER, hand_back_stages: [] } }),
+          [],
+        ),
+        realtime: false,
+      }).element,
+    );
+    await screen.findByText('Taken over by a human');
+    expect(container.textContent).toContain('No stage to hand back to');
+    expect(container.textContent).toContain('This task was merged');
+    expect(container.textContent).not.toContain('cannot be read on this build');
     expect(screen.queryByRole('button', { name: 'Hand back' })).toBeNull();
   });
 });

@@ -52,10 +52,12 @@ import { IllegalTransitionError } from '../errors.js';
  *  - **`paused → ready_for_merge` and `paused → merged` were added at WP-73** (PROGRESS backlog
  *    244, Q104): *a task paused while waiting for a merge resumes waiting for it*, and a merge made
  *    on the provider while it is paused ends the pause (Q104's answer (a)) — the saga takes that
- *    edge only when the paused task's stage is `ready_for_merge`. Before it, `ready_for_merge`
- *    could enter `paused` and nothing led back, so a pause was a cancel in slow motion. The table
- *    cannot say *"from this stage"*, so the **aggregate** refuses both edges from a pause at any
- *    other stage (`enterTerminalStage`, review round 1) — a hand-back cannot reach them.
+ *    edge only when the paused task's stage is `ready_for_merge`, or, since WP-165 (backlog 545),
+ *    `qa` for `merged` alone. Before it, `ready_for_merge` could enter `paused` and nothing led
+ *    back, so a pause was a cancel in slow motion. The table cannot say *"from this stage"*, so
+ *    the **aggregate** refuses `paused → ready_for_merge` from a pause at any other stage and
+ *    `paused → merged` from any stage but those two (`enterTerminalStage`, review round 1) — a
+ *    hand-back cannot reach them.
  *  - **`active → done` was added at WP-21**, and it closes a gap rather than widening a guarantee.
  *    Until then the only edge into `done` was `retro → done`, so a template that finishes without a
  *    merge could not finish at all: the pipeline asked for `complete`, the machine refused, and

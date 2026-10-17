@@ -29,6 +29,7 @@ import {
   type PipelineHarness,
 } from '../testing/pipeline-harness.js';
 import type { BindingLifecycle } from './binding-lifecycle.js';
+import { pauseTaskCommand } from './commands.js';
 import { MAX_REVIEW_FEEDBACK_CHARS } from './review-threads.js';
 import { DEFAULT_REVIEW_COMMENT_WINDOW_MS } from './saga.js';
 import { INITIAL_TASK_VERSION, type StoredTask } from './store.js';
@@ -806,6 +807,48 @@ describe('(6) at qa, the stage’s three other endings', () => {
     );
     expect(entered.slice(entered.lastIndexOf('qa'))).toContain('merged_gate');
     expect(eventsOf(waiting.harness, 'task.escalated')).toHaveLength(0);
+  });
+
+  /**
+   * WP-165 criterion (6), backlog 545 (Q104 (a) extended): a task **paused** at `qa` whose merge
+   * request is merged resumes into the merge, as one paused at `ready_for_merge` does, and its
+   * retrospective follows. Before it the saga escalated it with "paused before it was ready" and the
+   * aggregate refused `paused → merged`. A pause at a gate is still escalated (`saga.test.ts`,
+   * *"escalates, never drops, a merge of a task paused at a stage before ready_for_merge"*).
+   */
+  it('mr.merged ends a pause at qa: the task resumes, merges and runs its retrospective', async () => {
+    const waiting = await waitingAt('qa');
+    await pauseTaskCommand(waiting.harness.humanCommands, {
+      taskId: taskOf(waiting.harness).task.id,
+      userId: '00000000-0000-4000-8000-0000000000c2' as Id,
+    });
+    expect(at(waiting.harness)).toEqual(['paused', 'qa']);
+    await waiting.harness.publish([
+      event(waiting.harness, 'mr.merged', {
+        project_id: PROJECT,
+        task_id: null,
+        mr: MR_REF,
+        draft: false,
+        head_sha: 'b'.repeat(40),
+        diff_stats: null,
+        merge_commit_sha: 'c'.repeat(40),
+      }),
+    ]);
+    await waiting.harness.drain();
+
+    expect(eventsOf(waiting.harness, 'task.escalated')).toHaveLength(0);
+    expect(eventsOf(waiting.harness, 'task.resumed').at(-1)?.payload).toMatchObject({
+      reason: 'the merge request was merged while the task was paused',
+    });
+    const entered = eventsOf(waiting.harness, 'task.stage.entered').map(
+      (entry) => entry.payload.stage,
+    );
+    expect(entered.slice(entered.lastIndexOf('qa') + 1)).toEqual([
+      'merged_gate',
+      'retrospective',
+      'librarian',
+    ]);
+    expect(taskOf(waiting.harness).task.state).toBe('done');
   });
 
   it('default_branch.moved leads to rebase_gate, spending the re-check and not a human round', async () => {

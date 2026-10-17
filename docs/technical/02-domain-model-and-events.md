@@ -123,9 +123,9 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > by the same name; and the commands check the target first, so the refusal names the stage the
 > person chose. A merged task parked **at `merged_gate`** resumes into the first post-merge stage
 > (the move the gate would have made, since re-entering it would record the merge again); a
-> `retry-stage` of `merged_gate` stays refused. **Residual:** a merged task escalated and then
-> **paused** or **taken over** is at a pause, not in `needs_human`, and `paused → retro` is not an
-> edge — such a task can only be cancelled.
+> `retry-stage` of `merged_gate` stays refused. A merged task escalated and then **paused** or
+> **taken over** would be at a pause, not in `needs_human`, and `paused → retro` is not an edge, so
+> it could only be cancelled; the M10 amendment below closes the door into that pause.
 >
 > **M10 amendment (2026-10-08, architect, session 14; Q117 answered as its recommendation (a),
 > PROGRESS backlog 508): the residual is closed by closing the door into it, not by adding an
@@ -136,6 +136,16 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > default branch, so there is nothing to take over, and a pause would stop a pipeline that
 > `needs_human` has already stopped. A merged task that was paused before this change keeps
 > *Cancel*, and none is known to exist. Built at WP-165.
+> *As built* (WP-165): `pauseTask` and `takeOverTask` throw `TaskMergedError` for a task
+> `isMergedTask` holds for, before any event, so both commands answer `409 task_merged` and the
+> routes write no `human_actions` row. `pauseForCancel` skips the pause for a merged task; the run's
+> `cancel` row (a live lease) or its in-place ending is still recorded. That third door is real:
+> an **ask** is a leased run on any task, so a merged task parked in `needs_human` can carry a live
+> one (measured at WP-165). The picker's list is the domain's `handBackStages`, the stages the
+> hand-back command admits for this task, held to the command in both directions by a test — so it
+> is `[]` for a merged task and, for any task, leaves out `merged_gate`, the two stages after it
+> and `done` (none has an edge from a pause), and `ready_for_merge` unless the task was paused
+> there. Before it the picker offered those to every task, and the route refused each.
 >
 > **M10 head amendment (2026-10-08, architect, session 15; BD-031 decided by the product owner,
 > TD-029): an optional human `qa` stage, a claimed ticket, and one human return over four signals.**
@@ -245,12 +255,17 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > a pause, so an ending deferred to the resume (the dependency policy's `block`) is performed. **A merge made on the provider ends the pause** (Q104, answer (a)): a
 > human merging is BD-007's decision, made in the one place the platform cannot refuse it, so
 > `mr.merged` for a task paused **at `ready_for_merge`** records `task.resumed` and the merge and
-> the retrospective runs as for any merge. A task paused at any **other** stage whose merge
-> request is merged is escalated to `needs_human` with a brief rather than dropped, and so, since
+> the retrospective runs as for any merge — and so, since WP-165 (PROGRESS backlog 545, Q104 (a)
+> extended to the M10 head's human stage), does one paused **at `qa`**, which sits after the gates
+> and waits on the same human decision (TD-029 decision 9). A task paused at an agent or gate stage
+> whose merge request is merged is escalated to `needs_human` with a brief rather than dropped, and so, since
 > WP-73b (PROGRESS backlog 264), is a task still `active`, `returned`, `waiting_answers` or
 > `waiting_approval` — a merge before Ready is not the decision Ready waits for; a task already in
 > `needs_human` stays there with a log line naming the merge. **Both edges
-> exist only for a task paused _at_ `ready_for_merge`** (WP-73 review round 1): the table cannot say
+> exist only for a task paused _at_ a human stage** (WP-73 review round 1; WP-165): `paused →
+> ready_for_merge` from a pause at `ready_for_merge` only — a pause at `qa` does not resume into
+> Ready, because QA's pass is the ticket's status, not a resume — and `paused → merged` from a pause
+> at `ready_for_merge` or at `qa`. The table cannot say
 > "from this stage", so the Task aggregate refuses them from a pause anywhere else, and a
 > **hand-back cannot reach them** — handed back from a pause at `ci_gate` to `ready_for_merge` or
 > `merged_gate` is refused (it would skip CI and rebase, or record a merge that never happened),

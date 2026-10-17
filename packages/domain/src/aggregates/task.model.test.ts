@@ -216,12 +216,14 @@ const assertInvariants = (model: TaskModel, real: TaskReal): void => {
   }
 };
 
-/** Every state a merged task may be in (invariant 6): never `active`, never waiting, never Ready. */
+/**
+ * Every state a merged task may be in (invariant 6): never `active`, never waiting, never Ready —
+ * and never `paused` since WP-165 (Q117 (a)), from which it would reach no stage after the merge.
+ */
 const MERGED_TASK_STATES: readonly TaskState[] = [
   'merged',
   'retro',
   'needs_human',
-  'paused',
   'done',
   'cancelled',
 ];
@@ -229,12 +231,14 @@ const MERGED_TASK_STATES: readonly TaskState[] = [
 /** Runs a command that moves the machine to `target`, asserting success or rejection. */
 /**
  * The one guard the edge table cannot state (WP-73 review round 1): `paused → ready_for_merge` and
- * `paused → merged` are edges only for a task paused **at** `ready_for_merge`.
+ * `paused → merged` are edges only for a task paused **at** a human stage — `ready_for_merge` for
+ * both, and since WP-165 (backlog 545) `qa` for `paused → merged` alone.
  */
 const pausedTailEdgeAllowed = (model: TaskModel, target: TaskState): boolean =>
   model.state !== 'paused' ||
   (target !== 'ready_for_merge' && target !== 'merged') ||
-  model.currentStage === 'ready_for_merge';
+  model.currentStage === 'ready_for_merge' ||
+  (target === 'merged' && model.currentStage === 'qa');
 
 /**
  * The same kind of guard for `active → merged` (WP-178): an edge only for a task waiting at the
@@ -482,9 +486,13 @@ class Pause implements TaskCommand {
     return true;
   }
   run(model: TaskModel, real: TaskReal): void {
-    transition(model, real, 'paused', () =>
-      pauseTask(real.task, { reason: 'manual' }, context(real)),
-    );
+    const command = (): TaskDecision => pauseTask(real.task, { reason: 'manual' }, context(real));
+    // WP-165 (Q117 (a)): a merged task is never paused, from any state.
+    if (model.merged) {
+      expect(command).toThrow(TaskMergedError);
+      return;
+    }
+    transition(model, real, 'paused', command);
   }
   toString(): string {
     return 'pause()';
@@ -517,13 +525,18 @@ class TakeOver implements TaskCommand {
     return true;
   }
   run(model: TaskModel, real: TaskReal): void {
-    transition(model, real, 'paused', () =>
+    const command = (): TaskDecision =>
       takeOverTask(
         real.task,
         { branch: 'agentic/PROJ-1', stage: model.currentStage ?? 'implementation', runId: null },
         context(real),
-      ),
-    );
+      );
+    // WP-165 (Q117 (a)): a merged task is never taken over, from any state.
+    if (model.merged) {
+      expect(command).toThrow(TaskMergedError);
+      return;
+    }
+    transition(model, real, 'paused', command);
   }
   toString(): string {
     return 'takeOver()';
@@ -792,12 +805,14 @@ describe('Task state machine — model-based properties', () => {
   );
 
   /**
-   * WP-73 review round 1: the tail edges out of a pause exist for a pause **at** `ready_for_merge`
-   * and nowhere else — every other stage a task can be paused at is refused both edges, so a
-   * hand-back from a pause at `ci_gate` cannot put the task at Ready or record a merge.
+   * WP-73 review round 1: the tail edges out of a pause exist for a pause **at** a human stage and
+   * nowhere else — every other stage a task can be paused at is refused both edges, so a hand-back
+   * from a pause at `ci_gate` cannot put the task at Ready or record a merge. Since WP-165 (backlog
+   * 545) a pause at `qa` admits `paused → merged` (the merge QA waits on) and still refuses
+   * `paused → ready_for_merge`: QA's pass is the ticket's status, not a resume.
    */
   it(
-    'refuses paused → ready_for_merge and paused → merged from every stage but ready_for_merge',
+    'refuses paused → ready_for_merge and paused → merged from every stage but the human ones',
     () => {
       fc.assert(
         fc.property(
@@ -819,7 +834,7 @@ describe('Task state machine — model-based properties', () => {
             }
             const paused = pauseTask(task, { reason }, context(real)).aggregate;
             for (const command of [markReadyForMerge, recordMerge]) {
-              if (stage === 'ready_for_merge') {
+              if (stage === 'ready_for_merge' || (stage === 'qa' && command === recordMerge)) {
                 expect(command(paused, context(real)).aggregate.state).not.toBe('paused');
               } else {
                 expect(() => command(paused, context(real))).toThrow(IllegalTransitionError);

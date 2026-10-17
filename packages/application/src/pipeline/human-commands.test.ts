@@ -25,6 +25,8 @@
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { runFinishedEvent } from '@platform/contracts';
 import {
+  compilePipeline,
+  handBackStages,
   IllegalTransitionError,
   InvariantViolationError,
   readDataBlocks,
@@ -32,6 +34,7 @@ import {
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { withoutComments } from '../../../../scripts/source-scanner.mjs';
+import { askTaskCommand } from '../ask/commands.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import { IntegrationError } from '../ports/integrations/common.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
@@ -327,6 +330,29 @@ const walked = async (options: Parameters<typeof createPipelineHarness>[0] = {})
   expect(taskOf(harness).task.state).toBe('ready_for_merge');
   return harness;
 };
+
+/** The provider's merge of the task's merge request, as the WP-152 cases publish it. */
+const mergedEvent = () =>
+  ({
+    ...ticketMatched(),
+    type: 'mr.merged' as const,
+    payload: {
+      project_id: PROJECT,
+      task_id: null,
+      mr: {
+        provider: 'fake-git',
+        project_path: 'acme/api',
+        iid: 7,
+        url: 'https://git.example.test/acme/api/-/merge_requests/7',
+        branch: 'agentic/acme-1',
+        head_sha: 'b'.repeat(40),
+      },
+      draft: false,
+      head_sha: 'b'.repeat(40),
+      diff_stats: null,
+      merge_commit_sha: 'c'.repeat(40),
+    },
+  }) as never;
 
 /** A task parked on a blocking question at `refinement` — an **agent** stage, unlike the above. */
 const asking = async (options: Parameters<typeof createPipelineHarness>[0] = {}) => {
@@ -1797,6 +1823,210 @@ describe('a task escalated after its merge (WP-152)', () => {
     await harness.drain();
     expect(taskOf(harness).task.state).toBe('done');
   });
+
+  /**
+   * WP-165 criterion (2), Q117 (a): neither *Pause* nor *Take over* takes a merged task out of
+   * `needs_human`, where *Resume* still reaches its retrospective; from `paused` nothing would.
+   */
+  it('refuses to pause or take over a merged task by name, appends nothing, and the resume still finishes it', async () => {
+    const harness = await escalatedInRetro();
+    const task = taskOf(harness).task.id;
+    const since = harness.events().length;
+    await expect(
+      pauseTaskCommand(harness.humanCommands, { taskId: task, userId: USER }),
+    ).rejects.toThrow(TaskMergedError);
+    await expect(
+      takeOverTaskCommand(harness.humanCommands, {
+        taskId: task,
+        userId: USER,
+        authorName: 'Ada',
+        tarball: false,
+      }),
+    ).rejects.toThrow(/cannot be taken over/);
+    expect(harness.events().length).toBe(since);
+    expect(harness.store.runCommandRows()).toEqual([]);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+
+    await resumeTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('done');
+  });
+
+  /**
+   * WP-165 criterion (3), measured first (backlog 508's hypothesis): **a run can be live on a merged
+   * task parked in `needs_human`** — an ask is a run on any task, and it holds this process's lease
+   * for as long as it runs. Observed at the moment its run ends: still `running`, leased into the
+   * future, on a merged task in `needs_human`.
+   */
+  it('measures that an ask runs leased on a merged task parked in needs_human', async () => {
+    const harness = await escalatedInRetro();
+    const question = 'what did the retrospective trip over?';
+    harness.script(
+      `ask:${question}`,
+      ok({ answer: 'turns', citations: [], unanswered: [], confidence: 'high' }),
+    );
+    const seen: { status?: string; leased: boolean; state: string; merged: boolean }[] = [];
+    const repository = harness.store.runs as { finish: typeof harness.store.runs.finish };
+    const finish = repository.finish.bind(harness.store.runs);
+    repository.finish = async (tx, outcome) => {
+      const run = await harness.store.runs.load(tx, outcome.runId);
+      const lease = harness.store.leaseOf(outcome.runId);
+      const stored = taskOf(harness);
+      seen.push({
+        ...(run === null ? {} : { status: run.status }),
+        leased: lease !== null && Date.parse(lease.expiresAt) > Date.parse(harness.clock.now()),
+        state: stored.task.state,
+        merged: stored.task.stageAttempts.merged_gate !== undefined,
+      });
+      return finish(tx, outcome);
+    };
+    await askTaskCommand(
+      {
+        unitOfWork: harness.memory,
+        jobs: harness.jobs,
+        asks: harness.asks,
+        redactor: exactSecretRedactor([]),
+      },
+      {
+        id: harness.ids.next(),
+        taskId: taskOf(harness).task.id,
+        projectId: PROJECT,
+        source: 'ui',
+        askedByUserId: USER,
+        askedByIdentity: null,
+        ticketCommentId: null,
+        question,
+        createdAt: harness.clock.now(),
+      },
+    );
+    await harness.drain();
+    expect(harness.asks.all()[0]?.status).toBe('answered');
+    expect(seen).toEqual([{ status: 'running', leased: true, state: 'needs_human', merged: true }]);
+  });
+
+  /**
+   * WP-165 criterion (3), Q117 (a): so a run cancel reaches a merged parked task, through either
+   * branch. The run is stopped (its `cancel` row, or its ending in place) and the task stays in
+   * `needs_human` — before WP-165 the live branch paused it, and from that pause only *Cancel* was
+   * left. The run is seeded `running` (this file's docblock) in the measured shape above.
+   */
+  for (const leased of [true, false]) {
+    it(`stops a run on a merged parked task and leaves the task in needs_human (${leased ? 'a live lease' : 'no lease'})`, async () => {
+      const harness = await escalatedInRetro();
+      const runId = await seedLiveRun(harness, 'retrospective' as Slug);
+      if (leased) {
+        await leaseTo(harness, runId);
+      }
+      await cancelRunCommand(harness.humanCommands, { runId, userId: USER });
+      expect(taskOf(harness).task.state).toBe('needs_human');
+      expect(countOf(harness, 'task.paused')).toBe(0);
+      if (leased) {
+        expect(harness.store.runCommandRows()).toMatchObject([
+          { runId, instruction: { kind: 'cancel' } },
+        ]);
+      } else {
+        const run = await harness.memory.transaction(async (scope) =>
+          harness.store.runs.load(scope.tx, runId),
+        );
+        expect(run?.status).toBe('cancelled');
+      }
+    });
+  }
+});
+
+/**
+ * WP-165 criterion (4): **the picker and the route are one computation.** For a task taken over at
+ * Ready, one taken over at an agent stage, and a merged task held at a pause (the shape a take-over
+ * recorded before WP-165 left), every enabled stage of the pipeline is handed back in a fresh
+ * harness, and the set the command admits must equal `handBackStages` — the list the task page's
+ * picker is served (`handBackStagesOf`). Both directions (rule 42): a stage offered and refused,
+ * and a stage admitted but not offered, each fail.
+ */
+describe('the hand-back picker offers exactly what the hand-back admits (WP-165)', () => {
+  const takenOverAtReady = async () => {
+    const harness = await walked();
+    await takeOverTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      authorName: 'Ada',
+      tarball: false,
+    });
+    return harness;
+  };
+  const takenOverAtRefinement = async () => {
+    const harness = await asking();
+    await takeOverTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      authorName: 'Ada',
+      tarball: false,
+    });
+    return harness;
+  };
+  const mergedAndPaused = async () => {
+    const harness = await walked({
+      runs: {
+        retrospective: {
+          status: 'failed',
+          terminalReason: 'error_max_turns',
+          error: 'out of turns',
+          numTurns: 201,
+        } as never,
+      },
+    });
+    await harness.publish([mergedEvent()]);
+    await harness.drain();
+    const stored = taskOf(harness);
+    expect(stored.task.stageAttempts.merged_gate).toBe(1);
+    await harness.memory.transaction(async (scope) => {
+      await harness.store.tasks.save(scope.tx, {
+        ...stored,
+        task: { ...stored.task, state: 'paused' },
+      });
+    });
+    return harness;
+  };
+
+  for (const [name, reach, merged] of [
+    ['taken over at Ready', takenOverAtReady, false],
+    ['taken over at an agent stage', takenOverAtRefinement, false],
+    ['merged and held at a pause', mergedAndPaused, true],
+  ] as const) {
+    it(`for a task ${name}`, async () => {
+      const probe = await reach();
+      const stored = taskOf(probe);
+      const enabled = compilePipeline(
+        stored.task.template,
+        stored.template,
+        stored.pipelineDial,
+        stored.qaStage,
+      )
+        .stages.filter((stage) => stage.enabled)
+        .map((stage) => stage.id);
+      const offered = handBackStages(stored.task, enabled);
+      const admitted: string[] = [];
+      for (const stage of enabled) {
+        const harness = await reach();
+        const refused = await handBackTaskCommand(harness.humanCommands, {
+          taskId: taskOf(harness).task.id,
+          userId: USER,
+          stage: stage as Slug,
+          summary: 'finished by hand',
+        }).then(
+          () => false,
+          (error: unknown) => {
+            expect(error).toBeInstanceOf(IllegalTransitionError);
+            return true;
+          },
+        );
+        if (!refused) {
+          admitted.push(stage);
+        }
+      }
+      expect(offered).toEqual(admitted);
+      expect(offered.length === 0).toBe(merged);
+    });
+  }
 });
 
 /** The guard {@link StageNotReachedError} adds applies to a return from `active` too (backlog 483). */
@@ -2930,7 +3160,8 @@ describe('hand a task back', () => {
 
   /**
    * WP-73 review round 1: `paused → ready_for_merge` and `paused → merged` exist for a pause **at**
-   * `ready_for_merge` only, and a hand-back names any enabled stage — so a task paused at `ci_gate`
+   * `ready_for_merge` only (and `paused → merged` at `qa` since WP-165), and a hand-back names any
+   * enabled stage — so a task paused at `ci_gate`
    * handed back to Ready would skip CI and rebase, and one handed back to `merged_gate` would record
    * a merge that never happened. Both are refused and nothing is written.
    */

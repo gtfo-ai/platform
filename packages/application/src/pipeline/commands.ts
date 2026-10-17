@@ -1653,7 +1653,8 @@ const leaseIsLive = (run: LockedRun, now: IsoDateTime): boolean =>
  * this command and the executor wins the in-place branch, and the loser writes nothing.
  *
  * The task is paused only when the state machine has that edge: a task that is already `paused`, or
- * one that has finished, keeps the state it is in rather than making this command fail.
+ * one that has finished, keeps the state it is in rather than making this command fail — and so,
+ * since WP-165 (Q117 (a)), does a merged task, which is never paused.
  */
 export const cancelRunCommand = async (
   deps: HumanCommandDependencies,
@@ -1708,7 +1709,14 @@ export const cancelRunCommand = async (
   );
 };
 
-/** Pauses the run's task when the state machine has the edge, and appends `events` with it. */
+/**
+ * Pauses the run's task when the state machine has the edge, and appends `events` with it.
+ *
+ * **A merged task is left where it is** (WP-165, Q117 (a)): the run is still stopped and its cancel
+ * still recorded, but `pauseTask` refuses a merged task, because from `paused` it would reach none
+ * of the stages after the merge. An ask is a run on any task, leased, so a merged task parked in
+ * `needs_human` can carry a live one (measured, PROGRESS WP-165).
+ */
 const pauseForCancel = async (
   deps: HumanCommandDependencies,
   scope: TransactionScope,
@@ -1717,7 +1725,11 @@ const pauseForCancel = async (
   events: DomainEvent[],
 ): Promise<void> => {
   const stored = await deps.store.tasks.load(scope.tx, taskId);
-  if (stored !== null && canTransitionTask(stored.task.state, 'paused')) {
+  if (
+    stored !== null &&
+    !isMergedTask(stored.task) &&
+    canTransitionTask(stored.task.state, 'paused')
+  ) {
     const paused = pauseTask(stored.task, { reason: 'manual' }, context);
     await deps.store.tasks.save(scope.tx, { ...stored, task: paused.aggregate });
     events.push(...paused.events);
@@ -2322,8 +2334,8 @@ export const handBackTaskCommand = async (
       /**
        * **Not into the merge** (WP-73 review round 1). Entering `merged_gate` records a merge, and
        * the only thing that may say a merge happened is the provider's `mr.merged`. The aggregate
-       * already refuses it from a pause at any other stage; from a pause at `ready_for_merge` it
-       * would be an edge, so the command refuses the target by name.
+       * already refuses it from a pause at any other stage; from a pause at `ready_for_merge` or,
+       * since WP-165, at `qa` it would be an edge, so the command refuses the target by name.
        */
       if (input.stage === MERGED_GATE_STAGE) {
         throw new IllegalTransitionError('task', stored.task.state, `${input.stage} (hand-back)`);
