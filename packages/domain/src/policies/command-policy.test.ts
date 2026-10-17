@@ -7,6 +7,7 @@ import {
   basename,
   CI_VERIFICATION_BLOCK,
   CONFLICT_RESOLUTION_EXTRA_ALLOW,
+  carriesHazard,
   commandUncertainty,
   commandWriteTargets,
   DECLINED_BLOCK_VARIANTS,
@@ -23,6 +24,7 @@ import {
   GO_PATH_WRITING_TEST_FLAGS,
   gitResolvesLongOption,
   HAZARDOUS_ARGUMENTS,
+  type HazardousArgument,
   hasOutputRedirection,
   hazardousArgument,
   hazardousArguments,
@@ -2597,5 +2599,123 @@ describe('WP-164: the verbs a command floor names (backlog 530)', () => {
     for (const verb of XARGS_FLOORED_VERBS) {
       expect(UNCERTAINTY.xargsArguments, verb).toMatch(new RegExp(`\\b${verb}\\b`));
     }
+  });
+});
+
+/**
+ * WP-186 (c), backlog 558: the census above cannot read a predicate, so a `tokens` entry's `verbs`
+ * are checked against what its predicate does. Each `command`-kind `tokens` entry has a
+ * known-hazardous argv here (the words after the name; marker-only payloads, nothing runs them):
+ * its predicate must admit it under every declared verb and refuse it under every name that is
+ * neither a declared verb nor begins with one — the other derived verbs, a declared verb with a
+ * letter in front (`xmake`), and `cat`. The table is held to the entries in both directions, so a
+ * new predicate-only floor fails the build until it has a row.
+ */
+describe('WP-186: a tokens floor’s verbs, checked against its predicate (backlog 558)', () => {
+  const TOKENS_FIXTURES: Readonly<Record<string, string>> = {
+    'git * --exec*': 'push --exec=./x',
+    'git * --extcmd*': 'difftool --extcmd=./x',
+    'git --upload-pack abbreviated (any prefix of it git could resolve to it, e.g. --upload-pa)':
+      'fetch origin --upload-p=./x',
+    'git --receive-pack abbreviated (any prefix of it git could resolve to it, e.g. --receive-pa)':
+      'push origin --receive-p=./x',
+    'git --exec abbreviated (any prefix of it git could resolve to it, e.g. --ex)':
+      'push origin --exe=./x',
+    'git --extcmd abbreviated (any prefix of it git could resolve to it, e.g. --extc)':
+      'difftool --extcm=./x',
+    'git --ext-diff abbreviated (any prefix of it git could resolve to it, e.g. --ext-di)':
+      'log --ext-diff',
+    'git --textconv abbreviated (any prefix of it git could resolve to it, e.g. --textco)':
+      'cat-file --textconv HEAD:x',
+    'make VAR=value (a positional containing `=`)': "'X=$(shell touch m)'",
+    'make -…E… (a single-dash short-option cluster containing E)': '-E x',
+    'pytest -o / --override-ini (any key, any spelling argparse accepts)': '-o cache_dir=x',
+    'pytest @<file> (an argument read from a file)': '@args.txt',
+    'pytest -c / --config-file (any spelling argparse accepts)': '-c x.ini',
+  };
+
+  type CommandEntry = Extract<HazardousArgument, { kind: 'command' }>;
+
+  /** What is wrong between the `command`-kind `tokens` entries and the fixtures, or nothing. */
+  const tokensCensus = (
+    entries: readonly HazardousArgument[],
+    fixtures: Readonly<Record<string, string>>,
+  ): readonly string[] => {
+    const tokenEntries = entries.filter(
+      (entry): entry is CommandEntry => entry.kind === 'command' && entry.tokens !== undefined,
+    );
+    const faults: string[] = Object.keys(fixtures)
+      .filter((pattern) => !tokenEntries.some((entry) => entry.pattern === pattern))
+      .map((pattern) => `${pattern}: a fixture row names no command-kind tokens entry`);
+    const derived = new Set(
+      entries.flatMap((entry) => (entry.kind === 'command' ? entry.verbs : [])),
+    );
+    for (const entry of tokenEntries) {
+      const argv = fixtures[entry.pattern];
+      if (argv === undefined) {
+        faults.push(`${entry.pattern}: no fixture row`);
+        continue;
+      }
+      for (const verb of entry.verbs) {
+        if (!carriesHazard(`${verb} ${argv}`)(entry)) {
+          faults.push(`${entry.pattern}: its predicate refuses its fixture under ${verb}`);
+        }
+      }
+      const outsiders = [...derived, ...entry.verbs.map((verb) => `x${verb}`), 'cat'].filter(
+        (name) => !entry.verbs.some((verb) => name.startsWith(verb)),
+      );
+      for (const name of outsiders) {
+        if (carriesHazard(`${name} ${argv}`)(entry)) {
+          faults.push(`${entry.pattern}: its predicate admits its fixture under ${name}`);
+        }
+      }
+    }
+    return faults;
+  };
+
+  it('every command-kind tokens entry has a fixture its predicate admits under each verb only', () => {
+    expect(Object.keys(TOKENS_FIXTURES)).toHaveLength(13);
+    expect(tokensCensus(HAZARDOUS_ARGUMENTS, TOKENS_FIXTURES)).toEqual([]);
+  });
+
+  it('the census refuses a wrong verb, a missing row, a stray row and an entry with no row', () => {
+    const makeVar = HAZARDOUS_ARGUMENTS.find(
+      (entry) => entry.pattern === 'make VAR=value (a positional containing `=`)',
+    ) as CommandEntry;
+    // WP-164's surviving canary: the verbs say `go`, the predicate is make's.
+    const wrongVerbs = HAZARDOUS_ARGUMENTS.map((entry) =>
+      entry === makeVar ? { ...makeVar, verbs: ['go'] as const } : entry,
+    );
+    expect(tokensCensus(wrongVerbs, TOKENS_FIXTURES)).toEqual(
+      expect.arrayContaining([
+        'make VAR=value (a positional containing `=`): its predicate refuses its fixture under go',
+        'make VAR=value (a positional containing `=`): its predicate admits its fixture under make',
+      ]),
+    );
+    // A verb dropped from a list: `gmake` is still derived (the other entries name it) and the
+    // predicate still admits it.
+    const droppedVerb = HAZARDOUS_ARGUMENTS.map((entry) =>
+      entry === makeVar ? { ...makeVar, verbs: ['make'] as const } : entry,
+    );
+    expect(tokensCensus(droppedVerb, TOKENS_FIXTURES)).toEqual([
+      'make VAR=value (a positional containing `=`): its predicate admits its fixture under gmake',
+    ]);
+    const { [makeVar.pattern]: _deleted, ...missingRow } = TOKENS_FIXTURES;
+    expect(tokensCensus(HAZARDOUS_ARGUMENTS, missingRow)).toEqual([
+      'make VAR=value (a positional containing `=`): no fixture row',
+    ]);
+    expect(tokensCensus(HAZARDOUS_ARGUMENTS, { ...TOKENS_FIXTURES, 'no such entry': 'x' })).toEqual(
+      ['no such entry: a fixture row names no command-kind tokens entry'],
+    );
+    const added: HazardousArgument = {
+      pattern: 'cargo --frob (a new predicate-only floor)',
+      kind: 'command',
+      verbs: ['cargo'],
+      hazard: 'a test entry',
+      tokens: ({ name, flags }) => name.startsWith('cargo') && flags.includes('--frob'),
+    };
+    expect(tokensCensus([...HAZARDOUS_ARGUMENTS, added], TOKENS_FIXTURES)).toEqual([
+      'cargo --frob (a new predicate-only floor): no fixture row',
+    ]);
   });
 });

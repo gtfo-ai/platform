@@ -1941,6 +1941,58 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
     );
   });
 
+  /**
+   * WP-186, backlog 557: the three `make` floors test one set of names (`isMakeName`: a name
+   * beginning with `make` or `gmake`). Marker-only payloads. Every `is floored` row read
+   * `ask / auto / deny` before WP-186, and the xargs row too (PROGRESS § WP-186).
+   */
+  describe('WP-186, backlog 557: the make floors reach one set of names', () => {
+    it.each([
+      "gmake 'X=$(shell touch m)'",
+      'gmake --eval x',
+      'gmake -E x',
+      "make-4.4 'X=1'",
+      'make-4.4 -E x',
+      'gmake-4.4 -sE x',
+      "env gmake 'X=1'",
+    ])('%j is floored, as make is', (command) => {
+      expectCells(command, 'ask / hazard / hazard');
+    });
+
+    it('"echo \'X=1\' | xargs gmake" is uncertain', () => {
+      const command = "echo 'X=1' | xargs gmake";
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.xargsArguments]);
+    });
+
+    it.each([
+      // Rule 42: make's own floor and the verbs themselves keep their cells.
+      ["make 'X=$(shell touch m)'", 'ask / hazard / hazard'],
+      ['make-4.4 --eval x', 'ask / hazard / hazard'],
+      [
+        'make test',
+        { ro: 'ask / auto / deny', ver: 'allow / allow / allow', impl: 'allow / allow / allow' },
+      ],
+      [
+        'go test ./...',
+        { ro: 'ask / auto / deny', ver: 'allow / allow / allow', impl: 'allow / allow / allow' },
+      ],
+      ['gmake test', 'ask / auto / deny'],
+      // `makeinfo`, measured before and after: unfloored on the line, as it was…
+      ['makeinfo doc.texi', 'ask / auto / deny'],
+      ['makeinfo -o out.info doc.texi', 'ask / auto / deny'],
+      // …floored by `--e`, as the `make*` glob always did…
+      ['makeinfo --eval x', 'ask / hazard / hazard'],
+      ['makeinfo --error-limit=5 doc.texi', 'ask / hazard / hazard'],
+      // …and the stated over-ask of the shared name rule: `ask / auto / deny` before WP-186.
+      ['makeinfo -E x doc.texi', 'ask / hazard / hazard'],
+      ["makeinfo 'X=1'", 'ask / hazard / hazard'],
+      ['echo x | xargs makeinfo', 'ask / uncertain / uncertain'],
+    ])('keeps %j at %s', (command, expected) => {
+      expectCells(command, expected);
+    });
+  });
+
   /** Both modes, the implementation baseline: the rule a line is refused under. */
   const refusesIn = (command: string, rule: string): void => {
     for (const mode of ['auto', 'deny'] as const) {

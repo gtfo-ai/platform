@@ -81,7 +81,7 @@
  * the shell expands by a glob or a brace (`expandedName`), a name `hash -p` rebinds
  * (`reboundName`), and an `xargs` that hands its input to a wrapper, `find -exec`, `git`, a verb
  * a `command`-kind floor is written for (since WP-164: `make`, `go`, `cargo`, `npm`, `pnpm`,
- * `pytest`, `rg` — `XARGS_FLOORED_VERBS`), whose floored argument the input can carry, or a script
+ * `pytest`, `rg`, and `gmake` since WP-186 — `XARGS_FLOORED_VERBS`), whose floored argument the input can carry, or a script
  * shell whatever its own words (since WP-185), or that replaces a string that is not literal
  * (WP-185) — `xargsArguments`. A line continuation is joined before any word is classified, inside a word
  * as between words (`normaliseCommand`), and git's abbreviated long options are resolved by git's
@@ -213,7 +213,7 @@ export const UNCERTAINTY = {
    * (`-I`) that is not literal, whose text the platform cannot know.
    */
   xargsArguments:
-    'xargs handing the words it reads from its input to a command that runs its arguments (a wrapper such as env, nice, nohup or timeout, a shell such as sh or bash, find with -exec, or git) or that a refused argument would make run a program (cargo, go, make, npm, pnpm, pytest or rg, or a name beginning with one), or replacing a string (-I) that is not literal — write the command and its arguments on the line; the platform cannot read arguments xargs supplies from its input',
+    'xargs handing the words it reads from its input to a command that runs its arguments (a wrapper such as env, nice, nohup or timeout, a shell such as sh or bash, find with -exec, or git) or that a refused argument would make run a program (cargo, gmake, go, make, npm, pnpm, pytest or rg, or a name beginning with one), or replacing a string (-I) that is not literal — write the command and its arguments on the line; the platform cannot read arguments xargs supplies from its input',
 } as const;
 
 export type UncertaintyReason = (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY];
@@ -1091,6 +1091,19 @@ const gitAbbreviationFloor = ({
 });
 
 /**
+ * The names the three `make` floors are written for (WP-186, backlog 557): GNU make's own name and
+ * `gmake`, its name on BSD and macOS. A name **beginning with** one of them is make to every floor
+ * (`isMakeName`) — `make-4.4`, `gmake-4.4` — which is the reach the `make*` glob always had and the
+ * reach `XARGS_FLOORED_VERBS` matches by, so the line and `xargs` agree. The over-ask, stated:
+ * `makeinfo` begins with `make`, so `makeinfo -E x` and `makeinfo X=1` are floored too, as
+ * `makeinfo --e…` always was by the glob; `makeinfo doc.texi` is not. The run image ships neither
+ * name (measured, PROGRESS § WP-186); a project's own image may.
+ */
+const MAKE_VERBS: readonly [string, ...string[]] = ['make', 'gmake'];
+
+const isMakeName = (name: string): boolean => MAKE_VERBS.some((verb) => name.startsWith(verb));
+
+/**
  * Arguments that turn an allow-listed verb into something else: the `find … -exec` hazard, gone
  * looking for on the rest of the shipped verbs instead of waiting for it to be reported.
  *
@@ -1318,25 +1331,29 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   {
     pattern: 'make VAR=value (a positional containing `=`)',
     kind: 'command',
-    verbs: ['make'],
+    verbs: MAKE_VERBS,
     hazard:
       'a make argument with `=` that is not a flag is a command-line variable assignment — `X:=$(shell …)`, `SHELL=`, `.SHELLFLAGS=`, or an ordinary `V=1`, which can equally override a recipe variable such as `CC` — so every one is floored, while `--jobs=4` (a flag) is not',
     tokens: ({ name, positional }) =>
-      name === 'make' && positional.some((token) => token.includes('=')),
+      isMakeName(name) && positional.some((token) => token.includes('=')),
   },
-  {
-    pattern: 'make* --e*',
-    kind: 'command',
-    verbs: ['make'],
-    hazard:
-      'make --eval, spelled in full or by the prefixes GNU getopt accepts (`--ev`, `--eva`), evaluates the text as makefile source; `--environment-overrides` lets the environment replace the makefile’s variables',
-  },
+  // One glob per make name (WP-186): a glob is anchored at its first character, so `make*` alone
+  // never reaches `gmake`; together they reach exactly `isMakeName`'s set.
+  ...MAKE_VERBS.map(
+    (verb): HazardousArgument => ({
+      pattern: `${verb}* --e*`,
+      kind: 'command',
+      verbs: [verb],
+      hazard:
+        'make --eval, spelled in full or by the prefixes GNU getopt accepts (`--ev`, `--eva`), evaluates the text as makefile source; `--environment-overrides` lets the environment replace the makefile’s variables',
+    }),
+  ),
   {
     pattern: 'make -…E… (a single-dash short-option cluster containing E)',
     kind: 'command',
-    verbs: ['make'],
+    verbs: MAKE_VERBS,
     hazard: 'the short spelling of make --eval, alone (`-E`) or inside a clustered flag (`-sE`)',
-    tokens: ({ name, flags }) => name === 'make' && flags.some((flag) => /^-[^-]*E/.test(flag)),
+    tokens: ({ name, flags }) => isMakeName(name) && flags.some((flag) => /^-[^-]*E/.test(flag)),
   },
   {
     pattern: 'go* -exec*',
@@ -2111,8 +2128,12 @@ export const matchesBlockPattern = (pattern: string, command: string): boolean =
   );
 };
 
-/** Does this piece of command line carry `entry` — by its glob, or by its token predicate? */
-const carriesHazard =
+/**
+ * Does this piece of command line carry `entry` — by its glob, or by its token predicate? Exported
+ * for the `tokens` census in `command-policy.test.ts` (WP-186), which runs it over an entry that is
+ * not on the list.
+ */
+export const carriesHazard =
   (command: string) =>
   (entry: HazardousArgument): boolean =>
     entry.tokens === undefined
@@ -3996,12 +4017,13 @@ const readXargsOptions = (args: readonly ShellWord[]): XargsOptions => {
 /**
  * The verbs a `command`-kind floor on {@link HAZARDOUS_ARGUMENTS} is written for (WP-164, backlog
  * 530), **derived** from the entries' `verbs` and never listed a second time, so a new floor covers
- * its `xargs` spelling the day it is added. Today: `git`, `rg`, `make`, `go`, `cargo`, `npm`, `pnpm`
- * and `pytest` — `pytest` because its `-o`, `-c`/`--config-file` and `@file` floors are `command`
- * kind (WP-164 (c)). Matched against xargs' command's basename **by prefix** (WP-164 review round
- * 1), because that is as far as the floors reach — `go*`, `make*`, `cargo*`, `npm*`, `pnpm*` as
- * globs, `startsWith('pytest')` and `git-` in predicates — so `pytest-3` (Debian's name), `go1.25`,
- * `make-4.4` are in; `gmake` is not a prefix match, and no floor reaches it either.
+ * its `xargs` spelling the day it is added. Today: `git`, `rg`, `make`, `gmake`, `go`, `cargo`,
+ * `npm`, `pnpm` and `pytest` — `pytest` because its `-o`, `-c`/`--config-file` and `@file` floors
+ * are `command` kind (WP-164 (c)), `gmake` because the `make` floors name it (WP-186). Matched
+ * against xargs' command's basename **by prefix** (WP-164 review round 1), because that is as far
+ * as the floors reach — `go*`, `make*`, `gmake*`, `cargo*`, `npm*`, `pnpm*` as globs,
+ * `startsWith('pytest')`, `git-` and `isMakeName` in predicates — so `pytest-3` (Debian's name),
+ * `go1.25`, `make-4.4` and `gmake` are in.
  */
 export const XARGS_FLOORED_VERBS: ReadonlySet<string> = new Set(
   HAZARDOUS_ARGUMENTS.flatMap((entry) => (entry.kind === 'command' ? entry.verbs : [])),

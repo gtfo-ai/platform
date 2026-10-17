@@ -16070,6 +16070,16 @@ WP-185's *Decisions* records the over-ask for `-I{} grep x` and says *"the commo
 
 **Depends on** WP-160 (the set). Related: 561.
 
+### 569. **`gmake` has no allow entry beside `make` and `make *`, so an attended `gmake test` asks where `make test` runs** (TODO, **nit — an over-ask, fails closed; under `auto` it runs as before. Found by WP-186's implementer and review round 1, session 16; no work package owns it**)
+
+**What is wrong.** WP-186 made `gmake` a `make` for the floors (`MAKE_VERBS`, `isMakeName` in `packages/domain/src/policies/command-policy.ts`), but `PROJECT_COMMAND_ALLOW` (`packages/domain/src/policies/command-policy.ts:552-553`) lists only `make` and `make *`. Measured by the WP-186 reviewer through `decideUnattendedCommand`: attended `gmake test` asks in the verification and implementation baselines, while `make test` and `make -C sub test` are allowed.
+
+**What it costs to leave.** One extra question per attended `gmake` call, on a host whose project declares `gmake` (BSD and macOS images). Nothing is admitted that should not be.
+
+**Done when.** The allow entries are derived from `MAKE_VERBS` (or `gmake` and `gmake *` are listed beside `make`), a row shows attended `gmake test` reads as `make test` does in both baselines, and a control shows `gmake 'X=1'` still floored.
+
+**Depends on** WP-186.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -48363,3 +48373,56 @@ So the reviewer's report holds for every row (both 561 paths and 562 read `auto`
 
 **Discovered work (for a refiner).**
 - The command walk reads an operand such as `{}` (or `-I'{}'`) as a command position under a wrapper and runs the shell branch's expanded-name over-read on it (`xargs -I {} grep x` reads `handedCommand` through the `{}` word, measured). It fails closed, but it is why the `find -exec sh` rows were uncertain before (d) had a rule, and a later fix to the walk would silently drop that cover where the (d) rule does not reach.
+
+
+#### WP-186
+
+**The `make` floors reach one set of names, and a `tokens` floor's verbs are checked against its predicate** (backlogs 557 and 558). Implementer, session 16, on `67e51546`. No migration. **Status: implemented, awaiting review.**
+
+**(a) Measured first.** `docker run --rm --entrypoint sh platform-runtime:s16 -c 'command -v gmake make; true'` (this session's build of `docker/runtime.Dockerfile`, image `sha256:ecbdf7c3e7c6…`, created 2026-10-17 10:52; the brief's image, not `:dev`): **neither `gmake` nor `make` exists** (`command -v` printed nothing for either, `ls /usr/bin/*make*` matched nothing). So 557 is **latent** in the run image, as every `make` floor is; it is live in a project's own image that ships GNU make as `gmake` or a versioned name. Fixed either way, as ruled.
+
+**What changed.**
+- `packages/domain/src/policies/command-policy.ts`: `MAKE_VERBS = ['make', 'gmake']` and one predicate, `isMakeName` — **a name beginning with one of them** — ruling (b). `make VAR=value` and `make -…E…` test `isMakeName(name)` instead of `name === 'make'`, and name `MAKE_VERBS` as their `verbs`; the `make* --e*` glob becomes one glob per name (`make* --e*`, `gmake* --e*`, generated from `MAKE_VERBS`, each with its own name as `verbs`), because a glob is anchored at its first character. So `XARGS_FLOORED_VERBS` (still derived) gains `gmake`, and `UNCERTAINTY.xargsArguments` names it (the WP-164 test that the reason names every derived verb required it).
+- `carriesHazard` is exported, for the (c) census, which must run a predicate over an entry that is not on the list (its calibration).
+- technical/05: a WP-186 bullet after WP-185's, naming the set (criterion (5)).
+
+**Decision (ruling (b)'s mechanism, and the set).** The set is the prefix rule rather than an exact list (`make`, `gmake`, `make-<version>`): it is the reach the `make*` glob always had, the reach `XARGS_FLOORED_VERBS` matches by (WP-164 round 1), and what criterion (c)'s *"a name outside `verbs` and their prefixes"* describes — so the line and `xargs` now agree on every name. An exact set would have had to narrow the glob too, and then `makeinfo --eval x` would move from `hazard` to `auto`.
+
+**`makeinfo`, measured before and after** (`evaluateCommand` / `decideUnattendedCommand` `auto` / `deny`, three baselines, through `scripts/ts-source-resolver.mjs`, no shell; identical in all three):
+- unchanged: `makeinfo doc.texi` and `makeinfo -o out.info doc.texi` `ask / auto / deny` (unfloored on the line); `makeinfo --eval x` and `makeinfo --error-limit=5 doc.texi` `ask / hazard / hazard` (the `make*` glob's reach, before and after); `echo x | xargs makeinfo` `ask / uncertain / uncertain`.
+- **moved — assumption against ruling (b)'s *"does not move"***: `makeinfo -E x doc.texi` and `makeinfo 'X=1'` read `ask / auto / deny` before and `ask / hazard / hazard` after. No single name set can keep every `makeinfo` line: before WP-186 the glob reached `makeinfo` and the two predicates did not, so one set either floors `makeinfo -E` (this) or unfloors `makeinfo --eval`. I read the ruling's *"line-level verdict"* as backlog 557's *"`makeinfo` stays unfloored on the line"* — the plain `makeinfo doc.texi`, which holds — and took the direction that fails closed (`makeinfo -E` is `--macro-expand=FILE`, a path write). Stated in technical/05 and at `MAKE_VERBS`. If the architect meant every `makeinfo` line, the alternative is an exact set with the `--e` glob narrowed, and `makeinfo --eval x` moves to `auto` instead.
+
+**Criteria → tests.**
+- (1) `packages/domain/src/policies/unattended-commands.test.ts`, describe *WP-186, backlog 557: the make floors reach one set of names*: the `is floored, as make is` rows `gmake 'X=$(shell touch m)'`, `gmake --eval x`, `gmake -E x`, `make-4.4 'X=1'`, `make-4.4 -E x`, plus `gmake-4.4 -sE x` and `env gmake 'X=1'` — each `ask / hazard / hazard` in the read-only, verification and implementation baselines (every one read `ask / auto / deny` before, measured); and `"echo 'X=1' | xargs gmake" is uncertain` (`ask / uncertain / uncertain`, `[xargsArguments]` only; `ask / auto / deny` before).
+- (2) the same describe's `keeps` rows: `make 'X=$(shell touch m)'`, `make-4.4 --eval x`, `make test`, `go test ./...`, `gmake test` (`ask / auto / deny`: no allow entry names `gmake`, unchanged), the `makeinfo` rows above. WP-164's describe and WP-185's describe are unchanged and green.
+- (3) `packages/domain/src/policies/command-policy.test.ts` › "every command-kind tokens entry has a fixture its predicate admits under each verb only"
+  (13 rows: `git * --exec*`, `git * --extcmd*`, the six `command`-kind `gitAbbreviationFloor` entries, the two `make` predicates, pytest's `-o`, `@file` and `-c`), calibrated by
+  `packages/domain/src/policies/command-policy.test.ts` › "the census refuses a wrong verb, a missing row, a stray row and an entry with no row"
+  (rule 43: WP-164's canary as data, a verb dropped from a list, a deleted row, a row naming no entry, an added predicate-only entry). Outsiders are the other derived verbs, each declared verb with a letter in front (`xmake`, which an `includes` test would admit) and `cat`.
+- (4) above. (5) technical/05, the WP-186 bullet in § "Command and tool policy".
+
+**Canaries** (one in-place substitution each by a scratch script that records the file's md5, runs both policy test files, and writes the recorded bytes back; md5 equal after every one — `command-policy.ts` `e5d4adbf001c5499d9c0eb867855c962`, `command-policy.test.ts` `3d44ecc4b502e444598d16b6cd70a03c`).
+- `make VAR=value`'s `verbs` set to `['go']` (criterion (3), WP-164's surviving canary): **dead by** "every command-kind tokens entry has a fixture its predicate admits under each verb only" (and the calibration case, which reads the live list).
+- The `make -…E…` row deleted from the fixture table: **dead by** the same case.
+- A `command`-kind `tokens` entry (`cargo --frob`) added to `HAZARDOUS_ARGUMENTS` with no row: **dead by** the same case.
+- `make -…E…`'s `verbs` back to `['make']` (gmake dropped): **dead by** the same case (its predicate admits under `gmake`, a derived name outside its verbs).
+- `isMakeName` back to `name === 'make'`: **dead by** the rows named `"gmake 'X=$(shell touch m)'" is floored, as make is`, `"gmake -E x"`, `"make-4.4 'X=1'"`, `"make-4.4 -E x"`, `"gmake-4.4 -sE x"`, `"env gmake 'X=1'"`, the two moved `makeinfo` rows, and the census case (10 failed).
+- The `--e` globs reduced to `make*` alone: **dead by** the row named `"gmake --eval x" is floored, as make is`.
+- None survived.
+
+**Sentences falsified (rule 83)** — swept `docs/` (PROGRESS and the plan's row aside), `CLAUDE.md`, `packages/`, `apps/`, `scripts/`, `test/` for `gmake`, `make-`, `name === 'make'`, `make* --e*`, *tokens*, *census*, *verbs*, *cannot read a predicate*.
+- `XARGS_FLOORED_VERBS`' docblock: *"`gmake` is not a prefix match, and no floor reaches it either"*, and the verb list without `gmake`. Amended: `gmake` is in, named, and `isMakeName` and `gmake*` are listed among the floors' reach.
+- The module docblock's "What it reads as uncertain instead" list (*"since WP-164: `make`, `go`, … `rg`"*): adds *"and `gmake` since WP-186"*.
+- `UNCERTAINTY.xargsArguments`: names `gmake`.
+- `command-policy.test.ts`, WP-164's census docblock (*"a glob entry's first word … must be among its verbs"*) stays true: the census is unchanged and the new one stands beside it with its own docblock.
+- technical/05's WP-164 bullet (*"as far as the floors themselves reach (`go*`, `make*`, `startsWith('pytest')`) … `make-4.4` are in"*, and *"the stock run image ships no `make`"*): true as written, and the second is re-measured here.
+- No other hit. TD-027:256 names `make* --e*`, which still exists; `docs/decisions` and `docs/product` not edited.
+
+**Residuals.**
+- `busybox make`, `npx make` (backlog 559, carried): re-read after the name rule — `busybox make X=1` and `npx make X=1` still read `ask / auto / deny` in all three baselines (measured, before and after), because the name the floors see is `busybox`/`npx`.
+- A renamed copy (`./m`) stays WP-164's residual.
+- `gmake test` is not allow-listed beside `make test`, so it is an `ask` (runs under `auto`); not in the row.
+- The census proves a predicate admits one fixture under its verbs and refuses it under a finite list of outsiders, not that the `verbs` list is complete for every name the predicate admits (rule 65's other direction): a predicate admitting a name that is neither a derived verb, `x<verb>` nor `cat` is not caught.
+
+**Discovered work (for a refiner).**
+- `gmake` has no allow entry where `make *` has one (`PROJECT_COMMAND_ALLOW`), so a project whose image names GNU make `gmake` gets `ask` for `gmake test`; whether to allow it is a policy question, not a floor one.
