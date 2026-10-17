@@ -7,6 +7,10 @@
  * failure means on a Free gitlab.com plan, and the redaction TD-012 puts on a CI job log.
  */
 import {
+  allowAnyIntegrationHost,
+  createIntegrationActionExecutor,
+  createMemoryAuditLog,
+  createVirtualTimer,
   hasMintedCredentialShape,
   IntegrationError,
   IntegrationUnsupportedError,
@@ -1200,6 +1204,146 @@ describe('replying to a general note (WP-173)', () => {
       '_In reply to note [3401](https://gitlab.example.test/acme/api/-/merge_requests/7#note_3401)._',
     );
     expect(generalNoteReplyLine(null, null)).toContain('general note');
+  });
+});
+
+/**
+ * WP-189 (backlog 547): a reply is POST-then-read on both paths, and the executor retries a
+ * retryable failure inside one call. A re-read that fails after a successful POST is therefore
+ * thrown non-retryable, naming the posted note, and the POST runs once. **Canary:** let the
+ * re-read's `unavailable` through (`afterPost` rethrowing the error unchanged) and both cases count
+ * two POSTs.
+ */
+describe('a reply whose re-read fails after a successful POST is never re-posted (WP-189)', () => {
+  const THREAD = 'c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c189';
+  const REPLY = '<!-- agentic:reply:00000000-0000-4000-8000-0000000001b9 -->\nRenamed.';
+  const author = { id: 4242, username: 'agentic-bot', name: 'Agentic Bot' };
+  const note = (id: number, body: string) => ({
+    id,
+    type: 'DiscussionNote',
+    body,
+    author,
+    created_at: AT,
+    updated_at: AT,
+    system: false,
+    resolvable: true,
+  });
+  const replyPath = `POST /projects/${P}/merge_requests/7/discussions/${THREAD}/notes`;
+  const threadPath = `GET /projects/${P}/merge_requests/7/discussions/${THREAD}`;
+  const notesPath = `POST /projects/${P}/merge_requests/7/notes`;
+  const listPath = `GET /projects/${P}/merge_requests/7/discussions?per_page=100&page=1`;
+  const unavailable: Scripted = { status: 503, body: { message: '503 Service Unavailable' } };
+
+  /** The port call inside one executor mutation, as the pipeline's `reply` helper makes it. */
+  const replyThroughExecutor = (port: GitLabProvider) =>
+    createIntegrationActionExecutor({
+      egress: allowAnyIntegrationHost(),
+      auditLog: createMemoryAuditLog(),
+      redactor: noSecretsRedactor(),
+      timer: createVirtualTimer({ autoAdvance: true }),
+      clock: fixedClock(AT),
+      rateLimits: () => ({ capacity: 100, refillPerSecond: 100, maxConcurrent: 8 }),
+    }).execute({
+      integration: port.ref,
+      action: 'reply_to_discussion',
+      payload: { discussion_id: THREAD },
+      mutating: true,
+      mode: 'normal',
+      shadowResult: () => {
+        throw new Error('not a shadow task');
+      },
+      describeResult: (discussion) => ({ discussion_id: discussion.id }),
+      perform: () => port.replyToDiscussion(mrRef(), THREAD, REPLY),
+    });
+
+  const count = (calls: Harness['calls'], key: string): number =>
+    calls.filter((call) => `${call.method} ${call.path}` === key).length;
+
+  it('in the thread: a 201 POST and a 503 re-read make one POST and a non-retryable error naming the note', async () => {
+    const thread = {
+      id: THREAD,
+      individual_note: false,
+      notes: [note(18901, 'Rename it.'), note(18902, REPLY)],
+    };
+    const { port, calls } = build({
+      [replyPath]: { status: 201, body: note(18902, REPLY) },
+      [threadPath]: [unavailable, { status: 200, body: thread }],
+    });
+
+    const failure = await replyThroughExecutor(port).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(count(calls, replyPath), 'the reply POST is made once').toBe(1);
+    expect(failure).toBeInstanceOf(IntegrationError);
+    expect(failure).toMatchObject({ code: 'invalid_response', retryable: false });
+    expect((failure as Error).message).toContain('note 18902 was posted');
+  });
+
+  it('as the general-note fallback: a 201 POST and a 503 re-read make one POST and a non-retryable error naming the note', async () => {
+    const generalNote = { id: THREAD, individual_note: true, notes: [note(18901, 'Split it.')] };
+    const posted = note(18903, `${REPLY}\n\n${generalNoteReplyLine(18901, mrRef().url)}`);
+    const { port, calls } = build({
+      [replyPath]: { status: 404, body: { message: '404 Not found' } },
+      [threadPath]: { status: 200, body: generalNote },
+      [notesPath]: { status: 201, body: posted },
+      [listPath]: [
+        unavailable,
+        {
+          status: 200,
+          body: [generalNote, { id: 'c4c4-new', individual_note: true, notes: [posted] }],
+        },
+      ],
+    });
+
+    const failure = await replyThroughExecutor(port).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(count(calls, notesPath), 'the general note is posted once').toBe(1);
+    expect(failure).toBeInstanceOf(IntegrationError);
+    expect(failure).toMatchObject({ code: 'invalid_response', retryable: false });
+    expect((failure as Error).message).toContain('note 18903 was posted');
+  });
+
+  it('control: a POST that itself fails with 503 is retried, and the reply lands', async () => {
+    const thread = {
+      id: THREAD,
+      individual_note: false,
+      notes: [note(18901, 'Rename it.'), note(18904, REPLY)],
+    };
+    const { port, calls } = build({
+      [replyPath]: [unavailable, { status: 201, body: note(18904, REPLY) }],
+      [threadPath]: { status: 200, body: thread },
+    });
+
+    const outcome = await replyThroughExecutor(port);
+
+    expect(count(calls, replyPath)).toBe(2);
+    expect(outcome).toMatchObject({ status: 'ok', attempts: 2 });
+    expect(outcome.result.id).toBe(THREAD);
+  });
+
+  it('control: a general-note fallback POST that itself fails with 503 is retried, and the reply lands', async () => {
+    const generalNote = { id: THREAD, individual_note: true, notes: [note(18901, 'Split it.')] };
+    const posted = note(18905, `${REPLY}\n\n${generalNoteReplyLine(18901, mrRef().url)}`);
+    const { port, calls } = build({
+      [replyPath]: { status: 404, body: { message: '404 Not found' } },
+      [threadPath]: { status: 200, body: generalNote },
+      [notesPath]: [unavailable, { status: 201, body: posted }],
+      [listPath]: {
+        status: 200,
+        body: [generalNote, { id: 'c4c4-new', individual_note: true, notes: [posted] }],
+      },
+    });
+
+    const outcome = await replyThroughExecutor(port);
+
+    expect(count(calls, notesPath)).toBe(2);
+    expect(outcome).toMatchObject({ status: 'ok', attempts: 2 });
+    expect(outcome.result.id).toBe('c4c4-new');
   });
 });
 

@@ -77,7 +77,9 @@
  *     line after it naming the note it answers — and returns the **new** note's discussion, whose
  *     id is not the one asked for. A `400`/`404` for a thread that is not an individual note, and
  *     every other failure, throws as before; a `404` for a thread that does not exist is
- *     `not_found`.
+ *     `not_found`. On both paths a failure of the read that follows a **successful** POST is
+ *     thrown as a non-retryable `invalid_response` naming the posted note (WP-189), so the
+ *     executor's retry never posts the reply a second time.
  *  9. **Every note body is mention-neutral** (WP-187, backlog 549). GitLab notifies whoever a note
  *     names with `@name`, `@group` or `@all`, and a finding, a summary or a reply is the model's
  *     text. Each body the adapter posts — `createDiscussion` (both shapes), `replyToDiscussion` and
@@ -571,16 +573,18 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
    * note's discussion is found by re-reading the list, by the created id when GitLab returned one
    * and otherwise by the newest discussion whose first note is exactly this body.
    *
-   * Two residuals, stated rather than closed here. The body match does not check the author, so a
-   * person who posts the identical text, marker included, after this POST is taken for the reply —
-   * which is why WP-179 decides ownership by marker **and** author. And the post is not idempotent:
-   * a re-read that throws after a successful POST leaves the note posted, and a retry posts a
-   * second one, exactly as the in-thread path's POST-then-read does. This used to say the guard
-   * would be the executor's idempotency record at WP-179; it cannot be, because a call that threw
-   * stored no answer to replay. Since WP-179 the guard is the `conversation_replies` duty's own
-   * check, which finds the reply on the merge request by its marker and author before a retry posts
-   * again (`review-conversation.ts`). What it does not cover, stated: a failure the executor itself
-   * retries (`unavailable`, a 5xx, a timeout) re-runs the POST inside one call, before any check.
+   * The body match does not check the author, so a person who posts the identical text, marker
+   * included, after this POST is taken for the reply — which is why WP-179 decides ownership by
+   * marker **and** author. The post is not idempotent, so a re-read that throws after it leaves the
+   * note posted; the guard against a second copy is the `conversation_replies` duty's own check,
+   * which finds the reply on the merge request by its marker and author before a retry posts again
+   * (`review-conversation.ts`; the executor's idempotency record cannot be it, because a call that
+   * threw stored no answer to replay). Until WP-189 (backlog 547) a re-read failure the executor
+   * itself retries (`unavailable`, a 5xx, a timeout) re-ran the POST inside one call, before that
+   * check could see the first note; {@link afterPost} now rethrows it as non-retryable. What it
+   * still does not cover, stated: a POST (here or in the thread) whose own outcome is unknown — a
+   * timeout or a 5xx after GitLab created the note — is `unavailable`, and the executor retries it
+   * inside one call, so that reply can still be posted twice.
    */
   const replyAsGeneralNote = async (
     project: string,
@@ -593,7 +597,9 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       `${markdown}\n\n${generalNoteReplyLine(answeredNote, mrRef.url ?? null)}`,
     );
     const createdId = await client.createMergeRequestNote(project, mrRef.iid, body);
-    const discussions = await client.listDiscussions(project, mrRef.iid);
+    const discussions = await afterPost(createdId, `${project}!${mrRef.iid}`, () =>
+      client.listDiscussions(project, mrRef.iid),
+    );
     const created =
       createdId === null
         ? discussions.findLast((discussion) => discussion.notes?.[0]?.body === body)
@@ -609,6 +615,31 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       );
     }
     return toDiscussion(created);
+  };
+
+  /**
+   * The read that follows a successful reply POST (WP-189, backlog 547). Any failure of it is
+   * rethrown as `invalid_response` — non-retryable — naming the posted note, so the executor's own
+   * retry never re-runs the POST: the note exists, and the `conversation_replies` duty's marker
+   * check finds it on the job's next try.
+   */
+  const afterPost = async <T>(
+    noteId: number | null,
+    where: string,
+    read: () => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await read();
+    } catch (error) {
+      const why = error instanceof IntegrationError ? error.code : 'error';
+      throw new IntegrationError(
+        'invalid_response',
+        GITLAB_PROVIDER_ID,
+        `note ${noteId ?? '(id not returned)'} was posted on ${where}, and the re-read after it ` +
+          `failed (${why}); not retried, so the note is not posted twice`,
+        { action: 'reply_to_discussion', cause: error },
+      );
+    }
   };
 
   const requireDiscussion = async (
@@ -1145,22 +1176,22 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       // The documented response of POST …/notes is the created *note*, not the thread, so the
       // thread is re-read. A 400 or a 404 is answered rather than thrown, and the thread read
       // decides what it meant (divergence 8): an unknown discussion is still the `not_found` the
-      // contract suite asserts.
+      // contract suite asserts. After a reply that was created, the re-read's failure is never
+      // retryable (`afterPost`, WP-189), so the executor cannot post it again.
       const outcome = await client.addDiscussionNote(
         project,
         mrRef.iid,
         discussionId,
         gitlabNoteBody(markdown),
       );
-      const thread = await requireDiscussion(
-        project,
-        mrRef.iid,
-        discussionId,
-        'reply_to_discussion',
-      );
-      if (outcome === 'created') {
-        return toDiscussion(thread);
+      const reread = () =>
+        requireDiscussion(project, mrRef.iid, discussionId, 'reply_to_discussion');
+      if (typeof outcome === 'object') {
+        return toDiscussion(
+          await afterPost(outcome.noteId, `${project}!${mrRef.iid} (${discussionId})`, reread),
+        );
       }
+      const thread = await reread();
       if (thread.individual_note !== true) {
         throw new IntegrationError(
           outcome === 404 ? 'not_found' : 'invalid_request',

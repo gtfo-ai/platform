@@ -47,7 +47,9 @@
  * the body opens with, across **every** discussion, never by the id a reply call returned. A reply
  * whose marker is already on the merge request is not posted again, which also covers the residual
  * WP-173 left in the adapter's fallback (POST, then a read that may fail): a retry after the POST
- * landed finds the note by its marker even though the executor recorded no answer to replay.
+ * landed finds the note by its marker even though the executor recorded no answer to replay. That
+ * retry is the job's: since WP-189 the GitLab adapter throws such a read's failure non-retryable,
+ * so the executor's own retry never re-runs the POST before this check.
  *
  * **The author is asked too** (TD-029 decision 10's ownership by marker *and* author): a note counts
  * as the platform's own reply, or as a finding thread the Reviewer may resolve, only when its author

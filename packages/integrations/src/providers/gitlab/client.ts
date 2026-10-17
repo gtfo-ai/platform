@@ -225,7 +225,9 @@ export interface GitLabClient {
     position?: DiffNotePosition,
   ): Promise<z.output<typeof gitlabDiscussionSchema>>;
   /**
-   * § "Add note to a merge request thread" — returns the created *note*, so the caller re-reads.
+   * § "Add note to a merge request thread" — returns the created *note*, so the caller re-reads;
+   * its `id` is answered when the body carries one and `null` otherwise (WP-189: the re-read's
+   * failure names it).
    *
    * A `400` or a `404` is **answered** rather than thrown (WP-173): whether GitLab accepts an
    * `individual_note` discussion's id here is [unverified] (research/15 G4), so the provider decides
@@ -237,7 +239,7 @@ export interface GitLabClient {
     iid: number,
     discussionId: string,
     body: string,
-  ): Promise<'created' | 400 | 404>;
+  ): Promise<{ readonly noteId: number | null } | 400 | 404>;
   /**
    * <https://docs.gitlab.com/api/notes/> § "Create new merge request note" —
    * `POST /projects/:id/merge_requests/:merge_request_iid/notes` (WP-173, the reply fallback).
@@ -606,7 +608,11 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
         answerStatuses: [400, 404],
       });
       const status = response?.status;
-      return status === 400 || status === 404 ? status : 'created';
+      if (status === 400 || status === 404) {
+        return status;
+      }
+      const created = z.object({ id: z.int() }).safeParse(response?.body);
+      return { noteId: created.success ? created.data.id : null };
     },
 
     createMergeRequestNote: async (project, iid, body) => {
