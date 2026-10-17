@@ -274,6 +274,9 @@ describe('the step that computes a version, and the switch in front of it', () =
       const result = spawnSync('bash', ['-c', step], {
         cwd: directory,
         encoding: 'utf8',
+        // A socket on stdin makes a bash built with SSH_SOURCE_BASHRC (Homebrew's) read ~/.bashrc,
+        // which can put its own PATH in front of the stubs.
+        stdio: ['ignore', 'pipe', 'pipe'],
         env: {
           PATH: `${directory}:${process.env.PATH ?? ''}`,
           GITHUB_OUTPUT: join(directory, 'outputs'),
@@ -405,6 +408,9 @@ describe('the shell that tags the images and cuts the release', () => {
       const result = spawnSync('bash', ['-c', step], {
         cwd: directory,
         encoding: 'utf8',
+        // A socket on stdin makes a bash built with SSH_SOURCE_BASHRC (Homebrew's) read ~/.bashrc,
+        // which can put its own PATH in front of the stubs.
+        stdio: ['ignore', 'pipe', 'pipe'],
         env: {
           PATH: `${directory}:${process.env.PATH ?? ''}`,
           HOME: directory,

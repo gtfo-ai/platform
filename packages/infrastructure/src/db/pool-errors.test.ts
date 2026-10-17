@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 /**
  * The `'error'` listener every pool carries, from both sides, plus the census that keeps it true.
  *
@@ -166,7 +167,7 @@ const poolSites = (root: string): string[] =>
 
 describe('the census that keeps every pool guarded', () => {
   it('finds no unguarded pool construction in a source file of this repository', () => {
-    const root = new URL('../../../../', import.meta.url).pathname;
+    const root = fileURLToPath(new URL('../../../../', import.meta.url));
     const found = poolSites(root);
 
     // A positive anchor: if the pattern stopped matching anything, the assertion below would be
@@ -263,7 +264,7 @@ const clientSites = (root: string): string[] =>
 
 describe('the census that keeps every bare client owned by the harness', () => {
   it('finds no bare client constructed outside the files that account for one', () => {
-    const root = new URL('../../../../', import.meta.url).pathname;
+    const root = fileURLToPath(new URL('../../../../', import.meta.url));
     const found = clientSites(root);
 
     // Both anchors: the harness factory is found (so the pattern bites) and every allowed entry

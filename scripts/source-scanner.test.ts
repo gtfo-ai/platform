@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 /**
  * The comment stripper every source census reads through (PROGRESS backlogs 261 and 269). Until
  * WP-96 five read it by import and four kept a line-by-line copy — six, counted when the copies
@@ -137,7 +138,7 @@ describe('a `//` inside a string on a line of code (backlog 269)', () => {
 const WHOLE_TREE_TIMEOUT_MS = 30_000;
 let strippedTree: ReadonlyMap<string, string> | undefined;
 const strippedSources = (): ReadonlyMap<string, string> => {
-  const root = new URL('..', import.meta.url).pathname;
+  const root = fileURLToPath(new URL('..', import.meta.url));
   strippedTree ??= new Map(
     censusPaths(root, { pathspecs: ['*.ts', '*.tsx', '*.mjs', '*.js'] }).map((path) => [
       path,

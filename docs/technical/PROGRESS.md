@@ -15830,6 +15830,14 @@ The same lines at `HEAD` (`9f162f9f`) are `:642`, `:874`, `:1037`, `:1074`. WP-1
 
 **Depends on** WP-181 (the save-time check), WP-182.
 
+### 553. **The unit tier was red on a checkout whose path holds a space, and on a machine whose `bash` reads `~/.bashrc` when its stdin is a socket — so no push could leave this machine** (**RESOLVED** at the commit that carries this entry, session 16 — **blocker** for this machine, found by the orchestrator's first push of session 16)
+
+**What was wrong.** (1) Six census sites took the repository root as `new URL('…', import.meta.url).pathname`, which keeps a space as `%20`: in `/Users/vojtechkaizr/Projects/Agentic Platform/…` the `cwd` given to `git` does not exist and `execFileSync` throws `spawnSync git ENOENT` — `scripts/source-scanner.test.ts`, `scripts/census-files.test.ts`, `packages/infrastructure/src/human-time/human-time-writers.test.ts`, `packages/infrastructure/src/db/pool-errors.test.ts` (two) and `packages/infrastructure/src/stats/stats-writers.test.ts`. (2) `scripts/release.test.ts` runs the workflow's shell with `spawnSync('bash', …)` and a stub `node` first on `PATH`; Homebrew's `bash` 5 is built with `SSH_SOURCE_BASHRC`, so a socket on stdin (node's default pipe on macOS) makes it read `~/.bashrc`, which here rewrote `PATH` and ran the real `node` (*Cannot find module …/scripts/version.mjs*). Measured: `bash -c 'echo $PATH'` under `PATH=/zzz:…` prints the rc's `PATH` with stdin `pipe` and `/zzz:…` with stdin `ignore`. `scripts/git-fixture-isolation.test.ts` failed only because its child ran these. Neither is a defect of the product; both were invisible on the previous machine (no space in the path, `/bin/bash` 3.2).
+
+**What the change does.** `fileURLToPath(new URL(…))` at the six sites; `stdio: ['ignore', 'pipe', 'pipe']` on the two `bash` spawns, with the reason at the line. `pnpm run -s verify` read `PASS: verify` (exit 0) on this machine afterwards, at a one-minute load of 9.2.
+
+**Residual.** No census refuses a new `.pathname` root or a `bash` spawn with a socket stdin; the next one is found the same way, by a red local tier.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 

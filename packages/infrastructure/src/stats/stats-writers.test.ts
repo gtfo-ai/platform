@@ -19,6 +19,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { censusFiles } from '../../../../scripts/census-files.mjs';
 import { initScratchRepository } from '../../../../scripts/git-scratch-env.mjs';
@@ -50,7 +51,7 @@ const production = (paths: readonly string[]): string[] =>
   paths.filter((path) => !/\.(test|spec)\.[cm]?[jt]sx?$/.test(path) && !path.startsWith('test/'));
 
 describe('the census that keeps each statistics projection to one writer', () => {
-  const root = new URL('../../../../', import.meta.url).pathname;
+  const root = fileURLToPath(new URL('../../../../', import.meta.url));
 
   it.each(TABLES)('finds the adapter and no other SQL writer of %s', (table) => {
     const found = production(writerSites(root, sqlWritePattern(table)));

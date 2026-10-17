@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CensusUnreadableError, censusFiles, censusPaths, readCensus } from './census-files.mjs';
 import { initScratchRepository, scratchGitEnv } from './git-scratch-env.mjs';
@@ -167,7 +168,7 @@ const productionImporters = (root: string): string[] =>
 
 describe('who may import census-files.mjs', () => {
   it('is imported from a production source nowhere in this repository', () => {
-    const root = new URL('..', import.meta.url).pathname;
+    const root = fileURLToPath(new URL('..', import.meta.url));
     expect(productionImporters(root)).toEqual([]);
   });
 
