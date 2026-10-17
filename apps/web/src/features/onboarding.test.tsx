@@ -13,7 +13,7 @@
  *    get one instead of showing an error.
  */
 import type { AutonomyResponse, ProjectSummary, ReadinessResponse } from '@platform/contracts';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
@@ -507,6 +507,55 @@ describe('the wizard’s step 4', () => {
       expect(sent.filter((entry) => entry.url.includes('/autonomy'))).toHaveLength(2);
     });
     expect(sent.at(-1)?.body).toEqual({ autonomy: 'supervised' });
+  });
+
+  it('enables Save operating mode again as soon as the save resolves while the gate answers 503 (WP-168, backlog 527)', async () => {
+    // The save awaits an invalidation of the project's prefix, which re-reads the discovery gate
+    // mounted on step 2. A gate read that retried held the button about a second past the PUT.
+    let gateReads = 0;
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((settle) => {
+      release = settle;
+    });
+    const failingGate = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const url = String(input);
+      if ((init?.method ?? 'GET') !== 'GET' && url.includes('/autonomy')) {
+        await held;
+        return json({ level: 'supervised', preset_version: 1, performed: true });
+      }
+      if (url.includes('/api/projects/') && url.includes('/rediscovery')) {
+        gateReads += 1;
+        return json({ error: { code: 'onboarding_unavailable', message: 'cannot say' } }, 503);
+      }
+      return fetchFor('recorded')(input, init);
+    }) as typeof fetch;
+
+    render(createApp({ fetchImpl: failingGate, realtime: false }).element);
+    // The gate's first read has failed and says so (generous: the canary's retry takes ~1 s).
+    await screen.findByText(/Where the last discovery is could not be read/, undefined, {
+      timeout: 4_000,
+    });
+    const readsBefore = gateReads;
+    const save = screen.getByRole('button', { name: 'Save operating mode' }) as HTMLButtonElement;
+    fireEvent.click(save);
+    await waitFor(() => {
+      expect(save.disabled).toBe(true);
+    });
+    act(() => {
+      release();
+    });
+    // Well under the ~1 s retry delay: the canary (the default retry) fails here.
+    await waitFor(
+      () => {
+        expect(save.disabled).toBe(false);
+      },
+      { timeout: 400 },
+    );
+    // The invalidation did re-read the gate — otherwise the case would pass for the wrong reason.
+    expect(gateReads).toBeGreaterThan(readsBefore);
   });
 
   it('carries all five of the step’s items, and names the one it cannot honestly build', async () => {

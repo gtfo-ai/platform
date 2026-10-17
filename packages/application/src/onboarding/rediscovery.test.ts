@@ -314,6 +314,7 @@ describe('readRediscoveryGate', () => {
       at: '2026-10-07T10:00:00.000Z' as IsoDateTime,
       reason: 'run_failed',
       brief: 'The Discovery agent’s run failed; read its transcript.',
+      briefOriginalChars: null,
     };
     const reader = async (taskId: Id) => {
       asked.push(taskId);

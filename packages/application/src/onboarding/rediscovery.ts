@@ -144,7 +144,10 @@ export interface RediscoveryGate {
 export interface DiscoveryEscalation {
   readonly at: IsoDateTime;
   readonly reason: string;
+  /** At most `NOTIFICATION_DETAIL_MAX` characters (WP-168): the reader cuts a longer one. */
   readonly brief: string;
+  /** The brief's length before the reader cut it, or `null` when nothing was cut (WP-168). */
+  readonly briefOriginalChars: number | null;
 }
 
 export interface RediscoveryReadOptions {

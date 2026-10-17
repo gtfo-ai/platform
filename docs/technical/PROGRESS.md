@@ -16080,6 +16080,16 @@ WP-185's *Decisions* records the over-ask for `-I{} grep x` and says *"the commo
 
 **Depends on** WP-186.
 
+### 570. **`verify:web-e2e` failed once in `test/web-e2e/xss.spec.ts` › "a provider setup guide and a knowledge document are text as well": the integrations page never showed its *Setup guide* button within 30 s** (TODO, **minor — a flake; one of three runs on WP-168's tree, which does not touch the integrations page; found by the orchestrator, session 16; no work package owns it**)
+
+**What happened.** The orchestrator's `verify:web-e2e` on WP-168's uncommitted tree (over `a42b38c2`, one-minute load 9.8 at its start) failed 1 of 54: `locator.click: Test timeout of 30000ms exceeded`, waiting for `getByRole('button', { name: 'Setup guide' })` after `page.goto('/integrations')`. Two reruns of the whole target on the same tree, minutes later at a load near 3, read `PASS: verify:web-e2e` (54 each). Playwright's error context and trace were not kept (the next run cleared `test-results/`).
+
+**What it costs to leave.** A red local `verify:web-e2e` (and possibly CI's job) for a reason that is not the tree, read as a defect until a rerun (rule 84).
+
+**Done when.** The cause is found from a kept trace (run the file alone under load until it reproduces, keeping `test-results/`), and either the page's integrations read or the spec's wait is fixed so the button is waited for on the row the fake backend serves (rule 87).
+
+**Depends on** nothing.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -48513,3 +48523,35 @@ So the reviewer's report holds for every row (both 561 paths and 562 read `auto`
 **Discovered work (for a refiner).** None.
 
 **Review round 1 (APPROVE; the orchestrator recorded the minor).** The census docblock in `apps/web/src/error-notice-census.test.ts` now names the one spelling it missed: `readErrorDetail` returns `String(error)` for anything but a 403, so its ten notices hide a `PlatformUpdatedError` only because each also passes `error={…}`. The effort select's duplicate option when the run's effort equals the configured one is deliberate, as on the model select. Five reviewer canaries, all dead.
+
+#### WP-168 — The wizard's discovery status agrees with itself: a bounded brief, no stale sentence, no held button (backlogs 525, 526, 527)
+
+**Changes.**
+- (a) **525.** `createDiscoveryEscalationRead` (`apps/server/src/onboarding.ts`) cuts `brief` to `NOTIFICATION_DETAIL_MAX` (imported from `@platform/application`, not copied) with a plain `slice` — **no marker appended**, so the published brief is a prefix of the stored one and nothing the platform wrote sits inside the untrusted span — and answers `briefOriginalChars` (the length before the cut, `null` when nothing was cut). `DiscoveryEscalation` (`packages/application/src/onboarding/rediscovery.ts`) gains the field; the route (`routes/rediscovery.ts`) now maps the escalation field by field to `brief_original_chars` instead of passing the object through. The DTO (`packages/contracts/src/api.ts`) is `brief: nonEmptyStringSchema.max(1_000)` plus `brief_original_chars: z.int().positive().nullable()` (required); the docblock and technical/08's Projects row state the bound. **Assumption:** contracts cannot import the application's constant (ring rule), so it writes `1_000`; a unit case in `apps/server/src/onboarding.test.ts` holds the literal to `NOTIFICATION_DETAIL_MAX` through `rediscoveryGateResponseSchema`. The SPA appends *(shortened from N characters)* in its own span after the `<UntrustedText>`. `pnpm schemas`: 22 documents already up to date (the gate DTO is not a generated document).
+- (b) **526.** The `needs_human` fallback in `apps/web/src/features/discovery-status.tsx` renders `blocker.detail` only when the gate's `last_discovery` names the same task and its `state` is `needs_human`; otherwise it renders *"It is waiting for a person. Its task page says why."* with the task linked. **Measured (read):** a task frame **does** re-read the gate — `staleKeysForEvent` (`apps/web/src/realtime/query-bridge.ts`) invalidates `['project', project_id]` whenever the payload carries `project_id`, and every task-scoped event does (`taskScoped` in `packages/contracts/src/events.ts`). The two refetches resolve in either order, so the stale sentence lasted only until the gate's refetch landed; the one path that re-reads the task **alone** is a `reset` on `task:<id>` (`staleKeysForTopic` → task prefix only), where the gate stays stale until the next project-prefix invalidation. The component docblock states this.
+- (c) **527, option (a).** `useRediscoveryGate` (`apps/web/src/app/queries.ts`) sets `retry: false`, beside the readiness read's precedent. Both screens that mount it (wizard step 2, settings' re-evaluate) already render their own error notice.
+
+**Tests.**
+- `apps/server/src/onboarding.test.ts` › "cuts a brief over NOTIFICATION_DETAIL_MAX and answers its original length; one at the cap is unchanged (WP-168)" and "holds the wire schema’s literal bound to the cut it publishes (WP-168)"; the WP-155 case now expects `briefOriginalChars: null`.
+- `apps/server/src/routes/rediscovery.test.ts` › "publishes why a parked discovery waits for a person (WP-155)" now also publishes `brief_original_chars: 1200` through the route mapping.
+- `apps/web/src/features/onboarding-status.test.tsx` › "says a brief the server cut was shortened, in its own words outside the untrusted span (WP-168, backlog 525)", "shows no in-flight sentence under “needs a person” while the gate is a read behind the task (WP-168, backlog 526)", and the positive half "shows the gate’s own sentence under “needs a person” when the gate agrees (WP-168, backlog 526)" (rule 42).
+- `apps/web/src/features/onboarding.test.tsx` › "enables Save operating mode again as soon as the save resolves while the gate answers 503 (WP-168, backlog 527)": the PUT is held, released, and the button must be enabled within 400 ms (well under TanStack's ~1 s first-retry delay); it also asserts the gate was re-read after the save, so it cannot pass because nothing refetched.
+- Fixtures: `packages/application/src/onboarding/rediscovery.test.ts`, `test/integration/server/onboarding.integration.test.ts` (the escalation read's two cases ran: 2/2, `-t "discovery escalation read"`). `test/web-e2e/support/fixtures.ts` serves `escalation: null` and needed no change.
+
+**Canaries** (in-place edit, reverted in place, `shasum -c` OK after each).
+- Cap dropped (`brief: row.brief`): **dead by** "cuts a brief over NOTIFICATION_DETAIL_MAX and answers its original length; one at the cap is unchanged (WP-168)".
+- Unconditional detail restored (`{blocker !== null ? (`): **dead by** "shows no in-flight sentence under “needs a person” while the gate is a read behind the task (WP-168, backlog 526)".
+- `retry: false` removed: **dead by** "enables Save operating mode again as soon as the save resolves while the gate answers 503 (WP-168, backlog 527)" (`expected true to be false`, 1 430 ms).
+- None survived.
+
+**Sentences falsified (rule 83).** Swept `docs/` (plan and PROGRESS aside), `CLAUDE.md`, `apps/`, `packages/` for *brief*, *brief_original_chars*, *NOTIFICATION_DETAIL_MAX*, *last_discovery*, *useRediscoveryGate*, *retry*. The gate DTO docblock (`api.ts`) and technical/08's `last_discovery.escalation` clause amended; `DiscoveryEscalation`'s docblock and the read's docblock state the cut. No sentence claimed the brief unbounded. technical/09's Wizard row (*"a task frame carries `project_id`, so the bridge refreshes the gate … with it"*) is still true and is left. `app.tsx`'s `retry: 1` stays the application default.
+
+**Residuals.**
+- The cut counts UTF-16 code units like every other cap here, so a cut may split a surrogate pair at character 1 000 (one lone surrogate rendered as a replacement glyph). Not handled; same as `boundText`.
+- After a `reset` on the task's topic the gate can stay a read behind until the next project-prefix invalidation; the step then links the task instead of showing a stale sentence, which is the ruled behaviour.
+
+**Discovered work (for a refiner).** None.
+
+**Verification.** `scripts/citations.test.ts` 13/13 (after restoring a test name the first pass had renamed, which WP-155's note cites); the three touched ui files 33/33; `pnpm run -s verify` exit 0, final line `PASS: verify`. **Not run:** `verify:ui` (whole tier), `verify:web-e2e` (the orchestrator's).
+
+**Review round 1 (APPROVE).** No change asked; the code-unit residual of the cut is stated above. The orchestrator's first `verify:web-e2e` on this tree failed once in an untouched spec (filed as backlog 570); two reruns read `PASS`.

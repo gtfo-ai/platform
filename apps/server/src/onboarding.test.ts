@@ -18,8 +18,8 @@
  * the order of four independent reads would fail on a harmless reordering and say nothing.
  */
 import type { PipelineIntegrationsPort } from '@platform/application';
-import { silentLogger } from '@platform/application';
-import type { Id } from '@platform/contracts';
+import { NOTIFICATION_DETAIL_MAX, silentLogger } from '@platform/application';
+import { type Id, rediscoveryGateResponseSchema } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import {
   boundProjectReader,
@@ -198,11 +198,60 @@ describe('createDiscoveryEscalationRead (WP-155)', () => {
   it('answers the row’s reason, brief and instant, and null for no row or half a reason', async () => {
     expect(
       await readOver([{ occurred_at: at, reason: 'run_failed', brief: 'exit 1' }])('t-1'),
-    ).toEqual({ at: '2026-10-07T05:30:00.000Z', reason: 'run_failed', brief: 'exit 1' });
+    ).toEqual({
+      at: '2026-10-07T05:30:00.000Z',
+      reason: 'run_failed',
+      brief: 'exit 1',
+      briefOriginalChars: null,
+    });
     expect(await readOver([])('t-1')).toBeNull();
     expect(await readOver([{ occurred_at: at, reason: null, brief: 'exit 1' }])('t-1')).toBeNull();
     expect(
       await readOver([{ occurred_at: at, reason: 'run_failed', brief: '' }])('t-1'),
     ).toBeNull();
+  });
+
+  it('cuts a brief over NOTIFICATION_DETAIL_MAX and answers its original length; one at the cap is unchanged (WP-168)', async () => {
+    const over = `${'a'.repeat(NOTIFICATION_DETAIL_MAX)}TAIL`;
+    expect(await readOver([{ occurred_at: at, reason: 'run_failed', brief: over }])('t-1')).toEqual(
+      {
+        at: '2026-10-07T05:30:00.000Z',
+        reason: 'run_failed',
+        brief: 'a'.repeat(NOTIFICATION_DETAIL_MAX),
+        briefOriginalChars: NOTIFICATION_DETAIL_MAX + 4,
+      },
+    );
+    const atCap = 'b'.repeat(NOTIFICATION_DETAIL_MAX);
+    expect(
+      await readOver([{ occurred_at: at, reason: 'run_failed', brief: atCap }])('t-1'),
+    ).toMatchObject({ brief: atCap, briefOriginalChars: null });
+  });
+
+  it('holds the wire schema’s literal bound to the cut it publishes (WP-168)', () => {
+    // `@platform/contracts` cannot import the application's constant, so it writes the number.
+    const gate = (brief: string) => ({
+      can_start: false,
+      blocker: null,
+      ceiling_usd: 2,
+      last_discovery: {
+        task_id: '00000000-0000-4000-8000-0000000000d1',
+        state: 'needs_human',
+        cost_usd: 0,
+        findings_unrecorded: null,
+        escalation: {
+          at: at.toISOString(),
+          reason: 'run_failed',
+          brief,
+          brief_original_chars: null,
+        },
+      },
+    });
+    expect(
+      rediscoveryGateResponseSchema.safeParse(gate('x'.repeat(NOTIFICATION_DETAIL_MAX))).success,
+    ).toBe(true);
+    expect(
+      rediscoveryGateResponseSchema.safeParse(gate('x'.repeat(NOTIFICATION_DETAIL_MAX + 1)))
+        .success,
+    ).toBe(false);
   });
 });

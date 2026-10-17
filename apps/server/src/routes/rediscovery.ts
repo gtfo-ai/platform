@@ -74,6 +74,7 @@ export type RediscoveryGateReader = (projectId: string) => Promise<{
       readonly at: string;
       readonly reason: string;
       readonly brief: string;
+      readonly briefOriginalChars: number | null;
     } | null;
   } | null;
   readonly blocker: {
@@ -261,7 +262,15 @@ export const registerRediscoveryRoutes = async (
                 state: gate.lastDiscovery.state as never,
                 cost_usd: gate.lastDiscovery.costUsd,
                 findings_unrecorded: gate.lastDiscovery.findingsUnrecorded ?? null,
-                escalation: gate.lastDiscovery.escalation ?? null,
+                escalation:
+                  gate.lastDiscovery.escalation == null
+                    ? null
+                    : {
+                        at: gate.lastDiscovery.escalation.at,
+                        reason: gate.lastDiscovery.escalation.reason,
+                        brief: gate.lastDiscovery.escalation.brief,
+                        brief_original_chars: gate.lastDiscovery.escalation.briefOriginalChars,
+                      },
               },
       };
     },

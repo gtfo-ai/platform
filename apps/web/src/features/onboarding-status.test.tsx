@@ -181,7 +181,12 @@ const taskDetail = (state: TaskState, runs: readonly RunRecord[]): TaskDetailRes
 
 const gateFor = (
   state: TaskState,
-  escalation: { at: string; reason: string; brief: string } | null = null,
+  escalation: {
+    at: string;
+    reason: string;
+    brief: string;
+    brief_original_chars: number | null;
+  } | null = null,
 ): RediscoveryGateResponse => {
   const live = state !== 'done' && state !== 'cancelled';
   return {
@@ -420,6 +425,7 @@ describe('step 2 reads the discovery task back (WP-155 (c), backlog 452)', () =>
       at: '2026-10-07T05:30:00.000Z',
       reason: 'run_failed',
       brief: 'The run failed: <img src=x onerror=alert(1)> exit 1',
+      brief_original_chars: null,
     };
     const world = newWorld({
       gate: gateFor('needs_human', escalation),
@@ -436,6 +442,58 @@ describe('step 2 reads the discovery task back (WP-155 (c), backlog 452)', () =>
     expect(status.textContent).toContain('needs a person');
     expect(status.textContent).toContain('The run failed: <img src=x onerror=alert(1)> exit 1');
     expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('says a brief the server cut was shortened, in its own words outside the untrusted span (WP-168, backlog 525)', async () => {
+    const brief = 'a'.repeat(1_000);
+    const escalation = {
+      at: '2026-10-07T05:30:00.000Z',
+      reason: 'run_failed',
+      brief,
+      brief_original_chars: 1_234,
+    };
+    const world = newWorld({
+      gate: gateFor('needs_human', escalation),
+      task: taskDetail('needs_human', [run({ status: 'failed', ended_at: escalation.at })]),
+    });
+    render(createApp({ fetchImpl: fetchFor(world), realtime: false }).element);
+    const status = await screen.findByTestId('discovery-status');
+    await waitFor(() => {
+      expect(status.textContent).toContain('shortened from 1234 characters');
+    });
+    // The untrusted span holds the brief and nothing the platform added to it.
+    expect(within(status).getByText(brief).parentElement?.textContent).toBe(brief);
+  });
+
+  it('shows no in-flight sentence under “needs a person” while the gate is a read behind the task (WP-168, backlog 526)', async () => {
+    // The task already reads `needs_human`; the gate still holds the blocker written while it ran.
+    const world = newWorld({
+      gate: gateFor('active'),
+      task: taskDetail('needs_human', [run({ status: 'failed' })]),
+    });
+    render(createApp({ fetchImpl: fetchFor(world), realtime: false }).element);
+    const status = await screen.findByTestId('discovery-status');
+    await waitFor(() => {
+      expect(status.getAttribute('data-discovery-phase')).toBe('needs_human');
+    });
+    expect(status.textContent).toContain('It is waiting for a person.');
+    expect(status.textContent).not.toContain('is in flight');
+    expect(within(status).getByRole('link', { name: 'Its task page' }).getAttribute('href')).toBe(
+      `/projects/acme_api/tasks/${TASK}`,
+    );
+  });
+
+  it('shows the gate’s own sentence under “needs a person” when the gate agrees (WP-168, backlog 526)', async () => {
+    const world = newWorld({
+      gate: gateFor('needs_human'),
+      task: taskDetail('needs_human', [run({ status: 'failed' })]),
+    });
+    render(createApp({ fetchImpl: fetchFor(world), realtime: false }).element);
+    const status = await screen.findByTestId('discovery-status');
+    await waitFor(() => {
+      expect(status.textContent).toContain(`discovery task ${TASK} is in flight`);
+    });
+    expect(within(status).queryByRole('link', { name: 'Its task page' })).toBeNull();
   });
 
   it('shows a finished discovery with the readiness level it recorded', async () => {
@@ -513,7 +571,12 @@ describe('step 2 reads the discovery task back (WP-155 (c), backlog 452)', () =>
     });
     const stream = streams.at(-1);
     // The server moves the task; the frame is what tells the page.
-    const escalation = { at: '2026-10-07T05:30:00.000Z', reason: 'run_failed', brief: 'exit 1' };
+    const escalation = {
+      at: '2026-10-07T05:30:00.000Z',
+      reason: 'run_failed',
+      brief: 'exit 1',
+      brief_original_chars: null,
+    };
     world.task = taskDetail('needs_human', [run({ status: 'failed' })]);
     world.gate = gateFor('needs_human', escalation);
     act(() => {

@@ -119,6 +119,10 @@ export const useRediscoveryGate = (projectId: string | null) => {
     queryKey: queryKeys.rediscoveryGate(projectId ?? ''),
     queryFn: () => endpoints.rediscoveryGate(projectId ?? ''),
     enabled: projectId !== null,
+    // WP-168 (PROGRESS backlog 527), on the readiness read's precedent: a failed gate shows its own
+    // notice and the next invalidation re-reads it. The default retry held every awaited
+    // invalidation of the project's prefix — the operating mode's save — about a second longer.
+    retry: false,
     ...FOREVER,
   });
 };

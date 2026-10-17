@@ -1041,7 +1041,12 @@ describe('the discovery escalation read', () => {
       new Date().toISOString(),
     );
 
-    expect(await read()(task)).toEqual({ at: later, reason: 'run_failed', brief: 'read it' });
+    expect(await read()(task)).toEqual({
+      at: later,
+      reason: 'run_failed',
+      brief: 'read it',
+      briefOriginalChars: null,
+    });
     expect(await read()(other)).toMatchObject({ reason: 'other', brief: 'theirs' });
   });
 

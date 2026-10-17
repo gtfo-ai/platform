@@ -232,6 +232,7 @@ describe('GET /api/projects/:project_id/rediscovery', () => {
       at: '2026-10-07T10:00:00.000Z',
       reason: 'run_failed',
       brief: 'The Discovery agent’s run failed; read its transcript.',
+      briefOriginalChars: 1_200,
     };
     world.gate = {
       ceilingUsd: 2,
@@ -243,7 +244,12 @@ describe('GET /api/projects/:project_id/rediscovery', () => {
       url: `/api/projects/${PROJECT}/rediscovery`,
     });
     expect(response.statusCode).toBe(200);
-    expect(JSON.parse(response.body).last_discovery.escalation).toEqual(escalation);
+    expect(JSON.parse(response.body).last_discovery.escalation).toEqual({
+      at: escalation.at,
+      reason: escalation.reason,
+      brief: escalation.brief,
+      brief_original_chars: 1_200,
+    });
   });
 
   it('publishes why the last discovery’s findings were never recorded, when the recovery gave up (WP-124)', async () => {

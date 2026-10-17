@@ -16,6 +16,14 @@
  *   transcript), needs a person (the escalation's reason and brief, from the gate's
  *   `last_discovery.escalation`), paused (why), done (the readiness level it recorded), or cancelled.
  *
+ * The phase is the task's and the sentences are the gate's, and the two are separate reads: a task
+ * frame invalidates both (the query bridge reads the payload's `project_id`), but they resolve in
+ * either order, and a `reset` on the task's topic re-reads the task alone. So the gate's own
+ * `blocker.detail` is shown under *needs a person* only when the gate's `last_discovery.state` agrees
+ * (WP-168, PROGRESS backlog 526) — otherwise it is the in-flight sentence written for a running
+ * task — and the task page is linked instead. A brief the server cut (`brief_original_chars`) is
+ * announced in the step's own words, outside the untrusted span.
+ *
  * The click's own answer stays where it was, as the immediate feedback: this panel is what the page
  * says after it.
  *
@@ -134,13 +142,32 @@ export const DiscoveryStatus = ({
         escalation === null || escalation === undefined ? (
           <p>
             It is waiting for a person.{' '}
-            {blocker === null ? null : <UntrustedText value={blocker.detail} />}
+            {blocker !== null && last?.task_id === taskId && last.state === 'needs_human' ? (
+              <UntrustedText value={blocker.detail} />
+            ) : (
+              <>
+                <Link
+                  to="/projects/$key/tasks/$taskId"
+                  params={{ key: projectKey, taskId }}
+                  className="text-accent underline"
+                >
+                  Its task page
+                </Link>{' '}
+                says why.
+              </>
+            )}
           </p>
         ) : (
           <p>
             It is waiting for a person since {formatDateTime(escalation.at)}:{' '}
             <Badge tone="warning">{escalation.reason}</Badge>{' '}
             <UntrustedText value={escalation.brief} />
+            {escalation.brief_original_chars === null ? null : (
+              <span className="text-fg-muted">
+                {' '}
+                (shortened from {escalation.brief_original_chars} characters)
+              </span>
+            )}
           </p>
         )
       ) : null}

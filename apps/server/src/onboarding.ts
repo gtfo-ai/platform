@@ -55,6 +55,7 @@ import {
   createOnboardingRuntime,
   gitReads,
   integrationsForProject,
+  NOTIFICATION_DETAIL_MAX,
   noRunScopedSecrets,
   readRediscoveryGate,
   recordBusinessInterview,
@@ -382,6 +383,13 @@ const readArtifact = async (
  * event carries the why, exactly as the task page's `paused_reason` is read (`pausedReasonsFor`).
  * Ordered like that read — newest instant, then position — so a second escalation replaces the
  * first. A payload missing either string is answered `null` rather than half a reason.
+ *
+ * The brief is **cut at {@link NOTIFICATION_DETAIL_MAX} characters** (UTF-16 code units, WP-168,
+ * PROGRESS backlog 525) — the bound a chat notification already puts on the same brief — because
+ * nothing upstream bounds it: the event field is `nonEmptyStringSchema` and a producer may quote a
+ * run or a provider. A cut answers `briefOriginalChars` with the length before it, `null` when
+ * nothing was cut; the cut appends no marker, so the published text is a prefix of the stored one
+ * and the reader says *shortened* in its own words.
  */
 export const createDiscoveryEscalationRead =
   (pool: pg.Pool) =>
@@ -405,7 +413,8 @@ export const createDiscoveryEscalationRead =
     return {
       at: new Date(row.occurred_at).toISOString() as IsoDateTime,
       reason: row.reason,
-      brief: row.brief,
+      brief: row.brief.slice(0, NOTIFICATION_DETAIL_MAX),
+      briefOriginalChars: row.brief.length > NOTIFICATION_DETAIL_MAX ? row.brief.length : null,
     };
   };
 

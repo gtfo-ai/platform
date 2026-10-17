@@ -856,13 +856,17 @@ export const rediscoveryGateResponseSchema = z.strictObject({
        * and `blocker_brief`, with the instant (WP-155, PROGRESS backlog 452) — published only while
        * the task is `needs_human`, and `null` otherwise. The wizard's technical-discovery step shows
        * it beside the task's state. The brief is platform text that can quote a provider or a run's
-       * own words, so a reader renders it as untrusted text (BD-022).
+       * own words, so a reader renders it as untrusted text (BD-022). It is **bounded at 1 000
+       * characters** (UTF-16 code units; `NOTIFICATION_DETAIL_MAX`, the chat notification's bound
+       * on the same brief — WP-168, PROGRESS backlog 525): the read cuts a longer one with no marker,
+       * and `brief_original_chars` is its length before the cut, `null` when nothing was cut.
        */
       escalation: z
         .strictObject({
           at: isoDateTimeSchema,
           reason: nonEmptyStringSchema,
-          brief: nonEmptyStringSchema,
+          brief: nonEmptyStringSchema.max(1_000),
+          brief_original_chars: z.int().positive().nullable(),
         })
         .nullable(),
     })
