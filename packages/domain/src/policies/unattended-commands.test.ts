@@ -1044,14 +1044,25 @@ describe('WP-160 — a command handed over as a string, and a here-document the 
     [`echo '%P' | xargs sh -c '"$@"' _`, '`xargs` feeding a script that runs its operands'],
   ];
 
+  /**
+   * WP-185 (backlog 561): a shell under `xargs` is `xargsArguments` whatever its script, so the
+   * `"$@"` row loses the reason the positional rule gave it; a replaced script keeps its own.
+   */
+  const UNDER_XARGS: ReadonlyMap<string, readonly string[]> = new Map([
+    ["echo '%P' | xargs -I{} sh -c '{}'", [UNCERTAINTY.handedCommand, UNCERTAINTY.xargsArguments]],
+    ["echo x | xargs -I{} sh -c '%P {}'", [UNCERTAINTY.handedCommand, UNCERTAINTY.xargsArguments]],
+    [`echo '%P' | xargs sh -c '"$@"' _`, [UNCERTAINTY.xargsArguments]],
+  ]);
+
   it.each(UNREAD)('refuses %j as a string it cannot read (%s, criterion 2)', (form) => {
-    refuses(plant(form, PUSH), 'uncertain', [UNCERTAINTY.handedCommand]);
+    const reasons = UNDER_XARGS.get(form) ?? [UNCERTAINTY.handedCommand];
+    refuses(plant(form, PUSH), 'uncertain', reasons);
     const sudo = plant(form, SUDO);
     for (const mode of modes) {
       const decision = decideUnattendedCommand({ command: sudo }, policy, mode);
       expect(decision.decision, `${mode}: ${sudo}`).toBe('deny');
       if (decision.rule === 'uncertain') {
-        expect(decision.evaluation.uncertainty, mode).toEqual([UNCERTAINTY.handedCommand]);
+        expect(decision.evaluation.uncertainty, mode).toEqual(reasons);
       } else {
         expect(decision.rule, mode).toBe('block_list');
       }
@@ -1090,12 +1101,16 @@ describe('WP-160 — a command handed over as a string, and a here-document the 
     "flock f -c '%P'",
     "watch '%P'",
     "env -S '%P'",
-    "echo x | xargs sh -c '%P'",
     "bash -c '%P'",
     "eval '%P'",
   ])('still refuses %j (criterion 3)', (form) => {
     refuses(plant(form, PUSH), 'git_boundary');
     refuses(plant(form, SUDO), 'block_list');
+  });
+
+  it('still refuses a shell under xargs, now as uncertain, and still reads its block-list hit (WP-185)', () => {
+    refuses(plant("echo x | xargs sh -c '%P'", PUSH), 'uncertain', [UNCERTAINTY.xargsArguments]);
+    refuses(plant("echo x | xargs sh -c '%P'", SUDO), 'block_list');
   });
 
   /** Criterion (4), the other direction: each keeps the verdict its inner command earns. */
@@ -1137,6 +1152,19 @@ describe('WP-160 — a command handed over as a string, and a here-document the 
   describe('review round 1 — xargs’s script, -W, and continuations', () => {
     /** WP-161 criterion (13): `xargs env` and `xargs su` also hand `env`/`su` argv from the pipe. */
     const HANDS_ARGV = new Set([`echo "'%P'" | xargs env bash -c`, `echo "'%P'" | xargs su -c`]);
+    /**
+     * WP-185 (backlog 561): a shell under `xargs` is `xargsArguments` whatever its words, which
+     * subsumes the `-c`-with-no-operand rule these rows first pinned as `handedCommand`.
+     */
+    const SHELL_UNDER_XARGS = new Set([
+      `echo "'%P'" | xargs bash -c`,
+      `echo "'%P'" | xargs -L1 bash -c`,
+      `printf '%s\n' "'%P'" | xargs -d '\n' bash -c`,
+      `echo "'%P'" | xargs -- sh -c`,
+      `echo "'%P'" | xargs env bash -c`,
+      `xargs bash -c <<<"'%P'"`,
+      `xargs -a /dev/stdin bash -c <<<"'%P'"`,
+    ]);
     it.each<readonly [string, string]>([
       [`echo "'%P'" | xargs bash -c`, '`xargs bash -c`, the script from the pipe'],
       [`echo "'%P'" | xargs -L1 bash -c`, '`xargs -L1`'],
@@ -1157,7 +1185,13 @@ describe('WP-160 — a command handed over as a string, and a here-document the 
       ["exec \\\n<<<'%P'; bash", 'a continuation after `exec`'],
     ])('refuses %j (%s)', (form) => {
       const also = HANDS_ARGV.has(form) ? [UNCERTAINTY.xargsArguments] : [];
-      refuses(plant(form, PUSH), 'uncertain', [UNCERTAINTY.handedCommand, ...also]);
+      refuses(
+        plant(form, PUSH),
+        'uncertain',
+        SHELL_UNDER_XARGS.has(form)
+          ? [UNCERTAINTY.xargsArguments]
+          : [UNCERTAINTY.handedCommand, ...also],
+      );
       for (const mode of modes) {
         const decision = decideUnattendedCommand({ command: plant(form, SUDO) }, policy, mode);
         expect(decision.decision, mode).toBe('deny');
@@ -1798,15 +1832,113 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
       expectCells(command, 'ask / uncertain / uncertain');
     });
 
+    it.each([['echo x | xargs -0 grep x', 'ask / auto / deny']])(
+      'keeps %j at %s (review round 2)',
+      (command, expected) => {
+        expectCells(command, expected);
+      },
+    );
+
+    /**
+     * Round 2's two shell controls, re-pinned by WP-185 ruling (a) (rule 42's stated exception):
+     * a shell under `xargs` is uncertain whatever its script — the blanket rule's named over-ask.
+     */
+    it.each(["echo x | xargs sh -c 'echo hi'", "xargs --replace=X sh -c 'echo hi'"])(
+      '%j is uncertain since WP-185 (a round-2 control, flipped)',
+      (command) => {
+        expectCells(command, 'ask / uncertain / uncertain');
+        expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.xargsArguments]);
+      },
+    );
+  });
+
+  /**
+   * WP-185, backlogs 561 and 562: a script shell under `xargs` is uncertain whatever its own words
+   * (ruling (a), the blanket rule), and so is a replace string that is not literal (ruling (c)).
+   * Each `is uncertain` row of the first table read `ask / auto / deny` before WP-185 except
+   * `${!#}` (`evaluatedText`) and `printf … | xargs sh` (`handedCommand`), measured (PROGRESS).
+   */
+  describe('WP-185, backlogs 561 and 562: a shell under xargs, and a replace string that is not literal', () => {
     it.each([
-      // Its verdict before round 2 too: a literal script with no positional parameter is read.
-      ["echo x | xargs sh -c 'echo hi'", 'ask / auto / deny'],
-      // A replace string the command and the script do not contain.
-      ["xargs --replace=X sh -c 'echo hi'", 'ask / auto / deny'],
-      ['echo x | xargs -0 grep x', 'ask / auto / deny'],
-    ])('keeps %j at %s (review round 2)', (command, expected) => {
+      "echo 'git push --no-verify' | xargs sh -c 'for a; do $a; done'",
+      `xargs sh -c 'for a do make "$a"; done'`,
+      `cat f | xargs sh -c 'getopts a: v && make "$OPTARG"' _`,
+      `xargs bash -c 'select a; do make "$a"; done'`,
+      'xargs sh < f',
+      'xargs -a f sh',
+      'xargs sh -e',
+      'xargs sh -x',
+      'xargs bash --norc',
+      "printf '%s\\n' -c id | xargs sh",
+      "xargs busybox sh -c 'for a; do $a; done'",
+      "xargs -n1 bash -c 'date'",
+      // Ruling (c), backlog 562: the replace operand is not literal.
+      'xargs -I"$R" sh -c X',
+      'xargs -I $R sh -c X',
+      'xargs --replace="$R" sh -c X',
+      // …and into a command that is not a shell, which the blanket rule does not reach: the
+      // over-ask ruling (c) names, and the rows that hold the check itself.
+      'xargs -I"$R" grep R',
+      'xargs -I $R grep R',
+      'xargs --replace="$R" grep R',
+      'xargs -0i"$R" grep R',
+      // Backlog 562's test gap: `-i` takes only an attached value, so `make` is the command.
+      'echo x | xargs -i make grep',
+    ])('%j is uncertain', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.xargsArguments]);
+    });
+
+    it('reads the last positional (`!#` in a brace) under xargs by both rules', () => {
+      // WP-158's detector still reads the handed script (ruling (b)), so it keeps its own reason.
+      const command = `xargs bash -c 'make "\${!#}"'`;
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([
+        UNCERTAINTY.xargsArguments,
+        UNCERTAINTY.evaluatedText,
+      ]);
+    });
+
+    it.each([
+      // Rule 42: the same shells with no xargs, and the readers of a file or a pipe.
+      [`sh -c 'for a; do echo "$a"; done'`, 'ask / auto / deny'],
+      ["bash -c 'select a; do :; done'", 'ask / auto / deny'],
+      ['bash < f', 'ask / auto / deny'],
+      ['cat f | sh', 'ask / uncertain / uncertain'],
+      ['xargs grep x', 'ask / auto / deny'],
+      ['xargs rm -f', 'ask / auto / deny'],
+      ['xargs -IX sh -c X', 'ask / uncertain / uncertain'],
+      ['xargs -I X grep x', 'ask / auto / deny'],
+      ["xargs -I'{}' grep x", 'ask / auto / deny'],
+      ['xargs -I% grep x', 'ask / auto / deny'],
+    ])('keeps %j at %s', (command, expected) => {
       expectCells(command, expected);
     });
+
+    /**
+     * Ruling (d), measured first: `find -exec` hands a shell file names as operands. The `sh`
+     * spellings read `uncertain` already (the walk reaches `{}` as a command word); behind
+     * `busybox` it read `unattended_auto`, so a shell with the replace string among its words is
+     * uncertain (`handedCommand`).
+     */
+    it.each([
+      "find . -exec sh -c 'for a; do $a; done' _ {} +",
+      "find . -exec sh -c 'for a; do $a; done' _ {} \\;",
+      "find . -execdir sh -c 'for a; do $a; done' _ {} +",
+      "find . -exec bash -c 'for a; do $a; done' -- {} +",
+      "find . -exec busybox sh -c 'for a; do $a; done' _ {} +",
+      "find . -exec busybox bash -c 'for a; do $a; done' _ ./{} \\;",
+    ])('%j is uncertain (ruling (d))', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.handedCommand]);
+    });
+
+    it.each(["find . -exec sh -c 'echo hi' \\;", "find . -exec busybox sh -c 'echo hi' _ x \\;"])(
+      'keeps %j at ask / auto / deny (ruling (d))',
+      (command) => {
+        expectCells(command, 'ask / auto / deny');
+      },
+    );
   });
 
   /** Both modes, the implementation baseline: the rule a line is refused under. */

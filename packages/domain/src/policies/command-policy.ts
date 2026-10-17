@@ -79,10 +79,11 @@
  * **What it reads as uncertain instead** (WP-161, backlog 516–523): more than eight wrappers,
  * assignments or nested substitutions (`UNCERTAINTY.tooDeep`), a command name — or a wrapper's —
  * the shell expands by a glob or a brace (`expandedName`), a name `hash -p` rebinds
- * (`reboundName`), and an `xargs` that hands its input to a wrapper, `find -exec`, `git` or —
- * since WP-164 — a verb a `command`-kind floor is written for (`make`, `go`, `cargo`, `npm`,
- * `pnpm`, `pytest`, `rg`: `XARGS_FLOORED_VERBS`), whose floored argument the input can carry
- * (`xargsArguments`). A line continuation is joined before any word is classified, inside a word
+ * (`reboundName`), and an `xargs` that hands its input to a wrapper, `find -exec`, `git`, a verb
+ * a `command`-kind floor is written for (since WP-164: `make`, `go`, `cargo`, `npm`, `pnpm`,
+ * `pytest`, `rg` — `XARGS_FLOORED_VERBS`), whose floored argument the input can carry, or a script
+ * shell whatever its own words (since WP-185), or that replaces a string that is not literal
+ * (WP-185) — `xargsArguments`. A line continuation is joined before any word is classified, inside a word
  * as between words (`normaliseCommand`), and git's abbreviated long options are resolved by git's
  * rule (`HAZARDOUS_ARGUMENTS`).
  *
@@ -207,9 +208,12 @@ export const UNCERTAINTY = {
    * command that runs its arguments — a wrapper, `find -exec`, `git` — runs what the pipe said.
    * WP-164 (backlog 530): so does a verb a `command`-kind floor names, given the floored argument
    * by the pipe; the verbs listed here are held to `XARGS_FLOORED_VERBS` by a unit test.
+   * WP-185 (backlogs 561, 562): so does a script shell, whatever its own words — its `-c`, its
+   * script and its positional parameters can all arrive from the input — and a replace string
+   * (`-I`) that is not literal, whose text the platform cannot know.
    */
   xargsArguments:
-    'xargs handing the words it reads from its input to a command that runs its arguments (a wrapper such as env, nice, nohup or timeout, find with -exec, or git) or that a refused argument would make run a program (cargo, go, make, npm, pnpm, pytest or rg, or a name beginning with one) — write the command and its arguments on the line; the platform cannot read arguments xargs supplies from its input',
+    'xargs handing the words it reads from its input to a command that runs its arguments (a wrapper such as env, nice, nohup or timeout, a shell such as sh or bash, find with -exec, or git) or that a refused argument would make run a program (cargo, go, make, npm, pnpm, pytest or rg, or a name beginning with one), or replacing a string (-I) that is not literal — write the command and its arguments on the line; the platform cannot read arguments xargs supplies from its input',
 } as const;
 
 export type UncertaintyReason = (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY];
@@ -3923,6 +3927,13 @@ interface XargsOptions {
   readonly command: number | null;
   /** `-I R`, `-iR`, `-i`, `--replace[=R]` (any prefix), `-J R`: the string xargs replaces. */
   readonly replace: string | null;
+  /**
+   * The replace operand is not literal (`-I"$R"`, `-I $R`, `--replace="$R"`), so `replace` is its
+   * unexpanded text and not the string xargs replaces (WP-185, backlog 562). The stage is then
+   * uncertain whatever the command — over-asking `xargs -I"$R" grep R`, a spelling with no reason
+   * to take its string from a variable.
+   */
+  readonly opaqueReplace: boolean;
 }
 
 /**
@@ -3934,22 +3945,25 @@ interface XargsOptions {
  */
 const readXargsOptions = (args: readonly ShellWord[]): XargsOptions => {
   let replace: string | null = null;
+  let opaqueReplace = false;
   for (let index = 0; index < args.length; index += 1) {
-    const value = unquoteToken((args[index] as ShellWord).raw);
+    const raw = (args[index] as ShellWord).raw;
+    const value = unquoteToken(raw);
     if (value === '--') {
-      return { command: index + 1 < args.length ? index + 1 : -1, replace };
+      return { command: index + 1 < args.length ? index + 1 : -1, replace, opaqueReplace };
     }
     if (!value.startsWith('-') || value === '-') {
-      return { command: index, replace };
+      return { command: index, replace, opaqueReplace };
     }
     if (value.startsWith('--')) {
       const [word, ...attached] = value.slice(2).split('=');
       const option = xargsLongOption(word as string);
       if (option === null) {
-        return { command: null, replace };
+        return { command: null, replace, opaqueReplace };
       }
       if (option === 'replace') {
         replace = attached.join('=') || '{}';
+        opaqueReplace ||= !isLiteralWord(raw);
       }
       index += attached.length === 0 && XARGS_LONG_OPTIONS[option] === 'required' ? 1 : 0;
       continue;
@@ -3958,9 +3972,11 @@ const readXargsOptions = (args: readonly ShellWord[]): XargsOptions => {
       const letter = value[at] as string;
       const rest = value.slice(at + 1);
       if (XARGS_VALUE_SHORT.includes(letter)) {
-        const operand = rest === '' ? unquoteToken(args[index + 1]?.raw ?? '') : rest;
+        const operandRaw = rest === '' ? (args[index + 1]?.raw ?? '') : raw;
+        const operand = rest === '' ? unquoteToken(operandRaw) : rest;
         if (letter === 'I' || letter === 'J') {
           replace = operand || '{}';
+          opaqueReplace ||= !isLiteralWord(operandRaw);
         }
         index += rest === '' ? 1 : 0;
         break;
@@ -3968,12 +3984,13 @@ const readXargsOptions = (args: readonly ShellWord[]): XargsOptions => {
       if (XARGS_OPTIONAL_SHORT.includes(letter)) {
         if (letter === 'i') {
           replace = rest || '{}';
+          opaqueReplace ||= !isLiteralWord(raw);
         }
         break;
       }
     }
   }
-  return { command: -1, replace };
+  return { command: -1, replace, opaqueReplace };
 };
 
 /**
@@ -3993,7 +4010,8 @@ export const XARGS_FLOORED_VERBS: ReadonlySet<string> = new Set(
 /**
  * Whether an xargs command runs the words xargs appends as a command, or decides from them what to
  * run (WP-161 criterion (13), backlog 523): a wrapper (`env`, `nohup`, `timeout`, `nice`, …) —
- * not a shell, whose `-c` WP-160 reads (`fedByXargs`) — `find` with `-exec`/`-execdir`/`-ok`/
+ * not a shell, which `wrappedScript` makes uncertain under `xargs` by its own rule (`fedByXargs`,
+ * WP-185) — `find` with `-exec`/`-execdir`/`-ok`/
  * `-okdir`, whose command the input completes, or `git`, whose subcommand and refspec it supplies.
  * `echo 'sudo id ;' | xargs find . -maxdepth 0 -exec`, `| xargs env` and `| xargs nohup` ran their
  * payload in the run image (WP-160's review round 2).
@@ -4032,6 +4050,14 @@ const xargsRunsItsInput = (name: string, args: readonly ShellWord[]): boolean =>
  *    (`< <(…)`, an operand `<(…)`), a descriptor (`<&3`) or a pipe is uncertain. A here-document is
  *    WP-153's (`HERE_DOCUMENT_SCRIPT_READERS`), and so is `cat <<'EOF' | sh`. `bash file` and
  *    `bash < file` run a file the run wrote — backlog 481's residual, the module docblock's.
+ *    **Under `xargs` a shell is `UNCERTAINTY.xargsArguments` whatever its own words** (WP-185,
+ *    backlog 561): xargs appends its input to the shell's argv, so the input can be the `-c` and
+ *    its script (`xargs sh < f`, `xargs sh -e`), or the positional parameters a literal script
+ *    reads — by a name (`"$@"`, `${!#}`) or by none (`for a; do`, `getopts`, `select`). Any list
+ *    of those readers is open, so none is kept: the literal script is still handed (a block-list
+ *    hit in it is recorded), and the pipe is xargs' input rather than the shell's script. The
+ *    over-ask, stated: `xargs sh -c 'echo hi'` and `xargs -n1 bash -c 'date'`, a shell whose
+ *    script ignores what xargs feeds it, are refused under `auto` too; the line can drop `xargs`.
  *  - `script` — its `-c`/`--command` string (a cluster, `-cX` attached, `--c…` abbreviated, which
  *    util-linux accepts); without one it runs `$SHELL` on its standard input, read as a shell's.
  *  - `source`/`.` of a standard-input path, read as a shell's; of `<(…)`, uncertain.
@@ -4039,6 +4065,10 @@ const xargsRunsItsInput = (name: string, args: readonly ShellWord[]): boolean =>
  *    command (WP-160 (d)): read, not refused, so the block list, the git boundary and the hazard
  *    floor judge it. `{}` is a literal word, and a string in it that holds `{}` is not literal,
  *    since `find` puts a file name there (`replace`) — as `xargs -I` does with its own string.
+ *    A shell with that string among its words is uncertain too (WP-185 (d)): `find . -exec busybox
+ *    sh -c 'for a; do $a; done' _ {} +` runs file names as commands, and a file name is text the
+ *    run can choose; it read `unattended_auto` (measured), the `sh` spelling only by accident of
+ *    the command walk.
  */
 const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
   const words = shellWords(stage);
@@ -4078,7 +4108,8 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
   /** A reader of its standard input as a script. */
   const readsStandardInput = (): void => {
     if (stdin.length === 0) {
-      uncertain ||= piped && !input.fromHereDocument;
+      // Under `xargs` the pipe is xargs' input, which `xargsArguments` answers (WP-185).
+      uncertain ||= piped && !input.fromHereDocument && !fedByXargs;
     }
     for (const word of stdin) {
       const operator = word.redirect?.operator as string;
@@ -4120,20 +4151,15 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
     }
     const operand = args[index];
     if (command) {
-      // `-c` with no operand on the line: the script is one `xargs` (or nothing) supplies at run
-      // time — `echo "'cmd'" | xargs bash -c` ran `cmd` (review round 1, measured).
-      uncertain ||= operand === undefined;
+      // `-c` with no operand on the line, or a script reading positionals xargs supplies, is
+      // `xargsArguments` by the blanket rule at the call (WP-185); with no `xargs` it runs nothing.
       if (operand !== undefined) {
         hand(operand.raw);
         // `sh -c '"$@"' _ cmd …` runs its operands: a script that names a positional parameter
-        // has them read as a command too ($0 on, and $1 on), and under `xargs` they come from
-        // standard input, so the platform cannot read them — with operands on the line or with
-        // none, since xargs appends its input to them either way (`xargs sh -c 'make "$@"'`,
-        // WP-164 review round 2): over-asks `xargs sh -c 'echo "$1"'`, fails closed.
+        // has the operands on the line read as a command too ($0 on, and $1 on).
         const rest = args.slice(index + 1);
         const namesPositional =
           isLiteralWord(operand.raw) && /\$(?:[@*0-9]|\{!?[@*0-9])/.test(literalValue(operand.raw));
-        uncertain ||= namesPositional && fedByXargs;
         if (rest.length > 0 && namesPositional) {
           scripts.push({ script: rest.map((word) => word.raw).join(' '), replace: null });
           if (rest.length > 1) {
@@ -4291,6 +4317,17 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
       }
     } else if (SCRIPT_SHELLS.has(name) || /[*?[{]/.test(name)) {
       // A name the shell expands (`/bin/s? -c '…'`) may be a shell: read as one (an over-read).
+      // Under `xargs` a shell is uncertain whatever its words: the blanket rule (WP-185, backlog
+      // 561). An expanded name is not: the walk also reaches an operand such as `{}` here.
+      if (fedByXargs && SCRIPT_SHELLS.has(name)) {
+        reasons.add(UNCERTAINTY.xargsArguments);
+      }
+      // `find -exec sh -c 'for a; do $a; done' _ {} +`: the file names are the shell's operands, and
+      // a file name is text the run chose (WP-185 (d), measured `unattended_auto` behind `busybox`).
+      if (SCRIPT_SHELLS.has(name) && replace !== null) {
+        const replaced = replace;
+        uncertain ||= args.some((word) => word.raw.includes(replaced));
+      }
       readShell(args);
     } else if (name === 'script') {
       if (!readOptionString(args, 'c', ['command'], 'EIOBTm')) {
@@ -4315,9 +4352,10 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
     } else if (name === 'find') {
       readFind(args);
     } else if (name === 'xargs') {
-      const at = readXargsOptions(args).command;
+      const { command: at, opaqueReplace } = readXargsOptions(args);
       const run = at === null ? undefined : args[at];
       if (
+        opaqueReplace ||
         at === null ||
         (run !== undefined && xargsRunsItsInput(argv0Name(run.raw), args.slice(at + 1)))
       ) {
