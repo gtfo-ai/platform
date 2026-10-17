@@ -16152,6 +16152,39 @@ A plain inline link's destination is exempt since round 1. A bare `https://www.n
 
 **Depends on** WP-187. The parser half, whether GitLab's renderer places spans and fences where `marked` does, is already recorded in `docs/TODO.md` § Verification (WP-187's `[unverified]` item, owned by the first dogfood session after WP-187). Not refiled.
 
+### 575. **A package runner other than `npx` is not read: `npm exec -c '<string>'` runs a shell string, and `npm exec -- <cmd>`, `pnpm exec`, `pnpm dlx`, `yarn dlx` and `bunx` run a command, all under `auto`** (TODO — **major, fail-open: an arbitrary command reads `unattended_auto`**, the class WP-188 round 1 graded major for `npx`. Live in the stock run image for `npm` (it ships with Node); `pnpm`, `yarn` and `bun` are live where the run image or the project provides them (**needs measurement:** which of them exist in `platform-runtime` — `corepack enable pnpm` at `docker/runtime.Dockerfile:100` may be a build stage only). **Not a WP-188 regression**: the same verdict before WP-188. Found by WP-188's reviewer, round 1, session 16; listed in WP-188's *Discovered work*, not measured by the implementer. **No work package owns it — needs an owner (architect).** No test run by the refiner)
+
+**What is wrong.** WP-188 (d) made `npx` an `ARGV0_WRAPPERS` member (`packages/domain/src/policies/command-policy.ts:1815`), and round 1 added `UNCERTAINTY.npxCall` (`:221`) with `npxCallsString` (`:4126`), checked only where the command name is exactly `npx` (`:4480`). Every other package runner is an ordinary command word, so what it runs is neither peeled for the block list and the floors nor read as a script: the string after `npm exec -c`, the argv after `npm exec --`, and the command `bunx` runs.
+
+**Evidence.** Measured by WP-188's reviewer, round 1, marker-only through `decideUnattendedCommand`; every row reads `ask / auto / deny` in all three baselines (it also did before WP-188): `npm exec -c 'git push --no-verify'`, `npm exec -- git push --no-verify`, `bunx make 'X=1'`, and `pnpm dlx …`, `pnpm exec …`, `yarn dlx …` (the report gives these three as shapes; their exact strings are not recorded). For comparison, after round 1 `npx -c 'git push --no-verify'` and `npx --call='git push --no-verify'` read `ask / uncertain / uncertain`, and `npx make 'X=1'` reads `ask / hazard / hazard`. **Not measured (hypothesis):** `npm exec --call=…`, `npm x`, `pnpm exec -c`/`--shell-mode`, `yarn exec`, `bun x`, `pnpm dlx -c`, and an `xargs` into any of them (WP-188 made only `busybox` and `npx` input-driven runners for `xargsRunsItsInput`).
+
+**What it costs to leave.** An agent under `auto` runs anything — `git push --no-verify`, a blocked binary, a floored `make` — by prefixing it with `npm exec`. The npx fix closes one spelling of a door every Node image has several of.
+
+**Done when.**
+- An architect ruling chooses the shape, as for `npx` (the closed rule, rule 65): either each runner's command is peeled like `npx` (`ARGV0_WRAPPERS` after the runner's own subcommand and options), or a runner that runs a command is uncertain with a named reason. A shell-string option (`npm exec -c`/`--call` in any spelling nopt accepts, pnpm's `-c`/`--shell-mode`) is uncertain and never read as a script, as `npxCall` is.
+- Rows in `unattended-commands.test.ts`, all three baselines: every string in the evidence above reads `uncertain`, `hazard`, `git` or `block` — none `auto`; `npm exec -- sudo id` reads `block`; controls `npm test`, `pnpm run build` and `npx jest` keep their cells.
+- **Canary:** drop the new reader for one runner and its rows fail by name.
+- technical/05's WP-188 bullet names the runners read and the ones that are not.
+
+**Measured by WP-188's review round 2 (session 16), added by the orchestrator.** npm reads its configuration from the environment case-insensitively, so the call string also reaches `npx` with no flag: `npm_config_call='git push --no-verify' npx`, `env npm_config_call=x npx`, `NPM_CONFIG_CALL=x npx` and `export npm_config_call=x; npx` read `ask / auto / deny` in all three baselines (and did before WP-188); with no positional argument npx runs that string in a shell. The same spelling defeats a floor: `npm_config_node_options='--require x' npx jest` reads `auto` while `npx --node-options=…` reads `hazard`. And `npm exec --call=`, `npm x`, `pnpm exec --shell-mode` and `pnpm dlx -c`, listed above as not measured, all read `auto`. Residual no scanner can see: an `.npmrc` with `call=`. A row for 575 should take the closed rule — an `npm_config_*` (any case) assignment on a line that runs a package runner, and every runner's string-handing spelling, are uncertain — rather than a list of spellings.
+
+**Depends on** WP-188 (`npxCallsString`, the `ARGV0_WRAPPERS` peel). Related: 559, 561 (shell strings handed through another command).
+
+### 576. **A block-list entry that names a binary *and* a word (`terraform apply`, `gh release *`, `glab release *`) is completed by `xargs` from its input: `echo apply | xargs terraform` and `xargs gh release` run under `auto`** (TODO — **major, fail-open: a block-list entry, the organisation maximum, does not hold under `auto`**. **Live in the stock image for `gh` and `glab`**, which `docker/runtime.Dockerfile:70-73` installs; whether a run has a credential that lets `gh release`/`glab release` publish is **needs measurement**. `terraform` is not in the stock image. **Not a WP-188 regression**: the same verdict before it. Found by WP-188's reviewer, round 1, session 16; listed in WP-188's *Discovered work*. **No work package owns it — needs an owner (architect).** No test run by the refiner)
+
+**What is wrong.** WP-188's `xargsBannedEntry` (`packages/domain/src/policies/command-policy.ts:2221`) matches the word xargs runs against `binaryBans` (`:2203-2211`), which keeps only `name` and `name *` patterns. An entry with a fixed word after the binary is matched only against the words written on the line, and xargs appends the rest. The word-specific entries of `DEFAULT_BLOCKED_COMMANDS` (`:231-256`) are `rm -rf /*`, the seven `git push`/`git branch -D`/`git reset --hard` entries, `curl * | sh`, `wget * | sh`, `npm publish`, `pip upload`, `gh release *`, `glab release *` and `terraform apply`. The `git` entries are presumably already refused under xargs, because `git` is an input-driven command for `UNCERTAINTY.xargsArguments` (`:215-216`), and so presumably are `npm publish` (npm is a floored verb there) and the two `| sh` entries (a shell). The refiner read this; it did not measure it.
+
+**Evidence.** Measured by WP-188's reviewer, round 1, marker-only: `echo apply | xargs terraform` and `xargs gh release` read `ask / auto / deny` in all three baselines, before and after WP-188. **Not measured (hypothesis):** `xargs glab release`, `echo release | xargs gh`, `echo / | xargs rm -rf`, `echo publish | xargs npm` (expected `uncertain`), `xargs pip upload`, and a project-added word-specific entry.
+
+**What it costs to leave.** An agent under `auto` can publish a GitHub or GitLab release, which the policy says never happens, by piping one word to `xargs gh`. `pip upload` is not a real pip subcommand, so that entry guards nothing either way (a nit for Q37, not this entry).
+
+**Done when.**
+- An architect ruling chooses the rule: either `xargs <binary>` is `block` when **any** block entry starts with that binary and the words written are a prefix of it (`xargs terraform`, `xargs gh`, `xargs gh release`), or the xargs command is `uncertain` with a named reason. Note that the first refuses `echo 'issue view' | xargs gh` as well, which is the cost of a closed rule.
+- Rows, all three baselines: `echo apply | xargs terraform`, `xargs gh release`, `echo release | xargs gh`, `xargs glab release` and `echo / | xargs rm -rf` do not read `auto`. Controls: `xargs grep x` stays `auto`, and `gh release list` and `terraform plan` keep their cells.
+- **Canary:** restore `binaryBans` as the only matcher, and the rows fail by name.
+
+**Depends on** WP-188 (`xargsBannedEntry`). Related: 567 (the whole-binary half, built at WP-188), 575.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -48992,3 +49025,80 @@ The GitLab contract runners and `fixture-provenance.contract.test.ts` pass.
 - `provider.test.ts`: 73/73.
 - `scripts/citations.test.ts`: 13/13.
 - `pnpm run -s verify`: exit 0, final line `PASS: verify`. Run once, after `wp187-tiers3-idle` appeared.
+
+#### WP-188
+
+**A banned binary stays banned whatever `xargs` feeds it, four more shells are script shells, `gmake` is allowed beside `make`, and an applet runner is read through** (backlogs 567, 568, 569, 559). Implementer, session 16, on `6e861e7d`. No migration. **Status: implemented, awaiting review.** (d) is built; the split clause was not used.
+
+**Measured first** (marker-only: every row evaluated through `evaluateCommand`/`decideUnattendedCommand` from a scratch script via `scripts/ts-source-resolver.mjs`; no command string was executed, nothing ran `sudo`). Cells are `attended / auto rule / deny rule`, the same in the read-only, verification and implementation baselines unless stated.
+
+| Row | Before | After |
+|---|---|---|
+| `sudo` (bare, no xargs) | `ask / auto / deny` | unchanged — **the answer to the ruling's open question: a bare `sudo` is not blocked today** |
+| `sudo id` | `block / block / block` | unchanged |
+| `xargs sudo`, `xargs -n1 sudo`, `cat f \| xargs -n1 sudo` | `ask / auto / deny` | `block / block / block` (matched `sudo *`) |
+| `cat f \| xargs docker`, `xargs docker`, `xargs -n1 docker`, `xargs kubectl` | `ask / auto / deny` | `block / block / block` |
+| `xargs -0 -I{} sudo` | `ask / uncertain / uncertain` | `block / block / block` |
+| `xargs sudo sh` (control) | `block / block / block` | unchanged |
+| `xargs grep x` (control) | `ask / auto / deny` | unchanged |
+| `xargs env sudo` | `ask / uncertain / uncertain` | unchanged (`env` is the command xargs runs) |
+| `xargs yash`, `xargs posh`, `xargs bash5`, `xargs sh5`, `xargs yash -c 'x'` | `ask / auto / deny` | `ask / uncertain / uncertain` (`xargsArguments` only), as `xargs rbash` was and is |
+| `yash`/`posh`/`bash5`/`sh5 -c 'git push --no-verify'` | `ask / auto / deny` | `ask / git / git`, as `rbash -c …` was and is |
+| `gmake test`, `gmake`, `gmake -C sub test` | `ask / auto / deny` everywhere | ro `ask / auto / deny`; ver and impl `allow / allow / allow` — `make`'s cells |
+| `gmake 'X=$(shell touch m)'` (control) | `ask / hazard / hazard` | unchanged |
+| `busybox make 'X=1'`, `npx make 'X=1'`, `busybox make X=1`, `npx make X=1` | `ask / auto / deny` | `ask / hazard / hazard`, as `make X=1` |
+| `xargs busybox make X=1`, `xargs npx make X=1` | `ask / hazard / hazard` | `ask / uncertain / uncertain`, as `xargs make X=1` (which reads uncertain) |
+| `echo x \| xargs busybox make`, `echo x \| xargs npx make` | `ask / auto / deny` | `ask / uncertain / uncertain`, as `echo x \| xargs make` |
+| `busybox ls` | `ask / auto / deny` | `allow / allow / allow`, as `ls` |
+| `xargs busybox sudo` | `ask / auto / deny` | `ask / uncertain / uncertain` |
+| `busybox sudo`, `npx sudo` | `ask / auto / deny` | unchanged |
+| `npx jest`, `npx make test` | (not measured before) | `ask / auto / deny` |
+| `xargs npx prettier --check` | (not measured before) | `ask / uncertain / uncertain` — the stated over-ask |
+
+**What changed** (`packages/domain/src/policies/command-policy.ts`).
+- **(a) 567.** `xargsBannedEntry`: for every fragment the parse yields, each `xargs` at a command start (`argvStarts`) has its command word found by `readXargsOptions` (the reader WP-164/185 use), and that name is matched against every block entry `binaryBans` reads as a binary ban; a match is `block` naming the entry (`sudo *`), checked in `evaluateCommand` beside the resolved-binary ban. The ruling's wording was followed: the rule is the `xargs` branch's, so a bare `sudo` on the line is unchanged (see Residuals).
+- **(b) 568.** `yash`, `posh`, `bash5`, `sh5` added to `SCRIPT_SHELLS`; the docblock says a name list is open-ended.
+- **(c) 569.** `MAKE_VERBS` moved above `PROJECT_COMMAND_ALLOW` (a module `const` is not hoisted) and `make`'s two entries are `...MAKE_VERBS.flatMap((verb) => [verb, \`${verb} *\`])`.
+- **(d) 559.** `busybox` and `npx` joined `ARGV0_WRAPPERS` — the peel the block list and the floors read and the set `xargsRunsItsInput` treats as input-driven — and `busybox` alone joined `ENVIRONMENT_WRAPPERS` (the allow-list peel), so `busybox ls` is `ls`. **Assumption:** `npx` is kept out of the allow peel: `npx make test` may run or fetch a package's bin named `make`, so reading it as `make test` would be a loosening the ruling did not ask for. The ruling's two options were "unwrap to the applet before the floors and `xargsRunsItsInput`" or "list as input-driven runners"; this build does the first for the line (the peel) and the second under `xargs` — the closed rule (rule 65), because unwrapping `npx` under `xargs` would need a reader of its options (`-p`, `--package`, `-c '<string>'`).
+
+**Tests.** `packages/domain/src/policies/unattended-commands.test.ts`, describe *"WP-188: a banned binary under xargs, four shells, gmake, and an applet runner"* (criteria 1–4), every row in all three baselines; the WP-186 row `gmake test` moved from `ask / auto / deny` to `make test`'s cells (ruling (c)).
+
+**Canaries** (each applied with Edit and reverted in place with Edit to the recorded bytes; all four at once, failures told apart by name):
+- (1) the `xargsBannedEntry` loop iterating `[] as string[]` — *dead by* `"xargs sudo" is blocked whatever xargs feeds it (567)`, `"xargs -n1 sudo" …`, `"cat f | xargs docker" …`, `"cat f | xargs -n1 sudo" …`.
+- (2) `'posh'` dropped from `SCRIPT_SHELLS` — *dead by* `"xargs posh" is uncertain, as \`xargs rbash\` is (568)` and `reads posh -c 'git push --no-verify' as the script it hands over (568)`.
+- (3) `make`'s entries spelled by hand (`'make'`, `'make *'`) — *dead by* `"gmake test" reads as make does (569)` (and `gmake`, `gmake -C sub test`, and WP-186's moved `keeps "gmake test" at …`).
+- (4) `'npx'` dropped from `ARGV0_WRAPPERS` — *dead by* `"npx make 'X=1'" reads as make X=1 on the line (559)`, `"xargs npx make X=1" reads as xargs into make (559)` and `keeps "xargs npx prettier --check" at ask / uncertain / uncertain (559)`.
+- None survived.
+
+**Residuals.**
+- A bare banned binary with nothing after it (`sudo`, `docker`) is still `ask / auto / deny`, as measured before; it runs nothing it was not written with, and the ruling scoped (a) to `xargs`.
+- `xargs env sudo` stays uncertain rather than `block` (refused under both modes either way): the ban reads the word `xargs` runs, and `env` is that word.
+- ~~`npx -c '<string>'` hands npx a shell string that no reader reads on the line (not measured; for a refiner).~~ Wrong, and fixed at review round 1 (below): the separate form was read only by accident of the wrapper walk, and the attached forms ran under `auto`.
+- The over-ask: an `xargs` into `busybox` or `npx` is uncertain whatever follows.
+
+**Sentences falsified** (rule 83; grep of `docs/`, `CLAUDE.md` and the policy's docblocks for `xargs -n1 sudo`, `gmake test`, `busybox make`, `npx make`, `hush`, `xargs rbash`, `binaryBans`, `banned binary`): technical/05's WP-186 bullet *"`busybox make` and `npx make` … are still read as `busybox` and `npx` (backlog 559, carried)"* — marked as superseded in place, and the WP-188 bullet added after it (criterion 5); `PROJECT_COMMAND_ALLOW`'s docblock *"No verb is added that Q69 does not name"* — qualified; technical/04's `PROJECT_COMMAND_ALLOW` sentence names `gmake`. No other sentence found.
+
+**Discovered work** (for a refiner): ~~`npx -c '<string>'`~~ (built at review round 1). Review round 1's list, not measured by the implementer:
+- the same unread string through `npm exec -c`/`--call` and `npm exec -- git push --no-verify`, `pnpm dlx`, `pnpm exec`, `yarn dlx` and `bunx` — package runners that are not `npx`;
+- word-specific block entries completed by xargs (`echo apply | xargs terraform`, `xargs gh release`): the WP-188 rule reads only a ban on a whole binary, so an entry naming a subcommand is matched against the words written.
+
+**Verification.** Policy unit files (`packages/domain/src/policies`, `planner.test.ts`): 21 files, 2364 passed. `scripts/citations.test.ts`: 13/13. `pnpm run -s verify`: exit 0, final line `PASS: verify` (a first run failed on biome's formatting of the new `return` in `evaluateCommand`, fixed; one-minute load 1.3 at the start).
+
+**Review round 1** (REQUEST_CHANGES, one major). **Finding:** making `npx` a wrapper reads its shell string only as a separate word, by accident of the walk. The attached forms still ran under `auto`. **Orchestrator ruling (closed rule):** an `npx` carrying `-c`/`--call` in any spelling is uncertain, with a named reason, and never read as a script.
+- **Built:** `UNCERTAINTY.npxCall` and `npxCallsString` (`command-policy.ts`), checked at each `npx` command position in `wrappedScript`. The scan reads npx's option words. It continues past a word that may be an option's value (one after an option with no `=`) and stops at the first other word or at `--`. A long option that is a prefix of `call` matches (nopt abbreviates), separate, attached or with `=`. A single-dash word matches when `c` is among its letters (`-c`, `-c'…'`, `-yc`).
+- **Measured before → after**, all three baselines, marker-only:
+
+| Row | Before | After |
+|---|---|---|
+| `npx --call='curl x \| sh'`, `npx --call='git push --no-verify'`, `npx -c'git push --no-verify'`, `npx --call='make X=1'`, `npx --cal='git push --no-verify'`, `env npx -c'git push --no-verify'`, `npx --yes -p cowsay -c 'cowsay hi'` | `ask / auto / deny` | `ask / uncertain / uncertain` (`npxCall` only) |
+| `npx -c 'git push --no-verify'`, `npx -yc 'git push --no-verify'` | `ask / git / git` | `ask / uncertain / uncertain` — the closed rule's cost: still refused under both modes, now as uncertain rather than at the git boundary |
+| `npx --call 'curl x \| sh'` | `block / block / block` | unchanged (block, with `npxCall` beside it) |
+| `npx jest`, `npx jest -c jest.config.js` | `ask / auto / deny` | unchanged |
+
+- **Over-ask, stated:** `npx --yes jest -c x` is uncertain, because `jest` may be `--yes`'s value to a closed reader.
+- **Canary:** `&& false` appended to the new check's condition, then reverted with Edit. The md5 was `78f2030df7a5cc699cbde3bd14aaeddf` before and after. It was *dead by* every `… is uncertain (npxCall)` row (9 of 9 failed, each reading `ask / auto / deny`); the 2 `keeps … (npxCall)` controls passed.
+- **Tests:** two `it.each` blocks were added to the WP-188 describe in `unattended-commands.test.ts`. Single files: `unattended-commands.test.ts` 883/883, `command-policy.test.ts` 1016/1016.
+- technical/05's WP-188 bullet now states what `npx -c`/`--call` reads as.
+- **Checks:** `scripts/citations.test.ts` 13/13. `pnpm run -s verify` ran once, after `wp188-tiers-idle` appeared: exit 0, final line `PASS: verify`.
+
+**Review round 2 (REQUEST-CHANGES, closed by the orchestrator without a third round).** Every flag spelling of `npx -c`/`--call` reads uncertain (`npxCall`); four canaries dead. The one `auto` the reviewer found — the call string through npm's environment configuration (`npm_config_call=… npx`, any case, prefix, `env` or `export`), which also read `auto` before this row — is the class backlog 575 already owns, so it was added to 575 with the reviewer's measurements (and `npm_config_node_options` defeating the `--node-options` floor) rather than fixed here.

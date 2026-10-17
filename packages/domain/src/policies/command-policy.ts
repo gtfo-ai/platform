@@ -214,6 +214,12 @@ export const UNCERTAINTY = {
    */
   xargsArguments:
     'xargs handing the words it reads from its input to a command that runs its arguments (a wrapper such as env, nice, nohup or timeout, a shell such as sh or bash, find with -exec, or git) or that a refused argument would make run a program (cargo, gmake, go, make, npm, pnpm, pytest or rg, or a name beginning with one), or replacing a string (-I) that is not literal — write the command and its arguments on the line; the platform cannot read arguments xargs supplies from its input',
+  /**
+   * WP-188 review round 1: `npx -c '<string>'`/`--call=<string>` runs the string in a shell. It is
+   * never read as a script — the closed rule (rule 65), in every spelling (`npxCallsString`).
+   */
+  npxCall:
+    'npx -c or --call, which runs a string in a shell — run the command itself; the platform does not read the string npx hands to a shell',
 } as const;
 
 export type UncertaintyReason = (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY];
@@ -470,6 +476,18 @@ export const LOCKFILE_INSTALL_ALLOW: readonly string[] = [
 ];
 
 /**
+ * The names the three `make` floors are written for (WP-186, backlog 557): GNU make's own name and
+ * `gmake`, its name on BSD and macOS. A name **beginning with** one of them is make to every floor
+ * (`isMakeName`) — `make-4.4`, `gmake-4.4` — which is the reach the `make*` glob always had and the
+ * reach `XARGS_FLOORED_VERBS` matches by, so the line and `xargs` agree. The over-ask, stated:
+ * `makeinfo` begins with `make`, so `makeinfo -E x` and `makeinfo X=1` are floored too, as
+ * `makeinfo --e…` always was by the glob; `makeinfo doc.texi` is not. The run image ships neither
+ * name (measured, PROGRESS § WP-186); a project's own image may. {@link PROJECT_COMMAND_ALLOW}'s
+ * `make` entries are derived from it (WP-188), so it is declared before that list.
+ */
+const MAKE_VERBS: readonly [string, ...string[]] = ['make', 'gmake'];
+
+/**
  * product/19 §3's *"allow the project's declared commands (`how-to-run.md`: test, lint, format,
  * build, typecheck) … `make *` targets"* — as the **named verb set** Q69 (ii) ruled on (WP-54,
  * PROGRESS backlog 49).
@@ -484,7 +502,7 @@ export const LOCKFILE_INSTALL_ALLOW: readonly string[] = [
  * `make *`, `pytest *`, `go test *`, `cargo test *`) plus the **same verbs' other spelling**, the
  * two-entries-per-verb convention of `DEFAULT_READ_ONLY_ALLOW`: a bare `pytest`, `go test`,
  * `cargo test` and `make`, and `npm test`/`pnpm test` with arguments. No verb is added that Q69
- * does not name.
+ * does not name (`gmake` is `make` under its BSD name, below).
  *
  * **What a name does not bound, said where the names are.** `npm run *` and `make *` run whatever
  * the repository's own `package.json` or `Makefile` says, and a task branch can change that: the
@@ -541,6 +559,10 @@ export const LOCKFILE_INSTALL_ALLOW: readonly string[] = [
  * **One over-block, stated**: every `make` argument with `=` that is not a flag is floored,
  * including an ordinary `make test V=1` — a command-line variable overrides the makefile's, and
  * `CC=`/`SHELL=` are exactly the ones a recipe runs, so the harmless spelling is not told apart.
+ *
+ * **`make`'s entries are derived from {@link MAKE_VERBS}** (WP-188, backlog 569), so `gmake` —
+ * make's own name on BSD and macOS, not a verb Q69 would have to name — is allowed as `make` is,
+ * and the floors that reach it (WP-186) floor it as they floor `make`.
  */
 export const PROJECT_COMMAND_ALLOW: readonly string[] = [
   'npm test',
@@ -549,8 +571,7 @@ export const PROJECT_COMMAND_ALLOW: readonly string[] = [
   'pnpm test',
   'pnpm test *',
   'pnpm run *',
-  'make',
-  'make *',
+  ...MAKE_VERBS.flatMap((verb) => [verb, `${verb} *`]),
   'pytest',
   'pytest *',
   'go test',
@@ -1089,17 +1110,6 @@ const gitAbbreviationFloor = ({
     });
   },
 });
-
-/**
- * The names the three `make` floors are written for (WP-186, backlog 557): GNU make's own name and
- * `gmake`, its name on BSD and macOS. A name **beginning with** one of them is make to every floor
- * (`isMakeName`) — `make-4.4`, `gmake-4.4` — which is the reach the `make*` glob always had and the
- * reach `XARGS_FLOORED_VERBS` matches by, so the line and `xargs` agree. The over-ask, stated:
- * `makeinfo` begins with `make`, so `makeinfo -E x` and `makeinfo X=1` are floored too, as
- * `makeinfo --e…` always was by the glob; `makeinfo doc.texi` is not. The run image ships neither
- * name (measured, PROGRESS § WP-186); a project's own image may.
- */
-const MAKE_VERBS: readonly [string, ...string[]] = ['make', 'gmake'];
 
 const isMakeName = (name: string): boolean => MAKE_VERBS.some((verb) => name.startsWith(verb));
 
@@ -1798,6 +1808,11 @@ const ARGV0_WRAPPERS: ReadonlySet<string> = new Set([
   'ltrace',
   'nsenter',
   'unshare',
+  // An applet or package runner (WP-188, backlog 559): `busybox make 'X=1'` runs make's applet and
+  // `npx make 'X=1'` a bin named `make`, so the floors and the block list read the word after it
+  // as the command, and an `xargs` into either is an input-driven runner (`xargsRunsItsInput`).
+  'busybox',
+  'npx',
   'runuser',
   'su',
   'doas',
@@ -1901,7 +1916,10 @@ const argv0Name = (token: string): string => basename(unquoteToken(token));
  * from standard input, and runs a here-document it is handed. It was two sets until WP-160 —
  * `sh`/`bash`/`zsh`/`dash` for `-c`, and these for a here-document — so `rbash -c '…'` (shipped in
  * the run image) and `ksh -c '…'` were unread. `busybox` is not here: it is a shell only with a
- * second word (`busybox sh -c '…'`), which `wrappedScript` reads.
+ * second word (`busybox sh -c '…'`), which `wrappedScript` reads. `yash`, `posh`, `bash5` and
+ * `sh5` joined at WP-188 (backlog 568), so `xargs yash` is uncertain as `xargs rbash` is and
+ * `yash -c '…'` is read. A name list is open-ended by nature: a shell under a name not here (a
+ * copied `./s`) is read as the command it is named.
  */
 const SCRIPT_SHELLS: ReadonlySet<string> = new Set([
   'sh',
@@ -1916,6 +1934,10 @@ const SCRIPT_SHELLS: ReadonlySet<string> = new Set([
   'csh',
   'tcsh',
   'hush',
+  'yash',
+  'posh',
+  'bash5',
+  'sh5',
 ]);
 
 /**
@@ -1927,6 +1949,10 @@ const SCRIPT_SHELLS: ReadonlySet<string> = new Set([
  * variable or standard input rather than from the tokens in front of us — peeling those off would
  * hand an allow verdict to a command nobody has read. They remain peeled for the *block*-list,
  * where the same reasoning only ever tightens.
+ *
+ * `busybox` is here (WP-188, backlog 559): `busybox ls` runs the `ls` applet, so it keeps `ls`'s
+ * verdict. `npx` is not: `npx make test` may fetch or run a package's bin named `make`, so it stays
+ * peeled for the block list and the floors only.
  */
 const ENVIRONMENT_WRAPPERS: ReadonlySet<string> = new Set([
   'env',
@@ -1936,6 +1962,7 @@ const ENVIRONMENT_WRAPPERS: ReadonlySet<string> = new Set([
   'time',
   'nice',
   'ionice',
+  'busybox',
 ]);
 
 const tokenise = (text: string): readonly string[] =>
@@ -2182,6 +2209,38 @@ const binaryBans = (block: readonly string[]): readonly string[] =>
     }
     return rest === undefined || rest === '*' ? [name] : [];
   });
+
+/**
+ * The block entry banning the binary an `xargs` in this piece of command line runs, if any (WP-188,
+ * backlog 567). A `name *` entry matches the words written, and xargs supplies the rest from its
+ * input: `cat f | xargs -n1 sudo` is `sudo` with no word after it on the line, which `sudo *` does
+ * not match, so it read `ask / auto / deny` while `xargs sudo sh` was blocked. The command word
+ * xargs runs (after its own options, `readXargsOptions`) is judged by name, whatever follows it.
+ * A bare `sudo` with no `xargs` is not changed by this: it runs nothing it was not written with.
+ */
+const xargsBannedEntry = (text: string, block: readonly string[]): string | undefined => {
+  const tokens = tokenise(text);
+  for (const start of argvStarts(tokens).starts) {
+    const word = tokens[start];
+    if (word === undefined || argv0Name(word) !== 'xargs') {
+      continue;
+    }
+    const args = tokens.slice(start + 1).map((raw): ShellWord => ({ raw }));
+    const at = readXargsOptions(args).command;
+    const run = at === null ? undefined : args[at];
+    if (run === undefined) {
+      continue;
+    }
+    const name = argv0Name(run.raw);
+    const entry = block.find((pattern) =>
+      binaryBans([pattern]).some((ban) => globToRegExp(ban).test(name)),
+    );
+    if (entry !== undefined) {
+      return entry;
+    }
+  }
+  return undefined;
+};
 
 // ── scanning ─────────────────────────────────────────────────────────────────
 
@@ -4057,6 +4116,41 @@ const xargsRunsItsInput = (name: string, args: readonly ShellWord[]): boolean =>
     args.some((word) => /^-(?:exec|execdir|ok|okdir)$/.test(unquoteToken(word.raw))));
 
 /**
+ * Whether `npx` is given `-c`/`--call` (WP-188 review round 1): npm parses its own options before
+ * the command, and `--call <string>` runs the string in a shell. Read **closed**, failing toward
+ * uncertain: every option word up to the first word that is neither an option nor possibly an
+ * option's value (a word after an option with no `=`) is checked, so `npx --yes jest -c x` is an
+ * over-ask. A long option that is a prefix of `--call` (nopt's abbreviations) matches, separate,
+ * attached or with `=`; a short word matches when `c` is among its letters (`-c`, `-c'…'`, `-yc`).
+ */
+const npxCallsString = (args: readonly ShellWord[]): boolean => {
+  let valueMayFollow = false;
+  for (const word of args) {
+    const value = unquoteToken(word.raw);
+    if (value === '--') {
+      return false;
+    }
+    if (value.startsWith('--')) {
+      const name = value.slice(2).split('=')[0] as string;
+      if (name.length > 0 && 'call'.startsWith(name)) {
+        return true;
+      }
+      valueMayFollow = !value.includes('=');
+    } else if (value.startsWith('-') && value.length > 1) {
+      if (/^-[A-Za-z]*c/.test(value)) {
+        return true;
+      }
+      valueMayFollow = !value.includes('=');
+    } else if (valueMayFollow) {
+      valueMayFollow = false;
+    } else {
+      return false;
+    }
+  }
+  return false;
+};
+
+/**
  * The scripts a stage hands over as **strings**, read off its words as written (WP-160, backlog
  * 511) — `parseCommand` parses each as a script (rule 1), through its nested path and
  * `MAX_WRAPPER_DEPTH`. A string is read when it is literal (`isLiteralWord`) and makes the stage
@@ -4383,6 +4477,8 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
       ) {
         reasons.add(UNCERTAINTY.xargsArguments);
       }
+    } else if (name === 'npx' && npxCallsString(args)) {
+      reasons.add(UNCERTAINTY.npxCall);
     } else if (name === 'hash' && optionWords(args).some((option) => /^-[A-Za-z]*p/.test(option))) {
       // `hash -p FILE NAME` makes `NAME` run `FILE` (WP-161 criterion (12), backlog 522).
       reasons.add(UNCERTAINTY.reboundName);
@@ -4889,6 +4985,17 @@ export const evaluateCommand = (
         verdict: 'block',
         matched: banned,
         segment: request.resolvedBinary,
+        uncertainty: parsed.uncertainty,
+      };
+    }
+  }
+  for (const fragment of parsed.fragments) {
+    const banned = xargsBannedEntry(fragment, policy.block);
+    if (banned !== undefined) {
+      return {
+        verdict: 'block',
+        matched: banned,
+        segment: fragment,
         uncertainty: parsed.uncertainty,
       };
     }

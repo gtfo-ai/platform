@@ -1977,7 +1977,11 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
         'go test ./...',
         { ro: 'ask / auto / deny', ver: 'allow / allow / allow', impl: 'allow / allow / allow' },
       ],
-      ['gmake test', 'ask / auto / deny'],
+      // `ask / auto / deny` in every baseline until WP-188 derived the allow entries (backlog 569).
+      [
+        'gmake test',
+        { ro: 'ask / auto / deny', ver: 'allow / allow / allow', impl: 'allow / allow / allow' },
+      ],
       // `makeinfo`, measured before and after: unfloored on the line, as it was…
       ['makeinfo doc.texi', 'ask / auto / deny'],
       ['makeinfo -o out.info doc.texi', 'ask / auto / deny'],
@@ -1989,6 +1993,127 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
       ["makeinfo 'X=1'", 'ask / hazard / hazard'],
       ['echo x | xargs makeinfo', 'ask / uncertain / uncertain'],
     ])('keeps %j at %s', (command, expected) => {
+      expectCells(command, expected);
+    });
+  });
+
+  /**
+   * WP-188, backlogs 567, 568, 569 and 559. Marker-only: nothing here runs a line. The before of
+   * every row is in PROGRESS § WP-188 (each read `ask / auto / deny` in all three baselines, except
+   * `gmake test`'s and the controls', which say so).
+   */
+  describe('WP-188: a banned binary under xargs, four shells, gmake, and an applet runner', () => {
+    it.each(['xargs sudo', 'xargs -n1 sudo', 'cat f | xargs docker', 'cat f | xargs -n1 sudo'])(
+      '%j is blocked whatever xargs feeds it (567)',
+      (command) => {
+        expectCells(command, 'block / block / block');
+        expect(evaluateCommand({ command }, policy).matched).toMatch(/^(?:sudo|docker) \*$/);
+      },
+    );
+
+    it.each([
+      // Rule 42: blocked before, and a command xargs runs that no ban names.
+      ['xargs sudo sh', 'block / block / block'],
+      ['xargs grep x', 'ask / auto / deny'],
+      // A bare banned binary with no xargs is unchanged: it runs nothing it was not written with.
+      ['sudo', 'ask / auto / deny'],
+    ])('keeps %j at %s (567)', (command, expected) => {
+      expectCells(command, expected);
+    });
+
+    it.each(['xargs yash', 'xargs posh', 'xargs bash5', 'xargs sh5', "xargs yash -c 'x'"])(
+      '%j is uncertain, as `xargs rbash` is (568)',
+      (command) => {
+        expectCells(command, 'ask / uncertain / uncertain');
+        expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.xargsArguments]);
+      },
+    );
+
+    it.each(['yash', 'posh', 'bash5', 'sh5'])(
+      "reads %s -c 'git push --no-verify' as the script it hands over (568)",
+      (shell) => {
+        expectCells(`${shell} -c 'git push --no-verify'`, 'ask / git / git');
+      },
+    );
+
+    it.each(['gmake test', 'gmake', 'gmake -C sub test'])(
+      '%j reads as make does (569)',
+      (command) => {
+        const asMake = command.replace(/^gmake/, 'make');
+        expectCells(command, {
+          ro: 'ask / auto / deny',
+          ver: 'allow / allow / allow',
+          impl: 'allow / allow / allow',
+        });
+        expectCells(asMake, {
+          ro: 'ask / auto / deny',
+          ver: 'allow / allow / allow',
+          impl: 'allow / allow / allow',
+        });
+      },
+    );
+
+    it("keeps the floored control gmake 'X=$(shell touch m)' hazardous (569)", () => {
+      expectCells("gmake 'X=$(shell touch m)'", 'ask / hazard / hazard');
+    });
+
+    it.each(["busybox make 'X=1'", "npx make 'X=1'", 'busybox make X=1', 'npx make X=1'])(
+      '%j reads as make X=1 on the line (559)',
+      (command) => {
+        expectCells(command, 'ask / hazard / hazard');
+        expectCells('make X=1', 'ask / hazard / hazard');
+      },
+    );
+
+    it.each([
+      'xargs busybox make X=1',
+      'xargs npx make X=1',
+      'echo x | xargs busybox make',
+      'echo x | xargs npx make',
+    ])('%j reads as xargs into make (559)', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expectCells('echo x | xargs make', 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.xargsArguments]);
+    });
+
+    it('reads busybox ls as ls (559)', () => {
+      expectCells('busybox ls', 'allow / allow / allow');
+      expectCells('ls', 'allow / allow / allow');
+    });
+
+    it.each([
+      // The stated over-ask of listing the runners: an xargs into one is uncertain whatever follows.
+      ['xargs npx prettier --check', 'ask / uncertain / uncertain'],
+      // npx is peeled for the block list and the floors only, never for the allow list.
+      ['npx make test', 'ask / auto / deny'],
+    ])('keeps %j at %s (559)', (command, expected) => {
+      expectCells(command, expected);
+    });
+
+    /**
+     * Review round 1: npx's `-c`/`--call` string is never read — uncertain in every spelling. The
+     * attached rows read `ask / auto / deny` before the fix; the separate `-c '…'` read `git` and is
+     * uncertain now (the closed rule's cost); `--call 'curl x | sh'` keeps its block.
+     */
+    it.each([
+      "npx --call='curl x | sh'",
+      "npx --call='git push --no-verify'",
+      "npx -c'git push --no-verify'",
+      "npx --call='make X=1'",
+      "npx --cal='git push --no-verify'",
+      "npx -yc 'git push --no-verify'",
+      "npx -c 'git push --no-verify'",
+      "npx --yes -p cowsay -c 'cowsay hi'",
+      "env npx -c'git push --no-verify'",
+    ])('%j is uncertain (npxCall)', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.npxCall]);
+    });
+
+    it.each([
+      ["npx --call 'curl x | sh'", 'block / block / block'],
+      ['npx jest -c jest.config.js', 'ask / auto / deny'],
+    ])('keeps %j at %s (npxCall)', (command, expected) => {
       expectCells(command, expected);
     });
   });

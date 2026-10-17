@@ -543,7 +543,7 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   acceptance tester and discovery) and `implementation` (which now also carries `PROJECT_COMMAND_ALLOW`, for
 >   the developer). `PROJECT_COMMAND_ALLOW` is Q69's named verb set — `npm test`, `npm run *`,
 >   `pnpm test`, `pnpm run *`, `make *`, `pytest *`, `go test *`, `cargo test *` and their other
->   spelling — never a `*` allow. `Bash` follows product/13's Shell column for every role, which gave
+>   spelling (`make`'s entries cover `gmake` too since WP-188) — never a `*` allow. `Bash` follows product/13's Shell column for every role, which gave
 >   the investigator, the architect and the reviewer a shell they did not have.
 > - **A fourth layer, per skill** (`COMMAND_ALLOW_BY_SKILL`): the read verbs a provider skill's own
 >   recipes use (`logcli query *`, `sentry-cli issues list *`, `glab mr view *`, …), added only for a
