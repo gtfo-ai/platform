@@ -48,6 +48,7 @@ import {
   WORKSPACE_SETUP_ALLOW,
   withoutHereDocumentBodies,
   withVerificationMode,
+  XARGS_FLOORED_VERBS,
 } from './command-policy.js';
 import {
   GIT_LONG_OPTIONS,
@@ -2541,5 +2542,60 @@ describe('WP-161 — the scanner’s new uncertainty and what it reads', () => {
 
   it('splits `<&3` nowhere (criterion (8))', () => {
     expect(splitCommandSegments('git status <&3')).toEqual(['git status <&3']);
+  });
+});
+
+/**
+ * WP-164 criterion (3), backlog 530: every `command`-kind floor names the verbs it is written for,
+ * and `XARGS_FLOORED_VERBS` is derived from them. A glob entry's first word, stripped of its
+ * trailing `*`, must be among its verbs; a first word that is only `*` (`* --script-shell*`) names
+ * no verb, so its `verbs` are the entry's own statement and only their presence is checked.
+ */
+describe('WP-164: the verbs a command floor names (backlog 530)', () => {
+  /** What is wrong with one entry's `verbs`, or nothing. */
+  const verbsCensus = (entry: {
+    readonly pattern: string;
+    readonly verbs: readonly string[];
+    readonly tokens?: unknown;
+  }): readonly string[] => {
+    const faults: string[] = [];
+    if (entry.verbs.length === 0) {
+      faults.push(`${entry.pattern}: names no verb`);
+    }
+    const first = (entry.pattern.split(' ')[0] as string).replace(/\*$/, '');
+    if (entry.tokens === undefined && first !== '' && !entry.verbs.includes(first)) {
+      faults.push(`${entry.pattern}: first word ${first} is not among ${entry.verbs.join(', ')}`);
+    }
+    return faults;
+  };
+
+  it('every command-kind entry names a verb, and a glob entry names its first word', () => {
+    const commandEntries = HAZARDOUS_ARGUMENTS.flatMap((entry) =>
+      entry.kind === 'command' ? [entry] : [],
+    );
+    expect(commandEntries.length).toBeGreaterThan(30);
+    expect(commandEntries.flatMap(verbsCensus)).toEqual([]);
+  });
+
+  it('the census refuses a glob entry whose verbs miss its first word, and an empty list', () => {
+    expect(verbsCensus({ pattern: 'make* --e*', verbs: ['go'] })).toHaveLength(1);
+    expect(verbsCensus({ pattern: 'make* --e*', verbs: [] })).toHaveLength(2);
+    expect(verbsCensus({ pattern: 'make* --e*', verbs: ['make'] })).toEqual([]);
+  });
+
+  it('derives the set from the command-kind entries only, pytest included (ruling (c))', () => {
+    const derived = new Set(
+      HAZARDOUS_ARGUMENTS.flatMap((entry) => (entry.kind === 'command' ? entry.verbs : [])),
+    );
+    expect(XARGS_FLOORED_VERBS).toEqual(derived);
+    for (const verb of ['make', 'go', 'cargo', 'npm', 'pnpm', 'pytest']) {
+      expect(XARGS_FLOORED_VERBS.has(verb), verb).toBe(true);
+    }
+  });
+
+  it('the xargs reason names every derived verb', () => {
+    for (const verb of XARGS_FLOORED_VERBS) {
+      expect(UNCERTAINTY.xargsArguments, verb).toMatch(new RegExp(`\\b${verb}\\b`));
+    }
   });
 });

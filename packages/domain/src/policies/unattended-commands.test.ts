@@ -1693,6 +1693,122 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
     });
   });
 
+  /**
+   * WP-164, backlog 530: `xargs` into a verb a `command`-kind floor names (`XARGS_FLOORED_VERBS`)
+   * is uncertain, because the floored argument can arrive on xargs' input. Marker-only payloads;
+   * every row read `ask / auto / deny` before WP-164 (backlog 530's table, ruling (a)).
+   */
+  describe('WP-164, backlog 530: xargs feeding a verb a command floor names', () => {
+    it.each([
+      "echo 'X=$(shell touch m)' | xargs make",
+      "echo 'X:=$(shell touch m)' | xargs make test",
+      "echo '--eval=x:=$(shell touch m)' | xargs make",
+      "echo -E 'x' | xargs make",
+      'xargs make < f',
+      'xargs -a f make',
+      'xargs --arg-file=f make',
+      'xargs --arg-file f make',
+      'xargs /usr/bin/make < f',
+      "echo '-toolexec=./x' | xargs go test",
+      "echo '--config=x' | xargs cargo test",
+      "echo 'X=1' | xargs npm test",
+      "echo '--node-options=x' | xargs pnpm test",
+      "echo '-c x.ini' | xargs pytest",
+      "echo '@args.txt' | xargs pytest",
+      "echo '--pre=./x' | xargs rg x",
+      // The over-ask ruling (c) names: no hazard in the input, and still uncertain.
+      "find . -name '*_test.py' | xargs pytest",
+      "git ls-files '*.go' | xargs go vet",
+      'git ls-files | xargs rg TODO',
+      // Review round 1: the floors reach a name by prefix (`go*`, `make*`, `startsWith('pytest')`),
+      // and so does the set — `pytest-3` is Debian's name. `makeinfo` is the over-ask.
+      "echo '-c x.ini' | xargs pytest-3",
+      "echo '-toolexec=./x' | xargs go1.25 test",
+      "echo 'X=1' | xargs make-4.4",
+      'echo x | xargs makeinfo',
+      // Review round 1: GNU xargs takes any unambiguous prefix of a long option (`getopt_long`).
+      'xargs --arg-f grep make',
+      'xargs --process-slot-v grep make',
+      'xargs --max-a 1 make',
+      'xargs --arg-f f make',
+      // …and an ambiguous or unknown one leaves the command unread.
+      'xargs --max 1 grep x',
+      'xargs --e=x grep x',
+      'xargs --frobnicate grep x',
+      // Review round 2 (rule 38): a name `Object.prototype` carries is not an option.
+      'xargs --constructor grep x',
+      // Review round 2: an optional-argument long option without `=` leaves the next word alone.
+      'xargs --eof make',
+      'xargs --max-l make',
+      // …and `-i`'s value is the rest of its word, so `-iI` does not take `make` as `-I`'s value.
+      'echo x | xargs -iI make grep',
+    ])('%j is uncertain', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.xargsArguments]);
+    });
+
+    it.each([
+      // Rule 42: the floor on the line keeps its verdict, and so does a wrapper first.
+      ["make 'X=$(shell touch m)'", 'ask / hazard / hazard'],
+      // `hazard` before WP-164 (the flag is on the line); refused under both modes either way.
+      ["echo '--script-shell=./x' | xargs npm test", 'ask / uncertain / uncertain'],
+      ["echo 'X=$(shell touch m)' | xargs nice make", 'ask / uncertain / uncertain'],
+      // Verbs no `command`-kind floor names.
+      ['echo x | xargs grep x', 'ask / auto / deny'],
+      ['echo x | xargs rm -f', 'ask / auto / deny'],
+      // The full spellings of the abbreviated rows above, and the abbreviations into a verb no
+      // floor names: the option's value is skipped, so the command read is the right word.
+      ['xargs --arg-file grep make', 'ask / uncertain / uncertain'],
+      ['xargs --process-slot-var grep make', 'ask / uncertain / uncertain'],
+      ['xargs --max-args 1 make', 'ask / uncertain / uncertain'],
+      ['xargs --arg-file f make', 'ask / uncertain / uncertain'],
+      ['xargs --arg-f f grep x', 'ask / auto / deny'],
+      ['xargs --max-a 1 grep x', 'ask / auto / deny'],
+      ['xargs --max-a=1 grep x', 'ask / auto / deny'],
+      ['xargs --process-slot-v=V grep x', 'ask / auto / deny'],
+      // The verbs themselves, with no xargs.
+      [
+        'make test',
+        { ro: 'ask / auto / deny', ver: 'allow / allow / allow', impl: 'allow / allow / allow' },
+      ],
+      [
+        'go test ./...',
+        { ro: 'ask / auto / deny', ver: 'allow / allow / allow', impl: 'allow / allow / allow' },
+      ],
+    ])('keeps %j at %s', (command, expected) => {
+      expectCells(command, expected);
+    });
+
+    /**
+     * Review round 2 (backlog 560 folded in): the replace string xargs takes from any spelling
+     * `getopt_long` accepts, and a shell script under xargs that names its positional parameters,
+     * which xargs fills from its input. Uncertain for the reason the reader gives (a replaced
+     * string or an unread script), so only the cells are pinned.
+     */
+    it.each([
+      "echo 'git push --no-verify' | xargs --repl=X sh -c X",
+      "echo make | xargs --repl=grep grep 'X=$(shell touch m)'",
+      'echo x | xargs -0IR sh -c R',
+      'echo x | xargs -0iR sh -c R',
+      "echo 'git push --no-verify' | xargs --replace=X sh -c X",
+      `echo 'a X=1' | xargs sh -c 'make "$@"'`,
+      `echo x | xargs sh -c '"$@"'`,
+      "echo x | xargs sh -c 'make $1'",
+    ])('%j is uncertain (review round 2)', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+    });
+
+    it.each([
+      // Its verdict before round 2 too: a literal script with no positional parameter is read.
+      ["echo x | xargs sh -c 'echo hi'", 'ask / auto / deny'],
+      // A replace string the command and the script do not contain.
+      ["xargs --replace=X sh -c 'echo hi'", 'ask / auto / deny'],
+      ['echo x | xargs -0 grep x', 'ask / auto / deny'],
+    ])('keeps %j at %s (review round 2)', (command, expected) => {
+      expectCells(command, expected);
+    });
+  });
+
   /** Both modes, the implementation baseline: the rule a line is refused under. */
   const refusesIn = (command: string, rule: string): void => {
     for (const mode of ['auto', 'deny'] as const) {

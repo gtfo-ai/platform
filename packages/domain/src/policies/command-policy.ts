@@ -79,7 +79,9 @@
  * **What it reads as uncertain instead** (WP-161, backlog 516–523): more than eight wrappers,
  * assignments or nested substitutions (`UNCERTAINTY.tooDeep`), a command name — or a wrapper's —
  * the shell expands by a glob or a brace (`expandedName`), a name `hash -p` rebinds
- * (`reboundName`), and an `xargs` that hands its input to a wrapper, `find -exec` or `git`
+ * (`reboundName`), and an `xargs` that hands its input to a wrapper, `find -exec`, `git` or —
+ * since WP-164 — a verb a `command`-kind floor is written for (`make`, `go`, `cargo`, `npm`,
+ * `pnpm`, `pytest`, `rg`: `XARGS_FLOORED_VERBS`), whose floored argument the input can carry
  * (`xargsArguments`). A line continuation is joined before any word is classified, inside a word
  * as between words (`normaliseCommand`), and git's abbreviated long options are resolved by git's
  * rule (`HAZARDOUS_ARGUMENTS`).
@@ -88,7 +90,8 @@
  * file the run wrote, backlog 481's residual and the unattended module's), an interpreter that is not
  * a shell (`python3 -c`, `perl -e`), a command a program assembles from its input where no string on
  * the line names it (`parallel`; and `xargs` feeding a command that is not a wrapper, `find -exec`,
- * `git` or a shell — `xargs make`, whose input names targets), a prompt variable or an alias set by
+ * `git`, a shell or a verb a `command`-kind floor names — WP-164 made `xargs make`, whose input can
+ * name assignments and `--eval` as well as targets, uncertain), a prompt variable or an alias set by
  * a start-up file, an option's value attached to its option (`read -aNAME`), a name taken by a
  * builtin it does not list (`getopts`, `wait -p`, `exec {var}>…`), an attribute (`-i`, `-n`) given
  * to a variable outside the line, a name bound outside the line (`hash -p` in an earlier call, if
@@ -202,9 +205,11 @@ export const UNCERTAINTY = {
   /**
    * WP-161 criterion (13), backlog 523: `xargs` appends the words it reads to its command, so a
    * command that runs its arguments — a wrapper, `find -exec`, `git` — runs what the pipe said.
+   * WP-164 (backlog 530): so does a verb a `command`-kind floor names, given the floored argument
+   * by the pipe; the verbs listed here are held to `XARGS_FLOORED_VERBS` by a unit test.
    */
   xargsArguments:
-    'xargs handing the words it reads from its input to a command that runs its arguments (a wrapper such as env, nice, nohup or timeout, find with -exec, or git) — write the command and its arguments on the line; the platform cannot read arguments xargs supplies from its input',
+    'xargs handing the words it reads from its input to a command that runs its arguments (a wrapper such as env, nice, nohup or timeout, find with -exec, or git) or that a refused argument would make run a program (cargo, go, make, npm, pnpm, pytest or rg, or a name beginning with one) — write the command and its arguments on the line; the platform cannot read arguments xargs supplies from its input',
 } as const;
 
 export type UncertaintyReason = (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY];
@@ -746,7 +751,7 @@ export const DEFAULT_IMPLEMENTATION_ASK: readonly string[] = [
 /** {@link HazardousArgument.kind}'s three values. */
 export type HazardKind = 'command' | 'trust' | 'path';
 
-export interface HazardousArgument {
+interface HazardousArgumentShape {
   /**
    * Matched exactly like a block pattern: tokens (flag anywhere) or the whole line as a glob —
    * unless {@link tokens} is given, when this is the entry's **name** and only that predicate
@@ -786,6 +791,19 @@ export interface HazardousArgument {
     readonly words: readonly string[];
   }) => boolean;
 }
+
+/**
+ * A floor on {@link HAZARDOUS_ARGUMENTS}. A `command`-kind entry must name the **verbs** it floors
+ * (WP-164, backlog 530): the argv0 basenames its pattern or predicate is written for (`make`, `go`,
+ * `pytest`). An `xargs` that feeds one of them is uncertain ({@link XARGS_FLOORED_VERBS}), because
+ * the hazardous argument can arrive on xargs' input, where no floor reads it. A `trust` or `path`
+ * entry may name them and does not have to: those kinds are not derived into the set.
+ */
+export type HazardousArgument = HazardousArgumentShape &
+  (
+    | { readonly kind: 'command'; readonly verbs: readonly [string, ...string[]] }
+    | { readonly kind: 'trust' | 'path'; readonly verbs?: readonly string[] }
+  );
 
 /**
  * `go test` flags that write a path the command line chose (PROGRESS backlog 343, WP-120): six
@@ -1050,6 +1068,7 @@ const gitAbbreviationFloor = ({
 }: GitAbbreviationHazard): HazardousArgument => ({
   pattern: `git --${spelling} abbreviated (any prefix of it git could resolve to it, e.g. --${spelling.slice(0, Math.max(2, spelling.length - 2))})`,
   kind,
+  verbs: ['git'],
   hazard: `git accepts any unambiguous prefix of a long option, so this is --${spelling}: ${hazard}`,
   tokens: ({ name, flags, words }) => {
     if (name !== 'git' && !name.startsWith('git-')) {
@@ -1103,12 +1122,14 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   {
     pattern: 'git * --upload-pack*',
     kind: 'command',
+    verbs: ['git'],
     hazard:
       'git runs the --upload-pack value as a shell command on the far end, and with a local path as the remote that far end is this machine',
   },
   {
     pattern: 'git * --receive-pack*',
     kind: 'command',
+    verbs: ['git'],
     hazard: 'the push-side twin of --upload-pack, and equally a shell command',
   },
   /**
@@ -1121,6 +1142,7 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   {
     pattern: 'git * --exec*',
     kind: 'command',
+    verbs: ['git'],
     hazard:
       "--exec is git push's synonym for --receive-pack, git fetch-pack's for --upload-pack, and git rebase runs it (or -x) after each commit; it is not scoped to a subcommand because the next verb to grow one would be missed",
     tokens: ({ name, flags, positional }) =>
@@ -1139,6 +1161,7 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   {
     pattern: 'git * --extcmd*',
     kind: 'command',
+    verbs: ['git'],
     hazard: 'git difftool runs --extcmd (-x) once per changed file',
     tokens: ({ name, flags, positional }) =>
       (name === 'git' || name.startsWith('git-')) &&
@@ -1149,28 +1172,33 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   {
     pattern: 'git * --ext-diff*',
     kind: 'command',
+    verbs: ['git'],
     hazard:
       "--ext-diff turns on the external diff driver the *repository's own* config names, and a repository is untrusted input (BD-022)",
   },
   {
     pattern: 'git * --textconv*',
     kind: 'command',
+    verbs: ['git'],
     hazard: "--textconv runs the textconv filter the repository's config names (BD-022)",
   },
   {
     pattern: 'git * ext::*',
     kind: 'command',
+    verbs: ['git'],
     hazard:
       "git's ext:: transport runs its argument as a shell command; it is refused unless protocol.ext.allow is set, which is the workspace's configuration and not this module's to promise",
   },
   {
     pattern: 'rg * --pre*',
     kind: 'command',
+    verbs: ['rg'],
     hazard: 'ripgrep runs the --pre command over every file it searches',
   },
   {
     pattern: 'rg * --hostname-bin*',
     kind: 'command',
+    verbs: ['rg'],
     hazard: 'ripgrep runs the --hostname-bin command to label hyperlinks',
   },
   // ── writes a path that the `> file` rule never sees ──
@@ -1286,6 +1314,7 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   {
     pattern: 'make VAR=value (a positional containing `=`)',
     kind: 'command',
+    verbs: ['make'],
     hazard:
       'a make argument with `=` that is not a flag is a command-line variable assignment — `X:=$(shell …)`, `SHELL=`, `.SHELLFLAGS=`, or an ordinary `V=1`, which can equally override a recipe variable such as `CC` — so every one is floored, while `--jobs=4` (a flag) is not',
     tokens: ({ name, positional }) =>
@@ -1294,88 +1323,109 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   {
     pattern: 'make* --e*',
     kind: 'command',
+    verbs: ['make'],
     hazard:
       'make --eval, spelled in full or by the prefixes GNU getopt accepts (`--ev`, `--eva`), evaluates the text as makefile source; `--environment-overrides` lets the environment replace the makefile’s variables',
   },
   {
     pattern: 'make -…E… (a single-dash short-option cluster containing E)',
     kind: 'command',
+    verbs: ['make'],
     hazard: 'the short spelling of make --eval, alone (`-E`) or inside a clustered flag (`-sE`)',
     tokens: ({ name, flags }) => name === 'make' && flags.some((flag) => /^-[^-]*E/.test(flag)),
   },
   {
     pattern: 'go* -exec*',
     kind: 'command',
+    verbs: ['go'],
     hazard: 'go test -exec runs the test binary under an arbitrary program',
   },
-  { pattern: 'go* --exec*', kind: 'command', hazard: 'the double-dash spelling of go -exec' },
+  {
+    pattern: 'go* --exec*',
+    kind: 'command',
+    verbs: ['go'],
+    hazard: 'the double-dash spelling of go -exec',
+  },
   {
     pattern: 'go* -toolexec*',
     kind: 'command',
+    verbs: ['go'],
     hazard: 'go -toolexec runs an arbitrary program in front of every toolchain invocation',
   },
   {
     pattern: 'go* --toolexec*',
     kind: 'command',
+    verbs: ['go'],
     hazard: 'the double-dash spelling of go -toolexec',
   },
   {
     pattern: 'go* -ldflags*extld*',
     kind: 'command',
+    verbs: ['go'],
     hazard:
       '`-ldflags=-extld=…` names the external linker, which is a program the command line chose',
   },
   {
     pattern: 'go* --ldflags*extld*',
     kind: 'command',
+    verbs: ['go'],
     hazard: 'the double-dash spelling of go -ldflags … -extld',
   },
   {
     pattern: 'cargo* --config*',
     kind: 'command',
+    verbs: ['cargo'],
     hazard: 'cargo --config can set a target runner, which is an arbitrary command',
   },
   {
     pattern: '* --script-shell*',
     kind: 'command',
+    verbs: ['npm', 'pnpm'],
     hazard: 'npm and pnpm run the package script under the --script-shell binary instead of sh',
   },
   {
     pattern: 'npm* --scr*',
     kind: 'command',
+    verbs: ['npm'],
     hazard:
       'npm accepts any unique prefix of a long option; `--scr` is the shortest unique to --script-shell in the option set this is written against',
   },
   {
     pattern: 'pnpm* --scr*',
     kind: 'command',
+    verbs: ['pnpm'],
     hazard: 'the same prefixes of --script-shell, for pnpm',
   },
   {
     pattern: '* --node-options*',
     kind: 'command',
+    verbs: ['npm', 'pnpm'],
     hazard:
       'npm turns --node-options into NODE_OPTIONS, so `--import=data:…` runs model-written code',
   },
   {
     pattern: 'npm* --node*',
     kind: 'command',
+    verbs: ['npm'],
     hazard: 'the prefixes of --node-options npm accepts (`--node-o…`), floored from `--node`',
   },
   {
     pattern: 'pnpm* --node*',
     kind: 'command',
+    verbs: ['pnpm'],
     hazard: 'the same prefixes of --node-options, for pnpm',
   },
   {
     pattern: 'pnpm* --config.*',
     kind: 'command',
+    verbs: ['pnpm'],
     hazard:
       'pnpm `--config.<key>=` sets any configuration key, including `node-options` and `script-shell`',
   },
   {
     pattern: 'npm* --config.*',
     kind: 'command',
+    verbs: ['npm'],
     hazard:
       'the pnpm spelling on npm — floored as a precaution; whether npm accepts it is not measured',
   },
@@ -1476,6 +1526,7 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   {
     pattern: 'pytest -o / --override-ini (any key, any spelling argparse accepts)',
     kind: 'command',
+    verbs: ['pytest'],
     hazard:
       'pytest -o sets any configuration key from the command line: `cache_dir` moves the cache (pytest writes under it, and `--cache-clear` deletes its `d` and `v` subdirectories), `log_file` writes a log, and `addopts` is read from the overridden configuration, so it re-adds any flag floored here — floored for every key, like pnpm --config.<key>',
     tokens: ({ name, flags }) =>
@@ -1515,6 +1566,7 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   {
     pattern: 'pytest @<file> (an argument read from a file)',
     kind: 'command',
+    verbs: ['pytest'],
     hazard:
       'pytest 9.0.2 builds its parser with `fromfile_prefix_chars="@"` (`src/_pytest/config/argparsing.py:463`), so any argument starting with `@` is replaced by the lines of a file the agent may have written — which can carry every flag floored here, and no pattern sees them',
     tokens: ({ name, flags, positional }) =>
@@ -1523,6 +1575,7 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   {
     pattern: 'pytest -c / --config-file (any spelling argparse accepts)',
     kind: 'command',
+    verbs: ['pytest'],
     hazard:
       'pytest -c <file> loads its configuration — `addopts`, `cache_dir`, `log_file` — from a file the agent may have written, so it re-adds any flag floored here (`src/_pytest/main.py`, `dest="inifilename"`; `config/findpaths.py` `determine_setup` reads it)',
     tokens: ({ name, flags }) =>
@@ -3817,42 +3870,125 @@ interface StageInput {
 
 /** xargs' short options that take the next word (or the rest of their word) as a value: GNU and BSD. */
 const XARGS_VALUE_SHORT = 'adEILnPsJRS';
-/** xargs' long options that take a value, `=`-attached or the next word (GNU findutils). */
-const XARGS_VALUE_LONG: ReadonlySet<string> = new Set([
-  '--arg-file',
-  '--delimiter',
-  '--max-args',
-  '--max-procs',
-  '--max-chars',
-  '--process-slot-var',
-]);
+/**
+ * GNU xargs' long options and whether each takes the next word as its value (`required`) — the
+ * `optional` ones take a value only `=`-attached. findutils' `xargs.c` `longopts`, read 2026-10-17
+ * (https://github.com/gnu-mirror-unofficial/findutils/blob/master/xargs/xargs.c). `getopt_long`
+ * accepts any unambiguous prefix of one (WP-164 review round 1), so {@link xargsLongOption} resolves
+ * a word by that rule.
+ */
+const XARGS_LONG_OPTIONS: Readonly<Record<string, 'none' | 'optional' | 'required'>> = {
+  null: 'none',
+  'arg-file': 'required',
+  delimiter: 'required',
+  eof: 'optional',
+  replace: 'optional',
+  'max-lines': 'optional',
+  'max-args': 'required',
+  'open-tty': 'none',
+  interactive: 'none',
+  'no-run-if-empty': 'none',
+  'max-chars': 'required',
+  verbose: 'none',
+  'show-limits': 'none',
+  exit: 'none',
+  'max-procs': 'required',
+  'process-slot-var': 'required',
+  version: 'none',
+  help: 'none',
+};
 
 /**
- * Index in `args` (the words after `xargs`) of the command xargs runs, past its own options and
- * their values, or -1 when it names none (xargs then runs `echo`).
+ * The xargs long option `--word` names by `getopt_long`'s rule — an exact name wins, otherwise the
+ * one option it is a prefix of — or `null` for an unknown or ambiguous word (`--max`, `--e`).
  */
-const xargsCommandIndex = (args: readonly ShellWord[]): number => {
+const xargsLongOption = (word: string): string | null => {
+  if (Object.hasOwn(XARGS_LONG_OPTIONS, word)) {
+    return word;
+  }
+  const matches = Object.keys(XARGS_LONG_OPTIONS).filter((name) => name.startsWith(word));
+  return matches.length === 1 ? (matches[0] as string) : null;
+};
+
+/** xargs' short options whose value is optional and therefore only ever attached (`-i`, `-e`, `-l`). */
+const XARGS_OPTIONAL_SHORT = 'eil';
+
+/** What xargs' own options say: where its command is, and the string it replaces, if any. */
+interface XargsOptions {
+  /**
+   * Index in `args` (the words after `xargs`) of the command xargs runs; -1 when it names none
+   * (xargs then runs `echo`); `null` when a long option is unknown or ambiguous, so the platform
+   * cannot say which word is the command (WP-164 review round 1).
+   */
+  readonly command: number | null;
+  /** `-I R`, `-iR`, `-i`, `--replace[=R]` (any prefix), `-J R`: the string xargs replaces. */
+  readonly replace: string | null;
+}
+
+/**
+ * Reads xargs' options the way `getopt_long` does with the optstring
+ * `+0a:E:e::i::I:l::L:n:oprs:txP:d:` (plus BSD's `-J`, `-R`, `-S`): a short cluster ends at the
+ * first option that takes a value — the rest of the word, or for a required one with nothing left,
+ * the next word — so `-0IR` replaces `R` and `-iI` replaces `I` (WP-164 review round 2, backlog
+ * 560); a long option resolves by {@link xargsLongOption}, and `--repl=X` replaces `X`.
+ */
+const readXargsOptions = (args: readonly ShellWord[]): XargsOptions => {
+  let replace: string | null = null;
   for (let index = 0; index < args.length; index += 1) {
     const value = unquoteToken((args[index] as ShellWord).raw);
     if (value === '--') {
-      return index + 1 < args.length ? index + 1 : -1;
+      return { command: index + 1 < args.length ? index + 1 : -1, replace };
     }
     if (!value.startsWith('-') || value === '-') {
-      return index;
+      return { command: index, replace };
     }
     if (value.startsWith('--')) {
-      index += XARGS_VALUE_LONG.has(value) ? 1 : 0;
+      const [word, ...attached] = value.slice(2).split('=');
+      const option = xargsLongOption(word as string);
+      if (option === null) {
+        return { command: null, replace };
+      }
+      if (option === 'replace') {
+        replace = attached.join('=') || '{}';
+      }
+      index += attached.length === 0 && XARGS_LONG_OPTIONS[option] === 'required' ? 1 : 0;
       continue;
     }
     for (let at = 1; at < value.length; at += 1) {
-      if (XARGS_VALUE_SHORT.includes(value[at] as string)) {
-        index += at === value.length - 1 ? 1 : 0;
+      const letter = value[at] as string;
+      const rest = value.slice(at + 1);
+      if (XARGS_VALUE_SHORT.includes(letter)) {
+        const operand = rest === '' ? unquoteToken(args[index + 1]?.raw ?? '') : rest;
+        if (letter === 'I' || letter === 'J') {
+          replace = operand || '{}';
+        }
+        index += rest === '' ? 1 : 0;
+        break;
+      }
+      if (XARGS_OPTIONAL_SHORT.includes(letter)) {
+        if (letter === 'i') {
+          replace = rest || '{}';
+        }
         break;
       }
     }
   }
-  return -1;
+  return { command: -1, replace };
 };
+
+/**
+ * The verbs a `command`-kind floor on {@link HAZARDOUS_ARGUMENTS} is written for (WP-164, backlog
+ * 530), **derived** from the entries' `verbs` and never listed a second time, so a new floor covers
+ * its `xargs` spelling the day it is added. Today: `git`, `rg`, `make`, `go`, `cargo`, `npm`, `pnpm`
+ * and `pytest` — `pytest` because its `-o`, `-c`/`--config-file` and `@file` floors are `command`
+ * kind (WP-164 (c)). Matched against xargs' command's basename **by prefix** (WP-164 review round
+ * 1), because that is as far as the floors reach — `go*`, `make*`, `cargo*`, `npm*`, `pnpm*` as
+ * globs, `startsWith('pytest')` and `git-` in predicates — so `pytest-3` (Debian's name), `go1.25`,
+ * `make-4.4` are in; `gmake` is not a prefix match, and no floor reaches it either.
+ */
+export const XARGS_FLOORED_VERBS: ReadonlySet<string> = new Set(
+  HAZARDOUS_ARGUMENTS.flatMap((entry) => (entry.kind === 'command' ? entry.verbs : [])),
+);
 
 /**
  * Whether an xargs command runs the words xargs appends as a command, or decides from them what to
@@ -3861,33 +3997,24 @@ const xargsCommandIndex = (args: readonly ShellWord[]): number => {
  * `-okdir`, whose command the input completes, or `git`, whose subcommand and refspec it supplies.
  * `echo 'sudo id ;' | xargs find . -maxdepth 0 -exec`, `| xargs env` and `| xargs nohup` ran their
  * payload in the run image (WP-160's review round 2).
+ *
+ * **And a verb a `command`-kind floor is written for** ({@link XARGS_FLOORED_VERBS}, WP-164,
+ * backlog 530): xargs appends its input to the verb's argv, so the argument that floor refuses on
+ * the line — `make 'X=$(shell …)'`, `go test -toolexec=…`, `cargo test --config=…`, `pytest -c …`,
+ * `rg --pre=…` — arrives where no floor reads it. **The over-ask, stated:** every `xargs` into such
+ * a verb is uncertain whatever its input, so `find . -name '*_test.py' | xargs pytest`,
+ * `git ls-files '*.go' | xargs go vet` and `git ls-files | xargs rg TODO` stop running under `auto`
+ * (attended runs ask, as they did); the line can name its files instead. The prefix match adds
+ * every name that begins with a verb — `xargs makeinfo`, `xargs gofmt`, `xargs rgrep`, `xargs gitk`
+ * — which fails closed the same way.
  */
 const xargsRunsItsInput = (name: string, args: readonly ShellWord[]): boolean =>
   (ARGV0_WRAPPERS.has(name) && !SCRIPT_SHELLS.has(name)) ||
+  [...XARGS_FLOORED_VERBS].some((verb) => name.startsWith(verb)) ||
   name === 'git' ||
   name.startsWith('git-') ||
   (name === 'find' &&
     args.some((word) => /^-(?:exec|execdir|ok|okdir)$/.test(unquoteToken(word.raw))));
-
-/** `xargs -I R`, `-iR`, `-i`, `--replace[=R]`, `-J R`: the string xargs replaces, if it does. */
-const xargsReplace = (args: readonly ShellWord[]): string | null => {
-  for (const [index, word] of args.entries()) {
-    const value = unquoteToken(word.raw);
-    if (value === '-I' || value === '-J') {
-      return unquoteToken(args[index + 1]?.raw ?? '{}') || '{}';
-    }
-    if (/^-[IJ]./.test(value) || /^--replace=./.test(value)) {
-      return value.slice(value.startsWith('--') ? 10 : 2);
-    }
-    if (value === '-i' || value === '--replace') {
-      return '{}';
-    }
-    if (/^-i./.test(value)) {
-      return value.slice(2);
-    }
-  }
-  return null;
-};
 
 /**
  * The scripts a stage hands over as **strings**, read off its words as written (WP-160, backlog
@@ -4000,14 +4127,14 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
         hand(operand.raw);
         // `sh -c '"$@"' _ cmd …` runs its operands: a script that names a positional parameter
         // has them read as a command too ($0 on, and $1 on), and under `xargs` they come from
-        // standard input, so the platform cannot read them.
+        // standard input, so the platform cannot read them — with operands on the line or with
+        // none, since xargs appends its input to them either way (`xargs sh -c 'make "$@"'`,
+        // WP-164 review round 2): over-asks `xargs sh -c 'echo "$1"'`, fails closed.
         const rest = args.slice(index + 1);
-        if (
-          rest.length > 0 &&
-          isLiteralWord(operand.raw) &&
-          /\$(?:[@*0-9]|\{[@*0-9])/.test(literalValue(operand.raw))
-        ) {
-          uncertain ||= fedByXargs;
+        const namesPositional =
+          isLiteralWord(operand.raw) && /\$(?:[@*0-9]|\{!?[@*0-9])/.test(literalValue(operand.raw));
+        uncertain ||= namesPositional && fedByXargs;
+        if (rest.length > 0 && namesPositional) {
           scripts.push({ script: rest.map((word) => word.raw).join(' '), replace: null });
           if (rest.length > 1) {
             scripts.push({
@@ -4136,7 +4263,7 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
       piped ||= argv0Name(word.raw) === 'coproc';
       if (argv0Name(word.raw) === 'xargs') {
         fedByXargs = true;
-        replace = xargsReplace(argv.slice(argv.indexOf(word) + 1, position)) ?? replace;
+        replace = readXargsOptions(argv.slice(argv.indexOf(word) + 1, position)).replace ?? replace;
       }
     }
     const command = argv[position] as ShellWord;
@@ -4188,9 +4315,12 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
     } else if (name === 'find') {
       readFind(args);
     } else if (name === 'xargs') {
-      const at = xargsCommandIndex(args);
-      const run = args[at];
-      if (run !== undefined && xargsRunsItsInput(argv0Name(run.raw), args.slice(at + 1))) {
+      const at = readXargsOptions(args).command;
+      const run = at === null ? undefined : args[at];
+      if (
+        at === null ||
+        (run !== undefined && xargsRunsItsInput(argv0Name(run.raw), args.slice(at + 1)))
+      ) {
         reasons.add(UNCERTAINTY.xargsArguments);
       }
     } else if (name === 'hash' && optionWords(args).some((option) => /^-[A-Za-z]*p/.test(option))) {

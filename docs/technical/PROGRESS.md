@@ -15868,6 +15868,119 @@ The same lines at `HEAD` (`9f162f9f`) are `:642`, `:874`, `:1037`, `:1074`. WP-1
 
 **Depends on** nothing.
 
+### 557. **The `make` floors match the command name three different ways, so `gmake` reaches no floor at all and `make-4.4` reaches the `--eval` glob but not the `VAR=value` or `-E` predicates — `gmake 'X=$(shell …)'` reads `auto` on the line itself** (TODO, **minor — a named hazard read as `auto` under an ordinary spelling (GNU make's own alias on BSD and macOS). Not major: these floors are stated to be an enumeration that narrows what the model authors, not the boundary (`command-policy.ts:1309-1313`), and a renamed copy (`./m`) is already a residual of the same reach. Whether the run image ships a `gmake` at all **needs measurement**. Found by WP-164's reviewer, round 1, and measured by WP-164's implementer, session 16. **No work package owns it**; it is a floor gap, not an `xargs` one. Read on the uncommitted WP-164 tree over `56b7854e`, no test run)
+
+**What is wrong.** Three `command`-kind floors are written for `make`, and they disagree on which names are `make`:
+- `make VAR=value` is a `tokens` predicate, `name === 'make' && positional.some((token) => token.includes('='))` (`packages/domain/src/policies/command-policy.ts:1320-1321`).
+- `make -…E…` is a `tokens` predicate with the same `name === 'make'` test (`:1335`).
+- `make* --e*` is a glob (`:1324`), and `globToRegExp` anchors it at the start (`:1697-1702`), so it reaches `make-4.4` but not `gmake`.
+
+So `make-4.4 --eval …` is floored while `make-4.4 -E …` and `make-4.4 'X=1'` are not, and nothing reaches `gmake`. The other verbs are already prefix-matched in their predicates (pytest's six use `name.startsWith('pytest')`, `:1533`-`:1602`; git's use `name.startsWith('git-')`, `:1149`, `:1167`), and WP-164's round 1 made `xargsRunsItsInput` prefix-match the derived set (`:3980`). The `make` predicates are the outlier. WP-164's notes, review round 1, quoted:
+
+> `gmake 'X=$(shell touch m)'` on the line also reads `ask / unattended_auto / unattended_deny` in all three baselines (no floor reaches `gmake`), so it is a floor gap, not an `xargs` one; so is `make-4.4 'X=1'` (the `make VAR=value` predicate is `name === 'make'`), which the prefix set over-reaches under xargs.
+
+That was measured through `evaluateCommand` by the implementer. The `make-4.4 -E` and `gmake --eval` verdicts above are **read from the code, not measured**.
+
+**What it costs to leave.** Under `auto` an `ask` runs, so an agent that writes `gmake 'X=$(shell …)'` or `gmake --eval '…'` executes text it chose with no floor. That holds wherever `gmake` resolves: BSD and macOS, and any image whose `make` package ships the alias. The inconsistency is also why WP-164's `xargs` prefix set over-reaches `make-4.4` relative to the line.
+
+**Done when.** The three `make` floors reach one stated set of names, at least `make`, `make-<version>` and `gmake` (glob `make*` alone cannot name `gmake`, so either a second glob or a predicate on a shared name test). Each of `gmake 'X=$(shell touch m)'`, `gmake --eval x`, `gmake -E x`, `make-4.4 'X=1'` and `make-4.4 -E x` reads `ask / hazard / hazard` in the three baselines, as `make` does. `XARGS_FLOORED_VERBS` (derived) then needs `gmake` among a `make` entry's `verbs` for `xargs gmake` to be uncertain; add that row too. `makeinfo` stays unfloored on the line. **Needs measurement first:** whether `/usr/bin/gmake` exists in `platform-runtime:dev`, which decides whether this is live or latent there.
+
+**Depends on** WP-164 (the `verbs` field and the derived set).
+
+### 558. **The verb census skips every `tokens` entry, so a floor written as a predicate can name the wrong verbs and no test notices** (TODO, **minor. A wrong `verbs` list silently drops a verb from the derived `XARGS_FLOORED_VERBS`, and `xargs <verb>` then reads `auto` for a floored hazard. Today every such verb is held some other way (below), so nothing is wrong now. WP-164's review round 1, kept as its residual, session 16. **No work package owns it**)
+
+**What is wrong.** The census in `packages/domain/src/policies/command-policy.test.ts` checks a glob entry's first word against its `verbs` and skips an entry that has a predicate: `if (entry.tokens === undefined && first !== '' && !entry.verbs.includes(first))` (`:2566`). A predicate is a function, so it cannot read the verb from it. WP-164's canary section, quoted:
+
+> **Survives, stated:** changing the `verbs` of a `tokens` entry (e.g. `make VAR=value`'s to another verb) is invisible to the census — it cannot read a predicate — and to the xargs rows while another `make` entry names `make`.
+
+Review round 1 set `make VAR=value`'s `verbs` to `['go']` and it survived.
+
+**What it costs to leave.** A verb reaches the set only through some entry's `verbs`. Today the gap is covered by luck: `make` is also named by the `make* --e*` glob, `git` is matched by name in `xargsRunsItsInput` (`command-policy.ts:3981-3982`), and `pytest`, whose six floors are all predicates, is pinned by the membership list in the derivation case (`command-policy.test.ts`, near `:2590`, which names `make`, `go`, `cargo`, `npm`, `pnpm`, `pytest` but not `rg`). A new predicate-only verb would have no such cover.
+
+**Done when.** Each `command`-kind `tokens` entry carries a known-hazardous argv fixture. A test asserts the predicate admits it under each declared verb and refuses it under a name outside `verbs` (and outside their prefixes). The canary is `make VAR=value`'s `verbs` set to `['go']`, which must die. WP-164's implementer suggested it *"if a refiner finds it worth the per-entry fixtures"*: there are about a dozen `tokens` entries, so it is.
+
+**Depends on** WP-164.
+
+### 559. **An applet or package runner in front of a floored verb (`busybox make`, `npx make`) is not read as that verb, under `xargs` and, by reading, on the line** (TODO, **nit, latent. The run image ships no busybox (`command-policy.ts:413`, measured 2026-10-05). `npx make` resolves a package bin, which is repository content or a registry fetch the egress list bounds. WP-164's review round 1 nit, kept as its residual, session 16. **No work package owns it**)
+
+**What is wrong.** WP-164's residual, quoted: *"`busybox make` and `npx make` under xargs (an applet runner first) read `auto`; out of scope (review round 1's nit)"*. `xargsRunsItsInput` (`command-policy.ts:3978-3984`) tests the first name only, which is `busybox` or `npx`. `busybox` is unwrapped for a second word only on the handed-script path (`:4262`). **Hypothesis, not measured:** the line-level floors also miss `busybox make 'X=…'` and `npx make --eval …`, because the predicates see `name` and the `make*` glob is anchored at the start.
+
+**What it costs to leave.** Nothing in today's image for `busybox`. It becomes live with an image or a project devcontainer that has busybox.
+
+**Done when.** Measured first: the verdicts of `busybox make 'X=1'`, `npx make 'X=1'` and their `xargs` forms. Then the runner is either unwrapped to its applet before the floors and the `xargs` test run (as `busybox sh` is), or added to the documented list of input-driven runners beside `parallel`.
+
+**Depends on** WP-164; would naturally follow 557's name rule.
+
+### 560. **`xargsReplace` reads the replace string only from `--replace` spelled in full and from `-I`/`-i`/`-J` leading their word, so `--rep=R`, `--repl`, and a cluster like `-0IR` leave it unread and a handed script that contains it is read as literal** (TODO, **minor. An under-read in a security parser: the replace string is what marks a handed script or command word as input-substituted, which makes it `uncertain`. Live by reading. WP-164's round 1 residual, *"Not a WP-164 finding; for a refiner"*, session 16. **No work package owns it**)
+
+**What is wrong.** `packages/domain/src/policies/command-policy.ts:3987-4002`:
+- Matches `-I`/`-J` as a word, `/^-[IJ]./`, `/^--replace=./`, `-i`, `--replace` and `/^-i./`.
+- Does not match a `getopt_long` abbreviation (`--rep=R`, `--repl`), although WP-164 taught `xargsCommandIndex` (`:3918`) to resolve exactly those through `XARGS_LONG_OPTIONS` (`:3880`, `replace: 'optional'` at `:3885`).
+- Does not match `I`/`i` later in a short-option cluster (`-0I R`, `-0IR`, `-0i`).
+
+The result is consumed at `:4253`. A `null` there means `:4052` and `:4257` never mark the stage uncertain. WP-164's notes, quoted:
+
+> `xargsReplace` reads `--replace` only spelled in full, so `xargs --rep=R …` leaves the replace string unread (it is now resolved as an option by `xargsCommandIndex`, so the command word is right).
+
+**What it costs to leave.** **Hypothesis from reading, not measured:** `… | xargs --rep=R sh -c R` hands `sh` the literal script `R` while xargs substitutes each input line for it, so the line's verdict comes from a script the platform did not read. With `--replace=R` the same line is `uncertain`.
+
+**Done when.** `xargsReplace` resolves a long option through the same `xargsLongOption` that `xargsCommandIndex` uses, and reads `I`/`i`/`J` anywhere in a short cluster under getopt's rule (the value is the rest of the word, else the next word for `I`/`J`; `i` takes only an attached value). Each of `xargs --rep=R sh -c R`, `xargs --repl sh -c '{}'`, `xargs -0IR sh -c R` and `xargs -0I R sh -c R` then reads `uncertain` like its full-spelling control. Measure the current verdicts first (rule 27).
+
+**Depends on** WP-164 (`XARGS_LONG_OPTIONS`, `xargsLongOption`).
+
+### 561. **A script shell fed by `xargs` runs a command its input chose, by two paths the handed-script reader does not see: a `-c` script that reads its positionals with no `$` name (`for a; do $a; done`, `getopts`, `select`), and a shell with no literal script on the line, whose `-c` arrives as input** (TODO, **major, fail-open. An arbitrary command reads `unattended_auto`. The two causes are separate and are named (a) and (b), but they share one path, a shell's `-c` handed through `xargs`, and one owner decision, so they are one entry. Predates WP-164: both also read `auto` at `56b7854e`. Found by WP-164's reviewer, round 3, session 16. The review was capped at three rounds, so this is filed, not fixed in WP-164. **Needs an owner (architect)**; no work package owns it. Read on the uncommitted WP-164 tree over `56b7854e`, no test run by the refiner)
+
+**What is wrong.** Under `xargs` a script shell gets its input lines as arguments. `wrappedScript` reads the shell's words (`packages/domain/src/policies/command-policy.ts:4051`) and has two blind spots.
+
+- **(a) A positional read with no `$` name.** The `-c` branch marks the stage uncertain only when the literal script matches `namesPositional` (`:4134-4136`), the regex `/\$(?:[@*0-9]|\{!?[@*0-9])/`. Several shell constructs read the positionals with no such name. `for a; do …` and `for a do …` loop over `"$@"`. `getopts` parses them into `$OPTARG`. bash's `select a; do …` offers them. So `echo 'git push --no-verify' | xargs sh -c 'for a; do $a; done'` runs the input as a command, and the platform reads only the literal script.
+- **(b) No literal script on the line.** With no `-c` among the shell's own words, `readShell` falls through to `readsStandardInput` (`:4078-4094`). That marks the stage uncertain only for a pipe with no stdin redirect, a non-literal here-string, a descriptor or a process substitution. Under `xargs` the shell's input is not the script: xargs appends the input lines to the argv, so an input line `-c "git push --no-verify"` becomes the shell's `-c` and its script. `xargs sh < f`, `xargs -a f sh`, `xargs sh -e`, `xargs sh -x` and `xargs bash --norc` all take that path. The `-c`-with-no-operand case is already uncertain (`:4127-4129`, WP-164 review round 1). The no-`-c` case is not.
+
+The evidence is the reviewer's round 3 probe. It ran each line through `evaluateCommand` and `decideUnattendedCommand` (`auto`, `deny`) in the read-only, verification and implementation baselines, using `scripts/ts-source-resolver.mjs`, with no shell. Verdicts are **as the reviewer reported them**, because the probe's output was not kept, only its inputs (`scratchpad/wp164-rev3/c3.txt`, `c4.txt`):
+
+> `echo 'git push --no-verify' | xargs sh -c 'for a; do $a; done'` — ask/auto/deny in all three baselines — arbitrary command under `auto`
+
+The reviewer also reported `for a do …`, `getopts a: v && make "$OPTARG"` with `_`, and bash `select a; do …` slipping past `namesPositional` in the same way. For (b):
+
+> `xargs sh < f`, `xargs -a f sh`, `xargs sh -e`, `xargs bash --norc` read `auto`; with `f` = `-c "git push --no-verify"` that runs an arbitrary command. Pipe forms are uncertain only by another rule.
+
+The reviewer states that both majors also read `auto` at `56b7854e`, before WP-164.
+
+**What it costs to leave.** Under `auto` the model can write a line whose executed command is the text of its own input file or pipe, and the command boundary never reads it. That includes a `git push --no-verify` the git boundary exists to refuse. It is the same class backlog 530 and WP-164 closed for `xargs make`, reached through a shell instead of a floored verb. (b) needs only a file the run wrote, which any implementation-baseline run can do.
+
+**Done when.** The architect chooses one of two rules and states it at `wrappedScript`'s docblock (`:4021-4045`) and in technical/05's command-policy section.
+
+- **Narrow:** under `fedByXargs`, the following make the stage uncertain: a script shell with no literal `-c` script among its own words (closes (b)), and a literal `-c` script that contains `for NAME` with no `in`, `getopts`, `select`, or a reader such as `shift` or `/proc/…/cmdline` (closes (a), over-asking the readers).
+- **Blanket:** every script shell under `xargs` is uncertain, whatever its script. This closes both paths, and any positional reader not yet listed, but over-asks `xargs sh -c 'echo hi'`. The current over-ask stance (`xargs sh -c 'echo "$1"'` already fails closed, `:4130-4133`) suggests it costs little. **Recommended.**
+
+Either way, each of these reads `uncertain` under `auto` and `deny` in all three baselines:
+- `echo 'git push --no-verify' | xargs sh -c 'for a; do $a; done'`
+- `xargs sh -c 'for a do make "$a"; done'`
+- `cat f | xargs sh -c 'getopts a: v && make "$OPTARG"' _`
+- `xargs bash -c 'select a; do make "$a"; done'`
+- `xargs sh < f`, `xargs -a f sh`, `xargs sh -e`, `xargs sh -x`, `xargs bash --norc`
+- `printf '%s\n' -c id | xargs sh`
+
+Controls keep their verdicts (rule 42): `sh -c 'for a; do echo "$a"; done'` with no `xargs`, `bash < f`, and `cat f | sh`, which is already uncertain. Unit rows for each of these, plus a canary: dropping the new check must turn the `for a;` row back to `unattended_auto`. **Measure the current verdicts first (rule 27)**, since the reviewer's logs were not kept.
+
+**Depends on** WP-164 (`fedByXargs` on the handed-script path). Related: 562 (the replace string on the same path).
+
+### 562. **A replace string that is not literal (`xargs -I"$R"`, `-I $R`, `--replace="$R"`) is read as its unexpanded text, so a handed script holding the expanded value reads as literal; and no test pins `-i` to taking only an attached value** (TODO, **minor. Fail-open, but only with `R` bound outside the line, a residual the module already states (`command-policy.ts:97`, *"a name bound outside the line"*). The test gap is a **nit**. Found by WP-164's reviewer, round 3, session 16; filed, not fixed (three-round cap). **No work package owns it**. Read on the uncommitted WP-164 tree, no test run by the refiner)
+
+**What is wrong.** `readXargsOptions` (`packages/domain/src/policies/command-policy.ts:3935`) takes the replace operand through `unquoteToken`, so `-I"$R"` records the string `$R`. A handed script `X` does not contain `$R`, so `hand` (`:4065`) does not mark it uncertain. At run time `R` expands to `X`, and xargs substitutes each input line into the script. The reviewer's probe lines (`scratchpad/wp164-rev3/c5.txt`; verdicts as reported, output not kept):
+
+> `xargs -I"$R" sh -c X`, `-I $R`, `--replace="$R"` read `auto` (needs `R` bound outside the line, a stated residual).
+
+Separately, the round 3 canary that moved `i` from `XARGS_OPTIONAL_SHORT` (`:3914`) to `XARGS_VALUE_SHORT` (`:3872`) **survived**. Under it, `-i make grep` reads `make` as `-i`'s value and `grep` as the command, so the floored `make` would be missed. No row distinguishes the two readings.
+
+**What it costs to leave.** A line that needs a variable from an earlier call, which an agent can set up, so this is narrower than 561. The canary gap means a later edit to the option table can reopen backlog 530 for `xargs -i make` with the tier staying green.
+
+**Done when.**
+- A replace operand that is not literal (`isLiteralWord` false) makes the stage uncertain. `xargs -I"$R" sh -c X`, `xargs -I $R sh -c X` and `xargs --replace="$R" sh -c X` then read `uncertain` in all three baselines.
+- Controls keep their verdicts: `xargs -IX sh -c X` is already uncertain, and `xargs -I X grep x` is unchanged.
+- A row `echo x | xargs -i make grep` reads `uncertain`, which kills the `-i`-takes-a-separate-value canary.
+
+**Depends on** WP-164 (`readXargsOptions`). Related: 561.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -47944,3 +48057,72 @@ Also: `duty-lease.test.ts` (six cases: held while the work runs and released aft
 - The CI flake on `090618e2` (EPIPE in the conformance case for a close after the session's result) is on a path neither change touches: that case never aborts and its gate is not set, so the `aborted` branch in `onClose` and the `stopped` read in `sendSpawn` are not reached. Neither better nor worse.
 
 **Tiers** (load gate < 12, one-minute load 3.8–8.6 throughout): the three unit files 190/190 then 73/73 after the ask fix; the conformance file (`process` project) 9/9; the integration file alone 4/4 (no container left, volumes unchanged); `scripts/citations.test.ts` 13/13; `pnpm run -s verify` **PASS: verify**, exit 0 (its first run failed only on biome's formatting of the new integration case, fixed with `biome format --write` on that file).
+
+#### WP-164
+
+**Status: implemented, awaiting review.** Base `56b7854e`, no migration. Backlog 530, rulings (a)–(e).
+
+**What changed.**
+- **(b)** `HazardousArgument` (`packages/domain/src/policies/command-policy.ts`) is now a shape intersected with a union on `kind`: a `command` entry must carry `verbs: readonly [string, ...string[]]` (the compiler is the census of the entries), and a `trust`/`path` entry may. All 30 literal `command` entries name their verbs, including the `tokens` entries (`make VAR=value`, `make -…E…`, pytest's `-o`, `@file`, `-c`), and `gitAbbreviationFloor` names `git` for all eight of its floors. `XARGS_FLOORED_VERBS` is derived from the `command` entries' `verbs` (never a second list), and `xargsRunsItsInput` answers `true` for a verb in it, by exact basename after xargs' own options.
+- **(c)** `pytest` **is** in the set: its `-o`/`--override-ini`, `-c`/`--config-file` and `@file` floors are all `command` kind. The set at WP-164 is `cargo`, `git`, `go`, `make`, `npm`, `pnpm`, `pytest`, `rg`. The over-ask is named at `xargsRunsItsInput`'s docblock and in technical/05: `find . -name '*_test.py' | xargs pytest`, `git ls-files '*.go' | xargs go vet` and `git ls-files | xargs rg TODO` stop running under `auto` (each pinned `ask / uncertain / uncertain` by the test below).
+- **(e)** The module docblock's *"`xargs make`, whose input names targets"* is corrected (the input can name assignments and `--eval`, and the case is now read), the "what it reads as uncertain" paragraph names the new class, and `UNCERTAINTY.xargsArguments` names the verbs. A unit test holds the reason to the derived set, so a new verb fails the build until the reason names it.
+- **(d)** Not measured, as ruled.
+
+**Assumptions.**
+- `rg` is in the set because `rg --pre` and `rg --hostname-bin` are `command`-kind floors (ruling (b): *each* `command` entry). That widens the over-ask beyond the two the row names to `xargs rg`, which is common; named beside the others. The alternative (excluding a verb) would be a second list, which the ruling forbids.
+- Criterion (3)'s *"a glob entry's first word, stripped of its trailing `*`"* reads an entry with no `tokens` predicate as a glob entry. Two glob entries have a first word that is only `*` (`* --script-shell*`, `* --node-options*`): stripped, it names no verb, so the census checks only that their `verbs` are present (`npm`, `pnpm`, from the hazard text).
+- *(Corrected in review round 1.)* Round 0 matched by exact basename and said *"no baseline allows those names, so an `xargs` into one is already `ask` and never `auto`"*. That was false: under `auto` an `ask` runs, so `echo '-c x.ini' | xargs pytest-3` read `unattended_auto` while `pytest-3 -c x.ini` read `hazardous_argument`. Membership is now a basename **prefix** of a derived verb, the reach of the floors' own globs and predicates.
+- One verdict moves that was not a listed control: `echo '--script-shell=./x' | xargs npm test` read `ask / hazard / hazard` (the flag is on the line) and now reads `ask / uncertain / uncertain`, because the uncertainty answers first. Refused in both modes either way; pinned in the test.
+
+**Criteria → tests.**
+- (1) `packages/domain/src/policies/unattended-commands.test.ts`, describe *WP-164, backlog 530: xargs feeding a verb a command floor names*, the `is uncertain` rows: backlog 530's make rows, `xargs -a f make`, `xargs --arg-file=f make` (and `--arg-file f`), `xargs /usr/bin/make < f`, the go/cargo/npm/pnpm/pytest/rg forms and the three over-ask lines — each `ask / uncertain / uncertain` in the read-only, verification and implementation baselines, with `UNCERTAINTY.xargsArguments` the only reason.
+- (2) the same describe's `keeps` rows: `make 'X=$(shell touch m)'` stays `ask / hazard / hazard`, `xargs nice make` stays uncertain, `xargs grep x`, `xargs rm -f` and `xargs makeinfo` stay `ask / auto / deny`, `make test` and `go test ./...` unchanged; WP-161's criterion (13) block (the 523 cases and its controls) unchanged and green.
+- (3) `packages/domain/src/policies/command-policy.test.ts` › "every command-kind entry names a verb, and a glob entry names its first word", with the census calibrated by `packages/domain/src/policies/command-policy.test.ts` › "the census refuses a glob entry whose verbs miss its first word, and an empty list" (rule 43); the derivation by `packages/domain/src/policies/command-policy.test.ts` › "derives the set from the command-kind entries only, pytest included (ruling (c))"; the reason by `packages/domain/src/policies/command-policy.test.ts` › "the xargs reason names every derived verb".
+- (4) the canary below. (5) technical/05, a WP-164 bullet after WP-161's in § "Command and tool policy".
+
+**Canaries** (each an in-place Edit reverted by the same tool to the recorded bytes, rules 77 and 88).
+- `XARGS_FLOORED_VERBS.has(name) ||` removed from `xargsRunsItsInput` (criterion (4)): `echo 'X=$(shell touch m)' | xargs make` read `ask / auto / deny` (`unattended_auto`) again. Dead by the `unattended-commands.test.ts` row named `"echo 'X=$(shell touch m)' | xargs make" is uncertain`, and by all 18 other `is uncertain` rows of the WP-164 describe and its `--script-shell` keeps-row (19 failed).
+- `make* --e*`'s `verbs` changed to `['gmake']`: dead by the census case "every command-kind entry names a verb, and a glob entry names its first word" and the reason case "the xargs reason names every derived verb" in `command-policy.test.ts`.
+- **Survives, stated:** changing the `verbs` of a `tokens` entry (e.g. `make VAR=value`'s to another verb) is invisible to the census — it cannot read a predicate — and to the xargs rows while another `make` entry names `make`. The type requires a non-empty list; whether it is the right one is the reviewer's to read.
+
+**Sentences falsified (rule 83), and how each was amended.**
+- `packages/domain/src/policies/command-policy.ts` module docblock, "What it still does not read": *"`xargs` feeding a command that is not a wrapper, `find -exec`, `git` or a shell — `xargs make`, whose input names targets"*. Now excludes a floored verb and says WP-164 made `xargs make` (whose input can name assignments and `--eval`) uncertain.
+- The same docblock, "What it reads as uncertain instead": *"an `xargs` that hands its input to a wrapper, `find -exec` or `git`"*. Now adds the floored verbs.
+- `UNCERTAINTY.xargsArguments` and its docblock: named only wrappers, `find -exec` and `git`. Now names `cargo`, `go`, `make`, `npm`, `pnpm`, `pytest`, `rg`.
+- `docs/technical/05-workspaces-and-security.md`, WP-161's bullet: *"an `xargs` whose command is a non-shell wrapper, `find -exec` or `git` (523)"* (true as a WP-161 statement, left) and *"Still not read: `xargs` feeding a command that is not one of those (`xargs make`, …)"*, amended in place to point at the WP-164 bullet.
+- Swept with no other hit: `docs/`, `CLAUDE.md`, `packages/`, `apps/`, `scripts/`, `test/` for "xargs make", "whose input names targets", "xargsRunsItsInput" and `unattended_auto` beside xargs. BD-025 does not describe xargs; nothing in `docs/decisions` is falsified.
+
+**Residuals.**
+- A renamed copy of a verb the run wrote (`cp /usr/bin/make ./m; xargs ./m`) is not in the set, and runs under `auto` as an `ask`; the line-level floors do not reach `./m 'X=…'` either, so this is no wider than the floors.
+- `busybox make` and `npx make` under xargs (an applet runner first) read `auto`; out of scope (review round 1's nit), named here.
+- The census cannot check a `tokens` entry's `verbs` against its predicate (review round 1: setting `make VAR=value`'s verbs to `['go']` survived). Stated; the orchestrator files it.
+- `parallel` and other input-driven runners stay as the module docblock lists them.
+- Ruling (d) unmeasured.
+
+**Discovered work (for a refiner, no backlog entry filed).**
+- The census cannot check a `tokens` entry's `verbs` against its predicate; a probe that calls each predicate with a known-hazardous argv under each declared verb (and under a non-verb) would close that, if a refiner finds it worth the per-entry fixtures.
+
+**Review round 1** (REQUEST_CHANGES, four findings).
+- **[major] prefix reach.** `xargsRunsItsInput` answers `true` for a name that **begins with** a verb of `XARGS_FLOORED_VERBS` (still derived, no second list). The floors reach by prefix (`go*`, `make*`, `cargo*`, `npm*`, `pnpm*` as globs, `startsWith('pytest')`, `git-`), so a prefix is a superset of every floor's own match (rule 65). New `is uncertain` rows: `echo '-c x.ini' | xargs pytest-3`, `echo '-toolexec=./x' | xargs go1.25 test`, `echo 'X=1' | xargs make-4.4`, and the control `echo x | xargs makeinfo` flipped to uncertain (the over-ask, stated at the rule beside `gofmt`, `rgrep`, `gitk`). **Measured, not taken from the finding:** `gmake` is not the same split. `gmake 'X=$(shell touch m)'` on the line also reads `ask / unattended_auto / unattended_deny` in all three baselines (no floor reaches `gmake`), so it is a floor gap, not an `xargs` one; so is `make-4.4 'X=1'` (the `make VAR=value` predicate is `name === 'make'`), which the prefix set over-reaches under xargs. Both for a refiner.
+- **[major] xargs long-option prefixes.** `XARGS_LONG_OPTIONS` is GNU findutils' `longopts` table (read from `xargs/xargs.c` at the mirror, 2026-10-17, with the optstring `+0a:E:e::i::I:l::L:n:oprs:txP:d:`), each with `none`/`optional`/`required`; `xargsLongOption` resolves a word by `getopt_long`'s rule (exact, else the one option it prefixes), and `xargsCommandIndex` skips the next word only for a `required` option without `=`. An unknown or ambiguous long option answers `null`, and the stage is `UNCERTAINTY.xargsArguments`. New rows: `xargs --arg-f grep make`, `xargs --process-slot-v grep make`, `xargs --max-a 1 make`, `xargs --arg-f f make` uncertain; `xargs --max 1 grep x`, `xargs --e=x grep x`, `xargs --frobnicate grep x` uncertain; full-spelling controls (`--arg-file grep make`, `--process-slot-var grep make`, `--max-args 1 make`, `--arg-file f make`) uncertain, and `xargs --arg-f f grep x`, `--max-a 1 grep x`, `--max-a=1 grep x`, `--process-slot-v=V grep x` kept at `ask / auto / deny` (the value is skipped, so the right word is read).
+- **[minor]** the tokens-`verbs` residual, kept under *Residuals*. **[nit]** `busybox make`/`npx make`, named under *Residuals*.
+- Canaries (in-place Edit, reverted by Edit; md5 `a1e4c9dce83adef6cc811286af641efc` before and after):
+  - prefix match back to `XARGS_FLOORED_VERBS.has(name)`: dead by the `unattended-commands.test.ts` rows `"echo '-c x.ini' | xargs pytest-3" is uncertain`, `"echo '-toolexec=./x' | xargs go1.25 test" is uncertain`, `"echo 'X=1' | xargs make-4.4" is uncertain` and `"echo x | xargs makeinfo" is uncertain`.
+  - an unknown long option skipped (`continue`) rather than `null`: dead by `"xargs --max 1 grep x" is uncertain`, `"xargs --e=x grep x" is uncertain`, `"xargs --frobnicate grep x" is uncertain`.
+  - that and prefix resolution disabled (the round-0 reading): additionally dead by `"xargs --arg-f grep make" is uncertain`, `"xargs --process-slot-v grep make" is uncertain`, `"xargs --max-a 1 make" is uncertain`, `"xargs --arg-f f make" is uncertain`.
+- Sentences falsified by the round: this note's assumption on exact membership and residual on `./m` (corrected above, marked); technical/05's WP-164 bullet, *"`gmake`, `go1.25` or `pytest-3` are not in the set, and no baseline allows them"* (amended in place); `XARGS_FLOORED_VERBS`' docblock *"Matched … by exact basename"* and the `xargsArguments` reason (now *"or a name beginning with one"*).
+- Residual of the round: `xargsReplace` reads `--replace` only spelled in full, so `xargs --rep=R …` leaves the replace string unread (it is now resolved as an option by `xargsCommandIndex`, so the command word is right). ~~Not a WP-164 finding; for a refiner.~~ *(Corrected in review round 2: that was wrong. It hid a fail-open bypass — `echo 'git push --no-verify' | xargs --repl=X sh -c X` read `unattended_auto`, an arbitrary command under `auto`. Filed as backlog 560 and fixed in round 2, below.)*
+
+**Review round 2** (REQUEST_CHANGES, four findings; backlog 560 folded in).
+- **[major] the replace string.** `xargsCommandIndex` and `xargsReplace` are now one reader, `readXargsOptions` → `{ command, replace }`, following the optstring `+0a:E:e::i::I:l::L:n:oprs:txP:d:` (plus BSD's `-J`, `-R`, `-S`): a short cluster ends at the first option taking a value (`XARGS_VALUE_SHORT`, or the optional `-e`/`-i`/`-l`, whose value is only the rest of the word), and `--replace` resolves through `xargsLongOption` like every long option. So `--repl=X`, `-0IR` and `-0iR` give `X`/`R`, and `-iI` is `-i` with the string `I` rather than `-I` taking the next word (the command index used to skip `make` in `xargs -iI make grep`, read `grep`). Rows `is uncertain (review round 2)`: `echo 'git push --no-verify' | xargs --repl=X sh -c X`, `echo make | xargs --repl=grep grep 'X=$(shell touch m)'`, `xargs -0IR sh -c R`, `xargs -0iR sh -c R`, the `--replace=X` control (uncertain before and after); `echo x | xargs -iI make grep` is uncertain; `xargs --replace=X sh -c 'echo hi'` and `xargs -0 grep x` keep `ask / auto / deny`.
+- **[major] positional parameters under xargs.** In `readShell`, a literal `-c` script naming `$@`, `$*`, `$0`–`$9` or `${…}` of one (`${!1}` included) is uncertain when xargs feeds the stage **whether or not** operands follow it; reading the operands as scripts is unchanged (only with operands on the line). Rows: `echo 'a X=1' | xargs sh -c 'make "$@"'`, `echo x | xargs sh -c '"$@"'`, `echo x | xargs sh -c 'make $1'` uncertain. Control: `echo x | xargs sh -c 'echo hi'` reads `ask / auto / deny`, as it did before round 2. Over-ask: any xargs-fed script that reads a positional parameter, even to print it.
+- **[minor]** `xargs --eof make` and `xargs --max-l make` pinned `is uncertain`. **[nit]** `Object.hasOwn` in `xargsLongOption`; row `xargs --constructor grep x` uncertain.
+- Canaries (one in-place substitution each by a scratch `swap.py`, reverted by the same script; md5 `dfe77b99ef72b2f95e06bb289a7bda6c` before and after every one):
+  - `option === 'replace'` never true: dead by `"echo 'git push --no-verify' | xargs --repl=X sh -c X" is uncertain (review round 2)`, the `--repl=grep` row and the `--replace=X` row.
+  - `-i`'s replace never set: dead by `"echo x | xargs -0iR sh -c R" is uncertain (review round 2)`.
+  - `XARGS_OPTIONAL_SHORT` emptied (the cluster no longer stops at `-i`/`-e`/`-l`): dead by `"echo x | xargs -iI make grep" is uncertain` and the `-0iR` row.
+  - the positional rule back to "only with operands" (`&& rest.length > 0`): dead by `"echo 'a X=1' | xargs sh -c 'make \"$@\"'" is uncertain (review round 2)`, the `'"$@"'` row and `"echo x | xargs sh -c 'make $1'" is uncertain (review round 2)`. A first `make "${1}"` row survived this canary — the line is uncertain for another reason — and was replaced by the `make $1` row (rule 43).
+  - `Object.hasOwn` back to `in`: dead by `"xargs --constructor grep x" is uncertain`.
+  - an optional long option taking the next word (`!== 'none'`): dead by `"xargs --eof make" is uncertain` and `"xargs --max-l make" is uncertain`.
+- Sentences falsified by the round: round 1's residual on `xargsReplace` (struck and corrected above); technical/05's WP-164 bullet gains the replace and positional sentences. technical/05's WP-160 bullet (*"operands `xargs` feeds a `"$@"` script"*) stays true as written (narrower than now, not wrong).
+
