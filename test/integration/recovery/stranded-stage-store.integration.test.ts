@@ -231,10 +231,24 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
    * A failed job of another attempt of the stage, or one older than the entry, is not this entry's.
    */
   it('reads the entry’s failed job by class and code, and no other entry’s (backlog 490)', async () => {
+    const THROWN = {
+      code: 'unavailable',
+      provider: 'gitlab',
+      action: 'get_merge_request',
+      retryable: true,
+      name: 'IntegrationError',
+      message: 'gitlab: GET /projects/1 could not be reached FAKE-token-in-a-message',
+      cause: {
+        name: 'TimeoutError',
+        message: 'The operation was aborted due to timeout',
+        code: 23,
+      },
+    };
     const failJob = async (
       taskId: Id,
       data: { readonly stage: string; readonly attempt: number },
       completedMinutesAgo: number,
+      output: Record<string, unknown> = THROWN,
     ): Promise<void> => {
       const sent = await sender.jobs.enqueue({
         queue: JOB_QUEUES.stageExecute,
@@ -246,23 +260,7 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
         `update pgboss.job set state = 'failed', retry_count = 2,
                 completed_on = now() - ($3::int * interval '1 minute'), output = $2::jsonb
           where id = $1`,
-        [
-          (sent as { readonly jobId: string }).jobId,
-          JSON.stringify({
-            code: 'unavailable',
-            provider: 'gitlab',
-            action: 'get_merge_request',
-            retryable: true,
-            name: 'IntegrationError',
-            message: 'gitlab: GET /projects/1 could not be reached FAKE-token-in-a-message',
-            cause: {
-              name: 'TimeoutError',
-              message: 'The operation was aborted due to timeout',
-              code: 23,
-            },
-          }),
-          completedMinutesAgo,
-        ],
+        [(sent as { readonly jobId: string }).jobId, JSON.stringify(output), completedMinutesAgo],
       );
     };
     const failed = await seedTask({ stage: 'ci_gate', enteredMinutesAgo: 30 });
@@ -281,10 +279,37 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
       errorCode: 'unavailable',
       causeName: 'TimeoutError',
       causeCode: '23',
+      expired: false,
     });
     expect(JSON.stringify(row)).not.toContain('FAKE-token');
     expect(found.find((entry) => entry.taskId === otherAttempt)?.failedJob).toBeNull();
     expect(found.find((entry) => entry.taskId === beforeEntry)?.failedJob).toBeNull();
+
+    // WP-166 (b), backlog 529: the two outputs WP-156 measured pg-boss 12.30.0 writing for an
+    // expired try (`test/integration/jobs/job-expiry.integration.test.ts`) read as `expired`, and a
+    // thrown `Error` with another message does not.
+    const supervisor = await seedTask({ stage: 'ci_gate', enteredMinutesAgo: 30 });
+    await failJob(supervisor, { stage: 'ci_gate', attempt: 1 }, 5, {
+      value: { message: 'job timed out' },
+    });
+    const workerTimer = await seedTask({ stage: 'ci_gate', enteredMinutesAgo: 30 });
+    await failJob(workerTimer, { stage: 'ci_gate', attempt: 1 }, 5, {
+      name: 'Error',
+      message: 'handler execution exceeded 7200s',
+      stack: 'Error: handler execution exceeded 7200s\n    at fake',
+    });
+    const thrownError = await seedTask({ stage: 'ci_gate', enteredMinutesAgo: 30 });
+    await failJob(thrownError, { stage: 'ci_gate', attempt: 1 }, 5, {
+      name: 'Error',
+      message: 'handler execution exceeded 7200s because a FAKE provider said so',
+    });
+    const again = await store.strandedStages(tx, query());
+    const failedOf = (taskId: Id) => again.find((entry) => entry.taskId === taskId)?.failedJob;
+    expect(failedOf(supervisor)).toMatchObject({ errorName: null, expired: true });
+    expect(failedOf(workerTimer)).toMatchObject({ errorName: 'Error', expired: true });
+    expect(failedOf(thrownError)).toMatchObject({ errorName: 'Error', expired: false });
+    expect(failedOf(failed)).toMatchObject({ expired: false });
+    expect(JSON.stringify(again)).not.toContain('FAKE');
   });
 
   it('marks an entry once, only while it is stranded, and reads the mark back as that entry’s', async () => {

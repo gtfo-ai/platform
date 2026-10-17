@@ -70,6 +70,12 @@
  * after how many tries, and with which error **class and code** (and its cause's): identifiers
  * only, never the message, which can quote a provider (BD-022). The re-enqueue before it is
  * unchanged — a provider that has come back lets the second job through.
+ *
+ * **A job that expired did not throw** (WP-166 (b), PROGRESS backlog 529). pg-boss fails a try that
+ * runs past the queue's `expireInSeconds` with one of two outputs WP-156 measured — the supervisor's
+ * records no class (*"an error whose class was not recorded"*), the worker timer's is an `Error`
+ * thrown for a handler that never threw (*"threw Error"*). The store matches both against
+ * `EXPIRY_SIGNATURES` and the ending says the last try ran past `stage.execute`'s declared limit.
  */
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
@@ -78,6 +84,8 @@ import { NETWORK_ERROR_CODES } from '../pipeline/gate-outage.js';
 import type { PipelineStore, StoredTask } from '../pipeline/store.js';
 import { retryOnTaskConflict, TaskConflictExhaustedError } from '../pipeline/task-conflict.js';
 import { closeParkedStageRow, ESCALATED_OUTCOME } from '../pipeline/transitions.js';
+import { jobQueueDefinition } from '../ports/job-queues.js';
+import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { Transaction } from '../ports/transaction.js';
@@ -111,7 +119,7 @@ export interface StrandedStage {
   /**
    * The newest `stage.execute` job of **this entry** that pg-boss moved to `failed` — every retry
    * spent — or `null` when none did (PROGRESS backlog 490). The entry then *did* start; its job kept
-   * throwing, and the brief says so instead of *"never started"*. The four strings are the
+   * throwing (or its last try expired, `expired` below), and the brief says so instead of *"never started"*. The four strings are the
    * serialised error's `name` and `code` and its cause's, **as stored** — the store bounds them and
    * {@link errorIdentifier} admits only an identifier, so no message text (which can quote a
    * provider) reaches the brief.
@@ -124,6 +132,15 @@ export interface StrandedStage {
     readonly errorCode: string | null;
     readonly causeName: string | null;
     readonly causeCode: string | null;
+    /**
+     * pg-boss **expired** the last try rather than seeing it throw (WP-166 (b), PROGRESS backlog
+     * 529): its `output` is one of the two expiry signatures WP-156 measured — the supervisor's
+     * `{value: {message: "job timed out"}}`, which records no class, or the worker timer's `Error`
+     * thrown *for* a handler that was still running. The brief then says the try ran past the
+     * queue's limit ({@link STAGE_EXECUTE_EXPIRE_SECONDS}) and never that it threw. Always written
+     * by the store, never optional, so no producer can leave a guard reading an absent field.
+     */
+    readonly expired: boolean;
   } | null;
 }
 
@@ -271,13 +288,43 @@ const looksUnreachable = (failed: NonNullable<StrandedStage['failedJob']>): bool
       (value !== null && NETWORK_ERROR_CODES.has(value)),
   );
 
+/**
+ * `stage.execute`'s declared expiry, read off the queue table and never written here (WP-166 (b)):
+ * a try that runs past it is failed by pg-boss, which is what {@link StrandedStage.failedJob}'s
+ * `expired` records.
+ */
+export const STAGE_EXECUTE_EXPIRE_SECONDS: number | undefined = jobQueueDefinition(
+  JOB_QUEUES.stageExecute,
+).expireInSeconds;
+
+/** `7200` → `2 hours`; `undefined` (pg-boss's default applies) names no number. */
+const limitText = (seconds: number | undefined): string => {
+  if (seconds === undefined) return 'the queue’s expiry limit';
+  const [count, unit] =
+    seconds % 3600 === 0
+      ? [seconds / 3600, 'hour']
+      : seconds % 60 === 0
+        ? [seconds / 60, 'minute']
+        : [seconds, 'second'];
+  return `the queue’s limit of ${String(count)} ${unit}${count === 1 ? '' : 's'}`;
+};
+
+/** What the last try did: ran past the queue's limit, or threw an error of this class (backlogs 490, 529). */
+const lastTryOutcome = (
+  failed: NonNullable<StrandedStage['failedJob']>,
+  threw: 'threw' | 'throwing',
+): string =>
+  failed.expired
+    ? `${threw === 'threw' ? 'ran' : 'running'} past ${limitText(STAGE_EXECUTE_EXPIRE_SECONDS)}, so the queue expired it`
+    : `${threw} ${failedJobError(failed)}`;
+
 /** Why a task whose stage's job **failed** was parked (PROGRESS backlog 490). Platform text only. */
 export const failedJobReason = (
   row: StrandedStage,
   failed: NonNullable<StrandedStage['failedJob']>,
   attemptedAt: IsoDateTime,
 ): string =>
-  `the "${row.stage}" stage (attempt ${String(row.attempt)}) was entered at ${row.enteredAt} and its stage.execute job failed: the queue spent its retries (${String(failed.tries)} tries), the last one at ${failed.failedAt} throwing ${failedJobError(failed)}; the platform re-enqueued the stage once at ${attemptedAt} and it is still stuck (PROGRESS backlogs 320, 490)`;
+  `the "${row.stage}" stage (attempt ${String(row.attempt)}) was entered at ${row.enteredAt} and its stage.execute job failed: the queue spent its retries (${String(failed.tries)} tries), the last one at ${failed.failedAt} ${lastTryOutcome(failed, 'throwing')}; the platform re-enqueued the stage once at ${attemptedAt} and it is still stuck (PROGRESS backlogs 320, 490)`;
 
 /** The brief for a stage whose job kept failing — not one that "never started". */
 export const failedJobBrief = (
@@ -285,8 +332,8 @@ export const failedJobBrief = (
   failed: NonNullable<StrandedStage['failedJob']>,
   ticketKey: string,
 ): string =>
-  `${ticketKey} is at "${row.stage}", and the job that runs this stage kept failing: the queue spent its retries (${String(failed.tries)} tries) and the last one threw ${failedJobError(failed)}; one re-enqueue by the platform did not get the stage past it either. The stage did start — it is the job that failed, not a job that was lost.${
-    looksUnreachable(failed)
+  `${ticketKey} is at "${row.stage}", and the job that runs this stage kept failing: the queue spent its retries (${String(failed.tries)} tries) and the last one ${lastTryOutcome(failed, 'threw')}; one re-enqueue by the platform did not get the stage past it either. The stage did start — it is the job that failed, not a job that was lost.${
+    !failed.expired && looksUnreachable(failed)
       ? ' That error means a provider did not answer: check that it is reachable from the platform’s host.'
       : ''
   } The failed job and its message are in the organisation’s failed-jobs list. Fix the cause, then hand the task back at "${row.stage}" — or cancel it if it is no longer wanted.`;

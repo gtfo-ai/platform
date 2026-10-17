@@ -34,6 +34,7 @@ import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
 import { assertPgBossSchema } from '../jobs/queue-backlog.js';
+import { EXPIRY_SIGNATURES } from './postgres-expired-job-store.js';
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
 
@@ -53,7 +54,30 @@ interface Row extends Record<string, unknown> {
   readonly failed_code: string | null;
   readonly failed_cause_name: string | null;
   readonly failed_cause_code: string | null;
+  /** The supervisor's `output.value.message`, only when short enough to be a signature. */
+  readonly failed_value_message: string | null;
+  /** The serialised error's `message`, only when short enough to be a signature. */
+  readonly failed_message: string | null;
 }
+
+/**
+ * Did pg-boss **expire** this failed job rather than see its handler throw (WP-166 (b), PROGRESS
+ * backlog 529)? The two output shapes WP-156 measured, matched exactly with
+ * {@link EXPIRY_SIGNATURES} — the supervisor's fixed message, and the worker timer's `Error` with its
+ * one sentence. A handler that threw an `Error` with any other message is a thrown last try. The
+ * messages are compared here and dropped: they never leave the store, so no message text reaches a
+ * brief (BD-022).
+ */
+export const isExpiredJobOutput = (row: {
+  readonly failed_name: string | null;
+  readonly failed_value_message: string | null;
+  readonly failed_message: string | null;
+}): boolean =>
+  (row.failed_value_message !== null &&
+    (EXPIRY_SIGNATURES.supervisor as readonly string[]).includes(row.failed_value_message)) ||
+  (row.failed_name === 'Error' &&
+    row.failed_message !== null &&
+    new RegExp(EXPIRY_SIGNATURES.workerTimer).test(row.failed_message));
 
 const toStranded = (row: Row): StrandedStage => ({
   taskId: row.task_id as Id,
@@ -77,11 +101,19 @@ const toStranded = (row: Row): StrandedStage => ({
           errorCode: row.failed_code,
           causeName: row.failed_cause_name,
           causeCode: row.failed_cause_code,
+          expired: isExpiredJobOutput(row),
         },
 });
 
 /** Longest class or code read back; the application admits only an identifier of 64 characters. */
 const FAILED_IDENTIFIER_CHARS = 80;
+
+/**
+ * Longest message read back for {@link isExpiredJobOutput}: longer than either signature, and a
+ * longer message is read as `null` rather than cut, because a cut message could end where a
+ * signature's `$` does.
+ */
+const EXPIRY_MESSAGE_CHARS = 64;
 
 /**
  * Every task stranded at its stage, whatever its age. `$1` is the queue name. `attempted_at` is the
@@ -96,7 +128,8 @@ const strandedSql = (schema: string): string => `
          er.status as ended_status, er.terminal_reason as ended_reason,
          er.ended_at as ended_instant,
          fj.completed_on as failed_at, fj.tries as failed_tries,
-         fj.failed_name, fj.failed_code, fj.failed_cause_name, fj.failed_cause_code
+         fj.failed_name, fj.failed_code, fj.failed_cause_name, fj.failed_cause_code,
+         fj.failed_value_message, fj.failed_message
     from tasks t
     join task_stages s
       on s.task_id = t.id and s.stage = t.current_stage
@@ -114,13 +147,18 @@ const strandedSql = (schema: string): string => `
     -- Backlog 490: the newest job of **this entry** that pg-boss failed (every retry spent), read
     -- for the ending's brief — the stage did start. Only the serialised error's name and code and
     -- its cause's (pg-boss stores the thrown error through serialize-error as output), never the
-    -- message; \`data\` is compared, never selected.
+    -- message for the brief; \`data\` is compared, never selected. WP-166 (backlog 529): the two
+    -- short messages an expiry writes are read too, only to be matched against EXPIRY_SIGNATURES.
     left join lateral (
       select j.completed_on, j.retry_count + 1 as tries,
              left(j.output ->> 'name', ${FAILED_IDENTIFIER_CHARS}) as failed_name,
              left(j.output ->> 'code', ${FAILED_IDENTIFIER_CHARS}) as failed_code,
              left(j.output -> 'cause' ->> 'name', ${FAILED_IDENTIFIER_CHARS}) as failed_cause_name,
-             left(j.output -> 'cause' ->> 'code', ${FAILED_IDENTIFIER_CHARS}) as failed_cause_code
+             left(j.output -> 'cause' ->> 'code', ${FAILED_IDENTIFIER_CHARS}) as failed_cause_code,
+             case when char_length(j.output -> 'value' ->> 'message') <= ${EXPIRY_MESSAGE_CHARS}
+                  then j.output -> 'value' ->> 'message' end as failed_value_message,
+             case when char_length(j.output ->> 'message') <= ${EXPIRY_MESSAGE_CHARS}
+                  then j.output ->> 'message' end as failed_message
         from ${schema}.job j
        where j.name = $1 and j.singleton_key = 'task:' || t.id::text and j.state = 'failed'
          and j.data ->> 'stage' = t.current_stage and j.data ->> 'attempt' = s.attempt::text

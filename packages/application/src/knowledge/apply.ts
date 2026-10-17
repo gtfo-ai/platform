@@ -218,12 +218,23 @@ const nothing = (reason: string): KnowledgeApplyReport => ({
 });
 
 /**
- * The branch one batch lands on.
+ * The branch one batch lands on: `agentic/knowledge/<date>-batch-<32 hex>`.
  *
  * technical/07 names `agentic/knowledge/<date>`; this appends the batch's own discriminator,
  * because a date alone is not a name a second batch on the same day can use — the provider refuses
  * to create a branch that exists, and the alternative (committing onto the open branch) would add
  * pages to a merge request a human is already reading.
+ *
+ * **The earliest proposal, by the queue's own order, and its whole id** (WP-166 (c), PROGRESS
+ * backlog 528). The batch's earliest proposal is picked by `(createdAt, id)` — the order
+ * `listAwaitingApply` reads the queue in — so a proposal approved while a batch's job is in retry
+ * cannot become its earliest and rename the retry's branch. Its **whole** id is the discriminator,
+ * so the name does not depend on the id's uuid version: until WP-166 it was the first eight hex
+ * digits of the **lowest** id, which under uuidv7 are the top of the millisecond clock and shared
+ * by every id written in the same ~65 s, and two batches with one name share one commit through the
+ * executor's idempotency key. The `batch-` infix keeps a batch of one from being named exactly like
+ * its proposal's {@link knowledgeSoloBranchName}, which is the collision WP-156's split exists to
+ * avoid.
  *
  * **Both halves come from the batch, and that is what makes a retry idempotent.** The discriminator
  * is the earliest proposal's id and the date is that same proposal's `created_at` — *not* the
@@ -237,16 +248,20 @@ export const knowledgeBranchName = (
   at: IsoDateTime,
   proposals: readonly StoredKnowledgeProposal[],
 ): string => {
-  const earliest = [...proposals].sort((a, b) => (a.id < b.id ? -1 : 1))[0];
-  const discriminator = (earliest?.id ?? '').replaceAll('-', '').slice(0, 8);
-  return `agentic/knowledge/${(earliest?.createdAt ?? at).slice(0, 10)}-${discriminator}`;
+  const earliest = [...proposals].sort((a, b) =>
+    a.createdAt === b.createdAt ? (a.id < b.id ? -1 : 1) : a.createdAt < b.createdAt ? -1 : 1,
+  )[0];
+  const discriminator = (earliest?.id ?? '').replaceAll('-', '');
+  return `agentic/knowledge/${(earliest?.createdAt ?? at).slice(0, 10)}-batch-${discriminator}`;
 };
 
 /**
  * The branch one proposal lands on when its batch was refused whole and the pass splits it (WP-156,
  * backlog 420): the proposal's date and its **whole** id. Not {@link knowledgeBranchName} over a
- * batch of one, whose discriminator is the id's first eight hex digits — which for the batch's
- * earliest proposal **is** the refused batch's own branch. Every production writer passes a
+ * batch of one, which for the batch's earliest proposal **is** the refused batch's own branch —
+ * before WP-166 because its eight-digit discriminator was that id's first eight digits, since
+ * WP-166 because it is that whole id; the batch name's `batch-` infix is what keeps the two shapes
+ * apart. Every production writer passes a
  * `randomUUID()` (v4) id to `insert into kb_proposals` (`PostgresProposalStore.insert` names `id`;
  * the composition roots' `ids.next`), so eight digits collide only by chance; the column's
  * `uuidv7()` default (migration 0008) is reached only by SQL that omits `id`, and there one

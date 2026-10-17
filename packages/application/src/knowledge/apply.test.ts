@@ -32,6 +32,7 @@ import {
   INDEX_CATCH_UP_MS,
   type KnowledgeApplyOptions,
   knowledgeBranchName,
+  knowledgeSoloBranchName,
   MAX_TRAILER_TOKEN_CHARS,
   provenanceTokenOf,
   wakeAwaitingKnowledgeApply,
@@ -179,7 +180,7 @@ describe('the knowledge branch name', () => {
   it('carries the date and a discriminator stable across a retry of the same batch', () => {
     const batch = [proposal({ id: '00000000-0000-4000-8000-00000000ab01' as Id })];
     const first = knowledgeBranchName(AT as never, batch);
-    expect(first).toBe('agentic/knowledge/2026-09-12-00000000');
+    expect(first).toBe('agentic/knowledge/2026-09-12-batch-0000000000004000800000000000ab01');
     expect(knowledgeBranchName(AT as never, [...batch].reverse())).toBe(first);
     // …and a different batch gets a different branch, which is what lets two run on one day.
     expect(
@@ -204,7 +205,64 @@ describe('the knowledge branch name', () => {
     const before = knowledgeBranchName('2026-09-12T23:59:59.500Z' as never, batch);
     const afterMidnight = knowledgeBranchName('2026-09-13T00:00:30.000Z' as never, batch);
     expect(afterMidnight).toBe(before);
-    expect(before).toBe('agentic/knowledge/2026-09-12-00000000');
+    expect(before).toBe('agentic/knowledge/2026-09-12-batch-0000000000004000800000000000ab01');
+  });
+
+  /**
+   * **PROGRESS backlog 528** (WP-166 (c)): the name must not depend on the id's uuid version. Two
+   * uuidv7 ids written in the same second share their first eight hex digits (the top of the
+   * millisecond clock), so an eight-digit discriminator gave two batches one branch — and, through
+   * the executor's `knowledge_commit:<branch>` key, one commit.
+   */
+  it('gives two batches whose earliest ids are uuidv7s from the same second two names', () => {
+    const at = '2026-09-12T10:00:00.000Z' as StoredKnowledgeProposal['createdAt'];
+    const first = knowledgeBranchName(AT as never, [
+      proposal({ id: '0199e3a1-7c00-7000-8000-00000000aa01' as Id, createdAt: at }),
+    ]);
+    const second = knowledgeBranchName(AT as never, [
+      proposal({ id: '0199e3a1-7c2f-7000-8000-00000000bb02' as Id, createdAt: at }),
+    ]);
+    expect(first.slice(-32, -24)).toBe(second.slice(-32, -24));
+    expect(first).not.toBe(second);
+  });
+
+  /**
+   * The earliest is the queue's own order, `(created_at, id)` (`listAwaitingApply`), not the lowest
+   * id: with v4 ids the two differ, and a proposal approved while the batch's job was in retry could
+   * otherwise sort lower and rename the retry's branch (backlog 528's retry hypothesis).
+   */
+  it('names the batch’s earliest proposal by created_at, not its lowest id', () => {
+    const earliest = proposal({
+      id: 'ffffffff-0000-4000-8000-00000000cc03' as Id,
+      createdAt: '2026-09-12T09:00:00.000Z' as StoredKnowledgeProposal['createdAt'],
+    });
+    const later = proposal({
+      id: '00000000-0000-4000-8000-00000000cc04' as Id,
+      createdAt: '2026-09-12T09:00:01.000Z' as StoredKnowledgeProposal['createdAt'],
+    });
+    const tiedLower = proposal({
+      id: 'fffffffe-0000-4000-8000-00000000cc05' as Id,
+      createdAt: '2026-09-12T09:00:00.000Z' as StoredKnowledgeProposal['createdAt'],
+    });
+    const expected = 'agentic/knowledge/2026-09-12-batch-ffffffff00004000800000000000cc03';
+    expect(knowledgeBranchName(AT as never, [later, earliest])).toBe(expected);
+    expect(knowledgeBranchName(AT as never, [earliest, later])).toBe(expected);
+    // A tie on `created_at` falls to the id, as the queue's `order by created_at, id` does.
+    expect(knowledgeBranchName(AT as never, [later, earliest, tiedLower])).toBe(
+      'agentic/knowledge/2026-09-12-batch-fffffffe00004000800000000000cc05',
+    );
+  });
+
+  it('never names a batch of one like any proposal’s solo branch', () => {
+    const proposals = [
+      proposal({ id: '0199e3a1-7c00-7000-8000-00000000aa01' as Id }),
+      proposal({ id: '0199e3a1-7c2f-7000-8000-00000000bb02' as Id }),
+      proposal({ id: '00000000-0000-4000-8000-00000000ab01' as Id }),
+    ];
+    const solos = new Set(proposals.map((entry) => knowledgeSoloBranchName(AT as never, entry)));
+    for (const entry of proposals) {
+      expect(solos.has(knowledgeBranchName(AT as never, [entry]))).toBe(false);
+    }
   });
 });
 
@@ -561,7 +619,8 @@ describe('applying knowledge proposals', () => {
       const singles = calls.commits.slice(1).map((commit) => commit.branch);
       expect(new Set(singles).size).toBe(3);
       expect(singles).not.toContain(calls.commits[0]?.branch);
-      // The whole id: these test ids share their first eight digits, the batch name's discriminator.
+      // The whole id: these test ids share their first eight digits, the batch name's discriminator
+      // until WP-166 (backlog 528); since then the batch name carries `batch-` and can never be one.
       expect(singles).toEqual(
         three().map((row) => `agentic/knowledge/2026-09-12-${row.id.replaceAll('-', '')}`),
       );

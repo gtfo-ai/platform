@@ -1185,7 +1185,10 @@ const recoverStrandedStages = async (
           attempted_at: row.recoveryAttemptedAt,
           ended_run_status: row.endedRun?.status ?? null,
           // Backlog 490: the entry's failed job, by class and code only — never its message.
-          failed_job_error: row.failedJob === null ? null : failedJobError(row.failedJob),
+          failed_job_error:
+            row.failedJob === null || row.failedJob.expired ? null : failedJobError(row.failedJob),
+          // Backlog 529: an expired last try threw nothing, so it has no class to log.
+          failed_job_expired: row.failedJob?.expired ?? null,
         },
         row.endedRun === null
           ? 'a stage nothing ran did not start after its one recovery attempt, so the task was escalated to needs_human with a brief rather than left active for ever (PROGRESS backlog 320)'

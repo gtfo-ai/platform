@@ -261,9 +261,16 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > records the reasoning and what it leaves for the founder: BD-025 reads agent configuration from
 > the default branch, so a direct push is the one write that changes the rules every later run is
 > governed by with nobody in between. `auto_apply` therefore means *no queue entry*, not *no
-> review*. The branch is `agentic/knowledge/<date>-<batch>`, not `agentic/knowledge/<date>`: a date
-> alone is not a name a second batch on the same day can use, and the discriminator is the batch's
-> earliest proposal id, so it is stable across a retry and different for the next batch.
+> review*. The branch is `agentic/knowledge/<date>-batch-<id>`, not `agentic/knowledge/<date>`: a date
+> alone is not a name a second batch on the same day can use. The discriminator is the **whole** id
+> (32 hex digits) of the batch's earliest proposal by `(created_at, id)` — the order the queue is read
+> in — and the date is that proposal's `created_at`, so the name is stable across a retry (a proposal
+> approved meanwhile cannot become the earliest), different for the next batch, and independent of
+> the id's uuid version (WP-166, backlog 528: until then it was the first eight digits of the lowest
+> id, which two uuidv7 ids from the same minute share; TD-006's 2026-10-08 amendment says which ids
+> are which version). The `batch-` infix keeps a batch of one from being named like its proposal's
+> own branch below. **Upgrade residual:** a batch job in retry across the upgrade computes the new
+> name, so it can leave one stray branch with no merge request.
 >
 > **`index.md` is not regenerated.** Step 4 asks for it. The index page is a curated summary
 > (product/05 § "Curated, not dumped"), the Librarian can propose a change to it like any other page
@@ -322,7 +329,7 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > about an hour later. Now, when the commit of a batch of **more than one** proposal is refused with
 > `invalid_request`, the same pass commits each proposal on its own — its own branch
 > (`agentic/knowledge/<date>-<the proposal's whole id>`: never the refused batch's branch, which
-> the batch name over its earliest proposal would be), its own
+> the batch name over its earliest proposal would be, and never any batch's, which carries `batch-`), its own
 > merge request — **once**. A proposal that commits is `applied`; one refused again reads
 > `apply_failed` with the refusal class in its reason (`applyRefusedReason`, platform text — the
 > provider's message can quote the page), each recorded as it lands. There is no bisection, because

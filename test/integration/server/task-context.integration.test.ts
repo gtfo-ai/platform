@@ -281,6 +281,83 @@ describe('get_task_context, scoped to the run’s own task', () => {
     expect(JSON.stringify(answer.sections.artifacts)).toContain('"version":2');
   });
 
+  /**
+   * **PROGRESS backlog 507** (WP-166 (a)): a person's return out of a parked CI gate keeps the
+   * gate's failure in `attached_feedback` (WP-152, migration 0086) and their note in
+   * `return_reason`. The tool answers both texts on a return whose excerpt the person chose to send,
+   * and no `attached` on a return without one — nor on one whose box the person unticked
+   * (`attached_feedback_sent` false: their reason alone goes to the agent, WP-166 review round 1).
+   */
+  it('answers the gate failure a person sent beside their note, and no attached elsewhere (WP-166)', async () => {
+    const task = await one<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                          current_stage, template_snapshot)
+       values ($1, 'fake-jira', 'KEY-ATTACHED', 'https://jira.example.test/browse/A', 'feature',
+               'active', 'implementation',
+               '{"stages":[{"id":"code_review","kind":"agent"},{"id":"ci_gate","kind":"gate"}]}'::jsonb)
+       returning id`,
+      [mine.projectId],
+    );
+    const attempt = async (
+      stage: string,
+      n: number,
+      reason: string,
+      attached: { text: string; original: number | null; sent: boolean } | null,
+    ) =>
+      pool.query(
+        `insert into task_stages (task_id, stage, attempt, state, outcome, return_reason,
+                                 returned_to, entered_at, exited_at, attached_feedback,
+                                 attached_feedback_original_chars, attached_feedback_sent)
+         values ($1, $2, $3, 'returned', 'returned', $4, 'implementation',
+                 now() + ($5 || ' seconds')::interval, now() + ($5 || ' seconds')::interval,
+                 $6, $7, $8)`,
+        [
+          task.id,
+          stage,
+          n,
+          reason,
+          String(n * 10 + (stage === 'ci_gate' ? 5 : 0)),
+          attached?.text ?? null,
+          attached?.original ?? null,
+          attached?.sent ?? false,
+        ],
+      );
+    await attempt('code_review', 1, 'the footer rounds twice', null);
+    await attempt('ci_gate', 1, 'fix the phpstan errors, logs above', {
+      text: 'phpstan: 3 errors in src/Footer.php',
+      original: 9_000,
+      sent: true,
+    });
+    await attempt('ci_gate', 2, 'try again without the excerpt', {
+      text: 'phpstan: 1 error in src/Header.php',
+      original: null,
+      sent: false,
+    });
+
+    const scope = { projectId: mine.projectId, taskId: task.id as Id };
+    const answer = await readTaskContext(drizzled, ['feedback'], scope);
+    const returns = (
+      answer.sections.feedback as unknown as {
+        returns: { stage: string; reason: string; cause: unknown; attached?: unknown }[];
+      }
+    ).returns;
+    expect(returns.map((entry) => [entry.stage, entry.reason, entry.attached])).toEqual([
+      ['code_review', 'the footer rounds twice', undefined],
+      [
+        'ci_gate',
+        'fix the phpstan errors, logs above',
+        { reason: 'phpstan: 3 errors in src/Footer.php', original_chars: 9_000 },
+      ],
+      ['ci_gate', 'try again without the excerpt', undefined],
+    ]);
+    // Absent, not `null`: a return with nothing attached, or nothing sent, carries no key at all.
+    expect(Object.hasOwn(returns[0] ?? {}, 'attached')).toBe(false);
+    expect(Object.hasOwn(returns[2] ?? {}, 'attached')).toBe(false);
+    expect(JSON.stringify(returns)).not.toContain('src/Header.php');
+    // `cause` is unchanged (backlog 353 stays closed): the gate's return still names the gate.
+    expect(returns[1]?.cause).toEqual({ kind: 'gate', stage: 'ci_gate' });
+  });
+
   it('serves the latest version of each artifact type, not every version', async () => {
     const answer = await readTaskContext(drizzled, ['artifacts'], mine);
     const text = JSON.stringify(answer.sections.artifacts);

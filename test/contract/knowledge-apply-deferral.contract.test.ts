@@ -47,7 +47,7 @@ const PAGE = '.agentic/knowledge/technical/overview.md';
 const OTHER_PAGE = '.agentic/knowledge/technical/billing.md';
 const AT = '2026-09-13T08:00:00.000Z' as StoredKnowledgeProposal['createdAt'];
 
-/** Each proposal's id starts differently: a batch's branch is named from its earliest id's first eight. */
+/** Each proposal's id starts differently (a batch's branch was named from the lowest id's first eight until WP-166). */
 const approved = (id: string, path: string, delta: string): StoredKnowledgeProposal => ({
   id: id as Id,
   projectId: PROJECT,

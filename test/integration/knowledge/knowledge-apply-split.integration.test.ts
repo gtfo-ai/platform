@@ -3,8 +3,8 @@
  * real proposal store, the real event store and PostgreSQL 18.
  *
  * Three approved proposals of one project are written in one statement with the column's
- * `uuidv7()` default, so their ids share their first eight digits, the batch branch's discriminator
- * — not how production writes them (every writer passes a `randomUUID()` v4 id), but the worst case
+ * `uuidv7()` default, so their ids share their first eight digits — the batch branch's discriminator
+ * until WP-166 (backlog 528), the whole earliest id with a `batch-` infix since — not how production writes them (every writer passes a `randomUUID()` v4 id), but the worst case
  * for the split's branch naming —
  * and the git port refuses, on every attempt, any commit that carries the second page, the way
  * GitLab refuses a commit whole with a 4xx and names no file (`invalid_request`). The pass then

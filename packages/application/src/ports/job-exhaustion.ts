@@ -97,7 +97,7 @@ export const JOB_EXHAUSTION: Readonly<Record<string, JobExhaustion>> = {
     loss: 'a stage run: a transport failure to start is re-enqueued on its own bound (MAX_RUN_START_ATTEMPTS), a gate whose provider does not answer re-asks on its own time bound (backlog 490), and a write that loses every race escalates the task',
     recoveredBy: 'stranded_stage',
     residual:
-      'an unanticipated throw is retried by pg-boss; a job that spends its retries leaves the task at its stage with no job, which the stranded_stage row re-enqueues once and then escalates, naming the failed job’s error class and code (WP-108, backlog 490)',
+      'an unanticipated throw is retried by pg-boss; a job that spends its retries leaves the task at its stage with no job, which the stranded_stage row re-enqueues once and then escalates, naming the failed job’s error class and code (WP-108, backlog 490), or that its last try ran past the queue’s limit when it expired (WP-166, backlog 529)',
   },
   [JOB_QUEUES.mrCommentDebounce]: {
     kind: 'relies_on_retries',

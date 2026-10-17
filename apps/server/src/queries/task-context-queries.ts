@@ -27,7 +27,7 @@
  * |---|---|---|
  * | `ticket` | `tasks.ticket_snapshot` (bounded and redacted at the write, WP-15f) | the platform has not read the ticket |
  * | `artifacts` | the latest version of each type, `findArtifactBody` | per artifact: stored before redaction existed (migration 0038) |
- * | `feedback` | `task_stages` rows with `state = 'returned'`: the stage, its target (`returned_to`), the reason and — since WP-105 — its `cause` ({@link returnCauseOf}) — escalations excluded (WP-55) | never; an empty list is an answer |
+ * | `feedback` | `task_stages` rows with `state = 'returned'`: the stage, its target (`returned_to`), the reason and — since WP-105 — its `cause` ({@link returnCauseOf}), and — since WP-166 — the gate excerpt a person chose to send with their return (`attached: {reason, original_chars}`, absent when none was sent) — escalations excluded (WP-55) | never; an empty list is an answer |
  * | `mr` | `tasks.mr_ref` and `tasks.branch` | the task has no merge request yet |
  * | `ci` | `tasks.coverage` — the one per-task CI figure the platform stores | no coverage was recorded; pipeline runs themselves are **not** projected per task |
  * | `runs` | `findTaskDetail`'s runs, newest {@link TASK_CONTEXT_RUN_LIMIT}, as {@link RUN_FIELDS_FOR_AGENTS} | never |
@@ -284,7 +284,12 @@ const findTicketSnapshot = async (
 
 /**
  * Every return of this task, oldest first: the attempt that sent the task back, the stage it sent
- * it to (`returned_to`) and the finding it sent it with.
+ * it to (`returned_to`) and the finding it sent it with — and, since WP-166 (backlog 507), the
+ * gate's last failure a person's return out of a parked gate kept beside their note
+ * (`attached_feedback`, migration 0086), published **only when the person chose to send it**
+ * (`attached_feedback_sent`, the *Attach the gate's last failure* box, WP-152): an unticked box is the
+ * person's choice that the agent gets their reason alone, so the text stays on the row and no agent
+ * reads it here either (WP-166 review round 1).
  *
  * **Returns only** (WP-55): `state = 'returned'`, not "every row with a `return_reason`" — the
  * stage executor and the lease sweep write their *escalation* reason into that column too, and an
@@ -299,6 +304,9 @@ const listReturnFeedback = async (database: Database, taskId: string) =>
       attempt: taskStages.attempt,
       returnedTo: taskStages.returnedTo,
       reason: taskStages.returnReason,
+      attached: taskStages.attachedFeedback,
+      attachedOriginalChars: taskStages.attachedFeedbackOriginalChars,
+      attachedSent: taskStages.attachedFeedbackSent,
       exitedAt: taskStages.exitedAt,
     })
     .from(taskStages)
@@ -540,6 +548,14 @@ export const readTaskContext = async (
             reason: row.reason,
             at: iso(row.exitedAt),
             cause: returnCauseOf(row, verdicts, kinds),
+            ...(row.attachedSent !== true || typeof row.attached !== 'string'
+              ? {}
+              : {
+                  attached: {
+                    reason: row.attached,
+                    original_chars: row.attachedOriginalChars,
+                  },
+                }),
           })),
         };
       }

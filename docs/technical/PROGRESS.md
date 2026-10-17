@@ -48426,3 +48426,52 @@ So the reviewer's report holds for every row (both 561 paths and 562 read `auto`
 
 **Discovered work (for a refiner).**
 - `gmake` has no allow entry where `make *` has one (`PROJECT_COMMAND_ALLOW`), so a project whose image names GNU make `gmake` gets `ask` for `gmake test`; whether to allow it is a policy question, not a floor one.
+
+#### WP-166
+
+**What the record tells its reader: a person's attached gate failure in `get_task_context`, an expired stage job named as expired, and a knowledge batch name that does not depend on the id's version** (backlogs 507, 529, 528). Implementer, session 16, on `b38ad003`. No migration. **Status: implemented, awaiting review.**
+
+**What changed.**
+- **(a) 507.** `listReturnFeedback` (`apps/server/src/queries/task-context-queries.ts`) selects `attached_feedback` and `attached_feedback_original_chars`; each return in `feedback` carries `attached: {reason, original_chars}`, **absent** (no key) when the column holds nothing. `cause` is unchanged (353 stays closed). The module table row and the select's docblock say so; the tool description (`packages/infrastructure/src/runner/platform-mcp.ts`) now reads *"why earlier stages were returned (`feedback`, with the gate failure a person chose to send with their return, when they sent one)"* (the wording after review round 1). Item (4), `in_prompt` for the run the return caused, is **not done** (optional per the ruling; the duplicate is bounded by `TASK_CONTEXT_MAX_CHARS`).
+- **(b) 529.** `postgres-stranded-stage-store.ts` imports `EXPIRY_SIGNATURES` from `postgres-expired-job-store.ts` (no copy) and reads the supervisor's `output.value.message` and the serialised `message`, each only when ≤ 64 characters (a longer one is `null`, never cut, so a cut cannot end where the worker regex's `$` does). `isExpiredJobOutput` (exported, pure) matches them exactly; the messages never leave the store. `StrandedStage.failedJob.expired: boolean` is **required** (rule 16). `failedJobReason`/`failedJobBrief` (`packages/application/src/recovery/stranded-stage.ts`) say *"running/ran past the queue’s limit of 2 hours, so the queue expired it"* for an expired last try, the limit from `jobQueueDefinition(JOB_QUEUES.stageExecute).expireInSeconds` (`STAGE_EXECUTE_EXPIRE_SECONDS`), never a literal; an undefined declaration would read *"the queue’s expiry limit"* with no number. An expired try gets no reachability hint. A thrown last try reads byte-for-byte as before. `stranded.ts`'s ending log: `failed_job_error` is `null` for an expired job and `failed_job_expired` is added. The `JOB_EXHAUSTION` row for `stage.execute` (`ports/job-exhaustion.ts`) names the expired wording.
+- **(c) 528.** `knowledgeBranchName` (`packages/application/src/knowledge/apply.ts`) picks the earliest proposal by `(createdAt, id)` and uses its whole id: `agentic/knowledge/<date>-batch-<32 hex>`. Docblocks of both name functions updated; technical/07's sentence (`:264-266`) rewritten with the upgrade residual.
+
+**Decisions/assumptions.**
+- (a) ~~`attached` is published whenever the column holds text, including an unsent one~~ — **superseded by the orchestrator's review-round-1 ruling**: `attached` is published **only when `attached_feedback_sent` is true**, because the box is the person's choice of what the agent gets (WP-152; user-guide *"Untick it to send your reason alone"*).
+- (b) The match runs in TypeScript over the selected short messages rather than in SQL, so criterion (2)'s unit cases (and the canary) see it; the expired-job store keeps its own SQL predicate over the same imported constants.
+- (b) Wording: the reason keeps its participle form (*"the last one at … running past …"* / *"… throwing X"*), the brief its past form (*"ran past …"* / *"threw X"*).
+
+**Criteria → tests.**
+- (1) `test/integration/server/task-context.integration.test.ts` › "answers the gate failure a person sent beside their note, and no attached elsewhere (WP-166)" — a code-review return without one (no `attached` key), a CI-gate return with the excerpt sent and cut (`original_chars: 9000`), one kept unsent (no `attached` key, its text nowhere in the answer, since review round 1); `cause` still `gate`. Ran: 16/16.
+- (2) `packages/infrastructure/src/recovery/postgres-stranded-stage-store.test.ts` (new, unit, recording client): supervisor timeout, supervisor heartbeat and worker timer each read `expired` and the reason+brief contain *"ran past the queue’s limit of 2 hours"* and neither *"not recorded"* nor *"threw"*/*"throwing"*; thrown `Error` and an unrecorded class read as before; exact-match cases (`TypeError` with the worker message, a longer message, `job timed out!`, the supervisor text on a thrown `Error`). `packages/application/src/recovery/stranded-stage.test.ts` › "says an expired last try ran past the queue’s limit, written by %s (backlog 529)" (two rows, the whole pass over the harness, exact brief); the backlog-490 case is unchanged and green. `test/integration/recovery/stranded-stage-store.integration.test.ts` › "reads the entry’s failed job by class and code, and no other entry’s (backlog 490)" gained the two measured outputs (WP-156's shapes) and a thrown `Error` whose message only starts like the timer's. Ran: 9/9.
+- (3) `packages/application/src/knowledge/apply.test.ts` › "gives two batches whose earliest ids are uuidv7s from the same second two names", "names the batch’s earliest proposal by created_at, not its lowest id" (with a `created_at` tie falling to the id), "never names a batch of one like any proposal’s solo branch"; the two existing name cases updated to the new shape.
+- (4) technical/04 and technical/08 name `get_task_context` (04:16, :77, :207; 08:17) but neither lists the `feedback` fields, so neither changes (rule 83).
+
+**Canaries** (scratch script: in-place substitution, run, recorded bytes written back, md5 equal after each — `task-context-queries.ts` `756fd75204c3320017c81fd30bdc8a89`, `postgres-stranded-stage-store.ts` `3e3a4710f6e3d2fbc192bb72342297f9`, `apply.ts` `87cb3e95858c134255d914d362d4495f`).
+- `attached: taskStages.attachedFeedback` dropped from the select: **dead by** "answers the gate failure a person sent beside their note, and no attached elsewhere (WP-166)" (re-run after round 1).
+- `expired: isExpiredJobOutput(row)` → `expired: false` (the signature match dropped): **dead by** "the supervisor’s timeout: …", "the supervisor’s heartbeat: …", "the worker timer: expired, and the brief says it ran past its limit" (unit), and by the integration case named above. (A first attempt, `false && (…supervisor…) || (…worker…)`, disarmed only the supervisor half by precedence; the worker case survived it — the canary was wrong, not the test.)
+- `.slice(0, 8)` over the lowest id restored (infix kept): **dead by** "gives two batches whose earliest ids are uuidv7s from the same second two names" and "names the batch’s earliest proposal by created_at, not its lowest id" (and the two exact-name cases).
+- `batch-` infix dropped: **dead by** "never names a batch of one like any proposal’s solo branch" and WP-156's "ends a batch of three with one page refused on every attempt as two applied and one apply_failed".
+- None survived.
+
+**Sentences falsified (rule 83)** — swept `docs/` (PROGRESS and the plan aside), `CLAUDE.md`, `packages/`, `apps/server/src`, `test/` for *attached*, *feedback*, *threw*, *not recorded*, *expired*, *earliest proposal*, `slice(0, 8)`, *first eight*, *eight-digit*, *lowest id*, *batch*.
+- technical/07:264-266 (*"the discriminator is the batch's earliest proposal id"*) — rewritten; :324 (the solo name) gains *"never any batch's, which carries `batch-`"*.
+- `apply.ts`'s solo docblock (*"whose discriminator is the id's first eight hex digits"*) — amended.
+- `apply.test.ts:622` comment, `test/contract/knowledge-apply-deferral.contract.test.ts:50` (*"a batch's branch is named from its earliest id's first eight"*), `knowledge-apply-split.integration.test.ts:6` — each now says *until WP-166*.
+- `StrandedStage.failedJob`'s docblock (*"its job kept throwing"*) — adds the expired case; the module docblock gains a WP-166 paragraph.
+- `ports/job-exhaustion.ts`'s `stage.execute` row (*"naming the failed job’s error class and code"*) — adds the expired wording.
+- TD-004:107 and `expired-job.ts:45-50` (stage.execute's expiry is `run_lease`'s and `stranded_stage`'s) — still true. `docs/decisions` and `docs/product` not edited.
+
+**Residuals.**
+- 528's upgrade residual, as ruled: a batch job in retry across the upgrade computes the new name and can leave one stray branch without a merge request.
+- 529: still **not measured** end to end — a `stage.execute` job reaching its last try by expiry with no run row; the outputs are WP-156's measurement, the path is backlog 529's hypothesis.
+- 507 (4) not done: the run a return caused gets the excerpt in its prompt and again from the tool.
+
+**Verification.** `pnpm run -s verify` exit 0, final line `PASS: verify`; `scripts/citations.test.ts` 13/13; the two integration files above, one at a time.
+
+**Discovered work (for a refiner).** None.
+
+**Review round 1** (REQUEST_CHANGES, two findings).
+- **[major] An unsent excerpt was published.** Ruled by the orchestrator: `attached` only when `attached_feedback_sent`. `listReturnFeedback` selects `attached_feedback_sent`; the guard is `row.attachedSent !== true || typeof row.attached !== 'string'` → absent; the select's docblock, the module table row and the tool description say *"a gate excerpt the person chose to send"*. The integration case's unsent return now expects no `attached` key and its text nowhere in the answer; the sent return still answers both texts. Ran: 16/16. **Canary**: the `sent` condition dropped from the guard (md5 `8f3167dbe91fd4999e221113f4e9a119`, restored) — **dead by** "answers the gate failure a person sent beside their note, and no attached elsewhere (WP-166)". The drop-the-column canary re-run on the new bytes: dead by the same case.
+- **[minor, accepted as residual] "no literal 7200" is held by review only.** `STAGE_EXECUTE_EXPIRE_SECONDS` is read from `jobQueueDefinition(JOB_QUEUES.stageExecute).expireInSeconds`, but the tests' expected *"2 hours"* equals the declaration, so a canary that hard-codes 7200 in `stranded-stage.ts` survives (the reviewer's measurement). No injection added, as ruled.
+- Round 1 verification: citation guard 13/13; `pnpm run -s verify` after the tiers-idle marker, exit 0, final line `PASS: verify`.

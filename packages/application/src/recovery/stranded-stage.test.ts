@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { startProjectDiscovery } from '../onboarding/discovery.js';
 import { staticProjectSettings } from '../pipeline/settings.js';
 import type { StoredTask } from '../pipeline/store.js';
+import { jobQueueDefinition } from '../ports/job-queues.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
@@ -24,6 +25,7 @@ import {
   failedJobBrief,
   failedJobError,
   isDrivenStage,
+  STAGE_EXECUTE_EXPIRE_SECONDS,
   STRANDED_STAGE_COMPONENT,
   type StrandedStage,
   type StrandedStageRecoveryStore,
@@ -358,6 +360,7 @@ describe('the stranded-stage row (WP-108, PROGRESS backlog 320)', () => {
       errorCode: 'unavailable',
       causeName: 'TimeoutError',
       causeCode: '23',
+      expired: false,
     };
     const { store, calls } = harnessStore(harness, { failedJob });
     harness.clock.advance(GRACE_MS + 1);
@@ -388,6 +391,7 @@ describe('the stranded-stage row (WP-108, PROGRESS backlog 320)', () => {
       errorCode: null,
       causeName: null,
       causeCode: null,
+      expired: false,
       ...fields,
     });
     expect(failedJobError(failed({}))).toBe('an error whose class was not recorded');
@@ -424,6 +428,61 @@ describe('the stranded-stage row (WP-108, PROGRESS backlog 320)', () => {
       ),
     ).not.toContain('provider did not answer');
   });
+
+  /**
+   * **PROGRESS backlog 529** (WP-166 (b)): a `stage.execute` job whose last try **expired**, by
+   * each of the two writers WP-156 measured — the supervisor records no class, the worker timer an
+   * `Error` for a handler that never threw. The store says `expired`; the reason and the brief say
+   * the try ran past the queue's declared limit, read off `JOB_QUEUE_DEFINITIONS`, and never that it
+   * threw. A thrown last try is the backlog-490 case above, unchanged.
+   */
+  it.each([
+    [
+      'the supervisor',
+      { errorName: null, errorCode: null },
+      'an error whose class was not recorded',
+    ],
+    ['the worker timer', { errorName: 'Error', errorCode: null }, 'threw Error'],
+  ] as const)(
+    'says an expired last try ran past the queue’s limit, written by %s (backlog 529)',
+    async (_writer, error, oldWording) => {
+      const { harness } = setup();
+      const taskId = await lostDiscovery(harness);
+      const failedJob = {
+        failedAt: '2026-10-06T07:41:12.000Z' as IsoDateTime,
+        tries: 3,
+        ...error,
+        causeName: null,
+        causeCode: null,
+        expired: true,
+      };
+      const { store } = harnessStore(harness, { failedJob });
+      harness.clock.advance(GRACE_MS + 1);
+      expect(siteOf(await pass(harness, store))).toMatchObject({ reEnqueued: 1 });
+      expect(harness.jobs.take(JOB_QUEUES.stageExecute)).toHaveLength(1);
+      harness.clock.advance(STRANDED_ENDING_AFTER_MS + GRACE_MS + 1);
+      expect(siteOf(await pass(harness, store))).toMatchObject({ found: 1, ended: 1 });
+
+      const escalated = harness.events().filter((event) => event.type === 'task.escalated');
+      const payload = (
+        escalated[0] as Extract<(typeof escalated)[number], { type: 'task.escalated' }>
+      ).payload;
+      const limit = jobQueueDefinition(JOB_QUEUES.stageExecute).expireInSeconds;
+      expect(limit).toBe(STAGE_EXECUTE_EXPIRE_SECONDS);
+      expect(limit).toBe(7200);
+      expect(payload.reason).toContain(
+        'the queue spent its retries (3 tries), the last one at 2026-10-06T07:41:12.000Z running past the queue’s limit of 2 hours, so the queue expired it;',
+      );
+      expect(payload.blocker_brief).toBe(
+        `${(await loaded(harness, taskId)).task.ticket.key} is at "discovery", and the job that runs this stage kept failing: the queue spent its retries (3 tries) and the last one ran past the queue’s limit of 2 hours, so the queue expired it; one re-enqueue by the platform did not get the stage past it either. The stage did start — it is the job that failed, not a job that was lost. The failed job and its message are in the organisation’s failed-jobs list. Fix the cause, then hand the task back at "discovery" — or cancel it if it is no longer wanted.`,
+      );
+      for (const text of [payload.reason, payload.blocker_brief]) {
+        expect(text).not.toContain('threw');
+        expect(text).not.toContain('throwing');
+        expect(text).not.toContain(oldWording);
+      }
+    },
+  );
 
   it('enqueues nothing when the mark finds the live path got there first (standing rule 9)', async () => {
     const { harness } = setup();
