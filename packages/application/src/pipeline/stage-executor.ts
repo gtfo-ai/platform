@@ -130,6 +130,7 @@ import {
   recordCliSpawn,
   stopEndingOf,
   stoppedBeforeCliSpawn,
+  unspawnedStepOf,
   unspawnedStop,
 } from './cli-spawn.js';
 import { questionDeadlineRule } from './deadline-rules.js';
@@ -1296,11 +1297,12 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
     try {
       const handle = runner.start(prepared.spec, spawn.hooks);
       outcome = await handle.outcome;
-      if (!spawn.requested() && !isStopEnding(outcome)) {
+      if (!spawn.mayHaveReachedCli() && !isStopEnding(outcome)) {
         // Ruling (d): an ending that came back with no marker is a run whose CLI was never asked
         // for — a refused handshake, a connect timeout, a session that ended first. It ends as a
         // start failure, never as the `crash` the runner may have reported.
-        throw cliSpawnNotRequested(outcome);
+        // WP-163: so does one whose marker was written and whose `spawn` frame was then withheld.
+        throw cliSpawnNotRequested(outcome, spawn);
       }
     } catch (error) {
       // **A start that throws used to escape both endings** (WP-15c, Q52/Q59).
@@ -1372,15 +1374,16 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
           }),
           startAttempts,
           retryable,
-          spawnRequested: spawn.requested(),
+          spawnRequested: spawn.mayHaveReachedCli(),
         }),
       );
     }
     await stopHeartbeat();
     const stopReason = stopReasons.reasonFor(prepared.spec.runId);
     stopReasons.forget(prepared.spec.runId);
-    if (!spawn.requested()) {
-      // A stop that landed before the CLI was asked for keeps its status and spent nothing (WP-150),
+    if (!spawn.mayHaveReachedCli()) {
+      // A stop that landed before the CLI was asked for — or while its marker committed, so the
+      // frame was withheld (WP-163) — keeps its status and spent nothing (WP-150),
       // and records how far it got (WP-154 (b′), backlog 502): the run page then says *did not
       // start* rather than showing an empty transcript, and the event log can tell it from a run
       // that started and was stopped.
@@ -1388,7 +1391,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         outcome,
         stoppedBeforeCliSpawn({
           ending: stopEndingOf(outcome),
-          step: spawn.asked() ? 'spawn_gate' : 'preparing',
+          step: unspawnedStepOf(spawn),
           attempt: (job.startAttempts ?? 0) + 1,
           retryable: false,
         }),
@@ -2119,8 +2122,8 @@ const withSavedBranch = (stored: StoredTask, outcome: RunOutcome): StoredTask =>
  * cost — `lostTheRun`), and the spend is added once, by the winner. The reservation is released by
  * the row becoming terminal, as for every ending; a run that measured nothing **after asking for its
  * CLI** keeps both cost columns null and is held at its reservation by the task cap (rule 16,
- * WP-131) — never a `0`. A hand-back that landed before the marker spent nothing and carries the
- * measured zero (`unspawnedStop`, WP-150).
+ * WP-131) — never a `0`. A hand-back that landed before the marker, or whose `spawn` frame was
+ * withheld after it (WP-163), spent nothing and carries the measured zero (`unspawnedStop`, WP-150).
  *
  * **The task is not touched** on the hand-back: still `active` at this stage on this attempt with
  * its stage row open, which is exactly what `revalidateOpen` admits when the re-enqueued job fires
@@ -2270,9 +2273,10 @@ const recordUnstarted = async (
     /** `true` leaves the task where it is; the caller re-enqueues the stage. */
     readonly retryable: boolean;
     /**
-     * Whether the run's CLI spawn marker was written (WP-150). Almost always `false` here. `true` is
-     * a runner that failed **after** asking for the CLI, whose spend nobody measured: the run is
-     * then recorded with no figure and held at its reservation (WP-131), never the measured zero.
+     * Whether the run may have reached its CLI: its spawn marker was written (WP-150) and its
+     * `spawn` frame was not withheld (WP-163). Almost always `false` here. `true` is a runner that
+     * failed **after** asking for the CLI, whose spend nobody measured: the run is then recorded
+     * with no figure and held at its reservation (WP-131), never the measured zero.
      */
     readonly spawnRequested: boolean;
   },

@@ -2251,6 +2251,79 @@ describe('a run that never reached its CLI holds no money (WP-150)', () => {
     ).toBeUndefined();
   });
 
+  /**
+   * WP-163 criterion (1), PROGRESS backlog 501: the stop lands while the marker commits, so the
+   * gate **passes** and the adapter then withholds the `spawn` frame. The run keeps the stop's
+   * status, writes the measured zero, records the `spawn_withheld` step and is held by no cap —
+   * while the marker stays on the row. Canary: `CliSpawnRecord.withheld` always `false`, and the
+   * run is held at the stage's 15.
+   */
+  it('ends a stop whose spawn frame was withheld after the marker as a measured zero (WP-163)', async () => {
+    const harness = harnessWith({
+      settings,
+      runs: {
+        refinement: { status: 'cancelled', terminalReason: 'cancelled', withholdsSpawn: true },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    const task = taskOf(harness);
+    const runId = harness.specs[0]?.runId as Id;
+    const [stored, held] = await harness.memory.transaction(async (scope) => [
+      await harness.store.runs.load(scope.tx, runId),
+      await harness.store.runs.heldFor(scope.tx, task.task.id, 15),
+    ]);
+    const cause = {
+      kind: 'not_started',
+      diagnosis:
+        'cancelled by a person before its CLI was asked to start: the CLI spawn marker was written and the spawn frame was then withheld',
+      detail: null,
+      truncated: false,
+      attempt: 1,
+      retryable: false,
+    };
+    expect(stored?.status).toBe('cancelled');
+    expect(stored?.cliSpawnRequestedAt).not.toBeNull();
+    expect(stored?.cost).toEqual({ usd: 0, is_estimate: false, price_list_id: null });
+    expect(harness.store.startFailureOf(runId)).toEqual(cause);
+    expect(held).toEqual({ heldUsd: 0, heldRuns: 0 });
+    const ending = harness
+      .events()
+      .find((event) => event.type === 'run.finished' && event.payload.run_id === runId);
+    expect((ending?.payload as { start_failure?: unknown } | undefined)?.start_failure).toEqual(
+      cause,
+    );
+  });
+
+  /** WP-163 ruling (c): an ending that is not a stop is the start failure `ended_before_cli_spawn`. */
+  it('ends a crash whose spawn frame was withheld after the marker as a start failure with a measured zero (WP-163)', async () => {
+    const harness = harnessWith({
+      settings,
+      runs: {
+        refinement: {
+          status: 'failed',
+          terminalReason: 'crash',
+          costUnmeasured: true,
+          error: 'the run shim closed the control connection',
+          withholdsSpawn: true,
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    const task = taskOf(harness);
+    const runId = harness.specs[0]?.runId as Id;
+    const [stored, held] = await harness.memory.transaction(async (scope) => [
+      await harness.store.runs.load(scope.tx, runId),
+      await harness.store.runs.heldFor(scope.tx, task.task.id, 15),
+    ]);
+    expect(stored?.terminalReason).toBe('error_during_execution');
+    expect(stored?.cliSpawnRequestedAt).not.toBeNull();
+    expect(stored?.cost).toEqual({ usd: 0, is_estimate: false, price_list_id: null });
+    expect(harness.store.startFailureOf(runId)?.diagnosis).toBe(
+      'RunStartError: workspace_failed, ended_before_cli_spawn',
+    );
+    expect(held).toEqual({ heldUsd: 0, heldRuns: 0 });
+  });
+
   it('holds the same crash once the CLI was asked for, and refuses the fourth (WP-131 unchanged)', async () => {
     const harness = refusedAtHello(true);
     const { held } = await fourAttempts(harness);

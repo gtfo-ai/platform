@@ -11,9 +11,15 @@
  * **second connection** at the moment between `hello.ok` and the send (a hook wrapped around the
  * marker's own), and again when the `spawn` frame arrives. Its negative half: before `hello.ok` the
  * second connection reads null, so the marker is the handshake's and not the insert's.
+ *
+ * WP-163 criterion (4), PROGRESS backlog 501: a run whose marker committed and whose `spawn` frame
+ * was then **withheld** ends as the measured zero, so the production reads of every cap — the task
+ * cap's held set (`RunRepository.heldFor`) and a budget's pending total (`CostStore.pendingSpend`)
+ * — leave it out, while the marker stays on the row.
  */
 import {
   INITIAL_TASK_VERSION,
+  MEASURED_ZERO_COST,
   type PipelineStore,
   type RunStartHooks,
   recordCliSpawn,
@@ -23,7 +29,7 @@ import {
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES } from '@platform/domain';
-import { eventing, pipeline, runlet, runner } from '@platform/infrastructure';
+import { cost, eventing, pipeline, runlet, runner } from '@platform/infrastructure';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient, createTestPool } from '../support/postgres.js';
@@ -205,6 +211,7 @@ describe('the CLI spawn marker, against PostgreSQL (WP-150)', () => {
           seen.framesAtSend = peerFrames();
           return written;
         },
+        cliSpawnWithheld: record.hooks.cliSpawnWithheld,
       };
       const transport = runlet.createRunletSpawn({
         socketPath: volume.controlSocketPath,
@@ -231,7 +238,7 @@ describe('the CLI spawn marker, against PostgreSQL (WP-150)', () => {
       expect(seen.atSend).toBe(NOW);
       // The read happened before the frame left the runner.
       expect(seen.framesAtSend).toEqual(['hello']);
-      expect(record.requested()).toBe(true);
+      expect(record.mayHaveReachedCli()).toBe(true);
 
       // The shim goes away; the run had asked for its CLI, so it is a crash the caps hold.
       peer.close();
@@ -270,10 +277,82 @@ describe('the CLI spawn marker, against PostgreSQL (WP-150)', () => {
       );
       const record = recordCliSpawn({ unitOfWork, runs: store.runs, now: () => NOW, runId });
       expect(await record.hooks.beforeCliSpawn()).toBe(false);
-      expect(record.requested()).toBe(false);
+      expect(record.mayHaveReachedCli()).toBe(false);
       expect(await committedMarker(runId)).toBeNull();
     } finally {
       await pool.end();
     }
+  });
+
+  describe('a run whose spawn frame was withheld after the marker (WP-163)', () => {
+    /**
+     * The marker commits, the adapter withholds the frame, and the run is ended the way the stage
+     * executor ends a cancel whose record says so: `usd_reported` is the measured zero. Then the
+     * two production reads. The other direction is the same run with no withheld fact — the
+     * ending writes no figure, and both reads hold it at its reservation of 15.
+     */
+    const endThroughTheRecord = async (withhold: boolean) => {
+      const runId = await liveRun();
+      const pool = createTestPool(database.connectionString, { max: 2 });
+      const unitOfWork = new eventing.PostgresUnitOfWork({ pool });
+      try {
+        const record = recordCliSpawn({ unitOfWork, runs: store.runs, now: () => NOW, runId });
+        expect(await record.hooks.beforeCliSpawn()).toBe(true);
+        if (withhold) {
+          record.hooks.cliSpawnWithheld();
+        }
+        await unitOfWork.transaction(async (scope) =>
+          store.runs.finish(scope.tx, {
+            runId,
+            status: 'cancelled',
+            terminalReason: 'cancelled',
+            sessionId: null,
+            numTurns: 0,
+            usage: {
+              input_tokens: 0,
+              output_tokens: 0,
+              cache_write_5m_tokens: 0,
+              cache_write_1h_tokens: 0,
+              cache_read_tokens: 0,
+            },
+            cost: record.mayHaveReachedCli() ? null : MEASURED_ZERO_COST,
+            wallMs: 0,
+          }),
+        );
+        const taskId = (
+          await unitOfWork.transaction(async (scope) => store.runs.load(scope.tx, runId))
+        )?.taskId as Id;
+        const [held, pending] = await unitOfWork.transaction(async (scope) => [
+          await store.runs.heldFor(scope.tx, taskId, 2),
+          await cost
+            .createPostgresCostStore()
+            .pendingSpend(
+              scope.tx,
+              { scope: 'task', scopeId: taskId },
+              '2000-01-01T00:00:00.000Z' as IsoDateTime,
+              2,
+            ),
+        ]);
+        return { record, runId, held, pending };
+      } finally {
+        await pool.end();
+      }
+    };
+
+    it('leaves a marked run ended through the withheld path out of the held set and the pending total', async () => {
+      const { record, runId, held, pending } = await endThroughTheRecord(true);
+      expect(record.mayHaveReachedCli()).toBe(false);
+      // The marker is not cleared: the platform did ask.
+      expect(await committedMarker(runId)).toBe(NOW);
+      expect(held).toEqual({ heldUsd: 0, heldRuns: 0 });
+      expect(pending).toEqual({ pendingUsd: 0, heldUsd: 0, heldRuns: 0 });
+    });
+
+    it('holds the same marked run at its reservation when the frame was not withheld', async () => {
+      const { record, held, pending } = await endThroughTheRecord(false);
+      expect(record.mayHaveReachedCli()).toBe(true);
+      expect(held).toEqual({ heldUsd: 15, heldRuns: 1 });
+      expect(pending).toEqual({ pendingUsd: 0, heldUsd: 15, heldRuns: 1 });
+    });
   });
 });

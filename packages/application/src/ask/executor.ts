@@ -70,6 +70,7 @@ import {
   recordCliSpawn,
   stopEndingOf,
   stoppedBeforeCliSpawn,
+  unspawnedStepOf,
   unspawnedStop,
 } from '../pipeline/cli-spawn.js';
 import {
@@ -957,8 +958,8 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
       try {
         const handle = options.runner.start(plan.spec, spawn.hooks);
         outcome = await handle.outcome;
-        if (!spawn.requested() && !isStopEnding(outcome)) {
-          throw cliSpawnNotRequested(outcome);
+        if (!spawn.mayHaveReachedCli() && !isStopEnding(outcome)) {
+          throw cliSpawnNotRequested(outcome, spawn);
         }
       } catch (error) {
         await stopHeartbeat();
@@ -980,9 +981,10 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
           retryable: false,
         });
         return await options.unitOfWork.transaction(async (scope) => {
-          // The measured zero only when the CLI was never asked for (WP-150); a runner that failed
-          // after the marker leaves no figure, and the run is held at its reservation (WP-131).
-          const requested = spawn.requested();
+          // The measured zero only when the CLI was never asked for (WP-150) or its frame was
+          // withheld after the marker (WP-163); a runner that failed after the frame may have been
+          // sent leaves no figure, and the run is held at its reservation (WP-131).
+          const requested = spawn.mayHaveReachedCli();
           const failed = failRun(
             started.run,
             {
@@ -1017,14 +1019,15 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
       await stopHeartbeat();
       const stopReason = options.stopReasons.reasonFor(runId);
       options.stopReasons.forget(runId);
-      if (!spawn.requested()) {
-        // A stop before the CLI was asked for keeps its status and spent nothing (WP-150), and
+      if (!spawn.mayHaveReachedCli()) {
+        // A stop before the CLI was asked for, or whose frame was withheld after the marker
+        // (WP-163), keeps its status and spent nothing (WP-150), and
         // records how far it got (WP-154 (b′)). An ask has no start attempts: attempt 1.
         outcome = unspawnedStop(
           outcome,
           stoppedBeforeCliSpawn({
             ending: stopEndingOf(outcome),
-            step: spawn.asked() ? 'spawn_gate' : 'preparing',
+            step: unspawnedStepOf(spawn),
             attempt: 1,
             retryable: false,
           }),

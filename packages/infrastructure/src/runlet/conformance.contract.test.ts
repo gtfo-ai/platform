@@ -442,7 +442,54 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     );
   });
 
-  it('still logs an error-level line when the run shim closes with neither an exit frame nor a result', async () => {
+  /**
+   * Backlog 506 (WP-163 (e)): the stop path's half of backlog 463. The platform stops the run —
+   * the SDK's signal aborts and the adapter sends `signal{SIGTERM}` (technical/04's stop order) —
+   * and the launcher's container stop reaches the shim before the CLI exits. Here the CLI ignores
+   * SIGTERM, so the stop always wins. The run's ending comes from the stop cause, so the close is
+   * logged at `info` with an unknown status and no `error` emit. Canary: the `aborted` read dropped
+   * from the adapter's `onClose`, and this logs `runlet transport failed` at error (pino's
+   * `"level":50`).
+   */
+  it('logs no error-level line when the run shim closes after the platform’s own abort', async () => {
+    const shim = await startShimProcess({ RUNLET_KILL_GRACE_MS: '250' });
+    const { logger, lines } = recordingLogger();
+    const spawn = createRunletSpawn({
+      socketPath: shim.controlSocketPath,
+      token: TOKEN,
+      clock: systemClock,
+      logger,
+    });
+    const pidFile = `${shim.dir}/aborted.pid`;
+    const abort = new AbortController();
+    const child = spawn({
+      ...spawnOptions(['--scenario', 'ignore-term', '--pid-file', pidFile]),
+      signal: abort.signal,
+    });
+    const errors: Error[] = [];
+    child.on('error', (error) => errors.push(error));
+    const exited = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
+      child.once('exit', (code, signal) => resolve([code, signal]));
+    });
+    child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user' } })}\n`);
+    await waitForFile('the shim to spawn the fake CLI, which writes its pid file', pidFile);
+    abort.abort();
+    // The branch that ran (rule 10): the stop reached the CLI as SIGTERM, which it ignored.
+    await waitForFile('the shim to relay SIGTERM to the fake CLI', `${pidFile}.term`);
+    shim.stop();
+    expect(await shim.exited).toBe(0);
+    expect(await settlesWithin('the transport to report the end of the process', exited)).toEqual([
+      null,
+      null,
+    ]);
+    expect(errors).toEqual([]);
+    expect(lines.filter((line) => line.level === 'error')).toEqual([]);
+    expect(lines.map((line) => line.message)).toContain(
+      'the run shim closed the control connection after the platform stopped the run; the CLI’s exit status was not reported',
+    );
+  });
+
+  it('still logs an error-level line when the run shim closes with neither an exit frame nor a result, and no stop', async () => {
     const shim = await startShimProcess();
     const { logger, lines } = recordingLogger();
     const spawn = createRunletSpawn({

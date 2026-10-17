@@ -397,9 +397,14 @@ describe('the runner-side SpawnedProcess', () => {
       };
     };
 
-    const started = async (logger: ReturnType<typeof recordingLogger>['logger']) => {
+    const started = async (
+      logger: ReturnType<typeof recordingLogger>['logger'],
+      signal?: AbortSignal,
+    ) => {
       const { server, spawn } = await withRawShim({ logger });
-      const child = spawn(spawnOptionsFor('process.exit(0)'));
+      const child = spawn(
+        spawnOptionsFor('process.exit(0)', signal === undefined ? {} : { signal }),
+      );
       const errors: Error[] = [];
       child.on('error', (error) => errors.push(error));
       const peer = await server.peer();
@@ -425,7 +430,30 @@ describe('the runner-side SpawnedProcess', () => {
       );
     });
 
-    it('still fails the transport, at error, for a close with neither an exit frame nor a result', async () => {
+    /**
+     * Backlog 506 (WP-163 (e)): the platform's own stop — the SDK's signal aborted, the adapter
+     * sent `signal{SIGTERM}` — and the launcher's container stop beat the CLI's exit. The run's
+     * ending comes from the stop cause, so the close is not a transport failure. Canary: the
+     * `aborted` read dropped from `onClose`, and this logs `runlet transport failed` at error.
+     */
+    it('ends with an unknown exit status and no error-level line after the platform’s own abort (backlog 506)', async () => {
+      const { logger, lines } = recordingLogger();
+      const abort = new AbortController();
+      const { child, errors, peer } = await started(logger, abort.signal);
+      const exited = exitOf(child);
+      abort.abort();
+      // The branch that ran (rule 10): the stop reached the shim as a SIGTERM frame first.
+      await peer.next('signal');
+      peer.close();
+      expect(await exited).toEqual([null, null]);
+      expect(errors).toEqual([]);
+      expect(lines.filter((line) => line.level === 'error')).toEqual([]);
+      expect(lines.map((line) => line.message)).toContain(
+        'the run shim closed the control connection after the platform stopped the run; the CLI’s exit status was not reported',
+      );
+    });
+
+    it('still fails the transport, at error, for a close with neither an exit frame nor a result, and no stop', async () => {
       const { logger, lines } = recordingLogger();
       const { child, errors, peer } = await started(logger);
       const exited = exitOf(child);
@@ -466,6 +494,12 @@ describe('the runner-side SpawnedProcess', () => {
     const gateOf = (beforeSpawn: () => Promise<void>) => {
       const steps: RunletPreSpawnStep[] = [];
       const protocols: (RunletProtocols | null)[] = [];
+      /** WP-163: one entry per `spawnWithheld`, and a promise for the first. */
+      const withheld: string[] = [];
+      let told: () => void = () => {};
+      const withheldOnce = new Promise<void>((resolve) => {
+        told = resolve;
+      });
       return {
         gate: {
           beforeSpawn,
@@ -473,9 +507,16 @@ describe('the runner-side SpawnedProcess', () => {
             steps.push(step);
             protocols.push(named);
           },
+          spawnWithheld: () => {
+            withheld.push('withheld');
+            told();
+          },
+          stopped: () => false,
         },
         steps,
         protocols,
+        withheld,
+        withheldOnce,
       };
     };
 
@@ -516,7 +557,7 @@ describe('the runner-side SpawnedProcess', () => {
 
     it('sends no spawn frame when the gate refuses, and names the step (criterion 5)', async () => {
       const { server, spawn } = await withRawShim();
-      const { gate, steps } = gateOf(async () => {
+      const { gate, steps, withheld } = gateOf(async () => {
         throw new Error('the platform refused to record the CLI spawn');
       });
       spawn.setSpawnGate(gate);
@@ -535,6 +576,8 @@ describe('the runner-side SpawnedProcess', () => {
       expect(steps).toEqual(['spawn_refused']);
       await peer.closed;
       expect(peer.received.map((decoded) => decoded.frame.type)).not.toContain('spawn');
+      // WP-163 review round 1: a gate that refused wrote no marker, so nothing was withheld.
+      expect(withheld).toEqual([]);
     });
 
     it.each([
@@ -614,7 +657,7 @@ describe('the runner-side SpawnedProcess', () => {
     it('starts nothing when the process is killed while the gate is deciding (round 1)', async () => {
       const { server, spawn } = await withRawShim();
       let open: () => void = () => {};
-      const { gate, steps } = gateOf(
+      const { gate, steps, withheld, withheldOnce } = gateOf(
         () =>
           new Promise<void>((resolve) => {
             open = resolve;
@@ -632,6 +675,9 @@ describe('the runner-side SpawnedProcess', () => {
       const [code, signal] = await exited;
       open();
       await peer.closed;
+      // WP-163: the gate passed, so the record is told the frame was withheld — once.
+      await withheldOnce;
+      expect(withheld).toEqual(['withheld']);
       expect(code).toBeNull();
       expect(signal).toBe('SIGTERM');
       expect(child.killed).toBe(true);
@@ -642,7 +688,7 @@ describe('the runner-side SpawnedProcess', () => {
     it('starts nothing when the SDK aborts while the gate is deciding', async () => {
       const { server, spawn } = await withRawShim();
       let open: () => void = () => {};
-      const { gate, steps } = gateOf(
+      const { gate, steps, withheld, withheldOnce } = gateOf(
         () =>
           new Promise<void>((resolve) => {
             open = resolve;
@@ -661,10 +707,69 @@ describe('the runner-side SpawnedProcess', () => {
       const [code] = await exited;
       open();
       await peer.closed;
+      await withheldOnce;
+      expect(withheld).toEqual(['withheld']);
       expect(code).toBeNull();
       expect(steps).toEqual([]);
       // Neither the spawn nor a signal for a child that does not exist.
       expect(peer.received.map((decoded) => decoded.frame.type)).toEqual(['hello']);
+    });
+
+    /**
+     * WP-163 criterion (3), PROGRESS backlog 501: the shim's connection ends while the gate commits
+     * the marker. The gate then **passes**, and the adapter tells the record — once — that no frame
+     * followed it, beside the `connection_lost` step the transport's failure already named.
+     */
+    it('tells the record once, and sends no frame, when the connection closes while the gate decides', async () => {
+      const { server, spawn } = await withRawShim();
+      let open: () => void = () => {};
+      const { gate, steps, withheld, withheldOnce } = gateOf(
+        () =>
+          new Promise<void>((resolve) => {
+            open = resolve;
+          }),
+      );
+      spawn.setSpawnGate(gate);
+      const child = spawn(spawnOptionsFor('process.exit(0)'));
+      child.on('error', () => {});
+      const peer = await server.peer();
+      await peer.next('hello');
+      peer.send({ type: 'hello.ok', protocol: RUNLET_PROTOCOL_VERSION });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const exited = exitOf(child);
+      peer.close();
+      expect(await exited).toEqual([null, null]);
+      open();
+      await withheldOnce;
+      expect(withheld).toEqual(['withheld']);
+      expect(steps).toEqual(['connection_lost']);
+      expect(peer.received.map((decoded) => decoded.frame.type)).toEqual(['hello']);
+    });
+
+    /**
+     * The other direction (criterion (3)): a frame that was sent is a CLI that may exist, so no
+     * ending after it — an abort, a kill, a close — tells the record it was withheld. Canary: the
+     * hook called unconditionally after the gate, and this case fails.
+     */
+    it('never tells the record a frame was withheld once the spawn frame was sent', async () => {
+      const { server, spawn } = await withRawShim();
+      const { gate, withheld } = gateOf(async () => {});
+      spawn.setSpawnGate(gate);
+      const abort = new AbortController();
+      const child = spawn(spawnOptionsFor('process.exit(0)', { signal: abort.signal }));
+      child.on('error', () => {});
+      const peer = await server.peer();
+      await peer.next('hello');
+      peer.send({ type: 'hello.ok', protocol: RUNLET_PROTOCOL_VERSION });
+      await peer.next('spawn');
+      const exited = exitOf(child);
+      abort.abort();
+      await peer.next('signal');
+      child.kill('SIGKILL');
+      peer.close();
+      await exited;
+      await peer.closed;
+      expect(withheld).toEqual([]);
     });
   });
 

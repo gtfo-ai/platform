@@ -143,6 +143,22 @@ export interface RunletSpawnGate {
    * said; integers, so they can be named in platform text). `null` for every other step.
    */
   readonly failedBeforeSpawn: (step: RunletPreSpawnStep, protocols: RunletProtocols | null) => void;
+  /**
+   * Told once, when `beforeSpawn` **resolved** and the frame was then not sent — the transport
+   * ended, the SDK's signal aborted, the process was killed or the runner was stopped
+   * ({@link RunletSpawnGate.stopped}) while the gate decided (WP-163,
+   * PROGRESS backlog 501). Never after a `spawn` frame was sent, and never after a gate that
+   * rejected: the runner forwards it to `RunStartHooks.cliSpawnWithheld`, so a run whose marker
+   * committed and whose CLI was never asked for is a measured zero rather than held.
+   */
+  readonly spawnWithheld: () => void;
+  /**
+   * Whether the runner has been asked to stop the run (WP-163 review round 1). Read once, after
+   * `beforeSpawn` resolved: a cancel, take-over or shutdown sets the runner's stop cause at once,
+   * while the SDK's signal is aborted only after the interrupt's grace — so the signal alone would
+   * let a stop that landed while the marker committed send the frame anyway.
+   */
+  readonly stopped: () => boolean;
 }
 
 /**
@@ -174,7 +190,7 @@ export type RunletSpawn = ((spawnOptions: SpawnOptions) => SpawnedProcess) & {
    * returns its outcome once it has the `result`, the workspace runner then ends the workspace, and
    * the launcher's stop reaches the shim (through `tini`) while the CLI is still exiting on stdin
    * EOF — so the shim closes the connection with no `exit` frame. A close before the `result` is
-   * still logged at `error`.
+   * still logged at `error`, unless the platform aborted the run first (WP-163, backlog 506).
    */
   readonly noteSessionResult: () => void;
 };
@@ -394,8 +410,17 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
       }
       const connection = state.connection;
       // `killed`: a `kill()` while the gate decided is a process its caller already gave up on, and
-      // a `spawn` now would start a CLI nobody waits for (review round 1).
-      if (state.exited || spawnOptions.signal.aborted || killed || connection === null) {
+      // a `spawn` now would start a CLI nobody waits for (review round 1). `stopped`: the runner's
+      // stop, which reaches the SDK's signal only after the interrupt's grace (WP-163).
+      if (
+        state.exited ||
+        spawnOptions.signal.aborted ||
+        killed ||
+        connection === null ||
+        gate?.stopped() === true
+      ) {
+        // WP-163: the gate passed, so the marker is written, and no frame will follow it.
+        gate?.spawnWithheld();
         return;
       }
       connection.send(spawnFrame);
@@ -553,6 +578,18 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
           logger.info(
             {},
             'the run shim closed the control connection after the session’s result; the CLI’s exit status was not reported',
+          );
+          finish(null, null);
+          return;
+        }
+        if (spawnOptions.signal.aborted) {
+          // Backlog 506 (WP-163 (e)): the platform's own stop — the SDK aborts only when the
+          // runner's controller does — and the launcher's container stop beat the CLI's exit
+          // after the SIGTERM frame (technical/04's stop order). The run's ending comes from the
+          // stop cause, so this is not a failure either: `null` status, `info`, no `error` emit.
+          logger.info(
+            {},
+            'the run shim closed the control connection after the platform stopped the run; the CLI’s exit status was not reported',
           );
           finish(null, null);
           return;

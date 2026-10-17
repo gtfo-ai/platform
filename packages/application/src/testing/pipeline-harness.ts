@@ -338,6 +338,13 @@ export interface ScriptedRun {
    */
   readonly reachesCli?: boolean;
   /**
+   * The runner asks for the marker, it is written, and then the run shim's adapter **withholds**
+   * the `spawn` frame (WP-163, backlog 501): a stop, a kill or a lost connection landed while the
+   * marker committed. The runner tells the record through `RunStartHooks.cliSpawnWithheld` and
+   * answers the scripted outcome, which is what the executor's ending then reads.
+   */
+  readonly withholdsSpawn?: boolean;
+  /**
    * The runner asks for the marker, it is written, and then the outcome **rejects** with this error
    * (WP-150 round 1): a runner that failed after the CLI may have started. The executor records it
    * through the start-failure path with **no** figure, so every cap holds it (WP-131).
@@ -609,6 +616,9 @@ const askForCli = async (scripted: ScriptedRun, hooks: RunStartHooks): Promise<v
       retryable: false,
       diagnosis: { kind: 'workspace_failed', reason: 'cli_spawn_record_refused', commit: null },
     });
+  }
+  if (scripted.withholdsSpawn === true) {
+    hooks.cliSpawnWithheld();
   }
 };
 

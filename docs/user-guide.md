@@ -879,7 +879,7 @@ A run that ended with **nobody measuring it** — the platform stopped it, or it
 or a lost process ended it before it reported — has no cost at all, and is shown as *not measured*.
 This is only a run that got as far as asking for the Claude Code CLI: a run that never did — its
 workspace refused the handshake, or a cancel or a lost process ended it while its workspace was
-still being prepared — cannot have spent anything, is shown with a cost of **0**, and is never held.
+still being prepared or in the instant before the request went out — cannot have spent anything, is shown with a cost of **0**, and is never held.
 Its run page says *This run did not start* in place of an empty transcript: for a run refused at the
 handshake, the reason; for a run a person cancelled (or the platform's restart handed back) before its
 CLI was asked to start, that it was stopped first and how far it had got — the run is still shown as

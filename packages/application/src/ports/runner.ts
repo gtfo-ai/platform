@@ -742,6 +742,14 @@ export interface RunStartHooks {
    * (`../cost/pending.ts`).
    */
   readonly beforeCliSpawn: () => Promise<boolean>;
+  /**
+   * The CLI was **not** asked for after all (WP-163, BD-010's 2026-10-08 amendment): the marker was
+   * written — `beforeCliSpawn` answered `true` — and then the run shim's transport ended, the run
+   * was stopped or its process was killed before the `spawn` frame left the runner. Called at most
+   * once, only after a `beforeCliSpawn` that answered `true`, and never after a frame was sent, so
+   * a run told this cannot have reached a model. A runner with no frame to withhold never calls it.
+   */
+  readonly cliSpawnWithheld: () => void;
 }
 
 export interface ClaudeRunner {

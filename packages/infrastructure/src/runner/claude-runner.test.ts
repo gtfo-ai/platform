@@ -21,10 +21,15 @@ import type { RunOutcome, RunSpec, ToolApprovalDecision } from '@platform/applic
 import {
   countingStartHooks,
   PROGRESS_MIN_INTERVAL_MS,
+  recordCliSpawn,
   reportProgressTool,
+  unspawnedStepOf,
 } from '@platform/application';
 import type { TranscriptEvent } from '@platform/contracts';
+import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { createRunletSpawn } from '../runlet/spawn-adapter.js';
+import { createControlVolume, createRawServer } from '../runlet/testing.js';
 import {
   type ClaudeRunnerDependencies,
   createClaudeRunner,
@@ -1634,5 +1639,95 @@ describe('report_progress (backlog 496)', () => {
     expect(stored.some((event) => event.kind === 'progress')).toBe(true);
     const seqs = stored.map((event) => event.seq);
     expect(seqs).toEqual([...seqs].sort((left, right) => left - right));
+  });
+});
+
+/**
+ * WP-163 review round 1 (PROGRESS backlog 501's first trigger): a cancel that lands while the CLI
+ * spawn marker commits. `requestStop` sets the stop cause at once, but the SDK's signal is aborted
+ * only after the interrupt's grace, so the adapter reads the runner's stop through the gate's
+ * `stopped` and withholds the frame. Driven through the real runlet adapter against a raw server,
+ * because the question is which frames reach the wire. Canary: `stopped` dropped from the adapter's
+ * withhold condition, and the `spawn` frame is sent and the record says the CLI may have run.
+ */
+describe('a stop requested while the CLI spawn marker commits (WP-163)', () => {
+  it('sends no spawn frame, tells the record once, and the record answers a measured zero', async () => {
+    const volume = await createControlVolume();
+    const server = await createRawServer(volume.controlSocketPath);
+    try {
+      let commit: (written: boolean) => void = () => {};
+      const committing = new Promise<boolean>((resolve) => {
+        commit = resolve;
+      });
+      let asked: () => void = () => {};
+      const gateReached = new Promise<void>((resolve) => {
+        asked = resolve;
+      });
+      const record = recordCliSpawn({
+        unitOfWork: {
+          transaction: async (work: (scope: never) => unknown) => work({} as never),
+        } as never,
+        runs: {
+          markCliSpawnRequested: async () => {
+            asked();
+            return committing;
+          },
+        },
+        now: () => FIXTURE_CLOCK_START as never,
+        runId: runSpecFixture().runId,
+      });
+      let withholds = 0;
+      const hooks = {
+        beforeCliSpawn: record.hooks.beforeCliSpawn,
+        cliSpawnWithheld: () => {
+          withholds += 1;
+          record.hooks.cliSpawnWithheld();
+        },
+      };
+      const clock = manualClock(FIXTURE_CLOCK_START);
+      const runner = createClaudeRunner({
+        sink: recordingSink(),
+        approvals: scriptedApprovals(),
+        tools: recordingTools(),
+        clock,
+        injectedSecretRedactorFor: () => injectedSecretRedactorFixture(),
+        spawnClaudeCodeProcess: createRunletSpawn({
+          socketPath: volume.controlSocketPath,
+          token: 'run-token-wp163-runner-0000000000',
+          clock: manualClock(FIXTURE_CLOCK_START),
+        }),
+      });
+      const handle = runner.start(runSpecFixture({ artifactType: null }), hooks);
+      const peer = await server.peer();
+      await peer.next('hello');
+      peer.send({ type: 'hello.ok', protocol: RUNLET_PROTOCOL_VERSION });
+      await gateReached;
+
+      // The cancel lands while the marker's transaction is in flight; then the marker commits.
+      let stopped = false;
+      const stopping = handle.stop({ reason: 'cancelled' }).then(() => {
+        stopped = true;
+      });
+      commit(true);
+      for (let round = 0; round < 50 && !stopped; round += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        clock.advance(INTERRUPT_GRACE_MS);
+      }
+      await stopping;
+      const outcome = await handle.outcome;
+
+      expect(peer.received.map((decoded) => decoded.frame.type)).not.toContain('spawn');
+      expect(withholds).toBe(1);
+      expect(outcome.status).toBe('cancelled');
+      // The record the executor reads: the marker was written, the frame withheld, so the ending is
+      // `unspawnedStop`'s measured zero with the `spawn_withheld` step (WP-163 (c)).
+      expect(record.asked()).toBe(true);
+      expect(record.withheld()).toBe(true);
+      expect(record.mayHaveReachedCli()).toBe(false);
+      expect(unspawnedStepOf(record)).toBe('spawn_withheld');
+    } finally {
+      await server.close();
+      await volume.cleanup();
+    }
   });
 });

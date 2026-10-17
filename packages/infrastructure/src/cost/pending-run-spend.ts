@@ -37,9 +37,10 @@
  *
  * **One exclusion, since WP-150: `r.cli_spawn_requested_at is not null`** (migration 0085, BD-010's
  * 2026-10-06 amendment). A run counts `0` only when its row *proves* no CLI process was asked for,
- * and since WP-150 the row can: the process holding the run commits the marker before it sends the
- * shim its `spawn` frame and starts no CLI without it, so a null marker is a run that cannot have
- * sent a model request. Every ending of such a run writes the start failure's measured
+ * and since WP-150 the row can (since WP-163 a run whose `spawn` frame was withheld after the marker
+ * proves it through its ending's measured `usd_reported = 0` instead, the marker left set): the
+ * process holding the run commits the marker before it sends the shim its `spawn` frame and
+ * starts no CLI without it, so a null marker is a run that cannot have sent a model request. Every ending of such a run writes the start failure's measured
  * `usd_reported = 0` as well (`MEASURED_ZERO_COST`, *"nothing was spent, because nothing ran"*), so
  * the predicate is the second guard, for a row an older writer ended with no figure. Until WP-150 a
  * run swept or cancelled before its process spawned left both columns null like any other, nothing

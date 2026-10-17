@@ -83,3 +83,11 @@ auth_failed"*. Three decisions, built at WP-151:
 3. A close of the control connection **after** the `exit` frame, or after the session's `result` has been read, is not a
    transport failure (backlog 463): the order of the shim's last frames is measured first, and the error line is kept for a
    close that leaves the child's exit unknown.
+
+## Amendment (WP-163, 2026-10-17, session 16) — a close after the platform's own abort is not a fault (PROGRESS backlogs 506, 554)
+Item 3 of the M9 amendment keeps the error line for a close that leaves the child's exit unknown. A close that arrives
+**after the platform's own abort** (a stop the platform made: cancel, take-over, shutdown, stall, wall clock, budget) also
+leaves the exit unknown, and it is now logged at `info` and finishes with an unknown exit status (`null`, never `0`) and no
+`error` emit, as a close after a `result` already did. The run's ending comes from the stop's cause, so the error line
+described a deliberate ending as a fault. The error line stays for a close with no stop, no `result` and no `exit` frame.
+Built at WP-163 (`packages/infrastructure/src/runlet/spawn-adapter.ts`, `onClose`); technical/04 states it.

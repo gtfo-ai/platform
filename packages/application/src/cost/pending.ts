@@ -88,7 +88,9 @@
  *   for the batch's life. **The task cap never rolls over**: the task stays paused until a human
  *   raises the cap.
  * - **One exclusion, and it is a proof — WP-150** (BD-010's 2026-10-06 amendment, PROGRESS backlogs
- *   410 and 489). A run counts `0` only when its row proves no CLI process was asked for:
+ *   410 and 489). A run counts `0` only when its row proves no CLI process was asked for — or,
+ *   since WP-163, when its ending recorded the measured zero because the `spawn` frame was withheld
+ *   after the marker (the marker stays set; `usd_reported = 0` is the proof then):
  *   `runs.cli_spawn_requested_at` (migration 0085) is written, in its own committed transaction, by
  *   the process holding the run **before** it sends the run shim its `spawn` frame, and no CLI is
  *   started without it (`../pipeline/cli-spawn.ts`). A run whose marker is null — refused at the

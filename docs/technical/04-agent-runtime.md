@@ -651,7 +651,7 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > `packages/application/src/pipeline/live-runs.ts`); one benign route reads the same — a session
 > whose outcome settled during the very drain that looked — and the line names it.
 - Heartbeat: last output timestamp; `stalled` after `stallTimeoutMs` → interrupt, mark stalled, pipeline retries once with failure context (research/01 Symphony).
-- Transport: `spawnClaudeCodeProcess` returns a `SpawnedProcess` backed by the run shim's control socket (frames for stdin/stdout/stderr/signal/exit); `stderr` frames go to the runner's redacting sink and the run log (WP-127, below); the SDK teardown signal maps to `signal{SIGTERM}` and then container stop.
+- Transport: `spawnClaudeCodeProcess` returns a `SpawnedProcess` backed by the run shim's control socket (frames for stdin/stdout/stderr/signal/exit); `stderr` frames go to the runner's redacting sink and the run log (WP-127, below); the SDK teardown signal maps to `signal{SIGTERM}` and then container stop. **As built at WP-163 (PROGRESS backlog 506):** that order lets the container stop close the control connection before the CLI's `exit` frame, so a close that arrives after the platform's own abort (the SDK's spawn signal, which aborts only when the runner's controller does) is logged at `info`, reports an unknown exit status (`null`, never `0`) and emits no `error` — as WP-151 treats a close after the session's `result`. The run's ending comes from its stop cause either way; read for every cause in `READS_INTERRUPTED_RESULT`, the `error` emit after the abort had no effect but the log line. A close with no stop, no `result` and no `exit` frame is still a transport failure at `error`.
 
 > **WP-127 (PROGRESS backlog 344 and 346).** *stderr:* the SDK attaches its own `stderr` callback
 > only to a process it spawns itself, so until WP-127 a containerised CLI's stderr frames reached
@@ -739,6 +739,19 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > - **A run with the marker and no figure keeps WP-131's hold, unchanged**, including a runner that
 >   failed after it asked for the CLI (its start failure records no figure). The marker is written one
 >   frame before the CLI exists, so a `spawn` the shim then refused is held — the fail-closed side.
+> - **As built at WP-163 (BD-010's 2026-10-08 amendment, PROGRESS backlog 501): a frame withheld
+>   after the marker is a measured zero.** A stop, a kill or a lost connection can land while the
+>   marker commits; the gate then passes and the adapter sends no `spawn` frame. It says so through a
+>   second start hook, `RunStartHooks.cliSpawnWithheld` (called once, only after a gate that passed,
+>   never after a frame was sent), and the executors read one predicate, `CliSpawnRecord.mayHaveReachedCli`
+>   (*written and not withheld*), where they read `requested()` before. A stop ends through
+>   `unspawnedStop` with the step `spawn_withheld` in its `exit_detail`; any other ending is a start
+>   failure `ended_before_cli_spawn`; both write `usd_reported = 0`, so no cap holds the run. **The
+>   marker is not cleared**: `cli_spawn_requested_at` stays the true record that the platform asked.
+>   *Residual, stated rather than closed:* the withheld fact lives in the memory of the process
+>   holding the run, so a process that dies between the marker's commit and recording the ending
+>   leaves a marked run with no figure, which the lease sweep ends held — fail-closed, and as wide as
+>   the marker's commit plus the ending's transaction (stated at `recordCliSpawn`).
 > - Every row from before 0085 was backfilled to `started_at`, so nothing held then is released.
 >
 > The per-run caps themselves are unchanged (Q116 (a)): `docs/first-local-test.md` and the user guide

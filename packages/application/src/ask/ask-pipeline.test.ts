@@ -1213,6 +1213,108 @@ describe('an ask that never runs', () => {
   });
 
   /**
+   * WP-163 criterion (2), PROGRESS backlog 501: the ask executor's half. A stop that lands while
+   * the marker commits — the gate passes, the frame is withheld — is the measured zero with the
+   * `spawn_withheld` step, and the task cap holds nothing for it. Canary: `CliSpawnRecord.withheld`
+   * always `false`, and the ask run is held.
+   */
+  it('ends an ask cancelled while its CLI spawn marker committed as a measured zero (WP-163)', async () => {
+    const harness = createPipelineHarness({
+      projectId: PROJECT,
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          structuredOutput: askingRefinedSpec(),
+          costUsd: 0.1,
+        },
+        [`ask:${QUESTION}`]: {
+          status: 'cancelled',
+          terminalReason: 'cancelled',
+          withholdsSpawn: true,
+        },
+      },
+    });
+    await seedTask(harness);
+    await askThroughHttp(harness);
+    const [ask] = harness.asks.all();
+    const runId = ask?.runId as Id;
+    const [row, held] = await harness.memory.transaction(async (scope) => {
+      const run = await harness.store.runs.load(scope.tx, runId);
+      return [run, await harness.store.runs.heldFor(scope.tx, run?.taskId as Id, 7)] as const;
+    });
+    const cause = {
+      kind: 'not_started',
+      diagnosis:
+        'cancelled by a person before its CLI was asked to start: the CLI spawn marker was written and the spawn frame was then withheld',
+      detail: null,
+      truncated: false,
+      attempt: 1,
+      retryable: false,
+    };
+    expect(row?.cliSpawnRequestedAt).not.toBeNull();
+    expect(row?.cost).toEqual({ usd: 0, is_estimate: false, price_list_id: null });
+    expect(held).toEqual({ heldUsd: 0, heldRuns: 0 });
+    expect(harness.store.startFailureOf(runId)).toEqual(cause);
+    // `run.failed` is the one ending an ask has (WP-154 (b′)'s case above).
+    const failed = harness
+      .events()
+      .find((event) => event.type === 'run.failed' && event.payload.run_id === runId);
+    expect((failed?.payload as { start_failure?: unknown } | undefined)?.start_failure).toEqual(
+      cause,
+    );
+  });
+
+  /**
+   * WP-163 review round 1: the ask executor's non-stop half of ruling (c). A crash whose `spawn`
+   * frame was withheld after the marker is the start failure `ended_before_cli_spawn` with the
+   * measured zero, and no cap holds it. Canary: either ask site reading the marker alone
+   * (`written`), and the run is held with no figure.
+   */
+  it('ends an ask that crashed with its spawn frame withheld as a start failure with a measured zero (WP-163)', async () => {
+    const harness = createPipelineHarness({
+      projectId: PROJECT,
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          structuredOutput: askingRefinedSpec(),
+          costUsd: 0.1,
+        },
+        [`ask:${QUESTION}`]: {
+          status: 'failed',
+          terminalReason: 'crash',
+          costUnmeasured: true,
+          error: 'the run shim closed the control connection',
+          withholdsSpawn: true,
+        },
+      },
+    });
+    await seedTask(harness);
+    await askThroughHttp(harness);
+    const [ask] = harness.asks.all();
+    expect(ask?.status).toBe('failed');
+    expect(ask?.refusalReason).toContain('ended_before_cli_spawn');
+    const runId = ask?.runId as Id;
+    const [row, held] = await harness.memory.transaction(async (scope) => {
+      const run = await harness.store.runs.load(scope.tx, runId);
+      return [run, await harness.store.runs.heldFor(scope.tx, run?.taskId as Id, 7)] as const;
+    });
+    expect(row?.terminalReason).toBe('error_during_execution');
+    expect(row?.cliSpawnRequestedAt).not.toBeNull();
+    expect(row?.cost).toEqual({ usd: 0, is_estimate: false, price_list_id: null });
+    expect(held).toEqual({ heldUsd: 0, heldRuns: 0 });
+    const failed = harness
+      .events()
+      .find((event) => event.type === 'run.failed' && event.payload.run_id === runId);
+    expect((failed?.payload as { cost?: unknown } | undefined)?.cost).toEqual({
+      usd: 0,
+      is_estimate: false,
+      price_list_id: null,
+    });
+  });
+
+  /**
    * **An ask refused by its workspace says why, in platform words** — WP-132, PROGRESS backlog 424,
    * mirroring `stage-executor.test.ts` › "a run refused by its workspace names the kind and the
    * reason (WP-127)". The ask row and `run.failed.error` carry the workspace's error kind, its

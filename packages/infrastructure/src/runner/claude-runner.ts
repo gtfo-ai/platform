@@ -514,6 +514,11 @@ const startRun = (
         mismatch = step === 'protocol_mismatch' ? protocols : null;
       }
     },
+    // WP-163: the marker committed and the frame was not sent; the record, not this runner,
+    // decides what that ending costs (`packages/application/src/pipeline/cli-spawn.ts`).
+    spawnWithheld: () => hooks.cliSpawnWithheld(),
+    // WP-163 review round 1: a stop requested while the marker committed withholds the frame.
+    stopped: () => stopCause !== null,
   });
   const notSpawned = (failure: string | null): RunStartError => {
     const key =

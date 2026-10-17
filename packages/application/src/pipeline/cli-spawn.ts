@@ -21,13 +21,26 @@
  *
  * Its ending writes the zero a start failure writes ({@link MEASURED_ZERO_COST}), and every cap's
  * held set excludes it (`packages/infrastructure/src/cost/pending-run-spend.ts`). A run **with** the
- * marker and no figure keeps WP-131's hold, unchanged.
+ * marker and no figure keeps WP-131's hold, unchanged — unless its frame was withheld (below).
+ *
+ * ## When the frame is withheld after the marker (WP-163, BD-010's 2026-10-08 amendment)
+ *
+ * The marker commits **before** the frame, so a stop, a kill or a lost connection can land while
+ * it commits, and the run shim's adapter then sends no `spawn` frame (PROGRESS backlog 501). The
+ * adapter knows that exactly and says so through `RunStartHooks.cliSpawnWithheld`; the record keeps
+ * it as the **withheld** fact, and the executors read one predicate, {@link
+ * CliSpawnRecord.mayHaveReachedCli} — *written and not withheld* — so such a run ends as an
+ * unspawned one: a stop through {@link unspawnedStop} with the step `spawn_withheld`, anything else
+ * a start failure (`ended_before_cli_spawn`), both at {@link MEASURED_ZERO_COST}. **The marker is
+ * not cleared**: `runs.cli_spawn_requested_at` stays the true record that the platform asked, and
+ * the run's `exit_detail` says the frame was withheld.
  *
  * ## What it does not prove
  *
  * That the CLI **did** start: the marker is written before the `spawn` frame, so a run whose spawn
  * the shim then refused is held like any run that may have spent. That is the fail-closed side of
- * the window (standing rule 20), and it is one frame wide.
+ * the window (standing rule 20), and it is one frame wide. Nor does a withheld frame survive the
+ * process that withheld it: WP-163 (d)'s residual, stated at {@link recordCliSpawn}.
  */
 import type { Id, IsoDateTime, RunCost, RunStartFailure, TokenUsage } from '@platform/contracts';
 import type { Logger } from '../ports/logger.js';
@@ -55,8 +68,14 @@ export const MEASURED_ZERO_COST: RunCost = { usd: 0, is_estimate: false, price_l
 export interface CliSpawnRecord {
   /** Handed to `ClaudeRunner.start`. */
   readonly hooks: RunStartHooks;
-  /** `true` once this record's own write committed — the CLI may then have been started. */
-  readonly requested: () => boolean;
+  /**
+   * `true` once this record's own write committed **and** the runner did not then withhold the
+   * `spawn` frame (WP-163): the run **may have reached its CLI**, so a run that ended with no figure
+   * is held at its reservation. `false` is a measured zero.
+   */
+  readonly mayHaveReachedCli: () => boolean;
+  /** `true` when the marker was written and the runner then withheld the frame (WP-163). */
+  readonly withheld: () => boolean;
   /**
    * `true` once the runner reached the spawn gate and asked — whether or not the write committed.
    * It tells a stop that landed while the workspace and the shim were still being prepared from one
@@ -72,6 +91,11 @@ export interface CliSpawnRecord {
  * before the workspace was provisioned, and not the ending's, which is too late — so the marker is
  * durable the moment the hook answers `true`. A second call answers `false` without writing: the
  * runner asks once, and a runner that asked twice must not start two CLIs.
+ *
+ * Residual (WP-163 (d)): `cliSpawnWithheld` is recorded in this process's memory only, so a process
+ * that dies after the marker committed and before the run's ending was recorded leaves a marked,
+ * unmeasured run that the lease sweep ends held — fail-closed, and as wide as the marker's commit
+ * plus the ending's transaction.
  */
 export const recordCliSpawn = (deps: {
   readonly unitOfWork: UnitOfWork;
@@ -83,6 +107,7 @@ export const recordCliSpawn = (deps: {
   const logger = deps.logger ?? silentLogger;
   let asked = false;
   let written = false;
+  let withheld = false;
   return {
     hooks: {
       beforeCliSpawn: async () => {
@@ -102,8 +127,12 @@ export const recordCliSpawn = (deps: {
         }
         return written;
       },
+      cliSpawnWithheld: () => {
+        withheld = true;
+      },
     },
-    requested: () => written,
+    mayHaveReachedCli: () => written && !withheld,
+    withheld: () => written && withheld,
     asked: () => asked,
   };
 };
@@ -139,9 +168,11 @@ export const unspawnedStop = (outcome: RunOutcome, startFailure?: RunStartFailur
  *   (`endRunRecordInPlace`) and nothing was asked of a workspace on its behalf after that;
  * - `preparing` — the process holding the run applied the stop while its workspace and run shim
  *   were still being prepared, before the runner reached the spawn gate;
- * - `spawn_gate` — the runner had reached the spawn gate and the marker was not written.
+ * - `spawn_gate` — the runner had reached the spawn gate and the marker was not written;
+ * - `spawn_withheld` — the marker was written and the runner then withheld the `spawn` frame
+ *   (WP-163): the stop landed while the marker committed.
  */
-export type UnspawnedStopStep = 'unheld' | 'preparing' | 'spawn_gate';
+export type UnspawnedStopStep = 'unheld' | 'preparing' | 'spawn_gate' | 'spawn_withheld';
 
 const STOP_ENDING_WORDS = {
   cancelled: 'cancelled by a person',
@@ -152,7 +183,12 @@ const STOP_STEP_WORDS: Readonly<Record<UnspawnedStopStep, string>> = {
   unheld: 'no process was holding the run, so it was ended as a record',
   preparing: 'while its workspace and run shim were being prepared',
   spawn_gate: 'at the CLI spawn marker, which was not written',
+  spawn_withheld: 'the CLI spawn marker was written and the spawn frame was then withheld',
 };
+
+/** The step a stop that never reached its CLI had reached, read off its record. */
+export const unspawnedStepOf = (spawn: CliSpawnRecord): UnspawnedStopStep =>
+  spawn.withheld() ? 'spawn_withheld' : spawn.asked() ? 'spawn_gate' : 'preparing';
 
 /**
  * The cause a stop that landed **before** the CLI spawn marker records — on `runs.exit_detail`
@@ -189,12 +225,23 @@ export const stopEndingOf = (outcome: RunOutcome): 'cancelled' | 'shutdown' =>
  * (ruling (d)): a runner that reported a `crash`, a stall or anything else before it asked for the
  * CLI did not run one, so the honest record is *not started*, never `crash`. Terminal: nothing
  * known about it says another attempt would differ.
+ *
+ * A record whose frame was **withheld** after the marker (WP-163 (c)) is the same ending with the
+ * reason `ended_before_cli_spawn`: the platform asked, and no CLI was started.
  */
-export const cliSpawnNotRequested = (outcome: RunOutcome): RunStartError =>
-  new RunStartError(
-    `the session ended (${outcome.status}, ${outcome.terminalReason}) before its CLI was asked to start`,
-    {
-      retryable: false,
-      diagnosis: { kind: 'workspace_failed', reason: 'cli_spawn_not_requested', commit: null },
-    },
-  );
+export const cliSpawnNotRequested = (outcome: RunOutcome, spawn: CliSpawnRecord): RunStartError =>
+  spawn.withheld()
+    ? new RunStartError(
+        `the session ended (${outcome.status}, ${outcome.terminalReason}) after its CLI spawn marker was written and before the spawn frame was sent`,
+        {
+          retryable: false,
+          diagnosis: { kind: 'workspace_failed', reason: 'ended_before_cli_spawn', commit: null },
+        },
+      )
+    : new RunStartError(
+        `the session ended (${outcome.status}, ${outcome.terminalReason}) before its CLI was asked to start`,
+        {
+          retryable: false,
+          diagnosis: { kind: 'workspace_failed', reason: 'cli_spawn_not_requested', commit: null },
+        },
+      );
