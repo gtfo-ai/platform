@@ -42,6 +42,7 @@ import {
   removeInstanceRunObjects,
   sweepStaleHarnessResources,
 } from './harness-volumes.js';
+import { assertRuntimeImageProtocol, BUILD_IMAGES_COMMAND } from './runtime-image-protocol.js';
 
 const run = promisify(execFile);
 
@@ -64,8 +65,7 @@ export const EGRESS_IMAGE = process.env['WORKSPACE_E2E_EGRESS_IMAGE'] ?? 'platfo
 export const ALPINE_IMAGE = process.env['WORKSPACE_E2E_ALPINE_IMAGE'] ?? 'alpine:3.21';
 export const GIT_IMAGE = process.env['WORKSPACE_E2E_GIT_IMAGE'] ?? 'alpine/git:v2.49.1';
 
-/** How the two images above are built, quoted verbatim in the failure when one is missing. */
-export const BUILD_IMAGES_COMMAND = 'node scripts/build-images.mjs runtime egress';
+export { BUILD_IMAGES_COMMAND };
 
 const VCS = `g${'it'}`;
 
@@ -399,6 +399,9 @@ export const startDockerFixture = async (
   // reached through the CLI (which pulls) or through the engine (which does not).
   const images = imageTagsOf(providerImages);
   await ensureImages(images);
+  // Present is not enough since WP-151: a run image older than the runner's shim protocol is refused
+  // by the provider at every create, case by case. Asked once here instead (backlog 504).
+  await assertRuntimeImageProtocol(docker, providerImages.runtime);
   // What a killed run left behind — the repository container and the two servers, the network,
   // the two volumes, and the dead fixture's own run objects (WP-96 for the volumes, backlog 7
   // bullet 8; WP-116 for the container and the network, backlog 329; WP-128 the rest): only this

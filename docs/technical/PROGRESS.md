@@ -16090,6 +16090,28 @@ WP-185's *Decisions* records the over-ask for `-I{} grep x` and says *"the commo
 
 **Depends on** nothing.
 
+### 571. **The e2e isolation probe's `nc` half passes on a DNS failure: the repository container's name does not resolve on the run network, so `rc=1` says nothing about reachability** (TODO, **minor — a test that cannot fail for the reason it names; the isolation itself is not shown broken**. Measured by WP-169's canary (3), session 16; the measurement backlog 411 asked for. **No work package owns it**. No test run by the refiner)
+
+**What is wrong.** The probe in `test/e2e/workspace/docker-workspace.e2e.test.ts:1008` is ``nc -z -w 3 ${fixture.repoContainer} 9418; echo "rc=$?"; …``, asserted with `expect(lineValues('rc'), …).toEqual(['1'])` at `:1020`. `fixture.repoContainer` is the name `agentic-e2e-repo-${suffix}` (`test/e2e/support/docker-workspace.ts:416`), on the bridge network, and the run container's network is `internal` and has no resolver entry for it, so `nc` exits 1 before any packet is sent. A run network wrongly attached to the bridge would still read `rc=1` as long as the name stays unresolved.
+
+**Evidence.** WP-169's canary (3), one real run on `platform-runtime:s16`/`platform-egress:s16`, printed the probe's whole output: *"nc: bad address 'agentic-e2e-repo-489br3'\nrc=1\ndefault_routes=1\n"* (the `default_routes=1` is the canary's `grep -c ""`, not a route). WP-169's residual: *"`nc` prints *bad address* … rather than a refused connect. `rc=1` holds either way, as before."*
+
+**What it costs to leave.** Half of the e2e evidence for technical/05's network isolation is a DNS check. The `default_routes=0` half still holds, so this is a weak assertion, not a hole known to be open.
+
+**Done when.** The probe targets the repository container's **IP on the bridge network** (from `docker inspect`), and the case asserts the failure kind (a timeout or unreachable, never *bad address*) as well as `rc=1`. A control from a container on the bridge network reaches the same IP and port with `rc=0`, so the probe is shown able to succeed. A canary that attaches the run container to the bridge network is killed by the case.
+
+**Depends on** nothing. Related: 411 (diagnosability half closed by WP-169).
+
+### 572. **`postgres-history-bootstrap-store.integration.test.ts` › "sums only this batch’s tasks from the ledger" leaves `otherTask`, its two runs and their `cost_entries` behind** (TODO, **nit — pre-existing, harmless today because it is the last case in its `describe`**. Reported after WP-169, session 16. **No work package owns it**)
+
+**What is wrong.** The case (`test/integration/bootstrap/postgres-history-bootstrap-store.integration.test.ts:339-397`) inserts task `BOOT-OTHER` and, through its local `runFor`, two `runs` with a `cost_entries` row each. `runFor` does not push to `caseRows.runs`, so WP-169's `afterEach` (`:112-122`, *"Keyed by the case's own ids, so nothing else is touched"*) deletes the batch and nothing else. The task is never deleted.
+
+**What it costs to leave.** A case added after it in that `describe`, or any later read of the project's ledger, sees 10.25 USD and a task it did not create.
+
+**Done when.** `runFor` records its run in `caseRows.runs`, and the `afterEach` also deletes the case's extra tasks by id (after their runs).
+
+**Depends on** WP-169 (the `afterEach`).
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -48555,3 +48577,63 @@ So the reviewer's report holds for every row (both 561 paths and 562 read `auto`
 **Verification.** `scripts/citations.test.ts` 13/13 (after restoring a test name the first pass had renamed, which WP-155's note cites); the three touched ui files 33/33; `pnpm run -s verify` exit 0, final line `PASS: verify`. **Not run:** `verify:ui` (whole tier), `verify:web-e2e` (the orchestrator's).
 
 **Review round 1 (APPROVE).** No change asked; the code-unit residual of the cut is stated above. The orchestrator's first `verify:web-e2e` on this tree failed once in an untouched spec (filed as backlog 570); two reruns read `PASS`.
+
+#### WP-169 — The e2e fixture refuses a stale run image once, and two harness readings stop cascading or hiding their cause (backlogs 504, 409, 411)
+
+**Changes.**
+- (a) **504.** `assertRuntimeImageProtocol` (new, `test/e2e/support/runtime-image-protocol.ts`) runs `docker image inspect --format '{{json .Config.Labels}}'` on the runtime image. It throws one `Error` unless `com.agentic.runlet-protocol` reads `RUNLET_PROTOCOL_VERSION`. The message names the image, the image's number (*none* when it declares none or a non-number), the runner's number and `BUILD_IMAGES_COMMAND`. `startDockerFixture` calls it right after `ensureImages` and before `sweepStaleHarnessResources`, so nothing is created or removed first. It never skips. The label is read by `declaredRunletProtocol` from `@platform/contracts`, which the provider also uses (review round 1).
+- **Assumption.** `BUILD_IMAGES_COMMAND` moved into the new module, and `docker-workspace.ts` re-exports it, still on line 68. This lets the unit tier reach the check without the provider's import graph. Precedent: `scripts/e2e-harness-volumes.test.ts` reaches `harness-volumes.ts` the same way.
+- (b) **409.** The five cleanups in `test/integration/bootstrap/postgres-history-bootstrap-store.integration.test.ts` are now one `afterEach` inside `describe('what only the database can answer')`.
+  - It is keyed by the ids each case records: `batch(nextId())` for batch ids, and every id `startHistoryBootstrap` draws in the race case (a chunk id matches no batch, so recording it is harmless).
+  - The ledger case's runs are recorded too; their `cost_entries` are deleted by `run_id` before the runs.
+  - The race case's project-wide `delete … where project_id` is gone.
+- (c) **411.** The probe prints `rc=$?` and `default_routes=<count>` as labelled lines. Each is read per line (trimmed, by its `key=` prefix) and asserted on its own with `toEqual(['1'])` / `toEqual(['0'])`. Each assertion's message names its line and carries the whole output `JSON.stringify`-ed, so a stray `\r` or trailing text is visible.
+
+**Tests.**
+- `scripts/e2e-runtime-image-protocol.test.ts` (unit tier, a `docker` double):
+  - six refusals, each with one inspection and one error naming the image, both numbers and the command: no labels (`null`), labels without the protocol one, a non-number, another protocol, `${V}0` and `0${V}` (the last two added in review round 1);
+  - "accepts an image that declares exactly this checkout’s protocol";
+  - "is asked by the fixture after the images are ensured and before anything is created" (a source-order read of `docker-workspace.ts`).
+- Against this daemon (one read-only scratch call): `platform-runtime:s16` was accepted. The person's unlabelled `platform-runtime:dev` was refused with *"…declares shim protocol none (com.agentic.runlet-protocol), and this checkout's runner speaks protocol 3: rebuild it with `node scripts/build-images.mjs runtime egress`…"*.
+
+**Canaries** (in-place edit, reverted in place, `shasum -c` OK after each).
+- Label check skipped (`declared === RUNLET_PROTOCOL_VERSION || true`): **dead by** the four "%s: one inspection, one error naming the image, both numbers and the command" cases of the time (4 failed, 2 passed).
+- Fixture call removed: **dead by** "is asked by the fixture after the images are ensured and before anything is created".
+- (2) **409 planted failure, shown once and not committed.** `expect('planted').toBe('WP-169 canary')` was planted after the first case's `one_live` rejection, so its first batch stays live. The same plant went into this file and into a temporary copy of the `HEAD` version (removed afterwards), and both ran together.
+  - The `HEAD` copy failed **5** cases: the planted one, the race case (`expected [ Array(2) ] to deeply equal [ 'already_running', 'started' ]`) and three on `duplicate key value violates unique constraint "history_bootstrap_batches_one_live"`.
+  - The new file failed **1**, the planted case only (22 tests, 1 failed).
+- (3) **411.** `grep -c "^default"` was replaced by `grep -c ""` for one real run of `docker-workspace.e2e.test.ts` (`platform-runtime:s16`/`platform-egress:s16`).
+  - Result: 83 passed, 1 failed with *"AssertionError: the default-route count line — the whole probe output: "nc: bad address 'agentic-e2e-repo-489br3'\nrc=1\ndefault_routes=1\n": expected [ '1' ] to deeply equal [ '0' ]"*.
+  - Afterwards: 0 containers labelled `com.agentic.e2e.harness`, and `docker volume ls | wc -l` = 71.
+- None survived.
+- **Real run, canary reverted:** `docker-workspace.e2e.test.ts` alone, same images, **84/84** passed. Afterwards: 0 harness containers, 71 volumes.
+
+**Residuals.**
+- The 411 mechanism is still unmeasured. The `nc` half now reads as a DNS failure (review round 1, item 4).
+- `scripts/credential-path-check.mjs` also defaults to `platform-runtime:dev` and does not go through `startDockerFixture`, so it gets no label check. Not in this row.
+
+**Sentences falsified (rule 83).** Swept `docs/` (plan and PROGRESS aside), `CLAUDE.md`, `scripts/`, `test/`, `docker/` and `.github/` for *runlet-protocol*, *WORKSPACE_E2E_RUNTIME_IMAGE*, *stale run image*, *probe*, *rc=*, *default route*, *ensureImages*.
+- No sentence says a present image passes the fixture, or that the probe reads the last character.
+- `docker-workspace.ts`'s docblock (*a missing `platform-*` image fails immediately with the command*) is still true. The label check is stated at its call site.
+
+**Discovered work (for a refiner).** None.
+
+**Verification.**
+- Round 0: `scripts/citations.test.ts` 13/13. The bootstrap integration file alone: 22/22. `pnpm run -s verify` exit 0, final line `PASS: verify`.
+- **Not run:** the whole `verify:e2e` or `verify:integration` (the brief's limits).
+
+**Review round 1 (REQUEST_CHANGES, addressed).**
+- **1 [major, rule 7].** `declaredRunletProtocol(label)` now lives in `packages/contracts/src/runlet.ts`, beside `RUNLET_PROTOCOL_IMAGE_LABEL`, and owns the pattern `/^[1-9][0-9]{0,8}$/`.
+  - `provider.ts` (`#assertRunletProtocol`) and `test/e2e/support/runtime-image-protocol.ts` both call it; no copy is left.
+  - `schemas/` is unaffected: it is a function, not a schema.
+- **2 [minor].** Two more refusals in `scripts/e2e-runtime-image-protocol.test.ts`: `${V}0` (named as protocol 30) and `0${V}` (*none*).
+  - **Assumption:** "cover the shared function once" is read as one table test at the function's home: `packages/contracts/src/runlet.test.ts` › "reads a plain positive integer and nothing else". It accepts `3`, `30` and `999999999`, and answers `null` for undefined, `''`, `0`, `03`, `3.0`, ` 3`, `3 `, `three`, `-3`, `1e3` and `1000000000`.
+  - The provider's `runtime-protocol.test.ts` already covers `03`, `3.0` and ` 3` through `create`, and is unchanged (7/7).
+- **3 [minor].** The placement test uses `>= 0`. No canary: an `indexOf` of 0 is impossible for these lines.
+- **4 [rule 83].** Measured in this WP's canary e2e run: the `nc` half of 411 (`rc=1`) is a **DNS failure** (`nc: bad address 'agentic-e2e-repo-489br3'`), not a refused connection.
+  - The repository container's name does not resolve on the run's internal network, so the probe proves "unresolvable", not "unroutable".
+  - Recorded as backlog **571** (the follow-up: target the container's IP).
+- **Canaries** (in place, `md5` reverted and matched):
+  - Pattern widened to `/^[0-9]+$/`: **dead by** "reads a plain positive integer and nothing else" and by "this protocol with a leading zero: one inspection, one error naming the image, both numbers and the command".
+  - Prefix compare in the fixture (`String(declared).startsWith(String(RUNLET_PROTOCOL_VERSION))`): **dead by** "a protocol that starts with this one: one inspection, one error naming the image, both numbers and the command".
+- **Round 1 verification.** `scripts/citations.test.ts` 13/13. The three touched unit files: 24/24, 8/8 and 7/7. `pnpm run -s verify` exit 0, `PASS: verify`. `docker-workspace.e2e.test.ts` alone on the `s16` images: 84/84, then 0 harness containers and 71 volumes.

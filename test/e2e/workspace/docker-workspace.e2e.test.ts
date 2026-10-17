@@ -1005,12 +1005,22 @@ describe('the hardening flags, as the daemon recorded them and as the kernel enf
       handle.containerId,
       // The fixture repository is on the bridge network; the workspace is on `run-<id>`, which is
       // `internal: true`. Bounded so a firewalled environment fails fast rather than hanging.
-      `nc -z -w 3 ${fixture.repoContainer} 9418; echo "rc=$?"; ip route | grep -c "^default"`,
+      `nc -z -w 3 ${fixture.repoContainer} 9418; echo "rc=$?"; echo "default_routes=$(ip route | grep -c "^default")"`,
     );
-    expect(reachable.output).toContain('rc=1');
+    // Read per line and each line asserted on its own, with the whole output (quoted, so a stray
+    // `\r` or trailing text shows) in the failure: this once failed reading the output's last
+    // character, and nobody could say which half was wrong (PROGRESS backlog 411, WP-169).
+    const whole = `the whole probe output: ${JSON.stringify(reachable.output)}`;
+    const lineValues = (key: string): string[] =>
+      reachable.output
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith(`${key}=`))
+        .map((line) => line.slice(key.length + 1));
+    expect(lineValues('rc'), `the nc line (rc=) — ${whole}`).toEqual(['1']);
     // No default route at all — the same thing WP-13 measured, now for a network this provider
     // created. (busybox `ip route show default` ignores its own selector; the line is matched.)
-    expect(reachable.output.trim().endsWith('0')).toBe(true);
+    expect(lineValues('default_routes'), `the default-route count line — ${whole}`).toEqual(['0']);
 
     // And the neighbour it *can* name is the sidecar, by container name on the embedded resolver.
     //

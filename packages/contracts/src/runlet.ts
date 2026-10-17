@@ -70,6 +70,17 @@ export const RUNLET_PROTOCOL_VERSION = 3;
  */
 export const RUNLET_PROTOCOL_IMAGE_LABEL = 'com.agentic.runlet-protocol';
 
+/** A shim protocol as the run image's label spells it: a positive integer, digits only (WP-151). */
+const IMAGE_PROTOCOL_PATTERN = /^[1-9][0-9]{0,8}$/;
+
+/**
+ * The protocol a run image's {@link RUNLET_PROTOCOL_IMAGE_LABEL} value declares, or `null` when it
+ * declares none — absent, or any spelling but the plain positive integer the Dockerfile writes.
+ * One reading for the launcher (`provider.ts`) and the e2e fixture's pre-check (WP-169).
+ */
+export const declaredRunletProtocol = (label: string | undefined): number | null =>
+  label !== undefined && IMAGE_PROTOCOL_PATTERN.test(label) ? Number(label) : null;
+
 /**
  * Signals the shim will relay to the child.
  *

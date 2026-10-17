@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  declaredRunletProtocol,
   isRunletByteFrameType,
   RUNLET_BYTE_FRAME_TYPES,
   RUNLET_PROTOCOL_VERSION,
@@ -266,5 +267,33 @@ describe('runlet frame protocol', () => {
     expect(runletFatalReasonSchema.options).toContain('protocol_mismatch');
     expect(runletFatalReasonSchema.options).toContain('connection_taken');
     expect(runletFatalReasonSchema.options).toContain('credential_refused');
+  });
+});
+
+/**
+ * The one reading of the run image's protocol label (WP-169 review round 1): the launcher's refusal
+ * and the e2e fixture's pre-check both call it, so a spelling is decided here once.
+ */
+describe('declaredRunletProtocol', () => {
+  it('reads a plain positive integer and nothing else', () => {
+    const v = RUNLET_PROTOCOL_VERSION;
+    expect(declaredRunletProtocol(String(v))).toBe(v);
+    expect(declaredRunletProtocol(`${v}0`)).toBe(v * 10 + 0);
+    expect(declaredRunletProtocol('999999999')).toBe(999_999_999);
+    for (const label of [
+      undefined,
+      '',
+      '0',
+      `0${v}`,
+      `${v}.0`,
+      ` ${v}`,
+      `${v} `,
+      'three',
+      '-3',
+      '1e3',
+      '1000000000',
+    ]) {
+      expect(declaredRunletProtocol(label), String(label)).toBeNull();
+    }
   });
 });

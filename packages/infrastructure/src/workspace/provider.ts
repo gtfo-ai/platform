@@ -92,7 +92,7 @@ import {
   WorkspaceError,
   workspaceSpecSchema,
 } from '@platform/application';
-import { RUNLET_PROTOCOL_IMAGE_LABEL } from '@platform/contracts';
+import { declaredRunletProtocol, RUNLET_PROTOCOL_IMAGE_LABEL } from '@platform/contracts';
 import { cliEnvironmentVariables, numberGitConfig } from './cli-environment.js';
 import { EGRESS_CONFIG_MOUNT, egressProxyUrl, renderEgressConfig } from './egress.js';
 import type { DockerEngine, EngineContainerSummary, EngineVolume } from './engine.js';
@@ -235,9 +235,6 @@ export const runSshCommand = (input: {
 
 /** A `PATH` of absolute directories, colon-separated — what the run image may declare (WP-118). */
 const IMAGE_PATH_PATTERN = /^\/[\w./+-]*(?::\/[\w./+-]*)*$/;
-
-/** A shim protocol as the run image's label spells it: a positive integer, digits only (WP-151). */
-const IMAGE_PROTOCOL_PATTERN = /^[1-9][0-9]{0,8}$/;
 
 /**
  * What the clone helper prints when the project's mirror is not on the volume (WP-75). A fixed
@@ -827,8 +824,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     const image = this.#images.runtime;
     const inspected = await this.#engine.inspectImage(image);
     const label = inspected.Config?.Labels?.[RUNLET_PROTOCOL_IMAGE_LABEL];
-    const declared =
-      label !== undefined && IMAGE_PROTOCOL_PATTERN.test(label) ? Number(label) : null;
+    const declared = declaredRunletProtocol(label);
     if (declared === spec.runletProtocol) {
       return inspected.Id;
     }

@@ -31,7 +31,7 @@ import {
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { bootstrap as bootstrapAdapters, eventing } from '@platform/infrastructure';
 import type pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { runHistoryBootstrapStoreContract } from '../../contract/support/history-bootstrap-store-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient, createTestPool } from '../support/postgres.js';
@@ -99,9 +99,31 @@ runHistoryBootstrapStoreContract({
 });
 
 describe('what only the database can answer', () => {
+  /**
+   * What each case created, removed after it **whether or not it passed** (PROGRESS backlog 409):
+   * a batch left live by a failed case made the next case fail on `history_bootstrap_batches_one_live`
+   * and named the wrong test. Keyed by the case's own ids, so nothing else is touched.
+   */
+  const caseRows = { batches: [] as string[], runs: [] as string[] };
+  const batch = (id: Id): Id => {
+    caseRows.batches.push(id);
+    return id;
+  };
+  afterEach(async () => {
+    // The entries first: `cost_entries.run_id` references `runs`, so the other order is a foreign
+    // key violation rather than a cleanup. A batch's chunks go with it.
+    await pool.query('delete from cost_entries where run_id = any($1::uuid[])', [caseRows.runs]);
+    await pool.query('delete from runs where id = any($1::uuid[])', [caseRows.runs]);
+    await pool.query('delete from history_bootstrap_batches where id = any($1::uuid[])', [
+      caseRows.batches,
+    ]);
+    caseRows.batches.length = 0;
+    caseRows.runs.length = 0;
+  });
+
   it('admits one live batch per project, and a second once the first has finished', async () => {
-    const first = nextId();
-    const second = nextId();
+    const first = batch(nextId());
+    const second = batch(nextId());
     const insert = (id: string) =>
       pool.query(
         `insert into history_bootstrap_batches
@@ -119,9 +141,6 @@ describe('what only the database can answer', () => {
       [first],
     );
     await expect(insert(second)).resolves.toBeDefined();
-    await pool.query('delete from history_bootstrap_batches where id = any($1::uuid[])', [
-      [first, second],
-    ]);
   });
 
   it('answers the loser of a genuine race already_running, not a constraint violation', async () => {
@@ -174,7 +193,8 @@ describe('what only the database can answer', () => {
           store: raced,
           settings: staticProjectSettings(() => settings),
           jobs,
-          ids: { next: nextId },
+          // Every id the command draws, so its batch is removed by id; a chunk's id matches no batch.
+          ids: { next: () => batch(nextId()) },
           clock: { now: () => new Date().toISOString() as IsoDateTime },
           hasGitBinding: async () => true,
         },
@@ -195,11 +215,10 @@ describe('what only the database can answer', () => {
     );
     expect(Number(rows.rows[0]?.count)).toBe(1);
     expect(enqueued).toEqual([JOB_QUEUES.historyBootstrap]);
-    await pool.query('delete from history_bootstrap_batches where project_id = $1', [projectId]);
   });
 
   it('refuses a chunk that claims proposals before it has reported', async () => {
-    const batchId = nextId();
+    const batchId = batch(nextId());
     await pool.query(
       `insert into history_bootstrap_batches
          (id, project_id, merge_requests, batch_size, days, cap_usd, estimated_usd)
@@ -218,7 +237,6 @@ describe('what only the database can answer', () => {
     // Both legal shapes are accepted, which is what makes the refusal mean something.
     await expect(insert(null, 0)).resolves.toBeDefined();
     await expect(insert(new Date().toISOString(), 2)).resolves.toBeDefined();
-    await pool.query('delete from history_bootstrap_batches where id = $1', [batchId]);
   });
 
   /**
@@ -235,7 +253,7 @@ describe('what only the database can answer', () => {
    * the batch's life (PROGRESS backlog 402).
    */
   it('values a batch’s runs the ledger has not recorded, and stops once it has', async () => {
-    const batchId = nextId();
+    const batchId = batch(nextId());
     await pool.query(
       `insert into history_bootstrap_batches
          (id, project_id, merge_requests, batch_size, days, cap_usd, estimated_usd)
@@ -262,7 +280,9 @@ describe('what only the database can answer', () => {
          returning id`,
         [taskIds[1], projectId, status, usdReported, endedAt, reserveUsd],
       );
-      return created.rows[0]?.id as string;
+      const runId = created.rows[0]?.id as string;
+      caseRows.runs.push(runId);
+      return runId;
     };
 
     const client = createTestClient(database.connectionString);
@@ -312,12 +332,8 @@ describe('what only the database can answer', () => {
     } finally {
       await client.end();
     }
-    // The entries first: `cost_entries.run_id` references `runs`, so the other order is a foreign
-    // key violation rather than a cleanup. The second task is used throughout so nothing this test
-    // leaves behind can reach the batch the next one builds on the first.
-    await pool.query('delete from history_bootstrap_batches where id = $1', [batchId]);
-    await pool.query('delete from cost_entries where task_id = $1', [taskIds[1]]);
-    await pool.query('delete from runs where task_id = $1', [taskIds[1]]);
+    // The second task is used throughout so nothing this test leaves behind can reach the batch the
+    // next one builds on the first; its runs and their entries are removed by `afterEach`.
   });
 
   it('sums only this batch’s tasks from the ledger', async () => {
@@ -344,7 +360,7 @@ describe('what only the database can answer', () => {
       );
     };
 
-    const batchId = nextId();
+    const batchId = batch(nextId());
     await pool.query(
       `insert into history_bootstrap_batches
          (id, project_id, merge_requests, batch_size, days, cap_usd, estimated_usd)
@@ -378,6 +394,5 @@ describe('what only the database can answer', () => {
     } finally {
       await client.end();
     }
-    await pool.query('delete from history_bootstrap_batches where id = $1', [batchId]);
   });
 });
