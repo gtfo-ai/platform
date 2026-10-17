@@ -448,3 +448,56 @@ Retrieved **2026-10-08**, without a GitLab credential; nothing was recorded agai
 
 The comments are invented and neutral, by this corpus's reviewer account; no text comes from a
 customer's merge request.
+
+## Pages read for WP-187 that produced no fixture (mention-neutral notes)
+
+Retrieved **2026-10-17**, without a GitLab instance; nothing was recorded. WP-187 (backlog 549) makes
+every note body the adapter posts mention-neutral (`providers/gitlab/mentions.ts`), and its ruling
+asked for both facts it rests on to be cited or marked `[unverified]`.
+
+- `https://docs.gitlab.com/user/discussions/` § "Mentioning users and groups" and the `@all`
+  passage — *"You can mention a user or a group (including subgroups) … with `@username` or
+  `@groupname`"*, *"GitLab notifies all mentioned users with to-do items and emails"*, a mentioned
+  group's members all get a to-do item, and `@all` reaches *"all members of that project's parent
+  group"* (the `disable_all_mention` flag, on at gitlab.com and off by default self-managed, turns a
+  new `@all` into plain text). This is the behaviour being neutralised. **The page says nothing
+  about a mention inside code**; GitLab's source does (below).
+- `https://docs.gitlab.com/user/markdown/` § "GitLab-specific references", "Code spans and blocks",
+  "Escape characters" and "Inline HTML". The references section names no context in which a
+  reference is not rendered except snippet files, and the code section says only that code
+  contents are *"always displayed"* literally — so the pages alone leave it open; GitLab's source,
+  below, closes it. "Inline HTML"
+  says raw HTML follows the `HTML::Pipeline` `SanitizationFilter` allowlist plus `span`, `abbr`,
+  `details` and `summary`; it is why the adapter's inline code is the `<code>` element.
+- `lib/html/pipeline/sanitization_filter.rb` of the GitHub repository `gjtorikian/html-pipeline` at
+  tag `v2.14.3` (named without its URL so that this file's host allow-list stays GitLab's own) — the
+  allowlist the Markdown page points at: its `:elements` include `pre` and `code`, and
+  `remove_contents` is `['script']` only (so text inside a non-allowlisted element such as
+  `<textarea>` is kept as text, which is why the adapter's form also carries a zero-width space).
+  Which version of the filter a given GitLab runs is not stated; the tag set is the stable part.
+
+**Review round 1** read GitLab's own source at tag `v18.4.0-ee` (retrieved **2026-10-17**), which
+states what the pages above do not:
+
+- `https://gitlab.com/gitlab-org/gitlab/-/raw/v18.4.0-ee/lib/banzai/filter/references/reference_filter.rb`
+  — the class comment *"References within <pre>, <code>, <a>, and <style> elements are ignored"*,
+  and `ignore_ancestor_query` builds `%w[pre code a style]` (plus `blockquote` when
+  `ignore_blockquotes` is set) into the XPath every reference filter walks. So a name inside inline
+  code or a fence (`<pre><code>`) is not a reference and notifies nobody: ruling (b)'s first fact,
+  **cited**.
+- `https://gitlab.com/gitlab-org/gitlab/-/raw/v18.4.0-ee/app/models/user.rb` — `reference_prefix`
+  is `'@'` and `reference_pattern` is `(?<!\w)` + the prefix + `Gitlab::PathRegex::FULL_NAMESPACE_FORMAT_REGEX`;
+  `https://gitlab.com/gitlab-org/gitlab/-/raw/v18.4.0-ee/lib/gitlab/path_regex.rb` — a namespace
+  starts with `PATH_START_CHAR = '[a-zA-Z0-9_\.]'`. So `@` followed by a zero-width space is not a
+  user reference whatever element holds it.
+- `https://gitlab.com/gitlab-org/gitlab/-/raw/v18.4.0-ee/lib/banzai/filter/base_sanitization_filter.rb`
+  — `allowlist` starts from `super` (html-pipeline's) and pushes `span`, `details`, `summary` and
+  `abbr`; it removes no element, and it sets `code`'s attributes (`data-math-style`), so `code`
+  survives sanitisation.
+
+What remains `[unverified]` is only the parser: whether GitLab's Markdown renderer places code spans
+and fences where CommonMark (and `marked`) does (`docs/TODO.md` § Verification).
+
+The form itself — `<code>@&#8203;name</code>` rather than a backtick span — was decided by
+measurement against `marked` 16.4.2 and happy-dom 20.14.0 (`mentions.test.ts`; the WP-187 notes in
+`docs/technical/PROGRESS.md`), not by any page above.

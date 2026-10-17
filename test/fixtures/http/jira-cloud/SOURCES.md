@@ -52,6 +52,13 @@ a label and pointing the URL at a domain that does not exist changed no test at 
 - `https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/` — ADF: the root
   `doc` node, the block/inline/mark vocabulary, and "the simplest document … with no content".
   Retrieved 2026-09-10.
+- `https://developer.atlassian.com/cloud/jira/platform/apis/document/nodes/mention/` and
+  `…/document/nodes/text/` — *"The `mention` node represents a user mention"*, whose required `id`
+  is *"the Atlassian account ID or collection name of the person or collection being mentioned"*,
+  and a `text` node *"holds document text"*. Retrieved **2026-10-17** for WP-187 (backlog 549); no
+  fixture. Neither page says a `text` node is never interpreted, so that an `@all` in one notifies
+  nobody is read, not stated (`docs/TODO.md` § Verification); `jira-cloud/adf.test.ts` pins that
+  `marklassian` writes no `mention` node.
 - `https://support.atlassian.com/jira-software-cloud/docs/jql-fields/` — the JQL fields the polling
   fallback uses (`labels`, `status`, `parent`, `updated`), their operators, and the warning that an
   absolute date literal is read "relative to your configured time zone". Retrieved 2026-09-10.

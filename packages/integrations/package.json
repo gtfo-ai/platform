@@ -20,5 +20,8 @@
     "ky": "2.1.0",
     "marklassian": "1.2.1",
     "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "marked": "16.4.2"
   }
 }

@@ -186,6 +186,26 @@ capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArt
 > silence a person. A reply is found again by its marker across every discussion, never by the
 > discussion `replyToDiscussion` returned, whose id may differ (the port's docblock).
 
+> **WP-187 amendment (backlog 549, M11): every note is mention-neutral.** A finding, a review summary,
+> a reply and a `needs_person` name are model text shaped by untrusted input (BD-022), and GitLab
+> notifies whoever a note names with `@name`, `@group` or `@all`. The neutralisation is the
+> **adapter's**, because mention syntax is the provider's (BD-017), as Slack's `escapeSlackText` is the
+> Slack adapter's; the pipeline's renderers (`review-notes.ts`) stay provider-neutral and unchanged.
+> Every body the GitLab adapter posts through `createDiscussion` and `replyToDiscussion` (its
+> general-note fallback included) passes through `gitlabNoteBody`
+> (`packages/integrations/src/providers/gitlab/mentions.ts`): outside a code span or a fenced block a
+> mention is written as inline code, `<code>@&#8203;name</code>`, and code spans and fences are left
+> byte-identical. A census in `mentions.test.ts` refuses a note-writing call that bypasses it. The
+> backtick spelling of inline code was measured to leave a mention bare (inside an HTML block, after a
+> stray backtick, after a `\`), hence the element; the zero-width space keeps the form inert where raw
+> HTML stops the element being one. That a name in `code` notifies nobody is GitLab's source (the
+> reference filter skips `pre`, `code`, `a` and `style` ancestors, and `User.reference_pattern` needs a
+> name character after the `@`); whether GitLab's renderer places code spans and fences where
+> CommonMark does is **[unverified]** (`docs/TODO.md` § Verification). The platform writes no mention of its own: a
+> `needs_person` name is the model's text and is neutralised like the rest. **Jira** needs nothing:
+> an ADF mention is a `mention` node carrying an account id, and `marklassian` emits none, so an `@` in
+> a ticket comment is a `text` node (pinned in `jira-cloud/adf.test.ts`).
+
 Git operations (clone, branch, commit, rebase, push) are performed by the workspace manager with `git` and a credential helper, never by the agent with a raw token (BD-025).
 
 ### Communication

@@ -72,11 +72,23 @@
  *     `POST …/discussions/:discussion_id/notes` accepts such an id is **[unverified]** against a
  *     live instance (`docs/TODO.md` § Verification). `replyToDiscussion` posts there first; on a
  *     `400` or a `404` **for a discussion that exists and is an individual note** it posts
- *     `POST …/merge_requests/:iid/notes` instead — the caller's body unchanged at the start (so it
- *     still opens with the platform marker) and one platform line after it naming the note it
- *     answers — and returns the **new** note's discussion, whose id is not the one asked for. A
- *     `400`/`404` for a thread that is not an individual note, and every other failure, throws as
- *     before; a `404` for a thread that does not exist is `not_found`.
+ *     `POST …/merge_requests/:iid/notes` instead — the caller's body at the start (so it still
+ *     opens with the platform marker; divergence 9 is the only change made to it) and one platform
+ *     line after it naming the note it answers — and returns the **new** note's discussion, whose
+ *     id is not the one asked for. A `400`/`404` for a thread that is not an individual note, and
+ *     every other failure, throws as before; a `404` for a thread that does not exist is
+ *     `not_found`.
+ *  9. **Every note body is mention-neutral** (WP-187, backlog 549). GitLab notifies whoever a note
+ *     names with `@name`, `@group` or `@all`, and a finding, a summary or a reply is the model's
+ *     text. Each body the adapter posts — `createDiscussion` (both shapes), `replyToDiscussion` and
+ *     its general-note fallback — goes through `gitlabNoteBody` (`mentions.ts`), which writes a
+ *     mention outside code as inline code (`<code>@&#8203;name</code>`) and leaves code spans and
+ *     fences byte-identical; the platform's markers carry no `@`, so they are untouched. GitLab's
+ *     reference filter skips text inside `code` and its user pattern needs a name character after
+ *     the `@` (both read from GitLab's source, `test/fixtures/http/gitlab/SOURCES.md`); whether
+ *     its renderer places spans and fences where CommonMark does is **[unverified]**
+ *     (`docs/TODO.md` § Verification).
+ *     `mentions.test.ts` refuses a note-writing call that bypasses the function.
  */
 import {
   bindingSecretRedactor,
@@ -145,6 +157,7 @@ import {
   withDraftPrefix,
   withoutDraftPrefix,
 } from './mapping.js';
+import { gitlabNoteBody } from './mentions.js';
 import type { GitLabDiscussion, GitLabMergeRequest, gitlabAccessTokenSchema } from './schemas.js';
 import { gitLabDeliveryKey, verifyGitLabDelivery } from './webhook-verify.js';
 
@@ -576,7 +589,9 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
     markdown: string,
   ): Promise<Discussion> => {
     const answeredNote = answered.notes?.[0]?.id ?? null;
-    const body = `${markdown}\n\n${generalNoteReplyLine(answeredNote, mrRef.url ?? null)}`;
+    const body = gitlabNoteBody(
+      `${markdown}\n\n${generalNoteReplyLine(answeredNote, mrRef.url ?? null)}`,
+    );
     const createdId = await client.createMergeRequestNote(project, mrRef.iid, body);
     const discussions = await client.listDiscussions(project, mrRef.iid);
     const created =
@@ -1131,7 +1146,12 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       // thread is re-read. A 400 or a 404 is answered rather than thrown, and the thread read
       // decides what it meant (divergence 8): an unknown discussion is still the `not_found` the
       // contract suite asserts.
-      const outcome = await client.addDiscussionNote(project, mrRef.iid, discussionId, markdown);
+      const outcome = await client.addDiscussionNote(
+        project,
+        mrRef.iid,
+        discussionId,
+        gitlabNoteBody(markdown),
+      );
       const thread = await requireDiscussion(
         project,
         mrRef.iid,
@@ -1173,7 +1193,9 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         // A thread on the merge request itself — WP-24's neutral summary. GitLab's "Create a merge
         // request thread" takes `body` alone when there is no `position`, which is why this needs
         // no second endpoint and no second client method.
-        return toDiscussion(await client.createDiscussion(project, mrRef.iid, note.markdown));
+        return toDiscussion(
+          await client.createDiscussion(project, mrRef.iid, gitlabNoteBody(note.markdown)),
+        );
       }
       const mergeRequest = await client.mergeRequest(project, mrRef.iid);
       const refs = mergeRequest.diff_refs;
@@ -1195,7 +1217,7 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         new_line: line,
       };
       return toDiscussion(
-        await client.createDiscussion(project, mrRef.iid, note.markdown, position),
+        await client.createDiscussion(project, mrRef.iid, gitlabNoteBody(note.markdown), position),
       );
     },
 

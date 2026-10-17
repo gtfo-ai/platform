@@ -5,7 +5,7 @@
  * as ADF and read back as markdown, and a caller comparing the two must see what it wrote.
  */
 import { describe, expect, it } from 'vitest';
-import type { AdfDocument } from './adf.js';
+import type { AdfDocument, AdfNode } from './adf.js';
 import {
   AdfConversionError,
   adfMarkerId,
@@ -162,6 +162,33 @@ describe('markdownToAdfDocument', () => {
         'exactly one node carries a live marker: the one the platform appended',
       ).toBe(1);
     });
+  });
+});
+
+/**
+ * WP-187 (backlog 549, criterion (3)): a Jira comment cannot notify anybody it names. ADF has a
+ * node for a mention — *"The `mention` node represents a user mention"*, and its required `id` is
+ * *"the Atlassian account ID … of the person … being mentioned"*
+ * (`https://developer.atlassian.com/cloud/jira/platform/apis/document/nodes/mention/`, retrieved
+ * 2026-10-17) — and a `text` node *"holds document text"* (`…/document/nodes/text/`, same date).
+ * `marklassian` 1.2.1 emits no `mention` node for any input (its converter names none), so a
+ * model-written `@all` reaches Jira as text. Pinned here rather than assumed; that Jira notifies
+ * nobody for an `@` in a text node is read, not stated, and is `[unverified]` in `docs/TODO.md`.
+ */
+describe('markdownToAdfDocument writes no mention', () => {
+  const nodeTypes = (nodes: readonly AdfNode[]): string[] =>
+    nodes.flatMap((node) => [node.type, ...nodeTypes(node.content ?? [])]);
+
+  it.each([
+    ['@all', '@all'],
+    ['Ask @someone and @group/sub before merging.', '@group/sub'],
+    ['[~accountid:00000000-fake-account-id] must act on this.', '~accountid:'],
+    ['**@all** in a list:\n\n- @all\n- `@all`\n\n> @all', '@all'],
+    ['<span data-type="mention">@all</span> and [@all](https://example.test/@all)', '@all'],
+  ])('%j has no mention node, and the name survives as text', (markdown, name) => {
+    const document = markdownToAdfDocument(markdown);
+    expect(nodeTypes(document.content)).not.toContain('mention');
+    expect(JSON.stringify(document)).toContain(name);
   });
 });
 

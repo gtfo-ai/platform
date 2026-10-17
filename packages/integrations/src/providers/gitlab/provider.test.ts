@@ -11,6 +11,8 @@ import {
   IntegrationError,
   IntegrationUnsupportedError,
   noSecretsRedactor,
+  renderConversationReply,
+  renderFindingWith,
   type SecretRedactor,
 } from '@platform/application';
 import { fixedClock } from '@platform/domain';
@@ -18,6 +20,7 @@ import { describe, expect, it } from 'vitest';
 import { gitlabConfigSchema } from './config.js';
 import type { GitLabFetch } from './http.js';
 import { gitlabProviderRegistration } from './index.js';
+import { gitlabNoteBody } from './mentions.js';
 import {
   createGitLabProvider,
   type GitLabProvider,
@@ -1197,5 +1200,105 @@ describe('replying to a general note (WP-173)', () => {
       '_In reply to note [3401](https://gitlab.example.test/acme/api/-/merge_requests/7#note_3401)._',
     );
     expect(generalNoteReplyLine(null, null)).toContain('general note');
+  });
+});
+
+/**
+ * WP-187 (backlog 549, criterion (1)): a finding's words reach the merge request through the real
+ * adapter with no mention left bare outside code, and a code span byte-identical — the canary is
+ * removing `gitlabNoteBody` at the write, which posts the body as rendered.
+ */
+describe('every note the adapter posts is mention-neutral', () => {
+  const finding = {
+    id: 'f1',
+    severity: 'major' as const,
+    category: 'security',
+    explanation: 'Tell @all and @someone; @group/sub owns `@Injectable()` in this file.',
+    suggestion: null,
+  };
+  const discussionsPath = `POST /projects/${P}/merge_requests/7/discussions`;
+  const created = {
+    id: 'd187',
+    individual_note: false,
+    notes: [
+      {
+        id: 18701,
+        type: 'DiscussionNote',
+        body: 'x',
+        author: { id: 4242, username: 'agentic-bot', name: 'Agentic Bot' },
+        created_at: AT,
+        updated_at: AT,
+        system: false,
+        resolvable: true,
+      },
+    ],
+  };
+  const postedBody = (calls: Harness['calls'], key: string): string =>
+    (
+      JSON.parse(calls.find((call) => `${call.method} ${call.path}` === key)?.body ?? '{}') as {
+        body: string;
+      }
+    ).body;
+  const BARE = /(?<![A-Za-z0-9_])@(?:all|someone|group\/sub)/g;
+  /** The body with every code span and `<code>` element removed — what could still notify. */
+  const outsideCode = (body: string): string =>
+    body.replace(/<code>[\s\S]*?<\/code>/g, '').replace(/`[^`]*`/g, '');
+
+  it('posts a finding with no bare mention outside code and its code span unchanged', async () => {
+    const { port, calls } = build({ [discussionsPath]: { status: 201, body: created } });
+    await port.createDiscussion(mrRef(), {
+      markdown: renderFindingWith('<!-- agentic:review-only:t1 -->', finding),
+    });
+    const body = postedBody(calls, discussionsPath);
+    expect(body.startsWith('<!-- agentic:review-only:t1 -->\n')).toBe(true);
+    expect(outsideCode(body).match(BARE)).toBeNull();
+    expect(body).toContain('`@Injectable()`');
+    expect(body).toContain('<code>@&#8203;all</code>');
+    expect(body).toContain('<code>@&#8203;group/sub</code>');
+  });
+
+  it('posts a reply, in the thread and as the general-note fallback, the same way', async () => {
+    const thread = 'c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c187';
+    const reply = renderConversationReply({
+      marker: '<!-- agentic:reply:00000000-0000-4000-8000-0000000000d1 -->',
+      kind: 'needs_person',
+      reply: 'Ask @all.',
+      person: '@someone',
+    });
+    const replyPath = `POST /projects/${P}/merge_requests/7/discussions/${thread}/notes`;
+    const notesPath = `POST /projects/${P}/merge_requests/7/notes`;
+    const individual = { ...created, id: thread, individual_note: true };
+    const { port, calls } = build({
+      [replyPath]: { status: 404, body: { message: '404 Not found' } },
+      [`GET /projects/${P}/merge_requests/7/discussions/${thread}`]: {
+        status: 200,
+        body: individual,
+      },
+      [notesPath]: { status: 201, body: {} },
+      [`GET /projects/${P}/merge_requests/7/discussions?per_page=100&page=1`]: {
+        status: 200,
+        body: [
+          individual,
+          {
+            id: 'd187-new',
+            individual_note: true,
+            notes: [
+              {
+                ...created.notes[0],
+                id: 18702,
+                body: gitlabNoteBody(`${reply}\n\n${generalNoteReplyLine(18701, mrRef().url)}`),
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const replied = await port.replyToDiscussion(mrRef(), thread, reply);
+    for (const key of [replyPath, notesPath]) {
+      expect(outsideCode(postedBody(calls, key)).match(BARE), key).toBeNull();
+    }
+    expect(postedBody(calls, notesPath)).toContain('**<code>@&#8203;someone</code> must act');
+    // The fallback found its own note by the body it posted, which is the neutral one.
+    expect(replied.id).toBe('d187-new');
   });
 });

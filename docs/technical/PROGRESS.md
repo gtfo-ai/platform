@@ -16116,6 +16116,42 @@ WP-185's *Decisions* records the over-ask for `-I{} grep x` and says *"the commo
 
 **Depends on** WP-169 (the `afterEach`).
 
+### 573. **A merge request's description and title are model-written text posted to GitLab without `gitlabNoteBody`, so an `@all` or `@someone` the Developer writes through `open_mr` or `update_mr_description` notifies people. WP-187 neutralised notes only** (TODO, **minor — live since WP-138** on every non-shadow task whose Developer opens a merge request on a GitLab binding: the same class and the same attacker as 549, because the ticket and the repository the Developer reads shape the description (BD-022), and a wider audience, because this path runs on every feature ticket rather than only on review stages. Found by WP-187's implementer as discovered work, session 16. The refiner confirmed it by reading; no test run. **No work package owns it**: WP-187's row and its ruling (a) name notes only.)
+
+**What is wrong.** The tool bounds and redacts the model's title and description, and does nothing else to them. See `packages/application/src/pipeline/merge-request-tool.ts:239` (title), `:243` (description), and `composeDescription` at `:135-150`. Its docblock's ruling (d) (`:23-27`) lists the bound, the redaction and the footer, and no mention handling. The adapter sends the text as received: `openMergeRequest` sends `description: draft.description` and the prefixed `draft.title` (`packages/integrations/src/providers/gitlab/provider.ts:836-837`), and `updateMergeRequest` sends `title` and `update.description` (`:857-858`). `gitlabNoteBody` is imported at `:160` and called only on the note paths (`:592`, `:1153`). The other description writers are platform text. In the knowledge merge request's body (`packages/application/src/knowledge/apply.ts:371-386`) the only interpolated path sits inside a code span. The config export's body comes from `packages/application/src/config/export.ts:393`. The *Requested by* footer is at `merge-request-tool.ts:105-112`. An adapter-side fix would pass all of these through as well, and the existing property keeps their code spans byte-identical.
+
+**Evidence.** By reading only. WP-187's discovered work: *"The merge-request **description** (`openMergeRequest`, `updateMergeRequest` via `open_mr`/`update_mr_description`) is model text and also notifies on `@` in GitLab. It is not a note, so it is outside this row's ruling. Same class as 549."* **What is cited and what is not.** `test/fixtures/http/gitlab/SOURCES.md`, § WP-187, cites `docs.gitlab.com/user/discussions/` § "Mentioning users and groups" for the notification itself (*"GitLab notifies all mentioned users with to-do items and emails"*). The excerpt it records does not say whether that covers a description. **Citations still missing** (the refiner did not retrieve them; this part is a hypothesis): GitLab's to-do page, for being mentioned in a description, and `app/models/concerns/issuable.rb` at the corpus's tag `v18.4.0-ee`, for whether `title` as well as `description` is a mentionable attribute. Whether a **title** mention notifies is unverified. The corpus already cites `user.rb` and `path_regex.rb` (`PATH_START_CHAR`), which show that a zero-width space after `@` defeats a user reference whatever holds it, so the title's neutralising form needs no new fact.
+
+**What it costs to leave.** The same as 549: one merge request notifies every member (`@all`, which `disable_all_mention` leaves live by default on self-managed instances) or a stranger the injected text names. It happens once per opened merge request and again on every `update_mr_description`. Nothing is lost and no state changes.
+
+**Done when.**
+- The GitLab adapter's `openMergeRequest` and `updateMergeRequest` pass the description through `gitlabNoteBody`; it is GitLab Markdown like a note, and whether to rename the function is the implementer's call.
+- The title gets a neutralising form chosen from a cited fact. A title is rendered on GitLab's single-line pipeline, so whether a `<code>` element survives there is unverified. The zero-width space alone rests on the citation the corpus already has.
+- The census in `mentions.test.ts` (the case "finds every writer called, and every call passing its body through the function") also covers the client's title and description writers. Today it derives writers from the `client.ts` members whose `json:` sends `{ body`, so it cannot see `createMergeRequest` or `updateMergeRequest`.
+- A unit case puts `@all` and `@someone` in both title and description through the real adapter and finds no mention under the marked + happy-dom oracle. **Canary:** remove either call and the case fails by name.
+- The port docblocks for `MergeRequestDraft` and `MergeRequestUpdate` say the text changes only where mention syntax is neutralised (rule 83).
+- The description and title citations go into `SOURCES.md`. Whatever cannot be cited is marked `[unverified]` in `docs/TODO.md`.
+- **Needs measurement:** whether a description wrapped once is wrapped again when the Developer sends its own posted text back through `update_mr_description` (WP-187's residual: *"Applying `gitlabNoteBody` twice wraps twice. No path does this"*). The update key digests the text before the adapter sees it (`merge-request-tool.ts:315-317`), so the key is not affected. The open question is whether the double wrap shows.
+
+**Depends on** WP-187 (`gitlabNoteBody`). The fix touches `gitlab/provider.ts`, so it runs serially with WP-189. Related: 549, WP-138.
+
+### 574. **`gitlabNoteBody` fails closed on structure it cannot place, so it rewrites code there, including a `suggestion` fence that "Apply suggestion" would then commit changed, and it breaks bare URLs that contain `/@`** (TODO, **minor — the accepted cost of WP-187's round-2 ruling ("prefer fail-closed … A rewritten suggestion fence is the accepted cost"). No mention is live. The harm is a changed suggestion that a person could apply, plus broken link text.** The platform's own renderer writes no fence (`review-notes.ts:187-189` puts the model's `finding.suggestion` at column 0 after a blank line), so only model text that nests a fence triggers it. Stated by WP-187 as residuals, session 16. **No work package owns it.**)
+
+**What is wrong.** These inputs make the rest of a note "uncertain", so every `@name` in it, code included, becomes `<code>@&#8203;name</code>`. Quoted from the WP-187 residuals:
+- *"A suggestion fence in a structure this reading cannot place is still rewritten, and so is a changed suggestion: in a blockquote (`> ```), in a list item after a tag line, with a tab indent, after an indented line that breaks the terms above, or in any note with a raw-text element."*
+- From round 2: *"A suggestion fence on a list-marker or quote line is rewritten, and so is any code after it. A note with a lone `\r` wraps everything, its code included."*
+- *"A bare URL with `/@name`, and a link reference definition's URL, are wrapped."*
+
+A plain inline link's destination is exempt since round 1. A bare `https://www.npmjs.com/package/@types/node` is not, which matters because a dependency review is the likeliest place for such a URL.
+
+**Evidence.** These are WP-187's own residuals, each pinned as wrapped in `mentions.test.ts` under the describe "inputs whose structure the reading does not follow: every mention wrapped". The property found nothing live in 240,000 + 60,000 + 60,000 generated notes (rounds 1–3). **Needs measurement:** how often real model output hits these shapes (a fence inside a list or quote, a tab-indented fence, a bare scoped-package URL). Count them over stored review notes or `run_messages` before choosing a fix. Without that count, this entry is only a list of shapes.
+
+**What it costs to leave.** A suggestion that a person applies without reading the diff commits `<code>@&#8203;Component</code>` into the source. Everywhere else the damage is a visibly broken code block or link.
+
+**Done when.** At least the suggestion half closes in a fail-closed form, for example: when a wrap would land inside a block that might be a `suggestion` fence, the adapter drops the `suggestion` info string, so a rewritten block can never be applied. Each shape that is narrowed instead gets a pinned case and keeps the property clean under the marked + happy-dom oracle. Shapes left as they are get stated as accepted. **Canary:** restore the rewrite of a suggestion fence, and the case fails by name.
+
+**Depends on** WP-187. The parser half, whether GitLab's renderer places spans and fences where `marked` does, is already recorded in `docs/TODO.md` § Verification (WP-187's `[unverified]` item, owned by the first dogfood session after WP-187). Not refiled.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -48781,3 +48817,178 @@ So the reviewer's report holds for every row (both 561 paths and 562 read `auto`
   - Pattern widened to `/^[0-9]+$/`: **dead by** "reads a plain positive integer and nothing else" and by "this protocol with a leading zero: one inspection, one error naming the image, both numbers and the command".
   - Prefix compare in the fixture (`String(declared).startsWith(String(RUNLET_PROTOCOL_VERSION))`): **dead by** "a protocol that starts with this one: one inspection, one error naming the image, both numbers and the command".
 - **Round 1 verification.** `scripts/citations.test.ts` 13/13. The three touched unit files: 24/24, 8/8 and 7/7. `pnpm run -s verify` exit 0, `PASS: verify`. `docker-workspace.e2e.test.ts` alone on the `s16` images: 84/84, then 0 harness containers and 71 volumes.
+
+## WP notes — session 16 (M11)
+
+#### WP-187 — Every note the GitLab adapter posts neutralises mentions, and Jira's ADF is read, not assumed (backlog 549)
+
+**Changes.**
+- `packages/integrations/src/providers/gitlab/mentions.ts` (new): `gitlabNoteBody(markdown)`, the one function every merge-request note body passes through (ruling (a)). Outside code, each `@name`, `@all` and `@group/sub` — and the entity spellings `&#64;`, `&#x40;`, `&commat;` — is written `<code>@&#8203;name</code>`; a code span or fence it recognises is left byte-identical.
+- `provider.ts`: the four note writes call it — `createDiscussion` (merge-request thread and diff note), `replyToDiscussion`'s in-thread post, and the general-note fallback, whose whole body (reply plus the platform's reply line) is neutralised before it is posted **and** before the re-read compares bodies. Divergence 8 was reworded and divergence 9 added.
+- The port docblock (`git-provider.ts`, `replyToDiscussion`) said the caller's markdown is kept "unchanged". It now says the markdown changes only where provider mention syntax is neutralised, and that no marker contains any (rule 83).
+- technical/06 has the WP-187 amendment after the M10 head amendment (criterion (6)). `docs/TODO.md` § Verification has the `[unverified]` item. Both `SOURCES.md` files have a WP-187 section.
+- `packages/integrations/package.json` gains `devDependencies.marked: 16.4.2`, the version `marklassian` already pulls, so the lockfile adds an importer entry and no package. The property test renders with it.
+
+**Decision — the form deviates from the ruling's spelling, not its design (assumption, for the reviewer).** Ruling (b) says "written as inline code … inert either way". The backtick spelling of inline code was **measured to leave a mention live** with `marked` 16.4.2 (scratch script, 2026-10-17). `<div>\n`@all`\n</div>` renders `@all` as HTML-block text. `a ` b `@all` c` renders `<code>b</code>@all`. `\`@all`` renders the backticks literally. So inline code is spelled as the `<code>` element. `code` is on html-pipeline's `SanitizationFilter` allowlist, which GitLab's Markdown page points at. A `&#8203;` follows the `@`, because the element is still a tag. An unclosed raw tag absorbs it as an attribute, and text after an inline `<textarea>`/`<title>` is RCDATA. Measured with happy-dom: `<div><<code>@all</code>` and `<!-- m --><`<code>&#64;x</code>` left `@all`/`@x` in plain text. With the zero-width space, every decoding context yields `@`+U+200B+name, and every non-decoding context yields `@&`. Neither reads as a mention. The adapter is still where it lives, the renderers are untouched, and the name still shows as typed, in code. **If the architect wants a pure backtick form, the measurements above are the reason not to.**
+
+**Decision — code is recognised narrowly, because a false "this is code" is the only failure that notifies anyone.**
+- A fence counts only at column 0.
+- A code span counts only within one line, with no `|` on the line. Nothing `LINK_OR_TAG` names may come before it in its paragraph: `]`, `<` followed by a tag character, `~`, a `scheme://` or `www.`. Every earlier backtick string in the paragraph must have closed on its own line.
+- A fence-like line with leading whitespace makes the rest of the note uncertain, so every mention in it is wrapped. So does a line opening with HTML (one complete `<!-- … -->` line, the platform marker, excepted) and a GitLab `>>>` line.
+- Every rule came from a counterexample of a fast-check run against marked + happy-dom. In order:
+  - `@all@all`: the second `@` opens a text node after the inserted `</code>`.
+  - `_@all_`: `_` is an emphasis delimiter, so it is not an e-mail word character.
+  - Entity-spelled and backslash-escaped name characters (`@&#97;ll`, `@\_x`).
+  - `~` before a span: marked reads strikethrough first.
+  - A bare URL before a span: marked autolinks through it.
+  - A fence opener's info string at the end of the text: marked does not take it for a fence, so it is wrapped too.
+  - `\@` inside a name.
+- After the last rule, **180,000 generated notes rendered clean**: seeds 1, 3, 6–9 at 20,000 each with up to 40 tokens, and seeds 11–13 at 20,000 with up to 80.
+- The committed property runs 1,500 per unit pass. ~~The cost is cosmetic~~ — **corrected at review round 1:** a real code block reached in uncertain mode shows a literal `<code>` around a name, and in a **suggestion fence that is a changed suggestion** ("Apply suggestion" would commit it). Round 1 narrowed when that happens; see below.
+
+**Jira (criterion (3), ruling (e)).**
+- `marklassian` 1.2.1's converter names no `mention` node type (read from `dist/index.js`: blockquote, code, codeBlock, doc, em, external, hardBreak, heading, link, listItem, media, mediaSingle, paragraph, rule, strike, strong, table*, taskItem, taskList, text).
+- `adf.test.ts` pins five inputs (`@all`, `@group/sub`, `[~accountid:…]`, list/quote/code, and an HTML `<span data-type="mention">`): none produces a `mention` node.
+- The ADF `mention` and `text` node pages are cited. Rule (a) therefore does not apply to Jira. That an `@` in a text node notifies nobody is read, not stated, and is `[unverified]` in TODO.
+
+**Criterion (4).** (Superseded at review round 1: the code half is now cited from GitLab's source.) The GitLab pages (`docs.gitlab.com/user/discussions/`, `/user/markdown/`) state the mention behaviour. Neither states that code is mention-free, so both of ruling (b)'s facts are `[unverified]`. They are carried in `mentions.ts`'s docblock, `provider.ts` divergence 9 and `docs/TODO.md`. The html-pipeline allowlist is named without its URL, so `SOURCES.md`'s scraped host allow-list stays GitLab's own.
+
+**Criterion (5).** None of the review-only, conflict-warning and conversation test files is touched, and each passes with its count:
+- `conflict-warning.test.ts` 12
+- `review-conversation.test.ts` 24
+- `application/…/review-only.test.ts` 40
+- `domain/…/review-only.test.ts` 14
+- `review-conversation-replies.contract.test.ts` 1
+
+The GitLab contract runners and `fixture-provenance.contract.test.ts` pass.
+
+**Canaries** (Edit, reverted in place by Edit; `provider.ts` read back at `shasum e494fcaf…` before and after):
+- `createDiscussion` (no anchor) posting `note.markdown` straight: **dead by** "posts a finding with no bare mention outside code and its code span unchanged" (`provider.test.ts`) and by "finds every writer called, and every call passing its body through the function" (`mentions.test.ts`).
+- A second `await client.createMergeRequestNote(project, mrRef.iid, markdown);` in `replyAsGeneralNote`: **dead by** "finds every writer called, and every call passing its body through the function" (`provider.ts: createMergeRequestNote(… markdown …)`).
+
+**Residuals.**
+- GitLab's renderer is not marked. Where the two disagree about a span or fence the adapter leaves alone, a name could stay live. The narrow reading and the zero-width space bound this, but do not close it (TODO item).
+- A URL containing `/@name` is wrapped, which breaks that link's text and notifies nobody. (Since round 1, only a bare URL or a reference definition's URL; a link destination is left alone.)
+- The census reads the gitlab directory's sources by text. A note write through an aliased client, or a computed member name, would not be seen; the client's note writers are derived from `client.ts` (members whose `json:` sends `{ body`).
+- Applying `gitlabNoteBody` twice wraps twice. No path does this.
+
+**Sentences falsified** (rule 83; grep of docs/, CLAUDE.md and the packages for "as written", "unchanged", "mention", "neutralis"):
+- Fixed in this tree:
+  - `git-provider.ts`'s `replyToDiscussion` docblock: "the caller's `markdown` at the start … unchanged".
+  - `provider.ts` divergence 8: "the caller's body unchanged at the start".
+- Left for the orchestrator, because they are ledger state:
+  - backlog **549**'s heading (TODO, "No work package owns it", and "a grep for `mention` and `@all` over `providers/gitlab/` finds nothing", which is now false);
+  - the WP-187 status row.
+- `notify/render.ts:257` is about Slack and stays true. No other sentence found.
+
+**Discovered work** (for a refiner):
+- The merge-request **description** (`openMergeRequest`, `updateMergeRequest` via `open_mr`/`update_mr_description`) is model text and also notifies on `@` in GitLab. It is not a note, so it is outside this row's ruling. Same class as 549.
+- Slack's encoder and this one now differ in shape (entity escape vs inline code). Nothing requires them to match.
+
+**Verification.**
+- `packages/integrations/src/providers/gitlab/` unit tier: 10 files, 315 tests.
+- `adf.test.ts`: 36 tests.
+- `scripts/citations.test.ts`: 13/13.
+- `pnpm run -s verify`: exit 0, final line `PASS: verify`.
+- No integration or e2e tier applies: no migration and no pipeline change.
+
+**Review round 1** (REQUEST_CHANGES; the orchestrator **accepted** the `<code>@&#8203;name</code>` deviation from ruling (b)'s backtick spelling — recorded here as accepted).
+
+1. **[major] A tag-opening prose line no longer costs every later fence.**
+   - Before this round, any line opening with a tag made the rest of the note uncertain. So `<Button> loses its label.\n\n```suggestion…\n@Component(…)\n```` posted `<code>@&#8203;Component</code>`, a changed suggestion.
+   - Now an HTML line (up to three spaces in) opens an HTML block that the reading follows to its end. That end is the next blank line, or, for CommonMark types 1–5 (`<pre`/`<script`/`<style`/`<textarea`, an unclosed `<!--`, `<?`, `<!X`, `<![CDATA[`), the line that closes it. The start line itself counts.
+   - Inside the block every mention is wrapped. The rest of the note becomes uncertain only when one of these appears inside the block: a fence-like line; a type 1–5 start inside a blank-ended block; or any tag line inside a type 1–5 block that is not its close. Each is a block that could end somewhere else.
+   - A type 1–5 start behind a container marker (or indented ≥4, or with a tab) is not followed: the rest is uncertain.
+   - Pinned: "leaves a suggestion fence byte-identical after a prose line that opens with a tag" and "still wraps a fence inside an open <pre> block, which is HTML and not a fence" (unchanged behaviour).
+2. **[minor] A list item's suggestion fence is now left alone** (same change). An indented opener (spaces only) is followed as a fence when all of these hold:
+   - every non-blank line stays indented at least as far as the opener;
+   - it closes with a run at exactly that indentation;
+   - four or more spaces are accepted only after a blank line, since after a paragraph line they continue the paragraph;
+   - it is never in a paragraph that had a tag after a container marker (`- <textarea>` holds a following "fence" as raw text).
+
+   Anything else ends the reading: the rest is uncertain. Pinned: "leaves a suggestion fence byte-identical inside a list item".
+3. **[minor] The census resolves the nearest binding.**
+   - `boundToNoteBody`: the nearest `const|let|var <name>` before the call must be `const <name> = gitlabNoteBody(`. The block it is declared in must still be open at the call, and no arrow function in between may take a parameter of that name.
+   - Pinned: "reads the nearest binding of a name, not any earlier one" (three shapes).
+   - The reviewer's canary was replayed: `const body = markdown;` planted in `replyToDiscussion`, with `addDiscussionNote(…, body)`. It is **dead by** "finds every writer called, and every call passing its body through the function". `provider.ts` was restored to md5 `2529f0fa…`.
+4. **[minor] Ruling (b)'s code fact is cited from GitLab's source** (tag `v18.4.0-ee`, retrieved 2026-10-17, `SOURCES.md` § WP-187 "Review round 1"):
+   - `reference_filter.rb`: *"References within <pre>, <code>, <a>, and <style> elements are ignored"*; `ignore_ancestor_query` builds `%w[pre code a style]`.
+   - `user.rb`: `reference_pattern` is `(?<!\w)@` + `FULL_NAMESPACE_FORMAT_REGEX`.
+   - `path_regex.rb`: `PATH_START_CHAR = '[a-zA-Z0-9_\.]'`, so the zero-width space alone defeats a user reference.
+   - `base_sanitization_filter.rb`: removes no element, and sets `code`'s attributes.
+
+   Consequences:
+   - The `docs/TODO.md` item is narrowed to the parser half (GitLab's renderer vs CommonMark).
+   - `mentions.ts`, `provider.ts` divergence 9 and the technical/06 amendment were updated.
+   - The property's oracle now skips `pre`, `code`, `a` and `style`, as the filter does.
+5. **[nit] Link destinations.** A plain inline link's destination (`[x](https://www.npmjs.com/package/@types/node)`) is left alone. The link text may hold no bracket, backtick or tag, and the destination no space, paren, `<` or backtick. This applies only on a Markdown paragraph line with no tag and no earlier tag-after-container in the paragraph. Pinned: "leaves a link destination alone, which is no text".
+   - Still wrapped, and stated as residuals: a bare URL with `/@name`, and a reference definition's URL.
+
+**Found while fixing, and fixed (fail-closed).** An element a browser reads as text until its end tag (`<textarea>`, `<title>`, `<xmp>`, `<iframe>`, `<noembed>`, `<noframes>`, `<noscript>`, `<plaintext>`, `<script>`, `<style>`), opened anywhere in a note, can turn later code into plain text (HTML5 RCDATA/RAWTEXT). A note containing one now trusts no code at all. Pinned: "trusts no code at all once a note opens an element a browser reads as text".
+
+**Property, after this round's rules: 240,000 generated notes clean.** Seeds 3 and 5–9 at 20,000 with up to 60 tokens; seeds 1, 2, 4 and 11–13 at 20,000 with up to 80 tokens. The token alphabet adds indented fences, `<Button>`, `</pre>`, a link with `@` in its URL and a container marker. Two counterexamples were found and fixed along the way:
+- `http://h/[x](https://h/@a)`: marked autolinks the whole URL into an `a`. The oracle was correct to skip it once the filter's `a` rule was cited.
+- `  - </div>\n[x](https://h/@a)`: marked keeps the line in the list item's HTML, so link destinations are now never exempt after a tag-after-container.
+
+**Canaries** (a scratch script mutates the file, runs the single test file, writes the recorded bytes back and asserts the md5; `mentions.ts` `c717d4f2…`, `mentions.test.ts` `3137692d…`):
+- An HTML block that never ends at a blank line: **dead by** "leaves a suggestion fence byte-identical after a prose line that opens with a tag".
+- Indented fences never recognised: **dead by** "leaves a suggestion fence byte-identical inside a list item".
+- The census taking the first binding (`declarations.at(0)`): **dead by** "reads the nearest binding of a name, not any earlier one".
+- No link-destination skip: **dead by** "leaves a link destination alone, which is no text".
+- No raw-text check: **dead by** "trusts no code at all once a note opens an element a browser reads as text".
+
+**Residuals after round 1.**
+- GitLab's renderer is not marked (TODO).
+- A suggestion fence in a structure this reading cannot place is still rewritten, and so is a changed suggestion: in a blockquote (`> ```), in a list item after a tag line, with a tab indent, after an indented line that breaks the terms above, or in any note with a raw-text element.
+- A bare URL with `/@name`, and a link reference definition's URL, are wrapped.
+
+**Round 1 verification.**
+- `mentions.test.ts`: 28/28.
+- `provider.test.ts`: 73/73.
+- `scripts/citations.test.ts`: 13/13.
+- `pnpm run -s verify`: exit 0, final line `PASS: verify`. Run once, after `wp187-tiers-idle` appeared.
+
+**Review round 2** (REQUEST_CHANGES, three fail-open inputs). The orchestrator ruled for this round: prefer fail-closed (the rest of the note becomes uncertain) over exact parsing. A rewritten suggestion fence is the accepted cost.
+
+1. **[major] A fence on a container-marker line makes the rest of the note uncertain.** This covers `- ```, `1. ``` and `> ```, via `CONTAINER_FENCE`, checked on prose lines. Before, such a line was read as prose, its indented close was taken for an opener, and everything after it counted as code. `- ```suggestion\n  @Component\n  ```` is still rewritten (residual, accepted).
+2. **[major] A lone `\r` makes the whole note uncertain.** CommonMark treats it as a line ending, and the `\n` split does not see it.
+3. **[major] A blank line is `/^[ \t]*\r?$/`**, as in CommonMark. Before, `.trim()` counted NBSP, U+FEFF, `\f` and `\v` as blank, which ended HTML blocks and paragraphs early. Both uses are fixed (the main loop and `indentedFenceLine`).
+4. **[minor] Pinned**, in a new describe, "inputs whose structure the reading does not follow: every mention wrapped". It holds the reviewer's seven inputs plus `- <span>\n  ```\n  @all\n  ```` and `para\n    ```\n    @all\n    ````. Each case asserts that no unwrapped `@all`/`@Component` remains and that the marked + happy-dom oracle finds nothing.
+
+**Canaries** (scratch script, the recorded bytes written back, md5 `034bd62f…` asserted after each):
+- `CONTAINER_FENCE` disabled: **dead by** "a fence on a list-marker line" and "an ordered item whose fence closes at once". The suggestion case was wrapped either way, rewritten rather than live.
+- The lone-`\r` check removed: **dead by** "a lone carriage return as a line ending".
+- `BLANK` back to `.trim() === ''`: **dead by** the three no-break-space cases.
+- `!tagInContainer` dropped: **dead by** "a fence after a tag behind a list marker".
+- `indent < 4 || wasBlank` replaced by `true`: **dead by** "four spaces after a paragraph line, which continue it".
+
+**Property.** The alphabet adds `- ```, `1. ```, `\r` and NBSP. Seeds 21–23 ran at 20,000 each with up to 60 tokens: clean.
+
+**Residuals added.** A suggestion fence on a list-marker or quote line is rewritten, and so is any code after it. A note with a lone `\r` wraps everything, its code included.
+
+**Round 2 verification.**
+- `mentions.test.ts`: 37/37.
+- `provider.test.ts`: 73/73.
+- `scripts/citations.test.ts`: 13/13.
+- `pnpm run -s verify`: exit 0, final line `PASS: verify`. Run once, after `wp187-tiers2-idle` appeared.
+
+**Review round 3** (the last; one blocker). HTML5 decodes a numeric character reference without its `;` and with leading zeros (`&#64all`, `&#0064all`, `&#x40zed`), and an HTML block hands such text to the browser unchanged. `AT` matched only the `;` forms.
+
+**Fix.**
+- `AT` is now `@|&#0*64(?![0-9]);?|&#[xX]0*40(?![0-9A-Fa-f]);?|&commat;?`.
+- A name character may be any numeric reference with or without its `;` (`NAME_ENTITY`), so `@&#97ll` cannot slip past.
+- The pinned property run found one more case, `&#x40@&#97;ll`: the `0` that ends a `;`-less reference was read as an e-mail address's letter. A letter or digit that ends `&#?[A-Za-z0-9]+` no longer exempts the `@` that follows.
+
+**Pinned** in a new describe, "an `@` spelled as a reference without its semicolon": the reviewer's eight inputs, plus `<div>@&#97ll</div>` and `<div>&#x40@&#97;ll</div>`. The property's `TOKENS` gain `&#64`, `&#x40` and `all`.
+
+**Canaries** (scratch script; recorded bytes written back; md5 `4f2ec864…` asserted):
+- Old `AT` restored: **dead by** the eight reviewer cases and by "holds for notes built from Markdown's delimiters".
+- Reference-tail check removed: **dead by** `"<div>&#x40@&#97;ll</div>" is wrapped` and by the property.
+
+**Property.** Seeds 31–33 ran at 20,000 each with up to 60 tokens, alphabet plus `&#64`, `&#x40`, `all` and `&#97`: clean.
+
+**Round 3 verification.**
+- `mentions.test.ts`: 47/47.
+- `provider.test.ts`: 73/73.
+- `scripts/citations.test.ts`: 13/13.
+- `pnpm run -s verify`: exit 0, final line `PASS: verify`. Run once, after `wp187-tiers3-idle` appeared.

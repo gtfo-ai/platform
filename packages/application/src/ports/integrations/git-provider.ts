@@ -827,8 +827,10 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * then posts a new merge-request note and returns *that* note's discussion, whose id differs
    * (GitLab divergence 8, research/15 G4 still `[unverified]` live; the fake's divergence 31 makes
    * that the default). What an implementation **does** keep is the caller's `markdown` **at the
-   * start** of the note it writes, unchanged — the fallback appends one platform line after it — so
-   * a body that opens with a platform marker still opens with it. A caller therefore finds its own
+   * start** of the note it writes — the fallback appends one platform line after it — changed only
+   * where the provider's own mention syntax is neutralised (the GitLab adapter writes a mention
+   * outside code as inline code, WP-187), which no platform marker contains: a body that opens
+   * with a platform marker still opens with it. A caller therefore finds its own
    * reply again **by the marker its body opens with**, across every discussion, and never by the id
    * this call returned: matching by the returned id misses a reply that landed in a new discussion
    * and posts it a second time on a replay.
