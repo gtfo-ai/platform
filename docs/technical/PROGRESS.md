@@ -16152,7 +16152,7 @@ A plain inline link's destination is exempt since round 1. A bare `https://www.n
 
 **Depends on** WP-187. The parser half, whether GitLab's renderer places spans and fences where `marked` does, is already recorded in `docs/TODO.md` § Verification (WP-187's `[unverified]` item, owned by the first dogfood session after WP-187). Not refiled.
 
-### 575. **A package runner other than `npx` is not read: `npm exec -c '<string>'` runs a shell string, and `npm exec -- <cmd>`, `pnpm exec`, `pnpm dlx`, `yarn dlx` and `bunx` run a command, all under `auto`** (TODO — **major, fail-open: an arbitrary command reads `unattended_auto`**, the class WP-188 round 1 graded major for `npx`. Live in the stock run image for `npm` (it ships with Node); `pnpm`, `yarn` and `bun` are live where the run image or the project provides them (**needs measurement:** which of them exist in `platform-runtime` — `corepack enable pnpm` at `docker/runtime.Dockerfile:100` may be a build stage only). **Not a WP-188 regression**: the same verdict before WP-188. Found by WP-188's reviewer, round 1, session 16; listed in WP-188's *Discovered work*, not measured by the implementer. **No work package owns it — needs an owner (architect).** No test run by the refiner)
+### 575. **A package runner other than `npx` is not read: `npm exec -c '<string>'` runs a shell string, and `npm exec -- <cmd>`, `pnpm exec`, `pnpm dlx`, `yarn dlx` and `bunx` run a command, all under `auto`** (TODO, owned by **WP-196** — § "Architect ruling (M11 amendment, session 16)"; **major, fail-open: an arbitrary command reads `unattended_auto`**, the class WP-188 round 1 graded major for `npx`. Live in the stock run image for `npm` (it ships with Node); `pnpm`, `yarn` and `bun` are live where the run image or the project provides them (**needs measurement:** which of them exist in `platform-runtime` — `corepack enable pnpm` at `docker/runtime.Dockerfile:100` may be a build stage only). **Not a WP-188 regression**: the same verdict before WP-188. Found by WP-188's reviewer, round 1, session 16; listed in WP-188's *Discovered work*, not measured by the implementer. **No work package owns it — needs an owner (architect).** No test run by the refiner)
 
 **What is wrong.** WP-188 (d) made `npx` an `ARGV0_WRAPPERS` member (`packages/domain/src/policies/command-policy.ts:1815`), and round 1 added `UNCERTAINTY.npxCall` (`:221`) with `npxCallsString` (`:4126`), checked only where the command name is exactly `npx` (`:4480`). Every other package runner is an ordinary command word, so what it runs is neither peeled for the block list and the floors nor read as a script: the string after `npm exec -c`, the argv after `npm exec --`, and the command `bunx` runs.
 
@@ -16170,7 +16170,7 @@ A plain inline link's destination is exempt since round 1. A bare `https://www.n
 
 **Depends on** WP-188 (`npxCallsString`, the `ARGV0_WRAPPERS` peel). Related: 559, 561 (shell strings handed through another command).
 
-### 576. **A block-list entry that names a binary *and* a word (`terraform apply`, `gh release *`, `glab release *`) is completed by `xargs` from its input: `echo apply | xargs terraform` and `xargs gh release` run under `auto`** (TODO — **major, fail-open: a block-list entry, the organisation maximum, does not hold under `auto`**. **Live in the stock image for `gh` and `glab`**, which `docker/runtime.Dockerfile:70-73` installs; whether a run has a credential that lets `gh release`/`glab release` publish is **needs measurement**. `terraform` is not in the stock image. **Not a WP-188 regression**: the same verdict before it. Found by WP-188's reviewer, round 1, session 16; listed in WP-188's *Discovered work*. **No work package owns it — needs an owner (architect).** No test run by the refiner)
+### 576. **A block-list entry that names a binary *and* a word (`terraform apply`, `gh release *`, `glab release *`) is completed by `xargs` from its input: `echo apply | xargs terraform` and `xargs gh release` run under `auto`** (TODO, owned by **WP-197** — § "Architect ruling (M11 amendment, session 16)"; **major, fail-open: a block-list entry, the organisation maximum, does not hold under `auto`**. **Live in the stock image for `gh` and `glab`**, which `docker/runtime.Dockerfile:70-73` installs; whether a run has a credential that lets `gh release`/`glab release` publish is **needs measurement**. `terraform` is not in the stock image. **Not a WP-188 regression**: the same verdict before it. Found by WP-188's reviewer, round 1, session 16; listed in WP-188's *Discovered work*. **No work package owns it — needs an owner (architect).** No test run by the refiner)
 
 **What is wrong.** WP-188's `xargsBannedEntry` (`packages/domain/src/policies/command-policy.ts:2221`) matches the word xargs runs against `binaryBans` (`:2203-2211`), which keeps only `name` and `name *` patterns. An entry with a fixed word after the binary is matched only against the words written on the line, and xargs appends the rest. The word-specific entries of `DEFAULT_BLOCKED_COMMANDS` (`:231-256`) are `rm -rf /*`, the seven `git push`/`git branch -D`/`git reset --hard` entries, `curl * | sh`, `wget * | sh`, `npm publish`, `pip upload`, `gh release *`, `glab release *` and `terraform apply`. The `git` entries are presumably already refused under xargs, because `git` is an input-driven command for `UNCERTAINTY.xargsArguments` (`:215-216`), and so presumably are `npm publish` (npm is a floored verb there) and the two `| sh` entries (a shell). The refiner read this; it did not measure it.
 
@@ -20018,6 +20018,8 @@ migration. The next free number is **0092**. Read the backlog entry a row folds 
 
 ## WP notes (decisions, assumptions, reviewer findings)
 
+| WP-196 | **Scanner: every package runner is read through, a string any of them hands to a shell is never read, and an npm environment setting on the line is uncertain** | TODO | — | Folds **575** (major, fail-open under `auto`, contained by the stock image). Deps WP-188. No migration. Measure (a) first; nothing executed. Serial after WP-188 and before WP-197 and WP-193 on `command-policy.ts`; parallel-safe with every other row. Added by § "Architect ruling (M11 amendment, session 16)". |
+| WP-197 | **Scanner: a block entry that `xargs` could complete from its input is uncertain, whatever follows** | TODO | — | Folds **576** (major, fail-open under `auto`: a block entry, the organisation maximum, completed by `xargs`). Deps WP-188, WP-196. No migration. Measure (a) first; nothing executed. Serial after WP-196 and before WP-193 on `command-policy.ts`; parallel-safe with every other row. Added by § "Architect ruling (M11 amendment, session 16)". |
 ### WP-00
 
 **Blocking environment finding — the verification contract's literal command does not parse.**
@@ -47281,6 +47283,56 @@ table's order. The next free migration number is still **0092**, and no row is e
 - **(b) The helper** is `scripts/git-scratch-env.mjs` (types in `scripts/git-scratch-env.d.mts`). `withoutInheritedGit` drops every name with the `GIT_` prefix, by prefix. `scratchGitEnv(root)` adds back `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` = `/dev/null`, the author and committer, `core.hooksPath=/dev/null` through `GIT_CONFIG_COUNT`, and `GIT_CEILING_DIRECTORIES` = the real path of the root's parent. `assertScratchRepository` throws `ScratchRepositoryEscapeError` unless `git rev-parse --absolute-git-dir` is inside the root, and `initScratchRepository` runs `git init` and then that check. Every site 499 lists uses it, plus the ones the census found: the four planted-census cases (`pool-errors`, `human-time-writers`, `stats-writers`, `integration-config-writers`), `git-vault.test.ts`, `cli-environment.test.ts`, `release.test.ts`, `is-program.test.ts`, `test/e2e/support/agent-workspace.ts` and the integration and e2e files. The production scripts are unchanged.
 - **(c) The census** is `scripts/git-scratch-env-census.test.ts`, over the scanner in `scripts/git-spawn-sites.ts`. It reads files through `census-files.mjs`, tracked and untracked. Its docblock lists what it cannot see.
 - **(d) The reproduction** is `scripts/git-fixture-isolation.test.ts`, in `PROCESS_SUITES`. It picks its suites off disk (every unit-tier file with a git spawn site, 21 today). It runs them in a child vitest with `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_WORK_TREE` pointed at a throwaway repository, with coverage off and `VITEST_*`/`NODE_V8_COVERAGE` stripped. It asserts that `config`, `HEAD`, `index`, `packed-refs` and every loose ref are byte-identical, **and** that the child exited 0.
+### Architect ruling (M11 amendment, session 16) — two majors WP-188's review filed, and the package runner comes first
+
+Written 2026-10-17 at `932ed3bb`, WP-187 and WP-188 DONE, WP-189…WP-195 TODO. This pass covers the two
+headings WP-188's review and its refiner filed with no owner — **575** and **576** — and nothing else:
+§ "Architect ruling (M11, session 16)" holds for every entry it lists. No test tier and no Docker ran;
+the code was read at `932ed3bb` at the lines each entry cites. Both are **major, fail-open under
+`auto`** — the grade the M11 pass said no open entry carried — so they are placed **after WP-188 and
+before WP-189** in the plan's table: a command the scanner hands over outranks a duplicate write.
+
+**Two rows, not one.** The two defects share a file and a test file, but not a rule: 575 is about which
+word the policy looks at after a runner and which words on the line can hand it a program; 576 is about
+how much of a block entry the input may complete. One rule per row is what kept WP-185 and WP-188 under
+WP-164's three-round cap, so **WP-196** owns 575 and **WP-197** owns 576, serial on `command-policy.ts`
+(WP-196 first, as the wider door — every Node image has `npm exec`), with WP-193 serial after both.
+
+**The rule for 575: the peel for the command, a blanket for the environment.** The command a runner runs
+is peeled the way `npx` is since WP-188 (d) — the block list and the floors read it — because the
+alternative, every runner uncertain whatever it runs, refuses `npx jest` and `pnpm exec vitest run`,
+the commands verification is made of. The string a runner hands to a shell is never read, in every
+spelling, as `npxCallsString` already holds for `npx`: one closed reader for all runners. The
+environment is where the blanket goes: npm reads `npm_config_*` case-insensitively, a list of the
+settings that hand it a program (`call`, `node-options`, `script-shell`, …) is a reader list, and a
+reader list under-reads by construction (§ "Architect ruling (M10, session 16)", rule 65) — so any word
+naming `npm_config_*` or `NODE_OPTIONS`, in any position, is uncertain whatever the command. **The
+over-ask, named:** `npm_config_loglevel=silent npm ci` and `grep npm_config_ .npmrc` read uncertain.
+**Residual no scanner sees:** an `.npmrc` the run writes.
+
+**The rule for 576: a prefix of a block entry under `xargs` is uncertain, not blocked.** WP-188's binary
+ban reads `block` because every completion of `xargs sudo` matches `sudo *`. For `xargs gh` only some
+completions match `gh release *`, so the honest verdict is **uncertain** with a reason that names the
+entry; under `auto` both are `deny` (BD-025's 2026-10-06 amendment, decision 2), and in the attended
+mode a person can still approve `echo 'issue view' | xargs gh`. The rule is over `policy.block` whole,
+so a project's own word-specific entry is covered without a list. **The over-ask, named:** `echo plan |
+xargs terraform` and `find . -name '*.tmp' | xargs rm -rf` read uncertain; `cat ids | xargs gh issue
+view` does not, because it is a prefix of no entry.
+
+**Read, not measured, and handed to the rows to measure first:** which of `pnpm`, `pnpx`, `yarn`, `bun`,
+`bunx` and `corepack` the stock image ships (`docker/runtime.Dockerfile:100` may be a build stage
+only); whether `NODE_OPTIONS=… npx jest` reads `auto` today as `npm_config_node_options=…` does;
+whether the `git`, `npm publish` and `| sh` entries are already refused under `xargs` by the
+input-driven and floored-verb rules (576 presumes it); whether a run holds a credential that lets
+`gh release` or `glab release` publish. None of them changes a rule; each changes a row's before column.
+
+**Decisions.** None amended. BD-025's 2026-10-06 amendment, decision 2, already holds that an uncertain
+line stays `deny`; both rows widen what is uncertain, which that decision leaves to the scanner.
+technical/05's command-policy bullets are WP-196 criterion (6) and WP-197 criterion (3). The next free
+migration stays **0092**; neither row takes one. Nothing is marked RESOLVED by this pass.
+
+**Next: WP-196**, then WP-197, then WP-189…WP-195 in their table order with WP-193 after WP-197.
+
 - **(f)** `LOCAL_TOOL_PATHS` and `isLocalToolPath` sit beside `OS_ARTEFACT_NAMES` in `scripts/os-artefacts.mjs`. `check-ignored.mjs` consults them only for what its walk of untracked files finds.
 
 **Decisions and assumptions.**
