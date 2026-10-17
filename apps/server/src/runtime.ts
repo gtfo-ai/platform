@@ -1150,6 +1150,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         database.pool,
         config.secretKey,
       ),
+      projectSettings: createProjectSettingsPort(database.pool, loggerPort),
       historyBootstrap: bootstrapCommands,
       historyBootstrapGate: bootstrapGate,
       rediscoveryGate: capabilities.api

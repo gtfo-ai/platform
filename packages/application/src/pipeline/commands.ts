@@ -56,7 +56,6 @@ import {
   READY_FOR_MERGE_STAGE,
   recordFeedback,
   resetAgentIterations,
-  stageAgentDefaults,
   stageOf,
   steerRun,
   TaskMergedError,
@@ -80,6 +79,7 @@ import {
 } from './jobs.js';
 import { type RunCommandWakeUp, runCommandsTopic } from './run-commands.js';
 import type { ProjectSettingsPort } from './settings.js';
+import { configuredStageAgent } from './settings.js';
 import type { StageExecutionJob } from './stage-executor.js';
 import type {
   LockedRun,
@@ -1933,10 +1933,9 @@ const admitRetryModel = async (
   if (await deps.models.isListed(input.model, at)) {
     return;
   }
+  // The same resolver the planner and the run read's `retry_defaults` call (WP-167).
   const settings = await deps.settings.forProject(input.run.projectId);
-  const configured =
-    settings.config.stages?.[input.stage]?.model ?? stageAgentDefaults(input.stage).model;
-  if (input.model === configured) {
+  if (input.model === configuredStageAgent(settings, input.stage).model) {
     return;
   }
   throw new ModelNotListedError(input.model);

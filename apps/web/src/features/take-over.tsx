@@ -255,7 +255,7 @@ const HandBack = ({
         </Button>
       </div>
       {commands.handBack.isError ? (
-        <ErrorNotice title="The hand-back was refused." detail={String(commands.handBack.error)} />
+        <ErrorNotice title="The hand-back was refused." error={commands.handBack.error} />
       ) : null}
     </form>
   );
@@ -361,10 +361,7 @@ export const TakeOverPanel = ({
           </div>
         </form>
         {commands.takeOver.isError ? (
-          <ErrorNotice
-            title="The take-over was refused."
-            detail={String(commands.takeOver.error)}
-          />
+          <ErrorNotice title="The take-over was refused." error={commands.takeOver.error} />
         ) : null}
         {answered === undefined ? null : (
           <div className="flex flex-col gap-2">

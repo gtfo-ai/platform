@@ -502,12 +502,16 @@ test('the run screen retries with a model and an effort, and sends stage-scoped 
   await page.getByRole('button', { name: 'Steer' }).click();
   await expect(page.getByText(/Accepted\. The agent runs in another process/)).toBeVisible();
 
-  // WP-159: a select over `GET /api/org/models`, starting on the run's own model. Wait for a
-  // listed option the run is not on first, so the value is asserted over the loaded list (rule 87).
+  // WP-159: a select over `GET /api/org/models`, starting (WP-167) on *Configured (…)*, which names
+  // the run read's `retry_defaults`. Wait for a listed option the run is not on first, so the value
+  // is asserted over the loaded list (rule 87).
   await expect(
     page.getByLabel('Retry with model').locator('option', { hasText: 'claude-sonnet-5' }),
   ).toHaveCount(1);
-  await expect(page.getByLabel('Retry with model')).toHaveValue('claude-opus-5');
+  await expect(page.getByLabel('Retry with model')).toHaveValue('configured');
+  await expect(page.getByLabel('Retry with model').locator('option:checked')).toHaveText(
+    'Configured (claude-opus-5)',
+  );
   await page.getByLabel('Retry with model').selectOption('claude-sonnet-5');
   await page.getByLabel('Retry with effort').selectOption('low');
   await page.getByRole('button', { name: 'Retry run' }).click();

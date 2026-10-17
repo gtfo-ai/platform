@@ -58,7 +58,7 @@ export const AuditScreen = (): ReactElement => {
 
       {audit.isPending ? <Loading label="Loading audit entries…" /> : null}
       {audit.isError ? (
-        <ErrorNotice title="The audit log could not be loaded." detail={String(audit.error)} />
+        <ErrorNotice title="The audit log could not be loaded." error={audit.error} />
       ) : null}
       {audit.isSuccess && audit.data.items.length === 0 ? (
         <EmptyState

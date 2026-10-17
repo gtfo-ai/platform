@@ -101,6 +101,7 @@ export const SettingsScreen = (): ReactElement => {
         {users.isError ? (
           <ErrorNotice
             title="The user list could not be loaded."
+            error={users.error}
             detail={readErrorDetail(
               users.error,
               'Reading the organisation needs the viewer role or above.',
@@ -178,6 +179,7 @@ export const SettingsScreen = (): ReactElement => {
         {budgets.isError ? (
           <ErrorNotice
             title="The organisation budgets could not be loaded."
+            error={budgets.error}
             detail={readErrorDetail(
               budgets.error,
               'Reading a budget needs the viewer role; setting one needs maintainer.',

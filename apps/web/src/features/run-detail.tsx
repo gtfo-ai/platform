@@ -52,7 +52,8 @@ import { FeedbackForm } from './feedback.js';
 import { RunCommandLog } from './run-command-log.js';
 import { isStoppedRun, RunNotStartedPanel } from './run-not-started.js';
 import {
-  initialRetryModelChoice,
+  configuredLabel,
+  INITIAL_RETRY_MODEL_CHOICE,
   type RetryModelChoice,
   RetryModelField,
   retryModelRequest,
@@ -139,8 +140,8 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
   const commandLog = useRunCommandLog(runId);
   const [tab, setTab] = useState<Tab>('transcript');
   const [steer, setSteer] = useState('');
-  // WP-159: `null` until the person touches the field, so it starts on the run's own model.
-  const [retryModel, setRetryModel] = useState<RetryModelChoice | null>(null);
+  // WP-167: both selects start on *Configured (…)*, which sends nothing (WP-159 ruling (c)).
+  const [retryModel, setRetryModel] = useState<RetryModelChoice>(INITIAL_RETRY_MODEL_CHOICE);
   const [retryEffort, setRetryEffort] = useState<'low' | 'medium' | 'high' | ''>('');
 
   // The run's task, for the take-over control: `taken_over` lives on the task, not on a run.
@@ -160,7 +161,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
     return <Loading label="Loading run…" />;
   }
   if (run.isError) {
-    return <ErrorNotice title="Run could not be loaded." detail={String(run.error)} />;
+    return <ErrorNotice title="Run could not be loaded." error={run.error} />;
   }
 
   const record = run.data;
@@ -267,12 +268,15 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {/* Retry creates a new run with an overridden model or effort (technical/08
-              `POST /api/runs/:id/retry`). An unchanged field means "as before": the model select
-              starts on this run's own model and sends nothing unless it is changed (WP-159), and
-              the effort's empty option sends nothing either. */}
+              `POST /api/runs/:id/retry`). Both selects start on *Configured (…)*, which names the
+              stage's configured model and effort (`retry_defaults`, WP-167) and sends nothing, so
+              the new run is planned from configuration (WP-159 ruling (c)). This run's own model
+              and effort are ordinary options and are sent when chosen — for a run that was itself
+              an override, "as before" is a choice, not the default. */}
           <RetryModelField
             current={record.model}
-            choice={retryModel ?? initialRetryModelChoice(record.model)}
+            configured={record.retry_defaults?.model ?? null}
+            choice={retryModel}
             onChange={setRetryModel}
           />
           <select
@@ -283,7 +287,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
             }}
             className="rounded-md border border-line bg-surface px-2 py-1 text-sm text-fg"
           >
-            <option value="">{`Effort (${record.effort})`}</option>
+            <option value="">{configuredLabel(record.retry_defaults?.effort ?? null)}</option>
             <option value="low">low</option>
             <option value="medium">medium</option>
             <option value="high">high</option>
@@ -293,10 +297,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
             onClick={() => {
               commands.retry.mutate({
                 taskId: record.task_id,
-                ...retryModelRequest(
-                  record.model,
-                  retryModel ?? initialRetryModelChoice(record.model),
-                ),
+                ...retryModelRequest(retryModel),
                 ...(retryEffort === '' ? {} : { effort: retryEffort }),
               });
             }}
@@ -324,7 +325,11 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
         </p>
       ) : null}
       {commands.retry.isError ? (
-        <ErrorNotice title="That retry was refused." detail={commands.retry.error.message} />
+        <ErrorNotice
+          title="That retry was refused."
+          error={commands.retry.error}
+          detail={commands.retry.error.message}
+        />
       ) : null}
       {commands.retry.isSuccess ? (
         <p className="text-xs text-fg-muted">
@@ -388,7 +393,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
           {commandLog.isError ? (
             <ErrorNotice
               title="What became of the commands sent to this run could not be loaded."
-              detail={String(commandLog.error)}
+              error={commandLog.error}
             />
           ) : null}
           <RunCommandLog commands={commandLog.data?.items ?? []} />
@@ -400,7 +405,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
           <SectionHeading>Prompt snapshot</SectionHeading>
           {prompt.isPending ? <Loading label="Loading prompt…" /> : null}
           {prompt.isError ? (
-            <ErrorNotice title="The prompt could not be loaded." detail={String(prompt.error)} />
+            <ErrorNotice title="The prompt could not be loaded." error={prompt.error} />
           ) : null}
           {prompt.data === undefined ? null : (
             <>
@@ -431,10 +436,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
           <SectionHeading>Context pack</SectionHeading>
           {contextPack.isPending ? <Loading label="Loading context pack…" /> : null}
           {contextPack.isError ? (
-            <ErrorNotice
-              title="The context pack could not be loaded."
-              detail={String(contextPack.error)}
-            />
+            <ErrorNotice title="The context pack could not be loaded." error={contextPack.error} />
           ) : null}
           {contextPack.data === undefined ? null : (
             <Card>

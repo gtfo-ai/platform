@@ -718,7 +718,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         [`/api/tasks/${fixtures.IDS.taskTaken}`]: fixtures.takenOverTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskEpic}`]: fixtures.epicTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskEpic}/breakdown`]: fixtures.epicBreakdown,
-        [`/api/runs/${fixtures.IDS.run}`]: fixtures.run,
+        [`/api/runs/${fixtures.IDS.run}`]: fixtures.runRead,
         [`/api/runs/${fixtures.IDS.run}/messages`]: fixtures.runMessages,
         [`/api/runs/${fixtures.IDS.run}/prompt`]: fixtures.runPrompt,
         [`/api/runs/${fixtures.IDS.run}/context-pack`]: fixtures.runContextPack,

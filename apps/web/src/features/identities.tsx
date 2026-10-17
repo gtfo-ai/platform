@@ -123,6 +123,7 @@ export const IdentityMappings = (): ReactElement => {
       {identities.isError ? (
         <ErrorNotice
           title="The identity mappings could not be loaded."
+          error={identities.error}
           detail={readErrorDetail(
             identities.error,
             'Reading and writing them needs the admin role, because a mapping decides who may act as whom.',
@@ -274,10 +275,7 @@ export const IdentityMappings = (): ReactElement => {
             </Button>
           </div>
           {commands.mapIdentity.error === null ? null : (
-            <ErrorNotice
-              title="The mapping was not saved."
-              detail={String(commands.mapIdentity.error)}
-            />
+            <ErrorNotice title="The mapping was not saved." error={commands.mapIdentity.error} />
           )}
         </form>
       )}

@@ -1,18 +1,26 @@
 /**
- * *Retry run*'s model field is a select over the organisation's model list (WP-159, backlog 498).
+ * *Retry run*'s model field is a select over the organisation's model list (WP-159, backlog 498),
+ * and both selects start on *Configured (…)*, naming the run read's `retry_defaults` (WP-167,
+ * backlog 514).
  *
  * Driven through `createApp` with a fake server, as `run-cancel.test.tsx` is: the real router, query
  * client and endpoint parsers (`orgModelsResponseSchema`, `retryRunRequestSchema`), so a body the
  * client builds wrongly is caught at the same parse production runs. Every wait binds the thing it
  * asserts (rule 87): an option's presence, or the retry body the fake recorded.
  */
-import type { RunRecord } from '@platform/contracts';
+import type { RetryDefaults, RunRecord } from '@platform/contracts';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { retryModelOptions, retryModelRequest } from './run-retry-model.js';
+import {
+  CONFIGURED_MODEL,
+  modelOptionValue,
+  OTHER_MODEL,
+  retryModelOptions,
+  retryModelRequest,
+} from './run-retry-model.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -71,6 +79,8 @@ const json = (body: unknown, status = 200): Response =>
 
 interface World {
   readonly run: RunRecord;
+  /** The run read's `retry_defaults`: the stage's configured model and effort. */
+  readonly defaults: RetryDefaults;
   /** `null` answers the model list with a 500. */
   readonly listed: readonly string[] | null;
   readonly retries: unknown[];
@@ -98,7 +108,7 @@ const fetchFor = (world: World) =>
     }
     if (path === `/api/runs/${RUN}/messages`) return json({ items: [], next_seq: null });
     if (path === `/api/runs/${RUN}/commands`) return json({ items: [] });
-    if (path === `/api/runs/${RUN}`) return json(world.run);
+    if (path === `/api/runs/${RUN}`) return json({ ...world.run, retry_defaults: world.defaults });
     if (path === '/api/projects') return json({ items: [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
@@ -113,8 +123,12 @@ beforeEach(() => {
   window.history.pushState({}, '', `/runs/${RUN}`);
 });
 
-const open = async (model: string, listed: readonly string[] | null) => {
-  const world: World = { run: runOn(model), listed, retries: [] };
+const open = async (
+  model: string,
+  listed: readonly string[] | null,
+  defaults: RetryDefaults = { model, effort: 'high' },
+) => {
+  const world: World = { run: runOn(model), defaults, listed, retries: [] };
   const user = userEvent.setup();
   render(createApp({ fetchImpl: fetchFor(world), realtime: false }).element);
   const select = (await screen.findByLabelText('Retry with model')) as HTMLSelectElement;
@@ -138,11 +152,11 @@ const retry = async (world: World, user: ReturnType<typeof userEvent.setup>) => 
 };
 
 describe('Retry run’s model select (WP-159)', () => {
-  it('offers the server’s list and preselects the run’s own model', async () => {
+  it('offers Configured (…) first, then the server’s list, and preselects Configured', async () => {
     const { select } = await open('claude-fake-b', LISTED);
     await listedShown(select, 'claude-fake-c');
-    expect(optionLabels(select)).toEqual([...LISTED, 'Other…']);
-    expect(select.value).toBe('claude-fake-b');
+    expect(optionLabels(select)).toEqual(['Configured (claude-fake-b)', ...LISTED, 'Other…']);
+    expect(select.value).toBe(CONFIGURED_MODEL);
   });
 
   it('sends no model when the selection is unchanged', async () => {
@@ -158,15 +172,16 @@ describe('Retry run’s model select (WP-159)', () => {
     expect(await retry(world, user)).toEqual({ model: 'claude-fake-c' });
   });
 
-  it('keeps an unlisted current model as its own option, labelled not priced, and selected', async () => {
+  it('keeps an unlisted current model as its own option, labelled not priced', async () => {
     const { world, user, select } = await open('claude-custom-pinned', LISTED);
     await listedShown(select, 'claude-fake-a');
     expect(optionLabels(select)).toEqual([
+      'Configured (claude-custom-pinned)',
       'claude-custom-pinned (not priced)',
       ...LISTED,
       'Other…',
     ]);
-    expect(select.value).toBe('claude-custom-pinned');
+    expect(select.value).toBe(CONFIGURED_MODEL);
     // Never silently replaced: an unchanged submit still sends nothing.
     expect(await retry(world, user)).toEqual({});
   });
@@ -182,32 +197,78 @@ describe('Retry run’s model select (WP-159)', () => {
     });
   });
 
-  it('offers the run’s model and Other… with a notice when the list cannot be read', async () => {
+  it('offers Configured, the run’s model and Other… with a notice when the list cannot be read', async () => {
     const { world, user, select } = await open('claude-fake-b', null);
     await screen.findByText('The model list could not be loaded.');
-    expect(optionLabels(select)).toEqual(['claude-fake-b', 'Other…']);
-    expect(select.value).toBe('claude-fake-b');
+    expect(optionLabels(select)).toEqual(['Configured (claude-fake-b)', 'claude-fake-b', 'Other…']);
+    expect(select.value).toBe(CONFIGURED_MODEL);
     expect(await retry(world, user)).toEqual({});
+  });
+});
+
+/**
+ * WP-167 ruling (a), backlog 514: a run that was itself an override (it ran `claude-fake-b` at
+ * `high` on a stage configured `claude-fake-a` at `medium`). The default names what an unchanged
+ * submit runs; "the run's own again" is an ordinary choice that is sent.
+ */
+describe('Retry run of an override run (WP-167)', () => {
+  const OVERRIDE: RetryDefaults = { model: 'claude-fake-a', effort: 'medium' };
+
+  it('preselects Configured (the configured model), not the run’s own', async () => {
+    const { select } = await open('claude-fake-b', LISTED, OVERRIDE);
+    await listedShown(select, 'claude-fake-c');
+    expect(select.value).toBe(CONFIGURED_MODEL);
+    expect(select.selectedOptions[0]?.textContent).toBe('Configured (claude-fake-a)');
+  });
+
+  it('sends no model and no effort for an unchanged submit', async () => {
+    const { world, user, select } = await open('claude-fake-b', LISTED, OVERRIDE);
+    await listedShown(select, 'claude-fake-c');
+    const effort = screen.getByLabelText('Retry with effort') as HTMLSelectElement;
+    expect(effort.selectedOptions[0]?.textContent).toBe('Configured (medium)');
+    expect(await retry(world, user)).toEqual({});
+  });
+
+  it('sends the run’s own model and effort when they are chosen', async () => {
+    const { world, user, select } = await open('claude-fake-b', LISTED, OVERRIDE);
+    await listedShown(select, 'claude-fake-c');
+    await user.selectOptions(select, 'claude-fake-b');
+    await user.selectOptions(screen.getByLabelText('Retry with effort'), 'high');
+    expect(await retry(world, user)).toEqual({ model: 'claude-fake-b', effort: 'high' });
   });
 });
 
 describe('the field’s two pure halves', () => {
   it('builds the retry body’s model half', () => {
-    expect(retryModelRequest('m', { selected: 'm', other: '' })).toEqual({});
-    expect(retryModelRequest('m', { selected: 'n', other: 'x' })).toEqual({ model: 'n' });
-    expect(retryModelRequest('m', { selected: '', other: '  ' })).toEqual({});
-    expect(retryModelRequest('m', { selected: '', other: ' x ' })).toEqual({
+    expect(retryModelRequest({ selected: CONFIGURED_MODEL, other: 'x' })).toEqual({});
+    expect(retryModelRequest({ selected: modelOptionValue('n'), other: 'x' })).toEqual({
+      model: 'n',
+    });
+    // A model id that spells a keyword is still a model: the prefix keeps them apart.
+    expect(retryModelRequest({ selected: modelOptionValue('configured'), other: '' })).toEqual({
+      model: 'configured',
+    });
+    expect(retryModelRequest({ selected: OTHER_MODEL, other: '  ' })).toEqual({});
+    expect(retryModelRequest({ selected: OTHER_MODEL, other: ' x ' })).toEqual({
       model: 'x',
       allowUnlistedModel: true,
     });
   });
 
   it('labels the current model only once the list has answered without it', () => {
-    expect(retryModelOptions('m', null)).toEqual([{ value: 'm', label: 'm' }]);
-    expect(retryModelOptions('m', ['a'])).toEqual([
-      { value: 'm', label: 'm (not priced)' },
-      { value: 'a', label: 'a' },
+    const configured = { value: CONFIGURED_MODEL, label: 'Configured (c)' };
+    expect(retryModelOptions('m', 'c', null)).toEqual([
+      configured,
+      { value: 'model:m', label: 'm' },
     ]);
-    expect(retryModelOptions('a', ['a'])).toEqual([{ value: 'a', label: 'a' }]);
+    expect(retryModelOptions('m', 'c', ['a'])).toEqual([
+      configured,
+      { value: 'model:m', label: 'm (not priced)' },
+      { value: 'model:a', label: 'a' },
+    ]);
+    expect(retryModelOptions('a', null, ['a'])).toEqual([
+      { value: CONFIGURED_MODEL, label: 'Configured' },
+      { value: 'model:a', label: 'a' },
+    ]);
   });
 });

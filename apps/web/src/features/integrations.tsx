@@ -273,7 +273,7 @@ const ConfigEditor = ({
       {commands.patchIntegration.isError ? (
         <ErrorNotice
           title="The configuration was not saved."
-          detail={String(commands.patchIntegration.error)}
+          error={commands.patchIntegration.error}
         />
       ) : null}
     </form>
@@ -335,7 +335,7 @@ const CredentialResealer = ({
       {commands.resealIntegrationSecrets.isError ? (
         <ErrorNotice
           title="The credentials were not replaced."
-          detail={String(commands.resealIntegrationSecrets.error)}
+          error={commands.resealIntegrationSecrets.error}
         />
       ) : null}
       {commands.resealIntegrationSecrets.isSuccess ? (
@@ -401,7 +401,7 @@ const RetireControl = ({
       {commands.retireIntegration.isError ? (
         <ErrorNotice
           title="The integration was not retired."
-          detail={String(commands.retireIntegration.error)}
+          error={commands.retireIntegration.error}
         />
       ) : null}
     </div>
@@ -519,7 +519,7 @@ const CreateIntegrationForm = ({
       {commands.createIntegration.isError ? (
         <ErrorNotice
           title="The integration was not created."
-          detail={String(commands.createIntegration.error)}
+          error={commands.createIntegration.error}
         />
       ) : null}
     </form>
@@ -553,10 +553,7 @@ const RefusedDeliveries = ({ integrationId }: { readonly integrationId: string }
       {!open ? null : refused.isPending ? (
         <Loading label="Loading refused deliveries…" />
       ) : refused.isError ? (
-        <ErrorNotice
-          title="The refused deliveries could not be loaded."
-          detail={String(refused.error)}
-        />
+        <ErrorNotice title="The refused deliveries could not be loaded." error={refused.error} />
       ) : refused.data.items.length === 0 ? (
         <p className="text-xs text-fg-muted">Nothing this integration delivered was refused.</p>
       ) : (
@@ -623,6 +620,7 @@ export const IntegrationsScreen = (): ReactElement => {
         <ErrorNotice
           title="Integrations could not be loaded."
           // Only a 403 is the role (WP-114, backlog 327's reading, `readErrorDetail`).
+          error={integrations.error}
           detail={readErrorDetail(
             integrations.error,
             'Reading integration configuration needs the maintainer role (Q36).',
@@ -776,10 +774,7 @@ export const IntegrationsScreen = (): ReactElement => {
         </p>
         {providers.isPending ? <Loading label="Loading the shipped providers…" /> : null}
         {providers.isError ? (
-          <ErrorNotice
-            title="The shipped providers could not be loaded."
-            detail={String(providers.error)}
-          />
+          <ErrorNotice title="The shipped providers could not be loaded." error={providers.error} />
         ) : null}
         {providers.isSuccess ? <CreateIntegrationForm providers={providers.data.items} /> : null}
       </Card>

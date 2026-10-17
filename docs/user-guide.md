@@ -688,9 +688,14 @@ CLI refuses any other.
 You can **cancel** the run (member), **retry** it with a different model or effort (member — this
 creates a *new* run rather than changing this one), and leave **feedback** scoped to the stage. The
 model is a list, not a box to type into: it offers the models the platform has a price for (the
-operator's `price_list`) with this run's own model selected, and leaving it unchanged re-plans the
-new run from the project's configuration. A model the list does not carry — say one your project
-pins — is shown as its own entry marked *not priced* and stays selected. *Other…* lets you type any
+operator's `price_list`), and it starts on **Configured (…)**, which names the model the project's
+configuration gives this stage. Leaving it there re-plans the new run from the configuration, so
+that is the model it runs (if somebody changes the configuration before you press the button, the
+new value wins). This run's own model is an ordinary entry: choose it to run the same model again —
+which matters when this run was itself a retry on another model. A model the list does not carry —
+say one your project pins — is shown as its own entry marked *not priced*. The effort list works the
+same way: **Configured (…)** names the stage's configured effort, and this run's effort is one of
+the choices. *Other…* lets you type any
 id, and the platform runs it because you chose it there; an unlisted id sent without that choice is
 refused (`model_not_listed`), so a typo never reaches a run.
 

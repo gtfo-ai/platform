@@ -130,6 +130,7 @@ export const DeadLetters = (): ReactElement => {
         <ErrorNotice
           title="The dead letters could not be loaded."
           // WP-114, backlog 327: only a 403 is the role; a 503 or a 500 is shown as itself.
+          error={letters.error}
           detail={readErrorDetail(letters.error, 'Reading them needs the admin role.')}
         />
       ) : null}
@@ -149,7 +150,7 @@ export const DeadLetters = (): ReactElement => {
       {commands.requeueDeadLetter.isError ? (
         <ErrorNotice
           title="That event was not re-queued."
-          detail={String(commands.requeueDeadLetter.error)}
+          error={commands.requeueDeadLetter.error}
         />
       ) : null}
       {commands.requeueDeadLetter.isSuccess ? (
@@ -186,6 +187,7 @@ export const DeadLetters = (): ReactElement => {
       {letters.isFetchNextPageError ? (
         <ErrorNotice
           title="The older dead letters could not be loaded."
+          error={letters.error}
           detail={readErrorDetail(letters.error, 'Reading them needs the admin role.')}
         />
       ) : null}

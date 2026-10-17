@@ -237,7 +237,7 @@ export const StartTicketForm = ({ projectId }: { readonly projectId: string }): 
       </Button>
       {invalid === null ? null : <ErrorNotice title="That is not a ticket key." detail={invalid} />}
       {start.isError ? (
-        <ErrorNotice title="The ticket was not started." detail={String(start.error)} />
+        <ErrorNotice title="The ticket was not started." error={start.error} />
       ) : null}
       {started === null ? null : (
         <p role="status" className="basis-full text-xs text-fg-muted">
@@ -260,7 +260,7 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
     return <Loading label="Loading project…" />;
   }
   if (isError) {
-    return <ErrorNotice title="Project could not be loaded." detail={String(error)} />;
+    return <ErrorNotice title="Project could not be loaded." error={error} />;
   }
   if (project === null) {
     return (
@@ -322,7 +322,7 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
       </SectionHeading>
 
       {tasks.isError ? (
-        <ErrorNotice title="Tasks could not be loaded." detail={String(tasks.error)} />
+        <ErrorNotice title="Tasks could not be loaded." error={tasks.error} />
       ) : null}
 
       {canStart ? <StartTicketForm projectId={project.id} /> : null}

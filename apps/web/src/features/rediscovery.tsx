@@ -38,10 +38,7 @@ export const Rediscovery = ({ projectId }: { readonly projectId: string }): Reac
   }
   if (gate.isError) {
     return (
-      <ErrorNotice
-        title="Whether discovery can run again could not be read."
-        detail={String(gate.error)}
-      />
+      <ErrorNotice title="Whether discovery can run again could not be read." error={gate.error} />
     );
   }
   const { can_start: canStart, blocker, ceiling_usd: ceiling, last_discovery: last } = gate.data;
@@ -83,10 +80,7 @@ export const Rediscovery = ({ projectId }: { readonly projectId: string }): Reac
         </p>
       ) : null}
       {commands.startRediscovery.isError ? (
-        <ErrorNotice
-          title="Discovery was not run again."
-          detail={String(commands.startRediscovery.error)}
-        />
+        <ErrorNotice title="Discovery was not run again." error={commands.startRediscovery.error} />
       ) : null}
     </div>
   );

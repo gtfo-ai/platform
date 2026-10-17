@@ -49,6 +49,7 @@ import {
   runCommandsResponseSchema,
   runMessagesResponseSchema,
   runPromptResponseSchema,
+  runReadResponseSchema,
   runRecordSchema,
   setupGuideResponseSchema,
   taskBreakdownSchema,
@@ -459,6 +460,12 @@ export const run = runRecordSchema.parse({
   start_failure: null,
   saved_work: null,
   latest_progress: null,
+});
+
+/** `GET /api/runs/:id` (WP-167): the record plus what an unchanged *Retry run* runs. */
+export const runRead = runReadResponseSchema.parse({
+  ...run,
+  retry_defaults: { model: 'claude-opus-5', effort: 'high' },
 });
 
 export const taskDetail = taskDetailResponseSchema.parse({

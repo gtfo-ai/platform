@@ -107,7 +107,7 @@ import {
 import { CONFLICT_RESOLUTION_STAGE } from './rebase.js';
 import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { ProjectSettings } from './settings.js';
-import { effectiveProtectedPaths, withCiConfigPath } from './settings.js';
+import { configuredStageAgent, effectiveProtectedPaths, withCiConfigPath } from './settings.js';
 import type { StageRunPlan, StageRunPlanner, StageRunRequest } from './stage-executor.js';
 import type { StoredArtifact, StoredTask } from './store.js';
 import { exceptionsOf } from './tamper.js';
@@ -1467,8 +1467,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
     plan: async (request: StageRunRequest): Promise<StageRunPlan> => {
       const { stage, task, settings } = request;
       const role = stage.role ?? 'developer';
-      const defaults = stageAgentDefaults(stage.id);
-      const configured = settings.config.stages?.[stage.id];
+      const configured = configuredStageAgent(settings, stage.id);
       // Which skills this run is provisioned with: the role's row, minus every provider skill the
       // project's bindings do not name (WP-54). Read first, because the skills also bring their
       // own command patterns.
@@ -1702,10 +1701,12 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         mode,
         attempt: request.attempt,
         // The human's override for this attempt first (WP-15i), then the project's stage
-        // configuration, then the template's default. One attempt only: the override rides the
-        // `stage.execute` payload and is never written to the project.
-        model: request.overrides?.model ?? configured?.model ?? defaults.model,
-        effort: request.overrides?.effort ?? configured?.effort ?? defaults.effort,
+        // configuration, then the template's default — the last two are `configuredStageAgent`,
+        // which the retry's check and the run read's `retry_defaults` also call (WP-167). One
+        // attempt only: the override rides the `stage.execute` payload and is never written to
+        // the project.
+        model: request.overrides?.model ?? configured.model,
+        effort: request.overrides?.effort ?? configured.effort,
         providerMode: options.providerMode ?? 'api',
         // Two lanes, joined: the assembled prompt's version (technical/04's "hash of layers 1-3")
         // and a digest of the skill files this run's workspace was provisioned with, so an edit to

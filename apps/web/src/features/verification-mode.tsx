@@ -64,7 +64,7 @@ export const VerificationMode = ({ projectId }: { readonly projectId: string }):
       {config.isError ? (
         <ErrorNotice
           title="The verification mode could not be read: the project’s configuration did not load."
-          detail={String(config.error)}
+          error={config.error}
         />
       ) : null}
       <fieldset className="flex flex-col gap-2" disabled={!config.isSuccess}>
@@ -104,7 +104,7 @@ export const VerificationMode = ({ projectId }: { readonly projectId: string }):
       {commands.writeConfig.isError ? (
         <ErrorNotice
           title="The verification mode was not saved."
-          detail={String(commands.writeConfig.error)}
+          error={commands.writeConfig.error}
         />
       ) : null}
     </Card>

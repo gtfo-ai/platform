@@ -15,6 +15,7 @@ import type {
   AgenticConfig,
   AutonomyLevel,
   CommandPolicy,
+  Effort,
   Id,
   MaterialisedAutonomy,
   PipelineTemplate,
@@ -42,6 +43,7 @@ import {
   resolveIterationLimits,
   SHIPPED_TEMPLATES,
   SPIKE_TEMPLATE_ID,
+  stageAgentDefaults,
 } from '@platform/domain';
 import type { ProjectPromptReading } from '../config/project-prompts.js';
 import type { PromptsWithheld } from '../config/repository-config.js';
@@ -500,6 +502,31 @@ export const withCiConfigPath = (
   location?.kind === 'repository' && !protectedPaths.includes(location.path)
     ? [...protectedPaths, location.path]
     : protectedPaths;
+
+/** The model and effort a stage runs with when nobody overrides them (WP-167). */
+export interface ConfiguredStageAgent {
+  readonly model: string;
+  readonly effort: Effort;
+}
+
+/**
+ * **The one resolver of a stage's configured model and effort** (WP-167 ruling (a), backlog 514):
+ * the project's `stages.<stage>` value, else the template's default (`stageAgentDefaults`). The
+ * planner plans an un-overridden run with it, the retry's listing check admits its model, and the
+ * run read publishes it as `retry_defaults` — so what *Retry run* preselects is what an unchanged
+ * submit runs, read off the same function at the moment each is asked.
+ */
+export const configuredStageAgent = (
+  settings: Pick<ProjectSettings, 'config'>,
+  stage: string,
+): ConfiguredStageAgent => {
+  const defaults = stageAgentDefaults(stage);
+  const configured = settings.config.stages?.[stage];
+  return {
+    model: configured?.model ?? defaults.model,
+    effort: configured?.effort ?? defaults.effort,
+  };
+};
 
 export interface ProjectSettingsPort {
   forProject(projectId: Id, tx?: Transaction): Promise<ProjectSettings>;

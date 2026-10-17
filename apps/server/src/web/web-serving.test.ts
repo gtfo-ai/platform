@@ -143,6 +143,11 @@ const build = async (
     shadow: null,
     shadowGate: null,
     organisationCredentials: null,
+    projectSettings: {
+      forProject: async () => {
+        throw new Error('this test reads no project settings');
+      },
+    },
     historyBootstrap: null,
     historyBootstrapGate: null,
     rediscoveryGate: null,

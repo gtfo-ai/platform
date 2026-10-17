@@ -13,12 +13,14 @@ import {
   materialiseAutonomy,
   SHIPPED_TEMPLATES,
   SPIKE_TEMPLATE_ID,
+  stageAgentDefaults,
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { TransactionOpenError, withOpenTransaction } from '../events/open-transaction.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import {
   autonomyPresetFor,
+  configuredStageAgent,
   DEFAULT_TEMPLATE_BY_ISSUE_TYPE,
   DEFAULT_TEMPLATE_ID,
   defaultProjectSettings,
@@ -342,5 +344,36 @@ describe('a stored document with a key this release does not know (WP-125, backl
     expect(clause).not.toContain('FAKE-wp125');
     expect(clause).toContain('[REDACTED');
     expect(clause?.length).toBeLessThanOrEqual(MAX_STORED_VALUE_CHARS);
+  });
+});
+
+describe('configuredStageAgent (WP-167)', () => {
+  it('answers the template default for a stage the project does not configure', () => {
+    const settings = defaultProjectSettings(PROJECT);
+    const defaults = stageAgentDefaults('implementation');
+    expect(configuredStageAgent(settings, 'implementation')).toEqual({
+      model: defaults.model,
+      effort: defaults.effort,
+    });
+  });
+
+  it("answers the project's `stages.<stage>` value field by field", () => {
+    const base = defaultProjectSettings(PROJECT);
+    const settings = {
+      ...base,
+      config: { ...base.config, stages: { implementation: { model: 'claude-sonnet-5' } } },
+    };
+    expect(configuredStageAgent(settings, 'implementation')).toEqual({
+      model: 'claude-sonnet-5',
+      effort: stageAgentDefaults('implementation').effort,
+    });
+    const effortOnly = {
+      ...base,
+      config: { ...base.config, stages: { implementation: { effort: 'low' as const } } },
+    };
+    expect(configuredStageAgent(effortOnly, 'implementation')).toEqual({
+      model: stageAgentDefaults('implementation').model,
+      effort: 'low',
+    });
   });
 });

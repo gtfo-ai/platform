@@ -7,11 +7,17 @@
  * (BD-022) and are asserted to arrive as text — a tag in them stays a tag on screen, never an
  * element.
  */
-import type { RunRecord, RunStartFailure } from '@platform/contracts';
+import type { RunReadResponse, RunRecord, RunStartFailure } from '@platform/contracts';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+
+/** `GET /api/runs/:id` answers the record plus `retry_defaults` (WP-167); a run on its configuration. */
+const asRead = (record: RunRecord): RunReadResponse => ({
+  ...record,
+  retry_defaults: { model: record.model, effort: record.effort },
+});
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -82,7 +88,7 @@ const fetchWith = (run: RunRecord) =>
     if (url.includes('/api/auth/get-session')) return json(SESSION);
     if (url.includes(`/api/runs/${RUN}/messages`)) return json({ items: [], next_seq: null });
     if (url.endsWith(`/api/runs/${RUN}/commands`)) return json({ items: [] });
-    if (url.endsWith(`/api/runs/${RUN}`)) return json(run);
+    if (url.endsWith(`/api/runs/${RUN}`)) return json(asRead(run));
     if (url.endsWith('/api/projects')) return json({ items: [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;

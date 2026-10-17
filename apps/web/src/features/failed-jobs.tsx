@@ -118,6 +118,7 @@ export const FailedJobs = (): ReactElement => {
         <ErrorNotice
           title="The failed jobs could not be loaded."
           // Only a 403 is the role (backlog 327, `readErrorDetail`).
+          error={jobs.error}
           detail={readErrorDetail(jobs.error, 'Reading them needs the admin role.')}
         />
       ) : null}
@@ -157,6 +158,7 @@ export const FailedJobs = (): ReactElement => {
       {jobs.isFetchNextPageError ? (
         <ErrorNotice
           title="The older failed jobs could not be loaded."
+          error={jobs.error}
           detail={readErrorDetail(jobs.error, 'Reading them needs the admin role.')}
         />
       ) : null}

@@ -133,7 +133,7 @@ export const DashboardScreen = (): ReactElement => {
         </SectionHeading>
         {projects.isPending ? <Loading label="Loading projects…" /> : null}
         {projects.isError ? (
-          <ErrorNotice title="Projects could not be loaded." detail={String(projects.error)} />
+          <ErrorNotice title="Projects could not be loaded." error={projects.error} />
         ) : null}
         {projects.data?.items.length === 0 ? (
           <EmptyState

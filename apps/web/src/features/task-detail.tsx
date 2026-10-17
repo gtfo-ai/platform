@@ -1007,6 +1007,7 @@ const TaskActivity = ({ taskId }: { readonly taskId: string }): ReactElement => 
         // a failure, stated as the server stated it.
         <ErrorNotice
           title="This task's activity could not be loaded."
+          error={audit.error}
           detail={readErrorDetail(audit.error, 'Reading the record needs the maintainer role.')}
         />
       )}
@@ -1332,7 +1333,7 @@ const ArtifactBody = ({
     return <Loading label="Loading artifact…" />;
   }
   if (body.isError) {
-    return <ErrorNotice title="Artifact could not be loaded." detail={String(body.error)} />;
+    return <ErrorNotice title="Artifact could not be loaded." error={body.error} />;
   }
   const artifact = body.data;
   return (
@@ -1387,7 +1388,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
     return <Loading label="Loading task…" />;
   }
   if (detail.isError) {
-    return <ErrorNotice title="Task could not be loaded." detail={String(detail.error)} />;
+    return <ErrorNotice title="Task could not be loaded." error={detail.error} />;
   }
 
   const {

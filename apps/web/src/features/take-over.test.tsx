@@ -8,6 +8,7 @@
  */
 import type {
   ContextPackRecord,
+  RunReadResponse,
   RunRecord,
   TakenOver,
   TaskDetailResponse,
@@ -19,6 +20,12 @@ import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import { admittedDocuments, crossedBudgetCap, textSearchText } from './run-detail.js';
 import { interruptedRunOf, workspaceExportText } from './take-over.js';
+
+/** `GET /api/runs/:id` answers the record plus `retry_defaults` (WP-167); a run on its configuration. */
+const asRead = (record: RunRecord): RunReadResponse => ({
+  ...record,
+  retry_defaults: { model: record.model, effort: record.effort },
+});
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -423,7 +430,8 @@ describe('the run screen’s context pack (backlog 168 and 172)', () => {
         fetchImpl: fetchFor(detail(), [], (url) => {
           if (url.endsWith(`/api/runs/${RUN}/context-pack`)) return json(record);
           if (url.includes(`/api/runs/${RUN}/messages`)) return json({ items: [], next_seq: null });
-          if (url.endsWith(`/api/runs/${RUN}`)) return json(run(RUN, '2026-09-13T05:00:00.000Z'));
+          if (url.endsWith(`/api/runs/${RUN}`))
+            return json(asRead(run(RUN, '2026-09-13T05:00:00.000Z')));
           return null;
         }),
         realtime: false,
@@ -467,7 +475,7 @@ describe('the run screen’s budget cap badge (backlog 466)', () => {
       createApp({
         fetchImpl: fetchFor(detail(), [], (url) => {
           if (url.includes(`/api/runs/${RUN}/messages`)) return json({ items: [], next_seq: null });
-          if (url.endsWith(`/api/runs/${RUN}`)) return json(record);
+          if (url.endsWith(`/api/runs/${RUN}`)) return json(asRead(record));
           return null;
         }),
         realtime: false,

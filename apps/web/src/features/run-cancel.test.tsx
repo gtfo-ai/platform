@@ -7,12 +7,18 @@
  * client and endpoint parser (`cancelRunResponseSchema`), so a body the client cannot parse fails
  * here rather than reading as success.
  */
-import type { RunRecord } from '@platform/contracts';
+import type { RunReadResponse, RunRecord } from '@platform/contracts';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+
+/** `GET /api/runs/:id` answers the record plus `retry_defaults` (WP-167); a run on its configuration. */
+const asRead = (record: RunRecord): RunReadResponse => ({
+  ...record,
+  retry_defaults: { model: record.model, effort: record.effort },
+});
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -79,7 +85,7 @@ const fetchWith = (cancel: () => Response, posted: string[]) =>
     }
     if (url.includes(`/api/runs/${RUN}/messages`)) return json({ items: [], next_seq: null });
     if (url.endsWith(`/api/runs/${RUN}/commands`)) return json({ items: [] });
-    if (url.endsWith(`/api/runs/${RUN}`)) return json(RUNNING);
+    if (url.endsWith(`/api/runs/${RUN}`)) return json(asRead(RUNNING));
     if (url.endsWith('/api/projects')) return json({ items: [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;

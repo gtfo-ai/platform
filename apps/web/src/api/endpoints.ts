@@ -101,7 +101,7 @@ import {
   runCommandsResponseSchema,
   runMessagesResponseSchema,
   runPromptResponseSchema,
-  runRecordSchema,
+  runReadResponseSchema,
   runSettingsResponseSchema,
   setAutonomyRequestSchema,
   setDefaultBranchRequestSchema,
@@ -274,7 +274,7 @@ export interface Endpoints {
    * markup and never as a link (BD-022, `ui/untrusted.tsx`).
    */
   readonly artifact: (artifactId: string) => Promise<z.output<typeof artifactBodyResponseSchema>>;
-  readonly run: (runId: string) => Promise<z.output<typeof runRecordSchema>>;
+  readonly run: (runId: string) => Promise<z.output<typeof runReadResponseSchema>>;
   readonly runMessages: (
     runId: string,
     query?: { readonly after?: number; readonly limit?: number },
@@ -713,7 +713,7 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       client.get(`/api/tasks/${seg(taskId)}/asks`, { schema: taskAskListSchema }),
     taskAudit: (taskId) =>
       client.get(`/api/tasks/${seg(taskId)}/audit`, { schema: taskAuditPageSchema }),
-    run: (runId) => client.get(`/api/runs/${seg(runId)}`, { schema: runRecordSchema }),
+    run: (runId) => client.get(`/api/runs/${seg(runId)}`, { schema: runReadResponseSchema }),
     runMessages: (runId, query) =>
       client.get(`/api/runs/${seg(runId)}/messages`, {
         schema: runMessagesResponseSchema,

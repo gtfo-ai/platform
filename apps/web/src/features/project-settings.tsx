@@ -202,10 +202,7 @@ export const ProjectSettingsScreen = ({
           </Button>
         </div>
         {commands.putBindings.isError ? (
-          <ErrorNotice
-            title="The bindings were not saved."
-            detail={String(commands.putBindings.error)}
-          />
+          <ErrorNotice title="The bindings were not saved." error={commands.putBindings.error} />
         ) : null}
         {/* WP-182 ruling (a): the wizard's step-1 lifecycle slots, mirrored — the same component. */}
         <div className="flex flex-col gap-2">
@@ -239,10 +236,7 @@ export const ProjectSettingsScreen = ({
           keep the latest discovery’s answer until a maintainer re-evaluates.
         </p>
         {commands.startDiscovery.isError ? (
-          <ErrorNotice
-            title="Discovery was not started."
-            detail={String(commands.startDiscovery.error)}
-          />
+          <ErrorNotice title="Discovery was not started." error={commands.startDiscovery.error} />
         ) : null}
         {/* WP-94, Q107 (a): discovery again, on a maintainer's click, with its ceiling shown. */}
         <Rediscovery projectId={project.id} />
@@ -425,7 +419,7 @@ export const ProjectSettingsScreen = ({
         {commands.exportConfig.isError ? (
           <ErrorNotice
             title="The settings were not proposed."
-            detail={String(commands.exportConfig.error)}
+            error={commands.exportConfig.error}
           />
         ) : null}
         {commands.refreshConfig.isSuccess &&
@@ -438,7 +432,7 @@ export const ProjectSettingsScreen = ({
         {commands.refreshConfig.isError ? (
           <ErrorNotice
             title="The repository could not be re-read."
-            detail={String(commands.refreshConfig.error)}
+            error={commands.refreshConfig.error}
           />
         ) : null}
       </Card>

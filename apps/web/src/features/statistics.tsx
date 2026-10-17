@@ -102,6 +102,7 @@ export const StatisticsScreen = (): ReactElement => {
     return (
       <ErrorNotice
         title="Statistics could not be loaded"
+        error={stats.error}
         detail={stats.error instanceof Error ? stats.error.message : 'unknown error'}
       />
     );

@@ -465,6 +465,7 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
       <div className="flex flex-col gap-2">
         <ErrorNotice
           title={failure.title}
+          error={statuses.error}
           {...(failure.detail === undefined ? {} : { detail: failure.detail })}
         />
         <div>
@@ -598,7 +599,7 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
           detail="Your choices are kept here. Save again once the tracker answers."
         />
       ) : error === null ? null : (
-        <ErrorNotice title="The ticket lifecycle was not saved." detail={String(error)} />
+        <ErrorNotice title="The ticket lifecycle was not saved." error={error} />
       )}
     </div>
   );

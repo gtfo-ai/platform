@@ -53,7 +53,11 @@ import fastifyCompress from '@fastify/compress';
 import fastifySse from '@fastify/sse';
 import fastifySwagger from '@fastify/swagger';
 import underPressure from '@fastify/under-pressure';
-import type { DeadLetterCommands, WebhookIngress } from '@platform/application';
+import type {
+  DeadLetterCommands,
+  ProjectSettingsPort,
+  WebhookIngress,
+} from '@platform/application';
 import { createIntegrationEgressPolicy } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { redaction as redactionAdapters } from '@platform/infrastructure';
@@ -280,6 +284,12 @@ export interface BuildAppOptions {
    * forgets it says `null` (every row *not checked*) rather than nothing.
    */
   readonly organisationCredentials: IntegrationRoutesOptions['organisationCredentials'];
+  /**
+   * The project settings read (WP-167): `GET /api/runs/:run_id`'s `retry_defaults` is the stage's
+   * configured model and effort, resolved from it at the read. Required, like
+   * `organisationCredentials`, so a composition cannot forget it.
+   */
+  readonly projectSettings: ProjectSettingsPort;
   /**
    * The history bootstrap's start command (WP-35), or `null` for a process with no pipeline.
    *
@@ -903,7 +913,9 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       },
       commands: options.commands,
     });
-    await registerRunRoutes(app, { queries: databaseRunQueries(options.database) });
+    await registerRunRoutes(app, {
+      queries: databaseRunQueries(options.database, options.projectSettings),
+    });
     // WP-44: the transcript file and the take-over tarball, the two things product/19 §19 hands a
     // person besides the branch. Reads of what exists — `run_messages` and the shared export
     // volume — never a copy (Q93).

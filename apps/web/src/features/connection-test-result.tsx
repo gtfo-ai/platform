@@ -39,9 +39,7 @@ export const ConnectionTestResult = ({
     );
   }
   if (test.isError) {
-    return (
-      <ErrorNotice title="The connection test could not be run." detail={String(test.error)} />
-    );
+    return <ErrorNotice title="The connection test could not be run." error={test.error} />;
   }
   if (!test.isSuccess || test.data === undefined) {
     return null;

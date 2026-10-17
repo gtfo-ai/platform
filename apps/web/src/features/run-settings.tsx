@@ -128,7 +128,7 @@ export const RunSettingsPanel = ({
         not the ones this run was planned with.
       </p>
     ) : query.isError ? (
-      <ErrorNotice title="The settings could not be loaded." detail={String(query.error)} />
+      <ErrorNotice title="The settings could not be loaded." error={query.error} />
     ) : query.isPending || query.data === undefined ? (
       <Loading label="Loading settings…" />
     ) : (

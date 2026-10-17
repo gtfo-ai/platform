@@ -14,7 +14,7 @@
  */
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactElement, ReactNode } from 'react';
 import { useId } from 'react';
-import { PLATFORM_UPDATED_MESSAGE } from '../api/http.js';
+import { PlatformUpdatedError } from '../api/http.js';
 import { UntrustedText } from './untrusted.js';
 
 export const cx = (...parts: (string | false | null | undefined)[]): string =>
@@ -171,31 +171,44 @@ export const Loading = ({ label }: { readonly label: string }): ReactElement => 
  * not author. `role="alert"` announces it once, which is what a screen reader user needs from a
  * failure that appears without them doing anything.
  *
- * **A read refused because the server was upgraded under this tab renders nothing here** (WP-154
- * (d), PROGRESS backlog 487): its text is `PlatformUpdatedError`'s sentence, and the shell's
- * banner already says it once for the whole page — so the screen shows no schema error, and no
- * second copy of the reload instruction per section. Only that sentence, which the API client
- * writes after `/api/version` named a different build; every other failure is shown as before.
+ * **A screen passes the error itself** (`error`), and its text is the detail unless `detail` says
+ * otherwise. **A read refused because the server was upgraded under this tab renders nothing here**
+ * (WP-154 (d), PROGRESS backlog 487): the shell's banner already says it once for the whole page, so
+ * the screen shows no schema error and no second copy of the reload instruction per section. That
+ * is decided **by the error's type** — `error instanceof PlatformUpdatedError`, which only the API
+ * client throws after `/api/version` named a different build — and never by its text (WP-167
+ * ruling (b), backlog 524): until WP-167 the notice was hidden when its title or detail *contained*
+ * the platform sentence, so an `ApiError` whose server-written message carried those words hid
+ * itself. A screen that passes no `error` is never hidden; `apps/web/src/error-notice-census.test.ts`
+ * refuses `String(…)` in a `title` or `detail` attribute, the spelling that used to stand in for it.
  */
 export const ErrorNotice = ({
   title,
   detail,
+  error,
 }: {
   readonly title: string;
   readonly detail?: string;
-}): ReactElement | null =>
-  [title, detail].some((text) => text?.includes(PLATFORM_UPDATED_MESSAGE) === true) ? null : (
+  /** The failure itself: its text is the default detail, and its type decides whether to hide. */
+  readonly error?: unknown;
+}): ReactElement | null => {
+  if (error instanceof PlatformUpdatedError) {
+    return null;
+  }
+  const text = detail ?? (error === undefined ? undefined : String(error));
+  return (
     <div role="alert" className="rounded-lg border border-danger/40 bg-danger/10 p-4 text-sm">
       <p className="font-medium">
         <UntrustedText value={title} />
       </p>
-      {detail === undefined ? null : (
+      {text === undefined ? null : (
         <p className="pt-1 text-fg-muted">
-          <UntrustedText value={detail} />
+          <UntrustedText value={text} />
         </p>
       )}
     </div>
   );
+};
 
 // ── Metric ───────────────────────────────────────────────────────────────────
 

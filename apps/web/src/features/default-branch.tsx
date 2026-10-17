@@ -87,7 +87,7 @@ export const DefaultBranch = ({ projectId }: { readonly projectId: string }): Re
     return repository.isError ? (
       <ErrorNotice
         title="The project’s default branch could not be read."
-        detail={String(repository.error)}
+        error={repository.error}
       />
     ) : (
       <p className="text-xs text-fg-muted">Reading the default branch…</p>
@@ -155,7 +155,7 @@ export const DefaultBranch = ({ projectId }: { readonly projectId: string }): Re
         {commands.setDefaultBranch.isError ? (
           <ErrorNotice
             title="The default branch was not changed."
-            detail={String(commands.setDefaultBranch.error)}
+            error={commands.setDefaultBranch.error}
           />
         ) : null}
       </form>

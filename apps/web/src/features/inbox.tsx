@@ -79,7 +79,7 @@ export const InboxScreen = (): ReactElement => {
       </p>
       {inbox.isPending ? <Loading label="Loading inbox…" /> : null}
       {inbox.isError ? (
-        <ErrorNotice title="Inbox could not be loaded." detail={String(inbox.error)} />
+        <ErrorNotice title="Inbox could not be loaded." error={inbox.error} />
       ) : null}
       {inbox.isSuccess && questions.length === 0 && approvals.length === 0 ? (
         <EmptyState

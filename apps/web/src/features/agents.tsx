@@ -35,7 +35,7 @@ export const AgentsScreen = (): ReactElement => {
       <SectionHeading>Agents</SectionHeading>
       {agents.isPending ? <Loading label="Loading agents…" /> : null}
       {agents.isError ? (
-        <ErrorNotice title="Agents could not be loaded." detail={String(agents.error)} />
+        <ErrorNotice title="Agents could not be loaded." error={agents.error} />
       ) : null}
       {agents.isSuccess && agents.data.items.length === 0 ? (
         <EmptyState

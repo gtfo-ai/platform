@@ -118,7 +118,7 @@ export const KnowledgeHealth = ({
           hint="The nightly hygiene pass writes one per project: documents the parser refused, links that point nowhere, expired pages, duplicates. None has run for this project yet."
         />
       ) : health.isError ? (
-        <ErrorNotice title="The health report could not be loaded." detail={String(health.error)} />
+        <ErrorNotice title="The health report could not be loaded." error={health.error} />
       ) : null}
       {health.data === undefined ? null : (
         <Card className="flex flex-col gap-2">
@@ -181,7 +181,7 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
         <SectionHeading>Vault</SectionHeading>
         {tree.isPending ? <Loading label="Loading the vault…" /> : null}
         {tree.isError ? (
-          <ErrorNotice title="The vault could not be listed." detail={String(tree.error)} />
+          <ErrorNotice title="The vault could not be listed." error={tree.error} />
         ) : null}
         {tree.isSuccess && files.length === 0 ? (
           <EmptyState
@@ -217,7 +217,7 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
           ) : doc.isPending ? (
             <Loading label="Loading document…" />
           ) : doc.isError ? (
-            <ErrorNotice title="That document could not be read." detail={String(doc.error)} />
+            <ErrorNotice title="That document could not be read." error={doc.error} />
           ) : doc.data === undefined ? null : (
             <Card className="flex flex-col gap-2">
               <p className="font-mono text-xs text-fg-muted">
@@ -234,7 +234,7 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
           <SectionHeading>Proposals</SectionHeading>
           {proposals.isPending ? <Loading label="Loading proposals…" /> : null}
           {proposals.isError ? (
-            <ErrorNotice title="Proposals could not be loaded." detail={String(proposals.error)} />
+            <ErrorNotice title="Proposals could not be loaded." error={proposals.error} />
           ) : null}
           {proposals.isSuccess && proposals.data.items.length === 0 ? (
             <EmptyState
@@ -341,7 +341,7 @@ export const BudgetsScreen = ({ projectKey }: { readonly projectKey: string }): 
       </p>
       {budgets.isPending ? <Loading label="Loading budgets…" /> : null}
       {budgets.isError ? (
-        <ErrorNotice title="Budgets could not be loaded." detail={String(budgets.error)} />
+        <ErrorNotice title="Budgets could not be loaded." error={budgets.error} />
       ) : null}
       {budgets.isSuccess && budgets.data.items.length === 0 ? (
         <EmptyState
@@ -409,7 +409,7 @@ export const PipelineScreen = ({ projectKey }: { readonly projectKey: string }):
       {config.isError ? (
         <ErrorNotice
           title="The effective configuration could not be loaded."
-          detail={String(config.error)}
+          error={config.error}
         />
       ) : null}
       {config.data === undefined ? null : (

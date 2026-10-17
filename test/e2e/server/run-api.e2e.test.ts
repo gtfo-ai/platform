@@ -36,7 +36,7 @@ import {
   artifactBodyResponseSchema,
   contextPackRecordSchema,
   runMessagesResponseSchema,
-  runRecordSchema,
+  runReadResponseSchema,
   runSettingsResponseSchema,
   taskExportResponseSchema,
 } from '@platform/contracts';
@@ -219,10 +219,12 @@ describe('the run read API, over a transcript this pipeline wrote', () => {
     expect(run.status, JSON.stringify(run.body)).toBe(200);
     // Parsed by the published schema rather than spot-checked: the DTO is strict, so this is also
     // the assertion that the projection invents no key and omits none.
-    const parsed = runRecordSchema.parse(run.body);
+    const parsed = runReadResponseSchema.parse(run.body);
     expect(parsed.stage).toBe('refinement');
     expect(parsed.status).toBe('completed');
     expect(parsed.project_id).toBe(pipeline.projectId);
+    // WP-167: a run planned with no override ran exactly what an unchanged retry would run.
+    expect(parsed.retry_defaults).toEqual({ model: parsed.model, effort: parsed.effort });
     // `>= 0` stood here in round 1 and is vacuous for a non-negative integer column. The run's
     // `redaction_count` is what the redactor replaced in its two **prompt** columns (migration
     // 0038), and on this tier that is exactly **0** — every input to a first-stage prompt has

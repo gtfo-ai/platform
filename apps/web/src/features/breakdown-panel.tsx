@@ -135,10 +135,7 @@ export const BreakdownPanel = ({
   }
   if (breakdown.isError) {
     return (
-      <ErrorNotice
-        title="The proposed breakdown could not be loaded."
-        detail={String(breakdown.error)}
-      />
+      <ErrorNotice title="The proposed breakdown could not be loaded." error={breakdown.error} />
     );
   }
   const { items, can_decide: canDecide } = breakdown.data;
@@ -217,7 +214,7 @@ export const BreakdownPanel = ({
                 <span className="text-xs text-fg-muted">{`${queued.length} waiting`}</span>
               </div>
               {decide.isError ? (
-                <ErrorNotice title="That decision was refused." detail={String(decide.error)} />
+                <ErrorNotice title="That decision was refused." error={decide.error} />
               ) : null}
             </Card>
           ) : null}

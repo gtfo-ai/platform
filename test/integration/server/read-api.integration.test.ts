@@ -36,6 +36,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { toApiError } from '../../../apps/server/src/errors.js';
+import { createProjectSettingsPort } from '../../../apps/server/src/pipeline.js';
 import {
   findIntegrationRow,
   listIntegrationRows,
@@ -2187,7 +2188,9 @@ describe('the run commands a run screen reads (WP-85)', () => {
         sessionId: 'session-1',
       };
     });
-    await registerRunRoutes(app, { queries: databaseRunQueries(drizzled) });
+    await registerRunRoutes(app, {
+      queries: databaseRunQueries(drizzled, createProjectSettingsPort(pool)),
+    });
     await app.ready();
     try {
       const allowed = await app.inject({ method: 'GET', url: `/api/runs/${runId}/commands` });

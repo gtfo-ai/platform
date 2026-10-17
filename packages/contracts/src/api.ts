@@ -2398,6 +2398,30 @@ export const runSettingsResponseSchema = z.strictObject({
   snapshot: jsonObjectSchema,
 });
 
+/**
+ * What *Retry run* runs when the person changes nothing (WP-167 ruling (a), PROGRESS backlog 514):
+ * the stage's **configured** model and effort — the project's `stages.<stage>` value, else the
+ * template's default — resolved by the same function the planner and the retry's listing check
+ * call, **at the read**. It is not the run's own `model`/`effort`, which for a run that was itself
+ * an override differ from it.
+ *
+ * **The configuration can change between this read and the submit**, and the server resolves the
+ * model again at the job, so an unchanged submit runs what the configuration says *then*. The
+ * field is the screen's best statement of it, not a promise.
+ */
+export const retryDefaultsSchema = z.strictObject({
+  model: nonEmptyStringSchema,
+  effort: effortSchema,
+});
+
+/**
+ * `GET /api/runs/:run_id` — the run's record plus `retry_defaults` (WP-167). `retry_defaults` is
+ * `null` exactly for an ask run (`stage: null`), which has no stage to run again.
+ */
+export const runReadResponseSchema = runRecordSchema.extend({
+  retry_defaults: retryDefaultsSchema.nullable(),
+});
+
 export const steerRunRequestSchema = z.strictObject({
   message: nonEmptyStringSchema.max(10_000),
 });
@@ -2979,6 +3003,8 @@ export type SubmitFeedbackResponse = z.infer<typeof submitFeedbackResponseSchema
 export type TaskExportResponse = z.infer<typeof taskExportResponseSchema>;
 export type TaskExportEvent = z.infer<typeof taskExportEventSchema>;
 export type RunSettingsResponse = z.infer<typeof runSettingsResponseSchema>;
+export type RetryDefaults = z.infer<typeof retryDefaultsSchema>;
+export type RunReadResponse = z.infer<typeof runReadResponseSchema>;
 export type ArtifactBodyResponse = z.infer<typeof artifactBodyResponseSchema>;
 export type RunMessagesQuery = z.infer<typeof runMessagesQuerySchema>;
 export type RunMessagesResponse = z.infer<typeof runMessagesResponseSchema>;

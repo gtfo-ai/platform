@@ -193,7 +193,7 @@ export const ProjectPromptFiles = ({ projectId }: { readonly projectId: string }
         />
       ) : null}
       {refresh.isError ? (
-        <ErrorNotice title="The repository could not be re-read." detail={String(refresh.error)} />
+        <ErrorNotice title="The repository could not be re-read." error={refresh.error} />
       ) : null}
     </Card>
   );

@@ -238,11 +238,11 @@ export const AskThread = ({
         </div>
       </form>
       {ask.error === null || ask.error === undefined ? null : (
-        <ErrorNotice title="That question was refused." detail={String(ask.error)} />
+        <ErrorNotice title="That question was refused." error={ask.error} />
       )}
       {asks.isPending ? <Loading label="Loading the thread…" /> : null}
       {asks.error === null || asks.error === undefined ? null : (
-        <ErrorNotice title="The thread could not be loaded." detail={String(asks.error)} />
+        <ErrorNotice title="The thread could not be loaded." error={asks.error} />
       )}
       {asks.data !== undefined && asks.data.items.length === 0 ? (
         <EmptyState

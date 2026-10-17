@@ -22,13 +22,14 @@ import {
   type Transaction,
 } from '@platform/application';
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
-import { runFinishedEvent, runRecordSchema } from '@platform/contracts';
+import { runFinishedEvent, runReadResponseSchema } from '@platform/contracts';
 import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES } from '@platform/domain';
 import { db, eventing, pipeline, redaction } from '@platform/infrastructure';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { toApiError } from '../../../apps/server/src/errors.js';
+import { createProjectSettingsPort } from '../../../apps/server/src/pipeline.js';
 import { databaseRunQueries, registerRunRoutes } from '../../../apps/server/src/routes/runs.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient, createTestPool } from '../support/postgres.js';
@@ -251,13 +252,16 @@ const getRun = async (runId: Id) => {
     };
   });
   await registerRunRoutes(app, {
-    queries: databaseRunQueries(drizzle(pool, { schema: db.schema })),
+    queries: databaseRunQueries(
+      drizzle(pool, { schema: db.schema }),
+      createProjectSettingsPort(pool),
+    ),
   });
   await app.ready();
   try {
     const response = await app.inject({ method: 'GET', url: `/api/runs/${runId}` });
     expect(response.statusCode, response.body).toBe(200);
-    return runRecordSchema.parse(response.json());
+    return runReadResponseSchema.parse(response.json());
   } finally {
     await app.close();
   }

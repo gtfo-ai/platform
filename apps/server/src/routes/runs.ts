@@ -33,7 +33,8 @@
  * handler against them. {@link databaseRunQueries} binds them to the projections in
  * `queries/pipeline-queries.ts`, and is what `app.ts` composes.
  */
-import type { RunCommandRecord, RunRecord, UserRole } from '@platform/contracts';
+import { configuredStageAgent, type ProjectSettingsPort } from '@platform/application';
+import type { Id, RetryDefaults, RunCommandRecord, RunRecord, UserRole } from '@platform/contracts';
 import {
   apiErrorSchema,
   contextPackRecordSchema,
@@ -41,7 +42,7 @@ import {
   runMessagesQuerySchema,
   runMessagesResponseSchema,
   runPromptResponseSchema,
-  runRecordSchema,
+  runReadResponseSchema,
   runSettingsResponseSchema,
 } from '@platform/contracts';
 import type { FastifyInstance } from 'fastify';
@@ -66,7 +67,7 @@ import {
 } from '../queries/pipeline-queries.js';
 import { scopedProject, scopeToProject } from './scope.js';
 
-/** The eight reads these routes make, as functions — see "The queries are injected" above. */
+/** The nine reads these routes make, as functions — see "The queries are injected" above. */
 export interface RunQueries {
   readonly runProjectId: (runId: string) => Promise<string | null>;
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
@@ -76,6 +77,8 @@ export interface RunQueries {
   readonly commands: (runId: string) => Promise<readonly RunCommandRecord[]>;
   readonly contextPack: (runId: string) => Promise<RunContextPack>;
   readonly settings: (runId: string) => Promise<RunSettings>;
+  /** The stage's configured model and effort **now** — `retry_defaults` (WP-167). */
+  readonly retryDefaults: (projectId: string, stage: string) => Promise<RetryDefaults>;
 }
 
 export interface RunRoutesOptions {
@@ -83,7 +86,10 @@ export interface RunRoutesOptions {
 }
 
 /** {@link RunQueries} over this process's database — what `app.ts` composes. */
-export const databaseRunQueries = (database: Database): RunQueries => ({
+export const databaseRunQueries = (
+  database: Database,
+  projectSettings: ProjectSettingsPort,
+): RunQueries => ({
   runProjectId: async (runId) => findRunProjectId(database, runId),
   projectRole: async (projectId, userId) => findProjectRole(database, projectId, userId),
   run: async (runId) => findRun(database, runId),
@@ -92,7 +98,17 @@ export const databaseRunQueries = (database: Database): RunQueries => ({
   commands: async (runId) => listRunCommands(database, runId),
   contextPack: async (runId) => findRunContextPack(database, runId),
   settings: async (runId) => findRunSettings(database, runId),
+  retryDefaults: retryDefaultsReader(projectSettings),
 });
+
+/**
+ * `retry_defaults` over a settings read (WP-167): the stage's configured model and effort through
+ * `configuredStageAgent`, the function the planner and the retry's listing check call, read now.
+ */
+export const retryDefaultsReader =
+  (projectSettings: ProjectSettingsPort): RunQueries['retryDefaults'] =>
+  async (projectId, stage) =>
+    configuredStageAgent(await projectSettings.forProject(projectId as Id), stage);
 
 const runParamsSchema = z.strictObject({ run_id: z.uuid() });
 
@@ -122,7 +138,7 @@ export const registerRunRoutes = async (
         summary: 'One run',
         tags: ['runs'],
         params: runParamsSchema,
-        response: { 200: runRecordSchema },
+        response: { 200: runReadResponseSchema },
       },
     },
     async (request) => {
@@ -132,7 +148,11 @@ export const registerRunRoutes = async (
         // separate statements and a run deleted between them must not become a 500.
         throw new NotFoundError(`run ${request.params.run_id}`);
       }
-      return run;
+      // WP-167: what an unchanged *Retry run* runs, resolved now by the planner's own function.
+      // An ask run has no stage to run again.
+      const retryDefaults =
+        run.stage === null ? null : await queries.retryDefaults(run.project_id, run.stage);
+      return { ...run, retry_defaults: retryDefaults };
     },
   );
 

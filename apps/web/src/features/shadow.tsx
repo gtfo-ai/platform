@@ -258,7 +258,7 @@ const Aggregate = ({
     return <Loading label="Loading the batch" />;
   }
   if (batch.error !== null) {
-    return <ErrorNotice title="This batch could not be loaded." detail={String(batch.error)} />;
+    return <ErrorNotice title="This batch could not be loaded." error={batch.error} />;
   }
   const data = batch.data;
   if (data === undefined) {
@@ -448,16 +448,13 @@ export const ShadowScreen = ({ projectKey }: { readonly projectKey: string }): R
           </Button>
         </div>
         {commands.startBatch.error === null ? null : (
-          <ErrorNotice
-            title="The batch was not started."
-            detail={String(commands.startBatch.error)}
-          />
+          <ErrorNotice title="The batch was not started." error={commands.startBatch.error} />
         )}
       </Card>
 
       {batches.isPending ? <Loading label="Loading shadow batches" /> : null}
       {batches.error === null ? null : (
-        <ErrorNotice title="Shadow batches could not be loaded." detail={String(batches.error)} />
+        <ErrorNotice title="Shadow batches could not be loaded." error={batches.error} />
       )}
 
       {items.length === 0 ? (

@@ -9,18 +9,20 @@
  * correctly; that is `test/integration/server/read-api.integration.test.ts`, against a migrated
  * database and a row the WP-91 writer never touched.
  */
-import type { RunRecord, UserRole } from '@platform/contracts';
+import { defaultProjectSettings, type ProjectSettings } from '@platform/application';
+import type { Id, RunRecord, UserRole } from '@platform/contracts';
 import {
   runPromptResponseSchema,
-  runRecordSchema,
+  runReadResponseSchema,
   runSettingsResponseSchema,
 } from '@platform/contracts';
+import { stageAgentDefaults } from '@platform/domain';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
 import type { RunPrompt, RunSettings } from '../queries/pipeline-queries.js';
-import { type RunQueries, registerRunRoutes } from './runs.js';
+import { type RunQueries, registerRunRoutes, retryDefaultsReader } from './runs.js';
 
 const RUN = '00000000-0000-4000-8000-0000000000e1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -36,6 +38,8 @@ interface World {
   settings: RunSettings;
   run: RunRecord | null;
   prompt: RunPrompt;
+  /** The project's settings **now**, which `retry_defaults` is resolved from (WP-167). */
+  projectSettings: ProjectSettings;
   /** Every run id a read was asked about, by read. */
   readonly reads: string[];
 }
@@ -93,6 +97,7 @@ const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
     settings: { found: true, recorded: true, settingsHash: HASH, snapshot: SNAPSHOT },
     run: record(HASH),
     prompt: { found: false },
+    projectSettings: defaultProjectSettings(PROJECT as Id),
     reads: [],
   };
   const app = fastify();
@@ -134,6 +139,7 @@ const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
     },
     commands: unused,
     contextPack: unused,
+    retryDefaults: retryDefaultsReader({ forProject: async () => world.projectSettings }),
   };
   await registerRunRoutes(app, { queries });
   await app.ready();
@@ -199,7 +205,7 @@ describe('GET /api/runs/:run_id/settings (WP-112)', () => {
     expect(world.reads).toEqual([]);
     const recordReply = await app.inject({ method: 'GET', url: `/api/runs/${RUN}` });
     expect(recordReply.statusCode, recordReply.body).toBe(200);
-    expect(runRecordSchema.parse(recordReply.json()).settings_hash).toBe(HASH);
+    expect(runReadResponseSchema.parse(recordReply.json()).settings_hash).toBe(HASH);
   });
 
   it('publishes a run nobody measured as cost null through the real router, never a zero (WP-119)', async () => {
@@ -208,13 +214,13 @@ describe('GET /api/runs/:run_id/settings (WP-112)', () => {
     expect(reply.statusCode, reply.body).toBe(200);
     expect(Object.hasOwn(reply.json() as object, 'cost')).toBe(true);
     expect((reply.json() as { cost: unknown }).cost).toBeNull();
-    expect(runRecordSchema.parse(reply.json()).cost).toBeNull();
+    expect(runReadResponseSchema.parse(reply.json()).cost).toBeNull();
   });
 
   /**
    * WP-131 (PROGRESS backlog 404): a `run_model_usage` row with **neither** figure — a model
    * `price_list` has no row for, in `local` mode — is published as `usd: null`, never `0`, and the
-   * route's response schema (`runRecordSchema`, whose `model_usage` is the read DTO's own
+   * route's response schema (`runReadResponseSchema`, whose `model_usage` is the read DTO's own
    * `runModelUsageRecordSchema`) serialises it rather than refusing it. The projection that writes
    * the `null` is held by `test/integration/server/read-api.integration.test.ts`.
    */
@@ -239,7 +245,7 @@ describe('GET /api/runs/:run_id/settings (WP-112)', () => {
     expect(usage).toHaveLength(1);
     expect(Object.hasOwn(usage[0] as object, 'usd')).toBe(true);
     expect(usage[0]?.usd).toBeNull();
-    expect(runRecordSchema.parse(reply.json()).model_usage[0]?.usd).toBeNull();
+    expect(runReadResponseSchema.parse(reply.json()).model_usage[0]?.usd).toBeNull();
   });
 
   it('publishes a run record’s null hash as null, not as an absent field', async () => {
@@ -287,5 +293,55 @@ describe('GET /api/runs/:run_id/prompt carries what was withheld (WP-121)', () =
     expect(none.statusCode, none.body).toBe(200);
     expect(Object.hasOwn(none.json() as object, 'prompts_withheld')).toBe(true);
     expect(runPromptResponseSchema.parse(none.json()).prompts_withheld).toBeNull();
+  });
+});
+
+/**
+ * WP-167 ruling (a), backlog 514: `retry_defaults` is the stage's configured model and effort,
+ * resolved **at the read** by `configuredStageAgent` — the function the retry's listing check admits
+ * a model with (`packages/application/src/pipeline/human-commands.test.ts` › "retry a run: the
+ * model list (WP-159)" › the WP-167 case holds the check's half).
+ */
+describe('GET /api/runs/:run_id publishes retry_defaults (WP-167)', () => {
+  let app: FastifyInstance;
+  let world: World;
+  const url = `/api/runs/${RUN}`;
+  const read = async () => {
+    const reply = await app.inject({ method: 'GET', url });
+    expect(reply.statusCode, reply.body).toBe(200);
+    return runReadResponseSchema.parse(reply.json());
+  };
+
+  beforeEach(async () => {
+    ({ app, world } = await build());
+  });
+
+  it('answers the template default for a stage the project does not configure', async () => {
+    const defaults = stageAgentDefaults('implementation');
+    expect((await read()).retry_defaults).toEqual({
+      model: defaults.model,
+      effort: defaults.effort,
+    });
+  });
+
+  it('follows a changed `stages.<stage>.model` and effort, read by read, not the run’s own', async () => {
+    const pinned = (model: string, effort: 'low' | 'high') =>
+      defaultProjectSettings(PROJECT as Id, {
+        config: { ...world.projectSettings.config, stages: { implementation: { model, effort } } },
+      });
+    world.projectSettings = pinned('claude-custom-pinned', 'low');
+    const first = await read();
+    expect(first.retry_defaults).toEqual({ model: 'claude-custom-pinned', effort: 'low' });
+    // The run itself ran something else: the field is the configuration, never `record.model`.
+    expect(first.model).toBe('claude-test');
+    world.projectSettings = pinned('claude-custom-moved', 'high');
+    expect((await read()).retry_defaults).toEqual({ model: 'claude-custom-moved', effort: 'high' });
+  });
+
+  it('is null for an ask run, which has no stage to run again', async () => {
+    world.run = { ...record(HASH), stage: null, role: 'ask' };
+    const body = await read();
+    expect(Object.hasOwn(body, 'retry_defaults')).toBe(true);
+    expect(body.retry_defaults).toBeNull();
   });
 });

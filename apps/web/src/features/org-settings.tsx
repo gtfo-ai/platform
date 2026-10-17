@@ -57,7 +57,7 @@ export const OrganisationSettingsPanel = (): ReactElement => {
       {document.isError ? (
         <ErrorNotice
           title="The organisation settings could not be loaded."
-          detail={String(document.error)}
+          error={document.error}
         />
       ) : null}
       {document.isSuccess ? (
@@ -81,10 +81,7 @@ export const OrganisationSettingsPanel = (): ReactElement => {
             <CappedProjects capped={patch.data.capped_projects} />
           ) : null}
           {patch.error === null || patch.error === undefined ? null : (
-            <ErrorNotice
-              title="The organisation settings were not saved."
-              detail={String(patch.error)}
-            />
+            <ErrorNotice title="The organisation settings were not saved." error={patch.error} />
           )}
         </Card>
       ) : null}

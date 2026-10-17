@@ -226,7 +226,7 @@ export const OnboardingScreen = (): ReactElement => {
             {commands.createProject.isError ? (
               <ErrorNotice
                 title="The project was not created."
-                detail={String(commands.createProject.error)}
+                error={commands.createProject.error}
               />
             ) : null}
           </form>
@@ -364,10 +364,7 @@ export const OnboardingScreen = (): ReactElement => {
           </p>
         ) : null}
         {commands.startDiscovery.isError ? (
-          <ErrorNotice
-            title="Discovery was not started."
-            detail={String(commands.startDiscovery.error)}
-          />
+          <ErrorNotice title="Discovery was not started." error={commands.startDiscovery.error} />
         ) : null}
         {/* WP-155 (backlog 452): the discovery task read back — on load, after a refresh, and live. */}
         {project === null ? null : (

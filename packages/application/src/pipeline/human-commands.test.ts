@@ -77,6 +77,7 @@ import {
 import type { LiveRun, LiveRuns } from './live-runs.js';
 import { REBASE_RECHECK_REASON } from './ready-head.js';
 import { createRunCommandInbox } from './run-commands.js';
+import { configuredStageAgent } from './settings.js';
 import type { StoredTask } from './store.js';
 import { TaskConcurrentModificationError } from './store.js';
 import { TaskConflictExhaustedError } from './task-conflict.js';
@@ -2603,6 +2604,44 @@ describe('retry a run: the model list (WP-159)', () => {
   });
 });
 
+/**
+ * WP-167 ruling (a), backlog 514: the retry's check admits exactly the model `configuredStageAgent`
+ * answers, read at the call — the function the run read publishes as `retry_defaults`
+ * (`apps/server/src/routes/runs.test.ts` holds that half). A configuration that moved between the
+ * read and the submit is the stated residual, and this is it: the check follows the configuration.
+ */
+describe('retry a run: the configured model is the resolver’s (WP-167)', () => {
+  it('admits what configuredStageAgent answers now, and refuses what it answered before', async () => {
+    const harness = await asking({ listedModels: ['claude-fake-listed'] });
+    const first = harness.specs.at(-1);
+    await retryRunCommand(harness.humanCommands, {
+      runId: first?.runId as Id,
+      userId: USER,
+      model: 'claude-fake-listed',
+    });
+    await harness.drain();
+    const second = harness.specs.at(-1);
+    expect(second?.model).toBe('claude-fake-listed');
+    let current = harness.settings;
+    const configure = (model: string) => {
+      current = {
+        ...harness.settings,
+        config: { ...harness.settings.config, stages: { refinement: { model } } },
+      };
+    };
+    const deps = { ...harness.humanCommands, settings: { forProject: async () => current } };
+    const retry = (model: string) =>
+      retryRunCommand(deps, { runId: second?.runId as Id, userId: USER, model });
+    configure('claude-custom-a');
+    expect(configuredStageAgent(current, 'refinement').model).toBe('claude-custom-a');
+    await expect(retry('claude-custom-b')).rejects.toThrow(ModelNotListedError);
+    configure('claude-custom-b');
+    await expect(retry('claude-custom-a')).rejects.toThrow(ModelNotListedError);
+    await retry(configuredStageAgent(current, 'refinement').model);
+    expect(taskOf(harness).task.stageAttempts.refinement).toBe(3);
+  });
+});
+
 describe('a command that loses every race', () => {
   it('answers the caller rather than escalating the task (WP-15e’s ending, inverted)', async () => {
     const harness = await walked();
@@ -3708,7 +3747,6 @@ describe('a human’s way into Ready (WP-79)', () => {
         'READY_FOR_MERGE_STAGE',
         'recordFeedback', // no state change
         'resetAgentIterations', // pure
-        'stageAgentDefaults', // data: a retry's admitted default model (WP-159)
         'stageOf', // pure
         'steerRun', // no state change
         'TaskMergedError', // a refusal (WP-152)

@@ -369,10 +369,7 @@ export const AutonomyDial = ({ projectId }: { readonly projectId: string }): Rea
     <Section title="Autonomy dial">
       {autonomy.isPending ? <Loading label="Loading the dial…" /> : null}
       {autonomy.isError ? (
-        <ErrorNotice
-          title="The autonomy dial could not be loaded."
-          detail={String(autonomy.error)}
-        />
+        <ErrorNotice title="The autonomy dial could not be loaded." error={autonomy.error} />
       ) : null}
 
       {current === null ? null : (
@@ -458,7 +455,7 @@ export const AutonomyDial = ({ projectId }: { readonly projectId: string }): Rea
         )}
       </div>
       {commands.setAutonomy.isError ? (
-        <ErrorNotice title="The dial was not saved." detail={String(commands.setAutonomy.error)} />
+        <ErrorNotice title="The dial was not saved." error={commands.setAutonomy.error} />
       ) : null}
 
       {current !== null && current.overrides.length > 0 ? (
@@ -563,10 +560,7 @@ export const FeatureToggles = ({ projectId }: { readonly projectId: string }): R
     <Section title="Features">
       {config.isPending ? <Loading label="Loading configuration…" /> : null}
       {config.isError ? (
-        <ErrorNotice
-          title="This project’s configuration could not be read."
-          detail={String(config.error)}
-        />
+        <ErrorNotice title="This project’s configuration could not be read." error={config.error} />
       ) : null}
       <div className="grid gap-3 sm:grid-cols-2">
         {FEATURE_CARDS.map((card) => (
@@ -603,10 +597,7 @@ export const FeatureToggles = ({ projectId }: { readonly projectId: string }): R
         ))}
       </div>
       {commands.writeConfig.isError ? (
-        <ErrorNotice
-          title="The feature was not saved."
-          detail={String(commands.writeConfig.error)}
-        />
+        <ErrorNotice title="The feature was not saved." error={commands.writeConfig.error} />
       ) : null}
       <div className="flex flex-col gap-1">
         <p className="text-xs font-semibold">On by default, with nothing to toggle here</p>
@@ -824,10 +815,7 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
       )}
 
       {commands.writeConfig.isError ? (
-        <ErrorNotice
-          title="The risk classes were not saved."
-          detail={String(commands.writeConfig.error)}
-        />
+        <ErrorNotice title="The risk classes were not saved." error={commands.writeConfig.error} />
       ) : null}
 
       <p className="text-xs text-fg-muted">
@@ -917,7 +905,7 @@ export const Budgets = ({
         })}
       </ul>
       {error === null || error === undefined ? null : (
-        <ErrorNotice title="The budget was not saved." detail={String(error)} />
+        <ErrorNotice title="The budget was not saved." error={error} />
       )}
     </Section>
   );
@@ -1115,15 +1103,12 @@ export const Notifications = ({ projectId }: { readonly projectId: string }): Re
         </div>
       )}
       {commands.putBindings.isError ? (
-        <ErrorNotice
-          title="The channel was not saved."
-          detail={String(commands.putBindings.error)}
-        />
+        <ErrorNotice title="The channel was not saved." error={commands.putBindings.error} />
       ) : null}
       {commands.writeConfig.isError ? (
         <ErrorNotice
           title="The notification settings were not saved."
-          detail={String(commands.writeConfig.error)}
+          error={commands.writeConfig.error}
         />
       ) : null}
     </Section>
@@ -1147,6 +1132,7 @@ export const SettingsAudit = ({ projectId }: { readonly projectId: string }): Re
       {audit.isError ? (
         <ErrorNotice
           title="The settings audit could not be loaded."
+          error={audit.error}
           detail={readErrorDetail(audit.error, 'Reading it needs the maintainer role.')}
         />
       ) : null}
