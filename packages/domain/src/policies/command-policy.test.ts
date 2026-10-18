@@ -2550,8 +2550,8 @@ describe('WP-161 — the scanner’s new uncertainty and what it reads', () => {
 /**
  * WP-164 criterion (3), backlog 530: every `command`-kind floor names the verbs it is written for,
  * and `XARGS_FLOORED_VERBS` is derived from them. A glob entry's first word, stripped of its
- * trailing `*`, must be among its verbs; a first word that is only `*` (`* --script-shell*`) names
- * no verb, so its `verbs` are the entry's own statement and only their presence is checked.
+ * trailing `*`, must be among its verbs; a first word that is only `*` (`* --script-shell*`
+ * was one until WP-197 made it a `tokens` entry) names no verb, so its `verbs` are the entry's own statement and only their presence is checked.
  */
 describe('WP-164: the verbs a command floor names (backlog 530)', () => {
   /** What is wrong with one entry's `verbs`, or nothing. */
@@ -2632,6 +2632,19 @@ describe('WP-186: a tokens floor’s verbs, checked against its predicate (backl
     'pytest -o / --override-ini (any key, any spelling argparse accepts)': '-o cache_dir=x',
     'pytest @<file> (an argument read from a file)': '@args.txt',
     'pytest -c / --config-file (any spelling argparse accepts)': '-c x.ini',
+    // WP-197 review round 2: npm's and pnpm's options, read as nopt reads them.
+    'npm/pnpm --script-shell (any spelling nopt reads: every leading dash, a no- prefix, a prefix from --scr)':
+      '--script-shell=x',
+    'npm/pnpm --node-options (any spelling nopt reads: every leading dash, a no- prefix, a prefix from --node)':
+      '--node-options=x',
+    'npm/pnpm --config.<key> (any spelling nopt reads: every leading dash, a no- prefix, a prefix from --config.)':
+      '--config.node-options=x',
+    'npm/pnpm --editor (any spelling nopt reads: every leading dash, a no- prefix, a prefix from --ed)':
+      '--editor=x',
+    'npm/pnpm --browser (any spelling nopt reads: every leading dash, a no- prefix, a prefix from --br)':
+      '--browser=x',
+    'npm/pnpm --viewer (any spelling nopt reads: every leading dash, a no- prefix, a prefix from --vi)':
+      '--viewer=x',
   };
 
   type CommandEntry = Extract<HazardousArgument, { kind: 'command' }>;
@@ -2674,7 +2687,7 @@ describe('WP-186: a tokens floor’s verbs, checked against its predicate (backl
   };
 
   it('every command-kind tokens entry has a fixture its predicate admits under each verb only', () => {
-    expect(Object.keys(TOKENS_FIXTURES)).toHaveLength(13);
+    expect(Object.keys(TOKENS_FIXTURES)).toHaveLength(19);
     expect(tokensCensus(HAZARDOUS_ARGUMENTS, TOKENS_FIXTURES)).toEqual([]);
   });
 

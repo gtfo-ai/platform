@@ -14,11 +14,13 @@ import {
   DEFAULT_VERIFICATION_ALLOW,
   evaluateCommand,
   HAZARDOUS_ARGUMENTS,
+  hazardousArguments,
   type ResolvedCommandPolicy,
   runCommandPolicy,
   UNCERTAINTY,
   unattendedCommandModeOf,
   withVerificationMode,
+  xargsCompletesBlockEntry,
 } from './command-policy.js';
 import {
   computesCommandName,
@@ -1711,12 +1713,19 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
       "echo 'push origin HEAD:main' | xargs -- git",
     ])('%j is uncertain', (command) => {
       expectCells(command, 'ask / uncertain / uncertain');
-      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.xargsArguments]);
+      // Since WP-197 an `xargs git` also names the first `git …` block entry its input could
+      // complete; the verdict and this reason are unchanged.
+      expect(auto(command).evaluation.uncertainty).toEqual(
+        command.endsWith(' git')
+          ? [UNCERTAINTY.xargsArguments, xargsCompletesBlockEntry('git push --force*')]
+          : [UNCERTAINTY.xargsArguments],
+      );
     });
 
     it.each([
       ['echo x | xargs grep x', 'ask / auto / deny'],
-      ['echo x | xargs rm -f', 'ask / auto / deny'],
+      // WP-197 review round 3: `rm -rf /*` with `-rf` and `/` left for the input — uncertain.
+      ['echo x | xargs rm -f', 'ask / uncertain / uncertain'],
       ['echo x | xargs -I{} cat {}', 'ask / uncertain / uncertain'],
       ['find . -name x | xargs wc -l', 'ask / auto / deny'],
       ['echo x | xargs grep -l env', 'ask / auto / deny'],
@@ -1787,7 +1796,8 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
       ["echo 'X=$(shell touch m)' | xargs nice make", 'ask / uncertain / uncertain'],
       // Verbs no `command`-kind floor names.
       ['echo x | xargs grep x', 'ask / auto / deny'],
-      ['echo x | xargs rm -f', 'ask / auto / deny'],
+      // WP-197 review round 3: `rm -rf /*` with `-rf` and `/` left for the input — uncertain.
+      ['echo x | xargs rm -f', 'ask / uncertain / uncertain'],
       // The full spellings of the abbreviated rows above, and the abbreviations into a verb no
       // floor names: the option's value is skipped, so the command read is the right word.
       ['xargs --arg-file grep make', 'ask / uncertain / uncertain'],
@@ -1904,7 +1914,8 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
       ['bash < f', 'ask / auto / deny'],
       ['cat f | sh', 'ask / uncertain / uncertain'],
       ['xargs grep x', 'ask / auto / deny'],
-      ['xargs rm -f', 'ask / auto / deny'],
+      // WP-197 review round 3: `rm -rf /*` with `-rf` and `/` left for the input — uncertain.
+      ['xargs rm -f', 'ask / uncertain / uncertain'],
       ['xargs -IX sh -c X', 'ask / uncertain / uncertain'],
       ['xargs -I X grep x', 'ask / auto / deny'],
       ["xargs -I'{}' grep x", 'ask / auto / deny'],
@@ -2393,5 +2404,218 @@ describe('WP-196: every package runner is read through, its string never, and np
     ['pnpm -C d install', 'ask / auto / deny'],
   ])('keeps %j at %s (every word of a pnpm line)', (command, expected) => {
     expectCells(command, expected);
+  });
+});
+
+/**
+ * WP-197 (backlog 576): an `xargs` whose written words are a prefix of a block entry with words
+ * left over is uncertain, naming the entry — the input may complete it. And backlog 580: npm's
+ * `--editor`, `--browser` and `--viewer` name a program npm runs, so each is a `hazard` floor in the
+ * spellings `--script-shell` is floored in.
+ */
+describe('WP-197: a block entry xargs could complete from its input, and the programs npm runs', () => {
+  it.each([
+    ['echo apply | xargs terraform', 'terraform apply'],
+    ['xargs gh release', 'gh release *'],
+    ['echo release | xargs gh', 'gh release *'],
+    ['xargs glab release', 'glab release *'],
+    ['echo / | xargs rm -rf', 'rm -rf /*'],
+    // Was `ask / auto / deny` too: `curl * | sh` has words left, and no special case is made.
+    ['xargs curl x', 'curl * | sh'],
+    ['xargs gh 2>/dev/null', 'gh release *'],
+    // The over-ask, stated: some completions match, and the platform cannot say which arrives.
+    ["echo 'issue view' | xargs gh", 'gh release *'],
+    ['echo plan | xargs terraform', 'terraform apply'],
+    ["find . -name '*.tmp' | xargs rm -rf", 'rm -rf /*'],
+  ])('%j is uncertain, naming %j (576)', (command, entry) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([xargsCompletesBlockEntry(entry)]);
+  });
+
+  it('reads a project’s own word-specific entry: "xargs deploy" against "deploy prod *" (576)', () => {
+    for (const [name, given] of Object.entries(BASELINES)) {
+      const project = { ...given, block: [...given.block, 'deploy prod *'] };
+      for (const command of ['xargs deploy', 'echo prod | xargs deploy', 'xargs deploy prod']) {
+        expect(cell(command, project), `${name}: ${command}`).toBe('ask / uncertain / uncertain');
+        expect(evaluateCommand({ command }, project).uncertainty).toEqual([
+          xargsCompletesBlockEntry('deploy prod *'),
+        ]);
+      }
+      expect(cell('xargs deploy staging', project), name).toBe('ask / auto / deny');
+      expect(cell('xargs deploy', given), name).toBe('ask / auto / deny');
+    }
+  });
+
+  it.each([
+    // A prefix of no entry.
+    ['xargs grep x', 'ask / auto / deny'],
+    ['cat ids | xargs gh issue view', 'ask / auto / deny'],
+    // The cells without xargs.
+    ['gh release list', 'block / block / block'],
+    ['terraform plan', 'ask / auto / deny'],
+    ['rm -rf build', 'ask / auto / deny'],
+    // WP-188's whole-binary bans still block, and a written line the entry matches still blocks.
+    ['xargs sudo', 'block / block / block'],
+    ['xargs -n1 sudo', 'block / block / block'],
+    ['cat f | xargs -n1 sudo', 'block / block / block'],
+    ['xargs gh release create', 'block / block / block'],
+    ['xargs npm publish', 'block / block / block'],
+  ])('keeps %j at %s (576)', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it.each([
+    "npm edit zod --editor='sh -c id'",
+    "npm edit zod --editor 'sh -c id'",
+    // npm 11 — the run image's — resolves every unique prefix: `--ed`, `--edi`, `--edit`.
+    "npm edit zod --ed='sh -c id'",
+    "npm edit zod --edi='sh -c id'",
+    "npm edit zod --edit='sh -c id'",
+    "npm help npm --viewer=browser --browser='id;'",
+    "npm docs zod --browser='id;'",
+    "npm docs zod --br='id;'",
+    'npm help npm --vi=browser',
+    "pnpm docs zod --browser='id;'",
+    'pnpm help --vi=x',
+  ])('%j is a hazard: npm runs the program it names (580)', (command) => {
+    expectCells(command, 'ask / hazard / hazard');
+  });
+
+  it.each(['npm edit x', 'npm docs zod', 'npm help npm', 'npm view zod'])(
+    'keeps %j at ask / auto / deny (580)',
+    (command) => {
+      expectCells(command, 'ask / auto / deny');
+    },
+  );
+
+  /** The npm/pnpm option floor a command carries, by option (review round 2: one per option). */
+  const npmFloors = (command: string): readonly string[] =>
+    hazardousArguments(command).flatMap(
+      (entry) => /^npm\/pnpm --(\S+) /.exec(entry.pattern)?.[1] ?? [],
+    );
+
+  /** nopt reads a single-dash long option as the long one (review round 1). */
+  it.each([
+    // `allow / allow / allow` in the verification and implementation baselines before.
+    ['npm test -node-options=x', 'node-options'],
+    ['npm test -node-o=x', 'node-options'],
+    ['pnpm test -node-options=x', 'node-options'],
+    ["npm edit zod -editor='sh -c id'", 'editor'],
+    ["npm edit zod -ed='sh -c id'", 'editor'],
+    ["npm docs zod -browser='id;'", 'browser'],
+    ["npm docs zod -br='id;'", 'browser'],
+    ['npm help npm -viewer=x', 'viewer'],
+    ['npm help npm -vi=x', 'viewer'],
+  ])(
+    '%j is a hazard in its single-dash spelling, floored as --%s (review round 1)',
+    (command, option) => {
+      expectCells(command, 'ask / hazard / hazard');
+      expect(npmFloors(command)).toEqual([option]);
+    },
+  );
+
+  it.each([
+    ['npm test -script-shell=x', 'script-shell'],
+    ['npm run build -scr=x', 'script-shell'],
+  ])('%j is floored in its single-dash spelling, as --%s (review round 1)', (command, option) => {
+    // Refused as uncertain first: its letters include `c` (npxCall); the floor is beside it.
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(npmFloors(command)).toEqual([option]);
+  });
+
+  /**
+   * Review round 2: nopt strips every leading dash and cancels a doubled `no-`. The `node-options`
+   * and `script-shell` rows read `allow / allow / allow` in the verification and implementation
+   * baselines before, the rest `ask / auto / deny`.
+   */
+  it.each([
+    ['npm test ---node-options=x', 'node-options'],
+    ['npm test ----node-o=x', 'node-options'],
+    ['npm run build ---script-shell=x', 'script-shell'],
+    ['npm run build ---scr=x', 'script-shell'],
+    ['npm edit zod ---editor=x', 'editor'],
+    ['npm edit zod ---ed=x', 'editor'],
+    ['npm help npm ---vi=x', 'viewer'],
+    ['npm test --no-no-node-options=x', 'node-options'],
+    ['npm test --no-no-script-shell=x', 'script-shell'],
+    ['npm test --no-no-scr=x', 'script-shell'],
+    ['pnpm test --no-no-node-options=x', 'node-options'],
+    ['pnpm test ---config.script-shell=x', 'config.<key>'],
+    // A floored option before the bare `--` still is one.
+    ['npm test --browser=chromium -- --x', 'browser'],
+  ])('%j is a hazard, floored as --%s (review round 2)', (command, option) => {
+    expectCells(command, 'ask / hazard / hazard');
+    expect(npmFloors(command)).toEqual([option]);
+  });
+
+  /** Review round 2: the words after a bare `--` go to the script, which nopt never parses. */
+  it.each([
+    'npm test -- --browser=chromium',
+    'npm run e2e -- --browser=firefox',
+    'npm test -- --vitest-flag',
+    'npm run dev -- --edge',
+    'npm test -verbose',
+  ])('keeps %j at its cells (review round 2)', (command) => {
+    expectCells(command, {
+      ro: 'ask / auto / deny',
+      ver: 'allow / allow / allow',
+      impl: 'allow / allow / allow',
+    });
+  });
+
+  it.each([
+    'npm -v',
+    'npm -e x',
+    // npx stops at its command: these options are playwright's.
+    'npx playwright test --browser=chromium',
+    'npx --yes playwright test --browser=chromium',
+  ])('keeps %j at ask / auto / deny (review round 2)', (command) => {
+    expectCells(command, 'ask / auto / deny');
+  });
+
+  it.each(['npm test', 'npm ci', 'npm test --verbose', 'npm test -e'])(
+    'keeps %j at its cells (review round 1)',
+    (command) => {
+      expectCells(command, {
+        ro: 'ask / auto / deny',
+        ver: 'allow / allow / allow',
+        impl: 'allow / allow / allow',
+      });
+    },
+  );
+
+  /**
+   * Review round 3: the written words are read as the block matcher reads a line — flags anywhere,
+   * positionals as a prefix — so a flag before the input's words does not hide the entry. Each
+   * of the first three read `ask / auto / deny`.
+   */
+  it.each([
+    ['xargs terraform -chdir=x', 'terraform apply'],
+    ['xargs terraform -no-color', 'terraform apply'],
+    ['xargs gh --repo=o/r', 'gh release *'],
+    // Read `ask / auto / deny` too; the input can supply `-rf`, whose absence was all that hid it.
+    ['xargs rm -f', 'rm -rf /*'],
+    ['xargs rm -f /', 'rm -rf /*'],
+  ])('%j is uncertain with its flags read apart, naming %j (review round 3)', (command, entry) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([xargsCompletesBlockEntry(entry)]);
+  });
+
+  it.each([
+    ['xargs -I{} terraform apply', 'block / block / block'],
+    ['xargs grep x', 'ask / auto / deny'],
+    ['xargs terraform -chdir=x plan', 'ask / auto / deny'],
+  ])('keeps %j at %s (review round 3)', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it.each([
+    ['xargs /usr/bin/gh release', 'gh release *'],
+    ["xargs 'gh' release", 'gh release *'],
+    ["xargs gh 're'lease", 'gh release *'],
+    ['xargs ./terraform', 'terraform apply'],
+  ])('%j is uncertain by its unquoted name, naming %j (review round 1)', (command, entry) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([xargsCompletesBlockEntry(entry)]);
   });
 });

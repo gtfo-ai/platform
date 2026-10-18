@@ -213,7 +213,7 @@ export const UNCERTAINTY = {
    * (`-I`) that is not literal, whose text the platform cannot know.
    */
   xargsArguments:
-    'xargs handing the words it reads from its input to a command that runs its arguments (a wrapper such as env, nice, nohup or timeout, a shell such as sh or bash, a package runner such as npx, yarn, bun, bunx or corepack, find with -exec, or git) or that a refused argument would make run a program (cargo, gmake, go, make, npm, pnpm, pytest or rg, or a name beginning with one), or replacing a string (-I) that is not literal — write the command and its arguments on the line; the platform cannot read arguments xargs supplies from its input',
+    'xargs handing the words it reads from its input to a command that runs its arguments (a wrapper such as env, nice, nohup or timeout, a shell such as sh or bash, a package runner such as npx, pnpx, yarn, bun, bunx or corepack, find with -exec, or git) or that a refused argument would make run a program (cargo, gmake, go, make, npm, pnpm, pytest or rg, or a name beginning with one), or replacing a string (-I) that is not literal — write the command and its arguments on the line; the platform cannot read arguments xargs supplies from its input',
   /**
    * WP-188 review round 1: `npx -c '<string>'`/`--call=<string>` runs the string in a shell. It is
    * never read as a script — the closed rule (rule 65), in every spelling (`runnerCallsString`).
@@ -245,7 +245,19 @@ export const UNCERTAINTY = {
     'a word naming an npm_config_* setting (in any case) or NODE_OPTIONS, which can hand npm or node a program to run — run the command without it; the platform does not read settings a line puts in the environment',
 } as const;
 
-export type UncertaintyReason = (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY];
+/**
+ * WP-197 (backlog 576): the one reason that names something — the block entry an `xargs` could
+ * complete from its input (`xargs gh` against `gh release *`, `echo apply | xargs terraform`
+ * against `terraform apply`). Only some completions match, so the honest verdict is uncertain, not
+ * `block` (`xargsBlockPrefix`); under `auto` both are `deny` (BD-025's 2026-10-06 amendment,
+ * decision 2).
+ */
+export const xargsCompletesBlockEntry = (entry: string) =>
+  `xargs handing the words it reads from its input to a command that the block-list entry "${entry}" names, whose remaining words the input could supply — write the command and its arguments on the line; the platform cannot tell whether the input completes a command no run may execute` as const;
+
+export type UncertaintyReason =
+  | (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY]
+  | ReturnType<typeof xargsCompletesBlockEntry>;
 
 /**
  * product/19 §3, "Block (all stages)". These are the entries the organisation maximum starts from
@@ -535,12 +547,13 @@ const MAKE_VERBS: readonly [string, ...string[]] = ['make', 'gmake'];
  * than the repository are floored at `ask` by {@link HAZARDOUS_ARGUMENTS}: a `make` variable
  * assignment, `make --eval` (and the getopt prefixes `--ev`/`--eva`) and `-E` in a short-option
  * cluster, `go -exec`/`-toolexec`/`-ldflags … -extld` in either dash form, `cargo --config`, and
- * npm's and pnpm's `--script-shell`, `--node-options` and pnpm's `--config.<key>`.
+ * npm's and pnpm's `--script-shell`, `--node-options` and pnpm's `--config.<key>`, and since
+ * WP-197 npm's `--editor`, `--browser` and `--viewer`, which name a program npm runs.
  *
  * **That is an enumeration of known spellings and can be incomplete** — WP-54's review found seven
  * the first list missed in round 1 and five more in round 2. npm and pnpm accept any unique prefix
  * of a long option, and those are floored from the **shortest prefix that is unique today**
- * (`--scr`, `--node`): that is knowledge of the CLIs' current option sets, not a measurement, and a
+ * (`--scr`, `--node`, `--ed`, `--br`, `--vi`), in every spelling nopt reads (`NPM_OPTION_FLOORS`): that is knowledge of the CLIs' current option sets, not a measurement, and a
  * later option sharing the prefix moves it. The floors narrow what a model can author on the
  * command line; the boundary for what these commands *do* is the sandbox above.
  *
@@ -1137,6 +1150,98 @@ const gitAbbreviationFloor = ({
 const isMakeName = (name: string): boolean => MAKE_VERBS.some((verb) => name.startsWith(verb));
 
 /**
+ * The npm and pnpm options that hand the tool a program or any configuration key, each with the
+ * prefix it is floored from. A prefix is the shortest unique to the option among **npm 11**'s option
+ * names — the run image's npm (`node:24-trixie-slim`), where nopt resolves a unique prefix (npm 12
+ * refuses abbreviations outright) — or shorter (`node`, floored since WP-54). `--editor`,
+ * `--browser` and `--viewer` are WP-197's (backlog 580): `npm edit` splits `editor` on whitespace
+ * and spawns it, `npm docs` and `npm help` with `viewer=browser` hand `browser` to a shell, and
+ * `viewer` picks the program `npm help` runs. Their environment spellings are
+ * `UNCERTAINTY.npmEnvironment`'s.
+ */
+const NPM_OPTION_FLOORS: readonly { option: string; prefix: string; hazard: string }[] = [
+  {
+    option: 'script-shell',
+    prefix: 'scr',
+    hazard: 'npm and pnpm run the package script under the --script-shell binary instead of sh',
+  },
+  {
+    option: 'node-options',
+    prefix: 'node',
+    hazard:
+      'npm turns --node-options into NODE_OPTIONS, so `--import=data:…` runs model-written code',
+  },
+  {
+    option: 'config.<key>',
+    prefix: 'config.',
+    hazard:
+      'pnpm `--config.<key>=` sets any configuration key, including `node-options` and `script-shell` (on npm, floored as a precaution; not measured)',
+  },
+  { option: 'editor', prefix: 'ed', hazard: 'npm edit spawns the --editor value as a program' },
+  {
+    option: 'browser',
+    prefix: 'br',
+    hazard: 'npm docs and npm help run the --browser value as a shell string',
+  },
+  { option: 'viewer', prefix: 'vi', hazard: 'npm help runs the --viewer value as its viewer' },
+];
+
+/** The names whose option words nopt parses: npm and pnpm, and their runners `npx` and `pnpx`. */
+const NPM_OPTION_VERBS = ['npm', 'pnpm', 'npx', 'pnpx'] as const;
+
+/**
+ * An option word as nopt names it (WP-197 review round 2): every leading dash stripped (nopt reads
+ * `-node-options` and `---node-options` as `--node-options`), the value after `=` dropped, and
+ * every leading `no-` stripped, case-insensitively — nopt cancels a doubled `no-`, so
+ * `--no-no-node-options=x` sets it; stripping an odd count too is the closed side. `null` for a
+ * word that is not an option.
+ */
+const noptOptionName = (word: string): string | null => {
+  if (!word.startsWith('-')) {
+    return null;
+  }
+  let name = (word.replace(/^-+/, '').split('=')[0] as string).toLowerCase();
+  while (name.startsWith('no-')) {
+    name = name.slice(3);
+  }
+  return name;
+};
+
+/**
+ * The words nopt reads as options: those before the first bare `--`, which npm and pnpm hand to the
+ * script untouched (`npm test -- --browser=chromium`, review round 2). `npx` and `pnpx` also stop
+ * at their command — the first word that is not an option and cannot be the value of the option
+ * before it (one with no `=`).
+ */
+const npmOptionWords = (name: string, words: readonly string[]): readonly string[] => {
+  const end = words.indexOf('--');
+  const before = end < 0 ? words : words.slice(0, end);
+  if (name !== 'npx' && name !== 'pnpx') {
+    return before;
+  }
+  const command = before.findIndex(
+    (word, index) =>
+      !word.startsWith('-') && !/^-[^=]*$/.test(before[index - 1] ?? 'not-an-option'),
+  );
+  return command < 0 ? before : before.slice(0, command);
+};
+
+/** One floor per {@link NPM_OPTION_FLOORS} row: an option word whose nopt name begins with its prefix. */
+const npmOptionFloor = ({
+  option,
+  prefix,
+  hazard,
+}: (typeof NPM_OPTION_FLOORS)[number]): HazardousArgument => ({
+  pattern: `npm/pnpm --${option} (any spelling nopt reads: every leading dash, a no- prefix, a prefix from --${prefix})`,
+  kind: 'command',
+  verbs: NPM_OPTION_VERBS,
+  hazard,
+  tokens: ({ name, words }) =>
+    (NPM_OPTION_VERBS as readonly string[]).includes(name) &&
+    npmOptionWords(name, words).some((word) => noptOptionName(word)?.startsWith(prefix) === true),
+});
+
+/**
  * Arguments that turn an allow-listed verb into something else: the `find … -exec` hazard, gone
  * looking for on the rest of the shipped verbs instead of waiting for it to be reported.
  *
@@ -1431,58 +1536,8 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     verbs: ['cargo'],
     hazard: 'cargo --config can set a target runner, which is an arbitrary command',
   },
-  {
-    pattern: '* --script-shell*',
-    kind: 'command',
-    verbs: ['npm', 'pnpm'],
-    hazard: 'npm and pnpm run the package script under the --script-shell binary instead of sh',
-  },
-  {
-    pattern: 'npm* --scr*',
-    kind: 'command',
-    verbs: ['npm'],
-    hazard:
-      'npm accepts any unique prefix of a long option; `--scr` is the shortest unique to --script-shell in the option set this is written against',
-  },
-  {
-    pattern: 'pnpm* --scr*',
-    kind: 'command',
-    verbs: ['pnpm'],
-    hazard: 'the same prefixes of --script-shell, for pnpm',
-  },
-  {
-    pattern: '* --node-options*',
-    kind: 'command',
-    verbs: ['npm', 'pnpm'],
-    hazard:
-      'npm turns --node-options into NODE_OPTIONS, so `--import=data:…` runs model-written code',
-  },
-  {
-    pattern: 'npm* --node*',
-    kind: 'command',
-    verbs: ['npm'],
-    hazard: 'the prefixes of --node-options npm accepts (`--node-o…`), floored from `--node`',
-  },
-  {
-    pattern: 'pnpm* --node*',
-    kind: 'command',
-    verbs: ['pnpm'],
-    hazard: 'the same prefixes of --node-options, for pnpm',
-  },
-  {
-    pattern: 'pnpm* --config.*',
-    kind: 'command',
-    verbs: ['pnpm'],
-    hazard:
-      'pnpm `--config.<key>=` sets any configuration key, including `node-options` and `script-shell`',
-  },
-  {
-    pattern: 'npm* --config.*',
-    kind: 'command',
-    verbs: ['npm'],
-    hazard:
-      'the pnpm spelling on npm — floored as a precaution; whether npm accepts it is not measured',
-  },
+  // npm's and pnpm's program-naming options, read as nopt reads them (WP-197 review round 2).
+  ...NPM_OPTION_FLOORS.map(npmOptionFloor),
   {
     pattern: 'pip install -r http*',
     kind: 'trust',
@@ -2406,22 +2461,75 @@ const binaryBans = (block: readonly string[]): readonly string[] =>
  * A bare `sudo` with no `xargs` is not changed by this: it runs nothing it was not written with.
  */
 const xargsBannedEntry = (text: string, block: readonly string[]): string | undefined => {
-  const tokens = tokenise(text);
-  for (const start of argvStarts(tokens).starts) {
-    const word = tokens[start];
-    if (word === undefined || argv0Name(word) !== 'xargs') {
-      continue;
-    }
-    const args = tokens.slice(start + 1).map((raw): ShellWord => ({ raw }));
-    const at = readXargsOptions(args).command;
-    const run = at === null ? undefined : args[at];
-    if (run === undefined) {
-      continue;
-    }
-    const name = argv0Name(run.raw);
+  for (const [run] of xargsCommandWords(text)) {
+    const name = argv0Name(run as string);
     const entry = block.find((pattern) =>
       binaryBans([pattern]).some((ban) => globToRegExp(ban).test(name)),
     );
+    if (entry !== undefined) {
+      return entry;
+    }
+  }
+  return undefined;
+};
+
+/**
+ * For each `xargs` at a command start in this piece of command line, the words written for the
+ * command it runs: its command word (after xargs' own options, `readXargsOptions`) and every word
+ * after it. Never empty.
+ */
+const xargsCommandWords = (text: string): readonly (readonly string[])[] => {
+  const tokens = tokenise(text);
+  return argvStarts(tokens).starts.flatMap((start) => {
+    const word = tokens[start];
+    if (word === undefined || argv0Name(word) !== 'xargs') {
+      return [];
+    }
+    const args = tokens.slice(start + 1);
+    const at = readXargsOptions(args.map((raw): ShellWord => ({ raw }))).command;
+    return at === null || at < 0 || at >= args.length ? [] : [args.slice(at)];
+  });
+};
+
+/** A word that ends the words written for a command: a redirection or a control operator. */
+const ENDS_WRITTEN_WORDS = /[<>|&;]/;
+
+/**
+ * The block entry an `xargs` in this piece of command line could complete from its input, if any
+ * (WP-197, backlog 576). WP-188's ban reads a whole binary (`sudo *`), where every completion
+ * matches; an entry with a word after the binary (`terraform apply`, `gh release *`, a project's
+ * `deploy prod *`) was matched only against the words written, and xargs appends the rest, so
+ * `echo apply | xargs terraform` ran under `auto`. Here the written words are matched as a
+ * **prefix** of every entry of the policy's block list, read as the block matcher reads a line
+ * (`splitFlags`, `tokensMatch`: flags anywhere, positionals in order through `globToRegExp`), and an
+ * entry the input could complete is one with a positional left over, or with every positional
+ * matched and a flag still missing (review round 3: `xargs terraform -chdir=x`, `xargs rm -f`). The words stop at the first
+ * redirection or operator, which only shortens the prefix (the closed side). **The over-ask,
+ * stated:** `echo 'issue view' | xargs gh`, `echo plan | xargs terraform`, `find . | xargs rm -rf`
+ * and `xargs curl x` (against `curl * | sh`) — some completions match and the platform cannot say
+ * which arrives; `cat ids | xargs gh issue view` is a prefix of no entry and is not touched.
+ */
+const xargsBlockPrefix = (text: string, block: readonly string[]): string | undefined => {
+  for (const words of xargsCommandWords(text)) {
+    const end = words.findIndex((word) => ENDS_WRITTEN_WORDS.test(word));
+    const [name, ...rest] = end < 0 ? words : words.slice(0, end);
+    if (name === undefined) {
+      continue;
+    }
+    // Read as the block matcher reads a line (`tokensMatch`): flags anywhere, positionals as a
+    // prefix (review round 3 — `xargs terraform -chdir=x` completes to a blocked line).
+    const written = splitFlags([argv0Name(name), ...rest]);
+    const entry = block.find((pattern) => {
+      const { flags, positional } = splitFlags(tokenise(pattern));
+      return (
+        written.positional.length <= positional.length &&
+        written.positional.every((word, index) =>
+          globToRegExp(positional[index] as string).test(word),
+        ) &&
+        (written.positional.length < positional.length ||
+          flags.some((flag) => !written.flags.some((token) => globToRegExp(flag).test(token))))
+      );
+    });
     if (entry !== undefined) {
       return entry;
     }
@@ -4739,7 +4847,10 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
  * **Residual:** an `.npmrc` the run writes — by a redirection (`echo 'call=x' > .npmrc`) or by the
  * runner's own CLI (`npm config set call x && npx`, `npm config set script-shell …; npm test`,
  * `pnpm config set …`, `yarn config set …`, each `unattended_auto`, measured at review round 1) —
- * and a name assembled at runtime (`"npm_$x"`).
+ * and a name assembled at runtime (`"npm_$x"`). The `editor`, `browser` and `viewer` settings
+ * given as options on the line are `HAZARDOUS_ARGUMENTS` floors (WP-197); `EDITOR` and `VISUAL`,
+ * which npm reads for `editor`'s default, are not npm's names and are not matched here
+ * (`EDITOR='sh -c id' npm edit zod` reads `ask / auto / deny`, measured at WP-197).
  */
 const RUNNER_ENVIRONMENT_WORD = /(?:^(?:-v)?|=)(?:npm_config_|NODE_OPTIONS)/i;
 
@@ -5222,18 +5333,27 @@ export const evaluateCommand = (
     );
   }
   const parsed = parseCommand(request.command);
+  // The scanner's reasons, and one the policy adds: the block entry an `xargs` could complete
+  // from its input (WP-197) — the only reason that needs the block list, a project's included.
+  const uncertainty: readonly UncertaintyReason[] = [
+    ...new Set([
+      ...parsed.uncertainty,
+      ...parsed.fragments.flatMap((fragment) => {
+        const entry = xargsBlockPrefix(fragment, policy.block);
+        return entry === undefined ? [] : [xargsCompletesBlockEntry(entry)];
+      }),
+    ]),
+  ];
   const floor = (evaluation: Omit<CommandEvaluation, 'uncertainty'>): CommandEvaluation => ({
     ...evaluation,
     verdict:
-      parsed.uncertainty.length > 0
-        ? mostRestrictive(evaluation.verdict, fallback)
-        : evaluation.verdict,
-    uncertainty: parsed.uncertainty,
+      uncertainty.length > 0 ? mostRestrictive(evaluation.verdict, fallback) : evaluation.verdict,
+    uncertainty,
   });
 
   if (parsed.fragments.length === 0) {
     // Nothing runnable: an empty command, or only operators. Never `allow`.
-    return { verdict: fallback, matched: null, segment: null, uncertainty: parsed.uncertainty };
+    return { verdict: fallback, matched: null, segment: null, uncertainty };
   }
   // The whole line as the shell reads it for commands: a here-document body that is data is not
   // part of it, so `timeout 5 cat <<'EOF'` over a body line `git push --force` is not a push.
@@ -5247,7 +5367,7 @@ export const evaluateCommand = (
         verdict: 'block',
         matched: banned,
         segment: request.resolvedBinary,
-        uncertainty: parsed.uncertainty,
+        uncertainty,
       };
     }
   }
@@ -5258,7 +5378,7 @@ export const evaluateCommand = (
         verdict: 'block',
         matched: banned,
         segment: fragment,
-        uncertainty: parsed.uncertainty,
+        uncertainty,
       };
     }
   }
@@ -5291,7 +5411,7 @@ export const evaluateCommand = (
       verdict: mostRestrictive('ask', fallback),
       matched: null,
       segment: request.command,
-      uncertainty: parsed.uncertainty,
+      uncertainty,
     };
   }
 
@@ -5305,7 +5425,7 @@ export const evaluateCommand = (
           verdict: mostRestrictive('ask', fallback),
           matched: hazard.pattern,
           segment: candidate,
-          uncertainty: parsed.uncertainty,
+          uncertainty,
         };
       }
     }

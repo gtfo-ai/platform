@@ -562,8 +562,10 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   its egress, not by this policy; the flags that hand one of these verbs a model-written command
 >   (a `make` variable assignment, `make --eval` and `-E` in a short-option cluster,
 >   `go -exec`/`-toolexec`/`-ldflags … -extld` in either dash form, `cargo --config`, npm/pnpm
->   `--script-shell`, `--node-options` and pnpm's `--config.<key>`, the npm/pnpm long options
->   floored from the shortest prefix unique today) are `HAZARDOUS_ARGUMENTS` floors — **an
+>   `--script-shell`, `--node-options` and pnpm's `--config.<key>`, npm's `--editor`, `--browser`
+>   and `--viewer` (WP-197, which name a program npm runs), the npm/pnpm long options
+>   floored from the shortest prefix unique today, in every spelling nopt reads and only before a
+>   bare `--`) are `HAZARDOUS_ARGUMENTS` floors — **an
 >   enumeration of known spellings, which can be incomplete**; the boundary for the body is the
 >   sandbox. Two are token-scoped (the `make` assignment and the `-E` cluster), so `--jobs=4` and a
 >   capital E in a later word are not floored; `make test V=1` is, deliberately.

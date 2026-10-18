@@ -16266,6 +16266,68 @@ WP-196's round-3 notes left this class to the orchestrator and did not fix it. I
 
 **Depends on** WP-196 (`runnerOptions`, `runnerCallsString`). **No work package owns it.** Related: 580.
 
+### 582. **A redirection written before or among a command's words hides them from the block list and the floors: `2>/dev/null sudo id`, `xargs 2>/dev/null sudo`, `gh >out release create` and `terraform 2>x apply` read `auto`** (TODO, owned by **WP-198** — § "Architect ruling (M11 second amendment, session 16)"; **major — fail-open: a blocked `sudo` reaches `auto`; live in every run image, needs nothing installed**. Found by WP-197's reviewer, session 16, and listed in WP-197's implementer notes (Residuals, Discovered work); the same before and after WP-197. **Owner: WP-198, since the second amendment ruling.** No test run by the refiner)
+
+**What is wrong.** The shell lets a redirection stand anywhere in a simple command, and drops it from argv. The policy's block-side readers do not. They read whitespace tokens, and a redirection token stays a word. So a leading redirection becomes argv[0], and one in the middle splits the words a block entry needs adjacent. The mechanism, **read from source by the refiner, not executed** (`packages/domain/src/policies/command-policy.ts`, working tree with WP-197's uncommitted change):
+- `tokenise` (`:2212-2215`) is `normaliseCommand(text).split(' ')`: a redirection is a token like any other.
+- `argv0Candidates` (`:2320-2325`) takes its starts from `walkCommandStarts` (`:2248`), which peels only past a wrapper or an assignment (`chain`). A leading `2>/dev/null` is neither, so the only start is 0, and argv[0] is `2>/dev/null`. `matchesBlockPattern` (`:2388-2399`) and `carriesHazard` (`:2408`) both judge those candidates.
+- `readXargsOptions` (`:4320-4331`) returns the first word not starting with `-` as xargs' command word, so in `xargs 2>/dev/null sudo` the command word is `2>/dev/null`. WP-188's `xargsBannedEntry` and WP-197's `xargsBlockPrefix` both start there.
+- The parser already knows the difference: `wordsOf` (`:3168-3172`) drops a redirection word, and `ShellWord` carries a redirection's operator separately (`:3786-3792`). The block side does not use either.
+
+**Evidence.** Measured by WP-197's reviewer through `decideUnattendedCommand`, all three baselines, marker-only, nothing executed. Each line reads `ask / auto / deny`:
+- `2>/dev/null sudo id`
+- `xargs 2>/dev/null sudo` (WP-197's implementer also: `xargs > out sudo`)
+- `gh >out release create`
+- `terraform 2>x apply`
+
+Controls from WP-197's table: `xargs sudo` and `terraform apply` read `block / block / block`. WP-197 cut `xargsBlockPrefix` at the first word containing `<`, `>`, `|`, `&` or `;` (`ENDS_WRITTEN_WORDS`, `:2497`). That is the closed side for a *prefix*. It does nothing for a redirection in front of the command word.
+
+**Not measured (needs measurement before scoping).** Every reader built on `argv0Candidates` should share this, but only the four lines above were run:
+- `HAZARDOUS_ARGUMENTS` floors whose pattern starts with a command word, e.g. `git 2>x push --force origin main`. The `* --opt*` floors probably still match, because their leading `*` absorbs the token.
+- The unattended git boundary, which reads `commandArgvCandidates` (`:5214`): `2>/dev/null git push --no-verify`, `git >x push --force`.
+- The binary-ban path through `commandNameWords` (`:4222`, WP-188), for `2>/dev/null sudo id` inside a substitution or a handed script.
+- Redirections with a separate target (`2> /dev/null sudo id`, `> out sudo id`), `<in`, `<<<w` and a here-document opener before the command word.
+
+**What it costs to leave.** Under `auto`, any blocked command runs with one redirection in front of it: `sudo`, `terraform apply`, `gh release create`, a project's own block entries. It needs no installed tool and no knowledge of the policy beyond "put `2>/dev/null` first". An agent writes `2>/dev/null` routinely (backlog 462's compound read carries one), so this is reachable by accident as well as by intent.
+
+**Done when.**
+- An architect ruling on the shape, under the closed rule (rule 65). The obvious one: the block side reads argv as the shell builds it. Every redirection (operator and its target, whether attached or a separate word) is removed from the token list before `argv0Candidates`, `readXargsOptions`, `xargsBlockPrefix` and `commandArgvCandidates` read it, from the parser's own `ShellWord` redirection field rather than a second regex. The ruling should say whether the over-ask alternative (any redirection before the command word makes the line `uncertain`) is preferred for the xargs reader, where removing words changes which word is the command.
+- Rows in `unattended-commands.test.ts`, all three baselines: the four lines above read `block`, plus `> out sudo id`, `2> /dev/null sudo id`, `xargs > out sudo` and whichever floor and git-boundary lines the measurement above shows open. Controls: `ls 2>/dev/null`, `gh release list 2>/dev/null` and `terraform plan 2>x` keep their cells. **Canary:** remove the redirection step and the rows fail by name.
+- technical/05's block-list paragraph says the block list reads argv after redirections are removed.
+
+**Depends on** WP-197 (`xargsBlockPrefix`, `ENDS_WRITTEN_WORDS`) being merged, since it touches the same readers. **No work package owns it.** Related: 583.
+
+### 583. **`EDITOR`, `VISUAL` and `BROWSER` set on the line hand npm a program, and `EDITOR='sh -c id' npm edit zod` reads `auto`** (TODO, owned by **WP-199** — § "Architect ruling (M11 second amendment, session 16)"; **major — fail-open, the environment half of 580: a model-written program runs past the block list and the floors; live wherever the run image has npm, which the stock one does**. Found by WP-197's implementer, session 16 (Residuals, Discovered work), measured marker-only. **Owner: WP-199, since the second amendment ruling.** No test run by the refiner)
+
+**What is wrong.** WP-197 floored npm's `--editor`, `--browser` and `--viewer` options (580). The settings' environment forms `npm_config_*` are already uncertain through `UNCERTAINTY.npmEnvironment` (`packages/domain/src/policies/command-policy.ts:244`, the `RUNNER_ENVIRONMENT_WORD` scan at `:4866-4869`). But npm takes `editor`'s **default** from `EDITOR`/`VISUAL`, and the implementer's row shows `BROWSER` read the same way for `browser`. Those are not npm's names, so the scan does not see them. The `RUNNER_ENVIRONMENT_WORD` docblock in the working tree states this residual already (`:4860-4863`). This entry schedules it.
+
+**Evidence.** WP-197's implementer, through `evaluateCommand`/`decideUnattendedCommand`, all three baselines, nothing executed. Each line reads `ask / auto / deny`, before and after WP-197:
+- `EDITOR='sh -c id' npm edit zod`
+- `BROWSER='id;' npm docs zod`
+
+That npm takes `editor`'s default from `EDITOR`/`VISUAL` is the implementer's reading of npm 11's config definitions (`definitions.js`, the round-3 fetched copy, not checked in). `VISUAL` has no measured row.
+
+**Same class as `npmEnvironment`?** Yes. Both are a word naming an environment variable that a runner reads as a program to spawn, and the existing reason's text already fits ("can hand npm or node a program to run"). The fix is a wider name list in the same scan, not a new mechanism. One difference to settle: `EDITOR`/`VISUAL`/`BROWSER` are generic names many tools read, so matching them "whatever the command", as `npmEnvironment` does, over-asks on lines that have nothing to do with npm (`EDITOR=vim git status`). That over-ask is the closed side and is probably acceptable.
+
+**Hypothesis (needs measurement): git.** git reads `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`, `EDITOR` and `VISUAL` for `commit` without `-m`, `rebase -i`, `tag -a` and similar. Whether `GIT_EDITOR='sh -c id' git commit` reaches `auto` today is unmeasured. The allow-list does not peel a leading assignment (`stripEnvironmentPrefix` docblock), so attended reads `ask`. The `auto` cell and the git boundary's view are not known.
+
+**What it costs to leave.** Under `auto`, any program runs through `npm edit` or `npm docs` with one prefix assignment, which is the same door 580 closed for the option spelling.
+
+**Done when.**
+- An architect ruling on the name list and its scope (rule 65: the list is closed by naming what each runner documents reading, not by guessing): at least `EDITOR`, `VISUAL`, `BROWSER`, and `GIT_EDITOR`/`GIT_SEQUENCE_EDITOR` if the git measurement shows them open. The ruling also says whether they join `npmEnvironment` (one reason, its text widened) or get a reason of their own.
+- Rows in `unattended-commands.test.ts`, all three baselines: the two lines above, `VISUAL='sh -c id' npm edit zod` and `export EDITOR='sh -c id'; npm edit zod` read `uncertain`. Controls: `npm edit x` and `npm docs zod` keep their cells. **Canary:** remove the new names and the rows fail by name.
+- The `RUNNER_ENVIRONMENT_WORD` docblock residual and technical/05's WP-196/WP-197 residual sentences are updated.
+
+**Depends on** WP-197 (580's floors and the residual sentence it wrote). **No work package owns it.** Related: 580, 582.
+
+### 584. **A block entry's positionals are matched from the first non-flag word, so a flag that takes a separate value (`gh -R o/r release create v1`) hides the subcommand and the line reads `auto`; `xargs gh -R o/r release` inherits it** (TODO, **major — fail-open under `auto` for a block-listed command written on the line; found by WP-197's review round 3, session 16; no work package owns it — the M11 second amendment's WP-198 (the parser's words) is the natural owner**)
+
+**What is wrong.** `tokensMatch`/`splitFlags` in `packages/domain/src/policies/command-policy.ts` drop words that start with `-` and treat every other word as a positional, so the value of a separate-value flag (`-R o/r`, `--repo o/r`) becomes the first positional and the entry's `release`/`apply` no longer lines up. Measured through `decideUnattendedCommand` (WP-197 round 3 and the orchestrator's re-probe): `gh -R o/r release create v1` reads `ask / auto / deny` while `gh release create v1` is `block`; `xargs gh -R o/r release` reads `auto`. Also `xargs terraform ''` reads `auto` (an empty subcommand; probably harmless).
+
+**Done when.** The block matcher knows which flags of a block-listed binary take a separate value (derived per entry), or takes the closed rule (a positional right after a flag written without `=` is ambiguous and the line is uncertain), with rows for `gh -R o/r release create v1`, `gh --repo o/r release create`, `xargs gh -R o/r release` and a control `gh -R o/r issue list` unchanged.
+
+**Depends on** WP-197.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -49437,3 +49499,135 @@ The first round's table, re-measured: only `pnpm sudo id` and `bun exec 'git pus
 `unattended-commands.test.ts`: 992/992. `command-policy.test.ts` with `scripts/citations.test.ts`: 1029/1029. `pnpm run -s verify` ran once, after `wp196-tiers3-idle` appeared (load 5.1 at the start): exit 0, final line `PASS: verify`.
 
 **Orchestrator's check after the round cap.** After round 3's fix the orchestrator ran the reviewers' probe cases (rounds 1–3, 180+ lines) through `decideUnattendedCommand` on the tree and found one regression introduced by round 2's pnpm built-in fallback: a separate value of a pnpm global option (`pnpm -C d exec -c x`, `--dir d`, `-F a`, `--filter a`) was read as the first positional, so `exec -c …` escaped (`ask / auto / deny`). Ruled closed (every option word of a `pnpm` line is scanned for shell mode, the known value options skipped); re-probed: every remaining `auto` row is a control, a stated residual (`npm config set …`, `.npmrc`, project scripts) or filed (580: `--editor`/`--browser`/`--viewer`; 581: `yarn create -c`).
+
+#### WP-197
+
+**A block entry `xargs` could complete from its input is uncertain, naming the entry; npm's `--editor`, `--browser` and `--viewer` are floors** (backlogs 576 and 580, the second folded by the orchestrator). Implementer, session 16, on `main` at `ce56ea19`. No migration. **Status: implemented, awaiting review.** Nothing was executed: every row was evaluated through `evaluateCommand`/`decideUnattendedCommand` from a scratch script via `scripts/ts-source-resolver.mjs`; nothing ran `sudo`. Cells are `attended / auto rule / deny rule`, the same in the read-only, verification and implementation baselines unless stated.
+
+**(a) Measured first, then after.**
+
+| Row | Before | After |
+|---|---|---|
+| `echo apply \| xargs terraform`, `xargs terraform`, `xargs gh release`, `xargs gh`, `echo release \| xargs gh`, `xargs glab release`, `xargs glab`, `echo / \| xargs rm -rf`, `xargs rm -rf`, `xargs pip`, `xargs curl x`, `xargs curl`, `xargs wget x`, `xargs gh 2>/dev/null`, `xargs -n1 gh release`, `xargs /usr/bin/gh release`, `xargs 'gh' release`, `xargs gh \| cat`, `xargs -0 gh` | `ask / auto / deny` | `ask / uncertain / uncertain`, the reason naming the entry (`terraform apply`, `gh release *`, `glab release *`, `rm -rf /*`, `pip upload`, `curl * \| sh`, `wget * \| sh`) |
+| Project block `deploy prod *`: `xargs deploy`, `xargs deploy prod`, `echo prod \| xargs deploy` | `ask / auto / deny` | `ask / uncertain / uncertain` (`deploy prod *`) |
+| Project block `deploy prod *`: `deploy prod x`; `xargs deploy staging` | `block / block / block`; `ask / auto / deny` | unchanged |
+| The over-ask, stated: `echo 'issue view' \| xargs gh`, `echo plan \| xargs terraform`, `find . -name '*.tmp' \| xargs rm -rf` | `ask / auto / deny` | `ask / uncertain / uncertain` |
+| (c) presumed refused already: `echo publish \| xargs npm`, `xargs git push`, `xargs git` | `ask / uncertain / uncertain` (`xargsArguments`) | unchanged cell; the entry's reason (`npm publish`, `git push --force*`) is added beside it |
+| (c): `xargs npm publish`, `xargs pip upload`, `xargs gh release create` | `block / block / block` | unchanged |
+| (c): the two `\| sh` entries | `xargs curl x`/`xargs wget x` read **`auto`** — the presumption was wrong for them | uncertain under (b), no special case (rows above) |
+| Controls: `xargs grep x`, `cat ids \| xargs gh issue view`, `terraform plan`, `rm -rf build`, `gh release` | `ask / auto / deny` | unchanged |
+| Controls: `gh release list`, `terraform apply`, `xargs sudo`, `xargs -n1 sudo`, `cat f \| xargs -n1 sudo` | `block / block / block` | unchanged |
+| `xargs -I R gh R view`, `xargs -i gh {} list` | `ask / uncertain / uncertain` (`handedCommand`, WP-185) | unchanged; `xargs -I R terraform plan` stays `ask / auto / deny` (nothing is appended under `-I`) |
+| 580: `npm edit zod --editor='sh -c id'`, `npm edit zod --editor 'sh -c id'`, `npm edit zod --edito='sh -c id'`, `npm help npm --viewer=browser --browser='id;'`, `npm docs zod --browser='id;'`, `npm docs zod --br='id;'`, `npm help npm --vi=browser`, `pnpm docs zod --browser='id;'` | `ask / auto / deny` | `ask / hazard / hazard` |
+| 580 controls: `npm edit x`, `npm docs zod`, `npm help npm`, `npm view zod`, `npm --version`, `npm edit zod --edit='sh -c id'` | `ask / auto / deny` | unchanged |
+| `pnpm --config.editor=x edit` | `ask / hazard / hazard` (the `--config.<key>` floor: the ruling's question, answered yes) | unchanged |
+| Not changed (residuals): `EDITOR='sh -c id' npm edit zod`, `BROWSER='id;' npm docs zod`, `npm edit zod -editor=x`, `npm docs -browser=x` | `ask / auto / deny` | unchanged |
+
+**Credential for `gh release`/`glab release`: not measured.** Read only: no `GH_TOKEN`, `GITHUB_TOKEN`, `GITLAB_TOKEN` or `GLAB_TOKEN` is written by `packages/infrastructure` (the run's CLI environment, `runner/options.ts`); git's credential comes from the helper socket, which `gh`/`glab` are not known to read. The rule does not depend on it.
+
+**What changed** (`packages/domain/src/policies/command-policy.ts`).
+- **(b) 576.** `xargsCommandWords` is the loop `xargsBannedEntry` had (each `xargs` at an `argvStarts` position, its command word found by `readXargsOptions`), now shared. `xargsBlockPrefix` beside it takes the command word (`argv0Name`) and the written words after it (`unquoteToken`), **up to the first word containing `<`, `>`, `|`, `&` or `;`** (a redirection or operator only shortens the prefix — the closed side; without the cut `xargs gh 2>/dev/null` read `auto`), and finds the first `policy.block` entry whose tokens (`tokenise`) it matches token by token through `globToRegExp` with tokens left over. `evaluateCommand` adds `xargsCompletesBlockEntry(entry)` — a function, not an `UNCERTAINTY` key, because the reason names the entry; `UncertaintyReason` is widened by its template-literal type — to the scanner's reasons, and every return of the function carries the combined list, so the attended verdict is floored at `ask` and both modes refuse. `block` is unchanged: `xargsBannedEntry` is checked first.
+- **580.** `NPM_PROGRAM_OPTIONS` (`editor`/`edito`, `browser`/`br`, `viewer`/`vi`) and `npmProgramOptionFloors`, which derives the three spellings the `--script-shell` floor has (`* --<option>*` on npm and pnpm, `npm* --<prefix>*`, `pnpm* --<prefix>*`), spread into `HAZARDOUS_ARGUMENTS` after the `--node-options` entries. **Prefixes derived** from npm 11's `definitions.js` (the round-3 fetched copy, 184 of 191 names read by a regex; the 7 not read begin with `_` and share no prefix with these): ~~`--edit` is shared with `--edit-dir`, so `--edito`~~ — **wrong, corrected at review round 1**: the fetched copy was npm **12**'s (only npm 12 has `edit-dir`, and npm 12 refuses abbreviations); the run image's npm 11 resolves `--ed`, so the prefix is `ed`. `--br` and `--vi` are unique. No `short:` of npm's names any of the three. **Assumption:** the existing `--script-shell`/`--node-options` entries are left byte-identical (rule 42) rather than rewritten through the helper; the helper is the one place the three new options' spellings are written. *(Review round 1: they are now wrapped by `withSingleDash`, below.)*
+
+**Tests.** `packages/domain/src/policies/unattended-commands.test.ts`, describe *"WP-197: a block entry xargs could complete from its input, and the programs npm runs"*, every row in all three baselines, each 576 row also asserting the reason list names its entry. WP-161's criterion-(13) row `%j is uncertain` asserted `[xargsArguments]` exactly; its four `xargs git` lines now also carry `xargsCompletesBlockEntry('git push --force*')` and the assertion says so (cells unchanged).
+
+**Canaries** (each applied with Edit and reverted in place with Edit; md5 `dba12f080c7c82b4f2b0a968fd5f7ca6` before and after):
+- (1) `written.length > 0 &&` → `false &&` in `xargsBlockPrefix` (binaryBans the only matcher), run together with (2) — *dead by* every `%j is uncertain, naming %j (576)` row (10), `reads a project’s own word-specific entry: "xargs deploy" against "deploy prod *" (576)`, and WP-161's four `"… | xargs git" is uncertain` rows.
+- (2) `editor` filtered out of `NPM_PROGRAM_OPTIONS` — *dead by* the three `"npm edit zod --editor…"`/`--edito…` rows of `%j is a hazard: npm runs the program it names (580)`.
+- (3) `browser` filtered out — *dead by* `"npm docs zod --browser='id;'"`, `"npm docs zod --br='id;'"`, `"pnpm docs zod --browser='id;'"`. **Survived:** `"npm help npm --viewer=browser --browser='id;'"`, which the `--viewer` floor also holds.
+- (4) `viewer` filtered out — *dead by* `"npm help npm --vi=browser"` and `"pnpm help --vi=x"`.
+- The 576 controls (`keeps %j at %s (576)`) and the 580 controls passed under every canary.
+
+**Residuals.**
+- `xargs 2>/dev/null sudo` and `xargs > out sudo` read `ask / auto / deny` (before and after): `readXargsOptions` takes the redirection as xargs' command word, so neither WP-188's ban nor this prefix rule sees `sudo`. The same reading under the line rule: `gh >out release create` reads `ask / auto / deny`. Not this row's rule; for a refiner.
+- `gh release` alone (no xargs) reads `ask / auto / deny`, because `gh release *` needs a word after `release`; the entry's spelling is Q37's.
+- `EDITOR`/`VISUAL` (npm's default for `editor`) on the line are not npm's names and read `auto` (`EDITOR='sh -c id' npm edit zod`).
+- **npm's single-dash long option**: nopt's `resolveShort` returns `null` for an exact or abbreviated long name with one dash, so `-editor=x` is `--editor=x` (read from `npm/nopt` `lib/nopt-lib.js` at `main`, not executed). `npm edit zod -editor=x` and `npm docs -browser=x` read `ask / auto / deny`, and **`npm test -node-options=x` reads `allow / allow / allow` in the verification and implementation baselines** — the existing `--node-options` floor's class, not 580's. `npm test -script-shell=x` is uncertain only because its letters include `c` (`npxCall`). *(Fixed at review round 1, by ruling: below.)*
+
+**Discovered work** (for a refiner; not fixed, measured marker-only):
+- ~~npm's single-dash spelling of every floored long option~~ — built at review round 1.
+- A redirection between `xargs` and its command word hides the command (`xargs 2>/dev/null sudo`), and a redirection inside a written command hides its words from the block list (`gh >out release create`).
+- `EDITOR`/`VISUAL` as a prefix assignment in front of `npm edit` (and `git` reads `GIT_EDITOR`/`EDITOR` too).
+- BD-025's sentence listing the floored npm/pnpm spellings (`--script-shell`, `--node-options` and `--config.<key>`) does not name `--editor`/`--browser`/`--viewer`; it lists spellings that reach a *project verb*, which these do not, so it may stand — a decision record, not mine to edit.
+
+**Sentences falsified** (rule 83; grep of `docs/`, `CLAUDE.md` and the policy's docblocks for `binaryBans`, `xargsBannedEntry`, `word-specific`, `xargs terraform`, `xargs gh`, `--script-shell`, `--node-options`, `xargs`):
+- technical/05's WP-188 bullet ("judged against every block entry that bans a binary by name") — still true; a pointer to the WP-197 bullet was added. Its WP-196 bullet's residual now notes the three new floors and `EDITOR`/`VISUAL`. The WP-197 bullet was added (criterion (3)).
+- technical/04's floor list and the `PROJECT_COMMAND_ALLOW` docblock's floor list and prefix list (`--edito`, `--br`, `--vi`) name the three new options; `RUNNER_ENVIRONMENT_WORD`'s residual names them and `EDITOR`/`VISUAL`.
+- BD-025 line 46 — see Discovered work; not edited.
+
+**Checks.** Policy unit files with `planner.test.ts`: 21 files, 2519 passed, 5 skipped. `scripts/citations.test.ts`: 13/13. `pnpm run -s verify` ran once (one-minute load 4.5 at the start): exit 0, final line `PASS: verify`.
+
+**Review round 1** (REQUEST_CHANGES, three majors; the fourth finding is the orchestrator's to file).
+- **(1) `--edito` was npm 12's prefix.** The run image (`node:24-trixie-slim`) ships npm 11, where `--ed`, `--edi` and `--edit` all resolve to `editor` (the reviewer's nopt probe over npm 11.21.1). `NPM_PROGRAM_OPTIONS`' `editor` prefix is now `ed`; its docblock and the `PROJECT_COMMAND_ALLOW` docblock say the floors are written against npm 11 (npm 12 refuses abbreviations). My control `"npm edit zod --edit='sh -c id'"` pinned an open reading; it is now a hazard row beside `--ed` and `--edi`.
+- **(2) The single-dash spelling** (orchestrator ruling). nopt reads `-node-options=x` as `--node-options=x`. `withSingleDash` wraps every npm/pnpm floor — the six existing `--script-shell`/`--node-options` entries and the nine derived ones — and adds each entry's `-` sibling (pattern ` --` → ` -`). **Rule 42 yields here**: "left exactly as they were" (my round-0 assumption) gave way to a measured open spelling; the six existing entries keep their bytes and gain siblings.
+- **(3)** Rows for the path and quoted spellings under `xargs`.
+
+| Row | Before (round 0 tree) | After |
+|---|---|---|
+| `npm edit zod --ed='sh -c id'`, `--edi='…'`, `--edit='…'` | `ask / auto / deny` | `ask / hazard / hazard` |
+| `npm test -node-options=x`, `npm test -node-o=x` | ro `ask / auto / deny`; ver, impl **`allow / allow / allow`** | `ask / hazard / hazard` |
+| `pnpm test -node-options=x`, `npm edit zod -editor='sh -c id'`, `-ed=…`, `npm docs zod -browser='id;'`, `-br=…`, `npm help npm -viewer=x`, `-vi=x`, `pnpm docs -br=x` | `ask / auto / deny` (the `pnpm` row as `npm test`'s) | `ask / hazard / hazard` |
+| `npm test -script-shell=x`, `npm run build -scr=x` | `ask / uncertain / uncertain` (`npxCall`) | unchanged cell; the `-` floor now matches beside it |
+| `xargs /usr/bin/gh release`, `xargs 'gh' release`, `xargs gh 're'lease`, `xargs ./terraform` | `ask / uncertain / uncertain` (round 0) | unchanged, now tested |
+| Controls: `npm test`, `npm ci`, `npm test --verbose`, `npm test -e`, `npm test -- -e`, `pnpm install --frozen-lockfile` | ro `ask / auto / deny`; ver, impl `allow / allow / allow` | unchanged |
+| Controls: `npm edit x`, `npm docs zod`, `npm help npm`, `npm view zod`, `npm install -D zod` | `ask / auto / deny` | unchanged |
+
+**Tests.** In the WP-197 describe: `%j is a hazard in its single-dash spelling, matching %j (review round 1)` (nine rows, each asserting the `-` pattern through `hazardousArguments`), `%j is floored in its single-dash spelling, matching %j (review round 1)` (the two `npxCall` rows), `keeps %j at its cells (review round 1)`, and `%j is uncertain by its unquoted name, naming %j (review round 1)`.
+
+**Canaries** (four at once, applied with Edit and reverted in place with Edit; md5 `267526e82a99ff08087f1f7e6cbad7a9` before and after; 18 failed, told apart by name):
+- `prefix: 'ed'` → `'edito'` — *dead by* the `--ed`, `--edi`, `--edit` rows of `%j is a hazard: npm runs the program it names (580)`.
+- `withSingleDash`'s sibling pattern left as the `--` one — *dead by* all eleven single-dash rows (`… in its single-dash spelling, matching …`).
+- `argv0Name`/`unquoteToken` replaced by the raw word in `xargsBlockPrefix` — *dead by* the four `… is uncertain by its unquoted name …` rows (`xargs gh 're'lease` by `unquoteToken`, the other three by `argv0Name`).
+- None survived.
+
+**Discovered work** (for the orchestrator to file; not this row's): a leading or middle redirection hides banned words — `2>/dev/null sudo id`, `xargs 2>/dev/null sudo`, `gh >out release create` and `terraform 2>x apply` read `auto`, also at `ce56ea19`.
+
+**Checks (round 1).** `unattended-commands.test.ts` with `command-policy.test.ts`: 2063/2063. `scripts/citations.test.ts`: 13/13. `pnpm run -s verify` ran once, after `wp197-tiers-idle` appeared (one-minute load 4.9 at the start): exit 0, final line `PASS: verify`.
+
+**Review round 2** (REQUEST_CHANGES, two majors; round 1's three confirmed fixed).
+- **(1) nopt strips every leading dash and cancels a doubled `no-`** (the reviewer's nopt 11 probe), so `---node-options=x` and `--no-no-node-options=x` escaped round 1's twins. **Ruling: stop adding twins; normalise.** `withSingleDash`, `NPM_PROGRAM_OPTIONS` and `npmProgramOptionFloors` are gone. `NPM_OPTION_FLOORS` holds six rows — `script-shell`/`scr`, `node-options`/`node`, `config.<key>`/`config.`, `editor`/`ed`, `browser`/`br`, `viewer`/`vi` — and `npmOptionFloor` makes one `tokens` entry per row, replacing the fifteen glob entries and their fifteen twins, and the two `--config.*` globs. Its predicate reads each option word through `noptOptionName` (every leading dash stripped, the value after `=` dropped, every leading `no-` stripped case-insensitively) and floors a name that begins with the row's prefix. **Stripping an odd count of `no-` too is the closed side** (nopt would set the option to false): `npm test --no-browser` is floored, an over-ask, stated. The `--config.<key>` rows were folded in because `---config.script-shell=x` is the same escape; their two hazards became one.
+- **(2) The over-ask after a bare `--`** (ruling: the floors read only the words before it). `npmOptionWords` cuts at the first bare `--`. **Names:** the predicate admits `npm`, `pnpm`, `npx` and `pnpx` — the old `* --node-options*` glob was name-agnostic, and WP-196's control `npx --node-options='--require x' jest` is `hazard`, so `npx`/`pnpx` keep it; for those two the scan also stops at the runner's command (the first word that is no option and cannot be the value of an option before it with no `=`), because npx hands what follows to the command — otherwise `npx playwright test --browser=chromium` would be refused, the over-ask (2) names, on a runner. **Consequence, stated:** `npx` and `pnpx` are declared verbs, so they join `XARGS_FLOORED_VERBS`; both were already input-driven under `xargs` (`ARGV0_WRAPPERS`), and `UNCERTAINTY.xargsArguments` now names `pnpx`, which the verb census requires.
+
+| Row | Before (round-1 tree, the reviewer's measurement) | After |
+|---|---|---|
+| `npm test ---node-options=x`, `npm test ----node-o=x`, `npm run build ---script-shell=x`, `npm run build ---scr=x`, `npm test --no-no-node-options=x`, `npm test --no-no-script-shell=x`, `npm test --no-no-scr=x`, `pnpm test --no-no-node-options=x` | ro `ask / auto / deny`; ver, impl **`allow / allow / allow`** | `ask / hazard / hazard` |
+| `npm edit zod ---editor=x`, `npm edit zod ---ed=x`, `npm help npm ---vi=x`, `pnpm test ---config.script-shell=x` | `ask / auto / deny` | `ask / hazard / hazard` |
+| `npm test --browser=chromium -- --x` (a floored option before `--`) | `ask / hazard / hazard` | unchanged |
+| `npm test -- --browser=chromium`, `npm run e2e -- --browser=firefox`, `npm test -- --vitest-flag`, `npm run dev -- --edge` | `ask / hazard / hazard` (round 0 and 1's over-ask) | ro `ask / auto / deny`; ver, impl `allow / allow / allow` — their cells before WP-197 |
+| `npx playwright test --browser=chromium`, `npx --yes playwright test --browser=chromium` | `ask / hazard / hazard` (measured on this tree before the npx stop) | `ask / auto / deny` |
+| Controls: `npm -v`, `npm -e x` | `ask / auto / deny` | unchanged |
+| Controls: `npm test -verbose`, `npm test`, `npm ci` | ro `ask / auto / deny`; ver, impl `allow / allow / allow` | unchanged |
+| Every round-1 row (`--ed`, `-node-options`, `-br`, …), `npx --node-options='--require x' jest`, `pnpm test --config.node-options=x`, `npm run build --script-shell=/tmp/sh` | `ask / hazard / hazard` | unchanged |
+
+**Tests.** `command-policy.test.ts`: the six entries' fixture rows in WP-186's `tokens` census (13 → 19), and the WP-164 docblock's `* --script-shell*` example marked historical. `unattended-commands.test.ts`: round 1's single-dash rows now assert the floored option by name (`%j is a hazard in its single-dash spelling, floored as --%s (review round 1)`); new `%j is a hazard, floored as --%s (review round 2)` (13 rows), `keeps %j at its cells (review round 2)` (the four `--` rows and `npm test -verbose`), `keeps %j at ask / auto / deny (review round 2)` (`npm -v`, `npm -e x`, the two npx rows).
+
+**Canaries** (four at once, applied with Edit and reverted in place with Edit; md5 `3a3d5bc3e681cd23512b974bc203c297` before and after; 18 failed, told apart by name):
+- `/^-+/` → `/^--?/` in `noptOptionName` — *dead by* the seven `---…`/`----…` rows and `"pnpm test ---config.script-shell=x" …` of `%j is a hazard, floored as --%s (review round 2)`.
+- the `no-` loop disabled — *dead by* the four `--no-no-…` rows.
+- the `--` cut disabled — *dead by* the four `keeps "npm … -- --…" at its cells (review round 2)` rows.
+- the npx command stop disabled — *dead by* both `keeps "npx … playwright test --browser=chromium" at ask / auto / deny (review round 2)` rows.
+- None survived.
+
+**Sentences falsified:** technical/05's WP-197 bullet (the twins sentence and `NPM_PROGRAM_OPTIONS`), technical/04's floor sentence (now "in every spelling nopt reads and only before a bare `--`"), the `PROJECT_COMMAND_ALLOW` docblock's prefix sentence — each rewritten. The round-0/round-1 notes above name the removed helpers as history.
+
+**Checks (round 2).** `unattended-commands.test.ts` with `command-policy.test.ts`: 2085/2085. Policy files with `planner.test.ts`: 2561 passed, 5 skipped. `scripts/citations.test.ts`: 13/13. `pnpm run -s verify` ran once, after `wp197-tiers2-idle` appeared (one-minute load 6.0 at the start): exit 0, final line `PASS: verify`.
+
+**Review round 3** (the last; one blocker in the xargs half, verified by the orchestrator). `xargsBlockPrefix` matched the written words against the entry's tokens one by one, flags included, while the block matcher (`tokensMatch`) reads flags anywhere and positionals as a prefix. **Built:** the written words (the command word through `argv0Name`) and the entry both go through `splitFlags`, the block matcher's own function; an entry is flagged when the written positionals glob-match a prefix of its positionals and either a positional is left over or one of its flags is missing from the written flags.
+
+| Row | Before | After |
+|---|---|---|
+| `xargs terraform -chdir=x`, `xargs terraform -no-color` (→ `terraform apply`), `xargs gh --repo=o/r` (→ `gh release *`) | `ask / auto / deny` | `ask / uncertain / uncertain`, naming the entry |
+| `xargs rm -f`, `echo x \| xargs rm -f`, `xargs rm -f /` (→ `rm -rf /*`) | `ask / auto / deny` | `ask / uncertain / uncertain` |
+| Controls: `xargs -I{} terraform apply` | `block / block / block` | unchanged |
+| Controls: `xargs grep x`, `xargs terraform -chdir=x plan` | `ask / auto / deny` | unchanged |
+| `xargs gh -R o/r release`, `xargs terraform ''`, `gh -R o/r release create v1` | `ask / auto / deny` | unchanged (residuals, below) |
+
+**`xargs rm -f` is not unchanged, against the round's stated control.** The ruling's own rule flags it: `rm`'s positionals are a strict prefix of `rm -rf /*`'s, and the input can supply `-rf /`, completing `rm -f -rf /`, which the block matcher blocks (flags anywhere). Keeping it `auto` would need a special case that is a fail-open, and `xargs rm` alone has read uncertain since round 0. So the rule was followed. Three older controls that pinned it at `ask / auto / deny` (WP-161's criterion-(13) `keeps`, WP-164's floored-verb `keeps`, WP-185's shell `keeps`) were moved to `ask / uncertain / uncertain`, each with a comment. Those controls were written for other rules (verbs no floor names, shells), not for block-entry completion. **The orchestrator should confirm or overrule this.** The cost is the common `find … | xargs rm -f` idiom, now refused under `auto`.
+
+**Tests.** In the WP-197 describe: `%j is uncertain with its flags read apart, naming %j (review round 3)` (five rows) and `keeps %j at %s (review round 3)` (three controls). **Canary:** the comparison was restored to raw tokens, with no flags and every word a positional, and reverted with Edit; md5 `27d1f6f273169795c1b626c928217f76` before and after. *Dead by* all five round-3 rows and the three moved `xargs rm -f` controls (8 failed). The `keeps … (review round 3)` controls passed.
+
+**Discovered work** (for the orchestrator to file; not this row's): `gh -R o/r release create v1` reads `auto` on the line, because `tokensMatch` takes `o/r` as the first positional after `gh`, and `xargs gh -R o/r release` inherits it; `xargs terraform ''` (an empty written word) reads `auto`.
+
+**Checks (round 3).** `unattended-commands.test.ts` with `command-policy.test.ts`: 2093/2093 (one run started at one-minute load 13.9 by mistake; the rerun waited for 9.6). `scripts/citations.test.ts`: 13/13. `pnpm run -s verify` ran once, after `wp197-tiers3-idle` appeared (one-minute load 4.0 at the start): exit 0, final line `PASS: verify`.
+
+**Orchestrator's check after the round cap.** The orchestrator accepted the implementer's round-3 decision to read `xargs rm -f` as uncertain (input `-rf /` completes it to a blocked line; fail closed), and re-ran the reviewers' 390+ probe lines through `decideUnattendedCommand`: every remaining `auto` is a control, an accepted class, a redirection spelling (582, owned by WP-198) or the separate-value-flag spelling `gh -R o/r release create v1` it filed as 584.
