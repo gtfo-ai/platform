@@ -4335,8 +4335,11 @@ const shellWords = (text: string): readonly ShellWord[] => {
 
 /**
  * Whether the shell passes this word on as written, quotes off: nothing in it expands. A `$` or a
- * backtick outside single quotes, or an unquoted glob, brace, tilde or redirection character, makes
- * it a string the platform cannot read before it runs.
+ * backtick outside single quotes, an unquoted glob, tilde or redirection character, or a brace
+ * expansion makes it a string the platform cannot read before it runs. A brace expands only when it
+ * is unquoted and holds an unquoted `,` or `..` at its own level ({@link bracesExpand}: `{a,b}`,
+ * `{1..3}`, and fail-closed an unmatched `{a,b` and a `{..}` bash leaves alone); `{}`, `{x}` and
+ * `{}x` are passed as written, so `xargs -I{}` replaces a literal string (WP-193, backlog 565).
  */
 const isLiteralWord = (raw: string): boolean => {
   let quote: '"' | null = null;
@@ -4354,7 +4357,9 @@ const isLiteralWord = (raw: string): boolean => {
       quote = quote === null ? '"' : null;
     } else if (char === '$' || char === '`') {
       return false;
-    } else if (quote === null && /[*?[{~<>()]/.test(char)) {
+    } else if (quote === null && /[*?[~<>()]/.test(char)) {
+      return false;
+    } else if (quote === null && char === '{' && bracesExpand(raw, index)) {
       return false;
     }
   }
@@ -4455,26 +4460,32 @@ const expandsAsName = (word: string): boolean => {
   return false;
 };
 
-/** Whether the unquoted `{` at `open` starts a brace expansion: a `,` or `..` at its own level. */
+/**
+ * Whether the unquoted `{` at `open` starts a brace expansion: a `,` or `..` at its own level.
+ * bash closes the brace only at a `}` that follows such a separator — a `}` before one is a literal
+ * character, so `x{},a}` is `x}` and `xa` and `{x},b}` is `x}` and `b` (measured, bash 5.3) — and
+ * a backslash escapes inside double quotes too, so `{"\"",a}` expands. Before WP-193 both read as
+ * no expansion. Over-reads, never under-reads: an unmatched `{a,b`, any `..` (`{a..}`), and
+ * `{},a}`, which bash leaves alone at the start of a word only, all count.
+ */
 const bracesExpand = (word: string, open: number): boolean => {
   let depth = 0;
   let quote: '"' | "'" | null = null;
-  for (let index = open; index < word.length; index += 1) {
+  for (let index = open + 1; index < word.length; index += 1) {
     const char = word[index] as string;
-    if (quote !== null) {
+    if (quote === "'") {
       quote = char === quote ? null : quote;
     } else if (char === '\\') {
       index += 1;
+    } else if (quote === '"') {
+      quote = char === quote ? null : quote;
     } else if (char === '"' || char === "'") {
       quote = char;
     } else if (char === '{') {
       depth += 1;
     } else if (char === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        return false;
-      }
-    } else if (depth === 1 && (char === ',' || word.startsWith('..', index))) {
+      depth = Math.max(depth - 1, 0);
+    } else if (depth === 0 && (char === ',' || word.startsWith('..', index))) {
       return true;
     }
   }
@@ -5240,8 +5251,21 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
     } else if (name === 'find') {
       readFind(args);
     } else if (name === 'xargs') {
-      const { command: at, opaqueReplace } = readXargsOptions(args);
+      const { command: at, replace: replaced, opaqueReplace } = readXargsOptions(args);
       const run = at === null ? undefined : args[at];
+      // A word of xargs' command holding its replace string is where xargs writes its input, the
+      // command word included (`xargs -I{} {}`): uncertain by its own rule, not because the walk
+      // past the wrapper `xargs` happens to reach such a word as a command (WP-193, backlog 566).
+      if (
+        at !== null &&
+        at >= 0 &&
+        replaced !== null &&
+        args
+          .slice(at)
+          .some((word) => word.raw.includes(replaced) || unquoteToken(word.raw).includes(replaced))
+      ) {
+        uncertain = true;
+      }
       if (
         opaqueReplace ||
         at === null ||

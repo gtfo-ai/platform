@@ -577,3 +577,84 @@ describe('WP-161 — what bash runs past the bound, through an expanded or rebou
     }
   });
 });
+
+/**
+ * WP-193, backlog 565: which braces bash expands, held to bash. A word is printed twice by one
+ * `bash -c`, with brace expansion on and then off (`set +B`); when the two differ the word
+ * brace-expands, and the policy must read it as a replace string that is not literal. The pieces
+ * are the spellings the brace rule has to get right — a quoted or escaped comma, a `\"` inside a
+ * double-quoted part, nesting, an unmatched brace, a `..` with and without a sequence around it.
+ * One direction is a property (bash expands ⇒ not literal; an over-read such as `{a..}` is allowed),
+ * the other is the fixed rows bash passes as written. The property is unseeded and finds a regression
+ * only by chance (WP-193's review: dropping the `\"` handling survived it), so every spelling a
+ * regression has needed is also a fixed row below, and those rows are what hold the rule.
+ */
+describe('WP-193 — a brace bash expands is never a literal replace string', () => {
+  const PIECES = [
+    '{',
+    '}',
+    ',',
+    '..',
+    '.',
+    'a',
+    '1',
+    '{}',
+    "','",
+    '"\\""',
+    '"}"',
+    '\\,',
+    '\\}',
+    "'{'",
+  ];
+  const expands = (word: string): boolean => {
+    const out = run('bash', `printf '<%s>' -I${word}; echo; set +B; printf '<%s>' -I${word}`);
+    expect(out.ok).toBe(true);
+    const [on, off] = out.stdout.split('\n');
+    return on !== off;
+  };
+  const literal = (word: string): boolean =>
+    !commandUncertainty(`xargs -I${word} grep x`).includes(UNCERTAINTY.xargsArguments);
+
+  it(
+    'reads every word bash brace-expands as not literal',
+    () => {
+      fc.assert(
+        fc.property(
+          fc.array(fc.constantFrom(...PIECES), { minLength: 1, maxLength: 8 }),
+          (pieces) => {
+            const word = pieces.join('');
+            return !expands(word) || !literal(word);
+          },
+        ),
+        { numRuns: 300 },
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
+
+  it.each(['{}', '{x}', '{}x', '{a\\,b}', "{a','b}", '{a}{b}', '{"}"}', '{a,b', '{..}', '{a..}'])(
+    'bash passes %j as written, and the policy reads it as literal unless it over-reads',
+    (word) => {
+      expect(expands(word)).toBe(false);
+      expect(literal(word)).toBe(!['{a,b', '{..}', '{a..}'].includes(word));
+    },
+  );
+
+  // `-I{},a}` and `{x},b}`: a `}` before the comma is a literal character to bash, not the close.
+  it.each(['{a,b}', '{1..3}', '{"\\"",a}', '{{},a}', '{x{a,b}', 'a{,}', '{},a}', '{x},b}'])(
+    'bash expands %j, and the policy reads it as not literal',
+    (word) => {
+      expect(expands(word)).toBe(true);
+      expect(literal(word)).toBe(false);
+    },
+  );
+
+  it('bash runs a name expanded past a `\\"` inside a brace, and the policy reads it (expandedName)', () => {
+    // `bracesExpand` read `{"\"",x}` as quoted to its end before WP-193 (a fail-open).
+    writeFileSync(join(SCRATCH, 'm"'), '#!/bin/sh\necho RAN_1\n');
+    chmodSync(join(SCRATCH, 'm"'), 0o755);
+    const line = './m{"\\"",x}';
+    expect(executed(run('bash', line).stdout)).toEqual(['1']);
+    expect(commandUncertainty(line)).toContain(UNCERTAINTY.expandedName);
+  });
+});

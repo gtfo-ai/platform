@@ -3241,3 +3241,102 @@ describe('WP-200, backlogs 585 and 586: git configuration keys, HOME and the pag
     expect(source.match(/needs measurement/gi) ?? []).toEqual([]);
   });
 });
+
+/**
+ * WP-193, backlogs 565 and 566. bash brace-expands only an unquoted `{…}` with an unquoted `,` or
+ * `..` at its own level, so `-I{}`, `-I{x}` and `-I{}x` are literal replace strings and `-I{a,b}`
+ * and `-I{1..3}` are not (ruling (b)); the shell itself holds the rule in
+ * `here-documents.shell.test.ts`. And a word of xargs' command holding the replace string is
+ * uncertain by its own rule (566), not because the walk past the wrapper `xargs` reaches it as a
+ * command. Every `xargsArguments` row below read so before WP-193 except where a comment says
+ * otherwise (PROGRESS § WP-193 has the census, before and after).
+ */
+describe('WP-193, backlogs 565 and 566: a brace is literal unless it expands, and xargs writes its input into a word', () => {
+  it.each(['xargs -I{} grep x', 'xargs -I{x} grep x', 'xargs -I{}x grep x', 'xargs -i{} grep x'])(
+    '%j is a literal replace string again (ask / auto / deny, ruling (c))',
+    (command) => {
+      expectCells(command, 'ask / auto / deny');
+      expect(auto(command).evaluation.uncertainty).toEqual([]);
+    },
+  );
+
+  it.each([
+    'xargs -I{a,b} grep x',
+    'xargs -I{1..3} grep x',
+    'xargs -I"$R" grep R',
+    // Fail-closed spellings: an unmatched `{` before a `,`, a `\"` inside a double-quoted part
+    // ahead of the comma (bash expands it), a brace inside a brace, and `..` with no sequence
+    // around it — bash passes `{..}` and `{a..}` as written, an over-ask stated in PROGRESS.
+    'xargs -I{a,b grep x',
+    'xargs -I{"\\"",a} grep x',
+    'xargs -I{{a,b}} grep x',
+    'xargs -I{x{a,b} grep x',
+    'xargs -I{{},a} grep x',
+    // A `}` before the comma is a literal character to bash: `-I{},a}` is `-I}` and `-Ia`.
+    'xargs -I{},a} grep x',
+    'xargs -I{x},b} grep x',
+    'xargs -I{..} grep x',
+    'xargs -I{a..} grep x',
+  ])('%j stays uncertain: its replace string is not literal', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.xargsArguments]);
+  });
+
+  it.each([
+    'xargs -I{a\\,b} grep x',
+    "xargs -I{a','b} grep x",
+    'xargs -I{a}{b} grep x',
+    "xargs -I'{}' grep x",
+    'xargs -i"{}" grep x',
+  ])('%j is literal: no unquoted `,` or `..` at a brace’s level', (command) => {
+    expectCells(command, 'ask / auto / deny');
+  });
+
+  it.each([
+    // Backlog 565's seven rows: `xargsArguments` is gone, `handedCommand` (566's own rule) stays.
+    "find . -name '*.ts' | xargs -I{} cp {} out/",
+    'xargs -I {} echo {}',
+    'xargs -I{} grep x {}',
+    'xargs -0 -I{} rm {}',
+    'xargs -n1 -I{} echo {}',
+    'xargs --replace={} grep x {}',
+    // …its controls, and the replace string as xargs' command word.
+    "xargs -I'{}' grep x {}",
+    'xargs -I"{}" grep x {}',
+    'xargs --replace grep x {}',
+    'xargs -I% cp % out/',
+    'echo x | xargs -I{} cat {}',
+    'echo x | xargs -I{} {}',
+    'xargs -I{} cat "{"}',
+  ])('%j is uncertain because xargs writes its input into a word of its command', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.handedCommand]);
+  });
+
+  it('reads `xargs -I {} grep x` without `xargsArguments`; its `{}` is held by the walk alone', () => {
+    // Backlog 565's seventh row. The `{}` here is `-I`'s operand, which the walk past `xargs`
+    // reaches as a command word (566): its verdict is the walk's and is deliberately not pinned.
+    expect(auto('xargs -I {} grep x').evaluation.uncertainty).not.toContain(
+      UNCERTAINTY.xargsArguments,
+    );
+  });
+
+  it.each([
+    ['eval echo {}', []],
+    ['trap {} EXIT', []],
+    ['bash -c {}', []],
+    ['eval echo {a,b}', [UNCERTAINTY.handedCommand]],
+    ['trap {a,b} EXIT', [UNCERTAINTY.handedCommand]],
+    ['watch ls {a,b}', [UNCERTAINTY.handedCommand]],
+  ])('reads the handed string of %j by the same brace rule', (command, reasons) => {
+    expect(auto(command).evaluation.uncertainty).toEqual(reasons);
+  });
+
+  it('says what a non-literal replace string is, and no longer says it of `-I{}`', () => {
+    expect(UNCERTAINTY.xargsArguments).toContain('replacing a string (-I) that is not literal');
+    expect(auto('xargs -I{} grep x').reason).not.toContain('replacing a string');
+    expect(auto('xargs -I{a,b} grep x').reason).toContain(
+      'replacing a string (-I) that is not literal',
+    );
+  });
+});

@@ -50218,3 +50218,57 @@ Probe totals: this row's 178 lines, `AUTO` 175 → 14 (the 14 controls above); t
   3. *Recorded, no change:* `assertOpensWithMarker('ticket', …)` in `integrations.ts` accepts any platform marker, not the exact `markerId` the helper is passed. The exact id is held by census half 1 for every renderer, not at run time.
   
   `pnpm run -s verify`: PASS.
+
+#### WP-193
+
+**Scanner: a brace is literal unless it expands, and the `{}` operand's part in what is uncertain is measured** (backlogs **565**, **566**). Built in the worktree `wt-wp193` on `7195da54`. No migration. Probe harness, case files and logs: `scratchpad/wp193/` (`probe.mjs`, `rows*.txt`, `census-*.out`, `fuzz.mjs`).
+
+**Changes.**
+- `command-policy.ts`, `isLiteralWord`: `{` left the "never literal" class; an unquoted `{` makes a word non-literal only when `bracesExpand` says it starts a brace expansion. The docblock says which braces expand.
+- `bracesExpand` (shared with `expandsAsName`), held to bash and corrected in two ways, both fail-open before. (1) A backslash escapes inside double quotes, so `{"\"",a}` expands; it used to read as quoted to the end of the word. (2) bash closes a brace only at a `}` that comes after a `,` or `..` at its level. A `}` before one is a literal character: `-I{},a}` is `-I}` and `-Ia`, and `{x},b}` is `x}` and `b` (bash 5.3.20, measured). The old reader stopped at the first `}`. Now a `,` or `..` at the brace's own level, after any number of earlier `}`, counts.
+- The xargs branch of `wrappedScript` has a rule of its own (566): if any word of xargs' command, from the command word on, holds the replace string (as written or with its quotes removed), the stage is uncertain (`handedCommand`). Before, that verdict came from the command walk past the wrapper `xargs` reaching the word as a command position.
+- technical/05: WP-185's bullet no longer says an unquoted `-I{}` is an over-ask, and a WP-193 amendment bullet was added.
+
+**Decisions/assumptions.**
+- *Ruling (c)'s `xargs -I{} grep x {}` "returns to `auto`" is read as `xargs -I{} grep x`.* The row with `{}` in grep's operands read `[handedCommand]` before WP-185 (565's evidence), so it never "was" `auto` and cannot return there. Backlog 565's *Done when* has that row read `[handedCommand]` only, and it has `xargs -I{} grep x` read `ask/auto/deny`. That is what is built. If the architect meant the `{}` row to become `auto`, the walk has to change, and the pinned rule-42 control `echo x | xargs -I{} cat {}` would move with it.
+- *Fail-closed over-reads, stated.* bash leaves these as written: an unmatched `{a,b`, any `..` with no valid sequence (`{..}`, `{a..}`, `{}..3}`), and `{},a}` at the very start of a word (bash skips a `{}` there). The reader treats all of them as expansions. A trailing `,` after a closed `{x}` (`{x},a`) is also an over-read. Fuzz: 6000 random brace words, no fail-open and 690 over-reads (`fuzz.mjs`).
+- *Rows pinned with the walk's verdict left out.* `xargs -I {} grep x` (565's seventh row) reads `[handedCommand]` because the walk reaches `-I`'s separate operand `{}` as a command word. `xargs -I '{}' grep x` reads the same way. Neither has a reason of its own. A test asserts only that the first no longer names `xargsArguments`. Its honest verdict is `auto`, the same as `xargs -I{} grep x`.
+- *The new xargs rule over-asks in the way the walk did.* `xargs -I{} cat {}` is held although `xargs cat` and `find . -exec cat {} \;` read `auto`. That is the verdict this line has had since WP-161 (a rule-42 control). The rule also reaches past the walk's eight-word window, and it reads a quoted-apart spelling the walk missed: `xargs -I{} cat "{"}` would have read `auto` with the brace fix alone.
+
+**Census of `isLiteralWord`'s callers** (rule 27). These are cells in the implementation baseline, `attended/auto/deny [uncertainty]`, from `census-before.out` and `census-after.out`. The four callers are the xargs replace operand (three sites in `readXargsOptions`: `--replace=`, `-I`/`-J`, `-i`), `hand`, `namesPositional` in `readShell`, and `trap`'s reset test.
+
+| Caller | Line | Before | After |
+|---|---|---|---|
+| xargs replace | `xargs -I{} grep x`, `-I{}x`, `-i{}`, `-I{x}`, `-I {x}`, `-i{x}`, `--replace={x}`, `-J{}`, `-I{a\,b}`, `-I{a','b}` | `ask/uncertain/uncertain [xargsArguments]` | `ask/auto/deny []` |
+| xargs replace | 565's seven rows (`… xargs -I{} cp {} out/`, `xargs -I {} echo {}`, `xargs -I{} grep x {}`, `xargs -0 -I{} rm {}`, `xargs -I {} grep x`, `xargs -n1 -I{} echo {}`, `xargs --replace={} grep x {}`) | `… [handedCommand,xargsArguments]` | `ask/uncertain/uncertain [handedCommand]` |
+| xargs replace | `-I{a,b}`, `-I{1..3}`, `-i{a,b}`, `--replace={a,b}`, `-J{a,b}`, `-I{a,b`, `-I{..}`, `-I{a..}`, `-I{"\"",a}`, `-I${x}`, `-I"$R" grep R` | `… [xargsArguments]` | unchanged |
+| xargs replace | controls `-I'{}' grep x {}`, `-I"{}" grep x {}`, `--replace grep x {}`, `-I% cp % out/` | `[handedCommand]` | unchanged; `-I'{}' grep x` and `-i"{}" grep x` stay `ask/auto/deny` |
+| `hand` | `eval echo {}`, `eval echo {x}`, `sh -c echo{}`, `bash -c {}`, `watch ls {}`, `env -S echo{} x`, `script -c echo{} /dev/null` | `ask/uncertain/uncertain [handedCommand]` | `ask/auto/deny []` (the string is read as a script) |
+| `hand` | `eval echo {a,b}`, `watch ls {a,b}`, `sh -c echo{a,b}` | `[handedCommand]` (+`expandedName`) | unchanged |
+| `namesPositional` | `sh -c {}'"$@"' _ id` | `[handedCommand]` | `ask/auto/deny []` (the script is literal and its operands are read as a command, as for `sh -c '"$@"' _ id`) |
+| `namesPositional` | `sh -c {a,b}'"$@"' _ id` | `[expandedName,handedCommand]` | unchanged |
+| `trap` | `trap {} EXIT`, `trap -{} EXIT` | `[handedCommand]` | `ask/auto/deny []` (the action is read as a script) |
+| `trap` | `trap {a,b} EXIT` | `[handedCommand]` | unchanged |
+
+No `{}`-bearing line moved from `uncertain` to `auto` except the ones in the table. Each of those either reads a literal string as a script or uses a literal replace string.
+
+**566's canary, measured.** The canary was `if (<position past the first start> && unquoteToken(word).includes('{}')) continue;` in `wrappedScript`'s position loop, so the walk stops at a `{}` it reaches past a wrapper. It was applied in place and removed with Edit. `grep -c CANARY` gives 0.
+- Before the brace rule (old `isLiteralWord`), with a broader first version that skipped any `{}` word: unit tier 4174/4174 green in `packages/domain`. Nothing flipped, because `xargsArguments` (the opaque `-I{}`) still held every pinned `-I{}` row.
+- Brace rule alone, then the canary: the full unit tier flipped one row, which two tests pin, `echo x | xargs -I{} cat {}` (WP-161 criteria (6) and (13), rule-42 controls). Among the probe rows, 565's six rows with `{}` in the command's words also flipped to `auto`, as did `-I'{}' grep x {}`, `-I"{}" grep x {}`, `--replace grep x {}`, `xargs -I {} grep x` and `xargs -I{} {}`. The `find -exec sh … {}` rows of WP-185 ruling (d) did **not** flip, because that ruling's own rule holds them.
+- With the xargs rule above: the canary again, over the whole unit tier (531 files, 12714 tests), flips **none**. **Canary for the reason:** turning the xargs rule off with the canary still in place fails 14 tests, the two WP-161 `cat {}` rows and 12 of WP-193's rows.
+- Where the canary over-reaches: `find /usr/bin -name sudo -exec nice {} id \;` and `find . -exec nice {} \;` flip under it. There `{}` really is a command, `nice`'s, so the walk reaching it is correct and not the accident. These rows are not pinned. A walk that knows each wrapper's grammar would keep them.
+- Criterion 1's canary: putting the bare `{` back into `isLiteralWord`'s class fails 22 of the WP-193 tests in `unattended-commands.test.ts`, including all four "literal replace string again" rows (`-I{}`, `-I{x}`, `-I{}x`, `-i{}`). It was reverted with Edit.
+
+**Tests.** A WP-193 describe at the end of `packages/domain/src/policies/unattended-commands.test.ts` covers the literal rows, the uncertain rows (including the adversarial spellings), 565's rows and controls, the replace-string-in-a-word rows, the handed-string census rows, and the reason text. A WP-193 describe at the end of `here-documents.shell.test.ts` adds a property: one `bash -c` per word, printed with brace expansion on and then with `set +B`, and if the two differ the replace string must not be literal (300 runs, `</dev/null` through `input: ''`, a 5 s bound). It also adds the fixed rows in both directions, and a marker row: bash runs `./m"` through `./m{"\"",x}`, and the policy now reads that name as `expandedName`.
+
+**Sentences falsified** (rule 83).
+- `grep -rn --exclude=PROGRESS.md -e 'is not literal to the reader' -e 'unquoted glob, brace' -e 'I{} grep x' -e 'by accident of' -e 'reaches \`{}\` as a command' docs CLAUDE.md packages/domain/src` found these:
+  - technical/05's WP-185 bullet said *"and an unquoted `-I{}` with no `{}` in its command, since `{` is not literal to the reader"*. Fixed.
+  - `isLiteralWord`'s docblock (*"an unquoted glob, brace, tilde…"*) and `bracesExpand`'s one-liner. Rewritten.
+  - `command-policy.ts:4969` (*"the `sh` spelling only by accident of the command walk"*) and `unattended-commands.test.ts:1938` are history from WP-185 and still true.
+  - The plan row's ruling (c) is the assumption above, left unedited.
+- `UNCERTAINTY.xargsArguments`' text (*"replacing a string (-I) that is not literal"*) is now true for every line it is given on, and is no longer given for `-I{}`.
+
+**Discovered work.**
+- **A literal `-c` script that glues text to `"$@"` composes a command name the platform never reads.** `sh -c 'su"$@"' _ do id` (bash runs `sudo id`) and `sh -c 'g"$@"' _ it push origin main` both read `ask/auto/deny`, while `sh -c '"$@"' _ sudo id` reads `block`. bash ran `sh -c 'ec"$@"' _ ho RAN_1` and printed `RAN_1` (measured). `namesPositional` reads the operands as their own command, but not prefixed by the script's text. This was not introduced here: the quoted spelling never touched a brace. It is fail-open under `auto` for the block list and the git boundary.
+- The command walk past a wrapper reads every later word as a command, including `-I`'s separate operand (`xargs -I {} grep x`). An xargs- and wrapper-grammar-aware walk would let those lines return to `auto`. 566's residual.
