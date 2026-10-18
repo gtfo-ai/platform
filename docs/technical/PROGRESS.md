@@ -20189,6 +20189,7 @@ migration. The next free number is **0092**. Read the backlog entry a row folds 
 | WP-197 | **Scanner: a block entry that `xargs` could complete from its input is uncertain, whatever follows** | DONE | `e46ec21e` | Folds **576** (major, fail-open under `auto`: a block entry, the organisation maximum, completed by `xargs`). Deps WP-188, WP-196. No migration. Measure (a) first; nothing executed. Serial after WP-196 and before WP-193 on `command-policy.ts`; parallel-safe with every other row. Added by § "Architect ruling (M11 amendment, session 16)". Built on `main`, session 16; the orchestrator folded **580** (npm's `--editor`/`--browser`/`--viewer`) into it. **Three review rounds plus an orchestrator-verified fix**: R1 `edito` was npm 12's prefix (the image ships npm 11: `ed`), single-dash spellings read `allow`; R2 extra dashes and doubled `no-` (the floors now read a word as nopt does) and an over-ask on words after a bare `--`; R3 a flag between the command and its subcommand under xargs (`xargs terraform -chdir=x`) — fixed through `splitFlags` after the cap; the orchestrator accepted `xargs rm -f` → uncertain and re-probed 390+ reviewer lines (remaining `auto`: controls, accepted, 582, 584). Orchestrator: `verify` **PASS** (13 682), `verify:integration` **PASS** (887), `verify:e2e` **PASS** twice (298 each); no container left, volumes 71. Filed: 581–584 (582 redirection, 583 `EDITOR`/`VISUAL`/`BROWSER`, 584 separate-value flags — all major, fail-open). CI on `e46ec21e`: **PENDING**. |
 | WP-198 | **Scanner: the block list, the floors, the `xargs` readers and the git boundary read argv as the shell builds it — redirections removed, quotes resolved — beside the written words** | DONE | `6e07b948` | Folds **582** (major, fail-open under `auto`: a blocked `sudo` behind a redirection reaches `auto`; live in every run image, nothing installed). Deps WP-197. No migration. Measure (a) first; nothing executed. Serial after WP-197's merge and before WP-199 and WP-193 on `command-policy.ts`; parallel-safe with every other row. The union rule (written tokens **and** argv words, a match on either), a monotonicity property over the test file's own rows and a `tokenise(` census hold it. Added by § "Architect ruling (M11 second amendment, session 16)". Built on `main`, session 16; the orchestrator folded **584** (separate-value flags hiding a block entry) into it. The property found three more fail-opens of the class (`X=1 2>/dev/null $CMD`, `exec 2>&1 <<<'sudo id'; bash`, `2>/dev/null sudo 2>&1`), all fixed. **Two review rounds plus the orchestrator's re-probe**: R1 an unmemoised cubic value-skipping search (400 pairs 7 ms → 2.4 s; a model-written line could stall the hook) and a doubled per-line cost — made linear and gated on argv[0]; R2 module-level caches keyed by model text retained hundreds of MB (20 KB lines: 378 MB after 1 000) — scoped to one evaluation. Residuals stated: the `xargs` peel 1.7× slower on a 2 000-pair line; `> sudo id` reads `block`; nine leading redirections read uncertain. Orchestrator: `verify` **PASS** (13 737), `verify:integration` **PASS** (887), `verify:e2e` **PASS** twice (298 each); no container left, volumes 71; no probe line newly `auto`. CI on `6e07b948`: **PENDING**. |
 | WP-199 | **Scanner: the environment spelling of every `command`-kind floor is declared on the floor and uncertain wherever it stands, starting with npm's `EDITOR`, `VISUAL` and `BROWSER`** | TODO | — | Folds **583** (major, fail-open under `auto`: the environment half of 580; live wherever the image has npm) and the class it is one instance of — `MAKEFLAGS`, `GOFLAGS`, `PYTEST_ADDOPTS`, `RUSTC_WRAPPER`, `GIT_EDITOR` (read, not measured; (a) measures first). Deps WP-196, WP-197. No migration. Nothing executed. Serial after WP-198 and before WP-193 on `command-policy.ts`; parallel-safe with every other row. `HazardousArgument.environment` required for the `command` kind, the scan derived from it, a census that nothing is spelled twice; split clause for a verb's names, never for the field. Added by § "Architect ruling (M11 second amendment, session 16)". |
+| WP-200 | **Scanner: a git configuration key a run sets is inert by name or uncertain, `HOME` and `XDG_CONFIG_HOME` are the git boundary's, and git's pager names are read** | TODO | — | Folds **585** (major, fail-open under `auto`: a model-written program runs under an allowed git verb through `-c core.editor=…` or a planted global config; live in the stock image, nothing installed) and **586** (minor, unmeasured: `GIT_PAGER`/`PAGER` and three `environment: []` floors). Deps WP-198, WP-199. No migration. Measure (a) first; nothing executed. Serial after WP-199's merge on `unattended-commands.ts`, `command-policy.ts` and their test files, before WP-193; parallel-safe with every other row. The closed rule — three bands by key: guarded is the boundary, a short shipped inert list passes, every other key is uncertain, which is the rule `GIT_CONFIG_*` already has in its environment spelling — with `HOME`/`XDG_CONFIG_HOME`/`GIT_PAGER` on the boundary's environment pattern, `PAGER`/`MANPAGER` on npm's `--viewer` floor, and an inert-list census hold it. Added by § "Architect ruling (M11 third amendment, session 16)". |
 | WP-189 | **GitLab: a reply whose re-read fails after a successful POST is never re-posted** | DONE | `890f575b` | Folds **547** (minor, duplicate write). Deps WP-179, WP-184. No migration. Serial after WP-187. Built on `main`, session 16, beside the architect's M11 amendment (committed separately at `890f575b`'s parent). **One review round, APPROVE** with three minors: a dropped timeout residual restated and a fallback control added by the implementer; `paginate`'s quiet `maxPages` cut filed as 577 by the orchestrator. Canaries: implementer two, reviewer five (one survived, then given its control). Orchestrator: `verify` **PASS** (twice), `verify:integration` **PASS** (887), `verify:e2e` **PASS** twice (298 each); no container left, volumes 71. CI on `890f575b`: **PENDING**. |
 | WP-190 | **Every provider HTTP client bounds its response body in bytes** | TODO | — | Folds **548** (minor, hardening). No deps. No migration. Five clients, one reader, one census. Parallel-safe. |
 | WP-191 | **Every ticket comment the platform writes opens with its marker, and every marker is in the list** | TODO | — | Folds **546** (minor, latent while both adapters read `marker_id` back). No deps. No migration. Reads `upsertWorkpad`'s match first. Serial before WP-192 on `workpad.ts`. |
@@ -47589,6 +47590,91 @@ marked RESOLVED by this pass.
 
 **Next: WP-197's review**, then WP-198, then WP-199, then WP-190…WP-195 in their table order with
 WP-193 after WP-199.
+
+### Architect ruling (M11 third amendment, session 16) — two headings WP-199 filed, and the key list that was already a rule in its other spelling
+
+Written 2026-10-18 at `201ef2bc`, WP-198 DONE, WP-199 in review on the working tree, WP-190…WP-195
+TODO. This pass covers **585** and **586**, which WP-199's reviewer and implementer filed with no
+owner. No test tier and no Docker ran; the code was read on the working tree at the lines each entry
+cites (`packages/domain/src/policies/unattended-commands.ts:107-138`, `:331`, `:404-411`, `:450-468`,
+`:541-547`). 585 is **major, fail-open under `auto`, live in the stock image with nothing installed**;
+586 is **minor and unmeasured**. One row, **WP-200**, owns both, placed after WP-199 and before WP-189,
+serial after WP-199's merge on `unattended-commands.ts`, `command-policy.ts` and their test files, and
+WP-193 moves to serial after it. WP-199's row is not changed.
+
+**585: the `-c` spelling was a list while its environment spelling was already a rule.** The boundary
+reads a key a run sets in two places — `-c`/`--config-env`/attached `-c<key>` (`:450-468`, and
+`checkClone` at `:331`) and the `git config` write forms (`:404-411`) — and refuses only what
+`isGuardedGitConfigKey` names: ten sections and five `core.*` keys, chosen for *where git connects or
+what it runs*. git-config(1) documents more program-valued keys than 585's reading reached
+(`difftool.*.cmd`, `mergetool.*.cmd`, `browser.*.cmd`, `man.*.cmd`, `uploadpack.*`, `sendemail.*`),
+and the next one is the next heading: an override list is an enumeration (WP-75), and this session
+reopened every enumeration it kept (561, 575, 576, 580, 582, 583, now 585). Meanwhile the **environment**
+spelling of the same act is closed wholesale: `GIT_CONFIG(_[A-Z0-9_]+)?=` is refused as a prefix
+(`:138`), so `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.editor …` was always refused while
+`git -c core.editor=…` read `auto`. The row makes the two spellings one rule. **Three bands by key:**
+a guarded key stays the boundary, with its message, because the scanner knows what it does; a key on a
+**short, shipped, closed inert list** named from git-config(1) (`user.name`, `user.email`, `color.*`,
+`core.quotepath`, `core.abbrev`, `core.autocrlf`, `advice.*`, `init.defaultbranch`, `pull.rebase`,
+`pull.ff`, `rebase.autostash`, `merge.conflictstyle`, `diff.renames`, `status.showuntrackedfiles`,
+`log.date`) passes on the key alone — **a value is never read**, so `core.pager=cat` is not inert by
+its value (rule 65); **every other key is uncertain** under a named reason that says to write the
+command without it. `uncertain`, not the boundary, for WP-197 (b)'s reason: the boundary's message
+states what the key does, and for a key nobody read the scanner cannot — and under `auto` both are
+`deny` (BD-025's 2026-10-06 amendment, decision 2). The list fails closed in rule 65's shape: a key
+missing from it costs one refusal, never a run. **What holds the list:** a census that it is lower-case
+and disjoint from the guarded patterns, and a docblock admission test — no key whose documented value
+is a path, a program, a URL, a remote, a ref, a hook or an include — which is a reading at review and
+is stated as one. A project-declared widening is a BD-025 §2 question, the product owner's.
+
+**`HOME` and `XDG_CONFIG_HOME` are `GIT_CONFIG_GLOBAL` by another name.** Either assignment re-points
+git's global configuration at a file the run can choose, which is what `GIT_CONFIG_GLOBAL` does and
+what the pattern at `:137` already refuses; so both join it, read wherever it is read today. **The
+path guard is no answer**: it refuses the run *writing* `.gitconfig` or `git/config` (`:541-547`, read,
+not measured — (a) measures), but a repository may carry one, and `HOME=.` reads it. **Not scoped to a
+git line**, which the orchestrator's question allowed: `export HOME=.` in one call and `git diff` in
+the next (WP-199 (a)'s carry measurement, still open) and `HOME=. make test` where the Makefile runs
+git are the same door. **The over-ask, named:** `HOME=/tmp npm ci`, `HOME=$(mktemp -d) pnpm test`,
+`XDG_CONFIG_HOME=. some-tool` and a read that merely names one (`grep HOME= Dockerfile`, the Grep
+tool), each refused with the reason naming the variable; `echo $HOME` is not an assignment and keeps
+its cell. On the `-c` side: `git -c core.pager=cat log` (write `git --no-pager log`),
+`git -c safe.directory=* status`, `git -c commit.gpgsign=false commit -m x`,
+`git -c core.editor=true rebase --continue` and `git config core.filemode false`, each one refusal
+with the key named.
+
+**586 folds in, and the pager gets no floor.** Its `-c` half (`core.pager`, `pager.*`) is the rule
+above. For the environment half three placements were weighed. **(i) A `command`-kind floor on git's
+`-p`/`--paginate`** with `environment: ['GIT_PAGER', 'PAGER']`: `-p` names no program, so the floor
+would refuse `git -p log` for nothing — declined. **(ii) Both names on the boundary's environment
+pattern**: `GIT_PAGER` belongs there, a command git runs beside `GIT_SSH_COMMAND` and `GIT_ASKPASS`;
+`PAGER` is man's and npm's as much as git's, and 586 already wants it on npm's `--viewer` floor with
+`MANPAGER`. **(iii) Chosen: split by owner.** `GIT_PAGER` joins the boundary pattern whichever way the
+TTY measurement falls — git(1) documents `-p` as piping through it, closing it costs nothing, and if
+the image's git pages with no TTY the notes say so and the entry's severity is restated. `PAGER` and
+`MANPAGER` go on npm's `--viewer` floor, once; by WP-199's wherever-it-stands rule
+`PAGER='sh -c id' git log` is then uncertain too, the reason naming npm, and WP-199's census is not
+touched. The other two `environment: []` floors 586 (b) names declare their documented names —
+`--extcmd`: `GIT_DIFF_TOOL`; `-extld`: `CC`, `CXX`, `CGO_LDFLAGS`, because go reads them for cgo,
+which is the floor's own effect, and `CC=clang make` is the named over-ask — or carry (a)'s
+measurement at the entry in place of *needs measurement*; no `command`-kind entry keeps the bare
+phrase, which is WP-199's split clause closing.
+
+**What this does not close, stated.** A `.gitconfig` or `.git/config` the repository carries; a
+`core.hooksPath`, `filter.*` or `diff.external` written through repository content (WP-75's residual,
+unchanged); a key assembled at runtime (`expandedName` is uncertain already); `git -C <dir>` into a
+second checkout. Each is repository content or a program the sandbox bounds, which BD-025's WP-54
+amendment names as the boundary.
+
+**Decisions.** None amended. BD-025's 2026-10-06 amendment, decision 3, names the boundary's refusals
+by example (*"a guarded `-c`"*, *"`GIT_CONFIG_*`, `GIT_SSH_COMMAND`, …"*); the row adds three names
+to the environment list that decision names by example and a third verdict, `uncertain`, beside the
+boundary for a key nobody read, which decision 2 already defines. The enumeration 585's first option
+offers would have been a decision kept; the rule is the decision read in its other spelling.
+technical/05's git-boundary paragraph is WP-200 criterion (7). The next free migration stays
+**0092**; the row takes none. Nothing is marked RESOLVED by this pass.
+
+**Next: WP-199's review**, then WP-200, then WP-190…WP-195 in their table order with WP-193 after
+WP-200.
 
 ## WP notes — session 14 (M10)
 
