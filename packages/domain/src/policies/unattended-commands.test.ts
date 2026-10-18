@@ -2728,7 +2728,8 @@ describe('WP-198: the deny-direction readers read argv as the shell builds it, b
    */
   it('keeps no command text after a call returns (review round 2)', () => {
     for (let index = 0; index < 3; index += 1) {
-      const command = `echo ${'word '.repeat(4_000)}${index} > f${index}`;
+      // Long enough to be worth caching, short enough for a 2-core CI runner (4 000 words timed out).
+      const command = `echo ${'word '.repeat(400)}${index} > f${index}`;
       evaluateCommand({ command }, BASELINES.impl);
       expect(memoisedCommandTexts()).toBe(0);
       decideUnattendedCommand({ command }, BASELINES.impl, 'auto');
