@@ -182,7 +182,7 @@ interface StoredRemoteLink {
 const clone = <T>(value: T): T => structuredClone(value);
 
 /**
- * `labels = "agentic"` / `status = "In Review"` / `parent = "ACME-100"`, then the extras.
+ * `labels = "agentic"` / `status = "With reviewers"` / `parent = "ACME-100"`, then the extras.
  *
  * The leading parenthesis is the `kind: 'query'` form, which the adapter wraps so that a raw JQL
  * fragment cannot merge with the window clause it appends.

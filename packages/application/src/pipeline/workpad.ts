@@ -37,8 +37,9 @@
  * ## The status mapping is the project's vocabulary, not the platform's
  *
  * technical/12's `status_mapping` maps a **stage id or a task state** onto the provider's own
- * status name (`refinement: "In Refinement"`, `ready_for_merge: "In Review"`). The stage wins when
- * both match, because it is the more specific statement. A key nobody configured means "do not
+ * status name (`code_review: "Waiting for review"`, `ready_for_merge: "Reviewed"` — invented
+ * names: BD-031 ruling 1 assumes none). The stage wins when both match, because it is the more
+ * specific statement. A key nobody configured means "do not
  * transition" — not "guess": a wrong transition on somebody's board is worse than none, and
  * `transition` refuses a status the workflow does not have anyway (product/08).
  */

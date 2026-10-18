@@ -558,9 +558,10 @@ export const REVIEW_ONLY_TEMPLATE: PipelineTemplate = {
  *  - *"light"* lives in the stage defaults, and they are keyed by stage id. `refinement` is Opus 5,
  *    30 turns, a $2 cap; product/19 § 12 prices a lint at ~$0.10 (`STAGE_AGENT_DEFAULTS.ticket_lint`
  *    and `DEFAULT_STAGE_RUN_BUDGET_USD.ticket_lint` carry the derivation);
- *  - `status_mapping` is keyed by stage id too (technical/12's example maps `refinement` to *"In
- *    Refinement"*), and a linter that moved a human's ticket into the agent's workflow column would
- *    be doing the one thing product/18 level 0 promises it does not do.
+ *  - `status_mapping` is keyed by stage id too (technical/12's example maps `code_review` to
+ *    *"Waiting for review"*, an invented name), and a linter that moved a human's ticket into the
+ *    agent's workflow column would be doing the one thing product/18 level 0 promises it does not
+ *    do.
  *
  * The prompt is the Product Manager's with a narrower instruction rather than a variant file:
  * `STAGE_PROMPT_FOCUS.ticket_lint` (`packages/domain/src/prompt/assembly.ts`) is platform text the

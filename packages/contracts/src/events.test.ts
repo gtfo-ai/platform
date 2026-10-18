@@ -94,7 +94,7 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     task_id: TASK,
     ticket,
     from: 'To Do',
-    to: 'In Refinement',
+    to: 'Being shaped',
   },
   // WP-170: the claim, the release and the intake skip (TD-029 decision 5). Status names are
   // invented; an account id is the provider's opaque string.

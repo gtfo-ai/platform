@@ -160,7 +160,7 @@ runTaskManagementContract({
           Doing: 'in_progress',
           'Sent back': 'todo',
           Done: 'done',
-          'Waiting for input': 'unknown',
+          'Awaiting an answer': 'unknown',
         },
         assignElsewhere: async () => {
           binding.replay.assign(JIRA_TICKET.key, DEV_ACCOUNT_ID);
@@ -1193,9 +1193,9 @@ describe('jira-cloud — reaching the provider', () => {
       expect(statuses.filter((status) => status.name === 'Doing')).toEqual([
         { id: '10010', name: 'Doing', category: 'in_progress', raw_category: 'indeterminate' },
       ]);
-      expect(statuses.find((status) => status.name === 'Waiting for input')).toEqual({
+      expect(statuses.find((status) => status.name === 'Awaiting an answer')).toEqual({
         id: '10007',
-        name: 'Waiting for input',
+        name: 'Awaiting an answer',
         category: 'unknown',
         raw_category: null,
       });
@@ -1377,8 +1377,8 @@ describe('jira-cloud — every issue read parses what its `fields` asked for (ba
   });
 
   it('resolves a transition from a status-only read, and moves the ticket', async () => {
-    const result = await binding.port.transition(JIRA_TICKET, 'In Review');
-    expect(result).toMatchObject({ changed: true, to: 'In Review' });
+    const result = await binding.port.transition(JIRA_TICKET, 'With reviewers');
+    expect(result).toMatchObject({ changed: true, to: 'With reviewers' });
     expect(issueReads(binding.replay, 'ACME-1').map((request) => request.query.fields)).toEqual([
       'status',
     ]);
@@ -1397,7 +1397,7 @@ describe('jira-cloud — every issue read parses what its `fields` asked for (ba
 
   it('names its fields on every issue read and every search it makes', async () => {
     await binding.port.readTicket(JIRA_TICKET);
-    await binding.port.transition(JIRA_TICKET, 'In Review');
+    await binding.port.transition(JIRA_TICKET, 'With reviewers');
     await binding.port.setLabels(JIRA_TICKET, ['triaged'], []);
     await binding.port.matchTickets({ kind: 'label', label: JIRA_PICKUP_LABEL });
     await binding.port.unassign(JIRA_TICKET);

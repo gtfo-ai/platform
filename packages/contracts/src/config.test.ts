@@ -123,11 +123,10 @@ const DOC_EXAMPLE = {
     digest: { enabled: true, at: '09:00', quiet_hours: null },
   },
   status_mapping: {
-    refinement: 'In Refinement',
-    waiting_answers: 'Waiting for input',
-    implementation: 'In Progress',
-    ready_for_merge: 'In Review',
-    done: 'Done',
+    implementation: 'Doing',
+    code_review: 'Waiting for review',
+    ready_for_merge: 'Reviewed',
+    done: 'Finished',
   },
 };
 

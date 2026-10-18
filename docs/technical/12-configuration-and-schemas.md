@@ -189,12 +189,12 @@ features:
   maintenance: { enabled: false, schedule: "weekly", budget_usd: 20, chores: [deps, flaky, docs] }
   digest: { enabled: true, at: "09:00", quiet_hours: null, urgent: [escalation, budget_exhausted] }   # WP-32
   shadow_mode: { enabled: false }   # M3; added in WP-01 from product/18-19
-status_mapping:                  # task state -> ticket status name (provider-specific names)
-  refinement: "In Refinement"
-  waiting_answers: "Waiting for input"
-  implementation: "In Progress"
-  ready_for_merge: "In Review"
-  done: "Done"
+status_mapping:                  # stage id or task state -> the tracker's own status name; no default exists (BD-031 ruling 1), these names are invented
+  # superseded: when the binding's `lifecycle` block maps any slot other than pick-up, this block is not applied at all (TD-029 decision 3)
+  implementation: "Doing"
+  code_review: "Waiting for review"
+  ready_for_merge: "Reviewed"
+  done: "Finished"
 ```
 
 > **M10 head amendment (2026-10-08, BD-031 decided by the product owner, TD-029 decisions 1, 3 and 8).**

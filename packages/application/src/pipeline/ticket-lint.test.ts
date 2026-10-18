@@ -129,7 +129,7 @@ const lintHarness = (
               : {
                   version: 1,
                   features: { ticket_linter: { enabled: true } },
-                  status_mapping: { ticket_lint: 'In Refinement', done: 'Done' },
+                  status_mapping: { ticket_lint: 'Being shaped', done: 'Done' },
                 },
         }
       : {}),
@@ -160,7 +160,7 @@ const lintHarness = (
         },
         // A project that maps its stages **and** its states, so the ticket writes this mode must
         // not make are the ones a real project would have enabled.
-        status_mapping: { ticket_lint: 'In Refinement', done: 'Done' },
+        status_mapping: { ticket_lint: 'Being shaped', done: 'Done' },
       },
     },
     // The binding's own redactor, armed: a disarmed one proves nothing (standing rules 31, 35).

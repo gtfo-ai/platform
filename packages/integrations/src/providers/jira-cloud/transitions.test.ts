@@ -22,23 +22,23 @@ import type { JiraTransition } from './mapping.js';
 const TRANSITIONS: readonly JiraTransition[] = [
   // Atlassian's own example has a transition named "Close Issue" leading to "In Progress".
   { id: '11', name: 'Close Issue', to: { id: '3', name: 'In Progress' }, isAvailable: true },
-  { id: '21', name: 'In Progress', to: { id: '10005', name: 'In Review' } },
-  { id: '31', name: 'Park', to: { id: '10007', name: 'Waiting for input' }, isAvailable: false },
+  { id: '21', name: 'In Progress', to: { id: '10005', name: 'With reviewers' } },
+  { id: '31', name: 'Park', to: { id: '10007', name: 'Awaiting an answer' }, isAvailable: false },
 ];
 
 describe('resolveTransition', () => {
   it('matches the target **status**, not the transition name', () => {
     expect(resolveTransition(TRANSITIONS, 'In Progress')?.id).toBe('11');
     // "In Progress" is also the *name* of transition 21, which leads somewhere else entirely.
-    expect(resolveTransition(TRANSITIONS, 'In Review')?.id).toBe('21');
+    expect(resolveTransition(TRANSITIONS, 'With reviewers')?.id).toBe('21');
   });
 
   it('treats an omitted isAvailable as available, as Atlassian’s example does', () => {
-    expect(resolveTransition(TRANSITIONS, 'In Review')?.id).toBe('21');
+    expect(resolveTransition(TRANSITIONS, 'With reviewers')?.id).toBe('21');
   });
 
   it('does not offer a transition the workflow says is unavailable', () => {
-    expect(resolveTransition(TRANSITIONS, 'Waiting for input')).toBeNull();
+    expect(resolveTransition(TRANSITIONS, 'Awaiting an answer')).toBeNull();
   });
 
   it('compares status names case- and whitespace-insensitively', () => {
@@ -54,7 +54,7 @@ describe('resolveTransition', () => {
 
 describe('describeTargets', () => {
   it('names what the caller could have asked for, and hides what it could not', () => {
-    expect(describeTargets(TRANSITIONS)).toBe('"In Progress", "In Review"');
+    expect(describeTargets(TRANSITIONS)).toBe('"In Progress", "With reviewers"');
     expect(describeTargets([])).toBe('(none)');
   });
 });

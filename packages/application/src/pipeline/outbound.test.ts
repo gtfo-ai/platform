@@ -42,7 +42,7 @@ interface ProviderCalls {
 const harnessWith = (calls: ProviderCalls): PipelineHarness =>
   createPipelineHarness({
     projectId: PROJECT,
-    settings: { config: { status_mapping: { waiting_answers: 'Waiting for input' } } },
+    settings: { config: { status_mapping: { waiting_answers: 'Awaiting an answer' } } },
     runs: {
       refinement: {
         status: 'completed',

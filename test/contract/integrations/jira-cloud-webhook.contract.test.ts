@@ -519,7 +519,7 @@ describe('jira-cloud webhooks', () => {
 
     it('does not announce a match for a move to any other status', async () => {
       const byStatus = createJiraBinding({
-        config: { pickup_status: 'In Review', pickup_label: null },
+        config: { pickup_status: 'With reviewers', pickup_label: null },
       });
       const result = await byStatus.port.inbound.normalise(
         byStatus.replay.delivery('webhook-issue-updated-status.json'),

@@ -181,14 +181,14 @@ describe('renderWorkpad', () => {
 
 describe('mappedStatus', () => {
   const mapping = {
-    refinement: 'In Refinement',
-    waiting_answers: 'Waiting for input',
+    refinement: 'Being shaped',
+    waiting_answers: 'Awaiting an answer',
     done: 'Done',
   };
 
   it('prefers the stage over the state, because it is the more specific statement', () => {
-    expect(mappedStatus(mapping, 'waiting_answers', 'refinement')).toBe('In Refinement');
-    expect(mappedStatus(mapping, 'waiting_answers', null)).toBe('Waiting for input');
+    expect(mappedStatus(mapping, 'waiting_answers', 'refinement')).toBe('Being shaped');
+    expect(mappedStatus(mapping, 'waiting_answers', null)).toBe('Awaiting an answer');
     expect(mappedStatus(mapping, 'done', 'done')).toBe('Done');
   });
 
@@ -260,7 +260,7 @@ describe('the handlers', () => {
     const transitions: string[] = [];
     const harness = harnessFor({
       settings: {
-        config: { status_mapping: { refinement: 'In Refinement' } },
+        config: { status_mapping: { refinement: 'Being shaped' } },
       },
       taskManagement: {
         transition: (async (_ref: unknown, to: string) => {
@@ -271,7 +271,7 @@ describe('the handlers', () => {
     });
     await harness.publish([ticketMatched()]);
     // `intake` and `waiting_answers` are not mapped; `refinement` is.
-    expect(transitions).toEqual(['In Refinement']);
+    expect(transitions).toEqual(['Being shaped']);
   });
 
   it('leaves the ticket alone when the project has no mapping at all', async () => {
@@ -290,7 +290,7 @@ describe('the handlers', () => {
 
   it('writes both through the action executor, so every call is audited', async () => {
     const harness = harnessFor({
-      settings: { config: { status_mapping: { refinement: 'In Refinement' } } },
+      settings: { config: { status_mapping: { refinement: 'Being shaped' } } },
     });
     await harness.publish([ticketMatched()]);
     const actions = harness.audit.entries.map((entry) => entry.action);

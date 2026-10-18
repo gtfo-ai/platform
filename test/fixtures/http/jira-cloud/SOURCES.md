@@ -9,7 +9,7 @@ from it.
 | `evidence` | what it means |
 |---|---|
 | `documented` | Atlassian's own published example, with values replaced by obviously fake ones (BD-002) and members the adapter never reads removed. Nothing about the shape is ours. |
-| `documented-adapted` | The **shape** is Atlassian's published example; the **content** is this repository's scenario (the workflow of product/19 §6, the ticket the contract suite reads). A field that is present is a field Atlassian's example has. |
+| `documented-adapted` | The **shape** is Atlassian's published example; the **content** is this repository's scenario (an invented workflow — BD-031 ruling 1 assumes no status name, so none is a platform default — and the ticket the contract suite reads). A field that is present is a field Atlassian's example has. |
 | `composed` | Atlassian documents each part but publishes no complete example of this combination — the webhook envelope plus a comment, for instance. The file is the documented parts assembled, and the `note` says which sentence licenses each part. |
 | `inferred` | The shape is Atlassian's, but that **this** endpoint answers it is a reasoned guess the `note` states — WP-110's `error-issue-key-does-not-exist.json`, a Data Center knowledge-base answer assumed of Cloud's `search/jql`. |
 | `invented` | Nothing in the documentation states this shape. **There are no such files**, and adding one should be argued for in review rather than done quietly. |

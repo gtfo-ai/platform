@@ -179,8 +179,8 @@ has no id and does not follow a move.
 The platform never invents a status. It moves a ticket **by status name**, resolved against that
 project's own workflow at the moment of the move, and fails loudly if the workflow has no transition
 that leads there — a silently ignored transition looks exactly like a working mapping until someone
-opens the board. The defaults are in product/19 §6; anything your workflow does not have, leave
-unmapped and the platform will leave the ticket alone.
+opens the board. There is no default mapping (product/19 §6): every name is one you choose from your
+own workflow, and anything you leave unmapped the platform leaves alone.
 
 The **ticket lifecycle** (BD-031) is the binding's `lifecycle` block: `in_progress`, `in_review`,
 `approved`, `qa`, `returned` (a list) and `done`, each naming one of *your* statuses, plus `claim` and
