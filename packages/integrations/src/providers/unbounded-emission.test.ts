@@ -13,7 +13,7 @@
  * attached to the claim that `MAX_COMMENTS = 100` was "the shipped cap". **It was not a cap.** It
  * was `maxResults`, a *request* parameter, and nothing in the adapter refused a page that came back
  * larger. Since WP-83 the page is decided and enforced (`READ_TICKET_COMMENT_PAGE`, the newest
- * fifty), which the first assertion below demonstrates by returning two hundred comments and
+ * fifty), which the first assertion below demonstrates by returning sixty comments and
  * receiving fifty — a bound on how **many**, while every comment's text stays unbounded here.
  *
  * So the numbers live here, produced by the shipped code from the shipped defaults, and Q54 cites
@@ -101,8 +101,13 @@ afterAll(() => {
 const SITE = 'https://acme-example.atlassian.net';
 const KEY = 'ACME-1';
 
-/** Four times what the adapter asks for since WP-83, which is the point: the page is cut to size. */
-const COMMENTS_RETURNED = 200;
+/**
+ * More than the adapter asks for since WP-83, which is the point: the page is cut to size. It was
+ * two hundred until WP-190 (backlog 548): two hundred comments of two 128 KiB strings is a 52 MB
+ * answer, which the Jira client now refuses past `JIRA_MAX_RESPONSE_BYTES` (16 MiB) before the
+ * adapter sees it. Sixty is about 15.7 MB, under the ceiling and still ten past the page.
+ */
+const COMMENTS_RETURNED = 60;
 
 const adf = (text: string) => ({
   type: 'doc',
@@ -184,10 +189,10 @@ describe('one readTicket, with the provider hostile in every string it controls'
   /**
    * The correction Q54 needed, and since WP-83 the answer to it. Until then `maxResults=100` was a
    * request the adapter did not enforce: this case scripted two hundred comments and all two
-   * hundred were emitted. Now the page is decided — the newest `READ_TICKET_COMMENT_PAGE` (50),
+   * hundred were emitted (sixty since WP-190: see `COMMENTS_RETURNED`). Now the page is decided — the newest `READ_TICKET_COMMENT_PAGE` (50),
    * asked for with `orderBy=-created` — and a larger answer is cut to it.
    */
-  it('asks for the newest fifty comments and emits fifty of the two hundred it is given', () => {
+  it('asks for the newest fifty comments and emits fifty of the sixty it is given', () => {
     expect(READ_TICKET_COMMENT_PAGE).toBe(50);
     expect(
       seen.some(
@@ -220,7 +225,7 @@ describe('one readTicket, with the provider hostile in every string it controls'
       '$.title',
     ]);
     // Produced, not quoted (standing rule 39): Q54 cites this assertion rather than carrying a
-    // number of its own. It is the size of *this* document — two hundred comments of 128 KiB —
+    // number of its own. It is the size of *this* document — sixty comments of 128 KiB —
     // and it moves when the fixture moves, which is the property a quoted figure lacked.
     //
     // **It moved at WP-83, from 53 284 565, and the cause is re-derived rather than assumed** (rule
@@ -231,8 +236,11 @@ describe('one readTicket, with the provider hostile in every string it controls'
     // 1 then added `comment_total` (backlog 290): `,"comment_total":200` is exactly 20 bytes, which
     // is the whole move from 13 911 215. WP-134 (backlog 418) added the issue's stable id to the
     // ticket's reference: `,"id":"10001"` is exactly 13 bytes, the whole move from 13 911 235, and
-    // it is no new unbounded path — the adapter carries only 1–20 decimal digits there.
-    expect(bytesOf(JSON.stringify(ticket) ?? '')).toBe(13_911_248);
+    // it is no new unbounded path — the adapter carries only 1–20 decimal digits there. WP-190
+    // cut the scripted page from 200 to 60 comments (the Jira client's 16 MiB ceiling), and the
+    // only emitted byte that depends on it is `comment_total`: `60` is one digit shorter than `200`,
+    // the whole move from 13 911 248.
+    expect(bytesOf(JSON.stringify(ticket) ?? '')).toBe(13_911_247);
   });
 });
 

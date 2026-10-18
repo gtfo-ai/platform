@@ -19,6 +19,9 @@ import {
 import { httpUrlSchema } from '@platform/contracts';
 import * as z from 'zod';
 
+/** The schema maximum of `max_codeowners_bytes`; the HTTP client's ceiling derives from it (WP-190). */
+export const MAX_CODEOWNERS_BYTES_LIMIT = 4_194_304;
+
 /** Roles GitLab accepts for a project access token (protected_branches.md § "Valid access levels",
  * project_access_tokens.md § "Create a project access token"). */
 export const gitlabAccessLevelSchema = z.union([
@@ -162,7 +165,7 @@ export const gitlabConfigSchema = z.strictObject({
   /** Pages a bounded pager will follow before it stops and reports what it has. */
   max_pages: z.int().positive().max(100).default(10),
   /** Largest CODEOWNERS file the adapter will read, in bytes (BD-022: attacker-controlled). */
-  max_codeowners_bytes: z.int().positive().max(4_194_304).default(262_144),
+  max_codeowners_bytes: z.int().positive().max(MAX_CODEOWNERS_BYTES_LIMIT).default(262_144),
   /**
    * Whether this binding **polls** its merge requests (WP-110, technical/06 § "Inbound: webhooks
    * and polling") — off by default, and the switch an operator whose instance GitLab cannot reach

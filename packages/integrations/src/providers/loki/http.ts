@@ -42,12 +42,23 @@ import {
 } from '@platform/application';
 import type { JsonObject } from '@platform/contracts';
 import type { Clock } from '@platform/domain';
+import { readBoundedBody } from '../bounded-body.js';
+import { MAX_TOTAL_BYTES_LIMIT } from './config.js';
 import { LOKI_PROVIDER_ID } from './logql.js';
 
 export { LOKI_PROVIDER_ID };
 
 /** The prefix every documented query endpoint sits under. */
 export const LOKI_API_BASE = '/loki/api/v1';
+
+/**
+ * The largest body this client reads (WP-190, backlog 548): **64 MiB**, refused past it rather
+ * than cut — four times the 16 MiB schema maximum of `max_total_bytes` (`config.ts`), the cap on
+ * the whole result of a query. Four, for the labels repeated per stream, the timestamps, and JSON
+ * escaping. A result whose lines the adapter would have cut at `max_line_bytes` is refused once
+ * the raw answer passes it: a single line past 64 MiB is an `invalid_response`, not a cut line.
+ */
+export const LOKI_MAX_RESPONSE_BYTES = 4 * MAX_TOTAL_BYTES_LIMIT;
 
 export type LokiFetch = (url: string, init: LokiRequestInit) => Promise<Response>;
 
@@ -238,7 +249,14 @@ export const createLokiHttp = (options: LokiHttpOptions): LokiHttp => ({
       );
     }
 
-    const text = await response.text();
+    const text = await readBoundedBody(response, {
+      provider: LOKI_PROVIDER_ID,
+      ceilingBytes: LOKI_MAX_RESPONSE_BYTES,
+      host: new URL(options.baseUrl).host,
+      what: `GET ${spec.path}`,
+      action: spec.action,
+      overflow: response.status >= 200 && response.status < 300 ? 'refuse' : 'drop',
+    });
     const responseHeaders = headersToRecord(response.headers);
     if (response.status === 429) {
       throw new IntegrationRateLimitedError(LOKI_PROVIDER_ID, `GET ${spec.path} was rate limited`, {

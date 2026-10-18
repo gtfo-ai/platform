@@ -43,7 +43,9 @@
  *        is not a substring of the raw text, and because everything the adapter maps is derived
  *        from it. This pass is what puts redaction strictly *before* every cap downstream:
  *        `getJobLog`'s 1 MiB tail and `readCodeowners`'s byte bound both cut text that has already
- *        been through it, so a cut can never leave a fragment of a credential behind;
+ *        been through it, so a cut can never leave a fragment of a credential behind. The one cut
+ *        *before* it is the transport's own job-trace tail ({@link JOB_LOG_TAIL_BYTES}, WP-190),
+ *        and it is sized so that `getJobLog`'s cut discards whatever it split;
  *      - the **response headers**, name and value, because `GitLabResponse.headers` leaves this
  *        module and a header is the one place a webhook secret genuinely travels (`X-Gitlab-Token`
  *        *is* the secret token). Nothing emits them to a caller today — `paginate` reads
@@ -81,8 +83,35 @@ import {
   type SecretRedactor,
 } from '@platform/application';
 import type { JsonObject } from '@platform/contracts';
+import { readBodyTail, readBoundedBody } from '../bounded-body.js';
+import { MAX_CODEOWNERS_BYTES_LIMIT } from './config.js';
 
 export const GITLAB_PROVIDER_ID = 'gitlab';
+
+/**
+ * The largest body this client reads (WP-190, backlog 548): **16 MiB**, four times the 4 MiB
+ * schema maximum of `max_codeowners_bytes` (`config.ts`) — the largest body the adapter keeps
+ * whole. Four, because the kept text arrives inside a document that also carries what the adapter
+ * drops, and JSON escaping grows a capped field (a quote or a backslash doubles, a character
+ * measured in UTF-16 code units is up to three UTF-8 bytes). Past it a read is **refused**
+ * (`ProviderResponseTooLargeError`), never cut. Applies per page of a paginated list.
+ */
+export const GITLAB_MAX_RESPONSE_BYTES = 4 * MAX_CODEOWNERS_BYTES_LIMIT;
+
+/** What `getJobLog` keeps of a trace (`provider.ts`): a tail in UTF-16 code units of the redacted text. */
+export const MAX_JOB_LOG_TAIL_BYTES = 1_048_576;
+
+/**
+ * The job trace is the one read that keeps a tail instead of refusing (WP-190 ruling (a)): the
+ * transport keeps the trace's last **4 MiB** — four times {@link MAX_JOB_LOG_TAIL_BYTES} — and
+ * drops the rest unread into memory. Four, so that the port's own cut always lands strictly inside
+ * this one: `getJobLog` keeps at most 1 Mi UTF-16 code units, which is at most 3 MiB of UTF-8, so at
+ * least 1 MiB at the head of the transport's tail is discarded again — and with it any fragment of
+ * a credential the byte cut split before redaction could see it whole. The residual: a tail whose
+ * redaction *shrinks* it by more than 1 MiB (a megabyte of a configured secret's occurrences) could
+ * let the port's tail reach back to the byte cut.
+ */
+export const JOB_LOG_TAIL_BYTES = 4 * MAX_JOB_LOG_TAIL_BYTES;
 
 /**
  * The subset of `fetch` this client uses. Deliberately structural: `globalThis.fetch` satisfies
@@ -161,6 +190,12 @@ export interface GitLabRequestSpec {
    * the proof). A `429` is never an answer: the executor owns the backoff.
    */
   readonly answerStatuses?: readonly number[];
+  /**
+   * Keep the body's last {@link JOB_LOG_TAIL_BYTES} instead of refusing past
+   * {@link GITLAB_MAX_RESPONSE_BYTES} (WP-190). The job trace sets it, and nothing else may
+   * (`response-ceiling.test.ts`).
+   */
+  readonly keepTail?: true;
 }
 
 export interface GitLabResponse<TBody> {
@@ -348,11 +383,22 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
     if (response.status === 404 && spec.notFoundIsNull === true) {
       return null;
     }
-    const text = await response.text();
-    if (
+    const host = new URL(options.baseUrl).host;
+    const answered =
       (response.status >= 200 && response.status < 300) ||
-      (response.status !== 429 && spec.answerStatuses?.includes(response.status) === true)
-    ) {
+      (response.status !== 429 && spec.answerStatuses?.includes(response.status) === true);
+    const text =
+      spec.keepTail === true
+        ? (await readBodyTail(response, JOB_LOG_TAIL_BYTES)).text
+        : await readBoundedBody(response, {
+            provider: GITLAB_PROVIDER_ID,
+            ceilingBytes: GITLAB_MAX_RESPONSE_BYTES,
+            host,
+            what: `${spec.method} ${spec.path}`,
+            action: spec.action,
+            overflow: answered ? 'refuse' : 'drop',
+          });
+    if (answered) {
       return { response, text };
     }
     if (response.status === 429) {
@@ -414,7 +460,9 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
       // Property 4 on the text endpoints — the job trace and the raw file. It is the *only* pass
       // they get, and it runs here rather than at the caller so that it precedes the caller's cut:
       // `getJobLog` keeps a 1 MiB tail and `readCodeowners` keeps `max_codeowners_bytes`, and a
-      // cut applied to unredacted text leaves the leading bytes of a credential behind.
+      // cut applied to unredacted text leaves the leading bytes of a credential behind. (The
+      // transport's job-trace tail is a byte cut before this pass; `JOB_LOG_TAIL_BYTES` says why
+      // `getJobLog`'s cut always discards what it split.)
       body: redactText(spec.action, result.text),
       headers: redactedHeaders(spec.action, result.response.headers),
     };

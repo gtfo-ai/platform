@@ -51,8 +51,18 @@ import {
 } from '@platform/application';
 import type { JsonObject } from '@platform/contracts';
 import type { Clock } from '@platform/domain';
+import { readBoundedBody } from '../bounded-body.js';
+import { MAX_STACK_TRACE_BYTES_LIMIT } from './config.js';
 
 export const SENTRY_PROVIDER_ID = 'sentry';
+
+/**
+ * The largest body this client reads (WP-190, backlog 548): **16 MiB**, refused past it rather
+ * than cut — four times the 4 MiB schema maximum of `max_stack_trace_bytes` (`config.ts`), the
+ * largest byte cap the Sentry adapter applies to one event. Four, for the rest of the event
+ * document around the trace (breadcrumbs, tags, contexts the mapping drops) and JSON escaping.
+ */
+export const SENTRY_MAX_RESPONSE_BYTES = 4 * MAX_STACK_TRACE_BYTES_LIMIT;
 
 /** The `/api/0` prefix every documented Sentry endpoint sits under. */
 export const SENTRY_API_BASE = '/api/0';
@@ -250,7 +260,14 @@ export const createSentryHttp = (options: SentryHttpOptions): SentryHttp => {
     if (response.status === 404 && spec.notFoundIsNull === true) {
       return null;
     }
-    const text = await response.text();
+    const text = await readBoundedBody(response, {
+      provider: SENTRY_PROVIDER_ID,
+      ceilingBytes: SENTRY_MAX_RESPONSE_BYTES,
+      host: new URL(options.baseUrl).host,
+      what: `${spec.method} ${spec.path}`,
+      action: spec.action,
+      overflow: response.status >= 200 && response.status < 300 ? 'refuse' : 'drop',
+    });
     const responseHeaders = headersToRecord(response.headers);
     if (response.status === 429) {
       throw new IntegrationRateLimitedError(

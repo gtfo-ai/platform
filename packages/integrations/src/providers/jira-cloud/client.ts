@@ -72,6 +72,7 @@ import {
 } from '@platform/application';
 import type { JsonObject } from '@platform/contracts';
 import ky, { type KyInstance } from 'ky';
+import { readBoundedBody } from '../bounded-body.js';
 import { jiraErrorCollectionSchema, PROVIDER_ID } from './mapping.js';
 
 export type QueryValue = string | number | boolean | undefined | null;
@@ -122,6 +123,16 @@ export interface JiraClientOptions {
 }
 
 export const DEFAULT_TIMEOUT_MS = 20_000;
+
+/**
+ * The largest body this client reads (WP-190, backlog 548): **16 MiB**, refused past it rather
+ * than cut. The Jira adapter applies **no byte cap of its own** — its bounds are counts (page
+ * sizes, `MAX_TICKET_STATUSES`), and the ticket text's caps are the ticket snapshot's, in
+ * characters — so it takes the figure the GitLab and Sentry clients derive from their largest
+ * downstream cap (4 MiB, times four for the document around it and JSON escaping) rather than
+ * invent a third. A search page of fifty issues with their descriptions is far below it.
+ */
+export const JIRA_MAX_RESPONSE_BYTES = 4 * 4_194_304;
 
 export const basicAuthHeader = (email: string, apiToken: string): string =>
   `Basic ${Buffer.from(`${email}:${apiToken}`, 'utf8').toString('base64')}`;
@@ -283,7 +294,15 @@ export const createJiraClient = (options: JiraClientOptions): JiraClient => {
       );
     }
 
-    const text = await response.text();
+    const text = await readBoundedBody(response, {
+      provider: PROVIDER_ID,
+      ceilingBytes: JIRA_MAX_RESPONSE_BYTES,
+      host: new URL(options.siteUrl).host,
+      what: `${request.method} ${request.path}`,
+      action: request.action,
+      // An error body past the ceiling is dropped, so the status keeps its classification.
+      overflow: response.ok ? 'refuse' : 'drop',
+    });
     let parsed: unknown;
     try {
       // A parse failure is swallowed rather than reported: a `SyntaxError` quotes the input it

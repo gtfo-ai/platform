@@ -686,6 +686,7 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
         path: `/projects/${encodeProjectId(project)}/jobs/${jobId}/trace`,
         action: 'get_job_log',
         notFoundIsNull: true,
+        keepTail: true,
       });
       return response === null ? null : response.body;
     },

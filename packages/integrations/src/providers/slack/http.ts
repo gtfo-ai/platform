@@ -49,8 +49,19 @@ import {
   type SecretRedactor,
 } from '@platform/application';
 import type { JsonObject } from '@platform/contracts';
+import { readBoundedBody } from '../bounded-body.js';
+import { MAX_DELIVERY_BYTES_LIMIT } from './config.js';
 
 export const SLACK_PROVIDER_ID = 'slack';
+
+/**
+ * The largest body this client reads (WP-190, backlog 548): **16 MiB**, refused past it rather
+ * than cut — four times the 4 MiB schema maximum of `max_delivery_bytes` (`config.ts`), the one
+ * byte cap the Slack adapter applies. A Web API answer carries the same documents a delivery does
+ * (a message, a user, a channel), so it is held to the delivery's bound, times four for the
+ * envelope and JSON escaping.
+ */
+export const SLACK_MAX_RESPONSE_BYTES = 4 * MAX_DELIVERY_BYTES_LIMIT;
 
 /**
  * The subset of `fetch` this client uses. Structural on purpose: `globalThis.fetch` satisfies it,
@@ -302,7 +313,14 @@ export const createSlackHttp = (options: SlackHttpOptions): SlackHttp => ({
         retryAfterMs: parseRetryAfterMs(response.headers.get('retry-after'), Date.now()),
       });
     }
-    const text = await response.text();
+    const text = await readBoundedBody(response, {
+      provider: SLACK_PROVIDER_ID,
+      ceilingBytes: SLACK_MAX_RESPONSE_BYTES,
+      host: new URL(options.baseUrl).host,
+      what: spec.method,
+      action: spec.action,
+      overflow: response.status >= 200 && response.status < 300 ? 'refuse' : 'drop',
+    });
     if (response.status < 200 || response.status >= 300) {
       // The body is deliberately absent from the message: a Slack error body echoes the request.
       throw new IntegrationError(

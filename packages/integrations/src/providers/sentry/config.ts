@@ -29,6 +29,9 @@ const slugSchema = z
   .string()
   .regex(/^[a-z0-9][a-z0-9._-]*$/, 'expected a Sentry slug such as "acme-example"');
 
+/** The schema maximum of `max_stack_trace_bytes`; the HTTP client's ceiling derives from it (WP-190). */
+export const MAX_STACK_TRACE_BYTES_LIMIT = 4_194_304;
+
 export const sentryConfigSchema = z.strictObject({
   /**
    * `https://sentry.io`, a regional host, or the root of a self-hosted instance. The adapter
@@ -72,7 +75,7 @@ export const sentryConfigSchema = z.strictObject({
   /** Frames kept from the innermost end of a stack trace; the rest are dropped with a marker. */
   max_stack_frames: z.int().positive().max(1000).default(50),
   /** Bytes kept of the rendered stack trace, after redaction. */
-  max_stack_trace_bytes: z.int().positive().max(4_194_304).default(65_536),
+  max_stack_trace_bytes: z.int().positive().max(MAX_STACK_TRACE_BYTES_LIMIT).default(65_536),
   /** Breadcrumbs kept, newest last; the rest are dropped with a marker crumb. */
   max_breadcrumbs: z.int().positive().max(1000).default(25),
   /** Bytes kept of one breadcrumb message. */

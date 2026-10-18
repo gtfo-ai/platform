@@ -147,6 +147,7 @@ import {
   GITLAB_PROVIDER_ID,
   type GitLabFetch,
   type GitLabResponse,
+  MAX_JOB_LOG_TAIL_BYTES,
 } from './http.js';
 import { normaliseGitLabDelivery } from './inbound.js';
 import {
@@ -218,8 +219,6 @@ export interface GitLabProvider extends GitProviderPort {
   /** The instance's version string and edition, for the health panel and the setup guide. */
   instanceVersion(): Promise<{ readonly version: string; readonly enterprise: boolean }>;
 }
-
-const MAX_JOB_LOG_TAIL_BYTES = 1_048_576;
 
 const identityOf = (user: {
   id: number;

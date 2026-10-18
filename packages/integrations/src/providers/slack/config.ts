@@ -31,6 +31,9 @@ const channelSchema = z
   .min(1)
   .regex(/^[^\s]+$/, 'expected a channel id (C0123456789) or a name (#agentic), with no spaces');
 
+/** The schema maximum of `max_delivery_bytes`; the HTTP client's ceiling derives from it (WP-190). */
+export const MAX_DELIVERY_BYTES_LIMIT = 4_194_304;
+
 export const slackConfigSchema = z.strictObject({
   /**
    * The Web API root. Overridden only by the replay transport and by a proxy; a base URL that
@@ -107,7 +110,7 @@ export const slackConfigSchema = z.strictObject({
    * A message's text is attacker-controlled in a public channel (BD-022), and `JSON.parse` of an
    * unbounded string is the cheapest denial of service there is.
    */
-  max_delivery_bytes: z.int().positive().max(4_194_304).default(262_144),
+  max_delivery_bytes: z.int().positive().max(MAX_DELIVERY_BYTES_LIMIT).default(262_144),
   /** Reconnect backoff for Socket Mode, on the executor's injected timer — never a wall clock. */
   socket_reconnect_base_ms: z.int().positive().max(60_000).default(1_000),
   socket_reconnect_max_ms: z.int().positive().max(600_000).default(30_000),

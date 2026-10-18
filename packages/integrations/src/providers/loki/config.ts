@@ -41,6 +41,9 @@ const isStreamSelector = (value: string): boolean => {
   }
 };
 
+/** The schema maximum of `max_total_bytes`; the HTTP client's ceiling derives from it (WP-190). */
+export const MAX_TOTAL_BYTES_LIMIT = 16_777_216;
+
 export const lokiAuthModeSchema = z.enum(['none', 'bearer', 'basic']);
 
 export const lokiConfigSchema = z.strictObject({
@@ -113,7 +116,7 @@ export const lokiConfigSchema = z.strictObject({
    * the review's third blocker: counting `line` alone let a 2 MB label value across 20 lines
    * produce a 42,002,998-byte `LogQueryResult` reporting `truncated: false`.
    */
-  max_total_bytes: z.int().positive().max(16_777_216).default(1_048_576),
+  max_total_bytes: z.int().positive().max(MAX_TOTAL_BYTES_LIMIT).default(1_048_576),
   /**
    * Bytes kept of one label **name** and of one label **value**, wherever a label is emitted:
    * `queryRange` copies the stream's label set onto every line, and `labels`/`series` publish the
