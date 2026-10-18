@@ -83,7 +83,10 @@ describe('classifyTicketComment', () => {
     'refuses the platform’s own comment, which opens with %s, even when it is triggered',
     (marker) => {
       expect(
-        verified(`${marker}0199a0b0-1111-7000-8000-000000000001\n@agentic ask what is going on?`),
+        verified(
+          // `agentic:linter` has no parameter, so it is written alone (WP-191 review round 1).
+          `${marker.endsWith(':') ? `${marker}0199a0b0-1111-7000-8000-000000000001` : marker}\n@agentic ask what is going on?`,
+        ),
       ).toEqual({ kind: 'not_an_ask', reason: 'platform_comment' });
     },
   );

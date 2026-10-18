@@ -161,6 +161,10 @@ export const LINT_COMMENT_MARKER = '<!-- agentic:linter -->';
  * arrives as the adapter's own `[agentic:marker:agentic:linter]` paragraph. product/19 § 17 names
  * the first spelling and BD-023's convention is the second; the comment carries both rather than
  * this work package choosing which document to contradict.
+ *
+ * Since WP-191 (backlog 546) the id also **opens the body**, ahead of product/19's spelling on the
+ * same first line, and it is one of `PLATFORM_COMMENT_MARKERS` — so on a provider that does not read
+ * `marker_id` back the body alone is the platform's (TD-029 decision 6).
  */
 export const LINT_COMMENT_MARKER_ID = 'agentic:linter';
 
@@ -256,7 +260,9 @@ export const renderLintComment = (input: LintCommentInput): string => {
     .slice(0, MAX_LINT_QUESTIONS)
     .map((question) => `- ${cut(question, MAX_LINT_QUESTION_CHARS)}`);
   return [
-    LINT_COMMENT_MARKER,
+    // The marker id opens the body (WP-191, backlog 546; TD-029 decision 6) and product/19 § 17's
+    // spelling follows it on the same line, so the comment stays inside its ten lines.
+    `${LINT_COMMENT_MARKER_ID} ${LINT_COMMENT_MARKER}`,
     `**Agent readiness: ${input.readiness.score}/100** — ${missing}.`,
     '',
     ...(questions.length === 0

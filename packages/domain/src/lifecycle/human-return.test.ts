@@ -44,6 +44,9 @@ const input = (overrides: Partial<HumanReturnInput>): HumanReturnInput => ({
 const word = (form: HumanWordForm, text: string, at = AFTER): HumanWord => ({ form, text, at });
 
 const HUMAN_STAGES = ['qa', 'ready_for_merge'] as const;
+
+/** A marker as the platform writes it: a parameterised one with an id, `agentic:linter` alone. */
+const written = (marker: string): string => (marker.endsWith(':') ? `${marker}t1` : marker);
 const WORD_FORMS: readonly HumanWordForm[] = ['mr_diff', 'mr_note', 'ticket_comment'];
 
 describe('humanReturnDecision (WP-174 criterion 6)', () => {
@@ -354,8 +357,8 @@ describe('isPlatformWord — by marker, never by author (TD-029 decision 6)', ()
       expect.arrayContaining(['agentic:claim-refused:', 'agentic:reply:']),
     );
     for (const marker of PLATFORM_COMMENT_MARKERS) {
-      expect(isPlatformWord(word('ticket_comment', `${marker}t1\ntext`))).toBe(true);
-      expect(isPlatformWord(word('ticket_comment', `  ${marker}t1 text`))).toBe(true);
+      expect(isPlatformWord(word('ticket_comment', `${written(marker)}\ntext`))).toBe(true);
+      expect(isPlatformWord(word('ticket_comment', `  ${written(marker)} text`))).toBe(true);
     }
     expect(isPlatformWord(word('ticket_comment', 'a person’s comment'))).toBe(false);
   });
@@ -367,18 +370,86 @@ describe('isPlatformWord — by marker, never by author (TD-029 decision 6)', ()
   it.each(PLATFORM_COMMENT_MARKERS)(
     '(15) reads a ticket marker %s only at the start, so a quoting person still returns the task',
     (marker) => {
-      const quoting = `> ${marker}t1\n> **Asked and answered**\n\nplease rename X`;
+      const quoting = `> ${written(marker)}\n> **Asked and answered**\n\nplease rename X`;
       expect(isPlatformWord(word('ticket_comment', quoting))).toBe(false);
-      expect(isPlatformWord(word('ticket_comment', `please rename X — ${marker}t1`))).toBe(false);
+      expect(isPlatformWord(word('ticket_comment', `please rename X — ${written(marker)}`))).toBe(
+        false,
+      );
       for (const stage of HUMAN_STAGES) {
         expect(
           humanReturnDecision(input({ stage, words: [word('ticket_comment', quoting)] })).kind,
         ).toBe('return');
         expect(
           humanReturnDecision(
-            input({ stage, words: [word('ticket_comment', `${marker}t1\nplease rename X`)] }),
+            input({
+              stage,
+              words: [word('ticket_comment', `${written(marker)}\nplease rename X`)],
+            }),
           ).kind,
         ).toBe('none');
+      }
+    },
+  );
+
+  /**
+   * WP-191 criterion (2), backlog 546: the four ticket bodies that once carried their marker only
+   * as the provider's `marker_id` open with it in the body, so with **no** `marker_id` each is still
+   * the platform's. The first lines are the renderers' shapes (`platform-marker-census.test.ts`
+   * renders the real bodies in the application ring, which this ring cannot import).
+   */
+  const TASK = '0199a0b0-1111-7000-8000-0000000191a1';
+  const FOUR_BODIES = [
+    { name: 'the workpad', body: `agentic:task:${TASK}\n**ACME-1** — running (implementation)` },
+    {
+      name: 'the linter’s comment',
+      body: 'agentic:linter <!-- agentic:linter -->\n**Agent readiness: 45/100** — missing: scope boundaries.',
+    },
+    {
+      name: 'the spike report',
+      body: `agentic:spike-report:${TASK}:1\n# Spike: ACME-1\n\n**Question**: which store?`,
+    },
+    {
+      name: 'the claim refusal',
+      body: `agentic:claim-refused:${TASK}\nThe agent did not start work on this ticket: it is assigned to somebody else.`,
+    },
+  ] as const;
+
+  it('(WP-191) reads a person’s comment that opens with a word extending `agentic:linter` as a person’s', () => {
+    for (const text of ['agentic:linterX is noisy', 'agentic:linters are noisy\nplease stop']) {
+      const person: HumanWord = { form: 'ticket_comment', text, at: AFTER, markerId: null };
+      expect(isPlatformWord(person)).toBe(false);
+      for (const stage of HUMAN_STAGES) {
+        expect(humanReturnDecision(input({ stage, words: [person] })).kind).toBe('return');
+      }
+    }
+    // The delimited spellings are still the platform's.
+    for (const text of [
+      'agentic:linter',
+      'agentic:linter\nx',
+      'agentic:linter <!-- agentic:linter -->',
+    ]) {
+      expect(isPlatformWord({ form: 'ticket_comment', text, at: AFTER, markerId: null })).toBe(
+        true,
+      );
+    }
+  });
+
+  it.each(FOUR_BODIES)(
+    '(WP-191) reads $name as the platform’s with no marker_id, and a person quoting its marker on the second line as a person',
+    ({ body }) => {
+      const bare: HumanWord = { form: 'ticket_comment', text: body, at: AFTER, markerId: null };
+      expect(isPlatformWord(bare)).toBe(true);
+      const [marker] = body.split(/\s/, 1);
+      const quoting: HumanWord = {
+        form: 'ticket_comment',
+        text: `please rename X\n${marker} was the platform's`,
+        at: AFTER,
+        markerId: null,
+      };
+      expect(isPlatformWord(quoting)).toBe(false);
+      for (const stage of HUMAN_STAGES) {
+        expect(humanReturnDecision(input({ stage, words: [bare] })).kind).toBe('none');
+        expect(humanReturnDecision(input({ stage, words: [quoting] })).kind).toBe('return');
       }
     },
   );

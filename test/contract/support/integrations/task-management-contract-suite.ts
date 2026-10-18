@@ -527,6 +527,32 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
         expect(workpad?.marker_id).toBe(WORKPAD_MARKER);
       });
 
+      /**
+       * WP-191 (backlog 546): the platform's workpad body opens with its marker too, so the body
+       * alone is the platform's on a provider that does not read `marker_id` back. The port keys the
+       * comment on the marker it is **passed**, never on the body: the second upsert edits the first,
+       * and a comment somebody typed with the same first line and no marker is never adopted.
+       */
+      it('matches the workpad by its marker when the body opens with that marker too (WP-191)', async () => {
+        const marker = 'agentic:task:00000000-0000-4000-8000-000000000191';
+        const typed = await port.addComment(context.ticket, `${marker}\nTyped by a person`);
+        const before = (await port.readTicket(context.ticket)).comments.length;
+        const first = await port.upsertWorkpad(context.ticket, marker, `${marker}\nWorkpad v1`);
+        const second = await port.upsertWorkpad(context.ticket, marker, `${marker}\nWorkpad v2`);
+
+        expect(first.comment_id).not.toBe(typed.comment_id);
+        expect(second.comment_id).toBe(first.comment_id);
+        const after = await port.readTicket(context.ticket);
+        expect(after.comments.length).toBe(before + 1);
+        const workpad = after.comments.find((comment) => comment.id === first.comment_id);
+        expect(workpad?.marker_id).toBe(marker);
+        expect(workpad?.body.trimStart().startsWith(marker)).toBe(true);
+        expect(workpad?.body).toContain('Workpad v2');
+        expect(workpad?.body).not.toContain('Workpad v1');
+        const untouched = after.comments.find((comment) => comment.id === typed.comment_id);
+        expect(untouched?.body).toContain('Typed by a person');
+      });
+
       it('adds a new comment every time, so a question notifies', async () => {
         const before = (await port.readTicket(context.ticket)).comments.length;
         const first = await port.addComment(context.ticket, 'Question 1');

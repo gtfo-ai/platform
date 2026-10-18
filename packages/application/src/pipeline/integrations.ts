@@ -1376,6 +1376,8 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
     if (binding === null || !namesAProviderTicket(ticket)) {
       return null;
     }
+    // The body opens with the marker too (WP-191); the port still keys the comment on `markerId`.
+    assertOpensWithMarker('ticket', markdown, 'upsert_workpad');
     return mutate(
       integrations,
       binding.ref,
@@ -1443,6 +1445,7 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
       return null;
     }
     const redacted = binding.redactor.redactText(markdown).value;
+    assertOpensWithMarker('ticket', redacted, 'add_comment');
     return mutate(
       integrations,
       binding.ref,
@@ -1491,6 +1494,7 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
       return null;
     }
     const redacted = binding.redactor.redactText(markdown).value;
+    assertOpensWithMarker('ticket', redacted, 'add_comment');
     return mutate(
       integrations,
       binding.ref,
@@ -1539,6 +1543,7 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
       return null;
     }
     const redacted = binding.redactor.redactText(markdown).value;
+    assertOpensWithMarker('ticket', redacted, 'add_comment');
     return mutate(
       integrations,
       binding.ref,
@@ -1739,6 +1744,7 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
       return null;
     }
     const redacted = binding.redactor.redactText(markdown).value;
+    assertOpensWithMarker('ticket', redacted, 'add_comment');
     return mutate(
       integrations,
       binding.ref,
@@ -1806,8 +1812,9 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
 /**
  * **A note the platform posts opens with its marker, or it is not posted** (WP-179, TD-029
  * decision 6: *"every platform write path opens its body with a marker"*). Asked of the redacted
- * body — what is sent — by every merge-request note write (`reviewWrites.thread`, `reply`) and by
- * the ticket reply; `platform-marker-census.test.ts` holds the renderers to the same rule, so this is
+ * body — what is sent — by every merge-request note write (`reviewWrites.thread`, `reply`) and,
+ * since WP-191, by every ticket comment write in `ticketWrites` (the workpad, the lint, the ask
+ * mirror, the spike report, the claim refusal and the reply); `platform-marker-census.test.ts` holds the renderers to the same rule, so this is
  * the backstop for a caller that renders by hand. A refusal throws before the executor is reached:
  * no provider call and no audit row, because nothing was attempted.
  */

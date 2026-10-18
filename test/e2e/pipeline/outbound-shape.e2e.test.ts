@@ -154,13 +154,14 @@ describe('when the same wake-up is delivered twice', () => {
     // measurement if nothing else is still rendering. `ready_for_merge` is where the pipeline stops
     // until a human merges, and the render of *that* state is the last outbound job it enqueues.
     await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
-    await pipeline.waitFor(
-      'the workpad rendered for ready_for_merge',
-      async () =>
-        pipeline.tickets
-          .peek('ACME-1')
-          ?.comments[0]?.body.startsWith('**ACME-1** — ready_for_merge') === true,
-    );
+    await pipeline.waitFor('the workpad rendered for ready_for_merge', async () => {
+      // Line 1 is the workpad's marker since WP-191; the header is the line after it.
+      const [marker, header] = pipeline.tickets.peek('ACME-1')?.comments[0]?.body.split('\n') ?? [];
+      return (
+        /^agentic:task:[0-9a-f-]{36}$/.test(marker ?? '') &&
+        header?.startsWith('**ACME-1** — ready_for_merge') === true
+      );
+    });
 
     // The wake-up the workpad handler enqueued for `task.created`, rebuilt from the event log
     // rather than from pg-boss's own tables: the same duty, the same task, the same cause. That is

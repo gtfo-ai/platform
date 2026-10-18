@@ -299,18 +299,26 @@ describe('the budget-approval gate, end to end', () => {
     // rules 76 and 87 in one line.
     const ESTIMATE_LINE = `Estimate: ${HISTORY_TOTAL_USD.toFixed(2)} USD (from 1 finished task in this project)`;
     const WORKPAD_HEADER = '**ACME-3** — waiting_approval (refinement)';
+    const WORKPAD_MARKER_LINE = /^agentic:task:[0-9a-f-]{36}$/;
     await pipeline.waitFor(
       'the workpad for ACME-3 to render the estimate it waits on',
       async () => {
         const body = pipeline.tickets.peek('ACME-3')?.comments[0]?.body ?? '';
-        return body.includes(ESTIMATE_LINE) && body.startsWith(WORKPAD_HEADER);
+        // Line 1 is the workpad's marker since WP-191; the header is the line after it.
+        const [marker, header] = body.split('\n');
+        return (
+          body.includes(ESTIMATE_LINE) &&
+          WORKPAD_MARKER_LINE.test(marker ?? '') &&
+          header?.startsWith(WORKPAD_HEADER) === true
+        );
       },
     );
     const workpad = pipeline.tickets.peek('ACME-3')?.comments[0]?.body ?? '';
     expect(workpad).toContain(ESTIMATE_LINE);
     // The header, so the assertion is about the render the *gate* caused rather than any render
     // that happens to carry the line (standing rule 10).
-    expect(workpad.split('\n')[0]).toBe(WORKPAD_HEADER);
+    expect(workpad.split('\n')[0]).toMatch(WORKPAD_MARKER_LINE);
+    expect(workpad.split('\n')[1]).toBe(WORKPAD_HEADER);
     // One sticky comment, however many times the task moved (BD-023).
     expect(pipeline.tickets.peek('ACME-3')?.comments).toHaveLength(1);
 

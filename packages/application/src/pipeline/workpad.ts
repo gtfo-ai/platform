@@ -229,6 +229,15 @@ export const renderWorkpad = (view: WorkpadView): string => {
   return lines.join('\n');
 };
 
+/**
+ * The comment's whole body: {@link workpadMarker} on the first line, then {@link renderWorkpad}
+ * (WP-191, backlog 546), so the body alone is the platform's on a provider that does not read
+ * `marker_id` back (TD-029 decision 6). `upsertWorkpad` still finds the comment by the marker it is
+ * passed, never by the body, so the line changes nothing about which comment is edited.
+ */
+export const renderWorkpadComment = (taskId: Id, view: WorkpadView): string =>
+  `${workpadMarker(taskId)}\n${renderWorkpad(view)}`;
+
 const viewOf = (
   stored: StoredTask,
   budgetUsd: number,
@@ -413,7 +422,8 @@ export const runWorkpadRender = async (
   }
   const { stored, takenOver, capUsd } = read;
   const settings = await options.settings.forProject(stored.task.projectId);
-  const markdown = renderWorkpad(
+  const markdown = renderWorkpadComment(
+    taskId,
     viewOf(
       stored,
       capUsd ?? settings.taskBudgetUsd,

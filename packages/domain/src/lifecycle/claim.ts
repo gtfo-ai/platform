@@ -113,7 +113,9 @@ export const claimReadback = (
 
 /**
  * The marker the claim refusal's ticket comment opens with (TD-029 decision 5), one of
- * `PLATFORM_COMMENT_MARKERS`, so the platform never reads its own refusal as a person's word.
+ * `PLATFORM_COMMENT_MARKERS`, so the platform never reads its own refusal as a person's word. The
+ * body opens with it since WP-191 (`claimRefusedCommentFor` in the application ring); before that it
+ * travelled only as the provider's `marker_id`.
  */
 export const claimRefusedCommentMarker = (taskId: string): string =>
   `agentic:claim-refused:${taskId}`;

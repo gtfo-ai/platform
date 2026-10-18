@@ -491,6 +491,14 @@ export const CLAIM_REFUSED_COMMENT =
   'The agent did not start work on this ticket: it is assigned to somebody else. A maintainer has been asked who should take it.';
 
 /**
+ * The comment's whole body: `claimRefusedCommentMarker` on the first line, then
+ * {@link CLAIM_REFUSED_COMMENT} (WP-191, backlog 546), so the body alone is the platform's on a
+ * provider that does not read `marker_id` back (TD-029 decision 6).
+ */
+export const claimRefusedCommentFor = (taskId: string): string =>
+  `${claimRefusedCommentMarker(taskId)}\n${CLAIM_REFUSED_COMMENT}`;
+
+/**
  * A refusal: the escalation and `ticket.claim.refused` in one transaction, then — for a ticket held
  * elsewhere — the one ticket comment, outside it. A task that moved on meanwhile is left alone.
  */
@@ -595,13 +603,17 @@ const postRefusalComment = async (
 ): Promise<void> => {
   const { task } = stored;
   try {
-    await ticketWrites(integrations).claimRefusedComment(task.ticket, CLAIM_REFUSED_COMMENT, {
-      projectId: task.projectId,
-      taskId: task.id,
-      mode: task.mode,
-      idempotencyKey: `ticket_claim_refused:${task.id}:${request.stage}:${String(request.attempt)}`,
-      markerId: claimRefusedCommentMarker(task.id),
-    });
+    await ticketWrites(integrations).claimRefusedComment(
+      task.ticket,
+      claimRefusedCommentFor(task.id),
+      {
+        projectId: task.projectId,
+        taskId: task.id,
+        mode: task.mode,
+        idempotencyKey: `ticket_claim_refused:${task.id}:${request.stage}:${String(request.attempt)}`,
+        markerId: claimRefusedCommentMarker(task.id),
+      },
+    );
   } catch (error) {
     if (error instanceof TransactionOpenError) {
       throw error;

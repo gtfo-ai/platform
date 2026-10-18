@@ -448,7 +448,10 @@ describe('the claim before the first agent run (TD-029 decision 5)', () => {
     expect(runsCreated(harness)).toBe(0);
     expect(harness.specs).toHaveLength(0);
     expect(ticket.state.comments).toEqual([
-      { markerId: `agentic:claim-refused:${stored.task.id}`, body: CLAIM_REFUSED_COMMENT },
+      {
+        markerId: `agentic:claim-refused:${stored.task.id}`,
+        body: `agentic:claim-refused:${stored.task.id}\n${CLAIM_REFUSED_COMMENT}`,
+      },
     ]);
     expect(eventsOf(harness, 'ticket.claimed')).toHaveLength(0);
     expect(await claimOf(harness)).toBeNull();
@@ -707,7 +710,10 @@ describe('the WP-177 review amendment to TD-029 decision 5', () => {
     expect(ticket.calls).toEqual(['selfIdentity']);
     expect(ticket.state.assignee).toBe('jane');
     expect(ticket.state.comments).toEqual([
-      { markerId: `agentic:claim-refused:${stored.task.id}`, body: CLAIM_REFUSED_COMMENT },
+      {
+        markerId: `agentic:claim-refused:${stored.task.id}`,
+        body: `agentic:claim-refused:${stored.task.id}\n${CLAIM_REFUSED_COMMENT}`,
+      },
     ]);
     expect(harness.store.snapshot()[0]?.task.state).toBe('needs_human');
     expect(runsCreated(harness)).toBe(0);

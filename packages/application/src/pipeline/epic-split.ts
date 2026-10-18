@@ -169,7 +169,8 @@ const bullets = (items: readonly string[]): readonly string[] => items.map((item
  * adds an unbounded string.
  *
  * It is the **same bytes** for the ticket comment and for the knowledge page, deliberately: two
- * renderings of one report is two documents a reader has to reconcile.
+ * renderings of one report is two documents a reader has to reconcile. The comment only adds its
+ * marker as a first line ({@link renderSpikeReportComment}).
  */
 export const renderResearchReport = (input: {
   readonly report: ResearchReportData;
@@ -203,6 +204,14 @@ export const renderResearchReport = (input: {
     'Produced by the Agentic platform. No merge request was opened and no code was changed.',
   ].join('\n');
 };
+
+/**
+ * The report's ticket comment: {@link spikeReportMarkerFor} on the first line, then the report's
+ * bytes (WP-191, backlog 546), so the body alone is the platform's on a provider that does not
+ * read `marker_id` back (TD-029 decision 6). The knowledge page carries no marker line.
+ */
+export const renderSpikeReportComment = (taskId: Id, attempt: number, report: string): string =>
+  `${spikeReportMarkerFor(taskId, attempt)}\n${report}`;
 
 // ── The breakdown queue ──────────────────────────────────────────────────────
 
@@ -770,10 +779,11 @@ export const runSpikeReport = async (
     return;
   }
   const attempt = stored.task.stageAttempts[SPIKE_DOCUMENT_STAGE] ?? 1;
-  const markdown = renderResearchReport({
-    report: parsed.data,
-    ticketKey: stored.task.ticket.key,
-  });
+  const markdown = renderSpikeReportComment(
+    stored.task.id,
+    attempt,
+    renderResearchReport({ report: parsed.data, ticketKey: stored.task.ticket.key }),
+  );
 
   // Outside a run, so the call's scope holds no minted credential (Q55); outside every transaction,
   // which `integrationsForProject` refuses to be otherwise.

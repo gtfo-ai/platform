@@ -303,7 +303,8 @@ describe('the comment the linter posts', () => {
       questions: ['Which rows count?', 'What about credit notes?'],
       label: 'agentic',
     });
-    expect(body.startsWith(LINT_COMMENT_MARKER)).toBe(true);
+    // The marker id opens the body (WP-191) and product/19's spelling stays on the first line.
+    expect(body.split('\n')[0]).toBe(`${LINT_COMMENT_MARKER_ID} ${LINT_COMMENT_MARKER}`);
     expect(body).toContain('**Agent readiness: 45/100**');
     expect(body).toContain('missing: acceptance criteria');
     expect(body).toContain('- Which rows count?');
@@ -361,9 +362,9 @@ describe('the comment the linter posts', () => {
       questions: Array.from({ length: 5 }, () => 'q'.repeat(MAX_LINT_QUESTION_CHARS)),
       label: 'L'.repeat(64),
     });
-    // The measurement first, then the published bound over it: 1 843 characters is what the
+    // The measurement first, then the published bound over it: 1 858 characters is what the
     // renderer really produces at its caps, and the constant is the ceiling a reader is given.
-    expect(worst).toHaveLength(1_843);
+    expect(worst).toHaveLength(1_858);
     expect(worst.length).toBeLessThanOrEqual(LINT_COMMENT_MAX_TEXT_CHARS);
   });
 });

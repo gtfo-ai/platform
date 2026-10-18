@@ -33,6 +33,9 @@ import {
 } from '../support/pipeline.js';
 import { bugScenarios, featureScenarios, TICKETS } from '../support/scenarios.js';
 
+/** The workpad's first line since WP-191: its marker, `agentic:task:<task uuid>`, alone. */
+const WORKPAD_MARKER_LINE = /^agentic:task:[0-9a-f-]{36}$/;
+
 let harness: PipelineE2E | undefined;
 
 afterEach(async () => {
@@ -191,8 +194,11 @@ describe('a feature ticket, end to end', () => {
       'the workpad rendered for ready_for_merge and the ticket status moved with it',
       async () => {
         const seen = pipeline.tickets.peek('ACME-1');
+        // Line 1 is the workpad's marker since WP-191; the header is the line after it.
+        const [marker, header] = seen?.comments[0]?.body.split('\n') ?? [];
         return (
-          seen?.comments[0]?.body.startsWith(WORKPAD_HEADER) === true &&
+          WORKPAD_MARKER_LINE.test(marker ?? '') &&
+          header?.startsWith(WORKPAD_HEADER) === true &&
           seen?.status === 'Waiting for review'
         );
       },
@@ -204,8 +210,10 @@ describe('a feature ticket, end to end', () => {
     // The **first line**, not `toContain`. The render's checklist names every stage of the template
     // from the first pass, so `toContain('ready_for_merge')` was satisfied by the checklist and
     // would have passed on a task that never reached the state (standing rule 10). The header is
-    // the only part of the body that reports where the task actually is.
-    expect(ticket?.comments[0]?.body.split('\n')[0]).toBe(WORKPAD_HEADER);
+    // the only part of the body that reports where the task actually is. It is the line after the
+    // workpad's marker, which opens the body since WP-191.
+    expect(ticket?.comments[0]?.body.split('\n')[0]).toMatch(WORKPAD_MARKER_LINE);
+    expect(ticket?.comments[0]?.body.split('\n')[1]).toBe(WORKPAD_HEADER);
     // The last mapped state the task passed through.
     expect(ticket?.status).toBe('Waiting for review');
   });

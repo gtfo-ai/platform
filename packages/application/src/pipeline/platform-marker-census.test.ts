@@ -7,34 +7,41 @@
  *
  *  1. **The renderers.** Every function that renders a merge-request note is in {@link MR_NOTES},
  *     rendered with fixture input, and its body must open with `<!-- agentic:<kind>:<id> -->`
- *     (`isPlatformMergeRequestNote`); the ticket reply must open with its bare marker
- *     (`opensWithPlatformCommentMarker`). And each rendered body, read back as a person's word of
- *     every form, gives WP-178's decision **nothing** to return on.
+ *     (`isPlatformMergeRequestNote`); every ticket comment — the workpad, the linter's comment, the
+ *     ask mirror, the spike report, the claim refusal and the reply — must open with the bare marker
+ *     id it passes the port (`opensWithPlatformCommentMarker`), so the body alone is the platform's
+ *     on a provider that does not read `marker_id` back (WP-191, backlog 546). And each rendered
+ *     body, read back as a person's word of every form, gives WP-178's decision **nothing** to
+ *     return on.
  *  2. **The callers.** Every source file of this ring that posts a merge-request note
- *     (`.thread(`/`.reply(` on `reviewWrites`) is one of the files the table renders for, compared
- *     in both directions — a new caller fails here until its renderer is in the table.
+ *     (`.thread(`/`.reply(` on `reviewWrites`) or a ticket comment (a `ticketWrites` comment
+ *     helper) is one of the files the tables render for, compared in both directions — a new
+ *     caller fails here until its renderer is in a table.
  *  3. **The writes.** Every provider call that carries a body lives in `integrations.ts`, and each
- *     merge-request one is guarded by `assertOpensWithMarker` in the same helper, while each ticket
- *     one passes the port a marker id — so a caller that renders by hand is refused at run time.
- *
- * **What it does not claim, stated:** four **ticket** bodies — the workpad, the linter's comment,
- * the spike report and the claim refusal — do not open with a marker in the body; they carry it as
- * the port's `markerId`, which the adapters read back as `TicketComment.marker_id`, and decision 6's
- * ticket reading accepts either. Half 3 holds that they pass one. Making their bodies open with the
- * marker too is filed under WP-179's discovered work.
+ *     one — merge-request note and ticket comment — is guarded by `assertOpensWithMarker` in the
+ *     same helper, while each ticket one also passes the port a marker id — so a caller that renders
+ *     by hand is refused at run time.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Id, ReviewFinding } from '@platform/contracts';
+import type { Id, IsoDateTime, ResearchReportData, ReviewFinding } from '@platform/contracts';
 import {
+  askCommentMarker,
+  claimRefusedCommentMarker,
   type HumanWord,
   humanReturnDecision,
   isPlatformMergeRequestNote,
   opensWithPlatformCommentMarker,
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { renderAskComment } from '../ask/mirror.js';
 import { renderConflictWarning } from './conflict-warning.js';
+import {
+  renderResearchReport,
+  renderSpikeReportComment,
+  spikeReportMarkerFor,
+} from './epic-split.js';
 import {
   conversationReplyMarkerId,
   conversationReplyNoteMarker,
@@ -46,6 +53,9 @@ import {
 } from './review-notes.js';
 import { renderSummary } from './review-only.js';
 import { renderSupersededComment } from './superseded-mr.js';
+import { claimRefusedCommentFor } from './ticket-claim.js';
+import { LINT_COMMENT_MARKER_ID, renderLintComment } from './ticket-lint.js';
+import { renderWorkpadComment, workpadMarker } from './workpad.js';
 
 const TASK = '00000000-0000-4000-8000-0000000017d1' as Id;
 const RUN = '00000000-0000-4000-8000-0000000017d2';
@@ -129,16 +139,118 @@ const MR_NOTES: readonly { readonly name: string; readonly file: string; readonl
     })),
   ];
 
-const TICKET_REPLIES = KINDS.map((kind, index) => ({
-  name: `ticket reply (${kind})`,
-  markerId: conversationReplyMarkerId(TASK, RUN, index),
-  body: renderConversationReply({
-    marker: conversationReplyMarkerId(TASK, RUN, index),
-    kind,
-    reply: 'The footer renders now.',
-    person: kind === 'needs_person' ? 'The maintainer' : null,
-  }),
-}));
+const REPORT: ResearchReportData = {
+  question: 'Can the refund ledger reuse the outbox?',
+  summary: 'The outbox already carries an ordering key.',
+  findings: [
+    {
+      statement: 'The outbox writer takes the same advisory lock.',
+      evidence: ['src/outbox/writer.ts:88'],
+      confidence: 'high',
+    },
+  ],
+  options: [{ option: 'Reuse the outbox', pros: ['one queue'], cons: [], effort: 'M' }],
+  recommendation: 'Reuse the outbox.',
+  open_questions: [],
+  kb_citations: [],
+};
+
+const ASK_ID = '00000000-0000-4000-8000-0000000017d3' as Id;
+
+/**
+ * Every ticket comment renderer, with the file whose duty posts it and the marker id it passes the
+ * port — the body must open with that id (WP-191, backlog 546).
+ */
+const TICKET_COMMENTS: readonly {
+  readonly name: string;
+  readonly file: string;
+  readonly markerId: string;
+  readonly body: string;
+}[] = [
+  {
+    name: 'workpad',
+    file: 'pipeline/workpad.ts',
+    markerId: workpadMarker(TASK),
+    body: renderWorkpadComment(TASK, {
+      ticketKey: 'ACME-9',
+      state: 'active',
+      currentStage: 'implementation',
+      stages: [{ id: 'implementation', entered: true }],
+      costUsd: 1,
+      budgetUsd: 50,
+      estimate: { usd: null, basis: null, samples: null },
+      mrUrl: null,
+      blocker: 'agentic:task:someone-else — a brief that quotes a marker',
+      takenOver: null,
+    }),
+  },
+  {
+    name: 'linter comment',
+    file: 'pipeline/ticket-lint.ts',
+    markerId: LINT_COMMENT_MARKER_ID,
+    body: renderLintComment({
+      readiness: { score: 40, missing: ['scope_boundaries'], questions: 1 },
+      questions: ['Which rows count?'],
+      label: 'agentic',
+    }),
+  },
+  {
+    name: 'ask mirror',
+    file: 'ask/mirror.ts',
+    markerId: askCommentMarker(ASK_ID),
+    body: renderAskComment(
+      {
+        id: ASK_ID,
+        taskId: TASK,
+        projectId: '00000000-0000-4000-8000-0000000017d4' as Id,
+        source: 'ui',
+        askedByUserId: '00000000-0000-4000-8000-0000000017d5' as Id,
+        askedByIdentity: null,
+        ticketCommentId: null,
+        question: 'why a column?',
+        runId: null,
+        status: 'answered',
+        answer: 'Because a join on every read would be worse.',
+        citations: [],
+        droppedCitations: 0,
+        answerArtifactId: null,
+        refusalReason: null,
+        redactionCount: 0,
+        mirroredAt: null,
+        createdAt: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+        answeredAt: '2026-06-01T09:01:00.000Z' as IsoDateTime,
+      },
+      'https://agentic.example.test',
+    ),
+  },
+  {
+    name: 'spike report',
+    file: 'pipeline/epic-split.ts',
+    markerId: spikeReportMarkerFor(TASK, 2),
+    body: renderSpikeReportComment(
+      TASK,
+      2,
+      renderResearchReport({ report: REPORT, ticketKey: 'ACME-9' }),
+    ),
+  },
+  {
+    name: 'claim refusal',
+    file: 'pipeline/ticket-claim.ts',
+    markerId: claimRefusedCommentMarker(TASK),
+    body: claimRefusedCommentFor(TASK),
+  },
+  ...KINDS.map((kind, index) => ({
+    name: `ticket reply (${kind})`,
+    file: 'pipeline/review-conversation.ts',
+    markerId: conversationReplyMarkerId(TASK, RUN, index),
+    body: renderConversationReply({
+      marker: conversationReplyMarkerId(TASK, RUN, index),
+      kind,
+      reply: 'The footer renders now.',
+      person: kind === 'needs_person' ? 'The maintainer' : null,
+    }),
+  })),
+];
 
 /** WP-178's decision over one word, at both human stages, with every slot unmapped. */
 const decides = (word: HumanWord) =>
@@ -168,9 +280,11 @@ describe('half 1 — every renderer opens with its marker, and returns nothing',
     }
   });
 
-  it.each(TICKET_REPLIES)('$name', ({ body, markerId }) => {
+  it.each(TICKET_COMMENTS)('$name', ({ body, markerId }) => {
     expect(opensWithPlatformCommentMarker(body)).toBe(true);
-    expect(body.startsWith(`${markerId}\n`)).toBe(true);
+    // The id it passes the port is the body's first token, ended by the line or by a space (the
+    // linter keeps product/19's `<!-- agentic:linter -->` after it on the same line).
+    expect(body.startsWith(`${markerId}\n`) || body.startsWith(`${markerId} `)).toBe(true);
     // Read back without the provider's marker id, the body alone is the platform's.
     expect(
       decides({
@@ -229,6 +343,18 @@ describe('half 2 — every caller that posts a merge-request note is in the tabl
       .sort();
     expect(posting).toEqual([...new Set(MR_NOTES.map((entry) => entry.file))].sort());
   });
+
+  it('compares the files that post a ticket comment with the rendered ones, both ways (WP-191)', () => {
+    const TICKET_COMMENT_CALL =
+      /\.(?:upsertWorkpad|lintComment|askComment|reportComment|claimRefusedComment|replyComment)\(/;
+    const posting = sources()
+      .filter(
+        ({ file, text }) => file !== 'pipeline/integrations.ts' && TICKET_COMMENT_CALL.test(text),
+      )
+      .map(({ file }) => file)
+      .sort();
+    expect(posting).toEqual([...new Set(TICKET_COMMENTS.map((entry) => entry.file))].sort());
+  });
 });
 
 describe('half 3 — every body-carrying provider call is a guarded helper', () => {
@@ -256,6 +382,8 @@ describe('half 3 — every body-carrying provider call is a guarded helper', () 
     // The workpad, the lint, the ask mirror, the spike report, the claim refusal and the reply.
     expect(ticket.length).toBe(6);
     for (const helper of ticket) {
+      // Since WP-191 the ticket body is refused unless it opens with a marker, like the note's.
+      expect(helper).toContain("assertOpensWithMarker('ticket'");
       expect(
         /port\.addComment\([^)]*\{ markerId: context\.markerId \}\)|port\.upsertWorkpad\(ticket, markerId,/.test(
           helper,

@@ -138,12 +138,20 @@ export const ASK_TRIGGERS = ['@agentic ask', '@agentic why'] as const;
  * reply the platform posts on a ticket comment that asked for something
  * (`agentic:reply:<task>.<run>.<n>`). A comment opening with any of these is the platform's, so it is
  * neither an ask nor a person's word that returns a task (`humanReturnDecision`).
+ *
+ * Since WP-191 (backlog 546) the list also names the ticket readiness linter's comment
+ * (`agentic:linter`, one per ticket and therefore unparameterised) and the spike's report
+ * (`agentic:spike-report:<task>:<attempt>`), and every ticket comment the platform posts opens with
+ * its marker in the body — so the body alone is the platform's on a provider that does not read
+ * `marker_id` back. `platform-marker-census.test.ts` (application ring) holds every renderer to it.
  */
 export const PLATFORM_COMMENT_MARKERS = [
   'agentic:task:',
   'agentic:ask:',
   'agentic:claim-refused:',
   'agentic:reply:',
+  'agentic:linter',
+  'agentic:spike-report:',
 ] as const;
 
 /**
@@ -158,15 +166,24 @@ export const PLATFORM_COMMENT_MARKERS = [
  * ({@link classifyTicketComment}) is the second reader and is narrowed the same way: one test, so
  * the ask door and the human-return window cannot disagree about whose comment it is.
  *
- * Every platform comment this build posts opens with its marker or carries it as the provider's
- * `marker_id` (the Jira adapter's trailing marker node, read back as `TicketComment.marker_id`).
+ * Every platform comment this build posts opens with its marker **and** carries it as the provider's
+ * `marker_id` (the Jira adapter's trailing marker node, read back as `TicketComment.marker_id`) —
+ * both since WP-191; until then the workpad, the lint, the spike report and the claim refusal
+ * carried only the second.
  * The ask mirror's comment carried its marker mid-line until WP-178 (`**Asked and answered** —
  * agentic:ask:<id>`); one posted before then is still the platform's through its `marker_id`, and is
  * older than any horizon the window reads in practice.
  */
 export const opensWithPlatformCommentMarker = (text: string): boolean => {
   const body = text.trimStart();
-  return PLATFORM_COMMENT_MARKERS.some((marker) => body.startsWith(marker));
+  // A marker that ends in `:` is delimited by its own parameter; one that does not
+  // (`agentic:linter`) must be followed by whitespace or the end, so `agentic:linters …` is a
+  // person's (WP-191 review round 1).
+  return PLATFORM_COMMENT_MARKERS.some(
+    (marker) =>
+      body.startsWith(marker) &&
+      (marker.endsWith(':') || /^(?:\s|$)/.test(body.slice(marker.length))),
+  );
 };
 
 /** How a ticket comment reached the classifier, and what the platform did with it. */
