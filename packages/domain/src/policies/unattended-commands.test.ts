@@ -26,6 +26,7 @@ import {
   runCommandPolicy,
   UNCERTAINTY,
   unattendedCommandModeOf,
+  unknownProgramRunsJudgedName,
   unreadGitConfigKey,
   withVerificationMode,
   xargsCompletesBlockEntry,
@@ -3645,7 +3646,6 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
       // (3) A script that may rewrite its positional parameters before `"$@"`.
       [`sh -c 'shift; "$@"' _ ls git push origin main`, UNCERTAINTY.expandedName],
       [`sh -c 'set -- git push origin main; "$@"' _ ls`, UNCERTAINTY.expandedName],
-      [`sh -c 'f(){ "$@"; }; f git push origin main' _ ls`, UNCERTAINTY.expandedName],
       // (4) A glob before `--` may be the flag a block entry needs (a file named `-rf`).
       ['rm * /tmp', expansionCompletesBlockEntry('rm -rf /*')],
       ['rm * /', expansionCompletesBlockEntry('rm -rf /*')],
@@ -3660,6 +3660,16 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
     ])('%j is uncertain', (command, reason) => {
       expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
       expect(auto(command).evaluation.uncertainty).toEqual([reason]);
+    });
+
+    it('reads a function that runs "$@" as the unknown program it is, too (WP-203)', () => {
+      // `f` is defined on the line and runs its arguments: an unknown program handed `git`.
+      const command = `sh -c 'f(){ "$@"; }; f git push origin main' _ ls`;
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([
+        UNCERTAINTY.expandedName,
+        unknownProgramRunsJudgedName('f', 'git'),
+      ]);
     });
 
     it.each([
@@ -3798,6 +3808,298 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
         ].some((advice) => reason.includes(advice)),
         reason,
       ).toBe(true);
+    });
+  });
+});
+
+/**
+ * WP-203 (backlog 599): a program the policy does not know may be a wrapper, so every argument of
+ * it is a command-position word — a judged name there is uncertain (ruling (b); ruling (c), an
+ * argument the shell expands, left this row under the split clause); the run image's own wrappers join the sets with their
+ * grammar and read through to the block list or the git boundary (ruling (e)); and the valve of
+ * known non-wrappers is the rule's relief (ruling (d), its census in `command-policy.test.ts`).
+ * Every row below read `ask / auto / deny` before this row, except where a control says otherwise
+ * (PROGRESS § WP-203, `a-before.log`).
+ */
+describe('WP-203, backlog 599: an unknown command is a possible wrapper', () => {
+  const REFUSED = new Set(['uncertain', 'block_list', 'git_boundary']);
+  const refusedInBothModes = (command: string): void => {
+    for (const mode of ['auto', 'deny'] as const) {
+      const decision = decideUnattendedCommand({ command }, policy, mode);
+      expect(decision.decision, `${mode}: ${command}`).toBe('deny');
+      expect(REFUSED.has(decision.rule), `${mode}: ${command} read ${decision.rule}`).toBe(true);
+    }
+  };
+
+  describe('criterion (1): a judged name among an unknown program’s arguments', () => {
+    it.each([
+      // 599's eight measured `allow` lines.
+      'catchsegv sudo id',
+      'fakeroot sudo id',
+      'sg grp sudo id',
+      'chroot / sudo id',
+      'script -qc sudo id',
+      'catchsegv git push origin main',
+      'sg grp git push origin main',
+      'parallel git push ::: origin',
+      // The orchestrator's three, measured live in `platform-runtime:s16`.
+      "sg agentic 'git push origin main'",
+      "sg agentic -c 'git push origin main'",
+      "sg agentic 'sudo id'",
+      // The siblings.
+      "sg agentic 'echo x; git push origin main'",
+      "script -q -c 'git push origin main' /dev/null",
+      'fakeroot -- sudo id',
+      'fakeroot s{u,}do id',
+      'frobnicate sudo id',
+      './tools/wrap --runner git push origin main',
+      'cat f | frobnicate sudo',
+    ])('%j is refused under auto and deny, never run', (command) => {
+      refusedInBothModes(command);
+    });
+
+    it.each([
+      ['catchsegv sudo id', 'catchsegv', 'sudo'],
+      ['fakeroot sudo id', 'fakeroot', 'sudo'],
+      ['catchsegv git push origin main', 'catchsegv', 'git'],
+      ['parallel git push ::: origin', 'parallel', 'git'],
+      ['fakeroot -- sudo id', 'fakeroot', 'sudo'],
+      ['fakeroot s{u,}do id', 'fakeroot', 'sudo'],
+      ['frobnicate sudo id', 'frobnicate', 'sudo'],
+      ['./tools/wrap --runner git push origin main', 'wrap', 'git'],
+      ['cat f | frobnicate sudo', 'frobnicate', 'sudo'],
+      ["frobnicate 'echo x; sudo id'", 'frobnicate', 'sudo'],
+      ["frobnicate '{sudo,x} id'", 'frobnicate', 'sudo'],
+      ["find . -exec fakeroot sudo id ';'", 'fakeroot', 'sudo'],
+      ['gosu agentic git push origin main', 'gosu', 'git'],
+    ])('%j is uncertain, naming %s and %s', (command, program, word) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toContain(
+        unknownProgramRunsJudgedName(program, word),
+      );
+      expect(auto(command).reason).toContain('run the command itself');
+    });
+
+    it('reads a project’s own block entry as a judged name (rule 42)', () => {
+      const project: ResolvedCommandPolicy = {
+        ...policy,
+        block: [...policy.block, 'deploy prod *'],
+      };
+      expect(auto('frobnicate deploy prod', project).evaluation.uncertainty).toEqual([
+        unknownProgramRunsJudgedName('frobnicate', 'deploy'),
+      ]);
+      expect(cell('frobnicate deploy prod', policy)).toBe('ask / auto / deny');
+    });
+
+    it('knows a program the stage’s policy allows or asks for, by its first token (rule 42)', () => {
+      const project: ResolvedCommandPolicy = { ...policy, ask: [...policy.ask, './tools/wrap *'] };
+      expect(cell('./tools/wrap --runner git push origin main', project)).toBe('ask / auto / deny');
+    });
+  });
+
+  describe('criterion (2) left the row: an expansion given to an unknown program', () => {
+    it('reads `sg grp $(echo sudo) id` as a string it cannot read', () => {
+      expect(cell('sg grp $(echo sudo) id', policy)).toBe('ask / uncertain / uncertain');
+      expect(auto('sg grp $(echo sudo) id').evaluation.uncertainty).toContain(
+        UNCERTAINTY.handedCommand,
+      );
+    });
+  });
+
+  describe('criterion (3): the run image’s wrappers read through, with their grammar', () => {
+    it.each([
+      ["sg grp 'sudo id'", 'block / block / block'],
+      ['sg grp sudo id', 'block / block / block'],
+      ["sg agentic -c 'git push --no-verify origin main'", 'ask / git / git'],
+      ["sg -l agentic 'sudo id'", 'block / block / block'],
+      ["script -c 'sudo id' out", 'block / block / block'],
+      ['script -qc sudo id', 'block / block / block'],
+      ['chroot / sudo id', 'block / block / block'],
+      ['chroot --userspec x / sudo id', 'block / block / block'],
+      ['setpriv --reuid 1000 sudo id', 'block / block / block'],
+      ['prlimit --nofile=9 sudo id', 'block / block / block'],
+      ['prlimit --nofile=9 git push origin main', 'ask / git / git'],
+      ['start-stop-daemon --start --exec /usr/bin/sudo -- id', 'block / block / block'],
+      ['start-stop-daemon --start --exec /usr/bin/git -- push origin main', 'ask / git / git'],
+      ['linux32 sudo id', 'block / block / block'],
+      ['linux32 git push origin main', 'ask / git / git'],
+      ['runcon x sudo id', 'block / block / block'],
+      ['setarch x86_64 -R sudo id', 'block / block / block'],
+      ['uclampset -m 10 sudo id', 'block / block / block'],
+      ["newgrp agentic <<'EOF'\ngit push origin main\nEOF", 'ask / git / git'],
+      ["newgrp agentic <<'EOF'\nsudo id\nEOF", 'block / block / block'],
+      ["echo 'sudo id' | newgrp agentic", 'ask / uncertain / uncertain'],
+    ])('%j reads %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+
+    it('keeps `su -c` and `runuser -c`, whose strings were already read (measured)', () => {
+      expect(cell("su -c 'git push origin main'", policy)).toBe('ask / git / git');
+      expect(cell("runuser -u agentic -c 'sudo id'", policy)).toBe('block / block / block');
+    });
+  });
+
+  describe('criterion (5): the controls keep their cells', () => {
+    it.each([
+      ['grep -r sudo .', 'allow / allow / allow'],
+      ['rg sudo', 'allow / allow / allow'],
+      ['cat sudo.txt', 'allow / allow / allow'],
+      ['ls docker', 'allow / allow / allow'],
+      ['grep git file', 'allow / allow / allow'],
+      ['echo "git push"', 'ask / auto / deny'],
+      ['echo git push', 'ask / auto / deny'],
+      ['echo sudo', 'ask / auto / deny'],
+      ['echo $x', 'ask / auto / deny'],
+      ['which git', 'ask / auto / deny'],
+      ['type sudo', 'ask / auto / deny'],
+      ['test -x /usr/bin/sudo', 'ask / auto / deny'],
+      ['cp sudo x', 'ask / auto / deny'],
+      ['mkdir -p $dir', 'ask / auto / deny'],
+      ['cp $a $b', 'ask / auto / deny'],
+      ['chmod $m f', 'ask / auto / deny'],
+      ['touch $f', 'ask / auto / deny'],
+      ['python3 tools/x.py --git', 'ask / auto / deny'],
+      ['make git-hooks', 'allow / allow / allow'],
+      ['tsc', 'ask / auto / deny'],
+      ['prettier --check .', 'ask / auto / deny'],
+      ['bundle exec rspec', 'ask / auto / deny'],
+      ["awk '{print $1}' file", 'ask / auto / deny'],
+      ['for f in *.ts; do echo $f; done', 'ask / auto / deny'],
+      ['export PATH=$PATH:./bin', 'ask / auto / deny'],
+      ['unset arr[0]', 'ask / auto / deny'],
+      ['curl $url', 'ask / auto / deny'],
+      ['rm -rf dist $out', 'ask / auto / deny'],
+      ['cargo test $pkg', 'allow / allow / allow'],
+    ])('%j keeps %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+
+    it.each(['setsid', 'flock /tmp/l', 'unshare', 'taskset 1', 'ionice', 'chrt 1', 'watch'])(
+      '%s before a push keeps deny',
+      (wrapper) => {
+        expect(cell(`${wrapper} git push --force origin main`, policy)).toBe(
+          'block / block / block',
+        );
+        expect(cell(`${wrapper} git push origin main`, policy)).toBe('ask / git / git');
+      },
+    );
+  });
+
+  describe('the over-ask, named (ruling (f), and what the probe found beside it)', () => {
+    it.each([
+      './scripts/check.sh git',
+      'python3 lint.py --cmd sudo',
+      './gradlew docker',
+      'rm -rf git',
+      'curl https://example.test/sudo',
+    ])('%j is uncertain', (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+    });
+
+    it.each([
+      // `cargo` is allow-listed, so known: the ruling's `cargo run -- git` and `cargo test $pkg`.
+      ['cargo run -- git', 'ask / auto / deny'],
+      ['cargo test $pkg', 'allow / allow / allow'],
+    ])('%j keeps %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+  });
+
+  describe('the residual, stated', () => {
+    it.each([
+      // An option's value naming a program (WP-164's and WP-198's floor class).
+      'frobnicate --cmd=sudo',
+      // A script file the run wrote: `run-parts` runs a directory's files, `scriptlive` a typescript.
+      'run-parts /tmp/x',
+      'scriptlive t f',
+      // Ruling (c), split to a follow-up row: an expansion, `xargs` input or a `find -exec` file
+      // name given to a program the policy does not know.
+      'frobnicate $x id',
+      'catchsegv $x id',
+      './gradlew $task',
+      'exit $?',
+      'echo sudo id | xargs fakeroot',
+      'find /usr/bin -name git -exec /lib/ld-linux-aarch64.so.1 {} push origin main \\;',
+    ])('%j keeps ask / auto / deny', (command) => {
+      expect(cell(command, policy)).toBe('ask / auto / deny');
+    });
+  });
+
+  /**
+   * Backlog 602 (folded into WP-203 at review round 1): a wrapper given no command runs a shell on
+   * its standard input — `platform-runtime:s16` ran `echo "echo RAN_L64" | linux64`.
+   */
+  describe('backlog 602: a wrapper with no command is a shell on its input', () => {
+    it.each([
+      "echo 'git push origin main' | linux64",
+      "printf 'git push origin main' | linux32",
+      "echo 'git push origin main' | unshare",
+      "echo 'git push origin main' | unshare -r",
+      "echo 'git push origin main' | setarch x86_64",
+      "echo 'git push origin main' | nsenter -t 1",
+      "echo 'git push origin main' | chroot /",
+      "echo 'git push origin main' | su agentic",
+      "echo 'sudo id' | nice linux64",
+      // Review round 2: `-` is su's `-l`, getopt permutes, and only su's own `-c` is its string.
+      "echo 'git push origin main' | su - agentic",
+      "echo 'git push origin main' | su - root",
+      "echo 'git push origin main' | runuser - agentic",
+      "echo 'git push origin main' | su agentic -",
+      "echo 'git push origin main' | nice su -s /bin/sh - agentic",
+      "echo 'git push origin main' | taskset -c 0 su agentic",
+      "echo 'git push origin main' | ionice -c3 runuser -u agentic",
+      "echo 'git push origin main' | su agentic /dev/stdin",
+      // Review round 3: su's and runuser's options by getopt's model — an attached value of any
+      // shape, a `u` inside a value, a long option's separate value.
+      "echo 'git push origin main' | su -s/bin/sh agentic",
+      "echo 'git push origin main' | su -s./sh agentic",
+      "echo 'git push origin main' | su -Gwheel-x agentic",
+      "echo 'git push origin main' | su -wPATH,HOME agentic",
+      "echo 'git push origin main' | su -w_X agentic",
+      "echo 'git push origin main' | su -w1 agentic",
+      "echo 'git push origin main' | runuser -s/bin/sh agentic",
+      "echo 'git push origin main' | runuser -wu agentic",
+      "echo 'git push origin main' | runuser -wuser agentic",
+      "echo 'git push origin main' | su --whitelist-environment -c agentic",
+      "echo 'git push origin main' | runuser --whitelist-environment -c agentic",
+      "echo 'git push origin main' | su --group -c agentic",
+      // An option the model does not know: which word is USER is unknown.
+      'su --frobnicate agentic',
+      "su -c 'id' agentic git push origin main",
+      // `uname26` and the per-architecture names util-linux links to `setarch`.
+      "echo 'git push origin main' | uname26",
+      "echo 'git push origin main' | ppc64",
+    ])('%j is uncertain (handedCommand)', (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toContain(UNCERTAINTY.handedCommand);
+    });
+
+    it.each([
+      ["linux64 <<< 'git push origin main'", 'ask / git / git'],
+      ["linux64 <<'EOF'\ngit push origin main\nEOF", 'ask / git / git'],
+      ["unshare <<'EOF'\nsudo id\nEOF", 'block / block / block'],
+      ["chroot / <<< 'sudo id'", 'block / block / block'],
+      ['linux64 git push origin main', 'ask / git / git'],
+      // A command after the wrapper, or a `-c` string, is what runs: no shell reads the pipe.
+      ['echo x | linux64 cat', 'ask / auto / deny'],
+      ["echo x | su -c 'cat' agentic", 'ask / auto / deny'],
+      ['linux64', 'ask / auto / deny'],
+      ["su - agentic <<<'sudo id'", 'block / block / block'],
+      ["su -s /bin/sh agentic <<<'git push origin main'", 'ask / git / git'],
+      ["su --shell=/bin/sh - agentic <<<'git push origin main'", 'ask / git / git'],
+      ["su -c 'id' agentic", 'ask / auto / deny'],
+      ['su - agentic -c id', 'ask / auto / deny'],
+      ["su -lc 'id' agentic", 'ask / auto / deny'],
+      ['su -s /bin/sh -c id agentic', 'ask / auto / deny'],
+      ["su -g0 agentic <<<'git push origin main'", 'ask / git / git'],
+      ["su --group -c agentic <<<'git push origin main'", 'ask / git / git'],
+      ["su -lc 'sudo id' agentic", 'block / block / block'],
+      ["su --session-command='sudo id' agentic", 'block / block / block'],
+      ["su - agentic -c 'sudo id'", 'block / block / block'],
+      ['echo x | runuser -u agentic cat', 'ask / auto / deny'],
+      ['echo x | nice grep su file', 'ask / auto / deny'],
+    ])('%j reads %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
     });
   });
 });

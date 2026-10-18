@@ -51303,3 +51303,185 @@ Without `-v` every failure is silent except *bad address*. On the stock e2e topo
 - The integration file alone, `--project integration`: 23/23.
 - `docker-workspace.e2e.test.ts` alone, `--project e2e-fake-claude`, `s16` images: 84/84 (643 s). Afterwards: 0 harness containers, 0 harness networks, 71 volumes.
 - The citation guard: 13/13. `pnpm run -s verify`: `PASS: verify`.
+
+#### WP-203
+
+**Scanner: an unknown command is a possible wrapper** (backlog **599**). Built in the worktree `wt-wp203` on `9351d48a`. No migration. Ruling (b), (c), (d) and (e) are all built; nothing moved under the split clause.
+
+> **Superseded in part by review rounds 1 and 2 (below).** Round 1 moved ruling (c), the non-literal half, out under the split clause and removed it from the tree. Read every round-0 paragraph below as history wherever it describes (c):
+> - `unknownProgramUnreadArgument`, its table rows and its corpus counts (the "second number", which is now not built);
+> - the xargs-into-unknown reader;
+> - the `deploy pr$x` and `xargs deploy` re-pins (both restored);
+> - `unset` on the valve (removed);
+> - canary 2;
+> - the over-ask rows `./gradlew $task`, `exit $?`, `kill $pid` and `prettier --write "$f"` (now residual rows at `ask / auto / deny`).
+>
+> Round 1 also added backlog 602's readers, and round 2 rewrote the `su`/`runuser` half and added `uname26` and the per-architecture names.
+
+Probes, corpora logs, the image census and the canary harness are in `scratchpad/wp203/` (`probe.mjs`, `corpus-diff.mjs`, `canary.mjs`, `a-lines.txt`/`a-before.log`/`a-after.log`, `adv.jsonl`/`adv-before.log`/`adv-after.log`, `image-census.txt`, `base/` = `git archive HEAD` of the two packages for the before cells). Nothing was executed by bash for this row; the one container was the census below.
+
+**Changes** (`packages/domain/src/policies/command-policy.ts`).
+- `unknownProgramReasons(stage, policy)`, run by `evaluateOnce` over every stage as written (`Parsed.programStages`). The command is found by `commandNameWalk` (`commandNameWords`' walk, which now also returns the command's index and the wrappers it peeled). It is **unknown** when `knownProgram` says no: not on the valve, not on `PROGRAMS_THAT_RUN_A_COMMAND` (every wrapper set, the shells, the package runners, the string wrappers, `git`), not a reader of a handed command (`COMMAND_READERS`: `eval`, `trap`, `source`, `.`, `find`, `hash`, `alias`, `complete`, `compgen`, `bind`, `fc`), not a builtin WP-158 reads (`DECLARATION_BUILTINS`, `NAME_WRITING_BUILTINS`), not the first token of an `allow`/`ask` entry of the stage's policy (a glob token by glob), and not a floor's exact name.
+- Literal half (b): the first argument holding a judged name (`JUDGED_NAMES` plus the policy's block first tokens), read with `judgedNameIn`: quotes off, split on blanks, `;&|()<>` and backticks, each piece's quotes off, braces expanded (`braceWords`, bounded at 256 words; past it the piece is judged). Reason `unknownProgramRunsJudgedName(program, name)`.
+- Non-literal half (c): the first argument that is not `isLiteralJudgedWord`, and the command an `xargs` in the walk runs (read by `readXargsOptions`). Reason `unknownProgramUnreadArgument(program, argument)`.
+- Valve (d): `KNOWN_NON_WRAPPERS`, name → manual URL. The census is in `command-policy.test.ts` (the WP-203 valve describe).
+- Image wrappers (e): `chroot`, `runcon`, `setpriv`, `setarch`, `linux32`, `linux64`, `i386`, `x86_64`, `prlimit`, `uclampset` and `start-stop-daemon` join `ARGV0_WRAPPERS`, each with a `WRAPPER_FLAGS_WITHOUT_VALUE` row from its manual; `chroot`, `runcon` and `setarch` join `WRAPPER_OPERAND`. `sg` and `newgrp` are read by `readGroupShell` in `wrappedScript`, and both join `HERE_DOCUMENT_SCRIPT_READERS`. `script`'s `-c` value is also read joined to the literal operands after it (`readOptionString`'s `joinOperands`).
+- `commandNameWalk` reads a package runner's words before its exec subcommand as the runner's (`yarn workspace a exec …`), and stops at a runner whose subcommand is `'unknown'` or `'string'`. This lists more words to `expandsCommandName` and never fewer.
+- `HandedScript.overRead`: the operand readings `readShell` adds are marked over-reads, except `"$@"`'s `$1`-on reading. `parseCommand` threads `overRead` and keeps such stages out of `programStages`.
+- Module docblock: a WP-203 paragraph; the *What it still does not read* sentence that named `parallel` is rewritten. `commandNameWords`' docblock and `evaluateOnce`'s comment are updated.
+- technical/05: a WP-203 amendment bullet. The WP-160, WP-161 and WP-201 bullets each get a clause pointing to it.
+
+**Measurement, ruling (a)** (default policy, `attended / auto / deny`; `a-before.log` on `9351d48a` → `a-after.log`).
+
+| Lines | Before | After |
+|---|---|---|
+| `catchsegv sudo id`, `fakeroot sudo id`, `fakeroot -- sudo id`, `fakeroot s{u,}do id`, `frobnicate sudo id`, `cat f \| frobnicate sudo`, `catchsegv git push origin main`, `parallel git push ::: origin`, `./tools/wrap --runner git push origin main` | ask/auto/deny | ask/uncertain/uncertain (`unknownProgramRunsJudgedName`; `s{u,}do` adds the non-literal reason) |
+| `catchsegv $x id`, `frobnicate $x id`, `./tools/wrap "$cmd"` | ask/auto/deny | ask/uncertain/uncertain (`unknownProgramUnreadArgument`) |
+| `sg grp $(echo sudo) id` | ask/auto/deny | ask/uncertain/uncertain (`handedCommand`: `sg` reads its string) |
+| `sg grp sudo id`, `sg agentic 'sudo id'`, `sg grp 'sudo id'`, `script -qc sudo id`, `chroot / sudo id`, `setpriv --reuid 1000 sudo id`, `prlimit --nofile=9 sudo id`, `start-stop-daemon --start --exec /usr/bin/sudo -- id`, `linux32 sudo id`, `runcon x sudo id`, `newgrp agentic <<'EOF'`⏎`sudo id`⏎`EOF` | ask/auto/deny | block/block/block |
+| `sg grp git push origin main`, `sg agentic 'git push origin main'`, `sg agentic -c 'git push origin main'`, `sg agentic 'echo x; git push origin main'`, `sg agentic -c 'git push --no-verify origin main'`, `prlimit --nofile=9 git push origin main`, `start-stop-daemon --start --exec /usr/bin/git -- push origin main`, `linux32 git push origin main`, `newgrp agentic <<'EOF'`⏎`git push origin main`⏎`EOF` | ask/auto/deny | ask/git/git |
+| `script -q -c 'git push origin main' /dev/null`, `runuser -c 'git push origin main' agentic` | ask/git/git | unchanged |
+| `su -c 'sudo id'`, `script -c 'sudo id' out` | block/block/block | unchanged |
+| controls `grep -r sudo .`, `rg sudo`, `cat sudo.txt`, `ls docker`, `make git-hooks`, `cargo test $pkg` | allow/allow/allow | unchanged |
+| controls `echo "git push"`, `echo sudo`, `echo $x`, `which git`, `type sudo`, `test -x /usr/bin/sudo`, `cp sudo x`, `mkdir -p $dir`, `cp $a $b`, `chmod $m f`, `touch $f`, `python3 tools/x.py --git`, `tsc`, `prettier --check .`, `cargo run -- git` | ask/auto/deny | unchanged |
+| `setsid`, `flock /tmp/l`, `unshare`, `taskset 1`, `ionice`, `chrt 1`, `watch` before `git push --force origin main` | block/block/block | unchanged (and `ask/git/git` before a plain push) |
+| the over-ask `./scripts/check.sh git`, `python3 lint.py --cmd sudo`, `./gradlew docker`, `./gradlew $task`, `python3 x.py $arg` | ask/auto/deny | ask/uncertain/uncertain |
+
+**The corpora** (WP-201's three, in `scratchpad/wp201/`, read by `corpus-diff.mjs` on `base/` and on the worktree):
+- (1) 1 090 table strings: **84 newly refused**, 42 by the literal half and 42 by the non-literal half. Every one is a test title or a code fragment (`"a pipe into \`bash\`"`, `"ask / git / git"`), and none is a command line. Before `unset` joined the valve, one command line was refused: `unset arr[0]` (non-literal half).
+- (2) 83 developer lines: **0** newly refused. The one hit before `JUDGED_NAMES` dropped the builtin-only wrappers was `bundle exec rspec` (`exec`).
+- (3) 142 adversarial lines: **0** newly refused.
+- So the row's first number is **0** command lines and the second is **0**, after the two valve additions below. The probe found further over-asks the corpora do not hold (pinned under the over-ask describe): `exit $?`, `kill $pid`, `prettier --write "$f"`, `rm -rf git`, `curl https://example.test/sudo` and `xargs deploy`.
+
+**Image census** (`image-census.txt`: `docker run --rm --network none --entrypoint sh platform-runtime:s16`, arm64, uid 1000 `agentic`, Debian 13.6, `</dev/null` and a 120 s alarm).
+- **Present:** `sg` (a symlink to the setuid `newgrp`), `newgrp`, `chroot` (`/usr/sbin`), `script`, `scriptlive`, `scriptreplay`, `setpriv`, `setarch`, `linux32`, `linux64`, `prlimit`, `uclampset`, `runcon`, `start-stop-daemon` (`/usr/sbin`), `run-parts`, `su`, `runuser` (`/usr/sbin`), `perl`, `awk`, `sed`, and every listed wrapper (`setsid`, `flock`, `unshare`, `nsenter`, `chrt`, `taskset`, `ionice`, `env`, `nice`, `nohup`, `stdbuf`, `timeout`).
+- **Absent:** `i386` and `x86_64` (util-linux ships those names on x86 only; an amd64 image is unmeasured), `catchsegv`, `fakeroot`, `parallel`, `gosu`, `chpst`, `faketime`, `xvfb-run`, `dbus-run-session`, `gdb`, `valgrind`, `expect`, `bwrap`, `proot`, `firejail`, `chronic`, `authbind`.
+- `docs/TODO.md`: the presence item and the `su -c`/`runuser -c` item are closed `[x]` with these measurements. The *which shell* item stays open. By source reading only, shadow's `newgrp.c` runs sg's one command word as `execl(SHELL, "sh", "-c", command, NULL)`, with `SHELL` from its build configuration.
+
+**Decisions/assumptions.**
+- *`script -qc sudo id` and `sg grp sudo id` read through to `block` by an over-read.* `sg` hands only the word after the group (and `-c`) to `sh -c` and drops the rest (shadow `src/newgrp.c`). `script -qc sudo id` names `id` its typescript file. Read exactly, both run a bare `sudo`, and a bare `sudo` reads `ask / auto / deny` (as do `sudo`, `sh -c sudo` and `env sudo`): no block entry matches a judged name with no argument. Criterion (1) requires none of 599's eight lines to be `auto`, and ruling (e) makes both programs known and read through, so the structural rule cannot read them. Both readers therefore also read the string joined to the words after it (for `script`, only when every such word is literal). That is an over-read that can only tighten, and it costs `script -c sudo /dev/null` reading `block`. Canary 7 below holds it.
+- *The readers of a handed command count as known* (`COMMAND_READERS`, the builtins WP-158 reads). The ruling's unknown list does not name them. If they were unknown, WP-160's pinned rows (`trap '%P' EXIT` → `git_boundary`) would read `uncertain`. The policy reads their strings, which is the ruling's "a program with a floor has a reader" reasoning.
+- *A block entry's first token is judged, not known* (as the ruling says), so the literal half reads its arguments (`rm -rf git`, `curl https://example.test/sudo` are over-asks). The non-literal half does **not** read them, because WP-201's `blockEntryBehindExpansion` already reads their expansions against their entries. Otherwise WP-201's criterion (5) controls `curl $url`, `rm -rf dist $out` and `rm -f "$tmp"` would change cell.
+- *The builtin-only wrappers are not judged names* (`exec`, `eval`, `command`, `builtin`, `coproc`). No wrapper can exec one, and in a string a shell runs, the command after one is judged itself. Measured: `bundle exec rspec` was the developer corpus's only hit, and `bundle exec sudo id` stays uncertain. The shell keywords and grouping tokens are excluded from `PROGRAMS_THAT_RUN_A_COMMAND` for the same reason.
+- *A floor's glob vouches for no other program.* `FLOORED_NAMES` makes a command known only by exact name. Under glob matching, `go*` made `gosu` known, and `gosu agentic git push origin main` read `auto`. This was found by the adversarial probe.
+- *Valve.* The ruling's candidates, less `man` (`-P`/`--pager`, `-H`/`--html` name a program) and `sort` (`--compress-program`), each refused by its manual. Two names were added beyond the candidates, each measured: `unset` (`unset arr[0]`, the corpus) and `set` (`sh -c 'set -- git push origin main; "$@"' _ ls`, a WP-201 row, whose `"$@"` is judged where it runs). The census refuses `PROGRAMS_THAT_RUN_A_COMMAND`, `HERE_DOCUMENT_SCRIPT_READERS`, the default block first tokens and the ten names the ruling bars.
+- *Shells and `eval` in the walk.* `ARGV0_WRAPPERS` holds `sh`/`bash`/`zsh`/`dash`/`eval` for the block peel, so the walk read `_` as `bash -c '"$@"' _ git …`'s command. A stage whose walk passes a shell or `eval` is not read by the rule; `wrappedScript` reads it.
+- *xargs into an unknown program* is read under (c), because `xargs` appends input the line does not hold (`echo 'sudo id' | xargs fakeroot` read `auto`). It is skipped when `xargsArguments` already names the command, and for a command holding the replace string (WP-193's).
+- *`for NAME in WORDS`* and an append assignment (`HOME+=x git diff`) are not commands.
+
+**Tests changed (rule 92: renamed, moved, re-pinned).**
+- `unattended-commands.test.ts`, WP-201 review round 1: the row `sh -c 'f(){ "$@"; }; f git push origin main' _ ls` moved out of the one-reason table into its own test, *reads a function that runs "$@" as the unknown program it is, too (WP-203)*. Its cell is unchanged (uncertain), and its reasons gain `unknownProgramRunsJudgedName('f', 'git')`: `f` is a function the line defines that runs its arguments.
+- WP-201 criterion (3), *reads a project's own entry, and nothing without it (rule 42)*: `deploy pr$x` without the entry was `unattended_auto` and is now uncertain under `unknownProgramUnreadArgument`. The rule-42 point holds: the entry's own reason appears only with the entry. A known control `ls pr$x` (`allow_list`) is added.
+- WP-197, *reads a project's own word-specific entry*: `xargs deploy` without the entry was `ask / auto / deny` and is now `ask / uncertain / uncertain`, under the xargs reason. A known control `xargs wc -l` is added.
+- *These are cell changes the ruling's non-literal half makes, against criterion (5)'s "every WP-201 row".* `deploy pr$x` is exactly the ruling's `./gradlew $task` class. They are listed here for the orchestrator's split-clause judgement.
+
+**Tests added.**
+- A WP-203 describe at the end of `unattended-commands.test.ts`: criteria (1), (2), (3) and (5), the over-ask and the residual. The criterion (1) rows assert `deny` with rule `uncertain`/`block_list`/`git_boundary` in both modes, and the named rows assert the reason naming program and word. Two rule-42 rows: a project's block entry as a judged name, and a project's `ask` entry making a program known.
+- The valve census in `command-policy.test.ts`.
+- The policies unit tier reads **3 310 passed**, 5 skipped.
+
+**Canaries** (`canary.mjs`: one exact-anchor edit to `command-policy.ts`, both policy test files run, bytes restored and compared, `restored: true` each time).
+1. `&& false` on the judged-name push: 28 fail, including `criterion (1) … > "frobnicate sudo id" is uncertain, naming frobnicate and sudo`.
+2. `&& false` on the non-literal test: 9 fail, including `criterion (2) … > "frobnicate $x id" is uncertain`.
+3. `sg` removed from `STRING_WRAPPERS` and from `wrappedScript`'s dispatch: 5 fail, including `criterion (3) … > "sg grp 'sudo id'" reads block / block / block`, which received `ask / uncertain / uncertain`. Both layers exist.
+4. `env` added to the valve: the census fails with `offending` = `["env"]`.
+5. `echo` added to `ARGV0_WRAPPERS` only: the census fails naming `echo` (and 80 other rows move).
+6. `echo` dropped from the valve: 102 fail, including `criterion (5) … > "echo \"git push\"" keeps ask / auto / deny`.
+7. `script`'s joined reading off: 2 fail, the two `script -qc sudo id` rows.
+
+**Adversarial probe** (`adv.jsonl`, 113 lines, before and after in `adv-before.log`/`adv-after.log`).
+- These are refused after the change:
+  - `sg -  agentic …`, `sg -l agentic 'sudo id'`, `sg agentic -c sudo id` and `sg $g 'sudo id'` (a non-literal group);
+  - `script -qec 'sudo id' /dev/null`, `script -qec sudo id`, `chroot --userspec x / sudo id`, `chroot --userspec x / frobnicate sudo`, `setpriv --reuid=1000 --regid=1000 --init-groups sudo id`, `prlimit --nofile 9 sudo id` and `prlimit -n9 git push origin main`;
+  - `start-stop-daemon -S -a /usr/bin/sudo -- id`, `setarch -R sudo id`, `uclampset -m 10 sudo id`, `runcon -t t sudo id`, `echo 'sudo id' | newgrp agentic` and `echo 'git push origin main' | sg agentic`;
+  - each WP-201 spelling behind `fakeroot` (`$x`, `su$x`, `"$(echo sudo)"`, `~root/x`, `/usr/bin/s?do`, `/usr/bin/sud[o]`);
+  - `fakeroot` behind `env`, `nice`, `timeout`, `find -exec`, `sh -c` and `$(…)`;
+  - `gosu`, `xvfb-run`, `valgrind`, `gdb --args`, `parallel ::: '…'`, `perl -e 'system("sudo id")'` and `awk 'BEGIN{system("sudo id")}'`;
+  - `trap 'frobnicate sudo id' EXIT` and `pnpm m exec frobnicate sudo`.
+- Unchanged, as known or valved commands: `grep git file`, `echo git push`, `cat git.txt`, `ls git`, `which sudo` and `awk '{print $1}' file`.
+- A function or alias named like a non-wrapper keeps its earlier refusal. `echo() { sudo "$@"; }; echo id` is `block`, `cp() { "$@"; }; cp sudo id` is `git_boundary` (computed name), and `alias echo=sudo; …` is `handedCommand`.
+- `auto` by design, the residual: `frobnicate --cmd=sudo`, `run-parts /tmp/x`, `scriptlive t f`, `sg agentic` and `newgrp agentic` (a shell on a terminal-less input), and `bundle exec rspec`.
+
+**Residual, stated** (technical/05 too).
+- An option's value naming a program (`--cmd=sudo`).
+- An interpreter that is not a shell building a program the line does not name.
+- A script file the run wrote (`run-parts`, `scriptlive`).
+- A wrapper's operand or option value that the grammar-blind walk takes for the command, which moves the rule to the next word (WP-205's).
+- A `$` or a glob *inside* a quoted argument of an unknown program (`frobnicate 'eval $x'`).
+- A bare judged name with no argument.
+
+**Sentences falsified** (rule 83).
+- `grep -rn -i -e 'parallel\`' -e '(\`parallel' -e "nobody judges" -e "is the command itself" -e "never an argument of the command" -e "a wrapper the policy does not list" -e "an unmatched command runs" docs CLAUDE.md packages/domain/src packages/application/src`, PROGRESS, the plan and decisions excluded:
+  - `command-policy.ts` module docblock (`parallel`): rewritten.
+  - `commandNameWords`' *"never an argument of the command itself"*: kept, with a sentence that an unknown command's arguments are read by their own rule.
+  - technical/05 WP-160 bullet (`parallel`) and WP-161 bullet (*"`xargs` feeding a command that is not one of those"*): a clause each.
+  - technical/05 WP-201 residual (*"an argument no entry names (`curl $url`, `chmod $m f`) is the sandbox's"*): qualified to a known, valved or entry-named command.
+  - `HERE_DOCUMENT_SCRIPT_READERS`' *"an unmatched command runs under `auto`, and its script is not read"* (`python3 - <<'EOF'`), technical/05's WP-153 sentence and `unattended-commands.ts`'s *"under `auto` an unmatched command runs"* (`python3 -c '…subprocess…'`): still true. `python3`'s arguments hold no judged name there.
+  - `docs/technical/12-configuration-and-schemas.md`'s `APP_RUNNER_MAX_PARALLEL`: unrelated.
+- Backlog 599's *"A binary absent from these sets is the command itself, and its operands are arguments that nobody judges"*: the refiner's to close.
+
+**Discovered work.**
+- A bare judged name reads `auto`. `sudo`, `sh -c sudo`, `env sudo` and `docker` match no entry, because `sudo *` and `docker *` need a word after the name. Harmless in the stock image (no `sudo`; bare `docker` prints usage). It is the reason `script`/`sg` needed the joined over-read. It belongs with 598 (WP-204).
+- `prlimit`'s and `start-stop-daemon`'s grammar: `--exec PATH` names the command as an option value, which the walk lists only as a value (`expandsAsName` reads it) and the block peel reads by its every-start walk. It is WP-205's table to declare.
+
+**Risks.**
+- The non-literal half refuses every unknown program given an expansion under `auto`: `./gradlew $task`, `exit $?`, `kill $pid`, `prettier --write "$f"`. The corpora hold none of these, so the cost in real runs is unmeasured. That is the split clause's question.
+
+**Verification.** `pnpm run -s verify`: `PASS: verify` (14 610 passed, 19 skipped). The citation guard: 13/13. Not run, by the brief: the scanner's one e2e reader, `test/e2e/pipeline/project-commands.e2e.test.ts` (`e2e-fake-claude`, literal commands only), is the orchestrator's to run.
+
+**Review round 1** (reviewer REQUEST_CHANGES; probes and corpus in `scratchpad/wp203-rev/`).
+- *The split clause applies* (the orchestrator's ruling). Ruling (c), the non-literal half, newly refused **80 of 286** ordinary agent lines under `auto` in the reviewer's corpus (`corpus.txt`): `eslint "$f"`, `prettier --write "$f"`, `node $script`, `kill $pid`, `exit $?`, and every `for f in *.ts; do eslint "$f"; done`. No syntactic narrowing recovers them without reopening `frobnicate $x id`. So (c) **left the row**, and it is removed from the tree with nothing left half-wired: `unknownProgramUnreadArgument`, its union member, `readsExpansions`, `quotedWord`, the xargs-into-unknown reader and the criterion (2) rows. The reviewer's major goes with it, because its fix has the same over-ask shape (`find . -name '*.ts' -exec prettier --write {} +`). That major is `find /usr/bin -name git -exec /lib/ld-linux-aarch64.so.1 {} push origin main \;`, a `find -exec` file name given to an unknown program, which reads `ask / auto / deny` on the default policy. The orchestrator files both for the architect. The rows `frobnicate $x id`, `catchsegv $x id`, `./gradlew $task`, `exit $?`, `echo sudo id | xargs fakeroot` and the `ld-linux` line are pinned `ask / auto / deny` under the residual describe, as the follow-up's evidence.
+- *The re-pins were (c)'s only, so they are restored*: WP-201's `deploy pr$x` (`unattended_auto`) and WP-197's `xargs deploy` (`ask / auto / deny`). The `f(){ "$@"; }; f git push origin main` test stays: its added reason is the literal half's (`unknownProgramRunsJudgedName('f', 'git')`). `unset` leaves the valve, since it was added only for the non-literal half's `unset arr[0]`. `set` stays (a literal-half row).
+- *Backlog 602* (major, live, folded in by the orchestrator, measured): a wrapper given no command runs a shell on its standard input.
+  - Before: `echo 'git push origin main' | linux64`, `| linux32` and `| unshare` read `allow`, and `platform-runtime:s16` printed `RAN_L64` for `echo "echo RAN_L64" | linux64`.
+  - Built: `SHELL_WITHOUT_COMMAND` holds `setarch`, `linux32`, `linux64`, `i386`, `x86_64`, `unshare`, `nsenter`, `chroot`, and `su`/`runuser` without `-c`. The manuals (cited at the set): setarch's default program is `/bin/sh`; unshare and nsenter run `${SHELL}`; chroot runs `"$SHELL" -i`; su and runuser run the target user's shell.
+  - `wrappedScript` runs `readsStandardInput` when `commandNameWalk` finds no command and the last wrapper it peeled is on the set. So a pipe is `handedCommand`, and a literal here-string is the script. Every name joins `HERE_DOCUMENT_SCRIPT_READERS`, so a here-document is read as the script too.
+  - The other argv wrappers need a command (`setpriv`, `prlimit`, `runcon`, `uclampset`, `start-stop-daemon`, `setsid`, `taskset`, …), or print rather than run a shell with none (`nice`, `ionice`, `env`).
+  - Rows: nine pipes uncertain (including `| unshare -r`, `| nsenter -t 1`, `| chroot /`, `| su agentic` and `| nice linux64`), and here-string and here-document rows reading `git`/`block`. Controls: `echo x | linux64 cat`, `echo x | su -c 'cat' agentic` and a bare `linux64` keep `ask / auto / deny`.
+  - Canary 8 (`&& false` on the set test): the 9 pipe rows fail.
+- *[minor] The valve census* names `man` and `sort` in its never-list. Canary 9 (`sort` added to the valve) fails the census. That canary had survived round 0's census.
+- *[nit] Extglob, WP-204's residual*: `frob +(sudo) id` reads `ask / auto / deny` (extglob is off in a non-interactive bash). `frob @(su|x)do id` reads `uncertain` (`handedCommand`, by the scanner's split at the parenthesis, not by this rule).
+- Canary 1 re-anchored (`return found === undefined ? [] : …` → `return [];`): 29 fail. Canaries 3 and 7: 5 and 2 fail, as before. All restored, `restored: true`.
+- technical/05:
+  - The WP-203 bullet now states the split (the 80/286 measurement and the follow-up rows), 602's readers, the never-list and the extglob residual.
+  - Two clauses round 0 added were false after the split and are rewritten: the WP-201 residual's *"on one it does not … it is uncertain"* now says WP-203 leaves it to the sandbox, and the WP-161 *"nor a program the policy does not know"* is gone.
+- Module docblock: the non-literal sentence is replaced by the split and the residual (`frobnicate $x id`, `find -exec frobnicate {}`, `xargs frobnicate`), and 602 is added.
+- The policies unit tier: 3 323 passed, 5 skipped.
+
+**Review round 2** (fresh reviewer, REQUEST_CHANGES, one major; probes in `scratchpad/wp203-rev2/`).
+- *[major] `su`/`runuser` with no `-c`.* Round 1's walk took a bare `-` as su's user operand, and so `agentic` as the command. Its `-c` exemption also looked at every word on the line. So `echo 'git push origin main' | su - agentic`, `| su - root`, `| runuser - agentic`, `| su agentic -`, `| nice su -s /bin/sh - agentic`, `| taskset -c 0 su agentic` and `| ionice -c3 runuser -u agentic` read `allow`, and so did `su - agentic <<<'sudo id'`.
+  - Now `su` and `runuser` leave `SHELL_WITHOUT_COMMAND` and are read by `readLoginShell` in `wrappedScript`, by su(1)'s and runuser(1)'s grammar.
+  - The reader looks for `-c`/`--command`/`--session-command` among their **own** options (`readOptionString` over their words), and then the string is the script.
+  - Otherwise: a bare `-` is `-l`. `-s`, `-g`, `-G`, `-w` (and `-u` for `runuser`) and their long forms take a value. Getopt permutes, so an option after the user is read. The words after the user are the shell's argv, read by `readShell`, and with none the shell reads its standard input.
+  - `runuser -u USER CMD` runs CMD itself, which the walk reads. With no CMD it is read as the shell, an over-read.
+  - The reader runs only where the walk has found no command before the `su` word. So `echo x | nice grep su file` keeps `ask / auto / deny`, while `taskset -c 0 su agentic` (where the walk reads `su` as `taskset`'s operand) is read.
+  - `su` and `runuser` join `HERE_DOCUMENT_SCRIPT_READERS`.
+  - Rows: all the reviewer's spellings and `| su agentic /dev/stdin` read uncertain, and `su - agentic <<<'sudo id'` reads `block`. `su -s /bin/sh agentic <<<'git push origin main'` and `su --shell=/bin/sh - agentic <<<…` read `git`. Controls at their old cells: `su -c 'id' agentic`, `su - agentic -c id` (`ask / auto / deny`), `su - agentic -c 'sudo id'` (`block`), `echo x | runuser -u agentic cat`, `echo x | su -c 'cat' agentic` and `echo x | nice grep su file`.
+  - Canary 10 (the reader's `readShell` call removed): 12 fail, every su/runuser row.
+- *[minor] `uname26`* and every per-architecture name util-linux links to `setarch` are now one list, `SETARCH_NAMES`. Source: `sys-utils/Makemodule.am`'s `SETARCH_LINKS`, which is `uname26 linux32 linux64` plus `s390 s390x`, `i386`, `x86_64`, `ppc ppc64 ppc32`, `sparc sparc64 sparc32 sparc32bash`, `mips mips64 mips32`, `ia64`, and `parisc parisc64 parisc32` per architecture. The list is used by `ARGV0_WRAPPERS`, `WRAPPER_FLAGS_WITHOUT_VALUE` and `SHELL_WITHOUT_COMMAND`. Rows: `| uname26` and `| ppc64` are uncertain.
+- Canary 8 was re-anchored (the bare-wrapper test `&& false`): 10 fail.
+- *[minor] These notes:* the round-0 paragraphs that describe (c) are marked superseded at the top of this section, and kept as history.
+- *[nit] Residual classes, named once* (technical/05's WP-203 bullet too). Each reads `ask / auto / deny`:
+  - an option's value naming a program: `tar --to-command='…'`, `rsync --rsh='…'`;
+  - an interpreter or editor that is not a shell running a string with a judged name glued into it: `awk 'BEGIN{"git push …" | getline}'`, `vi -c '!git push …'`, `deno eval`;
+  - a file a wrapper with no command reads as its script: `linux64 < f`, `chroot / < f` (a file the run wrote);
+  - a locale-translated string: `frob $"git" push`.
+
+**Review round 3** (REQUEST_CHANGES, three majors in the su/runuser reader, contained in the image; probes in `scratchpad/wp203-rev3/lines.txt`; the orchestrator's ruling: a real getopt model, fail closed).
+- *The three majors.*
+  - (1) An attached value with a non-letter (`-s/bin/sh`, `-s./sh`, `-g0`, `-Gwheel-x`, `-wPATH,HOME`, `-w_X`, `-w1`) made the word an operand, so the user and stdin were misread.
+  - (2) `value.includes('u')` matched a `u` inside a value (`runuser -wu`, `-wuser`).
+  - (3) A long option that takes a value but is not the target name was skipped without its value (`su --whitelist-environment -c agentic`, `su --group -c agentic`).
+- *The fix:* `readLoginShell` replaces both readers for su/runuser and parses su(1)'s and runuser(1)'s whole option table.
+  - Short options: the no-value letters are `f l m p P T h V`; the valued ones are `c g G s w`, plus `u` for runuser. A cluster is read letter by letter, and a valued letter takes the rest of its word (any characters) or the next word.
+  - Long options: matched by unique prefix, with the value `=`-attached or in the next word, for each long option that takes a value.
+  - A bare `-` is `-l`, getopt permutes, and `--` ends the options.
+  - **Uncertain:** an unknown short letter or long option, an ambiguous prefix (`--s`), a value that never comes, a word that is not literal, and a `-c` string followed by words after USER (they become its positional parameters).
+  - Rows: every reviewer line in the round-3 message is uncertain (piped), or reads `git` with a here-string. So is `su --frobnicate agentic`, uncertain. Controls: `su -lc 'id' agentic`, `su -s /bin/sh -c id agentic`, `su -c 'id' agentic` and `su - agentic -c id` keep `ask / auto / deny`; `su -lc 'sudo id' agentic` and `su --session-command='sudo id' agentic` read `block`.
+- On the reviewer's full file of 159 lines, 18 read `ask / auto / deny`. All are honest or residual:
+  - controls with no pipe;
+  - `su agentic x <<<…`, where the shell runs the file `x` (a file the run wrote);
+  - `runuser -ul agentic` and `runuser -u -l agentic`, where `-u` takes `l`/`-l` and `agentic` is the command;
+  - `ppc64le`, `aarch64`, `arm64`, `armv7l` and `riscv64`, which `setarch` knows but util-linux installs no link for (`SETARCH_LINKS`). They are a residual: a project image that links one is unread.
+- Canary 11 restores the old rule that a short word with a non-letter is an operand: 8 fail (the attached-value rows and `su -g0 … <<<`). Canary 10 (the reader's `readShell` off): 26 fail.
+- The policies unit tier: 3 361 passed, 5 skipped.

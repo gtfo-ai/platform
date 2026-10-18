@@ -91,12 +91,30 @@
  * as between words (`normaliseCommand`), and git's abbreviated long options are resolved by git's
  * rule (`HAZARDOUS_ARGUMENTS`).
  *
- * **What it still does not read:** a script in a file (`bash file`, `bash < file`, `. ./x.sh` — a
- * file the run wrote, backlog 481's residual and the unattended module's), an interpreter that is not
- * a shell (`python3 -c`, `perl -e`), a command a program assembles from its input where no string on
- * the line names it (`parallel`; and `xargs` feeding a command that is not a wrapper, `find -exec`,
- * `git`, a shell or a verb a `command`-kind floor names — WP-164 made `xargs make`, whose input can
- * name assignments and `--eval` as well as targets, uncertain), a prompt variable or an alias set by
+ * **A program the policy does not know may be a wrapper** (WP-203, backlog 599): one no `allow` or
+ * `ask` entry of the stage's policy begins with, on no wrapper set, no shell or package runner, with
+ * no floor and no reader, and not on the valve of cited non-wrappers (`KNOWN_NON_WRAPPERS`). Every
+ * argument of it is a command-position word, so one holding a judged name — a wrapper, a shell, a
+ * package runner, `git` or a block entry's first token, read with its quotes off, split on
+ * operators and its braces expanded (`fakeroot sudo id`, `parallel git push ::: origin`,
+ * `sg grp 'git push origin main'` were `unattended_auto`) — is uncertain (`unknownProgramReasons`).
+ * One the shell expands is not read (ruling (c), split to a follow-up row). The run image's own wrappers
+ * are on the sets with their grammar: `chroot`, `setpriv`, `setarch`, `prlimit`, `runcon`,
+ * `start-stop-daemon` and the rest on `ARGV0_WRAPPERS`, `sg` and `script -c` read as a handed
+ * script, `newgrp` as a shell on its input, and a wrapper that runs `$SHELL` when it is given no
+ * command (`linux64`, `setarch`, `unshare`, `chroot`, …) as a shell on its input too (backlog 602).
+ *
+ * **What it still does not read:** a script in a file (`bash file`, `bash < file`, `. ./x.sh`,
+ * `run-parts dir`, `scriptlive` — a file the run wrote, backlog 481's residual and the unattended
+ * module's), an interpreter that is not a shell (`python3 -c`, `perl -e`: since WP-203 a judged
+ * name in their script is uncertain, but a program the script builds is not read), a command a
+ * program assembles from its input where no string on the line names it (`cat cmds | parallel`;
+ * and `xargs` feeding a known command that is not a wrapper, `find -exec`, `git`, a shell or a verb
+ * a `command`-kind floor names — WP-164 made `xargs make`, whose input can name assignments and
+ * `--eval` as well as targets, uncertain), an argument the shell expands given to a program the policy does not know
+ * (`frobnicate $x id`, `find -exec frobnicate {}`, `xargs frobnicate` — WP-203's split follow-up),
+ * an option's value naming a program on a command it does not know (`frobnicate --cmd=sudo`), a
+ * prompt variable or an alias set by
  * a start-up file, an option's value attached to its option (`read -aNAME`), a name taken by a
  * builtin it does not list (`getopts`, `wait -p`, `exec {var}>…`), an attribute (`-i`, `-n`) given
  * to a variable outside the line, a name bound outside the line (`hash -p` in an earlier call, if
@@ -296,13 +314,22 @@ export const environmentSpellsFloor = (verb: string) =>
 export const unreadGitConfigKey = (key: string) =>
   `a git configuration key, \`${key}\`, set for the command — git runs a program, reads a file or reaches a host through many keys, and the platform reads only a short list of keys that do none of these (user.name, user.email, color.*, …) — run the command without it; the platform does not read what a git configuration key does` as const;
 
+/**
+ * WP-203 (backlog 599), the literal half: an argument of a program the policy does not know holds a
+ * name that runs a command (`fakeroot sudo id`, `catchsegv git push origin main`). Such a program
+ * may be a wrapper, which would run it (`unknownProgramReasons`).
+ */
+export const unknownProgramRunsJudgedName = (program: string, name: string) =>
+  `an argument naming ${name} given to ${program}, a program the platform does not know — it may run its arguments as a command, as sg, chroot or fakeroot do — run the command itself, not through ${program}; the platform judges a command only where it knows the program in front of it` as const;
+
 export type UncertaintyReason =
   | (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY]
   | ReturnType<typeof environmentSpellsFloor>
   | ReturnType<typeof unreadGitConfigKey>
   | ReturnType<typeof xargsCompletesBlockEntry>
   | ReturnType<typeof flagValueHidesBlockEntry>
-  | ReturnType<typeof expansionCompletesBlockEntry>;
+  | ReturnType<typeof expansionCompletesBlockEntry>
+  | ReturnType<typeof unknownProgramRunsJudgedName>;
 
 /**
  * product/19 §3, "Block (all stages)". These are the entries the organisation maximum starts from
@@ -2091,6 +2118,37 @@ const RUNNER_EXEC_SUBCOMMANDS: Readonly<Record<string, ReadonlySet<string>>> = {
  * keywords and grouping tokens. A block pattern names the real binary, so these are peeled off
  * before matching — otherwise `env sudo id` and `then sudo id` read as `env` and `then` commands.
  */
+/**
+ * `setarch` and the names util-linux installs as links to it (WP-203 review round 2): `uname26`,
+ * `linux32` and `linux64` everywhere, and the per-architecture names its build adds
+ * (`sys-utils/Makemodule.am`'s `SETARCH_LINKS`, https://github.com/util-linux/util-linux). Each
+ * runs `/bin/sh` when given no program (https://manpages.debian.org/trixie/util-linux/setarch.8.en.html).
+ */
+const SETARCH_NAMES: readonly string[] = [
+  'setarch',
+  'uname26',
+  'linux32',
+  'linux64',
+  'i386',
+  'x86_64',
+  's390',
+  's390x',
+  'ppc',
+  'ppc32',
+  'ppc64',
+  'sparc',
+  'sparc32',
+  'sparc32bash',
+  'sparc64',
+  'mips',
+  'mips32',
+  'mips64',
+  'ia64',
+  'parisc',
+  'parisc32',
+  'parisc64',
+];
+
 const ARGV0_WRAPPERS: ReadonlySet<string> = new Set([
   'env',
   'command',
@@ -2126,6 +2184,22 @@ const ARGV0_WRAPPERS: ReadonlySet<string> = new Set([
   'runuser',
   'su',
   'doas',
+  // WP-203 (backlog 599): the run image's own argv wrappers (`command -v` in `platform-runtime:s16`
+  // finds every one but `i386` and `x86_64`, which util-linux ships on x86 only), each running its
+  // operands as a program: coreutils' `chroot NEWROOT CMD` and `runcon CONTEXT CMD`
+  // (https://manpages.debian.org/trixie/coreutils/chroot.8.en.html,
+  // https://manpages.debian.org/trixie/coreutils/runcon.1.en.html); util-linux's `setpriv`,
+  // `setarch ARCH` and its per-architecture names, `prlimit` and `uclampset`
+  // (https://manpages.debian.org/trixie/util-linux/setpriv.1.en.html, …/setarch.8.en.html,
+  // …/prlimit.1.en.html, …/uclampset.1.en.html); dpkg's `start-stop-daemon --exec PATH -- ARGS`
+  // (https://manpages.debian.org/trixie/dpkg/start-stop-daemon.8.en.html).
+  'chroot',
+  'runcon',
+  'setpriv',
+  ...SETARCH_NAMES,
+  'prlimit',
+  'uclampset',
+  'start-stop-daemon',
   // Not `sudo`: the block list bans it by name (`sudo *`), and peeling it would report the inner
   // command's match instead of that one (the `denied-tool` golden pins the reason a run reads).
   'builtin',
@@ -3994,11 +4068,35 @@ const hereDocumentUncertainty = (body: HereDocumentBody): readonly UncertaintyRe
  * A name computed from a variable (`| $SH`) is refused by the git boundary's computed-name check
  * under `auto`, and is unmatched (so refused) under `deny`.
  */
+/**
+ * Argv wrappers that run a shell when they are given no command (backlog 602, WP-203 round 1), so
+ * with nothing after their options and operands they read their standard input as a script, as a
+ * shell with no `-c` does: `setarch` and its per-architecture names ("the default program is
+ * /bin/sh", https://manpages.debian.org/trixie/util-linux/setarch.8.en.html), `unshare` and
+ * `nsenter` (`${SHELL}`, …/unshare.1.en.html, …/nsenter.1.en.html), `chroot` (`"$SHELL" -i`,
+ * https://manpages.debian.org/trixie/coreutils/chroot.8.en.html). `su` and `runuser` are read by
+ * their own grammar in `wrappedScript` (`readLoginShell`). `echo 'git push origin main' | linux64`
+ * read `allow`, and `platform-runtime:s16` ran `echo "echo RAN_L64" | linux64`.
+ */
+const SHELL_WITHOUT_COMMAND: ReadonlySet<string> = new Set([
+  ...SETARCH_NAMES,
+  'unshare',
+  'nsenter',
+  'chroot',
+]);
+
 export const HERE_DOCUMENT_SCRIPT_READERS: ReadonlySet<string> = new Set([
   ...SCRIPT_SHELLS,
   'busybox',
   'eval',
   'source',
+  // WP-203: `newgrp GROUP` and `sg GROUP` with no command start a shell on their input.
+  'newgrp',
+  'sg',
+  ...SHELL_WITHOUT_COMMAND,
+  // `su USER` and `runuser USER` with no `-c` run the user's shell on their input (backlog 602).
+  'su',
+  'runuser',
 ]);
 
 /**
@@ -4774,6 +4872,87 @@ const WRAPPER_FLAGS_WITHOUT_VALUE: Readonly<Record<string, ReadonlySet<string>>>
   command: new Set(['-p', '-v', '-V']),
   exec: new Set(['-c', '-l']),
   setsid: new Set(['-c', '-f', '-w', '--ctty', '--fork', '--wait']),
+  // WP-203: the run image's argv wrappers, from the manual each `ARGV0_WRAPPERS` entry cites.
+  chroot: new Set(['--skip-chdir']),
+  runcon: new Set(['-c', '--compute']),
+  setpriv: new Set([
+    '-d',
+    '--dump',
+    '--clear-groups',
+    '--keep-groups',
+    '--init-groups',
+    '--list-caps',
+    '--no-new-privs',
+    '--nnp',
+    '--reset-env',
+  ]),
+  ...Object.fromEntries(
+    SETARCH_NAMES.map((name) => [
+      name,
+      new Set([
+        '--uname-2.6',
+        '-v',
+        '--verbose',
+        '-3',
+        '--3gb',
+        '--4gb',
+        '-B',
+        '--32bit',
+        '-F',
+        '--fdpic-funcptrs',
+        '-I',
+        '--short-inode',
+        '-L',
+        '--addr-compat-layout',
+        '-R',
+        '--addr-no-randomize',
+        '-S',
+        '--whole-seconds',
+        '-T',
+        '--sticky-timeouts',
+        '-X',
+        '--read-implies-exec',
+        '-Z',
+        '--mmap-page-zero',
+        '--show',
+      ]),
+    ]),
+  ),
+  // A resource option's limits are optional and attached only (`--nofile=9`, `-n9`).
+  prlimit: new Set([
+    '--noheadings',
+    '--raw',
+    '--verbose',
+    ...['as', 'core', 'cpu', 'data', 'fsize', 'locks', 'memlock', 'msgqueue', 'nice', 'nofile']
+      .concat(['nproc', 'rss', 'rtprio', 'rttime', 'sigpending', 'stack'])
+      .map((resource) => `--${resource}`),
+    ...'Acdefilmnqrstuxy'.split('').map((letter) => `-${letter}`),
+  ]),
+  uclampset: new Set(['-a', '--all-tasks', '-R', '--reset-on-fork', '-s', '--system', '-v']),
+  'start-stop-daemon': new Set([
+    '-S',
+    '--start',
+    '-K',
+    '--stop',
+    '-T',
+    '--status',
+    '-t',
+    '--test',
+    '-o',
+    '--oknodo',
+    '-q',
+    '--quiet',
+    '-b',
+    '--background',
+    '--notify-await',
+    '-C',
+    '--no-close',
+    '-m',
+    '--make-pidfile',
+    '--remove-pidfile',
+    '-v',
+    '--verbose',
+  ]),
 };
 /**
  * Wrappers whose first operand is not the command (`flock FILE cmd`, `su USER …`, `timeout DURATION
@@ -4787,6 +4966,10 @@ const WRAPPER_OPERAND: ReadonlySet<string> = new Set([
   'timeout',
   'taskset',
   'chrt',
+  // WP-203: `chroot NEWROOT`, `runcon CONTEXT`, `setarch ARCH` (the manuals `ARGV0_WRAPPERS` cites).
+  'chroot',
+  'runcon',
+  'setarch',
 ]);
 
 /**
@@ -4795,13 +4978,30 @@ const WRAPPER_OPERAND: ReadonlySet<string> = new Set([
  * plain values and its leading operand (each of those is listed too, since the policy does not
  * know a wrapper's grammar). Never an assignment (backlog 512's lesson), never a `[`/`[[` test or
  * what is inside it, and never an argument of the command itself: `nice ls *.ts` lists `nice` and
- * `ls`, not `*.ts`.
+ * `ls`, not `*.ts`. The arguments of a command the policy does not know are command-position
+ * words too since WP-203, read by their own rule ({@link unknownProgramArgument}).
  */
-const commandNameWords = (tokens: readonly string[]): readonly string[] => {
+const commandNameWords = (tokens: readonly string[]): readonly string[] =>
+  commandNameWalk(tokens).words;
+
+/**
+ * {@link commandNameWords}' walk, which also says where the command it stopped at stands (`command`,
+ * an index into `tokens`; none when the stage is only wrappers or stops at an expanded name or a
+ * test) and which wrappers it peeled to reach it (WP-203).
+ */
+const commandNameWalk = (
+  tokens: readonly string[],
+): {
+  readonly words: readonly string[];
+  readonly command?: number;
+  readonly wrappers: readonly string[];
+} => {
   const words: string[] = [];
+  const wrappers: string[] = [];
   let operand = false;
   let wrapper = '';
   let runnerSubcommand: number | null = null;
+  let opaqueRunner = false;
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index] as string;
     const value = unquoteToken(token);
@@ -4842,17 +5042,25 @@ const commandNameWords = (tokens: readonly string[]): readonly string[] => {
     // A package runner's exec form and its subcommand are wrappers too (WP-196 (b)).
     const found = runnerSubcommandAt(tokens, index);
     const subcommand = typeof found === 'number' ? found : null;
-    if (
-      !(ARGV0_WRAPPERS.has(name) || found !== null || index === runnerSubcommand) ||
-      expandsAsName(token)
-    ) {
+    if (expandsAsName(token)) {
       break;
     }
+    if (!(ARGV0_WRAPPERS.has(name) || found !== null || index === runnerSubcommand)) {
+      // A package runner's own words before its exec subcommand (`yarn workspace a exec …`, `pnpm m
+      // exec …`) are not the command, and one whose subcommand cannot be determined (`yarn
+      // workspaces …`, `npm explore`) runs a command no walk names (WP-203).
+      if (runnerSubcommand !== null && index < runnerSubcommand) {
+        continue;
+      }
+      return opaqueRunner ? { words, wrappers } : { words, command: index, wrappers };
+    }
+    opaqueRunner ||= found === 'unknown' || found === 'string';
     runnerSubcommand = subcommand ?? runnerSubcommand;
     operand = WRAPPER_OPERAND.has(name);
     wrapper = name;
+    wrappers.push(name);
   }
-  return words;
+  return { words, wrappers };
 };
 
 /**
@@ -4955,12 +5163,369 @@ const expandsCommandName = (stage: string, boundaryReads: boolean, operands: boo
   );
 };
 
+// ── WP-203: an unknown command is a possible wrapper (backlog 599) ───────────
+
+/**
+ * The string wrappers and the shell the run image ships that are on no other set (WP-203 ruling
+ * (e); `command -v` in `platform-runtime:s16`): `script -c CMD` and `sg GROUP CMD` hand a string to
+ * a shell, and `newgrp GROUP` starts one on its input (`wrappedScript` reads all three).
+ */
+const STRING_WRAPPERS: readonly string[] = ['script', 'sg', 'newgrp'];
+
+/**
+ * The commands whose handed command the policy reads (`wrappedScript`, `storesCommand`, WP-160),
+ * which are therefore not unknown whatever set they are on — and not judged either: their names as
+ * an argument are no more a command than `prettier --check .`'s `.` is.
+ */
+const COMMAND_READERS: ReadonlySet<string> = new Set([
+  'eval',
+  'trap',
+  'source',
+  '.',
+  'find',
+  'hash',
+  'alias',
+  'complete',
+  'compgen',
+  'bind',
+  'fc',
+]);
+
+/**
+ * Words of shell syntax on the wrapper sets — keywords and grouping — which no wrapper can exec and
+ * which, in a string a shell runs, stand before a command that is judged itself.
+ */
+const SHELL_SYNTAX_WORDS: ReadonlySet<string> = new Set([
+  'if',
+  'then',
+  'else',
+  'elif',
+  'while',
+  'until',
+  'do',
+  'done',
+  'fi',
+  'for',
+  'case',
+  'esac',
+  '{',
+  '}',
+  '!',
+  '[[',
+  ']]',
+]);
+
+/**
+ * The names that run a command (WP-203 ruling (b)): every wrapper — the string wrappers included —
+ * the shells, the package runners and `git`. Exported for the valve's census.
+ */
+export const PROGRAMS_THAT_RUN_A_COMMAND: ReadonlySet<string> = new Set(
+  [
+    ...ARGV0_WRAPPERS,
+    ...ENVIRONMENT_WRAPPERS,
+    ...COMPUTED_NAME_WRAPPERS,
+    ...PACKAGE_RUNNER_COMMANDS,
+    ...Object.keys(RUNNER_EXEC_SUBCOMMANDS),
+    ...SCRIPT_SHELLS,
+    ...STRING_WRAPPERS,
+    'git',
+  ].filter((name) => !SHELL_SYNTAX_WORDS.has(name)),
+);
+
+/**
+ * The **judged** names, which an argument of an unknown program may not hold:
+ * {@link PROGRAMS_THAT_RUN_A_COMMAND} less the wrappers that are shell builtins only — no wrapper
+ * can exec one (Debian ships no `/usr/bin/exec`), and in a string a shell runs, the command after
+ * one is judged itself, so `bundle exec rspec` is not refused for its `exec` and `bundle exec sudo
+ * id` is for its `sudo`. The block list's first tokens join per policy ({@link unknownProgramReasons}).
+ */
+const JUDGED_NAMES: ReadonlySet<string> = new Set(
+  [...PROGRAMS_THAT_RUN_A_COMMAND].filter(
+    (name) => !['exec', 'eval', 'command', 'builtin', 'coproc'].includes(name),
+  ),
+);
+
+/**
+ * **The valve** (WP-203 ruling (d)): programs whose manual documents that no argument of theirs
+ * names a program to run, each with the page it rests on. A name here is exempt from the unknown
+ * program rule, so adding one **loosens** and is reviewed; a name missing only over-asks. A census
+ * (`command-policy.test.ts`) refuses a name on {@link PROGRAMS_THAT_RUN_A_COMMAND} or a default
+ * block entry's first token, and `env`, `xargs`, `awk`, `sed`, `tar`, `perl`, `python3`, `node`,
+ * `ssh` and `find` outright. Two of the ruling's candidates are **not** here, by their manuals:
+ * `man` (`-P`/`--pager` and `-H`/`--html` name a program,
+ * https://manpages.debian.org/trixie/man-db/man.1.en.html) and `sort` (`--compress-program=PROG`,
+ * https://manpages.debian.org/trixie/coreutils/sort.1.en.html).
+ */
+const COREUTILS = (name: string): string =>
+  `https://manpages.debian.org/trixie/coreutils/${name}.1.en.html`;
+const BASH_BUILTINS = 'https://www.gnu.org/software/bash/manual/html_node/Bash-Builtins.html';
+const BOURNE_BUILTINS =
+  'https://www.gnu.org/software/bash/manual/html_node/Bourne-Shell-Builtins.html';
+export const KNOWN_NON_WRAPPERS: Readonly<Record<string, string>> = {
+  echo: BASH_BUILTINS,
+  printf: BASH_BUILTINS,
+  type: BASH_BUILTINS,
+  test: BOURNE_BUILTINS,
+  '[': BOURNE_BUILTINS,
+  ':': BOURNE_BUILTINS,
+  cd: BOURNE_BUILTINS,
+  shift: BOURNE_BUILTINS,
+  // Not on the ruling's candidates: the over-ask measured on WP-201's rows,
+  // `sh -c 'set -- git push origin main; "$@"' _ ls`, whose `"$@"` is judged where it runs.
+  set: BOURNE_BUILTINS,
+  pushd: 'https://www.gnu.org/software/bash/manual/html_node/Directory-Stack-Builtins.html',
+  popd: 'https://www.gnu.org/software/bash/manual/html_node/Directory-Stack-Builtins.html',
+  true: COREUTILS('true'),
+  false: COREUTILS('false'),
+  sleep: COREUTILS('sleep'),
+  basename: COREUTILS('basename'),
+  dirname: COREUTILS('dirname'),
+  realpath: COREUTILS('realpath'),
+  readlink: COREUTILS('readlink'),
+  stat: COREUTILS('stat'),
+  touch: COREUTILS('touch'),
+  mkdir: COREUTILS('mkdir'),
+  rmdir: COREUTILS('rmdir'),
+  cp: COREUTILS('cp'),
+  mv: COREUTILS('mv'),
+  ln: COREUTILS('ln'),
+  chmod: COREUTILS('chmod'),
+  chown: COREUTILS('chown'),
+  date: COREUTILS('date'),
+  tee: COREUTILS('tee'),
+  tr: COREUTILS('tr'),
+  cut: COREUTILS('cut'),
+  uniq: COREUTILS('uniq'),
+  comm: COREUTILS('comm'),
+  md5sum: COREUTILS('md5sum'),
+  sha256sum: COREUTILS('sha256sum'),
+  base64: COREUTILS('base64'),
+  od: COREUTILS('od'),
+  du: COREUTILS('du'),
+  df: COREUTILS('df'),
+  uname: COREUTILS('uname'),
+  id: COREUTILS('id'),
+  whoami: COREUTILS('whoami'),
+  printenv: COREUTILS('printenv'),
+  seq: COREUTILS('seq'),
+  yes: COREUTILS('yes'),
+  mktemp: COREUTILS('mktemp'),
+  diff: 'https://manpages.debian.org/trixie/diffutils/diff.1.en.html',
+  cmp: 'https://manpages.debian.org/trixie/diffutils/cmp.1.en.html',
+  file: 'https://manpages.debian.org/trixie/file/file.1.en.html',
+  xxd: 'https://manpages.debian.org/trixie/xxd/xxd.1.en.html',
+  hostname: 'https://manpages.debian.org/trixie/hostname/hostname.1.en.html',
+  which: 'https://manpages.debian.org/trixie/debianutils/which.1.en.html',
+};
+
+/** Whether a policy word (an entry's first token, a floor's verb) names this command. */
+const namesProgram = (word: string, written: string, name: string): boolean =>
+  /[*?[]/.test(word)
+    ? cachedGlob(word).test(written) || cachedGlob(argv0Name(word)).test(name)
+    : argv0Name(word) === name;
+
+/** The first token of each entry. */
+const firstTokens = (entries: readonly string[]): readonly string[] =>
+  entries.map((entry) => entry.trim().split(/\s+/)[0] ?? '').filter((token) => token !== '');
+
+/** The names a floor is written for: a `command`-kind entry's verbs, and every pattern's first word. */
+const FLOORED_NAMES: readonly string[] = HAZARDOUS_ARGUMENTS.flatMap((entry) => [
+  ...firstTokens([entry.pattern]),
+  ...(entry.kind === 'command' ? entry.verbs : []),
+]);
+
+/** At most this many words of a brace expansion are read; past it the word is judged unread. */
+const BRACE_WORDS_LIMIT = 256;
+
+/**
+ * The words a brace expansion yields (`s{u,}do` → `sudo`, `sdo`; `{a..c}`), on text with its quotes
+ * already off; `null` past {@link BRACE_WORDS_LIMIT}. A `{` with no `,` or `..` at its own level is
+ * a literal character, as bash reads it.
+ */
+const braceWords = (word: string): readonly string[] | null => {
+  const done: string[] = [];
+  const pending = [word];
+  while (pending.length > 0) {
+    const current = pending.pop() as string;
+    const alternatives = firstBraceAlternatives(current);
+    if (alternatives === 'unbounded') {
+      return null;
+    }
+    if (alternatives === null) {
+      done.push(current);
+    } else {
+      pending.push(...alternatives);
+    }
+    if (done.length + pending.length > BRACE_WORDS_LIMIT) {
+      return null;
+    }
+  }
+  return done;
+};
+
+/**
+ * The first brace expansion in `text`, expanded one level; `null` when it has none, and
+ * `'unbounded'` for a sequence longer than {@link BRACE_WORDS_LIMIT}.
+ */
+const firstBraceAlternatives = (text: string): readonly string[] | null | 'unbounded' => {
+  for (let open = text.indexOf('{'); open !== -1; open = text.indexOf('{', open + 1)) {
+    let depth = 0;
+    const commas: number[] = [];
+    let close = -1;
+    for (let index = open + 1; index < text.length && close === -1; index += 1) {
+      const char = text[index] as string;
+      if (char === '{') {
+        depth += 1;
+      } else if (char === '}' && depth > 0) {
+        depth -= 1;
+      } else if (char === '}') {
+        close = index;
+      } else if (char === ',' && depth === 0) {
+        commas.push(index);
+      }
+    }
+    if (close === -1) {
+      continue;
+    }
+    const before = text.slice(0, open);
+    const body = text.slice(open + 1, close);
+    const after = text.slice(close + 1);
+    if (commas.length > 0) {
+      const parts = [open, ...commas].map((at, index) =>
+        text.slice(at + 1, [...commas, close][index] as number),
+      );
+      return parts.map((part) => `${before}${part}${after}`);
+    }
+    const range = /^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])(?:\.\.-?\d+)?$/.exec(body);
+    if (range !== null) {
+      const numeric = /\d/.test(range[1] as string);
+      const [from, to] = [range[1] as string, range[2] as string].map((end) =>
+        numeric ? Number(end) : end.charCodeAt(0),
+      ) as [number, number];
+      if (Math.abs(to - from) >= BRACE_WORDS_LIMIT) {
+        return 'unbounded';
+      }
+      const step = from <= to ? 1 : -1;
+      const values: string[] = [];
+      for (let value = from; value !== to + step; value += step) {
+        values.push(numeric ? String(value) : String.fromCharCode(value));
+      }
+      return values.map((value) => `${before}${value}${after}`);
+    }
+  }
+  return null;
+};
+
+/**
+ * The first judged name an argument holds (WP-203 ruling (b)): the argument with its quotes off,
+ * split as the shell would split it were it a script — on blanks and operators, a substitution's
+ * parentheses and backticks included — each piece with its own quotes off and its braces expanded,
+ * and asked whether its last path segment runs a command. Past the brace bound, the piece itself.
+ */
+const judgedNameIn = (raw: string, judged: (name: string) => boolean): string | undefined => {
+  for (const piece of unquoteToken(raw).split(/[\s;&|()<>`]+/)) {
+    const words = braceWords(unquoteToken(piece));
+    if (words === null) {
+      return piece;
+    }
+    const found = words.find((word) => word !== '' && judged(argv0Name(word)));
+    if (found !== undefined) {
+      return argv0Name(found);
+    }
+  }
+  return undefined;
+};
+
+/**
+ * WP-203 (backlog 599): the reason a stage's command is a program the policy does not know whose
+ * arguments it cannot clear. **Unknown** is: no `allow` or `ask` entry of the stage's policy begins
+ * with it, it is on no wrapper set, is no shell or package runner, no floor is written for it
+ * (`HAZARDOUS_ARGUMENTS`), the policy reads no handed command of it ({@link COMMAND_READERS}), and it
+ * is not on the valve ({@link KNOWN_NON_WRAPPERS}). Such a program may run its arguments as a command
+ * (`fakeroot sudo id`, `sg grp git push origin main`, `parallel git push ::: origin`), so every
+ * argument is a command-position word, and one holding a judged name ({@link judgedNameIn}: a block
+ * entry's first token, the stage policy's own included, or {@link JUDGED_NAMES}) is uncertain,
+ * naming the program and the name ({@link unknownProgramRunsJudgedName}). A block entry's first
+ * token (`rm`, `curl`) is judged and not known, so its arguments are read too.
+ *
+ * **Ruling (c), the non-literal half, is not built** (the split clause, orchestrator's ruling at
+ * WP-203 review round 1): an argument the shell expands (`frobnicate $x id`), `xargs` input into an
+ * unknown program and `find -exec <unknown> {}` are the follow-up row's. The command is found by
+ * {@link commandNameWalk}, past the wrappers it knows.
+ */
+const unknownProgramReasons = (
+  stage: string,
+  policy: ResolvedCommandPolicy,
+): readonly UncertaintyReason[] => {
+  const words = argvShellWords(stage);
+  // An append assignment (`HOME+=x git diff`) is environment, which the walk does not peel.
+  let start = 0;
+  let walk = commandNameWalk(words);
+  while (
+    walk.command !== undefined &&
+    /^[A-Za-z_][A-Za-z0-9_]*\+=/.test(unquoteToken(words[start + walk.command] as string))
+  ) {
+    start += walk.command + 1;
+    walk = commandNameWalk(words.slice(start));
+  }
+  // `for NAME in WORDS`: the walk reads `for` as a keyword in front of a command, and NAME is none.
+  // A shell's or `eval`'s words are a script and its operands, which `wrappedScript` reads (the
+  // block list peels a shell like an argv wrapper; `bash -c '"$@"' _ git …` has no command `_`).
+  if (
+    walk.command === undefined ||
+    walk.wrappers.at(-1) === 'for' ||
+    walk.wrappers.some((wrapper) => SCRIPT_SHELLS.has(wrapper) || wrapper === 'eval')
+  ) {
+    return [];
+  }
+  const command = start + walk.command;
+  const written = unquoteToken(words[command] as string);
+  const name = argv0Name(written);
+  if (knownProgram(written, name, policy)) {
+    return [];
+  }
+  const blockNames = firstTokens(policy.block);
+  const judged = (candidate: string): boolean =>
+    JUDGED_NAMES.has(candidate) ||
+    blockNames.some((token) => namesProgram(token, candidate, candidate));
+  const found = words
+    .slice(command + 1)
+    .map((raw) => judgedNameIn(raw, judged))
+    .find((word) => word !== undefined);
+  return found === undefined ? [] : [unknownProgramRunsJudgedName(name, found)];
+};
+
+/**
+ * Whether the policy knows this command ({@link unknownProgramReasons}' definition): the valve, a
+ * wrapper, shell, package runner or reader of a handed command, a builtin WP-158's reader reads
+ * (`stageEvaluatesText`: its words are names and values), the first token of an `allow` or `ask`
+ * entry of the stage's policy, or a name a floor is written for.
+ */
+const knownProgram = (written: string, name: string, policy: ResolvedCommandPolicy): boolean =>
+  Object.hasOwn(KNOWN_NON_WRAPPERS, name) ||
+  PROGRAMS_THAT_RUN_A_COMMAND.has(name) ||
+  COMMAND_READERS.has(name) ||
+  DECLARATION_BUILTINS.has(name) ||
+  NAME_WRITING_BUILTINS.has(name) ||
+  firstTokens([...policy.allow, ...policy.ask]).some((token) =>
+    namesProgram(token, written, name),
+  ) ||
+  // A floor's glob (`go*`, `pytest*`) is written to catch its own tool's spellings, never to vouch
+  // for every program sharing the prefix: `gosu` is a wrapper the `go*` floor never read.
+  FLOORED_NAMES.some((token) => !/[*?[]/.test(token) && argv0Name(token) === name);
+
 /** A script a stage hands over, and the string an enclosing `find -exec`/`xargs -I` replaces in it. */
 export interface HandedScript {
   readonly script: string;
   readonly replace: string | null;
   /** A `-c` script whose positional parameters are the operands on the line, read as a command too. */
   readonly operands?: true;
+  /**
+   * The operands read as a command although the script may not run them so (`sh -c '$2' _ x sudo`
+   * reads `_ x sudo` and `x sudo`): an over-read for the block list and the git boundary, whose
+   * first word need not be a program at all, so the unknown program rule does not read it (WP-203).
+   */
+  readonly overRead?: true;
 }
 
 /** What a stage hands over as a string: the scripts the platform can read, and whether one it cannot. */
@@ -5357,7 +5922,13 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
           if (script !== undefined && OPERANDS_EXPANSION.test(script.script.trim())) {
             scripts[handed] = { ...script, operands: true };
           }
-          scripts.push({ script: rest.map((word) => word.raw).join(' '), replace: null });
+          // WP-203: only `"$@"` runs the operands from `$1` on, as the reading has them.
+          const runsArgv = script !== undefined && /^"\$(?:@|\{@\})"$/.test(script.script.trim());
+          scripts.push({
+            script: rest.map((word) => word.raw).join(' '),
+            replace: null,
+            overRead: true,
+          });
           if (rest.length > 1) {
             scripts.push({
               script: rest
@@ -5365,6 +5936,7 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
                 .map((word) => word.raw)
                 .join(' '),
               replace: null,
+              ...(runsArgv ? {} : { overRead: true as const }),
             });
           }
         }
@@ -5392,7 +5964,24 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
     letter: string,
     longNames: readonly string[],
     valued: string,
+    joinOperands = false,
   ): boolean => {
+    /**
+     * WP-203: `script -qc sudo id` runs `sudo` and names `id` its typescript file, but the line is
+     * how `sudo id` is written, so the string is read joined to the operands after it as well — an
+     * over-read, kept to literal operands, that can only tighten.
+     */
+    const handValue = (at: number): void => {
+      hand((args[at] as ShellWord).raw);
+      const operands = args.slice(at + 1).filter((word) => !isFlagToken(unquoteToken(word.raw)));
+      if (
+        joinOperands &&
+        operands.length > 0 &&
+        operands.every((word) => isLiteralWord(word.raw))
+      ) {
+        hand([args[at] as ShellWord, ...operands]);
+      }
+    };
     for (let index = 0; index < args.length; index += 1) {
       const raw = (args[index] as ShellWord).raw;
       const value = unquoteToken(raw);
@@ -5406,7 +5995,7 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
           if (long[2] === '=') {
             handAttached(raw, raw.indexOf('=') + 1);
           } else if (next !== undefined) {
-            hand(next);
+            handValue(index + 1);
           } else {
             uncertain = true; // the string comes from somewhere else (`xargs`), review round 1
           }
@@ -5423,7 +6012,7 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
           if (raw.length > raw.indexOf(letter, 1) + 1 || !raw.startsWith('-')) {
             handAttached(raw, raw.indexOf(letter, 1) + 1);
           } else if (next !== undefined) {
-            hand(next);
+            handValue(index + 1);
           } else {
             uncertain = true;
           }
@@ -5436,6 +6025,36 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
       }
     }
     return false;
+  };
+  /**
+   * WP-203 (backlog 599): `sg [-|-l] GROUP [-c] CMD` hands one word to `/bin/sh -c`, dropping the
+   * words after it (shadow's `src/newgrp.c`, https://github.com/shadow-maint/shadow; manual
+   * https://manpages.debian.org/trixie/login/sg.1.en.html). That word is read as the script, and so
+   * are all of them joined — `sg grp sudo id` is how `sudo id` is written, and the image's `sg` was
+   * not measured on extra words — an over-read that can only tighten. With no command, and
+   * `newgrp [-|-l] [GROUP]` always, it starts a shell on its standard input. A group that is not
+   * literal may split into the group and a command, so it is uncertain.
+   */
+  const readGroupShell = (sg: boolean, args: readonly ShellWord[]): void => {
+    let index = /^-l?$/.test(unquoteToken(args[0]?.raw ?? '')) ? 1 : 0;
+    const group = args[index];
+    if (group !== undefined && !isLiteralWord(group.raw)) {
+      uncertain = true;
+      return;
+    }
+    index += 1;
+    if (sg && args[index] !== undefined && unquoteToken((args[index] as ShellWord).raw) === '-c') {
+      index += 1;
+    }
+    const command = sg ? args.slice(index) : [];
+    if (command.length === 0) {
+      readsStandardInput();
+      return;
+    }
+    hand((command[0] as ShellWord).raw);
+    if (command.length > 1) {
+      hand(command);
+    }
   };
   /** `watch`: its operands are joined into the string `sh -c` runs. */
   const readWatch = (args: readonly ShellWord[]): void => {
@@ -5473,6 +6092,133 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
       }
     }
   };
+
+  /**
+   * `su [options] [-] [USER [ARG…]]` and `runuser` (util-linux; https://manpages.debian.org/trixie/
+   * util-linux/su.1.en.html, …/runuser.1.en.html), backlog 602 and WP-203 review rounds 2 and 3,
+   * read by getopt's own model and **closed**: a short cluster letter by letter, a valued letter
+   * taking the rest of its word or the next word; a long option by its unique prefix, its value
+   * `=`-attached or the next word; a bare `-` is `-l`; getopt permutes, so options may follow USER;
+   * `--` ends them. A `-c`/`--command`/`--session-command` value is the script. With none, the
+   * target user's shell runs: on the words after USER, read as a shell's (`readShell`), or with
+   * none on its standard input (`echo 'git push origin main' | su - agentic`). `runuser -u USER CMD`
+   * runs CMD itself, which the walk reads; with no CMD it is read as the shell, an over-read. An
+   * option the model does not know, a value that never comes, or a word that is not literal (it
+   * may be an option or the user) is uncertain: the platform cannot tell which word is USER or
+   * whose `-c` it is.
+   */
+  const readLoginShell = (runuser: boolean, args: readonly ShellWord[]): void => {
+    const flags = 'flmpPThV';
+    const valued = runuser ? 'cgGswu' : 'cgGsw';
+    const longOptions: Readonly<Record<string, boolean>> = {
+      command: true,
+      'session-command': true,
+      fast: false,
+      group: true,
+      'supp-group': true,
+      login: false,
+      'preserve-environment': false,
+      pty: false,
+      'no-pty': false,
+      shell: true,
+      'whitelist-environment': true,
+      help: false,
+      version: false,
+      ...(runuser ? { user: true } : {}),
+    };
+    const operands: ShellWord[] = [];
+    let command: string | null = null;
+    let user = false;
+    let unread = false;
+    for (let index = 0; index < args.length && !unread; index += 1) {
+      const raw = (args[index] as ShellWord).raw;
+      if (!isLiteralWord(raw)) {
+        unread = true;
+        break;
+      }
+      const value = literalValue(raw);
+      const next = args[index + 1]?.raw;
+      if (value === '--') {
+        operands.push(...args.slice(index + 1));
+        break;
+      }
+      if (value === '-' || !value.startsWith('-')) {
+        if (value !== '-') {
+          operands.push(args[index] as ShellWord);
+        }
+        continue;
+      }
+      if (value.startsWith('--')) {
+        const [written, ...rest] = value.slice(2).split('=');
+        const matches = Object.keys(longOptions).filter((name) =>
+          name.startsWith(written as string),
+        );
+        const name = matches.includes(written as string) ? written : matches[0];
+        if (name === undefined || (matches.length > 1 && name !== written)) {
+          unread = true;
+          break;
+        }
+        if (!(longOptions[name as string] as boolean)) {
+          unread ||= rest.length > 0;
+          continue;
+        }
+        const taken =
+          rest.length > 0 ? rest.join('=') : next === undefined ? null : literalValue(next);
+        if (taken === null || (rest.length === 0 && next !== undefined && !isLiteralWord(next))) {
+          unread = true;
+          break;
+        }
+        index += rest.length > 0 ? 0 : 1;
+        user ||= name === 'user';
+        command = name === 'command' || name === 'session-command' ? taken : command;
+        continue;
+      }
+      for (let at = 1; at < value.length; at += 1) {
+        const letter = value[at] as string;
+        if (flags.includes(letter)) {
+          continue;
+        }
+        if (!valued.includes(letter)) {
+          unread = true;
+          break;
+        }
+        let taken: string | null = value.slice(at + 1);
+        if (taken === '') {
+          taken = next === undefined || !isLiteralWord(next) ? null : literalValue(next);
+          index += 1;
+        }
+        if (taken === null) {
+          unread = true;
+        }
+        user ||= letter === 'u';
+        command = letter === 'c' ? taken : command;
+        break;
+      }
+    }
+    if (unread) {
+      uncertain = true;
+      return;
+    }
+    if (command !== null) {
+      // Words after USER become the `-c` script's positional parameters, which it may run.
+      uncertain ||=
+        (replace !== null && command.includes(replace)) || operands.length > (user ? 0 : 1);
+      scripts.push({ script: command, replace: null });
+      return;
+    }
+    if (user && operands.length > 0) {
+      return;
+    }
+    // The words after USER are the shell's argv; with none it reads its standard input.
+    readShell(user ? operands : operands.slice(1));
+  };
+
+  // Backlog 602: a wrapper given no command runs a shell on its standard input (`echo … | linux64`,
+  // `chroot / <<<'…'`).
+  const bare = commandNameWalk(argv.map((word) => word.raw));
+  if (bare.command === undefined && SHELL_WITHOUT_COMMAND.has(bare.wrappers.at(-1) ?? '')) {
+    readsStandardInput();
+  }
 
   const reasons = new Set<UncertaintyReason>();
   const positions = commandPositions(argv);
@@ -5526,11 +6272,19 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
       }
       readShell(args);
     } else if (name === 'script') {
-      if (!readOptionString(args, 'c', ['command'], 'EIOBTm')) {
+      if (!readOptionString(args, 'c', ['command'], 'EIOBTm', true)) {
         readsStandardInput();
       }
+    } else if (name === 'sg' || name === 'newgrp') {
+      readGroupShell(name === 'sg', args);
     } else if (name === 'su' || name === 'runuser') {
-      readOptionString(args, 'c', ['command', 'session-command'], 'sgGw');
+      // Not where the walk found a command before it (`nice grep su file` greps for `su`); the walk
+      // may read it as a wrapper's value or operand (`taskset -c 0 su agentic`), which still counts.
+      if (bare.command === undefined || bare.command >= position) {
+        readLoginShell(name === 'runuser', args);
+      } else {
+        readOptionString(args, 'c', ['command', 'session-command'], 'sgGw');
+      }
     } else if (name === 'flock') {
       readOptionString(args, 'c', ['command'], 'wE');
     } else if (name === 'env') {
@@ -5829,6 +6583,8 @@ interface Parsed {
    * for the readers that ask whether a judged word is literal (WP-201).
    */
   readonly rawStages: readonly string[];
+  /** {@link rawStages} less those of an operand over-read (`HandedScript.overRead`, WP-203). */
+  readonly programStages: readonly string[];
 }
 
 /**
@@ -5837,7 +6593,8 @@ interface Parsed {
  * bottom rather than to a fixed depth.
  *
  * `scripted` is true when an enclosing level runs a script reader, so a here-document body here
- * may be what it runs (`sh -c "$(cat <<'EOF' …)"`).
+ * may be what it runs (`sh -c "$(cat <<'EOF' …)"`). `overRead` is true for a level that reads a
+ * shell's operands as a command only in case (`HandedScript.overRead`).
  */
 const parseCommand = (
   command: string,
@@ -5846,9 +6603,11 @@ const parseCommand = (
   replace: string | null = null,
   fed = false,
   operands = false,
+  overRead = false,
 ): Parsed => {
   const fragments: string[] = [];
   const rawStages: string[] = [];
+  const programStages: string[] = [];
   // Whether the git boundary's computed-name walk reads this level's stages as the scanner splits
   // them: only at the top, and not when an array assignment is on the line — the scanner splits
   // `x=(a) $GIT push` at the `(`, the boundary does not (review round 1).
@@ -5867,9 +6626,18 @@ const parseCommand = (
   // same as `sh -c '…'`. Its range stays out of `bodyRanges` — it is not data.
   for (const hereDocument of outer.hereDocuments) {
     if (readsScripts && depth < MAX_WRAPPER_DEPTH) {
-      const nested = parseCommand(hereDocument.body, depth + 1, true, replace, fed);
+      const nested = parseCommand(
+        hereDocument.body,
+        depth + 1,
+        true,
+        replace,
+        fed,
+        false,
+        overRead,
+      );
       fragments.push(...nested.fragments);
       rawStages.push(...nested.rawStages);
+      programStages.push(...nested.programStages);
       writeTargets.push(...nested.writeTargets);
       substitutes ||= nested.substitutes;
       for (const reason of nested.uncertainty) {
@@ -5934,6 +6702,9 @@ const parseCommand = (
     );
     for (const [stageIndex, stage] of stages.entries()) {
       rawStages.push(stage);
+      if (!overRead) {
+        programStages.push(stage);
+      }
       // WP-161 (f), WP-201: the command's name — or a wrapper's — is not literal. Read as written,
       // because the scanner's own stage has a substitution lifted out (`su$(echo do) id` is `su id`).
       if (expandsCommandName(stage, boundaryReads, operands)) {
@@ -5960,7 +6731,7 @@ const parseCommand = (
       for (const reason of handed.reasons) {
         uncertainty.add(reason);
       }
-      for (const { script, replace: inner, operands: read } of handed.scripts) {
+      for (const { script, replace: inner, operands: read, overRead: over } of handed.scripts) {
         if (depth >= MAX_WRAPPER_DEPTH) {
           // Nested past the bound: not read, so not certain (rule 5).
           uncertainty.add(UNCERTAINTY.handedCommand);
@@ -5973,10 +6744,12 @@ const parseCommand = (
           inner ?? replace,
           stagePiped,
           read === true,
+          overRead || over === true,
         );
         anyReadsScripts ||= nested.readsScripts;
         fragments.push(script, ...nested.fragments);
         rawStages.push(...nested.rawStages);
+        programStages.push(...nested.programStages);
         writeTargets.push(...nested.writeTargets);
         substitutes ||= nested.substitutes;
         for (const reason of nested.uncertainty) {
@@ -5997,10 +6770,12 @@ const parseCommand = (
       replace,
       fed,
       operands,
+      overRead,
     );
     anyReadsScripts ||= resumed.readsScripts;
     fragments.push(...resumed.fragments);
     rawStages.push(...resumed.rawStages);
+    programStages.push(...resumed.programStages);
     writeTargets.push(...resumed.writeTargets);
     substitutes ||= resumed.substitutes;
     for (const reason of resumed.uncertainty) {
@@ -6018,12 +6793,15 @@ const parseCommand = (
         readsScripts,
         replace,
         fed || command[offset - 2] === '>',
+        false,
+        overRead,
       );
       anyReadsScripts ||= nested.readsScripts;
       // The substitution as a fragment of its own is its text with its data bodies left out, so
       // a body line never reaches the block list as part of `cat <<'EOF' … EOF` (ruling (b)).
       fragments.push(withoutRanges(substitution, nested.bodyRanges), ...nested.fragments);
       rawStages.push(...nested.rawStages);
+      programStages.push(...nested.programStages);
       writeTargets.push(...nested.writeTargets);
       bodyRanges.push(
         ...nested.bodyRanges.map(([start, end]) => [start + offset, end + offset] as const),
@@ -6047,6 +6825,7 @@ const parseCommand = (
     bodyRanges: [...bodyRanges].sort(([a], [b]) => a - b),
     readsScripts: anyReadsScripts,
     rawStages,
+    programStages,
   };
 };
 
@@ -6267,10 +7046,11 @@ const evaluateOnce = (
     );
   }
   const parsed = parseCommand(request.command);
-  // The scanner's reasons, and three the policy adds: the block entry an `xargs` could complete
+  // The scanner's reasons, and four the policy adds: the block entry an `xargs` could complete
   // from its input (WP-197), the one a line matches only when a word is read as an option's
-  // value (WP-198), and the one an expansion could complete (WP-201) — the only reasons that need
-  // the block list, a project's included.
+  // value (WP-198), the one an expansion could complete (WP-201), and a program the stage's
+  // policy does not know handed a judged name (WP-203) — the only reasons that
+  // need the policy's lists, a project's included.
   const uncertainty: readonly UncertaintyReason[] = [
     ...new Set([
       ...parsed.uncertainty,
@@ -6287,6 +7067,8 @@ const evaluateOnce = (
         const entry = blockEntryBehindExpansion(stage, policy.block);
         return entry === undefined ? [] : [expansionCompletesBlockEntry(entry)];
       }),
+      // WP-203: a program the stage's policy does not know, handed a judged name.
+      ...parsed.programStages.flatMap((stage) => unknownProgramReasons(stage, policy)),
     ]),
   ];
   const floor = (evaluation: Omit<CommandEvaluation, 'uncertainty'>): CommandEvaluation => ({

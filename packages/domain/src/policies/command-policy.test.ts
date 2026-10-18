@@ -33,11 +33,13 @@ import {
   gitResolvesLongOption,
   HAZARDOUS_ARGUMENTS,
   type HazardousArgument,
+  HERE_DOCUMENT_SCRIPT_READERS,
   hasOutputRedirection,
   hazardousArgument,
   hazardousArguments,
   intersectWithOrganisationMaximum,
   isProjectCommandEntry,
+  KNOWN_NON_WRAPPERS,
   LOCKFILE_INSTALL_ALLOW,
   matchesBlockPattern,
   matchesCommandPattern,
@@ -45,6 +47,7 @@ import {
   normaliseCommand,
   POLICY_GIT_SUBCOMMANDS,
   PRECISE_ALLOW_ENTRIES,
+  PROGRAMS_THAT_RUN_A_COMMAND,
   PROJECT_COMMAND_ALLOW,
   type ResolvedCommandPolicy,
   readHereDocumentBodies,
@@ -2919,5 +2922,49 @@ describe('WP-199, backlog 583: the floors’ environment census', () => {
     expect(environmentCensus(underPrefix, floorEnvironmentRows(underPrefix))).toEqual([
       'cargo* --config*: RUSTC_WRAPPER is also spelled by cargo* --config*: RUSTC*',
     ]);
+  });
+});
+
+/**
+ * WP-203 ruling (d): the valve of known non-wrappers is the unknown program rule's relief — a name
+ * on it loosens — so each entry cites the manual that says no argument of it names a program to
+ * run, and none may be a name that runs a command or a default block entry's first token.
+ */
+describe('WP-203: the valve of known non-wrappers (census)', () => {
+  // The ruling's ten, and the two candidates its manuals refused: `man` (`-P`, `-H`) and `sort`
+  // (`--compress-program`).
+  const NEVER = [
+    'env',
+    'xargs',
+    'awk',
+    'sed',
+    'tar',
+    'perl',
+    'python3',
+    'node',
+    'ssh',
+    'find',
+    'man',
+    'sort',
+  ];
+  const blockFirstTokens = new Set(
+    DEFAULT_BLOCKED_COMMANDS.map((entry) => entry.trim().split(/\s+/)[0] as string),
+  );
+
+  it('cites a manual page for every entry', () => {
+    for (const [name, page] of Object.entries(KNOWN_NON_WRAPPERS)) {
+      expect(page, name).toMatch(/^https:\/\/(?:manpages\.debian\.org\/trixie\/|www\.gnu\.org\/)/);
+    }
+  });
+
+  it('holds no name that runs a command, reads a script, or begins a default block entry', () => {
+    const offending = Object.keys(KNOWN_NON_WRAPPERS).filter(
+      (name) =>
+        PROGRAMS_THAT_RUN_A_COMMAND.has(name) ||
+        HERE_DOCUMENT_SCRIPT_READERS.has(name) ||
+        blockFirstTokens.has(name) ||
+        NEVER.includes(name),
+    );
+    expect(offending).toEqual([]);
   });
 });
