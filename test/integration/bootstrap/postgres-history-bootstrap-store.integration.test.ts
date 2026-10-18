@@ -104,7 +104,7 @@ describe('what only the database can answer', () => {
    * a batch left live by a failed case made the next case fail on `history_bootstrap_batches_one_live`
    * and named the wrong test. Keyed by the case's own ids, so nothing else is touched.
    */
-  const caseRows = { batches: [] as string[], runs: [] as string[] };
+  const caseRows = { batches: [] as string[], runs: [] as string[], tasks: [] as string[] };
   const batch = (id: Id): Id => {
     caseRows.batches.push(id);
     return id;
@@ -114,11 +114,23 @@ describe('what only the database can answer', () => {
     // key violation rather than a cleanup. A batch's chunks go with it.
     await pool.query('delete from cost_entries where run_id = any($1::uuid[])', [caseRows.runs]);
     await pool.query('delete from runs where id = any($1::uuid[])', [caseRows.runs]);
+    // A case's own tasks after their runs, for the same reason (PROGRESS backlog 572).
+    await pool.query('delete from tasks where id = any($1::uuid[])', [caseRows.tasks]);
     await pool.query('delete from history_bootstrap_batches where id = any($1::uuid[])', [
       caseRows.batches,
     ]);
     caseRows.batches.length = 0;
     caseRows.runs.length = 0;
+    caseRows.tasks.length = 0;
+  });
+
+  /** The ledger's three tables as this block found them, compared by its last case (backlog 572). */
+  const LEDGER_COUNTS = `select (select count(*) from tasks)::int as tasks,
+                                (select count(*) from runs)::int as runs,
+                                (select count(*) from cost_entries)::int as cost_entries`;
+  let countsBefore: Record<string, number>;
+  beforeAll(async () => {
+    countsBefore = (await pool.query<Record<string, number>>(LEDGER_COUNTS)).rows[0] ?? {};
   });
 
   it('admits one live batch per project, and a second once the first has finished', async () => {
@@ -344,13 +356,16 @@ describe('what only the database can answer', () => {
       [projectId],
     );
     const otherTask = other.rows[0]?.id as string;
+    caseRows.tasks.push(otherTask);
     const runFor = async (taskId: string): Promise<string> => {
       const run = await pool.query<{ id: string }>(
         `insert into runs (task_id, project_id, role, model, prompt_version)
          values ($1, $2, 'developer', 'claude-sonnet-5', 'historian@1') returning id`,
         [taskId, projectId],
       );
-      return run.rows[0]?.id as string;
+      const runId = run.rows[0]?.id as string;
+      caseRows.runs.push(runId);
+      return runId;
     };
     const entry = async (taskId: string, usd: number): Promise<void> => {
       await pool.query(
@@ -394,5 +409,12 @@ describe('what only the database can answer', () => {
     } finally {
       await client.end();
     }
+  });
+
+  // Last in the block, so every case before it has had its `afterEach`. A count, not an id list:
+  // a row a case wrote and never recorded is exactly what an id-keyed check cannot see.
+  it('leaves tasks, runs and cost_entries as it found them', async () => {
+    const after = (await pool.query<Record<string, number>>(LEDGER_COUNTS)).rows[0];
+    expect(after).toEqual(countsBefore);
   });
 });

@@ -50941,4 +50941,5 @@ Without `-v` every failure is silent except *bad address*. On the stock e2e topo
 
 **Verification.**
 - The integration file alone, `--project integration`: 23/23.
-- `docker-workspace.e2e.test.ts` alone, `--project e2e-fake-claude`, `s16` images: see below.
+- `docker-workspace.e2e.test.ts` alone, `--project e2e-fake-claude`, `s16` images: 84/84 (643 s). Afterwards: 0 harness containers, 0 harness networks, 71 volumes.
+- The citation guard: 13/13. `pnpm run -s verify`: `PASS: verify`.

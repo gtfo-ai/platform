@@ -1000,24 +1000,71 @@ describe('the hardening flags, as the daemon recorded them and as the kernel enf
   });
 
   it('the workspace has no route off its internal network, and the sidecar has two networks', async () => {
+    // The fixture repository is on the bridge network; the workspace is on `run-<id>`, which is
+    // `internal: true`. The probe dials the repository's **address**, never its name: the name does
+    // not resolve on the run network, so `nc` exited 1 on *bad address* before any packet left and
+    // the old assertion held whether or not the network was isolated (PROGRESS backlog 571).
+    const repoNetworks = JSON.parse(
+      (
+        await docker([
+          'inspect',
+          '--format',
+          '{{json .NetworkSettings.Networks}}',
+          fixture.repoContainer,
+        ])
+      ).stdout,
+    ) as Record<string, { IPAddress?: string }>;
+    const repoAddress = repoNetworks[fixture.network]?.IPAddress ?? '';
+    expect(repoAddress, JSON.stringify(repoNetworks)).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+    // busybox `nc -z -v` (the probe image's) names the outcome on one line — measured: `<ip>
+    // (<ip>:<port>) open`, `nc: … Network unreachable` with no route, `nc: … Operation timed out`
+    // after `-w`, `nc: bad address '<name>'` — and prints nothing for a refused connect, which
+    // would mean a packet reached the host anyway. Bounded so a dropped SYN costs 3 s, not a hang.
+    const dial = `out=$(nc -z -v -w 3 ${repoAddress} 9418 2>&1); rc=$?; echo "nc_said=$out"; echo "rc=$rc"`;
     const reachable = await probeUnderRunContainerConfig(
       fixture.engine,
       handle.containerId,
-      // The fixture repository is on the bridge network; the workspace is on `run-<id>`, which is
-      // `internal: true`. Bounded so a firewalled environment fails fast rather than hanging.
-      `nc -z -w 3 ${fixture.repoContainer} 9418; echo "rc=$?"; echo "default_routes=$(ip route | grep -c "^default")"`,
+      `${dial}; echo "default_routes=$(ip route | grep -c "^default")"`,
     );
     // Read per line and each line asserted on its own, with the whole output (quoted, so a stray
     // `\r` or trailing text shows) in the failure: this once failed reading the output's last
     // character, and nobody could say which half was wrong (PROGRESS backlog 411, WP-169).
-    const whole = `the whole probe output: ${JSON.stringify(reachable.output)}`;
-    const lineValues = (key: string): string[] =>
-      reachable.output
+    const valuesIn = (output: string, key: string): string[] =>
+      output
         .split('\n')
         .map((line) => line.trim())
         .filter((line) => line.startsWith(`${key}=`))
         .map((line) => line.slice(key.length + 1));
+    const whole = `the whole probe output: ${JSON.stringify(reachable.output)}`;
+    const lineValues = (key: string): string[] => valuesIn(reachable.output, key);
     expect(lineValues('rc'), `the nc line (rc=) — ${whole}`).toEqual(['1']);
+    // The failure's kind, not only its status: no route or no answer, never a name lookup.
+    const unreachable = `nc: ${repoAddress} (${repoAddress}:9418): `;
+    expect(lineValues('nc_said'), `the nc reason (nc_said=) — ${whole}`).toSatisfy(
+      (said: string[]) =>
+        said.length === 1 &&
+        [`${unreachable}Network unreachable`, `${unreachable}Operation timed out`].includes(
+          said[0] ?? '',
+        ),
+    );
+    // The control: the same dial from the bridge network reaches the same address and port, so
+    // the probe is one that can succeed and its failure above is the network's.
+    const control = await docker([
+      'run',
+      '--rm',
+      ...harnessProbe(),
+      '--network',
+      fixture.network,
+      ALPINE_IMAGE,
+      'sh',
+      '-c',
+      dial,
+    ]);
+    const controlWhole = `the whole control output: ${JSON.stringify(control.stdout)}`;
+    expect(valuesIn(control.stdout, 'rc'), controlWhole).toEqual(['0']);
+    expect(valuesIn(control.stdout, 'nc_said'), controlWhole).toEqual([
+      `${repoAddress} (${repoAddress}:9418) open`,
+    ]);
     // No default route at all — the same thing WP-13 measured, now for a network this provider
     // created. (busybox `ip route show default` ignores its own selector; the line is matched.)
     expect(lineValues('default_routes'), `the default-route count line — ${whole}`).toEqual(['0']);
