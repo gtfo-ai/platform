@@ -51,6 +51,7 @@
  */
 import type { UnattendedCommandMode } from '@platform/contracts';
 import {
+  COMPUTED_NAME_WRAPPERS,
   type CommandEvaluation,
   type CommandRequest,
   commandArgvCandidates,
@@ -63,11 +64,13 @@ import {
   type HereDocumentOperator,
   hazardousArguments,
   hereDocumentsAtNewline,
+  isLineContinuation,
   REDIRECTION_OPERATOR,
   type ResolvedCommandPolicy,
   readHereDocumentOperator,
   readsHereDocumentsAsScripts,
   splitCommandSegments,
+  unreadableGitWord,
   unreadGitConfigKey,
   withCommandMemo,
   withoutHereDocumentBodies,
@@ -719,26 +722,6 @@ const redirectionAt = (command: string, index: number): string | null => {
  * to a shell (`readsHereDocumentsAsScripts`), where a body is the script that runs.
  */
 export const computesCommandName = (command: string): boolean => {
-  const WRAPPERS = new Set([
-    'env',
-    'command',
-    'exec',
-    'nohup',
-    'time',
-    'nice',
-    'xargs',
-    'eval',
-    'builtin',
-    'if',
-    'then',
-    'else',
-    'elif',
-    'while',
-    'until',
-    'do',
-    '!',
-    '{',
-  ]);
   let quote: '"' | "'" | null = null;
   let atCommand = true;
   let word = '';
@@ -762,7 +745,7 @@ export const computesCommandName = (command: string): boolean => {
     if (word === '') {
       return;
     }
-    if (atCommand && !WRAPPERS.has(word) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
+    if (atCommand && !COMPUTED_NAME_WRAPPERS.has(word) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
       atCommand = false;
     }
     word = '';
@@ -774,7 +757,7 @@ export const computesCommandName = (command: string): boolean => {
     }
     if (quote !== null) {
       if (char === '\\' && quote === '"') {
-        word += char + (command[index + 1] ?? '');
+        word += isLineContinuation(command, index) ? '' : char + (command[index + 1] ?? '');
         index += 1;
       } else {
         if (char === quote) {
@@ -785,7 +768,8 @@ export const computesCommandName = (command: string): boolean => {
       continue;
     }
     if (char === '\\') {
-      word += char + (command[index + 1] ?? '');
+      // A line continuation is removed, as the scanner removes it (`isLineContinuation`).
+      word += isLineContinuation(command, index) ? '' : char + (command[index + 1] ?? '');
       index += 1;
       continue;
     }
@@ -834,7 +818,10 @@ export const computesCommandName = (command: string): boolean => {
         word === '' &&
         target === 'none' &&
         char === '"' &&
-        command[index + 1] === '$'
+        command
+          .slice(index + 1)
+          .replace(/^(?:\\\n)+/, '')
+          .startsWith('$')
       ) {
         return true;
       }
@@ -1005,10 +992,20 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
       }
     }
   }
+  // WP-201 site (iii): a verb nobody can read is uncertain, not a refusal — the boundary says what
+  // a verb does, and for this one it cannot (WP-197 (b)'s reason).
+  const word = unreadableGitWord(command);
+  if (word !== null) {
+    return { kind: 'uncertain', fragment: command, detail: unreadableGitVerb(word) };
+  }
   return unread === null
     ? null
     : { kind: 'uncertain', fragment: unread.fragment, detail: unreadGitConfigKey(unread.key) };
 };
+
+/** WP-201: the reason for {@link unreadableGitWord}'s word, read as "… carries <this>." */
+export const unreadableGitVerb = (word: string): string =>
+  `a git subcommand or global option, \`${word}\`, that the shell expands when it runs — write it literally; the platform reads what git does from the words as written and cannot read a word the shell finishes`;
 
 // ── the decision ─────────────────────────────────────────────────────────────
 

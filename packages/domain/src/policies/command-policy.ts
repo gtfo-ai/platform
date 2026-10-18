@@ -81,7 +81,8 @@
  *
  * **What it reads as uncertain instead** (WP-161, backlog 516–523): more than eight wrappers,
  * assignments or nested substitutions (`UNCERTAINTY.tooDeep`), a command name — or a wrapper's —
- * the shell expands by a glob or a brace (`expandedName`), a name `hash -p` rebinds
+ * that is not literal — a parameter or command substitution joined to text, a glob or a brace
+ * (`expandedName`, since WP-201 every class `isLiteralWord` names, a bare `~` or `~/…` aside), a name `hash -p` rebinds
  * (`reboundName`), and an `xargs` that hands its input to a wrapper, `find -exec`, `git`, a verb
  * a `command`-kind floor is written for (since WP-164: `make`, `go`, `cargo`, `npm`, `pnpm`,
  * `pytest`, `rg`, and `gmake` since WP-186 — `XARGS_FLOORED_VERBS`), whose floored argument the input can carry, or a script
@@ -200,9 +201,15 @@ export const UNCERTAINTY = {
    * WP-161 (f), backlog 518: a command word holding an unquoted `*`, `?`, `[` or a brace expansion
    * (`,` or `..`) is a name the shell expands — `/usr/bin/g[i]t` ran git 2.47.3 in the run image —
    * so the block list and the git boundary, which match the name as written, never saw it.
+   * WP-201 (backlogs 591, 593): a parameter or command substitution too (`su$x id`, `su"$@"` in a
+   * `-c` script, `g$(echo it) push`), at every command-name word of every stage, handed scripts
+   * included, with **no** exemption — the glob-named shell WP-160 read (`/bin/[r]bash -c …`) is
+   * uncertain as well. The one word kept out is exactly one expansion where a reader reads it
+   * (`expandsCommandName`): the first name of a top-level stage, which the git boundary refuses as
+   * computed (`$GIT push …`), and a `-c` script's `"$@"`, whose operands are read as a command.
    */
   expandedName:
-    "a command name with a glob (*, ?, [) or a brace expansion ({a,b}, {a..b}) in it — write the command's name literally; the platform cannot read a name the shell expands",
+    "a command name the shell expands — a variable or command substitution joined to other text, a glob (*, ?, [) or a brace expansion ({a,b}, {a..b}) — write the command's name literally; the platform cannot read a name the shell expands",
   /** WP-161 criterion (12), backlog 522: `hash -p FILE NAME` makes `NAME` run `FILE`. */
   reboundName:
     'hash -p, which binds a command name to another program — run the program by its own name; the platform reads a command by the name it is written with',
@@ -260,6 +267,16 @@ export const flagValueHidesBlockEntry = (entry: string) =>
   `a word after an option written with no "=", which, read as that option's value, leaves a command that the block-list entry "${entry}" names — write the option as --option=value; the platform does not know which options take a value` as const;
 
 /**
+ * WP-201 (backlog 591's measurement): the block entry a line could match once a word the shell
+ * expands is expanded (`terraform ap$x` against `terraform apply`, `rm -rf $x` against `rm -rf /*`,
+ * `gh rel{e,}ase` against `gh release *`). The words before it are a proper prefix of the entry and
+ * the platform cannot know what the expansion yields, so the honest verdict is uncertain, as for
+ * {@link xargsCompletesBlockEntry} (`blockEntryBehindExpansion`).
+ */
+export const expansionCompletesBlockEntry = (entry: string) =>
+  `a word the shell expands (a variable or command substitution, a glob or a brace) where the block-list entry "${entry}" names a word — write the word literally; the platform cannot tell whether the expansion completes a command no run may execute` as const;
+
+/**
  * WP-199 (backlog 583), formerly WP-196's `npmEnvironment`: a word naming an environment variable
  * a `command`-kind floor declares (`HazardousArgument.environment` — `npm_config_*`,
  * `NODE_OPTIONS`, `EDITOR`, `MAKEFLAGS`, `GOFLAGS`, `PYTEST_ADDOPTS`, `CARGO_*`, …), wherever it
@@ -284,7 +301,8 @@ export type UncertaintyReason =
   | ReturnType<typeof environmentSpellsFloor>
   | ReturnType<typeof unreadGitConfigKey>
   | ReturnType<typeof xargsCompletesBlockEntry>
-  | ReturnType<typeof flagValueHidesBlockEntry>;
+  | ReturnType<typeof flagValueHidesBlockEntry>
+  | ReturnType<typeof expansionCompletesBlockEntry>;
 
 /**
  * product/19 §3, "Block (all stages)". These are the entries the organisation maximum starts from
@@ -2795,6 +2813,248 @@ const blockEntryBehindFlagValue = (
   });
 };
 
+/** A pattern word a stage cannot hold: an entry's positions from one on are a later stage's. */
+const STAGE_SEPARATOR = /^(?:\||\|&|;|&&|\|\||&)$/;
+
+/**
+ * The block entry this stage — as written, a substitution kept (`ParsedCommand.rawStages`) — could
+ * match once a word the shell expands is expanded (WP-201 site (ii)): the literal words before it
+ * are a proper prefix of the entry, read as the block matcher reads a line (flags anywhere,
+ * positionals in order through `globToRegExp`, a word after a single option with no `=` possibly
+ * its value, WP-198), and the expansion stands where the entry still names a word — a positional other
+ * than a bare `*`, which any word matches, or a flag the line has not written when the expansion is
+ * an option (`rm -$x /`). WP-197's prefix rule with an expansion as the completer instead of xargs'
+ * input (`xargsBlockPrefix`). An entry whose name is `git` is left to the git boundary, which
+ * reads git's verb (`gitBoundaryViolation`) and refs; an entry's words past a `|` are a later
+ * stage's and no expansion supplies them (`curl $url` against `curl * | sh`). **The residual,
+ * stated:** an expansion after the prefix has died (`rm -rf dist $out`) or after every positional
+ * matched (`git push origin $BRANCH`, the boundary's) is judged as today, and so is one behind a
+ * cluster whose last letter takes a value (`x -fR o/r $y`, where `-fR` is read as two flags).
+ */
+const blockEntryBehindExpansion = (stage: string, block: readonly string[]): string | undefined => {
+  const words = argvShellWords(stage);
+  for (const start of argvStarts(words).starts) {
+    const [name, ...rest] = words.slice(start);
+    if (name === undefined || expandsAsName(name)) {
+      continue;
+    }
+    const entry = block.find((pattern) => {
+      const tokens = tokenise(pattern);
+      const end = tokens.findIndex((token) => STAGE_SEPARATOR.test(token));
+      const { flags, positional } = splitFlags(end < 0 ? tokens : tokens.slice(0, end));
+      const first = positional[0];
+      return (
+        first !== undefined &&
+        first !== 'git' &&
+        cachedGlob(first).test(argv0Name(name)) &&
+        expansionAtEntryWord(rest, flags, positional)
+      );
+    });
+    if (entry !== undefined) {
+      return entry;
+    }
+  }
+  return undefined;
+};
+
+/**
+ * The walk of {@link blockEntryBehindExpansion} over the words after the name, keeping the set of
+ * entry positions reachable so far (`prefixEnds`'s walk): whether an expansion stands where the
+ * entry still names a word. When the entry names a flag the line does not write, the expansion
+ * counts only if it can supply it: an option the shell expands (`rm -$x /`), a glob before `--`
+ * that can match the flag (`rm * /`, where the checkout holds a file `-rf`) — each with every
+ * positional of the entry matched — or a positional one that may become several words (`rm $x`,
+ * where `x='-rf /'`). A double-quoted one is one word and
+ * cannot be the flag and the path at once, so `rm -f "$tmp"` is no `rm -rf /*`.
+ */
+const expansionAtEntryWord = (
+  rest: readonly string[],
+  flags: readonly string[],
+  positional: readonly string[],
+): boolean => {
+  let reachable = new Set([1]);
+  let literal = false;
+  let afterOption = false;
+  let expandedPositional = false;
+  let splits = false;
+  let expandedOption = false;
+  // Words that may be an option, words judged at an entry position, and words that are both: a
+  // pair of two different words can be the flag and the path (`rm "$x" "$y"`), one word cannot.
+  let optionWords = 0;
+  let judgedWords = 0;
+  let bothWords = 0;
+  const written: string[] = [];
+  for (const raw of rest) {
+    const value = unquoteToken(raw);
+    if (!literal && value === '--') {
+      literal = true;
+      afterOption = false;
+    } else if (!literal && isFlagToken(value)) {
+      // An unquoted expansion in an option splits into any number of words — options and
+      // positionals alike (`x="rf /"; rm -$x` is `rm -rf /`, round 1b) — so with the prefix alive
+      // it can supply every word the entry still names. A quoted one (`"-$x"`) is one option.
+      if (
+        expandsAsName(raw) &&
+        globPrefix(raw) === null &&
+        mayBeSeveralWords(raw) &&
+        reachable.size > 0
+      ) {
+        return true;
+      }
+      expandedOption ||= expandsAsName(raw);
+      written.push(value);
+      // A word after `-X` or `--long` may be its value (WP-198); a cluster (`-rf`) is read as
+      // flags, so `rm -rf dist $out` is not `-rf dist` and `$out` the path.
+      afterOption = /^(?:-[^-]|--[^=]+)$/.test(value);
+    } else if (reachable.size > 0) {
+      const glob = globPrefix(raw);
+      // A glob before `--` may yield words that are options (`rm * /tmp` with a file `-rf`, review
+      // round 1): it may supply a flag the entry needs, and it may stand for no positional at all.
+      const optionGlob =
+        !literal &&
+        glob !== null &&
+        flags.some((flag) => cachedGlob(value).test(flag.replace(/[*?[\]]/g, '')));
+      // So may a quoted expansion with nothing but `-` written before it (`rm "$x" /` with
+      // `x=-rf`, review round 3): one word, so it is the flag or a positional, never both.
+      const optionExpansion = !literal && glob === null && mayBeOption(raw);
+      expandedOption ||= optionGlob || optionExpansion;
+      const judged =
+        expandsAsName(raw) &&
+        [...reachable].some(
+          (used) =>
+            used < positional.length &&
+            positional[used] !== '*' &&
+            (glob === null || globMayMatch(glob, positional[used] as string)),
+        );
+      expandedPositional ||= judged;
+      splits ||= judged && glob === null && mayBeSeveralWords(raw);
+      optionWords += optionGlob || optionExpansion ? 1 : 0;
+      judgedWords += judged ? 1 : 0;
+      bothWords += judged && (optionGlob || optionExpansion) ? 1 : 0;
+      const next = new Set<number>();
+      for (const used of reachable) {
+        if (afterOption || optionGlob || optionExpansion || used === positional.length) {
+          next.add(used);
+        }
+        const token = positional[used];
+        if (token !== undefined && cachedGlob(token).test(value)) {
+          next.add(used + 1);
+        }
+      }
+      afterOption = false;
+      reachable = next;
+    }
+  }
+  if (!expandedPositional && reachable.size === 0) {
+    return false;
+  }
+  const flagMissing = flags.some((flag) => !written.some((token) => cachedGlob(flag).test(token)));
+  // An expanded option completes the entry only with every positional matched (`rm -$x /`).
+  const pair = optionWords > 0 && judgedWords > 0 && optionWords + judgedWords - bothWords > 1;
+  return flagMissing
+    ? (expandedOption && reachable.has(positional.length)) || splits || pair
+    : expandedPositional;
+};
+
+/**
+ * For a word that is not literal only by an unquoted glob (`*`, `?`, `[`), its text before the
+ * first one, quotes off; `null` for any other word. Every word pathname expansion yields from it
+ * starts with that text — or is the word itself, when nothing matches.
+ */
+const globPrefix = (raw: string): string | null => {
+  if (/[$`]/.test(raw.replace(/'[^']*'/g, '')) || !isLiteralJudgedWord(raw.replace(/[*?[]/g, ''))) {
+    return null;
+  }
+  let quote: '"' | null = null;
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index] as string;
+    if (char === '\\') {
+      index += 1;
+    } else if (quote === null && char === "'") {
+      const close = raw.indexOf("'", index + 1);
+      if (close === -1) {
+        return null;
+      }
+      index = close;
+    } else if (char === '"') {
+      quote = quote === null ? '"' : null;
+    } else if (quote === null && /[*?[]/.test(char)) {
+      return unquoteToken(raw.slice(0, index));
+    }
+  }
+  return null;
+};
+
+/**
+ * Whether a glob word whose fixed text is `prefix` may yield a word an entry's token matches: the
+ * two fixed beginnings agree, and an entry token that needs a leading `/` is not met by a pattern
+ * that starts with a wildcard — pathname expansion of a relative pattern yields relative names
+ * (`rm -rf dist/*` and `rm -f *.o` are no `rm -rf /*`).
+ */
+const globMayMatch = (prefix: string, token: string): boolean => {
+  const fixed = token.slice(0, token.search(/[*?[]|$/));
+  return (
+    (prefix.startsWith(fixed) || fixed.startsWith(prefix)) &&
+    !(prefix === '' && fixed.startsWith('/'))
+  );
+};
+
+/**
+ * Whether a word holds an expansion with nothing but `-` written before it (`"$x"`, `"${x}"`,
+ * `"$(echo -rf)"`, `-"$x"`), so that its value may be an option whatever the line writes.
+ */
+const mayBeOption = (raw: string): boolean => {
+  let written = '';
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index] as string;
+    if (char === '$' || char === '`') {
+      return /^-*$/.test(written);
+    }
+    if (char === '\\') {
+      written += raw[index + 1] ?? '';
+      index += 1;
+    } else if (char === "'") {
+      const close = raw.indexOf("'", index + 1);
+      if (close === -1) {
+        return false;
+      }
+      written += raw.slice(index + 1, close);
+      index = close;
+    } else if (char !== '"') {
+      written += char;
+    }
+  }
+  return false;
+};
+
+/**
+ * Whether a word may become several words: an expansion outside double quotes (split on blanks,
+ * then globbed), an unquoted glob, or a brace expansion.
+ */
+const mayBeSeveralWords = (raw: string): boolean => {
+  let quote: '"' | null = null;
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index] as string;
+    if (char === '\\') {
+      index += 1;
+    } else if (quote === null && char === "'") {
+      const close = raw.indexOf("'", index + 1);
+      if (close === -1) {
+        return false;
+      }
+      index = close;
+    } else if (char === '"') {
+      quote = quote === null ? '"' : null;
+    } else if (
+      quote === null &&
+      (/[$`*?[]/.test(char) || (char === '{' && bracesExpand(raw, index)))
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
 /**
  * Does a block pattern match this command?
  *
@@ -3520,7 +3780,7 @@ const joinContinuations = (text: string): string => {
   let out = '';
   for (let index = 0; index < text.length; index += 1) {
     if (text[index] === '\\') {
-      if (text[index + 1] !== '\n') {
+      if (!isLineContinuation(text, index)) {
         out += text.slice(index, index + 2);
       }
       index += 1;
@@ -3530,6 +3790,15 @@ const joinContinuations = (text: string): string => {
   }
   return out;
 };
+
+/**
+ * Whether a backslash at `index` starts a line continuation, which bash removes outside single
+ * quotes. One test for the scanner (`joinContinuations`) and the git boundary's computed-name walk
+ * (`computesCommandName`), so the two cannot read a continued line differently (WP-201 review
+ * round 3: `X=1 \⏎$CMD id` was exempt as computed, and the boundary never read `$CMD`).
+ */
+export const isLineContinuation = (text: string, index: number): boolean =>
+  text[index] === '\\' && text[index + 1] === '\n';
 
 /** The detector at the `$` at `text[index]`, over the text as bash reads it (continuations joined). */
 const evaluatesExpansionAt = (text: string, index: number): boolean =>
@@ -4341,7 +4610,25 @@ const shellWords = (text: string): readonly ShellWord[] => {
  * `{1..3}`, and fail-closed an unmatched `{a,b` and a `{..}` bash leaves alone); `{}`, `{x}` and
  * `{}x` are passed as written, so `xargs -I{}` replaces a literal string (WP-193, backlog 565).
  */
-const isLiteralWord = (raw: string): boolean => {
+const isLiteralWord = (raw: string): boolean => literalWord(raw, false);
+
+/**
+ * WP-201: whether a word the scanner judges by its written text — a command name, a block entry's
+ * token, git's verb — is literal: {@link isLiteralWord}, a bare `~` or a leading `~/` aside. `~`
+ * names the home the platform set, which WP-200 refuses the run re-pointing, so `~/bin/tool` is the
+ * sandbox's own file as `./tool` is. `~login` names another user's home (`~root`), and `~-`, `~+`
+ * and `~N` are `$OLDPWD`, `$PWD` and the directory stack: none is literal (review rounds 1 and 2). A quote left open is not an expansion here: the scanner reports it as
+ * its own reason (`unbalancedQuote`), and what follows it is quoted text.
+ */
+export const isLiteralJudgedWord = (raw: string): boolean => literalWord(raw, true);
+
+const literalWord = (raw: string, judged: boolean): boolean => {
+  // Only a bare `~` names the home the platform set (round 1: `OLDPWD=/usr/bin/sudo; ~- id`;
+  // round 2: `rm -rf ~root` is another user's home).
+  if (judged && raw.startsWith('~') && !/^~(?:\/|$)/.test(raw)) {
+    return false;
+  }
+  const expands = judged ? /[*?[<>()]/ : /[*?[~<>()]/;
   let quote: '"' | null = null;
   for (let index = 0; index < raw.length; index += 1) {
     const char = raw[index] as string;
@@ -4350,20 +4637,20 @@ const isLiteralWord = (raw: string): boolean => {
     } else if (quote === null && char === "'") {
       const close = raw.indexOf("'", index + 1);
       if (close === -1) {
-        return false;
+        return judged;
       }
       index = close;
     } else if (char === '"') {
       quote = quote === null ? '"' : null;
     } else if (char === '$' || char === '`') {
       return false;
-    } else if (quote === null && /[*?[~<>()]/.test(char)) {
+    } else if (quote === null && expands.test(char)) {
       return false;
     } else if (quote === null && char === '{' && bracesExpand(raw, index)) {
       return false;
     }
   }
-  return quote === null;
+  return judged || quote === null;
 };
 
 /** A literal word's value — what the program receives (only meaningful when `isLiteralWord`). */
@@ -4431,34 +4718,15 @@ const commandPositions = (argv: readonly ShellWord[]): CommandStarts => {
 // ── WP-161 (f): a command name the shell expands (backlog 518) ───────────────
 
 /**
- * Whether a word as written holds something bash expands into another word before it runs it: an
- * unquoted `*`, `?` or `[` (pathname expansion), or a brace expansion — an unquoted `{…}` with a
- * `,` or a `..` at its own level (`{a,b}`, `{i..i}`). `${…}` is a parameter expansion, not a brace,
- * and `{x}` and `{}` expand to nothing else. A `[` with no `]` is literal to bash and read as a glob
- * here, which can only over-read.
+ * Whether a word as written is one bash finishes only when it runs it (WP-201, backlogs 591 and
+ * 593): a `$` or a backtick outside single quotes (a parameter, command or arithmetic expansion,
+ * `$'…'` included), an unquoted `*`, `?` or `[` (pathname expansion), a brace expansion — an
+ * unquoted `{…}` with a `,` or a `..` at its own level (`{a,b}`, `{i..i}`) — or any other class
+ * {@link isLiteralWord} names; a tilde aside ({@link isLiteralJudgedWord}). Until WP-201 it read
+ * only the glob and the brace, so `su$x id` and `sh -c 'su"$@"' _ do id` were judged as `su`. A
+ * `[` with no `]` is literal to bash and read as a glob here, which can only over-read.
  */
-const expandsAsName = (word: string): boolean => {
-  let quote: '"' | "'" | null = null;
-  for (let index = 0; index < word.length; index += 1) {
-    const char = word[index] as string;
-    if (quote === "'") {
-      quote = char === "'" ? null : quote;
-    } else if (char === '\\') {
-      index += 1;
-    } else if (char === '"') {
-      quote = quote === '"' ? null : '"';
-    } else if (quote === null && char === "'") {
-      quote = "'";
-    } else if (quote === null && /[*?[]/.test(char)) {
-      return true;
-    } else if (char === '$' && word[index + 1] === '{') {
-      index = closingBraceEnd(word, index + 1) - 1;
-    } else if (quote === null && char === '{' && bracesExpand(word, index)) {
-      return true;
-    }
-  }
-  return false;
-};
+const expandsAsName = (word: string): boolean => !isLiteralJudgedWord(word);
 
 /**
  * Whether the unquoted `{` at `open` starts a brace expansion: a `,` or `..` at its own level.
@@ -4588,90 +4856,111 @@ const commandNameWords = (tokens: readonly string[]): readonly string[] => {
 };
 
 /**
- * Names a glob may never stand for while being read as a shell: what the policy judges by its name
- * (git, the block list's binaries, every wrapper that is not a shell, `hash`, `find`, `script`).
+ * Whether a word is **exactly one** expansion — `$x`, `${…}`, `$1`, `$@`, `$(…)`, `` `…` ``, or one
+ * of those inside one pair of double quotes — and nothing else (WP-201 ruling (d)). `$((…))` is
+ * not: an arithmetic result is `UNCERTAINTY.arithmetic`'s.
  */
-const NAMES_THE_POLICY_JUDGES: readonly string[] = [
-  ...new Set([
-    'git',
-    'sudo',
-    'hash',
-    'find',
-    'script',
-    'xargs',
-    ...DEFAULT_BLOCKED_COMMANDS.map((pattern) => pattern.split(' ')[0] as string),
-    ...[...ARGV0_WRAPPERS].filter((name) => !SCRIPT_SHELLS.has(name)),
-  ]),
-];
-
-/** A glob or brace word's last path segment as a regular expression, or `null` when it cannot say. */
-const expansionPattern = (word: string): RegExp | null => {
-  const segment = word.split('/').at(-1) ?? '';
-  if (/["'\\$]/.test(word) || /[{}]/.test(segment.replace(/\{[^{}/]*\}/g, ''))) {
-    return null;
+const isOneExpansion = (word: string): boolean => {
+  const inner =
+    word.length > 1 && word.startsWith('"') && doubleQuoteEnd(word, 0) === word.length
+      ? word.slice(1, -1)
+      : word;
+  if (/^\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])$/.test(inner)) {
+    return true;
   }
-  let pattern = '';
-  for (let index = 0; index < segment.length; index += 1) {
-    const char = segment[index] as string;
-    if (char === '*') {
-      pattern += '[\\s\\S]*';
-    } else if (char === '?') {
-      pattern += '[\\s\\S]';
-    } else if (char === '[') {
-      const close = segment.indexOf(']', index + 2);
-      if (close === -1) {
-        return null;
-      }
-      const body = segment.slice(index + 1, close).replace(/^!/, '^');
-      pattern += `[${body.replace(/[\\\]]/g, '\\$&')}]`;
-      index = close;
-    } else if (char === '{') {
-      const close = segment.indexOf('}', index);
-      const inner = segment.slice(index + 1, close);
-      pattern += inner.includes('..')
-        ? '[\\s\\S]*'
-        : `(?:${inner
-            .split(',')
-            .map((part) => part.replace(REGEX_SPECIALS, '\\$&'))
-            .join('|')})`;
-      index = close;
-    } else {
-      pattern += char.replace(REGEX_SPECIALS, '\\$&');
-    }
+  if (inner.startsWith('${')) {
+    return closingBraceEnd(inner, 1) === inner.length;
   }
-  try {
-    return new RegExp(`^${pattern}$`);
-  } catch {
-    return null;
+  if (inner.startsWith('$(') && !inner.startsWith('$((')) {
+    return findClosingParen(inner, 1, true) === inner.length - 1;
   }
+  return inner.startsWith('`') && inner.indexOf('`', 1) === inner.length - 1;
 };
 
 /**
- * WP-160 reads a command whose name the shell expands as a shell (`/bin/[r]bash -c '…'`), and so
- * judges the script it is handed; that reading keeps its verdict (WP-161 (f)) when the expansion
- * can be a shell and cannot be anything the policy judges by name. `/usr/bin/[gs][ih]* -c …` can
- * be `git`, so it is not exempt.
+ * The words `computesCommandName` reads past to the command name — itself, by its written text,
+ * past assignments and redirections too (WP-198). Here so that the expanded-name rule's carve-out
+ * (WP-201 (d), `expandsCommandName`) exempts exactly the word that reader reads.
  */
-const expandsOnlyToAShell = (word: string): boolean => {
-  const pattern = expansionPattern(word);
-  return (
-    pattern !== null &&
-    [...SCRIPT_SHELLS].some((shell) => pattern.test(shell)) &&
-    !NAMES_THE_POLICY_JUDGES.some((name) => pattern.test(name))
-  );
+export const COMPUTED_NAME_WRAPPERS: ReadonlySet<string> = new Set([
+  'env',
+  'command',
+  'exec',
+  'nohup',
+  'time',
+  'nice',
+  'xargs',
+  'eval',
+  'builtin',
+  'if',
+  'then',
+  'else',
+  'elif',
+  'while',
+  'until',
+  'do',
+  '!',
+  '{',
+]);
+
+/**
+ * The word of a top-level stage's argv (redirections out) the git boundary reads as its command
+ * name: the first that is neither a plain assignment nor in {@link COMPUTED_NAME_WRAPPERS}, as
+ * written — or none, when an assignment before it is not plain (an array, a quote, an expansion):
+ * the shell's split and `computesCommandName`'s walk read `x=(a b)` and `x="$(echo "a b")"`
+ * differently (review round 1: `x=(a) $GIT push origin main` read `allow`), so no word is exempt.
+ */
+const computedNameWord = (words: readonly string[]): string | undefined => {
+  for (const word of words) {
+    if (COMPUTED_NAME_WRAPPERS.has(word) || /^[A-Za-z_][A-Za-z0-9_]*=[\w./:@%+,=-]*$/.test(word)) {
+      continue;
+    }
+    return /^[A-Za-z_][A-Za-z0-9_]*(?:\[|\+?=)/.test(word) ? undefined : word;
+  }
+  return undefined;
 };
 
-/** Does this stage run a command whose name — or a wrapper's — the shell expands (WP-161 (f))? */
-const expandsCommandName = (stage: string): boolean =>
-  // The written words and the words left once the redirections are out (WP-198), quotes kept.
-  [tokenise(stage), argvShellWords(stage)].some((words) =>
-    commandNameWords(words).some((word) => expandsAsName(word) && !expandsOnlyToAShell(word)),
+/**
+ * A `-c` script's whole-command positional, **double-quoted**: `"$@"`, `"$0"`, `"$1"` (braces
+ * allowed) — the operands from there on, each passed as the one word the operand reader reads. An
+ * unquoted one splits and globs (`sh -c '$1' _ '/usr/bin/sud?'` runs `sudo`), and `"$*"` joins the
+ * operands into one word, which the reader does not model (review round 2).
+ */
+const OPERANDS_EXPANSION = /^"\$(?:[@01]|\{[@01]\})"$/;
+
+/**
+ * Does this stage — as written, a substitution kept — run a command whose name, or a wrapper's, is
+ * not literal (WP-161 (f), WP-201)? Every word `commandNameWords` lists is asked
+ * {@link expandsAsName}, with **one** carve-out (ruling (d)): a word that is exactly one expansion
+ * where a reader reads it — the word of a top-level stage (`boundaryReads`) the git boundary reads as
+ * its name and refuses as computed (`computedNameWord`, `computesCommandName`: `$GIT push …`,
+ * `X=1 $CMD`, `env > out $X`), and,
+ * a `-c` script that is nothing but a double-quoted `"$@"`, `"$0"` or `"$1"`, whose operands are read as a
+ * command (`operands`). Anywhere else nothing reads it — the boundary does not look inside a
+ * quoted script, a substitution or past a wrapper's option (`sh -c '$x id'`, `nice -n 5 $x id`
+ * read `unattended_auto` before WP-201) — so it is uncertain. WP-161 (f)'s exemption for a glob that
+ * can only be a shell (`expandsOnlyToAShell`) is gone: its premise, one word, is false for a brace
+ * (`{sh,-c} 'sudo id'` is `sh -c 'sudo id'`) and for a glob with two matches alike (backlog 593).
+ * The words are the shell's split (`argvShellWords`); the blank split would cut a substitution
+ * apart (`x=$(date +%s)`) and read its half as a name.
+ */
+const expandsCommandName = (stage: string, boundaryReads: boolean, operands: boolean): boolean => {
+  const words = argvShellWords(stage);
+  const computed = boundaryReads ? computedNameWord(words) : undefined;
+  return commandNameWords(words).some(
+    (word) =>
+      expandsAsName(word) &&
+      !(word === computed && isOneExpansion(word)) &&
+      !(operands && words.length === 1 && OPERANDS_EXPANSION.test(word)),
   );
+};
 
 /** A script a stage hands over, and the string an enclosing `find -exec`/`xargs -I` replaces in it. */
 export interface HandedScript {
   readonly script: string;
   readonly replace: string | null;
+  /** A `-c` script whose positional parameters are the operands on the line, read as a command too. */
+  readonly operands?: true;
 }
 
 /** What a stage hands over as a string: the scripts the platform can read, and whether one it cannot. */
@@ -5053,6 +5342,7 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
       // `-c` with no operand on the line, or a script reading positionals xargs supplies, is
       // `xargsArguments` by the blanket rule at the call (WP-185); with no `xargs` it runs nothing.
       if (operand !== undefined) {
+        const handed = scripts.length;
         hand(operand.raw);
         // `sh -c '"$@"' _ cmd …` runs its operands: a script that names a positional parameter
         // has the operands on the line read as a command too ($0 on, and $1 on).
@@ -5060,6 +5350,13 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
         const namesPositional =
           isLiteralWord(operand.raw) && /\$(?:[@*0-9]|\{!?[@*0-9])/.test(literalValue(operand.raw));
         if (rest.length > 0 && namesPositional) {
+          // WP-201 (d): a script that is nothing but a double-quoted `"$@"` (or `"$0"`, `"$1"`) runs
+          // exactly the operands read here; anything before it may `shift` or `set --` them (round
+          // 1), and an unquoted one splits and globs them (round 2).
+          const script = scripts[handed];
+          if (script !== undefined && OPERANDS_EXPANSION.test(script.script.trim())) {
+            scripts[handed] = { ...script, operands: true };
+          }
           scripts.push({ script: rest.map((word) => word.raw).join(' '), replace: null });
           if (rest.length > 1) {
             scripts.push({
@@ -5527,6 +5824,11 @@ interface Parsed {
   readonly bodyRanges: readonly (readonly [number, number])[];
   /** Whether any level read its here-documents as scripts (`HERE_DOCUMENT_SCRIPT_READERS`). */
   readonly readsScripts: boolean;
+  /**
+   * Every pipeline stage of every level as written — a substitution kept, continuations joined —
+   * for the readers that ask whether a judged word is literal (WP-201).
+   */
+  readonly rawStages: readonly string[];
 }
 
 /**
@@ -5543,8 +5845,14 @@ const parseCommand = (
   scripted = false,
   replace: string | null = null,
   fed = false,
+  operands = false,
 ): Parsed => {
   const fragments: string[] = [];
+  const rawStages: string[] = [];
+  // Whether the git boundary's computed-name walk reads this level's stages as the scanner splits
+  // them: only at the top, and not when an array assignment is on the line — the scanner splits
+  // `x=(a) $GIT push` at the `(`, the boundary does not (review round 1).
+  const boundaryReads = depth === 0 && !/[\w\]]\+?=\(/.test(command);
   const uncertainty = new Set<UncertaintyReason>();
   const outer = scan(command, LIST_OPERATORS);
   for (const reason of outer.uncertainty) {
@@ -5561,6 +5869,7 @@ const parseCommand = (
     if (readsScripts && depth < MAX_WRAPPER_DEPTH) {
       const nested = parseCommand(hereDocument.body, depth + 1, true, replace, fed);
       fragments.push(...nested.fragments);
+      rawStages.push(...nested.rawStages);
       writeTargets.push(...nested.writeTargets);
       substitutes ||= nested.substitutes;
       for (const reason of nested.uncertainty) {
@@ -5597,13 +5906,9 @@ const parseCommand = (
       if (stageEvaluatesText(stage, test)) {
         uncertainty.add(UNCERTAINTY.evaluatedText);
       }
-      // WP-161 (d) and (f): the peel the block list reads stopped at its bound, or the command's
-      // name — or a wrapper's — is one the shell expands.
+      // WP-161 (d): the peel the block list reads stopped at its bound.
       if (argvForms(stage).some((words) => argvStarts(words).tooDeep)) {
         uncertainty.add(UNCERTAINTY.tooDeep);
-      }
-      if (expandsCommandName(stage)) {
-        uncertainty.add(UNCERTAINTY.expandedName);
       }
     }
     // Every stage is a command in its own right, pushed whether or not there are two of them: a
@@ -5628,6 +5933,12 @@ const parseCommand = (
       joinContinuations,
     );
     for (const [stageIndex, stage] of stages.entries()) {
+      rawStages.push(stage);
+      // WP-161 (f), WP-201: the command's name — or a wrapper's — is not literal. Read as written,
+      // because the scanner's own stage has a substitution lifted out (`su$(echo do) id` is `su id`).
+      if (expandsCommandName(stage, boundaryReads, operands)) {
+        uncertainty.add(UNCERTAINTY.expandedName);
+      }
       if (storesCommand(stage)) {
         uncertainty.add(UNCERTAINTY.handedCommand);
       }
@@ -5649,15 +5960,23 @@ const parseCommand = (
       for (const reason of handed.reasons) {
         uncertainty.add(reason);
       }
-      for (const { script, replace: inner } of handed.scripts) {
+      for (const { script, replace: inner, operands: read } of handed.scripts) {
         if (depth >= MAX_WRAPPER_DEPTH) {
           // Nested past the bound: not read, so not certain (rule 5).
           uncertainty.add(UNCERTAINTY.handedCommand);
           continue;
         }
-        const nested = parseCommand(script, depth + 1, readsScripts, inner ?? replace, stagePiped);
+        const nested = parseCommand(
+          script,
+          depth + 1,
+          readsScripts,
+          inner ?? replace,
+          stagePiped,
+          read === true,
+        );
         anyReadsScripts ||= nested.readsScripts;
         fragments.push(script, ...nested.fragments);
+        rawStages.push(...nested.rawStages);
         writeTargets.push(...nested.writeTargets);
         substitutes ||= nested.substitutes;
         for (const reason of nested.uncertainty) {
@@ -5671,9 +5990,17 @@ const parseCommand = (
   // terminator from a fresh quote state, and so does this. The text is strictly shorter, and each
   // level spawns one such read, so the chain ends; its bodies are not this level's data.
   if (outer.resumeFrom !== null) {
-    const resumed = parseCommand(command.slice(outer.resumeFrom), depth, scripted, replace, fed);
+    const resumed = parseCommand(
+      command.slice(outer.resumeFrom),
+      depth,
+      scripted,
+      replace,
+      fed,
+      operands,
+    );
     anyReadsScripts ||= resumed.readsScripts;
     fragments.push(...resumed.fragments);
+    rawStages.push(...resumed.rawStages);
     writeTargets.push(...resumed.writeTargets);
     substitutes ||= resumed.substitutes;
     for (const reason of resumed.uncertainty) {
@@ -5696,6 +6023,7 @@ const parseCommand = (
       // The substitution as a fragment of its own is its text with its data bodies left out, so
       // a body line never reaches the block list as part of `cat <<'EOF' … EOF` (ruling (b)).
       fragments.push(withoutRanges(substitution, nested.bodyRanges), ...nested.fragments);
+      rawStages.push(...nested.rawStages);
       writeTargets.push(...nested.writeTargets);
       bodyRanges.push(
         ...nested.bodyRanges.map(([start, end]) => [start + offset, end + offset] as const),
@@ -5718,6 +6046,7 @@ const parseCommand = (
     substitutes,
     bodyRanges: [...bodyRanges].sort(([a], [b]) => a - b),
     readsScripts: anyReadsScripts,
+    rawStages,
   };
 };
 
@@ -5774,6 +6103,43 @@ export const commandWriteTargets = (command: string): readonly string[] =>
  */
 export const commandWords = (fragment: string): readonly string[] =>
   argvForms(fragment).flat().map(unquoteToken);
+
+/**
+ * WP-201 site (iii): the first word of a `git` argv on this line — at any depth, as written, a
+ * substitution kept (`Parsed.rawStages`), wrappers peeled — that says what git does and is not
+ * literal: its verb (`git pu$x origin main`, `git "$verb" …`, `git $(echo push) …`) or a global
+ * option before it (`git -$x push`). The git boundary decides by that word, so for a word nobody
+ * can read it answers uncertain rather than its own verdict (`gitBoundaryViolation`). A global
+ * option's value is not one (`-C $dir`; `-c`'s key is the boundary's three bands).
+ */
+export const unreadableGitWord = (command: string): string | null => {
+  for (const stage of parseCommand(command).rawStages) {
+    const words = argvShellWords(stage);
+    for (const start of argvStarts(words).starts) {
+      const [name, ...rest] = words.slice(start);
+      if (name === undefined || expandsAsName(name) || argv0Name(name) !== 'git') {
+        continue;
+      }
+      for (let index = 0; index < rest.length; index += 1) {
+        const raw = rest[index] as string;
+        if (expandsAsName(raw)) {
+          return raw;
+        }
+        const word = unquoteToken(raw);
+        if (GIT_GLOBAL_VALUE_OPTIONS.has(word)) {
+          index += 1;
+        } else if (!word.startsWith('-') || word === '--') {
+          const verb = word === '--' ? rest[index + 1] : undefined;
+          if (verb !== undefined && expandsAsName(verb)) {
+            return verb;
+          }
+          break;
+        }
+      }
+    }
+  }
+  return null;
+};
 
 /**
  * The argv lists one fragment could really run as — the **block** list's generous reading (rule 2):
@@ -5901,9 +6267,10 @@ const evaluateOnce = (
     );
   }
   const parsed = parseCommand(request.command);
-  // The scanner's reasons, and two the policy adds: the block entry an `xargs` could complete
-  // from its input (WP-197), and the one a line matches only when a word is read as an option's
-  // value (WP-198) — the only reasons that need the block list, a project's included.
+  // The scanner's reasons, and three the policy adds: the block entry an `xargs` could complete
+  // from its input (WP-197), the one a line matches only when a word is read as an option's
+  // value (WP-198), and the one an expansion could complete (WP-201) — the only reasons that need
+  // the block list, a project's included.
   const uncertainty: readonly UncertaintyReason[] = [
     ...new Set([
       ...parsed.uncertainty,
@@ -5914,6 +6281,11 @@ const evaluateOnce = (
       ...parsed.fragments.flatMap((fragment) => {
         const entry = blockEntryBehindFlagValue(fragment, policy.block);
         return entry === undefined ? [] : [flagValueHidesBlockEntry(entry)];
+      }),
+      // WP-201: the block entry an expansion could complete, read on each stage as written.
+      ...parsed.rawStages.flatMap((stage) => {
+        const entry = blockEntryBehindExpansion(stage, policy.block);
+        return entry === undefined ? [] : [expansionCompletesBlockEntry(entry)];
       }),
     ]),
   ];

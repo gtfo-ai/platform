@@ -2746,8 +2746,8 @@ describe('WP-186: a tokens floor’s verbs, checked against its predicate (backl
  * WP-198 (d): the `tokenise(` census, in the shape of `task-save-sites.test.ts`. The written-word
  * split reads a redirection as a word and a quote as part of one, so a deny-direction reader built
  * on it alone misses `2>/dev/null sudo id` (backlog 582). Its callers are the decided ones: the
- * written half of the union (`argvForms`, and `expandsCommandName`, which keeps quotes beside
- * `argvShellWords`), the pattern side, the allow and ask side, `stripEnvironmentPrefix` and
+ * written half of the union (`argvForms`; `expandsCommandName` left the list at WP-201, which
+ * reads the shell's split alone — the blank split cuts a substitution apart), the pattern side, the allow and ask side, `stripEnvironmentPrefix` and
  * `dequoteCommand`. A new caller fails here until somebody decides which it is.
  *
  * A lexical reading of `command-policy.ts`, its comments removed by the repository's scanner
@@ -2756,11 +2756,11 @@ describe('WP-186: a tokens floor’s verbs, checked against its predicate (backl
  */
 const TOKENISE_CALLERS: Readonly<Record<string, string>> = {
   argvForms: 'the written half of the union every deny-direction reader judges',
-  expandsCommandName: 'the written half, beside argvShellWords (a question about quoting)',
   matchesBlockPattern: 'the pattern side: a block entry or a floor glob',
   blockEntryBehindFlagValue: 'the pattern side: a block entry',
   binaryBans: 'the pattern side: a block entry',
   xargsBlockPrefix: 'the pattern side: a block entry',
+  blockEntryBehindExpansion: 'the pattern side: a block entry',
   matchesAllowEntry: 'the allow side: a precise entry reads the line as written',
   stripEnvironmentPrefix: 'the allow and ask side: the line as written, wrappers peeled',
   dequoteCommand: 'the ask side: the line as the shell would hand it on',
