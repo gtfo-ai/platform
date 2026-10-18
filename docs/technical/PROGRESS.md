@@ -20153,6 +20153,8 @@ migration. The next free number is **0092**. Read the backlog entry a row folds 
 | WP-188 | **Scanner: a banned binary stays banned whatever `xargs` feeds it, four more shells are script shells, `gmake` is allowed beside `make`, and an applet runner is unwrapped** | DONE | `fd9f653a` | Folds **567** (minor, fail-open under `auto`, contained), **568**, **569**, and **559** as optional (d) with a split clause. Deps WP-185, WP-186. No migration. Measure (a) first; nothing executed. Serial before WP-193 on `command-policy.ts`. Built on `main`, session 16. Measured first: bare `sudo` reads `ask/auto/deny` (unchanged, as ruled — `sudo *` needs an argument). Making `npx` a wrapper exposed its call string: an `npx` with `-c`/`--call` in any spelling is now uncertain (`npxCall`). **Two review rounds**: R1 the attached `-c'…'`/`--call=…` forms read `auto`; R2 every flag spelling uncertain, and the call string through `npm_config_call=… npx` (which read `auto` before the row too) folded into 575 by the orchestrator with the reviewer's measurements. Canaries: implementer four + one, reviewers five + four, all dead. Orchestrator: `verify` **PASS** (13 484), `verify:integration` **PASS** (887), `verify:e2e` **PASS** twice (298 each); no container left, volumes 71. Refiner: **575** (package runners other than `npx`, and npm's environment config, hand a string nothing reads — major) and **576** (word-specific block entries completed by `xargs` — major), both needing an owner. CI on `fd9f653a`: **PENDING**. |
 | WP-196 | **Scanner: every package runner is read through, a string any of them hands to a shell is never read, and an npm environment setting on the line is uncertain** | DONE | `b3e47df9` | Folds **575** (major, fail-open under `auto`, contained by the stock image). Deps WP-188. No migration. Measure (a) first; nothing executed. Serial after WP-188 and before WP-197 and WP-193 on `command-policy.ts`; parallel-safe with every other row. Added by § "Architect ruling (M11 amendment, session 16)". Built on `main`, session 16; the orchestrator folded **578** (pnpm's unknown-command fallback) and **579** (`bun exec`) into it at review round 2. Measured: the stock image ships npm, npx, corepack and Yarn 1 (`yarn`, `yarnpkg`), not pnpm or bun. **Three review rounds plus an orchestrator-verified fix**: R1 four undetermined-subcommand spellings (`npm exe`, `npm -- exec`, `corepack pnpm@9`, `yarn workspace a exec`) read `auto` — ruled: undetermined → uncertain; R2 `npm explore`, pnpm `recursive`/`multi`/`m`, 578, 579; R3 `npm init`/`create -c` — ruled: `-c`/`--call` uncertain on any npm line. After the cap the orchestrator's probe of 180+ reviewer cases found a regression of R2's pnpm fallback (`pnpm -C d exec -c x`), fixed closed and re-probed: every remaining `auto` is a control, a stated residual or filed. Orchestrator: `verify` **PASS** (13 597), `verify:integration` **PASS** (887), `verify:e2e` **PASS** twice (298 each); no container left, volumes 71. Filed: **580** (`--editor`/`--browser`/`--viewer` spawn a program — major; folded into WP-197 by the orchestrator), 581. CI on `b3e47df9`: **PENDING**. |
 | WP-197 | **Scanner: a block entry that `xargs` could complete from its input is uncertain, whatever follows** | TODO | — | Folds **576** (major, fail-open under `auto`: a block entry, the organisation maximum, completed by `xargs`). Deps WP-188, WP-196. No migration. Measure (a) first; nothing executed. Serial after WP-196 and before WP-193 on `command-policy.ts`; parallel-safe with every other row. Added by § "Architect ruling (M11 amendment, session 16)". |
+| WP-198 | **Scanner: the block list, the floors, the `xargs` readers and the git boundary read argv as the shell builds it — redirections removed, quotes resolved — beside the written words** | TODO | — | Folds **582** (major, fail-open under `auto`: a blocked `sudo` behind a redirection reaches `auto`; live in every run image, nothing installed). Deps WP-197. No migration. Measure (a) first; nothing executed. Serial after WP-197's merge and before WP-199 and WP-193 on `command-policy.ts`; parallel-safe with every other row. The union rule (written tokens **and** argv words, a match on either), a monotonicity property over the test file's own rows and a `tokenise(` census hold it. Added by § "Architect ruling (M11 second amendment, session 16)". |
+| WP-199 | **Scanner: the environment spelling of every `command`-kind floor is declared on the floor and uncertain wherever it stands, starting with npm's `EDITOR`, `VISUAL` and `BROWSER`** | TODO | — | Folds **583** (major, fail-open under `auto`: the environment half of 580; live wherever the image has npm) and the class it is one instance of — `MAKEFLAGS`, `GOFLAGS`, `PYTEST_ADDOPTS`, `RUSTC_WRAPPER`, `GIT_EDITOR` (read, not measured; (a) measures first). Deps WP-196, WP-197. No migration. Nothing executed. Serial after WP-198 and before WP-193 on `command-policy.ts`; parallel-safe with every other row. `HazardousArgument.environment` required for the `command` kind, the scan derived from it, a census that nothing is spelled twice; split clause for a verb's names, never for the field. Added by § "Architect ruling (M11 second amendment, session 16)". |
 | WP-189 | **GitLab: a reply whose re-read fails after a successful POST is never re-posted** | DONE | `890f575b` | Folds **547** (minor, duplicate write). Deps WP-179, WP-184. No migration. Serial after WP-187. Built on `main`, session 16, beside the architect's M11 amendment (committed separately at `890f575b`'s parent). **One review round, APPROVE** with three minors: a dropped timeout residual restated and a fallback control added by the implementer; `paginate`'s quiet `maxPages` cut filed as 577 by the orchestrator. Canaries: implementer two, reviewer five (one survived, then given its control). Orchestrator: `verify` **PASS** (twice), `verify:integration` **PASS** (887), `verify:e2e` **PASS** twice (298 each); no container left, volumes 71. CI on `890f575b`: **PENDING**. |
 | WP-190 | **Every provider HTTP client bounds its response body in bytes** | TODO | — | Folds **548** (minor, hardening). No deps. No migration. Five clients, one reader, one census. Parallel-safe. |
 | WP-191 | **Every ticket comment the platform writes opens with its marker, and every marker is in the list** | TODO | — | Folds **546** (minor, latent while both adapters read `marker_id` back). No deps. No migration. Reads `upsertWorkpad`'s match first. Serial before WP-192 on `workpad.ts`. |
@@ -47465,6 +47467,94 @@ technical/05's command-policy bullets are WP-196 criterion (6) and WP-197 criter
 migration stays **0092**; neither row takes one. Nothing is marked RESOLVED by this pass.
 
 **Next: WP-196**, then WP-197, then WP-189…WP-195 in their table order with WP-193 after WP-197.
+
+### Architect ruling (M11 second amendment, session 16) — two majors WP-197 filed, and the class behind the session's rows
+
+Written 2026-10-18 at `ce56ea19`, WP-187…WP-189 and WP-196 DONE, WP-197 in review on the working tree,
+WP-190…WP-195 TODO. This pass covers **582** and **583**, which WP-197's review and build filed with no
+owner, and the question the orchestrator put beside them: six headings this session (561, 575, 576,
+580, 582, 583) are each a spelling past an enumeration — is there a rule that closes the class rather
+than the spelling? No test tier and no Docker ran; the code was read on the working tree at the lines
+each entry cites. Both are **major, fail-open under `auto`**. 582 needs nothing installed, so **WP-198**
+owns it and comes first; **WP-199** owns 583; both are placed after WP-197 and before WP-190, serial on
+`command-policy.ts`, one rule per row (WP-164's three-round cap). WP-197's row is not changed.
+
+**The class is two classes.** The scanner has two readers of a line. The parser (`scan`, `shellWords`,
+`wordsOf`) honours quotes and carries each redirection as `ShellWord.redirect`; the block side
+(`tokenise`: `normaliseCommand`, then split on blanks) reads whitespace tokens, so a redirection is a
+word and a quote is part of one. Every deny-direction reader sits on the second — `argv0Candidates`
+and so `matchesBlockPattern`, `carriesHazard` and `commandArgvCandidates`; `xargsCommandWords` and so
+WP-188's ban and WP-197's prefix; `commandNameWords`. 582 is that gap, and it has a structural answer.
+583 is a different gap: a program reads its environment, and which names hand it a program is a fact
+about the program that no parse of the line can know. The answers differ, which is why there are two
+rows.
+
+**582: read argv as the shell builds it, as a union with the written words.** One function gives a
+stage's words as the program receives them — `shellWords`, every redirection removed with its target
+whether attached or separate (off `ShellWord.redirect`, never a second regex), every word dequoted —
+and every deny-direction reader judges **both** that list and the written tokens it judges today; a
+match on either is a match. **Union, not replacement**: removal loosens one corner — `A=1 sudo >x`
+matches `sudo *` on the written tokens only, because after removal the token half is `sudo` alone and
+the glob half is anchored past the assignment — and the union is the side that only tightens. The
+allow- and ask-list matchers do not change: there a removed redirection widens (`ls >out` would read
+as `ls`), and the redirection floor stays. **The orchestrator's alternative for the `xargs` reader** —
+any redirection before the command word makes the line uncertain — is declined: a redirection's effect
+is determined (its operator, its target, the words left), and `uncertain` is for what the scanner
+cannot determine; the over-ask would land on `xargs 2>/dev/null grep x`, which an agent writes
+routinely (backlog 462's compound read carries one). **The over-ask of the chosen rule, named:** none
+in any verdict, by the union. **What holds it:** a property over the test file's own rows — inserting
+a redirection at any blank between top-level words never moves a refused verdict to a run, in any
+baseline — and a census that `tokenise(` has exactly its listed callers, so a later reader cannot pick
+up the whitespace split without a decision. Quotes go with it: `gh re'lease' create` is the same
+mechanism, which WP-197 closed under `xargs` only (`unquoteToken` in `xargsBlockPrefix`); (a)
+measures it on the line, and the function dequotes.
+
+**583: the environment is a spelling of the floor, declared on the floor.** Three options were weighed.
+**(i) A wider name list** in `RUNNER_ENVIRONMENT_WORD` (`EDITOR`, `VISUAL`, `BROWSER`, `GIT_EDITOR`,
+…): closed by documentation, a small over-ask (`EDITOR=vim git status`), and exactly the enumeration
+the orchestrator asks to leave — every tool is a row. **(ii) A blanket** — any `NAME=value` prefix,
+`env NAME=`, `export` or bare assignment before a command the allow-list does not name is uncertain:
+the only rule that closes the class whole, and its over-ask is the verification baseline itself —
+`DATABASE_URL=x pnpm test`, `PYTHONPATH=src pytest`, `CI=true npx vitest run` refused with *run it
+without the assignment*, which a suite that needs one cannot do. A bare `export` must be in it too,
+because the pinned CLI's Bash tool is read as carrying one call's `export` into the next (the reason
+WP-196 (d) reads a bare assignment; **needs measurement**, WP-199 (a)), so `export DATABASE_URL=x` is
+refused as well. A variant with an inert-name allow-list (`CI`, `NODE_ENV`, `TERM`, `LC_*`, …) fails
+closed in rule 65's shape and keeps that over-ask for every project-specific name; a project-declared
+name list would be a BD-025 §2 widening, which is the product owner's question and not this ruling's.
+**(iii) Per verb, declared on the floor — chosen.** A `command`-kind floor exists because a verb's
+option hands it a program; the verb's documented environment variable with the same effect is the
+floor's second spelling, and today only npm's is read (`npm_config_*`, `NODE_OPTIONS`, WP-196) and
+git's in part (the boundary's environment list). So `HazardousArgument` gains `environment`, required
+for the `command` kind as `verbs` is since WP-164, each name cited from the tool's documentation; the
+scan is derived from the union and spelled nowhere else; a word naming one, wherever it stands
+(WP-196 (d)'s positions, for the same reason), is uncertain whatever the command. **Read, not measured,
+and the row's first hour:** `MAKEFLAGS='--eval=x' make test`, `GOFLAGS=-toolexec=x go test ./...`,
+`PYTEST_ADDOPTS='-p x' pytest`, `RUSTC_WRAPPER='sh -c id' cargo test`, `GIT_EDITOR='sh -c id' git
+commit` — each the environment spelling of a floor that already exists, each presumed `auto` today,
+the class 583 is one instance of. **The over-ask, named:** `EDITOR=vim git status`, `MAKEFLAGS=-j4
+make test`, `GOFLAGS=-mod=vendor go test ./...`, `PYTEST_ADDOPTS=-q pytest`, and a read that merely
+names one (`grep -rn EDITOR docs`), each refused with *write the option on the line* or the Grep tool.
+**What (iii) does not close, stated:** a tool with no floor (`EDITOR=x some-tool`), a variable a
+Makefile or a package script references (`CC='sh -c id' make`), a configuration file the run writes —
+each repository content or a program the sandbox bounds, which BD-025's WP-54 amendment already names
+as the boundary.
+
+**The session's rows, read as a class.** 561, 575, 576 and 580 were each closed with a rule over a
+class where one was identifiable — every shell, every runner, every block entry, every program option
+npm documents — and 582 is closed the same way. 583 is where the identifiable class ends at the
+floor's own verb. After WP-198 and WP-199 the open class is the one BD-025 names: an option or a
+variable nobody enumerated, bounded by the sandbox and not by the list.
+
+**Decisions.** None amended. BD-025 §2's *resolved against the real binary, not the name* is what
+WP-198 reads; its WP-54 amendment's *that floor is an enumeration of known spellings, not a boundary*
+stays true under WP-199, which adds a kind of spelling and not a boundary. The blanket (ii) would be
+a decision change, and is not chosen. technical/05's command-policy bullets are WP-198 criterion (6)
+and WP-199 criterion (6). The next free migration stays **0092**; neither row takes one. Nothing is
+marked RESOLVED by this pass.
+
+**Next: WP-197's review**, then WP-198, then WP-199, then WP-190…WP-195 in their table order with
+WP-193 after WP-199.
 
 ## WP notes — session 14 (M10)
 
