@@ -15,6 +15,7 @@ import {
   DEFAULT_IMPLEMENTATION_ALLOW,
   DEFAULT_READ_ONLY_ALLOW,
   DEFAULT_VERIFICATION_ALLOW,
+  environmentSpellsFloor,
   evaluateCommand,
   flagValueHidesBlockEntry,
   HAZARDOUS_ARGUMENTS,
@@ -2207,7 +2208,7 @@ describe('WP-196: every package runner is read through, its string never, and np
     'grep npm_config_ .npmrc',
   ])('%j is uncertain (npmEnvironment, criterion 3)', (command) => {
     expectCells(command, 'ask / uncertain / uncertain');
-    expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.npmEnvironment]);
+    expect(auto(command).evaluation.uncertainty).toEqual([environmentSpellsFloor('npm')]);
   });
 
   it.each([
@@ -2345,7 +2346,7 @@ describe('WP-196: every package runner is read through, its string never, and np
 
   it('"ref=npm_config_call" names npm’s environment after an `=` (review round 2)', () => {
     expect(auto('ref=npm_config_call').evaluation.uncertainty).toContain(
-      UNCERTAINTY.npmEnvironment,
+      environmentSpellsFloor('npm'),
     );
   });
 
@@ -2943,4 +2944,92 @@ describe('WP-198: the deny-direction readers read argv as the shell builds it, b
     },
     PROPERTY_TEST_TIMEOUT_MS,
   );
+});
+
+/**
+ * WP-199 (PROGRESS backlog 583): an environment variable a verb reads for the same effect as a
+ * `command`-kind floor's option is that floor's second spelling, declared on the floor
+ * (`HazardousArgument.environment`), and a word naming one is uncertain wherever it stands, with
+ * the reason naming the verb. Every cell before the change was `ask / auto / deny` (PROGRESS §
+ * WP-199). Nothing here executes a line.
+ */
+describe('WP-199, backlog 583: the environment spelling of a command floor', () => {
+  it.each([
+    // Criterion (1): 583's two lines and the three the row adds.
+    ["EDITOR='sh -c id' npm edit zod", 'npm'],
+    ["BROWSER='id;' npm docs zod", 'npm'],
+    ["VISUAL='sh -c id' npm edit zod", 'npm'],
+    ["export EDITOR='sh -c id'; npm edit zod", 'npm'],
+    ["env BROWSER='id;' npm docs zod", 'npm'],
+    // Criterion (2): git's editors, which the git boundary does not refuse.
+    ["GIT_EDITOR='sh -c id' git commit", 'git'],
+    ["GIT_SEQUENCE_EDITOR='sh -c id' git rebase -i main", 'git'],
+    ["GIT_EXTERNAL_DIFF='sh -c id' git diff", 'git'],
+    // `EDITOR` is declared once, on npm's --editor, so git's fallback reads as npm's.
+    ["EDITOR='sh -c id' git commit", 'npm'],
+    // Criterion (3): every hypothesis line of (a).
+    ["MAKEFLAGS='--eval=x' make test", 'make'],
+    ['MAKEFLAGS=-e make test', 'make'],
+    ["GNUMAKEFLAGS='--eval=x' make test", 'make'],
+    ['MAKEFILES=x.mk make test', 'make'],
+    ['GOFLAGS=-toolexec=x go test ./...', 'go'],
+    ['GOFLAGS=-exec=x go test ./...', 'go'],
+    ["PYTEST_ADDOPTS='-p x' pytest", 'pytest'],
+    ["PYTEST_ADDOPTS='-c x.ini' pytest", 'pytest'],
+    ['PYTEST_PLUGINS=x pytest', 'pytest'],
+    ["RUSTC_WRAPPER='sh -c id' cargo test", 'cargo'],
+    ["RUSTC='sh -c id' cargo build", 'cargo'],
+    ['CARGO_BUILD_RUSTC=x cargo test', 'cargo'],
+    ["CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER='sh -c id' cargo test", 'cargo'],
+    ['RIPGREP_CONFIG_PATH=x rg y', 'rg'],
+    // WP-196 (d)'s positions, for a name of this row.
+    ['read MAKEFLAGS; make test', 'make'],
+    ['for GOFLAGS in x; do go test; done', 'go'],
+    ['printf -vRUSTC_WRAPPER x; cargo test', 'cargo'],
+    ['ref=PYTEST_ADDOPTS', 'pytest'],
+    // Criterion (5)'s over-ask, pinned: the option belongs on the line, a search in the Grep tool.
+    ['EDITOR=vim git status', 'npm'],
+    ['MAKEFLAGS=-j4 make test', 'make'],
+    ['GOFLAGS=-mod=vendor go test ./...', 'go'],
+    ['PYTEST_ADDOPTS=-q pytest', 'pytest'],
+    ['CARGO_TERM_COLOR=always cargo test', 'cargo'],
+    ['grep -rn EDITOR docs', 'npm'],
+    ['ls CARGO_TOML', 'cargo'],
+    ['git diff -- RUSTFLAGS.md', 'cargo'],
+    // Review round 1: pnpm 11+ reads `pnpm_config_*`/`PNPM_CONFIG_*`, not `npm_config_*`.
+    ['pnpm_config_script_shell=x pnpm test', 'npm'],
+    ['PNPM_CONFIG_SCRIPT_SHELL=x pnpm test', 'npm'],
+    ['export pnpm_config_node_options=x; pnpm test', 'npm'],
+    // Review round 1: programs go runs from its environment.
+    ["GOCACHEPROG='sh -c id' go test ./...", 'go'],
+    ["GOAUTH='sh -c id' go mod download", 'go'],
+    ['GOROOT=/tmp/x go test ./...', 'go'],
+    ["CGO_CFLAGS='-wrapper x' go test ./...", 'go'],
+  ])('%j is uncertain, naming %s', (command, verb) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([environmentSpellsFloor(verb)]);
+  });
+
+  it.each([
+    // Criterion (5): the controls keep their cells. A name no floor declares, an exact name
+    // spelled in another case (Unix environment names are case-sensitive), a longer name.
+    ['CI=1 npm test', 'ask / auto / deny'],
+    ['NODE_ENV=test npm test', 'ask / auto / deny'],
+    ['DATABASE_URL=x pnpm test', 'ask / auto / deny'],
+    ['PYTHONPATH=src pytest', 'ask / auto / deny'],
+    ['npm edit x', 'ask / auto / deny'],
+    ['npm docs zod', 'ask / auto / deny'],
+    ["editor='sh -c id' npm edit zod", 'ask / auto / deny'],
+    ['EDITORS=x npm test', 'ask / auto / deny'],
+    [
+      'git commit -m x',
+      { ro: 'ask / auto / deny', ver: 'ask / auto / deny', impl: 'allow / allow / allow' },
+    ],
+    [
+      'make test',
+      { ro: 'ask / auto / deny', ver: 'allow / allow / allow', impl: 'allow / allow / allow' },
+    ],
+  ])('%j keeps its cells (control)', (command, expected) => {
+    expectCells(command, expected);
+  });
 });

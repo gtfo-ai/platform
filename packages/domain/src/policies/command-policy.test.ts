@@ -21,7 +21,11 @@ import {
   DEFAULT_READ_ONLY_ALLOW,
   DEFAULT_VERIFICATION_ALLOW,
   dequoteCommand,
+  environmentSpellsFloor,
   evaluateCommand,
+  FLOOR_ENVIRONMENT,
+  type FloorEnvironmentRow,
+  floorEnvironmentRows,
   GIT_ABBREVIATION_HAZARDS,
   GO_PATH_WRITING_BINARY_FLAGS,
   GO_PATH_WRITING_BUILD_FLAGS,
@@ -2729,6 +2733,7 @@ describe('WP-186: a tokens floor’s verbs, checked against its predicate (backl
       kind: 'command',
       verbs: ['cargo'],
       hazard: 'a test entry',
+      environment: [],
       tokens: ({ name, flags }) => name.startsWith('cargo') && flags.includes('--frob'),
     };
     expect(tokensCensus([...HAZARDOUS_ARGUMENTS, added], TOKENS_FIXTURES)).toEqual([
@@ -2810,6 +2815,109 @@ describe('WP-198 (d): who reads the written-word split', () => {
     const planted = `${SOURCE}\nconst newReader = (text: string) => tokenise(text)[0];\n`;
     expect(tokeniseCallers(planted).filter((caller) => !(caller in TOKENISE_CALLERS))).toEqual([
       'newReader',
+    ]);
+  });
+});
+
+/**
+ * WP-199 criterion (4), backlog 583: every `command`-kind floor declares its environment (the type
+ * requires the field; this holds it at runtime too), the scan's table is the derivation of the
+ * entries and nothing else, and no name is declared twice — the same name on two rows, in any case,
+ * or a name another row's prefix already covers. A name spelled in the table by hand is reported
+ * against the entry it names. What it cannot see: a name added to the matcher's regular expression
+ * text rather than to the table, which is code to review, not a row.
+ */
+describe('WP-199, backlog 583: the floors’ environment census', () => {
+  const rowKey = (row: FloorEnvironmentRow): string =>
+    `${row.entry.pattern}: ${row.name}${row.prefix ? '*' : ''}${row.anyCase ? ' (any case)' : ''}`;
+
+  const covers = (a: FloorEnvironmentRow, b: FloorEnvironmentRow): boolean =>
+    a.prefix
+      ? b.name.toLowerCase().startsWith(a.name.toLowerCase())
+      : !b.prefix && a.name.toLowerCase() === b.name.toLowerCase();
+
+  /** What is wrong between the entries and the table the scan reads, or nothing. */
+  const environmentCensus = (
+    entries: readonly HazardousArgument[],
+    table: readonly FloorEnvironmentRow[],
+  ): readonly string[] => {
+    const faults: string[] = entries
+      .filter((entry) => entry.kind === 'command' && !Array.isArray(entry.environment))
+      .map((entry) => `${entry.pattern}: declares no environment`);
+    const derived = floorEnvironmentRows(entries);
+    const derivedKeys = derived.map(rowKey);
+    const readKeys = table.map(rowKey);
+    faults.push(
+      ...readKeys
+        .filter((key) => !derivedKeys.includes(key))
+        .map((key) => `${key} is read by the scan and not declared on the entry`),
+      ...derivedKeys
+        .filter((key) => !readKeys.includes(key))
+        .map((key) => `${key} is declared and not read by the scan`),
+    );
+    derived.forEach((row, index) => {
+      for (const other of derived.slice(index + 1)) {
+        if (covers(row, other) || covers(other, row)) {
+          faults.push(`${rowKey(other)} is also spelled by ${rowKey(row)}`);
+        }
+      }
+    });
+    return faults;
+  };
+
+  it('every command floor declares its environment, and the table is their derivation', () => {
+    expect(environmentCensus(HAZARDOUS_ARGUMENTS, FLOOR_ENVIRONMENT)).toEqual([]);
+    expect(FLOOR_ENVIRONMENT.map((row) => row.name)).toEqual(
+      expect.arrayContaining(['npm_config_', 'NODE_OPTIONS', 'EDITOR', 'VISUAL', 'BROWSER']),
+    );
+  });
+
+  it.each(FLOOR_ENVIRONMENT.map((row) => [rowKey(row), row] as const))(
+    '%s is uncertain on the line, naming its verb',
+    (_key, row) => {
+      const verb = (row.entry.verbs as readonly string[])[0] as string;
+      const command = `${row.name}${row.prefix ? 'X' : ''}=x ${verb}`;
+      expect(evaluateCommand({ command }, DEFAULT_COMMAND_POLICY).uncertainty).toContain(
+        environmentSpellsFloor(verb),
+      );
+    },
+  );
+
+  const editorEntry = HAZARDOUS_ARGUMENTS.find((entry) =>
+    entry.pattern.startsWith('npm/pnpm --editor '),
+  ) as Extract<HazardousArgument, { kind: 'command' }>;
+
+  it('refuses a name spelled in the table by hand and deleted from its entry, naming the entry', () => {
+    const withoutEditor = { ...editorEntry, environment: ['VISUAL'] };
+    const entries = HAZARDOUS_ARGUMENTS.map((entry) =>
+      entry === editorEntry ? withoutEditor : entry,
+    );
+    const handSpelled: FloorEnvironmentRow = {
+      name: 'EDITOR',
+      prefix: false,
+      anyCase: false,
+      entry: withoutEditor,
+    };
+    expect(environmentCensus(entries, [...floorEnvironmentRows(entries), handSpelled])).toEqual([
+      `${editorEntry.pattern}: EDITOR is read by the scan and not declared on the entry`,
+    ]);
+  });
+
+  it('refuses a name declared twice, in another case, or under another row’s prefix', () => {
+    const redeclare = (pattern: string, environment: readonly string[]) =>
+      HAZARDOUS_ARGUMENTS.map((entry) =>
+        entry.pattern === pattern && entry.kind === 'command'
+          ? { ...entry, environment: [...entry.environment, ...environment] }
+          : entry,
+      );
+    const twice = redeclare('go* -exec*', ['GOFLAGS', 'editor']);
+    expect(environmentCensus(twice, floorEnvironmentRows(twice))).toEqual([
+      'go* -toolexec*: GOFLAGS is also spelled by go* -exec*: GOFLAGS',
+      `${editorEntry.pattern}: EDITOR is also spelled by go* -exec*: editor`,
+    ]);
+    const underPrefix = redeclare('cargo* --config*', ['RUSTC_WRAPPER']);
+    expect(environmentCensus(underPrefix, floorEnvironmentRows(underPrefix))).toEqual([
+      'cargo* --config*: RUSTC_WRAPPER is also spelled by cargo* --config*: RUSTC*',
     ]);
   });
 });

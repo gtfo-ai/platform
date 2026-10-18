@@ -238,14 +238,6 @@ export const UNCERTAINTY = {
    */
   runnerString:
     'npm explore or bun exec, which runs its words as a string in a shell — run the command itself; the platform does not read the string a package runner hands to a shell',
-  /**
-   * WP-196 (backlog 575): npm reads its configuration from the environment, case-insensitively, and
-   * node reads `NODE_OPTIONS`, so a setting there can hand either a program (`call`, `node-options`,
-   * `script-shell`, `--require`). A list of those settings would under-read (rule 65), so any word
-   * naming `npm_config_*` or `NODE_OPTIONS`, wherever it stands, is uncertain whatever the command.
-   */
-  npmEnvironment:
-    'a word naming an npm_config_* setting (in any case) or NODE_OPTIONS, which can hand npm or node a program to run — run the command without it; the platform does not read settings a line puts in the environment',
 } as const;
 
 /**
@@ -267,8 +259,19 @@ export const xargsCompletesBlockEntry = (entry: string) =>
 export const flagValueHidesBlockEntry = (entry: string) =>
   `a word after an option written with no "=", which, read as that option's value, leaves a command that the block-list entry "${entry}" names — write the option as --option=value; the platform does not know which options take a value` as const;
 
+/**
+ * WP-199 (backlog 583), formerly WP-196's `npmEnvironment`: a word naming an environment variable
+ * a `command`-kind floor declares (`HazardousArgument.environment` — `npm_config_*`,
+ * `NODE_OPTIONS`, `EDITOR`, `MAKEFLAGS`, `GOFLAGS`, `PYTEST_ADDOPTS`, `CARGO_*`, …), wherever it
+ * stands and whatever the command (`FLOOR_ENVIRONMENT`). The reason names the verb of the floor the
+ * word spells.
+ */
+export const environmentSpellsFloor = (verb: string) =>
+  `a word naming an environment variable ${verb} reads for an option the platform floors, which can hand ${verb} a program or configuration to run — run the command without it, or write the option on the line, where the floor reads it; to search for the name, use the Grep tool; the platform does not read settings a line puts in the environment` as const;
+
 export type UncertaintyReason =
   | (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY]
+  | ReturnType<typeof environmentSpellsFloor>
   | ReturnType<typeof xargsCompletesBlockEntry>
   | ReturnType<typeof flagValueHidesBlockEntry>;
 
@@ -872,12 +875,34 @@ interface HazardousArgumentShape {
  * `pytest`). An `xargs` that feeds one of them is uncertain ({@link XARGS_FLOORED_VERBS}), because
  * the hazardous argument can arrive on xargs' input, where no floor reads it. A `trust` or `path`
  * entry may name them and does not have to: those kinds are not derived into the set.
+ *
+ * A `command`-kind entry must also declare its **environment** (WP-199, backlog 583): the
+ * environment variables its verb documents reading for the same effect as the floored option —
+ * `--editor` and `EDITOR`, `make --eval` and `MAKEFLAGS`, `cargo --config` and `CARGO_*`. A word
+ * naming one, wherever it stands, is uncertain whatever the command ({@link FLOOR_ENVIRONMENT},
+ * the only place the scan reads names from). Each name is declared on exactly one entry, cited
+ * from the tool's documentation beside it; `[]` carries its reason in a comment at the entry.
  */
 export type HazardousArgument = HazardousArgumentShape &
   (
-    | { readonly kind: 'command'; readonly verbs: readonly [string, ...string[]] }
-    | { readonly kind: 'trust' | 'path'; readonly verbs?: readonly string[] }
+    | {
+        readonly kind: 'command';
+        readonly verbs: readonly [string, ...string[]];
+        readonly environment: readonly FloorEnvironmentName[];
+      }
+    | {
+        readonly kind: 'trust' | 'path';
+        readonly verbs?: readonly string[];
+        readonly environment?: readonly FloorEnvironmentName[];
+      }
   );
+
+/**
+ * One environment spelling of a floor: an exact name (`EDITOR`), or a prefix written with a
+ * trailing `*` (`CARGO_*`); `anyCase` when the verb reads it case-insensitively (npm's
+ * `npm_config_*`). Unix environment names are otherwise case-sensitive.
+ */
+export type FloorEnvironmentName = string | { readonly name: string; readonly anyCase: true };
 
 /**
  * `go test` flags that write a path the command line chose (PROGRESS backlog 343, WP-120): six
@@ -1143,6 +1168,9 @@ const gitAbbreviationFloor = ({
   pattern: `git --${spelling} abbreviated (any prefix of it git could resolve to it, e.g. --${spelling.slice(0, Math.max(2, spelling.length - 2))})`,
   kind,
   verbs: ['git'],
+  // The full spelling's entry declares the option's environment names; an abbreviation is the
+  // same option, so declaring them here too would spell them twice.
+  environment: [],
   hazard: `git accepts any unambiguous prefix of a long option, so this is --${spelling}: ${hazard}`,
   tokens: ({ name, flags, words }) => {
     if (name !== 'git' && !name.startsWith('git-')) {
@@ -1169,34 +1197,77 @@ const isMakeName = (name: string): boolean => MAKE_VERBS.some((verb) => name.sta
  * refuses abbreviations outright) — or shorter (`node`, floored since WP-54). `--editor`,
  * `--browser` and `--viewer` are WP-197's (backlog 580): `npm edit` splits `editor` on whitespace
  * and spawns it, `npm docs` and `npm help` with `viewer=browser` hand `browser` to a shell, and
- * `viewer` picks the program `npm help` runs. Their environment spellings are
- * `UNCERTAINTY.npmEnvironment`'s.
+ * `viewer` picks the program `npm help` runs. Each row declares its environment spellings (WP-199,
+ * backlog 583), read off npm 11's `workspaces/config/lib/definitions/definitions.js` (v11.6.2,
+ * retrieved 2026-10-18): npm reads every setting from `npm_config_<key>` in any case, so that prefix
+ * is declared once, on `config.<key>` — the floor that already stands for any key — and covers
+ * `npm_config_script_shell`, `npm_config_editor`, `npm_config_browser` and `npm_config_viewer`
+ * too.
  */
-const NPM_OPTION_FLOORS: readonly { option: string; prefix: string; hazard: string }[] = [
+const NPM_OPTION_FLOORS: readonly {
+  option: string;
+  prefix: string;
+  hazard: string;
+  environment: readonly FloorEnvironmentName[];
+}[] = [
   {
     option: 'script-shell',
     prefix: 'scr',
     hazard: 'npm and pnpm run the package script under the --script-shell binary instead of sh',
+    // `script-shell` reads no environment variable of its own (`default: null`); its
+    // `npm_config_script_shell` spelling is `config.<key>`'s prefix.
+    environment: [],
   },
   {
     option: 'node-options',
     prefix: 'node',
     hazard:
       'npm turns --node-options into NODE_OPTIONS, so `--import=data:…` runs model-written code',
+    // node reads NODE_OPTIONS itself (https://nodejs.org/api/cli.html#node_optionsoptions). Any
+    // case, as WP-196 matched it: the closed side.
+    environment: [{ name: 'NODE_OPTIONS', anyCase: true }],
   },
   {
     option: 'config.<key>',
     prefix: 'config.',
     hazard:
       'pnpm `--config.<key>=` sets any configuration key, including `node-options` and `script-shell` (on npm, floored as a precaution; not measured)',
+    // npm reads any setting from `npm_config_<key>`, matched case-insensitively
+    // (https://docs.npmjs.com/cli/v11/using-npm/config#environment-variables); pnpm 11 and later
+    // read `pnpm_config_<key>` and, since 11.0.6, `PNPM_CONFIG_<key>` instead, and no longer
+    // `npm_config_*` (https://pnpm.io/configuring; the repository pins pnpm 12). Both in any case:
+    // the closed side.
+    environment: [
+      { name: 'npm_config_*', anyCase: true },
+      { name: 'pnpm_config_*', anyCase: true },
+    ],
   },
-  { option: 'editor', prefix: 'ed', hazard: 'npm edit spawns the --editor value as a program' },
+  {
+    option: 'editor',
+    prefix: 'ed',
+    hazard: 'npm edit spawns the --editor value as a program',
+    // definitions.js: `const editor = process.env.EDITOR || process.env.VISUAL || …`, the
+    // `editor` default ("The EDITOR or VISUAL environment variables").
+    environment: ['EDITOR', 'VISUAL'],
+  },
   {
     option: 'browser',
     prefix: 'br',
     hazard: 'npm docs and npm help run the --browser value as a shell string',
+    // `browser` defaults to `xdg-open` on Linux, which runs `$BROWSER` when it is set (xdg-utils,
+    // https://portland.freedesktop.org/doc/xdg-open.html; the generic-desktop branch). Not npm's
+    // own read: xdg-open's, for the same effect.
+    environment: ['BROWSER'],
   },
-  { option: 'viewer', prefix: 'vi', hazard: 'npm help runs the --viewer value as its viewer' },
+  {
+    option: 'viewer',
+    prefix: 'vi',
+    hazard: 'npm help runs the --viewer value as its viewer',
+    // `viewer` reads no environment variable (`default: isWindows ? 'browser' : 'man'`); its
+    // `npm_config_viewer` spelling is `config.<key>`'s. *Needs measurement*: `man`, the default
+    // viewer, runs `MANPAGER` or `PAGER` — man's names, not npm's, and not declared here.
+    environment: [],
+  },
 ];
 
 /** The names whose option words nopt parses: npm and pnpm, and their runners `npx` and `pnpx`. */
@@ -1244,11 +1315,13 @@ const npmOptionFloor = ({
   option,
   prefix,
   hazard,
+  environment,
 }: (typeof NPM_OPTION_FLOORS)[number]): HazardousArgument => ({
   pattern: `npm/pnpm --${option} (any spelling nopt reads: every leading dash, a no- prefix, a prefix from --${prefix})`,
   kind: 'command',
   verbs: NPM_OPTION_VERBS,
   hazard,
+  environment,
   tokens: ({ name, words }) =>
     (NPM_OPTION_VERBS as readonly string[]).includes(name) &&
     npmOptionWords(name, words).some((word) => noptOptionName(word)?.startsWith(prefix) === true),
@@ -1291,6 +1364,9 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'git * --upload-pack*',
     kind: 'command',
     verbs: ['git'],
+    // git documents no environment variable for --upload-pack; the transport's own (`GIT_SSH`,
+    // `GIT_SSH_COMMAND`, `GIT_PROXY_COMMAND`) are the git boundary's (BD-025's 2026-10-06 amendment).
+    environment: [],
     hazard:
       'git runs the --upload-pack value as a shell command on the far end, and with a local path as the remote that far end is this machine',
   },
@@ -1298,6 +1374,8 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'git * --receive-pack*',
     kind: 'command',
     verbs: ['git'],
+    // As for --upload-pack: none of its own; the transport's are the git boundary's.
+    environment: [],
     hazard: 'the push-side twin of --upload-pack, and equally a shell command',
   },
   /**
@@ -1311,6 +1389,11 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'git * --exec*',
     kind: 'command',
     verbs: ['git'],
+    // git has no editor option to floor, so the program git runs while it commits and rebases is
+    // declared on the floor of the program `git rebase` runs (git-var(1), `GIT_EDITOR`; git-rebase(1)
+    // and git(1), `GIT_SEQUENCE_EDITOR`: *"the editor used to edit the todo list of an interactive
+    // rebase"*). `EDITOR` and `VISUAL`, git's fallback, are declared once, on npm's --editor.
+    environment: ['GIT_EDITOR', 'GIT_SEQUENCE_EDITOR'],
     hazard:
       "--exec is git push's synonym for --receive-pack, git fetch-pack's for --upload-pack, and git rebase runs it (or -x) after each commit; it is not scoped to a subcommand because the next verb to grow one would be missed",
     tokens: ({ name, flags, positional }) =>
@@ -1330,6 +1413,9 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'git * --extcmd*',
     kind: 'command',
     verbs: ['git'],
+    // *Needs measurement*: git-difftool(1) documents `GIT_DIFF_TOOL` only as set by difftool for
+    // its helper, not as read from the caller; the candidate name is that one.
+    environment: [],
     hazard: 'git difftool runs --extcmd (-x) once per changed file',
     tokens: ({ name, flags, positional }) =>
       (name === 'git' || name.startsWith('git-')) &&
@@ -1341,6 +1427,9 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'git * --ext-diff*',
     kind: 'command',
     verbs: ['git'],
+    // git(1): *"GIT_EXTERNAL_DIFF … the program named by it is called to generate diffs"* — the
+    // external driver --ext-diff turns on, from the environment instead of the repository.
+    environment: ['GIT_EXTERNAL_DIFF'],
     hazard:
       "--ext-diff turns on the external diff driver the *repository's own* config names, and a repository is untrusted input (BD-022)",
   },
@@ -1348,12 +1437,18 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'git * --textconv*',
     kind: 'command',
     verbs: ['git'],
+    // The textconv driver is named by the repository's configuration only; git documents no
+    // environment variable for it.
+    environment: [],
     hazard: "--textconv runs the textconv filter the repository's config names (BD-022)",
   },
   {
     pattern: 'git * ext::*',
     kind: 'command',
     verbs: ['git'],
+    // git(1): `GIT_ALLOW_PROTOCOL` *"behave as if protocol.allow is set to never, and each of the
+    // listed protocols has protocol.<name>.allow set to always"* — listing `ext` turns ext:: on.
+    environment: ['GIT_ALLOW_PROTOCOL'],
     hazard:
       "git's ext:: transport runs its argument as a shell command; it is refused unless protocol.ext.allow is set, which is the workspace's configuration and not this module's to promise",
   },
@@ -1361,12 +1456,17 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'rg * --pre*',
     kind: 'command',
     verbs: ['rg'],
+    // rg(1): `RIPGREP_CONFIG_PATH` names a file whose lines are prepended to the arguments, so it
+    // carries --pre (and --hostname-bin) as written.
+    environment: ['RIPGREP_CONFIG_PATH'],
     hazard: 'ripgrep runs the --pre command over every file it searches',
   },
   {
     pattern: 'rg * --hostname-bin*',
     kind: 'command',
     verbs: ['rg'],
+    // Its environment spelling is `RIPGREP_CONFIG_PATH`, declared once, on --pre.
+    environment: [],
     hazard: 'ripgrep runs the --hostname-bin command to label hyperlinks',
   },
   // ── writes a path that the `> file` rule never sees ──
@@ -1483,6 +1583,9 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'make VAR=value (a positional containing `=`)',
     kind: 'command',
     verbs: MAKE_VERBS,
+    // `MAKEFLAGS` carries assignments too, and is declared once, on the -E entry. A variable a
+    // makefile reads from the environment (`CC`) is repository content: the stated residual.
+    environment: [],
     hazard:
       'a make argument with `=` that is not a flag is a command-line variable assignment — `X:=$(shell …)`, `SHELL=`, `.SHELLFLAGS=`, or an ordinary `V=1`, which can equally override a recipe variable such as `CC` — so every one is floored, while `--jobs=4` (a flag) is not',
     tokens: ({ name, positional }) =>
@@ -1495,6 +1598,8 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
       pattern: `${verb}* --e*`,
       kind: 'command',
       verbs: [verb],
+      // make's names are declared once, on the -E entry, which floors every make verb.
+      environment: [],
       hazard:
         'make --eval, spelled in full or by the prefixes GNU getopt accepts (`--ev`, `--eva`), evaluates the text as makefile source; `--environment-overrides` lets the environment replace the makefile’s variables',
     }),
@@ -1503,6 +1608,11 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'make -…E… (a single-dash short-option cluster containing E)',
     kind: 'command',
     verbs: MAKE_VERBS,
+    // GNU make manual §5.7.3 (*"Communicating Options to a Sub-make"*): make reads its flags,
+    // `--eval` and `-e` included, from `MAKEFLAGS`, and GNU make from `GNUMAKEFLAGS` too; `MFLAGS`
+    // is the historical spelling; §3.4 (*"The Variable MAKEFILES"*): the makefiles it names are
+    // read first, which is --eval from a file. One entry for every make verb.
+    environment: ['MAKEFLAGS', 'GNUMAKEFLAGS', 'MFLAGS', 'MAKEFILES'],
     hazard: 'the short spelling of make --eval, alone (`-E`) or inside a clustered flag (`-sE`)',
     tokens: ({ name, flags }) => isMakeName(name) && flags.some((flag) => /^-[^-]*E/.test(flag)),
   },
@@ -1510,30 +1620,48 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'go* -exec*',
     kind: 'command',
     verbs: ['go'],
+    // Its environment spelling is `GOFLAGS`, declared once, on -toolexec.
+    environment: [],
     hazard: 'go test -exec runs the test binary under an arbitrary program',
   },
   {
     pattern: 'go* --exec*',
     kind: 'command',
     verbs: ['go'],
+    // As for -exec.
+    environment: [],
     hazard: 'the double-dash spelling of go -exec',
   },
   {
     pattern: 'go* -toolexec*',
     kind: 'command',
     verbs: ['go'],
+    // `go help environment`: `GOFLAGS` is *"a space-separated list of -flag=value settings to apply
+    // to go commands by default"* — any go flag, -exec, -toolexec and -ldflags included — and
+    // `GOENV` names the configuration file `go env -w` writes, which can set `GOFLAGS`. The same
+    // page documents programs go runs from its environment, which is -toolexec's effect:
+    // `GOCACHEPROG` (*"a command … that implements the build cache"*), `GOAUTH` (*"a command …
+    // to fetch authentication"*), `GOROOT` (where go finds its compiler and tools) and
+    // `CGO_CFLAGS` (handed to the C compiler, which takes `-wrapper`).
+    environment: ['GOFLAGS', 'GOENV', 'GOCACHEPROG', 'GOAUTH', 'GOROOT', 'CGO_CFLAGS'],
     hazard: 'go -toolexec runs an arbitrary program in front of every toolchain invocation',
   },
   {
     pattern: 'go* --toolexec*',
     kind: 'command',
     verbs: ['go'],
+    // As for -toolexec, which declares the names.
+    environment: [],
     hazard: 'the double-dash spelling of go -toolexec',
   },
   {
     pattern: 'go* -ldflags*extld*',
     kind: 'command',
     verbs: ['go'],
+    // *Needs measurement*: the external linker defaults to `CC` (`go help environment`, cmd/link),
+    // and `CGO_LDFLAGS` reaches it; candidates `CC`, `CXX`, `CGO_LDFLAGS`, not declared because
+    // `CC` is read by every C build (`CC=clang make`) and the hour did not settle what go itself does.
+    environment: [],
     hazard:
       '`-ldflags=-extld=…` names the external linker, which is a program the command line chose',
   },
@@ -1541,12 +1669,19 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'go* --ldflags*extld*',
     kind: 'command',
     verbs: ['go'],
+    // As for -ldflags … -extld.
+    environment: [],
     hazard: 'the double-dash spelling of go -ldflags … -extld',
   },
   {
     pattern: 'cargo* --config*',
     kind: 'command',
     verbs: ['cargo'],
+    // The Cargo Book, *"Environment variables"* and *"Configuration"*: every configuration key
+    // reads `CARGO_<KEY>` (`CARGO_BUILD_RUSTC`, `CARGO_TARGET_<triple>_RUNNER`, `CARGO_HOME`, the
+    // directory of the config file itself), and cargo reads `RUSTC`, `RUSTC_WRAPPER`,
+    // `RUSTC_WORKSPACE_WRAPPER`, `RUSTDOC`, `RUSTFLAGS` and `RUSTDOCFLAGS` (`-C linker=`).
+    environment: ['CARGO_*', 'RUSTC*', 'RUSTDOC*', 'RUSTFLAGS'],
     hazard: 'cargo --config can set a target runner, which is an arbitrary command',
   },
   // npm's and pnpm's program-naming options, read as nopt reads them (WP-197 review round 2).
@@ -1649,6 +1784,10 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'pytest -o / --override-ini (any key, any spelling argparse accepts)',
     kind: 'command',
     verbs: ['pytest'],
+    // pytest reference, *"Environment Variables"*: `PYTEST_ADDOPTS` *"contains a command-line
+    // (parsed by the py:mod:`shlex` module) that will be prepended to the command line"* — every
+    // flag floored here, -o included.
+    environment: ['PYTEST_ADDOPTS'],
     hazard:
       'pytest -o sets any configuration key from the command line: `cache_dir` moves the cache (pytest writes under it, and `--cache-clear` deletes its `d` and `v` subdirectories), `log_file` writes a log, and `addopts` is read from the overridden configuration, so it re-adds any flag floored here — floored for every key, like pnpm --config.<key>',
     tokens: ({ name, flags }) =>
@@ -1689,6 +1828,8 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'pytest @<file> (an argument read from a file)',
     kind: 'command',
     verbs: ['pytest'],
+    // Its environment spelling is `PYTEST_ADDOPTS`, declared once, on -o.
+    environment: [],
     hazard:
       'pytest 9.0.2 builds its parser with `fromfile_prefix_chars="@"` (`src/_pytest/config/argparsing.py:463`), so any argument starting with `@` is replaced by the lines of a file the agent may have written — which can carry every flag floored here, and no pattern sees them',
     tokens: ({ name, flags, positional }) =>
@@ -1698,6 +1839,9 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'pytest -c / --config-file (any spelling argparse accepts)',
     kind: 'command',
     verbs: ['pytest'],
+    // pytest reference: `PYTEST_PLUGINS` *"contains comma-separated list of modules that should be
+    // loaded as plugins"* — code from the repository, as a configuration file's `-p` would load.
+    environment: ['PYTEST_PLUGINS'],
     hazard:
       'pytest -c <file> loads its configuration — `addopts`, `cache_dir`, `log_file` — from a file the agent may have written, so it re-adds any flag floored here (`src/_pytest/main.py`, `dest="inifilename"`; `config/findpaths.py` `determine_setup` reads it)',
     tokens: ({ name, flags }) =>
@@ -5103,25 +5247,99 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
 };
 
 /**
- * A word naming npm's or node's environment configuration (WP-196 (d), backlog 575): its unquoted
- * text begins with `npm_config_` or `NODE_OPTIONS` in any case — npm matches its prefix
- * case-insensitively — as a prefix assignment, an `env`/`export`/`declare` operand, a bare
- * assignment, a `read`/`for` name, or anything else; or after `printf`'s attached `-v`, or after an
- * `=` (`declare -n r=NODE_OPTIONS` makes `r` that variable). Whatever the command, because which
- * settings hand npm or node a program is a list, and a list under-reads (rule 65). **The over-ask,
- * stated:** `npm_config_loglevel=silent npm ci` and `grep npm_config_ .npmrc` are uncertain.
- * **Residual:** an `.npmrc` the run writes — by a redirection (`echo 'call=x' > .npmrc`) or by the
- * runner's own CLI (`npm config set call x && npx`, `npm config set script-shell …; npm test`,
- * `pnpm config set …`, `yarn config set …`, each `unattended_auto`, measured at review round 1) —
- * and a name assembled at runtime (`"npm_$x"`). The `editor`, `browser` and `viewer` settings
- * given as options on the line are `HAZARDOUS_ARGUMENTS` floors (WP-197); `EDITOR` and `VISUAL`,
- * which npm reads for `editor`'s default, are not npm's names and are not matched here
- * (`EDITOR='sh -c id' npm edit zod` reads `ask / auto / deny`, measured at WP-197).
+ * One environment spelling of a `command`-kind floor, as the scan reads it: the name without its
+ * `*`, whether it is a prefix, whether the verb reads it in any case, and the floor it spells.
  */
-const RUNNER_ENVIRONMENT_WORD = /(?:^(?:-v)?|=)(?:npm_config_|NODE_OPTIONS)/i;
+export interface FloorEnvironmentRow {
+  readonly name: string;
+  readonly prefix: boolean;
+  readonly anyCase: boolean;
+  readonly entry: HazardousArgument;
+}
 
-const namesRunnerEnvironment = (stage: string): boolean =>
-  shellWords(stage).some((word) => RUNNER_ENVIRONMENT_WORD.test(unquoteToken(word.raw)));
+/** Every entry's declared environment, in entry order (WP-199): the scan's only source of names. */
+export const floorEnvironmentRows = (
+  entries: readonly HazardousArgument[],
+): readonly FloorEnvironmentRow[] =>
+  entries.flatMap((entry) =>
+    (entry.environment ?? []).map((declared) => {
+      const spelled = typeof declared === 'string' ? declared : declared.name;
+      const name = spelled.replace(/\*$/, '');
+      return {
+        name,
+        prefix: name !== spelled,
+        anyCase: typeof declared !== 'string',
+        entry,
+      };
+    }),
+  );
+
+/**
+ * The environment names the scan reads, derived from {@link HAZARDOUS_ARGUMENTS} alone (WP-199,
+ * backlog 583) — nothing is spelled here, and the census in `command-policy.test.ts` holds this
+ * table equal to the derivation and refuses a name declared twice.
+ */
+export const FLOOR_ENVIRONMENT: readonly FloorEnvironmentRow[] =
+  floorEnvironmentRows(HAZARDOUS_ARGUMENTS);
+
+/** Where a name is read in a word: its start (or after `printf`'s attached `-v`), or after an `=`. */
+const ENVIRONMENT_WORD_POSITION = '(?:^(?:-v)?|=)';
+
+const floorEnvironmentPattern = (row: FloorEnvironmentRow): RegExp =>
+  new RegExp(
+    `${ENVIRONMENT_WORD_POSITION}${row.name.replace(REGEX_SPECIALS, '\\$&')}${row.prefix ? '' : '(?![A-Za-z0-9_])'}`,
+    row.anyCase ? 'i' : '',
+  );
+
+const FLOOR_ENVIRONMENT_PATTERNS = FLOOR_ENVIRONMENT.map((row) => ({
+  verb: row.entry.verbs?.[0] ?? (row.entry.pattern.split(' ')[0] as string),
+  pattern: floorEnvironmentPattern(row),
+}));
+
+/** A case-insensitive superset of every row, so a word naming none costs one test. */
+const FLOOR_ENVIRONMENT_ANY = new RegExp(
+  `${ENVIRONMENT_WORD_POSITION}(?:${FLOOR_ENVIRONMENT.map((row) => row.name.replace(REGEX_SPECIALS, '\\$&')).join('|')})`,
+  'i',
+);
+
+/**
+ * The verbs whose floors a stage's words spell in the environment (WP-196 (d), backlog 575;
+ * WP-199, backlog 583): a word whose unquoted text begins with a name some `command`-kind floor
+ * declares ({@link FLOOR_ENVIRONMENT}) — an exact name ending there, or a prefix — in the case the
+ * verb reads it (npm's `npm_config_*` in any case): as a prefix assignment, an `env`/`export`/
+ * `declare` operand, a bare assignment, a `read`/`for` name, or anything else; or after
+ * `printf`'s attached `-v`, or after an `=` (`declare -n r=NODE_OPTIONS` makes `r` that
+ * variable). Whatever the command, because which line hands the variable to its verb is not
+ * something a parse of the line can know (a bare `export` may reach a later call: whether the
+ * pinned CLI's Bash tool carries it is unmeasured, so the closed side is kept). **The over-ask,
+ * stated:** `npm_config_loglevel=silent npm ci`, `EDITOR=vim git status`, `MAKEFLAGS=-j4 make
+ * test`, `GOFLAGS=-mod=vendor go test ./...`, `PYTEST_ADDOPTS=-q pytest`, `CARGO_TERM_COLOR=always
+ * cargo test` and a read that merely names one (`grep -rn EDITOR docs`, `grep npm_config_ .npmrc`)
+ * are uncertain, and so is a path a prefix covers (`ls CARGO_TOML`, `git diff -- RUSTFLAGS.md`).
+ * **Residual:** a tool with no floor (`EDITOR=x some-tool` is uncertain only because
+ * npm declares `EDITOR`; `SHELL` for `npm explore`, `PAGER` for `man` and git, `CC` for a
+ * Makefile are not declared), a variable a Makefile or a package script references (`CC='sh -c id'
+ * make`), an `.npmrc`, `.cargo/config.toml` or `setup.cfg` the run writes — by a redirection
+ * (`echo 'call=x' > .npmrc`) or by the runner's own CLI (`npm config set call x && npx`, each
+ * `unattended_auto`, measured at WP-196 review round 1) — and a name assembled at runtime
+ * (`"npm_$x"`). Those are repository content or a program the sandbox bounds (BD-025's WP-54
+ * amendment).
+ */
+const floorEnvironmentVerbs = (stage: string): readonly string[] => {
+  const verbs: string[] = [];
+  for (const word of shellWords(stage)) {
+    const text = unquoteToken(word.raw);
+    if (!FLOOR_ENVIRONMENT_ANY.test(text)) {
+      continue;
+    }
+    for (const { verb, pattern } of FLOOR_ENVIRONMENT_PATTERNS) {
+      if (pattern.test(text)) {
+        verbs.push(verb);
+      }
+    }
+  }
+  return verbs;
+};
 
 /** Variables bash runs the text of later — as a prompt, a hook, a startup file (WP-160 (b)). */
 const STORED_COMMAND_VARIABLES: ReadonlySet<string> = new Set([
@@ -5359,8 +5577,8 @@ const parseCommand = (
       if (storesCommand(stage)) {
         uncertainty.add(UNCERTAINTY.handedCommand);
       }
-      if (namesRunnerEnvironment(stage)) {
-        uncertainty.add(UNCERTAINTY.npmEnvironment);
+      for (const verb of floorEnvironmentVerbs(stage)) {
+        uncertainty.add(environmentSpellsFloor(verb));
       }
       const stagePiped = piped || stageIndex > 0;
       const handed = wrappedScript(stage, {
