@@ -16396,7 +16396,7 @@ The other unguarded keys above are a reading of the list against git-config(1), 
 
 **Judged not defects, recorded here so they are not re-filed.** `apps/server/src/auth/plugin.ts:235`, `await response.text()`, reads the `Response` that the in-process `options.auth.handler(...)` built. That is not a network read, so it has no peer to bound. Any outbound call to an identity provider happens inside the auth library and is a separate question that nobody has measured. `test/e2e/support/instance.ts:304` and `test/e2e/support/pipeline.ts:1561` are test harness reads of the instance under test.
 
-### 590. **The ticket snapshot still skips the platform's comments by `marker_id` alone, so WP-191's body rule does not reach it** (TODO, **minor, latent. No producer today**: both task-management adapters this build registers, Jira Cloud and the fake, read `marker_id` back. **Trigger:** a task-management provider whose adapter does not populate `marker_id`. Found by WP-191's implementer, session 17 (*Discovered work*), on WP-191's uncommitted tree over `342017a3`. The refiner confirmed it by reading, no test run. **No work package owns it.**)
+### 590. **The ticket snapshot still skips the platform's comments by `marker_id` alone, so WP-191's body rule does not reach it** (TODO, **minor, latent. No producer today**: both task-management adapters this build registers, Jira Cloud and the fake, read `marker_id` back. **Trigger:** a task-management provider whose adapter does not populate `marker_id`. Found by WP-191's implementer, session 17 (*Discovered work*), on WP-191's uncommitted tree over `342017a3`. The refiner confirmed it by reading, no test run. **Owned by WP-202** (§ "Architect ruling (M11 fourth amendment, session 17)").)
 
 **What is wrong.** Backlog 546 named three readers that decide whose comment it is. WP-191 gave two of them a second recogniser: since WP-191 every ticket comment the platform writes opens with its marker, and `isPlatformWord` (`packages/domain/src/lifecycle/human-return.ts:161-164`) answers platform when `markerId` is non-null **or** `opensWithPlatformCommentMarker(text)` holds (`packages/domain/src/ask/ask.ts:177`). The window and WP-180's conversation block (`packages/application/src/pipeline/conversation-read.ts:113`, `:137`) ask it. The third reader does not. `commentsOf` in `packages/application/src/pipeline/ticket-snapshot.ts:233-254` filters with `comment.marker_id === null || comment.marker_id === undefined` (line 239) and nothing else. Its docblock (lines 224-228) still says that a provider which never populates `marker_id` "skips nothing", which "is the harmless direction". That sentence is true of the code. WP-191's notes left it alone on purpose and filed this entry.
 
@@ -16408,7 +16408,7 @@ The other unguarded keys above are a reading of the list against git-config(1), 
 
 **Depends on** WP-191 being committed (the body rule and the marker list it relies on). Nothing else. It is a natural follow-on row for the same reader set as 546.
 
-### 591. **A literal `-c` script that glues text to a positional expansion composes a command name the policy never reads: `sh -c 'su"$@"' _ do id` runs `sudo id` and reads `ask/auto/deny`** (TODO, **major, fail-open under `auto`**, for the block list and the git boundary, in the same class as 575, 576, 582 and 585. **Live** for the git boundary: a run can push (it has the credential helper). For `sudo` it is contained the way 567 records (the stock run image installs no `sudo`, and the run has `no-new-privileges`), so the block-list half triggers on an image that ships a banned binary. **Not a WP-193 regression**: the quoted spelling never touched a brace. Found by WP-193's implementer, session 17 (*Discovered work*). The refiner confirmed the mechanism by reading WP-193's uncommitted tree over `7195da54`, no test run. **No work package owns it.**)
+### 591. **A literal `-c` script that glues text to a positional expansion composes a command name the policy never reads: `sh -c 'su"$@"' _ do id` runs `sudo id` and reads `ask/auto/deny`** (TODO, **major, fail-open under `auto`**, for the block list and the git boundary, in the same class as 575, 576, 582 and 585. **Live** for the git boundary: a run can push (it has the credential helper). For `sudo` it is contained the way 567 records (the stock run image installs no `sudo`, and the run has `no-new-privileges`), so the block-list half triggers on an image that ships a banned binary. **Not a WP-193 regression**: the quoted spelling never touched a brace. Found by WP-193's implementer, session 17 (*Discovered work*). The refiner confirmed the mechanism by reading WP-193's uncommitted tree over `7195da54`, no test run. **Owned by WP-201** (§ "Architect ruling (M11 fourth amendment, session 17)", which measured the class wider than positionals: `su$x id`, `g$x push origin main` and `terraform ap$x` read `auto` too, so the rule is over every judged word and not the `-c` reader).)
 
 **What is wrong.** `readShell`'s `-c` branch reads a literal script two ways. `hand(operand.raw)` reads the script itself (`packages/domain/src/policies/command-policy.ts:5052-5053`, with `hand` at `:4987-4998`). Then, when the script names a positional parameter (`namesPositional`, the regex at `:5060-5061`), it pushes the operands on the line as **their own** scripts, `$0` on and `$1` on (`:5062-5072`). Neither read joins the script's text to the operands. So in `sh -c 'su"$@"' _ do id` the policy reads the script `su"$@"` and the operand scripts `_ do id` and `do id`, and never reads `sudo id`, which is what bash runs. The script's own command word `su"$@"` is not caught either. `expandsAsName` (`:4440-4460`) flags only a glob or a brace, and its docblock (`:4432-4439`) says plainly that `${…}` "is a parameter expansion, not a brace". `expandsCommandName` (`:4665-4669`, called at `:5605-5607`) asks only that function. The result is that a command name built from the script's text plus its positionals is unread by every check.
 
@@ -16420,7 +16420,7 @@ The other unguarded keys above are a reading of the list against git-config(1), 
 
 **Depends on** nothing to build. The reader is WP-160/WP-185/WP-196's and is committed. It edits `command-policy.ts`, so schedule it after WP-193 lands to avoid a conflicting tree. Related: 561 (positionals read with no `$` name), 518 (WP-161 (f), the expanded-name rule this extends).
 
-### 592. **The command walk past a wrapper reads every later word as a command, including a wrapper's option operand, so `xargs -I {} grep x` over-asks `[handedCommand]`** (TODO, **nit, fails closed**. No verdict is too loose. Two lines over-ask, and an over-reach a future fix could get wrong in the other direction. 566's residual: WP-193 gave the `{}` rows a reason of their own and measured this half without fixing it. Found by WP-193's implementer, session 17 (*Decisions/assumptions* and *Discovered work*). The refiner read it on WP-193's uncommitted tree over `7195da54`, no test run. **No work package owns it.**)
+### 592. **The command walk past a wrapper reads every later word as a command, including a wrapper's option operand, so `xargs -I {} grep x` over-asks `[handedCommand]`** (TODO, **nit, fails closed**. No verdict is too loose. Two lines over-ask, and an over-reach a future fix could get wrong in the other direction. 566's residual: WP-193 gave the `{}` rows a reason of their own and measured this half without fixing it. Found by WP-193's implementer, session 17 (*Decisions/assumptions* and *Discovered work*). The refiner read it on WP-193's uncommitted tree over `7195da54`, no test run. **Carried, with reason, by § "Architect ruling (M11 fourth amendment, session 17)**: it fails closed and its fix is the command walk; WP-201 pins its three rows as controls so no scanner row opens them.)
 
 **What is wrong.** `commandPositions` (`packages/domain/src/policies/command-policy.ts:4404-4428`) returns, under a wrapper, "every later word too" as a possible command start, as its docblock says. `wrappedScript`'s loop (`:5185-5196`) then treats each such word as a command, and it marks the stage uncertain when one holds the replace string (`:5194-5196`). For `xargs -I {} grep x`, `-I`'s **separate** operand `{}` is reached as a command word, so the line reads `[handedCommand]` although xargs' command `grep x` never contains the replace string. WP-193's own xargs rule (`:5256-5266`) reads from xargs' parsed command (`readXargsOptions`) and would answer `auto` here.
 
@@ -16432,7 +16432,7 @@ The other unguarded keys above are a reading of the list against git-config(1), 
 
 **Depends on** WP-193 being committed (its xargs rule is what holds the `{}` rows once the walk stops reaching them). Related: 565, 566.
 
-### 593. **The shell exemption of the expanded-name rule treats a brace word as expanding to one word, and reads a `..` sequence as a wildcard, so `m{1..3}` (bash runs `m1 m2 m3`) is exempt as a possible `mksh` while `./m{a,b}` reads `expandedName`** (TODO, **major, fail-open under `auto`, live — `{bash,-c} 'git push origin main'` reads `allow` (measured, evidence 2)**; graded minor by the refiner before the measurement. **Pre-existing**, from WP-161 (f) (backlog 518). It is not a WP-193 regression: WP-193 taught `bracesExpand` the `..` but the exemption's translation of it predates the row. Found by WP-193's reviewer, session 17. The refiner read the mechanism on WP-193's uncommitted tree over `7195da54` and ran nothing. **No work package owns it.**)
+### 593. **The shell exemption of the expanded-name rule treats a brace word as expanding to one word, and reads a `..` sequence as a wildcard, so `m{1..3}` (bash runs `m1 m2 m3`) is exempt as a possible `mksh` while `./m{a,b}` reads `expandedName`** (TODO, **major, fail-open under `auto`, live — `{bash,-c} 'git push origin main'` reads `allow` (measured, evidence 2)**; graded minor by the refiner before the measurement. **Pre-existing**, from WP-161 (f) (backlog 518). It is not a WP-193 regression: WP-193 taught `bracesExpand` the `..` but the exemption's translation of it predates the row. Found by WP-193's reviewer, session 17. The refiner read the mechanism on WP-193's uncommitted tree over `7195da54` and ran nothing. **Owned by WP-201** (§ "Architect ruling (M11 fourth amendment, session 17)": the exemption is deleted rather than narrowed to globs, because its one-word premise is false for a glob with two matches as well).)
 
 **What is wrong.** One cause, two symptoms. `expandsCommandName` (`packages/domain/src/policies/command-policy.ts:4665-4669`, asked at `:5605-5607`) flags a command word that `expandsAsName` says bash expands (`:4440-4461`; since WP-193 its brace test `bracesExpand` counts a `..` at the brace's own level, `:4488`), **unless** `expandsOnlyToAShell` (`:4655-4662`) exempts it. The exemption builds a regular expression for the word's last segment with `expansionPattern` (`:4608-4647`) and exempts the word when the expression matches some name in `SCRIPT_SHELLS` (`:2373-2385`, which holds `mksh` at `:2379`) and no name in `NAMES_THE_POLICY_JUDGES` (`:4594-4605`). Two things in that are wrong for a brace:
 - **A `{…..…}` becomes `[\s\S]*`** (`:4631-4632`), whatever its endpoints. So `m{1..3}` becomes `^m[\s\S]*$`, which matches `mksh` and no judged name, and the word is exempt. `m{a,b}` becomes `^m(?:a|b)$`, which matches no shell, so it is flagged. That is exactly the reviewer's pair. The over-approximation is safe on the "no judged name" side and **permissive** on the "some shell" side, and the exemption needs both.
@@ -20292,7 +20292,9 @@ migration. The next free number is **0092**. Read the backlog entry a row folds 
 **Blocking environment finding — the verification contract's literal command does not parse.**
 `pnpm -s verify` fails on pnpm 12 with `error: unexpected argument '-s' found`: pnpm 12's CLI
 accepts `-s` only for a real subcommand, and the implicit "run this script" shorthand rejects
+| WP-201 | **Scanner: a word the scanner judges is judged only when it is literal — an expansion joined to text, a glob or a brace in a command name, a block entry's token or a git verb is uncertain, and the glob-shell exemption goes** | TODO | — | Folds **591** and **593** (both major, fail-open under `auto`: live for the git boundary in every run image, contained for `sudo` by the stock image and `no-new-privileges`) and the siblings the ruling measured `auto` at a block entry's token and the git verb (`terraform ap$x`, `git pu$x`). Deps WP-193, WP-200. No migration. Measure (a) first — the common-lines corpus count is the row's first number; nothing executed. Serial after WP-193's merge on `command-policy.ts`, `unattended-commands.ts` and their test files; before WP-192, WP-194 and WP-195; parallel-safe with every other row. Split clause: sites (ii) and (iii) may move to a follow-up row; site (i), the exemption's deletion and the carve-out may not. Added by § "Architect ruling (M11 fourth amendment, session 17)". |
 preceding global flags. Working equivalents, all implemented and green:
+| WP-202 | **The ticket snapshot skips a platform comment by its body, through the rule the other two readers share** | TODO | — | Folds **590** (minor, latent: both shipped task-management adapters read `marker_id` back). Deps WP-191. No migration. After WP-192; `ticket-snapshot.ts` and its test only; parallel-safe with every row. Added by § "Architect ruling (M11 fourth amendment, session 17)". |
 `pnpm run -s verify` · `pnpm -s run verify` · `pnpm verify`.
 The same applies to `verify:integration`, `verify:e2e`, `verify:ui`.
 `docs/technical/14-orchestration-protocol.md` § "Verification script contract" and the orchestrator
@@ -47774,6 +47776,121 @@ WP-200.
 - **(c) The census** is `scripts/git-scratch-env-census.test.ts`, over the scanner in `scripts/git-spawn-sites.ts`. It reads files through `census-files.mjs`, tracked and untracked. Its docblock lists what it cannot see.
 - **(d) The reproduction** is `scripts/git-fixture-isolation.test.ts`, in `PROCESS_SUITES`. It picks its suites off disk (every unit-tier file with a git spawn site, 21 today). It runs them in a child vitest with `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_WORK_TREE` pointed at a throwaway repository, with coverage off and `VITEST_*`/`NODE_V8_COVERAGE` stripped. It asserts that `config`, `HEAD`, `index`, `packed-refs` and every loose ref are byte-identical, **and** that the child exited 0.
 - **(f)** `LOCAL_TOOL_PATHS` and `isLocalToolPath` sit beside `OS_ARTEFACT_NAMES` in `scripts/os-artefacts.mjs`. `check-ignored.mjs` consults them only for what its walk of untracked files finds.
+
+### Architect ruling (M11 fourth amendment, session 17) — four headings WP-191 and WP-193 filed, and the one rule behind 591 and 593
+
+Written 2026-10-18 at `92fece23`, WP-187…WP-191, WP-193 and WP-196…WP-200 DONE, WP-192, WP-194 and
+WP-195 TODO. This pass covers **590**, **591**, **592** and **593**, which WP-191's and WP-193's builds
+and reviews filed with no owner, and the question the orchestrator put beside them again: is there
+one structural rule that closes 591 and 593 — the class, not the spelling — and what does it cost? No
+test tier and no Docker ran; the code was read on `main` at the lines each entry cites. **The policy
+was measured** (rule 27): every line named below went through `decideUnattendedCommand({ command },
+DEFAULT_COMMAND_POLICY, mode)` and `commandUncertainty` at `92fece23` (the architect's probe, under the
+session scratchpad), nothing executed by bash — the bash side of each line is bash's documented word
+expansion, which 591's and 593's reporters ran for their own rows and this pass did not re-run. 591 and
+593 are **major, fail-open under `auto`, live** for the git boundary (every run image) and contained
+for `sudo` (the stock image, `no-new-privileges`); 590 is minor and latent; 592 is a nit that fails
+closed.
+
+**One rule, three sites: 591 and 593 are one defect.** The scanner judges a word by its written text
+at three places — the command name (the block list's first token, the floors, `expandsCommandName`),
+a block entry's later tokens (`terraform apply`, `gh release *`, `rm -rf /*`) and the git boundary's
+verb — and at each it matches a word bash finishes only at run time as if it were finished. Measured,
+the class is wider than either entry reads it:
+- **591 is not the `-c` reader's.** `su$x id`, `x=do; su$x id`, `x=do; su${x} id`, `g$x push origin
+  main`, `eval 'su$x id'`, `sh -c 'x=do; su$x id'`, `env$x sudo id`, `sh -c 'su$1' _ do id` and
+  `sh -c '"$1"do id' _ su` all read `auto` with no reason (`sh -c "su$1" _ do id` reads `handedCommand`
+  only because its script is double-quoted). A word that is **exactly** one expansion is refused
+  already: `$x id`, `"$x" id`, `$GIT push …` and `X=1 $CMD` read `git_boundary` through
+  `computesCommandName` (`packages/domain/src/policies/unattended-commands.ts:721`), and a bare
+  `"$@"`/`$1` script has its operands read as a command (`namesPositional`,
+  `packages/domain/src/policies/command-policy.ts:5060`). The hole is exactly an expansion **joined to
+  text** in a judged word — and it reaches the other two sites: `terraform ap$x`, `x=ply; terraform
+  ap$x`, `gh rel$x create v1`, `npm pub$x`, `rm -rf $x`, `git pu$x origin main`, `git $verb origin
+  main`, `git "$verb" origin main`, `terraform ap{p,}ly`, `gh rel{e,}ase create v1` and `git pu{s,}h
+  origin main` all read `auto`.
+- **593's two symptoms share that cause.** `expandsOnlyToAShell` (`command-policy.ts:4655`) exempts
+  an expanded command name whose superset pattern matches a shell and no judged name, on the premise
+  that the word yields **one** word. A brace yields several (`{sh,-c} 'sudo id'` is `sh -c 'sudo id'`,
+  the orchestrator's measurement; `{sh,-c} 'sudo id' x` and `/bin/{,r}bash -c 'echo x'` read `auto`
+  here as well), and so does a glob with two matches (`/bin/[r]bash` with both files present runs
+  `/bin/bash` with `/bin/rbash` as its script operand — the scanner sees no filesystem either way). The
+  exemption's whole effect today is one spelling, a glob matching only shells, read `auto` instead of
+  `uncertain`, and nobody writes `/bin/[r]bash` to run a shell.
+
+**The rule (WP-201).** *A word the scanner judges by its written text is judged only when it is
+literal; a word that is not — an unquoted `$` or backtick outside single quotes, a glob or a brace
+expansion, the classes `isLiteralWord` already names, tilde aside — at a judged position is
+`uncertain`, with no exemption.* One predicate, three sites: **(i)** a command-name word
+(`commandNameWords`: a wrapper's name too, in every stage, handed scripts included) — `expandedName`
+reworded to name a parameter or command substitution beside a glob and a brace, and
+`expandsOnlyToAShell`, `expansionPattern` and `NAMES_THE_POLICY_JUDGES` **deleted**; **(ii)** a block
+entry's token — when the literal words so far are a proper prefix of an entry and the next judged
+word is not literal, uncertain under a reason naming the entry, which is WP-197's prefix rule with an
+expansion as the completer instead of `xargs` input (`xargsBlockPrefix` is the shape); **(iii)** the
+git boundary's verb — a verb word that is not literal is uncertain, not the boundary, for WP-197 (b)'s
+reason: the boundary says what a verb does, and for a verb nobody can read the scanner cannot. **The
+one carve-out is the orchestrator's own clause** (*unless its every possible expansion is judged*): a
+command-name word that is exactly one expansion keeps the reader it has — the boundary's computed
+name, whose *what it would have done* message the CARVE_OUT rows pin, and the `-c` reader's
+positionals, where the operands on the line are the expansions and are read as a command. Nothing
+else is exempt, and a path word is not: `./$x` is `sudo` when `x` is `../../usr/bin/sudo`.
+
+**The over-ask, measured by reading the unit tables, and named.** Site (i): **one** pinned row —
+WP-160's PARSED control `/bin/[r]bash -c '%P'`, which asserts `git_boundary` for the push payload and
+reads `uncertain` under the rule (the `sudo` half stays `block`, which reports first); it is re-pinned
+as the over-ask. No other pinned `auto` row carries a non-literal command word; the two glob-named
+shells in `here-documents.shell.test.ts` assert *judged or uncertain* and stay green. Sites (ii) and
+(iii): **none** — the 35 candidates a prefix scan over the three policy test files finds are all
+allow- and ask-list *patterns* (`git push*`, `npm *`), not commands. The cost therefore lives in the
+lines a model writes, not in the tables: `rm -rf $x`, `rm -rf "$TMPDIR"/x` (write the path),
+`python$ver -m pytest`, `python3.$v` (write the version), `./$script`, `./scripts/$name.sh`,
+`./node_modules/.bin/$tool --version`, `npm $cmd`, `gh $sub`, `terraform $a`, `git $verb`, each refused
+with the reason saying to write the word literally (BD-025's 2026-10-06 amendment, decision 5).
+**Not over-asked, measured:** `echo $x`, `ls $dir`, `grep -rn "$pattern" src`, `npm run $s`,
+`gh issue view $n`, `git checkout $b`, `curl $url`, `rm -rf build`, `rm -rf dist $out`,
+`git push origin $BRANCH` (the boundary, as today), `~/bin/tool`, `'$x'`, `\$x id`. **What must be
+measured first (rule 27), by the row:** the orchestrator's common-lines corpus (596 lines at WP-199
+and WP-200) — the only measure of the cost on lines a model writes; the number newly refused is the
+row's first number, or the corpus is stated gone — and the before cell of every row in (a).
+
+**Tilde, stated.** `~` is the one expansion left out: it names the home the platform set, which WP-200
+refuses the run re-pointing, so `~/x` is the sandbox's own file exactly as `./x` is; `~user/x` is the
+same. No row pins either; (a) records their cells.
+
+**Declined.** (1) 591's own *done when* — the `-c` reader alone, `handedCommand` for a positional
+joined to text — closes one spelling and leaves `su$x id` open. (2) 593's own *done when* — never
+exempt a brace, keep the exemption for globs — keeps a premise the measurement shows false for globs
+too, and keeps `expansionPattern`'s `..` wildcard, a translation of bash the scanner does not need
+once nothing is exempt. (3) Composing the operands into the `-c` script (591 advises against; agreed):
+a second word-splitter. (4) Scoping the rule to the command name, which is the question as asked:
+leaves `terraform ap$x` and `git pu$x` as the next two headings, which is the session-16 pattern this
+ruling exists to stop.
+
+**592 is carried, with reason.** It fails closed; its cost is two over-asks on a spelling with a
+blank after `-I`; and its fix is the command walk every scanner row leans on, with the trap the entry
+names (`find … -exec nice {} id \;`, where `{}` is a command, unpinned). WP-201 pins the walk's three
+rows as controls so no row of this session opens them by accident; the grammar-aware walk waits for a
+session with no fail-open to spend scanner rounds on. 592's *done when* stands as written.
+
+**590 is owned by WP-202.** Minor, latent, one reader and its test file. It is the third reader of
+546's set and takes the rule WP-191 gave the other two — `isPlatformWord` with the conversation
+block's inputs — so the three readers cannot drift; a second recogniser call in the snapshot is
+declined. Placed after WP-192 (the record) and before WP-194 and WP-195.
+
+**WP-193's deviation: confirmed.** Ruling (c) wrote `xargs -I{} grep x {}` where 565's *done when*
+and its seventh row say `xargs -I{} grep x`. The `{}` row read `[handedCommand,xargsArguments]` at
+`7195da54` and never `auto`, so it could not *return* there; the implementer built what 565 asked, and
+the plan row's (c) is corrected to say so. Whether a `{}`-in-command row should ever read `auto` is
+592's question, carried above, and is not reopened.
+
+**Decisions.** None amended. BD-025's 2026-10-06 amendment, decision 2, already holds an uncertain
+line to `deny`; the rule widens what is uncertain, which that decision leaves to the scanner, and its
+decision 5 is the shape of every refusal the rule adds. technical/05's command-policy bullets are
+WP-201 criterion (7). The next free migration stays **0092**; neither row takes one. Nothing is marked
+RESOLVED by this pass.
+
+**Next: WP-201**, then WP-192, then WP-202, then WP-194 and WP-195 in their table order.
 
 **Decisions and assumptions.**
 - **Rule 27 correction to ruling (b).** The ruling lists `census-files.mjs`, `version.mjs` and `changelog.mjs` among "the scripts the tests spawn". Their tests mostly **import** them and call them in process (`censusPaths(root)`, `nextVersionOf(root)`, `readCommits(range, root)`), and an in-process call cannot be handed an environment unless production changes. So the same prefix rule is also applied to every test worker's own `process.env`, by a second setup file in every vitest project: `test/support/git-environment.ts`, which is `GIT_ENVIRONMENT_SETUP` in `vitest.config.ts`. The census test holds that every project runs it, and checks the result inside its own worker.
