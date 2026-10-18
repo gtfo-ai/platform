@@ -23,7 +23,10 @@
  *     `agentic/` named literally; a fetch, pull, clone or `ls-remote` names `origin` or nothing;
  *     no remote is added, renamed or re-pointed; no git configuration of a remote, a URL rewrite, a
  *     credential, a hook path, an SSH command or an alias is written, on the command line (`-c`),
- *     in the environment (`GIT_CONFIG_*`, `GIT_SSH_COMMAND`, …) or in `.git/`; `git credential` and
+ *     in the environment (`GIT_CONFIG_*`, `GIT_SSH_COMMAND`, `GIT_PAGER`, and `HOME` or
+ *     `XDG_CONFIG_HOME`, which re-point git's global configuration) or in `.git/` — and any other key
+ *     set on the command line or by `git config` is uncertain unless it is on a short inert list
+ *     (WP-200: three bands, {@link isGuardedGitConfigKey}); `git credential` and
  *     the helper and its socket (`/ctl/…`) are not touched; and a command whose **name** is
  *     computed at run time (`$X …`, `$(…) …`) is not run, because the policy cannot read it.
  *
@@ -53,6 +56,7 @@ import {
   commandArgvCandidates,
   commandWords,
   commandWriteTargets,
+  environmentNamePattern,
   evaluateCommand,
   GIT_GLOBAL_VALUE_OPTIONS,
   type HazardousArgument,
@@ -64,6 +68,7 @@ import {
   readHereDocumentOperator,
   readsHereDocumentsAsScripts,
   splitCommandSegments,
+  unreadGitConfigKey,
   withCommandMemo,
   withoutHereDocumentBodies,
 } from './command-policy.js';
@@ -96,8 +101,12 @@ export interface UnattendedCommandDecision {
   readonly reason: string;
 }
 
-/** A refusal of the git boundary: the fragment, and what it would have done. */
+/**
+ * A refusal of the git boundary: the fragment, and what it would have done — or, as `uncertain`, a
+ * git configuration key nobody read (WP-200's third band), whose `detail` is `unreadGitConfigKey`.
+ */
 export interface GitBoundaryViolation {
+  readonly kind: 'boundary' | 'uncertain';
   readonly fragment: string;
   readonly detail: string;
 }
@@ -113,6 +122,18 @@ export interface GitBoundaryViolation {
  * `alias.*` — an alias starting `!` is a shell command), configuration it includes
  * (`include.*`, `includeIf.*`) and submodule sources (`submodule.*`, `fetch.recurseSubmodules`).
  * Section and variable names are case-insensitive in git, so the key is compared lower-cased.
+ *
+ * **This is the first of three bands** (WP-200, backlog 585). A key a run sets — `-c`, attached
+ * `-c<key>`, `--config-env`, `git clone -c`/`--config`, or any `git config` write, whatever file it
+ * names — is read by key alone: a key named here is the boundary, with a message saying what it
+ * does; a key on {@link INERT_GIT_CONFIG_KEYS} passes; **every other key is uncertain**
+ * (`unreadGitConfigKey`), because git runs a program, reads a file or reaches a host through more
+ * keys than any list of them (`core.editor`, `core.pager`, `pager.<cmd>`, `diff.external`,
+ * `gpg.program`, `filter.<x>.*`, `difftool.<x>.cmd`, `sendemail.*`, …). That is the rule the
+ * environment spelling already had: `GIT_CONFIG_*` is refused as a prefix
+ * ({@link GUARDED_GIT_ENVIRONMENT}). The over-ask, named: `git -c core.pager=cat log` (write
+ * `git --no-pager log`), `git -c safe.directory=* status`, `git -c commit.gpgsign=false commit`,
+ * `git config core.filemode false` — each one refusal naming the key.
  */
 const GUARDED_CONFIG_SECTION =
   /^(?:remote|url|credential|http|protocol|include|includeif|alias|push|submodule)(?:\.|$)/;
@@ -126,16 +147,108 @@ export const isGuardedGitConfigKey = (key: string): boolean => {
 };
 
 /**
+ * The second band (WP-200): git configuration keys a run may set, because git-config(1) documents
+ * each as changing only what git prints, records about the author, or how it merges text it
+ * already has. Lower-case; `section.*` admits every key of the section. **The key alone decides —
+ * a value is never read** (rule 65): `core.pager=cat` is not inert by its value.
+ *
+ * **The admission test**, which is a reading at review and not a mechanism: a key joins only if
+ * git-config(1) documents its value as none of a path, a program or command, a URL, a remote, a
+ * ref, a hook or an include — and a section joins only if that holds for every key in it. The
+ * census in the unit tests holds the list lower-case and disjoint from the guarded patterns. A key
+ * missing from it costs one refusal, never a run. Widening it per project is a BD-025 §2 question.
+ */
+export const INERT_GIT_CONFIG_KEYS: readonly string[] = [
+  // git-config(1), `user.name`/`user.email`: the identity recorded in a commit (backlog 468).
+  'user.name',
+  'user.email',
+  // git-config(1), `color.*`: a boolean, `always`/`never`/`auto`, or a colour.
+  'color.*',
+  // git-config(1), `core.quotePath`: a boolean, how a path is printed.
+  'core.quotepath',
+  // git-config(1), `core.abbrev`: the length of an abbreviated object name.
+  'core.abbrev',
+  // git-config(1), `core.autocrlf`: a boolean or `input`, line-ending conversion.
+  'core.autocrlf',
+  // git-config(1), `advice.*`: booleans, whether a hint is printed.
+  'advice.*',
+  // git-config(1), `pull.ff`: a boolean or `only`, how a pull integrates. Not `pull.rebase`, whose
+  // `interactive` makes a pull launch an editor, nor `init.defaultBranch`, which takes a ref name
+  // (WP-200 review round 1: both fail the admission test).
+  'pull.ff',
+  // git-config(1), `rebase.autoStash`: a boolean.
+  'rebase.autostash',
+  // git-config(1), `merge.conflictStyle`: `merge`, `diff3` or `zdiff3`.
+  'merge.conflictstyle',
+  // git-config(1), `diff.renames`: a boolean or `copies`.
+  'diff.renames',
+  // git-config(1), `status.showUntrackedFiles`: `no`, `normal` or `all`.
+  'status.showuntrackedfiles',
+  // git-config(1), `log.date`: a date format.
+  'log.date',
+];
+
+/** Is this git configuration key on {@link INERT_GIT_CONFIG_KEYS}? Compared lower-cased, never trimmed. */
+export const isInertGitConfigKey = (key: string): boolean => {
+  const name = key.toLowerCase();
+  return INERT_GIT_CONFIG_KEYS.some((entry) =>
+    entry.endsWith('.*')
+      ? name.startsWith(entry.slice(0, -1)) && name.length > entry.length - 1
+      : name === entry,
+  );
+};
+
+/**
  * Environment variables that configure git's transport, its configuration or where its commands
  * come from: `GIT_CONFIG_COUNT`/`_KEY_<n>`/`_VALUE_<n>`/`_PARAMETERS`/`_GLOBAL`/`_SYSTEM` are
- * `git -c` by another name, `GIT_SSH`/`GIT_SSH_COMMAND`/`GIT_PROXY_COMMAND`/`GIT_ASKPASS`/
- * `SSH_ASKPASS` are commands git runs, `GIT_EXEC_PATH` and `GIT_TEMPLATE_DIR` are where its
- * subcommands and hooks come from, and `GIT_DIR`/`GIT_WORK_TREE` point it at a repository whose
- * remotes are not the workspace's. Matched as an assignment anywhere in a fragment (`X=… git …`,
- * `env X=… git …`, `export X=…`), which over-refuses a word that merely contains one.
+ * `git -c` by another name, and so are `HOME` and `XDG_CONFIG_HOME` (WP-200, backlog 585): git
+ * reads its global configuration from `$HOME/.gitconfig` and `$XDG_CONFIG_HOME/git/config`, so
+ * either assignment re-points it at a file the run can choose — or one the repository carries,
+ * which no path guard sees. `GIT_SSH`/`GIT_SSH_COMMAND`/`GIT_PROXY_COMMAND`/`GIT_ASKPASS`/
+ * `SSH_ASKPASS`/`GIT_PAGER` are commands git runs (`GIT_PAGER`, WP-200 and backlog 586: git(1)'s
+ * `-p` pipes through it; `PAGER`, which man reads too, is declared on npm's `--viewer` floor
+ * instead), `GIT_EXEC_PATH` and `GIT_TEMPLATE_DIR` are where its subcommands and hooks come from,
+ * and `GIT_DIR`/`GIT_WORK_TREE` point it at a repository whose remotes are not the workspace's.
+ * Read by WP-199's environment-word rule (`environmentNamePattern`, the reader of the floors'
+ * names — WP-200 review round 1): a word naming one at its start (`X=… git …`, `X+=…`, `env X=…`,
+ * `export X=…`, `read X`, `for X in …`, `select X in …`, `getopts a X`, `mapfile -t X`,
+ * `printf -v X`), after `printf`'s attached `-v`, or after an `=` (`declare -n r=X`), anywhere in a
+ * fragment and on any line, git or not — `export HOME=.` in one call and `git diff` in the next, or
+ * `HOME=. make test` whose Makefile runs git, are the same door — which over-refuses a word that
+ * merely contains one: `HOME=/tmp npm ci`, `XDG_CONFIG_HOME=. some-tool`, `grep HOME= Dockerfile`
+ * (use the Grep tool), `ls HOME`. `echo $HOME` names no variable to write and passes. Residual:
+ * `LESS`/`LESSOPEN` reach the default pager, which git starts only for a terminal (`pager.c`'s
+ * `git_pager`, read), and `git -C <dir>` discovers a repository there by itself.
  */
-const GUARDED_GIT_ENVIRONMENT =
-  /^(?:GIT_CONFIG(?:_[A-Z0-9_]+)?|GIT_SSH(?:_COMMAND|_VARIANT)?|GIT_PROXY_COMMAND|GIT_ASKPASS|SSH_ASKPASS|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|GIT_DIR|GIT_WORK_TREE)=/;
+const GUARDED_GIT_ENVIRONMENT: readonly RegExp[] = (
+  [
+    ['GIT_CONFIG', true],
+    ['GIT_SSH', false],
+    ['GIT_SSH_COMMAND', false],
+    ['GIT_SSH_VARIANT', false],
+    ['GIT_PROXY_COMMAND', false],
+    ['GIT_ASKPASS', false],
+    ['SSH_ASKPASS', false],
+    ['GIT_PAGER', false],
+    ['GIT_EXEC_PATH', false],
+    ['GIT_TEMPLATE_DIR', false],
+    ['GIT_DIR', false],
+    ['GIT_WORK_TREE', false],
+    ['HOME', false],
+    ['XDG_CONFIG_HOME', false],
+  ] as const
+).map(([name, prefix]) => environmentNamePattern(name, { prefix, anyCase: false }));
+
+/** The guarded environment name a word spells, as it spells it, or `undefined`. */
+const guardedEnvironmentName = (word: string): string | undefined => {
+  for (const pattern of GUARDED_GIT_ENVIRONMENT) {
+    const match = pattern.exec(word);
+    if (match !== null) {
+      return match[1];
+    }
+  }
+  return undefined;
+};
 
 /**
  * The run's control mount (`/ctl`: the credential socket, the ssh-agent socket, the shim's control
@@ -321,7 +434,20 @@ const checkFetchLike = (subcommand: string, args: readonly string[]): string | n
   return null;
 };
 
-const checkClone = (args: readonly string[]): string | null => {
+/**
+ * The keys a git argv sets that are neither guarded nor inert, collected while the boundary reads
+ * it (WP-200): the third band, reported as uncertain only when nothing on the line is refused.
+ */
+type UnreadKeys = string[];
+
+/** Notes `key` when it is in the third band; a guarded key is the caller's refusal. */
+const noteUnreadKey = (key: string, unread: UnreadKeys): void => {
+  if (!isGuardedGitConfigKey(key) && !isInertGitConfigKey(key)) {
+    unread.push(key);
+  }
+};
+
+const checkClone = (args: readonly string[], unread: UnreadKeys): string | null => {
   const { positional, options } = splitGitArgs(args, CLONE_VALUE_OPTIONS);
   for (const [option, value] of options) {
     const name = optionName(option);
@@ -330,9 +456,11 @@ const checkClone = (args: readonly string[]): string | null => {
     }
     if (name === '-c' || name === '--config') {
       const setting = option.includes('=') ? option.slice(name.length + 1) : (value ?? '');
-      if (isGuardedGitConfigKey(setting.split('=')[0] as string)) {
+      const key = setting.split('=')[0] as string;
+      if (isGuardedGitConfigKey(key)) {
         return `\`git clone ${name} ${setting}\` sets git configuration a run may not write (a remote, a URL rewrite, a credential, a hook or a transport)`;
       }
+      noteUnreadKey(key, unread);
     }
   }
   if (refusesRecursion(options)) {
@@ -380,7 +508,7 @@ const CONFIG_WRITE_VERBS: ReadonlySet<string> = new Set([
   'remove-section',
 ]);
 
-const checkConfig = (args: readonly string[]): string | null => {
+const checkConfig = (args: readonly string[], unread: UnreadKeys): string | null => {
   const { positional, options } = splitGitArgs(
     args,
     new Set(['-f', '--file', '--blob', '--type', '--default', '--comment', '--value']),
@@ -406,6 +534,9 @@ const checkConfig = (args: readonly string[]): string | null => {
     ? positional.slice(1, first === 'rename-section' ? 3 : 2)
     : positional.slice(0, names.includes('--rename-section') ? 2 : 1);
   const guarded = keys.find(isGuardedGitConfigKey);
+  for (const key of keys) {
+    noteUnreadKey(key, unread);
+  }
   return guarded === undefined
     ? null
     : `\`git config\` would write \`${guarded}\` — a remote, a URL rewrite, a credential, a hook path, an SSH command, an alias or a transport — and a run may not change where git connects or what it runs`;
@@ -424,15 +555,26 @@ const checkSubmodule = (args: readonly string[]): string | null => {
 const REMOTE_PLUMBING =
   /^(?:send-pack|fetch-pack|http-push|http-fetch|upload-pack|receive-pack|upload-archive|remote-.+)$/;
 
-/** Subcommands whose remote is judged by name — and so must be the workspace's repository's. */
-const REMOTE_VERBS: ReadonlySet<string> = new Set(['push', 'fetch', 'pull', 'ls-remote', 'remote']);
+/**
+ * git(1)'s global options that are the flag spelling of a guarded environment name (WP-200 review
+ * round 1): `--git-dir` is `GIT_DIR`, `--work-tree` is `GIT_WORK_TREE`, and `--bare` sets `GIT_DIR`
+ * to the working directory when it is unset — each points git at a repository, and so at a
+ * `config`, the run can write with the Write tool. Refused on every subcommand, as their twins are
+ * (before, only on a remote verb). `--exec-path` (`GIT_EXEC_PATH`) is refused below; `-c` and
+ * `--config-env` (`GIT_CONFIG_PARAMETERS`) are read in the three bands; `--namespace`
+ * (`GIT_NAMESPACE`) names a ref prefix, which no guarded name is.
+ */
+const REPOSITORY_OPTION_RULE =
+  'points git at a repository other than the workspace’s, whose configuration the policy has not read — run git in the checkout itself';
 
-/** Judges one `git …` argv (argv[0] is `git`, or `git-<subcommand>`). */
-const checkGitArgv = (argv: readonly string[]): string | null => {
+/**
+ * Judges one `git …` argv (argv[0] is `git`, or `git-<subcommand>`): the boundary's refusal, or
+ * `null`, with every third-band key it sets pushed onto `unread`.
+ */
+const checkGitArgv = (argv: readonly string[], unread: UnreadKeys): string | null => {
   const [name, ...rest] = argv as [string, ...string[]];
   let subcommand: string | null = null;
   let args: readonly string[] = [];
-  let elsewhere = false;
   if (name !== 'git') {
     subcommand = name.slice('git-'.length);
     args = rest;
@@ -452,12 +594,13 @@ const checkGitArgv = (argv: readonly string[]): string | null => {
           if (isGuardedGitConfigKey(key)) {
             return `\`git ${option} ${value}\` sets \`${key}\` for this command — a remote, a URL rewrite, a credential, a hook path, an SSH command, an alias or a transport — and a run may not change where git connects or what it runs`;
           }
+          noteUnreadKey(key, unread);
         }
         if (option === '--exec-path') {
           return '`git --exec-path=<dir>` runs git’s subcommands from a directory the policy has not read';
         }
         if (option === '--git-dir' || option === '--work-tree') {
-          elsewhere = true;
+          return `\`git ${option}\` ${REPOSITORY_OPTION_RULE}`;
         }
         continue;
       }
@@ -466,7 +609,11 @@ const checkGitArgv = (argv: readonly string[]): string | null => {
         if (isGuardedGitConfigKey(key)) {
           return `\`git ${word}\` sets \`${key}\` for this command, and a run may not change where git connects or what it runs`;
         }
+        noteUnreadKey(key, unread);
         continue;
+      }
+      if (word === '--bare') {
+        return `\`git --bare\` ${REPOSITORY_OPTION_RULE}`;
       }
       if (word.startsWith('-')) {
         continue;
@@ -489,9 +636,6 @@ const checkGitArgv = (argv: readonly string[]): string | null => {
   if (verb === 'archive' && args.some((arg) => optionName(arg) === '--remote')) {
     return '`git archive --remote` reads a repository that is not this checkout';
   }
-  if (elsewhere && REMOTE_VERBS.has(verb)) {
-    return `\`--git-dir\`/\`--work-tree\` points \`git ${verb}\` at a repository whose remotes are not the workspace's`;
-  }
   switch (verb) {
     case 'push':
       return checkPush(args);
@@ -500,11 +644,11 @@ const checkGitArgv = (argv: readonly string[]): string | null => {
     case 'ls-remote':
       return checkFetchLike(verb, args);
     case 'clone':
-      return checkClone(args);
+      return checkClone(args, unread);
     case 'remote':
       return checkRemote(args);
     case 'config':
-      return checkConfig(args);
+      return checkConfig(args, unread);
     case 'submodule':
       return checkSubmodule(args);
     default:
@@ -759,7 +903,9 @@ export const computesCommandName = (command: string): boolean => {
  * stages, subshells, substitution bodies, the script `sh -c`/`eval` is handed), each through every
  * argv it could really be (`commandArgvCandidates`: wrappers and assignments peeled, quoting off),
  * so `env git push …`, `sh -c 'git push …'`, `$(git push …)`, `git -C dir push …` and `"git" push …`
- * are all the same `git push`.
+ * are all the same `git push`. A git configuration key in the third band (WP-200) is answered as
+ * `uncertain` only after the whole walk found nothing refused, so a guarded key or a bad push
+ * elsewhere on the line keeps the boundary's own message.
  */
 /** A word the shell reads as a redirection: `2>&1`, `>out`, `>>log`, `&>/dev/null`, `<in`. */
 const REDIRECTION_WORD = /^(?:\d+|&)?(?:>>?|<)/;
@@ -770,6 +916,7 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
   // is never a word a run needs.
   if (CONTROL_MOUNT_REFERENCE.test(command)) {
     return {
+      kind: 'boundary',
       fragment: command,
       detail:
         'it names the run’s control mount (`/ctl`) or the git credential helper; the run’s credential is reached only through git itself, which asks the helper when it needs it',
@@ -777,6 +924,7 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
   }
   if (computesCommandName(command)) {
     return {
+      kind: 'boundary',
       fragment: command,
       detail:
         'the name of a command in it is computed when it runs (`$VARIABLE …`, `$(…) …`), so the platform cannot read what would run; write the command name literally',
@@ -785,6 +933,7 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
   for (const target of commandWriteTargets(command)) {
     if (namesGitInternals(target)) {
       return {
+        kind: 'boundary',
         fragment: command,
         detail: `it writes \`${target}\`, which is git’s own configuration or hooks, not repository content; use \`git\` itself for what it is meant to change`,
       };
@@ -809,17 +958,22 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
   const parts = (fragment: string): readonly string[] => splitCommandSegments(fragment);
   const queue = [...fragments];
   const seen = new Set<string>();
+  // WP-200: the first third-band key, reported only when nothing on the line is refused.
+  let unread: { readonly fragment: string; readonly key: string } | null = null;
   for (let next = 0; next < queue.length; next += 1) {
     const fragment = queue[next] as string;
     if (seen.has(fragment)) {
       continue;
     }
     seen.add(fragment);
-    const assignment = commandWords(fragment).find((word) => GUARDED_GIT_ENVIRONMENT.test(word));
+    const assignment = commandWords(fragment)
+      .map(guardedEnvironmentName)
+      .find((name) => name !== undefined);
     if (assignment !== undefined) {
       return {
+        kind: 'boundary',
         fragment,
-        detail: `\`${assignment.split('=')[0]}\` configures git’s transport, its configuration or its repository from the environment, and a run may not change where git connects or what it runs`,
+        detail: `\`${assignment}\` configures git’s transport, its configuration, a program it runs or its repository from the environment, and a run may not change where git connects or what it runs`,
       };
     }
     const pieces = parts(fragment);
@@ -833,14 +987,17 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
       const argv = candidate.filter((word, index) => index === 0 || !REDIRECTION_WORD.test(word));
       const [name] = argv as [string, ...string[]];
       if (name === 'git' || name.startsWith('git-')) {
-        const detail = checkGitArgv(argv);
+        const keys: UnreadKeys = [];
+        const detail = checkGitArgv(argv, keys);
         if (detail !== null) {
-          return { fragment, detail };
+          return { kind: 'boundary', fragment, detail };
         }
+        unread ??= keys.length > 0 ? { fragment, key: keys[0] as string } : null;
       } else if (!READ_VERBS.has(name)) {
         const internal = argv.slice(1).find(namesGitInternals);
         if (internal !== undefined) {
           return {
+            kind: 'boundary',
             fragment,
             detail: `it names \`${internal}\`, which is git’s own configuration or hooks, not repository content; use \`git\` itself for what it is meant to change`,
           };
@@ -848,7 +1005,9 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
       }
     }
   }
-  return null;
+  return unread === null
+    ? null
+    : { kind: 'uncertain', fragment: unread.fragment, detail: unreadGitConfigKey(unread.key) };
 };
 
 // ── the decision ─────────────────────────────────────────────────────────────
@@ -960,7 +1119,7 @@ const decideOnce = (
     );
   }
   const boundary = gitBoundaryViolation(request.command);
-  if (boundary !== null) {
+  if (boundary?.kind === 'boundary') {
     return deny(
       'git_boundary',
       evaluation,
@@ -968,14 +1127,28 @@ const decideOnce = (
       `${whereOf(boundary.fragment, request.command)} is refused at the git boundary: ${boundary.detail}.`,
     );
   }
+  // WP-200: a git configuration key nobody read. After a refused hazard on an `ask` line, whose
+  // reason is the more specific (`git -c diff.tool=x difftool -x …` keeps WP-161's cell), and before
+  // an allow, which it never lets through.
+  const unreadKey =
+    boundary === null
+      ? null
+      : deny(
+          'uncertain',
+          evaluation,
+          boundary.fragment,
+          `${whereOf(boundary.fragment, request.command)} carries ${boundary.detail}.`,
+        );
   if (evaluation.verdict === 'allow') {
-    return {
-      decision: 'allow',
-      rule: 'allow_list',
-      evaluation,
-      fragment,
-      reason: `command policy: allow (${matchedText(evaluation, request.command)})`,
-    };
+    return (
+      unreadKey ?? {
+        decision: 'allow',
+        rule: 'allow_list',
+        evaluation,
+        fragment,
+        reason: `command policy: allow (${matchedText(evaluation, request.command)})`,
+      }
+    );
   }
 
   // `ask` from here on: an ask-list match, an unmatched fragment, a redirection to a path, or a
@@ -983,6 +1156,9 @@ const decideOnce = (
   const hazard = refusedHazard(request.command);
   if (hazard !== null) {
     return hazardDeny(evaluation, hazard.fragment, request.command, hazard.hazard);
+  }
+  if (unreadKey !== null) {
+    return unreadKey;
   }
   const where = whereOf(fragment, request.command);
   if (mode === 'deny') {

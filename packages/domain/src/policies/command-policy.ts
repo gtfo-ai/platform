@@ -269,9 +269,20 @@ export const flagValueHidesBlockEntry = (entry: string) =>
 export const environmentSpellsFloor = (verb: string) =>
   `a word naming an environment variable ${verb} reads for an option the platform floors, which can hand ${verb} a program or configuration to run — run the command without it, or write the option on the line, where the floor reads it; to search for the name, use the Grep tool; the platform does not read settings a line puts in the environment` as const;
 
+/**
+ * WP-200 (backlog 585): a git configuration key a run sets — `-c`, attached `-c<key>`,
+ * `--config-env`, `git clone -c` or a `git config` write — that is neither one the git boundary
+ * guards (`isGuardedGitConfigKey`) nor on its inert list (`INERT_GIT_CONFIG_KEYS`). Nobody read what
+ * the key does, so the line is uncertain rather than refused for a stated effect. The git boundary
+ * reports it (`gitBoundaryViolation`); `evaluateCommand` does not.
+ */
+export const unreadGitConfigKey = (key: string) =>
+  `a git configuration key, \`${key}\`, set for the command — git runs a program, reads a file or reaches a host through many keys, and the platform reads only a short list of keys that do none of these (user.name, user.email, color.*, …) — run the command without it; the platform does not read what a git configuration key does` as const;
+
 export type UncertaintyReason =
   | (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY]
   | ReturnType<typeof environmentSpellsFloor>
+  | ReturnType<typeof unreadGitConfigKey>
   | ReturnType<typeof xargsCompletesBlockEntry>
   | ReturnType<typeof flagValueHidesBlockEntry>;
 
@@ -1263,10 +1274,13 @@ const NPM_OPTION_FLOORS: readonly {
     option: 'viewer',
     prefix: 'vi',
     hazard: 'npm help runs the --viewer value as its viewer',
-    // `viewer` reads no environment variable (`default: isWindows ? 'browser' : 'man'`); its
-    // `npm_config_viewer` spelling is `config.<key>`'s. *Needs measurement*: `man`, the default
-    // viewer, runs `MANPAGER` or `PAGER` — man's names, not npm's, and not declared here.
-    environment: [],
+    // `viewer` reads no environment variable of npm's own (`default: isWindows ? 'browser' :
+    // 'man'`); its `npm_config_viewer` spelling is `config.<key>`'s. `man`, the default viewer,
+    // runs `MANPAGER`, else `PAGER`, as its pager (man(1), ENVIRONMENT) — man's names for the
+    // viewer's own effect, declared here once (WP-200, backlog 586). By the wherever-it-stands rule
+    // `PAGER='sh -c id' git log` names npm too: git reads `PAGER` after `GIT_PAGER` and
+    // `core.pager`, and `GIT_PAGER` is the git boundary's (`unattended-commands.ts`).
+    environment: ['MANPAGER', 'PAGER'],
   },
 ];
 
@@ -1413,9 +1427,11 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'git * --extcmd*',
     kind: 'command',
     verbs: ['git'],
-    // *Needs measurement*: git-difftool(1) documents `GIT_DIFF_TOOL` only as set by difftool for
-    // its helper, not as read from the caller; the candidate name is that one.
-    environment: [],
+    // git-difftool(1) documents no environment variable for --extcmd; its helper reads two
+    // (`git-difftool--helper.sh`, git master, read 2026-10-18 — read, not measured):
+    // `GIT_DIFFTOOL_EXTCMD`, which it `eval`s with the two file names, and `GIT_DIFF_TOOL`, the
+    // tool whose `difftool.<tool>.cmd` it runs (WP-200, backlog 586).
+    environment: ['GIT_DIFF_TOOL', 'GIT_DIFFTOOL_EXTCMD'],
     hazard: 'git difftool runs --extcmd (-x) once per changed file',
     tokens: ({ name, flags, positional }) =>
       (name === 'git' || name.startsWith('git-')) &&
@@ -1658,10 +1674,11 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'go* -ldflags*extld*',
     kind: 'command',
     verbs: ['go'],
-    // *Needs measurement*: the external linker defaults to `CC` (`go help environment`, cmd/link),
-    // and `CGO_LDFLAGS` reaches it; candidates `CC`, `CXX`, `CGO_LDFLAGS`, not declared because
-    // `CC` is read by every C build (`CC=clang make`) and the hour did not settle what go itself does.
-    environment: [],
+    // `go help environment`: `CC` and `CXX` are *"the command to use to compile C (C++) code"*,
+    // and the go command hands that compiler to the linker as its `-extld`; `CGO_LDFLAGS` reaches
+    // that linker — the floor's own effect (WP-200, backlog 586). `CC` is read by every C build, so
+    // `CC=clang make` is uncertain too, naming go: the over-ask, named.
+    environment: ['CC', 'CXX', 'CGO_LDFLAGS'],
     hazard:
       '`-ldflags=-extld=…` names the external linker, which is a program the command line chose',
   },
@@ -5285,11 +5302,24 @@ export const FLOOR_ENVIRONMENT: readonly FloorEnvironmentRow[] =
 /** Where a name is read in a word: its start (or after `printf`'s attached `-v`), or after an `=`. */
 const ENVIRONMENT_WORD_POSITION = '(?:^(?:-v)?|=)';
 
-const floorEnvironmentPattern = (row: FloorEnvironmentRow): RegExp =>
+/**
+ * The environment-word rule as a pattern (WP-199; shared with the git boundary's guarded names
+ * since WP-200 review round 1): `name` at a word's start (a prefix assignment, `NAME+=`, an
+ * `export`/`declare`/`local`/`readonly`/`typeset` operand, a `read`/`for`/`select`/`getopts`/
+ * `mapfile` name), after `printf`'s attached `-v`, or after an `=` — an exact name ending there, or
+ * a prefix. Group 1 is the name as the word spells it.
+ */
+export const environmentNamePattern = (
+  name: string,
+  { prefix, anyCase }: { readonly prefix: boolean; readonly anyCase: boolean },
+): RegExp =>
   new RegExp(
-    `${ENVIRONMENT_WORD_POSITION}${row.name.replace(REGEX_SPECIALS, '\\$&')}${row.prefix ? '' : '(?![A-Za-z0-9_])'}`,
-    row.anyCase ? 'i' : '',
+    `${ENVIRONMENT_WORD_POSITION}(${name.replace(REGEX_SPECIALS, '\\$&')}${prefix ? '[A-Za-z0-9_]*' : '(?![A-Za-z0-9_])'})`,
+    anyCase ? 'i' : '',
   );
+
+const floorEnvironmentPattern = (row: FloorEnvironmentRow): RegExp =>
+  environmentNamePattern(row.name, row);
 
 const FLOOR_ENVIRONMENT_PATTERNS = FLOOR_ENVIRONMENT.map((row) => ({
   verb: row.entry.verbs?.[0] ?? (row.entry.pattern.split(' ')[0] as string),

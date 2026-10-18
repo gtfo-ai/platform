@@ -25,6 +25,7 @@ import {
   runCommandPolicy,
   UNCERTAINTY,
   unattendedCommandModeOf,
+  unreadGitConfigKey,
   withVerificationMode,
   xargsCompletesBlockEntry,
 } from './command-policy.js';
@@ -32,7 +33,9 @@ import {
   computesCommandName,
   decideUnattendedCommand,
   gitBoundaryViolation,
+  INERT_GIT_CONFIG_KEYS,
   isGuardedGitConfigKey,
+  isInertGitConfigKey,
   UNATTENDED_ALTERNATIVES,
 } from './unattended-commands.js';
 
@@ -3032,5 +3035,209 @@ describe('WP-199, backlog 583: the environment spelling of a command floor', () 
     ],
   ])('%j keeps its cells (control)', (command, expected) => {
     expectCells(command, expected);
+  });
+});
+
+/**
+ * WP-200 (PROGRESS backlogs 585 and 586): a git configuration key a run sets is read in three bands
+ * — guarded (the boundary), inert (passes on the key alone) or uncertain — in every spelling; `HOME`,
+ * `XDG_CONFIG_HOME` and `GIT_PAGER` are the boundary's environment; `PAGER`/`MANPAGER`,
+ * `GIT_DIFF_TOOL` and `CC` are declared on their floors. Every key row read `ask / auto / deny`
+ * before (PROGRESS § WP-200). Nothing here executes a line.
+ */
+describe('WP-200, backlogs 585 and 586: git configuration keys, HOME and the pager', () => {
+  /** (a)'s two lists: the keys 585 read as unguarded, and the siblings that reading did not reach. */
+  const UNREAD_KEYS = [
+    'core.editor',
+    'sequence.editor',
+    'diff.external',
+    'core.pager',
+    'pager.log',
+    'gpg.program',
+    'gpg.openpgp.program',
+    'diff.x.textconv',
+    'diff.x.command',
+    'filter.x.clean',
+    'filter.x.smudge',
+    'filter.x.process',
+    'merge.x.driver',
+    'interactive.difffilter',
+    'difftool.x.cmd',
+    'mergetool.x.cmd',
+    'browser.x.cmd',
+    'web.browser',
+    'man.x.cmd',
+    'uploadpack.packobjectshook',
+    'receive.fsck.skiplist',
+    'sendemail.smtpserver',
+  ];
+  const SPELLINGS: readonly ((key: string) => string)[] = [
+    (key) => `git -c ${key}=x log`,
+    (key) => `git -c${key}=x log`,
+    (key) => `git --config-env=${key}=X log`,
+    (key) => `git config ${key} x`,
+    (key) => `git config --global ${key} x`,
+    (key) => `git config --file f ${key} x`,
+  ];
+  const ROWS = UNREAD_KEYS.flatMap((key) =>
+    SPELLINGS.map((spell): [string, string] => [spell(key), key]),
+  );
+
+  it.each<[string, string]>([
+    // Criterion (1): 585's three `-c` lines.
+    ["git -c core.editor='sh -c id' commit", 'core.editor'],
+    ['git -c sequence.editor=x rebase -i main', 'sequence.editor'],
+    ['git -c diff.external=x diff', 'diff.external'],
+    // Every key of (a)'s two lists, in every spelling.
+    ...ROWS,
+    // The other write forms, `git clone -c`, and git's case-insensitive names.
+    ['git config --unset core.editor', 'core.editor'],
+    ['git config set core.editor x', 'core.editor'],
+    ['git config --add core.editor x', 'core.editor'],
+    ['git clone -c core.editor=x origin', 'core.editor'],
+    ['git -c CORE.EDITOR=x log', 'CORE.EDITOR'],
+    // Criterion (5): 586's `-c` half.
+    ["git -c core.pager='sh -c id' log", 'core.pager'],
+    ['git -c pager.log=x log', 'pager.log'],
+    // Criterion (6): the over-ask, pinned — write `git --no-pager log`.
+    ['git -c core.pager=cat log', 'core.pager'],
+    ['git -c safe.directory=* status', 'safe.directory'],
+    ['git -c commit.gpgsign=false commit -m x', 'commit.gpgsign'],
+    ['git -c core.editor=true rebase --continue', 'core.editor'],
+    ['git config core.filemode false', 'core.filemode'],
+    // Review round 1: off the inert list, each failing the admission test.
+    ['git -c init.defaultBranch=main init', 'init.defaultBranch'],
+    ['git -c pull.rebase=interactive pull', 'pull.rebase'],
+  ])('%j is uncertain, naming %s', (command, key) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).reason).toContain(unreadGitConfigKey(key));
+  });
+
+  it.each([
+    // Criterion (2): `HOME` and `XDG_CONFIG_HOME` re-point git's global configuration.
+    ['HOME=. git diff', 'HOME'],
+    ['XDG_CONFIG_HOME=. git diff', 'XDG_CONFIG_HOME'],
+    ['env HOME=. git diff', 'HOME'],
+    ['export HOME=.; git diff', 'HOME'],
+    ['HOME=. make test', 'HOME'],
+    // Criterion (5): git's own pager is a command git runs.
+    ["GIT_PAGER='sh -c id' git log", 'GIT_PAGER'],
+    // Criterion (6): the over-ask, pinned — on any line, git or not.
+    ['HOME=/tmp npm ci', 'HOME'],
+    ['HOME=$(mktemp -d) pnpm test', 'HOME'],
+    ['XDG_CONFIG_HOME=. some-tool', 'XDG_CONFIG_HOME'],
+    // Review round 1: every position WP-199's environment-word rule reads, for every guarded name.
+    ['HOME+=/../../work/repo git diff', 'HOME'],
+    ['for HOME in /work/repo; do git diff; done', 'HOME'],
+    ['read HOME < f; git diff', 'HOME'],
+    ['printf -v HOME %s /work/repo; git diff', 'HOME'],
+    ['printf -vHOME %s /work/repo; git diff', 'HOME'],
+    ['export HOME+=x; git diff', 'HOME'],
+    ['select HOME in /work/repo; do git diff; done', 'HOME'],
+    ['getopts a HOME', 'HOME'],
+    ['mapfile -t HOME < f', 'HOME'],
+    ['readarray HOME < f', 'HOME'],
+    ['declare HOME=/work/repo; git diff', 'HOME'],
+    ['typeset -x HOME=/work/repo; git diff', 'HOME'],
+    ['XDG_CONFIG_HOME+=x git status', 'XDG_CONFIG_HOME'],
+    ['GIT_CONFIG_GLOBAL+=f git status', 'GIT_CONFIG_GLOBAL'],
+    ['GIT_SSH_COMMAND+=x git fetch origin', 'GIT_SSH_COMMAND'],
+    ['GIT_DIR+=x git status', 'GIT_DIR'],
+    ['read GIT_DIR < f; git status', 'GIT_DIR'],
+  ])('%j is refused by the git boundary, naming %s', (command, name) => {
+    expectCells(command, 'ask / git / git');
+    expect(auto(command).reason).toContain(`\`${name}\` configures git’s transport`);
+  });
+
+  it.each([
+    // Review round 1: the flag spellings of `GIT_DIR`/`GIT_WORK_TREE`, on every subcommand.
+    ['git --git-dir=x status', '--git-dir'],
+    ['git --git-dir x status', '--git-dir'],
+    ['git --work-tree=x status', '--work-tree'],
+    ['git --work-tree x log', '--work-tree'],
+    ['git --bare status', '--bare'],
+  ])('%j is refused by the git boundary, naming %s', (command, option) => {
+    expectCells(command, 'ask / git / git');
+    expect(auto(command).reason).toContain(`\`git ${option}\` points git at a repository`);
+  });
+
+  it('pins the read that merely names one as the over-ask (use the Grep tool)', () => {
+    expectCells('grep HOME= Dockerfile', 'allow / git / git');
+  });
+
+  it.each([
+    // Criterion (5): `PAGER` and `MANPAGER` are npm --viewer's, `GIT_DIFF_TOOL` --extcmd's, `CC`
+    // -extld's; `CC=clang make` is the named over-ask.
+    ["PAGER='sh -c id' git log", 'npm'],
+    ['MANPAGER=x npm help config --viewer=man', 'npm'],
+    ['GIT_DIFF_TOOL=x git difftool HEAD', 'git'],
+    ["GIT_DIFFTOOL_EXTCMD='sh -c id' git difftool HEAD", 'git'],
+    ['CC=x go build -ldflags=-linkmode=external', 'go'],
+    ['CC=clang make', 'go'],
+    ['CC=gcc ./configure', 'go'],
+  ])('%j is uncertain, naming %s', (command, verb) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([environmentSpellsFloor(verb)]);
+  });
+
+  it.each([
+    // Criterion (3): the controls keep their cells — the inert band, a read, git's own pager flags.
+    ['git -c user.name=x commit -m y', 'ask / auto / deny'],
+    ['git -c user.email=x@y.z commit -m y', 'ask / auto / deny'],
+    ['git -c color.ui=never diff', 'ask / auto / deny'],
+    ['git -c core.quotepath=off status', 'ask / auto / deny'],
+    ['git -c USER.NAME=x commit -m y', 'ask / auto / deny'],
+    ['git -c color.diff.meta=blue diff', 'ask / auto / deny'],
+    ['git -c advice.detachedhead=false checkout x', 'ask / auto / deny'],
+    ['git config user.name x', 'ask / auto / deny'],
+    ['git config --get core.editor', 'ask / auto / deny'],
+    ['git --no-pager log', 'ask / auto / deny'],
+    ['git -p log', 'ask / auto / deny'],
+    ['echo $HOME', 'ask / auto / deny'],
+    [
+      'git commit -m x',
+      { ro: 'ask / auto / deny', ver: 'ask / auto / deny', impl: 'allow / allow / allow' },
+    ],
+  ])('%j keeps its cells (control)', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it('keeps the boundary’s own message when a guarded key or a refused push shares the line', () => {
+    expect(auto('git -c core.editor=x -c core.sshcommand=y log').rule).toBe('git_boundary');
+    expect(auto('git -c core.editor=x log; git push origin main').rule).toBe('git_boundary');
+    expect(gitBoundaryViolation('git -c core.editor=x log')).toEqual({
+      kind: 'uncertain',
+      fragment: 'git -c core.editor=x log',
+      detail: unreadGitConfigKey('core.editor'),
+    });
+  });
+
+  it('reads the inert list by key alone, lower-cased and never trimmed', () => {
+    expect(isInertGitConfigKey('USER.NAME')).toBe(true);
+    expect(isInertGitConfigKey('color.ui')).toBe(true);
+    expect(isInertGitConfigKey('color.')).toBe(false);
+    expect(isInertGitConfigKey('color')).toBe(false);
+    expect(isInertGitConfigKey(' user.name')).toBe(false);
+    expect(isInertGitConfigKey('user.namex')).toBe(false);
+  });
+
+  it('holds the inert list lower-case and disjoint from the guarded patterns (census)', () => {
+    const refused = INERT_GIT_CONFIG_KEYS.filter((entry) => {
+      const section = entry.endsWith('.*') ? entry.slice(0, -2) : null;
+      return (
+        entry !== entry.toLowerCase() ||
+        isGuardedGitConfigKey(entry.replace(/\*$/, 'x')) ||
+        (section !== null && isGuardedGitConfigKey(section))
+      );
+    });
+    expect(refused).toEqual([]);
+  });
+
+  it('leaves no command floor marked as needing measurement bare (criterion 5)', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('./command-policy.ts', import.meta.url)),
+      'utf8',
+    );
+    expect(source.match(/needs measurement/gi) ?? []).toEqual([]);
   });
 });
