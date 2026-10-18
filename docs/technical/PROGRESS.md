@@ -16420,7 +16420,7 @@ The other unguarded keys above are a reading of the list against git-config(1), 
 
 **Depends on** nothing to build. The reader is WP-160/WP-185/WP-196's and is committed. It edits `command-policy.ts`, so schedule it after WP-193 lands to avoid a conflicting tree. Related: 561 (positionals read with no `$` name), 518 (WP-161 (f), the expanded-name rule this extends).
 
-### 592. **The command walk past a wrapper reads every later word as a command, including a wrapper's option operand, so `xargs -I {} grep x` over-asks `[handedCommand]`** (TODO, **nit, fails closed**. No verdict is too loose. Two lines over-ask, and an over-reach a future fix could get wrong in the other direction. 566's residual: WP-193 gave the `{}` rows a reason of their own and measured this half without fixing it. Found by WP-193's implementer, session 17 (*Decisions/assumptions* and *Discovered work*). The refiner read it on WP-193's uncommitted tree over `7195da54`, no test run. **Carried, with reason, by § "Architect ruling (M11 fourth amendment, session 17)**: it fails closed and its fix is the command walk; WP-201 pins its three rows as controls so no scanner row opens them.)
+### 592. **The command walk past a wrapper reads every later word as a command, including a wrapper's option operand, so `xargs -I {} grep x` over-asks `[handedCommand]`** (TODO, **nit, fails closed**. No verdict is too loose. Two lines over-ask, and an over-reach a future fix could get wrong in the other direction. 566's residual: WP-193 gave the `{}` rows a reason of their own and measured this half without fixing it. Found by WP-193's implementer, session 17 (*Decisions/assumptions* and *Discovered work*). The refiner read it on WP-193's uncommitted tree over `7195da54`, no test run. **Carried, with reason, by § "Architect ruling (M11 fourth amendment, session 17)**: it fails closed and its fix is the command walk; WP-201 pins its three rows as controls so no scanner row opens them. **Owned by WP-205** since § "Architect ruling (M11 fifth amendment, session 17)", with 596: WP-203 adds wrappers to the same tables, so the walk gains its grammar in this session or the over-ask grows with every wrapper added; last, fails closed, may slip to M12.)
 
 **What is wrong.** `commandPositions` (`packages/domain/src/policies/command-policy.ts:4404-4428`) returns, under a wrapper, "every later word too" as a possible command start, as its docblock says. `wrappedScript`'s loop (`:5185-5196`) then treats each such word as a command, and it marks the stage uncertain when one holds the replace string (`:5194-5196`). For `xargs -I {} grep x`, `-I`'s **separate** operand `{}` is reached as a command word, so the line reads `[handedCommand]` although xargs' command `grep x` never contains the replace string. WP-193's own xargs rule (`:5256-5266`) reads from xargs' parsed command (`readXargsOptions`) and would answer `auto` here.
 
@@ -16473,7 +16473,7 @@ The other unguarded keys above are a reading of the list against git-config(1), 
 
 **Depends on** WP-201 being committed (site (ii) is its code). Related: 584 (where a block entry's positionals are matched from), 591 and 593 (WP-201's rows).
 
-### 596. **The command-name walk lists a wrapper's option value and operand, and a shell's `-c` value, as command words, so since WP-201 `timeout $t make` reads `expandedName`** (TODO, **minor, fails closed** — an over-ask, no verdict too loose. **A WP-201 widening of 592's cause, not a new one:** before WP-201, `expandsAsName` flagged only a glob or a brace, so a `$` value in that slot passed. **Recommend folding into 592's fix**, with one wrapper grammar serving both walks. Found by WP-201's implementer, session 17 (*Discovered work*). The refiner confirmed the listing by reading `wt-wp201`, no test run. **No work package owns it**; 592 is carried with no owner.)
+### 596. **The command-name walk lists a wrapper's option value and operand, and a shell's `-c` value, as command words, so since WP-201 `timeout $t make` reads `expandedName`** (TODO, **minor, fails closed** — an over-ask, no verdict too loose. **A WP-201 widening of 592's cause, not a new one:** before WP-201, `expandsAsName` flagged only a glob or a brace, so a `$` value in that slot passed. **Recommend folding into 592's fix**, with one wrapper grammar serving both walks. Found by WP-201's implementer, session 17 (*Discovered work*). The refiner confirmed the listing by reading `wt-wp201`, no test run. **Owned by WP-205** with 592, by § "Architect ruling (M11 fifth amendment, session 17)": one declared grammar per wrapper serves both walks; last, fails closed, may slip to M12.)
 
 **What is wrong.** `commandNameWords` (`packages/domain/src/policies/command-policy.ts:4721-4777` in `wt-wp201`) lists, after a wrapper, the value of any option it does not know to take none (`:4744-4753`) and the wrapper's leading operand (`:4757-4760`), as its docblock says ("each of those is listed too, since the policy does not know a wrapper's grammar"). `expandsCommandName` (`:4853-4861`) tests each listed word with `expandsAsName`, which is now any non-literal word. So `timeout`'s duration `$t` is judged as a command name.
 
@@ -16485,11 +16485,11 @@ The other unguarded keys above are a reading of the list against git-config(1), 
 
 **Depends on** WP-201 being committed (same file), and on 592.
 
-### 597. **A regular-expression literal holding `'` in `unattended-commands.test.ts` made vitest hang at collection, with a worker at 100 % CPU, even under `-t`; the cause is not identified** (TODO, **minor — an instrument hazard, no product behaviour**. CI is bounded: every job in `.github/workflows/ci.yml` has a `timeout-minutes`. A local `verify` or an agent's test run is not bounded, and a hang reads as a slow run, which can burn a session. Found by WP-201's implementer, session 17 (*Decisions/assumptions* and *Discovered work*). The offending literal was replaced with `includes` and is not in the tree. **No work package owns it.**)
+### 597. **A regular-expression literal holding `'` in `unattended-commands.test.ts` made vitest hang at collection, with a worker at 100 % CPU, even under `-t`; the cause is not identified** (TODO, **minor — an instrument hazard, no product behaviour**. CI is bounded: every job in `.github/workflows/ci.yml` has a `timeout-minutes`. A local `verify` or an agent's test run is not bounded, and a hang reads as a slow run, which can burn a session. Found by WP-201's implementer, session 17 (*Decisions/assumptions* and *Discovered work*). The offending literal was replaced with `includes` and is not in the tree. **Carried, with reason, by § "Architect ruling (M11 fifth amendment, session 17)**: an instrument hazard, CI bounded by `timeout-minutes`; its first half is a measurement — the orchestrator records the literal's exact text on this entry from `scratchpad/wp201/` while that directory exists; the bounded collection is an M12 harness row. Its *done when* stands.)
 
 **What is wrong.** A test file that the transform or collection step cannot finish hangs vitest without any error, and no timeout covers collection: `testTimeout`/`hookTimeout` (`vitest.config.ts`) apply only once a test runs. `vitest.config.ts` declares no plugin or transform of its own (by reading), so the stall is presumably in vite's or vitest's own source handling. **Hypothesis**: a lexer that confuses a `/` regex with division and then scans for a quote that never closes.
 
-**Evidence.** From WP-201's notes, quoted: *"A regular-expression literal holding an apostrophe in `unattended-commands.test.ts` made vitest hang at collection with a worker at 100 % CPU, even under `-t`. It was found by bisection and replaced with `includes`."* The literal itself is not quoted in the notes. **Needs measurement:** the literal's exact text (`scratchpad/wp201/` may hold it), and a minimal file that reproduces it on the pinned vitest. Then it is clear whether this is an upstream defect to report or a pattern to ban.
+**Evidence.** From WP-201's notes, quoted: *"A regular-expression literal holding an apostrophe in `unattended-commands.test.ts` made vitest hang at collection with a worker at 100 % CPU, even under `-t`. It was found by bisection and replaced with `includes`."* The literal itself is not quoted in the notes. **The literal, recovered by the refiner from `scratchpad/wp201/` (session 17), is probable but not confirmed:** `/write (the command's name|the word|it) literally/`. No removed test line survives there. Every copy of the test file in the scratchpad (`ut-full.ts`, the bytes `bisect.sh` restores) already has the replacement, a `.some((advice) => reason.includes(advice))` over the three strings `"write the command's name literally"`, `'write the word literally'` and `'write it literally'`, which are exactly that regex's three alternatives. The regex appears verbatim in `oa.mjs`, a plain-Node probe of `decideUnattendedCommand` reasons (written 19:34:28). No log of that probe's output was kept, so whether plain Node ran it without hanging is not recorded. The two stalled vitest runs are `unit4.log` (19:19) and `unit5.log` (19:25): each holds only the `RUN v5.0.0` banner, 77 bytes, and no summary. The eight `bisect-*.log` runs (19:33–19:34, `timeout 45`, `-t "WP-201"`) all finished in 312–436 ms, so they bisected the file after the literal was gone, or bisected something else. The pinned vitest is **5.0.0**, from those banners. **Needs measurement:** a minimal file holding that regex under vitest 5.0.0, to confirm it is the literal and to decide whether this is an upstream defect to report or a pattern to ban.
 
 **What it costs to leave.** The next test author who writes a regex with `'` loses time bisecting a silent hang. A `.test.ts` file is where this repository's shell-policy rows live, and they are full of apostrophes.
 
@@ -16497,7 +16497,7 @@ The other unguarded keys above are a reading of the list against git-config(1), 
 
 **Depends on** nothing.
 
-### 598. **A block entry with options matches only the spelling it is written in: `rm -r -f /`, `rm build -rf /`, `rm x -rf /*` and `rm -r build -f /` read `allow` under `auto` while `rm -rf /` reads `deny`. The documents record this as decided, on a premise BD-025's 2026-10-06 amendment made stale** (TODO, **major as a class, fail-open under `auto`, live; the stock run container bounds what the one default entry `rm -rf /*` loses**. It is working as designed per four documents (below). The defect is that the design's premise no longer holds, so the documents change first. Trigger: any unattended run under the default `commands.unattended: auto`. Found by the orchestrator, session 17, while checking WP-201's round 1b. **No work package owns it. An architect pass places it.**)
+### 598. **A block entry with options matches only the spelling it is written in: `rm -r -f /`, `rm build -rf /`, `rm x -rf /*` and `rm -r build -f /` read `allow` under `auto` while `rm -rf /` reads `deny`. The documents record this as decided, on a premise BD-025's 2026-10-06 amendment made stale** (TODO, **major as a class, fail-open under `auto`, live; the stock run container bounds what the one default entry `rm -rf /*` loses**. It is working as designed per four documents (below). The defect is that the design's premise no longer holds, so the documents change first. Trigger: any unattended run under the default `commands.unattended: auto`. Found by the orchestrator, session 17, while checking WP-201's round 1b. **Owned by WP-204**, by § "Architect ruling (M11 fifth amendment, session 17)": getopt's cluster and operand order as two program-independent facts that only tighten, an `uncertain` clause for the alias the policy cannot read, one normaliser for the four readers; product/19 § 3's sentence goes to OPEN-QUESTIONS with the replacement text, BD-025 needs no amendment, and no criterion depends on either. After WP-203, which is live on the boundary.)
 
 **What is wrong.** GNU `rm`, like getopt-style tools in general, accepts options split (`-r -f`), combined in either order (`-rf`, `-fr`), long (`--recursive --force`, and `-R` as an alias of `-r`), and permuted after operands. `--` ends options. To the tool, every line in the title is `rm -rf … /`. The block matcher instead reads an entry's options as whole tokens and its positionals by index. There are two causes, both in the same function:
 1. **Options are matched by spelling, not by meaning.** In `tokensMatch` (`packages/domain/src/policies/command-policy.ts:2676` on WP-201's worktree, `:2658` on `main`), each pattern flag must be matched by one command token through `cachedGlob(flag)`. So the entry's `-rf` is never matched by `-r` plus `-f`, by `-fr`, by `-R -f` or by `--recursive --force`. Flags are already matched anywhere on the line, and `--` already ends options (`splitFlags`, worktree `:2655`), so the order of the **options** is not the cause.
@@ -16519,7 +16519,7 @@ The whole-line glob half (`globToRegExp`, worktree `:1998`, through `matchesComm
 
 **Depends on** WP-201 being committed, because it adds `blockEntryBehindExpansion` / `expansionAtEntryWord` to the same file and to the reader set. It also depends on a ruling that amends product/19 §3 and Q37's resolved line (architect, BD-025's owner). Related: Q37, 576 (WP-197's `xargs` prefix), 584 (WP-198's option values) and 591 / 593 (WP-201).
 
-### 599. **A wrapper the policy does not list runs its operands as a command the policy never judges: `catchsegv sudo id`, `fakeroot sudo id`, `sg grp sudo id`, `chroot / sudo id`, `script -qc sudo id`, and on the git boundary `sg grp git push origin main` and `parallel git push ::: origin`, all read `allow` under `auto`** (TODO, **major as a class, fail-open under `auto`, LIVE on the git boundary — measured by the orchestrator, session 17**: in `platform-runtime:s16` (uid 1000 `agentic`), `command -v` finds `sg`, `chroot` and `script` and not `catchsegv`, `fakeroot`, `parallel`; `sg agentic "echo RAN_SG"` prints `RAN_SG` (rc 0); and `decideUnattendedCommand` reads `sg agentic 'git push origin main'`, `sg agentic -c 'git push origin main'` and `sg agentic 'sudo id'` **`allow`** under `auto` on WP-201's tree. The per-binary reading below is superseded where it says `sg` needs measurement. The wrapper list is an enumeration, and a run fails open on every wrapper past it. This is the session-16/17 pattern of 559, 575, 591 and 593. **Mostly latent in the stock run image, by reading** (per-binary table below). **Pre-existing**: the verdicts are the same on `88daf951` and on WP-201's final tree, so this is not a WP-201 regression. Found by WP-201's implementer and its round-3 reviewer, session 17. Measured by the orchestrator, session 17. The refiner read the tables and the Dockerfiles and ran nothing. **No work package owns it. An architect pass places it.**)
+### 599. **A wrapper the policy does not list runs its operands as a command the policy never judges: `catchsegv sudo id`, `fakeroot sudo id`, `sg grp sudo id`, `chroot / sudo id`, `script -qc sudo id`, and on the git boundary `sg grp git push origin main` and `parallel git push ::: origin`, all read `allow` under `auto`** (TODO, **major as a class, fail-open under `auto`, LIVE on the git boundary — measured by the orchestrator, session 17**: in `platform-runtime:s16` (uid 1000 `agentic`), `command -v` finds `sg`, `chroot` and `script` and not `catchsegv`, `fakeroot`, `parallel`; `sg agentic "echo RAN_SG"` prints `RAN_SG` (rc 0); and `decideUnattendedCommand` reads `sg agentic 'git push origin main'`, `sg agentic -c 'git push origin main'` and `sg agentic 'sudo id'` **`allow`** under `auto` on WP-201's tree. The per-binary reading below is superseded where it says `sg` needs measurement. The wrapper list is an enumeration, and a run fails open on every wrapper past it. This is the session-16/17 pattern of 559, 575, 591 and 593. **Mostly latent in the stock run image, by reading** (per-binary table below). **Pre-existing**: the verdicts are the same on `88daf951` and on WP-201's final tree, so this is not a WP-201 regression. Found by WP-201's implementer and its round-3 reviewer, session 17. Measured by the orchestrator, session 17. The refiner read the tables and the Dockerfiles and ran nothing. **Owned by WP-203**, by § "Architect ruling (M11 fifth amendment, session 17)": an unknown command is a possible wrapper, so its arguments are command-position words — a judged name there is uncertain, a non-literal word is uncertain (split clause), a cited list of known non-wrappers is the relief and not the guard — and the image's own wrappers (`sg`, `script -c` as handed strings; `chroot`, `setpriv`, `setarch`, `prlimit`, `runcon`, `start-stop-daemon` as argv wrappers, from Debian trixie's package lists) join the sets with their grammar. First of what is open.)
 
 **What is wrong.** A block entry or the git boundary judges a stage's command word. Words that stand in front of the real command are peeled through hand-written sets in `packages/domain/src/policies/command-policy.ts` (line numbers on `main` at `ed59e955`): `ARGV0_WRAPPERS` (`:2076`, with `env`, `command`, `exec`, `nohup`, `time`, `nice`, `ionice`, `xargs`, `timeout`, `stdbuf`, `setsid`, `flock`, `chrt`, `taskset`, `unbuffer`, `watch`, `strace`, `ltrace`, `nsenter`, `unshare`, `busybox`, the package runners, `runuser`, `su`, `doas`, …), `ENVIRONMENT_WRAPPERS` (`:2406`), `WRAPPER_FLAGS_WITHOUT_VALUE` (`:4502`) and `WRAPPER_OPERAND` (`:4515`), which `commandNameWords` reads. A binary absent from these sets is the command itself, and its operands are arguments that nobody judges. So `catchsegv`, `fakeroot`, `sg`, `chroot`, `script` and `parallel` hide whatever follows them. Every listed wrapper reads `deny` for the same line, which is why this is a list gap and not a walk defect. The list has been extended twice for this class: once at the first local test, 2026-10-06 (`timeout` and the row after it, per the comment at `:2085`), and again at 559 (`busybox`) and 575 (the package runners). Each extension closed only the names it added.
 
@@ -20379,6 +20379,9 @@ migration. The next free number is **0092**. Read the backlog entry a row folds 
 | WP-193 | **Scanner: a brace is literal unless it expands, and the `{}` operand's part in what is uncertain is measured** | DONE | `a73ab026` | Folds **565** (minor, fail-closed, a false reason), **566**. Deps WP-185, WP-188. No migration. Built in the worktree `../wt-wp193` beside WP-191, session 17, applied to `main` after WP-191 and verified there. Measured first: the `isLiteralWord` caller census and 566's walk canary over the unit tier (it flips none once the new rule on xargs' own command holds the replace-string rows). `bracesExpand` gained two fail-open fixes (a `\"` inside double quotes; not stopping at the first `}`). **Ruling (c) read as 565's done-when** (`xargs -I{} grep x` returns to `auto`; `xargs -I{} grep x {}` was never `auto` — it read `[handedCommand,xargsArguments]` at `7195da54` — and stays `handedCommand`): a deviation from the row's wording, recorded for the architect. **One review round, APPROVE** with two minors (the property is unseeded — the docblock now says the fixed rows hold the rule; technical/05 said bash 5.3 — it now names 5.3 and 3.2, which agree on every probed word, and the image's 5.2) fixed by the orchestrator, and two nits. Reviewer: six canaries dead, 73 407 words compared with bash, no literal verdict on a word bash expands. Orchestrator: worktree `verify` **PASS**, `verify:integration` **PASS**, `verify:e2e` **PASS** twice; on `main` after the merge `verify` **PASS**; no container left, volumes 70. Filed: 591 (major), 592 (nit), 593 (major after the orchestrator's measurement). CI on `a73ab026`: `image` `39146162492` **completed success**; its `ci` `39146162511` was **cancelled** by the next push's concurrency group, and the same tree plus a ledger edit read `ci` `39146283826` **completed success** on `92fece23`. |
 | WP-194 | **Web: a merged task offers neither Pause nor Take over, and the hand-back stages are held both ways on a real database** | DONE | `a7a1ca10` | Folds **563**, **564**. Deps WP-165. No migration. User-guide sweep (rule 83). Parallel-safe. Built on `main`, session 17, beside WP-201. *Pause* hidden once the server has a `merged_gate` stage row; a merged task nobody took over gets no form but its own sentence (a deviation from ruling (a)'s wording, recorded: `HandBack`'s sentence is about a hand-back); a take-over in force keeps its panel. A real-database case posts every feature-template stage plus `deployment` at an agent stage and at Ready and holds the admitted set equal to `hand_back_stages` both ways. **One review round, APPROVE** with two minors — the Ready case runs about ten fake walks at once (≈ 57 s locally; to be watched on CI's 2-core runner and cut to the Ready-dependent stages only if it flakes) and the run page's branch has no test of its own — and a nit. Canaries: implementer three (the e2e one with the `handBackStages` filter removed: 9 admitted vs 14 offered), reviewer five, all dead. Orchestrator: `verify`, `verify:ui` (664), `verify:web-e2e` (54), `verify:integration`, `verify:e2e` twice — all **PASS**. CI on `a7a1ca10`: **PENDING**. |
 | WP-195 | **The isolation probe proves unreachability rather than a DNS failure, and the bootstrap-store case cleans up after itself** | TODO | — | Folds **571**, **572**. Deps WP-169. No migration. (a) wants the Docker daemon. |
+| WP-203 | **Scanner: an unknown command is a possible wrapper — a judged name or a non-literal word among its arguments is uncertain, known non-wrappers are a cited list, and the stock image's own wrappers join the sets with their grammar** | TODO | — | Folds **599** (major as a class, fail-open under `auto`, **live** on the git boundary: `sg` is in the stock image and runs its string; `chroot` and `script` present, `catchsegv`, `fakeroot`, `parallel` absent — the orchestrator's `command -v`). Deps WP-201. No migration. Measure (a) first; nothing executed; the image census only when WP-195 is not holding the daemon. **First of what is open** (after WP-195, already in build); serial before WP-204 on `command-policy.ts`. Split clause: the non-literal half (c) may move to a follow-up row with its corpus count; (b), (d), (e) may not. Added by § "Architect ruling (M11 fifth amendment, session 17)". |
+| WP-204 | **Scanner: a block entry is read by getopt's own rules — a letter cluster by its letters, an operand wherever it stands — and an option the policy cannot read beside the entry's operands is uncertain, through one normaliser all four readers share** | TODO | — | Folds **598** (major as a class, fail-open under `auto`; the default entry bounded by the container, a project's entries not). Deps WP-203. No migration. Measure (a) first; nothing executed. Serial after WP-203 and before WP-205 on `command-policy.ts`. product/19 § 3's *ask, never allow* sentence is the product owner's: the orchestrator files the ruling's replacement text in OPEN-QUESTIONS; no criterion depends on it; the implementer leaves product/19 alone. Split clause: the `uncertain` clause (b)(iii) may move with its count; (i), (ii), (c), (d) may not. Added by § "Architect ruling (M11 fifth amendment, session 17)". |
+| WP-205 | **Scanner: the command walk skips a wrapper's option values and leading operand by that wrapper's declared grammar, and a wrapper with none keeps the both-ways reading** | TODO | — | Folds **592** (nit, fails closed; carried once by the fourth amendment) and **596** (minor, fails closed; WP-201's widening of 592). Deps WP-204, WP-193. No migration. Pin the trap rows (a) first (rule 42). Last; serial after WP-204 on `command-policy.ts`; **may slip to M12** if session 17 closes before it. Added by § "Architect ruling (M11 fifth amendment, session 17)". |
 
 ## WP notes (decisions, assumptions, reviewer findings)
 
@@ -47973,6 +47976,229 @@ RESOLVED by this pass.
 
 **Next: WP-201**, then WP-192, then WP-202, then WP-194 and WP-195 in their table order.
 
+### Architect ruling (M11 fifth amendment, session 17) — four headings WP-201 filed, the wrapper class behind 599 and the spelling class behind 598
+
+Written 2026-10-18 at `6a205638`, WP-187…WP-194 and WP-196…WP-202 DONE, WP-195 in build (an
+implementer's; not touched). This pass covers **596**, **597**, **598** and **599**, which WP-201's
+build and three review rounds filed with no owner, and **592**, which the fourth amendment carried,
+and answers the orchestrator's question for each of the two majors: is there one structural rule per
+class rather than another list, what does it cost in over-asks, and must a document change first.
+**Nothing was measured by this pass** (rule 98 holds it to PROGRESS and the plan; no probe ran): the
+verdicts below are the orchestrator's session-17 measurements recorded at 598 and 599
+(`decideUnattendedCommand({ command }, DEFAULT_COMMAND_POLICY, 'auto')` on `88daf951` and on WP-201's
+tree alike, and `command -v` in `platform-runtime:s16`), the code read on `main` at the lines each
+entry cites, and Debian's own package lists for what the stock image ships (URLs below; a claim
+resting on a list and not on the image is marked so). 599 is **major, fail-open under `auto`, live
+on the git boundary** in the stock image: `sg` is present, uid 1000 may `sg agentic …` into its own
+group with no password, and the run holds the credential helper, so a reached push succeeds. 598 is
+**major as a class, fail-open under `auto`**, bounded by the container for the one default entry and
+unbounded for a project's own entries, which BD-025's decision 4 made the project's only stop. 592
+and 596 fail closed; 597 is an instrument hazard. Order: **599 before 598**, as the orchestrator
+proposed — one is live on the boundary, the other deletes the run's own workspace — and both serial
+on `command-policy.ts`; WP-195 is independent.
+
+**599: the rule (WP-203).** The scanner judges a word in **command position**, and it finds command
+positions by peeling wrappers it knows (`ARGV0_WRAPPERS`, `command-policy.ts:2094`; `WRAPPER_OPERAND`,
+`:4783`). A program it does not know is read as the command, and its arguments as nobody's. That is
+the premise 599 falsifies: *an unknown program may be a wrapper*, and the policy cannot tell. So the
+rule is WP-201's own, applied one position further out: **an unknown command is a possible wrapper,
+so every one of its arguments is a command-position word** — a literal one is judged (a judged name
+there is `uncertain`), and a non-literal one is `uncertain` as WP-201 made it in every command
+position. Stated for the implementer:
+- **Unknown** means: the command word's `argv0Name` is the first token of no `allow` or `ask` entry
+  of the stage's effective policy, is in no wrapper set (`ARGV0_WRAPPERS`, `ENVIRONMENT_WRAPPERS`,
+  `COMPUTED_NAME_WRAPPERS`, the package runners), is no shell (`SCRIPT_SHELLS`), has no
+  `HAZARDOUS_ARGUMENTS` entry (a program with a floor has a reader), and is not on the **valve** below.
+  A `block` entry's first token is *judged*, not known: `rm`, `git`, `docker`, `sudo`, `curl`, `wget`,
+  `npm`, `pip`, `gh`, `glab`, `kubectl`, `terraform` plus a project's.
+- **A judged word** is the `argv0Name` of: a `block` entry's first token (defaults and the project's),
+  a wrapper, a shell, a package runner, and `git`. An argument is scanned **dequoted and split by the
+  scanner's own word splitter, operators separating**, so `sg agentic 'git push origin main'`,
+  `sg agentic -c 'echo x; git push origin main'` and `script -qc 'sudo id' out` each hold a judged
+  word; a brace operand is expanded first (`fakeroot s{u,}do id` yields `sudo`). Every argument
+  position counts, because a wrapper's command may stand after its options (`script -qc CMD file`),
+  after a leading operand (`chroot / CMD`, `sg GROUP CMD`) or before a separator (`parallel CMD :::`).
+- **The non-literal half**: an argument word of an unknown command that is not literal — an unquoted
+  `$` or backtick, a command substitution, a glob — is `uncertain` under `expandedName` reworded, or a
+  reason of its own, saying to write the word literally. `catchsegv $x id` and `sg grp $(echo sudo) id`
+  are this half's. It is the costly half; it ships under a **split clause** (below).
+- **The valve**: a declared, cited list of **known non-wrappers** — programs whose manual documents
+  that no argument of theirs names a program to run — exempt from both halves: `echo`, `printf`,
+  `test`, `[`, `true`, `false`, `:`, `cd`, `pushd`, `popd`, `shift`, `sleep`, `basename`, `dirname`,
+  `realpath`, `readlink`, `stat`, `file`, `touch`, `mkdir`, `rmdir`, `cp`, `mv`, `ln`, `chmod`,
+  `chown`, `date`, `tee`, `tr`, `cut`, `sort`, `uniq`, `diff`, `cmp`, `comm`, `md5sum`, `sha256sum`,
+  `base64`, `xxd`, `od`, `du`, `df`, `uname`, `id`, `whoami`, `hostname`, `which`, `type`, `man`,
+  `printenv`, `seq`, `yes`, `mktemp` as the candidates — each admitted with a manual citation in the
+  entry, refused by a census if it is in any wrapper or shell set or is a `block` entry's first token
+  (`env`, `xargs`, `awk`, `sed`, `tar`, `perl`, `python3`, `node` and `ssh` can never join: each runs
+  a program from an argument or an option). The list is the **allow side** of the rule: a name added
+  to it can only loosen, which is the direction a reviewer reads, and a name missing from it only
+  over-asks. That is the shape the orchestrator's second option has a place in — not as the guard but
+  as the guard's stated relief. A list of known *wrappers* alone is today's design, and it fails open
+  on every name past it.
+- **The image's own wrappers join the sets, with their grammar** — belt beside the braces, because
+  the structural rule reads `uncertain` where a listed wrapper reads **through** to `block` or the
+  boundary, and a wrapper the stock image ships is one the measurement can name. By the orchestrator's
+  `command -v`: `sg`, `chroot` and `script` are present, `catchsegv`, `fakeroot` and `parallel` absent.
+  By Debian trixie's package lists, each package Essential and therefore in every Debian image, the
+  slim variant included (`[unverified]` that the slim build keeps every binary; the row's census
+  settles it): util-linux ships `setpriv`, `setarch`, `linux32`, `linux64`, `i386`, `x86_64`,
+  `prlimit`, `uclampset` beside the listed `setsid`, `flock`, `unshare`, `nsenter`, `chrt`, `taskset`,
+  `ionice`, `su`, `runuser` (https://packages.debian.org/trixie/amd64/util-linux/filelist); bsdutils
+  ships `script`, `scriptlive` and `scriptreplay` (https://packages.debian.org/trixie/amd64/bsdutils/filelist);
+  coreutils ships `runcon` and, under `/usr/sbin`, `chroot` beside the listed `env`, `nice`, `nohup`,
+  `stdbuf`, `timeout` (https://packages.debian.org/trixie/amd64/coreutils/filelist); login ships `sg`
+  and `newgrp` (https://packages.debian.org/trixie/amd64/login/filelist); dpkg ships
+  `start-stop-daemon` (https://packages.debian.org/trixie/amd64/dpkg/filelist); debianutils ships
+  `run-parts` (https://packages.debian.org/trixie/amd64/debianutils/filelist). Two grammars: `sg GROUP
+  [-c] CMD` and `script -c CMD [file]` hand a **string** to a shell (sg: the command is passed to the
+  user's shell, https://manpages.debian.org/trixie/login/sg.1.en.html; script: `-c` runs the command
+  rather than an interactive shell, through `SHELL` or the Bourne shell,
+  https://manpages.debian.org/trixie/bsdutils/script.1.en.html — which shell runs `-c`'s string is
+  `[unverified]` on both pages and does not change the rule), so both are read as a handed script the
+  way `sh -c` is (`HandedScript`); `su -c`/`runuser -c` are measured by (a) and join them if their
+  string is not read today. The rest are **argv** wrappers and join `ARGV0_WRAPPERS` with their valued
+  options declared (`chroot --userspec`, `--groups`; `setpriv --reuid`, `--regid`, `--groups`,
+  `--inh-caps`, …; `setarch ARCH`; `prlimit --nofile=…`; `start-stop-daemon --exec`, `--startas`,
+  `--chuid`, …; `runcon CONTEXT`), each cited; `newgrp` is a shell with no command operand and joins
+  the here-document readers (`newgrp agentic <<'EOF'`), and `scriptlive` and `run-parts` are listed as
+  argv wrappers or recorded as residuals with the reason. Absent today and common in project images —
+  `catchsegv`, `fakeroot`, `parallel`, `gosu`, `chpst`, `faketime`, `xvfb-run`, `dbus-run-session`,
+  `gdb --args`, `valgrind`, `expect`, `bwrap`, `proot`, `firejail`, `chronic`, `authbind` — are the
+  headings a list would have filed next; the structural rule reads each `uncertain` with nothing added.
+
+**The over-ask of 599's rule, by reading, and the measurement that decides it (rule 27).** The literal
+half costs: an unknown program handed a judged name as data — `./scripts/check.sh git`,
+`python3 lint.py --cmd sudo`, `cargo run -- git`, `./gradlew docker` — each refused with a reason
+naming the program and the word and saying to run the command itself; and **nothing** on a known or
+valved command: `grep -r sudo .`, `rg sudo`, `cat sudo.txt`, `ls docker` (allow-listed), `echo "git
+push"`, `which git`, `type sudo`, `test -x /usr/bin/sudo`, `cp sudo x` (the valve). The non-literal
+half costs every unknown program with an expansion in an argument — `./gradlew $task`,
+`python3 x.py $arg`, `cargo test $pkg` — where the program is not a declared project command (a
+declared one is allow-listed by pattern and therefore known); `mkdir -p $dir`, `cp $a $b`, `chmod $m
+f`, `touch $f` and WP-201's control `echo $x` keep `auto` through the valve, and the fourth
+amendment's residual sentence (`curl $url`, `chmod $m f` are the sandbox's) stays true for a known or
+valved command. **Measured first, by the row:** every line above and the three corpora WP-201 left in
+`scratchpad/wp201/` (1090 strings, 83 developer lines, 142 adversarial lines), the count newly
+refused by each half as the row's first and second numbers, or the corpora stated gone; and the
+image census (`command -v` over the declared candidate list in `platform-runtime`) when the daemon is
+free, else the orchestrator's three-and-three with the rest `[unverified]`. **Split clause:** the
+literal half, the valve, its census and the image's wrappers are the row's and may not move; the
+non-literal half moves to a follow-up row if the orchestrator judges its second number too high, with
+the count as that row's evidence — a stated gap, never a silent one.
+
+**Declined for 599.** (1) Growing the wrapper list by the six names: closes six and fails open on the
+seventh; the list has been extended three times for this class (2026-10-06, 559, 575). (2) Every
+unknown command `uncertain`: reverses BD-025's 2026-10-06 decision 1 (an unmatched command runs in the
+sandbox) — the product owner's, not an architect's to re-decide — and denies most of what a developer
+runs under the implementation baseline. (3) Scanning only the first operand: `script -qc CMD`,
+`setpriv --reuid 1000 CMD` and `start-stop-daemon --exec CMD` put the command elsewhere. (4) The
+valve alone: a list with no guard behind it. (5) Reading an unknown program's quoted operand as a
+**script** (the `sh -c` reader): the string is a script only for a string-wrapper, and for the rest it
+would read `--message 'git push later'` as a command; the judged-word scan is the honest reading, and
+the string-wrappers the image ships get the script reader by name. **Residual, stated:** an
+interpreter that is not a shell — `perl -e` (perl-base is Essential), `awk 'BEGIN{system(…)}'`,
+`sed 's/x/y/e'` (its print-range form alone is allowed; any other `sed` is ask, so `auto`),
+`python3 -c`, `node -e` — is the module docblock's residual (`command-policy.ts:94-96`) and a class of
+its own, which no wrapper rule reads and this ruling does not open; a script file the run wrote
+(`bash file`, `./tool`) likewise; and an option value that names a program on a known command
+(`tar --to-command`, `rg --pre`, `ssh -o ProxyCommand=`) is WP-198's and WP-164's floor class.
+
+**598: the rule (WP-204).** `tokensMatch` (`command-policy.ts:2676`) reads an entry's options as whole
+tokens and its positionals by index from the first operand; the three prefix readers that decide
+`uncertain` (`xargsBlockPrefix` `:3195`, `blockEntryBehindFlagValue` `:2788`, WP-201's
+`blockEntryBehindExpansion`/`expansionAtEntryWord` `:2834`/`:2870`) copy both assumptions. Two of the
+facts the matcher needs are **program-independent** and one is not, and the rule follows that line:
+- **Cluster equivalence** (getopt's own rule, every POSIX tool): a single-dash cluster of letters only
+  (`-rf`, `-D`, `-qD`) is **exploded into its letters** on both the entry and the line before
+  matching; an entry letter matches when it appears among the line's exploded letters. A token with a
+  non-letter (`-n1`, `-I{}`, `-chdir=x`), a long option (`--force`) and a glob flag (`-f*`) stay whole
+  and glob-matched as today — and a glob flag is tested against the exploded letters too, so
+  `git push -uf origin x` meets `-f*`. `--` ends options, as it does now.
+- **Operand order**: an entry's positionals are matched as an **in-order subsequence** of the line's
+  operands, not by index from the first: `rm build -rf /` and `rm x -rf /*` meet `/*`, `gh -R o/r
+  release create` meets `release` (WP-198's 584 read it `uncertain`; `block` is the same `deny`).
+  Both facts only **tighten**: every match today is a match after, and nothing that reads `allow`
+  today can read `allow` only because of them.
+- **The per-program fact — an alias** (`-R` for `-r`, `--recursive` for `-r`, `--delete --force` for
+  `-D`) — is what the scanner does not have, so there the verdict is `uncertain`: *a line whose
+  literal leading tokens are an entry's, whose operands meet every positional the entry names (so the
+  entry names at least one), and which writes an option word while the entry's exploded letters are
+  not all covered, is `uncertain` under a reason naming the entry and the option* — the entry is
+  still the organisation's stop, and an option the policy cannot read beside the entry's own operands
+  may be the entry by another name. The positional condition is what keeps `git push -u origin
+  agentic/x` (the one allowed push; the push entries name no positional) and `git branch -a` (no
+  operand) out of it.
+- **One normaliser, four readers**: the explosion and the subsequence live in one function
+  `splitFlags`' callers share, and a census in the `task-save-sites.test.ts` shape refuses a block
+  reader that classifies a flag on its own.
+
+**The cost of 598's two shapes, by reading.** The chosen rule's two tightening facts cost **no
+over-ask in any `allow` verdict**; their one over-block is a project entry written with a
+single-dash long option — GNU find's convention, `find * -delete` — which the letter union can meet
+from unrelated clusters (`find . -depth -type d -ls`), stated and pinned as such; the default entries
+carry none. The `uncertain` clause costs: `rm -f /tmp/x`, `rm -r /tmp/x`, `rm --force /tmp/x`,
+`git branch -m a b`, `git branch -d x`, `git branch -u origin/x x`, `git branch --list 'x*'`,
+`git reset --soft origin/main` — each refused naming the entry and the option; `git reset origin/main`
+(no option) and `rm /tmp/x` are untouched. The orchestrator's alternative — *a line whose command word
+is a block entry's and whose options or operands are not exactly the entry's spelling is uncertain* —
+is **declined by reading**: `git` is the command word of nine default entries, so it refuses
+`git push -u origin agentic/x`, `git branch -a`, `git reset --soft HEAD~1` and `rm -f x`,
+`rm -r build`, `rm -rf dist`, and with the last two the verification baseline's clean-up lines; its
+honest scope would have to be re-narrowed to the chosen clause to ship. **Measured first, by the
+row:** every line above, 598's own rows and controls, the three corpora as for WP-203, the count the
+clause newly refuses as the row's first number; if the orchestrator judges that number too high, the
+clause moves to a follow-up row with the count as its evidence, and the two tightening facts ship —
+**split clause**. The container's bound (`ctl` mount deletable from inside the run or not) is a
+measurement the row records when the daemon is free, and it changes the severity line, not the rule.
+
+**The documents, and what changes first.** Three texts say an unlisted spelling lands on *ask, never
+allow*: product/19 § 3's sentence (`docs/product/19-operating-definitions.md:34`), Q37's resolved row
+(`docs/OPEN-QUESTIONS.md`, the decision log), and `DECLINED_BLOCK_VARIANTS`
+(`command-policy.ts:350`). The premise — *ask can never reach allow* — ended with BD-025's 2026-10-06
+amendment, decision 1; **BD-025 itself needs no amendment**: its decision 2 holds `uncertain` to
+`deny`, its decision 4 makes `block` the project's stop, and the rule above lands every spelling on
+`block` or `uncertain`, inside both. What must change is the sentence that promised a verdict the
+mechanism no longer gives. **product/19 § 3 is the product owner's**; the replacement this ruling
+proposes, for the orchestrator to file in `docs/OPEN-QUESTIONS.md` as a new question with this
+recommendation (rule 98 holds this pass to PROGRESS and the plan): *"A spelling not listed is read
+by getopt's own rules — `rm -fr /`, `rm -r -f /`, `rm build -rf /` are `rm -rf /*` and **block**; a
+spelling the policy cannot read beside the entry's own operands — `rm --recursive --force /`,
+`git branch --delete --force <b>` — is **uncertain**, which an unattended run refuses (BD-025,
+2026-10-06, decision 2); `git push origin agentic/<x>:<other>` is the git boundary's (decision 3).
+None reaches allow."* Q37's resolved row takes the same sentence, with *(superseded by WP-204)*.
+`DECLINED_BLOCK_VARIANTS` is code and is WP-204's: its two rows record the verdict the rule gives and
+a unit test holds those strings to `decideUnattendedCommand`'s answers. **WP-204's criteria depend on
+none of the three**: they pin the verdicts, technical/05 and the constant.
+
+**592 and 596 are owned by WP-205**, with reason, after carrying 592 once. They are one defect — the
+command walk lists a wrapper's option value and leading operand as names because it has no grammar
+(`commandNameWords`, `:4790`), which over-asked on `{}` before WP-201 and on `$t`, `$n`, `$R` since —
+and WP-203 adds wrappers to the same tables, each with a declared grammar, so the walk gains its
+grammar in this session or the over-ask grows with every wrapper added. The fix is a **table**, and
+that is acceptable here because it is the fail-closed side: a wrapper with no declared grammar keeps
+today's both-ways reading, so a missing entry over-asks and never under-reads. WP-205 is last, after
+WP-204, and **may slip to M12** if session 17 closes before it; its first criterion pins the trap
+rows 592 names, so no row of this session opens them.
+
+**597 is carried**, with reason. It is an instrument hazard and not product behaviour; CI is bounded
+by `timeout-minutes`; and its first half is a measurement nobody has taken — the literal's exact text
+is in `scratchpad/wp201/` while that directory exists and nowhere else, so the **orchestrator records
+it on the entry now**, before the scratchpad goes. The bounded collection (an outer wall clock in the
+verify scripts naming the file being collected) is an M12 harness row in the protocol's order, parallel-
+safe with everything, and the entry's *done when* stands.
+
+**Decisions.** None amended. BD-025's 2026-10-06 amendment is read above and holds; a line it does not
+address — whether an unknown program's argument is a command-position word — is the scanner's, as
+decision 2 leaves what is uncertain to the scanner. No `docs/research/` file is written by this pass
+(rule 98); the URLs stand inline, and the orchestrator carries three items to `docs/TODO.md`
+(Verification): which shell `sg` and `script -c` hand their string to, whether the slim image keeps
+every Essential binary the lists name, and `su -c`/`runuser -c`'s string reader today. The next free
+migration stays **0092**; no row takes one. Nothing is marked RESOLVED by this pass.
+
+**Next: WP-203**, then WP-204, then WP-205, each serial after the previous one's merge on
+`command-policy.ts`; WP-195 is independent and already in build.
+
 ## WP notes — session 14 (M10)
 
 #### WP-162
@@ -50678,3 +50904,41 @@ Findings:
 **Discovered work (round 3).** The reviewer's probe sets also show wrappers the command walk does not know. `catchsegv sudo id`, `fakeroot sudo id`, `sg grp sudo id`, `chroot / sudo id` and `script -qc sudo id` read `auto`, and so does each of them in front of a non-literal name. They are absent from `ARGV0_WRAPPERS`, a wrapper census gap of the 559/575 kind and not a literal-word question. Not fixed here.
 
 The policies unit tier: 3196 passed. `pnpm run -s verify`: `PASS: verify` (14 489 tests). The citation guard: 13/13.
+
+#### WP-195 — The isolation probe proves unreachability rather than a DNS failure, and the bootstrap-store case cleans up after itself (backlogs 571, 572)
+
+**Changes.**
+- (a) **571.** The isolation case in `test/e2e/workspace/docker-workspace.e2e.test.ts` reads the repository container's address on `fixture.network` from `docker inspect` and dials it with `nc -z -v -w 3 <address> 9418`. It prints `nc_said=` and `rc=` lines. It asserts `rc=1`, and that `nc_said` is exactly `nc: <ip> (<ip>:9418): Network unreachable` or `… Operation timed out`. A control `docker run --rm` (harness name and labels) on `fixture.network`, same image and same dial, must print `rc=0` and `<ip> (<ip>:9418) open`. The `default_routes=0` half is unchanged.
+- (b) **572.** In `test/integration/bootstrap/postgres-history-bootstrap-store.integration.test.ts`, `runFor` pushes its run into `caseRows.runs`, and `caseRows.tasks` holds `BOOT-OTHER`. The `afterEach` deletes the tasks by id after their runs. A `beforeAll` in the block counts `tasks`, `runs` and `cost_entries`. A last case, "leaves tasks, runs and cost_entries as it found them", asserts the same counts.
+- (c) technical/05's isolation paragraph states what the e2e proves (one address, unreachable, with the control) and what it does not.
+
+**Measured (busybox `nc`, `alpine:3.21`, BusyBox v1.37.0; the probe image).** `platform-runtime:s16` has **no `nc` at all** (`sh: 1: nc: not found`, rc 127), so the probe stays on `alpine:3.21`, as before. Standalone, `nc -z -v -w 3`:
+- open port: `<ip> (<ip>:9418) open`, rc 0;
+- closed port (refused): **nothing printed**, rc 1;
+- unanswered address on the subnet: `nc: <ip> (<ip>:9418): Operation timed out`, rc 1, 3 s;
+- unknown name: `nc: bad address '<name>'`, rc 1;
+- from an `internal` network or `--network none`: `nc: <ip> (<ip>:9418): Network unreachable`, rc 1, immediate.
+
+Without `-v` every failure is silent except *bad address*. On the stock e2e topology the probe prints `Network unreachable` with no delay. The case's added wall time is one `docker inspect` and one `--rm` control container (about 1 s here).
+
+**Assumption (deviation from ruling (a)'s wording).** The accepted kinds are *Network unreachable* and *Operation timed out*, not *refused*. A refused connect means a RST came back, so a packet reached the host: that is not isolation. busybox also prints nothing for it, so it could not be named anyway. The backlog's "Done when" says "a timeout or unreachable", which matches.
+
+**Canaries** (in-place edits from a scratch script, file bytes restored by copy, `shasum -c` OK on both files after each). Each ran the one case (`-t "no route off its internal network"`) on `platform-runtime:s16`/`platform-egress:s16`.
+- **Plant: the probe under the run's configuration is also attached to the harness bridge** (`docker network connect` before start, in `probeUnderRunContainerConfig`). The new case fails: *"the whole probe output: "nc_said=192.168.163.2 (192.168.163.2:9418) open\nrc=0\ndefault_routes=1\n": expected [ '0' ] to deeply equal [ '1' ]"*.
+- **Canary as the brief worded it (old name target, `rc=1` alone, same plant): it did not pass wrongly.** It failed with *"nc_said=agentic-e2e-repo-5sktq2 (192.168.163.2:9418) open\nrc=0\ndefault_routes=1"*. Docker's embedded resolver answers the name on every network a container joins (also measured standalone), so a bridge attachment makes the name resolve too. The old probe's weakness is that a failed lookup reads as isolation, not that this plant gets past it.
+- **Canary that isolates the kind assertion.** The new case dials the name again (the defect), with no plant. With the kind assertion it fails: *"the nc reason (nc_said=) — the whole probe output: "nc_said=nc: bad address 'agentic-e2e-repo-q84g7y'\nrc=1\ndefault_routes=0\n""*. With `rc=1` alone (kind and control removed) it **passes**, 1/1: the wrong pass the backlog describes.
+- **Stock output, shown** (rc expectation planted to `'show'`): *"nc_said=nc: 192.168.163.2 (192.168.163.2:9418): Network unreachable\nrc=1\ndefault_routes=0\n"*.
+- **572 canary:** the push in `runFor` dropped. 2 failed. "sums only this batch’s tasks from the ledger" failed in its `afterEach` on `cost_entries_task_id_fkey` (the task cannot be deleted under its runs). "leaves tasks, runs and cost_entries as it found them" failed with *"expected { tasks: 3, runs: 2, cost_entries: 2 } to deeply equal"* the counts before.
+
+**Docker hygiene.** Before: 61 containers, `docker volume ls | wc -l` 71. Standalone measurements used the label `com.agentic.wp195.measure=1` and were removed by it (0 left). After every e2e run: 0 containers and 0 networks labelled `com.agentic.e2e.harness`, 71 volumes. The one extra container seen was Testcontainers' ryuk, which exits by itself.
+
+**Sentences falsified (rule 83).**
+- `grep -rn -e "nc -z" -e "rc=1" -e "unresolv" -e "does not resolve on the run" docs/technical/05-workspaces-and-security.md docs/operator-guide.md docs/research CLAUDE.md`: only technical/05:21 (now amended) and an unrelated `nslookup rc=1` in research/12.
+- `grep -rn -e runFor -e BOOT-OTHER -e "nothing else is touched" docs test` (plan and PROGRESS excluded): the block's docblock (*"Keyed by the case's own ids, so nothing else is touched"*) is now true. The other `runFor` helpers are other files.
+- The DNS case's comment (*"`nc` and the default-route count above carry it"*) stays true.
+
+**Discovered work (for a refiner).** None.
+
+**Verification.**
+- The integration file alone, `--project integration`: 23/23.
+- `docker-workspace.e2e.test.ts` alone, `--project e2e-fake-claude`, `s16` images: see below.
