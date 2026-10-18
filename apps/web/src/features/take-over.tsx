@@ -15,6 +15,8 @@
  *   branch, the session `claude --resume` continues (or that there was none), the resume lines, and
  *   the workspace's fate in its own tense (`requested` is "being committed and pushed as the run
  *   winds down", never "done").
+ *   A **merged** task (`merged`, the server's `merged_gate` row) is offered no form, only the reason
+ *   — the server refuses its take-over `409 task_merged` (WP-165, WP-194).
  * - **While a take-over is in force** (`taken_over`, which since WP-44 follows the workpad's rule and
  *   survives an escalation): the same lines, the two downloads a person takes to their own machine,
  *   and the hand-back control. Its stage picker is `hand_back_stages` — the task's **compiled**
@@ -274,7 +276,10 @@ export const TakeOverPanel = ({
 }: {
   readonly taskId: string;
   readonly state: TaskState;
-  /** The task entered `merged_gate` (WP-152's test of the same fact): its hand-back offers nothing. */
+  /**
+   * The task entered `merged_gate` (WP-152's test of the same fact): its hand-back offers nothing,
+   * and a task not yet taken over is offered no take-over (WP-194).
+   */
   readonly merged: boolean;
   readonly takenOver: TakenOver | null;
   readonly runs: readonly Pick<RunRecord, 'id' | 'started_at'>[];
@@ -317,6 +322,23 @@ export const TakeOverPanel = ({
 
   if (FINISHED.has(state)) {
     return null;
+  }
+
+  // WP-194 (backlog 563): since WP-165 the server refuses a merged task's take-over (`409
+  // task_merged`), so the form is not offered; the reason is said instead, as `HandBack` says it.
+  if (merged) {
+    return (
+      <div>
+        <SectionHeading>Take over</SectionHeading>
+        <Card>
+          <p className="text-xs text-fg-muted">
+            This task was merged, so there is nothing to take over or pause: its branch is already
+            in the default branch. Cancel the task — or, once it is waiting for a human, resume it
+            into the retrospective.
+          </p>
+        </Card>
+      </div>
+    );
   }
 
   return (

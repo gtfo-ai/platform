@@ -1417,6 +1417,9 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
   const rebaseGate = latestStageRow(stages, 'rebase_gate');
   const pendingApprovals = approvals.filter((approval) => approval.status === 'pending');
   const liveRun = liveStageRun(runs);
+  // The task entered `merged_gate` (WP-152's test, the server's own fact): since WP-165 the server
+  // refuses Pause and Take over on it (`409 task_merged`), so neither is offered (WP-194).
+  const merged = stages.some((entry) => entry.stage === 'merged_gate');
 
   return (
     <div className="grid gap-4 lg:grid-cols-[16rem_1fr_18rem]">
@@ -1492,14 +1495,16 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             />
           ) : null}
           <div className="ml-auto flex gap-2">
-            <Button
-              disabled={commands.pause.isPending}
-              onClick={() => {
-                commands.pause.mutate('paused from the UI');
-              }}
-            >
-              Pause
-            </Button>
+            {merged ? null : (
+              <Button
+                disabled={commands.pause.isPending}
+                onClick={() => {
+                  commands.pause.mutate('paused from the UI');
+                }}
+              >
+                Pause
+              </Button>
+            )}
             <Button
               disabled={commands.resume.isPending}
               onClick={() => {
@@ -1554,7 +1559,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
         <TakeOverPanel
           taskId={task.id}
           state={task.state}
-          merged={stages.some((entry) => entry.stage === 'merged_gate')}
+          merged={merged}
           takenOver={takenOver}
           runs={runs}
         />

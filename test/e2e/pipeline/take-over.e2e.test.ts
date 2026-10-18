@@ -29,6 +29,7 @@
  * suite).
  */
 import type { RunRecord, TaskDetailResponse } from '@platform/contracts';
+import { compilePipeline, FEATURE_TEMPLATE } from '@platform/domain';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   MAX_TURNS_SCRIPTED,
@@ -446,6 +447,192 @@ describe('taking a task over and handing it back', () => {
     // The human's summary is on the event and is not a second copy in the audit row.
     const handedBack = afterEvents.find((event) => event.type === 'task.handed_back');
     expect(JSON.stringify(handedBack?.payload)).toContain('rounded the footer by hand');
+  }, 300_000);
+});
+
+/**
+ * **The hand-back picker offers exactly what the hand-back admits, on a real database** (WP-194,
+ * PROGRESS backlog 564).
+ *
+ * `human-commands.test.ts` holds `handBackStages` to the command over an in-memory harness. This is
+ * the same equality through the server's own projection (`handBackStagesOf` over the task row, the
+ * compiled pipeline and `stage_attempts` read off PostgreSQL) and the real route: every stage id the
+ * feature template names, plus one it does not, is posted to `POST /api/tasks/:id/hand-back`, and
+ * the set that answered 200 must **equal** `GET /api/tasks/:id`'s `taken_over.hand_back_stages`, in
+ * both directions (rule 42). A refusal performs nothing, so the next stage is posted to the same
+ * task; an admitted hand-back moves the task, so the next one gets a fresh task taken over at the same
+ * place, whose list is asserted equal to the first.
+ *
+ * Two places, because the list differs between them: `ready_for_merge` is admitted only from a
+ * pause at Ready. The agent-stage half runs with `agent: 'none'` — `stage.execute` is not subscribed,
+ * so a task stays at `refinement` with no run and a fresh one costs an intake; the Ready half needs
+ * the fake runner to walk each task there.
+ */
+describe('the hand-back picker against the hand-back route (WP-194, backlog 564)', () => {
+  /** Every stage id the shipped feature template names, enabled or not, and one it does not. */
+  const CANDIDATES = [
+    ...compilePipeline('feature', FEATURE_TEMPLATE, null, false).stages.map((stage) => stage.id),
+    'deployment',
+  ];
+
+  const ticketsFor = (keys: readonly string[]) =>
+    keys.map((key) => ({
+      key,
+      title: 'Show the totals in the invoice footer',
+      issueType: 'Story',
+    }));
+
+  const matched = (pipeline: PipelineE2E, key: string) =>
+    inboundEvent('ticket.matched', {
+      project_id: pipeline.projectId,
+      ticket: {
+        provider: 'fake-task-management',
+        key,
+        url: `https://tickets.example.test/browse/${key}`,
+      },
+      rule: 'label:agentic',
+      priority: 'High',
+      issue_type: 'Story',
+      epic: null,
+      links: [],
+    });
+
+  const offeredOf = async (client: Client, taskId: string): Promise<readonly string[]> => {
+    const read = await client.json<TaskDetailResponse>(`/api/tasks/${taskId}`);
+    expect(read.status).toBe(200);
+    expect(read.body.taken_over).not.toBeNull();
+    return read.body.taken_over?.hand_back_stages ?? [];
+  };
+
+  /**
+   * Fresh tasks taken over where `reached` says, out of a ticket pool: `publish` starts walks ahead of
+   * need, so they run beside each other rather than one after another; `fresh` starts one itself when
+   * none is ahead (more admitted stages than offered ones).
+   */
+  const freshTasks = (
+    pipeline: PipelineE2E,
+    client: Client,
+    keys: readonly string[],
+    reached: { readonly state: string; readonly stage: string },
+  ) => {
+    let published = 0;
+    let next = 0;
+    const publish = async (count: number): Promise<void> => {
+      const batch = keys.slice(published, published + count);
+      published += batch.length;
+      await pipeline.publish(batch.map((key) => matched(pipeline, key)));
+    };
+    const fresh = async (): Promise<string> => {
+      if (next === published) {
+        await publish(1);
+      }
+      const key = keys[next++] as string;
+      let taskId: string | undefined;
+      await pipeline.waitFor(`${key} to be at ${reached.stage}`, async () => {
+        const rows = await pipeline.query<{ id: string }>(
+          'select id from tasks where ticket_key = $1 and state = $2 and current_stage = $3',
+          [key, reached.state, reached.stage],
+        );
+        taskId = rows[0]?.id;
+        return taskId !== undefined;
+      });
+      const taken = await send(client, `/api/tasks/${taskId}/take-over`, { tarball: false });
+      expect(taken.status, JSON.stringify(taken.body)).toBe(200);
+      expect(taken.body).toMatchObject({ state: 'paused', current_stage: reached.stage });
+      return taskId as string;
+    };
+    return { publish, fresh };
+  };
+
+  /** Posts every candidate; a fresh taken-over task replaces each one an admitted hand-back moved. */
+  const admittedSet = async (
+    client: Client,
+    tasks: ReturnType<typeof freshTasks>,
+  ): Promise<{
+    offered: readonly string[];
+    admitted: string[];
+    refused: Record<string, string>;
+  }> => {
+    let taskId = await tasks.fresh();
+    const offered = await offeredOf(client, taskId);
+    // The fresh tasks the equality needs if it holds, started together.
+    await tasks.publish(offered.length);
+    const admitted: string[] = [];
+    const refused: Record<string, string> = {};
+    for (const stage of CANDIDATES) {
+      const reply = await send(
+        client,
+        `/api/tasks/${taskId}/hand-back`,
+        { stage, summary: 'finished by hand' },
+        `hand-back-${taskId}-${stage}`,
+      );
+      if (reply.status === 200) {
+        admitted.push(stage);
+        // Nothing the hand-back started is needed: stop it, so the case costs one walk per stage.
+        const cancelled = await send(client, `/api/tasks/${taskId}/cancel`, { reason: 'probe' });
+        expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(200);
+        taskId = await tasks.fresh();
+        expect(await offeredOf(client, taskId)).toEqual(offered);
+      } else {
+        // A typed refusal, never a fault — and nothing recorded, so the same task serves the next.
+        expect(reply.status, `${stage}: ${JSON.stringify(reply.body)}`).toBe(409);
+        refused[stage] = reply.body.error?.code ?? 'none';
+      }
+    }
+    return { offered, admitted, refused };
+  };
+
+  /** One more key than candidates: the worst case is every candidate admitted. */
+  const keysFrom = (first: number) =>
+    [...CANDIDATES, 'spare'].map((_, index) => `ACME-${first + index}`);
+
+  it('at an agent stage', async () => {
+    const keys = keysFrom(201);
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'hand-back-picker-agent-stage',
+      tickets: ticketsFor(keys),
+      agent: 'none',
+    });
+    harness = pipeline;
+    const client = await signIn(pipeline.instance.baseUrl);
+
+    const { offered, admitted, refused } = await admittedSet(
+      client,
+      freshTasks(pipeline, client, keys, { state: 'active', stage: 'refinement' }),
+    );
+    expect(admitted).toEqual(offered);
+    // Which branch ran (rule 10): the stages from the merge on, and Ready from an agent stage, were
+    // posted and refused; the stages before Ready were posted and admitted.
+    expect(offered).toEqual(
+      expect.arrayContaining(['refinement', 'implementation', 'code_review']),
+    );
+    for (const stage of ['ready_for_merge', 'merged_gate', 'retrospective', 'librarian', 'done']) {
+      expect(Object.keys(refused)).toContain(stage);
+    }
+    expect(refused.deployment).toBe('stage_not_in_template');
+  }, 300_000);
+
+  it('at Ready', async () => {
+    const keys = keysFrom(301);
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'hand-back-picker-ready',
+      tickets: ticketsFor(keys),
+    });
+    harness = pipeline;
+    const client = await signIn(pipeline.instance.baseUrl);
+
+    const { offered, admitted, refused } = await admittedSet(
+      client,
+      freshTasks(pipeline, client, keys, { state: 'ready_for_merge', stage: 'ready_for_merge' }),
+    );
+    expect(admitted).toEqual(offered);
+    expect(offered).toContain('ready_for_merge');
+    for (const stage of ['merged_gate', 'retrospective', 'librarian', 'done']) {
+      expect(Object.keys(refused)).toContain(stage);
+    }
+    expect(refused.deployment).toBe('stage_not_in_template');
   }, 300_000);
 });
 

@@ -128,7 +128,8 @@ const NEVER_HANDED_BACK_INTO: readonly Slug[] = [MERGED_GATE_STAGE, ...POST_MERG
  * **A merged task is offered nothing**: it is never handed back before the merge, and from a pause
  * — a take-over recorded before WP-165, the only way a merged task is held — nothing after it is
  * reachable either, so its way forward is *Cancel*, or *Resume* once it is parked in `needs_human`.
- * `human-commands.test.ts` holds this list to the command in both directions.
+ * `human-commands.test.ts` holds this list to the command in both directions, and
+ * `take-over.e2e.test.ts` holds the server's projection of it to the route on a real database (WP-194).
  */
 export const handBackStages = (
   task: Pick<Task, 'state' | 'currentStage' | 'stageAttempts'>,

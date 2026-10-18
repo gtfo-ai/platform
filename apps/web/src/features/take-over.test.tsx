@@ -337,6 +337,67 @@ describe('a take-over in force', () => {
 });
 
 /**
+ * WP-194 (backlog 563): since WP-165 the server refuses *Pause* and *Take over* on a merged task
+ * (`409 task_merged`), so the page offers neither. `merged` is the server's `merged_gate` stage row.
+ */
+describe('a merged task (WP-194)', () => {
+  const mergedGate: TaskDetailResponse['stages'][number] = {
+    stage: 'merged_gate',
+    attempt: 1,
+    state: 'completed',
+    entered_at: '2026-09-13T06:00:00.000Z',
+    exited_at: '2026-09-13T06:00:00.000Z',
+    outcome: 'pass',
+  };
+  const escalated = (over: Partial<TaskDetailResponse>): TaskDetailResponse => {
+    const base = detail(over);
+    return { ...base, task: { ...base.task, state: 'needs_human', current_stage: 'retro' } };
+  };
+
+  it('offers neither Pause nor the take-over form, and says why', async () => {
+    const { container } = render(
+      createApp({
+        fetchImpl: fetchFor(escalated({ stages: [mergedGate] }), []),
+        realtime: false,
+      }).element,
+    );
+    await screen.findByRole('button', { name: 'Resume' });
+    expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Take over' })).toBeNull();
+    expect(screen.queryByRole('form', { name: `Take task ${TASK} over` })).toBeNull();
+    expect(container.textContent).toContain('nothing to take over or pause');
+    // Cancel stays: the refusal's way out.
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
+  });
+
+  it('still shows a take-over in force, with the hand-back’s merged sentence', async () => {
+    const { container } = render(
+      createApp({
+        fetchImpl: fetchFor(
+          escalated({ stages: [mergedGate], taken_over: { ...TAKEN_OVER, hand_back_stages: [] } }),
+          [],
+        ),
+        realtime: false,
+      }).element,
+    );
+    await screen.findByText('Taken over by a human');
+    expect(container.textContent).toContain('This task was merged, so it never goes back');
+    expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Take over' })).toBeNull();
+  });
+
+  it('an unmerged task in the same state is offered both', async () => {
+    const { container } = render(
+      createApp({ fetchImpl: fetchFor(escalated({}), []), realtime: false }).element,
+    );
+    await screen.findByRole('button', { name: 'Take over' });
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
+    expect(screen.getByRole('form', { name: `Take task ${TASK} over` })).toBeTruthy();
+    expect(container.textContent).not.toContain('nothing to take over or pause');
+  });
+});
+
+/**
  * WP-73, PROGRESS backlog 203: the panel reads the run `task.taken_over` recorded, and infers only
  * for an event written before the field existed — saying so.
  */
