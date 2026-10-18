@@ -7,6 +7,7 @@
  * (standing rule 82, earned by exactly this gap).
  */
 import type { Id, TicketSnapshot } from '@platform/contracts';
+import { PLATFORM_COMMENT_MARKERS } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { TransactionOpenError, withOpenTransaction } from '../events/open-transaction.js';
 import { exactSecretRedactor, noSecretsRedactor } from '../integrations/redaction.js';
@@ -157,6 +158,76 @@ describe('the snapshot a ticket is bounded into', () => {
     // The platform's own comment is not a comment that was *dropped*: the count is of the thread
     // a human wrote, so `truncated` stays false.
     expect(snapshot.comment_count).toBe(1);
+    expect(snapshot.truncated).toBe(false);
+  });
+
+  /**
+   * WP-202, backlog 590: on a provider that does not read `marker_id` back, the body is what says
+   * the comment is the platform's — the rule (`isPlatformWord`) the window and the conversation
+   * block ask. Both sides (rule 42): a person quoting a marker below their first line is kept.
+   */
+  it.each(PLATFORM_COMMENT_MARKERS)(
+    'leaves out a comment with no marker_id whose body opens with %s, and does not count it',
+    (marker) => {
+      // A parameterised marker carries the suffix its renderer gives it; `agentic:linter` has none
+      // and is followed by a line break, as the lint comment is.
+      const written = marker.endsWith(':')
+        ? `${marker}0199a0b0-1111-7000-8000-000000000001`
+        : marker;
+      const snapshot = boundTicketSnapshot(
+        ticket({
+          comments: [
+            comment({ id: 'human', body: 'a human wrote this' }),
+            comment({
+              id: 'platform',
+              body: `${written}\n**ACME-1** — active`,
+              created_at: '2026-06-01T10:00:00.000Z',
+              marker_id: null,
+            }),
+            comment({
+              id: 'quoting',
+              body: `please look again\n> ${written}`,
+              created_at: '2026-06-01T11:00:00.000Z',
+              marker_id: null,
+            }),
+          ],
+        }),
+        noSecretsRedactor(),
+      );
+      expect(snapshot.comments.map((entry) => entry.id)).toEqual(['human', 'quoting']);
+      expect(snapshot.comment_count).toBe(2);
+      expect(snapshot.truncated).toBe(false);
+    },
+  );
+
+  it('selects the newest comments from the person’s thread, so platform comments crowd none out', () => {
+    const people = Array.from({ length: MAX_TICKET_COMMENTS }, (_unused, index) =>
+      comment({
+        id: `person-${index}`,
+        created_at: new Date(Date.UTC(2026, 5, 1, index)).toISOString(),
+      }),
+    );
+    // Newer than every person's comment: one read back by `marker_id`, the rest by body alone.
+    const platform = PLATFORM_COMMENT_MARKERS.map((marker, index) =>
+      comment({
+        id: `platform-${index}`,
+        body: `${marker.endsWith(':') ? `${marker}0199a0b0-1111-7000-8000-000000000001` : marker}\ntext`,
+        created_at: new Date(Date.UTC(2026, 5, 2, index)).toISOString(),
+        marker_id: index === 0 ? 'agentic:task:1' : null,
+      }),
+    );
+    const marked = comment({
+      id: 'marked',
+      body: '**ACME-1** — active',
+      created_at: new Date(Date.UTC(2026, 5, 3)).toISOString(),
+      marker_id: 'agentic:task:1',
+    });
+    const snapshot = boundTicketSnapshot(
+      ticket({ comments: [...people, ...platform, marked] }),
+      noSecretsRedactor(),
+    );
+    expect(snapshot.comments.map((entry) => entry.id)).toEqual(people.map((entry) => entry.id));
+    expect(snapshot.comment_count).toBe(MAX_TICKET_COMMENTS);
     expect(snapshot.truncated).toBe(false);
   });
 

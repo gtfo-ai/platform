@@ -100,6 +100,7 @@ import type {
   TicketSnapshotComment,
 } from '@platform/contracts';
 import { ticketSnapshotSchema } from '@platform/contracts';
+import { isPlatformWord } from '@platform/domain';
 import { TransactionOpenError } from '../events/open-transaction.js';
 import type { InboundIdentityDirectory } from '../integrations/inbound.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
@@ -221,11 +222,15 @@ const byNewest = (left: TicketComment, right: TicketComment): number =>
  * investigator stage read a ticket everyone else has already answered, and a bug ticket's decisive
  * detail is usually in the thread.
  *
- * The platform's own comments are skipped. `marker_id` is non-null exactly when the platform wrote
- * the comment (the port says so, and it is how BD-023's workpad is found again), so feeding them
- * back would show an agent the stage checklist the platform rendered *about this task* as if a
- * human had written it. A provider that never populates `marker_id` skips nothing, which is the
- * harmless direction.
+ * The platform's own comments are skipped, because feeding them back would show an agent the stage
+ * checklist the platform rendered *about this task* as if a human had written it. Whose comment it
+ * is gets decided by `isPlatformWord`, the rule the human-return window and the conversation block
+ * ask too (WP-202, backlog 590): a non-null `marker_id` (the port's read-back, how BD-023's workpad
+ * is found again) **or** a body that opens with a platform marker — every ticket comment the
+ * platform posts does since WP-191 — so a provider that never populates `marker_id` still skips
+ * them. A person who quotes a marker below their first line is a person. The skipped comments are
+ * neither selected nor counted: `total` is the thread a person wrote, so the platform's comments
+ * cannot crowd a person's out of the newest {@link MAX_TICKET_COMMENTS}.
  *
  * Oldest first at the end, because a thread reads forwards; the *selection* is newest-first
  * because a 500-comment ticket's decisive detail is at the bottom.
@@ -236,7 +241,13 @@ const commentsOf = (
   tally: Redacting,
 ): { readonly comments: readonly TicketSnapshotComment[]; readonly total: number } => {
   const human = ticket.comments.filter(
-    (comment) => comment.marker_id === null || comment.marker_id === undefined,
+    (comment) =>
+      !isPlatformWord({
+        form: 'ticket_comment',
+        text: comment.body,
+        at: comment.created_at,
+        markerId: comment.marker_id ?? null,
+      }),
   );
   const newest = [...human].sort(byNewest).slice(0, MAX_TICKET_COMMENTS);
   const comments = [...newest].reverse().map((comment): TicketSnapshotComment => {
