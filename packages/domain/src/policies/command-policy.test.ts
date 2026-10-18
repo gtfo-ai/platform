@@ -1,8 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 import { PolicyViolationError } from '../errors.js';
 import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
+  argvWords,
   assertCommandAllowed,
   basename,
   CI_VERIFICATION_BLOCK,
@@ -2729,6 +2733,83 @@ describe('WP-186: a tokens floor’s verbs, checked against its predicate (backl
     };
     expect(tokensCensus([...HAZARDOUS_ARGUMENTS, added], TOKENS_FIXTURES)).toEqual([
       'cargo --frob (a new predicate-only floor): no fixture row',
+    ]);
+  });
+});
+
+/**
+ * WP-198 (d): the `tokenise(` census, in the shape of `task-save-sites.test.ts`. The written-word
+ * split reads a redirection as a word and a quote as part of one, so a deny-direction reader built
+ * on it alone misses `2>/dev/null sudo id` (backlog 582). Its callers are the decided ones: the
+ * written half of the union (`argvForms`, and `expandsCommandName`, which keeps quotes beside
+ * `argvShellWords`), the pattern side, the allow and ask side, `stripEnvironmentPrefix` and
+ * `dequoteCommand`. A new caller fails here until somebody decides which it is.
+ *
+ * A lexical reading of `command-policy.ts`, its comments removed by the repository's scanner
+ * (`withoutComments`): a call is attributed to the top-level `const` it sits in. It cannot see a call through an alias
+ * (`const split = tokenise`), which would also be a new line here to review.
+ */
+const TOKENISE_CALLERS: Readonly<Record<string, string>> = {
+  argvForms: 'the written half of the union every deny-direction reader judges',
+  expandsCommandName: 'the written half, beside argvShellWords (a question about quoting)',
+  matchesBlockPattern: 'the pattern side: a block entry or a floor glob',
+  blockEntryBehindFlagValue: 'the pattern side: a block entry',
+  binaryBans: 'the pattern side: a block entry',
+  xargsBlockPrefix: 'the pattern side: a block entry',
+  matchesAllowEntry: 'the allow side: a precise entry reads the line as written',
+  stripEnvironmentPrefix: 'the allow and ask side: the line as written, wrappers peeled',
+  dequoteCommand: 'the ask side: the line as the shell would hand it on',
+};
+
+const tokeniseCallers = (source: string): readonly string[] => {
+  const callers: string[] = [];
+  let current = '';
+  for (const line of withoutComments(source).split('\n')) {
+    const declared = /^(?:export )?const (\w+)/.exec(line);
+    if (declared !== null) {
+      current = declared[1] as string;
+    }
+    for (const _ of line.matchAll(/(?<![\w.])tokenise\(/g)) {
+      callers.push(current);
+    }
+  }
+  return callers.filter((caller) => caller !== 'tokenise');
+};
+
+describe('WP-198 (b): argv as the shell hands it to the program', () => {
+  it.each([
+    ['2>/dev/null sudo id', ['sudo', 'id']],
+    ['2> /dev/null sudo id', ['sudo', 'id']],
+    ['> out sudo id', ['sudo', 'id']],
+    ['<in sudo id', ['sudo', 'id']],
+    ['<<<w sudo id', ['sudo', 'id']],
+    ['<<EOF sudo id', ['sudo', 'id']],
+    ['gh >out release 2>&1 create', ['gh', 'release', 'create']],
+    ["gh re'lease' create", ['gh', 'release', 'create']],
+    ['terraform "apply"', ['terraform', 'apply']],
+    ['echo "a > b" \'c d\'', ['echo', 'a > b', 'c d']],
+    ['su\\\ndo id', ['sudo', 'id']],
+  ])('reads %j as %j', (text, words) => {
+    expect(argvWords(text)).toEqual(words);
+  });
+});
+
+describe('WP-198 (d): who reads the written-word split', () => {
+  const SOURCE = readFileSync(
+    fileURLToPath(new URL('./command-policy.ts', import.meta.url)),
+    'utf8',
+  );
+
+  it('calls tokenise( only from the decided readers, and from each of them', () => {
+    expect([...new Set(tokeniseCallers(SOURCE))].sort()).toEqual(
+      Object.keys(TOKENISE_CALLERS).sort(),
+    );
+  });
+
+  it('names a new reader that picks up the written-word split', () => {
+    const planted = `${SOURCE}\nconst newReader = (text: string) => tokenise(text)[0];\n`;
+    expect(tokeniseCallers(planted).filter((caller) => !(caller in TOKENISE_CALLERS))).toEqual([
+      'newReader',
     ]);
   });
 });

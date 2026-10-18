@@ -20,7 +20,10 @@
  *     never escape a ban; the whole-line glob is kept alongside it so the token rule can only ever
  *     *add* coverage. argv[0] is normalised first: leading `VAR=value` assignments and the
  *     wrappers `env`/`exec`/`xargs`/`nice`/shell keywords are peeled off and the binary is
- *     compared by basename, so `FOO=1 /usr/bin/sudo reboot` is a `sudo` command.
+ *     compared by basename, so `FOO=1 /usr/bin/sudo reboot` is a `sudo` command. The tokens are
+ *     read twice (WP-198, `argvForms`): as written, and as argv — the parser's words with every
+ *     redirection removed and the quotes taken off — so `2>/dev/null sudo id` is a `sudo` command
+ *     too; a match on either is a match.
  *  3. **The allow- and ask-lists stay prefix-anchored globs, and peel far less.** Only the
  *     block-list is generous — being generous with `allow` is how a policy becomes decoration.
  *     `env`-style wrappers are peeled for them; a leading `VAR=value`, `sh -c`, `eval` and `xargs`
@@ -255,9 +258,19 @@ export const UNCERTAINTY = {
 export const xargsCompletesBlockEntry = (entry: string) =>
   `xargs handing the words it reads from its input to a command that the block-list entry "${entry}" names, whose remaining words the input could supply — write the command and its arguments on the line; the platform cannot tell whether the input completes a command no run may execute` as const;
 
+/**
+ * WP-198 (backlog 584): the block entry a line matches only when a word after an option written
+ * with no `=` is that option's value (`gh -R o/r release create v1` against `gh release *`). The
+ * platform does not know which options take a value, so the honest verdict is uncertain, as for
+ * {@link xargsCompletesBlockEntry} (`blockEntryBehindFlagValue`).
+ */
+export const flagValueHidesBlockEntry = (entry: string) =>
+  `a word after an option written with no "=", which, read as that option's value, leaves a command that the block-list entry "${entry}" names — write the option as --option=value; the platform does not know which options take a value` as const;
+
 export type UncertaintyReason =
   | (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY]
-  | ReturnType<typeof xargsCompletesBlockEntry>;
+  | ReturnType<typeof xargsCompletesBlockEntry>
+  | ReturnType<typeof flagValueHidesBlockEntry>;
 
 /**
  * product/19 §3, "Block (all stages)". These are the entries the organisation maximum starts from
@@ -1812,6 +1825,24 @@ const globToRegExp = (glob: string): RegExp =>
   );
 
 /**
+ * `globToRegExp` for a policy entry's own words (a block entry, a floor's glob), compiled once.
+ * Its keys are the policy's patterns, never command text — every caller passes a pattern word —
+ * so it stays module-level (review round 2); bounded anyway.
+ */
+const GLOB_CACHE = new Map<string, RegExp>();
+const cachedGlob = (glob: string): RegExp => {
+  let compiled = GLOB_CACHE.get(glob);
+  if (compiled === undefined) {
+    if (GLOB_CACHE.size >= 4_096) {
+      GLOB_CACHE.clear();
+    }
+    compiled = globToRegExp(glob);
+    GLOB_CACHE.set(glob, compiled);
+  }
+  return compiled;
+};
+
+/**
  * Glob matching over a whole command line: `*` matches any run of characters, `?` matches one.
  * Anchored at both ends — a pattern is a command, not a substring. This is what the allow- and
  * ask-lists use, and it remains one half of block matching.
@@ -2147,9 +2178,23 @@ const runnerSubcommandAt = (
   return null;
 };
 
-/** A wrapper at `index` of `words`: a wrapper token, or a package runner in its exec form. */
+/**
+ * A written word that is a redirection (`2>/dev/null`, `>`, `<in`): the parser's operators
+ * (`REDIRECTION_OPERATOR`) after an optional descriptor. The peel steps past it as past a wrapper
+ * (WP-198 review round 1), so the written reading of `2>/dev/null sudo 2>&1` still has a
+ * candidate at `sudo` — the argv reading has `sudo` alone, which `sudo *` does not match.
+ */
+const isRedirectionWord = (token: string): boolean =>
+  REDIRECTION_OPERATOR.test(token.replace(/^(?:\d+|\{[A-Za-z_][A-Za-z0-9_]*\})/, ''));
+
+/**
+ * A wrapper at `index` of `words`: a wrapper token, a redirection word, or a package runner in its
+ * exec form.
+ */
 const isWrapperAt = (words: readonly string[], index: number): boolean =>
-  isWrapperToken(words[index] as string) || runnerSubcommandAt(words, index) !== null;
+  isWrapperToken(words[index] as string) ||
+  isRedirectionWord(words[index] as string) ||
+  runnerSubcommandAt(words, index) !== null;
 
 /** The name a token would run under: quoting off, then the last path segment. */
 const argv0Name = (token: string): string => basename(unquoteToken(token));
@@ -2208,10 +2253,86 @@ const ENVIRONMENT_WRAPPERS: ReadonlySet<string> = new Set([
   'busybox',
 ]);
 
+/**
+ * The written words: the line split on blanks, a redirection a word and a quote part of one. Its
+ * callers are a census (`command-policy.test.ts`, WP-198 (d)): the pattern side, the allow and
+ * ask side, and the written half of {@link argvForms}.
+ */
 const tokenise = (text: string): readonly string[] =>
   normaliseCommand(text)
     .split(' ')
     .filter((token) => token.length > 0);
+
+/**
+ * A stage's words before the shell takes its quotes off: split by `shellWords` (quotes honoured),
+ * every redirection removed with its target, attached (`2>/dev/null`) or apart (`2> /dev/null`,
+ * `> out`, `<<< w`, a here-document opener), read off `ShellWord.redirect`. `commandNameWords`
+ * reads these, because whether the shell expands a name is a question about its quoting.
+ */
+const argvShellWords = (text: string): readonly string[] =>
+  shellWords(joinQuotedContinuations(text))
+    .filter((word) => word.redirect === undefined)
+    .map((word) => word.raw);
+
+/**
+ * A stage's words **as the shell hands them to the program** (WP-198, backlog 582):
+ * {@link argvShellWords}, each dequoted (`unquoteToken`). A redirection stands anywhere in a
+ * simple command and is not in argv, so `2>/dev/null sudo id` runs `sudo` with `id`, and
+ * `gh >out release create` runs `gh release create`. Exported for its own test.
+ */
+export const argvWords = (text: string): readonly string[] =>
+  argvShellWords(text).map(unquoteToken);
+
+/**
+ * The two readings every deny-direction reader judges (WP-198 (c)): the written words it judged
+ * before (`tokenise`) **and** the argv words (`argvWords`); a match on either is a match. A union
+ * and not a replacement, because removing a redirection loosens one corner — `A=1 sudo >x`
+ * matches `sudo *` on the written words only — and the union is the side that only tightens. The
+ * allow and ask lists read the written line alone: there a removed redirection would widen
+ * (`ls >out` read as `ls`).
+ */
+/**
+ * The memo of one evaluation (review round 2): `argvForms` and `blockCandidates` are asked for the
+ * same text by every reader of a stage, so one evaluation reads each text once — and no text
+ * outlives the evaluation. A module-level cache keyed by model-written text retained hundreds of
+ * megabytes in the runner process (measured, 4 KB and 20 KB lines). Set by
+ * {@link withCommandMemo} for the length of one call; outside one, nothing is memoised.
+ */
+interface CommandMemo {
+  readonly forms: Map<string, readonly (readonly string[])[]>;
+  readonly candidates: Map<string, readonly (readonly string[])[]>;
+}
+let activeMemo: CommandMemo | undefined;
+
+/**
+ * Runs `evaluate` with a memo that is dropped when it returns; a call inside another shares the
+ * outer one. `evaluateCommand` and `decideUnattendedCommand` run in one each.
+ */
+export const withCommandMemo = <T>(evaluate: () => T): T => {
+  if (activeMemo !== undefined) {
+    return evaluate();
+  }
+  activeMemo = { forms: new Map(), candidates: new Map() };
+  try {
+    return evaluate();
+  } finally {
+    activeMemo = undefined;
+  }
+};
+
+/** How many texts a memo holds right now — none between calls (a probe for the test). */
+export const memoisedCommandTexts = (): number =>
+  activeMemo === undefined ? 0 : activeMemo.forms.size + activeMemo.candidates.size;
+
+const argvForms = (text: string): readonly (readonly string[])[] => {
+  const cached = activeMemo?.forms.get(text);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const forms = [tokenise(text), argvWords(text)];
+  activeMemo?.forms.set(text, forms);
+  return forms;
+};
 
 /**
  * How much of a line the peel and the nesting walk read: eight wrappers or assignments in front of
@@ -2315,12 +2436,28 @@ const stripEnvironmentPrefix = (text: string): readonly string[] => {
  * basename, plus — when it starts with a wrapper or an assignment — every suffix after it, because
  * a wrapper's own flags and their values (`nice -n 5 sudo id`) sit between the two commands. How
  * far that goes is `walkCommandStarts`'s, and past its bound the line is uncertain (WP-161 (d)).
+ * Every caller reads it over both of `argvForms`' readings (WP-198), so a redirection in front of
+ * the command (`2>/dev/null sudo id`) is not argv[0].
  */
 const argv0Candidates = (tokens: readonly string[]): readonly (readonly string[])[] => {
   const withBasename = (list: readonly string[]): readonly string[] =>
     list.length === 0 ? list : [argv0Name(list[0] as string), ...list.slice(1)];
 
   return argvStarts(tokens).starts.map((start) => withBasename(tokens.slice(start)));
+};
+
+/**
+ * `argv0Candidates` over both of `argvForms`' readings, read once per text within one evaluation
+ * (`CommandMemo`; review round 1: the block matcher asked for them once per entry).
+ */
+const blockCandidates = (text: string): readonly (readonly string[])[] => {
+  const cached = activeMemo?.candidates.get(text);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const candidates = argvForms(text).flatMap(argv0Candidates);
+  activeMemo?.candidates.set(text, candidates);
+  return candidates;
 };
 
 // ── block matching (token-aware, plus the whole-line glob) ───────────────────
@@ -2367,20 +2504,143 @@ const tokensMatch = (
     return false;
   }
   for (const [index, token] of pattern.positional.entries()) {
-    if (!globToRegExp(token).test(command.positional[index] as string)) {
+    if (!cachedGlob(token).test(command.positional[index] as string)) {
       return false;
     }
   }
-  return pattern.flags.every((flag) =>
-    command.flags.some((token) => globToRegExp(flag).test(token)),
-  );
+  return pattern.flags.every((flag) => command.flags.some((token) => cachedGlob(flag).test(token)));
+};
+
+/**
+ * For each positional `splitFlags` returns from `tokens`, whether it may be the value of the
+ * option written just before it with no `=` (WP-198, backlog 584): `gh -R o/r release create`
+ * runs `gh release create` with `-R`'s value `o/r`. The block matcher does not know which option
+ * takes a value, so such a word is read both ways. Nothing after a bare `--` is a value.
+ */
+const flagValuePositions = (tokens: readonly string[]): readonly boolean[] => {
+  const values: boolean[] = [];
+  let literal = false;
+  let afterOption = false;
+  for (const written of tokens) {
+    const token = unquoteToken(written);
+    if (!literal && token === '--') {
+      literal = true;
+      afterOption = false;
+    } else if (!literal && isFlagToken(token)) {
+      afterOption = !token.includes('=');
+    } else {
+      values.push(afterOption);
+      afterOption = false;
+    }
+  }
+  return values;
+};
+
+/**
+ * Where `written` (each word globbed by `pattern`'s word at the same place) can end in `pattern`,
+ * any word `value` marks left out: the index past the last pattern word used, for every way the
+ * written words fit as a prefix of `pattern`. Empty when they fit no way.
+ */
+const prefixEnds = (
+  pattern: readonly string[],
+  written: readonly string[],
+  value: readonly boolean[],
+): readonly number[] => {
+  // A walk over the written words keeping the **set** of pattern positions reachable so far, so
+  // each (word, position) pair is visited once: O(words × positions), never the branching search
+  // (WP-198 review round 1 — a long line of `-a word` pairs stalled the hook for seconds).
+  let reachable = new Set([0]);
+  for (const [at, word] of written.entries()) {
+    const next = new Set<number>();
+    for (const used of reachable) {
+      if (value[at] === true) {
+        next.add(used);
+      }
+      const glob = pattern[used];
+      if (glob !== undefined && cachedGlob(glob).test(word)) {
+        next.add(used + 1);
+      }
+    }
+    reachable = next;
+  }
+  return [...reachable];
+};
+
+/**
+ * Whether `pattern`'s positionals match a prefix of `command`'s, any of `command`'s words `value`
+ * marks left out (a word that may be an option's value) — the block matcher's positional rule,
+ * read with every option's arity unknown.
+ */
+const matchesSkippingValues = (
+  pattern: readonly string[],
+  command: readonly string[],
+  value: readonly boolean[],
+): boolean => {
+  // The same set walk as `prefixEnds`: the pattern matches once its last position is reachable.
+  let reachable = new Set([0]);
+  for (const [at, word] of command.entries()) {
+    if (reachable.has(pattern.length)) {
+      return true;
+    }
+    const next = new Set<number>();
+    for (const used of reachable) {
+      if (value[at] === true) {
+        next.add(used);
+      }
+      const glob = pattern[used];
+      if (glob !== undefined && cachedGlob(glob).test(word)) {
+        next.add(used + 1);
+      }
+    }
+    reachable = next;
+  }
+  return reachable.has(pattern.length);
+};
+
+/**
+ * The block entry this piece of command line matches only when a word after an option written
+ * with no `=` is read as that option's value (WP-198, backlog 584): `gh -R o/r release create v1`
+ * against `gh release *`, `git -C d branch -D x` against `git branch -D *`. Which options take a
+ * value is a fact about each program the matcher does not know, so the line is **uncertain**
+ * (`flagValueHidesBlockEntry`), not blocked — the closed rule 584 names. Read on both of
+ * `argvForms`' readings. **The over-ask, stated:** a word after an option that takes none, where
+ * leaving it out completes an entry (`rm -rf build /tmp/x` against `rm -rf /*`).
+ */
+const blockEntryBehindFlagValue = (
+  fragment: string,
+  block: readonly string[],
+): string | undefined => {
+  const candidates = blockCandidates(fragment);
+  return block.find((entry) => {
+    const pattern = splitFlags(tokenise(entry));
+    // Only a command named by the entry's first word can match it (review round 1: the search is
+    // not run for every other command).
+    const first = pattern.positional[0];
+    const named = candidates.filter(
+      ([name]) => first !== undefined && name !== undefined && cachedGlob(first).test(name),
+    );
+    if (named.length === 0 || matchesBlockPattern(entry, fragment)) {
+      return false;
+    }
+    return named.some((candidate) => {
+      const command = splitFlags(candidate);
+      return (
+        pattern.flags.every((flag) =>
+          command.flags.some((token) => cachedGlob(flag).test(token)),
+        ) &&
+        matchesSkippingValues(pattern.positional, command.positional, flagValuePositions(candidate))
+      );
+    });
+  });
 };
 
 /**
  * Does a block pattern match this command?
  *
  * Either the tokens match — the pattern's flags anywhere, its positionals as a prefix of the
- * command's, after argv[0] normalisation — or the whole line matches the pattern as a glob. The
+ * command's, after argv[0] normalisation, in either of `argvForms`' readings (WP-198: the written
+ * words, or argv with the redirections out, so `gh >out release create` is `gh release create`) —
+ * or the whole line matches the pattern as a glob. The
  * glob half is kept so the token rule can only add coverage, never remove it: `curl * | sh` must
  * still catch `curl -o out https://example.invalid | sh`.
  */
@@ -2392,9 +2652,7 @@ export const matchesBlockPattern = (pattern: string, command: string): boolean =
   if (matchesCommandPattern(pattern, command)) {
     return true;
   }
-  return argv0Candidates(tokenise(command)).some((candidate) =>
-    tokensMatch(patternTokens, candidate),
-  );
+  return blockCandidates(command).some((candidate) => tokensMatch(patternTokens, candidate));
 };
 
 /**
@@ -2407,7 +2665,7 @@ export const carriesHazard =
   (entry: HazardousArgument): boolean =>
     entry.tokens === undefined
       ? matchesBlockPattern(entry.pattern, command)
-      : argv0Candidates(tokenise(command)).some((candidate) => {
+      : blockCandidates(command).some((candidate) => {
           const [name, ...rest] = candidate;
           if (name === undefined) {
             return false;
@@ -2464,7 +2722,7 @@ const xargsBannedEntry = (text: string, block: readonly string[]): string | unde
   for (const [run] of xargsCommandWords(text)) {
     const name = argv0Name(run as string);
     const entry = block.find((pattern) =>
-      binaryBans([pattern]).some((ban) => globToRegExp(ban).test(name)),
+      binaryBans([pattern]).some((ban) => cachedGlob(ban).test(name)),
     );
     if (entry !== undefined) {
       return entry;
@@ -2476,20 +2734,22 @@ const xargsBannedEntry = (text: string, block: readonly string[]): string | unde
 /**
  * For each `xargs` at a command start in this piece of command line, the words written for the
  * command it runs: its command word (after xargs' own options, `readXargsOptions`) and every word
- * after it. Never empty.
+ * after it. Never empty. Read in both of `argvForms`' readings (WP-198), so a redirection between
+ * `xargs` and its command (`xargs 2>/dev/null sudo`) is not taken for the command word.
  */
-const xargsCommandWords = (text: string): readonly (readonly string[])[] => {
-  const tokens = tokenise(text);
-  return argvStarts(tokens).starts.flatMap((start) => {
-    const word = tokens[start];
-    if (word === undefined || argv0Name(word) !== 'xargs') {
-      return [];
-    }
-    const args = tokens.slice(start + 1);
-    const at = readXargsOptions(args.map((raw): ShellWord => ({ raw }))).command;
-    return at === null || at < 0 || at >= args.length ? [] : [args.slice(at)];
-  });
-};
+const xargsCommandWords = (text: string): readonly (readonly string[])[] =>
+  // Both readings (WP-198): `xargs 2>/dev/null sudo` runs `sudo`, not a command named `2>/dev/null`.
+  argvForms(text).flatMap((tokens) =>
+    argvStarts(tokens).starts.flatMap((start) => {
+      const word = tokens[start];
+      if (word === undefined || argv0Name(word) !== 'xargs') {
+        return [];
+      }
+      const args = tokens.slice(start + 1);
+      const at = readXargsOptions(args.map((raw): ShellWord => ({ raw }))).command;
+      return at === null || at < 0 || at >= args.length ? [] : [args.slice(at)];
+    }),
+  );
 
 /** A word that ends the words written for a command: a redirection or a control operator. */
 const ENDS_WRITTEN_WORDS = /[<>|&;]/;
@@ -2504,7 +2764,9 @@ const ENDS_WRITTEN_WORDS = /[<>|&;]/;
  * (`splitFlags`, `tokensMatch`: flags anywhere, positionals in order through `globToRegExp`), and an
  * entry the input could complete is one with a positional left over, or with every positional
  * matched and a flag still missing (review round 3: `xargs terraform -chdir=x`, `xargs rm -f`). The words stop at the first
- * redirection or operator, which only shortens the prefix (the closed side). **The over-ask,
+ * redirection or operator, which only shortens the prefix (the closed side); the argv reading
+ * (WP-198) has no redirection left in it, so `xargs gh 2>/dev/null release` is also read whole. A
+ * word after an option written with no `=` may be left out (WP-198, backlog 584). **The over-ask,
  * stated:** `echo 'issue view' | xargs gh`, `echo plan | xargs terraform`, `find . | xargs rm -rf`
  * and `xargs curl x` (against `curl * | sh`) — some completions match and the platform cannot say
  * which arrives; `cat ids | xargs gh issue view` is a prefix of no entry and is not touched.
@@ -2518,16 +2780,17 @@ const xargsBlockPrefix = (text: string, block: readonly string[]): string | unde
     }
     // Read as the block matcher reads a line (`tokensMatch`): flags anywhere, positionals as a
     // prefix (review round 3 — `xargs terraform -chdir=x` completes to a blocked line).
+    // A word after an option written with no `=` may be its value, so it may be left out of the
+    // prefix (WP-198, backlog 584: `xargs gh -R o/r release`).
+    const value = flagValuePositions([argv0Name(name), ...rest]);
     const written = splitFlags([argv0Name(name), ...rest]);
     const entry = block.find((pattern) => {
       const { flags, positional } = splitFlags(tokenise(pattern));
-      return (
-        written.positional.length <= positional.length &&
-        written.positional.every((word, index) =>
-          globToRegExp(positional[index] as string).test(word),
-        ) &&
-        (written.positional.length < positional.length ||
-          flags.some((flag) => !written.flags.some((token) => globToRegExp(flag).test(token))))
+      const flagMissing = flags.some(
+        (flag) => !written.flags.some((token) => cachedGlob(flag).test(token)),
+      );
+      return prefixEnds(positional, written.positional, value).some(
+        (used) => used < positional.length || flagMissing,
       );
     });
     if (entry !== undefined) {
@@ -3327,18 +3590,19 @@ const feedsScriptReader = (segment: string): boolean => {
     text
       .split(/[\s|&;()<>]+/)
       .some((word) => word.length > 0 && HERE_DOCUMENT_SCRIPT_READERS.has(argv0Name(word))) ||
-    scan(text, PIPE_OPERATORS).segments.some((stage) => {
-      const tokens = tokenise(stage);
-      const head = tokens.find((token) => !isAssignment(token));
-      if (head !== undefined && (argv0Name(head) === '[' || argv0Name(head) === '[[')) {
-        return false;
-      }
-      return argv0Candidates(tokens).some(
-        ([name]) =>
-          name === '.' ||
-          (name !== undefined && /[*?[{]/.test(name) && !isWrapperToken(name) && name !== '['),
-      );
-    })
+    scan(text, PIPE_OPERATORS).segments.some((stage) =>
+      argvForms(stage).some((tokens) => {
+        const head = tokens.find((token) => !isAssignment(token));
+        if (head !== undefined && (argv0Name(head) === '[' || argv0Name(head) === '[[')) {
+          return false;
+        }
+        return argv0Candidates(tokens).some(
+          ([name]) =>
+            name === '.' ||
+            (name !== undefined && /[*?[{]/.test(name) && !isWrapperToken(name) && name !== '['),
+        );
+      }),
+    )
   );
 };
 
@@ -3796,7 +4060,8 @@ interface ShellWord {
   readonly redirect?: { readonly operator: string; readonly fd: string };
 }
 
-const REDIRECTION_OPERATOR = /^(?:<<<|<<-|<<|<>|<&|>&|>>|>\||&>>|&>|<|>)/;
+/** The shell's redirection operators, longest first; `computesCommandName` reads them too. */
+export const REDIRECTION_OPERATOR = /^(?:<<<|<<-|<<|<>|<&|>&|>>|>\||&>>|&>|<|>)/;
 
 /** Index one past the `}` closing the `${` whose `{` is at `open`, or the text's end. */
 const closingBraceEnd = (text: string, open: number): number => {
@@ -4226,8 +4491,9 @@ const expandsOnlyToAShell = (word: string): boolean => {
 
 /** Does this stage run a command whose name — or a wrapper's — the shell expands (WP-161 (f))? */
 const expandsCommandName = (stage: string): boolean =>
-  commandNameWords(tokenise(stage)).some(
-    (word) => expandsAsName(word) && !expandsOnlyToAShell(word),
+  // The written words and the words left once the redirections are out (WP-198), quotes kept.
+  [tokenise(stage), argvShellWords(stage)].some((words) =>
+    commandNameWords(words).some((word) => expandsAsName(word) && !expandsOnlyToAShell(word)),
   );
 
 /** A script a stage hands over, and the string an enclosing `find -exec`/`xargs -I` replaces in it. */
@@ -4955,9 +5221,25 @@ const storesCommand = (stage: string): boolean => {
  * the argv[0] basename normalisation of rule 2, applied to a pipeline stage instead of to a line,
  * so the document's single spelling covers every spelling of the same thing.
  */
+/**
+ * Whether a stage is an `exec` that moves standard input for the rest of its level (`exec <in`,
+ * `exec 2>&1 <<<'…'`): its first argv word past any assignment is `exec`, and one of its
+ * redirections reads (`ShellWord.redirect`, an operator starting `<`).
+ */
+const movesStandardInput = (stage: string): boolean => {
+  const head = argvWords(stage).find((word) => !isAssignment(word));
+  return (
+    head !== undefined &&
+    argv0Name(head) === 'exec' &&
+    shellWords(stage).some((word) => word.redirect?.operator.startsWith('<') === true)
+  );
+};
+
 const canonicalShellStage = (stage: string): string =>
-  // A pipeline stage always carries at least one token: `scan` drops the empty ones.
-  SCRIPT_SHELLS.has(argv0Name(tokenise(stage)[0] as string)) ? 'sh' : stage;
+  // Either reading's first word (WP-198): `| 2>/dev/null bash` is a shell reading the pipe.
+  argvForms(stage).some((words) => words[0] !== undefined && SCRIPT_SHELLS.has(argv0Name(words[0])))
+    ? 'sh'
+    : stage;
 
 interface Parsed {
   readonly fragments: readonly string[];
@@ -5027,10 +5309,15 @@ const parseCommand = (
   // `fed`: this level's standard input is itself a pipe — a `>(…)` body, `coproc`'s command, or a
   // script handed over by a stage that a pipe feeds (`echo … | bash -c 'bash'`) — and `exec <…`
   // moves it for the rest of the level.
+  // The `exec` stage is also read off the parser's words (WP-198 (d)): the pattern stops at the
+  // `&` of `2>&1`, so `exec 2>&1 <<<'…'; bash` read `unattended_auto`.
   const piped =
     fed ||
     scan(command, PIPE_OPERATORS).segments.length > 1 ||
-    /(?:^|[\s;&|(){}])exec\b[^\n;&|]*</.test(joinContinuations(command));
+    /(?:^|[\s;&|(){}])exec\b[^\n;&|]*</.test(joinContinuations(command)) ||
+    outer.segments.some((segment) =>
+      scan(segment, PIPE_OPERATORS).segments.some(movesStandardInput),
+    );
   for (const [segmentIndex, segment] of outer.segments.entries()) {
     fragments.push(segment);
     const pipeline = scan(segment, PIPE_OPERATORS);
@@ -5040,7 +5327,7 @@ const parseCommand = (
       }
       // WP-161 (d) and (f): the peel the block list reads stopped at its bound, or the command's
       // name — or a wrapper's — is one the shell expands.
-      if (argvStarts(tokenise(stage)).tooDeep) {
+      if (argvForms(stage).some((words) => argvStarts(words).tooDeep)) {
         uncertainty.add(UNCERTAINTY.tooDeep);
       }
       if (expandsCommandName(stage)) {
@@ -5209,19 +5496,22 @@ export const commandWriteTargets = (command: string): readonly string[] =>
 
 /**
  * One fragment's words as the program receives them: split as `tokenise` splits, each word's
- * quoting and escaping taken off (`unquoteToken`). The unattended git boundary reads these.
+ * quoting and escaping taken off (`unquoteToken`), followed by the argv words (WP-198,
+ * `argvForms`) — so a word the blank split cuts inside its quotes is there whole as well. The
+ * unattended git boundary reads these, for an assignment anywhere among them.
  */
 export const commandWords = (fragment: string): readonly string[] =>
-  tokenise(fragment).map(unquoteToken);
+  argvForms(fragment).flat().map(unquoteToken);
 
 /**
  * The argv lists one fragment could really run as — the **block** list's generous reading (rule 2):
  * every leading wrapper and assignment peeled in turn, argv[0] reduced to its basename, every word
- * dequoted. The unattended git boundary judges each, so `env git push …`, `nice -n 5 git push …` and
- * `GIT_TRACE=1 git push …` are all a `git push`.
+ * dequoted, in both of `argvForms`' readings (WP-198). The unattended git boundary judges each, so
+ * `env git push …`, `nice -n 5 git push …`, `GIT_TRACE=1 git push …` and `2>/dev/null git push …`
+ * are all a `git push`.
  */
 export const commandArgvCandidates = (fragment: string): readonly (readonly string[])[] =>
-  argv0Candidates(tokenise(fragment))
+  blockCandidates(fragment)
     .filter((candidate) => candidate.length > 0)
     .map(([name, ...rest]) => [name as string, ...rest.map(unquoteToken)]);
 
@@ -5325,6 +5615,12 @@ export const evaluateCommand = (
   request: CommandRequest,
   policy: ResolvedCommandPolicy = DEFAULT_COMMAND_POLICY,
   fallback: CommandFallback = 'ask',
+): CommandEvaluation => withCommandMemo(() => evaluateOnce(request, policy, fallback));
+
+const evaluateOnce = (
+  request: CommandRequest,
+  policy: ResolvedCommandPolicy,
+  fallback: CommandFallback,
 ): CommandEvaluation => {
   if ((fallback as CommandVerdict) === 'allow') {
     throw new PolicyViolationError(
@@ -5333,14 +5629,19 @@ export const evaluateCommand = (
     );
   }
   const parsed = parseCommand(request.command);
-  // The scanner's reasons, and one the policy adds: the block entry an `xargs` could complete
-  // from its input (WP-197) — the only reason that needs the block list, a project's included.
+  // The scanner's reasons, and two the policy adds: the block entry an `xargs` could complete
+  // from its input (WP-197), and the one a line matches only when a word is read as an option's
+  // value (WP-198) — the only reasons that need the block list, a project's included.
   const uncertainty: readonly UncertaintyReason[] = [
     ...new Set([
       ...parsed.uncertainty,
       ...parsed.fragments.flatMap((fragment) => {
         const entry = xargsBlockPrefix(fragment, policy.block);
         return entry === undefined ? [] : [xargsCompletesBlockEntry(entry)];
+      }),
+      ...parsed.fragments.flatMap((fragment) => {
+        const entry = blockEntryBehindFlagValue(fragment, policy.block);
+        return entry === undefined ? [] : [flagValueHidesBlockEntry(entry)];
       }),
     ]),
   ];
@@ -5385,9 +5686,11 @@ export const evaluateCommand = (
 
   const candidates: string[] = [line, ...parsed.fragments];
   if (request.resolvedBinary !== undefined) {
-    // argv[0] replaced by what it really resolves to, so `tf apply` is judged as `terraform apply`.
-    const tokens = tokenise(line);
-    candidates.push([basename(request.resolvedBinary), ...tokens.slice(1)].join(' '));
+    // argv[0] replaced by what it really resolves to, so `tf apply` is judged as `terraform apply`
+    // — in both readings (WP-198), so a leading `2>/dev/null` is not the word replaced.
+    for (const tokens of argvForms(line)) {
+      candidates.push([basename(request.resolvedBinary), ...tokens.slice(1)].join(' '));
+    }
   }
 
   // The whole command is evaluated with no fallback: only an explicit match may speak for it,

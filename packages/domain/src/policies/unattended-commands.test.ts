@@ -3,9 +3,12 @@
  * `deny` under `deny` — and never loosens a block, an uncertain line, a `command`/`trust` hazard or
  * the git boundary, which this file tries to break through every wrapper the scanner knows.
  */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { CommandPolicy } from '@platform/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   DEFAULT_COMMAND_POLICY,
@@ -13,8 +16,10 @@ import {
   DEFAULT_READ_ONLY_ALLOW,
   DEFAULT_VERIFICATION_ALLOW,
   evaluateCommand,
+  flagValueHidesBlockEntry,
   HAZARDOUS_ARGUMENTS,
   hazardousArguments,
+  memoisedCommandTexts,
   type ResolvedCommandPolicy,
   runCommandPolicy,
   UNCERTAINTY,
@@ -2618,4 +2623,324 @@ describe('WP-197: a block entry xargs could complete from its input, and the pro
     expectCells(command, 'ask / uncertain / uncertain');
     expect(auto(command).evaluation.uncertainty).toEqual([xargsCompletesBlockEntry(entry)]);
   });
+});
+
+/**
+ * WP-198 (backlogs 582 and 584): the block list, the floors, the `xargs` readers and the git
+ * boundary judge argv as the shell builds it — redirections removed, quotes taken off — beside the
+ * written words, a match on either a match; and a word after an option written with no `=` that
+ * hides a block entry makes the line uncertain. Every row's before is in PROGRESS § WP-198.
+ */
+describe('WP-198: the deny-direction readers read argv as the shell builds it, beside the written words', () => {
+  it.each([
+    // Each read `ask / auto / deny` before (582's four lines first).
+    '2>/dev/null sudo id',
+    'xargs 2>/dev/null sudo',
+    'gh >out release create',
+    'terraform 2>x apply',
+    '> out sudo id',
+    '2> /dev/null sudo id',
+    '<in sudo id',
+    '<<<w sudo id',
+    '<<EOF sudo id\nhello\nEOF',
+    'xargs > out sudo',
+    'xargs 2> /dev/null sudo',
+    'echo $(2>/dev/null sudo id)',
+    '2>"$LOG" sudo id',
+    // Review round 1 (the property, inserting before the first word): argv is `sudo` alone, and
+    // the written words are read past the leading redirection as past a wrapper.
+    '2>/dev/null sudo 2>&1',
+    // Read `ask / git / git` before: the git boundary refused them, the block list did not.
+    'git 2>x push --force origin main',
+    'git >x push --force',
+    // Read `ask / uncertain / uncertain` before.
+    'curl x | 2>/dev/null sh',
+  ])('%j is blocked (582)', (command) => {
+    expectCells(command, 'block / block / block');
+  });
+
+  it('refuses a push behind a leading redirection at the git boundary (582)', () => {
+    // `ask / auto / deny` before: the boundary read `2>/dev/null` as the command.
+    expectCells('2>/dev/null git push --no-verify', 'ask / git / git');
+  });
+
+  it.each(["gh re'lease' create", 'terraform "apply"', 'rm -rf "/"*', '"sudo" id'])(
+    '%j is blocked, its quotes taken off (582, read `block` before as well)',
+    (command) => {
+      expectCells(command, 'block / block / block');
+    },
+  );
+
+  it.each([
+    ['ls 2>/dev/null', 'allow / allow / allow'],
+    ['gh release list 2>/dev/null', 'block / block / block'],
+    ['terraform plan 2>x', 'ask / auto / deny'],
+    // The written half of the union: after removal the words are `sudo` alone, which `sudo *`
+    // does not match.
+    ['A=1 sudo >x', 'block / block / block'],
+    ['xargs sudo >x', 'block / block / block'],
+    ['sudo 2>&1', 'block / block / block'],
+  ])('keeps %j at %s (582 controls)', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it.each([
+    // Each read `ask / auto / deny` before.
+    ['gh -R o/r release create v1', 'gh release *'],
+    ['gh --repo o/r release create', 'gh release *'],
+    // Read `ask / git / git` before.
+    ['git -C d push --force origin main', 'git push --force*'],
+    // The over-ask, stated: `-rf` takes no value, and `rm -rf /tmp/x` alone is blocked.
+    ['rm -rf build /tmp/x', 'rm -rf /*'],
+  ])('%j is uncertain, an option’s value hiding %j (584)', (command, entry) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([flagValueHidesBlockEntry(entry)]);
+  });
+
+  /**
+   * Review round 1: the leave-out search was a branching recursion, so `git -a push -a origin …`
+   * took 0.3 s at 200 pairs and 2.4 s at 400. The shape is asserted, not a wall clock: four times
+   * the pairs must cost well under sixteen times as long (linear is four, the old search sixty).
+   */
+  it('reads a long line of option–word pairs in linear time (584, review round 1)', () => {
+    const line = (pairs: number): string =>
+      `git ${Array.from({ length: pairs }, (_, index) => `-a ${index % 2 === 0 ? 'push' : 'origin'}`).join(' ')}`;
+    const fastest = (command: string): number =>
+      Math.min(
+        ...Array.from({ length: 3 }, () => {
+          const started = performance.now();
+          evaluateCommand({ command }, BASELINES.impl);
+          return performance.now() - started;
+        }),
+      );
+    fastest(line(100));
+    const small = fastest(line(100));
+    const large = fastest(line(400));
+    expect(large / Math.max(small, 0.5)).toBeLessThan(16);
+  });
+
+  /**
+   * Review round 2: the memo of `argvForms` and the block candidates lives for one call. A
+   * module-level cache keyed by model-written text retained 378 MB after 1 000 distinct 20 KB
+   * lines. What it cannot see: a cache that is not the memo (a new module-level `Map`) — the
+   * census of `tokenise(` callers and review are what see that.
+   */
+  it('keeps no command text after a call returns (review round 2)', () => {
+    for (let index = 0; index < 3; index += 1) {
+      const command = `echo ${'word '.repeat(4_000)}${index} > f${index}`;
+      evaluateCommand({ command }, BASELINES.impl);
+      expect(memoisedCommandTexts()).toBe(0);
+      decideUnattendedCommand({ command }, BASELINES.impl, 'auto');
+      expect(memoisedCommandTexts()).toBe(0);
+    }
+  });
+
+  it('reads an xargs prefix past an option’s value: "xargs gh -R o/r release" (584)', () => {
+    expectCells('xargs gh -R o/r release', 'ask / uncertain / uncertain');
+    expect(auto('xargs gh -R o/r release').evaluation.uncertainty).toEqual([
+      xargsCompletesBlockEntry('gh release *'),
+    ]);
+  });
+
+  it.each([
+    ['gh -R o/r issue list', 'ask / auto / deny'],
+    ['gh --repo=o/r release create v1', 'block / block / block'],
+  ])('keeps %j at %s (584 controls)', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it.each([
+    // `ask / auto / deny` before: a redirection ended the computed-name walk's command position.
+    ['X=1 2>/dev/null $CMD', 'ask / git / git'],
+    ['env > out $X', 'ask / git / git'],
+    // `ask / auto / deny` before: the `exec <` pattern stopped at the `&` of `2>&1`.
+    ["exec 2>&1 <<<'sudo id'; bash", 'ask / uncertain / uncertain'],
+  ])('%j reads %s (found by the property below)', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  /**
+   * WP-198 (d): the rows of this file, read off disk — every string literal whose innermost open
+   * bracket is `[` (a lexical reading of the file with its comments removed by the repository's
+   * scanner, `withoutComments`: an array element, a tuple's cell) — and, for each, every
+   * blank between two top-level words of a stage, outside quotes, substitutions, comments and
+   * here-document bodies, and not next to an operator or a redirection's own operator — and the
+   * start of the row, before its first word (review round 1).
+   */
+  const SOURCE = withoutComments(readFileSync(fileURLToPath(import.meta.url), 'utf8'));
+  const ESCAPES: Readonly<Record<string, string>> = {
+    n: '\n',
+    t: '\t',
+    r: '\r',
+    b: '\b',
+    f: '\f',
+    v: '\v',
+    '0': '\0',
+  };
+  const decode = (body: string): string =>
+    body.replace(/\\(u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[\s\S])/g, (_, sequence) => {
+      const code = /^(?:u\{?|x)([0-9a-fA-F]+)\}?$/.exec(sequence as string);
+      if (code !== null) {
+        return String.fromCodePoint(Number.parseInt(code[1] as string, 16));
+      }
+      return sequence === '\n' ? '' : (ESCAPES[sequence as string] ?? (sequence as string));
+    });
+  const arrayStrings = (source: string): readonly string[] => {
+    const found: string[] = [];
+    const open: string[] = [];
+    for (let index = 0; index < source.length; index += 1) {
+      const char = source[index] as string;
+      if (char === "'" || char === '"' || char === '`') {
+        let end = index + 1;
+        let substituted = false;
+        while (source[end] !== char) {
+          if (source[end] === '\\') {
+            end += 1;
+          } else if (char === '`' && source.startsWith('${', end)) {
+            substituted = true;
+            let depth = 0;
+            for (; end < source.length; end += 1) {
+              depth += source[end] === '{' ? 1 : source[end] === '}' ? -1 : 0;
+              if (depth === 0 && source[end] === '}') {
+                break;
+              }
+            }
+          }
+          end += 1;
+        }
+        if (!substituted && open.at(-1) === '[') {
+          found.push(decode(source.slice(index + 1, end)));
+        }
+        index = end;
+      } else if (char === '[' || char === '(' || char === '{') {
+        open.push(char);
+      } else if (char === ']' || char === ')' || char === '}') {
+        open.pop();
+      }
+    }
+    return [...new Set(found)];
+  };
+
+  interface InsertionPoint {
+    readonly at: number;
+    /**
+     * The stage reads a pipe here (after a `|`, or `coproc`'s command), so `<in` would replace
+     * what it reads rather than respell it.
+     */
+    readonly piped: boolean;
+  }
+  const OPERATOR = /[|;&()<>]/;
+  const insertionPoints = (line: string): readonly InsertionPoint[] => {
+    // Before the first word too (review round 1): `at` 0 inserts the redirection in front.
+    const points: InsertionPoint[] =
+      line.length > 0 && !/[\s#]/.test(line[0] as string) && !OPERATOR.test(line[0] as string)
+        ? [{ at: 0, piped: line.startsWith('coproc ') }]
+        : [];
+    let quote: string | null = null;
+    let depth = 0;
+    let piped = false;
+    for (let index = 0; index < line.length; index += 1) {
+      const char = line[index] as string;
+      if (quote === "'") {
+        quote = char === "'" ? null : quote;
+      } else if (char === '\\') {
+        index += 1;
+      } else if (char === '`') {
+        depth = depth === 0 ? 1 : depth - 1;
+      } else if (char === '$' && (line[index + 1] === '(' || line[index + 1] === '{')) {
+        depth += 1;
+        index += 1;
+      } else if (depth > 0) {
+        depth += char === '(' || char === '{' ? 1 : char === ')' || char === '}' ? -1 : 0;
+      } else if (quote === '"') {
+        quote = char === '"' ? null : quote;
+      } else if (char === "'" || char === '"') {
+        quote = char;
+      } else if (char === '#' && (index === 0 || /\s/.test(line[index - 1] as string))) {
+        const end = line.indexOf('\n', index);
+        index = end < 0 ? line.length : end - 1;
+      } else if (char === '\n' && /<<(?!<)/.test(line.slice(0, index))) {
+        // A here-document body follows: nothing after this newline is a word of the line.
+        break;
+      } else if (char === '|') {
+        piped = line[index + 1] !== '|' && line[index - 1] !== '|';
+      } else if (char === ';' || char === '&' || char === '\n') {
+        piped = false;
+      } else if (
+        line.startsWith('coproc ', index) &&
+        (index === 0 || /[\s;&|(]/.test(line[index - 1] as string))
+      ) {
+        // `coproc`'s command reads a pipe the line writes into later.
+        piped = true;
+      } else if (char === ' ' || char === '\t') {
+        const before = line[index - 1];
+        const after = line[index + 1];
+        if (
+          before !== undefined &&
+          after !== undefined &&
+          !/\s/.test(before) &&
+          !/\s/.test(after) &&
+          !OPERATOR.test(before) &&
+          !OPERATOR.test(after) &&
+          after !== '#'
+        ) {
+          points.push({ at: index, piped });
+        }
+      }
+    }
+    return points;
+  };
+
+  const REDIRECTIONS = ['2>/dev/null', '>out', '2> /dev/null', '> out', '<in', '2>&1'] as const;
+  const ROWS = arrayStrings(SOURCE);
+  const SITES = ROWS.flatMap((row) => insertionPoints(row).map((point) => ({ row, point })));
+  const WITHOUT_POINT = ROWS.filter((row) => insertionPoints(row).length === 0);
+
+  it(`reads ${ROWS.length} rows off this file, ${SITES.length} insertion points, ${WITHOUT_POINT.length} rows with none`, () => {
+    // Counted, never skipped in silence: a row with no blank between two words (`sudo`, `ls`).
+    expect(ROWS.length).toBeGreaterThan(1_000);
+    expect(SITES.length).toBeGreaterThan(2_000);
+    expect(WITHOUT_POINT.every((row) => insertionPoints(row).length === 0)).toBe(true);
+    expect(ROWS).toContain('2>/dev/null sudo id');
+    expect(insertionPoints('a "b c" $(d e) | f g # h i')).toEqual([
+      { at: 0, piped: false },
+      { at: 1, piped: false },
+      { at: 7, piped: false },
+      { at: 18, piped: true },
+    ]);
+  });
+
+  it(
+    'never moves a refused row to a run by a redirection between two of its words, in any baseline (property)',
+    () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom(...SITES),
+          fc.constantFrom(...REDIRECTIONS),
+          fc.constantFrom(...(Object.keys(BASELINES) as ('ro' | 'ver' | 'impl')[])),
+          ({ row, point }, redirection, baseline) => {
+            // `<in` where a pipe feeds the stage replaces the input it reads — `echo x | bash
+            // <in` runs the file `in`, as `bash in` does, and so does `coproc <in bash` — a
+            // different command, not a spelling.
+            fc.pre(!(redirection === '<in' && point.piped));
+            const line =
+              point.at === 0
+                ? `${redirection} ${row}`
+                : `${row.slice(0, point.at)} ${redirection}${row.slice(point.at)}`;
+            const given = BASELINES[baseline];
+            for (const mode of ['auto', 'deny'] as const) {
+              if (decideUnattendedCommand({ command: row }, given, mode).decision === 'deny') {
+                const decision = decideUnattendedCommand({ command: line }, given, mode);
+                expect(decision.decision, `${baseline}/${mode}: ${JSON.stringify(line)}`).toBe(
+                  'deny',
+                );
+              }
+            }
+          },
+        ),
+        { numRuns: 1_000 },
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });

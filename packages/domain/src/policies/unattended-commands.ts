@@ -59,10 +59,12 @@ import {
   type HereDocumentOperator,
   hazardousArguments,
   hereDocumentsAtNewline,
+  REDIRECTION_OPERATOR,
   type ResolvedCommandPolicy,
   readHereDocumentOperator,
   readsHereDocumentsAsScripts,
   splitCommandSegments,
+  withCommandMemo,
   withoutHereDocumentBodies,
 } from './command-policy.js';
 
@@ -547,9 +549,23 @@ const namesGitInternals = (word: string): boolean => {
 };
 
 /**
+ * The redirection operator that starts at `index` of `command` (`2>` is read at its `>`), or
+ * `null`: the parser's own operators (`REDIRECTION_OPERATOR`), and never a process substitution
+ * (`<(…)`, `>(…)`), which `shellWords` reads first as well.
+ */
+const redirectionAt = (command: string, index: number): string | null => {
+  const rest = command.slice(index);
+  if (rest.startsWith('<(') || rest.startsWith('>(')) {
+    return null;
+  }
+  return REDIRECTION_OPERATOR.exec(rest)?.[0] ?? null;
+};
+
+/**
  * Whether a command's **name** is computed when it runs — `$X …`, `"$X" …`, `$(…) …`, `` `…` … `` in
- * command position, after any assignments and environment wrappers — which the policy cannot read.
- * A quote-aware walk of the raw line, separate from the scanner because the scanner lifts a
+ * command position, after any assignments, environment wrappers and redirections (WP-198: a
+ * redirection's target, attached or apart, is no command word, so `X=1 2>/dev/null $CMD` is
+ * computed) — which the policy cannot read. A quote-aware walk of the raw line, separate from the scanner because the scanner lifts a
  * substitution out of the fragment it sat in (`$(echo git) push x` reads as `push x` there).
  *
  * A here-document's body is data, not commands (WP-153): `cat > a.php <<'EOF'` followed by PHP
@@ -582,13 +598,23 @@ export const computesCommandName = (command: string): boolean => {
   let quote: '"' | "'" | null = null;
   let atCommand = true;
   let word = '';
+  // WP-198 (d): a redirection's target is no command word, written attached (`2>/dev/null $X`) or
+  // apart (`> out $X`): `pending` until its first character, `started` until it ends.
+  type Target = 'none' | 'pending' | 'started';
+  let target: Target = 'none';
   const restore: boolean[] = [];
+  const targets: Target[] = [];
   const skipsBodies = !readsHereDocumentsAsScripts(command);
   let pending: HereDocumentOperator[] = [];
   let pendingFrom = -1;
   let skipped = '';
   let skippedUpTo = 0;
   const finishWord = (): void => {
+    if (target === 'started') {
+      target = 'none';
+      word = '';
+      return;
+    }
     if (word === '') {
       return;
     }
@@ -599,6 +625,9 @@ export const computesCommandName = (command: string): boolean => {
   };
   for (let index = 0; index < command.length; index += 1) {
     const char = command[index] as string;
+    if (target === 'pending' && quote === null && !/\s/.test(char)) {
+      target = 'started';
+    }
     if (quote !== null) {
       if (char === '\\' && quote === '"') {
         word += char + (command[index + 1] ?? '');
@@ -644,8 +673,25 @@ export const computesCommandName = (command: string): boolean => {
       atCommand = true;
       continue;
     }
+    const redirection = quote === null ? redirectionAt(command, index) : null;
+    if (redirection !== null && target === 'none') {
+      // A word of digits (or `{name}`) right before the operator is its descriptor, not a word.
+      if (!/^(?:\d+|\{[A-Za-z_][A-Za-z0-9_]*\})$/.test(word)) {
+        finishWord();
+      }
+      word = '';
+      target = 'pending';
+      index += redirection.length - 1;
+      continue;
+    }
     if (char === '"' || char === "'") {
-      if (atCommand && word === '' && char === '"' && command[index + 1] === '$') {
+      if (
+        atCommand &&
+        word === '' &&
+        target === 'none' &&
+        char === '"' &&
+        command[index + 1] === '$'
+      ) {
         return true;
       }
       quote = char;
@@ -653,36 +699,43 @@ export const computesCommandName = (command: string): boolean => {
       continue;
     }
     if (char === '$' && command[index + 1] === '(') {
-      if (atCommand && word === '') {
+      if (atCommand && word === '' && target === 'none') {
         return true;
       }
       restore.push(atCommand);
+      targets.push(target);
+      target = 'none';
       atCommand = true;
       word = '';
       index += 1;
       continue;
     }
     if (char === '`') {
-      if (atCommand && word === '') {
+      if (atCommand && word === '' && target === 'none') {
         return true;
       }
       restore.push(atCommand);
+      targets.push(target);
+      target = 'none';
       atCommand = true;
       word = '';
       continue;
     }
-    if (char === '$' && atCommand && word === '') {
+    if (char === '$' && atCommand && word === '' && target === 'none') {
       return true;
     }
     if (char === '(') {
       finishWord();
       restore.push(false);
+      targets.push(target);
+      target = 'none';
       atCommand = true;
       continue;
     }
     if (char === ')' && restore.length > 0) {
       finishWord();
       atCommand = restore.pop() as boolean;
+      target = targets.pop() ?? 'none';
       continue;
     }
     if (/[;&|(){}\n]/.test(char)) {
@@ -875,6 +928,14 @@ const matchedText = (evaluation: CommandEvaluation, command: string): string => 
  * always give the same decision and the same words.
  */
 export const decideUnattendedCommand = (
+  request: CommandRequest,
+  policy: ResolvedCommandPolicy,
+  mode: UnattendedCommandMode,
+): UnattendedCommandDecision =>
+  // One memo for the evaluation, the hazard read and the git boundary (WP-198 review round 2).
+  withCommandMemo(() => decideOnce(request, policy, mode));
+
+const decideOnce = (
   request: CommandRequest,
   policy: ResolvedCommandPolicy,
   mode: UnattendedCommandMode,
