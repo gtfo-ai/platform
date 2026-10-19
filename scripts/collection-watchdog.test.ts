@@ -79,16 +79,19 @@ const alive = (pid: number): boolean => {
 /**
  * This process's environment without what an outer `scripts/verify.mjs` set: under `verify` the
  * scratch run would otherwise write its stall into the outer target's report and name the outer
- * target (measured, review round 1: `FAIL: verify — collection stalled in spin.test.mjs`).
+ * target (measured, review round 1: `FAIL: verify — collection stalled in spin.test.mjs`). Colour is
+ * off as well: on CI vitest colours its summary, and the escape codes between `Tests` and `6 passed`
+ * defeat the assertions below (CI run 39270730494).
  */
 const isolated = (): NodeJS.ProcessEnv => {
   const {
     VERIFY_TARGET: _target,
     VERIFY_STALL_REPORT: _report,
     npm_lifecycle_event: _script,
+    FORCE_COLOR: _force,
     ...rest
   } = process.env;
-  return rest;
+  return { ...rest, NO_COLOR: '1' };
 };
 
 interface Run {
