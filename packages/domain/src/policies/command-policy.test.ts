@@ -71,6 +71,7 @@ import {
   GIT_LONG_OPTIONS_SOURCE,
   GIT_TABLELESS_SUBCOMMANDS,
 } from './git-long-options.generated.js';
+import { decideUnattendedCommand } from './unattended-commands.js';
 
 const verdict = (command: string, policy?: ResolvedCommandPolicy): string =>
   evaluateCommand({ command }, policy).verdict;
@@ -983,15 +984,26 @@ describe('the two block items no pattern can express (product/19 §3)', () => {
   });
 });
 
-describe('the block-list variants product/19 §3 does not state (Q37)', () => {
-  it('names them rather than inventing patterns, and none of them is allowed', () => {
+describe('the block-list variants product/19 §3 does not state (Q37, WP-204 (d))', () => {
+  const RULE_VERDICT: Readonly<Record<string, string>> = {
+    block_list: 'block',
+    uncertain: 'uncertain',
+  };
+
+  it('names them rather than inventing patterns', () => {
     expect(DECLINED_BLOCK_VARIANTS.map((entry) => entry.stated)).toEqual([
       'rm -rf /*',
       'git branch -D *',
     ]);
-    for (const command of ['rm -fr /', 'rm -r -f /', 'git branch --delete --force main']) {
-      expect(verdict(command), command).toBe('ask');
-    }
+  });
+
+  it.each(
+    DECLINED_BLOCK_VARIANTS.flatMap((entry) =>
+      (['auto', 'deny'] as const).map((mode) => [entry.spelled, mode, entry.verdict] as const),
+    ),
+  )('%s under %s reads the verdict the constant records, %s', (command, mode, recorded) => {
+    const { rule } = decideUnattendedCommand({ command }, DEFAULT_COMMAND_POLICY, mode);
+    expect(RULE_VERDICT[rule] ?? rule).toBe(recorded);
   });
 });
 
@@ -2767,6 +2779,7 @@ const TOKENISE_CALLERS: Readonly<Record<string, string>> = {
   binaryBans: 'the pattern side: a block entry',
   xargsBlockPrefix: 'the pattern side: a block entry',
   blockEntryBehindExpansion: 'the pattern side: a block entry',
+  blockEntryUnderUnreadOption: 'the pattern side: a block entry',
   matchesAllowEntry: 'the allow side: a precise entry reads the line as written',
   stripEnvironmentPrefix: 'the allow and ask side: the line as written, wrappers peeled',
   dequoteCommand: 'the ask side: the line as the shell would hand it on',
@@ -2820,6 +2833,80 @@ describe('WP-198 (d): who reads the written-word split', () => {
   it('names a new reader that picks up the written-word split', () => {
     const planted = `${SOURCE}\nconst newReader = (text: string) => tokenise(text)[0];\n`;
     expect(tokeniseCallers(planted).filter((caller) => !(caller in TOKENISE_CALLERS))).toEqual([
+      'newReader',
+    ]);
+  });
+});
+
+/**
+ * WP-204 (c), backlog 598: the option census, in the shape of `task-save-sites.test.ts`. Before
+ * WP-204 each block reader tested an entry's options against the line's with its own whole-token
+ * glob, so a fix in `tokensMatch` alone would have left three readers on the old spelling. Every
+ * reader now asks `entryFlagsMet` (getopt's cluster rule lives there), and a test of an entry's
+ * option written anywhere else fails here until somebody decides it belongs.
+ *
+ * A lexical reading of `command-policy.ts` without its comments, attributed to the top-level
+ * `const` a line sits in, as the `tokenise(` census above. What it recognises as an option test:
+ * `cachedGlob(flag)`, `pattern.flags.some(`/`.every(` and `entry.flags…` likewise, `clusterLetters(`
+ * and `LETTER_CLUSTER`. It cannot see a test spelled through another variable name
+ * (`cachedGlob(f)`) or an alias, which would be a new line to review here.
+ */
+const OPTION_READERS: Readonly<Record<string, string>> = {
+  LETTER_CLUSTER: 'the normaliser: what a letter cluster is',
+  clusterLetters: 'the normaliser: a cluster exploded into its letters',
+  entryFlagsMet: 'the normaliser: whether a line meets an entry’s options',
+  blockEntryUnderUnreadOption: 'names the option in its reason; the match is entryFlagsMet’s',
+};
+
+/** The readers that decide a block entry, each of which must ask the normaliser. */
+const BLOCK_READERS = [
+  'tokensMatch',
+  'xargsBlockPrefix',
+  'blockEntryBehindFlagValue',
+  'expansionAtEntryWord',
+  'blockEntryUnderUnreadOption',
+] as const;
+
+const OPTION_TEST =
+  /cachedGlob\(flag\)|\b(?:pattern|entry)\.flags\.(?:some|every)\(|\bclusterLetters\(|\bLETTER_CLUSTER\b/;
+
+/** Each top-level `const`'s comment-free text, by name. */
+const constBodies = (source: string): ReadonlyMap<string, string> => {
+  const bodies = new Map<string, string>();
+  let current = '';
+  for (const line of withoutComments(source).split('\n')) {
+    const declared = /^(?:export )?const (\w+)/.exec(line);
+    if (declared !== null) {
+      current = declared[1] as string;
+    }
+    bodies.set(current, `${bodies.get(current) ?? ''}${line}\n`);
+  }
+  return bodies;
+};
+
+const optionReaders = (source: string): readonly string[] =>
+  [...constBodies(source)].filter(([, body]) => OPTION_TEST.test(body)).map(([name]) => name);
+
+describe('WP-204 (c): every block reader reads an entry’s options through one normaliser', () => {
+  const SOURCE = readFileSync(
+    fileURLToPath(new URL('./command-policy.ts', import.meta.url)),
+    'utf8',
+  );
+
+  it('tests an entry’s option only in the decided places', () => {
+    expect([...optionReaders(SOURCE)].sort()).toEqual(Object.keys(OPTION_READERS).sort());
+  });
+
+  it('has every block reader ask entryFlagsMet', () => {
+    const bodies = constBodies(SOURCE);
+    expect(
+      BLOCK_READERS.filter((name) => !/\bentryFlagsMet\(/.test(bodies.get(name) ?? '')),
+    ).toEqual([]);
+  });
+
+  it('names a reader that tests an option on its own', () => {
+    const planted = `${SOURCE}\nconst newReader = (pattern: { flags: string[] }) => pattern.flags.some((flag) => cachedGlob(flag).test(flag));\n`;
+    expect(optionReaders(planted).filter((name) => !(name in OPTION_READERS))).toEqual([
       'newReader',
     ]);
   });

@@ -52347,3 +52347,92 @@ Verification, round 3:
 - `pnpm run -s verify`: `PASS: verify` (15,009 passed, 19 skipped), started at a load of 8.98.
 - Scoped integration (the four GitLab readers): 34/34, started at a load of 9.73 after a wait.
 - gitlab unit: 414.
+
+#### WP-204
+
+**Scanner: a block entry is read by getopt's own rules, and an option the policy cannot read beside the entry's operands is uncertain, through one normaliser** (backlogs 598 and 600). Main checkout, on `fdd53970`, uncommitted. No migration. Nothing moved under the split clause: the (b)(iii) clause's first number is **0** (no corpus cell moved).
+
+**Changes.**
+- `packages/domain/src/policies/command-policy.ts`: the normaliser beside `splitFlags` — `LETTER_CLUSTER`, `clusterLetters`, `entryFlagsMet` (ruling (b)(i)), `operandStart`, `entryStep`, `entryReach`, `entryOperandsMet` (ruling (b)(ii), and 600's bare trailing `*`), with a `PatternReading` of `block` or `hazard`. `tokensMatch`, `xargsBlockPrefix`, `blockEntryBehindFlagValue` and `expansionAtEntryWord` read through it. `prefixEnds` and `matchesSkippingValues` are gone (their walk is `entryReach`'s). There is a new reader, `blockEntryUnderUnreadOption`, with the reason `optionMayBeBlockEntry(entry, option)` (ruling (b)(iii)). `DECLINED_BLOCK_VARIANTS` is rewritten (ruling (d)): each row has `spelled` and `verdict` (`block`, `uncertain`) plus `why`, and its docblock no longer calls them declined. Five docblocks that this change made false are corrected (below).
+- `packages/domain/src/testing/command-corpus.ts`: the new reason is tagged.
+- `packages/domain/src/policies/command-policy.test.ts`: the Q37 describe now holds each constant row's verdict to `decideUnattendedCommand` under `auto` and `deny`. A new describe, *WP-204 (c): every block reader reads an entry's options through one normaliser*, is the census. `blockEntryUnderUnreadOption` joins `TOKENISE_CALLERS`.
+- `packages/domain/src/policies/unattended-commands.test.ts`: the describe *WP-204, backlogs 598 and 600*, with criteria (1), (2), (3), (5), (9) and (6). Earlier rows that this change moves are rewritten in place, each with a comment (listed below).
+- technical/05: the WP-204 amendment bullet. The WP-188, WP-197, WP-198 and WP-201 bullets each get a parenthetical where this change made them false.
+
+**Decisions/assumptions.**
+- **An entry's "operands" are its words from the first one holding a glob character on. The leading literal words are its *command words*, matched by place as before** (`operandStart`). The ruling's text matches every positional after argv[0] as a subsequence, and so does `gh -R o/r release create` meets `release`. That reading was built first and measured:
+  - five corpus lines moved, 6 + 5 cells newly refused, and one of them was `allow` (`npm run test -- --grep "$name"`), against `npm publish` and `terraform apply` reached through the expansion reader;
+  - `npm run publish`, `gh pr create --title release` and `npm run test -- --grep publish` read `block`;
+  - `npm run $s` went from `allow` to uncertain, and `gh issue view $n`, `cat ids | xargs gh issue view`, `xargs terraform -chdir=x plan` and `xargs git add` went to uncertain.
+  Criterion (5) pins the WP-197 and WP-201 controls among these. So the reading that holds both criterion (5) and the rows of (1) and (2) is this one: a program reads its subcommand by place. The cost is that `gh -R o/r release create` stays WP-198's `uncertain`, not `block`, which criterion (3) allows (*block or uncertain*). It is also the same notion as (b)(iii)'s *literal leading tokens*. **Accepted: orchestrator ruling, session 17** (at review).
+- **A floor (`HAZARDOUS_ARGUMENTS`) keeps the old reading** (`hazard`: whole options, words by place), through the same functions. Built with the explosion, 13 rows of `command-policy.test.ts` failed. Go's single-dash `-cover`/`-coverprofile` exploded to meet the `go* -o` floor, which took `go test -cover -covermode=atomic ./...` from `allow` to `ask`. A floor is not a block entry, and Go's flags are not getopt's.
+- **(b)(iii)'s "the entry names at least one" positional** means an operand (above). The clause needs a word for every operand, so a bare `*` needs one word, not none. The option it names is the line's first option with a letter the entry does not write, or else its first option.
+- **The xargs prefix**: an entry is completable when the written words are a live prefix and either the entry is not yet met or an option is missing. Without the first condition, an operand position that stays reachable made `xargs rm -r -f /` (already `block`) carry a reason too.
+- `blockEntryBehindFlagValue` is no longer subsumed by the matcher only because command words stay in place (`gh -R o/r release`).
+
+**(a) Measured first** (`scratchpad/wp204/probe.mjs`, nothing executed; the attended cell is `evaluateCommand`'s verdict, *uncertain* = `ask` with a reason; then the `auto` and `deny` rules). Before → after:
+
+| Line | Before | After |
+|---|---|---|
+| `rm -r -f /`, `rm -fr /`, `rm -f -r /`, `rm build -rf /`, `rm -r build -f /`, `rm -rfv /` | ask / auto / deny | block / block / block |
+| `rm x -rf /*` | ask / auto / deny | uncertain / block / block |
+| `rm -rf -- /`, `git reset -q --hard origin/main`, `git push -fu origin agentic/x` | block / block / block | unchanged |
+| `rm -R -f /`, `rm -Rf /`, `rm --recursive --force /`, `rm --recursive -f /` | ask / auto / deny | uncertain ×3 (`optionMayBeBlockEntry(rm -rf /*, -R / -Rf / --recursive)`) |
+| `git branch -qD x`, `git branch -Dq x` | ask / auto / deny | block ×3 |
+| `git branch --delete --force main`, `git branch -d main`, `git reset --soft origin/main` | ask / auto / deny | uncertain ×3 |
+| `git push -uf origin agentic/x` | ask / git / git | block ×3 (`git push -f*`) |
+| `xargs rm -r -f`, `echo / \| xargs rm -r -f`, `rm -r -f $x`, `gh -R o/r release create` | uncertain ×3 | unchanged |
+| `rm -rf build /tmp/x` | uncertain ×3 | block ×3 |
+| `git clean -f -d -x`, `git clean -xdf` under a project `git clean -fdx` | ask / auto / deny | block ×3 |
+| `find . -name x -delete` under a project `find * -delete` | block ×3 | unchanged |
+| `find . -depth -type d -ls` under `find * -delete` | allow ×3 | block ×3 (the over-block) |
+| criterion (5)'s controls (`rm -- -rf /` … `git reset origin/main`), `which sudo`, `echo docker` | — | unchanged |
+| `rm -f /tmp/x`, `rm -r /tmp/x`, `rm --force /tmp/x`, `git branch -m a b`, `git branch -d x`, `git branch -u origin/x x`, `git branch --list 'x*'` | ask / auto / deny | uncertain ×3 (the over-ask) |
+| `sudo`, `sh -c sudo`, `env sudo`, `docker`, `gh release` | ask / auto / deny | block ×3 |
+| `xargs sudo` | uncertain / block / block | unchanged (WP-188's ban) |
+
+**Corpus** (WP-208's instrument, `node scripts/command-corpus.mjs`): **0 cells changed** in `agent-lines` (286) and `developer-lines` (85), so (b)(iii) newly refuses 0 corpus lines. WP-201's other corpora (`scratchpad/wp201/all-rows.txt`, `rev2-lines.txt`) are adversarial and were not counted. The M12 ruling makes the count WP-208's diff.
+
+**The `ctl` measurement: not taken.** By reading `test/e2e/workspace/docker-workspace.e2e.test.ts`'s docblock (`#prepare` hands the run's control directory to uid 1000 as `0700`), the run's own uid owns it. So its entries are probably deletable from inside the run. This is unmeasured.
+
+**Rows moved from earlier work packages** (each is a tightening; none reads looser):
+- **600 (bare `*` meets no word), `block`:**
+  - `sudo` (WP-188, was `ask / auto / deny`);
+  - `xargs gh release`, `xargs glab release`, `xargs /usr/bin/gh release`, `xargs 'gh' release`, `xargs gh 're'lease` and a project's `xargs deploy prod` (WP-197, were uncertain);
+  - `sh -c '$1 id' _ sudo`, `sh -c '"$@" id' _ sudo`, `sh -c '$2' _ x sudo`, `OLDPWD=/usr/bin/sudo; ~- id` and `PWD=/usr/bin/sudo; ~+ id` (WP-201, were uncertain).
+  WP-201's `expandedName` rows now hand `git`. `xargs /usr/bin/gh` and `xargs 'gh'` keep the unquoted-name check.
+- **(ii), `block`:** `rm -rf build /tmp/x` (WP-198's stated over-ask).
+- **(ii), now uncertain:** `rm -rf dist $out` (WP-201's stated residual and its controls in WP-201 and WP-203). It is pinned with `xargs rm x` as an over-ask.
+- **A second reason, verdict unchanged:**
+  - `xargs rm -f /` gains `optionMayBeBlockEntry(rm -rf /*, -f)`;
+  - `rm -$x /` gains `optionMayBeBlockEntry(rm -rf /*, -$x)`;
+  - `xargs -0 -I{} rm {}` gains `xargsCompletesBlockEntry(rm -rf /*)`;
+  - `xargs gh -R o/r release` gains `flagValueHidesBlockEntry(gh release *)`.
+
+**Canaries** (`scratchpad/wp204/canary.py`, foreground, in place, the file's sha256 checked restored after each; logs `canary-<name>.log`):
+- *explosion* (`letters = []`): 14 failures, among them `"rm -r -f /" is blocked under auto and deny`.
+- *subsequence* (an operand position no longer skippable): 9, among them `"rm build -rf /" is blocked under auto and deny`.
+- *clause* (`&& false`): 19, among them `"rm -Rf /" is uncertain, naming "rm -rf /*" and "-Rf"`.
+- *xargs* (`xargsBlockPrefix` with its own whole-token option test): the census's three tests fail, and so does `"xargs rm -r -f /" is blocked, and the prefix reader reads its flags apart`. The row the plan names, `xargs rm -r -f`, **does not fail** under that canary, because its missing operand completes it either way, so its cell cannot depend on the option test.
+- *constant* (`verdict: 'ask'`): `rm -fr / under auto reads the verdict the constant records, ask` and its `deny` twin fail.
+- *bare* (one-or-more restored): 18 failures, among them `"sudo" is blocked under auto and deny`. `xargs sudo` does not fail, because WP-188's ban blocks it independently.
+
+**Sentences falsified** (rule 83):
+- `grep -rn "positionals as a prefix\|positionals in order\|prefix has died\|bare \`sudo\`\|ask, never allow\|never allow from the lists\|four reasons the policy\|rm -rf build /tmp/x" packages/domain/src docs/technical CLAUDE.md docs/user-guide.md docs/operator-guide.md` found these sentences, each now fixed:
+  - the docblocks of `blockEntryBehindFlagValue` (the `rm -rf build /tmp/x` over-ask), `blockEntryBehindExpansion` (the `rm -rf dist $out` residual), `matchesBlockPattern` (*positionals as a prefix*), `xargsBannedEntry` (*a bare `sudo` … is not changed*) and `xargsBlockPrefix`;
+  - `evaluateOnce`'s *four the policy adds*;
+  - technical/05's WP-188 (bare `sudo`), WP-197 (*positionals in order*), WP-198 (`rm -rf build /tmp/x`) and WP-201 (`rm -rf dist $out`) bullets.
+- product/19 § 3, Q37's resolved row and Q120 are left alone (ruling (e)).
+- The test docblock at the WP-197 round-3 table (*positionals as a prefix — so a flag before…*) is about options and still holds.
+
+**Tiers.**
+- `pnpm exec vitest run packages/domain/src/policies --project unit`: 3 787 passed.
+- `test/e2e/pipeline/project-commands.e2e.test.ts` (`--project e2e-fake-claude`, `platform-runtime:s16`): 2/2 passed, started at a load of 7.74.
+- `node scripts/command-corpus.mjs`: `PASS: command-corpus`.
+- `pnpm run -s verify`: `PASS: verify`, started at a load of 5.04. `scripts/citations.test.ts`: 13 passed.
+- The baseline `verify` before the change was `PASS: verify`. It started at a load of 19.80, before the wait loop was in place.
+
+**Discovered work.**
+- The census recognises an option test only by its spelling (`cachedGlob(flag)`, `pattern.flags.some(`, …). A test spelled through another variable is a review item, as with the `tokenise(` census.
+- With (ii) read on every positional, as the ruling words it, subcommand-style entries would be met out of place. If a later ruling wants `gh -R o/r release create` to read `block`, it needs a per-program fact (which option takes a value), not the subsequence.
+- The `ctl` deletability measurement (598's severity line) is still open.

@@ -338,6 +338,16 @@ export const expansionCompletesBlockEntry = (entry: string) =>
   `a word the shell expands (a variable or command substitution, a glob or a brace) where the block-list entry "${entry}" names a word — write the word literally; the platform cannot tell whether the expansion completes a command no run may execute` as const;
 
 /**
+ * WP-204 (backlog 598, ruling (b)(iii)): a line that meets every operand of a block entry and
+ * writes an option while the entry's own options are not all met (`rm -Rf /` against `rm -rf /*`,
+ * `git branch --delete --force main` against `git branch -D *`). Whether that option is the
+ * entry's by another name is a per-program fact the platform does not have, so the honest verdict
+ * is uncertain, as for {@link xargsCompletesBlockEntry} (`blockEntryUnderUnreadOption`).
+ */
+export const optionMayBeBlockEntry = (entry: string, option: string) =>
+  `an option, ${option}, beside the operands of the block-list entry "${entry}", which may be that entry's option by another name — write the entry's own option letters, or run the command without the option; the platform does not know which options of a program are aliases of each other` as const;
+
+/**
  * WP-199 (backlog 583), formerly WP-196's `npmEnvironment`: a word naming an environment variable
  * a `command`-kind floor declares (`HazardousArgument.environment` — `npm_config_*`,
  * `NODE_OPTIONS`, `EDITOR`, `MAKEFLAGS`, `GOFLAGS`, `PYTEST_ADDOPTS`, `CARGO_*`, …), wherever it
@@ -372,6 +382,7 @@ export type UncertaintyReason =
   | ReturnType<typeof xargsCompletesBlockEntry>
   | ReturnType<typeof flagValueHidesBlockEntry>
   | ReturnType<typeof expansionCompletesBlockEntry>
+  | ReturnType<typeof optionMayBeBlockEntry>
   | ReturnType<typeof unknownProgramRunsJudgedName>;
 
 /**
@@ -406,29 +417,34 @@ export const DEFAULT_BLOCKED_COMMANDS: readonly string[] = [
 ];
 
 /**
- * Where product/19 §3's block list is narrower than the hazard it names, and why the gap is left
- * rather than papered over. Inventing patterns here would put security rules in code that the
- * product document does not state — the fix belongs in the document (Q37).
+ * Two spellings of product/19 §3's block list that the list does not write, and the verdict each
+ * gets (WP-204, backlog 598). They were *declined* while an unlisted spelling could only land on
+ * `ask`; since BD-025's 2026-10-06 amendment an unattended `auto` run runs an `ask`, so the block
+ * list is what keeps them out, and the block matcher reads an entry by getopt's own rules instead
+ * of by its spelling: a letter cluster by its letters, an operand wherever it stands
+ * (`entryFlagsMet`, `entryOperandsMet`), and an option it cannot read beside the entry's operands
+ * as `uncertain` (`blockEntryUnderUnreadOption`), which an unattended run refuses (BD-025,
+ * decision 2). `verdict` is the `decideUnattendedCommand` rule on `spelled`, held there by a unit
+ * test.
  *
- * **The line WP-02a draws.** A missing spelling that only decides between `ask` and `block` stays
- * the document's to fix: the command can never reach `allow`, so the code is not the thing keeping
- * it out. A missing spelling that leaves a hazard reachable from the **allow**-list is closed here,
- * because the allow-list is the one thing this module exists to defend. That is why `git push -f`,
- * `git push … --delete` and `git push origin +…` moved onto the block list — the allow entry
- * `git push origin agentic/*` was carrying all three — while the two entries below did not.
+ * **The line WP-02a drew still holds for patterns:** no spelling is invented here as a new entry —
+ * `git push -f`, `git push … --delete` and `git push origin +…` became entries because the allow
+ * entry `git push origin agentic/*` carried them; these two are read from the entries that exist.
  */
 export const DECLINED_BLOCK_VARIANTS = [
   {
     hazard: 'recursive delete with the flags spelled differently — `rm -fr /`, `rm -r -f /`',
     stated: 'rm -rf /*',
-    verdict:
-      'ask (nothing on the allow-list matches `rm`), never allow from the lists; an unattended `auto` run runs an ask in its sandbox, whose only writable mount is the workspace (BD-025, 2026-10-06)',
+    spelled: 'rm -fr /',
+    verdict: 'block',
+    why: 'getopt reads `-fr` as `-f -r`, which meets the entry’s `-rf` letter by letter (WP-204 (b)(i))',
   },
   {
     hazard: 'branch deletion in long form — `git branch --delete --force main`',
     stated: 'git branch -D *',
-    verdict:
-      'ask, never allow from the lists; an unattended `auto` run runs an ask in its sandbox, and a push of the deletion is refused by the git boundary (BD-025, 2026-10-06)',
+    spelled: 'git branch --delete --force main',
+    verdict: 'uncertain',
+    why: 'the line meets the entry’s operand and writes options the platform cannot read as `-D` or not (WP-204 (b)(iii)); a push of the deletion is also refused by the git boundary',
   },
 ] as const;
 
@@ -2836,21 +2852,147 @@ const splitFlags = (
   return { flags, positional };
 };
 
+// ── WP-204: the one reading of an entry's options and operands (backlogs 598, 600) ──────────
+//
+// Every block reader — `tokensMatch`, `xargsBlockPrefix`, `blockEntryBehindFlagValue`,
+// `expansionAtEntryWord` and `blockEntryUnderUnreadOption` — asks these functions whether a line
+// meets an entry's options and operands, and none tests an option on its own (the census in
+// `command-policy.test.ts`). Two facts are program-independent and only tighten: getopt reads a
+// cluster of letters letter by letter, and an operand may stand anywhere among the operands.
+// A `HAZARDOUS_ARGUMENTS` pattern is read through the same functions in the `hazard` reading,
+// which is the one before WP-204 — whole options, operands by index — because a floor is not a
+// block entry and its programs are not getopt's: Go's `-cover` is one option, and exploded it
+// met the `go* -o` floor (measured, 13 rows of `command-policy.test.ts`).
+
+/** How a pattern's options and operands are read: a block entry's (WP-204), or a floor's. */
+type PatternReading = 'block' | 'hazard';
+
+/** A single-dash cluster of letters only (`-rf`, `-D`, `-qD`), which getopt reads letter by letter. */
+const LETTER_CLUSTER = /^-[A-Za-z]+$/;
+
+/** The one-letter options of every letter-only cluster among `flags` (`-rf` → `-r`, `-f`). */
+const clusterLetters = (flags: readonly string[]): readonly string[] =>
+  flags.flatMap((flag) =>
+    LETTER_CLUSTER.test(flag) ? [...flag.slice(1)].map((letter) => `-${letter}`) : [],
+  );
+
+/**
+ * Whether the line's options meet every option the entry writes (WP-204 (b)(i)). An entry option
+ * is met by a line option its glob matches whole, as before; a letter-only cluster is also met
+ * when each of its letters is among the line's exploded letters (`-rf` by `-r -f`, `-fr`, `-rfv`);
+ * and any entry option — a glob one in practice — is also met by one exploded letter its glob
+ * matches (`-f*` by `git push -uf`). A token with a non-letter (`-n1`, `-I{}`) and a long option
+ * stay whole. `--` has already ended the options (`splitFlags`).
+ */
+const entryFlagsMet = (
+  entry: readonly string[],
+  line: readonly string[],
+  reading: PatternReading = 'block',
+): boolean => {
+  const letters = reading === 'block' ? clusterLetters(line) : [];
+  return entry.every((flag) => {
+    const glob = cachedGlob(flag);
+    return (
+      line.some((token) => glob.test(token)) ||
+      letters.some((letter) => glob.test(letter)) ||
+      (reading === 'block' &&
+        LETTER_CLUSTER.test(flag) &&
+        clusterLetters([flag]).every((one) => letters.includes(one)))
+    );
+  });
+};
+
+/**
+ * Where an entry's operands start (WP-204 (b)(ii)): past its **command words**, the leading
+ * literal ones — `rm`; `git branch`; `gh release`; `npm publish` — which the program reads by
+ * place, so they are matched by place as before. The first word with a glob character is the first
+ * operand (`/*` of `rm -rf /*`, `*` of `git branch -D *`). argv[0] is always a command word. The
+ * `hazard` reading has no operands: every word by place, as before WP-204.
+ */
+const operandStart = (entry: readonly string[], reading: PatternReading): number => {
+  const glob = entry.findIndex((word) => /[*?[]/.test(word));
+  return reading === 'hazard' || glob < 0 ? entry.length : Math.max(1, glob);
+};
+
+/**
+ * The entry positions one line word takes position `used` to: one further when the word meets the
+ * entry's word there; and the same position when the word may be left out — an operand position,
+ * where an operand may stand anywhere among the line's (`rm build -rf /` meets `/*`), the end of
+ * the entry (a word after it), or a word `skippable` marks (an option's possible value, WP-198).
+ */
+const entryStep = (
+  entry: readonly string[],
+  used: number,
+  word: string,
+  skippable: boolean,
+  reading: PatternReading = 'block',
+): readonly number[] => {
+  const next: number[] = [];
+  if (skippable || used >= operandStart(entry, reading)) {
+    next.push(used);
+  }
+  const glob = entry[used];
+  if (glob !== undefined && cachedGlob(glob).test(word)) {
+    next.push(used + 1);
+  }
+  return next;
+};
+
+/**
+ * Every entry position reachable once the line's positionals are read (`entryStep` over each
+ * word, the set kept so each (word, position) pair is visited once — WP-198 review round 1: a
+ * branching search stalled the hook). `skippable` marks the words that may be left out at a
+ * command word too (`flagValuePositions`). Empty when a command word is not met.
+ */
+const entryReach = (
+  entry: readonly string[],
+  line: readonly string[],
+  skippable: readonly boolean[] = [],
+  reading: PatternReading = 'block',
+): ReadonlySet<number> => {
+  let reachable = new Set([0]);
+  for (const [at, word] of line.entries()) {
+    const next = new Set<number>();
+    for (const used of reachable) {
+      for (const position of entryStep(entry, used, word, skippable[at] === true, reading)) {
+        next.add(position);
+      }
+    }
+    reachable = next;
+  }
+  return reachable;
+};
+
+/**
+ * Whether the line's positionals meet all of the entry's. A trailing bare `*` also meets no word
+ * when `bareStar`, in the `block` reading (WP-204, backlog 600): `sudo` is `sudo *`, `gh release`
+ * is `gh release *`.
+ */
+const entryOperandsMet = (
+  entry: readonly string[],
+  line: readonly string[],
+  reading: PatternReading = 'block',
+  bareStar = true,
+  skippable: readonly boolean[] = [],
+): boolean => {
+  const needed =
+    reading === 'block' && bareStar && entry.length > 1 && entry.at(-1) === '*'
+      ? entry.slice(0, -1)
+      : entry;
+  return needed.length === 0 || entryReach(needed, line, skippable, reading).has(needed.length);
+};
+
 const tokensMatch = (
   patternTokens: readonly string[],
   commandTokens: readonly string[],
+  reading: PatternReading,
 ): boolean => {
   const pattern = splitFlags(patternTokens);
   const command = splitFlags(commandTokens);
-  if (pattern.positional.length > command.positional.length) {
-    return false;
-  }
-  for (const [index, token] of pattern.positional.entries()) {
-    if (!cachedGlob(token).test(command.positional[index] as string)) {
-      return false;
-    }
-  }
-  return pattern.flags.every((flag) => command.flags.some((token) => cachedGlob(flag).test(token)));
+  return (
+    entryOperandsMet(pattern.positional, command.positional, reading) &&
+    entryFlagsMet(pattern.flags, command.flags, reading)
+  );
 };
 
 /**
@@ -2879,74 +3021,14 @@ const flagValuePositions = (tokens: readonly string[]): readonly boolean[] => {
 };
 
 /**
- * Where `written` (each word globbed by `pattern`'s word at the same place) can end in `pattern`,
- * any word `value` marks left out: the index past the last pattern word used, for every way the
- * written words fit as a prefix of `pattern`. Empty when they fit no way.
- */
-const prefixEnds = (
-  pattern: readonly string[],
-  written: readonly string[],
-  value: readonly boolean[],
-): readonly number[] => {
-  // A walk over the written words keeping the **set** of pattern positions reachable so far, so
-  // each (word, position) pair is visited once: O(words × positions), never the branching search
-  // (WP-198 review round 1 — a long line of `-a word` pairs stalled the hook for seconds).
-  let reachable = new Set([0]);
-  for (const [at, word] of written.entries()) {
-    const next = new Set<number>();
-    for (const used of reachable) {
-      if (value[at] === true) {
-        next.add(used);
-      }
-      const glob = pattern[used];
-      if (glob !== undefined && cachedGlob(glob).test(word)) {
-        next.add(used + 1);
-      }
-    }
-    reachable = next;
-  }
-  return [...reachable];
-};
-
-/**
- * Whether `pattern`'s positionals match a prefix of `command`'s, any of `command`'s words `value`
- * marks left out (a word that may be an option's value) — the block matcher's positional rule,
- * read with every option's arity unknown.
- */
-const matchesSkippingValues = (
-  pattern: readonly string[],
-  command: readonly string[],
-  value: readonly boolean[],
-): boolean => {
-  // The same set walk as `prefixEnds`: the pattern matches once its last position is reachable.
-  let reachable = new Set([0]);
-  for (const [at, word] of command.entries()) {
-    if (reachable.has(pattern.length)) {
-      return true;
-    }
-    const next = new Set<number>();
-    for (const used of reachable) {
-      if (value[at] === true) {
-        next.add(used);
-      }
-      const glob = pattern[used];
-      if (glob !== undefined && cachedGlob(glob).test(word)) {
-        next.add(used + 1);
-      }
-    }
-    reachable = next;
-  }
-  return reachable.has(pattern.length);
-};
-
-/**
  * The block entry this piece of command line matches only when a word after an option written
  * with no `=` is read as that option's value (WP-198, backlog 584): `gh -R o/r release create v1`
  * against `gh release *`, `git -C d branch -D x` against `git branch -D *`. Which options take a
  * value is a fact about each program the matcher does not know, so the line is **uncertain**
  * (`flagValueHidesBlockEntry`), not blocked — the closed rule 584 names. Read on both of
- * `argvForms`' readings. **The over-ask, stated:** a word after an option that takes none, where
- * leaving it out completes an entry (`rm -rf build /tmp/x` against `rm -rf /*`).
+ * `argvForms`' readings. Since WP-204 an operand is met wherever it stands (`entryReach`), so
+ * leaving a word out matters only among an entry's command words (`gh -R o/r release`); the
+ * over-ask this stated, `rm -rf build /tmp/x` against `rm -rf /*`, is now that entry, `block`.
  */
 const blockEntryBehindFlagValue = (
   fragment: string,
@@ -2967,13 +3049,63 @@ const blockEntryBehindFlagValue = (
     return named.some((candidate) => {
       const command = splitFlags(candidate);
       return (
-        pattern.flags.every((flag) =>
-          command.flags.some((token) => cachedGlob(flag).test(token)),
-        ) &&
-        matchesSkippingValues(pattern.positional, command.positional, flagValuePositions(candidate))
+        entryFlagsMet(pattern.flags, command.flags) &&
+        entryOperandsMet(
+          pattern.positional,
+          command.positional,
+          'block',
+          true,
+          flagValuePositions(candidate),
+        )
       );
     });
   });
+};
+
+/**
+ * The block entry, and the option, of a line that may be the entry by an alias (WP-204 (b)(iii)):
+ * the line meets every positional of the entry — its command words, the leading literal ones, and
+ * at least one operand after them, each met by a word (a bare `*` by one, not none) — and writes an
+ * option while the entry's options are not all met. The option named is the line's first one with
+ * a letter the entry does not write, else its first. **The over-ask, stated:** `rm -f /tmp/x`,
+ * `rm -r /tmp/x`, `rm --force /tmp/x`, `git branch -m a b`, `git branch -d x`, `git branch -u
+ * origin/x x`, `git branch --list 'x*'` and `git reset --soft origin/main`. An entry with no
+ * operand after its command words (`git push --force*`) or no option is never read here, so
+ * `git push -u origin agentic/x` and `git branch -a` are untouched.
+ */
+const blockEntryUnderUnreadOption = (
+  fragment: string,
+  block: readonly string[],
+): { readonly entry: string; readonly option: string } | undefined => {
+  const candidates = blockCandidates(fragment);
+  for (const entry of block) {
+    const pattern = splitFlags(tokenise(entry));
+    if (
+      pattern.flags.length === 0 ||
+      operandStart(pattern.positional, 'block') >= pattern.positional.length ||
+      matchesBlockPattern(entry, fragment)
+    ) {
+      continue;
+    }
+    for (const candidate of candidates) {
+      const command = splitFlags(candidate);
+      const [first] = command.flags;
+      if (
+        first !== undefined &&
+        entryOperandsMet(pattern.positional, command.positional, 'block', false) &&
+        !entryFlagsMet(pattern.flags, command.flags)
+      ) {
+        const letters = clusterLetters(pattern.flags);
+        const unread = command.flags.find(
+          (flag) =>
+            !LETTER_CLUSTER.test(flag) ||
+            !clusterLetters([flag]).every((letter) => letters.includes(letter)),
+        );
+        return { entry, option: unread ?? first };
+      }
+    }
+  }
+  return undefined;
 };
 
 /** A pattern word a stage cannot hold: an entry's positions from one on are a later stage's. */
@@ -2990,9 +3122,11 @@ const STAGE_SEPARATOR = /^(?:\||\|&|;|&&|\|\||&)$/;
  * input (`xargsBlockPrefix`). An entry whose name is `git` is left to the git boundary, which
  * reads git's verb (`gitBoundaryViolation`) and refs; an entry's words past a `|` are a later
  * stage's and no expansion supplies them (`curl $url` against `curl * | sh`). **The residual,
- * stated:** an expansion after the prefix has died (`rm -rf dist $out`) or after every positional
+ * stated:** an expansion after the entry's command words have died or after every positional
  * matched (`git push origin $BRANCH`, the boundary's) is judged as today, and so is one behind a
  * cluster whose last letter takes a value (`x -fR o/r $y`, where `-fR` is read as two flags).
+ * Since WP-204 an expansion among an entry's operands is read wherever it stands (`entryStep`):
+ * `rm -rf dist $out` is uncertain, which this residual named before.
  */
 const blockEntryBehindExpansion = (stage: string, block: readonly string[]): string | undefined => {
   const words = argvShellWords(stage);
@@ -3022,7 +3156,7 @@ const blockEntryBehindExpansion = (stage: string, block: readonly string[]): str
 
 /**
  * The walk of {@link blockEntryBehindExpansion} over the words after the name, keeping the set of
- * entry positions reachable so far (`prefixEnds`'s walk): whether an expansion stands where the
+ * entry positions reachable so far (`entryStep`, `entryReach`'s walk): whether an expansion stands where the
  * entry still names a word. When the entry names a flag the line does not write, the expansion
  * counts only if it can supply it: an option the shell expands (`rm -$x /`), a glob before `--`
  * that can match the flag (`rm * /`, where the checkout holds a file `-rf`) — each with every
@@ -3096,12 +3230,16 @@ const expansionAtEntryWord = (
       bothWords += judged && (optionGlob || optionExpansion) ? 1 : 0;
       const next = new Set<number>();
       for (const used of reachable) {
-        if (afterOption || optionGlob || optionExpansion || used === positional.length) {
-          next.add(used);
-        }
-        const token = positional[used];
-        if (token !== undefined && cachedGlob(token).test(value)) {
-          next.add(used + 1);
+        // WP-204 (b)(ii): at an operand position any word may stand between two of the entry's
+        // (`rm -rf dist $out` is `rm -rf dist /` when `out=/`); at a command word, only a word
+        // that may be an option's value or an option.
+        for (const position of entryStep(
+          positional,
+          used,
+          value,
+          afterOption || optionGlob || optionExpansion,
+        )) {
+          next.add(position);
         }
       }
       afterOption = false;
@@ -3111,7 +3249,7 @@ const expansionAtEntryWord = (
   if (!expandedPositional && reachable.size === 0) {
     return false;
   }
-  const flagMissing = flags.some((flag) => !written.some((token) => cachedGlob(flag).test(token)));
+  const flagMissing = !entryFlagsMet(flags, written);
   // An expanded option completes the entry only with every positional matched (`rm -$x /`).
   const pair = optionWords > 0 && judgedWords > 0 && optionWords + judgedWords - bothWords > 1;
   return flagMissing
@@ -3221,14 +3359,19 @@ const mayBeSeveralWords = (raw: string): boolean => {
 /**
  * Does a block pattern match this command?
  *
- * Either the tokens match — the pattern's flags anywhere, its positionals as a prefix of the
- * command's, after argv[0] normalisation, in either of `argvForms`' readings (WP-198: the written
+ * Either the tokens match — the pattern's flags anywhere and its letter clusters letter by letter,
+ * its command words in place and its operands wherever they stand among the command's (WP-204:
+ * `entryFlagsMet`, `entryOperandsMet`), after argv[0] normalisation, in either of `argvForms`' readings (WP-198: the written
  * words, or argv with the redirections out, so `gh >out release create` is `gh release create`) —
  * or the whole line matches the pattern as a glob. The
  * glob half is kept so the token rule can only add coverage, never remove it: `curl * | sh` must
  * still catch `curl -o out https://example.invalid | sh`.
  */
-export const matchesBlockPattern = (pattern: string, command: string): boolean => {
+export const matchesBlockPattern = (
+  pattern: string,
+  command: string,
+  reading: PatternReading = 'block',
+): boolean => {
   const patternTokens = tokenise(pattern);
   if (patternTokens.length === 0) {
     return false;
@@ -3236,7 +3379,9 @@ export const matchesBlockPattern = (pattern: string, command: string): boolean =
   if (matchesCommandPattern(pattern, command)) {
     return true;
   }
-  return blockCandidates(command).some((candidate) => tokensMatch(patternTokens, candidate));
+  return blockCandidates(command).some((candidate) =>
+    tokensMatch(patternTokens, candidate, reading),
+  );
 };
 
 /**
@@ -3248,7 +3393,7 @@ export const carriesHazard =
   (command: string) =>
   (entry: HazardousArgument): boolean =>
     entry.tokens === undefined
-      ? matchesBlockPattern(entry.pattern, command)
+      ? matchesBlockPattern(entry.pattern, command, 'hazard')
       : blockCandidates(command).some((candidate) => {
           const [name, ...rest] = candidate;
           if (name === undefined) {
@@ -3300,7 +3445,8 @@ const binaryBans = (block: readonly string[]): readonly string[] =>
  * input: `cat f | xargs -n1 sudo` is `sudo` with no word after it on the line, which `sudo *` does
  * not match, so it read `ask / auto / deny` while `xargs sudo sh` was blocked. The command word
  * xargs runs (after its own options, `readXargsOptions`) is judged by name, whatever follows it.
- * A bare `sudo` with no `xargs` is not changed by this: it runs nothing it was not written with.
+ * A bare `sudo` with no `xargs` is not changed by this: it runs nothing it was not written with —
+ * and since WP-204 (backlog 600) the block matcher blocks it, `sudo *`'s trailing `*` meeting no word.
  */
 const xargsBannedEntry = (text: string, block: readonly string[]): string | undefined => {
   for (const [run] of xargsCommandWords(text)) {
@@ -3345,9 +3491,9 @@ const ENDS_WRITTEN_WORDS = /[<>|&;]/;
  * `deploy prod *`) was matched only against the words written, and xargs appends the rest, so
  * `echo apply | xargs terraform` ran under `auto`. Here the written words are matched as a
  * **prefix** of every entry of the policy's block list, read as the block matcher reads a line
- * (`splitFlags`, `tokensMatch`: flags anywhere, positionals in order through `globToRegExp`), and an
- * entry the input could complete is one with a positional left over, or with every positional
- * matched and a flag still missing (review round 3: `xargs terraform -chdir=x`, `xargs rm -f`). The words stop at the first
+ * (`splitFlags`, `entryReach`: flags anywhere, command words in place, operands wherever they stand —
+ * WP-204), and an entry the input could complete is one with a positional left over, or with every
+ * positional matched and a flag still missing (review round 3: `xargs terraform -chdir=x`, `xargs rm -f`). The words stop at the first
  * redirection or operator, which only shortens the prefix (the closed side); the argv reading
  * (WP-198) has no redirection left in it, so `xargs gh 2>/dev/null release` is also read whole. A
  * word after an option written with no `=` may be left out (WP-198, backlog 584). **The over-ask,
@@ -3362,7 +3508,7 @@ const xargsBlockPrefix = (text: string, block: readonly string[]): string | unde
     if (name === undefined) {
       continue;
     }
-    // Read as the block matcher reads a line (`tokensMatch`): flags anywhere, positionals as a
+    // Read as the block matcher reads a line (`tokensMatch`): flags anywhere, command words as a
     // prefix (review round 3 — `xargs terraform -chdir=x` completes to a blocked line).
     // A word after an option written with no `=` may be its value, so it may be left out of the
     // prefix (WP-198, backlog 584: `xargs gh -R o/r release`).
@@ -3370,11 +3516,11 @@ const xargsBlockPrefix = (text: string, block: readonly string[]): string | unde
     const written = splitFlags([argv0Name(name), ...rest]);
     const entry = block.find((pattern) => {
       const { flags, positional } = splitFlags(tokenise(pattern));
-      const flagMissing = flags.some(
-        (flag) => !written.flags.some((token) => cachedGlob(flag).test(token)),
-      );
-      return prefixEnds(positional, written.positional, value).some(
-        (used) => used < positional.length || flagMissing,
+      // The written words are a live prefix of the entry, and the input may supply what they
+      // leave unmet: an operand (an operand position stays reachable, WP-204), or an option.
+      const reach = entryReach(positional, written.positional, value);
+      return (
+        reach.size > 0 && (!reach.has(positional.length) || !entryFlagsMet(flags, written.flags))
       );
     });
     if (entry !== undefined) {
@@ -7681,9 +7827,10 @@ const evaluateOnce = (
     );
   }
   const parsed = parseCommand(request.command);
-  // The scanner's reasons, and four the policy adds: the block entry an `xargs` could complete
+  // The scanner's reasons, and five the policy adds: the block entry an `xargs` could complete
   // from its input (WP-197), the one a line matches only when a word is read as an option's
-  // value (WP-198), the one an expansion could complete (WP-201), and a program the stage's
+  // value (WP-198), the one whose operands a line meets beside an option it cannot read (WP-204),
+  // the one an expansion could complete (WP-201), and a program the stage's
   // policy does not know handed a judged name (WP-203) — the only reasons that
   // need the policy's lists, a project's included — and a sed or awk script that executes (WP-210).
   const uncertainty: readonly UncertaintyReason[] = [
@@ -7696,6 +7843,11 @@ const evaluateOnce = (
       ...parsed.fragments.flatMap((fragment) => {
         const entry = blockEntryBehindFlagValue(fragment, policy.block);
         return entry === undefined ? [] : [flagValueHidesBlockEntry(entry)];
+      }),
+      // WP-204 (b)(iii): an option the policy cannot read beside a block entry's operands.
+      ...parsed.fragments.flatMap((fragment) => {
+        const found = blockEntryUnderUnreadOption(fragment, policy.block);
+        return found === undefined ? [] : [optionMayBeBlockEntry(found.entry, found.option)];
       }),
       // WP-201: the block entry an expansion could complete, read on each stage as written.
       ...parsed.rawStages.flatMap((stage) => {

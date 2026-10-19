@@ -22,6 +22,7 @@ import {
   HAZARDOUS_ARGUMENTS,
   hazardousArguments,
   memoisedCommandTexts,
+  optionMayBeBlockEntry,
   type ResolvedCommandPolicy,
   runCommandPolicy,
   UNCERTAINTY,
@@ -2066,8 +2067,9 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
       // Rule 42: blocked before, and a command xargs runs that no ban names.
       ['xargs sudo sh', 'block / block / block'],
       ['xargs grep x', 'ask / auto / deny'],
-      // A bare banned binary with no xargs is unchanged: it runs nothing it was not written with.
-      ['sudo', 'ask / auto / deny'],
+      // A bare banned binary with no xargs read `ask / auto / deny` here; since WP-204 (backlog
+      // 600) the entry's trailing `*` also meets no word, so it is the entry.
+      ['sudo', 'block / block / block'],
     ])('keeps %j at %s (567)', (command, expected) => {
       expectCells(command, expected);
     });
@@ -2458,9 +2460,7 @@ describe('WP-196: every package runner is read through, its string never, and np
 describe('WP-197: a block entry xargs could complete from its input, and the programs npm runs', () => {
   it.each([
     ['echo apply | xargs terraform', 'terraform apply'],
-    ['xargs gh release', 'gh release *'],
     ['echo release | xargs gh', 'gh release *'],
-    ['xargs glab release', 'glab release *'],
     ['echo / | xargs rm -rf', 'rm -rf /*'],
     // Was `ask / auto / deny` too: `curl * | sh` has words left, and no special case is made.
     ['xargs curl x', 'curl * | sh'],
@@ -2477,12 +2477,14 @@ describe('WP-197: a block entry xargs could complete from its input, and the pro
   it('reads a project’s own word-specific entry: "xargs deploy" against "deploy prod *" (576)', () => {
     for (const [name, given] of Object.entries(BASELINES)) {
       const project = { ...given, block: [...given.block, 'deploy prod *'] };
-      for (const command of ['xargs deploy', 'echo prod | xargs deploy', 'xargs deploy prod']) {
+      for (const command of ['xargs deploy', 'echo prod | xargs deploy']) {
         expect(cell(command, project), `${name}: ${command}`).toBe('ask / uncertain / uncertain');
         expect(evaluateCommand({ command }, project).uncertainty).toEqual([
           xargsCompletesBlockEntry('deploy prod *'),
         ]);
       }
+      // Uncertain until WP-204 (backlog 600): the entry's trailing `*` also meets no word.
+      expect(cell('xargs deploy prod', project), name).toBe('block / block / block');
       expect(cell('xargs deploy staging', project), name).toBe('ask / auto / deny');
       expect(cell('xargs deploy', given), name).toBe('ask / auto / deny');
     }
@@ -2502,6 +2504,9 @@ describe('WP-197: a block entry xargs could complete from its input, and the pro
     ['cat f | xargs -n1 sudo', 'block / block / block'],
     ['xargs gh release create', 'block / block / block'],
     ['xargs npm publish', 'block / block / block'],
+    // Uncertain here until WP-204 (backlog 600): `gh release` is now `gh release *` itself.
+    ['xargs gh release', 'block / block / block'],
+    ['xargs glab release', 'block / block / block'],
   ])('keeps %j at %s (576)', (command, expected) => {
     expectCells(command, expected);
   });
@@ -2637,10 +2642,18 @@ describe('WP-197: a block entry xargs could complete from its input, and the pro
     ['xargs gh --repo=o/r', 'gh release *'],
     // Read `ask / auto / deny` too; the input can supply `-rf`, whose absence was all that hid it.
     ['xargs rm -f', 'rm -rf /*'],
-    ['xargs rm -f /', 'rm -rf /*'],
   ])('%j is uncertain with its flags read apart, naming %j (review round 3)', (command, entry) => {
     expectCells(command, 'ask / uncertain / uncertain');
     expect(auto(command).evaluation.uncertainty).toEqual([xargsCompletesBlockEntry(entry)]);
+  });
+
+  it('"xargs rm -f /" is uncertain, naming "rm -rf /*" twice (review round 3, WP-204)', () => {
+    expectCells('xargs rm -f /', 'ask / uncertain / uncertain');
+    // WP-204 (b)(iii) adds the second: `-f` beside the entry's operand may be `-rf` by an alias.
+    expect(auto('xargs rm -f /').evaluation.uncertainty).toEqual([
+      xargsCompletesBlockEntry('rm -rf /*'),
+      optionMayBeBlockEntry('rm -rf /*', '-f'),
+    ]);
   });
 
   it.each([
@@ -2652,14 +2665,22 @@ describe('WP-197: a block entry xargs could complete from its input, and the pro
   });
 
   it.each([
-    ['xargs /usr/bin/gh release', 'gh release *'],
-    ["xargs 'gh' release", 'gh release *'],
-    ["xargs gh 're'lease", 'gh release *'],
+    ['xargs /usr/bin/gh', 'gh release *'],
+    ["xargs 'gh'", 'gh release *'],
     ['xargs ./terraform', 'terraform apply'],
   ])('%j is uncertain by its unquoted name, naming %j (review round 1)', (command, entry) => {
     expectCells(command, 'ask / uncertain / uncertain');
     expect(auto(command).evaluation.uncertainty).toEqual([xargsCompletesBlockEntry(entry)]);
   });
+
+  // Uncertain until WP-204 (backlog 600): with `release` written each is `gh release *` itself,
+  // which only a name read unquoted reaches.
+  it.each(['xargs /usr/bin/gh release', "xargs 'gh' release", "xargs gh 're'lease"])(
+    '%j is blocked by its unquoted name (review round 1, WP-204)',
+    (command) => {
+      expectCells(command, 'block / block / block');
+    },
+  );
 });
 
 /**
@@ -2727,8 +2748,6 @@ describe('WP-198: the deny-direction readers read argv as the shell builds it, b
     ['gh --repo o/r release create', 'gh release *'],
     // Read `ask / git / git` before.
     ['git -C d push --force origin main', 'git push --force*'],
-    // The over-ask, stated: `-rf` takes no value, and `rm -rf /tmp/x` alone is blocked.
-    ['rm -rf build /tmp/x', 'rm -rf /*'],
   ])('%j is uncertain, an option’s value hiding %j (584)', (command, entry) => {
     expectCells(command, 'ask / uncertain / uncertain');
     expect(auto(command).evaluation.uncertainty).toEqual([flagValueHidesBlockEntry(entry)]);
@@ -2775,9 +2794,17 @@ describe('WP-198: the deny-direction readers read argv as the shell builds it, b
 
   it('reads an xargs prefix past an option’s value: "xargs gh -R o/r release" (584)', () => {
     expectCells('xargs gh -R o/r release', 'ask / uncertain / uncertain');
+    // WP-204 (backlog 600) adds the second: `gh -R o/r release` is the entry once `o/r` is `-R`'s.
     expect(auto('xargs gh -R o/r release').evaluation.uncertainty).toEqual([
       xargsCompletesBlockEntry('gh release *'),
+      flagValueHidesBlockEntry('gh release *'),
     ]);
+  });
+
+  // The over-ask WP-198 stated here (`-rf` takes no value) is gone: since WP-204 (b)(ii) the
+  // entry's `/*` is met wherever it stands among the operands.
+  it('blocks "rm -rf build /tmp/x" (584, WP-204)', () => {
+    expectCells('rm -rf build /tmp/x', 'block / block / block');
   });
 
   it.each([
@@ -3330,7 +3357,6 @@ describe('WP-193, backlogs 565 and 566: a brace is literal unless it expands, an
     "find . -name '*.ts' | xargs -I{} cp {} out/",
     'xargs -I {} echo {}',
     'xargs -I{} grep x {}',
-    'xargs -0 -I{} rm {}',
     'xargs -n1 -I{} echo {}',
     'xargs --replace={} grep x {}',
     // …its controls, and the replace string as xargs' command word.
@@ -3344,6 +3370,15 @@ describe('WP-193, backlogs 565 and 566: a brace is literal unless it expands, an
   ])('%j is uncertain because xargs writes its input into a word of its command', (command) => {
     expectCells(command, 'ask / uncertain / uncertain');
     expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.handedCommand]);
+  });
+
+  it('"xargs -0 -I{} rm {}" is uncertain, and since WP-204 names "rm -rf /*" too', () => {
+    // WP-204 (b)(ii): `{}` stands among `rm`'s operands, and the input may supply `-rf /` after it.
+    expectCells('xargs -0 -I{} rm {}', 'ask / uncertain / uncertain');
+    expect(auto('xargs -0 -I{} rm {}').evaluation.uncertainty).toEqual([
+      UNCERTAINTY.handedCommand,
+      xargsCompletesBlockEntry('rm -rf /*'),
+    ]);
   });
 
   it('reads `xargs -I {} grep x` without `xargsArguments`; its `{}` is held by the walk alone', () => {
@@ -3403,9 +3438,9 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
       // a wrapper's option — the git boundary reads none of these (measured `ask / auto / deny`).
       "sh -c '$x id'",
       "eval '$x id'",
-      "sh -c '$1 id' _ sudo",
-      `sh -c '"$@" id' _ sudo`,
-      "sh -c '$2' _ x sudo",
+      "sh -c '$1 id' _ git",
+      `sh -c '"$@" id' _ git`,
+      "sh -c '$2' _ x git",
       'echo "$($x id)"',
       'nice -n 5 $x id',
       'time -p $x id',
@@ -3415,6 +3450,20 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
       expectCells(command, 'ask / uncertain / uncertain');
       expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.expandedName]);
       expect(auto(command).reason).toContain("write the command's name literally");
+    });
+
+    // These three read `sudo` here until WP-204, uncertain; the bare `sudo` they hand the script
+    // is now `sudo *` itself (backlog 600), so the rows above hand it `git`, and these are blocked.
+    // So are review round 1's `OLDPWD=/usr/bin/sudo; ~- id` and `PWD=/usr/bin/sudo; ~+ id` below,
+    // for the same reason; that table hands them `git` now.
+    it.each([
+      "sh -c '$1 id' _ sudo",
+      `sh -c '"$@" id' _ sudo`,
+      "sh -c '$2' _ x sudo",
+      'OLDPWD=/usr/bin/sudo; ~- id',
+      'PWD=/usr/bin/sudo; ~+ id',
+    ])('%j is blocked: the bare sudo it hands on is the entry (WP-204, backlog 600)', (command) => {
+      expectCells(command, 'block / block / block');
     });
 
     it('names every class in its reason', () => {
@@ -3464,11 +3513,20 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
       ['gh -R o/r rel$x create v1', 'gh release *'],
       // An unquoted expansion may be several words, so it may also be the flag the entry needs.
       ['rm $x', 'rm -rf /*'],
-      ['rm -$x /', 'rm -rf /*'],
+      // A control until WP-204 (b)(ii): an operand may stand anywhere, so `$out` may be `/`.
+      ['rm -rf dist $out', 'rm -rf /*'],
     ])('%j is uncertain, naming %j', (command, entry) => {
       expectCells(command, 'ask / uncertain / uncertain');
       expect(auto(command).evaluation.uncertainty).toEqual([expansionCompletesBlockEntry(entry)]);
       expect(auto(command).reason).toContain('write the word literally');
+    });
+
+    it('"rm -$x /" is uncertain, naming "rm -rf /*" for its option too (WP-204 (b)(iii))', () => {
+      expectCells('rm -$x /', 'ask / uncertain / uncertain');
+      expect(auto('rm -$x /').evaluation.uncertainty).toEqual([
+        optionMayBeBlockEntry('rm -rf /*', '-$x'),
+        expansionCompletesBlockEntry('rm -rf /*'),
+      ]);
     });
 
     it('reads a project’s own entry, and nothing without it (rule 42)', () => {
@@ -3484,10 +3542,10 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
     });
 
     it.each([
-      // The prefix has died before the expansion, the expansion matches a bare `*`, the entry
-      // needs a flag one quoted word cannot supply as well as the path, a relative glob, a later
-      // stage's words, and git's words (the boundary's).
-      ['rm -rf dist $out', 'ask / auto / deny'],
+      // The expansion matches a bare `*`, the entry needs a flag one quoted word cannot supply as
+      // well as the path, a relative glob, a later stage's words, and git's words (the
+      // boundary's). `rm -rf dist $out` stood first here, its prefix dead before the expansion;
+      // since WP-204 (b)(ii) it is a row of the uncertain table above.
       ['rm -rf build', 'ask / auto / deny'],
       ['rm -f "$tmp"', 'ask / auto / deny'],
       ['rm -rf dist/*', 'ask / auto / deny'],
@@ -3549,7 +3607,8 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
       ['ls $dir', 'allow / allow / allow'],
       ['grep -rn "$pattern" src', 'allow / allow / allow'],
       ['curl $url', 'ask / auto / deny'],
-      ['rm -rf dist $out', 'ask / auto / deny'],
+      // `ask / auto / deny` until WP-204 (b)(ii): `$out` may be `/` wherever it stands.
+      ['rm -rf dist $out', 'ask / uncertain / uncertain'],
       ['~/bin/tool', 'ask / auto / deny'],
       // `~user/x` was a control here until review round 2: `~login` is another user's home.
       ['echo su$x', 'ask / auto / deny'],
@@ -3632,8 +3691,8 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
   describe('review round 1', () => {
     it.each([
       // (1) `~-`, `~+` and `~N` are `$OLDPWD`, `$PWD` and the directory stack, which a run sets.
-      ['OLDPWD=/usr/bin/sudo; ~- id', UNCERTAINTY.expandedName],
-      ['PWD=/usr/bin/sudo; ~+ id', UNCERTAINTY.expandedName],
+      ['OLDPWD=/usr/bin/git; ~- push', UNCERTAINTY.expandedName],
+      ['PWD=/usr/bin/git; ~+ push origin main', UNCERTAINTY.expandedName],
       ['OLDPWD=/usr/bin/git; ~- push origin main', UNCERTAINTY.expandedName],
       ['~+0 id', UNCERTAINTY.expandedName],
       ['~1 id', UNCERTAINTY.expandedName],
@@ -3968,7 +4027,8 @@ describe('WP-203, backlog 599: an unknown command is a possible wrapper', () => 
       ['export PATH=$PATH:./bin', 'ask / auto / deny'],
       ['unset arr[0]', 'ask / auto / deny'],
       ['curl $url', 'ask / auto / deny'],
-      ['rm -rf dist $out', 'ask / auto / deny'],
+      // `ask / auto / deny` until WP-204 (b)(ii): `$out` may be `/` wherever it stands.
+      ['rm -rf dist $out', 'ask / uncertain / uncertain'],
       ['cargo test $pkg', 'allow / allow / allow'],
     ])('%j keeps %s', (command, expected) => {
       expect(cell(command, policy)).toBe(expected);
@@ -4717,5 +4777,177 @@ describe('WP-210, backlog 605: a sed or awk script that can run a command', () =
     ['git -C ./planted log', 'ask / auto / deny'],
   ])('control %j keeps %s', (command, expected) => {
     expect(cell(command, policy)).toBe(expected);
+  });
+});
+
+/**
+ * WP-204 (backlogs 598 and 600): a block entry is read by getopt's own rules — a letter cluster by
+ * its letters, an operand wherever it stands among the operands — and an option the policy cannot
+ * read beside the entry's operands is uncertain, through one normaliser every block reader shares
+ * (`entryFlagsMet`, `entryReach`; the census is in `command-policy.test.ts`). A trailing bare `*`
+ * also meets no word. Nothing here executes: each cell is the policy's answer.
+ */
+describe('WP-204, backlogs 598 and 600: a block entry read by getopt’s rules', () => {
+  const modes = (command: string, given: ResolvedCommandPolicy = policy): string =>
+    `${SHORT[auto(command, given).rule]} / ${SHORT[denyMode(command, given).rule]}`;
+  const withBlock = (entry: string): ResolvedCommandPolicy => ({
+    ...policy,
+    block: [...policy.block, entry],
+  });
+
+  describe('criterion (1): a cluster by its letters, an operand wherever it stands', () => {
+    it.each([
+      'rm -r -f /',
+      'rm -fr /',
+      'rm -f -r /',
+      'rm -rf -- /',
+      'rm build -rf /',
+      'rm x -rf /*',
+      'rm -r build -f /',
+      'rm -rfv /',
+      'git branch -qD x',
+      'git branch -Dq x',
+    ])('%j is blocked under auto and deny', (command) => {
+      expect(modes(command)).toBe('block / block');
+    });
+
+    it.each([
+      ['git push -uf origin agentic/x', 'git push -f*'],
+      ['git push -fu origin agentic/x', 'git push -f*'],
+    ])('%j is blocked by %j (the boundary would refuse it too)', (command, entry) => {
+      expect(modes(command)).toBe('block / block');
+      expect(auto(command).evaluation.matched).toBe(entry);
+    });
+
+    it.each([
+      ['git clean -f -d -x', 'git clean -fdx'],
+      ['git clean -xdf', 'git clean -fdx'],
+    ])('%j is blocked under a project entry %j', (command, entry) => {
+      expect(modes(command, withBlock(entry))).toBe('block / block');
+      expect(modes(command)).toBe('auto / deny');
+    });
+  });
+
+  describe('criterion (2), ruling (b)(iii): an option the policy cannot read', () => {
+    it.each([
+      ['rm -R -f /', 'rm -rf /*', '-R'],
+      ['rm -Rf /', 'rm -rf /*', '-Rf'],
+      ['rm --recursive --force /', 'rm -rf /*', '--recursive'],
+      ['rm --recursive -f /', 'rm -rf /*', '--recursive'],
+      ['git branch --delete --force main', 'git branch -D *', '--delete'],
+      ['git branch -d main', 'git branch -D *', '-d'],
+      ['git reset --soft origin/main', 'git reset --hard origin/*', '--soft'],
+      // Review: abbreviated long options, which getopt_long resolves and the policy does not.
+      ['rm --rec --for /', 'rm -rf /*', '--rec'],
+      ['rm --rec -f /', 'rm -rf /*', '--rec'],
+      ['git branch --del --forc x', 'git branch -D *', '--del'],
+      ['git reset --har origin/main', 'git reset --hard origin/*', '--har'],
+    ])('%j is uncertain, naming %j and %j', (command, entry, option) => {
+      expect(modes(command)).toBe('uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([optionMayBeBlockEntry(entry, option)]);
+    });
+  });
+
+  describe('criterion (3): the readers', () => {
+    it.each(['xargs rm -r -f', 'echo / | xargs rm -r -f'])(
+      '%j is uncertain, naming "rm -rf /*" (WP-197’s prefix)',
+      (command) => {
+        expect(modes(command)).toBe('uncertain / uncertain');
+        expect(auto(command).evaluation.uncertainty).toEqual([
+          xargsCompletesBlockEntry('rm -rf /*'),
+        ]);
+      },
+    );
+
+    it('"xargs rm -r -f /" is blocked, and the prefix reader reads its flags apart', () => {
+      // The written words meet the entry whole, so xargs' input supplies nothing it needs.
+      expect(modes('xargs rm -r -f /')).toBe('block / block');
+      expect(auto('xargs rm -r -f /').evaluation.uncertainty).toEqual([]);
+    });
+
+    it('"rm -r -f $x" is uncertain, naming the entry (WP-201 site (ii))', () => {
+      expect(modes('rm -r -f $x')).toBe('uncertain / uncertain');
+      expect(auto('rm -r -f $x').evaluation.uncertainty).toEqual([
+        expansionCompletesBlockEntry('rm -rf /*'),
+      ]);
+    });
+
+    it.each([
+      ['rm -rf build /tmp/x', 'block / block'],
+      ['gh -R o/r release create', 'uncertain / uncertain'],
+    ])('%j reads %s, never auto', (command, expected) => {
+      expect(modes(command)).toBe(expected);
+    });
+  });
+
+  describe('criterion (5): the controls keep their cells', () => {
+    it.each([
+      ['rm -- -rf /', 'ask / auto / deny'],
+      ['rm -r -f build', 'ask / auto / deny'],
+      ['rm -rf dist', 'ask / auto / deny'],
+      ['rm -f *.o', 'ask / auto / deny'],
+      ['rm *.log', 'ask / auto / deny'],
+      ['rm -rf dist/*', 'ask / auto / deny'],
+      ['rm /tmp/x', 'ask / auto / deny'],
+      ['git push -u origin agentic/x', 'ask / auto / deny'],
+      ['git push origin agentic/x', 'allow / allow / allow'],
+      ['git branch -a', 'ask / auto / deny'],
+      ['git branch --show-current', 'ask / auto / deny'],
+      ['git reset origin/main', 'ask / auto / deny'],
+      ['git reset -q --hard origin/main', 'block / block / block'],
+      ['which sudo', 'ask / auto / deny'],
+      ['echo docker', 'ask / auto / deny'],
+    ])('%j keeps %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+
+    it('"find . -name x -delete" stays blocked under a project entry "find * -delete"', () => {
+      expect(cell('find . -name x -delete', withBlock('find * -delete'))).toBe(
+        'block / block / block',
+      );
+    });
+  });
+
+  describe('criterion (9), backlog 600: a trailing * also meets no word', () => {
+    it.each(['sudo', 'sh -c sudo', 'env sudo', 'xargs sudo', 'docker', 'gh release'])(
+      '%j is blocked under auto and deny',
+      (command) => {
+        expect(modes(command)).toBe('block / block');
+      },
+    );
+  });
+
+  describe('criterion (6): the over-ask and the over-block, named', () => {
+    it.each([
+      ['rm -f /tmp/x', 'rm -rf /*', '-f'],
+      ['rm -r /tmp/x', 'rm -rf /*', '-r'],
+      ['rm --force /tmp/x', 'rm -rf /*', '--force'],
+      ['git branch -m a b', 'git branch -D *', '-m'],
+      ['git branch -d x', 'git branch -D *', '-d'],
+      ['git branch -u origin/x x', 'git branch -D *', '-u'],
+      ["git branch --list 'x*'", 'git branch -D *', '--list'],
+      ['git reset --soft origin/main', 'git reset --hard origin/*', '--soft'],
+    ])('over-ask: %j is uncertain, naming %j and %j', (command, entry, option) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([optionMayBeBlockEntry(entry, option)]);
+    });
+
+    it.each([
+      // An operand may stand anywhere, so the input may supply `-rf /` after `x` (ruling (b)(ii)).
+      ['xargs rm x', xargsCompletesBlockEntry('rm -rf /*')],
+      ['rm -rf dist $out', expansionCompletesBlockEntry('rm -rf /*')],
+    ])('over-ask: %j is uncertain', (command, reason) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([reason]);
+    });
+
+    it('over-block: "find . -depth -type d -ls" meets a project entry "find * -delete"', () => {
+      // `-delete` is a single-dash long option, which the letter union meets from `-depth`,
+      // `-type` and `-ls` (d, e, l, t); GNU find's convention, and no default entry has one.
+      expect(cell('find . -depth -type d -ls', withBlock('find * -delete'))).toBe(
+        'block / block / block',
+      );
+      expect(cell('find . -depth -type d -ls', policy)).toBe('allow / allow / allow');
+    });
   });
 });
