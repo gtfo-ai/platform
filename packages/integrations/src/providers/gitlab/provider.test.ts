@@ -872,6 +872,23 @@ describe('CI', () => {
     });
     expect(await port.getJobLog(PROJECT, '9002', { tailBytes: 4 })).toBe('ghij');
   });
+
+  /**
+   * WP-209 (d), backlog 588: the tail counts UTF-8 bytes and starts on a character. `€` is three
+   * bytes and one UTF-16 code unit, so a code-unit tail of 4 kept `b€cd` (six bytes).
+   */
+  it.each([
+    [5, '€cd', 'the cut lands on the first byte of the character'],
+    [4, 'cd', 'one byte inside it: the partial character is dropped, never half kept'],
+    [6, 'b€cd', 'one byte before it'],
+  ])('tails %i bytes of a multi-byte trace as %j (%s)', async (tailBytes, expected) => {
+    const { port } = build({
+      [`GET /projects/${P}/jobs/9002/trace`]: { status: 200, text: 'ab€cd' },
+    });
+    const log = await port.getJobLog(PROJECT, '9002', { tailBytes });
+    expect(log).toBe(expected);
+    expect(Buffer.byteLength(log, 'utf8')).toBeLessThanOrEqual(tailBytes);
+  });
 });
 
 describe('CODEOWNERS lookup', () => {
@@ -913,6 +930,28 @@ describe('CODEOWNERS lookup', () => {
     );
     const rules = await port.readCodeowners(PROJECT, 'main');
     expect(rules?.rules.length).toBeLessThanOrEqual(2);
+  });
+
+  /**
+   * WP-209 (d), backlog 588: `max_codeowners_bytes` counts UTF-8 bytes and cuts on a character.
+   * `ó` is two bytes and one code unit: the file is 16 bytes and 15 code units, so a code-unit cap
+   * of 15 kept the whole of `bó`. The last line takes its section's owner, so its pattern shows the cut.
+   */
+  it.each([
+    [16, 'bó', 'the cap ends exactly after the character'],
+    [15, 'b', 'one byte inside it: the partial character is dropped'],
+  ])('cuts a multi-byte file at %i bytes, keeping %j (%s)', async (cap, pattern) => {
+    const { port } = build(
+      {
+        [`GET /projects/${P}/repository/files/CODEOWNERS/raw?ref=main`]: {
+          status: 200,
+          text: '[Docs] @docs\nbó',
+        },
+      },
+      { config: { max_codeowners_bytes: cap } },
+    );
+    const rules = await port.readCodeowners(PROJECT, 'main');
+    expect(rules?.rules).toEqual([{ pattern, owners: ['@docs'] }]);
   });
 });
 
@@ -1444,5 +1483,125 @@ describe('every note the adapter posts is mention-neutral', () => {
     expect(postedBody(calls, notesPath)).toContain('**<code>@&#8203;someone</code> must act');
     // The fallback found its own note by the body it posted, which is the neutral one.
     expect(replied.id).toBe('d187-new');
+  });
+});
+
+/**
+ * WP-209 round 2b (backlog 611): GitLab runs a quick action from a note or a description saved
+ * through the API, from a line whose first character is `/`. Every writer, through the real
+ * adapter, posts `/close` and `/label ~x` off column 0. The canary is `withoutQuickAction`
+ * answering the line unchanged: every row fails on `/close`.
+ */
+describe('no line the adapter posts runs a quick action', () => {
+  const TEXT = 'Fixed.\n/close\n/label ~x';
+  /** A line GitLab's extractor would read: `/` at column 0 once `\r` is deleted. */
+  const COMMAND = /^\/(?:close|label)\b/m;
+  const bodyOf = (calls: Harness['calls'], key: string, field = 'body'): string =>
+    String(
+      (
+        JSON.parse(
+          calls.find((call) => `${call.method} ${call.path}` === key)?.body ?? '{}',
+        ) as Record<string, unknown>
+      )[field],
+    );
+  const discussionsPath = `POST /projects/${P}/merge_requests/7/discussions`;
+  const created = {
+    id: 'd611',
+    individual_note: false,
+    notes: [
+      {
+        id: 61101,
+        type: 'DiscussionNote',
+        body: 'x',
+        author: { id: 4242, username: 'agentic-bot', name: 'Agentic Bot' },
+        created_at: AT,
+        updated_at: AT,
+        system: false,
+        resolvable: true,
+      },
+    ],
+  };
+  const expectInert = (body: string, label: string) => {
+    expect(body.replaceAll('\r', ''), label).not.toMatch(COMMAND);
+    expect(body, label).toContain('\n /close');
+  };
+
+  it('createDiscussion on the merge request', async () => {
+    const { port, calls } = build({ [discussionsPath]: { status: 201, body: created } });
+    await port.createDiscussion(mrRef(), { markdown: TEXT });
+    expectInert(bodyOf(calls, discussionsPath), 'createDiscussion');
+  });
+
+  it('createDiscussion on a diff line', async () => {
+    const { port, calls } = build({
+      [`GET /projects/${P}/merge_requests/7`]: { status: 200, body: mrBody() },
+      [discussionsPath]: { status: 201, body: created },
+    });
+    await port.createDiscussion(mrRef(), { markdown: TEXT, path: 'src/a.ts', line: 3 });
+    expectInert(bodyOf(calls, discussionsPath), 'a diff note');
+  });
+
+  it('replyToDiscussion, in the thread and as the general-note fallback', async () => {
+    const thread = 'c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c611';
+    const replyPath = `POST /projects/${P}/merge_requests/7/discussions/${thread}/notes`;
+    const notesPath = `POST /projects/${P}/merge_requests/7/notes`;
+    const individual = { ...created, id: thread, individual_note: true };
+    const { port, calls } = build({
+      [replyPath]: { status: 404, body: { message: '404 Not found' } },
+      [`GET /projects/${P}/merge_requests/7/discussions/${thread}`]: {
+        status: 200,
+        body: individual,
+      },
+      [notesPath]: { status: 201, body: {} },
+      [`GET /projects/${P}/merge_requests/7/discussions?per_page=100&page=1`]: {
+        status: 200,
+        body: [
+          individual,
+          {
+            id: 'd611-new',
+            individual_note: true,
+            notes: [
+              {
+                ...created.notes[0],
+                id: 61102,
+                body: gitlabNoteBody(`${TEXT}\n\n${generalNoteReplyLine(61101, mrRef().url)}`),
+              },
+            ],
+          },
+        ],
+      },
+    });
+    await port.replyToDiscussion(mrRef(), thread, TEXT);
+    expectInert(bodyOf(calls, replyPath), 'the in-thread reply');
+    expectInert(bodyOf(calls, notesPath), 'the general-note fallback');
+  });
+
+  it('openMergeRequest and updateMergeRequest descriptions', async () => {
+    const { port, calls } = build({
+      [`POST /projects/${P}/merge_requests`]: { status: 201, body: mrBody() },
+      [`PUT /projects/${P}/merge_requests/7`]: { status: 200, body: mrBody() },
+    });
+    await port.openMergeRequest({
+      project: PROJECT,
+      branch: 'agentic/task-2',
+      target: 'main',
+      title: '/close the totals',
+      description: TEXT,
+      draft: false,
+      labels: [],
+      reviewers: [],
+      remove_source_branch: false,
+    });
+    await port.updateMergeRequest(mrRef(), {
+      description: TEXT,
+      title: null,
+      draft: null,
+      labels: null,
+      reviewers: null,
+    });
+    expectInert(bodyOf(calls, `POST /projects/${P}/merge_requests`, 'description'), 'open');
+    expectInert(bodyOf(calls, `PUT /projects/${P}/merge_requests/7`, 'description'), 'update');
+    // A title is not read for quick actions (`issuable_base_service.rb`): it is sent as written.
+    expect(bodyOf(calls, `POST /projects/${P}/merge_requests`, 'title')).toBe('/close the totals');
   });
 });

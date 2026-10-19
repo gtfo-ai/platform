@@ -188,6 +188,27 @@ const withDiffStats = async (
   }
 };
 
+/**
+ * A merged merge request's discussions, or none when the provider refuses the read for good — a
+ * list longer than the binding pages through (WP-209 (c): the GitLab port refuses a cut list with a
+ * non-retryable `invalid_response`). One busy merge request then costs the sample its discussions,
+ * counted in the batch detail, never the whole batch; a retryable failure still throws.
+ */
+const discussionsOrNone = async (
+  reads: ReturnType<typeof gitReads>,
+  mr: MergedMergeRequest,
+  context: { readonly projectId: Id; readonly taskId: null },
+): Promise<readonly Discussion[] | null> => {
+  try {
+    return await reads.discussions(mr.ref, context);
+  } catch (error) {
+    if (error instanceof IntegrationError && !error.retryable) {
+      return null;
+    }
+    throw error;
+  }
+};
+
 export const collectHistory = async (
   options: HistoryCollectOptions,
   input: { readonly batchId: Id; readonly projectId: Id },
@@ -238,10 +259,15 @@ export const collectHistory = async (
 
   const withDiscussions: { mr: MergedMergeRequest; discussions: readonly Discussion[] }[] = [];
   let sizeless = 0;
+  let unread = 0;
   let statsReads = 0;
   for (const mr of merged) {
     // `1 + N`: the fan-out backlog 64 records, made once per merge request and bounded by N.
-    const discussions = await reads.discussions(mr.ref, context);
+    const read = await discussionsOrNone(reads, mr, context);
+    if (read === null) {
+      unread += 1;
+    }
+    const discussions = read ?? [];
     statsReads += mr.diff_stats == null ? 1 : 0;
     const sized = await withDiffStats(reads, mr, context);
     if (sized.diff_stats == null) {
@@ -268,6 +294,12 @@ export const collectHistory = async (
     } else {
       throw error;
     }
+  }
+
+  if (unread > 0) {
+    const lost = `the git provider refused the discussions of ${unread} of ${merged.length} merge request(s) (more than the binding pages through), so the sample carries none for them`;
+    logger.info({ project_id: projectId, batch_id: batchId, unread }, lost);
+    missing = missing === null ? lost : `${missing}; ${lost}`;
   }
 
   if (sizeless > 0) {

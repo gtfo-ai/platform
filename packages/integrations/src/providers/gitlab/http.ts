@@ -92,24 +92,31 @@ export const GITLAB_PROVIDER_ID = 'gitlab';
  * The largest body this client reads (WP-190, backlog 548): **16 MiB**, four times the 4 MiB
  * schema maximum of `max_codeowners_bytes` (`config.ts`) — the largest body the adapter keeps
  * whole. Four, because the kept text arrives inside a document that also carries what the adapter
- * drops, and JSON escaping grows a capped field (a quote or a backslash doubles, a character
- * measured in UTF-16 code units is up to three UTF-8 bytes). Past it a read is **refused**
+ * drops, and JSON escaping grows a capped field (a quote or a backslash doubles). Past it a read is
+ * **refused**
  * (`ProviderResponseTooLargeError`), never cut. Applies per page of a paginated list.
  */
 export const GITLAB_MAX_RESPONSE_BYTES = 4 * MAX_CODEOWNERS_BYTES_LIMIT;
 
-/** What `getJobLog` keeps of a trace (`provider.ts`): a tail in UTF-16 code units of the redacted text. */
+/**
+ * What `getJobLog` keeps of a trace (`provider.ts`): a tail of this many **UTF-8 bytes**, cut on a
+ * character boundary (WP-209 (d), backlog 588; before it, UTF-16 code units). The port cuts first
+ * and then redacts what it kept with the binding's redactor, so the tail it answers is this many
+ * bytes *before* that pass; a placeholder may make it shorter or longer. The text it cuts has
+ * already had this transport's own redaction pass (property 4, below).
+ */
 export const MAX_JOB_LOG_TAIL_BYTES = 1_048_576;
 
 /**
  * The job trace is the one read that keeps a tail instead of refusing (WP-190 ruling (a)): the
  * transport keeps the trace's last **4 MiB** — four times {@link MAX_JOB_LOG_TAIL_BYTES} — and
  * drops the rest unread into memory. Four, so that the port's own cut always lands strictly inside
- * this one: `getJobLog` keeps at most 1 Mi UTF-16 code units, which is at most 3 MiB of UTF-8, so at
- * least 1 MiB at the head of the transport's tail is discarded again — and with it any fragment of
- * a credential the byte cut split before redaction could see it whole. The residual: a tail whose
- * redaction *shrinks* it by more than 1 MiB (a megabyte of a configured secret's occurrences) could
- * let the port's tail reach back to the byte cut.
+ * this one: `getJobLog` keeps at most 1 MiB of UTF-8 (WP-209 (d); 3 MiB while its tail counted
+ * UTF-16 code units), so at least 3 MiB at the head of the transport's tail is discarded again —
+ * and with it any fragment of a credential the byte cut split before redaction could see it whole.
+ * The decode never shortens that head: an undecodable run becomes U+FFFD, three bytes. The
+ * residual: a tail whose redaction *shrinks* it by more than 3 MiB (megabytes of a configured
+ * secret's occurrences) could let the port's tail reach back to the byte cut.
  */
 export const JOB_LOG_TAIL_BYTES = 4 * MAX_JOB_LOG_TAIL_BYTES;
 
@@ -298,13 +305,27 @@ export interface GitLabHttp {
   request<TBody = unknown>(spec: GitLabRequestSpec): Promise<GitLabResponse<TBody> | null>;
   /** `text/plain` request, for the job trace and the raw file endpoints. */
   requestText(spec: GitLabRequestSpec): Promise<GitLabResponse<string> | null>;
-  /** Follows `x-next-page` up to `maxPages`, concatenating JSON arrays. */
   /**
-   * Every page of a list, up to the binding's `max_pages` — or up to `pages` when the caller asks
-   * for fewer (WP-110: the merge-request poller reads only as many pages as its limit needs).
+   * Every page of a list, following `x-next-page` and concatenating JSON arrays, up to the
+   * binding's `max_pages` — or up to `pages` when the caller asks for fewer (WP-110: the
+   * merge-request poller reads only as many pages as its limit needs).
+   *
+   * **A cut list says so** (WP-209 (c), backlog 577): `truncated` is `true` when the walk stopped at
+   * its bound while GitLab still named a next page, so a caller can tell "every item" from "the
+   * first `bound × perPage`" — before WP-209 the two were the same array.
    */
-  paginate<TItem>(spec: GitLabRequestSpec, perPage: number, pages?: number): Promise<TItem[]>;
+  paginate<TItem>(
+    spec: GitLabRequestSpec,
+    perPage: number,
+    pages?: number,
+  ): Promise<GitLabPages<TItem>>;
   readonly maxPages: number;
+}
+
+/** What {@link GitLabHttp.paginate} read, and whether the bound cut it. */
+export interface GitLabPages<TItem> {
+  readonly items: TItem[];
+  readonly truncated: boolean;
 }
 
 /** URL-encodes a project path so `acme/api` becomes the `:id` GitLab's namespaced paths want. */
@@ -472,7 +493,7 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
     spec: GitLabRequestSpec,
     perPage: number,
     pages?: number,
-  ): Promise<TItem[]> => {
+  ): Promise<GitLabPages<TItem>> => {
     const items: TItem[] = [];
     const bound = Math.min(options.maxPages, pages ?? options.maxPages);
     let page: string | undefined = '1';
@@ -482,6 +503,7 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
         query: { ...spec.query, per_page: perPage, page },
       });
       if (response === null) {
+        page = undefined;
         break;
       }
       if (!Array.isArray(response.body)) {
@@ -496,7 +518,7 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
       visited += 1;
       page = response.headers['x-next-page'];
     }
-    return items;
+    return { items, truncated: page !== undefined && page !== '' };
   };
 
   return { request, requestText, paginate, maxPages: options.maxPages };

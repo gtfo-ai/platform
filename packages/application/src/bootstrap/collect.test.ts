@@ -328,6 +328,44 @@ describe('collecting a project’s merged history', () => {
     expect(report.reason).toContain('published no diff stats for 2 of 2');
   });
 
+  /**
+   * WP-209 review round 1: the GitLab port refuses a discussion list its `max_pages` cut
+   * (`invalid_response`, not retryable). One busy merge request costs the sample its discussions,
+   * said in the batch detail — never the whole batch.
+   */
+  it('mines without one merge request’s discussions when the provider refuses that read for good', async () => {
+    const harness = world({
+      merged: 3,
+      git: {
+        listDiscussions: async (ref) => {
+          if (ref.iid === 2) {
+            throw new IntegrationError('invalid_response', 'fake-git', 'more than max_pages');
+          }
+          return [note('Use the money helper.')];
+        },
+      },
+    });
+    const batchId = await seedBatch(harness, { mergeRequests: 3, batchSize: 20 });
+    const report = await collect(harness, batchId);
+    expect(report.status).toBe('collected');
+    expect(harness.bootstrap.batches[0]?.status).toBe('mining');
+    expect(report.reason).toContain('refused the discussions of 1 of 3 merge request(s)');
+    expect(await tasksOf(harness)).toHaveLength(1);
+  });
+
+  it('still fails the collection on a discussion read that may succeed later', async () => {
+    const harness = world({
+      merged: 2,
+      git: {
+        listDiscussions: async () => {
+          throw new IntegrationError('unavailable', 'fake-git', 'down');
+        },
+      },
+    });
+    const batchId = await seedBatch(harness, { mergeRequests: 2, batchSize: 20 });
+    await expect(collect(harness, batchId)).rejects.toThrow('down');
+  });
+
   it('marks a batch empty when nothing was merged in the window, and creates no task', async () => {
     const harness = world({ merged: 0 });
     const batchId = await seedBatch(harness, { mergeRequests: 20, batchSize: 20 });

@@ -303,9 +303,10 @@ describe('createGitLabHttp — pagination', () => {
         ? json(200, [1, 2], { 'x-next-page': '2' })
         : json(200, [3], { 'x-next-page': '' });
     });
-    expect(await http.paginate({ method: 'GET', path: '/x', action: 'probe' }, 2)).toEqual([
-      1, 2, 3,
-    ]);
+    expect(await http.paginate({ method: 'GET', path: '/x', action: 'probe' }, 2)).toEqual({
+      items: [1, 2, 3],
+      truncated: false,
+    });
     expect(calls.map((call) => new URL(call.url).search)).toEqual([
       '?per_page=2&page=1',
       '?per_page=2&page=2',
@@ -314,8 +315,23 @@ describe('createGitLabHttp — pagination', () => {
 
   it('stops at maxPages rather than following a provider for ever', async () => {
     const { http, calls } = httpWith(() => json(200, [1], { 'x-next-page': '99' }));
-    await http.paginate({ method: 'GET', path: '/x', action: 'probe' }, 1);
+    const pages = await http.paginate({ method: 'GET', path: '/x', action: 'probe' }, 1);
     expect(calls.length, 'bounded by maxPages').toBe(3);
+    expect(pages, 'and the cut is reported, never quiet (WP-209 (c))').toEqual({
+      items: [1, 1, 1],
+      truncated: true,
+    });
+  });
+
+  it('reports a list whose last page is the bound as complete', async () => {
+    let page = 0;
+    const { http, calls } = httpWith(() => {
+      page += 1;
+      return json(200, [page], { 'x-next-page': page === 3 ? '' : String(page + 1) });
+    });
+    const pages = await http.paginate({ method: 'GET', path: '/x', action: 'probe' }, 1);
+    expect(calls.length).toBe(3);
+    expect(pages).toEqual({ items: [1, 2, 3], truncated: false });
   });
 
   it('refuses a page that is not an array', async () => {

@@ -248,6 +248,14 @@
  *     *"a thread from a single comment"*. A resolvable general note resolves like any thread; a
  *     non-resolvable one refuses `resolveDiscussion` with `invalid_request`, as every non-resolvable
  *     thread here does.
+ * 32. **Kinder — `listDiscussions` never refuses a long list** (WP-209 (c), backlog 577). It has
+ *     no page bound, so it answers every discussion however many there are. The GitLab adapter
+ *     reads at most `max_pages` pages of 100 and throws a non-retryable `invalid_response` past
+ *     them (the port's docblock). A consumer tested only against this fake has never seen that
+ *     refusal: `collectHistory` and the shadow report degrade on it, each pinned by a unit test that
+ *     throws it from a stub, and the GitLab runner holds the adapter to it
+ *     (`gitlab.contract.test.ts`, `review-conversation-truncated.contract.test.ts`). To exercise it
+ *     here, use `core.script.failWhile('list_discussions', …)`.
  */
 import {
   type BranchPushProtection,

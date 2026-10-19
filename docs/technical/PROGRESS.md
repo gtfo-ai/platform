@@ -52168,3 +52168,140 @@ Probes, corpora logs, the image census and the canary harness are in `scratchpad
 - **Minor, done:** the module docblock and technical/05 now name the residual: gawk's `@include "f"` and `@load`, an indirect call (`@f($0)`), and the names `original-awk`, `gsed` and a `sed` behind `strace -f` or `eatmydata`. These are latent, because the image's awk is mawk 1.3.4 (the reviewer's measurement). technical/05's *"behind any wrapper the walk peels"* is rewritten. TD-030's amendment carries the same phrase, but it is a decision and not this row's to edit, so the orchestrator should check it.
 - **Minor, done:** `command-corpus.test.ts` has the `allow → auto` case, `counts an allow that now runs only under auto as newly asked (WP-210 review round 1)`.
 - `pnpm run -s verify`: `PASS: verify` (15 015 passed), started at a load of 5.16. The `project-commands` e2e passed 2/2, started at a load of 17.31, over the rules' ~12, after the load rose between the two runs. The corpus check passed with 0 cells changed.
+
+#### WP-209 — GitLab: the merge request's title and description neutralise mentions, a rewritten suggestion is never applicable, a cut discussion list never re-posts, the byte caps count bytes (backlogs 573, 574, 577, 588)
+
+Worktree `wt-wp209` at `9a3216e9`. All four parts done; nothing moved under the split clause.
+
+**Changes.**
+- `providers/gitlab/mentions.ts`: `gitlabMergeRequestTitle` (new); `gitlabNoteBody` recognises its own form and drops a rewritten `suggestion` info string (`withoutChangedSuggestions`).
+- `providers/gitlab/provider.ts`: `openMergeRequest` and `updateMergeRequest` send the title through `gitlabMergeRequestTitle` and the description through `gitlabNoteBody`. The port's `listDiscussions` refuses a cut list. `getJobLog` and `readCodeowners` cut through `utf8Cut`.
+- `providers/gitlab/http.ts`: `paginate` answers `{ items, truncated }`. `client.ts`: six callers take `.items`; `listDiscussions` answers `{ discussions, truncated }`.
+- Docblocks: the port's `mergeRequestDraftSchema`, `mergeRequestUpdateSchema` and `listDiscussions` (rule 83); divergence 9; `config.ts` `max_pages`; `JOB_LOG_TAIL_BYTES`, `MAX_JOB_LOG_TAIL_BYTES`, `GITLAB_MAX_RESPONSE_BYTES`.
+- technical/06: a WP-209 amendment after WP-187's, and the WP-190 paragraph's tail clause. `docs/TODO.md`: the title item is answered. `SOURCES.md`: a WP-209 section. New fixture: `test/fixtures/http/gitlab/discussions-paged.json` (two interactions, each with a `source` block). `gitlab-harness.ts`: `gitlabReplayContext` takes `config`.
+
+**(a) Title and description (573).**
+- **The title's form, from a cited fact.** `issuable.rb` (`v18.4.0-ee`) declares `attr_mentionable :title, pipeline: :single_line_markdown`. That pipeline's `reference_filters` begin with `UserReferenceFilter`, although the comment above them says it is excluded. So a title's `@name` is read. Its sanitiser keeps `code`, so inline code would survive a rendered title; that answers the architect's open question. The form is still a **literal U+200B after every `@`** (and after every entity spelling of one), with no markup. A title is also shown unrendered (an e-mail subject, the API's `title`), where `<code>` or `&#8203;` would show as typed. `user.rb` and `path_regex.rb` (WP-187's citations) show the zero-width space defeats a user reference in any element. The function is idempotent.
+- **Assumption: a title can grow past GitLab's 255 characters.** The tool bounds titles at 255 (`boundTitle`). Each inserted character could push a bounded title past that, which GitLab would refuse. `gitlabMergeRequestTitle` cuts back to 255 with `…`. A cut cannot make a mention.
+- **The double wrap, measured** (scratch script, `mentions.ts` at `9a3216e9`): a second pass nested the form, `<code><code>@&#8203;&#8203;all</code></code>`, and it wrapped a code span on any line holding the form (`<code>` counted as `LINK_OR_TAG`). Two fixes. `wrapMentions` leaves `<code>` + any `@` spelling + `&#8203;` + name + `</code>`, which is inert in every decoding context. The structural tests read that exact form as text (`OWN_FORM`, `masked`): no attribute, backtick or bracket, so CommonMark gives it no block or span effect. Any other tag keeps its effect (pinned with `<b>`). Pinned: six inputs give once = twice, and a description sent back through the real adapter is sent byte-identical.
+- **The description's growth.** `<code>@&#8203;…</code>` adds 20 characters per mention. At the port's 32,768-character bound the worst case is about 360 KB, under GitLab's ~1 MB.
+- A draft toggle re-sends a person's title, so their `@name` gets the zero-width space too. Fail-closed, invisible.
+
+**(b) Suggestions (574).** A fence-opening line whose info string **starts with** `suggestion` (any case, behind any container marker) loses its whole info string when two things hold: the reading did not place and close the fence, and any later line differs from the input. A line holding a lone `\r` is judged per `\r` segment and condemned by a change in itself or after it. Two counterexamples widened the rule: a lone `\r` (marked splits there, the `\n` reading does not) and `suggestionall` (marked's class is a prefix match). The final rule ran clean over 80,000 notes of up to 40 tokens (seeds 1–7) and 30,000 of up to 80 (seeds 8–10): every `language-suggestion` block marked renders from the output is one it renders from the input. The committed property runs 500 per pass. **The URL half is stated as accepted** (`mentions.ts` residual). No cited fact says GitLab autolinks a bare URL before its reference filter runs.
+
+**(c) Truncation (577), measured first.** The bound is `max_pages`, default 10, schema maximum 100. GitLab's `per_page` maximum is 100 (`docs.gitlab.com/api/rest/` § Pagination, cited), the adapter's page size. So a list is cut past 1,000 discussions by default, 10,000 at most. Choices:
+- `paginate` reports `truncated` (the flag). The port's `listDiscussions` **throws `IntegrationError('invalid_response')`**, as `listStatuses` does for a cut list (WP-181). Every reader of the port refuses a busy merge request, not only the marker search. GitLab lists oldest first, so a cut list was quietly missing the newest discussions for every reader: the prompt's conversation, review threads, the poll.
+- The adapter's own three readers keep the cut list, each commented. Inbound `findThreadForNote` must not fail a webhook. The post-read fails on absence anyway. `discussion_count` is a history-sample count.
+- The duty fails, so the outbound job's retry and exhaustion escalate it.
+- **Assumption (rule 23):** the obligation is held by the GitLab runner, not the shared suite. The fake has no page bound, so it cannot be driven into a cut list. The port docblock says so.
+
+**(d) Bytes (588), option (a).** Both caps encode to UTF-8, cut at the byte count, and step to a character boundary: forward for the tail, back for the head. `max_codeowners_bytes` already said "in bytes", so no schema text changes. **The WP-190 tail argument, re-derived** at `JOB_LOG_TAIL_BYTES`: the port keeps at most 1 MiB of UTF-8, so at least 3 MiB of the transport's 4 MiB tail is discarded again (it was 1 MiB). Decoding never shortens that head. The residual is now a redaction that shrinks the tail by more than 3 MiB.
+
+**Criteria.**
+1. The title and description cases run through the real adapter under the marked + happy-dom oracle. Canaries (each in place, reverted by the same script to the recorded `sha256`, matched before and after) remove one call each, and each kills the case of its tool:
+   - `packages/integrations/src/providers/gitlab/mentions.test.ts` › "open_mr: neither the title nor the description mentions anybody"
+   - `packages/integrations/src/providers/gitlab/mentions.test.ts` › "update_mr_description: neither the title nor the description mentions anybody"
+2. The census derives title and description writers from `client.ts` (`textWriters`). Canary: a client member `renameMergeRequest` sending `json: { title }` was added and never called. The census failed, naming it:
+   - `packages/integrations/src/providers/gitlab/mentions.test.ts` › "finds every writer called, and every call passing its text through the function"
+3. Pinned: `packages/integrations/src/providers/gitlab/mentions.test.ts` › "neutralises a description sent back through update_mr_description once"
+4. Five shapes lose the info string (list marker, quote, raw-text element, lone `\r`, lost indented fence). Two controls keep it: nothing changed after the opener, and a placed fence. Canary: `withoutChangedSuggestions` removed, and all five cases plus the property failed:
+   - `packages/integrations/src/providers/gitlab/mentions.test.ts` › "renders no suggestion the input did not have"
+5. A reply on page 2 with `max_pages: 1` is not re-posted, through the real adapter and the real duty. With `max_pages: 2`, the control, it is found by marker. Canary: the flag ignored (`truncated && false`). The duty then reached `POST …/notes`, which the replay refused, so the case failed:
+   - `test/contract/review-conversation-truncated.contract.test.ts` › "is not posted again when max_pages stops before its page: the cut read is refused"
+   - `test/contract/integrations/gitlab.contract.test.ts` › "refuses the list when max_pages stops before its last page"
+6. The tail is tested at 6, 5 and 4 bytes of `ab€cd`, and the head at 16 and 15 bytes of `[Docs] @docs\nbó`. Canaries restoring the code-unit cuts kill the three tail cases and the 15-byte head case. The 16-byte case agrees under both units: it is the control.
+7. Controls keep their counts: `conflict-warning.test.ts` 12, `application/…/review-conversation.test.ts` 24, `application/…/review-only.test.ts` 40, `domain/src/policies/review-only.test.ts` 14, `response-ceiling.test.ts` 27, `bounded-body.test.ts` 12. The contract run passed 198, `review-conversation-replies.contract.test.ts` and the GitLab runner included. **Changed:** two `http.test.ts` pagination cases (WP-09's) now assert `{ items, truncated }` because the return shape changed, and the bound case also asserts `truncated: true`.
+8. `SOURCES.md` § WP-209 and the port docblocks are in this tree.
+
+**Sentences falsified** (rule 83). Grep: `git grep -n -F <phrase> -- docs CLAUDE.md packages test apps ':!docs/technical/PROGRESS.md'` for `wraps twice`, `UTF-16 code units`, `1 Mi`, `code-unit`, `returns what it has`, `notes only`, `note body the adapter posts`, `mention-neutral` and `max_pages`.
+- Fixed in this tree:
+  - technical/06's WP-190 paragraph ("1 Mi-code-unit tail").
+  - `http.ts`: three docblocks (the response ceiling's UTF-16 clause, `MAX_JOB_LOG_TAIL_BYTES`, `JOB_LOG_TAIL_BYTES`).
+  - `config.ts`'s `max_pages` ("stops and reports what it has").
+  - `mentions.ts`'s opening line and residual (WP-187's "a changed suggestion … Apply suggestion would commit it").
+- Still true:
+  - `ci-log.ts:12` ("GitLab: 1 MiB"), now exact.
+  - technical/06's WP-187 amendment, which speaks of notes.
+  - The other UTF-16 hits, which are other caps.
+- Left for the orchestrator (ledger state): the WP-187 residual "Applying `gitlabNoteBody` twice wraps twice"; the headings of backlogs 573, 574, 577 and 588; the WP-209 status row.
+
+**Discovered work.**
+- **A pre-existing fail-open in `gitlabNoteBody`**, found by the extended property at seed 1 and present at `9a3216e9` too. The input is `<details>&#x40x  ` + three backticks + `suggestion&#64;x\&#64;x&#64;x` + a backtick + `1. `.
+  - The name grammar admits `\&`, so `&#64;x\&` is one match. It is kept as an e-mail address after the letter `n`, and the following `&#64;x` likewise.
+  - In an HTML block the browser decodes the entity, which leaves `\@x`, and that is a mention to GitLab's `(?<!\w)@`.
+  - Likely fix: no `&` among the name's backslash escapes. It needs its own property run. Not reproduced with WP-187's token set in 30,000 runs, so the committed property is not expected to be flaky.
+- The client's other six paginated reads (`deployKeys`, `protectedBranches`, `listCommits`, `pollMergeRequests`, `listMergeRequests`, `pipelineJobs`) take `.items` and still ignore `truncated`. Each needs a decision about what a cut list costs its caller; this row decided only the discussions.
+
+**Verification.**
+- `pnpm run -s verify` on the final tree: `PASS: verify` (14,975 passed, 19 skipped), started at a one-minute load of 6.27.
+- Scoped integration (`--project integration`): `prompt-reread`, `webhook-ingress`, `egress`, `git-vault-index`, 4 files, 34/34. No e2e test reads the GitLab adapter (the e2e tier composes the fake).
+- `packages/integrations/src/providers/gitlab` unit: 10 files, 384 tests.
+
+**Review round 1** (REQUEST_CHANGES: one major, one minor, and backlog 609 folded in by the orchestrator).
+
+1. **[major] Every `listDiscussions` caller read for what the port's refusal costs it (577).**
+   - `bootstrap/collect.ts`: `discussionsOrNone`. A non-retryable `IntegrationError` gives that merge request no discussions. The batch detail says *"the git provider refused the discussions of N of M merge request(s)"*, the same shape `withDiffStats` uses. A retryable error still throws. Before this fix, one busy merge request failed the whole history sample.
+   - `shadow/report.ts` had the same defect (one refusal lost the whole report). A refused read now gives `discussions: null`: no reviewer minutes, and a note saying why.
+   - Callers that already coped: the planner's conversation read (it logs and the run proceeds without conversation blocks) and `mr-poll.ts:644-656` (it skips the task and asks again next poll). Confirmed by reading.
+   - Callers left failing their job, which retries and then escalates: `jobs.ts` (review window), `review-only.ts` (summary), `review-threads-refresh.ts`, and both conversation duties. Each writes a decision or a count from the list, and a cut list is the wrong input for one.
+   - Tests:
+     - `packages/application/src/bootstrap/collect.test.ts` › "mines without one merge request’s discussions when the provider refuses that read for good"
+     - `packages/application/src/bootstrap/collect.test.ts` › "still fails the collection on a discussion read that may succeed later"
+     - `packages/application/src/shadow/report.test.ts` › "writes the report without reviewer minutes when the human discussions are refused (WP-209)"
+     - plus a `buildShadowReport` case.
+   - Canaries: each catch disabled in place (sha matched before and after). Each killed its own case. The shadow canary first survived a `buildShadowReport`-only test, which is why the walk case exists.
+   - technical/06's WP-209 amendment now lists every caller.
+2. **[minor]** The fake's divergence 32 (kinder): `listDiscussions` never refuses a long list.
+3. **Backlog 609, fixed structurally.**
+   - The mechanism: a quantifier applied to the escape alternative alone let a name take `\&`, the start of the next `@` spelling.
+   - The fix: every name part (`NAME_PART`) sits behind one lookahead, `(?!\\?(?:AT))`, which refuses a part where an `@` spelling begins under either reading. Markdown reads `\&` as an escaped `&`. A raw HTML block reads `\` as a character and the `&` as the start of an entity.
+   - Why the HTML reading is GitLab's: `glfm_markdown.rb` (`v18.4.0-ee`) renders with `unsafe: true`. Cited in `SOURCES.md` § WP-209, round 1. Its title options have `unsafe: false`, a second reason the title form carries no markup.
+   - Measured on the way: the first attempt put `+` on the guarded part, so the lookahead ran once. Isolating the regex showed the name still took `b\&`.
+   - Cases, notes and a description through the real adapter: the WP-209 counterexample, and `a…b\…all` inside `<details>` or `<div>` with the decimal, hex and named spellings, `@all` included. Controls `a\&b`, `name@example.com` and `name@example.com\& co.` stay byte-identical. Canary: drop `\\?` from the lookahead, and all five cases fail.
+   - Property:
+     - 80,500 notes clean with the extended token set (seeds 1–7, 11,500 each).
+     - 50,000 clean with the committed structured generator (an opener plus up to 12 parts; seeds 1–5).
+     - Against the old function, the same generator found the class about once per 2,500 notes. So the pinned cases are the canary, and the committed property (500 per pass) is a net, not proof.
+
+Verification, round 1:
+- `pnpm run -s verify`: `PASS: verify` (14,988 passed, 19 skipped), started at a one-minute load of 2.21. `scripts/citations.test.ts`: 13/13.
+- Scoped integration, 6 files, 67/67: the four GitLab readers plus `postgres-history-bootstrap-store` and `postgres-shadow-store`.
+- Scoped e2e (`e2e-fake-claude`, `platform-runtime:s16`): `history-bootstrap` and `shadow`, 2 files, 7/7.
+- Touched unit suites: 566 passed.
+
+**Review round 2** (a fresh reviewer): APPROVE, with one nit. The `MAX_JOB_LOG_TAIL_BYTES` docblock now says what the code does: the port cuts first and then redacts what it kept with the binding's redactor. The tail is the byte count *before* that pass, and a placeholder may make it shorter or longer. The transport's own redaction pass ran before the cut.
+
+**Review round 2b** (backlog 611, folded in by the orchestrator: quick actions). Edits started only after `summary.log` showed two `verify:e2e rc=` lines (06:50).
+- **Read from GitLab's source** at `v18.4.0-ee`, cited in `SOURCES.md` § WP-209, round 2b. This settles the ledger's open questions:
+  - `extractor.rb` deletes `\r`. It then matches `^\/<command>` on the **source lines** of the paragraphs the `quick_action` pipeline returns, after an inline-code and HTML-block exclusion.
+  - `quick_action_filter.rb` takes **top-level** `p` nodes only, rendered with raw HTML disabled. So a code block, a quote, a list item and an HTML block hold no command.
+  - Indentation defeats the match, because it needs column 0.
+  - `issuable_base_service.rb` interprets the **description** on create and update, never the title.
+- **The form.** `gitlabNoteBody` gives every line whose first character is `/` (with `\r` removed, as GitLab removes it) **one leading space**. Exempt: the body of a fence this reading placed. This is every `/`, not only known command names, which fails closed.
+  - CommonMark strips a paragraph line's leading spaces, so the text shows the same. A test compares the shown text with marked + happy-dom; marked keeps the space in its HTML, and the browser drops it.
+  - Idempotent. The suggestion pass runs after it, so a `/` line rewritten inside a block the reading lost also drops that block's `suggestion` info string.
+  - The title is unchanged; a row pins it.
+- **Writer rows** through the real adapter post `/close` and `/label ~x`: `createDiscussion` (on the merge request and on a diff line), `replyToDiscussion` in the thread and its general-note fallback, and the `openMergeRequest` and `updateMergeRequest` descriptions. The function stays the one the existing census holds, so no new census.
+- **Cases:** six shapes moved off column 0 (each idempotent). Five controls stay byte-identical: a placed fence, an unclosed placed fence, a code span, a mid-line `a /close`, and an indented line.
+- **Property:** a CommonMark fence oracle, 100,000 notes clean (seeds 1–5, 20,000 each), committed at 500. The first oracle toggled on every fence-like line and reported false positives (a backtick run inside a `~~~` fence), which is why the committed one tracks the opener's character and length.
+- **Canary:** `withoutQuickAction` answering the line unchanged. Eleven tests failed, every writer row among them.
+- **Residual:** that the leading space is inert on a live GitLab is read, not measured. A `[ ]` item is filed in `docs/TODO.md`.
+- **Verification:**
+  - `pnpm run -s verify`: `PASS: verify` (15,005 passed, 19 skipped), started at a load of 10.44.
+  - Scoped integration (the four GitLab readers): 34/34.
+  - Contract: 76/76 (`gitlab.contract`, `review-conversation-truncated`, `review-conversation-replies`).
+  - Fault: the integration run started at a load of 20.73 without the wait the common rules require.
+
+**Review round 3** (REQUEST_CHANGES: one major, one minor; the reviewer measured with comrak 0.40.0, the version `gitlab-glfm-markdown` 0.0.33 pins at `v18.4.0-ee`).
+1. **[major] A `>>>` quote behind spaces.** comrak opens GitLab's multi-line quote behind 0–3 spaces (`detect_multiline_blockquote`), and its closing `>>>` closes a fence left open inside it. The reader checked `^>>>` only. So in `  >>>` / a fence line / `>>>` / `/close` / a fence line, it took `/close` for fence body, while comrak rendered a top-level paragraph that runs. A mention there stayed live too, a defect that predates WP-209 (since WP-187).
+   - The fix: `/^ {0,3}>>>/` makes the rest of the note uncertain wherever `^>>>` did. It is broader than the reviewer's `^ {0,3}>{3,}[ \t]*\r?$`, which fails closed.
+   - Pinned: the `/close` and `/approve x` half (the quick-action table); the `@all` half behind one and three spaces; and a control, `    >>>` (four spaces, indented code), after which a fence is still placed.
+   - Canary: `^>>>` restored, and the three new cases fail.
+   - The property's parts were **not** extended with `'  >>>'`, because its oracle does not model a quote's close ending a fence. The reviewer's comrak harness covers that shape instead.
+2. **[minor]** `placed.has(of)` was an equivalent mutant and is dropped. Every recorded fence-body line is exempt. A body line that opens with `/` can only belong to a column-0 fence, which is never lost: an indented fence's body lines carry its indent, and a line that does not is `lost` and never recorded. `fenceBody` is now a `Set`; the comment at the map says this.
+3. **The reviewer's comrak fuzz** (`wp209-rev3/fuzz.mjs`, comrak `cm` binary, seed 7) on the final tree: **0 distinct hits** in 8,000 notes, whose raw inputs ran a command 592 times. At 20,000 notes the harness ran out of heap (a happy-dom `Window` per call), so it ran at 8,000 with `--max-old-space-size=8192`.
+
+Verification, round 3:
+- `pnpm run -s verify`: `PASS: verify` (15,009 passed, 19 skipped), started at a load of 8.98.
+- Scoped integration (the four GitLab readers): 34/34, started at a load of 9.73 after a wait.
+- gitlab unit: 414.

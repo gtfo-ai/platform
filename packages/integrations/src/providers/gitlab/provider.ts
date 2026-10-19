@@ -91,6 +91,9 @@
  *     its renderer places spans and fences where CommonMark does is **[unverified]**
  *     (`docs/TODO.md` § Verification).
  *     `mentions.test.ts` refuses a note-writing call that bypasses the function.
+ *     **Since WP-209** (backlog 573) a merge request's description goes through it too, and its
+ *     title through `gitlabMergeRequestTitle` (a literal zero-width space after each `@`, no
+ *     markup: a title is mentionable and is also shown unrendered); the census covers both.
  */
 import {
   bindingSecretRedactor,
@@ -160,7 +163,7 @@ import {
   withDraftPrefix,
   withoutDraftPrefix,
 } from './mapping.js';
-import { gitlabNoteBody } from './mentions.js';
+import { gitlabMergeRequestTitle, gitlabNoteBody } from './mentions.js';
 import type { GitLabDiscussion, GitLabMergeRequest, gitlabAccessTokenSchema } from './schemas.js';
 import { gitLabDeliveryKey, verifyGitLabDelivery } from './webhook-verify.js';
 
@@ -319,6 +322,30 @@ export const generalNoteReplyLine = (
   return mergeRequestUrl === null || /[\s()]/u.test(mergeRequestUrl)
     ? `_In reply to note ${noteId}._`
     : `_In reply to note [${noteId}](${mergeRequestUrl}#note_${noteId})._`;
+};
+
+/** Whether a UTF-8 byte continues a character rather than starting one. */
+const continuesCharacter = (byte: number | undefined): boolean =>
+  byte !== undefined && (byte & 0xc0) === 0x80;
+
+/**
+ * `text` cut to its first or last `bytes` bytes of UTF-8, at a character boundary (WP-209 (d),
+ * backlog 588): the two caps that say bytes count bytes, never UTF-16 code units, and a cut never
+ * leaves half a character.
+ */
+const utf8Cut = (text: string, bytes: number, keep: 'head' | 'tail'): string => {
+  const encoded = Buffer.from(text, 'utf8');
+  if (encoded.byteLength <= bytes) {
+    return text;
+  }
+  if (keep === 'head') {
+    let end = bytes;
+    while (end > 0 && continuesCharacter(encoded[end])) end -= 1;
+    return encoded.subarray(0, end).toString('utf8');
+  }
+  let start = encoded.byteLength - bytes;
+  while (continuesCharacter(encoded[start])) start += 1;
+  return encoded.subarray(start).toString('utf8');
 };
 
 export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProvider => {
@@ -596,7 +623,8 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       `${markdown}\n\n${generalNoteReplyLine(answeredNote, mrRef.url ?? null)}`,
     );
     const createdId = await client.createMergeRequestNote(project, mrRef.iid, body);
-    const discussions = await afterPost(createdId, `${project}!${mrRef.iid}`, () =>
+    // A cut list cannot hold the newest note, so this check then fails below: never a false find.
+    const { discussions } = await afterPost(createdId, `${project}!${mrRef.iid}`, () =>
       client.listDiscussions(project, mrRef.iid),
     );
     const created =
@@ -686,7 +714,8 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         redactor,
         ...(options.onRedaction === undefined ? {} : { onRedaction: options.onRedaction }),
         findThreadForNote: async (project, iid, noteId) => {
-          const discussions = await client.listDiscussions(project, iid);
+          // A note past the cut is answered as no thread, as before WP-209 (the delivery is kept).
+          const { discussions } = await client.listDiscussions(project, iid);
           for (const discussion of discussions) {
             const note = (discussion.notes ?? []).find((candidate) => candidate.id === noteId);
             if (note !== undefined) {
@@ -863,8 +892,10 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         source_branch: draft.branch,
         target_branch: draft.target,
         // There is no `draft` parameter on POST /merge_requests; the title prefix is the API.
-        title: draft.draft ? withDraftPrefix(draft.title) : withoutDraftPrefix(draft.title),
-        description: draft.description,
+        title: gitlabMergeRequestTitle(
+          draft.draft ? withDraftPrefix(draft.title) : withoutDraftPrefix(draft.title),
+        ),
+        description: gitlabNoteBody(draft.description),
         ...(draft.labels.length === 0 ? {} : { labels: draft.labels.join(',') }),
         ...(draft.reviewers.length === 0
           ? {}
@@ -884,8 +915,8 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         title = update.draft ? withDraftPrefix(base) : withoutDraftPrefix(base);
       }
       const updated = await client.updateMergeRequest(project, mrRef.iid, {
-        ...(title === null ? {} : { title }),
-        ...(update.description == null ? {} : { description: update.description }),
+        ...(title === null ? {} : { title: gitlabMergeRequestTitle(title) }),
+        ...(update.description == null ? {} : { description: gitlabNoteBody(update.description) }),
         ...(update.labels == null ? {} : { labels: update.labels.join(',') }),
         ...(update.reviewers == null
           ? {}
@@ -1167,7 +1198,18 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       // Every discussion, an `individual_note` (a general comment) included and whatever its
       // `resolvable` says (WP-173, research/15 G2) — the shared contract suite pins it, and a
       // filter here is the canary that suite was written to kill.
-      return (await client.listDiscussions(project, mrRef.iid)).map(toDiscussion);
+      // GitLab lists the oldest first, so a cut list loses the newest — the reply a marker search
+      // is looking for. Refused, never answered (WP-209 (c), backlog 577; rule 20).
+      const { discussions, truncated } = await client.listDiscussions(project, mrRef.iid);
+      if (truncated) {
+        throw new IntegrationError(
+          'invalid_response',
+          GITLAB_PROVIDER_ID,
+          `${project}!${mrRef.iid} has more discussions than max_pages (${String(config.max_pages)}) pages of 100 hold`,
+          { action: 'list_discussions' },
+        );
+      }
+      return discussions.map(toDiscussion);
     },
 
     replyToDiscussion: async (mrRef, discussionId, markdown) => {
@@ -1328,8 +1370,7 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         logOptions?.tailBytes ?? MAX_JOB_LOG_TAIL_BYTES,
         MAX_JOB_LOG_TAIL_BYTES,
       );
-      const tail = trace.length <= tailBytes ? trace : trace.slice(trace.length - tailBytes);
-      return redact('get_job_log', tail);
+      return redact('get_job_log', utf8Cut(trace, tailBytes, 'tail'));
     },
 
     /**
@@ -1401,11 +1442,10 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         }
         // BD-022: a fork's contributor writes this file. Truncating before parsing bounds the work
         // regardless of what they wrote.
-        const bounded =
-          raw.length <= config.max_codeowners_bytes
-            ? raw
-            : raw.slice(0, config.max_codeowners_bytes);
-        return parseCodeowners(bounded, DEFAULT_CODEOWNERS_LIMITS);
+        return parseCodeowners(
+          utf8Cut(raw, config.max_codeowners_bytes, 'head'),
+          DEFAULT_CODEOWNERS_LIMITS,
+        );
       }
       return null;
     },
@@ -1492,7 +1532,8 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       for (const mr of merged) {
         // GitLab publishes `user_notes_count` (notes) and not a thread count, so the threads are
         // counted. One request per merge request, bounded by `limit`.
-        const discussions = await client.listDiscussions(project, mr.iid);
+        // A history sample's count: a cut list undercounts, which the sample tolerates.
+        const { discussions } = await client.listDiscussions(project, mr.iid);
         results.push({
           ref: {
             provider: GITLAB_PROVIDER_ID,

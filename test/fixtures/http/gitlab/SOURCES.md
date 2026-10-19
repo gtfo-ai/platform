@@ -501,3 +501,67 @@ and fences where CommonMark (and `marked`) does (`docs/TODO.md` § Verification)
 The form itself — `<code>@&#8203;name</code>` rather than a backtick span — was decided by
 measurement against `marked` 16.4.2 and happy-dom 20.14.0 (`mentions.test.ts`; the WP-187 notes in
 `docs/technical/PROGRESS.md`), not by any page above.
+
+## Pages read for WP-209 — `discussions-paged.json`, and the merge request's title and description
+
+Retrieved **2026-10-19**, without a GitLab instance; nothing was recorded. WP-209 (backlogs 573,
+577) neutralises mentions in a merge request's title and description and refuses a discussion list
+the binding's `max_pages` cut.
+
+- `https://gitlab.com/gitlab-org/gitlab/-/raw/v18.4.0-ee/app/models/concerns/issuable.rb` — a
+  merge request's `title` and `description` are both mentionable: `attr_mentionable :title,
+  pipeline: :single_line_markdown` and `attr_mentionable :description`, beside
+  `cache_markdown_field :title, pipeline: :single_line_markdown`. This is the citation backlog 573
+  listed as missing: a mention in either is read, and the discussions page's *"GitLab notifies all
+  mentioned users"* (WP-187, above) is what reading it does.
+- `https://gitlab.com/gitlab-org/gitlab/-/raw/v18.4.0-ee/lib/banzai/pipeline/single_line_markdown_pipeline.rb`
+  — the title's pipeline runs `MarkdownFilter` first and then the reference filters, and its
+  `reference_filters` list **starts with `Filter::References::UserReferenceFilter`**, under a comment
+  that says the opposite (*"UserReferenceFilter is intentionally excluded to prevent generating a
+  notification. This pipeline is mostly for titles."*). The code, not the comment, is what runs, so a
+  title's `@name` is a user reference.
+- `https://gitlab.com/gitlab-org/gitlab/-/raw/v18.4.0-ee/lib/banzai/filter/minimum_markdown_sanitization_filter.rb`
+  — that pipeline's sanitiser keeps only `em strong code del a`, so inline code **would** survive in
+  a rendered title (the architect's open question, answered from source). The adapter's title form
+  still uses no markup: a title is also shown where nothing renders it, and `user.rb` and
+  `path_regex.rb` (WP-187, above) already show that a zero-width space after the `@` defeats a user
+  reference in any element.
+- `https://gitlab.com/gitlab-org/gitlab/-/raw/v18.4.0-ee/lib/banzai/filter/markdown_filter.rb` — the
+  Markdown engine is `glfm_markdown` (comrak) and it deletes every `\r` before rendering; read for the
+  title's pipeline, it changes nothing the adapter does.
+- `https://docs.gitlab.com/api/rest/` § "Pagination" — `per_page` is *"Number of items to list per
+  page (default: `20`, max: `100`)"* and `x-next-page` is *"The index of the next page"*. With the
+  adapter's page size of 100 and the default `max_pages` of 10, a discussion list is read up to
+  1,000 discussions (10,000 at the schema maximum of 100 pages). The page does not say what
+  `x-next-page` holds on the last page; the second interaction of `discussions-paged.json` is
+  `inferred` for that reason.
+- `https://docs.gitlab.com/api/discussions/` — the discussion shape of both interactions.
+
+**Review round 1** (backlog 609, retrieved **2026-10-19**):
+
+- `https://gitlab.com/gitlab-org/gitlab/-/raw/v18.4.0-ee/lib/banzai/filter/markdown_engines/glfm_markdown.rb`
+  — a note's and a description's Markdown is rendered by comrak with `unsafe: true`, so raw HTML,
+  an HTML block included, is passed through, and no Markdown escape is processed inside it. The
+  browser then decodes `&#64;` there, and `\` stays a visible character, which is not `\w` to
+  `User.reference_pattern`'s `(?<!\w)@`. That is why `\&#64;all` inside `<details>` is a mention.
+  The same file's `MINIMUM_MARKDOWN`, the title's engine options, has `unsafe: false`: raw HTML in a
+  title is escaped, which is a second reason the title's form carries no `<code>`. Its `OPTIONS` also
+  set `escaped_char_spans: true`, so outside raw HTML an escaped character renders inside an element
+  of its own; the adapter does not rely on that.
+
+**Review round 2b** (backlog 611, quick actions; retrieved **2026-10-19**, tag `v18.4.0-ee`):
+
+- `https://gitlab.com/gitlab-org/gitlab/-/raw/v18.4.0-ee/lib/gitlab/quick_actions/extractor.rb` —
+  `perform_regex` deletes every `\r`, asks the `quick_action` pipeline for paragraphs that may hold
+  a command, and matches `^\/(?<cmd>…)` on those paragraphs' **source lines**, after an exclusion
+  alternative for inline code (`` `.+?` ``) and an HTML block. A command therefore runs only from
+  column 0 of a line; a leading space defeats it.
+- `https://gitlab.com/gitlab-org/gitlab/-/raw/v18.4.0-ee/lib/banzai/filter/quick_action_filter.rb`
+  and `…/lib/banzai/pipeline/quick_action_pipeline.rb` — the paragraphs are the **top-level** `p`
+  nodes only, rendered with `disable_raw_html: true`, so a list item, a quote, a code block or an
+  HTML block holds no command.
+- `https://gitlab.com/gitlab-org/gitlab/-/raw/v18.4.0-ee/app/services/issuable_base_service.rb` —
+  `merge_quick_actions_into_params!` interprets `params.fetch(:description, …)` on create and on
+  update. A merge request's description runs quick actions and its title does not.
+- `https://docs.gitlab.com/api/notes/` — notes sent through any API are normalised by *"Runs and then
+  removes any quick actions"* (quoted by backlog 611 from the page's source).

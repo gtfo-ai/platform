@@ -162,7 +162,10 @@ export const gitlabConfigSchema = z.strictObject({
   push_access_level: gitlabAccessLevelSchema.default(30),
   /** Per-request timeout in milliseconds; 0 disables it (the replay harness has no network). */
   request_timeout_ms: z.int().nonnegative().max(600_000).default(30_000),
-  /** Pages a bounded pager will follow before it stops and reports what it has. */
+  /**
+   * Pages a bounded pager will follow before it stops and reports what it has, and that the list
+   * was cut (WP-209): a merge request's discussions past it are refused, never answered in part.
+   */
   max_pages: z.int().positive().max(100).default(10),
   /** Largest CODEOWNERS file the adapter will read, in bytes (BD-022: attacker-controlled). */
   max_codeowners_bytes: z.int().positive().max(MAX_CODEOWNERS_BYTES_LIMIT).default(262_144),

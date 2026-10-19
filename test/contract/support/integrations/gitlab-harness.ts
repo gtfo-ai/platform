@@ -79,7 +79,11 @@ export interface GitLabReplayContext extends GitProviderContractContext {
 }
 
 export const gitlabReplayContext = (
-  overrides: { readonly mintCredentials?: boolean } = {},
+  overrides: {
+    readonly mintCredentials?: boolean;
+    /** Binding configuration for `port` (WP-209: `max_pages`). */
+    readonly config?: Readonly<Record<string, unknown>>;
+  } = {},
 ): GitLabReplayContext => {
   // Every fixture file on disk, not a list somebody has to remember to extend (rule 7): a file
   // this list forgot would be a recorded interaction `unusedFixtures()` never even loads.
@@ -119,7 +123,7 @@ export const gitlabReplayContext = (
         { name: 'gitlab_webhook_signing_token', value: FAKE_SIGNING_TOKEN },
       ]),
     });
-  const port = build();
+  const port = build(overrides.config);
 
   return {
     replay,

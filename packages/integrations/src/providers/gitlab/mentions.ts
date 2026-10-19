@@ -1,6 +1,6 @@
 /**
  * Every merge-request note body the GitLab adapter posts, made **mention-neutral** (WP-187, backlog
- * 549) — the counterpart of Slack's `escapeSlackText` (`../slack/mrkdwn.ts`), and for the same
+ * 549) — and since WP-209 (backlog 573) every merge-request description and title — the counterpart of Slack's `escapeSlackText` (`../slack/mrkdwn.ts`), and for the same
  * reason: mention syntax is the provider's, so the pipeline's renderers stay provider-neutral and
  * the adapter owns what GitLab would turn into a notification.
  *
@@ -52,7 +52,8 @@
  *    continuation lines —
  *    while every line of it stays indented at least as far as its opener and it closes at exactly
  *    that indentation (four or more spaces only after a blank line; never in a paragraph that has
- *    a tag after a container marker). A line that breaks those terms, a GitLab `>>>` quote, or a
+ *    a tag after a container marker). A line that breaks those terms, a GitLab `>>>` quote (up
+ *    to three spaces in, as comrak opens one), or a
  *    fence-like line nothing above places makes **the rest of the note** uncertain, and every
  *    mention in it is wrapped;
  *  - an **HTML block** (a line opening with a tag, up to three spaces in) is followed to its end:
@@ -82,11 +83,38 @@
  * alone in a Markdown paragraph — a URL is no text — and so is everything inside an `a` element
  * GitLab renders, which the filter skips.
  *
+ * ## A suggestion this reading changed can never be applied (WP-209 (b), backlog 574)
+ *
+ * Inside a code block this reading cannot place, a name shows with a visible `<code>` around it.
+ * For a `suggestion` fence that would be a changed suggestion, which "Apply suggestion" commits,
+ * so a fence-opening line whose `suggestion` info string sits outside a fence this reading placed
+ * and closed loses its **whole info string** whenever any line after it was changed: the block is
+ * then a plain code block, which GitLab offers nobody to apply. The test is "any later line",
+ * not "a line inside the block", because a block this reading cannot place is one whose end it
+ * cannot place either (fail-closed: a suggestion whose body was never touched may lose its button).
+ *
+ * ## The note body is neutralised once (WP-209 (a), backlog 573)
+ *
+ * A merge-request description goes through here too, and the Developer may send back the text it
+ * was shown. The form this function writes — `<code>@&#8203;name</code>`, with no backslash before
+ * the `@` — is recognised and left as it is, so a second pass does not nest it (measured before
+ * WP-209: `<code><code>@&#8203;&#8203;all</code></code>`), and it is read as text rather than as a
+ * tag (`OWN_FORM`), so a code span after it, or a line it opens, is read as on the first pass. Any
+ * other tag keeps its effect: a span after `<b>` is still uncertain.
+ *
+ * ## A line the platform posts never runs a quick action (WP-209 round 2b, backlog 611)
+ *
+ * GitLab runs a quick action (`/close`, `/label`, `/approve`, …) from a note or a description saved
+ * through the API, as the poster. Every line whose first character is `/` (once `\r` is gone, as
+ * GitLab deletes it) gets one leading space, outside the body of a fence this reading placed — see
+ * `withoutQuickAction` for the extractor it is written against. A title is not read for quick
+ * actions (`issuable_base_service.rb` interprets `description` only), so the title form is unchanged.
+ *
  * Residual, stated: what GitLab's own parser does differently from CommonMark is not read here;
  * a bare URL with `/@name` in it (no link syntax) and a link reference definition's URL are
- * wrapped, which breaks that link without notifying anybody; inside a code block this reading
- * cannot place, a name shows with a visible `<code>` around it — and for a suggestion fence that
- * is a changed suggestion, so "Apply suggestion" would commit it.
+ * wrapped, which breaks that link without notifying anybody — **accepted** by WP-209's ruling (b):
+ * no cited fact says GitLab autolinks the URL before its reference filter runs, so the URL is not
+ * narrowed.
  */
 
 /**
@@ -95,13 +123,20 @@
  * decodes a numeric reference **without** its `;` and with leading zeros (`&#64all`, `&#x40zed`,
  * `&#0064all`), and an HTML block passes such text to the browser as it is (review round 3), so
  * both the `@` and a name character are matched with the `;` optional.
+ *
+ * **A name never swallows the start of the next `@`** (WP-209 review round 1, backlog 609). Every
+ * name part is refused where an `@` spelling begins under **either** reading of the text: Markdown's,
+ * where `\&` is an escaped `&`, and an HTML block's, where GitLab's renderer passes raw HTML through
+ * unescaped (`unsafe: true`, `markdown_engines/glfm_markdown.rb`) so `\` is a character and the `&`
+ * after it opens an entity the browser decodes. Before this, the escape `\&` was a name part, so
+ * `n&#64;x\&#64;all` was one e-mail-shaped match kept as written — and an HTML block showed
+ * `n@x\@all`, a live `@all` to GitLab's `(?<!\w)@`. The guard is one lookahead over every
+ * alternative, not a narrower escape set, so a spelling added to either list cannot reopen it.
  */
 const AT = '@|&#0*64(?![0-9]);?|&#[xX]0*40(?![0-9A-Fa-f]);?|&commat;?';
 const NAME_ENTITY = '&#[0-9]+;?|&#[xX][0-9A-Fa-f]+;?|&[A-Za-z][A-Za-z0-9]*;';
-const MENTION = new RegExp(
-  `(\\\\*)(${AT})((?:[A-Za-z0-9_.\\-/]|(?!${AT})(?:${NAME_ENTITY})|\\\\[!-/:-?[-\`{-~])+)`,
-  'g',
-);
+const NAME_PART = `(?!\\\\?(?:${AT}))(?:[A-Za-z0-9_.\\-/]|${NAME_ENTITY}|\\\\[!-/:-?[-\`{-~])`;
+const MENTION = new RegExp(`(\\\\*)(${AT})((?:${NAME_PART})+)`, 'g');
 
 /**
  * A letter or digit before an unescaped `@` makes it an e-mail address. Not `_`: it is a word
@@ -164,6 +199,19 @@ const LONG_START =
 /** A plain inline link whose text holds no bracket, backtick or tag: its destination is no text. */
 const INLINE_LINK = /(?<!\\)\[[^[\]`<\n]*\]\(([^\s()<>`]*)\)/g;
 
+/**
+ * This module's own form, `<code>@&#8203;name</code>` (any `@` spelling, a name with no backslash
+ * escape): a closed element with no attribute, no backtick and no bracket, so a second pass reads
+ * it as text — never as a tag that could make a later span or line uncertain (WP-209 (a)).
+ */
+const OWN_FORM = new RegExp(
+  `<code>(?:${AT})&#8203;(?:[A-Za-z0-9_.\\-/]|${NAME_ENTITY})+</code>`,
+  'g',
+);
+
+/** `text` with this module's own form blanked, for the structural tests only. */
+const masked = (text: string): string => text.replace(OWN_FORM, (form) => 'x'.repeat(form.length));
+
 type Fence = { readonly char: string; readonly length: number; readonly indent: number };
 
 /**
@@ -184,6 +232,15 @@ const wrapMentions = (text: string, before: string, links = false): string => {
     MENTION,
     (match, slashes: string, at: string, name: string, offset: number) => {
       if (destinations.some(([from, to]) => offset >= from && offset + match.length <= to)) {
+        return match;
+      }
+      if (
+        slashes === '' &&
+        name.startsWith('&#8203;') &&
+        text.slice(0, offset).endsWith('<code>') &&
+        text.startsWith('</code>', offset + match.length)
+      ) {
+        // This function's own form, already neutral: a second pass leaves it (WP-209 (a)).
         return match;
       }
       // An unescaped `@` straight after a letter or digit is an e-mail address, not a mention —
@@ -255,7 +312,7 @@ const neutraliseProseLine = (
   let out = '';
   let cursor = 0;
   for (const [start, end] of lineSpans(line).spans) {
-    if (LINK_OR_TAG.test(line.slice(0, start))) break;
+    if (LINK_OR_TAG.test(masked(line.slice(0, start)))) break;
     out += wrapMentions(line.slice(cursor, start), before + out, links) + line.slice(start, end);
     cursor = end;
   }
@@ -294,6 +351,94 @@ const htmlBlockEnd = (line: string): RegExp | null =>
   LONG_HTML_BLOCKS.find(([opens]) => opens.test(line.trimStart()))?.[1] ?? null;
 
 /**
+ * `line` with a space before it when GitLab could read it as a quick action (WP-209 round 2b,
+ * backlog 611). GitLab's extractor (`lib/gitlab/quick_actions/extractor.rb`, `v18.4.0-ee`) deletes
+ * every `\r` and then matches `^\/<command>` against the **source lines** of each top-level
+ * paragraph, so a command runs only from column 0. One space keeps a paragraph line rendering the
+ * same (CommonMark strips a paragraph line's leading spaces) and moves the `/` off column 0 — every
+ * `/` there, a known command or not, outside the body of a fence this reading placed and closed.
+ */
+const withoutQuickAction = (line: string): string =>
+  line.replaceAll('\r', '').startsWith('/') ? ` ${line}` : line;
+
+/**
+ * A line that could open a fence, behind any container markers, whose info string starts with
+ * `suggestion` in any case — wider than GitLab's `suggestion:-0+0` on purpose (fail-closed).
+ */
+const SUGGESTION_OPENER =
+  /^([ \t]*(?:(?:>|[*+-]|\d{1,9}[.)])[ \t]*)*(?:`{3,}|~{3,}))[ \t]*suggestion[^\r]*(\r?)$/i;
+
+/**
+ * `out` with the info string dropped from every `suggestion` opener this reading did not place,
+ * when any line after it differs from the input (WP-209 (b)): a rewritten block is then a plain
+ * code block, never a suggestion "Apply suggestion" would commit.
+ */
+const withoutChangedSuggestions = (
+  out: readonly string[],
+  input: readonly string[],
+  placed: ReadonlySet<number>,
+): string[] => {
+  const result = [...out];
+  let changedAfter = false;
+  for (let index = out.length - 1; index >= 0; index -= 1) {
+    const line = out[index] as string;
+    const changed = line !== input[index];
+    if (/\r(?!$)/.test(line)) {
+      // A lone `\r` is a line ending the `\n` split does not see: every opener in the line is
+      // judged by the line, which a change anywhere in it, or after it, condemns.
+      if (changed || changedAfter) {
+        result[index] = line
+          .split('\r')
+          .map((segment) => {
+            const opener = SUGGESTION_OPENER.exec(segment);
+            return opener === null ? segment : (opener[1] ?? '');
+          })
+          .join('\r');
+      }
+    } else {
+      const opener = placed.has(index) ? null : SUGGESTION_OPENER.exec(line);
+      if (opener !== null && changedAfter) {
+        result[index] = `${opener[1] ?? ''}${opener[2] ?? ''}`;
+      }
+    }
+    changedAfter ||= changed;
+  }
+  return result;
+};
+
+/** `@`, or an HTML entity that decodes to one, not already followed by a zero-width space. */
+const TITLE_AT = new RegExp(`(?:${AT})(?!;?\\u200b)`, 'g');
+
+/** GitLab's own title limit, in characters (`MAX_MERGE_REQUEST_TITLE_CHARS` is the platform's). */
+const GITLAB_TITLE_MAX_CHARS = 255;
+
+/**
+ * A merge-request title as the adapter sends it (WP-209 (a), backlog 573): a **literal** U+200B
+ * after every `@` and every entity that decodes to one, and nothing else changed.
+ *
+ * GitLab renders a title with `single_line_markdown` and reads its mentions with that pipeline
+ * (`app/models/concerns/issuable.rb`: `attr_mentionable :title, pipeline: :single_line_markdown`),
+ * whose reference filters **include** `UserReferenceFilter` — despite the comment above them that
+ * says it is excluded (`lib/banzai/pipeline/single_line_markdown_pipeline.rb`, tag `v18.4.0-ee`;
+ * both cited in `test/fixtures/http/gitlab/SOURCES.md`). Inline code would survive there (its
+ * sanitiser allows `code`), but a title is also shown where nothing renders it — an e-mail subject,
+ * the API's `title` — so the form is plain text: a user reference is `@` followed by a namespace
+ * starting with `[a-zA-Z0-9_\.]` (`user.rb`, `path_regex.rb`), which a zero-width space is not. A
+ * literal character rather than `&#8203;`, because an entity shows as typed where nothing decodes
+ * it. Every `@`, an e-mail address's included: the cost is an invisible character.
+ *
+ * Idempotent (a `@` already followed by U+200B is left), and cut to GitLab's 255 characters with
+ * `…` when the inserted characters push a bounded title past it — a cut cannot make a mention.
+ */
+export const gitlabMergeRequestTitle = (title: string): string => {
+  const neutral = title.replace(TITLE_AT, (at) => `${at}\u200b`);
+  const chars = [...neutral];
+  return chars.length <= GITLAB_TITLE_MAX_CHARS
+    ? neutral
+    : `${chars.slice(0, GITLAB_TITLE_MAX_CHARS - 1).join('')}…`;
+};
+
+/**
  * The note body the adapter posts for `markdown`: identical except that no mention outside code
  * can notify anybody. Every member that writes a note passes its body through here
  * (`mentions.test.ts` holds that as a census over the adapter's sources).
@@ -301,6 +446,11 @@ const htmlBlockEnd = (line: string): RegExp | null =>
 export const gitlabNoteBody = (markdown: string): string => {
   const out: string[] = [];
   let fence: Fence | null = null;
+  // The opening lines of fences this reading placed and never lost: their bodies are untouched.
+  const placed = new Set<number>();
+  // Each line pushed as a fence's body or close.
+  const fenceBody = new Set<number>();
+  let opener = -1;
   // An open HTML block, and the line that ends it (`null`: the next blank line).
   let html: { readonly end: RegExp | null } | null = null;
   // Once the block structure cannot be followed, every later mention is wrapped.
@@ -329,6 +479,7 @@ export const gitlabNoteBody = (markdown: string): string => {
             : 'code'
           : indentedFenceLine(line, fence);
       if (verdict === 'lost') {
+        placed.delete(opener);
         uncertain = true;
         out.push(wrapMentions(line, before));
         continue;
@@ -337,6 +488,7 @@ export const gitlabNoteBody = (markdown: string): string => {
         fence = null;
         clean = true;
       }
+      fenceBody.add(out.length);
       out.push(line);
       continue;
     }
@@ -371,6 +523,8 @@ export const gitlabNoteBody = (markdown: string): string => {
     const run = open?.[1];
     if (run !== undefined && (run[0] === '~' || !(open?.[2] ?? '').includes('`'))) {
       fence = { char: run[0] as string, length: run.length, indent: 0 };
+      opener = out.length;
+      placed.add(opener);
       clean = true;
       // The info string is no code; a renderer that does not take the line for a fence (marked
       // at the end of the text) shows it as prose.
@@ -387,6 +541,8 @@ export const gitlabNoteBody = (markdown: string): string => {
       // an indented code block, and its lines are code either way.
       if (opens && (indent < 4 || wasBlank)) {
         fence = { char: indentedRun[0] as string, length: indentedRun.length, indent };
+        opener = out.length;
+        placed.add(opener);
         clean = true;
         out.push((indented[1] ?? '') + indentedRun + wrapMentions(info, indentedRun));
         continue;
@@ -403,13 +559,15 @@ export const gitlabNoteBody = (markdown: string): string => {
       out.push(wrapMentions(line, before));
       continue;
     }
-    if (/^>>>/.test(line)) {
-      // GitLab's multi-line quote, read before Markdown.
+    if (/^ {0,3}>>>/.test(line)) {
+      // GitLab's multi-line quote, read before Markdown — behind up to three spaces, as comrak's
+      // `detect_multiline_blockquote` opens it, and its close also closes a fence left open inside
+      // it (WP-209 review round 3), so nothing after it can be placed.
       uncertain = true;
       out.push(wrapMentions(line, before));
       continue;
     }
-    const tag = HTML_START.exec(line);
+    const tag = HTML_START.exec(masked(line));
     if (tag !== null) {
       const prefix = tag[1] ?? '';
       if (/^ {0,3}$/.test(prefix)) {
@@ -434,9 +592,14 @@ export const gitlabNoteBody = (markdown: string): string => {
       continue;
     }
     // A link's destination is left alone only in a paragraph no tag could have made raw HTML.
-    const links = !tagInContainer && !/<[A-Za-z/!?]/.test(line);
+    const links = !tagInContainer && !/<[A-Za-z/!?]/.test(masked(line));
     out.push(neutraliseProseLine(line, clean, before, links));
-    clean = clean && !line.includes('|') && !LINK_OR_TAG.test(line) && !lineSpans(line).unclosed;
+    clean =
+      clean && !line.includes('|') && !LINK_OR_TAG.test(masked(line)) && !lineSpans(line).unclosed;
   }
-  return out.join('\n');
+  // A body line is exempt whether or not its fence was later lost: one that opens with `/` belongs
+  // to a column-0 fence, which is never lost (an indented fence's body lines carry its indent, and
+  // a line that does not is `lost` and never recorded here).
+  const inert = out.map((line, index) => (fenceBody.has(index) ? line : withoutQuickAction(line)));
+  return withoutChangedSuggestions(inert, markdown.split('\n'), placed).join('\n');
 };

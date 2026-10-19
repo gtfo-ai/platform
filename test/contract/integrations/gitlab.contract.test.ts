@@ -382,3 +382,44 @@ describe('GitLab inbound, through the port, in replay', () => {
     expect(port.inbound.deliveryKey(signedDelivery('Push Hook', pushHookBody()))).not.toBe(first);
   });
 });
+
+/**
+ * WP-209 (c), backlog 577: a list the binding's `max_pages` cut is refused, never answered as the
+ * whole list. `discussions-paged.json` is two pages; the platform's own reply is on the second.
+ * Both sides of the bound (rule 42): with two pages allowed the reply is listed, with one the read
+ * throws — the cut list would have lost the newest discussion, the one a marker search looks for.
+ */
+describe('GitLab in replay: a discussion list cut at max_pages', () => {
+  const PAGED = {
+    provider: 'gitlab',
+    project_path: GITLAB_PROJECT,
+    iid: 31,
+    url: `${GITLAB_HOST}/acme/api/-/merge_requests/31`,
+  };
+
+  it('lists the second page when max_pages reaches it', async () => {
+    const { port, replay } = gitlabReplayContext({ config: { max_pages: 2 } });
+    const listed = await port.listDiscussions(PAGED);
+    expect(listed.map((discussion) => discussion.id)).toEqual([
+      'c0ffee00c0ffee00c0ffee00c0ffee00c0ffee01',
+      'c0ffee00c0ffee00c0ffee00c0ffee00c0ffee02',
+    ]);
+    expect(replay.requests.map((request) => request.key)).toHaveLength(2);
+  });
+
+  it('refuses the list when max_pages stops before its last page', async () => {
+    const { port, replay } = gitlabReplayContext({ config: { max_pages: 1 } });
+    let caught: unknown;
+    try {
+      await port.listDiscussions(PAGED);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught, 'a cut list is not an answer').toBeInstanceOf(Error);
+    expect((caught as { code?: string }).code).toBe('invalid_response');
+    expect(String((caught as Error).message)).toContain('max_pages (1)');
+    expect(replay.requests.map((request) => request.key)).toEqual([
+      'GET /projects/acme%2Fapi/merge_requests/31/discussions?page=1&per_page=100',
+    ]);
+  });
+});

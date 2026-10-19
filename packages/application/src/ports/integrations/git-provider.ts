@@ -278,6 +278,13 @@ export const repositoryCommitSchema = z.strictObject({
 /** Longest merge-request description the platform sends; GitLab's own limit is ~1 MB. */
 export const MAX_MERGE_REQUEST_DESCRIPTION_CHARS = 32_768;
 
+/**
+ * What `openMergeRequest` is asked for. The `title` and `description` reach the provider unchanged
+ * **except where the provider's own mention syntax is neutralised** (WP-209, backlog 573; BD-022):
+ * they are model text, and GitLab notifies whoever a title or a description names. The GitLab
+ * adapter writes a zero-width space after each `@` of a title and `<code>@&#8203;name</code>` for a
+ * mention outside code in a description (`providers/gitlab/mentions.ts`); nothing else changes.
+ */
 export const mergeRequestDraftSchema = z.strictObject({
   project: nonEmptyStringSchema,
   branch: nonEmptyStringSchema,
@@ -359,6 +366,12 @@ export const commitRefSchema = z.strictObject({
   url: urlSchema.nullish(),
 });
 
+/**
+ * What `updateMergeRequest` changes. As with {@link mergeRequestDraftSchema}, a `title` or
+ * `description` reaches the provider unchanged except where its mention syntax is neutralised
+ * (WP-209, backlog 573) — and text already neutralised (the Developer sending back what it was
+ * shown) is not neutralised a second time.
+ */
 export const mergeRequestUpdateSchema = z.strictObject({
   title: nonEmptyStringSchema.nullish(),
   description: z.string().nullish(),
@@ -817,6 +830,14 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    */
   readonly getMergeRequestDiffStats: (ref: MergeRequestRefInput) => Promise<DiffStats | null>;
 
+  /**
+   * Every discussion of the merge request, general notes included — or a refusal, never a list the
+   * provider's page bound cut (WP-209 (c), backlog 577): `IntegrationError('invalid_response')`
+   * when there are more pages than the binding reads, because a caller searching for its own reply
+   * by marker cannot tell "absent" from "not read", and a cut list (GitLab's is oldest first) loses
+   * the newest. A read. The fake keeps every discussion and never cuts; the GitLab runner
+   * (`gitlab.contract.test.ts`) holds the refusal.
+   */
   readonly listDiscussions: (ref: MergeRequestRefInput) => Promise<readonly Discussion[]>;
   /**
    * A reply in the discussion `discussionId` names — the platform's answer on a review thread or a

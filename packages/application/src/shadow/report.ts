@@ -70,6 +70,7 @@ import type { PipelineSagaOptions } from '../pipeline/saga.js';
 import { PIPELINE_ACTOR, type StoredTask } from '../pipeline/store.js';
 import { retryOnTaskConflict } from '../pipeline/task-conflict.js';
 import { closeParkedStageRow } from '../pipeline/transitions.js';
+import { IntegrationError } from '../ports/integrations/common.js';
 import type { Discussion, FileDiff } from '../ports/integrations/git-provider.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -265,8 +266,17 @@ export const runShadowReport = async (
       : await reads.mergeRequestDiff(stored.mr, MAX_SHADOW_DIFF_FILES, context);
   const humanFiles =
     humanMr === null ? null : await reads.mergeRequestDiff(humanMr, MAX_SHADOW_DIFF_FILES, context);
-  const discussions: readonly Discussion[] =
-    humanMr === null ? [] : await reads.discussions(humanMr, context);
+  // A provider that refuses the read for good — GitLab's port refuses a list its `max_pages` cut
+  // (WP-209 review round 1) — costs the report its reviewer minutes, said in a note, not the report.
+  let discussions: readonly Discussion[] | null = [];
+  if (humanMr !== null) {
+    try {
+      discussions = await reads.discussions(humanMr, context);
+    } catch (error) {
+      if (!(error instanceof IntegrationError) || error.retryable) throw error;
+      discussions = null;
+    }
+  }
 
   const report = buildShadowReport({
     ticketKey: stored.task.ticket.key,
@@ -536,7 +546,8 @@ export const buildShadowReport = (input: {
   readonly ticketRow: ShadowBatchTicketRow | null;
   readonly agentFiles: readonly FileDiff[] | null;
   readonly humanFiles: readonly FileDiff[] | null;
-  readonly discussions: readonly Discussion[];
+  /** `null` when the provider refused the human merge request's discussions for good. */
+  readonly discussions: readonly Discussion[] | null;
   readonly predictedCostUsd: number | null;
   readonly shadowCostUsd: number;
   /** WP-45: the review of the human merge request, or `null` when there is no human merge request. */
@@ -550,7 +561,7 @@ export const buildShadowReport = (input: {
   const human = input.humanFiles === null ? null : summarise(input.humanFiles);
   const overlap = agent === null || human === null ? null : compareShadowDiffs(agent, human);
   const minutes =
-    input.humanMr === null
+    input.humanMr === null || input.discussions === null
       ? null
       : reviewerMinutesFromDiscussions(input.discussions, {
           // product/19 §16's window runs *"to merge or last activity"*, and the merge instant is
@@ -619,7 +630,11 @@ export const buildShadowReport = (input: {
       `the human diff was cut at ${MAX_SHADOW_DIFF_FILES} files, so the overlap understates it`,
     );
   }
-  if (minutes === null && input.humanMr !== null) {
+  if (input.humanMr !== null && input.discussions === null) {
+    notes.push(
+      'the git provider refused the human merge request’s discussions (more than the binding pages through), so no reviewer minutes could be derived from it',
+    );
+  } else if (minutes === null && input.humanMr !== null) {
     notes.push(
       'the human merge request carries no human note, so no reviewer minutes could be derived from it',
     );

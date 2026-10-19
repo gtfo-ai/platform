@@ -17,6 +17,7 @@ import { exactSecretRedactor } from '../integrations/redaction.js';
 import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import { staticProjectSettings } from '../pipeline/settings.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import { IntegrationError } from '../ports/integrations/common.js';
 import type {
   Discussion,
   FileDiff,
@@ -251,6 +252,13 @@ describe('buildShadowReport', () => {
     expect(both().notes).toContain('carries no human note');
   });
 
+  it('carries no reviewer minutes, and says why, when the provider refused the discussions (WP-209)', () => {
+    const report = buildShadowReport({ ...bothInput(), discussions: null });
+    expect(report.reviewer_minutes_estimate).toBeNull();
+    expect(report.notes).toContain('refused the human merge request’s discussions');
+    expect(report.notes).not.toContain('carries no human note');
+  });
+
   it('runs the review window to the merge instant the batch recorded, not to the last comment', () => {
     /**
      * product/19 §16's *"to merge or last activity"*, whose first half never applied until round 2:
@@ -483,6 +491,8 @@ const walkedHarness = (
     readonly runs?: Readonly<Record<string, ScriptedRun>>;
     /** The git binding's redactor (WP-80): what the batch and the report redact with. */
     readonly gitRedactor?: SecretRedactor;
+    /** The human merge request's discussions are refused for good (WP-209: a cut list). */
+    readonly humanDiscussionsRefused?: boolean;
   } = {},
 ) =>
   createPipelineHarness({
@@ -518,7 +528,12 @@ const walkedHarness = (
       getMergeRequestDiff: async (ref: { iid: number }) =>
         ref.iid === HUMAN_MR.iid ? HUMAN_FILES : AGENT_FILES,
       listMergedMergeRequests: async () => options.merged ?? [mergedMr('ACME-1')],
-      listDiscussions: async () => [],
+      listDiscussions: async (ref: { iid: number }) => {
+        if (options.humanDiscussionsRefused === true && ref.iid === HUMAN_MR.iid) {
+          throw new IntegrationError('invalid_response', 'fake-git', 'more than max_pages');
+        }
+        return [];
+      },
     },
     taskManagement: { readTicket: async (ref: { key: string }) => ticket(ref.key) },
   });
@@ -556,6 +571,19 @@ describe('the shadow report, through the whole walk', () => {
     // Both diffs were read through the real `pipeline.outbound` duty, so this is a measurement of
     // the composition rather than of `buildShadowReport`.
     expect(comparison.overlap?.files_jaccard).toBeCloseTo(2 / 4, 10);
+  });
+
+  it('writes the report without reviewer minutes when the human discussions are refused (WP-209)', async () => {
+    const harness = walkedHarness({ humanDiscussionsRefused: true });
+    await startBatch(harness, ['ACME-1']);
+    await harness.drain();
+    expect(harness.shadow.reportRows).toHaveLength(1);
+    const comparison = harness.shadow.reportRows[0]?.comparison as {
+      reviewer_minutes_estimate: number | null;
+      notes: unknown;
+    };
+    expect(comparison.reviewer_minutes_estimate).toBeNull();
+    expect(JSON.stringify(comparison.notes)).toContain('refused the human merge request');
   });
 
   it('publishes the same document on the task’s own artifact list', async () => {

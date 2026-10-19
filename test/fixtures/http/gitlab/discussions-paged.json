@@ -1,0 +1,88 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/31/discussions?per_page=100&page=1",
+      "status": 200,
+      "headers": { "x-next-page": "2" },
+      "body": [
+        {
+          "id": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee01",
+          "individual_note": true,
+          "notes": [
+            {
+              "id": 3101,
+              "type": null,
+              "body": "Please also add the VAT line.",
+              "attachment": null,
+              "author": {
+                "id": 77,
+                "username": "dana.reviewer",
+                "name": "Dana Reviewer",
+                "state": "active",
+                "web_url": "https://gitlab.example.test/dana.reviewer",
+                "avatar_url": null
+              },
+              "created_at": "2026-06-01T07:30:00.000Z",
+              "updated_at": "2026-06-01T07:30:00.000Z",
+              "system": false,
+              "noteable_id": 155016031,
+              "noteable_type": "MergeRequest",
+              "project_id": 15513260,
+              "noteable_iid": 31,
+              "resolvable": false
+            }
+          ]
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/discussions/",
+        "retrieved": "2026-10-19",
+        "kind": "documented-adapted",
+        "note": "WP-209 (backlog 577): \"List all merge request discussion items\", one individual note cut to the members the adapter reads, as the first of two pages. The `x-next-page` header is \"The index of the next page\" (https://docs.gitlab.com/api/rest/ § Pagination, \"Other pagination headers\", retrieved 2026-10-19); `per_page` is at most 100 there, the adapter's own page size. One discussion stands for the 100 a full page holds."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/31/discussions?per_page=100&page=2",
+      "status": 200,
+      "headers": { "x-next-page": "" },
+      "body": [
+        {
+          "id": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee02",
+          "individual_note": true,
+          "notes": [
+            {
+              "id": 3102,
+              "type": null,
+              "body": "<!-- agentic:reply:00000000-0000-4000-8000-0000000020a3.00000000-0000-4000-8000-0000000020a4.0 -->\nAdded the VAT line.\n\n_In reply to note 3101._",
+              "attachment": null,
+              "author": {
+                "id": 4242,
+                "username": "agentic-bot",
+                "name": "Agentic Bot",
+                "state": "active",
+                "web_url": "https://gitlab.example.test/agentic-bot",
+                "avatar_url": null
+              },
+              "created_at": "2026-06-01T08:30:00.000Z",
+              "updated_at": "2026-06-01T08:30:00.000Z",
+              "system": false,
+              "noteable_id": 155016031,
+              "noteable_type": "MergeRequest",
+              "project_id": 15513260,
+              "noteable_iid": 31,
+              "resolvable": false
+            }
+          ]
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/discussions/",
+        "retrieved": "2026-10-19",
+        "kind": "inferred",
+        "note": "WP-209 (backlog 577): the second and last page — the platform's own reply to note 3101, posted earlier as a general note (GitLab divergence 8), opening with its conversation-reply marker and written by the binding's account (4242, `GET /user`). The discussion shape is documented; that the last page answers `x-next-page` empty is not stated by the pagination page (\"The index of the next page\" only), and is how the adapter has read it since WP-09."
+      }
+    }
+  ]
+}

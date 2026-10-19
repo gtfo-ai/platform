@@ -196,8 +196,18 @@ export interface GitLabClient {
   ): Promise<z.output<typeof gitlabPipelineSchema>>;
   /** <https://docs.gitlab.com/api/users/> § "Retrieve the current user" — `GET /user` (WP-138). */
   currentUser(): Promise<z.output<typeof gitlabUserSchema>>;
-  /** <https://docs.gitlab.com/api/discussions/> § "List all merge request discussion items". */
-  listDiscussions(project: string, iid: number): Promise<z.output<typeof gitlabDiscussionSchema>[]>;
+  /**
+   * <https://docs.gitlab.com/api/discussions/> § "List all merge request discussion items" — with
+   * `truncated` when the walk stopped at the binding's `max_pages` (WP-209 (c)). The port's
+   * `listDiscussions` refuses a cut list; the adapter's own readers say what a cut costs them.
+   */
+  listDiscussions(
+    project: string,
+    iid: number,
+  ): Promise<{
+    readonly discussions: z.output<typeof gitlabDiscussionSchema>[];
+    readonly truncated: boolean;
+  }>;
   /** § "Retrieve a merge request discussion item". */
   discussion(
     project: string,
@@ -359,28 +369,32 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
     deployKeys: async (project) =>
       parse(
         z.array(gitlabDeployKeySchema),
-        await http.paginate(
-          {
-            method: 'GET',
-            path: `/projects/${encodeProjectId(project)}/deploy_keys`,
-            action: 'list_deploy_keys',
-          },
-          100,
-        ),
+        (
+          await http.paginate(
+            {
+              method: 'GET',
+              path: `/projects/${encodeProjectId(project)}/deploy_keys`,
+              action: 'list_deploy_keys',
+            },
+            100,
+          )
+        ).items,
         'list_deploy_keys',
       ),
 
     protectedBranches: async (project) =>
       parse(
         z.array(gitlabProtectedBranchSchema),
-        await http.paginate(
-          {
-            method: 'GET',
-            path: `/projects/${encodeProjectId(project)}/protected_branches`,
-            action: 'list_protected_branches',
-          },
-          100,
-        ),
+        (
+          await http.paginate(
+            {
+              method: 'GET',
+              path: `/projects/${encodeProjectId(project)}/protected_branches`,
+              action: 'list_protected_branches',
+            },
+            100,
+          )
+        ).items,
         'list_protected_branches',
       ),
 
@@ -411,15 +425,17 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
     listCommits: async (project, query, perPage) =>
       parse(
         z.array(gitlabCommitSchema),
-        await http.paginate(
-          {
-            method: 'GET',
-            path: `/projects/${encodeProjectId(project)}/repository/commits`,
-            query,
-            action: 'list_commits',
-          },
-          Math.min(Math.max(1, perPage), 100),
-        ),
+        (
+          await http.paginate(
+            {
+              method: 'GET',
+              path: `/projects/${encodeProjectId(project)}/repository/commits`,
+              query,
+              action: 'list_commits',
+            },
+            Math.min(Math.max(1, perPage), 100),
+          )
+        ).items,
         'list_commits',
       ),
 
@@ -490,31 +506,35 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
     pollMergeRequests: async (project, query, perPage, pages) =>
       parse(
         z.array(gitlabMergeRequestSchema),
-        await http.paginate(
-          {
-            method: 'GET',
-            path: `/projects/${encodeProjectId(project)}/merge_requests`,
-            query: { ...query, order_by: 'updated_at', sort: 'asc' },
-            action: 'list_merge_requests',
-          },
-          perPage,
-          pages,
-        ),
+        (
+          await http.paginate(
+            {
+              method: 'GET',
+              path: `/projects/${encodeProjectId(project)}/merge_requests`,
+              query: { ...query, order_by: 'updated_at', sort: 'asc' },
+              action: 'list_merge_requests',
+            },
+            perPage,
+            pages,
+          )
+        ).items,
         'list_merge_requests',
       ),
 
     listMergeRequests: async (project, query) =>
       parse(
         z.array(gitlabMergeRequestSchema),
-        await http.paginate(
-          {
-            method: 'GET',
-            path: `/projects/${encodeProjectId(project)}/merge_requests`,
-            query,
-            action: 'list_merged_merge_requests',
-          },
-          100,
-        ),
+        (
+          await http.paginate(
+            {
+              method: 'GET',
+              path: `/projects/${encodeProjectId(project)}/merge_requests`,
+              query,
+              action: 'list_merged_merge_requests',
+            },
+            100,
+          )
+        ).items,
         'list_merged_merge_requests',
       ),
 
@@ -550,19 +570,20 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
         http.request({ method: 'GET', path: '/user', action: 'authenticated_user' }),
       ),
 
-    listDiscussions: async (project, iid) =>
-      parse(
-        z.array(gitlabDiscussionSchema),
-        await http.paginate(
-          {
-            method: 'GET',
-            path: `${mrPath(project, iid)}/discussions`,
-            action: 'list_discussions',
-          },
-          100,
-        ),
-        'list_discussions',
-      ),
+    listDiscussions: async (project, iid) => {
+      const pages = await http.paginate(
+        {
+          method: 'GET',
+          path: `${mrPath(project, iid)}/discussions`,
+          action: 'list_discussions',
+        },
+        100,
+      );
+      return {
+        discussions: parse(z.array(gitlabDiscussionSchema), pages.items, 'list_discussions'),
+        truncated: pages.truncated,
+      };
+    },
 
     discussion: async (project, iid, discussionId) =>
       required(
@@ -669,14 +690,16 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
     pipelineJobs: async (project, pipelineId) =>
       parse(
         z.array(gitlabJobSchema),
-        await http.paginate(
-          {
-            method: 'GET',
-            path: `/projects/${encodeProjectId(project)}/pipelines/${pipelineId}/jobs`,
-            action: 'get_pipeline_status',
-          },
-          100,
-        ),
+        (
+          await http.paginate(
+            {
+              method: 'GET',
+              path: `/projects/${encodeProjectId(project)}/pipelines/${pipelineId}/jobs`,
+              action: 'get_pipeline_status',
+            },
+            100,
+          )
+        ).items,
         'get_pipeline_status',
       ),
 
