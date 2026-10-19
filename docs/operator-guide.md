@@ -955,6 +955,17 @@ keeps `BACKUP_KEEP_DAYS` / `_WEEKS` / `_MONTHS` generations. **Its PostgreSQL ma
 fails the same way every night into a log nobody reads. Both pins are in `compose.yml` and a test
 refuses a bump that moves one without the other.
 
+**A stop waits for a running dump.** `docker compose stop` (or `down`) during a dump lets it finish
+and then exits 0, for up to the service's `stop_grace_period` of **120 s**; an idle `db-backup`
+stops at once. A dump that outlasts the grace is killed (exit 137) and leaves a **truncated**
+`last/app-<time>.sql.gz` beside the good dumps — `gzip -t` refuses it — while `daily/`, `weekly/`,
+`monthly/` and every `*-latest` link still point at the previous complete dump. So copy from a
+`*-latest` link, and if your database takes longer than two minutes to dump, raise the grace in
+`compose.yml` (the measurement is in the comment there; PROGRESS WP-227). An explicit
+`docker compose stop -t N` or `down -t N` replaces the grace with `N`. At host shutdown, systemd
+stops the Docker daemon after its own `TimeoutStopSec` (90 s by default), which is shorter than
+the grace — not measured here; raise that too if a dump must survive a reboot.
+
 Copy the dumps off the host; a volume on the same machine is not a backup:
 
 ```bash

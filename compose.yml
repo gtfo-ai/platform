@@ -484,6 +484,21 @@ services:
       db:
         condition: service_healthy
     profiles: ['backup']
+    # **How long a stop waits for a running dump** (WP-227, backlog 433). The image's scheduler
+    # (go-cron v0.0.11, PID 1, stop signal SIGINT) does not cut a dump: on the signal it logs
+    # *"Stopping"*, *"Waiting"*, lets `/backup.sh` finish and exits 0 — so the grace below is the
+    # only thing that decides whether a dump survives a stop (the image's README says nothing about a
+    # stop: https://github.com/prodrigestivill/docker-postgres-backup-local). Measured on Docker
+    # 29.4.0 / Compose 5.1.2, the dump started by the image's own scheduler: without this line a
+    # stop during a dump was killed after **10.3 s**, exit 137; a kill mid-write leaves
+    # a **truncated** `last/<db>-<time>.sql.gz` (`gzip -t`: *"unexpected end of file"*) beside the
+    # good dumps until `BACKUP_KEEP_MINS` expires it, while `daily/`, `weekly/`, `monthly/` and
+    # every `*-latest` link keep pointing at the previous complete dump. With a grace the same stop
+    # waited for the dump and exited 0 with a complete one. An idle scheduler stops in **0.2 s**,
+    # so the grace costs a stop nothing between dumps. The size: a 361 MB database dumped in about
+    # one second on the measured disk, so 120 s is about a hundred times that dump, and covers a
+    # database a hundred times larger or a disk a hundred times slower — not both.
+    stop_grace_period: 120s
     restart: unless-stopped
 
 volumes:

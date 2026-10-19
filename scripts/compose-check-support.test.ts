@@ -233,13 +233,13 @@ describe('the stop graces compose.yml declares (WP-133)', () => {
     db: 0.76,
     // A create drained under a stop: 11.7 s, 12.6 s (WP-132), 12.1 s (WP-127).
     launcher: 12.6,
+    // A scheduled dump of a 361 MB database: about one second at the log's resolution (WP-227).
+    'db-backup': 1,
   } as const;
   /** Long-lived services that need no grace, each with its reason. */
   const NO_GRACE_NEEDED: Record<string, string> = {
     'docker-socket-proxy':
       'a filtering proxy with no state of its own; the launcher, which stops first, is what drains',
-    'db-backup':
-      'an opt-in profile whose dump runs on a schedule; a dump cut short is not a backup and the next schedule writes one (not measured — PROGRESS, WP-133 discovered work)',
   };
 
   it('reads a service’s grace, answers null for none, and refuses a spelling it cannot read', () => {

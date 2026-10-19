@@ -356,6 +356,30 @@ describe('compose.yml', () => {
   });
 
   /**
+   * A stop waits for a running dump (WP-227, backlog 433).
+   *
+   * The image's scheduler waits for a running `/backup.sh` on its stop signal, so the grace is what
+   * decides whether a dump survives: without one, compose killed a stop during a dump after 10.3 s
+   * and left a truncated `.sql.gz` among the good ones (the measurement is in `compose.yml`, at the
+   * line). Compose renders the duration in Go's form (`2m0s`), which is read here rather than
+   * compared as text.
+   */
+  it('gives db-backup a stop grace of at least 120 s, so a stop does not cut a running dump', () => {
+    const result = config(['compose.yml'], { COMPOSE_PROFILES: 'backup' }) as unknown as {
+      services: Record<string, { stop_grace_period?: string }>;
+    };
+    const grace = result.services['db-backup']?.stop_grace_period;
+    expect(grace).toBeDefined();
+    const parsed = /^(?:([0-9]+)h)?(?:([0-9]+)m)?(?:([0-9]+)s)?$/.exec(grace ?? '');
+    if (parsed === null || grace === '') {
+      throw new Error(`unreadable stop_grace_period ${JSON.stringify(grace)}`);
+    }
+    const [, hours = '0', minutes = '0', seconds = '0'] = parsed;
+    const total = Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
+    expect(total).toBeGreaterThanOrEqual(120);
+  });
+
+  /**
    * TD-021's container half, in the form that survives WP-50.
    *
    * It used to assert that `DOCKER_HOST` was set on exactly one service. That assertion is gone,
