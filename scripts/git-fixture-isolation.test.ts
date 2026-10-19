@@ -23,7 +23,22 @@ import { gitSpawnSites } from './git-spawn-sites.js';
  *
  * **Which suites.** Every unit-tier test file with a `git` spawn site (`git-spawn-sites.ts`), read
  * off disk, so a new fixture suite joins without an edit here. The integration and e2e files that
- * spawn `git` need PostgreSQL and are not run by this suite; the census holds them to the helper.
+ * spawn `git` need PostgreSQL and are not run by this suite; the census holds them to the helper,
+ * and the worker scrub (`test/support/git-environment.ts`) holds what they call in-process.
+ *
+ * **Those tiers were measured once instead** (WP-226, backlog 534, 2026-10-19, at `7acc6865`):
+ * `gitSpawnSites` over `test/integration/` and `test/e2e/` names **11** files (3 integration, 7 e2e,
+ * and `test/e2e/support/docker-workspace.ts`, whose one site runs inside a container). The 3 ran
+ * with `--project integration`, and the 7 plus the helper's two consumers (`docker-workspace`,
+ * `harness-volumes`) with `--project e2e-fake-claude`, each under this suite's `GIT_DIR`,
+ * `GIT_INDEX_FILE` and `GIT_WORK_TREE` pointed at a throwaway with coverage off. The throwaway's
+ * `config`, `HEAD`, `index`, `packed-refs` and `refs/**` — those five paths, not its `objects/`,
+ * `hooks/`, `info/`, `logs/` or `worktrees/` — were byte-identical after both runs. A planted shell-string
+ * `git commit` (invisible to the census) wrote nothing while the scrub held and moved the
+ * throwaway's `refs/heads/main` once the scrub was disabled, so the comparison does see a write. The run, the
+ * commands and the canaries are in PROGRESS under WP-226. No standing case: the census stays the
+ * guard, and nothing in this repository runs those tiers under an inherited `GIT_DIR` (a linked
+ * worktree's `git rebase --exec` or `git bisect run` would: both export it, measured at git 2.56.0).
  *
  * **Coverage off in the child**: two vitest runs in one checkout collide on the coverage directory,
  * and the child's `VITEST_*` and `NODE_V8_COVERAGE` are stripped for the same reason
