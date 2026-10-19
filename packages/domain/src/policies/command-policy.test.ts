@@ -23,6 +23,7 @@ import {
   DEFAULT_READ_ONLY_ALLOW,
   DEFAULT_VERIFICATION_ALLOW,
   dequoteCommand,
+  ENVIRONMENT_ONLY_FLOORS,
   environmentSpellsFloor,
   evaluateCommand,
   FLOOR_ENVIRONMENT,
@@ -2959,7 +2960,9 @@ describe('WP-199, backlog 583: the floors’ environment census', () => {
   };
 
   it('every command floor declares its environment, and the table is their derivation', () => {
-    expect(environmentCensus(HAZARDOUS_ARGUMENTS, FLOOR_ENVIRONMENT)).toEqual([]);
+    expect(
+      environmentCensus([...HAZARDOUS_ARGUMENTS, ...ENVIRONMENT_ONLY_FLOORS], FLOOR_ENVIRONMENT),
+    ).toEqual([]);
     expect(FLOOR_ENVIRONMENT.map((row) => row.name)).toEqual(
       expect.arrayContaining(['npm_config_', 'NODE_OPTIONS', 'EDITOR', 'VISUAL', 'BROWSER']),
     );
@@ -3082,14 +3085,10 @@ describe('WP-206: every program the default lists name is on exactly one reader 
   const firstToken = (entry: string): string => entry.trim().split(/\s+/)[0] as string;
   const preciseNames = new Set([...PRECISE_ALLOW_ENTRIES.keys()].map(firstToken));
   /**
-   * Admitted, with the reason, and held equal in both directions: `composer` is named by the ask
-   * entry `composer require *`, has no floor and runs a vendor binary (`composer exec`), so it can
-   * be neither valved nor a precise entry. Its `require` line is known by match and not read
-   * (PROGRESS § WP-206, discovered work).
+   * Admitted, with the reason, and held equal in both directions. Empty since WP-211 (b), backlog
+   * 606: `composer`, the one name WP-206 admitted, is a package runner (`composer exec`).
    */
-  const ADMITTED: Readonly<Record<string, string>> = {
-    composer: 'composer require * (ask): no floor, no reader, not valvable (composer exec)',
-  };
+  const ADMITTED: Readonly<Record<string, string>> = {};
 
   const readersOf = (name: string): readonly string[] => {
     const entries = DEFAULT_ENTRIES.filter((entry) => firstToken(entry) === name);
@@ -3118,6 +3117,8 @@ describe('WP-206: every program the default lists name is on exactly one reader 
   });
 
   it('keeps the admitted list exact: each is named by a default list and on no reader else', () => {
+    expect(Object.keys(ADMITTED)).toEqual([]);
+    expect(readersOf('composer')).toEqual(['known by name']);
     const named = new Set(DEFAULT_ENTRIES.map(firstToken));
     for (const name of Object.keys(ADMITTED)) {
       expect(named.has(name), name).toBe(true);

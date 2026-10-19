@@ -352,6 +352,223 @@ export const COMMAND_ALLOW_BY_SKILL: Readonly<Record<string, readonly string[]>>
   ],
 };
 
+/** One skill entry's subcommand grammar, as its CLI's own `--help` prints it at the pinned version. */
+export interface SkillCommandGrammar {
+  /** The CLI and the version `--help` was read at. */
+  readonly cli: string;
+  /** Every option the subcommand's `--help` lists, inherited ones included. */
+  readonly options: readonly string[];
+}
+
+const GLAB = 'glab 1.117.0';
+const SENTRY_CLI = 'sentry-cli 3.7.0';
+const JIRA_CLI = 'jira 1.7.0';
+const JIRA_INHERITED = ['-c/--config', '--debug', '-p/--project'];
+
+/**
+ * The option grammar of every {@link COMMAND_ALLOW_BY_SKILL} entry (WP-211 (a), backlog 607): read
+ * off `<entry without its *> --help` in `platform-runtime:s16` on 2026-10-19, whose versions are
+ * `docker/runtime.Dockerfile`'s pins. **`acli` is not pinned**: Atlassian publishes it from one
+ * "latest" path, `acli --version` read `1.3.39-stable` in that image, and a rebuild may fetch a
+ * version whose `workitem view` takes options this grammar does not list — the drift is a residual,
+ * stated, and nothing here notices it. **No option of the eleven subcommands names a program to run**, so each entry
+ * is a valve scoped to its subcommand (the planner's census, `planner-command-census.test.ts`) and
+ * gets no floor. Each CLI's parser refuses an option it does not declare (cobra for glab, jira and
+ * acli, clap for sentry-cli, kingpin for logcli), so a `*` cannot reach an option not listed here.
+ * What the census weighed and the program valve was refused for (`glab alias set --shell`,
+ * `acli rovodev`) is PROGRESS § WP-211. Three options do more than read, and none runs a program:
+ *  - `-w`/`--web` (glab's `mr view`, acli's `workitem view`) opens the browser `BROWSER` names, an
+ *    environment name already on a floor (npm's `--browser`), so `env BROWSER=… glab mr view 1 -w`
+ *    is uncertain. The environment these CLIs read to run a program — a pager, a browser, an editor,
+ *    a configuration directory (`GLAB_PAGER`, `JIRA_PAGER`, `GLAB_CONFIG_DIR`, …) — is declared on
+ *    `ENVIRONMENT_ONLY_FLOORS` (WP-211 review round 1), so a line carrying one is uncertain;
+ *  - `--jq` (glab) is an expression glab evaluates in process (gojq, `go.mod` at v1.117.0);
+ *  - logcli's `--cpuprofile`, `--memprofile` and `--part-path-prefix` write a file the caller names
+ *    — a write, not a program (PROGRESS § WP-211, discovered work).
+ */
+export const SKILL_COMMAND_GRAMMARS: Readonly<Record<string, SkillCommandGrammar>> = {
+  'logcli query *': {
+    cli: 'logcli 3.7.7',
+    options: [
+      '--[no-]help',
+      '--[no-]version',
+      '-q/--[no-]quiet',
+      '--log.level',
+      '--[no-]stats',
+      '-o/--output',
+      '-z/--timezone',
+      '--output-timestamp-format',
+      '--cpuprofile',
+      '--memprofile',
+      '--[no-]stdin',
+      '--addr',
+      '--username',
+      '--password',
+      '--ca-cert',
+      '--[no-]tls-skip-verify',
+      '--cert',
+      '--key',
+      '--org-id',
+      '--query-tags',
+      '--[no-]nocache',
+      '--bearer-token',
+      '--bearer-token-file',
+      '--retries',
+      '--min-backoff',
+      '--max-backoff',
+      '--auth-header',
+      '--proxy-url',
+      '--[no-]compress',
+      '--[no-]envproxy',
+      '--header',
+      '--limit',
+      '--since',
+      '--from',
+      '--to',
+      '--step',
+      '--interval',
+      '--batch',
+      '--parallel-duration',
+      '--parallel-max-workers',
+      '--part-path-prefix',
+      '--[no-]overwrite-completed-parts',
+      '--[no-]merge-parts',
+      '--[no-]keep-parts',
+      '--[no-]forward',
+      '--[no-]no-labels',
+      '--exclude-label',
+      '--include-label',
+      '--[no-]include-common-labels',
+      '--labels-length',
+      '--store-config',
+      '--[no-]remote-schema',
+      '--schema-store',
+      '--[no-]colored-output',
+      '-t/--[no-]tail',
+      '-f/--[no-]follow',
+      '--delay-for',
+    ],
+  },
+  'sentry-cli issues list *': {
+    cli: SENTRY_CLI,
+    options: [
+      '--max-rows',
+      '-o/--org',
+      '--header',
+      '-p/--project',
+      '--pages',
+      '--auth-token',
+      '--query',
+      '-s/--status',
+      '-a/--all',
+      '--log-level',
+      '-i/--id',
+      '--quiet/--silent',
+      '-h/--help',
+    ],
+  },
+  'sentry-cli events list *': {
+    cli: SENTRY_CLI,
+    options: [
+      '-o/--org',
+      '-U/--show-user',
+      '--header',
+      '-p/--project',
+      '-T/--show-tags',
+      '--auth-token',
+      '--max-rows',
+      '--log-level',
+      '--pages',
+      '--quiet/--silent',
+      '-h/--help',
+    ],
+  },
+  'sentry-cli issues --help': { cli: SENTRY_CLI, options: ['-h/--help'] },
+  'acli jira workitem view *': {
+    cli: 'acli 1.3.39-stable',
+    options: ['-f/--fields', '-h/--help', '--json', '-w/--web'],
+  },
+  'jira issue view *': {
+    cli: JIRA_CLI,
+    options: ['--comments', '-h/--help', '--plain', '--raw', ...JIRA_INHERITED],
+  },
+  'jira issue list *': {
+    cli: JIRA_CLI,
+    options: [
+      '-t/--type',
+      '-R/--resolution',
+      '-s/--status',
+      '-y/--priority',
+      '-r/--reporter',
+      '-a/--assignee',
+      '-C/--component',
+      '-l/--label',
+      '-P/--parent',
+      '--history',
+      '-w/--watching',
+      '--created',
+      '--updated',
+      '--created-after',
+      '--updated-after',
+      '--created-before',
+      '--updated-before',
+      '-q/--jql',
+      '--order-by',
+      '--reverse',
+      '--paginate',
+      '--plain',
+      '--no-headers',
+      '--no-truncate',
+      '--delimiter',
+      '--comments',
+      '--raw',
+      '--csv',
+      '--columns',
+      '--fixed-columns',
+      '-h/--help',
+      ...JIRA_INHERITED,
+    ],
+  },
+  'glab mr view *': {
+    cli: GLAB,
+    options: [
+      '-c/--comments',
+      '-h/--help',
+      '--jq',
+      '-F/--output',
+      '-p/--page',
+      '-P/--per-page',
+      '-R/--repo',
+      '--resolved',
+      '-s/--system-logs',
+      '--unresolved',
+      '-w/--web',
+    ],
+  },
+  'glab mr diff *': { cli: GLAB, options: ['--color', '-h/--help', '--raw', '-R/--repo'] },
+  'glab mr note list *': {
+    cli: GLAB,
+    options: ['--file', '-h/--help', '--jq', '-F/--output', '-R/--repo', '--state', '-t/--type'],
+  },
+  'glab ci status': {
+    cli: GLAB,
+    options: [
+      '-b/--branch',
+      '-c/--compact',
+      '-h/--help',
+      '--jq',
+      '-l/--live',
+      '-F/--output',
+      '-R/--repo',
+      '-w/--wait',
+    ],
+  },
+  'glab ci trace *': {
+    cli: GLAB,
+    options: ['-b/--branch', '-h/--help', '-p/--pipeline-id', '-R/--repo'],
+  },
+};
+
 /**
  * The platform skills that describe a **provider** — provisioned only when the project has a
  * binding whose provider's `AgentTooling.skill` names it (WP-54, PROGRESS backlog 40).

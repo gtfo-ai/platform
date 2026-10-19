@@ -5687,3 +5687,150 @@ describe('WP-218, backlogs 621 and 620: git’s global options are one declared 
     );
   });
 });
+
+describe('WP-211, backlogs 606 and 581: composer is a package runner, and yarn create’s string is never read', () => {
+  // The cells are PROGRESS § WP-211's measurement; nothing executes here.
+  describe('criterion (3), backlog 606: composer exec runs a vendor binary as npx runs a package’s', () => {
+    it.each([
+      // `ask / uncertain / uncertain` before (WP-206 (c), the unknown program rule).
+      ['composer exec sudo id', 'block / block / block'],
+      ['composer e sudo id', 'block / block / block'],
+      ['composer global exec sudo id', 'block / block / block'],
+      ['composer -d dir exec sudo id', 'block / block / block'],
+      // `ask / auto / deny` before.
+      ['composer exec $x', 'ask / uncertain / uncertain'],
+    ])('%j reads %s', (command, expected) => {
+      expectCells(command, expected);
+    });
+
+    it.each([
+      'composer run-script git',
+      // The stated over-ask: a script the project's composer.json names is never read.
+      'composer run-script test',
+    ])('%j is a script composer hands to a shell (runnerString)', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.runnerString]);
+    });
+
+    it.each([
+      ['composer require foo/bar', 'ask / auto / deny'],
+      ['composer exec phpunit -c phpunit.xml', 'ask / auto / deny'],
+      ['composer install', 'ask / auto / deny'],
+    ])('control: %j keeps %s', (command, expected) => {
+      expectCells(command, expected);
+    });
+  });
+
+  /**
+   * Review rounds 1 and 2: only an exact built-in name or alias is that built-in. Composer loads
+   * the project's scripts for an inexact word, and Symfony Console finds an exact script name before
+   * any prefix or case-folded match, so a prefix (`e`, `ins`), a case-folded name (`EXEC`) or any
+   * other word may run a script and is `runnerSubcommand`. The block list still reads past it. With
+   * round 0's reader the `sudo` rows read `ask / auto / deny`; with round 1's (Symfony's prefix and
+   * case rules) `composer e phpunit`, `composer ex phpunit`, `composer inst` and `composer _` did.
+   */
+  describe('review rounds 1 and 2: only an exact built-in is a built-in', () => {
+    it.each([
+      'composer EXEC sudo id',
+      'composer Exec sudo id',
+      'composer g exec sudo id',
+      'composer glob exec sudo id',
+      'composer global EXEC sudo id',
+      'composer x sudo id',
+      'composer -nd dir exec sudo id',
+    ])('%j reads block / block / block', (command) => {
+      expectCells(command, 'block / block / block');
+    });
+
+    it.each([
+      'composer e phpunit',
+      'composer ex phpunit',
+      'composer inst',
+      'composer _',
+      'composer ins x',
+      'composer in x',
+      'composer test',
+      'composer RUN test',
+      'composer Run-S test',
+      'composer REQUIRE foo/bar',
+      // The cost, stated: the git boundary's reason gives way to the subcommand's.
+      'composer EXEC git push --no-verify',
+    ])('%j may run a script, and is uncertain (runnerSubcommand)', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.runnerSubcommand]);
+    });
+
+    it.each([
+      'composer install',
+      'composer -n install',
+      'composer remove x',
+      'composer exec phpunit',
+      'composer completion',
+      'composer global require foo/bar',
+    ])(
+      'control: %j is exactly a canonical built-in that runs no command, ask / auto / deny',
+      (command) => {
+        expectCells(command, 'ask / auto / deny');
+      },
+    );
+
+    it('control: "composer run-script test" is exactly run-script (runnerString)', () => {
+      expectCells('composer run-script test', 'ask / uncertain / uncertain');
+      expect(auto('composer run-script test').evaluation.uncertainty).toEqual([
+        UNCERTAINTY.runnerString,
+      ]);
+    });
+  });
+
+  /**
+   * After review round 3, orchestrator-directed: only a **canonical** name is a built-in. A
+   * script's `scripts-aliases` overwrite a built-in's alias (Symfony's `add()`), and Composer loads
+   * the scripts for no command word, `list`, `help` and `_complete` (`$mayNeedPluginCommand`), so
+   * each of these may run a script. All but `composer rm x` read `ask / auto / deny` after round 2;
+   * `composer rm x` read `ask / uncertain / uncertain` at `d72ed8eb` and `ask / auto / deny` after.
+   */
+  describe('after review round 3: an alias, list, help or no command word may run a script', () => {
+    it.each([
+      'composer i',
+      'composer r foo/bar',
+      'composer u',
+      'composer info',
+      'composer home',
+      'composer upgrade',
+      'composer list',
+      'composer help',
+      'composer',
+      'composer -n',
+      'composer global i',
+      'composer rm x',
+      'composer _complete',
+      'composer run test',
+    ])('%j is uncertain (runnerSubcommand)', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.runnerSubcommand]);
+    });
+  });
+
+  describe('criterion (4), backlog 581: Yarn 1 joins every word after the kit’s name into a shell string', () => {
+    it.each([
+      // `ask / auto / deny` before.
+      "yarn create vite -c 'git push --no-verify'",
+      "yarn create vite '; sudo id'",
+      "yarnpkg create vite '$(id)'",
+      "yarn --cwd d create vite 'a b'",
+      "yarn workspace w create vite ';id'",
+    ])('%j is uncertain (runnerString)', (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.runnerString]);
+    });
+
+    it.each([
+      'yarn create vite',
+      // `-c` is not special: a plain word is the starter kit's argument.
+      'yarn create vite -c x',
+      'yarn create vite my-app --template react',
+    ])('control: %j keeps ask / auto / deny', (command) => {
+      expectCells(command, 'ask / auto / deny');
+    });
+  });
+});

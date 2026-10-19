@@ -290,17 +290,22 @@ export const UNCERTAINTY = {
     'a package runner given -c, --call or --shell-mode (npx, npm exec, pnpm exec or dlx, and the rest), which runs a string in a shell — run the command itself; the platform does not read the string a package runner hands to a shell',
   /**
    * WP-196 review round 1: a package runner whose subcommand the platform cannot determine exactly
-   * (`yarn workspaces foreach … exec`) is never read as a command that runs nothing.
+   * (`yarn workspaces foreach … exec`) is never read as a command that runs nothing. WP-211 review
+   * rounds 1 to 3: a Composer command word that is not exactly a canonical built-in name — an alias too (`composer x`,
+   * `composer test`, `composer ex`), which Composer may run as a `composer.json` script.
    */
   runnerSubcommand:
-    'a package runner whose subcommand the platform cannot determine (yarn workspaces …), which may run a command — run the command itself; the platform reads a package runner only where it knows what it runs',
+    'a package runner whose subcommand the platform cannot determine (yarn workspaces …, or a composer word that is not exactly a canonical built-in command), which may run a command — run the command itself; the platform reads a package runner only where it knows what it runs',
   /**
    * WP-196 review round 2 (backlog 579): `npm explore <pkg> -- <words>` joins its words into one
    * string and runs it in a shell (npm 11 `lib/commands/explore.js`), and `bun exec '<string>'` runs
    * its string in Bun Shell. The string is never read.
+   * WP-211: `composer run-script`/`run` hands a `composer.json` script to a shell (backlog 606), and
+   * Yarn 1's `create` joins every word after the starter kit's name into one shell string (backlog
+   * 581, `yarnCreateHandsString`).
    */
   runnerString:
-    'npm explore or bun exec, which runs its words as a string in a shell — run the command itself; the platform does not read the string a package runner hands to a shell',
+    'npm explore, bun exec, composer run-script or yarn create, which runs its words as a string in a shell — run the command itself; the platform does not read the string a package runner hands to a shell',
   /**
    * WP-210 (backlog 605): a `sed` or awk script holding an execution primitive runs text as a shell
    * command — its own, or its input's (`echo … | sed 's/^//e'`) — so it is uncertain whatever its
@@ -934,6 +939,14 @@ export const DEFAULT_IMPLEMENTATION_ASK: readonly string[] = [
   'npm install *',
   'pnpm add *',
   'pip install *',
+  // WP-211 (b): `require`'s options, read off https://getcomposer.org/doc/03-cli.md#require-r
+  // (2026-10-19; unversioned, and Composer is in no stock image): `--dev`, `--dry-run`,
+  // `--prefer-install`, `--no-progress`, `--no-update`, `--no-install`, `--no-audit`,
+  // `--audit-format`, `--no-security-blocking`, `--no-blocking`, `--update-no-dev`, `-w`/`-W`,
+  // `--ignore-platform-req(s)`, `--prefer-stable`, `--prefer-lowest`, `-m`, `--sort-packages`,
+  // `-o`, `-a`, `--apcu-autoloader(-prefix)`, and the global `-d`, `--no-plugins`, `--no-scripts`,
+  // `--no-cache`, `--profile`, `-n`, `-q`, `-v`, `--ansi`. None names a program; what it runs is
+  // the required package's plugins and `composer.json`'s scripts, which is why the entry asks.
   'composer require *',
   'git push*',
   'git rebase* -x*',
@@ -2136,6 +2149,60 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
 ];
 
 /**
+ * The environment a platform-skill CLI reads to run a program, for a CLI whose subcommands have no
+ * option to floor (WP-211 review round 1, backlog 625). Each is a `command` floor with **no
+ * option** — its `tokens` never match — and is **not** on {@link HAZARDOUS_ARGUMENTS}, so it adds
+ * names to {@link FLOOR_ENVIRONMENT} without putting the CLI on {@link FLOORED_NAMES}: a floored
+ * name is known, and `glab alias set x '!sudo id'` would lose the unknown program rule's reading.
+ * `PAGER`, `BROWSER`, `EDITOR` and `VISUAL` are npm's rows already; `HOME` and `XDG_CONFIG_HOME`,
+ * which re-point every CLI's configuration, are the git boundary's (`GUARDED_GIT_ENVIRONMENT`).
+ * **Residual, stated** (WP-211 review round 2): the configuration file itself. `glab config set
+ * glab_pager x` reads `ask / auto / deny` — `deny` refuses it, and under `auto` it adds nothing a
+ * direct run of `x` would not — and a Write-tool edit of glab's configuration file, used by a later
+ * allowed `glab mr view`, is the file guard's residual (TD-030 tier 3, a file the run wrote).
+ */
+export const ENVIRONMENT_ONLY_FLOORS: readonly HazardousArgument[] = [
+  {
+    pattern: 'glab (environment)',
+    kind: 'command',
+    verbs: ['glab'],
+    hazard:
+      'glab runs its pager and editor from these, and its configuration directory holds `browser`, `glab_pager`, `editor` and `custom_headers` `valueFromCommand`, a command it runs',
+    tokens: () => false,
+    // `glab config --help` at 1.117.0 (`platform-runtime:s16`): `glab_pager` ("GLAB_PAGER takes
+    // precedence over both"), `editor` ("`GLAB_EDITOR`, `VISUAL`, `EDITOR`"), `custom_headers`
+    // ("valueFromCommand … glab runs it once for each process"); `GLAB_CONFIG_DIR` re-points the
+    // file those keys are read from (the binary's own text: "Set to a directory path to override the
+    // global configuration location").
+    environment: ['GLAB_PAGER', 'GLAB_EDITOR', 'GLAB_CONFIG_DIR'],
+  },
+  {
+    pattern: 'jira (environment)',
+    kind: 'command',
+    verbs: ['jira'],
+    hazard: 'jira runs its pager, browser and editor from these',
+    tokens: () => false,
+    // jira-cli v1.7.0: `pkg/tui/helper.go` (`os.Getenv("JIRA_PAGER")`, then `PAGER`, then
+    // `exec.Command(pager, …)`), `pkg/browser/browser.go` (`JIRA_BROWSER`, then `BROWSER`),
+    // `pkg/surveyext/editor.go` (`JIRA_EDITOR`, then `VISUAL`, then `EDITOR`). Its configuration
+    // (`JIRA_CONFIG_FILE`) names no program there.
+    environment: ['JIRA_PAGER', 'JIRA_BROWSER', 'JIRA_EDITOR'],
+  },
+  {
+    pattern: 'acli (environment)',
+    kind: 'command',
+    verbs: ['acli'],
+    hazard:
+      'acli reads its configuration from this directory, and what that configuration may run is not documented',
+    tokens: () => false,
+    // The one such name in the `acli` 1.3.39-stable binary (`grep -a`, `platform-runtime:s16`);
+    // acli's source is not public, so the name is declared on the closed side `[unverified]`.
+    // logcli 3.7.7 reads no environment that names a program (its `--help`: `LOKI_*` only).
+    environment: ['ACLI_CONFIG_DIR'],
+  },
+];
+
+/**
  * How a floored program's parser reads a single-dash option (WP-214, backlog 613; TD-030 tier 2).
  * `getopt`: a single-dash word is a cluster of one-character options read in order, and the first
  * one that takes a value ends the cluster, the rest of the word being its value — so to git `-an`
@@ -2395,6 +2462,12 @@ const RUNNER_EXEC_SUBCOMMANDS: Readonly<Record<string, ReadonlySet<string>>> = {
   // `sentry-cli monitors run <slug> -- <command>` (WP-205 (e), backlog 608): `run` after `monitors`
   // only, and its grammar is `WRAPPER_GRAMMARS`' `sentry-cli run`.
   'sentry-cli': new Set(['run']),
+  // WP-211 (b), backlog 606: `composer exec <binary>` "executes a vendored binary/script" as `npx`
+  // runs a package's (https://getcomposer.org/doc/03-cli.md#exec, read 2026-10-19). Its command word
+  // is a built-in only when it is a canonical name exactly; any other word may be a script (`composerSubcommandAt`);
+  // `run-script`/`run` hands a `composer.json` script to a shell and is `runnerSubcommandAt`'s
+  // `'string'`. Not on `PACKAGE_RUNNER_COMMANDS`: it runs nothing by its name.
+  composer: new Set(['exec']),
 };
 
 /**
@@ -2699,6 +2772,109 @@ const PNPM_BUILT_INS: ReadonlySet<string> = new Set([
 const npmExecWord = (value: string): boolean => value === 'x' || 'exec'.startsWith(value);
 
 /**
+ * Composer 2.10.3's built-in commands by their **canonical names** (`getDefaultCommands()` in
+ * `src/Composer/Console/Application.php` and each command's `setName`,
+ * https://github.com/composer/composer/tree/2.10.3/src/Composer/Command), plus Symfony Console's
+ * `completion`. Read as that command only when the word is exactly one of them (WP-211 review
+ * rounds 2 and 3). Not here, and so read as a word that may run a script: every alias (`i`, `r`,
+ * `u`, `upgrade`, `info`, `home`, `rm`, …), `list`, `help` and `_complete`.
+ */
+const COMPOSER_COMMANDS: ReadonlySet<string> = new Set([
+  'about',
+  'config',
+  'depends',
+  'prohibits',
+  'init',
+  'install',
+  'create-project',
+  'update',
+  'search',
+  'validate',
+  'audit',
+  'show',
+  'suggests',
+  'require',
+  'dump-autoload',
+  'status',
+  'archive',
+  'diagnose',
+  'run-script',
+  'licenses',
+  'global',
+  'clear-cache',
+  'remove',
+  'browse',
+  'exec',
+  'outdated',
+  'check-platform-reqs',
+  'fund',
+  'reinstall',
+  'bump',
+  'repository',
+  'policy',
+  'self-update',
+  'completion',
+]);
+
+/**
+ * The built-in Composer runs for a command word, **only when the word is exactly a built-in's
+ * canonical name** (WP-211 review rounds 2 and 3, the last orchestrator-directed); `null` for any
+ * other word, which Composer may run as a `composer.json` script. Composer 2.10.3 loads the
+ * project's scripts when the raw word is not the resolved name (`src/Composer/Console/Application.php:267`,
+ * `$mayNeedScriptCommand = $mayNeedPluginCommand || … || $rawCommandName !== $commandName`) and for
+ * no command word, `list`, `help` and `_complete` (`:256`–`:265`, `$mayNeedPluginCommand`). A script
+ * is skipped only when its **name** is a built-in's (`:383`, `$this->has($script)`), but its
+ * `scripts-aliases` reach Symfony Console 5.4.47's `Application::add`, which writes
+ * `$this->commands[$alias] = $command` over a built-in's alias
+ * (https://github.com/symfony/console/blob/v5.4.47/Application.php#L547). Symfony's `find` answers
+ * an exact entry before any prefix or case-folded match (`:685`, `if ($this->has($name))`). So an
+ * alias, a prefix, a case-folded name, `list`, `help` and a bare `composer` may all run a script,
+ * and an exact canonical name — whose raw word is its name, so no script is loaded — may not.
+ */
+const composerCommandOf = (word: string): string | null =>
+  COMPOSER_COMMANDS.has(word) ? word : null;
+
+/**
+ * Where Composer's exec form stands (WP-211 (b) and review round 1): the command word is the first
+ * word that is no option and no `-d`/`--working-dir` value (Composer binds its global definition
+ * before reading it, `getCommandNameBeforeBinding`), read by {@link composerCommandOf}. `exec` is
+ * the exec form; `run-script` hands a `composer.json` script to a shell (`'string'`); `global`
+ * reads the next command word; any word that is not exactly a built-in's canonical name, and no
+ * command word at all, is `'unknown'` — an alias, a prefix, a case-folded name, a script or a typo, any of which Composer may run as a
+ * `composer.json` script — and any other command is `null`. **The cost, stated:** `composer EXEC
+ * git push --no-verify` reads `runnerSubcommand` rather than the git boundary's reason; the block
+ * list still reads past the word (`composer EXEC sudo id` is blocked).
+ */
+const composerSubcommandAt = (
+  words: readonly string[],
+  head: number,
+): number | null | 'unknown' | 'string' => {
+  for (let index = head + 1; index < words.length; index += 1) {
+    const value = unquoteToken(words[index] as string);
+    if (value === '--') {
+      continue;
+    }
+    if (isFlagToken(value)) {
+      // `-d`'s value is the next word, also at the end of a short cluster (`-nd dir`).
+      index += /^(?:-[A-Za-z]*d|--working-dir)$/.test(value) ? 1 : 0;
+      continue;
+    }
+    const command = composerCommandOf(value);
+    if (command === 'exec') {
+      return index;
+    }
+    if (command === 'run-script') {
+      return 'string';
+    }
+    if (command !== 'global') {
+      return command === null ? 'unknown' : null;
+    }
+  }
+  // No command word (`composer`, `composer -n`, `composer global`): `list`, which loads the scripts.
+  return 'unknown';
+};
+
+/**
  * Where a package runner's exec subcommand stands, when `words[head]` is a runner (WP-196 (b)):
  * the first word after the runner that is neither one of its options nor possibly an option's
  * value (a word after an option with no `=`) — or such a value, read closed, so `npm --prefix exec
@@ -2720,6 +2896,9 @@ const runnerSubcommandAt = (
   const name = runnerName(words[head] ?? '');
   if (!Object.hasOwn(RUNNER_EXEC_SUBCOMMANDS, name)) {
     return null;
+  }
+  if (name === 'composer') {
+    return composerSubcommandAt(words, head);
   }
   const subcommands = RUNNER_EXEC_SUBCOMMANDS[name] as ReadonlySet<string>;
   const yarn = name === 'yarn' || name === 'yarnpkg';
@@ -7146,6 +7325,52 @@ const runnerCallsString = (args: readonly ShellWord[]): boolean => {
   return false;
 };
 
+/** A word `/bin/sh` hands on as itself: no quote, expansion, glob, operator, space or comment. */
+const SHELL_PLAIN_WORD = /^[A-Za-z0-9_./@%+=:,-]+$/;
+
+/**
+ * Whether Yarn 1's `create` hands a shell a string it would read as more than words (WP-211 (c),
+ * backlog 581, read from source). Yarn 1.22.22 passes every word after the starter kit's name
+ * through unparsed (`src/cli/index.js`, `PROXY_COMMANDS` `create: 1`) and runs
+ * `child.spawn(command, rest, {stdio: 'inherit', shell: true, env})`
+ * (`src/cli/commands/create.js:74`), and Node joins a `shell: true` command and its arguments with
+ * spaces into one `/bin/sh -c` string — so `-c` is not special: **every** word is shell text.
+ * `yarn create vite '; sudo id'` runs `sudo id`. Read closed, every word after `create` (the kit's
+ * name included) must be literal and plain ({@link SHELL_PLAIN_WORD}); anything else is
+ * `UNCERTAINTY.runnerString`. The first word of the string is Yarn's own path to `create-<name>`,
+ * so a plain word is only ever its argument. `create` is found as `runnerSubcommandAt` finds an exec
+ * form: past options and possibly their values, and past `workspace <name>`. Berry's `create` hands
+ * `dlx` an argument array (`plugin-dlx/sources/commands/create.ts`, `this.cli.run(['dlx', …])`).
+ */
+const yarnCreateHandsString = (name: string, args: readonly ShellWord[]): boolean => {
+  if (name !== 'yarn' && name !== 'yarnpkg') {
+    return false;
+  }
+  let valueMayFollow = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const value = unquoteToken((args[index] as ShellWord).raw);
+    if (value === 'create') {
+      return !args
+        .slice(index + 1)
+        .every((word) => isLiteralWord(word.raw) && SHELL_PLAIN_WORD.test(literalValue(word.raw)));
+    }
+    if (value === '--') {
+      continue;
+    }
+    if (isFlagToken(value)) {
+      valueMayFollow = !value.includes('=');
+    } else if (value === 'workspace') {
+      index += 1;
+      valueMayFollow = false;
+    } else if (valueMayFollow) {
+      valueMayFollow = false;
+    } else {
+      return false;
+    }
+  }
+  return false;
+};
+
 /**
  * The words a package runner reads its own options from (WP-196 (c)): every word after a runner
  * that needs no subcommand (`npx`, `pnpx`, `bunx`), and those after `npm`/`pnpm`/`yarn`/`bun` in
@@ -7721,6 +7946,8 @@ const wrappedScript = (stage: string, input: StageInput): HandedScripts => {
       ) {
         reasons.add(UNCERTAINTY.xargsArguments);
       }
+    } else if (yarnCreateHandsString(name, args)) {
+      reasons.add(UNCERTAINTY.runnerString);
     } else if (runnerSubcommandAt([name, ...args.map((word) => word.raw)], 0) === 'unknown') {
       reasons.add(UNCERTAINTY.runnerSubcommand);
     } else if (runnerSubcommandAt([name, ...args.map((word) => word.raw)], 0) === 'string') {
@@ -7764,12 +7991,15 @@ export const floorEnvironmentRows = (
   );
 
 /**
- * The environment names the scan reads, derived from {@link HAZARDOUS_ARGUMENTS} alone (WP-199,
- * backlog 583) — nothing is spelled here, and the census in `command-policy.test.ts` holds this
+ * The environment names the scan reads, derived from {@link HAZARDOUS_ARGUMENTS} and, since WP-211
+ * review round 1, {@link ENVIRONMENT_ONLY_FLOORS} alone (WP-199, backlog 583) — nothing is spelled
+ * here, and the census in `command-policy.test.ts` holds this
  * table equal to the derivation and refuses a name declared twice.
  */
-export const FLOOR_ENVIRONMENT: readonly FloorEnvironmentRow[] =
-  floorEnvironmentRows(HAZARDOUS_ARGUMENTS);
+export const FLOOR_ENVIRONMENT: readonly FloorEnvironmentRow[] = floorEnvironmentRows([
+  ...HAZARDOUS_ARGUMENTS,
+  ...ENVIRONMENT_ONLY_FLOORS,
+]);
 
 /** Where a name is read in a word: its start (or after `printf`'s attached `-v`), or after an `=`. */
 const ENVIRONMENT_WORD_POSITION = '(?:^(?:-v)?|=)';
