@@ -16670,6 +16670,73 @@ Option 2 has an over-ask that must be counted (`grep -e git`, `rg 'sudo'`, `git 
 
 **Depends on** WP-203 being merged, because its unknown-program rule, `judgedNameIn` and the valve are the scan that option 2 widens. It should be weighed with 603, a non-literal argument of an unknown program, which shares that scan, and with WP-205, the per-wrapper grammar, because a declared per-program grammar is the same table shape. The ruling cites WP-198 and WP-164 as the class's owners, but neither row's criteria cover option values of these tools; WP-164 derives `XARGS_FLOORED_VERBS` from the floors, so a new floor widens xargs' over-ask too (as `rg` did; WP-203's notes record `xargs rg`). Related: 580, 583, 585, 599, 603.
 
+### 605. **A program whose literal script runs its own input runs the line's earlier output: `echo 'git push origin main' | sed 's/^//e'` and `echo 'git push origin main' | awk '{system($0)}'` read `ask / auto / deny`, so `auto` runs them** (TODO, **major, fail-open under `auto`, live on the git boundary**: `sed` and `awk` are in `platform-runtime:s16` (`command -v`: `/usr/bin/sed`, `/usr/bin/awk`), and the same two shapes ran there with an `echo` marker in place of the push. The run holds the git credential helper, so a push that is reached succeeds. **Pre-existing**: the before and after cells are equal, so WP-206 neither caused nor closed it. Found by WP-206's implementer, session 17 (*Discovered work*), on WP-206's uncommitted tree over `eac3cf48`. The refiner read the probe logs and ran nothing. **No work package owns it — an architect pass places it.**)
+
+**What is wrong.** The data of these lines is literal and on the line: `echo` prints `git push origin main`, and the next stage executes what it reads. `sed`'s `s///e` hands the pattern space to a shell, and `awk`'s `system($0)` runs the input record. The scan sees neither half as a command:
+- `echo` is valved, so its argument is not read as a command.
+- The `sed`/`awk` script names no judged name, so WP-206's glue rule finds nothing in it.
+
+The policy already reads this shape for shells: a shell that reads its script from a pipe is `UNCERTAINTY.handedCommand` (`command-policy.ts:79`, applied at `:6784`). A program that is not a shell, with a script that executes its input, is the same shape and is not read.
+
+**Evidence** (WP-206's implementer, session 17; probes in the orchestrator's scratchpad `wp206/`, which will not outlive the session, so the numbers are copied here).
+- **The cells.** `adv-after.log:125–126`, under `attended / auto / deny`, before → after: `"echo 'git push origin main' | sed 's/^//e'"` reads `auto/auto/unattended_deny -> auto/auto/unattended_deny`, and the `awk '{system($0)}'` line reads the same. Pinned as the residual in `unattended-commands.test.ts:4281–4282` (the WP-206 describe *the residual, stated*), each `ask / auto / deny`.
+- **Ran in the image** (`cprobe/p.sh`, `cprobe/out.log`; arm64, `--network none`, uid 1000): `echo 'echo RAN_PIPE' | sed 's/^//e'` printed `RAN_PIPE`, and `echo 'echo RAN_AWK' | awk '{system($0)}'` printed `RAN_AWK`. The push itself was not run (no network). That it would be reached is the marker's reading, not a measurement.
+
+**Why the sixth amendment does not already decide it** (§ "Architect ruling (M11 sixth amendment, session 17)", *Declined for 604*). The ruling declined two things that bear on this class, and both reasons are about a different input:
+- **A primitive list** (option 3: `sed` with `e`, `awk` with `system`/`|`/`getline`, … uncertain unless the script is literal and free of exec primitives). It was declined because *"a primitive list is a deny-list over a language that can compose (`getattr`, string concatenation, `__import__`, `eval`, `require(x)`), so it fails open by construction and is the wrong direction for a guard"*. The fail-closed form, *"every inline script to an interpreter is uncertain"*, was declined because it *"re-decides BD-025's 2026-10-06 decision 1 for the commonest one-liners a coding agent writes"*.
+- **A `sed` floor for `e`.** It was declined because *"`sed 's/^//e' f` — the file's own lines run as commands — is the file residual (`bash file`), which is the sandbox's by decision 1"*.
+
+The second reason covers a **file** the run wrote, which the platform cannot read. In 605 the input is on the line, as literal as the `sh -c` body that rule 1 reads. The first reason is about a script that **composes** a name. Here the script is a literal four characters (`s/^//e`, `{system($0)}`), so nothing composes.
+
+**What it costs to leave.** Under the default `commands.unattended: auto`, any line can reach the git boundary or a block-listed name by printing the command and piping it into `sed … e` or `awk … system`. Both are Essential or Priority required in every Debian image. It is the class of 591, 599, 603 and 604 at the stdin spelling, and it closes nothing WP-206 opened: the WP-206 rows are bypassed by this one spelling.
+
+**What has to be decided** (the architect's; a structural answer, not another floor). Candidates:
+1. **The pipe-into-interpreter shape.** A pipeline stage, or a stage fed by `<<<`, a here-document or `<(…)`, whose program is a script reader (`sed`, `awk`, `perl`, `python3`, `node`, …) reads `uncertain` when two things hold: its literal script uses an exec primitive on its input (`e`/`s///e`, `system`, `| cmd`/`cmd | getline`, `print |`), and its input is not literal. When its input **is** literal (an `echo`/`printf` of literal words, a here-string), that input is read as the command it will run, as `handedCommand` reads `| sh`. The primitive list here is applied only to a script that is literal by the time it is matched. Whether that answers the ruling's *fails open by construction* is the architect's question.
+2. **Interpreters as script readers of their stdin.** When the script executes input, the program joins `handedCommand`'s readers, uncertain whatever its input. This is simpler, and its over-ask must be counted.
+3. **The sandbox's, stated.** Pin it as a residual in technical/05 and the module docblock with the reason, as the file form is today.
+
+**Added by the orchestrator, session 17, after WP-206's third review round (measured on WP-206's final tree).** The same `sed` execution class has a second live door WP-206 states as its residual rather than closing: a `s` command whose delimiter is a name character — `sed 's.x.git push.e' x`, `sed 's_x_git push_e' x`, `sed 'sAxAgit pushAe' x` — reads `allow` under `auto`, because WP-206's name boundary is any character outside `[A-Za-z0-9._-]` and these delimiters are inside it. A `sed` script reader that parses the `s` command's own delimiter (the character after `s`) would close it without widening the boundary; the architect may fold it into this entry's row.
+
+**Done when** the ruling is recorded and built, and:
+- **Measured first** (rule 27): the two lines above and their `perl -ne 'system $_'`, `printf … | sed 'e'`, `<<<` and here-document neighbours, under `attended`, `auto` and `deny`. Also the over-ask on the 286-line corpus (`wp203-rev/corpus.txt`, or its successor) as a count. *Needs measurement*: how many corpus lines pipe into `sed`/`awk` at all.
+- **Rows:** the two lines read `uncertain` or the git boundary under `auto`. Under option 3 they are instead pinned as stated residuals by name (they are pinned that way today).
+- **Controls (rule 42):** `cat f | awk '{print $1}'`, `git log | sed -n '1,5p'`, `echo x | sed 's/x/y/'`, `sed 's/^//e' f` (the file residual, by decision 1), and WP-206's criterion (5) controls keep their cells.
+- **Canary:** take the rule out, and `echo 'git push origin main' | sed 's/^//e'` fails by name.
+
+**Depends on** WP-206 being merged, because its `knownProgram`/glue scan is the reader this extends. It should be weighed with WP-207, which is serial after WP-206 on the same file and holds the other scanner residual, and with `handedCommand` (WP-160), which already reads the shell half of the shape. Related: 591, 599, 603, 604.
+
+### 606. **`composer` is the one default-listed program with no reader: `composer require *` is a default `ask` entry, it has no floor, and `composer exec` runs a vendor binary, so WP-206's census admits it by name** (TODO, **minor, latent. No producer today**: neither `docker/base.Dockerfile:43` nor `docker/runtime.Dockerfile` installs `composer` or `php`. This is by reading; no `command -v` was run for it. **Trigger:** a project image that ships Composer, which every PHP project's would. Found by WP-206's implementer, session 17 (*Discovered work*). The refiner read the census and ran nothing. **No work package owns it — an architect pass places it.**)
+
+**What is wrong.** WP-206's census holds every program the default lists name on exactly one reader (floored, wrapper/runner/reader, valve, or known by match only). `composer` fits none of them, so `command-policy.test.ts:2998–3005` admits it by name, *"no floor, no reader, not valvable (composer exec)"*. `DEFAULT_IMPLEMENTATION_ASK` lists `composer require *` (`command-policy.ts:888`). A line that matches it is known by match, and its arguments are not read.
+
+**Evidence** (WP-206's notes; `scratchpad/wp206/composer.jsonl`). WP-206's ruling (c) already tightened the lines the entry does not admit: `composer exec sudo id` and `composer run-script git` read `ask / auto / deny` before and `ask / uncertain / uncertain` after. Still unmeasured:
+- `composer exec <name>` with a name that is not judged, which runs a vendor binary as `npx` runs a package's.
+- `composer require …` with a program-running option, if Composer has one. The refiner knows of none, and that is not a reading of the manual.
+
+**What it costs to leave.** One admitted name in a census whose point is that there are none. Composer is not in the stock image, so nothing runs today.
+
+**Done when** `composer` leaves `ADMITTED` and stands on a reader:
+- `composer exec` joins the package runners (`PACKAGE_RUNNER_COMMANDS`, `command-policy.ts:2113`), or `composer` gets a floor for `exec`/`run-script`; and `composer require`'s options are read against Composer's manual, cited at the entry as the valve's are.
+- **Canary:** take the reader out, and the census fails with `composer: no reader`.
+
+**Depends on** WP-206 being merged. It could fold into WP-207's image reading, but WP-207 reads the stock image, which lacks Composer.
+
+### 607. **The planner's command tables are outside WP-206's census: `COMMAND_ALLOW_BY_SKILL` (`glab`, `acli`, `jira`, `logcli`, `sentry-cli`) makes five provider CLIs known by match on their pinned subcommands, with their arguments unread** (TODO, **minor, latent by the refiner's reading**: no program-running option on these subcommands is known, and none was looked for. All five CLIs are in `platform-runtime` (`docker/runtime.Dockerfile:13`, `:82`). Found by WP-206's implementer, session 17 (*Discovered work*). The refiner read `planner.ts` and ran nothing. **No work package owns it — an architect pass places it.**)
+
+**What is wrong.** WP-206's census (`command-policy.test.ts`, the WP-206 describe) reads the five default lists of `packages/domain`. The planner's tables live in `packages/application`, which the domain tests cannot import:
+- `COMMAND_ALLOW_BY_SKILL` (`packages/application/src/pipeline/planner.ts:338`) adds `allow` entries such as `glab mr view *` and `logcli query *`. Their `*` admits any argument, so these lines are allowed in **every** mode and never scanned. This is the *project's own wide entry* residual (`tar *`), shipped by the platform.
+- `COMMAND_ALLOW_BY_STAGE` (`:240`) is **covered today**: its one entry is `CONFLICT_RESOLUTION_EXTRA_ALLOW`, which the domain census reads by import. Only a future stage entry would escape it.
+
+`test/contract/prompts/platform-skills.contract.test.ts` holds the skill entries the other way round: every recipe line must be admitted. It does not ask whether an admitted line can run a program.
+
+**Evidence.** Reading only. No line of the form `glab mr view 1 <program-running option>` was found or measured. The paging environment names (`PAGER` and kin) are already floor environment names, per the sixth amendment.
+
+**What it costs to leave.** If one of these subcommands takes an option that runs a program, it is an `allow` that bypasses the scan. *Needs measurement*: the options of the eleven pinned subcommands, read off each CLI's `--help` at the pinned version.
+
+**Done when** a census in `packages/application` (or a contract test) puts every first token of both planner tables on one reader, the same way WP-206's does, with the skill CLIs' option grammar cited. **Canary:** add a stage entry for an unread program, and the census fails naming it.
+
+**Depends on** WP-206 being merged (`FLOORED_NAMES`, `COMMAND_READERS` exported for the census). Nit-adjacent; it may fold into whichever row next touches the planner's tables.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -51485,3 +51552,128 @@ Probes, corpora logs, the image census and the canary harness are in `scratchpad
   - `ppc64le`, `aarch64`, `arm64`, `armv7l` and `riscv64`, which `setarch` knows but util-linux installs no link for (`SETARCH_LINKS`). They are a residual: a project image that links one is unread.
 - Canary 11 restores the old rule that a short word with a non-letter is an operand: 8 fail (the attached-value rows and `su -g0 … <<<`). Canary 10 (the reader's `readShell` off): 26 fail.
 - The policies unit tier: 3 361 passed, 5 skipped.
+
+#### WP-206
+
+**Scanner: a judged name is read inside an argument whatever glues it, a program is known through an entry only on a line the entry admits, and every program the default lists name is on exactly one of the two readers** (backlog **604**). Built in the main checkout on `eac3cf48`. No migration. Rulings (b), (c) and (d) are all built; (c) ships in its **general** form (its count is 0). Probes, logs, the canary harness and the container probe are in `scratchpad/wp206/` (`probe.mjs`, `a-lines.jsonl`/`a-before.log`/`a-after.log`, `adv.jsonl`/`adv-1.log`/`adv-after.log`, `corpus-after.log`, `adv-corpora.log`, `corpora-2.log`, `canary.mjs`/`canary-{1..4}.log`, `cprobe/p.sh`/`cprobe/out.log`, `base/` = `git archive HEAD` of the two packages for the before cells).
+
+**Changes** (`packages/domain/src/policies/command-policy.ts`).
+- (b) `JUDGED_NAME_GLUE`: after the operator split, each piece is read twice (with its quotes off, and as written), its braces expanded, and split again on `=`, `:`, `!`, `+`, `,`, `{`, `}`, `[`, `]`, `(`, `)`, both quotes, a backslash and a **parameter expansion** (`${IFS}`, `$x`, `$1`). Each part is read by its last `/`-segment (`basename`).
+- (b) `gluedReadings`, two spellings with no separator, both measured running: a **short option's attached value** (a part `-X…` is read at every tail after its first letter, since getopt gives the rest of a cluster to a valued letter) and **sed's `e` command glued** behind an address or none (`1egit push`, `egit push`, `$egit`).
+- (c) `knownProgram(name, line, policy, admitPrecise)`: an `allow` entry counts only when `matchesAllowEntry` admits the line from the command word on (a precise entry by its grammar, and not on a line with a substitution, the verdict's own `admitPrecise`), an `ask` entry only when its glob matches the line or its dequoted form. The by-name terms (valve, wrapper sets, readers, builtins, exact floor names) are unchanged. `unknownProgramReasons` takes `admitPrecise` from `evaluateOnce`.
+- (d) `cat`, `grep`, `head`, `ls`, `pwd`, `tail`, `wc` join `KNOWN_NON_WRAPPERS` with their trixie pages. `FLOORED_NAMES` and `COMMAND_READERS` are exported for the census.
+- Docblocks: the module's WP-206 paragraph and its *What it still does not read* paragraph (the interpreter sentence now says *a name a script composes*), `judgedNameIn`, `knownProgram`, `unknownProgramReasons`. `unattended-commands.ts`'s git-boundary sentence is qualified. technical/05: a WP-206 amendment bullet, and clauses on the WP-160 and WP-203 bullets.
+
+**Measurement, ruling (a)** (default policy, `attended / auto / deny`, before on `eac3cf48` → after; `a-before.log`, `a-after.log`).
+
+| Lines | Before | After |
+|---|---|---|
+| 604's eighteen (`tar --to-command=…`, `--checkpoint-action=exec=…`, `--use-compress-program=sudo`, `--new-volume-script=…`, `--info-script=sudo`, `sed 's/x/git push/e' x`, `sed -n '1e git push origin main' x`, `sed --expression='1e sudo id' x`, `sort --compress-program=sudo f`, `man --pager=sudo ls`, `ssh -o ProxyCommand='git push' host`, `rsync --rsh=…`, `rsync --rsync-path=…`, `zip -TT=…`, `vim -c ':!git push origin main' -c q`, `less -X '+!git push origin main' x`, `gdb -batch -ex '!sudo id'`, `awk 'BEGIN{"git push"\|getline}'`) | ask/auto/deny | ask/uncertain/uncertain, naming the program and the word |
+| `python3 -c 'import subprocess; subprocess.run(["git","push"])'` | ask/auto/deny | ask/uncertain/uncertain |
+| `perl -e 'system("git push")'`, `node -e 'require("child_process").execSync("git push")'`, `frobnicate -x/usr/bin/git push origin main` | ask/uncertain/uncertain | unchanged (WP-203 already read them) |
+| controls of criterion (5): `sed -n '1,5p' f`, `grep -e git f`, `rg 'sudo'`, `git log --grep=push`, `git commit -m 'add docker compose'`, `npm run build` | allow/allow/allow | unchanged |
+| controls: `tar -xzf a.tgz`, `tar -cf x .`, `sort -u f`, `ssh -V`, `ssh host ls`, `awk '{print $1}' f`, `python3 tools/x.py --git`, `sed -i 's/a/b/' f` | ask/auto/deny | unchanged |
+| URL rule: `curl https://api.github.com/repos/x/git/refs`, `frobnicate --url=https://x/y/git/z` | ask/auto/deny | unchanged; `frobnicate --url=https://x/sudo` stays uncertain |
+| over-ask of (b): `frobnicate --message='git push later'`, `./tool --target=git`, `jq '.["git"]'`, `curl -d '{"cmd":"git"}'` | ask/auto/deny | ask/uncertain/uncertain |
+
+- **The corpus** (`scratchpad/wp203-rev/corpus.txt`, 286 ordinary agent lines, still present): **0** lines change cell — the first number (b) is **0** and the second (c) is **0** (`corpus-after.log`). One intermediate form of the glue (a bare `$` as a separator) refused 4 of them (`node $script`, `node "$script" --flag`, `npx tsx "$script"`, `tsx "$script"`: `script` is a judged name), so a parameter expansion is a separator *whole*, its name not a piece.
+- WP-201's developer corpora (`dev-lines.txt` 85, `dev-auto.jsonl` 83), adversarial corpora (`adv-auto.jsonl` 142, `rev-lines.txt` 169, `t201.txt` 105) and WP-203's `a-lines.txt`/`r2-lines.jsonl`: **0** changed. `table-auto.jsonl` (1 090 table strings): 4, each a code fragment. The reviewers' probe files (`adv-corpora.log`): every changed line is one of 604's class (`less +'!sudo id' f`, `vi -c '!sudo id'`, `tar --to-command='sudo id'`, `deno eval 'Deno.run({cmd:["git","push"]})'`, `catchsegv /usr/bin/su[d]o id`, `fakeroot su$x id`, …), and none read `auto` before for a reason this row should keep.
+- **`command -v` in `platform-runtime:s16`** (arm64, `--network none`, uid 1000, `</dev/null`, 120 s alarm; `cprobe/out.log`): `tar`, `sed`, `ssh` (`/usr/bin/ssh`), `awk`, `sort` **present**; `man`, `rsync`, `zip`, `vim`, `less`, `gdb` **absent**. So `ssh` **is** in the built image: 604's table is right and the orchestrator's earlier "absent" is not.
+- **Measured running in the same image** (markers only): `sed -n '1eecho RAN_1E' x`, `sed -n 'eecho RAN_E' x`, `sed 's/x/echo${IFS}RAN_IFS/e' x`, `sed 's/x/echo\x20RAN_X20/e' x`, `tar -I'printf RAN_TI' -cf …`, `tar --to-command='echo RAN_TO' -xf a.tar`, and the two residual pipes `echo 'echo RAN_PIPE' | sed 's/^//e'` and `echo 'echo RAN_AWK' | awk '{system($0)}'` — each printed its marker. These are why `gluedReadings` and the parameter-expansion separator exist.
+
+**Decisions/assumptions.**
+- *Beyond the ruling's separator list, three readings, each tightening only and each measured running before it was added:* a backslash (`git\x20push` in a sed replacement), a parameter expansion (`git${IFS}push`), a short option's attached value (`tar -I'git push origin main'`) and sed's glued `e` (`1egit push`). The ruling's list is a floor, and these are its neighbours the brief told the row to probe. Each costs 0 corpus lines; the short-option tail costs `frob -ash` (pinned over-ask).
+- *The attended column.* `evaluateCommand`'s verdict, as the test tables use it, so a newly uncertain row reads `ask / uncertain / uncertain`.
+- *(c) reads the line from the command word on*, after the walk's peel: `timeout 5 sed 's/x/git push/e' x` is scanned, `cat f | sed -n '1,5p' 2>/dev/null` keeps `allow` (redirections are not words).
+- *The census's reader groups* (`command-policy.test.ts`, the WP-206 describe): **known by name** (an exact `FLOORED_NAMES` entry, `PROGRAMS_THAT_RUN_A_COMMAND`, `COMMAND_READERS`), **valve**, **known by match only** (every default entry of the name is a precise entry, or every one is the bare name — the second is `./.agentic/workspace/setup`, whose one admitted line has no argument to read), or **admitted**. Exactly one. The lists read: `DEFAULT_IMPLEMENTATION_ALLOW`, `DEFAULT_VERIFICATION_ALLOW`, `DEFAULT_READ_ONLY_ALLOW`, `CONFLICT_RESOLUTION_EXTRA_ALLOW`, `DEFAULT_IMPLEMENTATION_ASK`.
+- *`composer` is admitted in the test, by name, with its reason*, because the ruling's census cannot place it: `composer require *` is a default `ask` entry, `composer` has no floor, and `composer exec` runs a vendor binary, so it can be neither valved nor precise. The ruling counted it among the seventeen *"`name *`-shaped or with a reader"*; it is the first and has no reader. (c) already tightened its other lines: `composer exec sudo id` and `composer run-script git` read `ask / auto / deny` before and `ask / uncertain / uncertain` after. A `composer require …` line is still known by match and unread.
+
+**Tests.**
+- `unattended-commands.test.ts`, a WP-206 describe at the end: criterion (1) (the eighteen, the three interpreter spellings, the attached loader, the moved `frobnicate --cmd=sudo` and 17 neighbours the probe found, each `ask / uncertain / uncertain`, `deny`/`uncertain` in both modes, the reason naming program and word); (2) `sed` scanned off its entry with `sed -i 's/a/b/' f` and `sed -n '1,5p' f` at their cells, and a project's narrow `./scripts/deploy --dry-run` (rule 42); (4) the URL rule; (5) 27 controls; (6) the over-asks; the residual describe.
+- *Re-pinned (rule 92):* WP-203's residual row `frobnicate --cmd=sudo` (`ask / auto / deny`) is removed by name from that describe, with a comment, and pinned uncertain under WP-206 criterion (1).
+- `command-policy.test.ts`, a WP-206 census describe: one reader each, the admitted list exact, the seven valve names cited.
+- The policies unit tier: 3 451 passed, 5 skipped.
+
+**Canaries** (`canary.mjs`: one exact-anchor edit, both policy test files, bytes restored and compared, `restored true` each time).
+1. The operator-only split (no glue, no glued readings): 37 fail, including the row for `tar --to-command='git push origin main' -xf x`.
+2. `knownProgram` counting an entry by its first token again: 14 fail, including the row for `sed 's/x/git push/e' x`.
+3. `grep` off the valve: the census fails with `grep: no reader`.
+4. `tar` on the valve: the WP-203 never-list fails naming `tar` (and 604's tar rows fail too).
+
+**Residual, stated** (technical/05 and the module docblock): a name a script composes (`"gi" "t push"`, `"gi"+"t"`); a script or file the run wrote (`sed 's/^//e' f`, `sed -f script.sed x`, `--to-command=./x.sh`); a judged name alone as a script's last `/`-segment (`sed 's/x/git/e' x` runs a bare `git`); a URL's path (`frob https://example.test/git/x`); a project's own wide entry (`tar *`); `$'git'` and a locale string; and the line's own input run by a script primitive (below).
+
+**Sentences falsified** (rule 83).
+- `grep -rn -i -e "to-command" -e "option's value naming" -e "an interpreter that is not a shell" -e "glued into" -e "begins with it" -e "split on blanks and operators"` over `docs`, `CLAUDE.md` and `packages`, PROGRESS, the plan and tests excluded:
+  - technical/05 WP-160 bullet (*"an interpreter that is not a shell (`python3 -c`)"*): a clause added.
+  - technical/05 WP-203 bullet (*"is **unknown** when no `allow` or `ask` entry … begins with it"*, *"split on blanks and operators"*, and its residual's first two classes): qualified, and the two classes point to WP-206.
+  - The module docblock's residual (the interpreter sentence and `frobnicate --cmd=sudo`): rewritten.
+  - `unknownProgramReasons`' docblock (*"no `allow` or `ask` entry of the stage's policy begins with it"*): rewritten.
+  - `unattended-commands.ts` (*"`python3 -c '…subprocess…'` … can spell any of the refused commands"*): qualified to a composed name.
+- In this file, as history and not edited: backlog 604's *"`sed` is known, so it is never scanned"* and *"None of the eleven programs has a floor"*, and WP-203's round-2 *"Residual classes, named once"* (`tar --to-command`, `awk … getline`, `vi -c '!…'`). The refiner's to close.
+
+**Discovered work.**
+- *The line's own input run by a script primitive* (live, measured: `echo 'echo RAN_PIPE' | sed 's/^//e'` and `echo 'echo RAN_AWK' | awk '{system($0)}'` printed their markers in `platform-runtime:s16`). `echo 'git push origin main' | sed 's/^//e'` and `… | awk '{system($0)}'` read `ask / auto / deny`. The script names no judged name, and the data is an argument of a valved `echo`. This is the class of `| sh` (`handedCommand`), at a primitive the ruling declined to list (ruling (e), the `sed` floor for `e`, decided on the file residual only). It needs an architect's call. Pinned under the residual describe.
+- *`composer`*: no floor and no reader, admitted by name in the census (above). It needs a floor, or the `ask` entry narrowed, or a cited reading of `composer require`'s options.
+- *The planner's skill and stage tables are not census'd* (`COMMAND_ALLOW_BY_SKILL`: `glab`, `acli`, `jira`, `logcli`, `sentry-cli`; `COMMAND_ALLOW_BY_STAGE`: `git`). They live in `packages/application`, which the domain census cannot import. Their glob entries make those programs known by match on their pinned subcommands, with the arguments unread.
+
+**Risks.**
+- The short-option tail reads any tail of a single-dash word, so an unknown program's flag cluster ending in a short judged name (`sh`, `su`, `sg`, `env`, `git`, `npm`) is uncertain (`frob -ash`). 0 of the corpora's lines, and no known/valved command is affected (`ls -lash`, `du -sh .` keep their cells).
+
+**Verification.** `pnpm run -s verify`: `PASS: verify` (14 751 passed, 19 skipped). The scanner's e2e reader `test/e2e/pipeline/project-commands.e2e.test.ts` (`--project e2e-fake-claude`, `platform-runtime:s16`): 2/2 passed. Nothing is executed by any test. The only container is the probe above.
+
+**Review round 1** (fresh implementer, session 17; probes, logs and canaries in `scratchpad/wp206-r1/`: `probe.mjs`, `rows.txt`/`rows-before.log`/`rows-after.log`, `corpus-before.log`/`corpus-after.log`, `canary.mjs`/`canary-{1..5}.log`, `verify.log`, `e2e.log`; the reviewers' probe files were not opened).
+
+*Changes* (`packages/domain/src/policies/command-policy.ts`, `judgedNameIn` and its helpers).
+1. `JUDGED_NAME_GLUE`'s closed list is gone. `NAME_BOUNDARY`: a name ends at **any character outside `[A-Za-z0-9._-]`**, so `s%x%git push%e`, `s#^#git #e`, `qx#git push#`, `%x@git push@` are read and `foo.git`, `git_sha`, `git-backup`, `legit` are not. **Assumption:** `/` is kept out of the boundary set, because a part is still read by its last `/`-segment (`basename`); making `/` a boundary would read `curl …/x/git/refs` and `sed -i 's/git/hg/' f`, which criterion (4) and the controls keep.
+2. sed's glued `e` reads `\d*[IM]*e…` on the last segment, so `/x/Iegit`, `/x/Megit`, `/x/IMegit` and `\%x%Iegit` are read (sed(1)'s `/regexp/I`, `/regexp/M`; `!` and blanks are boundaries already).
+3. `expansionsAsBoundaries`: the argument is read with its quotes off **and as written**, and in both every `$x`, `$1`, `${…}` becomes a blank, so `--to-command="$x"git`, `ProxyCommand="$x"'sudo id'`, `frobnicate "$x"sudo id`, `--to-command=$x'git push'` are read, while `node $script` / `node "$script"` keep their cells (the name of the variable is never read). In the as-written reading a `$` inside single quotes is a literal character, so `sed '$egit push' x` is read too (the round-0 docblock claimed `$egit`; it was not read).
+4. A `${v<op>w}` body with `:-`, `-`, `:=`, `=`, `:+`, `+`, `:?`, `?` keeps its word, bounded and itself expanded (`EXPANSION_WORD`): `sed 's/x/${y:-git} --version/e' x` and the eight `tar --to-command='${x<op>sudo} id'` spellings are read.
+5. The residual names `bun -e '…'` (a package runner, known by name, its arguments unscanned: `bun -e 'Bun.spawn(["git","push"])'` reads `ask / auto / deny`) and a name glued by its own characters (`frob s.git.`), in the module docblock, technical/05 and pinned rows.
+
+*Tests.* `unattended-commands.test.ts`, describe "review round 1: boundaries, sed modifiers, expansions" inside the WP-206 describe: 22 rows `ask / uncertain / uncertain`, `deny`/`uncertain` in both modes, the reason naming program and word (every one read `ask / auto / deny` on round 0's tree, `rows-before.log`, except `sed '/x/!egit'` and the `${IFS}` row, which were already uncertain and are not added); the 11 controls the brief named plus `node $script`, `node "$script" --flag` and `npx tsx "$script"`; three over-asks; two residual rows. Policies unit tier 3 492 passed, 5 skipped.
+
+*Over-ask, measured.* The 286-line corpus (`scratchpad/wp203-rev/corpus.txt`, `decideUnattendedCommand(…, DEFAULT_COMMAND_POLICY, 'auto')`): before 40 `allow_list`, 236 `unattended_auto`, 3 `block_list`, 1 `hazardous_argument`, 6 `uncertain`; after **identical, 0 lines changed**. New over-asks found by probing, pinned: `ssh -T git@github.com` (`@` bounds `git`), `frob --type=Mesh` (`M` + `e` + `sh`), `node '$script'` (a single-quoted `$` is literal, so `script` is read).
+
+*Canaries* (`canary.mjs`, one exact-anchor edit each, both policy test files, bytes restored, `restored true` five times; the harness's `String.replace` now takes a function, because a `$'` in a replacement is a JavaScript replacement pattern and broke the first run of canary 4).
+1. The closed separator list back (`=:!+,{}[]()"'\$`): 6 fail, among them the row for `sed 's%x%git push%e' x` and the row for `perl -e 'qx#git push#'`.
+2. `I`/`M` dropped from the glued `e`: 5 fail, among them the row for `sed '/x/Iegit --version' x`.
+3. The as-written reading dropped: 6 fail, among them the row for `tar --to-command="$x"git -xf x` and the row for `frobnicate "$x"sudo id`.
+4. The `${…}` handling dropped (a `${` read as a lone `$` and braces): 3 fail — the rows for `sed 's/x/${y:-git} --version/e' x`, `tar --to-command='${x:-sudo} id' -xf x` and `tar --to-command='${x-sudo} id' -xf x`. The other six operators survive it, because `=`, `+` and `?` are boundaries anyway.
+5. The census, two readers: `make` added to the valve beside its floor fails the census test "holds every default first token on exactly one reader" (1 fail).
+- *The `${IFS}` canary:* under canary 4 the row for `sed 's/x/git${IFS}push${IFS}origin${IFS}main/e' x` **survives** — `$`, `{` and `}` are boundaries by themselves, so that row no longer witnesses the `${…}` handling; the `${y:-git}` rows do.
+
+*Sentences falsified* (rule 83). `grep -rn -e "JUDGED_NAME_GLUE" -e "glue is declared" -e "Declared, so a word glued" -e "parameter expansion split"` over technical/05, `CLAUDE.md` and `packages/domain/src`: the module docblock's WP-206 paragraph (rewritten to the boundary rule), technical/05's WP-206 bullet (b) (rewritten; its over-ask and residual lists extended), the WP-206 test describe's docblock (rewritten). `JUDGED_NAME_GLUE`'s own docblock is deleted with it. Round 0's notes above (the "Changes" (b) bullet and the "Decisions" bullet listing separators) are history and not edited. `$'git'` in the residual is unchanged: `$'…'` is uncertain by its own rule before the scan.
+
+*Verification.* `pnpm run -s verify`: `PASS: verify` (14 792 passed, 19 skipped). `test/e2e/pipeline/project-commands.e2e.test.ts` (`--project e2e-fake-claude`, `platform-runtime:s16`): 2/2 passed (started at a one-minute load of 13.4, verify having just finished). Nothing ran through a shell.
+
+*Discovered work.* none new.
+
+**Review round 2** (same implementer, after the fresh reviewer's REQUEST_CHANGES and the orchestrator's ruling *one structural reading, not four patches*; logs in `scratchpad/wp206-r1/`: `rows3.txt`, `rows-r2.log`, `corpus-r2.log`, `canary2.mjs`/`canary-r2-{A,B,B2,R14,C,D,E}.log`, `verify-3.log`, `e2e-2.log`; the reviewer's probe files were not opened).
+
+*Change* (`command-policy.ts`): `judgedNameIn` is now `boundedNameIn` (rounds 0–1's two readings) or `joinedNameIn`, a third reading of the argument **joined** (`joinedText`): every backslash, every quote character and every expansion's syntax deleted — a `${v<op>w}` keeps its word, `$x`/`${x}` are deleted whole and their neighbours join (they may be empty, so the join is the fail-closed reading), and a `$` before a quote goes with the quote (`$''`, `$""`). Its parts are runs of name and glob characters and closed `[…]` expressions; a part holding `*`, `?` or `[…]` is a **pattern** (`shellPattern`; a class JavaScript refuses matches everything) and counts when it could match a judged name or a literal block-list first token. This closes all four findings: the regression (`system("g\\it push")` in `awk`, `python3 -c`, `perl -e`, `node -e`, and `s\\udo`), `${x-g}it` and `${x:-g}it`, `/usr/bin/gi?` and `gi[t]`, and `g$''it`/`g$""it`.
+
+*Decision (narrower than the ruling, stated):* a pattern counts only when it holds a **literal character outside its wildcards and classes** (`namePattern`: `gi?`, `gi[t]`, `*.ts`). The literal ruling — any glob that could match — refused `rm *`, `rm -rf dist/*` and `rm * /tmp` (8 existing rows failed, because `rm` is a program the policy does not know and `*` matches every name), and `sed 's/^[ \t]*//' f` and `awk '{print $1 * 2}' f`. A file glob of wildcards and classes alone (`*`, `[ t]*`, `[g][i][t]`) is therefore the residual, pinned (`tar -czf out.tgz *`, `sed 's/^[ \t]*//' f`, `sed 's/x/[g][i][t] push/e' f` keep `ask / auto / deny`). A project's block token that is itself a glob is not compared with a pattern (no default token is one). *Follow-up ruling (orchestrator):* a class admitting exactly one character (`[g]`, `[\g]`) is a literal for `namePattern`, so `tar --to-command='[g][i][t] push' -xf x`, `awk 'BEGIN{system("[g][i][t] push")}'` and `sed 's/x/[g][i][t] push/e' f` (moved out of the residual) are uncertain, `rm -rf dist/*` keeps `ask / auto / deny`, the corpus is still 0 of 286 changed, and the canary that stops counting a one-character class as a literal fails those three rows (`canary3.mjs`, `canary-r2-F.log`).
+
+**Review round 3** (same implementer; logs in `scratchpad/wp206-r1/`: `rows4.txt`, `corpus-r3.log`, `rows-r3.log`, `canary4.mjs`/`canary-r2-G.log`, `canary5.mjs`/`canary-r2-H.log`, `canary-r3-R14.log`, `verify-5.log`, `e2e-3.log`).
+- *Change:* `joinedNameIn` reads the joined text of the argument **and** of the argument with every command substitution deleted whole (`substitutionsDeleted`: `$(…)` to its balanced `)`, `` `…` `` to the next backtick, an unclosed one to the end), so a substitution printing nothing joins its neighbours. The reviewer's eleven lines (`g$(:)it` and ``g``it`` in `tar --to-command`, `tar -I`, `/usr/bin/g$(:)it`, `sed s///e`, `sed '1e…'`, `ssh -o ProxyCommand`, `awk`, `python3 -c`, `perl -e`, `node -e`) and three neighbours (`` g`:`it ``, `g$(true)it`, `g"$(:)"it`) are uncertain, naming program and `git`, in the describe "review round 3: an empty command substitution".
+- *Pinned:* `tar --to-command="git${IFS}push origin main" -xf x` and `ssh -o ProxyCommand="sudo${IFS}id" h`, uncertain. Canary H (the blank `expansionsAsBoundaries` writes for an expansion replaced by nothing) fails exactly those two rows; round 1's canary 4 (its `${…}` branch dropped) still fails none, since a `${` alone is a boundary.
+- *Residual, stated* (technical/05, pinned `ask / auto / deny`): a name a command prints (`tar --to-command='$(printf g)it push' -xf x`) and a name composed through a variable set on the same line (`x=git tar --to-command='$x push' -xf x`, whose `sh -c` sees the exported `x`). Control: `frob "$(date +%s)" out` keeps `ask / auto / deny`.
+- *Canary G* (the substitution-deleted form dropped): 14 fail, the row for `tar --to-command='g$(:)it push origin main' -xf x` among them.
+- *Over-ask:* the 286-line corpus is unchanged (0 lines); round 1's and round 2's probe rows read identically.
+
+*Tests* (`unattended-commands.test.ts`, describe "review round 2: the joined reading and patterns"): 12 rows `ask / uncertain / uncertain`, `deny`/`uncertain` in both modes, the reason naming program and word (a pattern is named as written, `gi?`); 2 controls (`frob *.ts`, `python3 -c 'print(2*3)'`); the over-asks the reviewer accepted, pinned — `sed -i 's|git|hg|g' f`, `scp git@host:x .`, `gradle test -Pgit=true` (with round 1's `ssh -T git@github.com`); 5 residual rows (two composed names, three wildcard-only globs). Round 1's rows (`rows.txt`) read identically after this change.
+
+*Over-ask, re-measured.* The 286-line corpus: identical to `corpus-before.log`, **0 lines changed**.
+
+*Canaries* (`canary2.mjs`, `restored true` each time).
+- A, the joined reading dropped: the five regression rows and the two `${x-g}it` rows fail, among them the row for `awk 'BEGIN{system("g\\it push")}'`.
+- B, the joined reading's `${…}` word dropped: 2 fail, the rows for `tar --to-command='${x-g}it push' -xf x` and `${x:-g}it`.
+- B2, both `${…}` word readings dropped (the blank reading's and the joined one's): 5 fail, the two `${x-g}it` rows among them.
+- R14, round 1's canary 4 alone (the blank reading's `${…}` branch): **0 fail** — the joined reading now reads every row it guarded, so that branch is redundant for the rows and kept for the reason it names (a `${v:-w}` word is read at its boundaries too).
+- C, a pattern read as a literal name: 3 fail, among them the row for `sed 's/x/gi[t] push/e' f`.
+- D, an empty splice's `$` kept: 2 fail, the rows for `frob g$''it push` and `frob g$""it push`.
+- E, a wildcard-only glob counted: 8 existing `rm` rows fail, among them `rm -rf dist/*`'s.
+
+*Sentences falsified.* `grep -rn -e "glue" -e "boundaries" -e "Name bounded" -e "pattern"` over the WP-206 bullet of technical/05 and the module docblock: bullet (b) gains the joined reading, its over-ask list the three accepted lines, its residual the wildcard-only glob; the module docblock's WP-206 paragraph gains the joined reading. Round 1's notes above are history.
+
+*Verification.* `pnpm run -s verify`: `PASS: verify` (14 814 passed, 19 skipped; the first run failed on biome's formatting of `judgedNameIn`, fixed by `biome format --write` on that file). `test/e2e/pipeline/project-commands.e2e.test.ts` (`--project e2e-fake-claude`, `platform-runtime:s16`): 2/2 passed. It started at a one-minute load of 16.4 because verify had just finished, which breaks the rule to start under ~12. Nothing ran through a shell.

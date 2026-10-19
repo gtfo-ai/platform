@@ -104,17 +104,36 @@
  * script, `newgrp` as a shell on its input, and a wrapper that runs `$SHELL` when it is given no
  * command (`linux64`, `setarch`, `unshare`, `chroot`, …) as a shell on its input too (backlog 602).
  *
+ * **A name glued into an argument is read, and a list knows a program only where it matches**
+ * (WP-206, backlog 604: `tar --to-command='git push origin main'`, `sed 's/x/git push/e'` and
+ * `ssh -o ProxyCommand=…` were `unattended_auto`, and the first two ran in the run image). The
+ * scan reads a name between boundaries (`NAME_BOUNDARY`: any character outside `[A-Za-z0-9._-]`),
+ * a part by its last `/`-segment (a URL's `…/git/refs` is `refs`), the argument as written too with
+ * each parameter expansion a boundary and a `${v:-w}` word as text (`expansionsAsBoundaries`), and
+ * a short option's attached value and sed's glued `e` command, behind an address and its `I`/`M`
+ * modifiers (`gluedReadings`), and the argument **joined**, every backslash, quote, empty splice
+ * and expansion's syntax deleted (`"g\\it"`, `${x-g}it`, `g$''it`), and every command
+ * substitution too (`g$(:)it`, `substitutionsDeleted`), where a part holding a glob
+ * is a pattern that counts if it could match a judged name (`joinedNameIn`). An `allow`/`ask` entry makes its program
+ * known only on a line it admits (`knownProgram`), so `sed` off `sed -n '<N>[,<M>]p'` is scanned;
+ * the wrappers, shells, runners, readers, floored names and the valve stay known by name, and a
+ * census holds every default list's first token on exactly one of the two readers.
+ *
  * **What it still does not read:** a script in a file (`bash file`, `bash < file`, `. ./x.sh`,
  * `run-parts dir`, `scriptlive` — a file the run wrote, backlog 481's residual and the unattended
- * module's), an interpreter that is not a shell (`python3 -c`, `perl -e`: since WP-203 a judged
- * name in their script is uncertain, but a program the script builds is not read), a command a
+ * module's, and `sed … e` or `--to-command=./x.sh` over one), a name a script composes
+ * (`"gi"+"t"`, `getattr(os, "sys"+"tem")`: since WP-206 a judged name written in an
+ * interpreter's or a tool's script is uncertain, glued or not), the script of a runner known by
+ * name (`bun -e '…'`: a package runner's arguments are not scanned), a name glued by a name's own
+ * characters (`s.git.`, `legit`), the line's own input run by a
+ * script primitive (`echo … | sed 's/^//e'`, `| awk '{system($0)}'`), a command a
  * program assembles from its input where no string on the line names it (`cat cmds | parallel`;
  * and `xargs` feeding a known command that is not a wrapper, `find -exec`, `git`, a shell or a verb
  * a `command`-kind floor names — WP-164 made `xargs make`, whose input can name assignments and
  * `--eval` as well as targets, uncertain), an argument the shell expands given to a program the policy does not know
  * (`frobnicate $x id`, `find -exec frobnicate {}`, `xargs frobnicate` — WP-203's split follow-up),
- * an option's value naming a program on a command it does not know (`frobnicate --cmd=sudo`), a
- * prompt variable or an alias set by
+ * a project's own wide entry (`tar *` admits `tar --to-command`: its allow entry is its door), a
+ * `$'…'` or locale string, a prompt variable or an alias set by
  * a start-up file, an option's value attached to its option (`read -aNAME`), a name taken by a
  * builtin it does not list (`getopts`, `wait -p`, `exec {var}>…`), an attribute (`-i`, `-n`) given
  * to a variable outside the line, a name bound outside the line (`hash -p` in an earlier call, if
@@ -5177,7 +5196,7 @@ const STRING_WRAPPERS: readonly string[] = ['script', 'sg', 'newgrp'];
  * which are therefore not unknown whatever set they are on — and not judged either: their names as
  * an argument are no more a command than `prettier --check .`'s `.` is.
  */
-const COMMAND_READERS: ReadonlySet<string> = new Set([
+export const COMMAND_READERS: ReadonlySet<string> = new Set([
   'eval',
   'trap',
   'source',
@@ -5316,6 +5335,15 @@ export const KNOWN_NON_WRAPPERS: Readonly<Record<string, string>> = {
   xxd: 'https://manpages.debian.org/trixie/xxd/xxd.1.en.html',
   hostname: 'https://manpages.debian.org/trixie/hostname/hostname.1.en.html',
   which: 'https://manpages.debian.org/trixie/debianutils/which.1.en.html',
+  // WP-206 ruling (d): the default read-only list's own names, which were known by list until a
+  // list made a program known only on a line its entry admits. Each runs no program by its manual.
+  cat: COREUTILS('cat'),
+  head: COREUTILS('head'),
+  ls: COREUTILS('ls'),
+  pwd: COREUTILS('pwd'),
+  tail: COREUTILS('tail'),
+  wc: COREUTILS('wc'),
+  grep: 'https://manpages.debian.org/trixie/grep/grep.1.en.html',
 };
 
 /** Whether a policy word (an entry's first token, a floor's verb) names this command. */
@@ -5329,7 +5357,7 @@ const firstTokens = (entries: readonly string[]): readonly string[] =>
   entries.map((entry) => entry.trim().split(/\s+/)[0] ?? '').filter((token) => token !== '');
 
 /** The names a floor is written for: a `command`-kind entry's verbs, and every pattern's first word. */
-const FLOORED_NAMES: readonly string[] = HAZARDOUS_ARGUMENTS.flatMap((entry) => [
+export const FLOORED_NAMES: readonly string[] = HAZARDOUS_ARGUMENTS.flatMap((entry) => [
   ...firstTokens([entry.pattern]),
   ...(entry.kind === 'command' ? entry.verbs : []),
 ]);
@@ -5417,20 +5445,256 @@ const firstBraceAlternatives = (text: string): readonly string[] | null | 'unbou
 };
 
 /**
- * The first judged name an argument holds (WP-203 ruling (b)): the argument with its quotes off,
- * split as the shell would split it were it a script — on blanks and operators, a substitution's
- * parentheses and backticks included — each piece with its own quotes off and its braces expanded,
- * and asked whether its last path segment runs a command. Past the brace bound, the piece itself.
+ * Where a program name ends inside an argument (WP-206 ruling (b), review round 1, backlog 604): a
+ * name is made of `[A-Za-z0-9._-]`, so **any other character** bounds it — an option's `=`, a
+ * key's `:`, an editor's `!`, a script's quotes, brackets, `%`, `#` or `@` delimiters (`s%x%git%e`,
+ * `qx#git push#`), a backslash (`git\x20push`). `/` is the one exception: a part is read by its
+ * **last** `/`-segment ({@link basename}), so a URL's `…/repos/x/git/refs` is `refs` and
+ * `s/git/hg/` is `hg`. A name glued by `.`, `_`, `-`, a letter or a digit is no name (`foo.git`,
+ * `git_sha`, `git-backup`, `legit`), and that is the residual (`s.git.`).
  */
-const judgedNameIn = (raw: string, judged: (name: string) => boolean): string | undefined => {
-  for (const piece of unquoteToken(raw).split(/[\s;&|()<>`]+/)) {
-    const words = braceWords(unquoteToken(piece));
+const NAME_BOUNDARY = /[^A-Za-z0-9._/-]+/;
+
+/** A `${…}` body whose word the shell may substitute (`${v:-w}`, `${v=w}`, `${v:+w}`, `${v?w}`). */
+const EXPANSION_WORD = /^(?:[A-Za-z_]\w*|\d+|[@*#?$!-])(?::?[-=+?])([\s\S]*)$/;
+
+/** The index of the `}` closing the `{` at `open`, or the text's end when none does. */
+const closingBrace = (text: string, open: number): number => {
+  let depth = 0;
+  for (let index = open; index < text.length; index += 1) {
+    depth += text[index] === '{' ? 1 : text[index] === '}' ? -1 : 0;
+    if (depth === 0) {
+      return index;
+    }
+  }
+  return text.length;
+};
+
+/**
+ * `text` with every parameter expansion a blank (WP-206 review round 1): `$x`, `$1`, `${x}` bound
+ * a name on both sides (`"$x"git`, `$x'git push'`), and their own name is never read (`node
+ * $script`). A `${v<op>w}` default, assignment, alternative or error word is text the shell may
+ * substitute, so it stays, bounded (`${y:-git}`). With `quotes`, a `$` inside single quotes is a
+ * literal character and stays (`sed '$egit'`); a `$(`, `$'` or a lone `$` stays as a boundary.
+ */
+const expansionsAsBoundaries = (text: string, quotes: boolean): string => {
+  let out = '';
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] as string;
+    if (quotes && (char === '"' || char === "'") && (quote === null || quote === char)) {
+      quote = quote === null ? char : null;
+    } else if (char === '\\' && quote !== "'") {
+      out += char;
+      index += 1;
+      out += text[index] ?? '';
+      continue;
+    } else if (char === '$' && quote !== "'" && text[index + 1] === '{') {
+      const close = closingBrace(text, index + 1);
+      const word = EXPANSION_WORD.exec(text.slice(index + 2, close))?.[1];
+      out += ` ${word === undefined ? '' : expansionsAsBoundaries(word, quotes)} `;
+      index = close;
+      continue;
+    } else if (char === '$' && quote !== "'") {
+      const name = /^(?:[A-Za-z_]\w*|[0-9@*#?$!-])/.exec(text.slice(index + 1))?.[0];
+      if (name !== undefined) {
+        out += ' ';
+        index += name.length;
+        continue;
+      }
+    }
+    out += char;
+  }
+  return out;
+};
+
+/**
+ * The names one bounded part may run (WP-206, the two spellings with no boundary at all, each
+ * measured running in `platform-runtime:s16`): its last path segment; a **short option's attached
+ * value** — `-I'git push'` is `-Igit`, and getopt takes any tail of a cluster as the value, so every
+ * tail after the first letter is read (`tar -Isudo`, `man -Psudo`); and sed's **`e` command**,
+ * which takes its command glued, behind an address, its `I`/`M` modifiers (sed(1): *"/regexp/I"*,
+ * *"/regexp/M"*; its `!` and blanks are boundaries) or none (`1egit push`, `/x/Iegit`, `egit`).
+ */
+const gluedReadings = (part: string): readonly string[] => {
+  const tails = /^-[^-]/.test(part)
+    ? Array.from({ length: part.length - 2 }, (_, index) => part.slice(index + 2))
+    : [];
+  return [part, ...tails].flatMap((reading) => {
+    const name = basename(reading);
+    const command = /^\d*[IM]*e(.+)$/.exec(name)?.[1];
+    return command === undefined ? [name] : [name, command];
+  });
+};
+
+/**
+ * The first judged name an argument holds (WP-203 ruling (b), WP-206 ruling (b)): the argument
+ * twice — with its quotes off, and **as written** (an expansion's bound is lost once `"$x"git` is
+ * `$xgit`) — its parameter expansions blanked ({@link expansionsAsBoundaries}), split as the shell
+ * would split it were it a script — on blanks and operators, a substitution's parentheses and
+ * backticks included — each piece read twice, as written and with its own quotes off, its braces
+ * expanded, split again at {@link NAME_BOUNDARY}, and each part asked whether its **last** path
+ * segment runs a command (so `--git`, `--no-git`, `foo.git` equal no name). Past the brace bound,
+ * the piece itself. And a third time **joined** ({@link joinedNameIn}).
+ */
+const judgedNameIn = (
+  raw: string,
+  judged: (name: string) => boolean,
+  names: readonly string[],
+): string | undefined => boundedNameIn(raw, judged) ?? joinedNameIn(raw, judged, names);
+
+/**
+ * The argument with all quoting and escaping removed (WP-206 review round 2): every `\`, every
+ * quote character and every expansion's syntax is deleted, so what a script's own escape, an
+ * empty splice or a default word joins is one word (`"g\\it"`, `g$''it`, `${x-g}it` → `git`). A
+ * `${v<op>w}` keeps its word; any other expansion is deleted whole, its neighbours joined — it may
+ * be empty, so the join is the fail-closed reading.
+ */
+const joinedText = (text: string): string => {
+  let out = '';
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] as string;
+    if (char === '$' && text[index + 1] === '{') {
+      const close = closingBrace(text, index + 1);
+      out += joinedText(EXPANSION_WORD.exec(text.slice(index + 2, close))?.[1] ?? '');
+      index = close;
+    } else if (char === '$') {
+      // `$x`, `$1`: the name goes with it; `$'`, `$"`, `$(`: the `$` goes, the rest is read on.
+      index += /^(?:[A-Za-z_]\w*|[0-9@*#?$!-])/.exec(text.slice(index + 1))?.[0].length ?? 0;
+    } else if (char !== '\\' && char !== '"' && char !== "'") {
+      out += char;
+    }
+  }
+  return out;
+};
+
+/**
+ * A shell pattern as a regular expression: `*`, `?` and a closed `[…]` (`!`/`^` negating). A
+ * class JavaScript refuses (`[z-a]`) matches everything, so the reading fails closed.
+ */
+const shellPattern = (pattern: string): RegExp => {
+  let source = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index] as string;
+    const close = char === '[' ? pattern.indexOf(']', index + 2) : -1;
+    if (char === '*' || char === '?') {
+      source += char === '*' ? '[\\s\\S]*' : '[\\s\\S]';
+    } else if (close !== -1) {
+      const body = pattern.slice(index + 1, close);
+      const negated = /^[!^]/.test(body);
+      source += `[${negated ? '^' : ''}${body.slice(negated ? 1 : 0).replace(/[\\\]^[]/g, '\\$&')}]`;
+      index = close;
+    } else {
+      source += char.replace(REGEX_SPECIALS, '\\$&');
+    }
+  }
+  try {
+    return new RegExp(`^${source}$`);
+  } catch {
+    return /[\s\S]*/;
+  }
+};
+
+/**
+ * Whether a pattern spells part of a name: a literal character outside its wildcards and
+ * multi-character classes (`gi?`, `gi[t]`, `*.ts`); a class admitting exactly one character is that
+ * literal (`[g][i][t]`). One of wildcards and wider classes alone (`*`, `dist/*`'s `*`, `[ \t]*`) is
+ * a file glob that any name matches, and reading it would refuse `rm -rf dist/*`; that is the residual.
+ */
+const namePattern = (pattern: string): boolean =>
+  /[A-Za-z0-9]/.test(
+    pattern.replace(/\[([!^]?)(\]?[^\]]*)\]/g, (_, negated: string, body: string) =>
+      negated === '' && body.replace(/\\/g, '').length === 1 ? body.replace(/\\/g, '') : '',
+    ),
+  );
+
+/**
+ * `text` with every command substitution deleted whole — `$(…)` to its balanced `)`, `` `…` `` to
+ * its closing backtick, an unclosed one to the end (WP-206 review round 3) — so the neighbours of
+ * one that prints nothing join (`g$(:)it`, ``g``it``, `g"$(true)"it` run `git`). What a
+ * substitution prints is not read (`$(printf g)it`): that is the composed-name residual.
+ */
+const substitutionsDeleted = (text: string): string => {
+  let out = '';
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] as string;
+    if (char === '$' && text[index + 1] === '(') {
+      let depth = 0;
+      do {
+        depth += text[index] === '(' ? 1 : text[index] === ')' ? -1 : 0;
+        index += 1;
+      } while (index < text.length && !(depth === 0 && text[index - 1] === ')'));
+      index -= 1;
+    } else if (char === '`') {
+      const close = text.indexOf('`', index + 1);
+      index = close === -1 ? text.length : close;
+    } else {
+      out += char;
+    }
+  }
+  return out;
+};
+
+/** A name's characters, a glob's and a closed bracket expression: one part of a joined word. */
+const JOINED_PART = /(?:[A-Za-z0-9._/*?-]|\[[!^]?\]?[^\]]*\])+/g;
+
+/**
+ * The first judged name the argument **joined** holds ({@link joinedText}), read at the same
+ * boundaries as {@link boundedNameIn}; a part holding `*`, `?` or `[…]` is a **pattern**, and
+ * counts when it could match a judged name or a literal block token (`/usr/bin/gi?`, `gi[t]`), as
+ * a command name that is a glob does (WP-201).
+ */
+const joinedNameIn = (
+  raw: string,
+  judged: (name: string) => boolean,
+  names: readonly string[],
+): string | undefined => {
+  const pieces = [raw, substitutionsDeleted(raw)].flatMap((text) =>
+    joinedText(text).split(/[\s;&|()<>`]+/),
+  );
+  for (const piece of pieces) {
+    const words = braceWords(piece);
     if (words === null) {
       return piece;
     }
-    const found = words.find((word) => word !== '' && judged(argv0Name(word)));
-    if (found !== undefined) {
-      return argv0Name(found);
+    for (const word of words) {
+      for (const part of word.match(JOINED_PART) ?? []) {
+        const found = gluedReadings(part).find((reading) =>
+          /[*?[]/.test(reading)
+            ? namePattern(reading) && names.some((name) => shellPattern(reading).test(name))
+            : reading !== '' && judged(reading),
+        );
+        if (found !== undefined) {
+          return found;
+        }
+      }
+    }
+  }
+  return undefined;
+};
+
+/** {@link judgedNameIn}'s first two readings: quotes off and as written, at the boundaries. */
+const boundedNameIn = (raw: string, judged: (name: string) => boolean): string | undefined => {
+  for (const [text, quotes] of [
+    [unquoteToken(raw), false],
+    [raw, true],
+  ] as const) {
+    for (const piece of expansionsAsBoundaries(text, quotes).split(/[\s;&|()<>`]+/)) {
+      for (const reading of [unquoteToken(piece), piece]) {
+        const words = braceWords(reading);
+        if (words === null) {
+          return piece;
+        }
+        for (const word of words) {
+          const found = word
+            .split(NAME_BOUNDARY)
+            .flatMap(gluedReadings)
+            .find((name) => name !== '' && judged(name));
+          if (found !== undefined) {
+            return found;
+          }
+        }
+      }
     }
   }
   return undefined;
@@ -5438,8 +5702,8 @@ const judgedNameIn = (raw: string, judged: (name: string) => boolean): string | 
 
 /**
  * WP-203 (backlog 599): the reason a stage's command is a program the policy does not know whose
- * arguments it cannot clear. **Unknown** is: no `allow` or `ask` entry of the stage's policy begins
- * with it, it is on no wrapper set, is no shell or package runner, no floor is written for it
+ * arguments it cannot clear. **Unknown** is: no `allow` or `ask` entry of the stage's policy admits
+ * the line (WP-206 (c); before it, one beginning with the name was enough), it is on no wrapper set, is no shell or package runner, no floor is written for it
  * (`HAZARDOUS_ARGUMENTS`), the policy reads no handed command of it ({@link COMMAND_READERS}), and it
  * is not on the valve ({@link KNOWN_NON_WRAPPERS}). Such a program may run its arguments as a command
  * (`fakeroot sudo id`, `sg grp git push origin main`, `parallel git push ::: origin`), so every
@@ -5456,6 +5720,7 @@ const judgedNameIn = (raw: string, judged: (name: string) => boolean): string | 
 const unknownProgramReasons = (
   stage: string,
   policy: ResolvedCommandPolicy,
+  admitPrecise: boolean,
 ): readonly UncertaintyReason[] => {
   const words = argvShellWords(stage);
   // An append assignment (`HOME+=x git diff`) is environment, which the walk does not peel.
@@ -5479,36 +5744,49 @@ const unknownProgramReasons = (
     return [];
   }
   const command = start + walk.command;
-  const written = unquoteToken(words[command] as string);
-  const name = argv0Name(written);
-  if (knownProgram(written, name, policy)) {
+  const name = argv0Name(words[command] as string);
+  if (knownProgram(name, words.slice(command).join(' '), policy, admitPrecise)) {
     return [];
   }
   const blockNames = firstTokens(policy.block);
   const judged = (candidate: string): boolean =>
     JUDGED_NAMES.has(candidate) ||
     blockNames.some((token) => namesProgram(token, candidate, candidate));
+  const judgedNames = [
+    ...JUDGED_NAMES,
+    ...blockNames.filter((token) => !/[*?[]/.test(token)).map(argv0Name),
+  ];
   const found = words
     .slice(command + 1)
-    .map((raw) => judgedNameIn(raw, judged))
+    .map((raw) => judgedNameIn(raw, judged, judgedNames))
     .find((word) => word !== undefined);
   return found === undefined ? [] : [unknownProgramRunsJudgedName(name, found)];
 };
 
 /**
- * Whether the policy knows this command ({@link unknownProgramReasons}' definition): the valve, a
- * wrapper, shell, package runner or reader of a handed command, a builtin WP-158's reader reads
- * (`stageEvaluatesText`: its words are names and values), the first token of an `allow` or `ask`
- * entry of the stage's policy, or a name a floor is written for.
+ * Whether the policy knows this command ({@link unknownProgramReasons}' definition): **by name** —
+ * the valve, a wrapper, shell, package runner or reader of a handed command, a builtin WP-158's
+ * reader reads (`stageEvaluatesText`: its words are names and values), or a name a floor is
+ * written for, each of which has a reader — or **by match** (WP-206 ruling (c), backlog 604): an
+ * `allow` or `ask` entry of the stage's policy that admits `line`, the command and its words, by
+ * the decision the verdict makes (a glob entry by its glob, a precise entry by its grammar, and
+ * not at all on a line with a substitution). A line no entry admits is unmatched, and its program
+ * is read: `sed 's/x/git push/e' x` is no `sed -n '<N>[,<M>]p'`, so `sed` is scanned there.
  */
-const knownProgram = (written: string, name: string, policy: ResolvedCommandPolicy): boolean =>
+const knownProgram = (
+  name: string,
+  line: string,
+  policy: ResolvedCommandPolicy,
+  admitPrecise: boolean,
+): boolean =>
   Object.hasOwn(KNOWN_NON_WRAPPERS, name) ||
   PROGRAMS_THAT_RUN_A_COMMAND.has(name) ||
   COMMAND_READERS.has(name) ||
   DECLARATION_BUILTINS.has(name) ||
   NAME_WRITING_BUILTINS.has(name) ||
-  firstTokens([...policy.allow, ...policy.ask]).some((token) =>
-    namesProgram(token, written, name),
+  policy.allow.some((entry) => matchesAllowEntry(entry, line, admitPrecise)) ||
+  [line, dequoteCommand(line)].some((form) =>
+    policy.ask.some((entry) => matchesCommandPattern(entry, form)),
   ) ||
   // A floor's glob (`go*`, `pytest*`) is written to catch its own tool's spellings, never to vouch
   // for every program sharing the prefix: `gosu` is a wrapper the `go*` floor never read.
@@ -7068,7 +7346,9 @@ const evaluateOnce = (
         return entry === undefined ? [] : [expansionCompletesBlockEntry(entry)];
       }),
       // WP-203: a program the stage's policy does not know, handed a judged name.
-      ...parsed.programStages.flatMap((stage) => unknownProgramReasons(stage, policy)),
+      ...parsed.programStages.flatMap((stage) =>
+        unknownProgramReasons(stage, policy, !parsed.substitutes),
+      ),
     ]),
   ];
   const floor = (evaluation: Omit<CommandEvaluation, 'uncertainty'>): CommandEvaluation => ({

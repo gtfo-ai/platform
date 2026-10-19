@@ -36,8 +36,9 @@
  * ## What the git boundary is, and what it is not
  *
  * It is a reading of the command line, and the command line is not the only way to run git: under
- * `auto` an unmatched command runs, so `python3 -c '…subprocess…'` or a script the run wrote can
- * spell any of the refused commands where no pattern sees them. **The control that holds whatever
+ * `auto` an unmatched command runs, so `python3 -c '…subprocess…'` composing the name (WP-206
+ * reads one written literally) or a script the run wrote can spell any of the refused commands
+ * where no pattern sees them. **The control that holds whatever
  * the spelling is the credential**: the run's credential is answered only for the project's git
  * host, by exact comparison (`RunCredentialBroker.answer`), and only while the run is live; the
  * egress allow-list admits the model host, the project's git host and the registries an operator

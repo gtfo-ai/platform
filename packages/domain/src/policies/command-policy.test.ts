@@ -10,6 +10,7 @@ import {
   assertCommandAllowed,
   basename,
   CI_VERIFICATION_BLOCK,
+  COMMAND_READERS,
   CONFLICT_RESOLUTION_EXTRA_ALLOW,
   carriesHazard,
   commandUncertainty,
@@ -18,12 +19,14 @@ import {
   DEFAULT_BLOCKED_COMMANDS,
   DEFAULT_COMMAND_POLICY,
   DEFAULT_IMPLEMENTATION_ALLOW,
+  DEFAULT_IMPLEMENTATION_ASK,
   DEFAULT_READ_ONLY_ALLOW,
   DEFAULT_VERIFICATION_ALLOW,
   dequoteCommand,
   environmentSpellsFloor,
   evaluateCommand,
   FLOOR_ENVIRONMENT,
+  FLOORED_NAMES,
   type FloorEnvironmentRow,
   floorEnvironmentRows,
   GIT_ABBREVIATION_HAZARDS,
@@ -2966,5 +2969,78 @@ describe('WP-203: the valve of known non-wrappers (census)', () => {
         NEVER.includes(name),
     );
     expect(offending).toEqual([]);
+  });
+});
+
+/**
+ * WP-206 ruling (d) (backlog 604): the scanner has two readers — the floors for a program a list
+ * names, the judged-name scan for one it does not — and every first token of every default `allow`
+ * and `ask` list is held on exactly one of them, read off the constants. A name is **known by
+ * name** (a reader is written for it: floored exactly, a wrapper, shell, package runner or `git`,
+ * or a reader of a handed command), **valved** (its manual says it runs no program), or **known by
+ * match only** (a precise entry, or an entry that is the bare name: off the line its entry
+ * admits, the scan reads it). A project's own `commands.allow` is not census'd (BD-025,
+ * 2026-10-06, decision 4: its allow entry is its door).
+ */
+describe('WP-206: every program the default lists name is on exactly one reader (census)', () => {
+  const DEFAULT_ENTRIES = [
+    ...new Set([
+      ...DEFAULT_IMPLEMENTATION_ALLOW,
+      ...DEFAULT_VERIFICATION_ALLOW,
+      ...DEFAULT_READ_ONLY_ALLOW,
+      ...CONFLICT_RESOLUTION_EXTRA_ALLOW,
+      ...DEFAULT_IMPLEMENTATION_ASK,
+    ]),
+  ];
+  const firstToken = (entry: string): string => entry.trim().split(/\s+/)[0] as string;
+  const preciseNames = new Set([...PRECISE_ALLOW_ENTRIES.keys()].map(firstToken));
+  /**
+   * Admitted, with the reason, and held equal in both directions: `composer` is named by the ask
+   * entry `composer require *`, has no floor and runs a vendor binary (`composer exec`), so it can
+   * be neither valved nor a precise entry. Its `require` line is known by match and not read
+   * (PROGRESS § WP-206, discovered work).
+   */
+  const ADMITTED: Readonly<Record<string, string>> = {
+    composer: 'composer require * (ask): no floor, no reader, not valvable (composer exec)',
+  };
+
+  const readersOf = (name: string): readonly string[] => {
+    const entries = DEFAULT_ENTRIES.filter((entry) => firstToken(entry) === name);
+    const byName =
+      FLOORED_NAMES.includes(name) ||
+      PROGRAMS_THAT_RUN_A_COMMAND.has(name) ||
+      COMMAND_READERS.has(name);
+    const byMatchOnly =
+      !byName &&
+      entries.every((entry) => PRECISE_ALLOW_ENTRIES.has(entry) || entry.trim() === name) &&
+      (preciseNames.has(name) || entries.every((entry) => entry.trim() === name));
+    return [
+      ...(byName ? ['known by name'] : []),
+      ...(Object.hasOwn(KNOWN_NON_WRAPPERS, name) ? ['valve'] : []),
+      ...(byMatchOnly ? ['known by match only'] : []),
+      ...(Object.hasOwn(ADMITTED, name) ? ['admitted'] : []),
+    ];
+  };
+
+  it('holds every default first token on exactly one reader', () => {
+    const offending = [...new Set(DEFAULT_ENTRIES.map(firstToken))]
+      .map((name) => [name, readersOf(name)] as const)
+      .filter(([, readers]) => readers.length !== 1)
+      .map(([name, readers]) => `${name}: ${readers.join(', ') || 'no reader'}`);
+    expect(offending).toEqual([]);
+  });
+
+  it('keeps the admitted list exact: each is named by a default list and on no reader else', () => {
+    const named = new Set(DEFAULT_ENTRIES.map(firstToken));
+    for (const name of Object.keys(ADMITTED)) {
+      expect(named.has(name), name).toBe(true);
+      expect(readersOf(name), name).toEqual(['admitted']);
+    }
+  });
+
+  it('valves the read-only list’s seven names, each cited', () => {
+    for (const name of ['cat', 'grep', 'head', 'ls', 'pwd', 'tail', 'wc']) {
+      expect(KNOWN_NON_WRAPPERS[name], name).toMatch(/^https:\/\/manpages\.debian\.org\/trixie\//);
+    }
   });
 });

@@ -4007,8 +4007,8 @@ describe('WP-203, backlog 599: an unknown command is a possible wrapper', () => 
 
   describe('the residual, stated', () => {
     it.each([
-      // An option's value naming a program (WP-164's and WP-198's floor class).
-      'frobnicate --cmd=sudo',
+      // `frobnicate --cmd=sudo`, an option's value naming a program, moved out at WP-206: the
+      // scan's declared glue reads it (the WP-206 describe below).
       // A script file the run wrote: `run-parts` runs a directory's files, `scriptlive` a typescript.
       'run-parts /tmp/x',
       'scriptlive t f',
@@ -4100,6 +4100,379 @@ describe('WP-203, backlog 599: an unknown command is a possible wrapper', () => 
       ['echo x | nice grep su file', 'ask / auto / deny'],
     ])('%j reads %s', (command, expected) => {
       expect(cell(command, policy)).toBe(expected);
+    });
+  });
+});
+
+/**
+ * WP-206 (backlog 604): a known command's option value or script runs a program. A judged name is
+ * read between boundaries — any character outside `[A-Za-z0-9._-]`, a parameter expansion — by its
+ * last `/`-segment, and so is a short option's attached value and sed's glued `e` command (ruling
+ * (b), review round 1) — and a program is
+ * known through an `allow`/`ask` entry only on a line the entry admits (ruling (c)), which is what
+ * scans `sed`. Every row below read `ask / auto / deny` before this row (PROGRESS § WP-206,
+ * `a-before.log`); `tar --to-command`, `sed … e`, `sed '1e…'`, `sed s///e` with `${IFS}` or `\x20`
+ * and `tar -I'…'` were measured running in `platform-runtime:s16`.
+ */
+describe('WP-206, backlog 604: a program named in an option value or a script', () => {
+  const refusedInBothModes = (command: string): void => {
+    for (const mode of ['auto', 'deny'] as const) {
+      const decision = decideUnattendedCommand({ command }, policy, mode);
+      expect(decision.decision, `${mode}: ${command}`).toBe('deny');
+      expect(decision.rule, `${mode}: ${command}`).toBe('uncertain');
+    }
+  };
+
+  describe('criterion (1): 604’s eighteen lines, the interpreter spellings and the neighbours', () => {
+    it.each([
+      // 604's eighteen, measured `allow` under `auto` on WP-203's tree.
+      ["tar --to-command='git push origin main' -xf x", 'tar', 'git'],
+      ["tar -cf x --checkpoint=1 --checkpoint-action=exec='git push origin main' .", 'tar', 'git'],
+      ['tar --use-compress-program=sudo -cf x .', 'tar', 'sudo'],
+      ["tar --new-volume-script='git push' -cf x .", 'tar', 'git'],
+      ['tar --info-script=sudo -cf x .', 'tar', 'sudo'],
+      ["sed 's/x/git push/e' x", 'sed', 'git'],
+      ["sed -n '1e git push origin main' x", 'sed', 'git'],
+      ["sed --expression='1e sudo id' x", 'sed', 'sudo'],
+      ['sort --compress-program=sudo f', 'sort', 'sudo'],
+      ['man --pager=sudo ls', 'man', 'sudo'],
+      ["ssh -o ProxyCommand='git push' host", 'ssh', 'git'],
+      ["rsync --rsh='sudo id' a b", 'rsync', 'sudo'],
+      ["rsync --rsync-path='sudo rsync' a h:b", 'rsync', 'sudo'],
+      ["zip -TT='sudo id' -T x.zip f", 'zip', 'sudo'],
+      ["vim -c ':!git push origin main' -c q", 'vim', 'git'],
+      ["less -X '+!git push origin main' x", 'less', 'git'],
+      ["gdb -batch -ex '!sudo id'", 'gdb', 'sudo'],
+      ['awk \'BEGIN{"git push"|getline}\'', 'awk', 'git'],
+      // The interpreter spellings, read literally (a name the script composes is the residual).
+      ['python3 -c \'import subprocess; subprocess.run(["git","push"])\'', 'python3', 'git'],
+      ['perl -e \'system("git push")\'', 'perl', 'git'],
+      ['node -e \'require("child_process").execSync("git push")\'', 'node', 'git'],
+      // The attached loader spelling on an unknown program.
+      ['frobnicate -x/usr/bin/git push origin main', 'frobnicate', 'git'],
+      // Moved out of WP-203's residual by name.
+      ['frobnicate --cmd=sudo', 'frobnicate', 'sudo'],
+      // The neighbours the probe found, each measured running in `platform-runtime:s16` where
+      // marked: a short option's attached value, sed's glued `e`, a parameter expansion, `\x20`.
+      ["tar -I'git push origin main' -cf x .", 'tar', 'git'], // measured
+      ['tar -Isudo -cf x .', 'tar', 'sudo'],
+      ['man -Psudo ls', 'man', 'sudo'],
+      ['zip -T -TTsudo x.zip f', 'zip', 'sudo'],
+      ['ssh -oProxyCommand=sudo host', 'ssh', 'sudo'],
+      ["sed '1egit push origin main' x", 'sed', 'git'], // measured
+      ["sed 'egit push origin main' x", 'sed', 'git'], // measured
+      ["sed 's/x/git${IFS}push${IFS}origin${IFS}main/e' x", 'sed', 'git'], // measured
+      ["sed 's/x/git\\x20push\\x20origin\\x20main/e' x", 'sed', 'git'], // measured
+      ["sed -e'1e git push' x", 'sed', 'git'],
+      ["tar --rsh-command='git push' -cf h:x .", 'tar', 'git'],
+      ['ssh -o LocalCommand=sudo -o PermitLocalCommand=yes host', 'ssh', 'sudo'],
+      ["zip --unzip-command='sudo id' -T x.zip f", 'zip', 'sudo'],
+      ['awk -v c=git \'BEGIN{system(c " push")}\'', 'awk', 'git'],
+      ["timeout 5 sed 's/x/git push/e' x", 'sed', 'git'],
+      ["find . -name '*.ts' -exec sed 's/x/git push/e' {} +", 'sed', 'git'],
+      ['bash -c \'tar --to-command="git push" -xf x\'', 'tar', 'git'],
+    ])('%j is uncertain, naming %s and %s', (command, program, word) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      refusedInBothModes(command);
+      expect(auto(command).evaluation.uncertainty).toContain(
+        unknownProgramRunsJudgedName(program, word),
+      );
+      expect(auto(command).reason).toContain('run the command itself');
+    });
+  });
+
+  describe('criterion (2): a program is known through an entry only on a line it admits', () => {
+    it('scans `sed` off its print-range entry, and keeps the entry’s own lines', () => {
+      expect(cell("sed 's/x/git push/e' x", policy)).toBe('ask / uncertain / uncertain');
+      expect(cell("sed -i 's/a/b/' f", policy)).toBe('ask / auto / deny');
+      expect(cell("sed -n '1,5p' f", policy)).toBe('allow / allow / allow');
+      expect(cell("sed -n '1,5p' git.log", policy)).toBe('allow / allow / allow');
+      expect(cell("cat f | sed -n '1,5p' 2>/dev/null", policy)).toBe('allow / allow / allow');
+    });
+
+    it('reads a project’s narrow entry by its match (rule 42)', () => {
+      const project: ResolvedCommandPolicy = {
+        ...policy,
+        allow: [...policy.allow, './scripts/deploy --dry-run'],
+      };
+      expect(cell('./scripts/deploy --dry-run', project)).toBe('allow / allow / allow');
+      expect(cell('./scripts/deploy --target=git', project)).toBe('ask / uncertain / uncertain');
+      expect(auto('./scripts/deploy --target=git', project).evaluation.uncertainty).toContain(
+        unknownProgramRunsJudgedName('deploy', 'git'),
+      );
+    });
+  });
+
+  describe('criterion (4): a URL’s path is read by its last segment', () => {
+    it.each([
+      ['curl https://api.github.com/repos/x/git/refs', 'ask / auto / deny'],
+      ['frobnicate --url=https://x/y/git/z', 'ask / auto / deny'],
+      ['frobnicate --url=https://x/sudo', 'ask / uncertain / uncertain'],
+    ])('%j reads %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+  });
+
+  describe('criterion (5): the controls keep their cells', () => {
+    it.each([
+      ["sed -n '1,5p' f", 'allow / allow / allow'],
+      ['tar -xzf a.tgz', 'ask / auto / deny'],
+      ['tar -cf x .', 'ask / auto / deny'],
+      ['tar -xzf "$a"', 'ask / auto / deny'],
+      ['tar --exclude=.git -czf out.tgz .', 'ask / auto / deny'],
+      ['sort -u f', 'ask / auto / deny'],
+      ['sort -t: -k2 f', 'ask / auto / deny'],
+      ['ssh -V', 'ask / auto / deny'],
+      ['ssh host ls', 'ask / auto / deny'],
+      ['ssh -o StrictHostKeyChecking=no host ls', 'ask / auto / deny'],
+      ['rsync -avz -e ssh a host:b', 'ask / auto / deny'],
+      ["awk '{print $1}' f", 'ask / auto / deny'],
+      ["awk -F: '{print $1}' /etc/passwd", 'ask / auto / deny'],
+      ['python3 tools/x.py --git', 'ask / auto / deny'],
+      ["python3 -c 'print(1)'", 'ask / auto / deny'],
+      ['node $script', 'ask / auto / deny'],
+      ['eslint "$f"', 'ask / auto / deny'],
+      ['frob --no-git', 'ask / auto / deny'],
+      ['frob foo.git', 'ask / auto / deny'],
+      ['frob sudo.txt', 'ask / auto / deny'],
+      ['grep -e git f', 'allow / allow / allow'],
+      ["rg 'sudo'", 'allow / allow / allow'],
+      ['git log --grep=push', 'allow / allow / allow'],
+      ["git commit -m 'add docker compose'", 'allow / allow / allow'],
+      ['npm run build', 'allow / allow / allow'],
+      ['ls -lash', 'allow / allow / allow'],
+      ['cat sudo.txt', 'allow / allow / allow'],
+    ])('%j keeps %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+  });
+
+  describe('criterion (6): the over-ask, named', () => {
+    it.each([
+      // Ruling (b): a judged name glued inside an argument of a scanned program.
+      "frobnicate --message='git push later'",
+      './tool --target=git',
+      'jq \'.["git"]\'',
+      'curl -d \'{"cmd":"git"}\'',
+      // The short-option tail: any tail of a cluster is a possible value.
+      'frob -ash',
+      // Ruling (c): a `sed` script naming a judged name, off the print-range entry.
+      "sed -i 's/git push/git push --dry-run/' f",
+      "sed -i 's/sudo/doas/' f",
+    ])('%j is uncertain', (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+    });
+  });
+
+  describe('the residual, stated', () => {
+    it.each([
+      // A name the script composes.
+      'awk \'BEGIN{system("gi" "t push")}\'',
+      'python3 -c \'import os; os.system("gi"+"t push")\'',
+      // A script or file the run wrote.
+      "sed 's/^//e' f",
+      'sed -f script.sed x',
+      'tar --to-command=./x.sh -xf x',
+      // A judged name with no argument, which the last `/`-segment rule does not read in a script.
+      "sed 's/x/git/e' x",
+      // A URL's path is not a command.
+      'frob https://example.test/git/x',
+      // The line's own input, run by a script primitive (PROGRESS § WP-206, discovered work).
+      "echo 'git push origin main' | sed 's/^//e'",
+      "echo 'git push origin main' | awk '{system($0)}'",
+    ])('%j keeps ask / auto / deny', (command) => {
+      expect(cell(command, policy)).toBe('ask / auto / deny');
+    });
+  });
+
+  /**
+   * Review round 1: a name is bounded by any character outside `[A-Za-z0-9._-]` (not a list), a
+   * sed address's `I`/`M` modifiers sit before a glued `e`, an expansion is a boundary on both
+   * sides of the word as written, and a `${v<op>w}` word is text. Every row read `ask / auto /
+   * deny` on round 0's tree (PROGRESS § WP-206, review round 1).
+   */
+  describe('review round 1: boundaries, sed modifiers, expansions', () => {
+    it.each([
+      // (1) Any character outside a name's alphabet bounds it.
+      ["sed 's%x%git push%e' x", 'sed', 'git'],
+      ["sed 's#^#git #e' x", 'sed', 'git'],
+      ["perl -e 'qx#git push#'", 'perl', 'git'],
+      ["perl -e '%x@git push@'", 'perl', 'git'],
+      // (2) sed's address modifiers before a glued `e`.
+      ["sed '/x/Iegit --version' x", 'sed', 'git'],
+      ["sed '/x/Megit --version' x", 'sed', 'git'],
+      ["sed '/x/IMegit --version' x", 'sed', 'git'],
+      ["sed '\\%x%Iegit --version' x", 'sed', 'git'],
+      ["sed '$egit push' x", 'sed', 'git'],
+      // (3) An expansion bounds the word as written.
+      ['tar --to-command="$x"git -xf x', 'tar', 'git'],
+      ['ssh -o ProxyCommand="$x"\'sudo id\' host', 'ssh', 'sudo'],
+      ['frobnicate "$x"sudo id', 'frobnicate', 'sudo'],
+      ["tar --to-command=$x'git push' -xf x", 'tar', 'git'],
+      // (4) A parameter expansion's word is text.
+      ["sed 's/x/${y:-git} --version/e' x", 'sed', 'git'],
+      ["tar --to-command='${x:-sudo} id' -xf x", 'tar', 'sudo'],
+      ["tar --to-command='${x-sudo} id' -xf x", 'tar', 'sudo'],
+      ["tar --to-command='${x:=sudo} id' -xf x", 'tar', 'sudo'],
+      ["tar --to-command='${x=sudo} id' -xf x", 'tar', 'sudo'],
+      ["tar --to-command='${x:+sudo} id' -xf x", 'tar', 'sudo'],
+      ["tar --to-command='${x+sudo} id' -xf x", 'tar', 'sudo'],
+      ["tar --to-command='${x:?sudo} id' -xf x", 'tar', 'sudo'],
+      ["tar --to-command='${x?sudo} id' -xf x", 'tar', 'sudo'],
+    ])('%j is uncertain, naming %s and %s', (command, program, word) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      refusedInBothModes(command);
+      expect(auto(command).evaluation.uncertainty).toContain(
+        unknownProgramRunsJudgedName(program, word),
+      );
+    });
+
+    it.each([
+      ['frob foo.git', 'ask / auto / deny'],
+      ['frob git_sha', 'ask / auto / deny'],
+      ['tar -czf git-backup.tgz .', 'ask / auto / deny'],
+      ['npm run build:git', 'allow / allow / allow'],
+      ['git log --pretty=format:%h', 'allow / allow / allow'],
+      ["grep -r 'git' .", 'allow / allow / allow'],
+      ['echo "push to git"', 'ask / auto / deny'],
+      ['curl https://github.com/x/git.git', 'ask / auto / deny'],
+      ["sed -i 's/git/hg/' f", 'ask / auto / deny'],
+      ['frob --format=json', 'ask / auto / deny'],
+      ['make -C dir', 'allow / allow / allow'],
+      ['node $script', 'ask / auto / deny'],
+      ['node "$script" --flag', 'ask / auto / deny'],
+      ['npx tsx "$script"', 'ask / auto / deny'],
+    ])('control %j keeps %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+
+    it.each([
+      // `@` bounds a name: an ssh user named like a judged program.
+      'ssh -T git@github.com',
+      // sed's modifiers make `Mesh` an `M` and an `e` before `sh`.
+      'frob --type=Mesh',
+      // A single-quoted `$` is a literal character, so its name is read.
+      "node '$script'",
+    ])('over-ask %j is uncertain', (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+    });
+
+    it.each([
+      // A name glued by a name's own characters.
+      'frob s.git.',
+      // A runner known by name: its script is not scanned.
+      'bun -e \'Bun.spawn(["git","push"])\'',
+    ])('residual %j keeps ask / auto / deny', (command) => {
+      expect(cell(command, policy)).toBe('ask / auto / deny');
+    });
+  });
+
+  /**
+   * Review round 2: the argument is also read **joined** — every backslash, quote, empty splice
+   * and expansion's syntax deleted, a `${v<op>w}` word kept — and a part holding `*`, `?` or `[…]`
+   * is a pattern that counts when it could match a judged name. The first five rows were uncertain
+   * on `eac3cf48` and read `allow` under `auto` on round 1's tree (a regression).
+   */
+  describe('review round 2: the joined reading and patterns', () => {
+    it.each([
+      // An interpreter's own string escape joins the name.
+      ['awk \'BEGIN{system("g\\\\it push")}\'', 'awk', 'git'],
+      ['python3 -c \'import os; os.system("g\\\\it push")\'', 'python3', 'git'],
+      ['perl -e \'system("g\\\\it push")\'', 'perl', 'git'],
+      ['node -e \'require("child_process").execSync("g\\\\it push")\'', 'node', 'git'],
+      ['awk \'BEGIN{system("s\\\\udo id")}\'', 'awk', 'sudo'],
+      // A default word joins its neighbours.
+      ["tar --to-command='${x-g}it push' -xf x", 'tar', 'git'],
+      ["tar --to-command='${x:-g}it push' -xf x", 'tar', 'git'],
+      // A pattern that could match a judged name.
+      ["tar --to-command='/usr/bin/gi? push' -xf x", 'tar', 'gi?'],
+      ['awk \'BEGIN{system("/usr/bin/gi? push")}\'', 'awk', 'gi?'],
+      ["sed 's/x/gi[t] push/e' f", 'sed', 'gi[t]'],
+      // A one-character class is a literal, so a pattern of them spells a name.
+      ["tar --to-command='[g][i][t] push' -xf x", 'tar', '[g][i][t]'],
+      ['awk \'BEGIN{system("[g][i][t] push")}\'', 'awk', '[g][i][t]'],
+      ["sed 's/x/[g][i][t] push/e' f", 'sed', '[g][i][t]'],
+      // An empty splice.
+      ["frob g$''it push", 'frob', 'git'],
+      ['frob g$""it push', 'frob', 'git'],
+    ])('%j is uncertain, naming %s and %s', (command, program, word) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      refusedInBothModes(command);
+      expect(auto(command).evaluation.uncertainty).toContain(
+        unknownProgramRunsJudgedName(program, word),
+      );
+    });
+
+    it.each([
+      ['frob *.ts', 'ask / auto / deny'],
+      ['rm -rf dist/*', 'ask / auto / deny'],
+      ["python3 -c 'print(2*3)'", 'ask / auto / deny'],
+    ])('control %j keeps %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+
+    it.each([
+      // A judged name bounded by a script's delimiter, a user's `@`, an option's `=`.
+      "sed -i 's|git|hg|g' f",
+      'scp git@host:x .',
+      'gradle test -Pgit=true',
+    ])('over-ask %j is uncertain', (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+    });
+
+    it.each([
+      // A name a script composes stays the residual: the joined reading keeps the blank and `+`.
+      'awk \'BEGIN{system("gi" "t push")}\'',
+      'python3 -c \'import os; os.system("gi"+"t push")\'',
+      // A pattern of wildcards and multi-character classes alone is a file glob, not a name.
+      'tar -czf out.tgz *',
+      "sed 's/^[ \\t]*//' f",
+    ])('residual %j keeps ask / auto / deny', (command) => {
+      expect(cell(command, policy)).toBe('ask / auto / deny');
+    });
+  });
+
+  /**
+   * Review round 3: a command substitution that prints nothing joins its neighbours (bash and dash
+   * run `g$(:)it`, ``g``it``, `g"$(:)"it` as `git`), so the joined reading also reads the argument
+   * with every `$(…)` and `` `…` `` deleted whole. The first eleven rows read `allow` under `auto`
+   * on round 2's tree.
+   */
+  describe('review round 3: an empty command substitution', () => {
+    it.each([
+      ["tar --to-command='g$(:)it push origin main' -xf x", 'tar', 'git'],
+      ["tar --to-command='g``it push origin main' -xf x", 'tar', 'git'],
+      ["tar -I'g$(:)it push' -cf x .", 'tar', 'git'],
+      ["tar --to-command='/usr/bin/g$(:)it push' -xf x", 'tar', 'git'],
+      ["sed 's/x/g$(:)it push/e' x", 'sed', 'git'],
+      ["sed -n '1eg$(:)it push' x", 'sed', 'git'],
+      ["ssh -o ProxyCommand='g$(:)it push' host", 'ssh', 'git'],
+      ['awk \'BEGIN{system("g$(:)it push")}\'', 'awk', 'git'],
+      ['python3 -c \'import os; os.system("g$(:)it push")\'', 'python3', 'git'],
+      ['perl -e \'system("g``it push")\'', 'perl', 'git'],
+      ['node -e \'require("child_process").execSync("g$(:)it push")\'', 'node', 'git'],
+      ["tar --to-command='g`:`it push' -xf x", 'tar', 'git'],
+      ["tar --to-command='g$(true)it push' -xf x", 'tar', 'git'],
+      ['tar --to-command=\'g"$(:)"it push\' -xf x', 'tar', 'git'],
+      // The blank `expansionsAsBoundaries` leaves for `${IFS}`, witnessed.
+      ['tar --to-command="git${IFS}push origin main" -xf x', 'tar', 'git'],
+      ['ssh -o ProxyCommand="sudo${IFS}id" h', 'ssh', 'sudo'],
+    ])('%j is uncertain, naming %s and %s', (command, program, word) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      refusedInBothModes(command);
+      expect(auto(command).evaluation.uncertainty).toContain(
+        unknownProgramRunsJudgedName(program, word),
+      );
+    });
+
+    it.each([
+      // A name a command composes, and one composed through a variable set on the line.
+      "tar --to-command='$(printf g)it push' -xf x",
+      "x=git tar --to-command='$x push' -xf x",
+      // A substitution as an ordinary argument.
+      'frob "$(date +%s)" out',
+    ])('residual or control %j keeps ask / auto / deny', (command) => {
+      expect(cell(command, policy)).toBe('ask / auto / deny');
     });
   });
 });
