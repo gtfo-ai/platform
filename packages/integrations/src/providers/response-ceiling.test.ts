@@ -23,14 +23,16 @@
  * `redirect-refusal.test.ts` reads them: a sixth provider fails the equality below the moment its
  * directory exists, and its sources are scanned without anyone listing them.
  *
- * ## The one bounded reader outside it
+ * ## The two bounded readers outside it
  *
  * `packages/infrastructure/src/dependencies/registry-metadata.ts` keeps its own streaming reader
  * (`MAX_REGISTRY_BYTES`, 2 MiB), and that is decided rather than missed (WP-190 ruling (d)): the
  * dependency rule forbids `infrastructure` from importing `@platform/integrations`, and the
  * registry call has no binding and no provider id for `ProviderResponseTooLargeError` to name — its
  * refusal is its own module's `unavailable`. The last case below holds that the exception is still
- * a bounded reader, so the sentence stays checkable.
+ * a bounded reader, so the sentence stays checkable. The launcher client
+ * (`packages/infrastructure/src/launcher/client.ts`, WP-224) is the second, for the same dependency
+ * reason; its ceiling and its census are `launcher/client.test.ts`'s.
  *
  * ## What it cannot prove
  *
@@ -372,7 +374,7 @@ describe('no provider source reads a body except through bounded-body.ts', () =>
     expect(read('gitlab/client.ts').match(/\bkeepTail: true\b/g)).toHaveLength(1);
   });
 
-  it('the registry reader, the one exception, is still a bounded reader', () => {
+  it('the registry reader, an exception outside this module, is still a bounded reader', () => {
     const registry = readFileSync(
       fileURLToPath(
         new URL('../../../infrastructure/src/dependencies/registry-metadata.ts', import.meta.url),

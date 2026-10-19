@@ -8,13 +8,28 @@
  * arrives as a `WorkspaceError` whose **code** the stage executor already knows how to act on, and a
  * base URL that is not an `http(s)` address without credentials is refused before a byte is sent.
  */
-import { WorkspaceError } from '@platform/application';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import {
+  existingProtectedPathsSchema,
+  MAX_EXISTING_PROTECTED_PATHS,
+  MAX_OPAQUE_TRACKED_PATHS,
+  WorkspaceError,
+} from '@platform/application';
 import { describe, expect, it } from 'vitest';
-import { createLauncherControlClient, type LauncherFetch, parseLauncherBaseUrl } from './client.js';
+import { withoutComments } from '../../../../scripts/source-scanner.mjs';
+import {
+  createLauncherControlClient,
+  type LauncherFetch,
+  LauncherResponseTooLargeError,
+  parseLauncherBaseUrl,
+} from './client.js';
 import {
   CONTROL_PLANE_ERROR_CODES,
+  CONTROL_PLANE_MAX_RESPONSE_BYTES,
   CONTROL_PLANE_STATUS_BY_CODE,
   controlPlaneCodeOfStatus,
+  createRunResponseSchema,
   workspaceCodeOfControlPlaneCode,
 } from './protocol.js';
 
@@ -33,7 +48,7 @@ const clientWith = (
     const recorded = { url, init };
     calls.push(recorded);
     const result = await answer(recorded);
-    return { status: result.status, text: async () => result.body };
+    return { status: result.status, body: new Response(result.body).body };
   };
   return {
     client: createLauncherControlClient({
@@ -369,5 +384,211 @@ describe('the reaper’s two verbs (WP-103, TD-028 decision 12)', () => {
     }));
     await expect(client.listRuns()).rejects.toMatchObject({ code: 'invalid_spec' });
     await expect(client.destroyRun(RUN)).rejects.toMatchObject({ code: 'invalid_spec' });
+  });
+});
+
+/**
+ * WP-224 (PROGRESS backlog 589): the answer is read off its stream up to
+ * `CONTROL_PLANE_MAX_RESPONSE_BYTES` and refused past it, never cut into a parse. The body at the
+ * ceiling and one byte over it are the same valid document padded with JSON whitespace, so a reader
+ * that takes the whole body (`response.text()`) parses the over case too (standing rules 42, 43).
+ */
+describe('the response ceiling (WP-224)', () => {
+  const CHUNK = 1024 * 1024;
+  const RUN = '55555555-5555-4555-8555-555555555555';
+  const listing = { runs: [{ runId: RUN, createdAt: '2026-10-19T10:00:00.000Z', running: true }] };
+
+  /** `document` padded with spaces to exactly `size` bytes, streamed in 1 MiB chunks. */
+  const paddedStream = (document: string, size: number): ReadableStream<Uint8Array> => {
+    const bytes = new Uint8Array(size).fill(0x20);
+    bytes.set(new TextEncoder().encode(document));
+    let offset = 0;
+    return new ReadableStream({
+      pull: (controller) => {
+        if (offset >= bytes.byteLength) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(bytes.subarray(offset, offset + CHUNK));
+        offset += CHUNK;
+      },
+    });
+  };
+
+  const streaming = (
+    status: number,
+    body: () => ReadableStream<Uint8Array> | null,
+  ): ReturnType<typeof createLauncherControlClient> =>
+    createLauncherControlClient({
+      baseUrl: 'http://launcher:7780',
+      token: TOKEN,
+      fetch: async () => ({ status, body: body() }),
+    });
+
+  it('reads an answer of exactly the ceiling', async () => {
+    const client = streaming(200, () =>
+      paddedStream(JSON.stringify(listing), CONTROL_PLANE_MAX_RESPONSE_BYTES),
+    );
+    await expect(client.listRuns()).resolves.toEqual(listing);
+  }, 30_000);
+
+  it('refuses an answer one byte over it, naming the verb and the ceiling', async () => {
+    const client = streaming(200, () =>
+      paddedStream(JSON.stringify(listing), CONTROL_PLANE_MAX_RESPONSE_BYTES + 1),
+    );
+    const refused = await client.listRuns().catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(LauncherResponseTooLargeError);
+    expect(refused).toBeInstanceOf(WorkspaceError);
+    expect(refused).toMatchObject({
+      code: 'workspace_failed',
+      reason: null,
+      verb: 'GET /v1/runs',
+      ceilingBytes: CONTROL_PLANE_MAX_RESPONSE_BYTES,
+      message: `the launcher control plane answered GET /v1/runs with more than ${String(CONTROL_PLANE_MAX_RESPONSE_BYTES)} bytes; refused rather than cut`,
+    });
+  }, 30_000);
+
+  it('stops reading a body that never ends, and releases its stream', async () => {
+    let pulled = 0;
+    let cancelled = false;
+    const client = streaming(
+      200,
+      () =>
+        new ReadableStream<Uint8Array>({
+          pull: (controller) => {
+            pulled += CHUNK;
+            controller.enqueue(new Uint8Array(CHUNK).fill(0x20));
+          },
+          cancel: () => {
+            cancelled = true;
+          },
+        }),
+    );
+    await expect(client.health()).rejects.toBeInstanceOf(LauncherResponseTooLargeError);
+    expect(cancelled).toBe(true);
+    // The highWaterMark of one chunk may be pulled ahead of the read that refused.
+    expect(pulled).toBeLessThanOrEqual(CONTROL_PLANE_MAX_RESPONSE_BYTES + 2 * CHUNK);
+  }, 30_000);
+
+  it('keeps a refusal’s own code when its body is past the ceiling', async () => {
+    const oversized = (status: number) =>
+      streaming(status, () =>
+        paddedStream(errorBody('workspace_failed', 'no'), CONTROL_PLANE_MAX_RESPONSE_BYTES + 1),
+      );
+    // A wrong token stays terminal and a proxy's 503 stays retryable; neither becomes the body's code.
+    await expect(oversized(401).listRuns()).rejects.toMatchObject({
+      name: 'LauncherResponseTooLargeError',
+      code: 'invalid_spec',
+      reason: 'launcher_unauthorized',
+    });
+    await expect(oversized(503).destroyRun(RUN)).rejects.toMatchObject({
+      name: 'LauncherResponseTooLargeError',
+      code: 'engine_unavailable',
+      reason: null,
+      runId: RUN,
+      verb: `POST /v1/runs/${RUN}/destroy`,
+    });
+  }, 30_000);
+
+  /**
+   * Criterion (2): the bound holds only while the reader is the one read. Comments are stripped
+   * first, because the docblocks name `Response.text()` to say why it is not used.
+   */
+  it('reads an empty body as no answer, never as one past the ceiling', async () => {
+    for (const status of [200, 204]) {
+      const refused = await streaming(status, () => null)
+        .listRuns()
+        .catch((error: unknown) => error);
+      expect(refused).not.toBeInstanceOf(LauncherResponseTooLargeError);
+      expect(refused).toMatchObject({
+        code: 'workspace_failed',
+        message: 'the launcher control plane answered /v1/runs with a body this build cannot read',
+      });
+    }
+  });
+
+  it('reports a stream that breaks mid-read as the transport failure it is', async () => {
+    const client = streaming(
+      200,
+      () =>
+        new ReadableStream<Uint8Array>({
+          start: (controller) => {
+            controller.enqueue(new TextEncoder().encode('{"runs":['));
+            controller.error(new Error('ECONNRESET'));
+          },
+        }),
+    );
+    const refused = await client.listRuns().catch((error: unknown) => error);
+    expect(refused).not.toBeInstanceOf(LauncherResponseTooLargeError);
+    expect(refused).toMatchObject({ code: 'engine_unavailable', reason: 'launcher_unreachable' });
+  });
+
+  it('carries the verb, the ceiling and the status as detail, and never the token', async () => {
+    const refused = (await streaming(200, () =>
+      paddedStream(JSON.stringify(listing), CONTROL_PLANE_MAX_RESPONSE_BYTES + 1),
+    )
+      .listRuns()
+      .catch((error: unknown) => error)) as WorkspaceError;
+    expect(refused).toBeInstanceOf(LauncherResponseTooLargeError);
+    expect(refused.detail).toBe(
+      `GET /v1/runs: body past ${String(CONTROL_PLANE_MAX_RESPONSE_BYTES)} bytes (HTTP 200)`,
+    );
+    expect(`${refused.message} ${String(refused.detail)}`).not.toContain(TOKEN);
+  }, 30_000);
+
+  /**
+   * The ceiling's derivation, pinned (review round 1): a create answer whose protected-path listing
+   * is at its schema maximum in ASCII — both counts and the path length read off the schema's own
+   * bounds — stays under the ceiling, so raising either bound past it fails here. The other fields
+   * of a create answer are 68,234 bytes at their maximum (protocol.ts), inside the 1 MiB margin.
+   */
+  it('admits a create answer whose listing is at its ASCII schema maximum', () => {
+    const listed = existingProtectedPathsSchema.options[0];
+    const pathMax = listed.shape.paths.element.maxLength;
+    expect(pathMax).toBeTypeOf('number');
+    const path = 'a'.repeat(pathMax as number);
+    const answer = {
+      handle: {
+        runId: RUN,
+        projectId: RUN,
+        containerId: 'c1',
+        sidecarContainerId: null,
+        networkId: 'n1',
+        volumeName: 'ws-1',
+        cacheKey: null,
+        controlSubPath: RUN,
+        keepUntil: '2026-10-19T10:00:00.000Z',
+      },
+      attachment: { socketPath: '/ctl/run.sock', token: 'FAKE-run-token', workdir: '/work/repo' },
+      claudeCodePath: '/usr/local/bin/claude',
+      cliEnvironment: {
+        proxy: null,
+        home: '/home/agent',
+        claudeConfigDir: '/home/agent/.claude',
+        path: '/usr/bin',
+        gitConfig: [],
+      },
+      credentialScope: null,
+      existingProtectedPaths: {
+        state: 'listed',
+        paths: Array.from({ length: MAX_EXISTING_PROTECTED_PATHS }, () => path),
+        opaque: Array.from({ length: MAX_OPAQUE_TRACKED_PATHS }, () => path),
+      },
+      replayed: false,
+    };
+    expect(createRunResponseSchema.safeParse(answer).success).toBe(true);
+    const bytes = Buffer.byteLength(JSON.stringify(answer));
+    expect(bytes).toBeGreaterThan(45_000_000);
+    expect(bytes + 1024 * 1024).toBeLessThanOrEqual(CONTROL_PLANE_MAX_RESPONSE_BYTES);
+  }, 30_000);
+
+  it('is the only body read in client.ts', () => {
+    const source = withoutComments(
+      readFileSync(fileURLToPath(new URL('./client.ts', import.meta.url)), 'utf8'),
+    );
+    expect(source.match(/\.getReader\(/g)).toHaveLength(1);
+    expect(source.match(/\.body\b/g)).toEqual(['.body']);
+    expect(source).not.toMatch(/\.(?:text|json|arrayBuffer|blob|formData|bytes)\(/);
+    expect(source).not.toMatch(/new Response\(|\.pipeTo\(|\.pipeThrough\(|\.tee\(|for await/);
   });
 });

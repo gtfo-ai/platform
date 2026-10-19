@@ -7,7 +7,7 @@
  * off disk to refuse one. What this file constructs is a `fetch` against a URL an operator
  * configured; the daemon stays in the `platform-launcher` container.
  *
- * ## Three things are decided here rather than left to `fetch`
+ * ## Four things are decided here rather than left to `fetch`
  *
  *  - **A redirect is refused, never followed.** `redirect: 'error'`, for the reason
  *    `dependencies/registry-metadata.ts` gives one directory away: *"a redirect is how an
@@ -18,6 +18,11 @@
  *  - **Every request is bounded in time.** An `AbortSignal.timeout`, because a `create` that hangs
  *    holds a `stage.execute` worker — and a worker that never returns is a queue that stops, which
  *    is worse than a run that fails and is retried (Q59(a)).
+ *  - **Every response is bounded in bytes** (WP-224, PROGRESS backlog 589). The body is read off
+ *    its stream by {@link readControlPlaneBody} and refused past
+ *    {@link CONTROL_PLANE_MAX_RESPONSE_BYTES} with {@link LauncherResponseTooLargeError}, never cut
+ *    and parsed. A timeout bounds time, not bytes. `client.test.ts` refuses any other body read in
+ *    this file, read off disk.
  *  - **Every failure is a {@link WorkspaceError}**, so `classifyProvisionFailure` decides
  *    retryability from the same four codes it always has and the stage executor's ending is
  *    unchanged. A body that does not parse falls back to the status (see
@@ -34,10 +39,12 @@ import {
   type Logger,
   silentLogger,
   WorkspaceError,
+  type WorkspaceErrorCode,
   type WorkspaceErrorReason,
 } from '@platform/application';
 import * as z from 'zod';
 import {
+  CONTROL_PLANE_MAX_RESPONSE_BYTES,
   CONTROL_PLANE_PATHS,
   type ControlPlaneErrorCode,
   type CreateRunRequestPayload,
@@ -57,7 +64,10 @@ import {
   workspaceCodeOfControlPlaneCode,
 } from './protocol.js';
 
-/** The `fetch` this client calls. Injected so the unit tier needs no listener. */
+/**
+ * The `fetch` this client calls. Injected so the unit tier needs no listener. The body is the
+ * stream, not `text()`, so nothing in this file can read it whole (WP-224).
+ */
 export type LauncherFetch = (
   input: string,
   init: {
@@ -69,8 +79,76 @@ export type LauncherFetch = (
   },
 ) => Promise<{
   readonly status: number;
-  text(): Promise<string>;
+  readonly body: ReadableStream<Uint8Array> | null;
 }>;
+
+/**
+ * A control-plane answer past {@link CONTROL_PLANE_MAX_RESPONSE_BYTES} (WP-224). It names the verb
+ * and the ceiling, never a body byte. Its code is the one the status would have given: a 2xx is
+ * `workspace_failed`, like any success body this build cannot read, and a refusal keeps its own
+ * status's code, so a 401 with an oversized body stays terminal and a 503 stays retryable.
+ */
+export class LauncherResponseTooLargeError extends WorkspaceError {
+  readonly ceilingBytes: number;
+  readonly verb: string;
+
+  constructor(
+    code: WorkspaceErrorCode,
+    verb: string,
+    options: {
+      readonly runId?: string;
+      readonly reason: WorkspaceErrorReason | null;
+      readonly status: number;
+    },
+  ) {
+    const { status, ...rest } = options;
+    super(
+      code,
+      `the launcher control plane answered ${verb} with more than ${String(CONTROL_PLANE_MAX_RESPONSE_BYTES)} bytes; refused rather than cut`,
+      {
+        ...rest,
+        // The log field: the verb, the ceiling and the status — never a body byte or the token.
+        detail: `${verb}: body past ${String(CONTROL_PLANE_MAX_RESPONSE_BYTES)} bytes (HTTP ${String(status)})`,
+      },
+    );
+    this.name = 'LauncherResponseTooLargeError';
+    this.ceilingBytes = CONTROL_PLANE_MAX_RESPONSE_BYTES;
+    this.verb = verb;
+  }
+}
+
+/**
+ * Reads at most {@link CONTROL_PLANE_MAX_RESPONSE_BYTES} of a body; past it answers `null` and
+ * cancels the stream. Decoding matches `Response.text()` (UTF-8 with replacement, a BOM dropped).
+ */
+const readControlPlaneBody = async (
+  body: ReadableStream<Uint8Array> | null,
+): Promise<string | null> => {
+  if (body === null) {
+    return '';
+  }
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let size = 0;
+  let text = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      size += value.byteLength;
+      if (size > CONTROL_PLANE_MAX_RESPONSE_BYTES) {
+        return null;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    // Releases the connection on a refusal; a no-op on a stream that already ended.
+    await reader.cancel().catch(() => undefined);
+  }
+  return text + decoder.decode();
+};
 
 export interface LauncherControlClientOptions {
   /** `http://launcher:7780` — the launcher's address on the internal network (TD-028 decision 2). */
@@ -175,8 +253,9 @@ export const createLauncherControlClient = (
     runId: string | null,
   ): Promise<T> => {
     const url = `${base}${path}`;
+    const runIdOption = runId === null ? {} : { runId };
     let status: number;
-    let text: string;
+    let text: string | null;
     try {
       const response = await call(url, {
         method,
@@ -189,14 +268,23 @@ export const createLauncherControlClient = (
         signal: AbortSignal.timeout(timeoutMs),
       });
       status = response.status;
-      text = await response.text();
+      text = await readControlPlaneBody(response.body);
     } catch (cause) {
       // DNS, a refused connection, a timeout, or the refused redirect above. All of them are
       // "the launcher could not be reached", which is the retryable code.
       throw new WorkspaceError(
         'engine_unavailable',
         `the launcher control plane could not be reached at ${url}: ${describe(cause)}`,
-        { ...(runId === null ? {} : { runId }), cause, reason: 'launcher_unreachable' },
+        { ...runIdOption, cause, reason: 'launcher_unreachable' },
+      );
+    }
+    if (text === null) {
+      const success = status >= 200 && status < 300;
+      const statusCode = controlPlaneCodeOfStatus(status);
+      throw new LauncherResponseTooLargeError(
+        success ? 'workspace_failed' : workspaceCodeOfControlPlaneCode(statusCode),
+        `${method} ${path}`,
+        { ...runIdOption, reason: success ? null : transportReasonOf(statusCode), status },
       );
     }
     if (status >= 200 && status < 300) {

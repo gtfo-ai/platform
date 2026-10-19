@@ -88,6 +88,23 @@ export const CONTROL_PLANE_AUTH_HEADER = 'authorization';
  */
 export const CONTROL_PLANE_MAX_BODY_BYTES = 256 * 1024;
 
+/**
+ * The largest response body the client reads — the other direction's bound (WP-224, PROGRESS
+ * backlog 589). Past it `client.ts` refuses with `LauncherResponseTooLargeError`; it never cuts.
+ *
+ * Derived from the largest answer, which is **`POST /v1/runs`'s**, not `GET /v1/runs`'s: measured
+ * at schema maximum (`JSON.stringify`, UTF-8 bytes), the listing is 143,010 bytes, an end answer
+ * 196,671, health 52,318, an error 36,643 — and a create answer 68,234 before its
+ * `existingProtectedPaths`, whose 11,000 paths of up to 4,096 characters make it **45,157,232**
+ * bytes when every path is ASCII. 64 MiB admits that with room, and a 120-character path listing
+ * at both counts (1.4 MB) by forty-fold.
+ *
+ * **Residual, stated:** the same listing at schema maximum in three-byte characters (135 MB) or in
+ * characters JSON escapes to six bytes (270 MB) is refused. That is thousands of protected paths
+ * each about four kilobytes long; such a create answer fails the run with `workspace_failed`, named.
+ */
+export const CONTROL_PLANE_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+
 // ── The structures the port already owns, as schemas ─────────────────────────
 
 /**
