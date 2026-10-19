@@ -5426,7 +5426,9 @@ interface WrapperGrammar {
  * declared option's value and a declared operand — never naming either as a command — while the
  * walk is still reading by grammar and the word is **one word** to the shell ({@link isOneWord}): an
  * unquoted expansion or a glob there may become several words, one of them the command (measured:
- * `t="1 echo"; timeout $t MARK` runs `echo`), so it is listed as before. {@link walkCommandStarts}
+ * `t="1 echo"; timeout $t MARK` runs `echo`), so it is listed as before — and so is an option word
+ * that may be several words (`nice -n$n make`, WP-216), which the grammar then reads as one it does
+ * not name. {@link walkCommandStarts}
  * drops the same words as command starts, so one grammar serves both walks.
  */
 const WRAPPER_GRAMMARS: Readonly<Record<string, WrapperGrammar>> = {
@@ -5626,7 +5628,9 @@ const grammarOption = (
  * WP-205) has its option values and operand skipped by that grammar, unlisted, while each is one
  * word and every word before it was read by a grammar; any other value or operand — of a wrapper
  * with no declared grammar, after an option its grammar does not name, or one the shell may split
- * (`timeout $t make`) — is listed too, since it may be the command. Never an assignment (backlog 512's lesson), never a `[`/`[[` test or
+ * (`timeout $t make`) — is listed too, since it may be the command; so is an option word itself
+ * that the shell may split (`nice -n$n make`, `taskset -c$c make`; WP-216), while a quoted one
+ * (`-n"$n"`) is one word and is not. Never an assignment (backlog 512's lesson), never a `[`/`[[` test or
  * what is inside it, and never an argument of the command itself: `nice ls *.ts` lists `nice` and
  * `ls`, not `*.ts`. The arguments of a command the policy does not know are command-position
  * words too since WP-203, read by their own rule ({@link unknownProgramArgument}).
@@ -5637,7 +5641,11 @@ const commandNameWords = (tokens: readonly string[]): readonly string[] =>
 /**
  * {@link commandNameWords}' walk, which also says where the command it stopped at stands (`command`,
  * an index into `tokens`; none when the stage is only wrappers or stops at an expanded name or a
- * test) and which wrappers it peeled to reach it (WP-203).
+ * test) and which wrappers it peeled to reach it (WP-203). A wrapper's option word that may be
+ * several words (`!isOneWord`: `-n$n`, `--adjustment=$n`, `-$x`) is listed as a possible command
+ * word by the generic option branch, which a declared grammar's `unknown` reading and every
+ * undeclared wrapper reach (WP-216); `walkCommandStarts` already starts a command there, since
+ * the word is never `skipped`.
  */
 const commandNameWalk = (
   tokens: readonly string[],
@@ -5722,9 +5730,14 @@ const commandNameWalk = (
       // after it. Only an option known to take no value (`WRAPPER_FLAGS_WITHOUT_VALUE`) does not
       // spend the next word. The over-ask, stated: `nice -x ls *.ts` (an option the table does not
       // know) reads `*.ts` as a command word. A wrapper with a declared grammar reads its options
-      // above (WP-205), and comes here only for an option its grammar does not name.
+      // above (WP-205), and comes here only for an option its grammar does not name. The option word
+      // itself is listed when the shell may split it (WP-216, backlog 614): `nice -n$n make` with
+      // `n="5 echo"` runs `echo`, so `-n$n` is a possible command word, as `$n` in the value slot is.
       const next = tokens[index + 1];
       precise = false;
+      if (!isOneWord(token)) {
+        words.push(token);
+      }
       if (
         !value.includes('=') &&
         next !== undefined &&

@@ -3342,7 +3342,12 @@ describe('WP-193, backlogs 565 and 566: a brace is literal unless it expands, an
     'xargs -I{a..} grep x',
   ])('%j stays uncertain: its replace string is not literal', (command) => {
     expectCells(command, 'ask / uncertain / uncertain');
-    expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.xargsArguments]);
+    // Since WP-216 the option word the shell may split is a possible command word too.
+    expect(auto(command).evaluation.uncertainty).toEqual(
+      command.includes('"$R"')
+        ? [UNCERTAINTY.xargsArguments]
+        : [UNCERTAINTY.expandedName, UNCERTAINTY.xargsArguments],
+    );
   });
 
   it.each([
@@ -5260,6 +5265,75 @@ describe('WP-214, backlog 613: a floor’s short option read by its program’s 
     it('"git push -nf origin agentic/x" is WP-204’s block (`-n` is push’s --dry-run)', () => {
       expect(cell('git push -nf origin agentic/x', policy)).toBe('block / block / block');
       expect(auto('git push -nf origin agentic/x').evaluation.matched).toBe('git push -f*');
+    });
+  });
+});
+
+describe('WP-216, backlog 614: a wrapper’s option word the shell may split is a possible command word', () => {
+  // 614's bash measurement (`nice -n$n MARKER` with `n="5 echo"` ran `echo`) is WP-205's, cited in
+  // PROGRESS § WP-205; nothing executes here.
+  describe('criterion (1): an unquoted expansion attached to the option is judged', () => {
+    it.each([
+      'nice -n$n make',
+      'env -u$v id',
+      'timeout -k$k 5 make',
+      'stdbuf -o$m make',
+      'xargs -n$n echo',
+      'nice --adjustment=$n make',
+      'timeout --kill-after=$k 5 make',
+      'nice -$x make',
+      // `n="5 git"`: the git boundary's command comes out of the option word.
+      'nice -n$n push origin main',
+    ])('%j reads uncertain (expandedName), never auto', (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.expandedName]);
+    });
+
+    it('"nice -n$n git push origin main" is never allow', () => {
+      expect(cell('nice -n$n git push origin main', policy).split(' / ')).not.toContain('allow');
+      expect(cell('nice -n$n git push origin main', policy)).toBe('ask / uncertain / uncertain');
+    });
+  });
+
+  it.each(['taskset -c$c make', 'chrt -p$p make'])(
+    'criterion (2): %j, a wrapper with no declared grammar, reads uncertain',
+    (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.expandedName]);
+    },
+  );
+
+  describe('criterion (3): a quoted or literal option word keeps its cell', () => {
+    it.each([
+      'nice -n5 make',
+      'nice -n "$n" make',
+      'nice -n"$n" make',
+      'nice "-n$n" make',
+      'timeout "$t" make',
+      // A declared grammar reads the four above before the generic branch; these reach it, so
+      // listing an option word whatever its quoting turns them uncertain (the canary's rows).
+      'taskset -c"$c" make',
+      'taskset "-c$c" make',
+      'chrt -p"$p" make',
+    ])('%j reads ask / auto / deny', (command) => {
+      expect(cell(command, policy)).toBe('ask / auto / deny');
+      expect(auto(command).evaluation.uncertainty).toEqual([]);
+    });
+
+    it.each(['nice -n"$n" git push origin main', 'nice "-n$n" git push origin main'])(
+      '%j reads the git boundary',
+      (command) => {
+        expect(cell(command, policy)).toBe('ask / git / git');
+      },
+    );
+
+    it.each(['nice -n $n make', 'timeout $t make'])('%j stays expandedName (WP-205)', (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.expandedName]);
+    });
+
+    it('"nice -n$n sudo id" stays blocked: the block list reads the command behind the option', () => {
+      expect(cell('nice -n$n sudo id', policy)).toBe('block / block / block');
     });
   });
 });
