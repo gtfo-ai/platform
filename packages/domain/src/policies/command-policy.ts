@@ -1232,34 +1232,141 @@ export const gitResolvesLongOption = (
   return matches.find((spelling) => GIT_HAZARD_SPELLINGS.has(spelling)) ?? (matches[0] as string);
 };
 
-/** Global options of `git` itself that take the next word as their value (git(1)). */
-export const GIT_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
-  '-C',
-  '-c',
-  '--git-dir',
-  '--work-tree',
-  '--namespace',
-  '--config-env',
-  '--super-prefix',
-  '--attr-source',
-]);
+/** How a git global option takes its value: the next word, after its own `=`, or none. */
+export type GitGlobalOptionShape = 'separate' | 'equals' | 'valueless';
 
-/** The subcommand of a `git` argv (`name` is `git` or `git-<sub>`), past git's own options. */
+/** Where {@link GIT_GLOBAL_OPTIONS} was read: `handle_options` in the run image's git. */
+export const GIT_GLOBAL_OPTIONS_SOURCE = {
+  git: 'git version 2.47.3',
+  url: 'https://raw.githubusercontent.com/git/git/v2.47.3/git.c',
+  retrieved: '2026-10-19',
+} as const;
+
+/**
+ * WP-218 (backlogs 621 and 620): git's global options before the verb, as **one declared grammar**
+ * read off `handle_options` in `git.c` at `v2.47.3` (the run image's git,
+ * {@link GIT_GLOBAL_OPTIONS_SOURCE}); `line` is the line of the option's branch there. A word that
+ * starts with `-` before the verb and is not declared here is **unreadable**: the git boundary
+ * answers it `uncertain` and `gitSubcommandOf` answers `null`, so an option this list misses fails
+ * closed instead of handing its value word to the boundary as the verb (`--shallow-file` was that
+ * omission until WP-218). TD-030 decision 1's admission test. Only {@link readGitGlobalOptions}
+ * reads it (a census in `unattended-commands.test.ts`).
+ *
+ * - `separate`: the next word is the value (an exact `strcmp`, then `(*argv)++`).
+ * - `equals`: the key is the spelling up to and including `=` (`skip_prefix`); the value is the rest.
+ * - `valueless`: no value. `--exec-path` without `=`, `--html-path`, `--man-path` and
+ *   `--info-path` print a path and **exit**; `-h`, `--help`, `-v` and `--version` end git's options
+ *   (`:167`) and become the verb `help` or `version` (`cmd_main`). Reading on past any of them for a
+ *   verb is stricter than git's own reading, which runs nothing after them.
+ *
+ * Not declared, so unreadable: `--super-prefix` (no occurrence in `git.c` at `v2.47.3`; it was in
+ * the value list before WP-218), `--shallow-file=` (git's branch is an exact `strcmp`), `-C=`,
+ * `-c=`, `-c<key>` written attached (the boundary still judges its key first: a stricter reading
+ * than git's, which refuses the word), and `--` (git answers *unknown option* at `:355`).
+ */
+export const GIT_GLOBAL_OPTIONS: Readonly<
+  Record<string, { readonly shape: GitGlobalOptionShape; readonly line: number }>
+> = {
+  '--help': { shape: 'valueless', line: 167 },
+  '-h': { shape: 'valueless', line: 167 },
+  '--version': { shape: 'valueless', line: 168 },
+  '-v': { shape: 'valueless', line: 168 },
+  '--exec-path': { shape: 'valueless', line: 174 },
+  '--exec-path=': { shape: 'equals', line: 174 },
+  '--html-path': { shape: 'valueless', line: 182 },
+  '--man-path': { shape: 'valueless', line: 186 },
+  '--info-path': { shape: 'valueless', line: 190 },
+  '-p': { shape: 'valueless', line: 194 },
+  '--paginate': { shape: 'valueless', line: 194 },
+  '-P': { shape: 'valueless', line: 196 },
+  '--no-pager': { shape: 'valueless', line: 196 },
+  '--no-lazy-fetch': { shape: 'valueless', line: 200 },
+  '--no-replace-objects': { shape: 'valueless', line: 205 },
+  '--git-dir': { shape: 'separate', line: 210 },
+  '--git-dir=': { shape: 'equals', line: 220 },
+  '--namespace': { shape: 'separate', line: 224 },
+  '--namespace=': { shape: 'equals', line: 234 },
+  '--work-tree': { shape: 'separate', line: 238 },
+  '--work-tree=': { shape: 'equals', line: 248 },
+  '--bare': { shape: 'valueless', line: 252 },
+  '-c': { shape: 'separate', line: 260 },
+  '--config-env': { shape: 'separate', line: 268 },
+  '--config-env=': { shape: 'equals', line: 276 },
+  '--literal-pathspecs': { shape: 'valueless', line: 278 },
+  '--no-literal-pathspecs': { shape: 'valueless', line: 282 },
+  '--glob-pathspecs': { shape: 'valueless', line: 286 },
+  '--noglob-pathspecs': { shape: 'valueless', line: 290 },
+  '--icase-pathspecs': { shape: 'valueless', line: 294 },
+  '--no-optional-locks': { shape: 'valueless', line: 298 },
+  '--shallow-file': { shape: 'separate', line: 302 },
+  '-C': { shape: 'separate', line: 308 },
+  '--list-cmds=': { shape: 'equals', line: 321 },
+  '--attr-source': { shape: 'separate', line: 335 },
+  '--attr-source=': { shape: 'equals', line: 345 },
+  '--no-advice': { shape: 'valueless', line: 350 },
+};
+
+/** One global option {@link readGitGlobalOptions} read: its spelling, its value, and its index. */
+export interface GitGlobalOption {
+  /** The option without `=` and value (`--git-dir` for `--git-dir=x`). */
+  readonly option: string;
+  /** Its value, or `null` for a valueless option and for a separate one at the end of the argv. */
+  readonly value: string | null;
+  /** The index of the option's own word in the words read. */
+  readonly index: number;
+}
+
+/** The one reading of git's words before the verb (WP-218). */
+export interface GitGlobalOptionReading {
+  /** The declared options before the verb (or before the undeclared word), in order. */
+  readonly options: readonly GitGlobalOption[];
+  /** The index of the verb, or `null` when there is none or an undeclared word stands first. */
+  readonly verb: number | null;
+  /** The index of the first word that starts with `-` and {@link GIT_GLOBAL_OPTIONS} does not declare. */
+  readonly undeclared: number | null;
+}
+
+/**
+ * **The** reader of git's global options (WP-218): `words` is a `git` argv after argv[0], dequoted.
+ * `gitSubcommandOf`, `unreadableGitWord` and the boundary's `checkGitArgv` all take the verb and
+ * the options before it from here, so they cannot read the same line differently.
+ */
+export const readGitGlobalOptions = (words: readonly string[]): GitGlobalOptionReading => {
+  const options: GitGlobalOption[] = [];
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index] as string;
+    if (!word.startsWith('-')) {
+      return { options, verb: index, undeclared: null };
+    }
+    const equals = word.indexOf('=');
+    const key = equals > 0 ? word.slice(0, equals + 1) : word;
+    const declared = Object.hasOwn(GIT_GLOBAL_OPTIONS, key) ? GIT_GLOBAL_OPTIONS[key] : undefined;
+    if (declared === undefined) {
+      return { options, verb: null, undeclared: index };
+    }
+    if (declared.shape === 'equals') {
+      options.push({ option: word.slice(0, equals), value: word.slice(equals + 1), index });
+    } else if (declared.shape === 'separate') {
+      options.push({ option: word, value: words[index + 1] ?? null, index });
+      index += 1;
+    } else {
+      options.push({ option: word, value: null, index });
+    }
+  }
+  return { options, verb: null, undeclared: null };
+};
+
+/**
+ * The subcommand of a `git` argv (`name` is `git` or `git-<sub>`), past git's own options — or
+ * `null` when an option word git's grammar does not declare stands first (WP-218), which fails
+ * closed: an unnamed subcommand reads every letter and keeps every floor.
+ */
 const gitSubcommandOf = (name: string, words: readonly string[]): string | null => {
   if (name !== 'git') {
     return name.slice('git-'.length);
   }
-  for (let index = 0; index < words.length; index += 1) {
-    const word = words[index] as string;
-    if (GIT_GLOBAL_VALUE_OPTIONS.has(word)) {
-      index += 1;
-    } else if (word === '--') {
-      return words[index + 1] ?? null;
-    } else if (!word.startsWith('-')) {
-      return word;
-    }
-  }
-  return null;
+  const { verb } = readGitGlobalOptions(words);
+  return verb === null ? null : (words[verb] as string);
 };
 
 /** The table of a subcommand, if the generated data has one (never an inherited property). */
@@ -1648,6 +1755,23 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     kind: 'trust',
     hazard:
       'a refspec pushes to a destination ref of its own choosing, so `git push origin agentic/x:main` writes main under an allow entry that names only agentic/*; a remote spelled as a URL is caught by the same colon',
+    // WP-218 (c), backlog 620: a predicate, so the verb is the one `readGitGlobalOptions` finds and
+    // `git -C . push origin HEAD:main` carries the floor as the bare line does. As a whole-line glob
+    // it could not see past a global option, and its token reading put `origin` where `*:*` stood.
+    tokens: ({ name, words }) => {
+      if (name === 'git-push') {
+        return words.some((word) => word.includes(':'));
+      }
+      if (name !== 'git') {
+        return false;
+      }
+      const { verb } = readGitGlobalOptions(words);
+      return (
+        verb !== null &&
+        (words[verb] as string).startsWith('push') &&
+        words.slice(verb + 1).some((word) => word.includes(':'))
+      );
+    },
   },
   {
     // Not scoped to `commit`, for `git * --exec*`'s reason and for a measured one. `git merge` is
@@ -8163,8 +8287,15 @@ export const commandWords = (fragment: string): readonly string[] =>
  * option before it (`git -$x push`). The git boundary decides by that word, so for a word nobody
  * can read it answers uncertain rather than its own verdict (`gitBoundaryViolation`). A global
  * option's value is not one (`-C $dir`; `-c`'s key is the boundary's three bands).
+ *
+ * WP-218: so is a literal word before the verb that starts with `-` and git's declared grammar
+ * ({@link GIT_GLOBAL_OPTIONS}) does not name — `git --shallow-file=x push …`, `git --super-prefix p/
+ * push …` — answered as `undeclared`. The verb and the options come from
+ * {@link readGitGlobalOptions}, the boundary's own reader.
  */
-export const unreadableGitWord = (command: string): string | null => {
+export const unreadableGitWord = (
+  command: string,
+): { readonly word: string; readonly reason: 'expands' | 'undeclared' } | null => {
   for (const stage of parseCommand(command).rawStages) {
     const words = argvShellWords(stage);
     for (const start of argvStarts(words).starts) {
@@ -8172,21 +8303,15 @@ export const unreadableGitWord = (command: string): string | null => {
       if (name === undefined || expandsAsName(name) || argv0Name(name) !== 'git') {
         continue;
       }
-      for (let index = 0; index < rest.length; index += 1) {
-        const raw = rest[index] as string;
-        if (expandsAsName(raw)) {
-          return raw;
-        }
-        const word = unquoteToken(raw);
-        if (GIT_GLOBAL_VALUE_OPTIONS.has(word)) {
-          index += 1;
-        } else if (!word.startsWith('-') || word === '--') {
-          const verb = word === '--' ? rest[index + 1] : undefined;
-          if (verb !== undefined && expandsAsName(verb)) {
-            return verb;
-          }
-          break;
-        }
+      const reading = readGitGlobalOptions(rest.map(unquoteToken));
+      const stop = reading.undeclared ?? reading.verb;
+      const read = [...reading.options.map(({ index }) => index), ...(stop === null ? [] : [stop])];
+      const expands = read.map((index) => rest[index] as string).find(expandsAsName);
+      if (expands !== undefined) {
+        return { word: expands, reason: 'expands' };
+      }
+      if (reading.undeclared !== null) {
+        return { word: rest[reading.undeclared] as string, reason: 'undeclared' };
       }
     }
   }

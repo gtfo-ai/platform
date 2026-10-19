@@ -60,7 +60,6 @@ import {
   commandWriteTargets,
   environmentNamePattern,
   evaluateCommand,
-  GIT_GLOBAL_VALUE_OPTIONS,
   type HazardousArgument,
   type HereDocumentOperator,
   hazardousArguments,
@@ -68,6 +67,7 @@ import {
   isLineContinuation,
   REDIRECTION_OPERATOR,
   type ResolvedCommandPolicy,
+  readGitGlobalOptions,
   readHereDocumentOperator,
   readsHereDocumentsAsScripts,
   splitCommandSegments,
@@ -583,48 +583,41 @@ const checkGitArgv = (argv: readonly string[], unread: UnreadKeys): string | nul
     subcommand = name.slice('git-'.length);
     args = rest;
   } else {
-    for (let index = 0; index < rest.length; index += 1) {
-      const word = rest[index] as string;
-      const option = optionName(word);
-      if (GIT_GLOBAL_VALUE_OPTIONS.has(word) || (word.includes('=') && word.startsWith('--'))) {
-        const value = GIT_GLOBAL_VALUE_OPTIONS.has(word)
-          ? (rest[index + 1] ?? '')
-          : word.slice(option.length + 1);
-        if (GIT_GLOBAL_VALUE_OPTIONS.has(word)) {
-          index += 1;
-        }
-        if (option === '-c' || option === '--config-env') {
-          const key = value.split('=')[0] as string;
-          if (isGuardedGitConfigKey(key)) {
-            return `\`git ${option} ${value}\` sets \`${key}\` for this command — a remote, a URL rewrite, a credential, a hook path, an SSH command, an alias or a transport — and a run may not change where git connects or what it runs`;
-          }
-          noteUnreadKey(key, unread);
-        }
-        if (option === '--exec-path') {
-          return '`git --exec-path=<dir>` runs git’s subcommands from a directory the policy has not read';
-        }
-        if (option === '--git-dir' || option === '--work-tree') {
-          return `\`git ${option}\` ${REPOSITORY_OPTION_RULE}`;
-        }
-        continue;
-      }
-      if (word.startsWith('-c') && word.length > 2 && !word.startsWith('--')) {
-        const key = word.slice(2).split('=')[0] as string;
+    // WP-218: the verb and the options before it are `readGitGlobalOptions`' — git's declared
+    // grammar — and an undeclared option word ends the reading: no verb is judged here, and
+    // `gitBoundaryViolation` answers it uncertain (`unreadableGitWord`).
+    const reading = readGitGlobalOptions(rest);
+    for (const { option, value: given } of reading.options) {
+      const value = given ?? '';
+      if (option === '-c' || option === '--config-env') {
+        const key = value.split('=')[0] as string;
         if (isGuardedGitConfigKey(key)) {
-          return `\`git ${word}\` sets \`${key}\` for this command, and a run may not change where git connects or what it runs`;
+          return `\`git ${option} ${value}\` sets \`${key}\` for this command — a remote, a URL rewrite, a credential, a hook path, an SSH command, an alias or a transport — and a run may not change where git connects or what it runs`;
         }
         noteUnreadKey(key, unread);
-        continue;
       }
-      if (word === '--bare') {
+      if (option === '--exec-path' && given !== null) {
+        return '`git --exec-path=<dir>` runs git’s subcommands from a directory the policy has not read';
+      }
+      if (option === '--git-dir' || option === '--work-tree') {
+        return `\`git ${option}\` ${REPOSITORY_OPTION_RULE}`;
+      }
+      if (option === '--bare') {
         return `\`git --bare\` ${REPOSITORY_OPTION_RULE}`;
       }
-      if (word.startsWith('-')) {
-        continue;
+    }
+    const undeclared = reading.undeclared === null ? undefined : rest[reading.undeclared];
+    // `-c<key>` written attached: git refuses the word, and its key is still judged first.
+    if (undeclared?.startsWith('-c') && undeclared.length > 2 && !undeclared.startsWith('--')) {
+      const key = undeclared.slice(2).split('=')[0] as string;
+      if (isGuardedGitConfigKey(key)) {
+        return `\`git ${undeclared}\` sets \`${key}\` for this command, and a run may not change where git connects or what it runs`;
       }
-      subcommand = word;
-      args = rest.slice(index + 1);
-      break;
+      noteUnreadKey(key, unread);
+    }
+    if (reading.verb !== null) {
+      subcommand = rest[reading.verb] as string;
+      args = rest.slice(reading.verb + 1);
     }
   }
   if (subcommand === null) {
@@ -995,18 +988,30 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
   }
   // WP-201 site (iii): a verb nobody can read is uncertain, not a refusal — the boundary says what
   // a verb does, and for this one it cannot (WP-197 (b)'s reason).
-  const word = unreadableGitWord(command);
-  if (word !== null) {
-    return { kind: 'uncertain', fragment: command, detail: unreadableGitVerb(word) };
+  const unreadable = unreadableGitWord(command);
+  if (unreadable?.reason === 'expands') {
+    return { kind: 'uncertain', fragment: command, detail: unreadableGitVerb(unreadable.word) };
   }
-  return unread === null
+  if (unread !== null) {
+    return { kind: 'uncertain', fragment: unread.fragment, detail: unreadGitConfigKey(unread.key) };
+  }
+  // WP-218: an option word git's declared grammar does not name. After the unread key, so an
+  // attached `-c<key>` (itself undeclared) is reported by the key it sets.
+  return unreadable === null
     ? null
-    : { kind: 'uncertain', fragment: unread.fragment, detail: unreadGitConfigKey(unread.key) };
+    : { kind: 'uncertain', fragment: command, detail: undeclaredGitOption(unreadable.word) };
 };
 
 /** WP-201: the reason for {@link unreadableGitWord}'s word, read as "… carries <this>." */
 export const unreadableGitVerb = (word: string): string =>
   `a git subcommand or global option, \`${word}\`, that the shell expands when it runs — write it literally; the platform reads what git does from the words as written and cannot read a word the shell finishes`;
+
+/**
+ * WP-218: the reason for a word before git's verb that git's declared grammar does not name
+ * (`GIT_GLOBAL_OPTIONS`), read as "… carries <this>."
+ */
+export const undeclaredGitOption = (word: string): string =>
+  `a git global option, \`${word}\`, that the platform's declared list of git's options (read from git's own source) does not name — the platform reads git's options by that list, so it cannot tell whether the next word is this option's value or git's subcommand; write the command without it`;
 
 // ── the decision ─────────────────────────────────────────────────────────────
 

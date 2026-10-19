@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import type { CommandPolicy } from '@platform/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { censusPaths, censusText } from '../../../../scripts/census-files.mjs';
 import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
@@ -20,6 +21,8 @@ import {
   expansionCompletesBlockEntry,
   FLOOR_OPTION_READINGS,
   flagValueHidesBlockEntry,
+  GIT_GLOBAL_OPTIONS,
+  GIT_GLOBAL_OPTIONS_SOURCE,
   HAZARDOUS_ARGUMENTS,
   type HazardousArgument,
   hazardousArguments,
@@ -35,6 +38,7 @@ import {
   wrappersWithoutGrammar,
   xargsCompletesBlockEntry,
 } from './command-policy.js';
+import { GIT_LONG_OPTIONS_SOURCE } from './git-long-options.generated.js';
 import {
   computesCommandName,
   decideUnattendedCommand,
@@ -43,6 +47,7 @@ import {
   isGuardedGitConfigKey,
   isInertGitConfigKey,
   UNATTENDED_ALTERNATIVES,
+  undeclaredGitOption,
   unreadableGitVerb,
 } from './unattended-commands.js';
 
@@ -3580,8 +3585,8 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
       ['git -C . $verb origin main', '$verb'],
       ['nice -n 5 git $verb origin main', '$verb'],
       ["sh -c 'git $1 origin main' _ push", '$1'],
-      // A global option before the verb; a definite refusal elsewhere wins (`git -$x push origin
-      // main` is the boundary's for `main`).
+      // A global option before the verb. Since WP-218 `git -$x push origin main` is uncertain too:
+      // an unreadable option word ends the reading, so no verb after it is judged.
       ['git -$x status', '-$x'],
     ])('%j is uncertain, naming %j', (command, word) => {
       expectCells(command, 'ask / uncertain / uncertain');
@@ -5448,5 +5453,221 @@ describe('WP-217, backlogs 616 and 617: a floor reads a word after an option bot
     ])('%j reads %s (pinned)', (command, expected) => {
       expect(cell(command, policy)).toBe(expected);
     });
+  });
+});
+
+describe('WP-218, backlogs 621 and 620: git’s global options are one declared grammar', () => {
+  // The cells are PROGRESS § WP-218 (a)'s measurement; nothing executes here.
+  const floored = (command: string): readonly string[] =>
+    hazardousArguments(command).map((entry) => entry.pattern);
+
+  describe('criterion (1): an option the grammar declares hands git its value, not its verb', () => {
+    it('"git --shallow-file x push origin HEAD:main" reads the boundary’s cell', () => {
+      expect(cell('git --shallow-file x push origin HEAD:main', policy)).toBe('ask / git / git');
+      expect(gitBoundaryViolation('git --shallow-file x push origin HEAD:main')).toMatchObject({
+        kind: 'boundary',
+      });
+    });
+
+    it.each([
+      ['git --shallow-file clone commit -on -m y src/x.ts', 'git commit -on -m y src/x.ts'],
+      ['git --shallow-file am commit -pn -m y', 'git commit -pn -m y'],
+    ])('%j reads the cell %j reads: hazard under auto', (command, bare) => {
+      expect(cell(command, policy)).toBe(cell(bare, policy));
+      expect(cell(command, policy)).toBe('ask / hazard / hazard');
+      expect(floored(command)).toContain('git commit* -n*');
+    });
+
+    it.each([
+      ['git --no-such-option x push origin HEAD:main', '--no-such-option'],
+      ['git --super-prefix p/ push origin HEAD:main', '--super-prefix'],
+    ])('%j reads uncertain under auto and deny, naming %j', (command, word) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(gitBoundaryViolation(command)).toEqual({
+        kind: 'uncertain',
+        fragment: command,
+        detail: undeclaredGitOption(word),
+      });
+      expect(auto(command).reason).toContain(undeclaredGitOption(word));
+    });
+  });
+
+  describe('criterion (2): the controls', () => {
+    it('"git --shallow-file x status" keeps "git status"’s reading: no refusal, no floor', () => {
+      // Not allow: the allow entry `git status*` does not read past a global option (unchanged).
+      expect(gitBoundaryViolation('git --shallow-file x status')).toBeNull();
+      expect(floored('git --shallow-file x status')).toEqual(floored('git status'));
+      expect(cell('git --shallow-file x status', policy)).toBe('ask / auto / deny');
+    });
+
+    it('"git --shallow-file=x push origin agentic/x" reads uncertain: git refuses the spelling', () => {
+      const command = 'git --shallow-file=x push origin agentic/x';
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).reason).toContain(undeclaredGitOption('--shallow-file=x'));
+    });
+
+    it.each([
+      ['git --no-pager commit -n -m y', 'ask / hazard / hazard'],
+      ['git -C . commit -n -m y', 'ask / hazard / hazard'],
+      ['git --exec-path=/tmp/x status', 'ask / git / git'],
+      ['git --bare status', 'ask / git / git'],
+      ['git -ccore.hooksPath=x commit -m y', 'ask / git / git'],
+    ])('%j keeps %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+  });
+
+  describe('criterion (3): the census', () => {
+    it('the grammar’s git is the run image’s git the long-option tables were read from', () => {
+      expect(
+        GIT_GLOBAL_OPTIONS_SOURCE.git,
+        'GIT_GLOBAL_OPTIONS_SOURCE.git must equal GIT_LONG_OPTIONS_SOURCE.git: re-read handle_options at the image’s git',
+      ).toBe(GIT_LONG_OPTIONS_SOURCE.git);
+      const version = /^git version (\d+\.\d+\.\d+)$/.exec(GIT_GLOBAL_OPTIONS_SOURCE.git)?.[1];
+      expect(GIT_GLOBAL_OPTIONS_SOURCE.url).toBe(
+        `https://raw.githubusercontent.com/git/git/v${version}/git.c`,
+      );
+    });
+
+    it('every option cites its branch in handle_options (git.c:153–355 at the tag)', () => {
+      for (const [word, { shape, line }] of Object.entries(GIT_GLOBAL_OPTIONS)) {
+        expect(word.startsWith('-'), word).toBe(true);
+        expect(word.endsWith('='), word).toBe(shape === 'equals');
+        expect(line, word).toBeGreaterThan(153);
+        expect(line, word).toBeLessThan(355);
+      }
+      expect(GIT_GLOBAL_OPTIONS['--shallow-file']).toEqual({ shape: 'separate', line: 302 });
+      expect(Object.keys(GIT_GLOBAL_OPTIONS)).not.toContain('--super-prefix');
+      expect(Object.keys(GIT_GLOBAL_OPTIONS)).not.toContain('--shallow-file=');
+    });
+
+    /**
+     * Scope: every `.ts`/`.tsx` source under `packages/` and `apps/` that git knows about — tracked,
+     * staged or untracked and not ignored (`censusPaths`) — except tests. Its blind spots: a reader
+     * reached through another name (`const g = GIT_GLOBAL_OPTIONS` is itself a reader and is
+     * counted; a computed property of a module namespace is not), and anything outside those two
+     * directories.
+     */
+    it('exactly one function reads the grammar: readGitGlobalOptions', () => {
+      const root = fileURLToPath(new URL('../../../../', import.meta.url));
+      const files = censusPaths(root, {
+        pathspecs: ['*.ts', '*.tsx'],
+        include: (path: string) =>
+          (path.startsWith('packages/') || path.startsWith('apps/')) && !/\.test\.tsx?$/.test(path),
+      });
+      expect(files).toContain('packages/domain/src/policies/command-policy.ts');
+      const readers = files.flatMap((file: string) => {
+        const source = withoutComments(censusText(root, file));
+        return [...source.matchAll(/\bGIT_GLOBAL_OPTIONS\b(?!_)/g)].map(({ index }) => {
+          // Up to the name's end, so the declaration names itself.
+          const before = source.slice(0, index + 'GIT_GLOBAL_OPTIONS'.length);
+          const declared = [...before.matchAll(/^(?:export )?const (\w+)/gm)].at(-1)?.[1];
+          return `${file} › ${declared ?? '(module)'}`;
+        });
+      });
+      expect([...new Set(readers)]).toEqual([
+        'packages/domain/src/policies/command-policy.ts › GIT_GLOBAL_OPTIONS',
+        'packages/domain/src/policies/command-policy.ts › readGitGlobalOptions',
+      ]);
+    });
+
+    /**
+     * Review round 1: every declared option's shape, held by a list written apart from the grammar
+     * (each read off `handle_options` at `v2.47.3`), and by the cell the shape dictates — a valueless
+     * option declared as taking the next word swallows the verb (`git --literal-pathspecs push …`
+     * would read `auto`), so each line reads the boundary's cell.
+     */
+    const EXPECTED_SHAPES: readonly (readonly [string, 'separate' | 'equals' | 'valueless'])[] = [
+      ['--help', 'valueless'],
+      ['-h', 'valueless'],
+      ['--version', 'valueless'],
+      ['-v', 'valueless'],
+      ['--exec-path', 'valueless'],
+      ['--exec-path=', 'equals'],
+      ['--html-path', 'valueless'],
+      ['--man-path', 'valueless'],
+      ['--info-path', 'valueless'],
+      ['-p', 'valueless'],
+      ['--paginate', 'valueless'],
+      ['-P', 'valueless'],
+      ['--no-pager', 'valueless'],
+      ['--no-lazy-fetch', 'valueless'],
+      ['--no-replace-objects', 'valueless'],
+      ['--git-dir', 'separate'],
+      ['--git-dir=', 'equals'],
+      ['--namespace', 'separate'],
+      ['--namespace=', 'equals'],
+      ['--work-tree', 'separate'],
+      ['--work-tree=', 'equals'],
+      ['--bare', 'valueless'],
+      ['-c', 'separate'],
+      ['--config-env', 'separate'],
+      ['--config-env=', 'equals'],
+      ['--literal-pathspecs', 'valueless'],
+      ['--no-literal-pathspecs', 'valueless'],
+      ['--glob-pathspecs', 'valueless'],
+      ['--noglob-pathspecs', 'valueless'],
+      ['--icase-pathspecs', 'valueless'],
+      ['--no-optional-locks', 'valueless'],
+      ['--shallow-file', 'separate'],
+      ['-C', 'separate'],
+      ['--list-cmds=', 'equals'],
+      ['--attr-source', 'separate'],
+      ['--attr-source=', 'equals'],
+      ['--no-advice', 'valueless'],
+    ];
+    const VALUES: Readonly<Record<string, string>> = { '-c': 'user.name=x', '--config-env': 'n=V' };
+
+    it('the expected list and the grammar name the same options', () => {
+      expect(EXPECTED_SHAPES.map(([word]) => word).sort()).toEqual(
+        Object.keys(GIT_GLOBAL_OPTIONS).sort(),
+      );
+    });
+
+    it.each(EXPECTED_SHAPES)(
+      '%j is declared %s and reads the push’s boundary cell',
+      (word, shape) => {
+        expect(GIT_GLOBAL_OPTIONS[word]?.shape).toBe(shape);
+        const option =
+          shape === 'separate'
+            ? `${word} ${VALUES[word] ?? 'x'}`
+            : shape === 'equals'
+              ? `${word}x`
+              : word;
+        expect(cell(`git ${option} push origin HEAD:main`, policy)).toBe('ask / git / git');
+      },
+    );
+  });
+
+  describe('criterion (4), backlog 620: the push floor is read past git’s global options', () => {
+    it.each([
+      'git push origin HEAD:main',
+      'git -C . push origin agentic/x:main',
+      'git --no-pager push origin HEAD:main',
+      'git -p push origin HEAD:main',
+      'git -C . push origin HEAD:main',
+      'git -c user.name=x push origin HEAD:main',
+      'git --git-dir .git push origin HEAD:main',
+      'git --work-tree . push origin HEAD:main',
+      'git --namespace n push origin HEAD:main',
+      'git --config-env n=V push origin HEAD:main',
+      'git --attr-source HEAD push origin HEAD:main',
+      'git --git-dir=.git push origin HEAD:main',
+      'git --work-tree=. push origin HEAD:main',
+      'git --namespace=n push origin HEAD:main',
+      'git --config-env=n=V push origin HEAD:main',
+      'git --attr-source=HEAD push origin HEAD:main',
+      'git --shallow-file x push origin HEAD:main',
+    ])('%j carries "git push* *:*" and reads ask / git / git', (command) => {
+      expect(floored(command)).toContain('git push* *:*');
+      expect(cell(command, policy)).toBe('ask / git / git');
+    });
+
+    it.each(['git push origin agentic/x', 'git -C . push origin agentic/x', 'git -C a:b status'])(
+      'control: %j does not carry it',
+      (command) => {
+        expect(floored(command)).not.toContain('git push* *:*');
+      },
+    );
   });
 });
