@@ -98,9 +98,10 @@
  * package runner, `git` or a block entry's first token, read with its quotes off, split on
  * operators and its braces expanded (`fakeroot sudo id`, `parallel git push ::: origin`,
  * `sg grp 'git push origin main'` were `unattended_auto`) — is uncertain (`unknownProgramReasons`).
- * One the shell expands is not read (ruling (c), split to a follow-up row). The run image's own wrappers
- * are on the sets with their grammar: `chroot`, `setpriv`, `setarch`, `prlimit`, `runcon`,
- * `start-stop-daemon` and the rest on `ARGV0_WRAPPERS`, `sg` and `script -c` read as a handed
+ * One the shell expands is not read (WP-207, backlog 603: the residual below). The run image's own
+ * wrappers are on the sets with their grammar: `chroot`, `setpriv`, `setarch`, `prlimit`, `runcon`,
+ * `start-stop-daemon`, `ssh-agent`, `fstab-decode`, `choom` and the rest on `ARGV0_WRAPPERS`, the
+ * dynamic loader by its name pattern (`DYNAMIC_LOADER_NAME`), `sg` and `script -c` read as a handed
  * script, `newgrp` as a shell on its input, and a wrapper that runs `$SHELL` when it is given no
  * command (`linux64`, `setarch`, `unshare`, `chroot`, …) as a shell on its input too (backlog 602).
  *
@@ -131,7 +132,10 @@
  * and `xargs` feeding a known command that is not a wrapper, `find -exec`, `git`, a shell or a verb
  * a `command`-kind floor names — WP-164 made `xargs make`, whose input can name assignments and
  * `--eval` as well as targets, uncertain), an argument the shell expands given to a program the policy does not know
- * (`frobnicate $x id`, `find -exec frobnicate {}`, `xargs frobnicate` — WP-203's split follow-up),
+ * (`frobnicate $x id`, `find -exec frobnicate {}`, `xargs frobnicate` — WP-207: the non-literal half refused
+ * 80 of 286 ordinary agent lines, 38 of them `"$f"` alone, no syntactic narrowing recovers them
+ * without reopening the class, and a wrapper the image ships is listed by name, so a wrapper the
+ * image does not ship, handed an expansion, is the sandbox's: BD-025, 2026-10-06, decision 1),
  * a project's own wide entry (`tar *` admits `tar --to-command`: its allow entry is its door), a
  * `$'…'` or locale string, a prompt variable or an alias set by
  * a start-up file, an option's value attached to its option (`read -aNAME`), a name taken by a
@@ -2168,6 +2172,14 @@ const SETARCH_NAMES: readonly string[] = [
   'parisc64',
 ];
 
+/**
+ * The node image's entrypoint (`/usr/local/bin/docker-entrypoint.sh` in `platform-runtime:s16`,
+ * read there): `node "$@"` when its first argument starts with `-` or names no command, else
+ * `exec "$@"`. It has no options of its own, so {@link commandNameWalk} reads a leading option as
+ * `node`'s and stops at the entrypoint (WP-207).
+ */
+const NODE_ENTRYPOINT = 'docker-entrypoint.sh';
+
 const ARGV0_WRAPPERS: ReadonlySet<string> = new Set([
   'env',
   'command',
@@ -2219,6 +2231,23 @@ const ARGV0_WRAPPERS: ReadonlySet<string> = new Set([
   'prlimit',
   'uclampset',
   'start-stop-daemon',
+  // WP-207 (backlog 603): the rest of the run image's exec shims, from a reading of every
+  // `/usr/bin`, `/usr/sbin` and `/usr/local/bin` name in `platform-runtime:s16` (PROGRESS § WP-207;
+  // the dynamic loader joins by `DYNAMIC_LOADER_NAME`). openssh-client's `ssh-agent … command [arg
+  // …]` (https://manpages.debian.org/trixie/openssh-client/ssh-agent.1.en.html), sysvinit-utils'
+  // `fstab-decode COMMAND [ARGUMENT …]` (…/sysvinit-utils/fstab-decode.8.en.html), util-linux's
+  // `choom -n number [--] command` and `switch_root newroot init` (…/util-linux/choom.1.en.html,
+  // …/util-linux/switch_root.8.en.html), debconf's `debconf [options] command` and
+  // `debconf-apt-progress [--] command` (…/debconf/debconf.1.en.html,
+  // …/debconf/debconf-apt-progress.1.en.html), and the node image's `docker-entrypoint.sh`, which
+  // ends `exec "$@"` (read in the image).
+  'ssh-agent',
+  'fstab-decode',
+  'choom',
+  'switch_root',
+  'debconf',
+  'debconf-apt-progress',
+  NODE_ENTRYPOINT,
   // Not `sudo`: the block list bans it by name (`sudo *`), and peeling it would report the inner
   // command's match instead of that one (the `denied-tool` golden pins the reason a run reads).
   'builtin',
@@ -2249,6 +2278,27 @@ const ARGV0_WRAPPERS: ReadonlySet<string> = new Set([
   // as a `coproc` command and were `unattended_auto` (measured).
   'coproc',
 ]);
+
+/**
+ * The dynamic loader, which runs a program given to it "directly": `/lib/ld-linux.so.* [OPTIONS]
+ * [PROGRAM [ARGUMENTS]]` (WP-207, backlog 603; https://manpages.debian.org/trixie/manpages/ld.so.8.en.html).
+ * Its file name carries the architecture — `ld-linux-aarch64.so.1` on arm64, `ld-linux-x86-64.so.2`
+ * on amd64 (https://packages.debian.org/trixie/arm64/libc6/filelist,
+ * https://packages.debian.org/trixie/amd64/libc6/filelist), and `/usr/bin/ld.so` links to it in
+ * `platform-runtime:s16` — so it joins {@link ARGV0_WRAPPERS} by this declared pattern of the
+ * loader's own spellings, tested where that set is consulted ({@link isArgv0Wrapper}, its grammar
+ * key, and the judged names of `unknownProgramReasons`, which derive from it) and nowhere else.
+ */
+const DYNAMIC_LOADER_NAME =
+  /^(?:ld-linux-[\s\S]*\.so\.[\s\S]*|ld-linux\.so\.[\s\S]*|ld-musl-[\s\S]*\.so\.[\s\S]*|ld64\.so\.[\s\S]*|ld\.so)$/;
+
+/** Whether a name (an `argv0Name`) is on {@link ARGV0_WRAPPERS} or is the dynamic loader. */
+const isArgv0Wrapper = (name: string): boolean =>
+  ARGV0_WRAPPERS.has(name) || DYNAMIC_LOADER_NAME.test(name);
+
+/** The key of a wrapper's grammar: the loader's spellings share one ({@link DYNAMIC_LOADER_NAME}). */
+const wrapperGrammarKey = (name: string): string =>
+  DYNAMIC_LOADER_NAME.test(name) ? 'ld.so' : name;
 
 /**
  * One token with the shell's quoting and escaping taken off, which is what the program on the
@@ -2309,7 +2359,7 @@ const isAssignment = (token: string): boolean =>
   /^[A-Za-z_][A-Za-z0-9_]*=/.test(unquoteToken(token));
 
 const isWrapperToken = (token: string): boolean =>
-  ARGV0_WRAPPERS.has(argv0Name(token)) || isAssignment(token);
+  isArgv0Wrapper(argv0Name(token)) || isAssignment(token);
 
 /**
  * The name a package runner runs under: `argv0Name` with corepack's version pin taken off, so
@@ -4822,8 +4872,7 @@ const commandPositions = (argv: readonly ShellWord[]): CommandStarts => {
   const walk = walkCommandStarts(raws, isWrapperAt, (raw) => isFlagToken(unquoteToken(raw)));
   const isWrapper =
     start < argv.length &&
-    (ARGV0_WRAPPERS.has(argv0Name(raws[start] as string)) ||
-      runnerSubcommandAt(raws, start) !== null);
+    (isArgv0Wrapper(argv0Name(raws[start] as string)) || runnerSubcommandAt(raws, start) !== null);
   return {
     starts: (isWrapper ? walk.starts.filter((position) => position >= start) : [start]).filter(
       (position) => position < argv.length,
@@ -4972,6 +5021,26 @@ const WRAPPER_FLAGS_WITHOUT_VALUE: Readonly<Record<string, ReadonlySet<string>>>
     '-v',
     '--verbose',
   ]),
+  // WP-207: from the manual each `ARGV0_WRAPPERS` entry (and `DYNAMIC_LOADER_NAME`) cites. `--list`,
+  // `--verify` and `--list-*` run nothing; read as a wrapper anyway, the line only over-asks.
+  'ld.so': new Set([
+    '--inhibit-cache',
+    '--list',
+    '--list-diagnostics',
+    '--list-tunables',
+    '--verify',
+  ]),
+  'ssh-agent': new Set(['-c', '-s', '-d', '-D', '-k']),
+  choom: new Set(['-h', '--help', '-V', '--version']),
+  switch_root: new Set(['-h', '--help', '-V', '--version']),
+  debconf: new Set(['--terse']),
+  'debconf-apt-progress': new Set([
+    '--config',
+    '--start',
+    '--stop',
+    '--no-progress',
+    '--logstderr',
+  ]),
 };
 /**
  * Wrappers whose first operand is not the command (`flock FILE cmd`, `su USER …`, `timeout DURATION
@@ -4989,6 +5058,8 @@ const WRAPPER_OPERAND: ReadonlySet<string> = new Set([
   'chroot',
   'runcon',
   'setarch',
+  // WP-207: `switch_root NEWROOT INIT` (the manual `ARGV0_WRAPPERS` cites).
+  'switch_root',
 ]);
 
 /**
@@ -5032,6 +5103,14 @@ const commandNameWalk = (
     if (value === '[' || value === '[[') {
       break;
     }
+    if (
+      wrapper === NODE_ENTRYPOINT &&
+      argv0Name(tokens[index - 1] ?? '') === NODE_ENTRYPOINT &&
+      isFlagToken(value)
+    ) {
+      // `docker-entrypoint.sh -e '…'` is `node -e '…'`: the entrypoint is the command.
+      return { words, command: index - 1, wrappers: wrappers.slice(0, -1) };
+    }
     if (afterWrapper && isFlagToken(value)) {
       // Fail closed (backlog 531, folded into WP-161): an option written without `=` may take the
       // next word as its value whatever its shape (`env -u foo`, `taskset -c 0-3`, `timeout -s
@@ -5044,7 +5123,7 @@ const commandNameWalk = (
         !value.includes('=') &&
         next !== undefined &&
         !isFlagToken(unquoteToken(next)) &&
-        !(WRAPPER_FLAGS_WITHOUT_VALUE[wrapper]?.has(value) ?? false)
+        !(WRAPPER_FLAGS_WITHOUT_VALUE[wrapperGrammarKey(wrapper)]?.has(value) ?? false)
       ) {
         words.push(next);
         index += 1;
@@ -5064,7 +5143,7 @@ const commandNameWalk = (
     if (expandsAsName(token)) {
       break;
     }
-    if (!(ARGV0_WRAPPERS.has(name) || found !== null || index === runnerSubcommand)) {
+    if (!(isArgv0Wrapper(name) || found !== null || index === runnerSubcommand)) {
       // A package runner's own words before its exec subcommand (`yarn workspace a exec …`, `pnpm m
       // exec …`) are not the command, and one whose subcommand cannot be determined (`yarn
       // workspaces …`, `npm explore`) runs a command no walk names (WP-203).
@@ -5237,6 +5316,11 @@ const SHELL_SYNTAX_WORDS: ReadonlySet<string> = new Set([
 /**
  * The names that run a command (WP-203 ruling (b)): every wrapper — the string wrappers included —
  * the shells, the package runners and `git`. Exported for the valve's census.
+ *
+ * Not {@link NODE_ENTRYPOINT} (WP-207): it is a wrapper only when its first argument names a
+ * command, and otherwise `node` with its arguments, which the walk then stops at and the scan reads
+ * as an unknown program's; and a name ending `.sh` here would be judged in every `*.sh` glob
+ * (`shellcheck scripts/*.sh` read uncertain, measured on the 286-line corpus).
  */
 export const PROGRAMS_THAT_RUN_A_COMMAND: ReadonlySet<string> = new Set(
   [
@@ -5248,7 +5332,7 @@ export const PROGRAMS_THAT_RUN_A_COMMAND: ReadonlySet<string> = new Set(
     ...SCRIPT_SHELLS,
     ...STRING_WRAPPERS,
     'git',
-  ].filter((name) => !SHELL_SYNTAX_WORDS.has(name)),
+  ].filter((name) => !SHELL_SYNTAX_WORDS.has(name) && name !== NODE_ENTRYPOINT),
 );
 
 /**
@@ -5714,7 +5798,7 @@ const boundedNameIn = (raw: string, judged: (name: string) => boolean): string |
  *
  * **Ruling (c), the non-literal half, is not built** (the split clause, orchestrator's ruling at
  * WP-203 review round 1): an argument the shell expands (`frobnicate $x id`), `xargs` input into an
- * unknown program and `find -exec <unknown> {}` are the follow-up row's. The command is found by
+ * unknown program and `find -exec <unknown> {}` are the stated residual (WP-207, with its number). The command is found by
  * {@link commandNameWalk}, past the wrappers it knows.
  */
 const unknownProgramReasons = (
@@ -5751,6 +5835,7 @@ const unknownProgramReasons = (
   const blockNames = firstTokens(policy.block);
   const judged = (candidate: string): boolean =>
     JUDGED_NAMES.has(candidate) ||
+    DYNAMIC_LOADER_NAME.test(candidate) ||
     blockNames.some((token) => namesProgram(token, candidate, candidate));
   const judgedNames = [
     ...JUDGED_NAMES,
@@ -5980,7 +6065,7 @@ export const XARGS_FLOORED_VERBS: ReadonlySet<string> = new Set(
  * — which fails closed the same way.
  */
 const xargsRunsItsInput = (name: string, args: readonly ShellWord[]): boolean =>
-  (ARGV0_WRAPPERS.has(name) && !SCRIPT_SHELLS.has(name)) ||
+  (isArgv0Wrapper(name) && !SCRIPT_SHELLS.has(name)) ||
   // WP-196 (e): every package runner, whatever follows it — the input can be `exec` and a command.
   Object.hasOwn(RUNNER_EXEC_SUBCOMMANDS, name) ||
   [...XARGS_FLOORED_VERBS].some((verb) => name.startsWith(verb)) ||

@@ -16737,6 +16737,26 @@ The second reason covers a **file** the run wrote, which the platform cannot rea
 
 **Depends on** WP-206 being merged (`FLOORED_NAMES`, `COMMAND_READERS` exported for the census). Nit-adjacent; it may fold into whichever row next touches the planner's tables.
 
+### 608. **`sentry-cli monitors run <slug> -- <command>` is a subcommand-form wrapper the policy does not know: `sentry-cli monitors run m -- $x` reads `auto`, so an expanded name behind it runs under `auto`** (TODO, **minor**: a literal judged name behind `--` already reads `uncertain` through WP-203 (b), measured, so `sentry-cli monitors run m -- git push origin main` does not read `auto`. What is left is the non-literal residual of 603, in a CLI the stock image ships. `sentry-cli` 3.7.0 is in `platform-runtime` (`docker/runtime.Dockerfile:49`, `:77`, `:164`). Found by WP-207's implementer, session 17 (*Discovered work*). The refiner read the tables and Sentry's documentation and ran nothing. **No work package owns it — an architect pass places it.**)
+
+**What is wrong.** Sentry's CLI runs a command under a cron monitor. The policy reads `sentry-cli` as the command and `monitors run m -- …` as its arguments. So the scan treats the wrapped command as an unknown program's arguments, not as a command. No name set can express this: the command starts after a subcommand pair and a slug. It is WP-205's subcommand-grammar shape, the same shape `RUNNER_EXEC_SUBCOMMANDS` (`packages/domain/src/policies/command-policy.ts:2131`) gives `npm exec` and `pnpm dlx`.
+
+**Evidence.**
+- WP-207's notes, *Discovered work*, quoted: *"A literal judged name after it reads uncertain (WP-203 (b), measured). `sentry-cli monitors run m -- $x` reads `auto` (measured): the residual, but in a CLI the stock image ships."*
+- The implementer's claim that the command runs was *"by recollection of Sentry's CLI and `[unverified]`; no manual was read"*. The refiner found the form documented at https://docs.sentry.io/cli/crons/ (read 2026-10-19), which gives `sentry-cli monitors run <monitor_slug> -- <command> <args>` and the example `sentry-cli monitors run my-monitor-slug -- node path/to/file.js`. The same page documents the valued options `-e`, `-s`/`--schedule`, `--check-in-margin`, `--max-runtime` and `--timezone`. That page is unversioned. Pinned 3.7.0's `--help` was not read, and the command was not run.
+- The line is not an `allow` path. `COMMAND_ALLOW_BY_SKILL`'s `sentry-issue` entry (`packages/application/src/pipeline/planner.ts:340-343`) names only `issues list *`, `events list *` and `issues --help`. So the line reaches the unattended scan as an unlisted line.
+
+**What it costs to leave.** Under `auto`, `sentry-cli monitors run m -- $x` with `x=sudo` or `x=git` runs whatever the expansion names, the same as `frobnicate $x id` (603's residual). Sentry's CLI is in every run image, but the run holds no Sentry credential unless a binding provides one (the skill's own docblock). *Needs measurement*: whether an unauthenticated `sentry-cli` 3.7.0 still runs the command when its check-in fails, in `platform-runtime` with an `echo` marker.
+
+**Done when** the subcommand grammar names `sentry-cli`'s `monitors run` form, with its valued options cited from the manual at the pinned version. Then:
+- `sentry-cli monitors run m -- git push origin main` reads the git boundary;
+- `… -- sudo id` reads `block`;
+- `… -- $x` reads `uncertain` (`expandedName`).
+
+Controls: `sentry-cli issues list --max-rows 20` keeps `allow`. **Canary:** remove the entry, and the `sudo` row fails by reading `uncertain`.
+
+**Depends on** WP-205 (the wrapper grammar) and WP-207 being merged. It fits WP-205's table if the architect folds it; the 607 census over the planner's CLIs is the neighbouring row.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -51677,3 +51697,143 @@ Probes, corpora logs, the image census and the canary harness are in `scratchpad
 *Sentences falsified.* `grep -rn -e "glue" -e "boundaries" -e "Name bounded" -e "pattern"` over the WP-206 bullet of technical/05 and the module docblock: bullet (b) gains the joined reading, its over-ask list the three accepted lines, its residual the wildcard-only glob; the module docblock's WP-206 paragraph gains the joined reading. Round 1's notes above are history.
 
 *Verification.* `pnpm run -s verify`: `PASS: verify` (14 814 passed, 19 skipped; the first run failed on biome's formatting of `judgedNameIn`, fixed by `biome format --write` on that file). `test/e2e/pipeline/project-commands.e2e.test.ts` (`--project e2e-fake-claude`, `platform-runtime:s16`): 2/2 passed. It started at a one-minute load of 16.4 because verify had just finished, which breaks the rule to start under ~12. Nothing ran through a shell.
+
+#### WP-207
+
+**Scanner: the stock image is read once for the wrappers it ships** (backlog **603**). Built in the main checkout on `86f5c39c`. No migration. Rulings (a)–(e) built; (f) declined as ruled. Probes, logs and the census are in `scratchpad/wp207/`: `probe.mjs`, `keys.mjs`, `diff.mjs`; `a-lines.txt` with `a-before.log`/`a-after.log`; `b-lines.txt` (the extra shims) with `b-before.log`/`b-after.log`; `corpus-before.log`/`corpus-after.log`; `census.sh`/`census.log` and `census2.sh`/`census2.log`; `names.txt` and `classify.mjs`; `can/`. The before cells come from `base/`, a `git archive HEAD` of `packages/domain` and `packages/contracts`. That copy's `a-lines` output is byte-identical to `a-before.log`, which was measured on the tree before any edit.
+
+**Changes** (`packages/domain/src/policies/command-policy.ts`).
+- `DYNAMIC_LOADER_NAME` is the declared pattern (`ld-linux-*.so.*`, `ld-linux.so.*`, `ld-musl-*.so.*`, `ld64.so.*`, `ld.so`). `isArgv0Wrapper(name)` is `ARGV0_WRAPPERS.has(name) || DYNAMIC_LOADER_NAME.test(name)`. It replaces `ARGV0_WRAPPERS.has` at all four places the set was consulted: `isWrapperToken`, `commandPositions`, `commandNameWalk` and `xargsRunsItsInput`. The pattern is tested in exactly two other places, both derived from that set. `wrapperGrammarKey` maps every loader spelling onto one grammar row, `'ld.so'`. The judged names of `unknownProgramReasons` also test the pattern, so `frobnicate /lib/ld-linux-aarch64.so.1 $x` is uncertain.
+- `ARGV0_WRAPPERS` gains `ssh-agent`, `fstab-decode`, `choom`, `switch_root`, `debconf`, `debconf-apt-progress` and `docker-entrypoint.sh` (as `NODE_ENTRYPOINT`), each citing its manual. `WRAPPER_FLAGS_WITHOUT_VALUE` gains the options that take no value:
+  - `ld.so`: `--inhibit-cache`, `--list`, `--list-diagnostics`, `--list-tunables`, `--verify`;
+  - `ssh-agent`: `-c -s -d -D -k`;
+  - `choom`: `-h/--help -V/--version`;
+  - `switch_root`: the same as `choom`;
+  - `debconf`: `--terse`;
+  - `debconf-apt-progress`: `--config --start --stop --no-progress --logstderr`.
+
+  Every other option is valued, which fails closed as before. `WRAPPER_OPERAND` gains `switch_root`, whose `NEWROOT` is not the command.
+- **`docker-entrypoint.sh`.** Its script, read in the image, is `node "$@"` when the first argument starts with `-` or names no command, and `exec "$@"` otherwise. `commandNameWalk` therefore stops at the entrypoint when the word straight after it is an option. It is also filtered out of `PROGRAMS_THAT_RUN_A_COMMAND`, and so out of the judged names. The scan then reads `docker-entrypoint.sh -e '…'` as an unknown program, as before.
+- **Why the filter (measured).** As a plain wrapper the entrypoint loosened `docker-entrypoint.sh -e "require('child_process').execSync('git push origin main')"` from `uncertain` to `auto`. As a judged name, its `.sh` made `shellcheck scripts/*.sh` uncertain: that was 1 of the 286 corpus lines, through the joined glob reading.
+
+**(a) Measured first** (`a-before.log` → `a-after.log`; cell = attended / auto rule / deny rule; nothing executed).
+
+| Line | Before | After |
+|---|---|---|
+| `/lib/ld-linux-aarch64.so.1 /usr/bin/git push origin main` | ask / uncertain / uncertain | ask / git_boundary / git_boundary |
+| `/usr/lib/ld-linux-aarch64.so.1 --library-path /tmp /usr/bin/git push origin main` | ask / uncertain / uncertain | ask / git_boundary / git_boundary |
+| `/lib64/ld-linux-x86-64.so.2 /usr/bin/sudo id` | ask / uncertain / uncertain | block / block_list / block_list |
+| `find /usr/bin -name git -exec /lib/ld-linux-aarch64.so.1 {} push origin main \;` | ask / unattended_auto / unattended_deny | ask / uncertain / uncertain (`handedCommand`) |
+| `find /usr/bin -name sudo -exec /lib/ld-linux-aarch64.so.1 {} id \;` | ask / unattended_auto / unattended_deny | ask / uncertain / uncertain (`handedCommand`) |
+| `ssh-agent git push origin main` | ask / uncertain / uncertain | ask / git_boundary / git_boundary |
+| `ssh-agent -t 60 sudo id` | ask / uncertain / uncertain | block / block_list / block_list |
+| `ssh-agent $x push origin main` | ask / unattended_auto / unattended_deny | ask / uncertain / uncertain (`expandedName`) |
+| `fstab-decode git push origin main` | ask / uncertain / uncertain | ask / git_boundary / git_boundary |
+| `fstab-decode $x id` | ask / unattended_auto / unattended_deny | ask / uncertain / uncertain (`expandedName`) |
+| `choom -n 0 -- git push origin main` | ask / uncertain / uncertain | ask / git_boundary / git_boundary |
+| `choom -n 0 sudo id` | ask / uncertain / uncertain | block / block_list / block_list |
+| `choom -p 1` | ask / unattended_auto / unattended_deny | same |
+| `EDITOR=git sensible-editor push` | ask / uncertain / uncertain | same |
+| `PAGER='git push origin' sensible-pager main` | ask / uncertain / uncertain | same |
+| `sensible-editor f` | ask / unattended_auto / unattended_deny | same |
+| residual: `frobnicate $x id`, `catchsegv $x id`, `find /usr/bin -name sudo -exec frobnicate {} id \;`, `find . -exec frobnicate {} +`, `echo 'sudo id' \| xargs fakeroot` | ask / unattended_auto / unattended_deny | same |
+| controls: `find . -name '*.ts' -exec prettier --write {} +`, `eslint "$f"`, `prettier --write "$f"`, `node $script`, `kill $pid`, `./gradlew $task` | ask / unattended_auto / unattended_deny | same |
+| control: `find . -exec nice {} \;` | ask / uncertain / uncertain | same |
+| `/lib/ld-linux-aarch64.so.1 --list /usr/bin/git` (and `--verify`) | ask / uncertain / uncertain | ask / unattended_auto / unattended_deny |
+
+- **The `find -exec LOADER {}` reading held as the ruling expected.** With the loader listed, its command word is `{}`, which is WP-193's `handedCommand`, exactly as for `find . -exec nice {} \;`. No name-specific rule was needed.
+- **The one loosening is `--list`/`--verify`.** Read as a wrapper, the walk takes `/usr/bin/git` with no arguments as the command, and a bare `git` reads `auto`. The loader runs nothing under either option (ld.so(8)), so the new cell is the true one. Before, the line was uncertain only because the literal `git` was a judged name in an unknown program's argument.
+- `b-lines.txt` covers the other shims (`b-before.log` → `b-after.log`; 19 of 30 changed, every change a tightening):
+  - `debconf`, `debconf-apt-progress`, `switch_root` and `docker-entrypoint.sh` with a literal push read the git boundary (before: `uncertain`), and with `sudo` they read `block`.
+  - With `$x` they read `expandedName` (before: `auto`).
+  - `echo 'sudo id' | xargs /lib/ld-linux-aarch64.so.1`, `| xargs ssh-agent` and `| xargs fstab-decode` read uncertain through `xargsRunsItsInput` (before: `auto`).
+  - `docker-entrypoint.sh -e "…git push…"` keeps `uncertain`, and `docker-entrypoint.sh node server.js` keeps `auto`.
+
+**Over-ask** (`corpus-before.log` → `corpus-after.log`, the reviewer's 286-line corpus, under `auto`): **0 of 286 changed**. The first build changed 1 line (`shellcheck scripts/*.sh`), fixed as described above.
+
+**The image reading** (2026-10-19). Run with `perl -e 'alarm 120; exec @ARGV' docker run --rm --network none --entrypoint sh platform-runtime:s16 -c '…' </dev/null` on arm64 as uid 1000 `agentic`. `dpkg-query -W` lists 576 packages, and `/usr/bin`, `/usr/sbin` and `/usr/local/bin` hold 408 names (`names.txt`).
+- `command -v` finds:
+  - `ssh-agent`: `/usr/bin`;
+  - `fstab-decode`: `/usr/sbin`;
+  - `choom`: `/usr/bin`;
+  - `ldd`, `ssh`: present;
+  - `ld.so`: `/usr/bin/ld.so`, a link to `../lib/ld-linux-aarch64.so.1`;
+  - the loader itself: `/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1`, with `/lib/` and `/usr/lib/` links;
+  - **no** `/lib64`;
+  - **none** of the five sensible-utils names, and no `catchsegv` or `fakeroot`.
+- **The four probes, each with an `echo MARKER` payload:**
+  - `fstab-decode sh -c 'echo MARKER_FSTAB'` printed the marker.
+  - `ssh-agent sh -c 'echo MARKER_AGENT'` printed it.
+  - `/lib/ld-linux-aarch64.so.1 /bin/echo MARKER_LOADER` and `ld.so /bin/echo MARKER_LDSO` printed it.
+  - `choom -n 0 sh -c '…'` failed: `invalid option -- 'c'`. getopt permutes, so the command's `-c` was taken as choom's. `choom -n 0 -- sh -c 'echo MARKER_CHOOM2'` printed the marker.
+  - All four run an argument as uid 1000.
+- **The other shims probed:**
+  - `docker-entrypoint.sh echo MARKER_DE` printed the marker.
+  - `switch_root / /bin/echo …` was refused (`Operation not permitted`).
+  - `debconf echo …` did not reach the command: the frontend failed with no tty (rc 128). The `debconf-apt-progress` output was cut short by `head`. Both are listed by their manuals, not by these runs.
+- **Manuals read:**
+  - choom(1): `-p`/`--pid` and `-n`/`--adjust` take a value; `-h`, `-V`.
+  - ld.so(8): the options above.
+  - ssh-agent(1): valued `-a -E -O -P -t`; flags `-c -s -d -D -k`.
+  - fstab-decode(8): no options.
+  - switch_root(8), debconf(1) and debconf-apt-progress(1).
+
+**The classification** (`classify.mjs` over `names.txt`, 408 names).
+- **Wrapper — on a set with a grammar** (41). Held by `command-policy.test.ts`'s describe "WP-207: every wrapper the run image ships is on a set with a grammar". Its constant `IMAGE_WRAPPERS` lists these 41 plus the two loader file names:
+  - `env nice nohup timeout stdbuf setsid flock chrt taskset ionice xargs nsenter unshare`;
+  - `npx corepack npm yarn yarnpkg`;
+  - `runuser su sg newgrp script find`;
+  - `chroot runcon setpriv setarch linux32 linux64 prlimit uclampset start-stop-daemon`;
+  - `ssh-agent fstab-decode choom switch_root debconf debconf-apt-progress docker-entrypoint.sh ld.so`.
+- **Shell** (4): `sh bash dash rbash`.
+- **Interpreter** (8): `node nodejs perl perl5.40.1 perl5.40-aarch64-linux-gnu cpan cpan5.40-aarch64-linux-gnu prove`.
+- **Script reader** (16): `sed awk mawk nawk`, `run-parts scriptlive`, and the init and maintainer-script runners over fixed directories. Those are `installkernel service invoke-rc.d update-rc.d deb-systemd-invoke deb-systemd-helper dpkg-maintscript-helper dpkg-reconfigure dpkg-preconfigure policy-rc.d`, the file residual.
+- **Environment-runner** (12, plus `ssh-add`). Each runs the program an environment name picks:
+  - `EDITOR`/`VISUAL`: `vipw vigr bashbug perlbug perlthanks`;
+  - `PAGER`: `perldoc dmesg`;
+  - interactive `!`/`v`: `more pager zless zmore sdiff`;
+  - `SSH_ASKPASS`: `ssh-add` (`SSH_ASKPASS=git ssh-add` reads the git boundary, measured).
+- **Option-value runner, WP-206's class** (20). Each reads uncertain when the value holds a judged name; measured for `install --strip-program`, `split --filter`, `diff3 --diff-program` and `scp -S`.
+  - `tar sort split diff3 install`;
+  - `ssh scp sftp ssh-copy-id ssh-argv0` (`ssh-argv0` runs `ssh` only);
+  - `dpkg` (`--pre-invoke`, root by its manual);
+  - `apt apt-get apt-cache apt-config apt-mark` (`-o …::Pre-Invoke`);
+  - `agetty getty` (`-l`);
+  - `rg rgrep`, which are floored.
+- **The platform's own and provider CLIs** (15): `git git-receive-pack git-upload-pack git-upload-archive git-shell scalar gh glab jira acli claude sentry-cli sentry-mcp logcli agentic-runlet`.
+- **Runs no program by its manual** (the other 291, listed by `classify.mjs`). **`[unverified]`, a dated batch claim (2026-10-19)**: read from the names and the manuals, and nothing ran them. Some run fixed helper programs by name, which is not a program the line names: `mount`, `fsck` and `mkfs` run `*.TYPE` helpers, `zgrep` and `zdiff` run `grep` and `diff`, and `wcurl` runs `curl`. `login` and `sulogin` are root-only. A misclassified name is an unknown program, which is the residual class.
+- **`ldd` is left alone, as ruled.** ldd(1) (https://manpages.debian.org/trixie/manpages/ldd.1.en.html) runs the dynamic linker *"with the LD_TRACE_LOADED_OBJECTS environment variable set to 1"*, which loads the dependencies and calls no `main`. It also warns: *"you should never employ ldd on an untrusted executable, since this may result in the execution of arbitrary code"*. That code is a file the run wrote, which is the file residual, not a program the line names. Read, not run.
+- `ldd sudo id` reads `ask / uncertain / uncertain` (an unknown program with a judged argument), and so does `ldd /usr/bin/git`. Canary 4 uses that.
+
+**Tests.**
+- **`unattended-commands.test.ts`.** A new describe, "WP-207, backlog 603: the image’s wrappers, the loader among them", with rows for criteria (1), (2), (3) and (5) and the other shims.
+- **The WP-203 residual describe** is now titled "the residual, stated (the non-literal half refused 80 of 286 ordinary lines)", with the ruling's sentence in its docblock:
+  - the loader's `find -exec` row left it;
+  - `echo 'sudo id' | xargs fakeroot`, `find /usr/bin -name sudo -exec frobnicate {} id \;` and `find . -exec frobnicate {} +` joined `frobnicate $x id` and `catchsegv $x id` there.
+- **`command-policy.test.ts`.** The classification test (43 rows): each line's argv0 is its name, and `evaluateCommand` reads `block` matched by `sudo *`. A name the policy does not know reads `ask` with an uncertain reason instead. Nothing is executed by any test.
+
+**Canaries** (on the final files, `can/c1b.log`, `c2b.log`, `c4b.log`; restored by `cp` from the recorded copies and checked with `cmp`, `restored`).
+- **1, the name pattern taken out of `isArgv0Wrapper`: 15 fail.** Among them is the row named `"find /usr/bin -name git -exec /lib/ld-linux-aarch64.so.1 {} push origin main \\;" is uncertain (handedCommand: a listed wrapper’s `{}` command)`. The direct line `"/lib/ld-linux-aarch64.so.1 /usr/bin/git push origin main" reads ask / git / git` fails receiving `ask / uncertain / uncertain`: WP-203 (b), the second layer.
+- **2, `ssh-agent` removed from the set: 6 fail.** Among them is `"ssh-agent git push origin main" reads ask / git / git`, receiving `ask / uncertain / uncertain`.
+- **4, `ldd: 'ldd sudo id'` added to `IMAGE_WRAPPERS` with no set entry: 1 fails**, named `ldd reads through to the block list`.
+
+**Decisions and assumptions.**
+- The image's other exec shims (`switch_root`, `debconf`, `debconf-apt-progress`, `docker-entrypoint.sh`) joined the set under ruling (d)'s *"the exec shims it finds joining the sets with their grammar"*. Each is a tightening, measured.
+- `docker-entrypoint.sh` gets the one grammar rule a name set cannot express: a leading option makes the command `node`. It also leaves `PROGRAMS_THAT_RUN_A_COMMAND`, for the reason the code states.
+- `--list`/`--verify` read through the loader as a wrapper, so `ld.so --list /usr/bin/git` reads `auto`. That cell is true to the manual, and the ruling accepts the wrapper reading of those options.
+
+**Sentences falsified** (rule 83).
+- `grep -rn -e "split to a follow-up row" -e "split follow-up" -e "the follow-up row's" -e "follow-up row's evidence" docs CLAUDE.md packages/domain/src` (excluding PROGRESS) found:
+  - technical/05's WP-201 bullet (*"ruling (c) split to a follow-up row"*), now completed with WP-207;
+  - its WP-203 bullet (*"keep `ask / auto / deny`, the follow-up row's evidence"* and *"ruling (c)'s class above (split to a follow-up row)"*), both rewritten with the residual sentence, the loader and the three wrappers;
+  - the module docblock's three sentences: the WP-203 paragraph, the residual list and `unknownProgramReasons`' docblock, all rewritten.
+- `grep -rn "ld-linux-aarch64.so.1 {} push origin main"` outside PROGRESS finds the plan row, technical/05 (now *reads `handedCommand`*) and the new test row only.
+- Backlog 603's heading still says *"No work package owns it"*. That is the refiner's to mark resolved.
+
+**Discovered work.**
+- `sentry-cli monitors run <slug> -- <command>` is a subcommand-form wrapper, by recollection of Sentry's CLI and `[unverified]`; no manual was read. A literal judged name after it reads uncertain (WP-203 (b), measured). `sentry-cli monitors run m -- $x` reads `auto` (measured): the residual, but in a CLI the stock image ships. A name set cannot express it; it is WP-205's subcommand-grammar shape, like `npm exec`.
+
+**Verification.**
+- `pnpm run -s verify`: `PASS: verify` (14 931 passed, 19 skipped), started at a one-minute load of 1.84.
+- `test/e2e/pipeline/project-commands.e2e.test.ts` (`--project e2e-fake-claude`, `platform-runtime:s16`): 2/2 passed, started at a load of 10.30.
+- Two containers ran, both bounded and `--network none`, with `echo MARKER` payloads.

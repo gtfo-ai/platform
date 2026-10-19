@@ -4005,21 +4005,29 @@ describe('WP-203, backlog 599: an unknown command is a possible wrapper', () => 
     });
   });
 
-  describe('the residual, stated', () => {
+  /**
+   * WP-207 (backlog 603): an expansion handed to a program the policy does not know is the
+   * sandbox's (BD-025, 2026-10-06, decision 1). Reading it refused 80 of 286 ordinary agent lines
+   * (38 of them `"$f"` alone), and no syntactic narrowing recovers them without reopening the
+   * class; a wrapper the image ships is listed by name (the WP-207 describe below).
+   */
+  describe('the residual, stated (the non-literal half refused 80 of 286 ordinary lines)', () => {
     it.each([
       // `frobnicate --cmd=sudo`, an option's value naming a program, moved out at WP-206: the
       // scan's declared glue reads it (the WP-206 describe below).
       // A script file the run wrote: `run-parts` runs a directory's files, `scriptlive` a typescript.
       'run-parts /tmp/x',
       'scriptlive t f',
-      // Ruling (c), split to a follow-up row: an expansion, `xargs` input or a `find -exec` file
-      // name given to a program the policy does not know.
+      // An expansion, `xargs` input or a `find -exec` file name given to a program the policy does
+      // not know. The loader's `find -exec` row left at WP-207: the loader is a listed wrapper.
       'frobnicate $x id',
       'catchsegv $x id',
       './gradlew $task',
       'exit $?',
       'echo sudo id | xargs fakeroot',
-      'find /usr/bin -name git -exec /lib/ld-linux-aarch64.so.1 {} push origin main \\;',
+      "echo 'sudo id' | xargs fakeroot",
+      'find /usr/bin -name sudo -exec frobnicate {} id \\;',
+      'find . -exec frobnicate {} +',
     ])('%j keeps ask / auto / deny', (command) => {
       expect(cell(command, policy)).toBe('ask / auto / deny');
     });
@@ -4473,6 +4481,125 @@ describe('WP-206, backlog 604: a program named in an option value or a script', 
       'frob "$(date +%s)" out',
     ])('residual or control %j keeps ask / auto / deny', (command) => {
       expect(cell(command, policy)).toBe('ask / auto / deny');
+    });
+  });
+});
+
+/**
+ * WP-207 (backlog 603): the run image's own exec shims, read once (PROGRESS § WP-207). The dynamic
+ * loader joins the argv wrappers by a declared name pattern, and `ssh-agent`, `fstab-decode`,
+ * `choom` and the rest of the image's shims by name, each with its manual's grammar — so a literal
+ * command after one reads through to the block list or the git boundary, an expanded one is
+ * `expandedName`, and a `find -exec` handing the loader `{}` is WP-193's `handedCommand`.
+ */
+describe('WP-207, backlog 603: the image’s wrappers, the loader among them', () => {
+  describe('criterion (1): the dynamic loader', () => {
+    it.each([
+      ['/lib/ld-linux-aarch64.so.1 /usr/bin/git push origin main', 'ask / git / git'],
+      [
+        '/usr/lib/ld-linux-aarch64.so.1 --library-path /tmp /usr/bin/git push origin main',
+        'ask / git / git',
+      ],
+      ['/lib64/ld-linux-x86-64.so.2 /usr/bin/sudo id', 'block / block / block'],
+      ['ld.so /usr/bin/git push origin main', 'ask / git / git'],
+      ['/lib/ld-musl-aarch64.so.1 git push origin main', 'ask / git / git'],
+      ['/lib/ld-linux-aarch64.so.1 --argv0 x /usr/bin/sudo id', 'block / block / block'],
+      ['/lib/ld-linux-aarch64.so.1 --inhibit-cache /usr/bin/sudo id', 'block / block / block'],
+      // `--list` and `--verify` run nothing: read as a wrapper, `git` alone is what it names.
+      ['/lib/ld-linux-aarch64.so.1 --list /usr/bin/git', 'ask / auto / deny'],
+      ['/lib/ld-linux-aarch64.so.1 /usr/bin/ls', 'ask / auto / deny'],
+    ])('%j reads %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+
+    it.each([
+      'find /usr/bin -name git -exec /lib/ld-linux-aarch64.so.1 {} push origin main \\;',
+      'find /usr/bin -name sudo -exec /lib/ld-linux-aarch64.so.1 {} id \\;',
+    ])('%j is uncertain (handedCommand: a listed wrapper’s `{}` command)', (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.handedCommand]);
+    });
+
+    it.each([
+      '/lib/ld-linux-aarch64.so.1 $x push origin main',
+      'frobnicate /lib/ld-linux-aarch64.so.1 $x',
+      "echo 'sudo id' | xargs /lib/ld-linux-aarch64.so.1",
+    ])('%j is uncertain', (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+    });
+  });
+
+  describe('criterion (2): ssh-agent, fstab-decode, choom', () => {
+    it.each([
+      ['ssh-agent git push origin main', 'ask / git / git'],
+      ['ssh-agent -c git push origin main', 'ask / git / git'],
+      ['ssh-agent -a /tmp/s git push origin main', 'ask / git / git'],
+      ['fstab-decode git push origin main', 'ask / git / git'],
+      ['choom -n 0 -- git push origin main', 'ask / git / git'],
+      ['choom --adjust 0 git push origin main', 'ask / git / git'],
+      ['ssh-agent -t 60 sudo id', 'block / block / block'],
+      ['choom -n 0 sudo id', 'block / block / block'],
+      ['choom -n0 sudo id', 'block / block / block'],
+      ["fstab-decode sh -c 'sudo id'", 'block / block / block'],
+      ['choom -p 1', 'ask / auto / deny'],
+      ['ssh-agent -k', 'ask / auto / deny'],
+      ['fstab-decode echo x', 'ask / auto / deny'],
+    ])('%j reads %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+
+    it.each(['ssh-agent $x push origin main', 'fstab-decode $x id'])(
+      '%j is uncertain (expandedName)',
+      (command) => {
+        expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+        expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.expandedName]);
+      },
+    );
+  });
+
+  describe('the rest of the image’s shims, by the same reading', () => {
+    it.each([
+      ['switch_root /new git push origin main', 'ask / git / git'],
+      ['debconf git push origin main', 'ask / git / git'],
+      ['debconf -f noninteractive sudo id', 'block / block / block'],
+      ['debconf-apt-progress -- git push origin main', 'ask / git / git'],
+      ['docker-entrypoint.sh git push origin main', 'ask / git / git'],
+      ['switch_root /new $x', 'ask / uncertain / uncertain'],
+      ['docker-entrypoint.sh $x id', 'ask / uncertain / uncertain'],
+      // A leading option makes the entrypoint `node`, whose script is scanned as before.
+      [
+        "docker-entrypoint.sh -e \"require('child_process').execSync('git push origin main')\"",
+        'ask / uncertain / uncertain',
+      ],
+      ['docker-entrypoint.sh node server.js', 'ask / auto / deny'],
+    ])('%j reads %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+  });
+
+  describe('criterion (3): sensible-utils is read by the floor-environment rule', () => {
+    it.each([
+      ['EDITOR=git sensible-editor push', 'ask / uncertain / uncertain'],
+      ["PAGER='git push origin' sensible-pager main", 'ask / uncertain / uncertain'],
+      ['sensible-editor f', 'ask / auto / deny'],
+    ])('%j reads %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+  });
+
+  describe('criterion (5): controls keep their cells', () => {
+    it.each([
+      ["find . -name '*.ts' -exec prettier --write {} +", 'ask / auto / deny'],
+      ['find . -exec nice {} \\;', 'ask / uncertain / uncertain'],
+      ['eslint "$f"', 'ask / auto / deny'],
+      ['prettier --write "$f"', 'ask / auto / deny'],
+      ['node $script', 'ask / auto / deny'],
+      ['kill $pid', 'ask / auto / deny'],
+      ['./gradlew $task', 'ask / auto / deny'],
+      ['shellcheck scripts/*.sh', 'ask / auto / deny'],
+      ['ldd /usr/bin/git', 'ask / uncertain / uncertain'],
+    ])('%j keeps %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
     });
   });
 });

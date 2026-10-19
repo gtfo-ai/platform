@@ -3044,3 +3044,68 @@ describe('WP-206: every program the default lists name is on exactly one reader 
     }
   });
 });
+
+/**
+ * WP-207 ruling (d) (backlog 603): every `/usr/bin`, `/usr/sbin` and `/usr/local/bin` name in
+ * `platform-runtime:s16` was classified once (PROGRESS § WP-207, 2026-10-19). This is the list the
+ * notes classify as a **wrapper** — a program that runs its operands as a command — each with a
+ * line that hands it `sudo id`. Every one must be on a set with a grammar, so the block list reads
+ * through it; a name the policy does not know reads `uncertain` instead (the unknown-program
+ * scan), which this test refuses by name. The rest of the classification — shells, interpreters,
+ * script readers, environment-runners and *runs no program by its manual* — is the notes', and
+ * the last of those is a batch claim marked `[unverified]` there.
+ */
+describe('WP-207: every wrapper the run image ships is on a set with a grammar', () => {
+  const IMAGE_WRAPPERS: Readonly<Record<string, string>> = {
+    env: 'env sudo id',
+    nice: 'nice sudo id',
+    nohup: 'nohup sudo id',
+    timeout: 'timeout 5 sudo id',
+    stdbuf: 'stdbuf -o0 sudo id',
+    setsid: 'setsid sudo id',
+    flock: 'flock /tmp/l sudo id',
+    chrt: 'chrt 1 sudo id',
+    taskset: 'taskset 1 sudo id',
+    ionice: 'ionice -c3 sudo id',
+    xargs: 'xargs sudo id',
+    nsenter: 'nsenter -t 1 sudo id',
+    unshare: 'unshare sudo id',
+    npx: 'npx sudo id',
+    corepack: 'corepack sudo id',
+    npm: 'npm exec sudo id',
+    yarn: 'yarn exec sudo id',
+    yarnpkg: 'yarnpkg exec sudo id',
+    runuser: 'runuser -u agentic sudo id',
+    su: 'su agentic sudo id',
+    sg: "sg agentic 'sudo id'",
+    newgrp: "newgrp agentic <<< 'sudo id'",
+    script: "script -qc 'sudo id'",
+    find: 'find . -exec sudo id \\;',
+    chroot: 'chroot / sudo id',
+    runcon: 'runcon c sudo id',
+    setpriv: 'setpriv sudo id',
+    setarch: 'setarch x86_64 sudo id',
+    linux32: 'linux32 sudo id',
+    linux64: 'linux64 sudo id',
+    prlimit: 'prlimit sudo id',
+    uclampset: 'uclampset sudo id',
+    'start-stop-daemon': 'start-stop-daemon --start --exec /usr/bin/sudo -- id',
+    'ssh-agent': 'ssh-agent sudo id',
+    'fstab-decode': 'fstab-decode sudo id',
+    choom: 'choom -n 0 sudo id',
+    switch_root: 'switch_root /new sudo id',
+    debconf: 'debconf sudo id',
+    'debconf-apt-progress': 'debconf-apt-progress sudo id',
+    'docker-entrypoint.sh': 'docker-entrypoint.sh sudo id',
+    'ld.so': 'ld.so sudo id',
+    'ld-linux-aarch64.so.1': '/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1 sudo id',
+    'ld-linux-x86-64.so.2': '/lib64/ld-linux-x86-64.so.2 sudo id',
+  };
+
+  it.each(Object.entries(IMAGE_WRAPPERS))('%s reads through to the block list', (name, line) => {
+    expect(basename(line.split(' ')[0] as string), name).toBe(name);
+    const evaluation = evaluateCommand({ command: line }, DEFAULT_COMMAND_POLICY);
+    expect(evaluation.verdict, `${name}: ${line}`).toBe('block');
+    expect(evaluation.matched, `${name}: ${line}`).toBe('sudo *');
+  });
+});
