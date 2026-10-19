@@ -1,0 +1,123 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fmany-rules",
+      "status": 200,
+      "body": {
+        "id": 15513290,
+        "name": "many-rules",
+        "path": "many-rules",
+        "path_with_namespace": "acme/many-rules",
+        "default_branch": "main",
+        "ssh_url_to_repo": "git@gitlab.example.test:acme/many-rules.git",
+        "http_url_to_repo": "https://gitlab.example.test/acme/many-rules.git",
+        "web_url": "https://gitlab.example.test/acme/many-rules"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/projects/",
+        "retrieved": "2026-10-19",
+        "kind": "documented-adapted",
+        "note": "WP-220 (backlog 610): \"Retrieve a project\", the same members `instance.json` records for acme/api, for a second project whose protection rules and deploy keys run to two pages."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fmany-rules/protected_branches?per_page=100&page=1",
+      "status": 200,
+      "headers": { "x-next-page": "2" },
+      "body": [
+        {
+          "id": 201,
+          "name": "main",
+          "push_access_levels": [
+            { "id": 1201, "access_level": 0, "access_level_description": "No one" }
+          ],
+          "merge_access_levels": [
+            { "id": 2201, "access_level": 40, "access_level_description": "Maintainers" }
+          ],
+          "allow_force_push": false,
+          "code_owner_approval_required": false
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/protected_branches/",
+        "retrieved": "2026-10-19",
+        "kind": "documented-adapted",
+        "note": "WP-220 (backlog 610): \"List protected branches\", the first of two pages — an exact `main` rule with push \"No one\", in the shape `run-token-scope.json` records. The `x-next-page` header is \"The index of the next page\" (https://docs.gitlab.com/api/rest/ § Pagination, retrieved 2026-10-19). One rule stands for the 100 a full page holds."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fmany-rules/protected_branches?per_page=100&page=2",
+      "status": 200,
+      "headers": { "x-next-page": "" },
+      "body": [
+        {
+          "id": 202,
+          "name": "ma*",
+          "push_access_levels": [
+            { "id": 1202, "access_level": 40, "access_level_description": "Maintainers" }
+          ],
+          "merge_access_levels": [
+            { "id": 2202, "access_level": 40, "access_level_description": "Maintainers" }
+          ],
+          "allow_force_push": false,
+          "code_owner_approval_required": false
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/protected_branches/",
+        "retrieved": "2026-10-19",
+        "kind": "inferred",
+        "note": "WP-220 (backlog 610): the second and last page — a wildcard rule `ma*` that lets Maintainers push, which matches `main` and, combined the way GitLab combines rules (\"the most permissive rule controls\", https://docs.gitlab.com/user/project/repository/branches/protected/), opens it. The rule shape is documented; that the last page answers `x-next-page` empty is not stated by the pagination page, as for `discussions-paged.json`."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fmany-rules/deploy_keys?per_page=100&page=1",
+      "status": 200,
+      "headers": { "x-next-page": "2" },
+      "body": [
+        {
+          "id": 41,
+          "title": "read-only mirror",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER fake-read-only@example.test",
+          "fingerprint_sha256": "SHA256:FAKE-not-computed",
+          "created_at": "2026-10-04T08:00:00Z",
+          "expires_at": null,
+          "can_push": false
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/deploy_keys/",
+        "retrieved": "2026-10-19",
+        "kind": "documented-adapted",
+        "note": "WP-220 (backlog 610): \"List deploy keys for project\", the first of two pages — the read-only key `deploy-keys.json` records, standing for the 100 a full page holds. The page publishes no pagination for this endpoint; `x-next-page` is the REST API's ordinary pagination header (https://docs.gitlab.com/api/rest/ § Pagination)."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fmany-rules/deploy_keys?per_page=100&page=2",
+      "status": 200,
+      "headers": { "x-next-page": "" },
+      "body": [
+        {
+          "id": 42,
+          "title": "agentic runs",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINdamAGCsQq31Uv+08lkBzoO4XLz2qYjJa8CGmj3B1Ea fake-deploy-key@example.test",
+          "fingerprint_sha256": "SHA256:FAKE-not-computed",
+          "created_at": "2026-10-04T08:00:00Z",
+          "expires_at": null,
+          "can_push": true
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/deploy_keys/",
+        "retrieved": "2026-10-19",
+        "kind": "inferred",
+        "note": "WP-220 (backlog 610): the second and last page — the write key `deploy-keys.json` records (the public half of RFC 8032 section 7.1 TEST 1's key, so obviously not a real deploy key). The key shape is documented; the endpoint's pagination and the empty `x-next-page` on the last page are not, as for the first page."
+      }
+    }
+  ]
+}

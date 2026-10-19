@@ -34,6 +34,7 @@ import {
   createVirtualTimer,
   exactSecretRedactor,
   FAKE_DEPLOY_KEY,
+  IntegrationError,
   type MemoryIntegrationAuditLog,
   noSecretsRedactor,
   SecretResolutionError,
@@ -481,6 +482,8 @@ describe('the probe of an operator’s own run token (WP-141)', () => {
       };
       readonly connected?: boolean;
       readonly withoutMembers?: boolean;
+      /** What `branchPushProtection` throws, when set (WP-220). */
+      readonly protectionError?: Error;
     } = {},
   ) => {
     const calls: { member: string; argument: string }[] = [];
@@ -533,6 +536,9 @@ describe('the probe of an operator’s own run token (WP-141)', () => {
                 },
                 branchPushProtection: async (project: string, branch: string) => {
                   calls.push({ member: 'branchPushProtection', argument: `${project}@${branch}` });
+                  if (options.protectionError !== undefined) {
+                    throw options.protectionError;
+                  }
                   return (
                     options.protection ?? {
                       protected: true,
@@ -663,6 +669,33 @@ describe('the probe of an operator’s own run token (WP-141)', () => {
       check(await proberOver(unnamed.registration).test(INTEGRATION), 'default_branch_protection')
         ?.detail,
     ).toMatch(/lets someone push/);
+  });
+
+  /**
+   * WP-220 (backlog 610): a read the provider refused as `invalid_response` — GitLab's rules cut at
+   * `max_pages` — fails the check by name, redacted, instead of a 500 with no detail. Any other
+   * failure still throws: a catch-all would turn an outage into a check (rule 43).
+   */
+  it('names a protection read the provider could not finish, and still throws any other failure', async () => {
+    const cut = operatorRegistration({
+      protectionError: new IntegrationError(
+        'invalid_response',
+        'probe-git',
+        `list_protected_branches stopped at max_pages (1) pages of 100 (${PLANTED_TOKEN})`,
+        { action: 'branch_push_protection' },
+      ),
+    });
+    const outcome = await proberOver(cut.registration).test(INTEGRATION);
+    expect(outcome?.ok).toBe(false);
+    const detail = check(outcome, 'default_branch_protection')?.detail ?? '';
+    expect(detail).toMatch(/^Not checked: .*list_protected_branches stopped at max_pages \(1\)/);
+    expect(detail).not.toContain(PLANTED_TOKEN);
+    const gone = operatorRegistration({
+      protectionError: new IntegrationError('not_found', 'probe-git', 'project acme/api is gone'),
+    });
+    await expect(proberOver(gone.registration).test(INTEGRATION)).rejects.toThrow(
+      /project acme\/api is gone/,
+    );
   });
 });
 

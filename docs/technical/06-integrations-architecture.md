@@ -237,6 +237,21 @@ capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArt
 > is `/` one leading space, outside the body of a fence it placed: the paragraph renders the same and
 > the command is off column 0. A title is not read for quick actions (`issuable_base_service.rb`).
 
+> **WP-220 amendment (backlog 610, M13): every paginated GitLab read says what a cut list means, and
+> the two that answer yes or no refuse one.** `branchPushProtection` and `deployKeyAccess` throw
+> `invalid_response`, naming the read and `max_pages`, when the protection rules or the deploy keys run
+> past the bound: a rule left unread may be the wildcard that opens the branch, and "nobody pushes" read
+> off the first pages handed a run the operator's own token (measured through the adapter with
+> `max_pages: 1`). The operator-token gate then withholds the token, and the binding probe names the
+> incomplete read on its check (`Not checked: …`) instead of "not one of the deploy keys". `listCommits`
+> refuses a cut that leaves fewer commits than the caller's limit, which a limit above 100 × `max_pages`
+> reaches; a cut that filled the limit lost only older commits. The history bootstrap records that
+> refusal as a missing commit half and goes on, as it does a cut discussion list (review round 1). `pipelineJobs`, the merge-request poll
+> and the merged sample keep the cut list, and each docblock says what it costs. The port's docblocks
+> carry the refusals, the shared contract suite holds both providers to the first two (the fake through
+> `listsPastReadBound`, its divergence 33), and `paginate-census.test.ts` fails on a `paginate` call in
+> `client.ts` that neither reads `truncated` nor declares the cut it keeps.
+
 Git operations (clone, branch, commit, rebase, push) are performed by the workspace manager with `git` and a credential helper, never by the agent with a raw token (BD-025).
 
 ### Communication

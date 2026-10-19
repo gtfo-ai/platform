@@ -280,7 +280,10 @@ export const collectHistory = async (
 
   /**
    * The commit half. One read, bounded at what the chunks can hold, and **recorded as absent rather
-   * than failed** when the adapter has no such capability.
+   * than failed** when the adapter has no such capability — or when its read stopped at the
+   * binding's own page bound before the limit (WP-220, `invalid_response`), as a cut discussion
+   * list above is: failing the batch would fail it again on every retry until an operator raised
+   * `max_pages`. Any other failure still fails the collection.
    */
   const commitLimit = groups.length * HISTORY_COMMITS_PER_CHUNK;
   let commits: readonly import('../ports/integrations/git-provider.js').RepositoryCommit[] = [];
@@ -290,6 +293,9 @@ export const collectHistory = async (
   } catch (error) {
     if (error instanceof IntegrationUnsupportedError) {
       missing = 'this git provider does not list commits, so the sample carries no commit messages';
+      logger.info({ project_id: projectId, batch_id: batchId }, missing);
+    } else if (error instanceof IntegrationError && error.code === 'invalid_response') {
+      missing = `the git provider could not read the window's commits whole (more than the binding pages through), so the sample carries no commit messages`;
       logger.info({ project_id: projectId, batch_id: batchId }, missing);
     } else {
       throw error;

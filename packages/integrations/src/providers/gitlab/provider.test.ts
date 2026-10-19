@@ -1081,6 +1081,58 @@ describe('health and history', () => {
   });
 });
 
+/**
+ * WP-220 (d), backlog 610: `listCommits` pages newest first at `min(limit, 100)` a page, so the
+ * window can hold more commits than `max_pages` pages reach once `limit` passes 100 × `max_pages`.
+ * Short of the limit, a cut is refused; a cut that filled the limit lost only commits the caller
+ * would drop (rule 42: both sides of the limit, and of the bound).
+ */
+describe('listing commits past max_pages (WP-220)', () => {
+  const SINCE = '2026-01-01T00:00:00.000Z';
+  const page = (n: number) =>
+    `GET /projects/${P}/repository/commits?since=${encodeURIComponent(SINCE)}&ref_name=main&per_page=100&page=${n}`;
+  const commits = (from: number, count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      id: (from + index).toString(16).padStart(40, '0'),
+      message: `commit ${from + index}`,
+      author_name: 'Dana',
+      committed_date: '2026-06-01T08:00:00.000Z',
+    }));
+  const script = {
+    [`GET /projects/${P}`]: {
+      status: 200,
+      body: { id: 1, path_with_namespace: PROJECT, default_branch: 'main', web_url: HOST },
+    },
+    [page(1)]: { status: 200, body: commits(0, 100), headers: { 'x-next-page': '2' } },
+    [page(2)]: { status: 200, body: commits(100, 1), headers: { 'x-next-page': '' } },
+  };
+
+  it('refuses a window cut before the limit, after reading only the pages max_pages allows', async () => {
+    const { port, calls } = build(script, { config: { max_pages: 1 } });
+    const error = await port
+      .listCommits(PROJECT, { since: SINCE, limit: 101 })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(IntegrationError);
+    expect((error as IntegrationError).code).toBe('invalid_response');
+    expect((error as Error).message).toContain('list_commits stopped at max_pages (1)');
+    expect(calls.map((call) => call.path)).toEqual([`/projects/${P}`, page(1).slice(4)]);
+  });
+
+  it('answers a cut that filled the limit, and the whole window when max_pages reaches it', async () => {
+    const filled = await build(script, { config: { max_pages: 1 } }).port.listCommits(PROJECT, {
+      since: SINCE,
+      limit: 100,
+    });
+    expect(filled).toHaveLength(100);
+    const whole = await build(script, { config: { max_pages: 2 } }).port.listCommits(PROJECT, {
+      since: SINCE,
+      limit: 101,
+    });
+    expect(whole).toHaveLength(101);
+    expect(whole.at(-1)?.message).toBe('commit 100');
+  });
+});
+
 describe('construction', () => {
   it('refuses a binding with no token rather than failing on the first call', () => {
     expect(() =>

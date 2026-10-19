@@ -31,6 +31,34 @@ const FAILING_JOB = 'test:unit';
 /** WP-123: the person's note's instant, stated rather than the fake clock's, so the suite compares it. */
 const HUMAN_NOTE_AT = '2026-06-02T09:15:00.000Z';
 
+/**
+ * WP-220, divergence 33: the same project seeded twice — read whole, `main` lets Maintainers push
+ * and the write key is enabled; seeded past one read, both reads refuse.
+ */
+const cutLists = (): GitProviderContractContext['cutLists'] => {
+  const seeded = (listsPastReadBound: boolean) => {
+    const port = createFakeGitProvider({
+      integrationId: INTEGRATION_ID,
+      projects: [{ path: 'acme/many-rules', defaultBranch: 'main', listsPastReadBound }],
+    });
+    port.setBranchPushProtection('acme/many-rules', 'main', {
+      protected: true,
+      nobodyPushes: false,
+      forcePushAllowed: false,
+      pushers: ['No one', 'Maintainers (rule ma*)'],
+    });
+    port.setDeployKey('acme/many-rules', FAKE_DEPLOY_KEYS.writable, true);
+    return port;
+  };
+  return {
+    cut: seeded(true),
+    whole: seeded(false),
+    project: 'acme/many-rules',
+    branch: 'main',
+    publicKey: FAKE_DEPLOY_KEYS.writable,
+  };
+};
+
 runGitProviderContract({
   name: 'in-memory fake',
   create: async (): Promise<GitProviderContractContext> => {
@@ -350,6 +378,7 @@ runGitProviderContract({
         forcePush: 'stable',
       },
       deployKeys: FAKE_DEPLOY_KEYS,
+      cutLists: cutLists(),
       runTokens: FAKE_RUN_TOKENS,
       // WP-139, divergence 25: the fake answers the location a seed states.
       repositories: {

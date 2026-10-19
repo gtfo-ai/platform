@@ -393,6 +393,42 @@ describe('collecting a project’s merged history', () => {
     expect(tasks[0]?.historySample?.merge_requests.length).toBeGreaterThan(0);
   });
 
+  /**
+   * WP-220 round 1: a commit window the adapter cut at its page bound is recorded and the batch goes
+   * on, as a cut discussion list is; a failure that may pass later still fails it (rule 42).
+   */
+  it('carries on without the commit half when the provider cut the commit window', async () => {
+    const harness = world({
+      git: {
+        listCommits: async () => {
+          throw new IntegrationError(
+            'invalid_response',
+            'fake-git',
+            'list_commits stopped at max_pages (1)',
+          );
+        },
+      },
+    });
+    const batchId = await seedBatch(harness, { mergeRequests: 20, batchSize: 20 });
+    const report = await collect(harness, batchId);
+    expect(report.status).toBe('collected');
+    expect(report.commits).toBe(0);
+    expect(report.reason).toContain("could not read the window's commits whole");
+    expect((await tasksOf(harness))[0]?.historySample?.commits).toEqual([]);
+  });
+
+  it('still fails the collection on a commit read that may succeed later', async () => {
+    const harness = world({
+      git: {
+        listCommits: async () => {
+          throw new IntegrationError('unavailable', 'fake-git', 'down');
+        },
+      },
+    });
+    const batchId = await seedBatch(harness, { mergeRequests: 20, batchSize: 20 });
+    await expect(collect(harness, batchId)).rejects.toThrow('down');
+  });
+
   it('mines no tickets when the project maps no status to done, and names the reason', async () => {
     // The platform has no definition of "closed" that is not a project's own status mapping
     // (`shadow/batch.ts` states it), so guessing would mine whatever a project calls its last

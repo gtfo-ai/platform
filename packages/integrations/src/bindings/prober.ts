@@ -52,6 +52,7 @@ import {
   bindingSecretRedactor,
   composeSecretRedactors,
   deployKeyProtectionFault,
+  IntegrationError,
   noSecretsRedactor,
   operatorProtectionFault,
 } from '@platform/application';
@@ -554,6 +555,27 @@ const scopeProof = async (
   };
 };
 
+/**
+ * WP-220 (backlog 610): a read the provider answered `invalid_response` — a GitLab list cut at the
+ * binding's `max_pages` among them — is named on its check, never read as an answer and never
+ * thrown out of the probe as an unexplained 500. Every other failure throws as before.
+ */
+const readOrNotChecked = async <T>(
+  read: () => Promise<T>,
+  redact: (text: string) => string,
+): Promise<{ readonly answer: T } | { readonly notChecked: string }> => {
+  try {
+    return { answer: await read() };
+  } catch (error) {
+    if (error instanceof IntegrationError && error.code === 'invalid_response') {
+      return {
+        notChecked: `Not checked: the provider's answer could not be read whole — ${redact(error.message)}.`,
+      };
+    }
+    throw error;
+  }
+};
+
 const protectionCheck = async (
   input: OperatorRunTokenInput,
   read: GitProviderPort['branchPushProtection'],
@@ -568,22 +590,30 @@ const protectionCheck = async (
         'Not checked: no project is bound to this integration yet, so there is no default branch to read. Bind it and test again.',
     };
   }
-  const rule = (
-    await input.options.executor.execute<BranchPushProtection>({
-      integration: input.ref,
-      action: 'check_default_branch_protection',
-      payload: { project: bound.path, branch: bound.defaultBranch },
-      projectId: null,
-      taskId: null,
-      mutating: false,
-      perform: async () => read(bound.path, bound.defaultBranch),
-      describeResult: (result) => ({
-        protected: result.protected,
-        nobody_pushes: result.nobodyPushes,
-        force_push_allowed: result.forcePushAllowed,
-      }),
-    })
-  ).result;
+  const answered = await readOrNotChecked(
+    async () =>
+      (
+        await input.options.executor.execute<BranchPushProtection>({
+          integration: input.ref,
+          action: 'check_default_branch_protection',
+          payload: { project: bound.path, branch: bound.defaultBranch },
+          projectId: null,
+          taskId: null,
+          mutating: false,
+          perform: async () => read(bound.path, bound.defaultBranch),
+          describeResult: (result) => ({
+            protected: result.protected,
+            nobody_pushes: result.nobodyPushes,
+            force_push_allowed: result.forcePushAllowed,
+          }),
+        })
+      ).result,
+    input.redact,
+  );
+  if ('notChecked' in answered) {
+    return { name, ok: false, detail: answered.notChecked };
+  }
+  const rule = answered.answer;
   const fault = operatorProtectionFault(bound.path, bound.defaultBranch, {
     ...rule,
     pushers: rule.pushers.map(input.redact),
@@ -647,60 +677,61 @@ const checkDeployKey = async (input: {
       'Not checked: no project is bound to this integration yet, so there is no project whose deploy keys and default branch could be read. Bind it and test again.',
     );
   }
-  const access = (
-    await input.options.executor.execute<DeployKeyAccess>({
-      integration: input.ref,
-      action: 'check_deploy_key',
-      // The project and the key's public half only — never the private key.
-      payload: { project: bound.path },
-      projectId: null,
-      taskId: null,
-      mutating: false,
-      perform: async () =>
-        (git.deployKeyAccess as GitProviderPort['deployKeyAccess'])(bound.path, input.publicKey),
-      describeResult: (result) => ({ enabled: result.enabled, can_push: result.canPush }),
-    })
-  ).result;
-  const keyCheck: IntegrationProbeCheck = !access.enabled
-    ? {
-        name: key,
-        ok: false,
-        detail: `Refused: the declared public key is not one of ${bound.path}'s deploy keys — add it under Settings › Repository › Deploy keys with "Grant write permissions". ${DEPLOY_KEY_REACH}`,
-      }
-    : !access.canPush
-      ? {
-          name: key,
-          ok: false,
-          detail: `Refused: the deploy key is enabled on ${bound.path} without write access, so no writing stage could push — grant it write permissions. ${DEPLOY_KEY_REACH}`,
-        }
-      : {
-          name: key,
-          ok: true,
-          detail: `The deploy key is enabled on ${bound.path} with write access. ${DEPLOY_KEY_REACH}`,
-        };
-  const rule = (
-    await input.options.executor.execute<BranchPushProtection>({
-      integration: input.ref,
-      action: 'check_default_branch_protection',
-      payload: { project: bound.path, branch: bound.defaultBranch },
-      projectId: null,
-      taskId: null,
-      mutating: false,
-      perform: async () =>
-        (git.branchPushProtection as GitProviderPort['branchPushProtection'])(
-          bound.path,
-          bound.defaultBranch,
-        ),
-      describeResult: (result) => ({
-        protected: result.protected,
-        nobody_pushes: result.nobodyPushes,
-        force_push_allowed: result.forcePushAllowed,
-      }),
-    })
-  ).result;
+  const access = await readOrNotChecked(
+    async () =>
+      (
+        await input.options.executor.execute<DeployKeyAccess>({
+          integration: input.ref,
+          action: 'check_deploy_key',
+          // The project and the key's public half only — never the private key.
+          payload: { project: bound.path },
+          projectId: null,
+          taskId: null,
+          mutating: false,
+          perform: async () =>
+            (git.deployKeyAccess as GitProviderPort['deployKeyAccess'])(
+              bound.path,
+              input.publicKey,
+            ),
+          describeResult: (result) => ({ enabled: result.enabled, can_push: result.canPush }),
+        })
+      ).result,
+    input.redact,
+  );
+  const keyCheck: IntegrationProbeCheck =
+    'notChecked' in access
+      ? { name: key, ok: false, detail: `${access.notChecked} ${DEPLOY_KEY_REACH}` }
+      : deployKeyCheck(key, bound.path, access.answer);
+  const rule = await readOrNotChecked(
+    async () =>
+      (
+        await input.options.executor.execute<BranchPushProtection>({
+          integration: input.ref,
+          action: 'check_default_branch_protection',
+          payload: { project: bound.path, branch: bound.defaultBranch },
+          projectId: null,
+          taskId: null,
+          mutating: false,
+          perform: async () =>
+            (git.branchPushProtection as GitProviderPort['branchPushProtection'])(
+              bound.path,
+              bound.defaultBranch,
+            ),
+          describeResult: (result) => ({
+            protected: result.protected,
+            nobody_pushes: result.nobodyPushes,
+            force_push_allowed: result.forcePushAllowed,
+          }),
+        })
+      ).result,
+    input.redact,
+  );
+  if ('notChecked' in rule) {
+    return [keyCheck, { name: protection, ok: false, detail: rule.notChecked }];
+  }
   const fault = deployKeyProtectionFault(bound.path, bound.defaultBranch, {
-    ...rule,
-    pushers: rule.pushers.map(input.redact),
+    ...rule.answer,
+    pushers: rule.answer.pushers.map(input.redact),
   });
   return [
     keyCheck,
@@ -713,3 +744,27 @@ const checkDeployKey = async (input: {
       : { name: protection, ok: false, detail: `Refused: ${fault}.` },
   ];
 };
+
+/** The `run_credential` check of a deploy key the provider answered for (WP-146). */
+const deployKeyCheck = (
+  key: string,
+  project: string,
+  access: DeployKeyAccess,
+): IntegrationProbeCheck =>
+  !access.enabled
+    ? {
+        name: key,
+        ok: false,
+        detail: `Refused: the declared public key is not one of ${project}'s deploy keys — add it under Settings › Repository › Deploy keys with "Grant write permissions". ${DEPLOY_KEY_REACH}`,
+      }
+    : !access.canPush
+      ? {
+          name: key,
+          ok: false,
+          detail: `Refused: the deploy key is enabled on ${project} without write access, so no writing stage could push — grant it write permissions. ${DEPLOY_KEY_REACH}`,
+        }
+      : {
+          name: key,
+          ok: true,
+          detail: `The deploy key is enabled on ${project} with write access. ${DEPLOY_KEY_REACH}`,
+        };

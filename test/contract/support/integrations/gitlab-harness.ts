@@ -249,6 +249,16 @@ export const gitlabReplayContext = (
     },
     // WP-146: `deploy-keys.json` records an Ed25519 write key and one without write access.
     deployKeys: GITLAB_FAKE_DEPLOY_KEYS,
+    // WP-220: `project-lists-paged.json` records acme/many-rules with two pages of protection rules
+    // (`main` No one, then the wildcard `ma*` letting Maintainers push) and two of deploy keys (a
+    // read-only key, then the write key) — one page past `max_pages: 1`, none past `max_pages: 2`.
+    cutLists: {
+      cut: build({ ...overrides.config, max_pages: 1 }),
+      whole: build({ ...overrides.config, max_pages: 2 }),
+      project: 'acme/many-rules',
+      branch: 'main',
+      publicKey: GITLAB_FAKE_DEPLOY_KEYS.writable,
+    },
     runTokens: GITLAB_FAKE_RUN_TOKENS,
     // WP-139: `repository-settings.json` records the three projects' `GET /projects/:id`.
     repositories: {

@@ -565,3 +565,24 @@ the binding's `max_pages` cut.
   update. A merge request's description runs quick actions and its title does not.
 - `https://docs.gitlab.com/api/notes/` — notes sent through any API are normalised by *"Runs and then
   removes any quick actions"* (quoted by backlog 611 from the page's source).
+
+## Pages read for WP-220 — `project-lists-paged.json`
+
+Retrieved **2026-10-19**, without a GitLab instance; nothing was recorded. WP-220 (backlog 610)
+refuses a protection-rule list and a deploy-key list the binding's `max_pages` cut, so the fixture is
+one project, `acme/many-rules`, whose two lists each run to a second page.
+
+- `https://docs.gitlab.com/api/projects/` — the project object of `GET /projects/acme%2Fmany-rules`,
+  the members `instance.json` records for `acme/api`.
+- `https://docs.gitlab.com/api/protected_branches/` — "List protected branches": the rule object of
+  both pages, in the shape `run-token-scope.json` records. Page 1 is an exact `main` rule with push
+  "No one"; page 2 a wildcard `ma*` letting Maintainers push.
+- `https://docs.gitlab.com/user/project/repository/branches/protected/` — *"If more than one rule
+  applies to a branch, the most permissive rule controls how the branch behaves"*: why the wildcard on
+  page 2 opens `main`, and why a list cut before it answered "nobody pushes".
+- `https://docs.gitlab.com/api/deploy_keys/` — "List deploy keys for project": the key object of both
+  pages, the two Ed25519 keys `deploy-keys.json` records (read-only on page 1, write on page 2). The
+  page publishes no pagination for this endpoint.
+- `https://docs.gitlab.com/api/rest/` § "Pagination" — `x-next-page` is *"The index of the next page"*,
+  and `per_page` is at most 100, the adapter's page size. The page does not say what the header holds on
+  the last page, so both second pages are `inferred`, as `discussions-paged.json`'s is.

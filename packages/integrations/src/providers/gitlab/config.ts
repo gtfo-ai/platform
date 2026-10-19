@@ -164,7 +164,9 @@ export const gitlabConfigSchema = z.strictObject({
   request_timeout_ms: z.int().nonnegative().max(600_000).default(30_000),
   /**
    * Pages a bounded pager will follow before it stops and reports what it has, and that the list
-   * was cut (WP-209): a merge request's discussions past it are refused, never answered in part.
+   * was cut (WP-209): a merge request's discussions past it are refused, never answered in part,
+   * and so are a project's protection rules and deploy keys, and a commit window it cuts short of
+   * the caller's limit (WP-220). The other lists keep what they read, each saying why in `client.ts`.
    */
   max_pages: z.int().positive().max(100).default(10),
   /** Largest CODEOWNERS file the adapter will read, in bytes (BD-022: attacker-controlled). */

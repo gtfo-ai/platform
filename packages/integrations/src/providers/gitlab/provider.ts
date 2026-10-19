@@ -1029,12 +1029,23 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
      * matching rule is GitLab's `0` with no user, group or deploy key; force push is allowed when
      * **any** matching rule allows it. Group-level protected branches (Premium) are not on this
      * endpoint and are not seen. The project is read first, so an unknown project is `not_found`.
+     *
+     * A list cut at `max_pages` is **refused** (WP-220, backlog 610): the rule a missing page holds
+     * may be the wildcard that opens the branch, and "nobody pushes" read off the first pages is what
+     * hands a run the operator's own token. The refusal fails that gate closed.
      */
     branchPushProtection: async (project, branch) => {
       await client.project(project);
-      const matching = (await client.protectedBranches(project)).filter((rule) =>
-        gitlabBranchRuleMatches(rule.name, branch),
-      );
+      const { rules, truncated } = await client.protectedBranches(project);
+      if (truncated) {
+        throw new IntegrationError(
+          'invalid_response',
+          GITLAB_PROVIDER_ID,
+          `list_protected_branches stopped at max_pages (${String(config.max_pages)}) pages of 100, and ${project} has more protection rules than that`,
+          { action: 'branch_push_protection' },
+        );
+      }
+      const matching = rules.filter((rule) => gitlabBranchRuleMatches(rule.name, branch));
       if (matching.length === 0) {
         return { protected: false, nobodyPushes: false, forcePushAllowed: true, pushers: [] };
       }
@@ -1080,14 +1091,26 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
      * (`GET /projects/:id/deploy_keys`, paged), read with the API token, matched on the key's type
      * and base64 (the comment is the operator's and ignored). The project is read first, so an
      * unknown project is `not_found`.
+     *
+     * A list cut at `max_pages` is **refused** (WP-220, backlog 610): the key may be on a missing
+     * page, and "not enabled" would send the operator to fix a key that is there.
      */
     deployKeyAccess: async (project, publicKey) => {
       await client.project(project);
       const wanted = publicKeyIdentity(publicKey);
-      const found =
-        wanted === null
-          ? undefined
-          : (await client.deployKeys(project)).find((key) => publicKeyIdentity(key.key) === wanted);
+      let found: Awaited<ReturnType<GitLabClient['deployKeys']>>['keys'][number] | undefined;
+      if (wanted !== null) {
+        const { keys, truncated } = await client.deployKeys(project);
+        if (truncated) {
+          throw new IntegrationError(
+            'invalid_response',
+            GITLAB_PROVIDER_ID,
+            `list_deploy_keys stopped at max_pages (${String(config.max_pages)}) pages of 100, and ${project} has more deploy keys than that`,
+            { action: 'deploy_key_access' },
+          );
+        }
+        found = keys.find((key) => publicKeyIdentity(key.key) === wanted);
+      }
       return found === undefined
         ? { enabled: false, canPush: false, keyId: null }
         : { enabled: true, canPush: found.can_push === true, keyId: String(found.id) };
@@ -1585,7 +1608,7 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         throw invalidRequest('list_commits', 'since must be an ISO-8601 instant');
       }
       const defaultBranch = (await client.project(project)).default_branch ?? undefined;
-      const listed = await client.listCommits(
+      const { commits: listed, truncated } = await client.listCommits(
         project,
         {
           since: new Date(sinceMs).toISOString(),
@@ -1609,6 +1632,17 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         if (commits.length >= options.limit) {
           break;
         }
+      }
+      // WP-220: newest first, so a cut that still filled the limit lost only commits the caller
+      // would drop. Short of the limit, the window held commits past the bound: refused, never
+      // answered as the whole window (a limit above 100 × `max_pages` reaches it).
+      if (truncated && commits.length < options.limit) {
+        throw new IntegrationError(
+          'invalid_response',
+          GITLAB_PROVIDER_ID,
+          `list_commits stopped at max_pages (${String(config.max_pages)}) pages before ${String(options.limit)} commits of ${project} since ${options.since} were read`,
+          { action: 'list_commits' },
+        );
       }
       return commits;
     },

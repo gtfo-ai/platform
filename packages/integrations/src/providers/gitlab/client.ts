@@ -95,11 +95,23 @@ export interface GitLabClient {
   branch(project: string, branch: string): Promise<z.output<typeof gitlabBranchSchema>>;
   /**
    * <https://docs.gitlab.com/api/protected_branches/> § "List protected branches" — every rule,
-   * wildcards included, paged (WP-141 review round 1).
+   * wildcards included, paged (WP-141 review round 1) — with `truncated` when the walk stopped at
+   * the binding's `max_pages` (WP-220). A cut list can miss the wildcard that opens a branch, so
+   * `branchPushProtection` refuses it.
    */
-  protectedBranches(project: string): Promise<z.output<typeof gitlabProtectedBranchSchema>[]>;
-  /** WP-146: the project's deploy keys, paged. */
-  deployKeys(project: string): Promise<z.output<typeof gitlabDeployKeySchema>[]>;
+  protectedBranches(project: string): Promise<{
+    readonly rules: z.output<typeof gitlabProtectedBranchSchema>[];
+    readonly truncated: boolean;
+  }>;
+  /**
+   * WP-146: the project's deploy keys, paged — with `truncated` when the walk stopped at the
+   * binding's `max_pages` (WP-220). A cut list can miss the key asked about, so `deployKeyAccess`
+   * refuses it.
+   */
+  deployKeys(project: string): Promise<{
+    readonly keys: z.output<typeof gitlabDeployKeySchema>[];
+    readonly truncated: boolean;
+  }>;
   /** <https://docs.gitlab.com/api/protected_branches/> § "Retrieve a protected branch …". */
   protectedBranch(
     project: string,
@@ -121,12 +133,19 @@ export interface GitLabClient {
    * `since` and `ref_name` are documented attributes of that endpoint; the platform pages with
    * `per_page` up to the caller's limit. The endpoint answers the commits reachable from `ref_name`,
    * which is why the adapter passes the project's default branch rather than nothing.
+   *
+   * With `truncated` when the walk stopped at the binding's `max_pages` (WP-220). The list is newest
+   * first, so a cut loses the oldest commits; the port's `listCommits` refuses only a cut that
+   * leaves fewer commits than the caller's limit, because then the window held commits it keeps.
    */
   listCommits(
     project: string,
     query: { readonly since: string; readonly ref_name?: string },
     perPage: number,
-  ): Promise<readonly z.output<typeof gitlabCommitSchema>[]>;
+  ): Promise<{
+    readonly commits: readonly z.output<typeof gitlabCommitSchema>[];
+    readonly truncated: boolean;
+  }>;
   /** <https://docs.gitlab.com/api/merge_requests/> § "Create a merge request". */
   createMergeRequest(
     project: string,
@@ -165,6 +184,9 @@ export interface GitLabClient {
    * `order_by=updated_at`, `sort=asc`, every state (the documented default `all`), at most `pages`
    * pages of `perPage`. Its own method so the audit action is `list_merge_requests` and the history
    * bootstrap's read keeps its own.
+   *
+   * A cut list is kept: the caller asks for only the pages its limit needs, oldest update first, so a
+   * cut drops the newest changes, which the poller's cursor reaches on its next poll (WP-220).
    */
   pollMergeRequests(
     project: string,
@@ -172,7 +194,12 @@ export interface GitLabClient {
     perPage: number,
     pages: number,
   ): Promise<z.output<typeof gitlabMergeRequestSchema>[]>;
-  /** § "List project merge requests". */
+  /**
+   * § "List project merge requests" — the history bootstrap's merged sample, newest first.
+   *
+   * A cut list is kept: it drops the oldest merge requests of the window, and the caller keeps only
+   * the newest `limit` of a sample that never claimed to be the whole history (WP-220).
+   */
   listMergeRequests(
     project: string,
     query: Readonly<Record<string, string | number>>,
@@ -270,7 +297,17 @@ export interface GitLabClient {
   ): Promise<z.output<typeof gitlabPipelineSchema> | null>;
   /** § "Retrieve a single pipeline" — the only place `coverage` appears. */
   pipeline(project: string, pipelineId: number): Promise<z.output<typeof gitlabPipelineSchema>>;
-  /** <https://docs.gitlab.com/api/jobs/> § "List pipeline jobs". */
+  /**
+   * <https://docs.gitlab.com/api/jobs/> § "List pipeline jobs".
+   *
+   * A cut list is kept: the pipeline's status is read from the pipeline itself, so a cut shortens
+   * only the job list and the log references it offers (WP-220). One reader decides from the jobs:
+   * `merge-request-ready.ts`'s `heldAtManual` asks for a new merge-request pipeline when a blocking
+   * manual job is listed. A cut can hide such a job, and the only cost is that no pipeline is asked
+   * for and the CI gate keeps reading the existing pipeline (a pipeline whose own status is
+   * `manual` is still caught, from the pipeline). That decision grants no access and hands no
+   * credential, so it is not a permission decision; the gate's status still comes from the pipeline.
+   */
   pipelineJobs(project: string, pipelineId: number): Promise<z.output<typeof gitlabJobSchema>[]>;
   /** § "Retrieve a job log file" (`GET /projects/:id/jobs/:job_id/trace`). */
   jobTrace(project: string, jobId: number): Promise<string | null>;
@@ -366,37 +403,35 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
         }),
       ),
 
-    deployKeys: async (project) =>
-      parse(
-        z.array(gitlabDeployKeySchema),
-        (
-          await http.paginate(
-            {
-              method: 'GET',
-              path: `/projects/${encodeProjectId(project)}/deploy_keys`,
-              action: 'list_deploy_keys',
-            },
-            100,
-          )
-        ).items,
-        'list_deploy_keys',
-      ),
+    deployKeys: async (project) => {
+      const pages = await http.paginate(
+        {
+          method: 'GET',
+          path: `/projects/${encodeProjectId(project)}/deploy_keys`,
+          action: 'list_deploy_keys',
+        },
+        100,
+      );
+      return {
+        keys: parse(z.array(gitlabDeployKeySchema), pages.items, 'list_deploy_keys'),
+        truncated: pages.truncated,
+      };
+    },
 
-    protectedBranches: async (project) =>
-      parse(
-        z.array(gitlabProtectedBranchSchema),
-        (
-          await http.paginate(
-            {
-              method: 'GET',
-              path: `/projects/${encodeProjectId(project)}/protected_branches`,
-              action: 'list_protected_branches',
-            },
-            100,
-          )
-        ).items,
-        'list_protected_branches',
-      ),
+    protectedBranches: async (project) => {
+      const pages = await http.paginate(
+        {
+          method: 'GET',
+          path: `/projects/${encodeProjectId(project)}/protected_branches`,
+          action: 'list_protected_branches',
+        },
+        100,
+      );
+      return {
+        rules: parse(z.array(gitlabProtectedBranchSchema), pages.items, 'list_protected_branches'),
+        truncated: pages.truncated,
+      };
+    },
 
     protectedBranch: async (project, branch) => {
       const response = await http.request({
@@ -422,22 +457,21 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
         }),
       ),
 
-    listCommits: async (project, query, perPage) =>
-      parse(
-        z.array(gitlabCommitSchema),
-        (
-          await http.paginate(
-            {
-              method: 'GET',
-              path: `/projects/${encodeProjectId(project)}/repository/commits`,
-              query,
-              action: 'list_commits',
-            },
-            Math.min(Math.max(1, perPage), 100),
-          )
-        ).items,
-        'list_commits',
-      ),
+    listCommits: async (project, query, perPage) => {
+      const pages = await http.paginate(
+        {
+          method: 'GET',
+          path: `/projects/${encodeProjectId(project)}/repository/commits`,
+          query,
+          action: 'list_commits',
+        },
+        Math.min(Math.max(1, perPage), 100),
+      );
+      return {
+        commits: parse(z.array(gitlabCommitSchema), pages.items, 'list_commits'),
+        truncated: pages.truncated,
+      };
+    },
 
     createMergeRequest: async (project, body) =>
       required(

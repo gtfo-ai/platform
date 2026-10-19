@@ -256,6 +256,18 @@
  *     throws it from a stub, and the GitLab runner holds the adapter to it
  *     (`gitlab.contract.test.ts`, `review-conversation-truncated.contract.test.ts`). To exercise it
  *     here, use `core.script.failWhile('list_discussions', …)`.
+ * 33. **Same — a project's protection rules and deploy keys can run past a read** (WP-220, backlog
+ *     610). A project seeded with `listsPastReadBound` makes `branchPushProtection` and
+ *     `deployKeyAccess` throw a non-retryable `invalid_response`, as the GitLab adapter does when
+ *     its walk stops at `max_pages` pages of 100; any other project is read whole, as GitLab's is
+ *     within the bound. The shared contract suite holds both providers to the refusal.
+ * 34. **Kinder — `listCommits` never refuses a long window** (WP-220 round 1). It has no page
+ *     bound, so it answers up to `limit` commits however many the window holds. The GitLab adapter
+ *     throws a non-retryable `invalid_response` when `max_pages` stops its walk before `limit`
+ *     commits (the port's docblock). The one consumer, `collectHistory`, records that as a missing
+ *     commit half, pinned by a unit test that throws it from a stub; the GitLab adapter's own unit
+ *     tests (`provider.test.ts`) hold the refusal. To exercise it here, use
+ *     `core.script.failWhile('list_commits', …)`.
  */
 import {
   type BranchPushProtection,
@@ -272,6 +284,7 @@ import {
   type HealthProbe,
   type InboundContext,
   type InboundNormaliser,
+  IntegrationError,
   type IntegrationRef,
   IntegrationUnsupportedError,
   type MergedMergeRequest,
@@ -330,6 +343,11 @@ export interface FakeProjectSeed {
   readonly protectedBranches?: readonly string[];
   /** What `repositorySettings` answers for the CI configuration (WP-139, divergence 25). */
   readonly ciConfig?: CiConfigLocation;
+  /**
+   * Divergence 33 (WP-220): the project holds more protection rules and deploy keys than one read
+   * of the provider takes, so `branchPushProtection` and `deployKeyAccess` refuse it.
+   */
+  readonly listsPastReadBound?: boolean;
 }
 
 export interface FakeGitOptions {
@@ -381,6 +399,7 @@ interface StoredProject {
   protectedBranches: Set<string>;
   nextIid: number;
   ciConfig: CiConfigLocation;
+  listsPastReadBound: boolean;
 }
 
 interface StoredNote {
@@ -873,6 +892,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       codeowners: seed.codeowners ?? null,
       nextIid: 1,
       ciConfig: seed.ciConfig ?? { kind: 'repository', path: '.gitlab-ci.yml' },
+      listsPastReadBound: seed.listsPastReadBound ?? false,
     });
   };
   for (const seed of options.projects ?? []) {
@@ -885,6 +905,18 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       throw notFound(PROVIDER, action, `project ${path}`);
     }
     return project;
+  };
+
+  /** Divergence 33: the refusal the GitLab adapter makes past `max_pages`. */
+  const refusePastReadBound = (stored: StoredProject, action: string, what: string): void => {
+    if (stored.listsPastReadBound) {
+      throw new IntegrationError(
+        'invalid_response',
+        PROVIDER,
+        `${stored.path} has more ${what} than one read takes`,
+        { action },
+      );
+    }
   };
 
   const branchKey = (project: string, branch: string): string => `${project}\u0000${branch}`;
@@ -1828,6 +1860,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     branchPushProtection: async (project: string, branch: string) => {
       core.enter('branch_push_protection');
       const stored = requireProject('branch_push_protection', project);
+      refusePastReadBound(stored, 'branch_push_protection', 'protection rules');
       const installed = pushRules.get(memberKey(project, branch));
       if (installed !== undefined) {
         return installed;
@@ -1840,7 +1873,11 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     /** Divergence 29: exactly the keys a test enabled, compared by type and base64. */
     deployKeyAccess: async (project: string, publicKey: string) => {
       core.enter('deploy_key_access');
-      requireProject('deploy_key_access', project);
+      refusePastReadBound(
+        requireProject('deploy_key_access', project),
+        'deploy_key_access',
+        'deploy keys',
+      );
       const found = deployKeys.get(memberKey(project, keyIdentity(publicKey)));
       return found === undefined
         ? { enabled: false, canPush: false, keyId: null }

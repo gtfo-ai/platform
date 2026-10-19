@@ -246,6 +246,21 @@ export interface GitProviderContractContext {
     readonly readOnly: string;
     readonly absent: string;
   };
+  /**
+   * WP-220 (backlog 610): `project` holds more protection rules and deploy keys than one read of the
+   * provider takes (GitLab: `max_pages` pages of 100). Read whole, through `whole`, `branch` is
+   * opened by a rule past the bound (a pusher, so nobody-pushes is false) and `publicKey` is enabled
+   * with write access past it; read through `cut`, whose bound stops before them, both reads refuse
+   * with `invalid_response` — a cut list read as the whole list answers "nobody pushes" and "not
+   * enabled", the first of which hands a run the operator's token.
+   */
+  readonly cutLists: {
+    readonly cut: GitProviderPort;
+    readonly whole: GitProviderPort;
+    readonly project: string;
+    readonly branch: string;
+    readonly publicKey: string;
+  };
   readonly runTokens: {
     readonly repositoryOnly: string;
     readonly apiCapable: string;
@@ -689,6 +704,31 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         await expectIntegrationError(
           () => port.deployKeyAccess(context.missingProject, context.deployKeys.writable),
           'not_found',
+        );
+      });
+
+      /**
+       * WP-220 (backlog 610): a list the provider could not read whole is refused, never answered.
+       * Both sides of the bound (rule 42): read whole, the rule past it opens the branch and the key
+       * past it is enabled — so a cut read that answered would say the opposite (rule 43).
+       */
+      it('refuses the protection and the deploy keys of a project whose lists run past one read', async () => {
+        const { cut, whole, project, branch, publicKey } = context.cutLists;
+        expect(await whole.branchPushProtection(project, branch)).toMatchObject({
+          protected: true,
+          nobodyPushes: false,
+        });
+        expect(await whole.deployKeyAccess(project, publicKey)).toMatchObject({
+          enabled: true,
+          canPush: true,
+        });
+        await expectIntegrationError(
+          () => cut.branchPushProtection(project, branch),
+          'invalid_response',
+        );
+        await expectIntegrationError(
+          () => cut.deployKeyAccess(project, publicKey),
+          'invalid_response',
         );
       });
 

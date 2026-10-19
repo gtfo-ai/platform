@@ -766,7 +766,9 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    *
    * A branch with no protection rule answers `{ protected: false }`, never an exception.
    *
-   * @throws {IntegrationError} `not_found` for a project that does not exist.
+   * @throws {IntegrationError} `not_found` for a project that does not exist; `invalid_response`
+   * when the provider's rules could not be read whole (GitLab: more than `max_pages` pages), because
+   * a rule left unread may be the one that opens the branch (WP-220).
    */
   readonly branchPushProtection: (project: string, branch: string) => Promise<BranchPushProtection>;
 
@@ -790,7 +792,9 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    *
    * A key that is not enabled is `{ enabled: false }`, never an exception.
    *
-   * @throws {IntegrationError} `not_found` for a project that does not exist.
+   * @throws {IntegrationError} `not_found` for a project that does not exist; `invalid_response`
+   * when the provider's keys could not be read whole (GitLab: more than `max_pages` pages), because
+   * the key may be on the part left unread (WP-220).
    */
   readonly deployKeyAccess: (project: string, publicKey: string) => Promise<DeployKeyAccess>;
 
@@ -1079,7 +1083,10 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * It is a **read**, so it happens in every mode. An adapter that cannot list commits at all
    * throws `unsupported_capability`, the same answer `readCodeowners` gives, and the caller records
    * the batch as having no commit half rather than failing it (standing rule 20: this is a read the
-   * bootstrap can do without).
+   * bootstrap can do without). An adapter whose read stopped at its own bound before `limit`
+   * commits of the window throws `invalid_response` rather than answering a short list as the
+   * whole window (WP-220); the bootstrap records that as a missing commit half, as it does
+   * `unsupported_capability`, rather than failing the batch.
    */
   readonly listCommits: (
     project: string,
