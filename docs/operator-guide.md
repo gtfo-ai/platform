@@ -754,9 +754,15 @@ you use it.
 **Take a dump first.** A migration is forward-only, so there is no down-step to run if one goes
 wrong:
 
+<!-- pre-upgrade-dump:start -->
 ```bash
-docker compose exec -T db pg_dump -U app -Fc app > pre-upgrade-$(date +%F).dump
+docker compose exec -T db sh -c 'pg_dump -Z1 --username="$POSTGRES_USER" "$POSTGRES_DB"' > pre-upgrade-$(date +%F).sql.gz
 ```
+<!-- pre-upgrade-dump:end -->
+
+It is the same format `db-backup` writes — gzipped plain SQL, `pg_dump -Z1` — so § 6 *Restore*
+restores it: copy it to `backup.sql.gz` and run that block. The command exits non-zero when
+`pg_dump` fails, so check it before you go on.
 
 **Upgrading past the build that introduced deadlines (WP-56).** Questions and plan or budget
 approvals that were open before it have no deadline. The recovery pass (the
@@ -932,8 +938,11 @@ That refusal is deliberate, and it is the whole recovery procedure. Two ways out
 - **Roll the image forward** to the build that applied the migrations it names — set `PLATFORM_TAG`
   back to that version and `docker compose up -d`. Nothing is lost; the rollback simply did not
   happen.
-- **Restore the dump you took before the upgrade** (§ 6 has the `pg_restore` line), which takes the
-  database back to a schema the older image knows. Everything written since that dump is gone, which
+- **Restore the dump you took before the upgrade**, which takes the database back to a schema the
+  older image knows: set `PLATFORM_TAG` back to the version the dump was taken with, copy
+  `pre-upgrade-<date>.sql.gz` to `backup.sql.gz`, and run § 6 *Restore*'s block (it checks the dump
+  with `gzip -t`, stops the writers, recreates the database, loads it with `gunzip -c … | psql`,
+  and ends with `docker compose up -d`, which recreates the containers on the tag you set). Everything written since that dump is gone, which
   is why the dump is taken *before* the upgrade and not after the trouble starts.
 
 ## 6. Backup
@@ -974,17 +983,62 @@ docker compose cp db-backup:/backups ./backups
 
 ### Restore
 
+A `db-backup` dump is **gzipped plain SQL** (`.sql.gz`): the image's defaults are
+`POSTGRES_EXTRA_OPTS=-Z1` and `BACKUP_SUFFIX=.sql.gz`, read off the pinned digest, and `compose.yml`
+overrides neither. So it is restored with `gunzip` and `psql`, as the image's own README does
+(<https://github.com/prodrigestivill/docker-postgres-backup-local#restore-examples>), never with
+`pg_restore`, which refuses it (*"input file does not appear to be a valid tar archive"*, exit 1).
+
+Put the dump you are restoring in the current directory as `backup.sql.gz`. To take the newest one
+straight off the `backups` volume, copy a `*-latest` link with `-L` (without it `docker compose cp`
+copies the link itself, not the dump):
+
 ```bash
-docker compose stop app runner launcher
-docker compose exec -T db pg_restore -U app -d app --clean --if-exists < backup.dump
-docker compose start app runner launcher
+docker compose cp -L db-backup:/backups/last/app-latest.sql.gz backup.sql.gz
 ```
 
-Stop **all three**: `app` and `runner` both write the database (since WP-53 the runner is a second
-writer — its jobs, its runs' transcripts and leases), and a writer left running while `pg_restore
---clean` drops and recreates the tables writes into a database that is half old and half new. The
-sentence was `stop app launcher` until WP-135 (PROGRESS backlog 433); the corrected commands were
-not run against a dump.
+Then run the whole block. Each line runs only if the one before it succeeded, so a paste stops at
+the first failure:
+
+<!-- restore-block:start -->
+```bash
+gzip -t backup.sql.gz &&
+docker compose stop app runner launcher db-backup &&
+docker compose exec -T db sh -c 'dropdb --username="$POSTGRES_USER" --maintenance-db=postgres --force "$POSTGRES_DB" && createdb --username="$POSTGRES_USER" --maintenance-db=postgres "$POSTGRES_DB"' &&
+gunzip -c backup.sql.gz | docker compose exec -T db sh -c 'psql --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --quiet --output=/dev/null -v ON_ERROR_STOP=1 --single-transaction' &&
+docker compose up -d &&
+docker compose start db-backup
+```
+<!-- restore-block:end -->
+
+What each line is for:
+
+1. **`gzip -t` first, while the database is still whole.** A dump cut by a stop (above) is a
+   truncated file under a real name; `gzip -t` refuses it (*"unexpected end of file"*) and nothing
+   after it runs.
+2. **Stop every writer and the backup service.** `app` and `runner` both write the database (since
+   WP-53 the runner is a second writer — its jobs, its runs' transcripts and leases), the launcher
+   serves the runner, and a `db-backup` left running could dump the half-restored database and make
+   it the next `*-latest`. Naming `db-backup` is harmless on an instance that never started it.
+3. **Drop and recreate the database** through the maintenance database. A plain dump carries no
+   `DROP` statements, so restoring over the live tables collides with every object they hold.
+   `--force` ends any session still connected.
+4. **Load the dump** with `ON_ERROR_STOP` and `--single-transaction`: the first error stops `psql`
+   and rolls the whole load back, so a failed restore leaves an empty database and stopped services
+   — never a half-restored one serving traffic. Fix the cause and run the block again.
+5. **Start the services again with `up -d`, not `start`.** `start` reuses the existing containers
+   and never re-reads `PLATFORM_TAG` (measured: with the tag changed, `start` brought `app`,
+   `migrate` and `launcher` back on the old image), and `app` depends on `migrate`, which runs
+   again either way. So on a rollback (§ 5), a `start` would run the **newer** image's `migrate`
+   and move the restored database forward again; `up -d` recreates every container whose tag
+   changed and runs the older `migrate`. Set `PLATFORM_TAG` **before** you run the block.
+   `start db-backup` brings the backup service back if you run it, and does nothing if you do not.
+
+`node scripts/restore-check.mjs` runs exactly this block, read from this page between its markers,
+against a dump the pinned `db-backup` image made **and** against one § 5's pre-upgrade line made
+(read from its own markers), and compares every table's row count and the applied migrations with
+each dump (PROGRESS WP-228). The sentence was `stop app launcher` until
+WP-135 (PROGRESS backlog 433), and the block ran `pg_restore` until WP-228 (backlog 633).
 
 ### What is deliberately **not** backed up
 
