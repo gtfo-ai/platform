@@ -16841,6 +16841,36 @@ Proved through the real adapter with `max_pages: 1` and a second page holding th
 
 **Depends on** nothing. It is small enough to ride with any tooling row, and it is worth landing before the next session that runs rows in worktrees.
 
+### 613. **A git floor written as a short-option glob matches only a token that starts with its letter, so `git commit -an -m x` reads `allow` while `git commit -na` reads `hazardous_argument`: git parses short options getopt-style, `-an` is `-a -n`, and `-n` is `--no-verify`** (TODO, **major, fail-open under `auto`, live**: a hook-skipping commit passes a floor that exists because skipping hooks skips the repository's secret scan (BD-002). Found by WP-204's reviewer, session 17. The refiner read `command-policy.ts` on `main` at `72c8ce9f` and ran nothing. **No work package owns it — an architect pass places it.**)
+
+**What is wrong.** The floor `git commit* -n*` (`packages/domain/src/policies/command-policy.ts:1632`, hazard *"the short spelling of --no-verify"*) is a glob over whole tokens. It catches `-n`, `-nm` and `-na`, but not `-an`, `-anm` or `-sn`, where `n` sits later in the cluster. git reads every one of those as including `-n`. WP-204 kept the floors on the whole-token reading on purpose, because Go's flags are not getopt's (`go test -cover` must not read as `go* -o`). That reason is Go's. git's subcommand options are getopt-style, and the table already says so in two places: the `rebase -x` and `difftool -x` floors were rewritten as token predicates (`:1501-1505`, `:1524-1528`) because *"a glob cannot read a cluster"* (`:1487`, `:1512`), and `make -E` is matched inside a cluster (`:1712`). The WP-161 abbreviation floor says *"Short options are not read here (`-n` and `rebase -x` have entries of their own)"* (`:1260`), so only `-n` was left as a glob.
+
+**Evidence** (reviewer's measurement, quoted from the report):
+- `decideUnattendedCommand('git commit -an -m x', DEFAULT_COMMAND_POLICY, 'auto')` → `allow` (`allow_list`, through `git commit *`, `:744`).
+- `decideUnattendedCommand('git commit -na', …)` → `hazardous_argument`.
+
+**The other git floors with a short spelling a cluster could hide** (the refiner's reading of the table at `:1463-1720`; only the first row was measured):
+1. `git commit* -n*` (`:1632`). **Live, measured** as above.
+2. `git merge* -s*` (`:1649`) and `git merge* -X*` (`:1660`). git-merge's `-n` is `--no-stat` and takes no value, so `git merge -ns ours origin/main` and `git merge -nXours origin/main` should hide the strategy. `git merge origin/*` is on the implementation allow set (`:892`), and these floors exist because product/19 §3 says `-s`/`-X` are *"never allow"*. **Hypothesis: needs measurement.** The likely grade is major, like row 1.
+3. `--no-verify` on `merge`, `push` and `am`. `git push -n` is `--dry-run` and `git merge -n` is `--no-stat`, so neither is a short `--no-verify`, and a `-n` floor there would be wrong. `git am` may document `-n` for `--no-verify`. **Needs a read of git-am(1) for the run image's git (2.47.3)**: if it does, `am` needs the same floor, which does not exist today in any form.
+4. `--upload-pack`'s short spelling `-u` on `git clone` (and possibly `git ls-remote`). No floor exists for `-u` in any form, alone or clustered. The refiner is recalling this from git's manuals, not reading them, so it is **a hypothesis: needs a read of git-clone(1) and git-ls-remote(1)**. It is outside the default allow set (no `git clone` entry), so it matters for a project that allows `git *`.
+5. Already cluster-aware: `rebase -x` (`:1501-1505`) and `difftool -x` (`:1524-1528`), both measured against git 2.47.3 at WP-160/161.
+6. `git -c <key>=<v>` (`:1219`, `GIT_GLOBAL_VALUE_OPTIONS`) is a global option before the subcommand. The refiner understands that git's top-level parser compares whole words and does not cluster them, so `-pc` should be refused by git itself. **Not a row of this finding unless measured otherwise.** The configuration-key path is WP-200's (`:351`).
+7. `git push -f*`/`-d*` (`:389`, `:392`) are **block** entries, not floors. `git push -uf` hiding `-f` is the class WP-204 already owns ("a block entry is read by getopt's own rules"). If WP-204 lands as titled, it is closed there and is not this entry's.
+
+**What it costs to leave.** Under `auto`, an agent's `git commit -an -m …` commits with the pre-commit and commit-msg hooks skipped, which skips the secret scan and the formatter, and it is auto-allowed without a prompt. Nothing needs to be configured, because `git commit *` is in the shipped implementation allow set. The developer stage's model chooses its own flags, so the trigger is whatever spelling it writes.
+
+**Done when** git's floors read a short-option cluster letter by letter, per program and for git only: Go stays whole-token and the `go -cover` row stays green. Ideally this goes through WP-204's normaliser, which already reads a cluster as its letters, given a git table of which short options take a value so that `-m x` and `-mx` end the cluster. Rows through `decideUnattendedCommand(…, DEFAULT_COMMAND_POLICY, 'auto')`:
+- `git commit -an -m x`, `git commit -anm x` and `git commit -sn` → `hazardous_argument`;
+- controls: `git commit -am x` → `allow`, and `git commit -m -n` stays `allow` (`-n` here is `-m`'s value, so it is a message, not a flag);
+- if row 2 measures live: `git merge -ns ours origin/main` and `git merge -nXours origin/main` → floored;
+- if row 3 or 4 reads true: `git am -n` and `git clone -u x y` (with `-qu`) → floored;
+- `git push -nf`, which is a dry run with a force flag: whatever WP-204's block reading answers, asserted rather than assumed.
+
+**Canary:** restore the `git commit* -n*` glob and the `-an` and `-anm` rows fail while `-na` stays green.
+
+**Depends on** WP-204 (the shared normaliser; it is TODO on `main`). It may fold into WP-204 if the architect widens that row from block entries to git floors. Rows 2–4 need their measurement or manual read before they are scheduled as more than hypotheses.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
