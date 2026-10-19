@@ -12,11 +12,22 @@
  * `listStatuses` with `[]` instead of refusing must fail the suite's clauses, which is asserted here
  * as a rejection rather than once by hand. The workflow's status names are invented (BD-031).
  */
-import type { TicketPollPlan } from '@platform/application';
+import {
+  allowAnyIntegrationHost,
+  createIntegrationActionExecutor,
+  createMemoryAuditLog,
+  createVirtualTimer,
+  type IntegrationActionExecutor,
+  noSecretsRedactor,
+  type TaskManagementPort,
+  type TicketPollPlan,
+} from '@platform/application';
+import { fixedClock } from '@platform/domain';
 import { createFakeTaskManagement } from '@platform/integrations';
 import { describe, expect, it } from 'vitest';
 import {
   checkListStatuses,
+  checkOneExecutorCallPerPortCall,
   expectRefusedByName,
   runTaskManagementContract,
   type TaskManagementContractContext,
@@ -42,6 +53,19 @@ const WORKFLOW = [
   { name: 'Sent back', rawCategory: 'a-key-nobody-documented' },
   { name: 'Finished', rawCategory: 'done' },
 ] as const;
+
+/** The composition's executor (WP-212): the fake is handed none, as no shipped provider is. */
+const composition = () => {
+  const audit = createMemoryAuditLog();
+  const executor = createIntegrationActionExecutor({
+    egress: allowAnyIntegrationHost(),
+    auditLog: audit,
+    redactor: noSecretsRedactor(),
+    timer: createVirtualTimer({ autoAdvance: true }),
+    clock: fixedClock('2026-10-19T09:00:00.000Z'),
+  });
+  return { executor, audit };
+};
 
 const fakeHarness: TaskManagementContractHarness = {
   name: 'in-memory fake',
@@ -135,6 +159,7 @@ const fakeHarness: TaskManagementContractHarness = {
           return 'user-2';
         },
       },
+      composition: composition(),
       projectId: PROJECT_ID,
       integrationId: INTEGRATION_ID,
       cleanup: async () => {},
@@ -175,5 +200,40 @@ describe('canary: a lifecycle member that answers [] instead of refusing (WP-171
       }),
     };
     await expect(checkListStatuses(canary)).rejects.toThrow(/never an empty list/);
+  });
+});
+
+/**
+ * WP-212's canary, kept beside the clause rather than made once by hand: a provider that enters its
+ * composition's executor from inside its own members — the Jira shape before WP-212 — fails the
+ * one-executor-call clause by counting its own rows beside its caller's.
+ */
+describe('canary: a provider that wraps its own members in the executor (WP-212)', () => {
+  const wrappingItsOwnMembers = (
+    port: TaskManagementPort,
+    executor: IntegrationActionExecutor,
+  ): TaskManagementPort => ({
+    ...port,
+    readTicket: async (ref) =>
+      (
+        await executor.execute({
+          integration: port.ref,
+          action: 'read_ticket',
+          mutating: false,
+          payload: {},
+          perform: () => port.readTicket(ref),
+        })
+      ).result,
+  });
+
+  it('fails the clause', async () => {
+    const context = await fakeHarness.create();
+    const canary = {
+      ...context,
+      port: wrappingItsOwnMembers(context.port, context.composition.executor),
+    };
+    await expect(checkOneExecutorCallPerPortCall(canary)).rejects.toThrow(
+      /one audit row per port call/,
+    );
   });
 });

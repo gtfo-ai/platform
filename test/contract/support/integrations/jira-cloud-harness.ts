@@ -1,12 +1,19 @@
 /**
- * One Jira Cloud binding, composed the way the composition root will compose it: the adapter, an
+ * One Jira Cloud binding, composed the way the composition root composes it: the adapter, an
  * `IntegrationActionExecutor` with a memory audit log, a virtual timer and a fixed clock, all in
  * front of the fixture-backed replay double.
  *
  * It lives beside the contract suite because two runners need it — the shared
  * `runTaskManagementContract` and the Jira-specific contract file — and because the *composition*
- * is part of what WP-08 has to get right: an adapter that reached a provider without going through
- * the executor would still pass a suite that only calls port methods.
+ * is part of what WP-08 has to get right.
+ *
+ * **Since WP-212 the adapter makes no executor call of its own** (GitLab's shape): the caller's
+ * call is the one. So the binding carries two views of one adapter: `adapter`, the port itself,
+ * which the shared suite runs against; and `port`, the same adapter with every port call made
+ * inside **one** executor call, as the pipeline's `read`/`mutate` make it
+ * (`packages/application/src/pipeline/integrations.ts`) — a read for the members that change
+ * nothing and a mutation, under the binding's `mode`, for the eight that do. The Jira-specific
+ * file asserts the audit rows, the shadow guard, the retries and the scrub through `port`.
  */
 import {
   allowAnyIntegrationHost,
@@ -21,7 +28,7 @@ import {
   type TaskManagementPort,
   type VirtualTimer,
 } from '@platform/application';
-import type { Id, TaskMode } from '@platform/contracts';
+import type { Id, JsonObject, TaskMode } from '@platform/contracts';
 import { fixedClock } from '@platform/domain';
 import {
   createJiraCloudTaskManagement,
@@ -44,12 +51,15 @@ export const JIRA_TASK_ID: Id = '00000000-0000-4000-8000-00000000c108';
 export const JIRA_PICKUP_LABEL = 'agentic';
 
 export interface JiraBinding {
+  /** The adapter as its caller holds it: one executor call per port call (WP-212). */
   readonly port: TaskManagementPort;
+  /** The adapter itself, with no executor anywhere — what the shared suite runs against. */
+  readonly adapter: TaskManagementPort;
   readonly replay: JiraReplay;
   readonly audit: MemoryIntegrationAuditLog;
   readonly timer: VirtualTimer;
   readonly executor: IntegrationActionExecutor;
-  /** Flipped by the shadow-mode tests; the adapter reads it at every call. */
+  /** Flipped by the shadow-mode tests; the executor call around each port call reads it. */
   mode: TaskMode;
 }
 
@@ -104,20 +114,14 @@ export const createJiraBinding = (options: JiraBindingOptions = {}): JiraBinding
     rateLimits: () => JIRA_CLOUD_RATE_LIMIT_POLICY,
   });
 
-  // The mode lives in a cell the adapter reads at every call, which is what a real
-  // `actionContext` does: one binding serves tasks in both modes over its lifetime.
+  // The mode lives in a cell read at every call: one binding serves tasks in both modes over its
+  // lifetime, and the caller states the task's mode on each executor call.
   const state: { mode: TaskMode } = { mode: options.mode ?? 'normal' };
 
-  const port = createJiraCloudTaskManagement({
+  const adapter = createJiraCloudTaskManagement({
     integrationId: JIRA_INTEGRATION_ID,
     config: jiraConfig(options.config),
-    executor,
     clock,
-    actionContext: () => ({
-      mode: state.mode,
-      projectId: JIRA_PROJECT_ID,
-      taskId: JIRA_TASK_ID,
-    }),
     fetch: options.fetch ?? replay.fetch,
     // Required since WP-11 (standing rule 31). The adapter composes it with the redactor it builds
     // from its own configuration, so the no-op here states "this harness injected nothing else".
@@ -125,7 +129,8 @@ export const createJiraBinding = (options: JiraBindingOptions = {}): JiraBinding
   });
 
   return {
-    port,
+    port: throughOneExecutorCall(adapter, executor, () => state.mode),
+    adapter,
     replay,
     audit,
     timer,
@@ -145,3 +150,132 @@ export const JIRA_TICKET = {
   key: 'ACME-1',
   url: `${JIRA_REPLAY_SITE}/browse/ACME-1`,
 } as const;
+
+/**
+ * Every port call made inside one executor call, the way the pipeline makes it (WP-212): a read for
+ * a member that changes nothing, and a mutation under the caller's `mode` for the eight that do,
+ * each answering a shadow task with a value that cannot be mistaken for a provider's (the
+ * pipeline's own `would-have` spellings). Action names are the members' own, in snake_case.
+ */
+const throughOneExecutorCall = (
+  adapter: TaskManagementPort,
+  executor: IntegrationActionExecutor,
+  mode: () => TaskMode,
+): TaskManagementPort => {
+  const scope = { projectId: JIRA_PROJECT_ID, taskId: JIRA_TASK_ID };
+  const read = async <T>(action: string, payload: JsonObject, perform: () => Promise<T>) =>
+    (
+      await executor.execute<T>({
+        integration: adapter.ref,
+        action,
+        mutating: false,
+        payload,
+        ...scope,
+        perform,
+      })
+    ).result;
+  const mutate = async <T>(
+    action: string,
+    payload: JsonObject,
+    perform: () => Promise<T>,
+    shadowResult: () => T,
+  ) =>
+    (
+      await executor.execute<T>({
+        integration: adapter.ref,
+        action,
+        mutating: true,
+        mode: mode(),
+        payload,
+        ...scope,
+        perform,
+        shadowResult,
+        describeResult: () => null,
+      })
+    ).result;
+  const wouldHaveComment = (ticketKey: string, markerId: string | null) => ({
+    provider: adapter.ref.provider,
+    ticket_key: ticketKey,
+    comment_id: 'would-have',
+    url: null,
+    marker_id: markerId,
+  });
+  return {
+    ...adapter,
+    readTicket: (ref) =>
+      read('read_ticket', { ticket_key: ref.key }, () => adapter.readTicket(ref)),
+    matchTickets: (rule, options) =>
+      read('match_tickets', { rule: rule.kind }, () => adapter.matchTickets(rule, options)),
+    resolveIdentity: (query) => read('resolve_identity', {}, () => adapter.resolveIdentity(query)),
+    testConnection: () => read('test_connection', {}, () => adapter.testConnection()),
+    listStatuses: () => read('list_statuses', {}, () => adapter.listStatuses()),
+    listTransitions: (ref) =>
+      read('list_transitions', { ticket_key: ref.key }, () => adapter.listTransitions(ref)),
+    selfIdentity: () => read('self_identity', {}, () => adapter.selfIdentity()),
+    listComments: (ref, options) =>
+      read('list_comments', { ticket_key: ref.key }, () => adapter.listComments(ref, options)),
+    transition: (ref, status, fields) =>
+      mutate(
+        'transition',
+        { ticket_key: ref.key, to: status },
+        () => adapter.transition(ref, status, fields),
+        () => ({ changed: false, from: status, to: status }),
+      ),
+    upsertWorkpad: (ref, markerId, markdown) =>
+      mutate(
+        'upsert_workpad',
+        { ticket_key: ref.key, marker_id: markerId },
+        () => adapter.upsertWorkpad(ref, markerId, markdown),
+        () => wouldHaveComment(ref.key, markerId),
+      ),
+    addComment: (ref, markdown, options) =>
+      mutate(
+        'add_comment',
+        { ticket_key: ref.key },
+        () => adapter.addComment(ref, markdown, options),
+        () => wouldHaveComment(ref.key, options?.markerId ?? null),
+      ),
+    setLabels: (ref, add, remove) =>
+      mutate(
+        'set_labels',
+        { ticket_key: ref.key },
+        () => adapter.setLabels(ref, add, remove),
+        () => [...add],
+      ),
+    linkMergeRequest: (ref, mrUrl) =>
+      mutate(
+        'link_merge_request',
+        { ticket_key: ref.key },
+        () => adapter.linkMergeRequest(ref, mrUrl),
+        () => undefined,
+      ),
+    createTicket: (draft) =>
+      mutate(
+        'create_ticket',
+        { project_key: draft.project_key },
+        () => adapter.createTicket(draft),
+        () => ({
+          provider: adapter.ref.provider,
+          key: 'WOULD-HAVE-NOT-A-REAL-TICKET',
+          url: 'https://shadow.invalid/would-have-created',
+        }),
+      ),
+    assignToSelf: (ref) =>
+      mutate(
+        'assign_to_self',
+        { ticket_key: ref.key },
+        () => adapter.assignToSelf(ref),
+        () => ({
+          changed: false,
+          assignee: { provider: adapter.ref.provider, external_id: 'would-have', verified: false },
+        }),
+      ),
+    unassign: (ref) =>
+      mutate(
+        'unassign',
+        { ticket_key: ref.key },
+        () => adapter.unassign(ref),
+        () => ({ changed: false }),
+      ),
+  };
+};

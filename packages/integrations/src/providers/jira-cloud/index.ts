@@ -5,40 +5,31 @@
  * `TaskManagementPort`, and this is one. What follows is the part of that contract that is
  * specific to Jira and could not be learned from the port alone.
  *
- * ## Every outbound call goes through `IntegrationActionExecutor`
+ * ## The caller's `IntegrationActionExecutor` call is the one (WP-212, backlog 550)
  *
- * Not "most": every one, reads included. The executor owns shadow mode, idempotency, the
- * per-binding rate limit, the audit row (BD-003) and — the reason a *read* goes through it too —
- * the single `catch` that scrubs an escaping error (TD-012). `docs/TODO.md` records that an
- * adapter throwing *outside* the executor is uncovered, and round 1 of this work package's review
- * found one here: `transition` decided "no such transition" after its resolving action had
- * returned and threw the provider's own status names past the scrub. The decision now happens
- * inside `perform`, and the assertion that keeps it there is an audit row — only the executor
- * writes one, so a refusal that is *recorded* is a refusal that went through it. The throws left
- * outside carry no provider text at all: a missing delivery header, the caller's own marker id,
- * and the constant message of an `IntegrationUnsupportedError`.
+ * This adapter does **not** enter the executor: it is GitLab's shape (`gitlab/provider.ts`). Every
+ * port call it serves in production is made inside **one** executor call by its caller — the
+ * pipeline's `read`/`mutate` (`pipeline/integrations.ts`) and the prober's `test_connection`
+ * (`bindings/prober.ts`) — and that call owns shadow mode, idempotency, the per-binding rate limit,
+ * the audit row (BD-003) and the single `catch` that scrubs an escaping error (TD-012). So one port
+ * call is one `integration_actions` row and one rate-limit token, not one HTTP request: `readTicket`
+ * makes three requests (issue, comments, remote links), five when the ticket is in an epic (parent,
+ * siblings), which is why `JIRA_CLOUD_RATE_LIMIT_POLICY` below is deliberately far under Jira's own
+ * budget.
  *
- * One executor action is one **port call**, not one HTTP request: `readTicket` spends a single
- * `read_ticket` action on three requests (issue, comments, remote links), five when the ticket is
- * in an epic (parent, siblings). That keeps the audit readable — a row is something the platform
- * decided to do — and it makes the rate limiter count port calls, which is why
- * `JIRA_CLOUD_RATE_LIMIT_POLICY` below is deliberately far under Jira's own budget.
+ * Until WP-212 the adapter wrapped its own members in the same executor instance under the same
+ * `integrations.id`, so a pipeline call wrote two rows (three for a member that resolves before it
+ * writes) and, before `df01f9b1`, held two limiter slots. What that inner wrap carried, and where it
+ * went, is in PROGRESS under WP-212: its shadow guard ran under a fixed `normal` mode and never
+ * decided anything in production, it made no idempotency key, and its per-request evidence is the
+ * caller's row now — except `listStatuses`' category conflicts, which go to the `logger` below.
  *
- * A port method that *resolves* something before mutating spends two actions (two audit rows; under
- * the pipeline's executor one token since backlog 550, the inner calls being re-entrant), and that is on
- * purpose: `transition` records a `resolve_transition` read and then, only if a move is actually
- * needed, a `transition` write. A shadow task performs the first and stops at the second — which
- * is what shadow mode means — and an unknown target status still fails loudly in shadow mode,
- * because the resolution happens before the guard.
- *
- * ## Where the task's mode comes from
- *
- * `MutatingActionRequest.mode` is required and must never be defaulted (a shadow guard that
- * guesses "not guarded" fails open). The port's methods have no mode parameter, so this adapter is
- * constructed with an `actionContext` function that answers "on whose behalf is this call being
- * made" — the task's `mode`, and its ids for the audit row. WP-15 supplies it when it resolves a
- * binding for a task; `fixedActionContext` is the answer for a caller that has no task (a poll, a
- * health probe) and is deliberately explicit rather than implied.
+ * Every throw still leaves through the caller's executor, because every port call is made inside
+ * its `perform`: an error carrying provider text (a refused transition quoting the workflow's status
+ * names) is scrubbed there, after the adapter's own redactor has already scrubbed the transport's
+ * text (`client.ts`). A member that *resolves* before it writes — `transition`, `upsertWorkpad`,
+ * `setLabels`, `assignToSelf`, `unassign` — makes its read and its write inside that one call, so a
+ * caller that refuses a shadow task's mutation refuses the read with it.
  *
  * ## Idempotency lives in the provider, not in a store
  *
@@ -71,9 +62,8 @@
  * The six lifecycle members use research/15 J1 (`project/{key}/statuses`, per key in
  * `project_keys`), J3, J4 (`PUT issue/{key}/assignee`), J5 (`orderBy=-created`) and J6 — never J2,
  * which needs project administration. The claim and the release are split like `transition`: a
- * `read_assignee` read and then, only when something must change, an `assign_to_self` or `unassign`
- * mutation, so shadow mode performs the read and stops at the write, and `unassign` never writes a
- * ticket somebody else holds. Each member's own docblock carries its rule.
+ * read of the assignee and then, only when something must change, the `PUT`, so `unassign` never
+ * writes a ticket somebody else holds. Each member's own docblock carries its rule.
  */
 import {
   type AssignResult,
@@ -85,18 +75,19 @@ import {
   type ExternalIdentity,
   egressHostOf,
   type HealthProbe,
-  type IntegrationActionExecutor,
   IntegrationError,
   type IntegrationRef,
   IntegrationUnsupportedError,
   type LifecycleStatus,
   type ListCommentsOptions,
+  type Logger,
   lifecycleStatusSchema,
   listCommentsOptionsSchema,
   normaliseStatusCategory,
   parseProviderData,
   type RateLimitPolicy,
   type SecretRedactor,
+  silentLogger,
   type TaskManagementCapabilities,
   type TaskManagementPort,
   type Ticket,
@@ -112,13 +103,7 @@ import {
   ticketTransitionSchema,
   type UnassignResult,
 } from '@platform/application';
-import {
-  type Id,
-  type JsonObject,
-  lifecycleStatusKey,
-  MAX_TICKET_STATUSES,
-  type TaskMode,
-} from '@platform/contracts';
+import { type Id, lifecycleStatusKey, MAX_TICKET_STATUSES } from '@platform/contracts';
 import type { Clock } from '@platform/domain';
 import * as z from 'zod';
 import { adfMarkerId, adfToMarkdown, markdownToAdfDocument } from './adf.js';
@@ -322,25 +307,16 @@ export const commentTotalOf = (total: unknown, returned: number): number | null 
   return returned < READ_TICKET_COMMENT_PAGE ? shown : null;
 };
 
-/** On whose behalf a call is made. `mode` is `tasks.mode` (technical/03) and is never defaulted. */
-export interface JiraActionContext {
-  readonly mode: TaskMode;
-  readonly projectId?: Id | null;
-  readonly taskId?: Id | null;
-}
-
-/** For a caller with no task: a poll, a health probe, the setup wizard. */
-export const fixedActionContext = (mode: TaskMode): (() => JiraActionContext) => {
-  return () => ({ mode, projectId: null, taskId: null });
-};
-
 export interface JiraCloudOptions {
   readonly integrationId: Id;
   readonly config: JiraCloudConfig;
-  readonly executor: IntegrationActionExecutor;
-  /** See the module docblock: the task this call belongs to, read at every call. */
-  readonly actionContext: () => JiraActionContext;
   readonly clock: Clock;
+  /**
+   * Where `listStatuses` names a status it read with two categories (WP-212). Until WP-212 that was
+   * the adapter's own `list_statuses` audit row; the caller's row describes the port call, not what
+   * the union kept, so the record moved here. Absent is silent, as Slack's is.
+   */
+  readonly logger?: Logger;
   /** Injected by the fixture-replay contract runner; the default is the global `fetch`. */
   readonly fetch?: JiraClientOptions['fetch'];
   /**
@@ -353,8 +329,6 @@ export interface JiraCloudOptions {
    */
   readonly redactor: SecretRedactor;
 }
-
-const jsonPayload = (fields: JsonObject): JsonObject => fields;
 
 export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskManagementPort => {
   const config = jiraCloudConfigSchema.parse(options.config);
@@ -444,51 +418,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     commentsRead: true,
   };
 
-  const context = (): JiraActionContext => options.actionContext();
-
-  const read = async <T>(
-    action: string,
-    payload: JsonObject,
-    perform: () => Promise<T>,
-    describeResult?: (result: T) => JsonObject | null,
-  ): Promise<T> => {
-    const { mode, projectId, taskId } = context();
-    const outcome = await options.executor.execute<T>({
-      integration: ref,
-      action,
-      mutating: false,
-      mode,
-      projectId: projectId ?? null,
-      taskId: taskId ?? null,
-      payload,
-      perform,
-      ...(describeResult === undefined ? {} : { describeResult }),
-    });
-    return outcome.result;
-  };
-
-  const mutate = async <T>(
-    action: string,
-    payload: JsonObject,
-    perform: () => Promise<T>,
-    shadowResult: () => T,
-    describeResult: (result: T) => JsonObject | null,
-  ): Promise<T> => {
-    const { mode, projectId, taskId } = context();
-    const outcome = await options.executor.execute<T>({
-      integration: ref,
-      action,
-      mutating: true,
-      mode,
-      projectId: projectId ?? null,
-      taskId: taskId ?? null,
-      payload,
-      perform,
-      shadowResult,
-      describeResult,
-    });
-    return outcome.result;
-  };
+  const logger = options.logger ?? silentLogger;
 
   // ── Provider reads used by several methods ─────────────────────────────────
 
@@ -591,7 +521,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
    * state an untrusted producer can put this adapter in. Answering `null` would make the author
    * check compare against nothing, and the check is the only thing standing between a marker a
    * human typed and the platform editing that person's comment. This throws instead, from inside
-   * the executor's `perform`, so the failure is audited and scrubbed like any other.
+   * the caller's executor call, so the failure is audited and scrubbed like any other.
    */
   const requireSelfAccountId = async (action: string): Promise<string> => {
     if (selfAccountId === null) {
@@ -672,44 +602,42 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
 
   const readTicket = async (ticketRef: TicketRefInput): Promise<Ticket> => {
     const key = ticketRef.key;
-    return read('read_ticket', jsonPayload({ ticket_key: key }), async () => {
-      const action = 'read_ticket';
-      const issue = await fetchIssue(key, FIELDS_FOR_TICKET, jiraIssueWithUpdatedSchema, action);
-      const [commentPage, remoteLinks] = await Promise.all([
-        fetchNewestComments(key, action),
-        fetchRemoteLinks(key, action),
-      ]);
-      const parentKey = issue.fields.parent?.key ?? null;
-      const epic =
-        parentKey === null
-          ? null
-          : await (async () => {
-              const parent = await fetchIssue(
-                parentKey,
-                'summary,description',
-                jiraIssueSchema,
-                action,
-              );
-              return {
-                key: parentKey,
-                title: parent.fields.summary ?? '',
-                description: adfDescription(parent.fields.description),
-              };
-            })();
-      const siblings = parentKey === null ? [] : await fetchSiblings(parentKey, key, action);
-      const mapped = toTicket({
-        issue,
-        siteUrl,
-        comments: commentPage.comments,
-        commentTotal: commentPage.total,
-        remoteLinks,
-        epic,
-        siblings,
-      });
-      // The mapping is ours, but every value in it came from Jira: a timestamp Jira invented or a
-      // field it dropped fails here, at the ring boundary, rather than three layers up (BD-022).
-      return parse(ticketSchema, mapped, action);
+    const action = 'read_ticket';
+    const issue = await fetchIssue(key, FIELDS_FOR_TICKET, jiraIssueWithUpdatedSchema, action);
+    const [commentPage, remoteLinks] = await Promise.all([
+      fetchNewestComments(key, action),
+      fetchRemoteLinks(key, action),
+    ]);
+    const parentKey = issue.fields.parent?.key ?? null;
+    const epic =
+      parentKey === null
+        ? null
+        : await (async () => {
+            const parent = await fetchIssue(
+              parentKey,
+              'summary,description',
+              jiraIssueSchema,
+              action,
+            );
+            return {
+              key: parentKey,
+              title: parent.fields.summary ?? '',
+              description: adfDescription(parent.fields.description),
+            };
+          })();
+    const siblings = parentKey === null ? [] : await fetchSiblings(parentKey, key, action);
+    const mapped = toTicket({
+      issue,
+      siteUrl,
+      comments: commentPage.comments,
+      commentTotal: commentPage.total,
+      remoteLinks,
+      epic,
+      siblings,
     });
+    // The mapping is ours, but every value in it came from Jira: a timestamp Jira invented or a
+    // field it dropped fails here, at the ring boundary, rather than three layers up (BD-022).
+    return parse(ticketSchema, mapped, action);
   };
 
   const fetchSiblings = async (
@@ -889,11 +817,9 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     const limit = matchOptions?.limit ?? 50;
     const since = matchOptions?.since ?? null;
     const jql = buildJql(rule, since, options.clock.now());
-    return read('match_tickets', jsonPayload({ jql, limit }), async () =>
-      rule.kind === 'keys'
-        ? searchKeys(rule.keys, rule.ids ?? [], since, limit, matchOptions?.onUnreadableKeys)
-        : searchUpTo(jql, limit),
-    );
+    return rule.kind === 'keys'
+      ? searchKeys(rule.keys, rule.ids ?? [], since, limit, matchOptions?.onUnreadableKeys)
+      : searchUpTo(jql, limit);
   };
 
   const transition = async (
@@ -907,78 +833,42 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
       throw new IntegrationUnsupportedError(PROVIDER_ID, 'fields on a transition');
     }
     const key = ticketRef.key;
-    /**
-     * The whole resolution — including the refusal — happens **inside** the executor's `perform`.
-     *
-     * The refusal quotes the provider's own status names back to the caller, and TD-012 requires
-     * every error carrying provider text to leave the integration layer through the executor's
-     * single scrubbing `catch`. Deciding it out here and throwing after the action returned would
-     * go around that choke point, which is precisely what WP-08 review round 1 found. `target`
-     * being `null` therefore means one thing only — the ticket is already in the target status —
-     * because the other way of having no transition is the throw.
-     */
-    const resolved = await read(
-      'resolve_transition',
-      jsonPayload({ ticket_key: key, target_status: targetStatusName }),
-      async (): Promise<{ readonly from: string; readonly target: JiraTransition | null }> => {
-        const action = 'resolve_transition';
-        const issue = await fetchIssue(key, 'status', jiraIssueSchema, action);
-        const listed = parse(
-          jiraTransitionsSchema,
-          await client.send({
-            method: 'GET',
-            path: `issue/${encodeURIComponent(key)}/transitions`,
-            action,
-          }),
-          action,
-        );
-        const from = issue.fields.status?.name ?? 'Unknown';
-        if (equalsStatus(from, targetStatusName)) {
-          // product/08: "transition only if not already there".
-          return { from, target: null };
-        }
-        const found = resolveTransition(listed.transitions, targetStatusName);
-        if (found === null) {
-          throw new IntegrationError(
-            'invalid_request',
-            PROVIDER_ID,
-            `${key} has no transition to "${targetStatusName}"; available from "${from}": ` +
-              `${describeTargets(listed.transitions)}`,
-            { action },
-          );
-        }
-        return { from, target: found };
-      },
-      (result) => ({ from: result.from, transition_id: result.target?.id ?? null }),
-    );
-
-    const target = resolved.target;
-    if (target === null) {
-      // Already there. No mutating action is recorded, because none was decided on.
-      return { changed: false, from: resolved.from, to: targetStatusName };
-    }
-
-    return mutate<TransitionResult>(
-      'transition',
-      jsonPayload({
-        ticket_key: key,
-        from: resolved.from,
-        to: targetStatusName,
-        transition_id: target.id,
+    // The refusal below quotes the provider's own status names, so it must leave through the
+    // caller's executor `catch` (TD-012) — which it does, because the whole port call is that
+    // call's `perform` (WP-08 review round 1 found it thrown past an executor that had returned).
+    const resolving = 'resolve_transition';
+    const issue = await fetchIssue(key, 'status', jiraIssueSchema, resolving);
+    const listed = parse(
+      jiraTransitionsSchema,
+      await client.send({
+        method: 'GET',
+        path: `issue/${encodeURIComponent(key)}/transitions`,
+        action: resolving,
       }),
-      async () => {
-        await client.send({
-          method: 'POST',
-          path: `issue/${encodeURIComponent(key)}/transitions`,
-          body: { transition: { id: target.id } },
-          action: 'transition',
-        });
-        return { changed: true, from: resolved.from, to: targetStatusName };
-      },
-      // Shadow mode changed nothing, and says so. What it *would* have done is the audit row.
-      () => ({ changed: false, from: resolved.from, to: targetStatusName }),
-      (result) => ({ changed: result.changed, from: result.from, to: result.to }),
+      resolving,
     );
+    const from = issue.fields.status?.name ?? 'Unknown';
+    if (equalsStatus(from, targetStatusName)) {
+      // product/08: "transition only if not already there".
+      return { changed: false, from, to: targetStatusName };
+    }
+    const target = resolveTransition(listed.transitions, targetStatusName);
+    if (target === null) {
+      throw new IntegrationError(
+        'invalid_request',
+        PROVIDER_ID,
+        `${key} has no transition to "${targetStatusName}"; available from "${from}": ` +
+          `${describeTargets(listed.transitions)}`,
+        { action: resolving },
+      );
+    }
+    await client.send({
+      method: 'POST',
+      path: `issue/${encodeURIComponent(key)}/transitions`,
+      body: { transition: { id: target.id } },
+      action: 'transition',
+    });
+    return { changed: true, from, to: targetStatusName };
   };
 
   const upsertWorkpad = async (
@@ -987,44 +877,24 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     markdown: string,
   ): Promise<CommentRef> => {
     const key = ticketRef.key;
-    const existing = await read(
-      'read_workpad',
-      jsonPayload({ ticket_key: key, marker_id: markerId }),
-      () => findMarkedComment(key, markerId, 'read_workpad'),
-      (comment) => ({ found: comment !== null, comment_id: comment?.id ?? null }),
-    );
+    const existing = await findMarkedComment(key, markerId, 'read_workpad');
     const document = markdownToAdfDocument(markdown, { markerId });
-
-    return mutate<CommentRef>(
-      'upsert_workpad',
-      jsonPayload({ ticket_key: key, marker_id: markerId, comment_id: existing?.id ?? null }),
-      async () => {
-        const action = 'upsert_workpad';
-        const path =
-          existing === null
-            ? `issue/${encodeURIComponent(key)}/comment`
-            : `issue/${encodeURIComponent(key)}/comment/${encodeURIComponent(existing.id)}`;
-        const saved = parse(
-          jiraCommentSchema,
-          await client.send({
-            method: existing === null ? 'POST' : 'PUT',
-            path,
-            body: { body: document },
-            action,
-          }),
-          action,
-        );
-        return commentRefOf(key, saved, markerId);
-      },
-      () => ({
-        provider: PROVIDER_ID,
-        ticket_key: key,
-        comment_id: existing?.id ?? 'shadow',
-        url: null,
-        marker_id: markerId,
+    const action = 'upsert_workpad';
+    const path =
+      existing === null
+        ? `issue/${encodeURIComponent(key)}/comment`
+        : `issue/${encodeURIComponent(key)}/comment/${encodeURIComponent(existing.id)}`;
+    const saved = parse(
+      jiraCommentSchema,
+      await client.send({
+        method: existing === null ? 'POST' : 'PUT',
+        path,
+        body: { body: document },
+        action,
       }),
-      (result) => ({ comment_id: result.comment_id, edited: existing !== null }),
+      action,
     );
+    return commentRefOf(key, saved, markerId);
   };
 
   const addComment = async (
@@ -1036,44 +906,24 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     const markerId = commentOptions?.markerId ?? null;
     if (markerId !== null) {
       // A marked comment is a question or a linter report: posting it twice notifies twice.
-      const existing = await read(
-        'read_marked_comment',
-        jsonPayload({ ticket_key: key, marker_id: markerId }),
-        () => findMarkedComment(key, markerId, 'read_marked_comment'),
-        (comment) => ({ found: comment !== null }),
-      );
+      const existing = await findMarkedComment(key, markerId, 'read_marked_comment');
       if (existing !== null) {
         return commentRefOf(key, existing, markerId);
       }
     }
     const document = markdownToAdfDocument(markdown, { markerId });
-
-    return mutate<CommentRef>(
-      'add_comment',
-      jsonPayload({ ticket_key: key, marker_id: markerId }),
-      async () => {
-        const action = 'add_comment';
-        const saved = parse(
-          jiraCommentSchema,
-          await client.send({
-            method: 'POST',
-            path: `issue/${encodeURIComponent(key)}/comment`,
-            body: { body: document },
-            action,
-          }),
-          action,
-        );
-        return commentRefOf(key, saved, markerId);
-      },
-      () => ({
-        provider: PROVIDER_ID,
-        ticket_key: key,
-        comment_id: 'shadow',
-        url: null,
-        marker_id: markerId,
+    const action = 'add_comment';
+    const saved = parse(
+      jiraCommentSchema,
+      await client.send({
+        method: 'POST',
+        path: `issue/${encodeURIComponent(key)}/comment`,
+        body: { body: document },
+        action,
       }),
-      (result) => ({ comment_id: result.comment_id }),
+      action,
     );
+    return commentRefOf(key, saved, markerId);
   };
 
   const setLabels = async (
@@ -1082,13 +932,8 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     remove: readonly string[],
   ): Promise<readonly string[]> => {
     const key = ticketRef.key;
-    const current = await read(
-      'read_labels',
-      jsonPayload({ ticket_key: key }),
-      async () =>
-        (await fetchIssue(key, 'labels', jiraIssueSchema, 'read_labels')).fields.labels ?? [],
-      (labels) => ({ label_count: labels.length }),
-    );
+    const current =
+      (await fetchIssue(key, 'labels', jiraIssueSchema, 'read_labels')).fields.labels ?? [];
     const next = new Set(current);
     for (const label of add) {
       next.add(label);
@@ -1098,36 +943,27 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     }
     const wanted = [...next];
     if (sameLabels(current, wanted)) {
-      // Nothing to do, so nothing is sent — and no mutating row claims otherwise.
+      // Nothing to do, so nothing is sent.
       return wanted;
     }
-
-    return mutate<readonly string[]>(
-      'set_labels',
-      jsonPayload({ ticket_key: key, add: [...add], remove: [...remove] }),
-      async () => {
-        const action = 'set_labels';
-        await client.send({
-          method: 'PUT',
-          path: `issue/${encodeURIComponent(key)}`,
-          body: {
-            update: {
-              labels: [
-                ...add.filter((label) => !current.includes(label)).map((label) => ({ add: label })),
-                ...remove
-                  .filter((label) => current.includes(label))
-                  .map((label) => ({ remove: label })),
-              ],
-            },
-          },
-          action,
-        });
-        // The edit returns 204 with no body, so the result is read back rather than assumed.
-        return (await fetchIssue(key, 'labels', jiraIssueSchema, action)).fields.labels ?? [];
+    const action = 'set_labels';
+    await client.send({
+      method: 'PUT',
+      path: `issue/${encodeURIComponent(key)}`,
+      body: {
+        update: {
+          labels: [
+            ...add.filter((label) => !current.includes(label)).map((label) => ({ add: label })),
+            ...remove
+              .filter((label) => current.includes(label))
+              .map((label) => ({ remove: label })),
+          ],
+        },
       },
-      () => wanted,
-      (labels) => ({ labels: [...labels] }),
-    );
+      action,
+    });
+    // The edit returns 204 with no body, so the result is read back rather than assumed.
+    return (await fetchIssue(key, 'labels', jiraIssueSchema, action)).fields.labels ?? [];
   };
 
   const linkMergeRequest = async (ticketRef: TicketRefInput, mrUrl: string): Promise<void> => {
@@ -1135,133 +971,98 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     // Atlassian: "If a `globalId` is provided and a remote issue link with that global ID is found
     // it is updated … Otherwise, the remote issue link is created." That is the whole idempotency.
     const globalId = `agentic-merge-request=${mrUrl}`;
-    await mutate<void>(
-      'link_merge_request',
-      jsonPayload({ ticket_key: key, mr_url: mrUrl }),
-      async () => {
-        await client.send({
-          method: 'POST',
-          path: `issue/${encodeURIComponent(key)}/remotelink`,
-          body: {
-            globalId,
-            relationship: 'merge request',
-            object: { url: mrUrl, title: mrUrl },
-          },
-          action: 'link_merge_request',
-        });
+    await client.send({
+      method: 'POST',
+      path: `issue/${encodeURIComponent(key)}/remotelink`,
+      body: {
+        globalId,
+        relationship: 'merge request',
+        object: { url: mrUrl, title: mrUrl },
       },
-      () => undefined,
-      () => ({ global_id: globalId }),
-    );
+      action: 'link_merge_request',
+    });
   };
 
-  const createTicket = async (draft: TicketDraft): Promise<TicketRefInput> =>
-    mutate<TicketRefInput>(
-      'create_ticket',
-      jsonPayload({
-        project_key: draft.project_key,
-        issue_type: draft.issue_type,
-        title: draft.title,
+  const createTicket = async (draft: TicketDraft): Promise<TicketRefInput> => {
+    const action = 'create_ticket';
+    const created = parse(
+      jiraCreatedIssueSchema,
+      await client.send({
+        method: 'POST',
+        path: 'issue',
+        body: {
+          fields: {
+            project: { key: draft.project_key },
+            issuetype: { name: draft.issue_type },
+            summary: draft.title,
+            ...(draft.description.trim().length === 0
+              ? {}
+              : { description: markdownToAdfDocument(draft.description) }),
+            labels: [...draft.labels],
+            ...(draft.parent_key === null || draft.parent_key === undefined
+              ? {}
+              : { parent: { key: draft.parent_key } }),
+            ...(draft.priority === null || draft.priority === undefined
+              ? {}
+              : { priority: { name: draft.priority } }),
+          },
+        },
+        action,
       }),
-      async () => {
-        const action = 'create_ticket';
-        const created = parse(
-          jiraCreatedIssueSchema,
-          await client.send({
-            method: 'POST',
-            path: 'issue',
-            body: {
-              fields: {
-                project: { key: draft.project_key },
-                issuetype: { name: draft.issue_type },
-                summary: draft.title,
-                ...(draft.description.trim().length === 0
-                  ? {}
-                  : { description: markdownToAdfDocument(draft.description) }),
-                labels: [...draft.labels],
-                ...(draft.parent_key === null || draft.parent_key === undefined
-                  ? {}
-                  : { parent: { key: draft.parent_key } }),
-                ...(draft.priority === null || draft.priority === undefined
-                  ? {}
-                  : { priority: { name: draft.priority } }),
-              },
-            },
-            action,
-          }),
-          action,
-        );
-        return { provider: PROVIDER_ID, key: created.key, url: issueUrl(siteUrl, created.key) };
-      },
-      () => ({
-        provider: PROVIDER_ID,
-        // Obviously not a real key: a shadow task must not be able to pretend it filed a ticket.
-        key: `${draft.project_key}-SHADOW`,
-        url: issueUrl(siteUrl, `${draft.project_key}-SHADOW`),
-      }),
-      (created) => ({ key: created.key }),
+      action,
     );
+    return { provider: PROVIDER_ID, key: created.key, url: issueUrl(siteUrl, created.key) };
+  };
 
   const resolveIdentity = async (query: {
     readonly providerUserId?: string;
     readonly email?: string;
   }): Promise<ExternalIdentity | null> => {
+    const action = 'resolve_identity';
     if (query.providerUserId !== undefined) {
-      return read(
-        'resolve_identity',
-        jsonPayload({ account_id: query.providerUserId }),
-        async () => {
-          const action = 'resolve_identity';
-          try {
-            const user = parse(
-              jiraUserSchema,
-              await client.send({
-                method: 'GET',
-                path: 'user',
-                query: { accountId: query.providerUserId },
-                action,
-              }),
-              action,
-            );
-            return identityOfUser(user);
-          } catch (error) {
-            if (error instanceof IntegrationError && error.code === 'not_found') {
-              return null;
-            }
-            throw error;
-          }
-        },
-      );
+      try {
+        const user = parse(
+          jiraUserSchema,
+          await client.send({
+            method: 'GET',
+            path: 'user',
+            query: { accountId: query.providerUserId },
+            action,
+          }),
+          action,
+        );
+        return identityOfUser(user);
+      } catch (error) {
+        if (error instanceof IntegrationError && error.code === 'not_found') {
+          return null;
+        }
+        throw error;
+      }
     }
     if (query.email === undefined) {
       return null;
     }
     const email = query.email;
-    return read('resolve_identity', jsonPayload({ email_query: true }), async () => {
-      const action = 'resolve_identity';
-      const users = parse(
-        usersSchema,
-        await client.send({ method: 'GET', path: 'user/search', query: { query: email }, action }),
-        action,
-      );
-      const exact = users.find((user) => user.emailAddress?.toLowerCase() === email.toLowerCase());
-      if (exact !== undefined) {
-        return identityOfUser(exact);
-      }
-      // A site that hides email addresses (the GDPR default, and what Atlassian's own example
-      // response shows) returns matches with no `emailAddress` at all. One match for a full
-      // address is that account; two would be a prefix match on a display name, and guessing
-      // between them is how the platform would attribute an answer to the wrong human (BD-022).
-      return users.length === 1 ? identityOfUser(users[0] as z.infer<typeof jiraUserSchema>) : null;
-    });
+    const users = parse(
+      usersSchema,
+      await client.send({ method: 'GET', path: 'user/search', query: { query: email }, action }),
+      action,
+    );
+    const exact = users.find((user) => user.emailAddress?.toLowerCase() === email.toLowerCase());
+    if (exact !== undefined) {
+      return identityOfUser(exact);
+    }
+    // A site that hides email addresses (the GDPR default, and what Atlassian's own example
+    // response shows) returns matches with no `emailAddress` at all. One match for a full
+    // address is that account; two would be a prefix match on a display name, and guessing
+    // between them is how the platform would attribute an answer to the wrong human (BD-022).
+    return users.length === 1 ? identityOfUser(users[0] as z.infer<typeof jiraUserSchema>) : null;
   };
 
   const testConnection = async (): Promise<HealthProbe> => {
     const checkedAt = options.clock.now();
     try {
-      const myself = await read('test_connection', jsonPayload({}), () =>
-        fetchSelf('test_connection'),
-      );
+      const myself = await fetchSelf('test_connection');
       return {
         ok: true,
         detail: safeDetail(
@@ -1313,136 +1114,139 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
    *
    * J1 is per project, so a binding that declares no `project_keys` has no project to ask, and the
    * answer is a refusal rather than an empty list (the port: an empty answer is a refusal wearing a
-   * result's clothes). A name seen with two categories answers the first; the second is recorded on
-   * the audit row (`category_conflicts`), which is this adapter's structured log — it holds no
-   * logger, and the row is the record an operator reads beside the call.
+   * result's clothes). A name seen with two categories answers the first; the second is named on a
+   * `warn` line (`category_conflicts`, at most {@link MAX_RECORDED_CATEGORY_CONFLICTS}) through the
+   * binding's `logger` — until WP-212 it was the adapter's own `list_statuses` audit row, which the
+   * caller's single row replaced.
    */
   const listStatuses = async (): Promise<readonly LifecycleStatus[]> => {
     const action = 'list_statuses';
-    const union = await read(
-      action,
-      jsonPayload({ project_keys: [...config.project_keys] }),
-      async () => {
-        if (config.project_keys.length === 0) {
-          throw new IntegrationError(
-            'invalid_request',
-            PROVIDER_ID,
-            'listStatuses reads a project’s statuses (GET project/{key}/statuses), and this binding declares no project_keys',
-            { action },
-          );
-        }
-        const issueTypes: z.infer<typeof jiraProjectStatusesSchema> = [];
-        for (const projectKey of config.project_keys) {
-          const answered = parse(
-            jiraProjectStatusesSchema,
-            await client.send({
-              method: 'GET',
-              path: `project/${encodeURIComponent(projectKey)}/statuses`,
-              action,
-            }),
-            action,
-          );
-          issueTypes.push(...answered);
-        }
-        const result = unionJiraStatuses(issueTypes.map((issueType) => issueType.statuses));
-        if (result.overflow) {
-          // WP-181 criterion (7): refused rather than cut — a cut list would make the save check
-          // call a status the tracker has unknown, and hide it from the pick list.
-          throw new IntegrationError(
-            'invalid_response',
-            PROVIDER_ID,
-            `GET project/{key}/statuses answered more than ${MAX_TICKET_STATUSES} distinct statuses for ${config.project_keys.join(', ')}; the platform reads at most ${MAX_TICKET_STATUSES}, so name fewer project_keys on this binding`,
-            { action },
-          );
-        }
-        if (result.statuses.length === 0) {
-          throw new IntegrationError(
-            'invalid_response',
-            PROVIDER_ID,
-            `GET project/{key}/statuses answered no status the platform can name for ${config.project_keys.join(', ')}`,
-            { action },
-          );
-        }
-        return result;
-      },
-      (result) => ({
-        status_count: result.statuses.length,
-        skipped: result.skipped,
-        category_conflicts: result.conflicts
-          .slice(0, MAX_RECORDED_CATEGORY_CONFLICTS)
-          .map((conflict) => ({ ...conflict })),
-      }),
-    );
-    return union.statuses;
+    if (config.project_keys.length === 0) {
+      throw new IntegrationError(
+        'invalid_request',
+        PROVIDER_ID,
+        'listStatuses reads a project’s statuses (GET project/{key}/statuses), and this binding declares no project_keys',
+        { action },
+      );
+    }
+    const issueTypes: z.infer<typeof jiraProjectStatusesSchema> = [];
+    for (const projectKey of config.project_keys) {
+      const answered = parse(
+        jiraProjectStatusesSchema,
+        await client.send({
+          method: 'GET',
+          path: `project/${encodeURIComponent(projectKey)}/statuses`,
+          action,
+        }),
+        action,
+      );
+      issueTypes.push(...answered);
+    }
+    const result = unionJiraStatuses(issueTypes.map((issueType) => issueType.statuses));
+    if (result.overflow) {
+      // WP-181 criterion (7): refused rather than cut — a cut list would make the save check
+      // call a status the tracker has unknown, and hide it from the pick list.
+      throw new IntegrationError(
+        'invalid_response',
+        PROVIDER_ID,
+        `GET project/{key}/statuses answered more than ${MAX_TICKET_STATUSES} distinct statuses for ${config.project_keys.join(', ')}; the platform reads at most ${MAX_TICKET_STATUSES}, so name fewer project_keys on this binding`,
+        { action },
+      );
+    }
+    if (result.statuses.length === 0) {
+      throw new IntegrationError(
+        'invalid_response',
+        PROVIDER_ID,
+        `GET project/{key}/statuses answered no status the platform can name for ${config.project_keys.join(', ')}`,
+        { action },
+      );
+    }
+    if (result.conflicts.length > 0 || result.skipped > 0) {
+      // Status names are provider text (TD-012). They are already redacted: the transport runs every
+      // response body through this binding's composed `redactor` before anything reads it
+      // (`client.ts`, "Where redaction happens") — step 1 over the binding's own credentials, and,
+      // because the pipeline's loader composes the platform redactor into `ProviderCreateInput.redactor`,
+      // step 2's patterns too. That is the one guard (rules 9, 41); a second pass here would be a
+      // no-op a mutation could delete unseen (WP-212 review round 1). What the old audit row added
+      // beyond it — the executor's own step-2 pass over the row — matters only for a caller whose
+      // `redactor` omits step 2, which no production loader does (`lifecycle.test.ts` plants a token).
+      logger.warn(
+        {
+          provider: PROVIDER_ID,
+          integration_id: options.integrationId,
+          action,
+          status_count: result.statuses.length,
+          skipped: result.skipped,
+          category_conflicts: result.conflicts
+            .slice(0, MAX_RECORDED_CATEGORY_CONFLICTS)
+            .map((conflict) => ({ ...conflict })),
+        },
+        'jira statuses answered a name with two categories or an entry the platform cannot name',
+      );
+    }
+    return result.statuses;
   };
 
   /**
    * `listTransitions` — research/15 **J3**. The moves the ticket can take **now**: Jira lists only
    * available ones by default (`includeUnavailableTransitions` is false), and one that says
    * `isAvailable: false` is dropped as `resolveTransition` drops it. An entry the port's shape cannot
-   * carry (no target status name, a name past the bounds) is skipped and counted on the audit row,
-   * never invented around.
+   * carry (no target status name, a name past the bounds) is skipped and counted on a `warn` line
+   * (the adapter's own audit row until WP-212), never invented around.
    */
   const listTransitions = async (
     ticketRef: TicketRefInput,
   ): Promise<readonly TicketTransition[]> => {
     const key = ticketRef.key;
     const action = 'list_transitions';
-    const listed = await read(
-      action,
-      jsonPayload({ ticket_key: key }),
-      async () =>
-        toTicketTransitions(
-          parse(
-            jiraTransitionsSchema,
-            await client.send({
-              method: 'GET',
-              path: `issue/${encodeURIComponent(key)}/transitions`,
-              action,
-            }),
-            action,
-          ).transitions,
-        ),
-      (result) => ({ transition_count: result.transitions.length, skipped: result.skipped }),
+    const listed = toTicketTransitions(
+      parse(
+        jiraTransitionsSchema,
+        await client.send({
+          method: 'GET',
+          path: `issue/${encodeURIComponent(key)}/transitions`,
+          action,
+        }),
+        action,
+      ).transitions,
     );
+    if (listed.skipped > 0) {
+      logger.warn(
+        {
+          provider: PROVIDER_ID,
+          integration_id: options.integrationId,
+          action,
+          transition_count: listed.transitions.length,
+          skipped: listed.skipped,
+        },
+        'jira transitions answered an entry the platform cannot carry',
+      );
+    }
     return listed.transitions;
   };
 
-  /** `selfIdentity` — research/15 **J6**, `GET /myself`, read fresh through the executor. */
+  /** `selfIdentity` — research/15 **J6**, `GET /myself`, read fresh. */
   const selfIdentity = async (): Promise<ExternalIdentity> => {
-    const action = 'self_identity';
-    return read(action, jsonPayload({}), async () => {
-      selfUser = null;
-      return requireSelf(action);
-    });
+    selfUser = null;
+    return requireSelf('self_identity');
   };
 
   /**
    * Who holds the ticket, beside the binding's own account — the read half of the claim and of the
-   * release (WP-172 ruling (b)), so shadow mode stops before the write and a ticket somebody else
-   * holds is never written to by `unassign`. `fields=assignee` only, parsed without the `updated`
-   * the mapped reads require (Jira returns only the fields asked for; backlog 540).
+   * release (WP-172 ruling (b)), so a ticket somebody else holds is never written to by `unassign`.
+   * `fields=assignee` only, parsed without the `updated` the mapped reads require (Jira returns only
+   * the fields asked for; backlog 540).
    */
   const readAssignee = async (
     key: string,
   ): Promise<{ readonly assignee: string | null; readonly self: ExternalIdentity }> => {
     const action = 'read_assignee';
-    return read(
-      action,
-      jsonPayload({ ticket_key: key }),
-      async () => {
-        const [issue, self] = await Promise.all([
-          fetchIssue(key, 'assignee', jiraIssueSchema, action),
-          requireSelf(action),
-        ]);
-        const accountId = issue.fields.assignee?.accountId;
-        return { assignee: accountId === undefined ? null : accountId, self };
-      },
-      (result) => ({
-        assigned: result.assignee !== null,
-        held_by_self: result.assignee === result.self.external_id,
-      }),
-    );
+    const [issue, self] = await Promise.all([
+      fetchIssue(key, 'assignee', jiraIssueSchema, action),
+      requireSelf(action),
+    ]);
+    const accountId = issue.fields.assignee?.accountId;
+    return { assignee: accountId === undefined ? null : accountId, self };
   };
 
   /** The one write both assign members make — research/15 **J4**, with ruling (d)'s 403. */
@@ -1462,8 +1266,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
   /**
    * `assignToSelf` — the claim's write (TD-029 decision 5): a read, then `PUT …/assignee` with the
    * binding's own `accountId` **whoever held it** (the claim's re-read decides who won). Already
-   * held by this account is `{changed: false}` and nothing is written; a shadow task performs the
-   * read and records the write as `would_have`.
+   * held by this account is `{changed: false}` and nothing is written.
    */
   const assignToSelf = async (ticketRef: TicketRefInput): Promise<AssignResult> => {
     const key = ticketRef.key;
@@ -1471,16 +1274,8 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     if (held.assignee === held.self.external_id) {
       return { changed: false, assignee: held.self };
     }
-    return mutate<AssignResult>(
-      'assign_to_self',
-      jsonPayload({ ticket_key: key, was_assigned: held.assignee !== null }),
-      async () => {
-        await putAssignee(key, held.self.external_id, 'assign_to_self');
-        return { changed: true, assignee: held.self };
-      },
-      () => ({ changed: false, assignee: held.self }),
-      (result) => ({ changed: result.changed }),
-    );
+    await putAssignee(key, held.self.external_id, 'assign_to_self');
+    return { changed: true, assignee: held.self };
   };
 
   /**
@@ -1498,16 +1293,8 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     if (held.assignee !== held.self.external_id) {
       return { changed: false };
     }
-    return mutate<UnassignResult>(
-      'unassign',
-      jsonPayload({ ticket_key: key }),
-      async () => {
-        await putAssignee(key, null, 'unassign');
-        return { changed: true };
-      },
-      () => ({ changed: false }),
-      (result) => ({ changed: result.changed }),
-    );
+    await putAssignee(key, null, 'unassign');
+    return { changed: true };
   };
 
   /**
@@ -1537,21 +1324,14 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     }
     const { limit } = asked.data;
     const since = asked.data.since ?? null;
-    return read(
+    const page = await fetchCommentPage(key, action, { size: limit, orderBy: '-created' });
+    const comments = commentWindow(page.comments.slice(0, limit), since).map((comment) =>
+      toTicketComment(comment, { siteUrl, issueKey: key }),
+    );
+    return parse(
+      commentPageSchema,
+      { comments, total: comments.length < limit ? comments.length : null },
       action,
-      jsonPayload({ ticket_key: key, since, limit }),
-      async () => {
-        const page = await fetchCommentPage(key, action, { size: limit, orderBy: '-created' });
-        const comments = commentWindow(page.comments.slice(0, limit), since).map((comment) =>
-          toTicketComment(comment, { siteUrl, issueKey: key }),
-        );
-        return parse(
-          commentPageSchema,
-          { comments, total: comments.length < limit ? comments.length : null },
-          action,
-        );
-      },
-      (result) => ({ comment_count: result.comments.length, total: result.total }),
     );
   };
 
@@ -1936,7 +1716,7 @@ export const commentWindow = (
 /**
  * WP-172 ruling (d): a `403` on `PUT …/assignee` is `forbidden` **naming the permission** the
  * account lacks — J4 requires *Browse Projects* and *Assign Issues* — with Jira's own detail after
- * it. Thrown from inside the executor's `perform`, so the detail is scrubbed with every other.
+ * it. Thrown from inside the caller's executor call, so the detail is scrubbed with every other.
  */
 export const assignRefusal = (error: unknown, key: string, action: string): unknown => {
   if (!(error instanceof IntegrationError) || error.code !== 'forbidden') {

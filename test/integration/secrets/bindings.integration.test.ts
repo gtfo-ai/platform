@@ -336,7 +336,6 @@ describe('the shipped provider registrations, loaded from real rows', () => {
       repository: secretAdapters.createPostgresBindingRepository(pool, accountOnlyFieldsOf),
       secrets: secretAdapters.createPostgresSecretStore({ sql: pool, key: KEY }),
       registry: createPipelineProviderRegistry({
-        executor,
         clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
         // Socket Mode's backoff; nothing here opens a socket (WP-43).
         timer: { now: () => 0, sleep: async () => {} },
@@ -397,7 +396,6 @@ describe('the shipped provider registrations, loaded from real rows', () => {
       repository: secretAdapters.createPostgresBindingRepository(pool, accountOnlyFieldsOf),
       secrets: secretAdapters.createPostgresSecretStore({ sql: pool, key: KEY }),
       registry: createPipelineProviderRegistry({
-        executor,
         clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
         // Socket Mode's backoff; nothing here opens a socket (WP-43).
         timer: { now: () => 0, sleep: async () => {} },

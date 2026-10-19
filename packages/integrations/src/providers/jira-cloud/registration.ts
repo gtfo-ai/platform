@@ -1,11 +1,11 @@
 /**
  * The registry entry for Jira Cloud (technical/06 § "Provider module layout", BD-017).
  *
- * `ProviderRegistration.create` is handed `{integrationId, config, secrets}` and nothing else —
- * no executor, no clock, no task. Those are platform services, not binding configuration, so they
- * are captured **here**, when the provider is registered by the composition root, rather than
- * added to `ProviderCreateInput` (which every other provider shares, and which WP-09…WP-11 are
- * writing against right now).
+ * `ProviderCreateInput` carries `{integrationId, config, secrets, redactor}` and nothing else — no
+ * clock and no logger. Those are platform services, not binding configuration, so they are captured
+ * **here**, when the provider is registered by the composition root, rather than added to
+ * `ProviderCreateInput`, which every other provider shares. Since WP-212 there is no executor among
+ * them: the caller's executor call is the one (`index.ts`).
  *
  * `secrets` is merged over `config` before validation, which is how a binding whose token lives in
  * the secret store reaches the adapter: the settings row stores `api_token` as a reference, the
@@ -15,18 +15,12 @@
 import type { AgentTooling } from '@platform/application';
 import type { ProviderRegistration } from '../../registry.js';
 import { JIRA_CLOUD_SECRET_FIELDS, jiraCloudConfigSchema } from './config.js';
-import {
-  createJiraCloudTaskManagement,
-  type JiraActionContext,
-  type JiraCloudOptions,
-} from './index.js';
+import { createJiraCloudTaskManagement, type JiraCloudOptions } from './index.js';
 import { PROVIDER_ID } from './mapping.js';
 
 export interface JiraCloudRegistrationDeps {
-  readonly executor: JiraCloudOptions['executor'];
   readonly clock: JiraCloudOptions['clock'];
-  /** See `index.ts`: which task, and in which mode, a call is being made for. */
-  readonly actionContext: () => JiraActionContext;
+  readonly logger?: JiraCloudOptions['logger'];
   readonly fetch?: JiraCloudOptions['fetch'];
 }
 
@@ -53,10 +47,10 @@ export const JIRA_CLOUD_AGENT_TOOLING: AgentTooling | null = {
 };
 
 /**
- * Everything about this provider that is true before an executor exists.
+ * Everything about this provider that is true before a clock exists.
  *
- * Split out because Jira is the one shipped provider whose registration is a **factory** — it
- * captures an executor, a clock and an action context — while the read surface of technical/08
+ * Split out because Jira's registration is a **factory** — it captures a clock (and, since WP-212,
+ * a logger) — while the read surface of technical/08
  * (`GET /api/integrations`, `GET /api/integrations/:id/setup-guide`) needs the metadata and never
  * calls `create`. The factory spreads this object, so the display name, the secret field list and
  * the guide path have exactly one definition rather than one per consumer (standing rule 7).
@@ -100,9 +94,8 @@ export const createJiraCloudRegistration = (
       // Standing rule 31: the field is required on `ProviderCreateInput`, and this is the
       // registration honouring it rather than dropping it on the floor.
       redactor,
-      executor: deps.executor,
       clock: deps.clock,
-      actionContext: deps.actionContext,
+      ...(deps.logger === undefined ? {} : { logger: deps.logger }),
       ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
     }),
 });

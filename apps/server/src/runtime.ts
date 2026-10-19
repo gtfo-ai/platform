@@ -346,9 +346,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      *
      * The pipeline builds provider adapters to *call* and the webhook ingress builds them to
      * *read*, and both go through the same registration. Two stacks would mean two idempotency
-     * stores and two rate-limit budgets for one account, which is the duplication
-     * `shipped-registry.ts` already records for Jira's inner executor — so it is built once, here,
-     * and shared. It is `null` only for a role that serves neither the API nor the workers.
+     * stores and two rate-limit budgets for one account — so it is built once, here, and shared.
+     * It is `null` only for a role that serves neither the API nor the workers.
      */
     const stack =
       capabilities.api || capabilities.worker

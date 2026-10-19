@@ -21,35 +21,30 @@
  * `loader.test.ts` builds each through this very registry.
  *
  * Both are built with the **process's** clock and the runtime's `fetch`; neither takes the executor,
- * because neither wraps its own calls (GitLab's shape, not Jira's — the duplication note below does
- * not grow). Their `IntegrationRef.host` is the binding's `base_url` host, so the executor's egress
- * check against `APP_INTEGRATION_HOSTS` applies to every pre-fetch read like any other call.
+ * because neither wraps its own calls — no shipped adapter does since WP-212 (below). Their
+ * `IntegrationRef.host` is the binding's `base_url` host, so the executor's egress check against
+ * `APP_INTEGRATION_HOSTS` applies to every pre-fetch read like any other call.
  *
  * **Registering Slack has one consequence beyond the notification band**, and it is deliberate:
  * the webhook ingress shares this registry, so `POST /webhooks/slack/<integrationId>` now resolves
  * a provider and can verify and normalise a delivery (WP-10 built both halves and WP-15c built the
  * door). An unmapped author is still `ignored` with a reason and never a decision (BD-022, Q10).
  *
- * ## The duplication this composition carries, stated rather than discovered later
+ * ## One executor call per port call (WP-212, PROGRESS backlog 550)
  *
- * WP-09's GitLab adapter deliberately keeps `IntegrationActionExecutor` **outside** itself
- * (`gitlab/provider.ts`: "Putting the executor *inside* the adapter would … which is the whole of
- * standing rule 14"), and the pipeline wraps every call in the executor itself
- * (`pipeline/integrations.ts`). WP-08's Jira adapter does the opposite: it takes an executor and
- * wraps its own calls. So a ticket call through a Jira binding enters the executor **twice**, from
- * inside itself, on one `integrations.id`.
+ * No adapter registered here enters `IntegrationActionExecutor`: the caller's call is the one —
+ * the pipeline's `read`/`mutate` (`pipeline/integrations.ts`) and the prober's `test_connection`
+ * (`prober.ts`) — so one port call is one `integration_actions` row and one rate-limit token. That
+ * is WP-09's GitLab shape (`gitlab/provider.ts`: "Putting the executor *inside* the adapter would …
+ * which is the whole of standing rule 14"), and since WP-212 it is Jira's too.
  *
- * **This note used to say "nothing is unsafe", and it was wrong** (PROGRESS backlog 550). It was
- * about shadow mode — the outer executor does refuse a shadow mutation before the inner one is
- * reached — and never considered the concurrency slot: the limiter holds one across `perform` and a
- * waiter has no deadline, so `maxConcurrent` concurrent outer calls held every slot while their
- * inner calls waited for one, and every later Jira call of that binding in that process hung. The
- * executor now runs a call nested in another's `perform` on the same integration under the outer
- * call's lease, with one attempt (`action-executor.ts`, the module docblock's last section), so a
- * Jira call spends one slot and one token. What is **left** is the audit: still two
- * `integration_actions` rows for one action, the pipeline's and the adapter's. Removing it is Jira
- * adopting GitLab's shape — an adapter change with its own contract suite, which takes the
- * `fixedActionContext('normal')` seam below with it — and backlog 550 is where it is filed.
+ * Until WP-212, WP-08's Jira adapter took this registry's executor — the pipeline's own instance —
+ * and wrapped its own members in it, so a ticket call entered the executor **twice** on one
+ * `integrations.id`. This note once said that was safe because the outer executor refuses a shadow
+ * mutation first; it never considered the limiter slot, which deadlocked `maxConcurrent` concurrent
+ * calls until `df01f9b1` made the nested call run under the outer lease, and it left two audit rows
+ * per read (three per transition) until WP-212 removed the inner wrap. `jira-one-wrap.integration.test.ts`
+ * counts them on the production composition.
  *
  * ## The rate-limit policy each provider gets
  *
@@ -60,14 +55,14 @@
  */
 import {
   DEFAULT_RATE_LIMIT_POLICY,
-  type IntegrationActionExecutor,
   type IntegrationRef,
   type IntegrationTimer,
+  type Logger,
   type RateLimitPolicy,
 } from '@platform/application';
 import type { Clock } from '@platform/domain';
 import { gitlabProviderRegistration } from '../providers/gitlab/index.js';
-import { fixedActionContext, JIRA_CLOUD_RATE_LIMIT_POLICY } from '../providers/jira-cloud/index.js';
+import { JIRA_CLOUD_RATE_LIMIT_POLICY } from '../providers/jira-cloud/index.js';
 import {
   createJiraCloudRegistration,
   JIRA_CLOUD_PROVIDER_METADATA,
@@ -78,14 +73,12 @@ import { createSlackRegistration, type SocketConnect } from '../providers/slack/
 import { createIntegrationRegistry, type IntegrationRegistry } from '../registry.js';
 
 export interface PipelineProviderRegistryOptions {
-  /**
-   * The executor Jira's adapter wraps its own calls in — see the duplication note above.
-   *
-   * It is the same instance the pipeline uses, deliberately: two executors would mean two
-   * idempotency stores and two rate-limit budgets for one account, which is worse than two rows.
-   */
-  readonly executor: IntegrationActionExecutor;
   readonly clock: Clock;
+  /**
+   * Where Jira's adapter names what its single audit row no longer carries — a status read with two
+   * categories (`listStatuses`, WP-212). Absent is silent.
+   */
+  readonly logger?: Logger;
   /**
    * Socket Mode's reconnect backoff (WP-43). Required: the Slack adapter refuses to open a socket
    * without one, and a registry that forgot it would turn every held connection into a refusal at
@@ -116,14 +109,8 @@ export const createPipelineProviderRegistry = (
   createIntegrationRegistry([
     gitlabProviderRegistration,
     createJiraCloudRegistration({
-      executor: options.executor,
       clock: options.clock,
-      // The task and the mode a call belongs to are carried by the *outer* executor, which the
-      // pipeline calls with the task's own `mode` (`pipeline/integrations.ts`). This inner context
-      // therefore never decides whether a mutation happens — the outer guard has already refused a
-      // shadow task's mutation before `perform` runs — and `normal` is what a call that reached
-      // here was allowed to be.
-      actionContext: fixedActionContext('normal'),
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
     }),
     /**
      * Slack (WP-32), built with the **process's** clock and nothing else.

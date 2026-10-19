@@ -1160,8 +1160,8 @@ describe('IntegrationActionExecutor', () => {
 
   /**
    * Backlog 550: a `perform` that calls the executor again on the same integration — the shape of
-   * every pipeline call through a Jira binding, because the pipeline wraps the port and the adapter
-   * wraps its own members in the same executor. The limiter holds a slot across `perform` and a
+   * every pipeline call through a Jira binding until WP-212, when the pipeline wrapped the port and
+   * the adapter wrapped its own members in the same executor. The limiter holds a slot across `perform` and a
    * waiter has no deadline, so before the fix `maxConcurrent` outer calls held every slot while
    * their inner calls waited for one: a deadlock, which these cases bound with a wall-clock race
    * so that it fails by name rather than on vitest's timeout.

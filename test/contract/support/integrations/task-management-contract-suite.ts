@@ -16,7 +16,9 @@ import type {
   ExternalIdentity,
   IgnoredDelivery,
   InboundContext,
+  IntegrationActionExecutor,
   LifecycleMember,
+  MemoryIntegrationAuditLog,
   TaskManagementPort,
   TicketRefInput,
   WebhookDelivery,
@@ -102,6 +104,20 @@ export interface TaskManagementContractContext {
    * branch alone. The context's `ticket` starts **unassigned**.
    */
   readonly lifecycle?: TaskManagementLifecycleContext;
+  /**
+   * The executor this harness's composition holds, and the audit log it writes (WP-212, backlog 550).
+   *
+   * An obligation of the contract (standing rule 23): a provider makes **no** executor call of its
+   * own — its caller's is the one, so one port call is one `integration_actions` row and one
+   * rate-limit token. The harness builds the provider the way its composition root does, so a root
+   * that handed the provider an executor would hand it this one, and the suite's clause would count
+   * the provider's rows beside its own. Until WP-212 Jira's did, and every Jira port call the
+   * pipeline made wrote two rows (three for a transition).
+   */
+  readonly composition: {
+    readonly executor: IntegrationActionExecutor;
+    readonly audit: MemoryIntegrationAuditLog;
+  };
   readonly projectId: Id;
   readonly integrationId: Id;
   cleanup(): Promise<void>;
@@ -332,6 +348,40 @@ const eitherBranch = async (
   }
 };
 
+/**
+ * WP-212's clause, exported so the runner's canary can call it against a provider that wraps its own
+ * members: a read and a transition, each made inside **one** executor call as the pipeline makes it,
+ * leave exactly those two rows in the composition's audit log.
+ */
+export const checkOneExecutorCallPerPortCall = async (
+  context: TaskManagementContractContext,
+): Promise<void> => {
+  const { executor, audit } = context.composition;
+  const before = audit.entries.length;
+  await executor.execute({
+    integration: context.port.ref,
+    action: 'contract_read_ticket',
+    mutating: false,
+    payload: {},
+    perform: () => context.port.readTicket(context.ticket),
+  });
+  const { target } = context.statuses;
+  await executor.execute({
+    integration: context.port.ref,
+    action: 'contract_transition',
+    mutating: true,
+    mode: 'normal',
+    payload: {},
+    perform: () => context.port.transition(context.ticket, target),
+    shadowResult: () => ({ changed: false, from: target, to: target }),
+    describeResult: () => null,
+  });
+  expect(
+    audit.entries.slice(before).map((entry) => `${entry.action}:${entry.status}`),
+    'one audit row per port call: the provider made no executor call of its own (WP-212)',
+  ).toEqual(['contract_read_ticket:ok', 'contract_transition:ok']);
+};
+
 export const runTaskManagementContract = (harness: TaskManagementContractHarness): void => {
   describe(`TaskManagement contract — ${harness.name}`, () => {
     let context: TaskManagementContractContext;
@@ -353,6 +403,12 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
       defaultBranch: 'main',
       resolveUser: resolve,
       resolveThread: async () => null,
+    });
+
+    describe('one executor call per port call (WP-212)', () => {
+      it('leaves one audit row for a read and one for a transition that resolves first', async () => {
+        await checkOneExecutorCallPerPortCall(context);
+      });
     });
 
     describe('capabilities and health', () => {

@@ -7,10 +7,12 @@
  * by editing the contract.
  *
  * The second half asserts the four things the shared suite cannot express, because they are about
- * *how* the adapter reaches Jira rather than about what the port returns:
+ * *how* the adapter reaches Jira rather than about what the port returns. Since WP-212 the adapter
+ * makes no executor call of its own, so they are asserted through the harness's `port`, which makes
+ * each port call inside one executor call the way the pipeline does:
  *
- *  1. every mutating port method reaches `IntegrationActionExecutor` as a `MutatingActionRequest`
- *     — proven by running it in shadow mode and asserting no write request left the adapter
+ *  1. a mutating port method changes nothing when its caller's executor refuses a shadow task —
+ *     proven by running it in shadow mode and asserting no write request left the adapter
  *     (`ReadActionRequest` § "`mutating: false` is a claim the executor cannot check");
  *  2. a documented `429` with `Retry-After` is retried after exactly that delay, on an injected
  *     timer;
@@ -38,6 +40,7 @@ import {
   createJiraReplay,
   JIRA_REPLAY_TOKEN,
   type JiraReplay,
+  loadJiraFixture,
   REPLAY_COMMENT_PAGE_CAP,
 } from '../support/integrations/jira-cloud-replay.js';
 import {
@@ -84,7 +87,8 @@ runTaskManagementContract({
     };
 
     return {
-      port: binding.port,
+      // The adapter itself (WP-212): the shared suite's one-wrap clause composes the executor call.
+      port: binding.adapter,
       ticket: JIRA_TICKET,
       missingTicketKey: 'ACME-404',
       statuses: { initial: 'To pick up', target: 'In Progress' },
@@ -147,7 +151,8 @@ runTaskManagementContract({
        * through the plan the configuration states rather than a rule the test wrote.
        */
       polling: {
-        port: createJiraBinding({ config: { poll_enabled: true, poll_interval_seconds: 90 } }).port,
+        port: createJiraBinding({ config: { poll_enabled: true, poll_interval_seconds: 90 } })
+          .adapter,
         intervalSeconds: 90,
       },
       /**
@@ -167,6 +172,8 @@ runTaskManagementContract({
           return DEV_ACCOUNT_ID;
         },
       },
+      // The executor the harness composes: the adapter is handed none since WP-212.
+      composition: { executor: binding.executor, audit: binding.audit },
       projectId: JIRA_PROJECT_ID,
       integrationId: JIRA_INTEGRATION_ID,
       cleanup: async () => {},
@@ -181,7 +188,7 @@ describe('jira-cloud — reaching the provider', () => {
     binding = createJiraBinding();
   });
 
-  describe('shadow mode reaches the executor as a mutating action', () => {
+  describe('a mutating member writes nothing when its caller refuses a shadow task', () => {
     /**
      * Each case is one mutating port method, with the write it makes in `normal` mode. The
      * positive control runs first on purpose: proving the harness *can* make the request is what
@@ -269,42 +276,38 @@ describe('jira-cloud — reaching the provider', () => {
         ).toEqual(['would_have']);
       });
     }
-
-    it('still fails loudly on an unknown target status in shadow mode', async () => {
-      binding.mode = 'shadow';
-      // The resolution happens before the shadow guard, so a broken status mapping is visible in
-      // a shadow run — which is the only run a new project makes before it is trusted.
-      await expect(binding.port.transition(JIRA_TICKET, 'Shipped To Mars')).rejects.toBeInstanceOf(
-        IntegrationError,
-      );
-    });
   });
 
   describe('every error carrying provider text leaves through the executor', () => {
-    it('refuses an unknown target status from inside the resolving action', async () => {
-      // Round 1 threw this *after* `resolve_transition` had returned — provider text past the one
-      // `catch` TD-012 relies on, and `docs/TODO.md` said the adapter had no such path. The audit
-      // row is the proof that it does not now: only the executor writes one.
+    it('refuses an unknown target status inside the caller’s executor call', async () => {
+      // Round 1 threw this *after* the resolving action had returned — provider text past the one
+      // `catch` TD-012 relies on. The audit row is the proof that it does not now: only the
+      // executor writes one, and since WP-212 the one is the caller's.
       await expect(binding.port.transition(JIRA_TICKET, 'Shipped To Mars')).rejects.toMatchObject({
         code: 'invalid_request',
       });
-      const rows = binding.audit.entriesFor('resolve_transition');
+      const rows = binding.audit.entries;
       expect(
-        rows.map((entry) => entry.status),
-        'the executor recorded the failure it scrubbed',
-      ).toEqual(['failed']);
+        rows.map((entry) => `${entry.action}:${entry.status}`),
+        'the executor recorded the failure it scrubbed, once',
+      ).toEqual(['transition:failed']);
       expect(rows[0]?.error, 'and the refusal is what failed').toContain(
         'has no transition to "Shipped To Mars"',
       );
-      expect(binding.audit.entriesFor('transition'), 'no write was ever decided on').toEqual([]);
+      expect(
+        binding.replay.requests.filter((request) => request.method === 'POST'),
+        'no write was ever decided on',
+      ).toEqual([]);
     });
 
-    it('records a resolution that succeeds as an ok row, so the failure above is not the only path', async () => {
-      // Control (standing rule 4): the same action against a status the workflow does offer.
+    it('records a resolution and its move as one ok row, so the failure above is not the only path', async () => {
+      // Control (standing rule 4): the same action against a status the workflow does offer. One
+      // port call, two requests (the read and the POST), one row — WP-212's whole point.
       await binding.port.transition(JIRA_TICKET, 'In Progress');
-      expect(binding.audit.entriesFor('resolve_transition').map((entry) => entry.status)).toEqual([
-        'ok',
+      expect(binding.audit.entries.map((entry) => `${entry.action}:${entry.status}`)).toEqual([
+        'transition:ok',
       ]);
+      expect(binding.replay.requests.map((request) => request.method)).toContain('POST');
     });
   });
 
@@ -760,13 +763,13 @@ describe('jira-cloud — reaching the provider', () => {
     it('refuses to look for its own comment when Jira will not say who it is', async () => {
       // `accountId` is optional in every user shape Jira publishes (standing rule 16). Answering
       // `null` would leave the author check comparing against nothing; this fails loudly instead,
-      // from inside the executor, so the refusal is audited.
+      // from inside the caller's executor call, so the refusal is audited.
       const anonymous = createJiraBinding({ fetch: withoutSelfAccountId() });
       await expect(
         anonymous.port.upsertWorkpad(JIRA_TICKET, 'agentic:workpad', '# Mine'),
       ).rejects.toMatchObject({ code: 'invalid_response' });
       expect(
-        anonymous.audit.entriesFor('read_workpad').map((entry) => entry.status),
+        anonymous.audit.entriesFor('upsert_workpad').map((entry) => entry.status),
         'the failure is on the record',
       ).toEqual(['failed']);
       // Control: the same call against a site that answers `GET /myself` in full succeeds, so the
@@ -783,10 +786,9 @@ describe('jira-cloud — reaching the provider', () => {
         binding.replay.requests.filter((request) => request.method !== 'GET'),
         'the set was already right',
       ).toEqual([]);
-      expect(
-        binding.audit.entriesFor('set_labels'),
-        'and no mutating row claims otherwise',
-      ).toEqual([]);
+      // The caller's row is the port call's, which was made; what it changed is the empty write
+      // list above (until WP-212 the adapter's own `set_labels` row was absent here).
+      expect(binding.audit.entriesFor('set_labels').map((entry) => entry.status)).toEqual(['ok']);
     });
 
     it('does not transition a ticket that is already in the target status', async () => {
@@ -891,7 +893,7 @@ describe('jira-cloud — reaching the provider', () => {
       );
       expect(writes(binding.replay), 'a search that could not finish posts nothing').toEqual([]);
       expect(
-        binding.audit.entriesFor('read_workpad').map((entry) => entry.status),
+        binding.audit.entriesFor('upsert_workpad').map((entry) => entry.status),
         'the refusal is on the record',
       ).toEqual(['failed']);
 
@@ -1148,24 +1150,6 @@ describe('jira-cloud — reaching the provider', () => {
       expect(created.fields.description).toBeNull();
     });
 
-    it('returns a shadow comment reference that cannot be mistaken for a real one', async () => {
-      binding.mode = 'shadow';
-      const workpad = await binding.port.upsertWorkpad(JIRA_TICKET, 'agentic:workpad', '# Workpad');
-      expect(workpad.comment_id).toBe('shadow');
-      expect(workpad.url).toBeNull();
-
-      const created = await binding.port.createTicket({
-        project_key: 'ACME',
-        issue_type: 'Task',
-        title: 'Follow-up',
-        description: 'x',
-        labels: [],
-        parent_key: null,
-        priority: null,
-      });
-      expect(created.key).toBe('ACME-SHADOW');
-    });
-
     it('reports a response that does not match the documented shape as invalid_response', async () => {
       const wrong = createJiraBinding({
         fetch: async () =>
@@ -1391,8 +1375,9 @@ describe('jira-cloud — every issue read parses what its `fields` asked for (ba
       'labels',
       'labels',
     ]);
-    expect(binding.audit.entriesFor('read_labels').map((entry) => entry.status)).toEqual(['ok']);
-    expect(binding.audit.entriesFor('set_labels').map((entry) => entry.status)).toEqual(['ok']);
+    expect(binding.audit.entries.map((entry) => `${entry.action}:${entry.status}`)).toEqual([
+      'set_labels:ok',
+    ]);
   });
 
   it('names its fields on every issue read and every search it makes', async () => {
@@ -1408,5 +1393,92 @@ describe('jira-cloud — every issue read parses what its `fields` asked for (ba
     );
     expect(reads.length).toBeGreaterThanOrEqual(7);
     expect(reads.filter((request) => (request.query.fields ?? '') === '')).toEqual([]);
+  });
+});
+
+/**
+ * Backlog 594 (WP-212 (c)): the fixtures describe **one** invented ACME workflow, so a status has one
+ * id in all of them. Until WP-212 *To pick up* was `10001` in `transitions-acme-1.json` and `10002`
+ * in `project-statuses-acme.json` (and in `issue-acme-1.json`); nothing compared them, because the
+ * replay double matches a transition's target by name — the trap is the first resolver or test that
+ * matches by id.
+ */
+describe('jira-cloud — the fixtures give each status one id (backlog 594)', () => {
+  type Status = { readonly id?: unknown; readonly name?: unknown };
+  const bodyOf = (name: string): unknown => loadJiraFixture(name).response?.body;
+
+  /** `project-statuses-acme.json`, name → ids, over every issue type. */
+  const projectStatusIds = (): Map<string, Set<string>> => {
+    const ids = new Map<string, Set<string>>();
+    for (const issueType of bodyOf('project-statuses-acme.json') as {
+      statuses: readonly Status[];
+    }[]) {
+      for (const status of issueType.statuses) {
+        const named = ids.get(String(status.name)) ?? new Set<string>();
+        named.add(String(status.id));
+        ids.set(String(status.name), named);
+      }
+    }
+    return ids;
+  };
+
+  /** Every status a document names whose name the project's statuses carry with another id. */
+  const disagreements = (
+    project: Map<string, Set<string>>,
+    named: readonly Status[],
+  ): { compared: number; wrong: string[] } => {
+    let compared = 0;
+    const wrong: string[] = [];
+    for (const status of named) {
+      const known = project.get(String(status.name));
+      if (known === undefined) {
+        continue;
+      }
+      compared += 1;
+      if (!known.has(String(status.id))) {
+        wrong.push(
+          `${String(status.name)}: ${String(status.id)} (project: ${[...known].join(', ')})`,
+        );
+      }
+    }
+    return { compared, wrong };
+  };
+
+  const transitionTargets = (name: string): Status[] =>
+    (bodyOf(name) as { transitions: readonly { to: Status }[] }).transitions.map(
+      (transition) => transition.to,
+    );
+
+  it('names each status with one id across the issue types of J1', () => {
+    for (const [name, ids] of projectStatusIds()) {
+      expect([...ids], name).toHaveLength(1);
+    }
+  });
+
+  it.each(['transitions-acme-1.json', 'transitions-category-keys.json'])(
+    'gives every transition target in %s the id the project statuses give it',
+    (name) => {
+      const { compared, wrong } = disagreements(projectStatusIds(), transitionTargets(name));
+      // Rule 10: the comparison ran on something, so an empty `wrong` is a finding.
+      expect(compared, 'targets whose name the project statuses carry').toBeGreaterThan(0);
+      expect(wrong).toEqual([]);
+    },
+  );
+
+  it('gives the issue fixture’s status the id the project statuses give it', () => {
+    const issue = bodyOf('issue-acme-1.json') as { fields: { status: Status } };
+    expect(disagreements(projectStatusIds(), [issue.fields.status])).toEqual({
+      compared: 1,
+      wrong: [],
+    });
+  });
+
+  it('fails on the id the transitions fixture carried before WP-212 (canary)', () => {
+    const before = transitionTargets('transitions-acme-1.json').map((target) =>
+      target.name === 'To pick up' ? { ...target, id: '10001' } : target,
+    );
+    expect(disagreements(projectStatusIds(), before).wrong).toEqual([
+      'To pick up: 10001 (project: 10002)',
+    ]);
   });
 });

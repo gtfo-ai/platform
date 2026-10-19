@@ -9,20 +9,12 @@
  * may happen is a read. Every status name here is invented and neutral (BD-031).
  */
 import {
-  allowAnyIntegrationHost,
-  createIntegrationActionExecutor,
-  createMemoryAuditLog,
-  createVirtualTimer,
   IntegrationError,
-  type MemoryIntegrationAuditLog,
+  type LogFields,
   noSecretsRedactor,
   type TaskManagementPort,
 } from '@platform/application';
-import {
-  MAX_LIFECYCLE_STATUS_NAME_CHARS,
-  MAX_TICKET_STATUSES,
-  type TaskMode,
-} from '@platform/contracts';
+import { MAX_LIFECYCLE_STATUS_NAME_CHARS, MAX_TICKET_STATUSES } from '@platform/contracts';
 import { fixedClock } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import {
@@ -230,10 +222,19 @@ const MYSELF = { accountId: SELF, displayName: 'Agentic Platform' };
 
 const adapter = (
   answers: Record<string, Answer>,
-  options: { readonly mode?: TaskMode; readonly projectKeys?: readonly string[] } = {},
-): { port: TaskManagementPort; calls: Call[]; audit: MemoryIntegrationAuditLog } => {
+  options: { readonly projectKeys?: readonly string[] } = {},
+): { port: TaskManagementPort; calls: Call[]; warnings: LogFields[] } => {
   const calls: Call[] = [];
-  const audit = createMemoryAuditLog();
+  // Where `listStatuses` names what its own audit row carried until WP-212.
+  const warnings: LogFields[] = [];
+  const logger = {
+    debug: () => {},
+    info: () => {},
+    warn: (fields: LogFields) => {
+      warnings.push(fields);
+    },
+    error: () => {},
+  };
   const clock = fixedClock(NOW, 0);
   const port = createJiraCloudTaskManagement({
     integrationId: '00000000-0000-4000-8000-0000000001c2',
@@ -243,16 +244,8 @@ const adapter = (
       api_token: 'FAKE-jira-api-token-0123456789',
       project_keys: [...(options.projectKeys ?? ['ACME'])],
     } as never,
-    executor: createIntegrationActionExecutor({
-      egress: allowAnyIntegrationHost(),
-      auditLog: audit,
-      redactor: noSecretsRedactor(),
-      timer: createVirtualTimer({ autoAdvance: true }),
-      clock,
-      rateLimits: () => ({ capacity: 100, refillPerSecond: 100, maxConcurrent: 8 }),
-    }),
     clock,
-    actionContext: () => ({ mode: options.mode ?? 'normal', projectId: null, taskId: null }),
+    logger,
     redactor: noSecretsRedactor(),
     fetch: async (input: string | URL | Request, init?: RequestInit) => {
       const request = input instanceof Request ? input : new Request(String(input), init);
@@ -269,7 +262,7 @@ const adapter = (
       return answer === undefined ? json({ errorMessages: ['unscripted'] }, 501) : answer(call);
     },
   });
-  return { port, calls, audit };
+  return { port, calls, warnings };
 };
 
 const assignedTo = (accountId: string | null): Record<string, Answer> => ({
@@ -327,13 +320,6 @@ describe('the claim’s read and write (WP-172 ruling (b))', () => {
     const { port, calls } = adapter(assignedTo(SELF));
     expect((await port.assignToSelf(REF)).changed).toBe(false);
     expect(puts(calls)).toEqual([]);
-  });
-
-  it('a shadow claim reads, records would_have, and sends no PUT (criterion 5)', async () => {
-    const { port, calls, audit } = adapter(assignedTo(SOMEONE), { mode: 'shadow' });
-    expect((await port.assignToSelf(REF)).changed).toBe(false);
-    expect(puts(calls)).toEqual([]);
-    expect(audit.entriesFor('assign_to_self').map((entry) => entry.status)).toEqual(['would_have']);
   });
 
   it('a 403 on the write is forbidden, naming the Assign Issues permission', async () => {
@@ -432,7 +418,7 @@ describe('listStatuses (research/15 J1, never J2)', () => {
     ]);
 
   it('unions the binding’s projects by name and asks J1 for each', async () => {
-    const { port, calls, audit } = adapter(
+    const { port, calls, warnings } = adapter(
       {
         'GET project/ACME/statuses': statuses([
           ['Doing', 'indeterminate'],
@@ -455,10 +441,13 @@ describe('listStatuses (research/15 J1, never J2)', () => {
       'project/ACME/statuses',
       'project/BETA/statuses',
     ]);
-    expect(audit.entriesFor('list_statuses')[0]?.result).toMatchObject({
-      status_count: 3,
-      category_conflicts: [{ name: 'Doing', kept: 'indeterminate', ignored: 'new' }],
-    });
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        action: 'list_statuses',
+        status_count: 3,
+        category_conflicts: [{ name: 'Doing', kept: 'indeterminate', ignored: 'new' }],
+      }),
+    ]);
   });
 
   it('refuses a binding with no project to ask, rather than answering nothing', async () => {
@@ -470,10 +459,32 @@ describe('listStatuses (research/15 J1, never J2)', () => {
     expect(calls).toEqual([]);
   });
 
-  it('names at most MAX_RECORDED_CATEGORY_CONFLICTS conflicts on the audit row', async () => {
+  /**
+   * WP-212 review round 1: the warning carries provider text, and a status name can quote the
+   * binding's own token. The guard is the transport's redaction (the line adds no pass of its own),
+   * so this case is held by it: **canary** — drop the redactor from `client.ts`'s response read and
+   * the token reaches the logged object.
+   */
+  it('names a conflict whose status name quotes the binding’s token by its placeholder', async () => {
+    const planted = 'Doing FAKE-jira-api-token-0123456789';
+    const { port, warnings } = adapter(
+      {
+        'GET project/ACME/statuses': statuses([[planted, 'indeterminate']]),
+        'GET project/BETA/statuses': statuses([[planted, 'new']]),
+      },
+      { projectKeys: ['ACME', 'BETA'] },
+    );
+    await port.listStatuses();
+    const logged = JSON.stringify(warnings);
+    expect(warnings, 'the conflict was logged').toHaveLength(1);
+    expect(logged).not.toContain('FAKE-jira-api-token-0123456789');
+    expect(logged).toContain('Doing [REDACTED:integration:jira_api_token]');
+  });
+
+  it('names at most MAX_RECORDED_CATEGORY_CONFLICTS conflicts on the warning', async () => {
     const many = MAX_RECORDED_CATEGORY_CONFLICTS + 5;
     const names = Array.from({ length: many }, (_, index) => `Status ${index}`);
-    const { port, audit } = adapter(
+    const { port, warnings } = adapter(
       {
         'GET project/ACME/statuses': statuses(names.map((name) => [name, 'new'])),
         'GET project/BETA/statuses': statuses(names.map((name) => [name, 'done'])),
@@ -481,10 +492,8 @@ describe('listStatuses (research/15 J1, never J2)', () => {
       { projectKeys: ['ACME', 'BETA'] },
     );
     expect(await port.listStatuses()).toHaveLength(many);
-    const row = audit.entriesFor('list_statuses')[0]?.result as {
-      readonly category_conflicts: readonly unknown[];
-    };
-    expect(row.category_conflicts).toHaveLength(MAX_RECORDED_CATEGORY_CONFLICTS);
+    const [warning] = warnings as { readonly category_conflicts: readonly unknown[] }[];
+    expect(warning?.category_conflicts).toHaveLength(MAX_RECORDED_CATEGORY_CONFLICTS);
   });
 
   it('answers MAX_TICKET_STATUSES statuses, and refuses one more rather than cutting the list (WP-181 (7))', async () => {
@@ -492,6 +501,7 @@ describe('listStatuses (research/15 J1, never J2)', () => {
       Array.from({ length: count }, (_, index): [string, string] => [`Status ${index}`, 'new']);
     const atBound = adapter({ 'GET project/ACME/statuses': statuses(names(MAX_TICKET_STATUSES)) });
     expect(await atBound.port.listStatuses()).toHaveLength(MAX_TICKET_STATUSES);
+    expect(atBound.warnings, 'no conflict, nothing skipped, no warning').toEqual([]);
     const past = adapter({
       'GET project/ACME/statuses': statuses(names(MAX_TICKET_STATUSES + 1)),
     });

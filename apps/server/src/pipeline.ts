@@ -429,8 +429,8 @@ export interface ComposePipelineOptions {
  * It is built here rather than inside {@link composePipeline} because the **webhook ingress needs
  * the same three** — a provider adapter is built through its registration whichever direction the
  * call goes — and two executors in one process would mean two idempotency stores and two
- * rate-limit budgets for one account, which is the defect `shipped-registry.ts` already records for
- * Jira's inner executor. One per process, shared.
+ * rate-limit budgets for one account. One per process, shared; since WP-212 no adapter in the
+ * registry holds it, so a port call enters it once, from its caller.
  */
 export interface IntegrationStack {
   readonly executor: IntegrationActionExecutor;
@@ -576,7 +576,7 @@ export const composeIntegrationStack = (
   return {
     executor,
     auditLog,
-    registry: registryOf({ executor, clock: { now: nowIso }, timer: processTimer }),
+    registry: registryOf({ clock: { now: nowIso }, timer: processTimer, logger: options.logger }),
     runSecrets,
     platformRedactor,
   };

@@ -29,13 +29,7 @@
  *  - **Not the vendor's limits.** Jira and GitLab impose their own page sizes; this measures what
  *    the *adapter* does with what it is handed, which is the only half the platform controls.
  */
-import {
-  allowAnyIntegrationHost,
-  createIntegrationActionExecutor,
-  createMemoryAuditLog,
-  createVirtualTimer,
-  noSecretsRedactor,
-} from '@platform/application';
+import { noSecretsRedactor } from '@platform/application';
 import { fixedClock } from '@platform/domain';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { gitlabProviderRegistration } from './gitlab/index.js';
@@ -161,18 +155,7 @@ describe('one readTicket, with the provider hostile in every string it controls'
     );
     const clock = fixedClock(NOW, 0);
     const port = createJiraCloudRegistration({
-      executor: createIntegrationActionExecutor({
-        // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
-        // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
-        egress: allowAnyIntegrationHost(),
-        auditLog: createMemoryAuditLog(),
-        redactor: noSecretsRedactor(),
-        timer: createVirtualTimer({ autoAdvance: true }),
-        clock,
-        rateLimits: () => ({ capacity: 100, refillPerSecond: 100, maxConcurrent: 8 }),
-      }),
       clock,
-      actionContext: () => ({ mode: 'normal', projectId: null, taskId: null }),
     }).create({
       integrationId: '00000000-0000-4000-8000-0000000000a8',
       config: { site_url: SITE, user_email: 'agentic-bot@example.test', project_keys: ['ACME'] },
@@ -292,16 +275,7 @@ describe('a comment page whose total is hostile or missing', () => {
     );
     const clock = fixedClock(NOW, 0);
     const port = createJiraCloudRegistration({
-      executor: createIntegrationActionExecutor({
-        egress: allowAnyIntegrationHost(),
-        auditLog: createMemoryAuditLog(),
-        redactor: noSecretsRedactor(),
-        timer: createVirtualTimer({ autoAdvance: true }),
-        clock,
-        rateLimits: () => ({ capacity: 100, refillPerSecond: 100, maxConcurrent: 8 }),
-      }),
       clock,
-      actionContext: () => ({ mode: 'normal', projectId: null, taskId: null }),
     }).create({
       integrationId: '00000000-0000-4000-8000-0000000000a8',
       config: { site_url: SITE, user_email: 'agentic-bot@example.test', project_keys: ['ACME'] },

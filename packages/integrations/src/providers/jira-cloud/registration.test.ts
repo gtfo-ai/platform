@@ -3,14 +3,7 @@
  * matters most: a `secretFields` entry that does not exist in the config schema would leave a
  * credential stored and rendered as plain configuration (BD-002).
  */
-import {
-  allowAnyIntegrationHost,
-  createIntegrationActionExecutor,
-  createMemoryAuditLog,
-  createVirtualTimer,
-  noSecretsRedactor,
-  type TaskManagementPort,
-} from '@platform/application';
+import { noSecretsRedactor, type TaskManagementPort } from '@platform/application';
 import { fixedClock } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { createIntegrationRegistry, ProviderRegistrationError } from '../../registry.js';
@@ -29,17 +22,7 @@ const SECRETS = {
 };
 
 const deps = () => ({
-  executor: createIntegrationActionExecutor({
-    // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
-    // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
-    egress: allowAnyIntegrationHost(),
-    auditLog: createMemoryAuditLog(),
-    redactor: noSecretsRedactor(),
-    timer: createVirtualTimer({ autoAdvance: true }),
-    clock: fixedClock('2026-09-02T12:05:00.000Z', 0),
-  }),
   clock: fixedClock('2026-09-02T12:05:00.000Z', 0),
-  actionContext: () => ({ mode: 'normal' as const }),
 });
 
 describe('createJiraCloudRegistration', () => {

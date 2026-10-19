@@ -118,7 +118,6 @@ const loaderFor = (options: LoaderOptions = {}) => {
     registry:
       options.registrations === undefined
         ? createPipelineProviderRegistry({
-            executor: actions,
             clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
             // Socket Mode's backoff; nothing here opens a socket (WP-43).
             timer: { now: () => 0, sleep: async () => {} },
@@ -651,7 +650,6 @@ describe('the minting integration (WP-80, TD-028 decision 10)', () => {
       },
       secrets: secretsOf(secrets),
       registry: createPipelineProviderRegistry({
-        executor: actions,
         clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
         timer: { now: () => 0, sleep: async () => {} },
       }),

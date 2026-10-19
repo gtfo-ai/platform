@@ -167,10 +167,10 @@
  *
  * The limiter holds a concurrency slot for the whole of `perform`, and a caller waiting for a slot
  * waits without a deadline. So a `perform` that calls `execute` again **on the same integration**
- * — which every pipeline call through a Jira binding does, because the pipeline wraps the port
- * (`pipeline/integrations.ts`) and WP-08's adapter wraps its own members in the same executor
- * instance under the same `integrations.id` — used to wait for a second slot while holding the
- * first. `maxConcurrent` such outer calls held every slot and each waited for a slot only its own
+ * — which every pipeline call through a Jira binding did until WP-212, because the pipeline wraps
+ * the port (`pipeline/integrations.ts`) and WP-08's adapter wrapped its own members in the same
+ * executor instance under the same `integrations.id` — used to wait for a second slot while holding
+ * the first. `maxConcurrent` such outer calls held every slot and each waited for a slot only its own
  * completion would free: every later call on that integration in that process queued behind them
  * for ever (`action-executor.test.ts` › *"re-entrant calls on one integration (backlog 550)"*).
  *
@@ -190,9 +190,10 @@
  *    three) and the inner retries spent no budget at all;
  *  - **everything else is unchanged and still runs**: the action name, the egress check, the
  *    shadow guard, the idempotency record and the audit row. A re-entrant call therefore still
- *    writes its own `integration_actions` row, so a Jira port call made by the pipeline is still
- *    **two rows for one action**, as it was before — no audited call disappears, and removing the
- *    duplicate is the adapter change backlog 550 prefers (Jira adopting GitLab's shape), not this.
+ *    writes its own `integration_actions` row — no audited call disappears. The duplicate rows this
+ *    gave every Jira port call were removed by the adapter change backlog 550 preferred, not here:
+ *    since WP-212 Jira has GitLab's shape and no shipped adapter nests, so this branch guards a
+ *    future nesting rather than a live one.
  *
  * What the marker cannot see is what `AsyncLocalStorage` cannot: work detached from the async
  * context. The failure direction of *losing* the mark is the old behaviour (a second slot); the

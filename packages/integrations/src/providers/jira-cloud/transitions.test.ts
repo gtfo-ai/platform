@@ -12,7 +12,6 @@ import {
   buildJql,
   describeTargets,
   equalsStatus,
-  fixedActionContext,
   jqlLiteral,
   pickupRuleOf,
   resolveTransition,
@@ -132,15 +131,5 @@ describe('pickupRuleOf', () => {
     expect(pickupRuleOf({ pickup_label: 'agentic' })).toEqual({ kind: 'label', label: 'agentic' });
     expect(pickupRuleOf({ pickup_label: null, pickup_status: null })).toEqual({ kind: 'none' });
     expect(pickupRuleOf({})).toEqual({ kind: 'none' });
-  });
-});
-
-describe('fixedActionContext', () => {
-  it('states the mode a caller with no task is acting in', () => {
-    expect(fixedActionContext('shadow')()).toEqual({
-      mode: 'shadow',
-      projectId: null,
-      taskId: null,
-    });
   });
 });

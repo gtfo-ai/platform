@@ -56,8 +56,8 @@
           "id": "41",
           "name": "Back to backlog",
           "to": {
-            "self": "https://acme-example.atlassian.net/rest/api/3/status/10001",
-            "id": "10001",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10002",
+            "id": "10002",
             "name": "To pick up"
           },
           "isAvailable": true

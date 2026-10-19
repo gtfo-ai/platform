@@ -19,7 +19,6 @@
  */
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import type { IntegrationActionExecutor } from '@platform/application';
 import { noSecretsRedactor } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
@@ -34,7 +33,6 @@ import {
   toIntegrationProvider,
 } from './catalogue.js';
 import { gitlabProviderRegistration } from './providers/gitlab/index.js';
-import { fixedActionContext } from './providers/jira-cloud/index.js';
 import { createJiraCloudRegistration } from './providers/jira-cloud/registration.js';
 import { lokiProviderRegistration } from './providers/loki/index.js';
 import { sentryProviderRegistration } from './providers/sentry/index.js';
@@ -42,13 +40,6 @@ import { slackProviderRegistration } from './providers/slack/index.js';
 import type { AnyProviderRegistration } from './registry.js';
 
 const INTEGRATION_ID = '0199aa11-2b3c-7d4e-8f90-000000000001' as Id;
-
-/** Never called: Jira's registration captures one, and nothing below makes a provider call. */
-const unusedExecutor = {
-  perform: () => {
-    throw new Error('the catalogue test makes no provider call');
-  },
-} as unknown as IntegrationActionExecutor;
 
 const clock = { now: () => '2026-09-13T00:00:00.000Z' as `${string}T${string}` };
 
@@ -72,9 +63,7 @@ const BUILDABLE: readonly {
   },
   {
     registration: createJiraCloudRegistration({
-      executor: unusedExecutor,
       clock,
-      actionContext: fixedActionContext('normal'),
     }),
     config: { site_url: 'https://acme.atlassian.test', user_email: 'ops@example.test' },
     secrets: { api_token: 'FAKE-jira-api-token-DO-NOT-USE' },

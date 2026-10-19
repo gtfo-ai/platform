@@ -73,20 +73,9 @@ const PROVIDER_DIRECTORIES: readonly string[] = readdirSync(new URL('.', import.
   .map((entry) => entry.name)
   .sort();
 
-/**
- * Jira's registration is a factory over an executor, so one is built here — and it is a **stub**
- * rather than a real `IntegrationActionExecutor`: nothing below performs an action, and a real one
- * would need the very egress policy this file is checking the input of, which would make the
- * assertion circular.
- */
+/** Jira's registration is a factory over a clock (and no executor since WP-212). */
 const jiraRegistration = createJiraCloudRegistration({
-  executor: {
-    execute: async () => {
-      throw new Error('no action is performed by egress-host.test.ts');
-    },
-  },
   clock,
-  actionContext: () => ({ mode: 'normal', projectId: null, taskId: null }),
 });
 
 interface EgressHostCase {

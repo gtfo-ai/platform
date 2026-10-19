@@ -59,14 +59,7 @@
  *    `integration_actions`, and what WP-15 appends to `events.payload`, have their own redaction
  *    obligations; this file bounds what the adapters hand over.
  */
-import {
-  allowAnyIntegrationHost,
-  createIntegrationActionExecutor,
-  createMemoryAuditLog,
-  createVirtualTimer,
-  type IntegrationError,
-  noSecretsRedactor,
-} from '@platform/application';
+import { type IntegrationError, noSecretsRedactor } from '@platform/application';
 import { fixedClock } from '@platform/domain';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { type GitLabProvider, gitlabProviderRegistration } from './gitlab/index.js';
@@ -1115,20 +1108,7 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
     stubFetch(jiraScript(), calls);
     const clock = fixedClock(NOW, 0);
     const registration = createJiraCloudRegistration({
-      executor: createIntegrationActionExecutor({
-        // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
-        // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
-        egress: allowAnyIntegrationHost(),
-        auditLog: createMemoryAuditLog(),
-        // The executor is disarmed too: nothing below may be discharged by the layer outside the
-        // adapter, which is the layer that does not cover a returned value anyway.
-        redactor: noSecretsRedactor(),
-        timer: createVirtualTimer({ autoAdvance: true }),
-        clock,
-        rateLimits: () => ({ capacity: 100, refillPerSecond: 100, maxConcurrent: 8 }),
-      }),
       clock,
-      actionContext: () => ({ mode: 'normal', projectId: null, taskId: null }),
     });
     const port = registration.create({
       integrationId: '00000000-0000-4000-8000-0000000000a8',
@@ -1284,18 +1264,7 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
   it('keeps the credentials out of a failure branch as well', async () => {
     const clock = fixedClock(NOW, 0);
     const registration = createJiraCloudRegistration({
-      executor: createIntegrationActionExecutor({
-        // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
-        // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
-        egress: allowAnyIntegrationHost(),
-        auditLog: createMemoryAuditLog(),
-        redactor: noSecretsRedactor(),
-        timer: createVirtualTimer({ autoAdvance: true }),
-        clock,
-        rateLimits: () => ({ capacity: 100, refillPerSecond: 100, maxConcurrent: 8 }),
-      }),
       clock,
-      actionContext: () => ({ mode: 'normal', projectId: null, taskId: null }),
     });
     const port = registration.create({
       integrationId: '00000000-0000-4000-8000-0000000000a8',

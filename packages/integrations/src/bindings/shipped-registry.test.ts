@@ -1,15 +1,16 @@
 /**
  * Backlog 550 through the **real** composition: the pipeline's `ticketReads` over the Jira adapter
  * built by `createPipelineProviderRegistry`, on one real executor with the production rate-limit
- * resolver — the same executor instance on both layers and the same `integrations.id`, which is
- * what `apps/server/src/pipeline.ts` composes. Only the transport is scripted (a global `fetch`
- * stub); the clock is a virtual timer, so a token wait costs no wall time.
+ * resolver — what `apps/server/src/pipeline.ts` composes. Only the transport is scripted (a global
+ * `fetch` stub); the clock is a virtual timer, so a token wait costs no wall time.
  *
- * Before the fix the pipeline's call held a limiter slot across `perform` while the adapter's own
- * call inside it waited for a second slot of the same limiter, with no deadline: `maxConcurrent`
- * concurrent reads held every slot and none settled. The wall-clock race below bounds that so it
- * fails by name. **Canary:** make `isReentrant` in `action-executor.ts` answer `false` and the first
- * case fails on `'deadlocked'`.
+ * Before `df01f9b1` the pipeline's call held a limiter slot across `perform` while the adapter's own
+ * executor call inside it waited for a second slot of the same limiter, with no deadline:
+ * `maxConcurrent` concurrent reads held every slot and none settled. Since WP-212 the adapter makes
+ * no executor call of its own, so there is no second slot to wait for and one audit row per read.
+ * The wall-clock race below still bounds the case so a deadlock fails by name. **Canary:** wrap the
+ * adapter's `selfIdentity` in an executor call of its own again (the registry handing it the
+ * executor) and the row count doubles.
  */
 import {
   allowAnyIntegrationHost,
@@ -67,7 +68,7 @@ const composeJira = () => {
     clock,
     rateLimits: pipelineRateLimitPolicy,
   });
-  const registry = createPipelineProviderRegistry({ executor, clock, timer });
+  const registry = createPipelineProviderRegistry({ clock, timer });
   const port = registry.get('task_management', 'jira-cloud').create({
     integrationId: INTEGRATION_ID,
     config: {
@@ -109,9 +110,9 @@ describe('a pipeline call through the shipped Jira registration (backlog 550)', 
     );
     expect(requests).toHaveLength(callers);
     expect(timer.sleeps, 'no read waited for a token').toEqual([]);
-    // The audit is what it was: the pipeline's row and the adapter's, both `ok`, per read.
-    expect(audit.entriesFor('self_identity').map((entry) => entry.status)).toEqual(
-      Array.from({ length: callers * 2 }, () => 'ok'),
+    // One row per read: the pipeline's, and no second one from inside the adapter (WP-212).
+    expect(audit.entries.map((entry) => `${entry.action}:${entry.status}`)).toEqual(
+      Array.from({ length: callers }, () => 'self_identity:ok'),
     );
   });
 

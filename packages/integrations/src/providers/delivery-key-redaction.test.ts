@@ -78,14 +78,7 @@
  *    Discovered work rather than answered here.
  */
 import { readdirSync } from 'node:fs';
-import {
-  allowAnyIntegrationHost,
-  createIntegrationActionExecutor,
-  createMemoryAuditLog,
-  createVirtualTimer,
-  noSecretsRedactor,
-  type WebhookDelivery,
-} from '@platform/application';
+import { noSecretsRedactor, type WebhookDelivery } from '@platform/application';
 import { fixedClock } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { gitlabProviderRegistration } from './gitlab/index.js';
@@ -141,20 +134,7 @@ const SENTRY_TOKEN = 'FAKE-PLANTED-sentry-auth-token-0123456789';
 const SLACK_SIGNING_SECRET = 'FAKE-PLANTED-slack-signing-secret-0123456789';
 
 const jiraRegistration = createJiraCloudRegistration({
-  executor: createIntegrationActionExecutor({
-    // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
-    // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
-    egress: allowAnyIntegrationHost(),
-    auditLog: createMemoryAuditLog(),
-    // Disarmed too: nothing below may be discharged by the ring outside the adapter — and the
-    // executor does not cover this value anyway, since `deliveryKey` is not an action.
-    redactor: noSecretsRedactor(),
-    timer: createVirtualTimer({ autoAdvance: true }),
-    clock,
-    rateLimits: () => ({ capacity: 100, refillPerSecond: 100, maxConcurrent: 8 }),
-  }),
   clock,
-  actionContext: () => ({ mode: 'normal', projectId: null, taskId: null }),
 });
 
 /**
