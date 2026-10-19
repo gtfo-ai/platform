@@ -4274,20 +4274,13 @@ describe('WP-206, backlog 604: a program named in an option value or a script', 
 
   describe('the residual, stated', () => {
     it.each([
-      // A name the script composes.
-      'awk \'BEGIN{system("gi" "t push")}\'',
+      // A name the script composes. (awk's `system` spelling moved to WP-210: an awk script that
+      // can run a command is uncertain, and so are the sed rows WP-210 lists.)
       'python3 -c \'import os; os.system("gi"+"t push")\'',
       // A script or file the run wrote.
-      "sed 's/^//e' f",
-      'sed -f script.sed x',
       'tar --to-command=./x.sh -xf x',
-      // A judged name with no argument, which the last `/`-segment rule does not read in a script.
-      "sed 's/x/git/e' x",
       // A URL's path is not a command.
       'frob https://example.test/git/x',
-      // The line's own input, run by a script primitive (PROGRESS § WP-206, discovered work).
-      "echo 'git push origin main' | sed 's/^//e'",
-      "echo 'git push origin main' | awk '{system($0)}'",
     ])('%j keeps ask / auto / deny', (command) => {
       expect(cell(command, policy)).toBe('ask / auto / deny');
     });
@@ -4429,8 +4422,8 @@ describe('WP-206, backlog 604: a program named in an option value or a script', 
     });
 
     it.each([
-      // A name a script composes stays the residual: the joined reading keeps the blank and `+`.
-      'awk \'BEGIN{system("gi" "t push")}\'',
+      // A name a script composes stays the residual: the joined reading keeps the blank and `+`
+      // (awk's `system` spelling moved to WP-210).
       'python3 -c \'import os; os.system("gi"+"t push")\'',
       // A pattern of wildcards and multi-character classes alone is a file glob, not a name.
       'tar -czf out.tgz *',
@@ -4601,5 +4594,128 @@ describe('WP-207, backlog 603: the image’s wrappers, the loader among them', (
     ])('%j keeps %s', (command, expected) => {
       expect(cell(command, policy)).toBe(expected);
     });
+  });
+});
+
+/**
+ * WP-210 (backlog 605), the orchestrator's coarse rule: a `sed` or awk script holding an execution
+ * primitive — or one the platform cannot read — is uncertain **whatever its input**, a pipe, a
+ * here-string, a process substitution or a file. Every row in the first four tables read `ask / auto
+ * / deny` or was uncertain only for a judged name before this row (PROGRESS § WP-210, `a-before.log`).
+ */
+describe('WP-210, backlog 605: a sed or awk script that can run a command', () => {
+  const scriptExecutes = (command: string): void => {
+    expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toContain(UNCERTAINTY.scriptExecutes);
+  };
+
+  it.each([
+    "printf 'git push origin main' | sed 'e'",
+    "sed 'e' <<< 'git push origin main'",
+    "sed '1e sudo id' f",
+    "sed -e 's/a/b/' -e 'e git push origin main' f",
+    "echo x | sed -e 's/a/b/' -e 'e'",
+    "sed '/^x/I e' f",
+  ])('the sed e command: %j is uncertain', scriptExecutes);
+
+  it.each([
+    "echo 'git push origin main' | sed 's/^//e'",
+    "echo 'sudo id' | sed 's/^//e'",
+    "sed 's/^//e' <<< 'git push origin main'",
+    "sed 's/^//e' <<'EOF'\ngit push origin main\nEOF",
+    "sed 's/^//e' < <(echo 'git push origin main')",
+    "sed 's/^//e' f",
+    "sed --expression='s/^//e' f",
+    "sed -iex 's/^//e' f",
+    "sed 's/x/git/e' x",
+  ])('the sed s flag e: %j is uncertain', scriptExecutes);
+
+  it.each([
+    "sed 's.x.git push origin main.e' x",
+    "sed 's_x_git push origin main_e' x",
+    "sed 'sAxAgit push origin mainAe' x",
+    "sed 's|x|git push origin main|e' x",
+    "sed 's/a\\/b/c/e' x",
+  ])('the s delimiter is any character: %j is uncertain', scriptExecutes);
+
+  it.each([
+    "echo 'git push origin main' | awk '{system($0)}'",
+    "awk '{system($0)}' <<< 'git push origin main'",
+    "awk '{system($0)}' f",
+    "awk -v c='git push origin main' 'BEGIN{system(c)}'",
+    'awk \'BEGIN{system("gi" "t push")}\'',
+  ])('the awk system call: %j is uncertain', scriptExecutes);
+
+  it.each(['awk \'"git push origin main" | getline\'', 'gawk \'BEGIN{"date" |& getline d}\''])(
+    'the awk getline pipe: %j is uncertain',
+    scriptExecutes,
+  );
+
+  it.each([
+    'awk \'{print | "sh"}\'',
+    "echo 'git push origin main' | awk '{print | \"sh\"}'",
+    'awk \'{printf "%s\\n", $0 | "sh"}\'',
+  ])('the awk output pipe: %j is uncertain', scriptExecutes);
+
+  it.each([
+    "echo 'git push origin main' | mawk '{system($0)}'",
+    "echo 'git push origin main' | gawk '{system($0)}'",
+    "echo 'git push origin main' | nawk '{system($0)}'",
+    "echo 'git push origin main' | busybox awk '{system($0)}'",
+    "echo 'git push origin main' | busybox sed 's/^//e'",
+    "busybox sed 's.x.git push origin main.e' x",
+    "echo 'git push origin main' | /usr/bin/sed 's/^//e'",
+    "echo 'git push origin main' | timeout 5 sed 's/^//e'",
+  ])('every name reaches the reader: %j is uncertain', scriptExecutes);
+
+  // Review round 1: the walk spends the word after a wrapper option it does not know as its value.
+  it.each([
+    "ls | xargs -n1 sed 's/^//e'",
+    "ls | xargs -0 sed 's/^//e'",
+    "ls | xargs -r sed 's/^//e'",
+    "ls | xargs -I{} sed 's/^//e' {}",
+    "find . -print0 | xargs -0 -n1 sed 's/^//e'",
+    "echo x | stdbuf -oL sed 's/^//e'",
+    "echo x | ionice -c3 sed 's/^//e'",
+    "ls | xargs -n1 awk '{system($0)}'",
+    "ls | xargs -0 awk '{system($0)}'",
+    "ls | xargs -r awk '{system($0)}'",
+    "ls | xargs -I{} awk '{system($0)}' {}",
+    "echo x | stdbuf -oL awk '{system($0)}'",
+    "echo x | ionice -c3 awk '{system($0)}'",
+  ])('behind a wrapper option the walk does not know: %j is uncertain', scriptExecutes);
+
+  it.each([
+    'sed -f script.sed x',
+    'sed --file=script.sed x',
+    'awk -f prog.awk f',
+    'gawk --include=lib.awk f',
+    'mawk -W exec prog.awk',
+    'sed "$s" f',
+    "sed 's/x/y' f",
+    "echo x | sed 's/x/y'",
+    "sed 'k' f",
+  ])('a script the reader cannot read: %j is uncertain', scriptExecutes);
+
+  it.each([
+    ["sed -n '1,5p' f", 'allow / allow / allow'],
+    ["git log | sed -n '1,5p'", 'allow / allow / allow'],
+    ["sed -i 's/a/b/' f", 'ask / auto / deny'],
+    ["sed 's/x/y/g'", 'ask / auto / deny'],
+    ["echo x | sed 's/x/y/'", 'ask / auto / deny'],
+    ["sed 's/name/value/' f", 'ask / auto / deny'],
+    ["sed -n '/re/p' f", 'ask / auto / deny'],
+    ["sed -i.bak -e 's/a/b/' f", 'ask / auto / deny'],
+    ["ls | xargs -n1 sed -n '1,5p'", 'ask / auto / deny'],
+    ["awk '{print $1}' f", 'ask / auto / deny'],
+    ["cat f | awk '{print $1}'", 'ask / auto / deny'],
+    ["awk -F: '{print $1}' /etc/passwd", 'ask / auto / deny'],
+    ["awk -F, '{s+=$2} END {print s}' f", 'ask / auto / deny'],
+    ["awk '$1 == 1 || $2 == 2 {print}' f", 'ask / auto / deny'],
+    // Tier 3, pinned (Q121, 587).
+    ["perl -ne 'system $_'", 'ask / auto / deny'],
+    ['git -C ./planted log', 'ask / auto / deny'],
+  ])('control %j keeps %s', (command, expected) => {
+    expect(cell(command, policy)).toBe(expected);
   });
 });

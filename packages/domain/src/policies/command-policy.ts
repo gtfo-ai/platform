@@ -120,14 +120,26 @@
  * the wrappers, shells, runners, readers, floored names and the valve stay known by name, and a
  * census holds every default list's first token on exactly one of the two readers.
  *
+ * **A `sed` or awk script that can run a command is uncertain whatever its input** (WP-210, backlog
+ * 605: `echo 'git push origin main' | sed 's/^//e'` and `| awk '{system($0)}'` were
+ * `unattended_auto`). The reader is coarse and fails closed (`scriptExecutesReasons`): sed's `e`
+ * command and `s` flag, whatever the delimiter, awk's `system` and a pipe beside `print`, `printf`
+ * or `getline`, and a script it cannot read (a file, an expansion, a sed script it cannot walk).
+ * Not read: gawk's `@include "f"` and `@load`, an indirect call (`@f($0)`), and the names
+ * `original-awk` and `gsed`, and a `sed` or awk behind any program the policy does not know
+ * (`strace -f`, `eatmydata`, `rlwrap`, `faketime 0`, `parallel` — WP-210's round-2 review; latent where
+ * the program is absent, and the image's awk is mawk 1.3.4). Tier 3 and unchanged (TD-030): a composing interpreter's inline script (`python3 -c`, `node -e`,
+ * `perl -e`, `ruby -e`, `php -r`) keeps WP-206's literal read (Q121), and `git -C <dir>` or
+ * `cd <dir>; git …` into a repository the run wrote keeps its cell (backlog 587).
+ *
  * **What it still does not read:** a script in a file (`bash file`, `bash < file`, `. ./x.sh`,
  * `run-parts dir`, `scriptlive` — a file the run wrote, backlog 481's residual and the unattended
- * module's, and `sed … e` or `--to-command=./x.sh` over one), a name a script composes
+ * module's, and `--to-command=./x.sh` over one; `sed -f`, `awk -f` and a `sed … e` over a file are
+ * uncertain since WP-210), a name a script composes
  * (`"gi"+"t"`, `getattr(os, "sys"+"tem")`: since WP-206 a judged name written in an
  * interpreter's or a tool's script is uncertain, glued or not), the script of a runner known by
  * name (`bun -e '…'`: a package runner's arguments are not scanned), a name glued by a name's own
- * characters (`s.git.`, `legit`), the line's own input run by a
- * script primitive (`echo … | sed 's/^//e'`, `| awk '{system($0)}'`), a command a
+ * characters (`s.git.`, `legit`), a command a
  * program assembles from its input where no string on the line names it (`cat cmds | parallel`;
  * and `xargs` feeding a known command that is not a wrapper, `find -exec`, `git`, a shell or a verb
  * a `command`-kind floor names — WP-164 made `xargs make`, whose input can name assignments and
@@ -286,6 +298,14 @@ export const UNCERTAINTY = {
    */
   runnerString:
     'npm explore or bun exec, which runs its words as a string in a shell — run the command itself; the platform does not read the string a package runner hands to a shell',
+  /**
+   * WP-210 (backlog 605): a `sed` or awk script holding an execution primitive runs text as a shell
+   * command — its own, or its input's (`echo … | sed 's/^//e'`) — so it is uncertain whatever its
+   * input; and so is a script the platform cannot read (`-f`, one the shell expands, a sed script it
+   * cannot parse). `scriptExecutesReasons` is the reader.
+   */
+  scriptExecutes:
+    "a sed or awk script that can run a command — sed's e command or the e flag of s, awk's system(), a pipe into getline or a print or printf into a pipe — or one the platform cannot read (a script file, a script the shell expands, a sed script it cannot parse) — write the edit without e, system or a pipe, and run a command itself; the platform does not read what a sed or awk script runs",
 } as const;
 
 /**
@@ -5849,6 +5869,258 @@ const unknownProgramReasons = (
 };
 
 /**
+ * WP-210 (backlog 605), the orchestrator's coarse, fail-closed rule in place of a full sed/awk
+ * grammar: a stage with `sed` or an awk (`awk`, `gawk`, `mawk`, `nawk`; `busybox`'s applets) at
+ * any command-position word {@link commandNameWalk} lists — its command, or a word it read as a
+ * wrapper option's value — is `UNCERTAINTY.scriptExecutes` when its script — the
+ * `-e`/`--expression` (awk: `-e`/`--source`) values joined, or else the first operand — holds an
+ * execution primitive, **whatever its input**: a pipe, a here-string or a file operand alike. A
+ * script the reader cannot read is uncertain too: a file (`-f`, awk's `--include`/`--load`/`--exec`
+ * and `-W`), a word the shell expands, and a sed script {@link sedScriptExecutes} cannot walk. Both
+ * languages' exec sets are finite and documented (GNU sed manual § 3.3 and § 3.8:
+ * https://www.gnu.org/software/sed/manual/sed.html; gawk manual, *I/O Functions*), which is what
+ * makes a coarse reader enough.
+ */
+const scriptExecutesReasons = (stage: string): readonly UncertaintyReason[] => {
+  const words = argvShellWords(stage);
+  const walk = commandNameWalk(words);
+  // Every command-position word the walk lists, not only the command it stopped at (review round
+  // 1): the walk spends the word after a wrapper option it does not know as that option's value
+  // (`xargs -n1 sed …`, `stdbuf -oL sed …`), so a word that may be `sed` counts. Fail closed.
+  const listed = new Set(walk.words);
+  const executes = words.some((word, index) => {
+    if (!(listed.has(word) || index === walk.command)) {
+      return false;
+    }
+    const name = argv0Name(word);
+    const language = name === 'sed' ? SED_SCRIPT : AWK_NAMES.has(name) ? AWK_SCRIPT : undefined;
+    if (language === undefined) {
+      return false;
+    }
+    const script = scriptOperand(words.slice(index + 1), language.options);
+    return script !== undefined && (script === null || language.executes(script));
+  });
+  return executes ? [UNCERTAINTY.scriptExecutes] : [];
+};
+
+const AWK_NAMES: ReadonlySet<string> = new Set(['awk', 'gawk', 'mawk', 'nawk']);
+
+/**
+ * How an option of a script language treats its value: `attached` takes an optional value only
+ * attached to it (sed's `-i[SUFFIX]`), which ends its cluster.
+ */
+type ScriptOptionKind = 'script' | 'file' | 'value' | 'attached' | 'flag';
+
+interface ScriptLanguage {
+  readonly options: {
+    readonly short: Readonly<Record<string, ScriptOptionKind>>;
+    readonly long: Readonly<Record<string, ScriptOptionKind>>;
+  };
+  readonly executes: (script: string) => boolean;
+}
+
+/** A literal word's value, or `null` for one the shell expands ({@link isLiteralWord}). */
+const literalOrNull = (raw: string | undefined): string | null =>
+  raw === undefined || !isLiteralWord(raw) ? null : literalValue(raw);
+
+/** The kind a long option takes: the most dangerous among the names it abbreviates. */
+const longOptionKind = (
+  long: string,
+  options: ScriptLanguage['options']['long'],
+): ScriptOptionKind => {
+  const kinds = Object.entries(options)
+    .filter(([candidate]) => candidate.startsWith(long))
+    .map(([, kind]) => kind);
+  return (['file', 'script', 'value'] as const).find((kind) => kinds.includes(kind)) ?? 'flag';
+};
+
+/**
+ * The script a sed or awk invocation runs: the script options' values joined by newlines (as GNU
+ * sed joins its `-e` fragments), or else the first operand; `null` when it cannot be read (a file,
+ * an expanded word), `undefined` when there is none. A long option is matched by every name it
+ * abbreviates (getopt accepts a unique prefix); an unknown short option is a flag.
+ */
+const scriptOperand = (
+  args: readonly string[],
+  options: ScriptLanguage['options'],
+): string | null | undefined => {
+  const scripts: (string | null)[] = [];
+  let operand: string | null | undefined;
+  let optionsEnd = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const raw = args[index] as string;
+    const word = unquoteToken(raw);
+    if (optionsEnd || word === '-' || !word.startsWith('-')) {
+      operand = operand === undefined ? literalOrNull(raw) : operand;
+      continue;
+    }
+    if (word === '--') {
+      optionsEnd = true;
+      continue;
+    }
+    const literal = literalOrNull(raw);
+    const text = literal ?? word;
+    // The option's kind and where its attached value starts (none: `text.length`).
+    const equals = text.indexOf('=');
+    let kind: ScriptOptionKind = 'flag';
+    let from = text.length;
+    if (text.startsWith('--')) {
+      kind = longOptionKind(equals === -1 ? text : text.slice(0, equals), options.long);
+      from = equals === -1 ? text.length : equals + 1;
+    } else {
+      for (let at = 1; at < text.length && kind === 'flag'; at += 1) {
+        kind = options.short[text[at] as string] ?? 'flag';
+        from = at + 1;
+      }
+    }
+    const attached = from < text.length ? (literal === null ? null : text.slice(from)) : undefined;
+    const value = (): string | null => {
+      if (attached !== undefined) {
+        return attached;
+      }
+      index += 1;
+      return literalOrNull(args[index]);
+    };
+    if (kind === 'script') {
+      scripts.push(value());
+    } else if (kind === 'file') {
+      value();
+      scripts.push(null);
+    } else if (kind === 'value') {
+      value();
+    }
+  }
+  if (scripts.length > 0) {
+    return scripts.includes(null) ? null : scripts.join('\n');
+  }
+  return operand;
+};
+
+/** GNU sed 4.9's options (`sed --help`), busybox's a subset; `-i`/`-s`'s value is attached only. */
+const SED_SCRIPT: ScriptLanguage = {
+  options: {
+    short: { e: 'script', f: 'file', l: 'value', i: 'attached' },
+    long: {
+      '--expression': 'script',
+      '--file': 'file',
+      '--line-length': 'value',
+    },
+  },
+  executes: (script) => sedScriptExecutes(script),
+};
+
+/**
+ * POSIX awk's `-F`/`-v`/`-f`, gawk's long options, `-e`/`-i`/`-l`/`-E` and the optional attached values of `-d`/`-D`/`-L`/`-o`/`-p`, mawk's and gawk's `-W`
+ * (read as a file: `mawk -W exec file` runs a program file). An awk script executes when it names
+ * `system`, or holds a `|` (not `||`) beside a `print`, `printf` or `getline` — the output pipe,
+ * `cmd | getline` and gawk's `|&` — read over-inclusively: a `|` in a string or a regex counts.
+ */
+const AWK_SCRIPT: ScriptLanguage = {
+  options: {
+    short: {
+      F: 'value',
+      v: 'value',
+      f: 'file',
+      e: 'script',
+      i: 'file',
+      l: 'file',
+      E: 'file',
+      W: 'file',
+      d: 'attached',
+      D: 'attached',
+      L: 'attached',
+      o: 'attached',
+      p: 'attached',
+    },
+    long: {
+      '--field-separator': 'value',
+      '--assign': 'value',
+      '--file': 'file',
+      '--source': 'script',
+      '--include': 'file',
+      '--load': 'file',
+      '--exec': 'file',
+    },
+  },
+  executes: (script) =>
+    /\bsystem\b/.test(script) ||
+    (script.replaceAll('||', '').includes('|') && /\b(?:print|getline)/.test(script)),
+};
+
+/**
+ * Whether a sed script can run a command — the `e` command, or an `e` in an `s` command's flags
+ * (GNU sed manual § 3.3, § 3.8) — walked command by command, over-inclusively: `s` and `y` take
+ * the character after the letter as their delimiter, whatever it is (`s.x.cmd.e`), a backslash
+ * escaping inside; every other argument (a label, a file name, `a`/`i`/`c` text) ends at the
+ * first `;`, `}` or newline, earlier than sed ends some of them, so more of the script is read as
+ * commands than sed reads; and what the walk cannot place (an unterminated `s`, an unknown command
+ * letter) counts as executing.
+ */
+const sedScriptExecutes = (script: string): boolean => {
+  let index = 0;
+  const delimited = (delimiter: string): boolean => {
+    while (index < script.length) {
+      const char = script[index] as string;
+      index += char === '\\' ? 2 : 1;
+      if (char === delimiter) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const toArgumentEnd = () => {
+    while (index < script.length && !/[;}\n]/.test(script[index] as string)) {
+      index += 1;
+    }
+  };
+  while (index < script.length) {
+    const char = script[index] as string;
+    index += 1;
+    if (/[\s;{}!0-9$,~+]/.test(char)) {
+      continue;
+    }
+    if (char === '/' || char === '\\') {
+      const delimiter = char === '/' ? '/' : script[index++];
+      if (delimiter === undefined || !delimited(delimiter)) {
+        return true;
+      }
+      while (/[IM]/.test(script[index] ?? '')) {
+        index += 1;
+      }
+      continue;
+    }
+    if (char === 'e') {
+      return true;
+    }
+    if (char === 's' || char === 'y') {
+      const delimiter = script[index++];
+      if (
+        delimiter === undefined ||
+        /[\n\\]/.test(delimiter) ||
+        !delimited(delimiter) ||
+        !delimited(delimiter)
+      ) {
+        return true;
+      }
+      const flags = index;
+      toArgumentEnd();
+      if (script.slice(flags, index).includes('e')) {
+        return true;
+      }
+      continue;
+    }
+    if ('abcilqrtvwFLQRTW:#'.includes(char)) {
+      toArgumentEnd();
+      continue;
+    }
+    if (!'dDgGhHnNpPxz='.includes(char)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/**
  * Whether the policy knows this command ({@link unknownProgramReasons}' definition): **by name** —
  * the valve, a wrapper, shell, package runner or reader of a handed command, a builtin WP-158's
  * reader reads (`stageEvaluatesText`: its words are names and values), or a name a floor is
@@ -7413,7 +7685,7 @@ const evaluateOnce = (
   // from its input (WP-197), the one a line matches only when a word is read as an option's
   // value (WP-198), the one an expansion could complete (WP-201), and a program the stage's
   // policy does not know handed a judged name (WP-203) — the only reasons that
-  // need the policy's lists, a project's included.
+  // need the policy's lists, a project's included — and a sed or awk script that executes (WP-210).
   const uncertainty: readonly UncertaintyReason[] = [
     ...new Set([
       ...parsed.uncertainty,
@@ -7434,6 +7706,8 @@ const evaluateOnce = (
       ...parsed.programStages.flatMap((stage) =>
         unknownProgramReasons(stage, policy, !parsed.substitutes),
       ),
+      // WP-210: a sed or awk script that can run a command, whatever its input.
+      ...parsed.programStages.flatMap(scriptExecutesReasons),
     ]),
   ];
   const floor = (evaluation: Omit<CommandEvaluation, 'uncertainty'>): CommandEvaluation => ({

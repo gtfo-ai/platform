@@ -10,7 +10,7 @@
  * the recorded ones and exits 1 when any does. Refuses a missing corpus, a blank line and a repeated
  * one. Nothing executes: the cells are the policy's answers.
  *
- * A scanner change that moves a cell regenerates the file in the same change and records the two
+ * A scanner change that moves a cell regenerates the file in the same change and records the three
  * counts this prints (`policies/command-corpus.test.ts` prints the same diff when it is forgotten).
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -44,7 +44,7 @@ for (const corpus of corpora) {
     );
     continue;
   }
-  const { changes, newlyRefused, newlyAllowed } = corpusDiff(
+  const { changes, newlyRefused, newlyAllowed, newlyAsked } = corpusDiff(
     JSON.parse(readFileSync(target, 'utf8')),
     lines,
   );
@@ -52,7 +52,7 @@ for (const corpus of corpora) {
     process.stdout.write(`${JSON.stringify(line)} | ${cell} | ${before} | ${after}\n`);
   }
   process.stdout.write(
-    `${file}: ${changes.length} cells changed, ${newlyRefused} newly refused, ${newlyAllowed} newly allowed\n`,
+    `${file}: ${changes.length} cells changed, ${newlyRefused} newly refused, ${newlyAllowed} newly allowed, ${newlyAsked} newly asked\n`,
   );
   changed += changes.length;
 }

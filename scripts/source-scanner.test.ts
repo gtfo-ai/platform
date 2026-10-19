@@ -180,6 +180,8 @@ describe('a comment stripper is recognised by its shape', () => {
     'apps/web/src/app/shell.tsx chars': "a route comparison, `item.to === '/'`",
     'packages/domain/src/readiness/ci-rules.ts chars':
       'the opening `/` of a regular-expression literal in a GitLab `rules:if` expression (WP-143) — a tokenizer of another language, which has no comments',
+    'packages/domain/src/policies/command-policy.ts chars':
+      'the opening `/` of a regular-expression address in a sed script (`sedScriptExecutes`, WP-210) — a walker of another language, whose comments are its own `#` command',
     'apps/web/src/routes/redirect.ts probe':
       "refuses a protocol-relative redirect, `startsWith('//')`",
     'packages/domain/src/knowledge/frontmatter.ts probe': "a YAML alias, `startsWith('*')`",

@@ -177,9 +177,10 @@ const refuses = (cell: string | undefined): boolean => {
 };
 
 /**
- * Every cell that differs between the recorded verdicts and the recomputed ones, and the two counts
- * a scanner row quotes: cells newly refused (a run that ran no longer runs, or an attended line is
- * now refused or uncertain) and cells newly allowed (the converse).
+ * Every cell that differs between the recorded verdicts and the recomputed ones, and the three
+ * counts a scanner row quotes: cells newly refused (a run that ran no longer runs, or an attended
+ * line is now refused or uncertain), cells newly allowed (the converse), and cells newly asked (an
+ * `allow` that now asks attended or runs only under `auto`, which neither of the first two counts).
  */
 export const corpusDiff = (
   recorded: Readonly<Record<string, Partial<CorpusCells>>>,
@@ -188,6 +189,7 @@ export const corpusDiff = (
   readonly changes: readonly CellChange[];
   readonly newlyRefused: number;
   readonly newlyAllowed: number;
+  readonly newlyAsked: number;
 } => {
   const changes: CellChange[] = [];
   for (const line of lines) {
@@ -211,5 +213,10 @@ export const corpusDiff = (
   const newlyAllowed = changes.filter(
     (change) => refuses(change.before) && !refuses(change.after),
   ).length;
-  return { changes, newlyRefused, newlyAllowed };
+  const newlyAsked = changes.filter(
+    (change) =>
+      cellValue(change.before) === 'allow' &&
+      (cellValue(change.after) === 'ask' || cellValue(change.after) === 'auto'),
+  ).length;
+  return { changes, newlyRefused, newlyAllowed, newlyAsked };
 };

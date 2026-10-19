@@ -24,7 +24,7 @@ wrapper*, *argv as the shell builds it*, *a name boundary is any character outsi
 also measured its over-ask on a corpus that lived in a scratch directory and, as backlog 603 and 605 record,
 *will not outlive the session*.
 
-What is still open (backlog 598, 605, 592/596/601, 608, 606/607, 581, 587, 603's `frobnicate $x id`) is each a
+What is still open (backlog 598, 605 — closed by WP-210, see the 2026-10-19 amendment below — 592/596/601, 608, 606/607, 581, 587, 603's `frobnicate $x id`) is each a
 grammar the scanner does not have. Without a stated contract every such grammar is filed as a major, built as a
 row, and reviewed for three rounds against spellings that are, by BD-025's own paragraph, the credential's and
 the sandbox's. This decision states the contract so that a finding is graded by its tier, a row is opened only
@@ -54,8 +54,8 @@ for a tier the scanner promises, and the over-ask is a diff the suite prints.
      stock image and the line is literal, in which case major.
    - **Tier 3 — the stated residual.** A name composed at run time (`"gi"+"t"`, `getattr`, `$'…'`, a locale
      string); an inline script to a composing language (`python3 -c`, `node -e`, `perl -e`, `ruby -e`,
-     `php -r`) beyond the literal names it contains; a script or file the run wrote (`bash f`, `sed -f`,
-     `sed … e` over a file, `run-parts`, a planted `.git/config` under `git -C <dir>`, an `LD_PRELOAD` of a
+     `php -r`) beyond the literal names it contains; a script or file the run wrote (`bash f`,
+     `run-parts`, a planted `.git/config` under `git -C <dir>`, an `LD_PRELOAD` of a
      written object); a project's own wide `allow` entry; and a wrapper the image does not ship handed an
      expansion (`frobnicate $x id`). The scanner gives tier 3 the literal read (tier 1's four rules) and
      nothing more. Its control is the sandbox (BD-025, 2026-10-06, decision 1's list) and the credential
@@ -132,3 +132,13 @@ for a tier the scanner promises, and the over-ask is a diff the suite prints.
   rule 83); the module docblock of `command-policy.ts` names the tiers where it states its residual (WP-210).
 - A reviewer brief for a scanner row cites this decision and asks for the tier of every new spelling.
 - No migration; no schema; no API change.
+
+## Amendment 2026-10-19 (WP-210, session 17)
+
+`sed -f`, a `sed … e` over a file, and every other `sed`/awk script that can execute a command (sed's `e`
+command and `s///e` flag; awk's `system()`, `cmd | getline`, `print | "cmd"`) or that the reader cannot read
+(a script file, awk `-W`, an expanded script word) moved from tier 3 to tier 2 (a declared grammar, here a coarse one that fails closed) at WP-210: the scanner reads them
+`uncertain` (`UNCERTAINTY.scriptExecutes`) whatever the input, a coarse fail-closed rule chosen by the
+orchestrator over a full sed/awk grammar after a safety classifier stopped the first implementer. The over-ask
+is accepted under this decision's grading rule (an awk `|` inside a string next to `print`; `sed "s/x$/y/"`); the
+committed corpus moved no line. The run image's `awk` is mawk 1.3.4 (measured), so gawk's `@load` is latent.

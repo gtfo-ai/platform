@@ -2,7 +2,7 @@
  * WP-208 (TD-030 decision 4): the agent-line corpus, `test/fixtures/commands/`, recomputed cell by
  * cell. Every `<name>.txt` there is a corpus and `<name>.verdicts.json` records each line's attended,
  * `auto` and `deny` cells under the default policy; a scanner change that moves a cell fails here
- * printing `line | cell | before | after` and the two counts a scanner row quotes as its over-ask,
+ * printing `line | cell | before | after` and the three counts a scanner row quotes as its over-ask,
  * and regenerates the file with `node scripts/command-corpus.mjs --write`. The fixture is read as a
  * file, never imported. Nothing executes: the cells are the policy's answers.
  */
@@ -46,15 +46,15 @@ describe('the agent-line corpus (test/fixtures/commands/)', () => {
 
   it.each(CORPORA)('%s: every recorded cell is the one the default policy answers', (name) => {
     const { lines, recorded } = read(name);
-    const { changes, newlyRefused, newlyAllowed } = corpusDiff(recorded, lines);
+    const { changes, newlyRefused, newlyAllowed, newlyAsked } = corpusDiff(recorded, lines);
     const diff = [
       'line | cell | before | after',
       ...changes.map(
         ({ line, cell, before, after }) =>
           `${JSON.stringify(line)} | ${cell} | ${before} | ${after}`,
       ),
-      `${changes.length} cells changed: ${newlyRefused} newly refused, ${newlyAllowed} newly allowed`,
-      'If the change is intended: node scripts/command-corpus.mjs --write, and record both counts.',
+      `${changes.length} cells changed: ${newlyRefused} newly refused, ${newlyAllowed} newly allowed, ${newlyAsked} newly asked`,
+      'If the change is intended: node scripts/command-corpus.mjs --write, and record the counts.',
     ].join('\n');
     expect(changes, diff).toEqual([]);
   });
@@ -117,5 +117,31 @@ describe('corpusDiff counts what moved', () => {
       { line: 'ls', cell: 'auto', before: 'uncertain: handedCommand', after: 'allow' },
     ]);
     expect({ newlyRefused, newlyAllowed }).toEqual({ newlyRefused: 1, newlyAllowed: 1 });
+  });
+
+  it('counts an allow that now asks, which is neither refused nor allowed (WP-210)', () => {
+    const recorded = {
+      'git push origin main': { attended: 'allow' },
+      'git status': { attended: 'ask: git status' },
+    };
+    const { changes, newlyRefused, newlyAllowed, newlyAsked } = corpusDiff(recorded, [
+      'git push origin main',
+      'git status',
+    ]);
+    expect(changes.filter(({ cell }) => cell === 'attended')).toEqual([
+      { line: 'git push origin main', cell: 'attended', before: 'allow', after: 'ask: git push*' },
+      { line: 'git status', cell: 'attended', before: 'ask: git status', after: 'allow' },
+    ]);
+    expect(newlyAsked).toBe(1);
+    expect({ newlyRefused, newlyAllowed }).toEqual({ newlyRefused: 2, newlyAllowed: 0 });
+  });
+
+  it('counts an allow that now runs only under auto as newly asked (WP-210 review round 1)', () => {
+    const recorded = { 'git diff': { auto: 'allow' }, 'sed -i x f': { auto: 'allow' } };
+    const { changes, newlyAsked } = corpusDiff(recorded, ['git diff', 'sed -i x f']);
+    expect(changes.filter(({ cell }) => cell === 'auto')).toEqual([
+      { line: 'sed -i x f', cell: 'auto', before: 'allow', after: 'auto: unmatched' },
+    ]);
+    expect(newlyAsked).toBe(1);
   });
 });

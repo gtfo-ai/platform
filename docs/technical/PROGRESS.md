@@ -16806,6 +16806,29 @@ Proved through the real adapter with `max_pages: 1` and a second page holding th
 
 **Depends on** WP-209 being merged (the flag). It is the same decision WP-209 (c) made for discussions, so it fits a GitLab row.
 
+### 611. **GitLab runs quick actions (`/close`, `/label`, `/assign_reviewer`, `/unapprove`, `/draft`, `/rebase`, `/approve`, `/merge`, …) in a note posted through the API, under the poster's token, and no GitLab writer neutralises a line-leading `/`, so model text the platform posts can act on the merge request as the platform's account** (TODO, **major, fail-open, live for notes by GitLab's documentation; descriptions by reading, unmeasured**: every note body the adapter posts (`createDiscussion`, `replyToDiscussion` and its general-note fallback) carries model text shaped by untrusted input (the diff, the ticket, review comments), and GitLab's Notes API says it runs quick actions on any note sent through any API. This is the BD-022 class of 549/573/609 (mentions), but the text **acts** rather than pings, and GitLab then **removes** the command from the stored body, so the note the platform's audit and a reader see does not show what ran. No guard exists, so nothing shipped fails; the gap is that the mention guard was the only one built. Found by WP-209's round-2 reviewer, session 17, unverified; the refiner read GitLab's documentation (curl of the raw docs, no browser) and grepped `main` at `fa14d489` and `wt-wp209` at `9a3216e9`, and ran nothing. **No work package owns it — an architect pass places it.**)
+
+**What is wrong.** GitLab executes a line that starts with `/` and a known command name when a description or comment is saved. `gitlabNoteBody` rewrites mentions outside code and nothing else, so a line such as `/close` or `/label ~approved` in a finding, a review reply or a description reaches GitLab as written. The platform's credential is the actor, so the action is recorded as the platform's.
+
+**Evidence** (GitLab documentation, retrieved 2026-10-19 from `https://gitlab.com/gitlab-org/gitlab/-/raw/master/doc/…`, the source of `https://docs.gitlab.com/user/project/quick_actions/` and `https://docs.gitlab.com/api/notes/`).
+- `doc/api/notes.md:57-66`, quoted: *"When you create or update a note on an issue, merge request, epic, or commit, GitLab normalizes the body before saving it. This applies to notes sent through any API, including the Discussions API, Draft notes API, and Commits API."* and, as the first normalisation step, *"Runs and then removes any quick actions"*.
+- `doc/user/project/quick_actions.md:21` and `:34`, quoted: quick actions *"Run automatically when you save descriptions or comments."* and *"Each command starts with a forward slash (`/`) and must be entered on a separate line."* `:62-63`: *"The following quick actions are applicable to descriptions, discussions, and threads."* The page lists `approve` (`:168`), `assign_reviewer` (`:242`), `close` (`:593`), `draft` (`:768`), `label` (`:1045`), `merge` (`:1134`), `rebase` (`:1478`), `request_review` (`:1855`), `submit_review` (`:2092`) and `unapprove` (`:2298`) for merge requests.
+- One partial brake, for notes only: `doc/api/notes.md:471` makes `merge_request_diff_head_sha` *"Required for the `/merge` quick action"*. The platform does not send it, so `/merge` in a note is likely refused; nothing else in the list has such a parameter.
+- **Descriptions are by reading, not documented for the API.** `doc/api/merge_requests.md` does not mention quick actions; that `POST`/`PUT …/merge_requests` runs them on `description` rests on the user page's *"descriptions"* above. Needs measurement or a read of GitLab's create/update services.
+- The repository: a case-insensitive grep for `quick.?action` over `packages`, `apps`, `docs` and `test` finds nothing. On `main`, notes go through `gitlabNoteBody` (`packages/integrations/src/providers/gitlab/provider.ts:595`, `:1184`, `:1227`, `:1250`) and descriptions do not (`provider.ts:867`, `:888`). On `wt-wp209`, descriptions do too (`provider.ts:898`, `:919`), and the title goes through `gitlabMergeRequestTitle` (`mentions.ts:413`). No function touches a line-leading `/`.
+- **Not known:** whether GitLab's extractor skips code spans, fences, quotes or HTML comments, and whether it admits indentation before the `/`. Neither page says. Needs a read of GitLab's `lib/gitlab/quick_actions/extractor.rb`, cited in `test/fixtures/http/gitlab/SOURCES.md`.
+
+**What it costs to leave.** Text an attacker steers into a finding or reply can close the merge request, relabel it, request reviewers, mark it draft, withdraw an approval or trigger a rebase as the platform's account, depending on that account's role. Whether `/approve` lands depends on the project's author-approval setting, since the platform's account usually authored the MR. GitLab strips the command from the stored note, so the platform's own reread of what it posted shows nothing. The effect lands at the next post with such a line, and nothing has to be configured for it.
+
+**Done when** every GitLab writer of a description or note neutralises a quick-action line outside code. The likely form matches the title's `@`: a zero-width character before the `/` (`​/close`), idempotent, with code spans and fences left byte-identical as `gitlabNoteBody` already does. Then:
+- one row per writer through the real adapter (`createDiscussion` both shapes, `replyToDiscussion`, the general-note fallback, `createMergeRequest` and `updateMergeRequest` descriptions), each posting `/close` and `/label ~x` on their own line and asserting the neutralised body on the wire;
+- the existing census in `mentions.test.ts` (`:634-836` on `wt-wp209`) holds the writers, so no new census is needed. If the neutraliser is a separate function, it must be added to that census;
+- controls: `/close` inside a fence and a code span is byte-identical, and a mid-line `a /close` is unchanged.
+
+**Canary:** remove the neutralisation, and every writer row fails on `/close`. Whether the neutralised form is inert on a real GitLab, and whether indentation or a container (`> /close`, `- /close`) also runs, is *needs measurement* against a live instance (`docs/TODO.md` § Verification, beside 549's renderer question).
+
+**Depends on** WP-209 being merged (it routes descriptions through `gitlabNoteBody` and adds the census), and best done with 609 in the same function. It is a GitLab row of the same kind.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -52091,3 +52114,57 @@ Probes, corpora logs, the image census and the canary harness are in `scratchpad
 
 **Discovered work.**
 - The http provenance suite's scope is `test/fixtures/http/`; a check over `test/fixtures/commands/SOURCES.md` (a `composed` mark and a date) would make the corpus's provenance enforced rather than stated.
+
+#### WP-210
+
+**Scanner: a `sed` or awk script that can run a command is uncertain whatever its input** (backlog 605; TD-030 tier 2). Second dispatch, main checkout, on `fa14d489`.
+
+**Deviation (the orchestrator's ruling for this dispatch).** A coarse, fail-closed reader instead of the row's full sed/awk grammar and its stdin-shape rule: an invocation of `sed` or `awk`/`gawk`/`mawk`/`nawk` (any path, behind any wrapper `commandNameWalk` peels, `busybox`'s applets included) whose script holds an execution primitive, or which the reader cannot read, is `UNCERTAINTY.scriptExecutes` in all three cells, **whatever its input**. So the row's tier-3 pins `sed 's/^//e' f`, `awk '{system($0)}' f` and `sed -f` move to uncertain, and the primitive's operand is not read for judged names beyond WP-206's existing read.
+
+**Changes.**
+- `packages/domain/src/policies/command-policy.ts`: `UNCERTAINTY.scriptExecutes`; `scriptExecutesReasons` (asked in `evaluateOnce` over `parsed.programStages`, beside WP-203's reader); `scriptOperand` (the script: `-e`/`--expression`/`--source` values joined by newlines, else the first operand; `null` for a file option or an expanded word; long options matched by abbreviation, the most dangerous kind winning; sed's `-i[SUFFIX]` and gawk's `-d`/`-D`/`-L`/`-o`/`-p` end their cluster); `sedScriptExecutes` (a command walker); the awk test. The module docblock's WP-210 paragraph, its residual list rewritten.
+- `packages/domain/src/policies/unattended-commands.test.ts`: the WP-210 describe (62 rows, 9 tables); seven WP-206 residual rows that WP-210 moves taken out of *the residual, stated* and its round-2 twin (`sed 's/^//e' f`, `sed -f script.sed x`, `sed 's/x/git/e' x`, the two pipe lines and the composed awk `system` line, twice), each now a WP-210 row.
+- WP-208 follow-up, *newly asked*: `corpusDiff` returns `newlyAsked` (a cell from `allow` to `ask` or `auto`), printed by `scripts/command-corpus.mjs` and the census's failure message, with a test.
+- technical/05: one amendment bullet; the WP-208 bullet's tier-3 `sed -f` marked uncertain since WP-210.
+
+**Decisions/assumptions.**
+- **sed** (`sedScriptExecutes`): an `e` in a command position, or anywhere in an `s` command's flag text, is exec. The `s`/`y` delimiter is the character after the letter, any character, backslash escaping. Every other argument (a label, a file name, `a`/`i`/`c` text) ends at the first `;`, `}` or newline. That is earlier than sed ends some of them, so the walk reads more of the script as commands than sed does. An unterminated `s`/`y`/address regex or an unknown command letter counts as exec.
+- **awk**: `\bsystem\b`, or a `|` (with `||` removed) in a script that names `print`/`printf`/`getline`, strings and regexes included.
+- **Unreadable is uncertain**: `sed -f`/`--file`, awk's `-f`, `-i`, `-l`, `-E` and any `-W` (`mawk -W exec file`), gawk's `--include`/`--load`/`--exec`, and a script word that is not `isLiteralWord` (`sed "$s" f`, also `sed "s/x$/y/"`: over-ask).
+- **The corpus moved 0 cells** (371 lines: 0 newly refused, 0 newly allowed, 0 newly asked). Five corpus lines run `sed`/`awk`, and none uses a primitive.
+- **WP-208's second follow-up (a stable id on `GitBoundaryViolation`) is skipped as not small**: eight construction sites in `gitBoundaryViolation`, but `checkGitArgv` returns its detail from dozens of sites, so a stable tag needs an id at each.
+- Which `awk` the image ships stays `[unverified]`. The daemon was not used. No shell probe ran, and nothing executes in any test.
+
+**Measured** (`scratchpad/wp210b/after.log`, the first dispatch's `a-before.log` lines plus controls): every 605 row (pipe, here-string, `< <(…)`, `<(…)`, `mawk`/`gawk`/`nawk`/`busybox awk` behind a pipe, `busybox sed`, the `.`/`_`/`A`/`|` delimiters, `sed -e … -e 'e …'`, `sed '1e sudo id'`) reads `uncertain` in all three cells. `perl -ne 'system $_'` and `git -C ./planted log` keep `ask / auto / deny` (Q121, 587). `git log | sed -n '1,5p'` and `sed -n '1,5p' f` stay `allow`. `sed -i 's/a/b/' f`, `sed 's/x/y/g'`, `awk '{print $1}' f` and `awk -F, '{s+=$2} END {print s}' f` keep `ask / auto / deny`.
+
+**Canaries** (`scratchpad/wp210b/canary.mjs`, run in the foreground; each mutation applied in place and the recorded bytes restored by the same script, sha256 `2e5220d1c2a1…` before and after; `canaries1.log`, `canaries2.log`):
+- `sedE` (an `e` command read as no exec): 5 fail, among them `the sed e command: "printf 'git push origin main' | sed 'e'" is uncertain`.
+- `sedFlag` (the `s` flag `e` unread): 18 fail, among them `the sed s flag e: "echo 'git push origin main' | sed 's/^//e'" is uncertain`.
+- `delimiter` (an `s` not delimited by `/` read as no exec): 5 fail, among them `the s delimiter is any character: "sed 's.x.git push origin main.e' x" is uncertain`.
+- `parse` (an unterminated `s` answers no exec): 2 fail, `a script the reader cannot read: "sed 's/x/y' f" is uncertain` and its pipe twin.
+- `awkSystem`: 9 fail. `awkGetline`: 2 fail, `the awk getline pipe: …`. `awkPrint`: 3 fail, `the awk output pipe: …`.
+- `gawk` (dropped from the names): 3 fail, among them `every name reaches the reader: "echo 'git push origin main' | gawk '{system($0)}'" is uncertain`.
+- `file` (a script file read as nothing): 5 fail, among them `a script the reader cannot read: "sed -f script.sed x" is uncertain`.
+- `allAwk` (every awk script exec): 5 controls fail, among them `control "awk '{print $1}' f" keeps ask / auto / deny`.
+
+**Sentences falsified** (rule 83).
+- `grep -rn "script primitive\|s/^//e\|system(\$0)\|sed … e\|awk '{system" docs/technical CLAUDE.md packages docs/TODO.md docs/OPEN-QUESTIONS.md` (excluding PROGRESS, the plan and tests): two sentences in the module docblock's residual list (*"the line's own input run by a script primitive"* and *"`sed … e` … over one"*), both rewritten.
+- `grep -n "sed -f" docs/decisions/technical/TD-030-command-scanner-reading-contract.md`: line 57 lists `sed -f` in tier 3, and it is now uncertain. It is a decision and not this row's to edit. technical/05's copy of that sentence is marked.
+- The plan row's text describes the full grammar and the file residual. The deviation above states what was built instead.
+
+**Discovered work.**
+- gawk's `@load "x"` in an inline script loads a shared library. The awk test does not read it. It is gawk-only, so it matters only if the image's `awk` is gawk.
+- A stable reason id for the git boundary's corpus tags (WP-208's follow-up) needs an id at every `checkGitArgv` return.
+
+**Verification.**
+- `scripts/source-scanner.test.ts`'s shape census found `sedScriptExecutes`' `=== '/'` (a sed regex address). It is listed in `SHAPED` with that reason. It is not a comment stripper.
+- `pnpm run -s verify`: `PASS: verify` (15 000 passed, 19 skipped). It started at a one-minute load of 17.07, over the ~12 the rules ask for; the first run's only failure was the census above.
+- `test/e2e/pipeline/project-commands.e2e.test.ts` (`--project e2e-fake-claude`, `platform-runtime:s16`): 2/2 passed, started at a load of 9.74. No other e2e or integration file passes a `sed`/awk line through the policy. `docker-workspace.e2e.test.ts`'s `sed 's/^/neighbour=/'` runs in a container directly.
+- `node scripts/command-corpus.mjs`: `PASS: command-corpus`, 0 cells changed in both corpora.
+
+**Review round 1** (REQUEST_CHANGES: one major, two minors).
+- **Major, fixed:** `commandNameWalk` spends the word after a wrapper option it does not know as that option's value, so `xargs -n1 sed …`, `xargs -0`/`-r`/`-I{}`, `stdbuf -oL` and `ionice -c3` never reached the reader. `scriptExecutesReasons` now reads every word the walk lists (and its command) whose name is `sed` or an awk. This fails closed: a word that may be `sed` counts. The new table `behind a wrapper option the walk does not know` has 13 rows, `xargs -n1`, `-0`, `-r`, `-I{}`, `find … | xargs -0 -n1`, `stdbuf -oL` and `ionice -c3` for sed and awk. One control was added, `ls | xargs -n1 sed -n '1,5p'`, which keeps `ask / auto / deny`.
+- **Canary** `walkCommandOnly` (`canary-r1.log`, foreground, bytes restored, sha256 `0a21a30d4e41…`): reading `walk.command` only fails all 13 rows, among them `behind a wrapper option the walk does not know: "ls | xargs -n1 sed 's/^//e'" is uncertain`.
+- **Minor, done:** the module docblock and technical/05 now name the residual: gawk's `@include "f"` and `@load`, an indirect call (`@f($0)`), and the names `original-awk`, `gsed` and a `sed` behind `strace -f` or `eatmydata`. These are latent, because the image's awk is mawk 1.3.4 (the reviewer's measurement). technical/05's *"behind any wrapper the walk peels"* is rewritten. TD-030's amendment carries the same phrase, but it is a decision and not this row's to edit, so the orchestrator should check it.
+- **Minor, done:** `command-corpus.test.ts` has the `allow → auto` case, `counts an allow that now runs only under auto as newly asked (WP-210 review round 1)`.
+- `pnpm run -s verify`: `PASS: verify` (15 015 passed), started at a load of 5.16. The `project-commands` e2e passed 2/2, started at a load of 17.31, over the rules' ~12, after the load rose between the two runs. The corpus check passed with 0 cells changed.
