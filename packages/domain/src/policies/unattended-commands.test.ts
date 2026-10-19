@@ -30,6 +30,7 @@ import {
   unknownProgramRunsJudgedName,
   unreadGitConfigKey,
   withVerificationMode,
+  wrappersWithoutGrammar,
   xargsCompletesBlockEntry,
 } from './command-policy.js';
 import {
@@ -3381,9 +3382,10 @@ describe('WP-193, backlogs 565 and 566: a brace is literal unless it expands, an
     ]);
   });
 
-  it('reads `xargs -I {} grep x` without `xargsArguments`; its `{}` is held by the walk alone', () => {
+  it('reads `xargs -I {} grep x` without `xargsArguments`', () => {
     // Backlog 565's seventh row. The `{}` here is `-I`'s operand, which the walk past `xargs`
-    // reaches as a command word (566): its verdict is the walk's and is deliberately not pinned.
+    // reached as a command word (566) until WP-205's grammar read it as `-I`'s value; its cell is
+    // pinned in WP-205's describe.
     expect(auto('xargs -I {} grep x').evaluation.uncertainty).not.toContain(
       UNCERTAINTY.xargsArguments,
     );
@@ -3614,8 +3616,8 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
       ['echo su$x', 'ask / auto / deny'],
       ["'$x'", 'ask / auto / deny'],
       ['\\$x id', 'ask / auto / deny'],
-      // Backlog 592's walk rows, pinned so no scanner row opens them.
-      ['xargs -I {} grep x', 'ask / uncertain / uncertain'],
+      // Backlog 592's walk rows, pinned so no scanner row opens them. `xargs -I {} grep x` left at
+      // WP-205, whose grammar reads `{}` as `-I`'s value (its describe below).
       ['find . -exec nice {} ;', 'ask / uncertain / uncertain'],
       ['find /usr/bin -name sudo -exec nice {} id ;', 'ask / uncertain / uncertain'],
       ['echo x | xargs -I{} cat {}', 'ask / uncertain / uncertain'],
@@ -3624,7 +3626,6 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
     });
 
     it.each([
-      'xargs -I {} grep x',
       'find . -exec nice {} ;',
       'find /usr/bin -name sudo -exec nice {} id ;',
       'echo x | xargs -I{} cat {}',
@@ -4948,6 +4949,164 @@ describe('WP-204, backlogs 598 and 600: a block entry read by getopt’s rules',
         'block / block / block',
       );
       expect(cell('find . -depth -type d -ls', policy)).toBe('allow / allow / allow');
+    });
+  });
+});
+
+/**
+ * WP-205 (backlogs 592, 596, 601, 608): the command walk skips a wrapper's option values and its
+ * operand by that wrapper's declared grammar (`WRAPPER_GRAMMARS`), one grammar for both walks, and
+ * a wrapper with none keeps the both-ways reading. A value the shell may split is never skipped:
+ * `t="1 echo"; timeout $t MARK` runs `echo` (measured, bash), so an unquoted `$t` stays listed.
+ */
+describe('WP-205, backlogs 592, 596, 601 and 608: a wrapper’s declared grammar', () => {
+  describe('criterion (1): the trap rows keep their cells', () => {
+    it.each([
+      'find . -exec nice {} \;',
+      'find /usr/bin -name sudo -exec nice {} id \;',
+      'echo x | xargs -I{} cat {}',
+    ])('%j stays handedCommand', (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.handedCommand]);
+    });
+
+    it.each(['timeout 5 $x id', 'bash $script'])('%j stays expandedName', (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.expandedName]);
+    });
+  });
+
+  describe('criterion (2): a declared value or operand is no command', () => {
+    it.each([
+      ['xargs -I {} grep x', 'ask / auto / deny'],
+      ["xargs -I '{}' grep x", 'ask / auto / deny'],
+      ['timeout "$t" make', 'ask / auto / deny'],
+      ['nice -n "$n" make', 'ask / auto / deny'],
+      ['env -u sudo id', 'ask / auto / deny'],
+      ['timeout -s KILL 5 x', 'ask / auto / deny'],
+      ['timeout -s sudo 5 make', 'ask / auto / deny'],
+    ])('%j reads %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+
+    it.each([
+      // One word in the value slot may become several, one of them the command (the deviation
+      // recorded in PROGRESS § WP-205): fail closed, as before.
+      ['timeout $t make', [UNCERTAINTY.expandedName]],
+      ['nice -n $n make', [UNCERTAINTY.expandedName]],
+      ['timeout "$@" make', [UNCERTAINTY.expandedName]],
+      ['timeout -s $sig 5 make', [UNCERTAINTY.expandedName]],
+      ['env -u $v id', [UNCERTAINTY.expandedName]],
+      // WP-185's opaque replace string holds it whatever the walk reads.
+      ['xargs -I $R echo', [UNCERTAINTY.expandedName, UNCERTAINTY.xargsArguments]],
+    ])('%j stays uncertain', (command, reasons) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual(reasons);
+    });
+
+    it.each([
+      // The value is skipped; the command behind it is not.
+      ['env -u x sudo id', 'block / block / block'],
+      ['timeout -s KILL 5 sudo id', 'block / block / block'],
+      ['nice -n 5 sudo id', 'block / block / block'],
+      ['stdbuf -oL sudo id', 'block / block / block'],
+      ['xargs -I {} sudo {}', 'block / block / block'],
+      ['env -u x git push origin main', 'ask / git / git'],
+      // `-S`'s value is a command line, declared as such and never skipped.
+      ["env -S 'sudo id'", 'block / block / block'],
+      ["env -S'sudo id'", 'block / block / block'],
+      ["env --split-string='sudo id'", 'block / block / block'],
+    ])('%j reads %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+  });
+
+  it.each([
+    // Review round 1: a declared value is skipped only while every earlier word was read by a
+    // grammar. `chroot`'s operand and `setsid`'s options are read both ways (no declared grammar),
+    // so the `sudo` after them stays a possible command: the block list reads it.
+    'chroot / env -u sudo id',
+    'setsid -w nice -n sudo id',
+    'flock f env -u sudo id',
+  ])('%j stays blocked: no skip after a word read both ways', (command) => {
+    expect(cell(command, policy)).toBe('block / block / block');
+    expect(auto(command).evaluation.matched).toBe('sudo *');
+  });
+
+  it('criterion (3): every argv wrapper declares a grammar or is listed undeclared with a reason', () => {
+    expect(wrappersWithoutGrammar()).toEqual([]);
+  });
+
+  describe('criterion (7), backlog 601: start-stop-daemon names its program by an option', () => {
+    it.each([
+      'start-stop-daemon --start --exec /usr/bin/git -- push origin main',
+      'start-stop-daemon --start --exec=/usr/bin/git -- push origin main',
+      'start-stop-daemon -S -x/usr/bin/git -- push origin main',
+      'start-stop-daemon -S -x /usr/bin/git -- push origin main',
+      'start-stop-daemon -S --startas=/usr/bin/git -- push origin main',
+      'start-stop-daemon -S -a /usr/bin/git -- push origin main',
+      // A relative program after `--chdir`: only the declared grammar reads it (the canary's row).
+      'start-stop-daemon --start --chdir=/usr/bin --exec=git -- push origin main',
+      'start-stop-daemon -S -d /usr/bin -xgit -- push origin main',
+    ])('%j reads the git boundary', (command) => {
+      expect(cell(command, policy)).toBe('ask / git / git');
+    });
+
+    it.each([
+      'start-stop-daemon --start --exec /usr/bin/sudo -- id',
+      'start-stop-daemon --start --exec=/usr/bin/sudo -- id',
+      'start-stop-daemon -S -x/usr/bin/sudo -- id',
+      'start-stop-daemon -S -x /usr/bin/sudo -- id',
+      'start-stop-daemon -S --startas=/usr/bin/sudo -- id',
+      'start-stop-daemon -S -a /usr/bin/sudo -- id',
+      'start-stop-daemon -S --exec=sudo -- id',
+      'start-stop-daemon -S -asudo -- id',
+    ])('%j is blocked', (command) => {
+      expect(cell(command, policy)).toBe('block / block / block');
+    });
+
+    it.each([
+      // Review round 1: start-stop-daemon consumes its first `--`, so the program's arguments
+      // start after it (`rm -rf /`, not `rm -- -rf /`).
+      ['start-stop-daemon -S --exec=/bin/rm -- -rf /', 'block / block / block'],
+      ['start-stop-daemon -S -x /bin/rm -- -r -f /', 'block / block / block'],
+      ['start-stop-daemon -S --startas=/bin/rm -- -rf /', 'block / block / block'],
+      ['start-stop-daemon -S --exec=/usr/bin/git -- branch -D main', 'block / block / block'],
+      ['start-stop-daemon -S -x /usr/bin/git -- reset --hard origin/main', 'block / block / block'],
+      ['start-stop-daemon -S -x /bin/rm -- -rf build', 'ask / auto / deny'],
+    ])('%j reads %s (the program’s arguments follow the wrapper’s `--`)', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+
+    it.each(['start-stop-daemon -S --exec=/usr/bin/s$x -- id', 'start-stop-daemon -S -x $x -- id'])(
+      '%j is uncertain (expandedName)',
+      (command) => {
+        expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+        expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.expandedName]);
+      },
+    );
+  });
+
+  describe('criterion (7), backlog 608: sentry-cli monitors run', () => {
+    // The `sentry-issue` skill's allow entries (`COMMAND_ALLOW_BY_SKILL`, planner.ts).
+    const withSentrySkill: ResolvedCommandPolicy = {
+      ...policy,
+      allow: [...policy.allow, 'sentry-cli issues list *', 'sentry-cli events list *'],
+    };
+
+    it.each([
+      ['sentry-cli monitors run m -- git push origin main', 'ask / git / git'],
+      ['sentry-cli monitors run m -- sudo id', 'block / block / block'],
+      ['sentry-cli monitors run -e dev m -- sudo id', 'block / block / block'],
+      ['sentry-cli issues list --max-rows 20', 'allow / allow / allow'],
+    ])('%j reads %s', (command, expected) => {
+      expect(cell(command, withSentrySkill)).toBe(expected);
+    });
+
+    it('"sentry-cli monitors run m -- $x" is uncertain (expandedName)', () => {
+      const command = 'sentry-cli monitors run m -- $x';
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.expandedName]);
     });
   });
 });

@@ -2170,6 +2170,9 @@ const RUNNER_EXEC_SUBCOMMANDS: Readonly<Record<string, ReadonlySet<string>>> = {
   yarn: new Set(['dlx', 'exec']),
   yarnpkg: new Set(['dlx', 'exec']),
   bun: new Set(['x']),
+  // `sentry-cli monitors run <slug> -- <command>` (WP-205 (e), backlog 608): `run` after `monitors`
+  // only, and its grammar is `WRAPPER_GRAMMARS`' `sentry-cli run`.
+  'sentry-cli': new Set(['run']),
 };
 
 /**
@@ -2500,6 +2503,7 @@ const runnerSubcommandAt = (
   const yarn = name === 'yarn' || name === 'yarnpkg';
   let valueMayFollow = false;
   let option = '';
+  let monitors = false;
   for (let index = head + 1; index < words.length; index += 1) {
     const value = unquoteToken(words[index] as string);
     if (value === '--') {
@@ -2516,7 +2520,13 @@ const runnerSubcommandAt = (
       (name === 'bun' && value === 'exec')
     ) {
       return 'string';
-    } else if (subcommands.has(value) || (name === 'npm' && npmExecWord(value))) {
+    } else if (name === 'sentry-cli' && value === 'monitors' && !monitors) {
+      monitors = true;
+      valueMayFollow = false;
+    } else if (
+      (subcommands.has(value) && (name !== 'sentry-cli' || monitors)) ||
+      (name === 'npm' && npmExecWord(value))
+    ) {
       return index;
     } else if ((yarn && value === 'workspaces') || (name === 'pnpm' && value === 'with')) {
       return 'unknown';
@@ -2721,7 +2731,9 @@ interface CommandStarts {
  * and stops — **uncertain** — at a ninth wrapper or assignment (WP-161 (d)). The window is counted
  * from the last wrapper rather than from the first word, so three `nice -n 5` in a row (nine words)
  * no longer hide the tenth word (measured `unattended_auto` before WP-161). `flag` says what an
- * option is.
+ * option is. A word a wrapper's **declared grammar** reads as an option's value or its operand
+ * (`commandNameWalk`'s `skipped`: `env -u sudo id`, `xargs -I {} grep x`) is no start (WP-205);
+ * under a wrapper with none, every word still is.
  */
 const walkCommandStarts = (
   words: readonly string[],
@@ -2732,10 +2744,13 @@ const walkCommandStarts = (
   if (words[0] === undefined || !chain(words, 0)) {
     return { starts, tooDeep: false };
   }
+  const values = new Set(commandNameWalk(words).skipped);
   let peeled = 1;
   let limit = MAX_WRAPPER_DEPTH;
   for (let index = 1; index < words.length && index <= limit; index += 1) {
-    starts.push(index);
+    if (!values.has(index)) {
+      starts.push(index);
+    }
     const word = words[index] as string;
     if (chain(words, index)) {
       peeled += 1;
@@ -2801,7 +2816,17 @@ const argv0Candidates = (tokens: readonly string[]): readonly (readonly string[]
   const withBasename = (list: readonly string[]): readonly string[] =>
     list.length === 0 ? list : [argv0Name(list[0] as string), ...list.slice(1)];
 
-  return argvStarts(tokens).starts.map((start) => withBasename(tokens.slice(start)));
+  // A program a declared grammar names by an option (`--exec=sudo -- id`, `-x /bin/rm -- -rf /`,
+  // backlog 601) is a start of its own, followed by its arguments: the words after the wrapper's
+  // first `--`, which the wrapper consumes (review round 1: kept, `rm -- -rf /` is no `rm -rf /*`).
+  const inside = commandNameWalk(tokens).attached.map(({ index, command }) => {
+    const end = tokens.findIndex((token, at) => at > index && unquoteToken(token) === '--');
+    return withBasename([command, ...(end === -1 ? [] : tokens.slice(end + 1))]);
+  });
+  return [
+    ...argvStarts(tokens).starts.map((start) => withBasename(tokens.slice(start))),
+    ...inside,
+  ];
 };
 
 /**
@@ -5026,7 +5051,8 @@ const optionWords = (args: readonly ShellWord[]): readonly string[] =>
 /**
  * Where the command of a stage may start: past its assignments, and — when that word is a wrapper
  * — every later word too, as `argv0Candidates` tries them (a wrapper's options and arguments sit
- * between it and the command). The walk is `walkCommandStarts`, so it has the same bound and says
+ * between it and the command), except a value or operand the wrapper's declared grammar names
+ * (WP-205). The walk is `walkCommandStarts`, so it has the same bound and says
  * when it stopped at it (WP-161 (d)).
  */
 const commandPositions = (argv: readonly ShellWord[]): CommandStarts => {
@@ -5229,10 +5255,227 @@ const WRAPPER_OPERAND: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * A wrapper's declared grammar (WP-205, backlogs 592, 596, 601, 608): the options that take a value
+ * — the rest of a short cluster, `=`-attached, or the next word — the options whose value is only
+ * ever attached, the options whose value **is** the command it runs, and how many operands stand
+ * before the command. Its options that take none are {@link WRAPPER_FLAGS_WITHOUT_VALUE}'s (and
+ * `flags` here). An option the grammar does not name is read as today, both ways.
+ */
+interface WrapperGrammar {
+  readonly values: ReadonlySet<string>;
+  readonly attachedOnly?: ReadonlySet<string>;
+  readonly flags?: ReadonlySet<string>;
+  readonly commands?: ReadonlySet<string>;
+  readonly operands?: number;
+}
+
+/**
+ * The wrappers whose grammar is declared, each from its manual, keyed as `wrapperGrammarKey` keys
+ * them (a package runner's exec form as `<runner> <subcommand>`). {@link commandNameWalk} skips a
+ * declared option's value and a declared operand — never naming either as a command — while the
+ * walk is still reading by grammar and the word is **one word** to the shell ({@link isOneWord}): an
+ * unquoted expansion or a glob there may become several words, one of them the command (measured:
+ * `t="1 echo"; timeout $t MARK` runs `echo`), so it is listed as before. {@link walkCommandStarts}
+ * drops the same words as command starts, so one grammar serves both walks.
+ */
+const WRAPPER_GRAMMARS: Readonly<Record<string, WrapperGrammar>> = {
+  // https://manpages.debian.org/trixie/coreutils/env.1.en.html
+  env: {
+    values: new Set(['-u', '--unset', '-C', '--chdir']),
+    // `-S`'s value is a command line (read by `readOptionString`), so it is never skipped.
+    commands: new Set(['-S', '--split-string']),
+    attachedOnly: new Set(['--block-signal', '--default-signal', '--ignore-signal']),
+    flags: new Set(['--list-signal-handling']),
+  },
+  // https://manpages.debian.org/trixie/coreutils/timeout.1.en.html: `timeout [OPTION] DURATION COMMAND`.
+  timeout: {
+    values: new Set(['-k', '--kill-after', '-s', '--signal']),
+    flags: new Set(['-f', '-p']),
+    operands: 1,
+  },
+  // https://manpages.debian.org/trixie/coreutils/nice.1.en.html
+  nice: { values: new Set(['-n', '--adjustment']) },
+  // https://manpages.debian.org/trixie/coreutils/stdbuf.1.en.html
+  stdbuf: { values: new Set(['-i', '--input', '-o', '--output', '-e', '--error']) },
+  // `readXargsOptions`' optstring `+0a:E:e::i::I:l::L:n:oprs:txP:d:` (plus BSD's `-J`, `-R`, `-S`)
+  // and its long options (`XARGS_LONG_OPTIONS`); an abbreviated long option is read both ways.
+  xargs: {
+    values: new Set([
+      ...'adEILnPsJRS'.split('').map((letter) => `-${letter}`),
+      ...['arg-file', 'delimiter', 'max-args', 'max-chars', 'max-procs', 'process-slot-var'].map(
+        (name) => `--${name}`,
+      ),
+    ]),
+    attachedOnly: new Set(['-e', '-i', '-l', '--eof', '--replace', '--max-lines']),
+    flags: new Set([
+      ...'0oprtx'.split('').map((letter) => `-${letter}`),
+      ...['null', 'open-tty', 'interactive', 'no-run-if-empty', 'verbose', 'show-limits', 'exit']
+        .concat(['version', 'help'])
+        .map((name) => `--${name}`),
+    ]),
+  },
+  // https://manpages.debian.org/trixie/dpkg/start-stop-daemon.8.en.html: `--exec`/`-x` and
+  // `--startas`/`-a` name the program it runs, in every getopt spelling (backlog 601).
+  'start-stop-daemon': {
+    values: new Set([
+      '--pid',
+      '--ppid',
+      '-p',
+      '--pidfile',
+      '-n',
+      '--name',
+      '-u',
+      '--user',
+      '-g',
+      '--group',
+      '-s',
+      '--signal',
+      '-R',
+      '--retry',
+      '-c',
+      '--chuid',
+      '-r',
+      '--chroot',
+      '-d',
+      '--chdir',
+      '--notify-timeout',
+      '-O',
+      '--output',
+      '-N',
+      '--nicelevel',
+      '-P',
+      '--procsched',
+      '-I',
+      '--iosched',
+      '-k',
+      '--umask',
+    ]),
+    commands: new Set(['-x', '--exec', '-a', '--startas']),
+    flags: new Set(['-H', '--help', '-V', '--version']),
+  },
+  // `sentry-cli monitors run [OPTIONS] <monitor_slug> -- <command> <args>` (backlog 608;
+  // https://docs.sentry.io/cli/crons/, read 2026-10-19; `sentry-cli` 3.7.0 is pinned in
+  // `docker/runtime.Dockerfile`, whose own `--help` was not read): `-e`, `-s`/`--schedule`,
+  // `--check-in-margin`, `--max-runtime` and `--timezone` take a value, and the slug is its operand.
+  'sentry-cli run': {
+    values: new Set(['-e', '-s', '--schedule', '--check-in-margin', '--max-runtime', '--timezone']),
+    operands: 1,
+  },
+};
+
+/**
+ * The names of {@link ARGV0_WRAPPERS} (and the loader's key) with no declared grammar, each with its
+ * reason (WP-205 (c)'s census, `wrappersWithoutGrammar`): such a wrapper keeps the both-ways
+ * reading, which over-asks and never under-reads.
+ */
+const UNDECLARED_WRAPPER_GRAMMARS: Readonly<Record<string, string>> = {
+  ...Object.fromEntries(
+    ['if', 'then', 'else', 'elif', 'while', 'until', 'do', 'done', 'fi', 'for', 'case', 'esac']
+      .concat(['{', '}', '!', '[[', ']]', 'coproc', 'builtin', 'command', 'exec', 'eval', 'time'])
+      .map((name) => [name, 'a shell keyword or builtin: the shell’s grammar, not a getopt one']),
+  ),
+  ...Object.fromEntries(
+    ['sh', 'bash', 'zsh', 'dash'].map((name) => [
+      name,
+      'a shell: its operands are a script and its arguments, which `wrappedScript` reads',
+    ]),
+  ),
+  ...Object.fromEntries(
+    ['busybox', ...PACKAGE_RUNNER_COMMANDS, NODE_ENTRYPOINT].map((name) => [
+      name,
+      'an applet or package runner: the word after it is the program, read by its own rule',
+    ]),
+  ),
+  ...Object.fromEntries(
+    ['ionice', 'setsid', 'flock', 'chrt', 'taskset', 'unbuffer', 'watch', 'strace', 'ltrace']
+      .concat(['nsenter', 'unshare', 'runuser', 'su', 'doas', 'nohup', 'chroot', 'runcon'])
+      .concat(['setpriv', ...SETARCH_NAMES, 'prlimit', 'uclampset', 'ssh-agent', 'fstab-decode'])
+      .concat(['choom', 'switch_root', 'debconf', 'debconf-apt-progress', 'ld.so'])
+      .map((name) => [
+        name,
+        'not declared by WP-205, whose rows name env, timeout, nice, stdbuf, xargs, start-stop-daemon and sentry-cli: read both ways',
+      ]),
+  ),
+};
+
+/** A wrapper's declared grammar, by its key. */
+const grammarOf = (key: string): WrapperGrammar | undefined =>
+  Object.hasOwn(WRAPPER_GRAMMARS, key) ? WRAPPER_GRAMMARS[key] : undefined;
+
+/**
+ * WP-205 (c)'s census: every name of {@link ARGV0_WRAPPERS}, and the dynamic loader's key, either
+ * declares a grammar or is listed undeclared with a reason. The names that do neither.
+ */
+export const wrappersWithoutGrammar = (): readonly string[] =>
+  [...ARGV0_WRAPPERS, 'ld.so'].filter(
+    (name) =>
+      !Object.hasOwn(WRAPPER_GRAMMARS, name) && !Object.hasOwn(UNDECLARED_WRAPPER_GRAMMARS, name),
+  );
+
+/**
+ * Whether the shell passes a word on as exactly one word: no unquoted expansion, glob or brace
+ * ({@link mayBeSeveralWords}), and no `"$@"`/`"${a[@]}"`, which is any number of words quoted.
+ */
+const isOneWord = (raw: string): boolean =>
+  !mayBeSeveralWords(raw) && !/\$\{?[@*]|\[[@*]\]/.test(raw);
+
+/**
+ * How a declared grammar reads one option word: `value` when the next word is its value, `command`
+ * when the next word is the command it runs, `attached-command` when the word itself carries that
+ * command (`--exec=/usr/bin/git`, `-x/usr/bin/git`; the command is the second element), `done` when
+ * the word is whole, and `unknown` when the grammar does not name it (then the walk reads it both
+ * ways, as for an undeclared wrapper).
+ */
+const grammarOption = (
+  grammar: WrapperGrammar,
+  flags: ReadonlySet<string> | undefined,
+  value: string,
+): 'value' | 'command' | readonly ['attached-command', string] | 'done' | 'unknown' => {
+  const isFlag = (option: string): boolean =>
+    (flags?.has(option) ?? false) || (grammar.flags?.has(option) ?? false);
+  if (value.startsWith('--')) {
+    const [name = '', ...attached] = value.split('=');
+    const takesValue = grammar.values.has(name) || (grammar.commands?.has(name) ?? false);
+    if (attached.length > 0) {
+      if (grammar.commands?.has(name)) {
+        return ['attached-command', attached.join('=')];
+      }
+      return takesValue || (grammar.attachedOnly?.has(name) ?? false) ? 'done' : 'unknown';
+    }
+    if (takesValue) {
+      return grammar.commands?.has(name) ? 'command' : 'value';
+    }
+    return isFlag(name) || (grammar.attachedOnly?.has(name) ?? false) ? 'done' : 'unknown';
+  }
+  // A short cluster, by getopt: flags until the first option that takes a value, which takes the
+  // rest of the word or, with nothing left, the next word.
+  for (let at = 1; at < value.length; at += 1) {
+    const option = `-${value[at] as string}`;
+    const rest = at + 1 < value.length;
+    if (grammar.values.has(option) || grammar.commands?.has(option)) {
+      if (grammar.commands?.has(option)) {
+        return rest ? ['attached-command', value.slice(at + 1)] : 'command';
+      }
+      return rest ? 'done' : 'value';
+    }
+    if (grammar.attachedOnly?.has(option)) {
+      return 'done';
+    }
+    if (!isFlag(option)) {
+      return 'unknown';
+    }
+  }
+  return 'done';
+};
+
+/**
  * The words of a stage in **command position** (WP-161 (f)): past its assignments, the first word,
  * and — while that word is a wrapper — the next command word after the wrapper's options, their
- * plain values and its leading operand (each of those is listed too, since the policy does not
- * know a wrapper's grammar). Never an assignment (backlog 512's lesson), never a `[`/`[[` test or
+ * plain values and its leading operand. A wrapper with a declared grammar ({@link WRAPPER_GRAMMARS},
+ * WP-205) has its option values and operand skipped by that grammar, unlisted, while each is one
+ * word and every word before it was read by a grammar; any other value or operand — of a wrapper
+ * with no declared grammar, after an option its grammar does not name, or one the shell may split
+ * (`timeout $t make`) — is listed too, since it may be the command. Never an assignment (backlog 512's lesson), never a `[`/`[[` test or
  * what is inside it, and never an argument of the command itself: `nice ls *.ts` lists `nice` and
  * `ls`, not `*.ts`. The arguments of a command the policy does not know are command-position
  * words too since WP-203, read by their own rule ({@link unknownProgramArgument}).
@@ -5251,11 +5494,20 @@ const commandNameWalk = (
   readonly words: readonly string[];
   readonly command?: number;
   readonly wrappers: readonly string[];
+  readonly skipped: readonly number[];
+  readonly attached: readonly { readonly index: number; readonly command: string }[];
 } => {
   const words: string[] = [];
   const wrappers: string[] = [];
+  const skipped: number[] = [];
+  const attached: { readonly index: number; readonly command: string }[] = [];
   let operand = false;
   let wrapper = '';
+  let grammarKey = '';
+  let runner = '';
+  // Whether every word so far was read by a declared grammar or plain shell syntax, never both
+  // ways: only then is a declared value or operand skipped (WP-205).
+  let precise = true;
   let runnerSubcommand: number | null = null;
   let opaqueRunner = false;
   for (let index = 0; index < tokens.length; index += 1) {
@@ -5275,7 +5527,42 @@ const commandNameWalk = (
       isFlagToken(value)
     ) {
       // `docker-entrypoint.sh -e '…'` is `node -e '…'`: the entrypoint is the command.
-      return { words, command: index - 1, wrappers: wrappers.slice(0, -1) };
+      return { words, command: index - 1, wrappers: wrappers.slice(0, -1), skipped, attached };
+    }
+    const grammar = precise ? grammarOf(grammarKey) : undefined;
+    if (afterWrapper && isFlagToken(value) && grammar !== undefined) {
+      // WP-205: a declared grammar reads the option by getopt's rules. Its value is skipped when it
+      // is one word; one that may be several (`-s $sig`, `-n$n`) is listed and ends the precision.
+      const option = grammarOption(grammar, WRAPPER_FLAGS_WITHOUT_VALUE[grammarKey], value);
+      const reading = typeof option === 'string' && !isOneWord(token) ? 'unknown' : option;
+      const next = tokens[index + 1];
+      if (reading !== 'unknown') {
+        // The option word is no start either: the block peel reads a start at an option as the
+        // positional after it (`-u sudo id` is `sudo id` to `tokensMatch`).
+        if (reading === 'done') {
+          skipped.push(index);
+        } else if (typeof reading !== 'string') {
+          // The command is inside the word (backlog 601): listed — so `--exec=/usr/bin/s$x` is an
+          // expanded name — and offered to the block peel as a start of its own
+          // (`argv0Candidates`); the walk stops knowing where the arguments begin.
+          words.push(token);
+          attached.push({ index, command: reading[1] });
+          precise = false;
+        } else if (next !== undefined) {
+          index += 1;
+          if (reading === 'value' && isOneWord(next)) {
+            skipped.push(index - 1, index);
+          } else {
+            words.push(next);
+            precise = false;
+            if (reading === 'command') {
+              attached.push({ index, command: next });
+            }
+          }
+        }
+        continue;
+      }
+      precise = false;
     }
     if (afterWrapper && isFlagToken(value)) {
       // Fail closed (backlog 531, folded into WP-161): an option written without `=` may take the
@@ -5283,8 +5570,10 @@ const commandNameWalk = (
       // kill`), so that word is listed — tested by `expandsAsName` — and the walk goes on to the one
       // after it. Only an option known to take no value (`WRAPPER_FLAGS_WITHOUT_VALUE`) does not
       // spend the next word. The over-ask, stated: `nice -x ls *.ts` (an option the table does not
-      // know) reads `*.ts` as a command word.
+      // know) reads `*.ts` as a command word. A wrapper with a declared grammar reads its options
+      // above (WP-205), and comes here only for an option its grammar does not name.
       const next = tokens[index + 1];
+      precise = false;
       if (
         !value.includes('=') &&
         next !== undefined &&
@@ -5296,9 +5585,16 @@ const commandNameWalk = (
       }
       continue;
     }
+    if (afterWrapper && operand && grammar !== undefined && isOneWord(token)) {
+      // WP-205: a declared operand (`timeout DURATION`, the `sentry-cli monitors run` slug).
+      skipped.push(index);
+      operand = false;
+      continue;
+    }
     if (afterWrapper && (operand || WRAPPER_VALUE_WORD.test(value))) {
       words.push(token);
       operand = false;
+      precise = false;
       continue;
     }
     words.push(token);
@@ -5316,15 +5612,23 @@ const commandNameWalk = (
       if (runnerSubcommand !== null && index < runnerSubcommand) {
         continue;
       }
-      return opaqueRunner ? { words, wrappers } : { words, command: index, wrappers };
+      return opaqueRunner
+        ? { words, wrappers, skipped, attached }
+        : { words, command: index, wrappers, skipped, attached };
     }
     opaqueRunner ||= found === 'unknown' || found === 'string';
     runnerSubcommand = subcommand ?? runnerSubcommand;
-    operand = WRAPPER_OPERAND.has(name);
+    runner = typeof found === 'number' ? runnerName(token) : runner;
+    // A package runner's exec form has its grammar under `<runner> <subcommand>` (WP-205, 608).
+    grammarKey =
+      index === runnerSubcommand && Object.hasOwn(WRAPPER_GRAMMARS, `${runner} ${name}`)
+        ? `${runner} ${name}`
+        : wrapperGrammarKey(name);
+    operand = WRAPPER_OPERAND.has(name) || (grammarOf(grammarKey)?.operands ?? 0) > 0;
     wrapper = name;
     wrappers.push(name);
   }
-  return { words, wrappers };
+  return { words, wrappers, skipped, attached };
 };
 
 /**
