@@ -36,6 +36,9 @@
  *    daemon's tail, a line lost, a stderr line mixed in — is `unlisted`.
  *  - **A bound before the listing.** A tree past {@link MAX_TRACKED_ENTRIES} prints only the
  *    trailer.
+ *  - **A bound on what is carried**: the counts of `paths` and `opaque`, and their summed length
+ *    against {@link MAX_CARRIED_PATH_CODE_UNITS} (WP-230), which is derived from the control
+ *    plane's response ceiling so a listing the launcher answers is one the runner can read.
  *  - **Every line parses, every path decodes.** `core.quotePath` is forced on, so git C-quotes any
  *    path with a control character, a quote, a backslash or a byte above 0x7F; the parser decodes
  *    the escapes to bytes and then decodes UTF-8 **fatally**. A path that is not UTF-8 cannot be
@@ -64,6 +67,7 @@ import {
   MAX_TRACKED_ENTRIES,
   unlistedProtectedPaths,
 } from '@platform/application';
+import { MAX_CARRIED_PATH_CODE_UNITS } from '../launcher/protocol.js';
 import { matchesPathPattern } from '../runner/path-guard.js';
 
 /** The first word of the listing's last line. Platform text; no git output starts with `@@`. */
@@ -276,6 +280,8 @@ export const trackedListingOutput = (
 export const parseTrackedListing = (
   output: string,
   patterns: readonly string[],
+  /** The carried-path budget; a parameter so the unit tier can test it without a 132 MB listing. */
+  budget: number = MAX_CARRIED_PATH_CODE_UNITS,
 ): ExistingProtectedPaths => {
   const lines = output.split('\n').filter((line) => line.length > 0);
   const trailer = lines.at(-1)?.split(' ') ?? [];
@@ -356,6 +362,12 @@ export const parseTrackedListing = (
   if (opaque.length > MAX_OPAQUE_TRACKED_PATHS) {
     return unlistedProtectedPaths(
       `the merge base and the checkout hold ${String(opaque.length)} symlinks and submodules, past the bound of ${String(MAX_OPAQUE_TRACKED_PATHS)}`,
+    );
+  }
+  const carried = [...paths, ...opaque].reduce((sum, path) => sum + path.length, 0);
+  if (carried > budget) {
+    return unlistedProtectedPaths(
+      `the protected files, symlinks and submodules listed come to ${String(carried)} characters, past the budget of ${String(budget)} the launcher's answer can carry`,
     );
   }
   return { state: 'listed', paths, opaque };

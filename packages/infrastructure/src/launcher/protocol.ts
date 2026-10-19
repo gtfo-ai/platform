@@ -47,7 +47,9 @@ import type {
 } from '@platform/application';
 import {
   existingProtectedPathsSchema,
+  MAX_EXISTING_PROTECTED_PATHS,
   MAX_LABELLED_RUNS,
+  MAX_OPAQUE_TRACKED_PATHS,
   WORKSPACE_ERROR_OUTPUT_MAX_CHARS,
   workspaceErrorReasonSchema,
   workspaceGitSshSchema,
@@ -99,11 +101,40 @@ export const CONTROL_PLANE_MAX_BODY_BYTES = 256 * 1024;
  * bytes when every path is ASCII. 64 MiB admits that with room, and a 120-character path listing
  * at both counts (1.4 MB) by forty-fold.
  *
- * **Residual, stated:** the same listing at schema maximum in three-byte characters (135 MB) or in
- * characters JSON escapes to six bytes (270 MB) is refused. That is thousands of protected paths
- * each about four kilobytes long; such a create answer fails the run with `workspace_failed`, named.
+ * The same listing at schema maximum in three-byte characters (135 MB) or in characters JSON
+ * escapes to six bytes (270 MB) would be past it, so the listing has a budget of its own,
+ * {@link MAX_CARRIED_PATH_CODE_UNITS}, derived below from this ceiling (WP-230, backlog 630): past
+ * it the launcher answers `unlisted`, which fails closed, rather than a create answer this client
+ * refuses as `workspace_failed`.
  */
 export const CONTROL_PLANE_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * What a create answer holds besides its listing's path strings, stated at 1 MiB: measured at
+ * schema maximum it is 68,234 bytes (above), so the margin is fifteen-fold.
+ */
+export const CREATE_ANSWER_OTHER_FIELDS_BYTES = 1024 * 1024;
+
+/**
+ * The tracked listing's budget on the paths it carries (`paths` plus `opaque`, summed), in UTF-16
+ * code units — the unit `JSON.stringify` escapes, and a path's `length` (WP-230, backlog 630).
+ *
+ * **Derived from the ceiling, not copied.** The worst escaping is six bytes per code unit (a control
+ * character written as `\u00XX`; a lone surrogate would be `\udXXX`, but a listed path is decoded
+ * from UTF-8 fatally and cannot hold one); every other code unit takes at most three
+ * (a BMP character outside ASCII) and a surrogate pair four for two. Each path adds its two quotes
+ * and a comma, at most 11,000 of them. So a create answer whose listing carries this many code units
+ * serialises to at most `CREATE_ANSWER_OTHER_FIELDS_BYTES + 3 × 11,000 + 6 × budget` bytes, which is
+ * under {@link CONTROL_PLANE_MAX_RESPONSE_BYTES} — 11,004,548 code units at 64 MiB.
+ * `parseTrackedListing` (`workspace/tracked.ts`) answers `unlisted` past it; `client.test.ts`
+ * builds that worst answer and holds both constants to each other.
+ */
+export const MAX_CARRIED_PATH_CODE_UNITS = Math.floor(
+  (CONTROL_PLANE_MAX_RESPONSE_BYTES -
+    CREATE_ANSWER_OTHER_FIELDS_BYTES -
+    3 * (MAX_EXISTING_PROTECTED_PATHS + MAX_OPAQUE_TRACKED_PATHS)) /
+    6,
+);
 
 // ── The structures the port already owns, as schemas ─────────────────────────
 

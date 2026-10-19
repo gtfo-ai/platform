@@ -28,8 +28,10 @@ import {
   CONTROL_PLANE_ERROR_CODES,
   CONTROL_PLANE_MAX_RESPONSE_BYTES,
   CONTROL_PLANE_STATUS_BY_CODE,
+  CREATE_ANSWER_OTHER_FIELDS_BYTES,
   controlPlaneCodeOfStatus,
   createRunResponseSchema,
+  MAX_CARRIED_PATH_CODE_UNITS,
   workspaceCodeOfControlPlaneCode,
 } from './protocol.js';
 
@@ -580,6 +582,36 @@ describe('the response ceiling (WP-224)', () => {
     const bytes = Buffer.byteLength(JSON.stringify(answer));
     expect(bytes).toBeGreaterThan(45_000_000);
     expect(bytes + 1024 * 1024).toBeLessThanOrEqual(CONTROL_PLANE_MAX_RESPONSE_BYTES);
+  }, 30_000);
+
+  /**
+   * WP-230 (backlog 630): the tracked listing's budget against the ceiling it is derived from. The
+   * worst answer at the budget — every code unit a control character, which `JSON.stringify` writes
+   * as six bytes, spread over both counts — leaves {@link CREATE_ANSWER_OTHER_FIELDS_BYTES} for the
+   * rest of the answer, and one code unit more would not. So moving either constant alone fails here.
+   */
+  it('derives the tracked listing budget from the ceiling at the worst JSON escaping', () => {
+    const slots = MAX_EXISTING_PROTECTED_PATHS + MAX_OPAQUE_TRACKED_PATHS;
+    const each = Math.floor(MAX_CARRIED_PATH_CODE_UNITS / slots);
+    const spare = MAX_CARRIED_PATH_CODE_UNITS - each * slots;
+    const lengths = Array.from({ length: slots }, (_, index) => each + (index < spare ? 1 : 0));
+    const all = lengths.map((length) => '\u0001'.repeat(length));
+    const listed = {
+      state: 'listed' as const,
+      paths: all.slice(0, MAX_EXISTING_PROTECTED_PATHS),
+      opaque: all.slice(MAX_EXISTING_PROTECTED_PATHS),
+    };
+    expect(lengths.reduce((sum, length) => sum + length, 0)).toBe(MAX_CARRIED_PATH_CODE_UNITS);
+    expect(existingProtectedPathsSchema.safeParse(listed).success).toBe(true);
+    const empty = Buffer.byteLength(JSON.stringify({ ...listed, paths: [], opaque: [] }));
+    const listing = Buffer.byteLength(JSON.stringify(listed)) - empty;
+    expect(listing).toBeGreaterThanOrEqual(6 * MAX_CARRIED_PATH_CODE_UNITS);
+    expect(listing + CREATE_ANSWER_OTHER_FIELDS_BYTES).toBeLessThanOrEqual(
+      CONTROL_PLANE_MAX_RESPONSE_BYTES,
+    );
+    expect(listing + 6 + CREATE_ANSWER_OTHER_FIELDS_BYTES).toBeGreaterThan(
+      CONTROL_PLANE_MAX_RESPONSE_BYTES,
+    );
   }, 30_000);
 
   it('is the only body read in client.ts', () => {

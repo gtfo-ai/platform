@@ -431,7 +431,9 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   and submodule at that commit, and returns them on the create response. The runner substitutes
 >   them into `RunSpec.existingProtectedPaths` beside `workspacePath`.
 > - **Bounded.** At most 100 000 tracked entries are read, 10 000 protected paths and 1 000
->   symlinks or submodules are carried. A repository past a bound is listed as unknown.
+>   symlinks or submodules are carried, and the carried paths come to at most 11 004 548
+>   characters, a budget derived from the control plane's response ceiling (WP-230). A repository
+>   past a bound is listed as unknown.
 > - **Fail closed.** Any of these reads as *existing and undeclared*, which is the guard's
 >   behaviour before WP-99:
 >   - the spec until a workspace answers;

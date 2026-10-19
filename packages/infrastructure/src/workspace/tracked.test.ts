@@ -123,6 +123,55 @@ describe('parseTrackedListing', () => {
     const listing = parseTrackedListing(trackedListingOutput(entries), PATTERNS);
     expect(listing).toMatchObject({ state: 'unlisted', reason: /past the bound/ });
   });
+
+  /**
+   * WP-230 (backlog 630): inside both counts, but past the budget on carried path length. The
+   * budget is the parser's parameter here, so the listing stays small (review round 1: the real
+   * budget needs a 132 MB listing, 3.27 GB in one worker); `client.test.ts` ties the default to the
+   * control plane's ceiling. Three-byte characters, as git prints them (`\342\202\254` each), and
+   * both edges: past the budget, and the same listing one path shorter.
+   */
+  const euroPaths = (count: number, mode: string, prefix: string) =>
+    Array.from({ length: count }, (_, index) => ({
+      path: `${prefix}/${'€'.repeat(40)}${String(index)}.test.ts`,
+      mode,
+    }));
+  const carriedOf = (entries: readonly { readonly path: string }[]) =>
+    entries.reduce((sum, entry) => sum + entry.path.length, 0);
+  const pastBudget = (carried: number, budget: number) =>
+    `the protected files, symlinks and submodules listed come to ${String(carried)} characters, past the budget of ${String(budget)} the launcher's answer can carry`;
+
+  it('answers unlisted past the budget on carried path length, in three-byte characters', () => {
+    const entries = euroPaths(10, '100644', 't');
+    expect(trackedListingOutput(entries)).toContain('\\342\\202\\254');
+    const carried = carriedOf(entries);
+    const budget = carried - 1;
+    expect(parseTrackedListing(trackedListingOutput(entries), PATTERNS, budget)).toEqual({
+      state: 'unlisted',
+      reason: pastBudget(carried, budget),
+    });
+    const within = entries.slice(1);
+    expect(carriedOf(within)).toBeLessThanOrEqual(budget);
+    expect(parseTrackedListing(trackedListingOutput(within), PATTERNS, budget)).toMatchObject({
+      state: 'listed',
+      paths: { length: within.length },
+    });
+  });
+
+  it('counts symlinks and submodules against the budget, not only the protected files', () => {
+    const files = euroPaths(2, '100644', 't');
+    const links = [...euroPaths(3, '120000', 'l'), ...euroPaths(2, '160000', 'm')];
+    const budget = carriedOf(files) + carriedOf(links) - 1;
+    expect(carriedOf(files)).toBeLessThanOrEqual(budget);
+    const entries = [...files, ...links];
+    expect(parseTrackedListing(trackedListingOutput(entries), PATTERNS, budget)).toEqual({
+      state: 'unlisted',
+      reason: pastBudget(budget + 1, budget),
+    });
+    expect(
+      parseTrackedListing(trackedListingOutput(entries.slice(0, -1)), PATTERNS, budget),
+    ).toMatchObject({ state: 'listed', opaque: { length: links.length - 1 } });
+  });
 });
 
 describe('decodeGitPath and quoteGitPath', () => {
