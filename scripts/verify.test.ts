@@ -156,6 +156,13 @@ describe('the verification targets and .github/workflows/ci.yml', () => {
     expect(VERIFY_GROUPS['verify:static']).toContain('data-model:check');
   });
 
+  it('keeps the shared-hooks check in the static group (WP-219)', () => {
+    // The same blind spot as above: dropping `hooks:check` from the table keeps it equal to CI.
+    expect(VERIFY_GROUPS['verify:static'], 'verify:static lost hooks:check').toContain(
+      'hooks:check',
+    );
+  });
+
   it('runs every step of `verify` in some CI job', () => {
     const inCi = new Set(workflowCommands().flatMap(expand));
 

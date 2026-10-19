@@ -41,6 +41,8 @@ export const VERIFY_GROUPS: Readonly<Record<string, readonly string[]>> = {
     'conflict:check',
     // technical/03 held to the tables the migrations create (WP-97, PROGRESS backlog 124).
     'data-model:check',
+    // The shared git hooks name no path outside this checkout (WP-219, PROGRESS backlog 615).
+    'hooks:check',
   ],
   'verify:types': ['typecheck'],
   // TD-013's bundle budget is an **acceptance criterion** of WP-20, not a nicety, so it is a step

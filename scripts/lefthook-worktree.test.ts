@@ -1,5 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -9,8 +11,9 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import process from 'node:process';
 import { afterAll, describe, expect, it } from 'vitest';
 import { initScratchRepository } from './git-scratch-env.mjs';
@@ -154,6 +157,99 @@ describe('the commit-msg hook in a linked worktree under a spaced path (WP-215)'
       expect(refused.status, refused.output).not.toBe(0);
       expect(refused.output).toContain('subject may not be empty');
       expect(subject()).toBe('feat: a commit from a linked worktree');
+    },
+  );
+});
+
+/**
+ * **A hook that cannot find lefthook refuses the commit** (WP-219, PROGRESS backlog 615 (d)).
+ *
+ * lefthook 2.1.12's hook tries `$LEFTHOOK_BIN`, `lefthook` on `PATH`, the absolute path of the
+ * binary that installed it (written unquoted, so a space in it splits it), the checkout's own
+ * `node_modules`, and a list of package managers — and when all of them fail it printed
+ * `Can't find lefthook in PATH` and exited **0**: the commit was made and the gitleaks job never
+ * ran (measured, WP-219 (a)(ii)). `assert_lefthook_installed: true` in `lefthook.yml` turns that
+ * last branch into `exit 1`. This case reaches that branch deterministically on any host: the
+ * installing binary is a copy that is deleted after the install, the worktree has no
+ * `node_modules`, and `PATH` holds only `git` and the system directories, so no package manager is
+ * found. It asserts the branch it reached by its message (rule 10) and that no commit was made.
+ */
+describe('a pre-commit hook that cannot find lefthook (WP-219)', () => {
+  it.skipIf(!existsSync(binaries.lefthook))(
+    existsSync(binaries.lefthook)
+      ? 'refuses the commit instead of skipping the secret scan'
+      : 'skipped: lefthook not installed under node_modules/.bin',
+    () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'lefthook-absent-')));
+      roots.push(root);
+      const main = join(root, 'spaced dir', 'main');
+      const worktree = join(root, 'spaced dir', 'bare wt');
+      const installer = join(root, 'spaced dir', 'installer');
+      mkdirSync(main, { recursive: true });
+      mkdirSync(installer);
+      const lefthookPackage = realpathSync(
+        join(repositoryRoot, 'node_modules', 'lefthook', 'package.json'),
+      );
+      const { getExePath } = createRequire(lefthookPackage)('./get-exe.js') as {
+        getExePath: () => string;
+      };
+      const installingBinary = join(installer, 'lefthook');
+      copyFileSync(getExePath(), installingBinary);
+      chmodSync(installingBinary, 0o755);
+
+      const gitOnPath = (process.env.PATH ?? '')
+        .split(delimiter)
+        .map((directory) => join(directory, 'git'))
+        .find((candidate) => candidate.startsWith('/') && existsSync(candidate));
+      if (gitOnPath === undefined) throw new Error('no git on PATH');
+      const binDirectory = join(root, 'bin');
+      mkdirSync(binDirectory);
+      symlinkSync(gitOnPath, join(binDirectory, 'git'));
+
+      const env = initScratchRepository(main, {
+        parent: withoutInheritedLefthook(),
+        initArgs: ['-b', 'main'],
+        config: { 'core.hooksPath': join(main, '.git', 'hooks') },
+        env: { NO_COLOR: '1', FORCE_COLOR: '0' },
+      });
+      const run = (command: string, args: string[], cwd: string) =>
+        execFileSync(command, args, {
+          cwd,
+          env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: CHILD_TIMEOUT_MS,
+          killSignal: 'SIGKILL',
+        });
+      writeFileSync(join(main, 'lefthook.yml'), readFileSync(join(repositoryRoot, 'lefthook.yml')));
+      writeFileSync(join(main, 'package.json'), '{ "type": "module", "private": true }\n');
+      writeFileSync(join(main, '.gitignore'), '/node_modules\n');
+      run('git', ['add', '-A'], main);
+      run('git', ['commit', '-q', '-m', 'chore: the scratch repository'], main);
+      run(installingBinary, ['install', 'pre-commit'], main);
+      expect(readFileSync(join(main, '.git', 'hooks', 'pre-commit'), 'utf8')).toContain(
+        installingBinary,
+      );
+      rmSync(installer, { recursive: true, force: true });
+      run('git', ['worktree', 'add', '-q', '--detach', worktree], main);
+      expect(existsSync(join(worktree, 'node_modules'))).toBe(false);
+
+      writeFileSync(join(worktree, 'change.txt'), 'change\n');
+      run('git', ['add', 'change.txt'], worktree);
+      const result = spawnSync('git', ['commit', '-q', '-m', 'feat: a commit nothing scanned'], {
+        cwd: worktree,
+        env: { ...env, PATH: [binDirectory, '/usr/bin', '/bin'].join(delimiter) },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: CHILD_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
+      });
+      const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      expect(output).toContain("Can't find lefthook in PATH");
+      expect(output).toContain('Operation is aborted');
+      expect(result.status, output).not.toBe(0);
+      expect(run('git', ['log', '-1', '--format=%s'], worktree).toString().trim()).toBe(
+        'chore: the scratch repository',
+      );
     },
   );
 });

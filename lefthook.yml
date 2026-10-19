@@ -7,6 +7,13 @@
 # reported as a pass (BD-002). The only way past it is the explicit and noisy
 # GITLEAKS_SKIP=1, which CI ignores. Skip all hooks once with LEFTHOOK=0 or
 # `git commit --no-verify` — never to get past an actual secret finding.
+#
+# A hook that cannot find lefthook at all fails instead of printing "Can't find lefthook in PATH"
+# and exiting 0. Without this, a commit from a linked worktree with no node_modules, under a path
+# with a space (lefthook 2.1.12 writes its own path unquoted) and no pnpm on PATH, was made with no
+# secret scan (measured, WP-219; `scripts/lefthook-worktree.test.ts` holds it).
+assert_lefthook_installed: true
+
 pre-commit:
   parallel: true
   jobs:

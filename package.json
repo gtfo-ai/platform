@@ -44,6 +44,7 @@
     "nul:check": "node scripts/check-nul.mjs",
     "conflict:check": "node scripts/check-conflict.mjs",
     "data-model:check": "node scripts/check-data-model.mjs",
+    "hooks:check": "node scripts/check-hooks.mjs",
     "secrets:scan": "node scripts/gitleaks.mjs dir .",
     "secrets:scan:ci": "node scripts/gitleaks.mjs git --log-opts=--all --require",
     "secrets:scan:history": "node scripts/gitleaks.mjs git --log-opts=--all",
