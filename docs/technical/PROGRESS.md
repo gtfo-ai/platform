@@ -16759,6 +16759,53 @@ Controls: `sentry-cli issues list --max-rows 20` keeps `allow`. **Canary:** remo
 
 **Depends on** WP-205 (the wrapper grammar) and WP-207 being merged. It fits WP-205's table if the architect folds it; the 607 census over the planner's CLIs is the neighbouring row.
 
+### 609. **`gitlabNoteBody` leaves a live mention when a name ends in a backslash-escaped `&`: inside an HTML block, `n&#64;x\&#64;x` is passed unchanged and the browser shows `n@x\@x`, whose second `@x` GitLab reads as a mention** (TODO, **major, fail-open of a shipped BD-022 guard, live by reading**: `gitlabNoteBody` (WP-187, backlog 549) runs on every note the platform posts to a GitLab merge request, and since WP-209 on every description. Model text is shaped by untrusted input (the diff, the ticket), and an HTML block is one line opening with `<details>`. 549 itself was graded minor because no guard existed; this is a guard the documents say holds and that does not. **Pre-existing**: present at `9a3216e9`, not a WP-209 regression. That `@all` is reachable (`a&#64;b\&#64;all`) is the refiner's reading, not measured. Found by WP-209's implementer, session 17 (*Discovered work*), through the extended property at seed 1. The refiner read the mechanism on `wt-wp209` over `9a3216e9` and ran nothing. **No work package owns it — an architect pass places it.**)
+
+**What is wrong.** The name grammar admits a backslash escape of any ASCII punctuation, `&` included, so the name absorbs the `&` that opens the next entity. Two exemptions then keep the text as written: the first match follows a letter (an e-mail address), and the rest of the next entity, `#64;x`, no longer starts with `&` and matches nothing. Markdown would read `\&` as a literal `&`, so the entity stays text outside an HTML block. Inside one, the browser decodes `\&#64;x` to `\@x`, and a backslash is not a word character to GitLab's `(?<!\w)@`.
+
+**Evidence.**
+- WP-209's notes, *Discovered work* (`wt-wp209/docs/technical/PROGRESS.md:52062-52065`), quoted: *"The input is `<details>&#x40x  ` + three backticks + `suggestion&#64;x\&#64;x&#64;x` + a backtick + `1. `."* and *"The name grammar admits `\&`, so `&#64;x\&` is one match. It is kept as an e-mail address after the letter `n`, and the following `&#64;x` likewise."* and *"In an HTML block the browser decodes the entity, which leaves `\@x`, and that is a mention to GitLab's `(?<!\w)@`."*
+- The grammar: `MENTION`'s escape alternative is `\\[!-/:-?[-\`{-~]` (`packages/integrations/src/providers/gitlab/mentions.ts:121`); the range `!-/` (0x21–0x2F) contains `&` (0x26). The e-mail exemption is `ADDRESS_BEFORE` (`mentions.ts:126-129`), applied at `mentions.ts:230-236`.
+- Not caught before: *"Not reproduced with WP-187's token set in 30,000 runs"* (the same notes). WP-209's committed property uses that set, so it is not expected to flake on this.
+
+**What it costs to leave.** A merge-request note or description the platform posts can notify a named person or, by reading, everyone on the project (`@all`), on text an attacker steered. Each post is one notification storm, and it carries the platform's account as author.
+
+**Done when** no name's backslash escape can absorb the `&` (or any other character) that opens an `@` spelling, and the property is extended with tokens that hold `\&`, `&#64;`, `&#x40` and `&commat;` beside a letter. Then:
+- WP-209's counterexample, and `<details>` + `a&#64;b\&#64;all`, render with no live mention under the marked + happy-dom oracle, through the real adapter;
+- the extended property runs clean at the scale WP-209 used (80,000 notes, seeds 1–7) and is committed at 500 per pass.
+
+Controls: `a\&b` outside an HTML block, and `name@example.com`, stay byte-identical. **Canary:** restore `&` to the escape range, and the counterexample case fails.
+
+**Depends on** WP-209 being merged (it touches the same function). The likely fix is the implementer's: *"no `&` among the name's backslash escapes. It needs its own property run."* Whether another character in the range composes the same way is *needs measurement* by that property.
+
+### 610. **Six of the GitLab client's paginated reads still ignore the `truncated` flag WP-209 gave `paginate`, so each caller acts on a cut list as if it were whole; one of them, `protectedBranches`, can then answer "nobody pushes" for a branch a later page's wildcard rule opens** (TODO, **minor, latent**: a cut needs more than `max_pages` × 100 items (1,000 by default, 100 if an operator sets `max_pages: 1`). Of the six, only the branch-protection read fails open; the others fail closed or are bounded by design (table below). **Trigger:** a GitLab project with that many protected-branch rules, deploy keys or pipeline jobs, or a binding with a low `max_pages`. Found by WP-209's implementer, session 17 (*Discovered work*); WP-209 decided only the discussions (backlog 577). The refiner read the callers on `wt-wp209` over `9a3216e9` and ran nothing. **No work package owns it — an architect pass places it.**)
+
+**What is wrong.** `paginate` answers `{ items, truncated }` since WP-209 (c). `listDiscussions` refuses a cut list at the port. The other six take `.items` and drop the flag.
+
+**Evidence.**
+- WP-209's notes (`wt-wp209/docs/technical/PROGRESS.md:52066`), quoted: *"The client's other six paginated reads (`deployKeys`, `protectedBranches`, `listCommits`, `pollMergeRequests`, `listMergeRequests`, `pipelineJobs`) take `.items` and still ignore `truncated`. Each needs a decision about what a cut list costs its caller; this row decided only the discussions."*
+- The refiner's reading of each caller (`packages/integrations/src/providers/gitlab/`):
+
+| Client read (`client.ts`) | Caller (`provider.ts`) | What a cut list does |
+|---|---|---|
+| `protectedBranches` `:385` | `branchPushProtection` `:1035` | **Fails open.** A wildcard rule on a missing page that admits a pusher or force push is not seen. That answer gates the operator's own token to a run (`operatorTokenProtectionRefusal`, `packages/application/src/pipeline/integrations.ts:2966`, TD-028 13a). |
+| `deployKeys` `:369` | `deployKeyAccess` `:1090` | Fails closed. A key on a missing page reads `enabled: false`, and the binding probe (`packages/integrations/src/bindings/prober.ts:664`) reports it as not enabled. The message is wrong. |
+| `pipelineJobs` `:690` | `getPipelineStatus` `:1333` | The pipeline's status comes from the pipeline; only the job list (and its log refs) is short. |
+| `pollMergeRequests` `:506` | `listMergeRequests` `:1473` | Bounded by design: it asks for `ceil(limit / perPage)` pages and the poller's cursor moves oldest first. |
+| `listMergeRequests` `:524` | `listMergedMergeRequests` `:1520` | A history sample, newest first; a cut drops the oldest. |
+| `listCommits` `:425` | `listCommits` `:1588` | The caller stops at `limit` ≤ 100. Needs measurement: whether `since` can be older than `max_pages` pages. |
+
+**What it costs to leave.** For the branch-protection read, a run can be handed the operator's token for a branch that someone can push to. Past that, a probe that misnames a cause, and short job lists. Nothing here needs measurement to believe, but the 1,000-rule threshold makes the fail-open unlikely on a real project.
+
+**Done when** each of the six declares, in its docblock, what a cut list means to its caller. Then:
+- `branchPushProtection` refuses a cut list (`IntegrationError('invalid_response')`, as `listDiscussions` does), so the token is refused;
+- `deployKeyAccess` refuses a cut list, or says "not found in the first N" instead of "not enabled";
+- the four bounded reads keep the cut list, each with a comment saying why, as WP-209 did for its own three.
+
+Proved through the real adapter with `max_pages: 1` and a second page holding the opening wildcard rule. **Canary:** ignore the flag (`truncated && false`), and the branch-protection case reads `nobodyPushes: true`.
+
+**Depends on** WP-209 being merged (the flag). It is the same decision WP-209 (c) made for discussions, so it fits a GitLab row.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -51999,3 +52046,48 @@ Probes, corpora logs, the image census and the canary harness are in `scratchpad
 - `pnpm run -s verify`: `PASS: verify` (14 931 passed, 19 skipped), started at a one-minute load of 1.84.
 - `test/e2e/pipeline/project-commands.e2e.test.ts` (`--project e2e-fake-claude`, `platform-runtime:s16`): 2/2 passed, started at a load of 10.30.
 - Two containers ran, both bounded and `--network none`, with `echo MARKER` payloads.
+
+## WP notes — session 17 (M12)
+
+#### WP-208
+
+**Instrument: the agent-line corpus is a committed fixture with three cells per line, and a scanner change prints its over-ask as a diff** (TD-030 decision 4; no backlog number). Built in the main checkout on `9a3216e9`, uncommitted. No migration. Nothing moved under a split clause.
+
+**Changes.**
+- `test/fixtures/commands/agent-lines.txt` — the reviewer's 286-line corpus (`scratchpad/wp203-rev/corpus.txt`), byte-identical (`cmp`); `developer-lines.txt` — WP-201's `scratchpad/wp201/dev-lines.txt`, 85 lines, byte-identical; one `.verdicts.json` per corpus; `SOURCES.md` (provenance `composed`, what the corpus is and is not, the baseline).
+- `packages/domain/src/testing/command-corpus.ts` — the one cell function both readers use (`corpusCells`, `corpusLines`, `corpusDiff`, `verdictsText`, `uncertaintyTag`), in the test-support ring beside `testing/property.ts`, absent from `index.ts`.
+- `packages/domain/src/policies/command-corpus.test.ts` (unit tier) — recomputes every cell of every corpus and, on a difference, fails printing `line | cell | before | after` and the newly-refused / newly-allowed counts; holds the json to exactly one entry per line in corpus order, and the agent corpus to 286 lines.
+- `scripts/command-corpus.mjs` — `--write` regenerates every verdicts file; without it, prints the same diff and exits 1 on one.
+- technical/05 (a WP-208 amendment bullet in *Command and tool policy*: the three tiers, the grading rule, the instrument) and technical/10 (*Fixtures and fakes*: the corpus, its provenance mark, the update rule); both cite TD-030.
+
+**Decisions/assumptions.**
+- **The `attended` cell is `evaluateCommand`'s verdict, not a mode.** `decideUnattendedCommand` takes `auto | deny` only; the plan row's wording names it for all three, and the reviewer's probe (and the orchestrator's `p206.mjs` shape) passed the string `attended`, which the function reads as `auto` (any mode that is not `deny`). The attended cell is therefore `evaluateCommand({ command }, DEFAULT_COMMAND_POLICY).verdict`, the convention `unattended-commands.test.ts`'s `cell` helper already uses (*attended verdict / auto rule / deny rule*).
+- **A cell's text** is its value, or `value: tag` when the value is not `allow`. Attended: `allow`, `ask: <entry or unmatched>`, `uncertain: <reasons>` (verdict `ask` with uncertainty), `block: <entry>`. `auto`/`deny`: the rule — `allow` (`allow_list`), `auto`/`deny` (`unattended_auto`/`unattended_deny`) tagged with the ask entry, `block: <entry>`, `hazard: <pattern>`, `git: <boundary detail>`, `uncertain: <reasons>`. An uncertainty reason is tagged by its `UNCERTAINTY` key or as `builder(argument, …)` for the six built reasons (each builder is called with placeholders and read back as a pattern, a repeated placeholder as a back-reference); an unnamed one keeps its text. A git-config `uncertain` with no evaluator reason is tagged from the boundary's detail.
+- **The two counts**: a cell is *refused* when its value is none of `allow`, `auto`, `ask`; *newly refused* is a change from not refused to refused, *newly allowed* the converse. A policy that throws reads `throws: <message>` per cell in the diff rather than stopping at the first line (the fallback canary needs every line to fail).
+- **Two lines hold a literal backslash-`n`** (`printf '%s\n' "$x"`, `tr : '\n'`). The reviewer's probe turned `\n` into a newline before measuring; the fixture keeps the line as written and measures it as written. Both lines' `auto` and `deny` cells equal the reviewer's `corpus-base.log` either way: all 286 lines agree with it (0 differences). `corpus-copy.log` (WP-203's first tree, later revised) differs on 80, every one an `uncertain` there that is `auto`/`deny` on `main`.
+- **The developer corpus is `dev-lines.txt`**, the orchestrator having named none: it is the file WP-201's notes cite as *"83 ordinary developer lines (`dev-lines.txt`…)"*. It holds 85 lines (`dev-auto.jsonl`, the measured subset, 83); all 85 are committed and SOURCES.md says so. `rev-lines.txt`, `all-rows.txt` and `rev2-lines.txt` are adversarial, not this row's.
+- **Provenance is prose.** `fixture-provenance.contract.test.ts` discovers `test/fixtures/http/` only, so `SOURCES.md` here is not checked mechanically; it states the `composed` mark in the http vocabulary as ruling (b) asks.
+- **The fixture is read with `readFileSync`**, not imported; `unattended-commands.test.ts` already reads files from the domain tests, so the fixture stays under `test/fixtures/`.
+
+**Baseline** (default policy, at `9a3216e9`; under `auto` an `ask` that runs reads `auto`, under `deny` it reads `deny`):
+
+| Corpus | Mode | allow | ask/auto/deny | uncertain | block | hazard | git |
+|---|---|---|---|---|---|---|---|
+| agent-lines (286) | attended | 40 | 237 | 6 | 3 | — | — |
+| agent-lines | auto | 40 | 236 | 6 | 3 | 1 | 0 |
+| agent-lines | deny | 40 | 236 | 6 | 3 | 1 | 0 |
+| developer-lines (85) | attended | 33 | 51 | 1 | 0 | — | — |
+| developer-lines | auto | 33 | 49 | 1 | 0 | 0 | 2 |
+| developer-lines | deny | 33 | 49 | 1 | 0 | 0 | 2 |
+
+**Canaries** (logs in `scratchpad/wp208/`; each reverted by the tool that made it, the tracked sources byte-identical after — `git diff --stat` empty — and the verdicts' `shasum` back at `34483f57…`/`c32c6e7c…`).
+- (2) Flip `"pnpm test"`'s attended cell to `ask: pnpm test`: the census fails with `"pnpm test" | attended | ask: pnpm test | allow` (`canary-1.log`).
+- (2) `found === undefined || true` in `unknownProgramReasons` (WP-203 ruling (b)'s judged-name clause): **no corpus line moves** — the census passes (`canary-2.log`); no ordinary line hands a judged name to an unknown program. The fallback, a planted `throw` first in `decideOnce`: every line's `auto` and `deny` cells fail — 572 changed cells on the agent corpus (2 × 286) and 170 on the developer corpus (2 × 85) (`canary-2b.log`).
+- (3) Delete the `"docker ps"` key: the script's check prints `"docker ps" | deny | undefined | block: docker *` and three cells; `--write` restores the file byte-identical. `--write` twice on `main` gives the same bytes, and biome accepts the generated JSON unchanged.
+
+**Sentences falsified** (rule 83).
+- `grep -rn "will not outlive the session\|corpus that lived in a scratch\|scratch directory and" docs CLAUDE.md packages/domain/src`: TD-030's Context (lines 24–25), the plan's M12 preamble (line 777), PROGRESS backlog 605's evidence and the M12 ruling — each a past-tense statement of why the instrument was needed, none made false; TD-030 is a decision and not this row's to edit.
+- `grep -rln "test/fixtures/commands" docs CLAUDE.md`: TD-030, technical/05, technical/10, the plan, PROGRESS — every mention names the directory this row creates.
+
+**Discovered work.**
+- The http provenance suite's scope is `test/fixtures/http/`; a check over `test/fixtures/commands/SOURCES.md` (a `composed` mark and a date) would make the corpus's provenance enforced rather than stated.

@@ -1,0 +1,1432 @@
+{
+  "pnpm test": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "pnpm run lint": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "pnpm run build": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "pnpm exec vitest run src/a.test.ts": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "pnpm exec tsc --noEmit": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "pnpm install --frozen-lockfile": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "npm test": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "npm run build": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "npm ci": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "npx prettier --write src": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "npx eslint --fix src": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "yarn test": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "yarn build": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "node scripts/build.mjs": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "node $script": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "node \"$script\" --flag": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "node dist/index.js": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "python main.py": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "python $file": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "python3 \"$file\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "python3 -m pytest tests": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "python3 -m pytest \"$test_path\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "pytest -k \"$name\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "pytest tests/test_a.py": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "pip install -r requirements.txt": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "go test ./...": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "go test -run \"$t\" ./pkg/...": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "go build ./cmd/x": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "go vet ./...": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cargo build": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cargo test": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "cargo test $pkg": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "cargo clippy -- -D warnings": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cargo run --bin x": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "make": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "make test": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "make build TARGET=$target": {
+    "attended": "ask: make VAR=value (a positional containing `=`)",
+    "auto": "hazard: make VAR=value (a positional containing `=`)",
+    "deny": "hazard: make VAR=value (a positional containing `=`)"
+  },
+  "make -C \"$dir\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "./gradlew build": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "./gradlew $task": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "./gradlew test --tests \"$cls\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "mvn -q test": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "mvn -pl \"$module\" test": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "./mvnw verify": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "dotnet test": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "dotnet build \"$proj\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "bundle exec rspec": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "bundle exec rspec \"$spec\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "rspec spec/a_spec.rb": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "rake test": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "composer install": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "php artisan test": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "phpunit": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "vendor/bin/phpunit --filter \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "eslint \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "eslint src": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "eslint --fix \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "prettier --write \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "prettier --check .": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "prettier --write .": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "tsc": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "tsc -p \"$cfg\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "black \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "black .": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ruff check .": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ruff check \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ruff format \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "isort \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "mypy \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "mypy src": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "flake8 \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "gofmt -w \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "gofmt -l .": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "rustfmt \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "shellcheck \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "shellcheck scripts/*.sh": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "clang-format -i \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "stylelint \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "biome check .": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "biome format --write \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "jq . package.json": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "jq '.version' package.json": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "jq -r '.scripts' \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "jq --arg v \"$v\" '.version=$v' package.json": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "yq '.a' x.yml": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "curl -s \"$url\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "curl -fsSL https://example.com": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "wget -q \"$url\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "kill $pid": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "kill -9 $pid": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "kill \"$PID\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "kill %1": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "wait $pid": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "wait": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "exit $?": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "exit 1": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "exit \"$rc\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "return $?": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "return 0": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "test -f \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "test -d \"$dir\" || mkdir -p \"$dir\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "[ -n \"$x\" ]": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "[ -z \"$x\" ] && echo empty": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "[ -f \"$f\" ] && cat \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "[[ -n $x ]]": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "[[ -f $f ]]": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cd \"$dir\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cd $dir && ls": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cd \"$(git rev-parse --show-toplevel)\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "mkdir -p \"$out\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "mkdir -p $out/logs": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "rm -rf \"$out\"": {
+    "attended": "uncertain: expansionCompletesBlockEntry(rm -rf /*)",
+    "auto": "uncertain: expansionCompletesBlockEntry(rm -rf /*)",
+    "deny": "uncertain: expansionCompletesBlockEntry(rm -rf /*)"
+  },
+  "rm -f \"$tmp\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "rm -rf dist": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cp \"$a\" \"$b\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "mv \"$a\" \"$b\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ln -s \"$a\" \"$b\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "touch \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "chmod +x \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cat \"$f\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "head -n 20 \"$f\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "tail -n 50 \"$log\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "wc -l \"$f\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "grep -rn \"$pattern\" src": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "grep -c TODO \"$f\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "rg \"$pattern\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "rg -n foo src": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "sed -n '1,20p' \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "sed -i 's/a/b/' \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "awk '{print $1}' \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "sort \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "sort -u \"$f\" | uniq -c": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "uniq \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "diff \"$a\" \"$b\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "diff -u a b": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cut -d: -f1 \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "tr a-z A-Z < \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "xargs -n1 echo < list": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ls | xargs wc -l": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "find . -name '*.ts' | xargs grep -l foo": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "find . -name \"$name\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "find src -name '*.ts' -newer \"$f\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "for f in *.ts; do eslint \"$f\"; done": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "for f in src/*.py; do black \"$f\"; done": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "for f in $(ls); do echo $f; done": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "for i in 1 2 3; do echo $i; done": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "for f in *.json; do jq . \"$f\" > /dev/null; done": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "while read -r line; do echo \"$line\"; done < \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "while read -r f; do prettier --write \"$f\"; done < files.txt": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "if [ -f \"$f\" ]; then cat \"$f\"; fi": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "export PATH=\"$HOME/bin:$PATH\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "export NODE_ENV=test": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "FOO=bar node x.js": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "NODE_OPTIONS=\"$opts\" node x.js": {
+    "attended": "uncertain: environmentSpellsFloor(npm)",
+    "auto": "uncertain: environmentSpellsFloor(npm)",
+    "deny": "uncertain: environmentSpellsFloor(npm)"
+  },
+  "source .venv/bin/activate": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  ". ./env.sh": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "echo \"$x\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "echo $?": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "printf '%s\\n' \"$x\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "date +%s": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "sleep 1": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "sleep $n": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "basename \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "dirname \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "realpath \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "git status": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git diff": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git diff \"$base\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git log --oneline -n 10": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git log \"$ref\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git log \"$ref\"..HEAD": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git show \"$sha\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git checkout -b \"$branch\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "git add \"$f\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git add -A": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git commit -m \"$msg\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git rev-parse HEAD": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "git branch --show-current": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "git fetch origin": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git stash": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "docker ps": {
+    "attended": "block: docker *",
+    "auto": "block: docker *",
+    "deny": "block: docker *"
+  },
+  "docker build -t \"$tag\" .": {
+    "attended": "block: docker *",
+    "auto": "block: docker *",
+    "deny": "block: docker *"
+  },
+  "du -sh \"$dir\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "df -h": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ps aux": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ps -p $pid": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "lsof -i :$port": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "pgrep -f node": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "pkill -f \"$name\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "which node": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "command -v node": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "type node": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "env | sort": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "printenv PATH": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "id -u": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "whoami": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "uname -a": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "tar -xzf \"$archive\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "tar -czf out.tgz \"$dir\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "unzip -q \"$zip\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "gzip -d \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "zip -r out.zip \"$dir\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "openssl rand -hex 16": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "base64 -d <<< \"$x\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "sha256sum \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "md5sum \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "tee \"$log\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "time pnpm test": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "timeout 60 pnpm test": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "nohup node server.js &": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "node server.js &": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "psql \"$DATABASE_URL\" -c 'select 1'": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "sqlite3 db.sqlite '.tables'": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "redis-cli ping": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "less \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "code \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "open \"$url\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ssh \"$host\" uptime": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "scp \"$f\" \"$host\":": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "rsync -av \"$src\" \"$dst\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "diff <(sort a) <(sort b)": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "read -r x": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "read -p \"ok?\" ans": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "local x=\"$1\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "declare -a arr": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "set -euo pipefail": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "set -x": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "shift": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "trap 'rm -f \"$tmp\"' EXIT": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "tmp=$(mktemp)": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "x=$(cat \"$f\")": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "count=$((count+1))": {
+    "attended": "uncertain: arithmetic",
+    "auto": "uncertain: arithmetic",
+    "deny": "uncertain: arithmetic"
+  },
+  "echo \"${arr[@]}\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ulimit -n 4096": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "umask 022": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "hash -r": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "history": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "alias ll='ls -l'": {
+    "attended": "uncertain: handedCommand",
+    "auto": "uncertain: handedCommand",
+    "deny": "uncertain: handedCommand"
+  },
+  "getopts \"ab\" opt": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "printf -v x '%s' \"$y\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "let i++": {
+    "attended": "uncertain: evaluatedText",
+    "auto": "uncertain: evaluatedText",
+    "deny": "uncertain: evaluatedText"
+  },
+  "(( i++ ))": {
+    "attended": "uncertain: evaluatedText",
+    "auto": "uncertain: evaluatedText",
+    "deny": "uncertain: evaluatedText"
+  },
+  "true": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "false": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  ":": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "./scripts/check.sh": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "./scripts/check.sh \"$arg\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "bash scripts/x.sh": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "sh -c 'echo hi'": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "bash -c \"pnpm test\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "vitest run \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "jest \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "mocha \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "playwright test \"$spec\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "terraform plan -var \"x=$x\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "kubectl get pods -n \"$ns\"": {
+    "attended": "block: kubectl *",
+    "auto": "block: kubectl *",
+    "deny": "block: kubectl *"
+  },
+  "helm template \"$chart\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "aws s3 ls \"$bucket\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "gh pr view \"$n\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "npm version \"$v\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "pnpm add \"$pkg\"": {
+    "attended": "ask: pnpm add *",
+    "auto": "auto: pnpm add *",
+    "deny": "deny: pnpm add *"
+  },
+  "pnpm --filter \"$pkg\" test": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "npx tsx \"$script\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "tsx \"$script\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "deno run \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "bun test \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ruby \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "perl \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "php \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "java -jar \"$jar\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "javac \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "gcc -o out \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "clang \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cmake -S . -B \"$build\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cmake --build \"$build\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ctest --test-dir \"$build\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ninja -C \"$build\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "echo \"$PATH\" | tr : '\\n'": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cat \"$f\" | jq .": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ls -la \"$dir\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "stat \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "file \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "xxd \"$f\" | head": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "od -c \"$f\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "seq 1 $n": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "yes | head -n 3": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  }
+}

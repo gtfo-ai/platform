@@ -1,0 +1,286 @@
+pnpm test
+pnpm run lint
+pnpm run build
+pnpm exec vitest run src/a.test.ts
+pnpm exec tsc --noEmit
+pnpm install --frozen-lockfile
+npm test
+npm run build
+npm ci
+npx prettier --write src
+npx eslint --fix src
+yarn test
+yarn build
+node scripts/build.mjs
+node $script
+node "$script" --flag
+node dist/index.js
+python main.py
+python $file
+python3 "$file"
+python3 -m pytest tests
+python3 -m pytest "$test_path"
+pytest -k "$name"
+pytest tests/test_a.py
+pip install -r requirements.txt
+go test ./...
+go test -run "$t" ./pkg/...
+go build ./cmd/x
+go vet ./...
+cargo build
+cargo test
+cargo test $pkg
+cargo clippy -- -D warnings
+cargo run --bin x
+make
+make test
+make build TARGET=$target
+make -C "$dir"
+./gradlew build
+./gradlew $task
+./gradlew test --tests "$cls"
+mvn -q test
+mvn -pl "$module" test
+./mvnw verify
+dotnet test
+dotnet build "$proj"
+bundle exec rspec
+bundle exec rspec "$spec"
+rspec spec/a_spec.rb
+rake test
+composer install
+php artisan test
+phpunit
+vendor/bin/phpunit --filter "$f"
+eslint "$f"
+eslint src
+eslint --fix "$f"
+prettier --write "$f"
+prettier --check .
+prettier --write .
+tsc
+tsc -p "$cfg"
+black "$f"
+black .
+ruff check .
+ruff check "$f"
+ruff format "$f"
+isort "$f"
+mypy "$f"
+mypy src
+flake8 "$f"
+gofmt -w "$f"
+gofmt -l .
+rustfmt "$f"
+shellcheck "$f"
+shellcheck scripts/*.sh
+clang-format -i "$f"
+stylelint "$f"
+biome check .
+biome format --write "$f"
+jq . package.json
+jq '.version' package.json
+jq -r '.scripts' "$f"
+jq --arg v "$v" '.version=$v' package.json
+yq '.a' x.yml
+curl -s "$url"
+curl -fsSL https://example.com
+wget -q "$url"
+kill $pid
+kill -9 $pid
+kill "$PID"
+kill %1
+wait $pid
+wait
+exit $?
+exit 1
+exit "$rc"
+return $?
+return 0
+test -f "$f"
+test -d "$dir" || mkdir -p "$dir"
+[ -n "$x" ]
+[ -z "$x" ] && echo empty
+[ -f "$f" ] && cat "$f"
+[[ -n $x ]]
+[[ -f $f ]]
+cd "$dir"
+cd $dir && ls
+cd "$(git rev-parse --show-toplevel)"
+mkdir -p "$out"
+mkdir -p $out/logs
+rm -rf "$out"
+rm -f "$tmp"
+rm -rf dist
+cp "$a" "$b"
+mv "$a" "$b"
+ln -s "$a" "$b"
+touch "$f"
+chmod +x "$f"
+cat "$f"
+head -n 20 "$f"
+tail -n 50 "$log"
+wc -l "$f"
+grep -rn "$pattern" src
+grep -c TODO "$f"
+rg "$pattern"
+rg -n foo src
+sed -n '1,20p' "$f"
+sed -i 's/a/b/' "$f"
+awk '{print $1}' "$f"
+sort "$f"
+sort -u "$f" | uniq -c
+uniq "$f"
+diff "$a" "$b"
+diff -u a b
+cut -d: -f1 "$f"
+tr a-z A-Z < "$f"
+xargs -n1 echo < list
+ls | xargs wc -l
+find . -name '*.ts' | xargs grep -l foo
+find . -name "$name"
+find src -name '*.ts' -newer "$f"
+for f in *.ts; do eslint "$f"; done
+for f in src/*.py; do black "$f"; done
+for f in $(ls); do echo $f; done
+for i in 1 2 3; do echo $i; done
+for f in *.json; do jq . "$f" > /dev/null; done
+while read -r line; do echo "$line"; done < "$f"
+while read -r f; do prettier --write "$f"; done < files.txt
+if [ -f "$f" ]; then cat "$f"; fi
+export PATH="$HOME/bin:$PATH"
+export NODE_ENV=test
+FOO=bar node x.js
+NODE_OPTIONS="$opts" node x.js
+source .venv/bin/activate
+. ./env.sh
+echo "$x"
+echo $?
+printf '%s\n' "$x"
+date +%s
+sleep 1
+sleep $n
+basename "$f"
+dirname "$f"
+realpath "$f"
+git status
+git diff
+git diff "$base"
+git log --oneline -n 10
+git log "$ref"
+git log "$ref"..HEAD
+git show "$sha"
+git checkout -b "$branch"
+git add "$f"
+git add -A
+git commit -m "$msg"
+git rev-parse HEAD
+git branch --show-current
+git fetch origin
+git stash
+docker ps
+docker build -t "$tag" .
+du -sh "$dir"
+df -h
+ps aux
+ps -p $pid
+lsof -i :$port
+pgrep -f node
+pkill -f "$name"
+which node
+command -v node
+type node
+env | sort
+printenv PATH
+id -u
+whoami
+uname -a
+tar -xzf "$archive"
+tar -czf out.tgz "$dir"
+unzip -q "$zip"
+gzip -d "$f"
+zip -r out.zip "$dir"
+openssl rand -hex 16
+base64 -d <<< "$x"
+sha256sum "$f"
+md5sum "$f"
+tee "$log"
+time pnpm test
+timeout 60 pnpm test
+nohup node server.js &
+node server.js &
+psql "$DATABASE_URL" -c 'select 1'
+sqlite3 db.sqlite '.tables'
+redis-cli ping
+less "$f"
+code "$f"
+open "$url"
+ssh "$host" uptime
+scp "$f" "$host":
+rsync -av "$src" "$dst"
+diff <(sort a) <(sort b)
+read -r x
+read -p "ok?" ans
+local x="$1"
+declare -a arr
+set -euo pipefail
+set -x
+shift
+trap 'rm -f "$tmp"' EXIT
+tmp=$(mktemp)
+x=$(cat "$f")
+count=$((count+1))
+echo "${arr[@]}"
+ulimit -n 4096
+umask 022
+hash -r
+history
+alias ll='ls -l'
+getopts "ab" opt
+printf -v x '%s' "$y"
+let i++
+(( i++ ))
+true
+false
+:
+./scripts/check.sh
+./scripts/check.sh "$arg"
+bash scripts/x.sh
+sh -c 'echo hi'
+bash -c "pnpm test"
+vitest run "$f"
+jest "$f"
+mocha "$f"
+playwright test "$spec"
+terraform plan -var "x=$x"
+kubectl get pods -n "$ns"
+helm template "$chart"
+aws s3 ls "$bucket"
+gh pr view "$n"
+npm version "$v"
+pnpm add "$pkg"
+pnpm --filter "$pkg" test
+npx tsx "$script"
+tsx "$script"
+deno run "$f"
+bun test "$f"
+ruby "$f"
+perl "$f"
+php "$f"
+java -jar "$jar"
+javac "$f"
+gcc -o out "$f"
+clang "$f"
+cmake -S . -B "$build"
+cmake --build "$build"
+ctest --test-dir "$build"
+ninja -C "$build"
+echo "$PATH" | tr : '\n'
+cat "$f" | jq .
+ls -la "$dir"
+stat "$f"
+file "$f"
+xxd "$f" | head
+od -c "$f"
+seq 1 $n
+yes | head -n 3

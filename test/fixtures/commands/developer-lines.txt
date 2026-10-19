@@ -1,0 +1,85 @@
+npm test
+npm run build
+npm ci
+npm install
+pnpm -r build
+pnpm test
+pnpm install --frozen-lockfile
+yarn test
+git status
+git diff
+git log --oneline -5
+git add -A
+git commit -m "fix: x"
+git push origin agentic/ABC-1
+git fetch origin
+git checkout -b agentic/ABC-1
+rm -rf dist
+rm -rf node_modules
+python -m pytest
+python3 -m pytest -q
+pytest -x
+make
+make test
+cargo test
+cargo build --release
+go test ./...
+go build ./...
+ls -la
+cat package.json
+grep -rn TODO src
+find . -name '*.ts'
+mkdir -p build
+cp a b
+mv a b
+echo hello
+node scripts/build.mjs
+npx tsc --noEmit
+npx vitest run
+./gradlew test
+./mvnw test
+mvn -q test
+bundle exec rspec
+ruby -v
+tsc -p .
+eslint .
+prettier --check .
+for f in *.ts; do echo $f; done
+for f in src/*.ts; do wc -l "$f"; done
+ls *.json
+wc -l src/*.ts
+cat $HOME/.npmrc
+echo $PATH
+export PATH=$PATH:./bin
+cd src && ls
+test -f package.json && echo ok
+[ -d dist ] && rm -rf dist
+python3 -c 'print(1)'
+node -e 'console.log(1)'
+bash -c 'npm test'
+sh -c 'make test'
+pnpm --filter web build
+pnpm exec vitest run
+git rev-parse HEAD
+git branch --show-current
+du -sh .
+head -n 20 README.md
+tail -n 50 log.txt
+sed -n '1,20p' file.ts
+awk '{print $1}' file
+sort file | uniq -c
+xargs -n1 echo < list
+ls src/**/*.ts
+cat src/{a,b}.ts
+mkdir -p src/{a,b}
+cp file{,.bak}
+for t in unit e2e; do npm run test:$t; done
+for d in packages/*; do ls "$d"; done
+npm run test -- --grep "$name"
+pytest tests/test_$name.py
+git diff HEAD~1 -- src/$f
+ls -la "$HOME"
+echo "${HOME}/x"
+$EDITOR file
+"$PYTHON" -m pytest
+./bin/$1

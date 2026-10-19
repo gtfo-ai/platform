@@ -1,0 +1,427 @@
+{
+  "npm test": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "npm run build": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "npm ci": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "npm install": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "pnpm -r build": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "pnpm test": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "pnpm install --frozen-lockfile": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "yarn test": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "git status": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git diff": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git log --oneline -5": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git add -A": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git commit -m \"fix: x\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git push origin agentic/ABC-1": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git fetch origin": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git checkout -b agentic/ABC-1": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "rm -rf dist": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "rm -rf node_modules": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "python -m pytest": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "python3 -m pytest -q": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "pytest -x": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "make": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "make test": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "cargo test": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "cargo build --release": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "go test ./...": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "go build ./...": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ls -la": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "cat package.json": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "grep -rn TODO src": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "find . -name '*.ts'": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "mkdir -p build": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cp a b": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "mv a b": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "echo hello": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "node scripts/build.mjs": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "npx tsc --noEmit": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "npx vitest run": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "./gradlew test": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "./mvnw test": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "mvn -q test": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "bundle exec rspec": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ruby -v": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "tsc -p .": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "eslint .": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "prettier --check .": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "for f in *.ts; do echo $f; done": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "for f in src/*.ts; do wc -l \"$f\"; done": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ls *.json": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "wc -l src/*.ts": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "cat $HOME/.npmrc": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "echo $PATH": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "export PATH=$PATH:./bin": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cd src && ls": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "test -f package.json && echo ok": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "[ -d dist ] && rm -rf dist": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "python3 -c 'print(1)'": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "node -e 'console.log(1)'": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "bash -c 'npm test'": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "sh -c 'make test'": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "pnpm --filter web build": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "pnpm exec vitest run": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "git rev-parse HEAD": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "git branch --show-current": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "du -sh .": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "head -n 20 README.md": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "tail -n 50 log.txt": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "sed -n '1,20p' file.ts": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "awk '{print $1}' file": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "sort file | uniq -c": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "xargs -n1 echo < list": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "ls src/**/*.ts": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "cat src/{a,b}.ts": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "mkdir -p src/{a,b}": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "cp file{,.bak}": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "for t in unit e2e; do npm run test:$t; done": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "for d in packages/*; do ls \"$d\"; done": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "npm run test -- --grep \"$name\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "pytest tests/test_$name.py": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "git diff HEAD~1 -- src/$f": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "ls -la \"$HOME\"": {
+    "attended": "allow",
+    "auto": "allow",
+    "deny": "allow"
+  },
+  "echo \"${HOME}/x\"": {
+    "attended": "ask: unmatched",
+    "auto": "auto: unmatched",
+    "deny": "deny: unmatched"
+  },
+  "$EDITOR file": {
+    "attended": "ask: unmatched",
+    "auto": "git: the name of a command in it is computed when it runs (`$VARIABLE …`, `$(…) …`), so the platform cannot read what would run; write the command name literally",
+    "deny": "git: the name of a command in it is computed when it runs (`$VARIABLE …`, `$(…) …`), so the platform cannot read what would run; write the command name literally"
+  },
+  "\"$PYTHON\" -m pytest": {
+    "attended": "ask: unmatched",
+    "auto": "git: the name of a command in it is computed when it runs (`$VARIABLE …`, `$(…) …`), so the platform cannot read what would run; write the command name literally",
+    "deny": "git: the name of a command in it is computed when it runs (`$VARIABLE …`, `$(…) …`), so the platform cannot read what would run; write the command name literally"
+  },
+  "./bin/$1": {
+    "attended": "uncertain: expandedName",
+    "auto": "uncertain: expandedName",
+    "deny": "uncertain: expandedName"
+  }
+}
