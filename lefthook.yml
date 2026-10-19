@@ -16,10 +16,17 @@ pre-commit:
       glob: '*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,json,jsonc,css}'
       run: ./node_modules/.bin/biome check --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
 
+# `{1}` is git's message path, and lefthook pastes it into the shell line unquoted. In a linked
+# worktree it is absolute (`<main>/.git/worktrees/<name>/COMMIT_EDITMSG`), so a space anywhere in
+# the main checkout's path split it and commitlint refused `Unknown argument` (backlog 612). Quoted,
+# it is one word. A bare `--edit` is not the answer: it reads COMMIT_EDITMSG, and `git merge` hands
+# the hook MERGE_MSG — a non-conventional merge message passed (measured, WP-215).
+# `scripts/lefthook-worktree.test.ts` commits from such a worktree with this file.
+# `{staged_files}` above needs no quotes: lefthook quotes each path itself (measured, WP-215).
 commit-msg:
   jobs:
     - name: commitlint
-      run: ./node_modules/.bin/commitlint --edit {1}
+      run: ./node_modules/.bin/commitlint --edit "{1}"
 
 # The merge-conflict guard runs here as well as in `verify`/CI because pre-push is the hook that
 # decides what reaches `origin`, and the defect it exists for (d1e7b69: markers in CLAUDE.md, on

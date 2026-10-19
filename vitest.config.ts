@@ -66,7 +66,8 @@ const SETUP_FILES = [PROPERTY_SEED_SETUP, GIT_ENVIRONMENT_SETUP];
 
 /**
  * The suites that start **real processes** and wait on them structurally (WP-69, PROGRESS backlog
- * 25) — with {@link GIT_FIXTURE_ISOLATION_SUITE}, the `process` project's whole membership.
+ * 25) — with {@link GIT_FIXTURE_ISOLATION_SUITE} and {@link COMMIT_HOOK_SUITE}, the `process`
+ * project's whole membership.
  *
  * A structural wait asserts that something happens (a socket is bound, a pid file is written, a pid
  * disappears), and how long it takes is **process scheduling**: exactly the quantity the parallel
@@ -95,11 +96,22 @@ export const STRUCTURAL_WAIT_SUITES = [
  * repository is byte-identical afterwards. It belongs here for the reason the structural waits do —
  * it owns a real process whose duration is the host's — and because a vitest run inside the
  * parallel `unit` group would compete with the group it is measuring. `scripts/verify.test.ts`
- * holds the membership as exactly these two kinds.
+ * holds the membership as exactly these kinds and {@link COMMIT_HOOK_SUITE}.
  */
 export const GIT_FIXTURE_ISOLATION_SUITE = 'scripts/git-fixture-isolation.test.ts';
 
-export const PROCESS_SUITES = [...STRUCTURAL_WAIT_SUITES, GIT_FIXTURE_ISOLATION_SUITE];
+/**
+ * The third kind (WP-215, PROGRESS backlog 612): it installs this checkout's `lefthook.yml` into a
+ * scratch repository under a spaced path and commits from a linked worktree, so the real
+ * `commit-msg` hook — lefthook, a shell, commitlint — runs as processes whose duration is the host's.
+ */
+export const COMMIT_HOOK_SUITE = 'scripts/lefthook-worktree.test.ts';
+
+export const PROCESS_SUITES = [
+  ...STRUCTURAL_WAIT_SUITES,
+  GIT_FIXTURE_ISOLATION_SUITE,
+  COMMIT_HOOK_SUITE,
+];
 
 /** What coverage measures: the source rings the `unit`, `contract` and `process` projects reach. */
 export const COVERAGE_INCLUDE = [
