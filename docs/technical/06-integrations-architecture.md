@@ -680,7 +680,8 @@ the existing suite (BD-017).
   > carries no changelog. **Since WP-110 a poll also re-reads its live tasks' tickets** (PROGRESS
   > backlog 298): a second `matchTickets` per poll with a `keys` rule — the tickets of the binding's
   > tasks in any state but `done`/`cancelled`, whatever the pick-up rule says, at most
-  > `TICKET_POLL_LIVE_KEYS_LIMIT` (100, one Jira page, so the bound is **one request per poll**) —
+  > `TICKET_POLL_LIVE_KEYS_LIMIT` (100, one Jira page, so the bound is **one request per poll** while
+  > Jira refuses no key and answers whole pages) —
   > recorded as `ticket.updated` **only**, never `ticket.matched`, on the same key; so an edit to a
   > ticket a **status** rule no longer matches (the platform's status mapping moved it on) reaches its
   > live task. A key Jira says does not exist (`400`, a deleted ticket — documented for Data Center
@@ -689,7 +690,18 @@ the existing suite (BD-017).
   > key stands alone, every search counted against `MAX_KEY_SEARCHES` (32), and the keys left out
   > are reported to the poll, which names them in a warning every poll. A read that still fails —
   > past the bound, or every key refused on its own — fails open (a warning; the rule half stands).
-  > It never moves the cursor. **Since WP-145 (PROGRESS backlog 437) a live task that recorded its
+  > It never moves the cursor. **Since WP-223 (PROGRESS backlog 436) the read says what it cost**:
+  > it is one executor action, and the port reports every search request it made, pages and refused
+  > searches included (`matchTickets`' `onSearches`), answered or thrown. The `match_tickets` row
+  > records the count as `result.searches`, and the executor debits the integration's limiter one
+  > token for every request past the first **after** the call has returned and its slot is released,
+  > never during it (`providerRequests`, `RateLimiter.debit`; backlog 550's deadlock came from
+  > re-entering the limiter while a slot was held). Measured through the production executor on the
+  > replay double: 100 keys with one gone and no key named made 18 searches, wrote one row with a
+  > `null` result and took one token before; the row now says 18 and 18 tokens are taken. A read
+  > that throws is charged the same, but its `failed` row carries no count (the executor writes no
+  > result on a failure). Re-bisecting a deleted ticket on every poll is accepted rather than
+  > cached: it is bounded at 32 searches, fails open, and its cost is now on every poll's row. **Since WP-145 (PROGRESS backlog 437) a live task that recorded its
   > issue's id is asked by it** — the rule carries `ids` beside `keys`, Jira's JQL is
   > `(id in (10001) OR key in ("ACME-7"))`, and an id is written bare only when it is decimal digits —
   > because a moved issue answers under its new key and whether JQL resolves a former key is not

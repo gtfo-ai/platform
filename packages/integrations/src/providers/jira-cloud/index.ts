@@ -667,8 +667,15 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     }));
   };
 
-  /** One search, following `nextPageToken` up to `limit` (WP-87 review round 2). */
-  const searchUpTo = async (jql: string, limit: number): Promise<TicketMatch[]> => {
+  /**
+   * One search, following `nextPageToken` up to `limit` (WP-87 review round 2). `requests`, when
+   * given, counts every request sent, refused ones included (WP-223).
+   */
+  const searchUpTo = async (
+    jql: string,
+    limit: number,
+    requests?: { count: number },
+  ): Promise<TicketMatch[]> => {
     const action = 'match_tickets';
     /**
      * Up to `limit` matches, **following `nextPageToken`** (WP-87 review round 2): the poller widens
@@ -681,6 +688,9 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     const found: TicketMatch[] = [];
     let pageToken: string | null = null;
     for (;;) {
+      if (requests !== undefined) {
+        requests.count += 1;
+      }
       const result: z.infer<typeof jiraSearchResultSchema> = parse(
         jiraSearchResultSchema,
         await client.send({
@@ -732,7 +742,8 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
    * on its own (the refusal was about the query, not a key), the original error is thrown and the
    * poller fails the read open as before. The keys left out are reported once, through
    * `onUnreadableKeys`, from the platform's own list — provider text only ever narrows it. The
-   * answer is the port's: oldest `updated` first, at most `limit`.
+   * answer is the port's: oldest `updated` first, at most `limit`. `requests` counts every page of
+   * every search, which `matchTickets` reports through `onSearches` (WP-223).
    */
   const searchKeys = async (
     keys: readonly string[],
@@ -740,6 +751,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     since: string | null,
     limit: number,
     onUnreadableKeys: ((keys: readonly string[], ids: readonly string[]) => void) | undefined,
+    requests: { count: number },
   ): Promise<TicketMatch[]> => {
     let searches = 0;
     // WP-145: the terms are the rule's ids and keys together, so one search asks for both and a
@@ -761,6 +773,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
         return await searchUpTo(
           buildJql(ruleOfTerms(asked), since, options.clock.now()),
           Math.min(limit, asked.length),
+          requests,
         );
       } catch (error) {
         if (!isSearchRefusal(error) || searches >= MAX_KEY_SEARCHES) {
@@ -817,9 +830,25 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     const limit = matchOptions?.limit ?? 50;
     const since = matchOptions?.since ?? null;
     const jql = buildJql(rule, since, options.clock.now());
-    return rule.kind === 'keys'
-      ? searchKeys(rule.keys, rule.ids ?? [], since, limit, matchOptions?.onUnreadableKeys)
-      : searchUpTo(jql, limit);
+    if (rule.kind !== 'keys') {
+      return searchUpTo(jql, limit);
+    }
+    const requests = { count: 0 };
+    try {
+      return await searchKeys(
+        rule.keys,
+        rule.ids ?? [],
+        since,
+        limit,
+        matchOptions?.onUnreadableKeys,
+        requests,
+      );
+    } finally {
+      // WP-223: answered or thrown, the caller learns what the read cost.
+      if (requests.count > 0) {
+        matchOptions?.onSearches?.(requests.count);
+      }
+    }
   };
 
   const transition = async (
@@ -1429,6 +1458,13 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
  * searches — two halves per level, seven levels — and two in about thirty. Thirty-two is that, so a
  * poll with a deleted ticket or two still reads every other task's ticket, and a binding with many
  * gone at once fails open after a bounded number of reads rather than walking every key.
+ *
+ * The bound counts searches asked; each may be several pages. Since WP-223 (PROGRESS backlog 436)
+ * every request is also reported through `matchTickets`' `onSearches`, answered or thrown, so the
+ * pipeline's one `match_tickets` row records them as `result.searches` and the rate limiter is
+ * charged for every one past the first after the call returns. A deleted ticket is re-bisected on
+ * every poll; that half of 436 is declined, because it is bounded here, fails open, and the row now
+ * shows what it costs.
  */
 export const MAX_KEY_SEARCHES = 32;
 

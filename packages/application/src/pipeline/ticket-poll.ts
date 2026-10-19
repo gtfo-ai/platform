@@ -205,7 +205,9 @@ export const TICKET_POLL_MAX_LIMIT = 1000;
 
 /**
  * The most live tasks' tickets one poll re-reads (WP-110, backlog 298) — {@link MAX_TICKET_MATCH_KEYS},
- * one provider page, so the extra read is **one request per poll**. A binding with more live tasks
+ * one provider page, so the extra read is **one request per poll** while the provider refuses no
+ * key; a refused key costs more searches, which the read's audit row counts and the rate limiter is
+ * charged for (WP-223, backlog 436). A binding with more live tasks
  * reads the hundred whose task was touched last, and a warn line names how many it left out.
  */
 export const TICKET_POLL_LIVE_KEYS_LIMIT = MAX_TICKET_MATCH_KEYS;

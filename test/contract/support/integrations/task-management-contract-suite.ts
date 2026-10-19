@@ -535,11 +535,19 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
        * tickets that do exist — one deleted ticket must not hide every other live task's edits.
        */
       it('answers the existing tickets when a keys rule also names one that does not exist (WP-110)', async () => {
-        const matches = await port.matchTickets({
-          kind: 'keys',
-          keys: [context.missingTicketKey, context.ticket.key],
-        });
+        const searches: number[] = [];
+        const matches = await port.matchTickets(
+          { kind: 'keys', keys: [context.missingTicketKey, context.ticket.key] },
+          { onSearches: (count) => searches.push(count) },
+        );
         expect(matches.map((match) => match.ref.key)).toEqual([context.ticket.key]);
+        // WP-223 (backlog 436): what the read cost is reported at most once, as one whole count of
+        // at least one request — a provider that reported per request would undercount the
+        // caller's charge to its last request, and a zero would read as a read that cost nothing.
+        expect(searches.length, 'onSearches is called at most once').toBeLessThanOrEqual(1);
+        for (const count of searches) {
+          expect(Number.isInteger(count) && count >= 1, `searches ${count}`).toBe(true);
+        }
         expect(await port.matchTickets({ kind: 'keys', keys: [context.missingTicketKey] })).toEqual(
           [],
         );

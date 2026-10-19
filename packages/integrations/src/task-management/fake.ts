@@ -108,6 +108,9 @@
  *     (WP-171): `selfIdentity()` answers it unverified (only the platform's mapping verifies), and it
  *     is the account `assignToSelf` writes and `unassign` recognises. The comments the fake writes
  *     through the port carry the same account id, as a tracker attributes them to the credential.
+ * 17. **Different — `matchTickets` never calls `onSearches`** (WP-223). A fake read is one request
+ *     at most, which the port lets a provider leave unreported: the caller counts one. Jira reports
+ *     every page and refused search of a `keys` read.
  */
 import {
   type AssignResult,

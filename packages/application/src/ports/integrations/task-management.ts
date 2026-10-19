@@ -459,6 +459,15 @@ export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabi
        * `ids` is the same for the rule's `ids` (WP-145): the asked-for ids the provider refused.
        */
       readonly onUnreadableKeys?: (keys: readonly string[], ids: readonly string[]) => void;
+      /**
+       * For a `keys` rule: how many search requests the read made, every page counted (WP-223,
+       * PROGRESS backlog 436) — the part of the answer the audit row and the rate limiter need,
+       * because a read that drops or bisects refused keys is one port call and many requests.
+       * Called exactly once when the read made any request, **answered or thrown**, with a whole
+       * number of at least 1. A provider whose `keys` read is always one request (the fake) may
+       * not call it; the caller then counts one.
+       */
+      readonly onSearches?: (searches: number) => void;
     },
   ) => Promise<readonly TicketMatch[]>;
 

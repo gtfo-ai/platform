@@ -1156,6 +1156,139 @@ describe('IntegrationActionExecutor', () => {
       await Promise.all([first, second]);
       expect(order).toEqual(['first:start', 'first:end', 'second:start']);
     });
+
+    /**
+     * WP-223 (PROGRESS backlog 436): a `perform` that made several provider requests pays a token
+     * for each, the extra ones **after** it returned — never while its slot is held, which is where
+     * backlog 550's deadlock lived. **Canary:** drop the debit and the third call does not wait.
+     */
+    it('charges the requests past the first after the call returns, not during it (WP-223)', async () => {
+      executor = build({ rateLimits: { capacity: 3, refillPerSecond: 1, maxConcurrent: 2 } });
+      const order: string[] = [];
+      const gate = Promise.withResolvers<void>();
+      const firstStarted = Promise.withResolvers<void>();
+
+      const first = executor.execute(
+        addComment({
+          perform: async () => {
+            order.push('first:start');
+            firstStarted.resolve();
+            await gate.promise;
+            order.push('first:end');
+            return { comment_id: 'c-1' };
+          },
+          providerRequests: () => {
+            order.push('first:counted');
+            return 3;
+          },
+        }),
+      );
+      await firstStarted.promise;
+      // While the first call holds its slot, its extra requests are not yet charged: a second call
+      // finds the burst's third token.
+      await executor.execute(addComment());
+      expect(timer.sleeps, 'nothing charged during the call').toEqual([]);
+
+      gate.resolve();
+      await first;
+      expect(order).toEqual(['first:start', 'first:end', 'first:counted']);
+      // 3 − 1 (first) − 1 (second) − 2 (first's extra requests) = −1: the next call waits two
+      // seconds at one token a second.
+      await executor.execute(addComment());
+      expect(timer.sleeps).toEqual([2000]);
+    });
+
+    it('charges the requests of an attempt that threw, and asks no re-entrant call (WP-223)', async () => {
+      executor = build({ rateLimits: { capacity: 3, refillPerSecond: 1, maxConcurrent: 2 } });
+      const asked: string[] = [];
+
+      await expect(
+        executor.execute(
+          addComment({
+            perform: async () =>
+              // The inner call runs under this call's lease: it holds no slot and is not asked.
+              executor.execute(
+                addComment({
+                  perform: async () => {
+                    throw new IntegrationError('forbidden', INTEGRATION.provider, 'no permission');
+                  },
+                  providerRequests: () => {
+                    asked.push('inner');
+                    return 5;
+                  },
+                }),
+              ),
+            providerRequests: () => {
+              asked.push('outer');
+              return 3;
+            },
+          }),
+        ),
+      ).rejects.toThrow('no permission');
+
+      expect(asked).toEqual(['outer']);
+      // 3 − 1 − 2 = 0: the next call waits one second.
+      await executor.execute(addComment());
+      expect(timer.sleeps).toEqual([1000]);
+    });
+
+    /**
+     * WP-223 review round 1: the charge runs before the attempt's audit row, so a count `debit`
+     * would refuse must not cost the row. It is charged as one and logged; a whole count beside it
+     * is still debited (the other side).
+     */
+    it.each([
+      ['NaN', Number.NaN],
+      ['1.5', 1.5],
+      ['0', 0],
+      ['-2', -2],
+    ])('charges a bad count of %s as one, keeping both rows (WP-223)', async (_, count) => {
+      const captured = capturingLogger();
+      executor = build({
+        logger: captured.logger,
+        rateLimits: { capacity: 2, refillPerSecond: 1, maxConcurrent: 2 },
+      });
+
+      await executor.execute(addComment({ providerRequests: () => count }));
+      await expect(
+        executor.execute(
+          addComment({
+            perform: async () => {
+              throw new IntegrationError('forbidden', INTEGRATION.provider, 'no permission');
+            },
+            providerRequests: () => count,
+          }),
+        ),
+      ).rejects.toThrow('no permission');
+
+      expect(auditLog.entries.map((entry) => entry.status)).toEqual(['ok', 'failed']);
+      const warned = captured.records.filter((record) => record.level === 'warn');
+      expect(warned).toHaveLength(2);
+      expect(warned[0]?.fields).toEqual({
+        integration_id: INTEGRATION.integrationId,
+        action: 'add_comment',
+        provider_requests: String(count),
+      });
+      // One token each, nothing more: the bucket is empty, so the next call waits one second.
+      expect(timer.sleeps).toEqual([]);
+      await executor.execute(addComment());
+      expect(timer.sleeps).toEqual([1000]);
+    });
+
+    it('debits a whole count and logs nothing beside the counts it refuses (WP-223)', async () => {
+      const captured = capturingLogger();
+      executor = build({
+        logger: captured.logger,
+        rateLimits: { capacity: 2, refillPerSecond: 1, maxConcurrent: 2 },
+      });
+
+      await executor.execute(addComment({ providerRequests: () => 2 }));
+
+      expect(captured.records.filter((record) => record.level === 'warn')).toEqual([]);
+      // 2 − 1 − 1 = 0: the next call waits one second.
+      await executor.execute(addComment());
+      expect(timer.sleeps).toEqual([1000]);
+    });
   });
 
   /**

@@ -33,6 +33,7 @@ import { assertOutsideTransaction } from '../events/open-transaction.js';
 import {
   type IdempotencyPlan,
   type IntegrationActionExecutor,
+  type ReadActionRequest,
   SHADOW_RUN_CREDENTIAL_CARVE_OUT,
 } from '../integrations/action-executor.js';
 import { hasMintedCredentialShape } from '../integrations/credential-shape.js';
@@ -637,6 +638,7 @@ const read = async <T>(
   payload: JsonObject,
   context: CallContext,
   perform: () => Promise<T>,
+  cost?: Pick<ReadActionRequest<T>, 'describeResult' | 'providerRequests'>,
 ): Promise<T> => {
   assertOutsideTransaction(`the provider read "${action}"`);
   const outcome = await integrations.executor.execute<T>({
@@ -647,6 +649,7 @@ const read = async <T>(
     projectId: context.projectId,
     taskId: context.taskId,
     perform,
+    ...cost,
   });
   return outcome.result;
 };
@@ -1191,20 +1194,34 @@ export const ticketReads = (integrations: PipelineIntegrations) => ({
     if (binding === null) {
       return null;
     }
+    // WP-223 (backlog 436): a `keys` read that drops or bisects refused keys is one action and many
+    // searches. The port reports them; the row records them and the limiter is charged for them
+    // after the call. Reset per attempt, because each attempt is its own requests.
+    let searches: number | null = null;
+    const attemptOptions = () => {
+      searches = null;
+      return {
+        since: options.since,
+        limit: options.limit,
+        ...(options.onUnreadableKeys === undefined
+          ? {}
+          : { onUnreadableKeys: options.onUnreadableKeys }),
+        onSearches: (count: number) => {
+          searches = count;
+        },
+      };
+    };
     return read(
       integrations,
       binding.ref,
       'match_tickets',
       { rule: rule.kind, since: options.since, limit: options.limit },
       context,
-      async () =>
-        binding.port.matchTickets(rule, {
-          since: options.since,
-          limit: options.limit,
-          ...(options.onUnreadableKeys === undefined
-            ? {}
-            : { onUnreadableKeys: options.onUnreadableKeys }),
-        }),
+      async () => binding.port.matchTickets(rule, attemptOptions()),
+      {
+        describeResult: () => (searches === null ? null : { searches }),
+        providerRequests: () => searches ?? 1,
+      },
     );
   },
 

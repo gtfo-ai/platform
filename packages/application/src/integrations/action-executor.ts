@@ -180,7 +180,9 @@
  *  - it takes **no slot and no token** — it runs under the lease the outer call holds, so one
  *    **port** call spends one slot and one token, never two. That is per port call, not per
  *    provider request: a Jira member that makes two adapter actions (`transition`, `upsertWorkpad`,
- *    `setLabels`, `assignToSelf`/`unassign`) spent three tokens before and spends one now. And a
+ *    `setLabels`, `assignToSelf`/`unassign`) spent three tokens before and spends one now (a
+ *    request that counts its provider requests, `providerRequests`, pays the rest after it
+ *    returns — WP-223). And a
  *    `perform` that started several nested calls at once would run them all under its one slot;
  *    nothing does that today;
  *  - it makes **one attempt**: the outer call owns the retry schedule, so a retryable failure
@@ -292,6 +294,17 @@ interface BaseActionRequest<TResult> {
   readonly taskId?: Id | null;
   readonly idempotency?: IdempotencyPlan<TResult>;
   perform(attempt: AttemptContext): Promise<TResult>;
+  /**
+   * How many provider requests the attempt that just ended made, when one `perform` can make
+   * several the caller can count (WP-223, PROGRESS backlog 436: a bisected Jira `keys` read makes
+   * up to `MAX_KEY_SEARCHES` searches, each paged). Absent means one.
+   *
+   * Asked once per attempt — answered or thrown — **after** its lease is released, and every
+   * request past the first is debited from the integration's limiter then, never during the call:
+   * nothing re-enters the limiter while a slot is held (backlog 550). A re-entrant call holds no
+   * slot of its own and is not asked.
+   */
+  providerRequests?(): number;
 }
 
 /**
@@ -534,6 +547,37 @@ const describe = <TResult>(
   request: IntegrationActionRequest<TResult>,
   result: TResult,
 ): JsonObject | null => (request.describeResult ? request.describeResult(result) : null);
+
+/**
+ * Debits the requests an attempt made past the one its token paid for (WP-223). Called after the
+ * lease is released; see {@link BaseActionRequest.providerRequests}.
+ *
+ * It runs before the attempt's audit row is written, so it must not throw (review round 1): a count
+ * that is not a whole number of at least 1 is charged as one and logged, never handed to `debit`.
+ */
+const chargeExtraRequests = <TResult>(
+  request: IntegrationActionRequest<TResult>,
+  limiter: RateLimiter,
+  reentrant: boolean,
+  logger: Logger,
+): void => {
+  if (reentrant || request.providerRequests === undefined) {
+    return;
+  }
+  const count = request.providerRequests();
+  if (!Number.isInteger(count) || count < 1) {
+    logger.warn(
+      {
+        integration_id: request.integration?.integrationId ?? null,
+        action: request.action,
+        provider_requests: String(count),
+      },
+      'integration action reported a provider request count that is not a whole number of at least 1; charged as one',
+    );
+    return;
+  }
+  limiter.debit(count - 1);
+};
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? `${error.name}: ${error.message}` : String(error);
@@ -1052,6 +1096,7 @@ export const createIntegrationActionExecutor = (
         );
       } catch (error) {
         lease.release();
+        chargeExtraRequests(request, limiter, reentrant, logger);
         const delay = reentrant ? null : retryDelayMs(error, attempt);
         if (delay === null) {
           // 4 — Audit before the throw: an action nobody recorded is an action nobody can audit.
@@ -1094,6 +1139,7 @@ export const createIntegrationActionExecutor = (
         continue;
       }
       lease.release();
+      chargeExtraRequests(request, limiter, reentrant, logger);
 
       // 5 — Success: remember it, then record it. See the docblock for why in that order.
       //     The stored value is redacted first, for the reason the audit row is: it is persistent

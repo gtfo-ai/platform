@@ -97,6 +97,13 @@ export interface RateLimiter {
   tryAcquire(): RateLimitAttempt;
   /** A provider said "not before then" — usually `Retry-After` on a 429. */
   penalise(milliseconds: number): void;
+  /**
+   * Charges `tokens` for requests already made (WP-223, PROGRESS backlog 436): one port call that
+   * made several provider requests paid one token at `acquire`, and pays the rest here, **after**
+   * it returned. It never waits and takes no slot, so it cannot deadlock a holder (backlog 550); the
+   * bucket may go below zero, and the next `acquire` waits for the refill that covers the debt.
+   */
+  debit(tokens: number): void;
   snapshot(): RateLimiterSnapshot;
 }
 
@@ -214,6 +221,13 @@ export const createRateLimiter = (
         throw new TypeError(`penalty must be a non-negative number of milliseconds`);
       }
       blockedUntil = Math.max(blockedUntil, timer.now() + milliseconds);
+    },
+    debit: (count: number) => {
+      if (!Number.isInteger(count) || count < 0) {
+        throw new TypeError(`a debit must be a non-negative whole number of tokens, got ${count}`);
+      }
+      refill();
+      tokens -= count;
     },
     snapshot: () => {
       refill();

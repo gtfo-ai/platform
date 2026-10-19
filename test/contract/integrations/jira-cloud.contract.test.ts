@@ -550,10 +550,17 @@ describe('jira-cloud — reaching the provider', () => {
     it('bisects a refusal that names no key, and still reads every other ticket (WP-134)', async () => {
       binding.replay.refuseUnknownKeysWith('opaque');
       const reported: (readonly string[])[] = [];
+      const searches: number[] = [];
       const matches = await binding.port.matchTickets(
         { kind: 'keys', keys: ['ACME-1', 'ACME-404', 'ACME-2'] },
-        { limit: 3, onUnreadableKeys: (keys) => reported.push(keys) },
+        {
+          limit: 3,
+          onUnreadableKeys: (keys) => reported.push(keys),
+          onSearches: (count) => searches.push(count),
+        },
       );
+      // WP-223 (backlog 436): the read says what it cost — once, every request counted.
+      expect(searches).toEqual([binding.replay.requests.length]);
       expect(matches.map((match) => match.ref.key).sort()).toEqual(['ACME-1', 'ACME-2']);
       expect(reported).toEqual([['ACME-404']]);
       // Oldest first, as the port promises a poller whose cursor reads it.
@@ -595,15 +602,21 @@ describe('jira-cloud — reaching the provider', () => {
       // Many gone at once: bounded at MAX_KEY_SEARCHES, never a walk of every key.
       binding.replay.resetRequests();
       const gone = Array.from({ length: 40 }, (_, index) => `GONE-${index + 1}`);
+      const searches: number[] = [];
       await expect(
         binding.port.matchTickets(
           { kind: 'keys', keys: ['ACME-1', ...gone] },
-          { limit: 41, onUnreadableKeys: (keys) => reported.push(keys) },
+          {
+            limit: 41,
+            onUnreadableKeys: (keys) => reported.push(keys),
+            onSearches: (count) => searches.push(count),
+          },
         ),
       ).rejects.toMatchObject({ code: 'invalid_request' });
-      expect(
-        binding.replay.requests.filter((request) => request.path === 'search/jql').length,
-      ).toBeLessThanOrEqual(MAX_KEY_SEARCHES);
+      const made = binding.replay.requests.filter((request) => request.path === 'search/jql');
+      expect(made.length).toBeLessThanOrEqual(MAX_KEY_SEARCHES);
+      // WP-223: a read that gave up still reports what it spent, so the caller can charge it.
+      expect(searches).toEqual([made.length]);
       expect(reported).toEqual([]);
     });
 
@@ -1467,6 +1480,27 @@ describe('jira-cloud — the fixtures give each status one id (backlog 594)', ()
 
   it('gives the issue fixture’s status the id the project statuses give it', () => {
     const issue = bodyOf('issue-acme-1.json') as { fields: { status: Status } };
+    expect(disagreements(projectStatusIds(), [issue.fields.status])).toEqual({
+      compared: 1,
+      wrong: [],
+    });
+  });
+
+  /**
+   * Backlog 619 (WP-223 (e)): the replay double wrote status id `'0'` after a transition, an id no
+   * fixture has. **Canary:** put `'0'` back in `jira-cloud-replay.ts` and this fails on it.
+   */
+  it('keeps the target status’s id on an issue the replay moved (backlog 619)', async () => {
+    const binding = createJiraBinding();
+    const moved = await binding.adapter.transition(JIRA_TICKET, 'In Progress');
+    expect(moved).toMatchObject({ changed: true, to: 'In Progress' });
+
+    const issue = binding.replay.peekIssue('ACME-1') as { fields: { status: Status } };
+    const target = transitionTargets('transitions-acme-1.json').find(
+      (status) => status.name === 'In Progress',
+    );
+    expect(target?.id, 'the fixture names the target’s id').toBe('3');
+    expect(issue.fields.status).toEqual({ id: target?.id, name: 'In Progress' });
     expect(disagreements(projectStatusIds(), [issue.fields.status])).toEqual({
       compared: 1,
       wrong: [],

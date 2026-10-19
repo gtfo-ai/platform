@@ -229,3 +229,93 @@ describe('one Jira port call through the production executor (WP-212, backlog 55
     ]);
   });
 });
+
+/**
+ * **A bisected `keys` read says how many searches it made, and pays for them** — WP-223 (PROGRESS
+ * backlog 436, the audit half).
+ *
+ * The ticket poll re-reads up to 100 live tasks' tickets with one `keys` read (WP-87's rule), and a
+ * refusal that names no key is bisected (`MAX_KEY_SEARCHES`), so one port call — one executor
+ * action — may make up to 32 searches, each paged. Measured on this file before the change (ruling
+ * (a)): 100 keys with one gone in the middle made **18** HTTP searches, wrote **one** `match_tickets`
+ * row with a **null** `result`, and took **one** token. After it, the row's `result.searches` is the
+ * HTTP count and the limiter is charged that many tokens, once the call has returned.
+ */
+describe('a bisected keys read through the production executor (WP-223, backlog 436)', () => {
+  const KEYS = 100;
+  const GONE = 'ACME-404';
+
+  /** 99 issues the double holds and one it does not, the gone one in the middle. */
+  const keysWithOneGone = async (composed: Composed): Promise<string[]> => {
+    const port = composed.integrations.taskManagement?.port;
+    if (port === undefined) {
+      throw new Error('no task-management binding');
+    }
+    const keys: string[] = [];
+    for (let index = 0; index < KEYS - 1; index += 1) {
+      const ref = await port.createTicket({
+        project_key: 'ACME',
+        issue_type: 'Task',
+        title: `Live ${index}`,
+        description: '',
+        labels: [],
+      });
+      keys.push(ref.key);
+    }
+    keys.splice(KEYS / 2, 0, GONE);
+    composed.replay.refuseUnknownKeysWith('opaque');
+    composed.replay.resetRequests();
+    return keys;
+  };
+
+  /**
+   * The bucket's level, read off the next calls: the clock moves only when something sleeps, so a
+   * whole token count serves that many calls without a sleep, and a deficit shows as the first
+   * call's wait (`(1 − tokens) / refill` seconds).
+   */
+  const tokensLeft = async (composed: Composed): Promise<number> => {
+    const { capacity, refillPerSecond } = JIRA_CLOUD_RATE_LIMIT_POLICY;
+    const before = composed.timer.sleeps.length;
+    for (let served = 0; served <= capacity; served += 1) {
+      await ticketReads(composed.integrations).selfIdentity(READ_CONTEXT);
+      const slept = composed.timer.sleeps.slice(before);
+      if (slept.length > 0) {
+        return served > 0 ? served : 1 - ((slept[0] as number) * refillPerSecond) / 1000;
+      }
+    }
+    throw new Error('the bucket never ran dry');
+  };
+
+  it('records the searches it made in its one row and takes a token for each (criteria 1–3)', async () => {
+    const composed = await compose();
+    const keys = await keysWithOneGone(composed);
+    const unreadable: (readonly string[])[] = [];
+
+    const matches = await ticketReads(composed.integrations).matches(
+      { kind: 'keys', keys },
+      {
+        since: '2026-09-02T11:00:00.000Z',
+        limit: KEYS,
+        onUnreadableKeys: (gone) => unreadable.push(gone),
+      },
+      READ_CONTEXT,
+    );
+
+    // Rule 10: the read really bisected, and answered every other ticket.
+    expect(unreadable).toEqual([[GONE]]);
+    expect(matches).toHaveLength(KEYS - 1);
+    const searches = composed.replay.requests.filter((request) => request.path === 'search/jql');
+    expect(searches.length, 'several HTTP searches for one port call').toBeGreaterThan(1);
+
+    const { rows } = await pool.query<{ action: string; status: string; result: unknown }>(
+      'select action, status, result from integration_actions',
+    );
+    expect(rows).toEqual([
+      { action: 'match_tickets', status: 'ok', result: { searches: searches.length } },
+    ]);
+    expect(composed.timer.sleeps, 'nothing waited during the read').toEqual([]);
+    expect(JIRA_CLOUD_RATE_LIMIT_POLICY.capacity - (await tokensLeft(composed))).toBe(
+      searches.length,
+    );
+  });
+});

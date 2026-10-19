@@ -41,6 +41,32 @@ describe('createRateLimiter', () => {
     expect(timer.sleeps).toEqual([500]);
   });
 
+  it('takes a debit without waiting or a slot, and the next caller pays it off (WP-223)', async () => {
+    const timer = createVirtualTimer({ autoAdvance: true });
+    const limiter = createRateLimiter({ capacity: 2, refillPerSecond: 2, maxConcurrent: 1 }, timer);
+
+    const held = await limiter.acquire();
+    // A holder's debit neither waits nor queues behind its own slot (backlog 550).
+    limiter.debit(3);
+    expect(timer.sleeps).toEqual([]);
+    expect(limiter.snapshot()).toMatchObject({ tokens: -2, active: 1, waiting: 0 });
+    held.release();
+
+    // −2 tokens: three tokens short of one, at two a second.
+    (await limiter.acquire()).release();
+    expect(timer.sleeps).toEqual([1500]);
+    limiter.debit(0);
+    expect(limiter.snapshot().tokens).toBe(0);
+  });
+
+  it('refuses a debit that is not a whole number of tokens (WP-223)', () => {
+    const limiter = createRateLimiter(DEFAULT_RATE_LIMIT_POLICY, createVirtualTimer());
+    expect(() => limiter.debit(-1)).toThrow(/whole number/);
+    expect(() => limiter.debit(1.5)).toThrow(/whole number/);
+    expect(() => limiter.debit(Number.NaN)).toThrow(/whole number/);
+    expect(limiter.snapshot().tokens).toBe(DEFAULT_RATE_LIMIT_POLICY.capacity);
+  });
+
   it('honours a penalty for the whole limiter, not for one caller', async () => {
     const timer = createVirtualTimer({ autoAdvance: true });
     const limiter = createRateLimiter(

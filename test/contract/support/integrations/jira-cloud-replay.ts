@@ -273,7 +273,7 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
   };
 
   const transitionsFixture = bodyOf('transitions-acme-1.json') as {
-    transitions: { id: string; to?: { name?: string } }[];
+    transitions: { id: string; to?: { id?: string; name?: string } }[];
   };
   const myself = bodyOf('myself.json') as { accountId: string; displayName: string };
   const bot = { ...myself };
@@ -597,10 +597,15 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
       if (method === 'POST' && tail === 'transitions') {
         const id = (request.body as { transition: { id: string } }).transition.id;
         const transition = transitionsFixture.transitions.find((entry) => entry.id === id);
-        if (transition === undefined || transition.to?.name === undefined) {
+        if (
+          transition === undefined ||
+          transition.to?.name === undefined ||
+          transition.to.id === undefined
+        ) {
           return jsonResponse(400, { errorMessages: ['Transition is not valid for this issue.'] });
         }
-        fieldsOf(key).status = { id: '0', name: transition.to.name };
+        // Backlog 619 (WP-223): the target status's own id, never an invented one.
+        fieldsOf(key).status = { id: transition.to.id, name: transition.to.name };
         fieldsOf(key).updated = '2026-09-02T12:07:00.000+0000';
         return new Response(null, { status: 204 });
       }
