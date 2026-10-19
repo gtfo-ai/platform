@@ -16829,7 +16829,7 @@ Proved through the real adapter with `max_pages: 1` and a second page holding th
 
 **Depends on** WP-209 being merged (it routes descriptions through `gitlabNoteBody` and adds the census), and best done with 609 in the same function. It is a GitLab row of the same kind.
 
-### 612. **The `commit-msg` hook fails in every linked worktree when the main checkout's path holds a space: lefthook substitutes `{1}` unquoted, so commitlint receives the worktree's `COMMIT_EDITMSG` path split in two** (TODO, **minor — tooling, no product behaviour; live on this machine** (`/Users/vojtechkaizr/Projects/Agentic Platform/…`). It is the space class of 553, in a place 553's fix did not reach. Measured by the orchestrator, session 17, twice: in `wt-wp209` and in a scratch worktree. The refiner read `lefthook.yml` and ran nothing. **No work package owns it.**)
+### 612. **The `commit-msg` hook fails in every linked worktree when the main checkout's path holds a space: lefthook substitutes `{1}` unquoted, so commitlint receives the worktree's `COMMIT_EDITMSG` path split in two** (TODO, **minor — tooling, no product behaviour; live on this machine** (`/Users/vojtechkaizr/Projects/Agentic Platform/…`). It is the space class of 553, in a place 553's fix did not reach. Measured by the orchestrator, session 17, twice: in `wt-wp209` and in a scratch worktree. The refiner read `lefthook.yml` and ran nothing. **Owned by WP-215** (§ "Architect ruling (M12 first amendment, session 17)"; parallel-safe, first free implementer).)
 
 **What is wrong.** `lefthook.yml:22` is `run: ./node_modules/.bin/commitlint --edit {1}`. Git runs `commit-msg` with the message file as its argument. In the main checkout that argument is the relative `.git/COMMIT_EDITMSG`, which holds no space, so the hook works there. In a linked worktree git passes an absolute path under `<main>/.git/worktrees/<name>/`. Lefthook puts the path into the shell command without quotes, so the shell splits it at the space and commitlint receives two words.
 
@@ -16841,7 +16841,7 @@ Proved through the real adapter with `max_pages: 1` and a second page holding th
 
 **Depends on** nothing. It is small enough to ride with any tooling row, and it is worth landing before the next session that runs rows in worktrees.
 
-### 613. **A git floor written as a short-option glob matches only a token that starts with its letter, so `git commit -an -m x` reads `allow` while `git commit -na` reads `hazardous_argument`: git parses short options getopt-style, `-an` is `-a -n`, and `-n` is `--no-verify`** (TODO, **major, fail-open under `auto`, live**: a hook-skipping commit passes a floor that exists because skipping hooks skips the repository's secret scan (BD-002). Found by WP-204's reviewer, session 17. The refiner read `command-policy.ts` on `main` at `72c8ce9f` and ran nothing. **No work package owns it — an architect pass places it.**)
+### 613. **A git floor written as a short-option glob matches only a token that starts with its letter, so `git commit -an -m x` reads `allow` while `git commit -na` reads `hazardous_argument`: git parses short options getopt-style, `-an` is `-a -n`, and `-n` is `--no-verify`** (TODO, **major, fail-open under `auto`, live**: a hook-skipping commit passes a floor that exists because skipping hooks skips the repository's secret scan (BD-002). Found by WP-204's reviewer, session 17. The refiner read `command-policy.ts` on `main` at `72c8ce9f` and ran nothing. **Owned by WP-214** (§ "Architect ruling (M12 first amendment, session 17)"; TD-030 tier 2; right after WP-205's merge, serial on `command-policy.ts`).)
 
 **What is wrong.** The floor `git commit* -n*` (`packages/domain/src/policies/command-policy.ts:1632`, hazard *"the short spelling of --no-verify"*) is a glob over whole tokens. It catches `-n`, `-nm` and `-na`, but not `-an`, `-anm` or `-sn`, where `n` sits later in the cluster. git reads every one of those as including `-n`. WP-204 kept the floors on the whole-token reading on purpose, because Go's flags are not getopt's (`go test -cover` must not read as `go* -o`). That reason is Go's. git's subcommand options are getopt-style, and the table already says so in two places: the `rebase -x` and `difftool -x` floors were rewritten as token predicates (`:1501-1505`, `:1524-1528`) because *"a glob cannot read a cluster"* (`:1487`, `:1512`), and `make -E` is matched inside a cluster (`:1712`). The WP-161 abbreviation floor says *"Short options are not read here (`-n` and `rebase -x` have entries of their own)"* (`:1260`), so only `-n` was left as a glob.
 
@@ -20720,7 +20720,10 @@ WP-204, WP-205 and WP-211 are serial on `command-policy.ts`, in that order, each
 one's merge; WP-209 (the GitLab adapter), WP-212 (the Jira adapter) and WP-213 (`scripts/`,
 `test/support/`) are parallel-safe with every row. WP-210 and WP-211 want the Docker daemon only for
 a `command -v`. No row is expected to need a migration. The next free number is **0092**. Read the
-backlog entry a row folds, and TD-030, before planning a scanner row.
+backlog entry a row folds, and TD-030, before planning a scanner row. **Amended by § "Architect ruling
+(M12 first amendment, session 17)"**: WP-214 (613, fail-open under `auto`, live) runs right after
+WP-205's merge, serial on `command-policy.ts`, and WP-211 follows WP-214; WP-215 (612, tooling) is
+parallel-safe with every row and goes to the first free implementer.
 
 | WP | Title | Status | Commit | Notes |
 |---|---|---|---|---|
@@ -20729,7 +20732,8 @@ backlog entry a row folds, and TD-030, before planning a scanner row.
 | WP-210 | **Scanner: a program whose literal script executes its input is a script reader of its stdin — `sed`'s `e` and `awk`'s `system`, pipe and `getline` read by each program's own script grammar, delimiter included — and an inline script the grammar cannot parse is uncertain** | DONE | `50206d8b` | Folds **605** (major, fail-open under `auto`, **live**: `sed` and `awk` in every image, measured running with a marker in `platform-runtime:s16`; `sed 's.x.git push.e'` passes WP-206's boundary). TD-030 tier 2 (closed languages). 587 pinned here as tier 3. Deps WP-206, WP-207, WP-208. No migration. Measure (a) first (the WP-208 census diff is the number); nothing executed; `command -v`/`awk -W version` only when the daemon is free. First scanner row; serial after WP-208 and before WP-204 on `command-policy.ts`, `unattended-commands.ts` and their test files. Split clause: the `awk` reader may move; the `sed` reader, the stdin-shape rule and the parse-failure clause may not. Added by § "Architect ruling (M12, session 17)". Built on `main`, session 17, beside WP-209. **Deviation, recorded (orchestrator ruling)**: a safety classifier stopped the first implementer while it laid out the row's full sed/awk grammar, so a second dispatch built a coarse fail-closed rule instead — any sed/awk script that can execute a command, or that the reader cannot read, is `uncertain` (`UNCERTAINTY.scriptExecutes`) whatever its input; TD-030 amended (tier 3 → tier 2). Corpus moved no cell; the census gained a *newly asked* count (WP-208's follow-up); the git-boundary stable id was skipped as not small. **Two review rounds**: round 1 REQUEST_CHANGES (wrapper options hid `sed` from the reader: `xargs -n1 sed …`, `stdbuf -oL`, `ionice -c3`); round 2 APPROVE with doc minors (the residual class — a sed behind any unknown program: `rlwrap`, `faketime`, `parallel`; TD-030's tier wording) fixed by the orchestrator. Canaries: implementer ten, reviewers seven and seven, all dead. Orchestrator: `verify`, `verify:integration`, `verify:e2e` twice — **PASS**. CI on `50206d8b`: `ci` `39204740589`, `image` `39204740661` **completed success**. |
 | WP-204 | **Scanner: a block entry is read by getopt's own rules — a letter cluster by its letters, an operand wherever it stands — and an option the policy cannot read beside the entry's operands is uncertain, through one normaliser all four readers share** | DONE | `b972a1c0` | Folds **598** (major as a class, fail-open under `auto`; the default entry bounded by the container, a project's entries not) and, since the sixth amendment, **600** (nit: a trailing `*` positional also matches zero operands, in the same normaliser). Deps WP-203. No migration. **Placed after WP-206 and WP-207 by the sixth amendment** (both live on the git boundary); M12's if M11 closes after WP-207, as recommended. Measure (a) first; nothing executed. Serial after WP-203 and before WP-205 on `command-policy.ts`. product/19 § 3's *ask, never allow* sentence is the product owner's: the orchestrator files the ruling's replacement text in OPEN-QUESTIONS; no criterion depends on it; the implementer leaves product/19 alone. Split clause: the `uncertain` clause (b)(iii) may move with its count; (i), (ii), (c), (d) may not. Added by § "Architect ruling (M11 fifth amendment, session 17)". **Moved to M12** by § "Architect ruling (M12, session 17)"; its row stands as written, its corpus count is WP-208's census diff. Built on `main`, session 17 (moved to M12 by the sixth amendment), rebased onto WP-209 and verified there. **Orchestrator ruling, recorded**: an entry's leading literal words match by place and its operands from its first glob word as a subsequence — the ruling's literal "every word a subsequence" was built and measured: it broke the WP-197/WP-201 controls and blocked `npm run publish`. Corpus moved no cell; the named over-ask is live (`rm -f /tmp/x`, `git branch -d x` uncertain). **One review round, APPROVE** with two minors (four abbreviated-option rows pinned after canary 4 survived; the project-entry residual — options and no operand — stated in technical/05 and Q120) and a nit, fixed by the implementer. Canaries six (five dead, the sixth pinned). Orchestrator: `verify`, `verify:integration`, `verify:e2e` twice — **PASS**; `verify` **PASS** on the rebased tree. Filed: 613 (major: `git commit -an` is `--no-verify` and reads allow — a git floor misses a cluster). CI on `b972a1c0`: **PENDING**. |
 | WP-205 | **Scanner: the command walk skips a wrapper's option values and leading operand by that wrapper's declared grammar, and a wrapper with none keeps the both-ways reading** | TODO | — | Folds **592** (nit, fails closed; carried once by the fourth amendment), **596** (minor, fails closed; WP-201's widening of 592) and, since the sixth amendment, **601** (minor after measurement: `start-stop-daemon`'s `--exec=`/`-xPATH`/`--startas=` value grammar by name). Deps WP-204, WP-193. No migration. Pin the trap rows (a) first (rule 42). Last; serial after WP-204 on `command-policy.ts`; **may slip to M12** if session 17 closes before it — M12's if M11 closes after WP-207, as the sixth amendment recommends. Added by § "Architect ruling (M11 fifth amendment, session 17)". Folds **608** since the M12 ruling (optional, split clause). **Moved to M12** by § "Architect ruling (M12, session 17)"; its row stands as written, its corpus count is WP-208's census diff. |
-| WP-211 | **Scanner: every program a platform list names stands on a reader — the planner's tables join the census, `composer` gets its reader, and Yarn 1's `create -c` is read from source** | TODO | — | Folds **606** (minor, latent), **607** (minor, latent), **581** (minor, hypothesis). TD-030 tier 2. Deps WP-196, WP-205, WP-206. No migration. Last scanner row; serial after WP-205 on `command-policy.ts`; touches the planner's tests in `packages/application`. Split clause: (c) may close by reading alone; (a) and (b) may not move. Added by § "Architect ruling (M12, session 17)". |
+| WP-214 | **Scanner: a floor's short option is read by its program's own parser — git's letter clusters by their letters, with the letters that take a value ending the cluster, and Go's stay whole** | TODO | — | Folds **613** (**major**, fail-open under `auto`, **live**: `git commit -an -m x` reads `allow` through the shipped `git commit *` entry; git reads `-an` as `-a -n`, and `-n` is `--no-verify`, so the repository's secret scan is skipped — BD-002). TD-030 tier 2. Deps WP-204, WP-205. No migration. Measure (a) first, and read git-commit(1), git-merge(1), git-am(1), git-clone(1) and git-ls-remote(1) at 2.47.3 first; nothing executed. **Right after WP-205's merge**; serial on `command-policy.ts`, `unattended-commands.ts` and their test files, before WP-211. Split clause: the `am` and `clone`/`ls-remote` floors may move; the `commit` and `merge` clusters, the per-program declaration and the census may not. Added by § "Architect ruling (M12 first amendment, session 17)". |
+| WP-211 | **Scanner: every program a platform list names stands on a reader — the planner's tables join the census, `composer` gets its reader, and Yarn 1's `create -c` is read from source** | TODO | — | Folds **606** (minor, latent), **607** (minor, latent), **581** (minor, hypothesis). TD-030 tier 2. Deps WP-196, WP-205, WP-206. No migration. Last scanner row; serial after WP-214 (since the M12 first amendment; WP-205 before it) on `command-policy.ts`; touches the planner's tests in `packages/application`. Split clause: (c) may close by reading alone; (a) and (b) may not move. Added by § "Architect ruling (M12, session 17)". |
 | WP-212 | **Jira: the executor is entered once per port call — the adapter adopts the GitLab shape — and the two fixtures agree on a status id** | TODO | — | Folds **550**'s audit half (minor, record: two `integration_actions` rows and two rate-limit tokens per port call) and **594** (nit). Deps WP-181, WP-192. No migration. Measure (a) first on the replay double through the production executor. Split clause: the interim re-entrant marker ships if the reshaping exceeds two days, with the reshaping filed; (a) and (c) may not move. Parallel-safe with every row; its reviewer not WP-209's in the same round. 538 untouched. Added by § "Architect ruling (M12, session 17)". |
 | WP-213 | **Harness: a local tier's collection is bounded and names the file it was collecting, and the hanging literal is reproduced or refused** | TODO | — | Folds **597** (minor, instrument hazard). The M11 fifth amendment's M12 harness row. No deps. No migration. Reproduce (a) first, under a bound (rule 99). Parallel-safe with every row (`scripts/`, `test/support/`); last. Added by § "Architect ruling (M12, session 17)". |
 
@@ -20747,6 +20751,7 @@ The same applies to `verify:integration`, `verify:e2e`, `verify:ui`.
 loop should be updated to `pnpm run -s verify` (docs are the orchestrator's to change, not the
 implementer's).
 
+| WP-215 | **Tooling: the commit-msg hook passes git's message path as one word, so a commit in a linked worktree under a spaced path runs commitlint** | TODO | — | Folds **612** (minor, tooling, no product behaviour; live on this machine — 553's space class at `lefthook.yml:22`, which 553's fix did not reach). No deps. No migration. Reproduce (a) first in a spaced scratch repository (`scratchGitEnv`, WP-162), then measure which `--edit` spelling commitlint 21.2.2 honours in a worktree, and `{staged_files}` with a spaced staged path. Parallel-safe with every row (`lefthook.yml`, one process-tier check); first free implementer, before the next session that runs rows in worktrees. Added by § "Architect ruling (M12 first amendment, session 17)". |
 Decisions and assumptions:
 - **Package scope `@platform/*`** (BD-014). Root package `platform`; nothing carries the product
   name. Renaming later is a scope search-and-replace plus the display constant.
@@ -48935,6 +48940,83 @@ table's order. The next free migration number is still **0092**, and no row is e
 **Decisions and assumptions.**
 - **Rule 27 correction to ruling (b).** The ruling lists `census-files.mjs`, `version.mjs` and `changelog.mjs` among "the scripts the tests spawn". Their tests mostly **import** them and call them in process (`censusPaths(root)`, `nextVersionOf(root)`, `readCommits(range, root)`), and an in-process call cannot be handed an environment unless production changes. So the same prefix rule is also applied to every test worker's own `process.env`, by a second setup file in every vitest project: `test/support/git-environment.ts`, which is `GIT_ENVIRONMENT_SETUP` in `vitest.config.ts`. The census test holds that every project runs it, and checks the result inside its own worker.
 - **A second shape: `checkoutGitEnv()`**, the prefix rule with nothing added, for a test that reads **this** checkout (`tasks-column-ownership.test.ts`, `docker-access.test.ts`, the shallow-clone check in `changelog.test.ts`, the live run in `check-data-model.test.ts`, `is-program.test.ts`). It adds no `/dev/null` configuration, so the user's global excludes still apply to those reads, as they did before. The census admits it.
+### Architect ruling (M12 first amendment, session 17) — two headings WP-204's review and the orchestrator filed, and the git floor that misses a cluster comes right after WP-205
+
+Written 2026-10-19 at `bab0315b`, WP-208, WP-209, WP-210 and WP-204 DONE, WP-205 in build, WP-211…WP-213
+TODO. This pass covers the two headings filed this session with no owner — **613** (WP-204's reviewer)
+and **612** (the orchestrator) — and nothing else: § "Architect ruling (M12, session 17)" holds for
+every entry it lists. No test tier and no Docker ran; `command-policy.ts` and `lefthook.yml` were
+read at `bab0315b` at the lines each entry cites, and the WP-204 notes (§ WP-204, session 17) were
+read for the normaliser. Nothing was measured by this pass (rule 98): 613's one measured row is the
+reviewer's, and its other six rows are the refiner's hypotheses, handed to the row to read first.
+
+**613 is tier 2 and major, and it is placed right after WP-205.** By TD-030 decision 1 a floor's
+hazardous options are a declared grammar (tier 2), and by decision 2 a tier-2 spelling that reads
+`allow` under `auto` is major when it is literal, one line, and on a program the stock image ships:
+`git commit -an -m x` is all three, and `git commit *` is in the shipped implementation allow set, so
+nothing needs configuring. What it reaches is the repository's own hooks — the pre-commit secret scan
+(BD-002) and the formatter — which is the reason the floor exists. It is **fail-open under `auto`**,
+the grade the protocol puts first, so **WP-214** owns it and runs **serial after WP-205's merge** on
+`command-policy.ts`, before WP-211 (which then follows WP-214, not WP-205). It cannot ride with
+WP-205: WP-205 is in build, and its rule (a wrapper's declared grammar) is a different sentence.
+
+**The rule for 613: a floor's short option is read by the rules of its program's own option parser,
+declared per program.** WP-204 kept every floor on the whole-token reading for a reason that is Go's
+(`go test -cover` must not meet `go* -o`), and the reason is right for Go and wrong for git: git's
+subcommand options are getopt-style, which the table already says in two places — the `rebase -x` and
+`difftool -x` floors are token predicates because *"a glob cannot read a cluster"* (`:1487`, `:1512`),
+and `make -E` is matched inside a cluster (`:1712`) — and the one short floor left as a glob is
+`git commit* -n*` (`:1632`). So the fix is not a fourth token predicate; it is the fact WP-204's
+normaliser already has (`clusterLetters` `:2874`, `entryFlagsMet` `:2887`, the `hazard` reading of
+`PatternReading` `:2868`) gated by a per-program declaration: **git explodes a letter cluster into its
+letters, and a letter that takes a value ends the cluster** (`-m x`, `-mx` and `-am x` carry no `-n`;
+`-an`, `-anm x` and `-sn` do), while **Go stays whole-token**. The declaration is a table of which
+short letters take a value, per git subcommand, in the shape WP-205 gives a wrapper's valued options,
+**cited from the manuals at the run image's git (2.47.3, the version the `rebase -x` floor was
+measured against)** — it cannot come from `scripts/git-long-options.mjs`, whose helper prints a
+subcommand's long options only (its docblock). It is a tier-2 table whose omission fails closed: a
+letter the table does not name takes no value, so a floored letter after it is read as a flag. A
+census in WP-204 (c)'s shape holds that every floor with a single-dash letter spelling names a
+program on exactly one of two lists — getopt-declared with its table, or whole-token with a reason —
+and a program on neither fails by name. **The over-ask, named:** a cluster holding an unnamed valued
+letter before a floored one (`-Zn` where `Z` took a value) is floored by the default; nothing on an
+ordinary line is expected to move, and WP-208's census is the number. **Not this row's:** 613 row 7
+(`git push -uf`) is WP-204's and reads `block` since `b972a1c0`; row 6 (git's top-level parser) is
+not a row unless (a) measures it clustering; row 5 is the control; `git commit -$x` is WP-201's
+expansion rule and a planted alias is WP-200's boundary (tier 3, pinned).
+
+**Read, not measured, and handed to WP-214 to read first** (613's rows 2, 3 and 4, each a manual
+sentence at 2.47.3, cited in the notes): whether git-merge's `-n` is `--no-stat` and valueless, so
+`git merge -ns ours origin/main` and `-nXours` hide the strategy today (the likely second live row);
+whether git-am documents `-n` for `--no-verify`, which would need a floor that does not exist in any
+form; whether git-clone and git-ls-remote give `--upload-pack` the short `-u`, which no floor reads
+either — outside the default allow set, so it matters for a project that allows `git *`. Each answer
+changes a row's before column or adds an entry under the same declaration; none changes the rule.
+
+**612 is a tooling nit with a session cost, and it gets its own small row.** It has no tier (it is
+not the scanner) and no product behaviour: `lefthook.yml:22` hands commitlint `{1}` unquoted, so in a
+linked worktree under this machine's spaced path the message path splits and the `commit-msg` hook
+fails — WP-209 was committed from a standalone clone for it, and every parallel row of this session
+runs in a worktree. CI's `verify:commitlint` still reads every message, so nothing malformed reaches
+`main`; the cost is the extra clone and the local check it skips. **WP-215** owns it, parallel-safe
+with every row (`lefthook.yml` and one process-tier check), for the first free implementer and before
+the next session that runs rows in worktrees. The rule is 553's: a path is one word. Which of the two
+spellings commitlint 21.2.2 honours in a worktree — `--edit "{1}"` or a bare `--edit` reading git's
+own argument — is the row's first measurement, and `{staged_files}` on the biome job is measured with
+a spaced staged path in the same scratch repository rather than assumed quoted. The proof outlives the
+fix: a check that installs the hooks from the repository's **real** `lefthook.yml` into a scratch
+repository under a spaced directory (`scratchGitEnv`, WP-162, never this checkout's `.git`), makes a
+linked worktree, and commits a conventional message with exit 0.
+
+**Decisions.** None amended. TD-030 already places a floor's options at tier 2 and grades 613 as it
+is graded here; BD-025 unchanged; product/19 untouched (Q120 stands). The next free migration stays
+**0092**; neither row takes one. No `docs/research/` file is written (rule 98); WP-214's manual
+citations stand in its notes, `[unverified]` in `docs/TODO.md` where a sentence cannot be cited.
+Nothing is marked RESOLVED by this pass.
+
+**Next:** WP-205's merge, then **WP-214**, then WP-211 (now after WP-214), with WP-212, WP-213 and
+WP-215 parallel-safe beside them in the table's order.
+
 - **The census reaches wider than the ruling's four tiers.** It reads every `*.test.ts` outside `apps/web/` (so the contract tier too), plus the harness under `test/` except `test/web-e2e/` and `test/fixtures/`. A child-process callee is one of the `child_process` functions or a name the file binds to `promisify(execFile)`. A local wrapper called `run` is not a callee: `is-program.test.ts`'s `run('changelog.mjs')` was a false positive in the first pass. It has **one exemption**, pinned in both directions: `test/e2e/support/docker-workspace.ts`'s `git http-backend`, which is program text (`GIT_SERVER_PROGRAM`) that runs inside a run-image container with an environment built from nothing.
 - **`PROCESS_SUITES` is now two kinds**: `STRUCTURAL_WAIT_SUITES` (the three WP-69 files) and `GIT_FIXTURE_ISOLATION_SUITE`. `scripts/verify.test.ts` holds that the importers of `structural-wait.js` are exactly the first, and that the union is exactly `PROCESS_SUITES`.
 - **The helper sets `GIT_AUTHOR_*`/`GIT_COMMITTER_*`**, which win over a fixture's `-c user.name/user.email`. No test asserts an author. `version.test.ts`'s shallow clone now runs from inside the clone directory (`clone … .`), so its scratch root is the clone itself, not the temp directory.
