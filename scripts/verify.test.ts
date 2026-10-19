@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import vitestConfig, {
+  COLLECTION_WATCHDOG_SUITE,
   COMMIT_HOOK_SUITE,
   GIT_FIXTURE_ISOLATION_SUITE,
   PROCESS_SUITES,
@@ -195,6 +196,9 @@ const projectsNamedBy = (script: string): string[] =>
 const scriptBodies = (): Readonly<Record<string, string>> =>
   (JSON.parse(read('package.json')) as { scripts: Record<string, string> }).scripts;
 
+/** How a script starts vitest under the collection bound (`scripts/vitest-bounded.mjs`). */
+const BOUNDED_VITEST = 'node scripts/vitest-bounded.mjs';
+
 const declaredProjects = (): string[] =>
   (vitestConfig.test?.projects ?? []).map((project) => {
     const name = (project as { test?: { name?: unknown } }).test?.name;
@@ -231,6 +235,25 @@ describe('the vitest projects and the verification targets', () => {
     ).toEqual([]);
   });
 
+  it('starts every vitest a target runs through the collection bound (WP-213)', () => {
+    const bodies = scriptBodies();
+    const vitestSteps = Object.entries(TARGETS).flatMap(([target, steps]) =>
+      steps
+        .filter((step) => /\bvitest\b/.test(bodies[step] ?? ''))
+        .map((step) => ({ target, step, body: bodies[step] ?? '' })),
+    );
+    // Not vacuous: the four tiers that run vitest are among them (standing rule 4).
+    expect(new Set(vitestSteps.map(({ step }) => step))).toEqual(
+      new Set(['test', 'test:integration', 'test:e2e', 'test:ui']),
+    );
+    expect(
+      vitestSteps
+        .filter(({ body }) => !body.startsWith(`${BOUNDED_VITEST} run `))
+        .map(({ target, step }) => `${target} › ${step}`),
+      'a target starts vitest without the collection bound, so a hang at collection is silent',
+    ).toEqual([]);
+  });
+
   it('puts the real-process suites in `verify` itself, not in a target of their own', () => {
     const bodies = scriptBodies();
     const inVerify = new Set(
@@ -243,7 +266,8 @@ describe('the vitest projects and the verification targets', () => {
 /**
  * The `process` project holds exactly the test files that use a structural wait (WP-69), plus the
  * one suite of WP-162 (d) that starts a whole vitest run (`GIT_FIXTURE_ISOLATION_SUITE`), plus the
- * one of WP-215 that runs the real `commit-msg` hook in a linked worktree (`COMMIT_HOOK_SUITE`).
+ * one of WP-215 that runs the real `commit-msg` hook in a linked worktree (`COMMIT_HOOK_SUITE`), plus
+ * the one of WP-213 that runs a vitest over a planted collection stall (`COLLECTION_WATCHDOG_SUITE`).
  *
  * A structural wait takes its deadline from the running test's budget, and that budget is only
  * right in the project whose scheduling it was chosen for. So the membership is read off what the
@@ -267,12 +291,18 @@ describe('the process project’s membership', () => {
     expect(importers).toEqual([...STRUCTURAL_WAIT_SUITES].sort());
   });
 
-  it('is the structural waits, the git-fixture reproduction and the commit hook, and nothing else (WP-162, WP-215)', () => {
+  it('is the structural waits, the git-fixture reproduction, the commit hook and the collection watchdog, and nothing else (WP-162, WP-215, WP-213)', () => {
     expect([...PROCESS_SUITES].sort()).toEqual(
-      [...STRUCTURAL_WAIT_SUITES, GIT_FIXTURE_ISOLATION_SUITE, COMMIT_HOOK_SUITE].sort(),
+      [
+        ...STRUCTURAL_WAIT_SUITES,
+        GIT_FIXTURE_ISOLATION_SUITE,
+        COMMIT_HOOK_SUITE,
+        COLLECTION_WATCHDOG_SUITE,
+      ].sort(),
     );
     expect(STRUCTURAL_WAIT_SUITES).not.toContain(GIT_FIXTURE_ISOLATION_SUITE);
     expect(STRUCTURAL_WAIT_SUITES).not.toContain(COMMIT_HOOK_SUITE);
+    expect(STRUCTURAL_WAIT_SUITES).not.toContain(COLLECTION_WATCHDOG_SUITE);
   });
 
   it('recognises the import spellings a test file uses, and not a mention in prose', () => {

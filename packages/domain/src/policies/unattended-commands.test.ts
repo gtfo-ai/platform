@@ -2867,6 +2867,11 @@ describe('WP-198: the deny-direction readers read argv as the shell builds it, b
         let end = index + 1;
         let substituted = false;
         while (source[end] !== char) {
+          // Past the end `source[end]` is `undefined`, which no quote equals: the scan looped
+          // there, at collection, on a quote a regular expression held (backlogs 597, 618).
+          if (end >= source.length) {
+            throw new Error(`arrayStrings: the quote at offset ${index} is never closed`);
+          }
           if (source[end] === '\\') {
             end += 1;
           } else if (char === '`' && source.startsWith('${', end)) {
@@ -2981,6 +2986,17 @@ describe('WP-198: the deny-direction readers read argv as the shell builds it, b
       { at: 7, piped: false },
       { at: 18, piped: true },
     ]);
+  });
+
+  it('refuses a quote that never closes, naming its offset, rather than looping (618, WP-213)', () => {
+    // A copy of this file with `/['"]/` planted at its end, spelled with escapes so that this
+    // line's own quotes pair.
+    const planted = `${SOURCE}\nconst planted = /[\x27\x22]/;\n`;
+    const offset = SOURCE.length + '\nconst planted = /['.length;
+    expect(planted[offset]).toBe("'");
+    expect(() => arrayStrings(planted)).toThrow(
+      `arrayStrings: the quote at offset ${offset} is never closed`,
+    );
   });
 
   it(

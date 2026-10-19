@@ -66,8 +66,8 @@ const SETUP_FILES = [PROPERTY_SEED_SETUP, GIT_ENVIRONMENT_SETUP];
 
 /**
  * The suites that start **real processes** and wait on them structurally (WP-69, PROGRESS backlog
- * 25) — with {@link GIT_FIXTURE_ISOLATION_SUITE} and {@link COMMIT_HOOK_SUITE}, the `process`
- * project's whole membership.
+ * 25) — with {@link GIT_FIXTURE_ISOLATION_SUITE}, {@link COMMIT_HOOK_SUITE} and
+ * {@link COLLECTION_WATCHDOG_SUITE}, the `process` project's whole membership.
  *
  * A structural wait asserts that something happens (a socket is bound, a pid file is written, a pid
  * disappears), and how long it takes is **process scheduling**: exactly the quantity the parallel
@@ -96,7 +96,8 @@ export const STRUCTURAL_WAIT_SUITES = [
  * repository is byte-identical afterwards. It belongs here for the reason the structural waits do —
  * it owns a real process whose duration is the host's — and because a vitest run inside the
  * parallel `unit` group would compete with the group it is measuring. `scripts/verify.test.ts`
- * holds the membership as exactly these kinds and {@link COMMIT_HOOK_SUITE}.
+ * holds the membership as exactly these kinds, {@link COMMIT_HOOK_SUITE} and
+ * {@link COLLECTION_WATCHDOG_SUITE}.
  */
 export const GIT_FIXTURE_ISOLATION_SUITE = 'scripts/git-fixture-isolation.test.ts';
 
@@ -107,10 +108,17 @@ export const GIT_FIXTURE_ISOLATION_SUITE = 'scripts/git-fixture-isolation.test.t
  */
 export const COMMIT_HOOK_SUITE = 'scripts/lefthook-worktree.test.ts';
 
+/**
+ * The fourth kind (WP-213, PROGRESS backlog 597): it starts a whole vitest run through
+ * `scripts/vitest-bounded.mjs` over a planted collection stall and waits for the bound to stop it.
+ */
+export const COLLECTION_WATCHDOG_SUITE = 'scripts/collection-watchdog.test.ts';
+
 export const PROCESS_SUITES = [
   ...STRUCTURAL_WAIT_SUITES,
   GIT_FIXTURE_ISOLATION_SUITE,
   COMMIT_HOOK_SUITE,
+  COLLECTION_WATCHDOG_SUITE,
 ];
 
 /** What coverage measures: the source rings the `unit`, `contract` and `process` projects reach. */

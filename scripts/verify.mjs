@@ -17,14 +17,20 @@
  * and exits non-zero on failure. The steps a target runs may print their own PASS/FAIL lines
  * (`schemas:check` does), so each child's stdout is redirected to this process's stderr: the
  * orchestrator reads one verdict per target from stdout, and everything else stays on stderr
- * where it is still visible in a terminal and in CI logs.
+ * where it is still visible in a terminal and in CI logs. A step whose vitest run stopped because a
+ * file never finished collecting (`vitest-bounded.mjs`, WP-213) makes that line
+ * `FAIL: <target> — collection stalled in <file>`.
  */
 import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import process from 'node:process';
 // The on-disk `.ts` specifier, not this repository's usual `.js` one: Node runs this file directly
 // and strips the types itself (verified on node:24-alpine, the version in .nvmrc), and its type
 // stripping resolves the path it is given rather than rewriting the extension (CLAUDE.md).
 import { TARGETS } from './verify-targets.ts';
+import { stallLine } from './vitest-bounded.mjs';
 
 const target = process.argv[2];
 const steps = TARGETS[target];
@@ -42,7 +48,16 @@ let failed = null;
 
 // When this target started, for a step that must tell this run's output from a previous one's:
 // `coverage:ratchet` refuses a coverage summary written before it (WP-97).
-const env = { ...process.env, VERIFY_TARGET_STARTED_AT: String(Date.now()) };
+// A step that runs vitest goes through `vitest-bounded.mjs`, which writes the file whose collection
+// stalled to `VERIFY_STALL_REPORT`, so this target's one line can name it (WP-213).
+const reports = mkdtempSync(join(tmpdir(), 'verify-'));
+const stallReport = join(reports, 'stalled');
+const env = {
+  ...process.env,
+  VERIFY_TARGET_STARTED_AT: String(Date.now()),
+  VERIFY_TARGET: target,
+  VERIFY_STALL_REPORT: stallReport,
+};
 
 for (const step of steps) {
   process.stderr.write(`\n── ${target} › ${step} ──\n`);
@@ -64,8 +79,11 @@ for (const step of steps) {
   }
 }
 
+const stalled = existsSync(stallReport) ? readFileSync(stallReport, 'utf8') : null;
+rmSync(reports, { recursive: true, force: true });
+
 if (failed) {
-  process.stdout.write(`FAIL: ${target}\n`);
+  process.stdout.write(stalled === null ? `FAIL: ${target}\n` : `${stallLine(target, stalled)}\n`);
   process.exit(1);
 }
 
