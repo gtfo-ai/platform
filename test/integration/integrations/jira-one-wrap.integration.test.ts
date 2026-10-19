@@ -44,6 +44,7 @@ import {
 } from '@platform/integrations';
 import type pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { JIRA_PICKUP_LABEL } from '../../contract/support/integrations/jira-cloud-harness.js';
 import {
   createJiraReplay,
   JIRA_REPLAY_EMAIL,
@@ -51,6 +52,7 @@ import {
   JIRA_REPLAY_SITE,
   JIRA_REPLAY_TOKEN,
   type JiraReplay,
+  REPLAY_SEARCH_PAGE_CAP,
 } from '../../contract/support/integrations/jira-cloud-replay.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestPool } from '../support/postgres.js';
@@ -154,6 +156,24 @@ const auditRows = async (): Promise<readonly { action: string; status: string }[
     'select action, status from integration_actions order by created_at, action, status',
   );
   return rows;
+};
+
+/**
+ * The bucket's level, read off the next calls: the clock moves only when something sleeps, so a
+ * whole token count serves that many calls without a sleep, and a deficit shows as the first
+ * call's wait (`(1 − tokens) / refill` seconds).
+ */
+const tokensLeft = async (composed: Composed): Promise<number> => {
+  const { capacity, refillPerSecond } = JIRA_CLOUD_RATE_LIMIT_POLICY;
+  const before = composed.timer.sleeps.length;
+  for (let served = 0; served <= capacity; served += 1) {
+    await ticketReads(composed.integrations).selfIdentity(READ_CONTEXT);
+    const slept = composed.timer.sleeps.slice(before);
+    if (slept.length > 0) {
+      return served > 0 ? served : 1 - ((slept[0] as number) * refillPerSecond) / 1000;
+    }
+  }
+  throw new Error('the bucket never ran dry');
 };
 
 describe('one Jira port call through the production executor (WP-212, backlog 550)', () => {
@@ -268,24 +288,6 @@ describe('a bisected keys read through the production executor (WP-223, backlog 
     return keys;
   };
 
-  /**
-   * The bucket's level, read off the next calls: the clock moves only when something sleeps, so a
-   * whole token count serves that many calls without a sleep, and a deficit shows as the first
-   * call's wait (`(1 − tokens) / refill` seconds).
-   */
-  const tokensLeft = async (composed: Composed): Promise<number> => {
-    const { capacity, refillPerSecond } = JIRA_CLOUD_RATE_LIMIT_POLICY;
-    const before = composed.timer.sleeps.length;
-    for (let served = 0; served <= capacity; served += 1) {
-      await ticketReads(composed.integrations).selfIdentity(READ_CONTEXT);
-      const slept = composed.timer.sleeps.slice(before);
-      if (slept.length > 0) {
-        return served > 0 ? served : 1 - ((slept[0] as number) * refillPerSecond) / 1000;
-      }
-    }
-    throw new Error('the bucket never ran dry');
-  };
-
   it('records the searches it made in its one row and takes a token for each (criteria 1–3)', async () => {
     const composed = await compose();
     const keys = await keysWithOneGone(composed);
@@ -307,6 +309,85 @@ describe('a bisected keys read through the production executor (WP-223, backlog 
     const searches = composed.replay.requests.filter((request) => request.path === 'search/jql');
     expect(searches.length, 'several HTTP searches for one port call').toBeGreaterThan(1);
 
+    const { rows } = await pool.query<{ action: string; status: string; result: unknown }>(
+      'select action, status, result from integration_actions',
+    );
+    expect(rows).toEqual([
+      { action: 'match_tickets', status: 'ok', result: { searches: searches.length } },
+    ]);
+    expect(composed.timer.sleeps, 'nothing waited during the read').toEqual([]);
+    expect(JIRA_CLOUD_RATE_LIMIT_POLICY.capacity - (await tokensLeft(composed))).toBe(
+      searches.length,
+    );
+  });
+
+  it('records the searches of a keys read that throws on its failed row (WP-233, backlog 629)', async () => {
+    const composed = await compose();
+    // Every key gone and no key named: each is refused on its own, so the read throws Jira's error.
+    const keys = ['ACME-401', 'ACME-402', 'ACME-403'];
+    composed.replay.refuseUnknownKeysWith('opaque');
+    composed.replay.resetRequests();
+
+    await expect(
+      ticketReads(composed.integrations).matches(
+        { kind: 'keys', keys },
+        { since: '2026-09-02T11:00:00.000Z', limit: keys.length },
+        READ_CONTEXT,
+      ),
+    ).rejects.toThrow();
+
+    const searches = composed.replay.requests.filter((request) => request.path === 'search/jql');
+    // Rule 10: the read bisected down to each key before it gave up.
+    expect(searches.length).toBeGreaterThan(keys.length);
+    const { rows } = await pool.query<{ action: string; status: string; result: unknown }>(
+      'select action, status, result from integration_actions',
+    );
+    expect(rows).toEqual([
+      { action: 'match_tickets', status: 'failed', result: { searches: searches.length } },
+    ]);
+    expect(JIRA_CLOUD_RATE_LIMIT_POLICY.capacity - (await tokensLeft(composed))).toBe(
+      searches.length,
+    );
+  });
+});
+
+/**
+ * **A rule read past one page says how many pages it read, and pays for them** — WP-233 (PROGRESS
+ * backlog 628). The ticket poll widens a label/status rule up to `TICKET_POLL_MAX_LIMIT` (1000), and
+ * `searchUpTo` follows `nextPageToken` at most `MATCH_PAGE_MAX` issues a request (the replay pages
+ * at `REPLAY_SEARCH_PAGE_CAP`, 20). Measured on this case before the change (ruling (a)): 45
+ * labelled issues at `limit` 1000 made **3** HTTP searches, wrote **one**
+ * `match_tickets` row with a **null** `result`, and took **one** token. After it, the row's
+ * `result.searches` is the HTTP count and the limiter is charged that many tokens.
+ */
+describe('a paged rule read through the production executor (WP-233, backlog 628)', () => {
+  it('records the pages it read in its one row and takes a token for each (criteria 1–2)', async () => {
+    const composed = await compose();
+    const port = composed.integrations.taskManagement?.port;
+    if (port === undefined) {
+      throw new Error('no task-management binding');
+    }
+    for (let index = 0; index < 45; index += 1) {
+      await port.createTicket({
+        project_key: 'ACME',
+        issue_type: 'Task',
+        title: `Bulk ${index}`,
+        description: '',
+        labels: [JIRA_PICKUP_LABEL],
+      });
+    }
+    composed.replay.resetRequests();
+
+    const matches = await ticketReads(composed.integrations).matches(
+      { kind: 'label', label: JIRA_PICKUP_LABEL },
+      { since: '2026-09-02T11:00:00.000Z', limit: 1000 },
+      READ_CONTEXT,
+    );
+
+    const searches = composed.replay.requests.filter((request) => request.path === 'search/jql');
+    // Rule 10: one port call really walked several pages.
+    expect(matches?.length).toBeGreaterThan(REPLAY_SEARCH_PAGE_CAP * 2);
+    expect(searches.length, 'several HTTP pages for one port call').toBeGreaterThan(1);
     const { rows } = await pool.query<{ action: string; status: string; result: unknown }>(
       'select action, status, result from integration_actions',
     );

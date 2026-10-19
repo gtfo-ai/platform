@@ -1195,8 +1195,9 @@ export const ticketReads = (integrations: PipelineIntegrations) => ({
       return null;
     }
     // WP-223 (backlog 436): a `keys` read that drops or bisects refused keys is one action and many
-    // searches. The port reports them; the row records them and the limiter is charged for them
-    // after the call. Reset per attempt, because each attempt is its own requests.
+    // searches, and so is any rule read past one page (WP-233, backlog 628). The port reports them;
+    // the row records them — a failed one too — and the limiter is charged for them after the
+    // call. Reset per attempt, because each attempt is its own requests.
     let searches: number | null = null;
     const attemptOptions = () => {
       searches = null;

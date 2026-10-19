@@ -1227,6 +1227,12 @@ describe('IntegrationActionExecutor', () => {
       ).rejects.toThrow('no permission');
 
       expect(asked).toEqual(['outer']);
+      // WP-233 (backlog 629): the outer failed row carries the count it was charged for; the inner
+      // re-entrant row, never asked, carries none.
+      expect(auditLog.entries.map((entry) => [entry.status, entry.result])).toEqual([
+        ['failed', null],
+        ['failed', { searches: 3 }],
+      ]);
       // 3 − 1 − 2 = 0: the next call waits one second.
       await executor.execute(addComment());
       expect(timer.sleeps).toEqual([1000]);
@@ -1262,6 +1268,8 @@ describe('IntegrationActionExecutor', () => {
       ).rejects.toThrow('no permission');
 
       expect(auditLog.entries.map((entry) => entry.status)).toEqual(['ok', 'failed']);
+      // WP-233: a refused count is not a count, so the failed row claims none.
+      expect(auditLog.entries[1]?.result).toBeNull();
       const warned = captured.records.filter((record) => record.level === 'warn');
       expect(warned).toHaveLength(2);
       expect(warned[0]?.fields).toEqual({
@@ -1288,6 +1296,30 @@ describe('IntegrationActionExecutor', () => {
       // 2 − 1 − 1 = 0: the next call waits one second.
       await executor.execute(addComment());
       expect(timer.sleeps).toEqual([1000]);
+    });
+
+    /**
+     * WP-233 (PROGRESS backlog 629): a failed row carries the count its attempt was charged for,
+     * as `{ searches: n }` and nothing else — the provider's error text stays in `error`. The other
+     * side (rule 42): a failed request that declares no count still writes `result` null.
+     */
+    it('writes the charged count, and only it, on a failed row (WP-233)', async () => {
+      const failing = (providerRequests?: () => number) =>
+        addComment({
+          perform: async () => {
+            throw new IntegrationError('forbidden', INTEGRATION.provider, 'no permission');
+          },
+          ...(providerRequests === undefined ? {} : { providerRequests }),
+        });
+
+      await expect(executor.execute(failing(() => 7))).rejects.toThrow('no permission');
+      await expect(executor.execute(failing())).rejects.toThrow('no permission');
+
+      expect(auditLog.entries.map((entry) => [entry.status, entry.result])).toEqual([
+        ['failed', { searches: 7 }],
+        ['failed', null],
+      ]);
+      expect(auditLog.entries[0]?.error).toContain('no permission');
     });
   });
 

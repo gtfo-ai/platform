@@ -482,6 +482,20 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
         const matches = await port.matchTickets({ kind: 'label', label: context.pickupLabel });
         expect(matches.map((match) => match.ref.key)).toContain(context.ticket.key);
       });
+
+      it('reports what a rule read cost at most once, as a whole count (WP-233, backlog 628)', async () => {
+        const searches: number[] = [];
+        const matches = await port.matchTickets(
+          { kind: 'label', label: context.pickupLabel },
+          { onSearches: (count) => searches.push(count) },
+        );
+        expect(matches.map((match) => match.ref.key)).toContain(context.ticket.key);
+        // The `keys` clause's rule (WP-223), for every rule: one report per read, never one per page.
+        expect(searches.length, 'onSearches is called at most once').toBeLessThanOrEqual(1);
+        for (const count of searches) {
+          expect(Number.isInteger(count) && count >= 1, `searches ${count}`).toBe(true);
+        }
+      });
     });
 
     describe('the declared scope (WP-122)', () => {

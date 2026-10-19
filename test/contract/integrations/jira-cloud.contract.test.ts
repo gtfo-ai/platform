@@ -694,14 +694,18 @@ describe('jira-cloud — reaching the provider', () => {
           labels: [JIRA_PICKUP_LABEL],
         });
       }
+      binding.replay.resetRequests();
+      const reported: number[] = [];
       const all = await binding.port.matchTickets(
         { kind: 'label', label: JIRA_PICKUP_LABEL },
-        { limit: 1000 },
+        { limit: 1000, onSearches: (count) => reported.push(count) },
       );
       const searches = () =>
         binding.replay.requests.filter((request) => request.path === 'search/jql');
       expect(all.length).toBeGreaterThan(45);
       expect(searches().length, 'more than one page was read').toBeGreaterThan(1);
+      // WP-233 (backlog 628): every page is reported, once, as the read's whole cost.
+      expect(reported).toEqual([searches().length]);
       expect(searches()[1]?.query.nextPageToken).toBeDefined();
       const instants = all.map((match) => Date.parse(match.updated_at));
       expect(instants).toEqual(instants.toSorted((left, right) => left - right));

@@ -303,6 +303,13 @@ interface BaseActionRequest<TResult> {
    * request past the first is debited from the integration's limiter then, never during the call:
    * nothing re-enters the limiter while a slot is held (backlog 550). A re-entrant call holds no
    * slot of its own and is not asked.
+   *
+   * The attempt that **fails** the action writes its count on its `failed` row as
+   * `result: { searches: n }` and nothing else (WP-233, PROGRESS backlog 629; BD-003: the audit
+   * names what an action cost). It is the only `result` a `failed` row ever carries, so no provider
+   * text reaches it; a request that declares no count, or reports one that is not a whole
+   * number of at least 1 (charged as one, and not a count), leaves `result` null. A retried action's row counts its last attempt, as a success row's
+   * `describeResult` does; the earlier attempts were charged and are not on it.
    */
   providerRequests?(): number;
 }
@@ -554,15 +561,18 @@ const describe = <TResult>(
  *
  * It runs before the attempt's audit row is written, so it must not throw (review round 1): a count
  * that is not a whole number of at least 1 is charged as one and logged, never handed to `debit`.
+ *
+ * Answers the count it charged for, or `null` when the request declares none (or is re-entrant, or
+ * reported a count it refused): a failed attempt's row records it (WP-233).
  */
 const chargeExtraRequests = <TResult>(
   request: IntegrationActionRequest<TResult>,
   limiter: RateLimiter,
   reentrant: boolean,
   logger: Logger,
-): void => {
+): number | null => {
   if (reentrant || request.providerRequests === undefined) {
-    return;
+    return null;
   }
   const count = request.providerRequests();
   if (!Number.isInteger(count) || count < 1) {
@@ -574,9 +584,10 @@ const chargeExtraRequests = <TResult>(
       },
       'integration action reported a provider request count that is not a whole number of at least 1; charged as one',
     );
-    return;
+    return null;
   }
   limiter.debit(count - 1);
+  return count;
 };
 
 const errorMessage = (error: unknown): string =>
@@ -1096,7 +1107,7 @@ export const createIntegrationActionExecutor = (
         );
       } catch (error) {
         lease.release();
-        chargeExtraRequests(request, limiter, reentrant, logger);
+        const charged = chargeExtraRequests(request, limiter, reentrant, logger);
         const delay = reentrant ? null : retryDelayMs(error, attempt);
         if (delay === null) {
           // 4 — Audit before the throw: an action nobody recorded is an action nobody can audit.
@@ -1105,7 +1116,9 @@ export const createIntegrationActionExecutor = (
           // is redacted and counted; every other copy of that text comes from `entry.error`.
           const entry = buildEntry(request, {
             status: 'failed',
-            result: null,
+            // WP-233 (backlog 629): the count this attempt was charged for, and nothing else —
+            // never provider text. The only `result` a failed row carries.
+            result: charged === null ? null : { searches: charged },
             error: errorMessage(error),
             durationMs,
             attempts: attempt,

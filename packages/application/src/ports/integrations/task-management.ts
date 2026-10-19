@@ -460,12 +460,12 @@ export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabi
        */
       readonly onUnreadableKeys?: (keys: readonly string[], ids: readonly string[]) => void;
       /**
-       * For a `keys` rule: how many search requests the read made, every page counted (WP-223,
-       * PROGRESS backlog 436) — the part of the answer the audit row and the rate limiter need,
-       * because a read that drops or bisects refused keys is one port call and many requests.
-       * Called exactly once when the read made any request, **answered or thrown**, with a whole
-       * number of at least 1. A provider whose `keys` read is always one request (the fake) may
-       * not call it; the caller then counts one.
+       * How many search requests the read made, every page counted (WP-223, PROGRESS backlog 436;
+       * every rule since WP-233, backlog 628) — the part of the answer the audit row and the rate
+       * limiter need, because a read that drops or bisects refused keys, or that follows a page
+       * token past one page, is one port call and many requests. Called exactly once when the read
+       * made any request, **answered or thrown**, with a whole number of at least 1. A provider
+       * whose read is always one request (the fake) may not call it; the caller then counts one.
        */
       readonly onSearches?: (searches: number) => void;
     },

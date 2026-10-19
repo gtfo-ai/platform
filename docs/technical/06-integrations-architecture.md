@@ -698,9 +698,15 @@ the existing suite (BD-017).
   > never during it (`providerRequests`, `RateLimiter.debit`; backlog 550's deadlock came from
   > re-entering the limiter while a slot was held). Measured through the production executor on the
   > replay double: 100 keys with one gone and no key named made 18 searches, wrote one row with a
-  > `null` result and took one token before; the row now says 18 and 18 tokens are taken. A read
-  > that throws is charged the same, but its `failed` row carries no count (the executor writes no
-  > result on a failure). Re-bisecting a deleted ticket on every poll is accepted rather than
+  > `null` result and took one token before; the row now says 18 and 18 tokens are taken. **Since
+  > WP-233 (backlogs 628, 629) every rule counts, and a failed row says what it cost**: a label or
+  > status read that follows `nextPageToken` past one page reports its pages the same way (45
+  > labelled issues at `limit` 1000 on the replay's 20-issue pages: 3 searches, one row with a
+  > `null` result and one token before; `{ "searches": 3 }` and 3 tokens after), and a read that
+  > throws is charged the same and its `failed` row carries `result: { "searches": n }` — the
+  > count and nothing else, the only `result` a `failed` row carries, so no provider text reaches
+  > it (three keys every one refused with no key named: 5 searches, 5 tokens, and the row said
+  > `null` before). Re-bisecting a deleted ticket on every poll is accepted rather than
   > cached: it is bounded at 32 searches, fails open, and its cost is now on every poll's row. **Since WP-145 (PROGRESS backlog 437) a live task that recorded its
   > issue's id is asked by it** — the rule carries `ids` beside `keys`, Jira's JQL is
   > `(id in (10001) OR key in ("ACME-7"))`, and an id is written bare only when it is decimal digits —

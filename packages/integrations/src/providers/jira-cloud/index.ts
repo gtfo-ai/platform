@@ -829,20 +829,20 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
   ): Promise<readonly TicketMatch[]> => {
     const limit = matchOptions?.limit ?? 50;
     const since = matchOptions?.since ?? null;
-    const jql = buildJql(rule, since, options.clock.now());
-    if (rule.kind !== 'keys') {
-      return searchUpTo(jql, limit);
-    }
     const requests = { count: 0 };
     try {
-      return await searchKeys(
-        rule.keys,
-        rule.ids ?? [],
-        since,
-        limit,
-        matchOptions?.onUnreadableKeys,
-        requests,
-      );
+      // WP-233 (backlog 628): a rule read past one page is several requests too, so it counts
+      // them as a `keys` read does.
+      return rule.kind === 'keys'
+        ? await searchKeys(
+            rule.keys,
+            rule.ids ?? [],
+            since,
+            limit,
+            matchOptions?.onUnreadableKeys,
+            requests,
+          )
+        : await searchUpTo(buildJql(rule, since, options.clock.now()), limit, requests);
     } finally {
       // WP-223: answered or thrown, the caller learns what the read cost.
       if (requests.count > 0) {
