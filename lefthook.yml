@@ -10,9 +10,16 @@
 #
 # A hook that cannot find lefthook at all fails instead of printing "Can't find lefthook in PATH"
 # and exiting 0. Without this, a commit from a linked worktree with no node_modules, under a path
-# with a space (lefthook 2.1.12 writes its own path unquoted) and no pnpm on PATH, was made with no
-# secret scan (measured, WP-219; `scripts/lefthook-worktree.test.ts` holds it).
+# with a space (lefthook 2.1.12 wrote its own path unquoted; 2.1.15 quotes it) and no pnpm on PATH,
+# was made with no secret scan (measured, WP-219; `scripts/lefthook-worktree.test.ts` holds it).
 assert_lefthook_installed: true
+
+# A hook run never rewrites the hooks. Linked worktrees share `.git/hooks`, and without this a
+# commit from a worktree whose lefthook.yml differs from the recorded checksum re-installed the
+# shared hooks from that worktree's config and binary (measured, WP-219 and WP-222;
+# `scripts/lefthook-worktree.test.ts` holds it). The cost: after a change to this file, run
+# `pnpm exec lefthook install` from the main checkout (technical/14 § "Commit and push policy").
+no_auto_install: true
 
 pre-commit:
   parallel: true

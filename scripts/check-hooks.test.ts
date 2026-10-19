@@ -23,7 +23,10 @@ import { initScratchRepository } from './git-scratch-env.mjs';
  */
 const repositoryRoot = realpathSync(join(import.meta.dirname, '..'));
 
-/** The lines of lefthook 2.1.12's hook that carry paths, as `lefthook install` writes them. */
+/**
+ * The lines of lefthook 2.1.12's hook that carry paths, unquoted as it wrote them. 2.1.15 and later
+ * quote the path; the `checkHooks` cases below read hooks the pinned version writes (WP-222).
+ */
 const hookText = (installer: string) =>
   [
     '#!/bin/sh',
@@ -58,7 +61,7 @@ describe('outsidePaths', () => {
   const binary =
     'node_modules/.pnpm/lefthook-darwin-arm64@2.1.12/node_modules/lefthook-darwin-arm64/bin/lefthook';
 
-  it('admits a path under a root that holds a space, unquoted as lefthook writes it', () => {
+  it('admits a path under a root that holds a space, unquoted as lefthook 2.1.12 wrote it', () => {
     expect(outsidePaths(hookText(`${root}/${binary}`), [root])).toEqual([]);
   });
 

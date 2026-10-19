@@ -5,10 +5,12 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -164,8 +166,9 @@ describe('the commit-msg hook in a linked worktree under a spaced path (WP-215)'
 /**
  * **A hook that cannot find lefthook refuses the commit** (WP-219, PROGRESS backlog 615 (d)).
  *
- * lefthook 2.1.12's hook tries `$LEFTHOOK_BIN`, `lefthook` on `PATH`, the absolute path of the
- * binary that installed it (written unquoted, so a space in it splits it), the checkout's own
+ * lefthook's hook tries `$LEFTHOOK_BIN`, `lefthook` on `PATH`, the absolute path of the
+ * binary that installed it (2.1.12 wrote it unquoted, so a space in it split it; quoted since
+ * 2.1.15, WP-222), the checkout's own
  * `node_modules`, and a list of package managers — and when all of them fail it printed
  * `Can't find lefthook in PATH` and exited **0**: the commit was made and the gitleaks job never
  * ran (measured, WP-219 (a)(ii)). `assert_lefthook_installed: true` in `lefthook.yml` turns that
@@ -250,6 +253,166 @@ describe('a pre-commit hook that cannot find lefthook (WP-219)', () => {
       expect(run('git', ['log', '-1', '--format=%s'], worktree).toString().trim()).toBe(
         'chore: the scratch repository',
       );
+    },
+  );
+});
+
+/**
+ * **A worktree commit never rewrites the shared hooks** (WP-222, PROGRESS backlog 623).
+ *
+ * Linked worktrees share `.git/hooks`. lefthook re-installs the hooks at run time when the running
+ * checkout's `lefthook.yml` differs from the checksum it recorded (its auto-install), and it writes
+ * them from **that** checkout's config with **that** run's binary path: a worktree commit rewrote
+ * every checkout's hooks (measured, WP-219 (i) and WP-222 (a)(ii)). `no_auto_install: true` in
+ * `lefthook.yml` turns the sync off. This case installs this checkout's `lefthook.yml` from a copied
+ * binary, then commits from a linked worktree whose `lefthook.yml` declares a hook more (a
+ * `post-commit`) and whose hook resolves to another binary (`LEFTHOOK_BIN`, standing in for any
+ * branch that finds a binary other than the installer), and asserts the hooks directory is
+ * byte-identical. Without the option the comparison names the rewritten hooks and the new one.
+ * The pre-commit jobs are excluded by name (they need this checkout's scripts); the commit-msg job
+ * runs and accepts the message, so the hook demonstrably ran lefthook (rule 10).
+ */
+describe('a commit from a worktree with a differing lefthook.yml (WP-222)', () => {
+  it.skipIf(missing.length > 0)(
+    missing.length > 0
+      ? `skipped: ${missing.join(' and ')} not installed under node_modules/.bin`
+      : 'leaves the shared hooks byte-identical',
+    () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'lefthook-sync-')));
+      roots.push(root);
+      const main = join(root, 'spaced dir', 'main');
+      const worktree = join(root, 'spaced dir', 'sync wt');
+      const installer = join(root, 'spaced dir', 'installer');
+      mkdirSync(main, { recursive: true });
+      mkdirSync(installer);
+      const lefthookPackage = realpathSync(
+        join(repositoryRoot, 'node_modules', 'lefthook', 'package.json'),
+      );
+      const { getExePath } = createRequire(lefthookPackage)('./get-exe.js') as {
+        getExePath: () => string;
+      };
+      const installingBinary = join(installer, 'lefthook');
+      copyFileSync(getExePath(), installingBinary);
+      chmodSync(installingBinary, 0o755);
+
+      const env = initScratchRepository(main, {
+        parent: withoutInheritedLefthook(),
+        initArgs: ['-b', 'main'],
+        config: { 'core.hooksPath': join(main, '.git', 'hooks') },
+        env: { NO_COLOR: '1', FORCE_COLOR: '0' },
+      });
+      const run = (command: string, args: string[], cwd: string) =>
+        execFileSync(command, args, {
+          cwd,
+          env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: CHILD_TIMEOUT_MS,
+          killSignal: 'SIGKILL',
+        });
+      const config = readFileSync(join(repositoryRoot, 'lefthook.yml'), 'utf8');
+      writeFileSync(join(main, 'lefthook.yml'), config);
+      writeFileSync(
+        join(main, 'commitlint.config.js'),
+        readFileSync(join(repositoryRoot, 'commitlint.config.js')),
+      );
+      writeFileSync(join(main, 'package.json'), '{ "type": "module", "private": true }\n');
+      writeFileSync(join(main, '.gitignore'), '/node_modules\n');
+      run('git', ['add', '-A'], main);
+      run('git', ['commit', '-q', '-m', 'chore: the scratch repository'], main);
+      run(installingBinary, ['install'], main);
+      run('git', ['worktree', 'add', '-q', '--detach', worktree], main);
+      symlinkSync(join(repositoryRoot, 'node_modules'), join(worktree, 'node_modules'));
+
+      const hooksDirectory = join(main, '.git', 'hooks');
+      const hooks = () =>
+        Object.fromEntries(
+          readdirSync(hooksDirectory)
+            .filter((name) => !name.endsWith('.sample'))
+            .sort()
+            .map((name) => [name, readFileSync(join(hooksDirectory, name), 'utf8')]),
+        );
+      const before = hooks();
+      expect(Object.keys(before)).toContain('pre-commit');
+      expect(before['pre-commit']).toContain(installingBinary);
+
+      // Load-bearing: lefthook trusts an unchanged modification second over the checksum, so the
+      // differing file is dated apart from the installed one. Without this line the canary (the
+      // option removed) is not dead but flaky — it fails only when the two writes straddle a
+      // second (measured, WP-222 review round 1: 1 failure in 3).
+      const worktreeConfig = join(worktree, 'lefthook.yml');
+      writeFileSync(
+        worktreeConfig,
+        `${config}\npost-commit:\n  jobs:\n    - name: noop\n      run: "true"\n`,
+      );
+      const past = Date.now() / 1000 - 3600;
+      utimesSync(worktreeConfig, past, past);
+
+      writeFileSync(join(worktree, 'change.txt'), 'change\n');
+      run('git', ['add', 'change.txt'], worktree);
+      const result = spawnSync('git', ['commit', '-q', '-m', 'feat: a commit from a worktree'], {
+        cwd: worktree,
+        env: { ...env, LEFTHOOK_BIN: binaries.lefthook, LEFTHOOK_EXCLUDE: 'gitleaks,biome' },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: CHILD_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
+      });
+      const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      expect(result.status, output).toBe(0);
+      expect(output).toContain('commitlint');
+      expect(hooks()).toEqual(before);
+    },
+  );
+});
+
+/**
+ * **The generated hook quotes the installing binary's path** (WP-222, PROGRESS backlog 622).
+ *
+ * lefthook 2.1.12 wrote `elif <path> -h` unquoted, so a space in the checkout's path split it and
+ * the hook fell through to `pnpm lefthook` (WP-219 (a)(ii)); 2.1.15 quotes it (lefthook PR 1509).
+ * This case installs with the pinned binary, copied to a spaced directory, and asserts the line
+ * names that path inside single quotes, so a downgrade fails here (measured with 2.1.12, WP-222
+ * review round 1).
+ */
+describe('the hook the pinned lefthook writes (WP-222)', () => {
+  it.skipIf(!existsSync(binaries.lefthook))(
+    existsSync(binaries.lefthook)
+      ? 'quotes the installing binary path that holds a space'
+      : 'skipped: lefthook not installed under node_modules/.bin',
+    () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'lefthook-quote-')));
+      roots.push(root);
+      const main = join(root, 'spaced dir', 'main');
+      const installer = join(root, 'spaced dir', 'installer');
+      mkdirSync(main, { recursive: true });
+      mkdirSync(installer);
+      const lefthookPackage = realpathSync(
+        join(repositoryRoot, 'node_modules', 'lefthook', 'package.json'),
+      );
+      const { getExePath } = createRequire(lefthookPackage)('./get-exe.js') as {
+        getExePath: () => string;
+      };
+      const installingBinary = join(installer, 'lefthook');
+      copyFileSync(getExePath(), installingBinary);
+      chmodSync(installingBinary, 0o755);
+      const env = initScratchRepository(main, {
+        parent: withoutInheritedLefthook(),
+        initArgs: ['-b', 'main'],
+        config: { 'core.hooksPath': join(main, '.git', 'hooks') },
+        env: { NO_COLOR: '1', FORCE_COLOR: '0' },
+      });
+      writeFileSync(join(main, 'lefthook.yml'), readFileSync(join(repositoryRoot, 'lefthook.yml')));
+      execFileSync(installingBinary, ['install', 'pre-commit'], {
+        cwd: main,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: CHILD_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
+      });
+      const hook = readFileSync(join(main, '.git', 'hooks', 'pre-commit'), 'utf8');
+      expect(installingBinary).toContain(' ');
+      expect(hook).toContain(`elif '${installingBinary}' -h >/dev/null 2>&1`);
+      expect(hook).toContain(`'${installingBinary}' "$@"`);
     },
   );
 });
