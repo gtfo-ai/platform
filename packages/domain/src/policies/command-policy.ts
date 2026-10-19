@@ -34,7 +34,10 @@
  *  4. **An unmatched command is `ask`, never `allow`** (product/19 §3: "everything else → ask").
  *     Two things floor an otherwise allowed line at `ask`: a redirection that writes to a path,
  *     and an argument on `HAZARDOUS_ARGUMENTS` — the flag that hands an allow-listed verb an
- *     arbitrary command, an arbitrary path to write, or an unread package source.
+ *     arbitrary command, an arbitrary path to write, or an unread package source. A floor's
+ *     options are a declared grammar (TD-030 tier 2), and its single-dash spelling is read by the
+ *     rules of its program's own parser (`FLOOR_OPTION_READINGS`, WP-214): git's clusters letter by
+ *     letter up to a letter that takes a value, Go's whole.
  *  5. **Parse uncertainty fails closed.** A hand-rolled shell scanner is never complete, so it
  *     says when it is out of its depth (`CommandEvaluation.uncertainty`) and an uncertain line can
  *     never be `allow`. `UNCERTAINTY` lists every construct that trips it; what the scanner still
@@ -1496,12 +1499,25 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     environment: [],
     hazard: 'the push-side twin of --upload-pack, and equally a shell command',
   },
+  {
+    // WP-214, backlog 613 row 4: git-clone(1) at 2.47.3 gives --upload-pack the short `-u
+    // <upload-pack>`; git-ls-remote(1) does not (its option table has `--upload-pack` only), so
+    // there is no ls-remote twin.
+    pattern: 'git clone* -u*',
+    kind: 'command',
+    verbs: ['git'],
+    // As for --upload-pack: none of its own; the transport's are the git boundary's.
+    environment: [],
+    hazard: 'git clone’s short spelling of --upload-pack, a shell command run on the far end',
+  },
   /**
    * `--exec`, and since WP-160 (d) `git rebase`'s short spelling, `-x`: attached (`-xCMD`) or last
    * in a cluster (`-ix`, `-qx`) — git 2.47.3 (the run image's) and 2.54 each ran the command for all
    * three, and for `--ex`/`--exe`, the abbreviations git's option parser accepts. A token predicate
-   * rather than the glob it was, because a glob cannot read a cluster; the glob's own reach (a flag
-   * after any subcommand, quoting off) is the predicate's too.
+   * rather than the glob it was, because a glob could not read a cluster then; the glob's own reach (a
+   * flag after any subcommand, quoting off) is the predicate's too. Since WP-214 a git glob floor
+   * reads clusters by `FLOOR_OPTION_READINGS`; this predicate was kept, and over-reads where the
+   * table would not (`-x` after a letter that takes a value), which is the safe direction.
    */
   {
     pattern: 'git * --exec*',
@@ -1525,7 +1541,7 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
    * (`-xCMD`), separate, or last in a cluster (`-yx`) — git 2.47.3 ran the command for each (PROGRESS
    * § WP-161). `git mergetool` rejects both `-x` and `--extcmd` (measured), so this names difftool
    * only; the hazard text said *"difftool and mergetool"* until WP-161. A token predicate for
-   * `--exec`'s reason: a glob cannot read a cluster.
+   * `--exec`'s reason, and kept since WP-214 for the same one.
    */
   {
     pattern: 'git * --extcmd*',
@@ -1645,7 +1661,12 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     hazard:
       'skips the pre-commit, pre-merge and commit-msg hooks, which is where a repository runs its secret scan (BD-002) and its formatter',
   },
+  // WP-214: read by git's own cluster rule (`FLOOR_OPTION_READINGS`), so `-an` and `-sn` carry it.
   { pattern: 'git commit* -n*', kind: 'trust', hazard: 'the short spelling of --no-verify' },
+  // WP-214, backlog 613 row 3: git-am(1) at 2.47.3, *"When any of `--no-verify` or `-n` is given,
+  // these are bypassed"* — the pre-applypatch and applypatch-msg hooks. The long spelling is the
+  // entry above's.
+  { pattern: 'git am* -n*', kind: 'trust', hazard: 'git am’s short spelling of --no-verify' },
   // WP-161 (b): every abbreviation git resolves to one of the long spellings above.
   ...GIT_ABBREVIATION_HAZARDS.map(gitAbbreviationFloor),
   /**
@@ -1989,6 +2010,83 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
       name.startsWith('pytest') && flags.some((flag) => pytestLongFlag('rootdir').test(flag)),
   },
 ];
+
+/**
+ * How a floored program's parser reads a single-dash option (WP-214, backlog 613; TD-030 tier 2).
+ * `getopt`: a single-dash word is a cluster of one-character options read in order, and the first
+ * one that takes a value ends the cluster, the rest of the word being its value — so to git `-an`
+ * is `-a -n` and `-mn` is `-m` with the message `n`. `valued` names, per subcommand, the short
+ * options that take a value, required or attached-optional alike (either ends the cluster).
+ * **Omission fails closed**: a subcommand or a letter it does not name takes no value, so a floored
+ * letter after it is read as an option (the over-ask, named: `-Zn`, were `Z` to take a value, is
+ * floored). `whole`: every option is one word, the reading WP-204 left every floor on, with the
+ * reason it is right for that program.
+ */
+export type FloorOptionReading =
+  | { readonly reading: 'getopt'; readonly valued: Readonly<Record<string, string>> }
+  | { readonly reading: 'whole'; readonly reason: string };
+
+/**
+ * Every program a floor's single-dash spelling is written for, on exactly one of the two readings
+ * (the census in `unattended-commands.test.ts`); a program on neither keeps the whole-word reading. The
+ * `hazard` reading of `entryFlagsMet` explodes a `getopt` program's clusters by this table, so it
+ * changes the glob floors (`git commit* -n*`, `git merge* -s*`/`-X*`, `git am* -n*`, `git clone*
+ * -u*`); the token predicates (`rebase -x`, `difftool -x`, make's `-E`, pytest's `-o`/`-c`) read
+ * their own clusters, as they did.
+ */
+export const FLOOR_OPTION_READINGS: Readonly<Record<string, FloorOptionReading>> = {
+  // git 2.47.3, the run image's: each subcommand's manual and its parse-options table in
+  // `builtin/<subcommand>.c` (https://github.com/git/git/tree/v2.47.3, read 2026-10-19; the
+  // sentences are quoted in PROGRESS § WP-214). `scripts/git-long-options.mjs` prints long options
+  // only, so this table is written by hand.
+  git: {
+    reading: 'getopt',
+    valued: {
+      // git-commit(1): `-C <commit>`, `-c <commit>`, `-F <file>`, `-m <msg>`, `-t <file>`,
+      // `-u[<mode>]`, `-S[<keyid>]`; `-a`, `-e`, `-i`, `-n`, `-o`, `-p`, `-q`, `-s`, `-v`, `-z` take none.
+      commit: 'CFSctmu',
+      // git-merge(1): `-m <msg>`, `-F <file>`, `-s <strategy>`, `-X <option>`, `-S[<keyid>]`; `-n`
+      // is `--no-stat` and takes none, nor do `-e`, `-q`, `-v`.
+      merge: 'FSXms',
+      // git-am(1): `-C<n>`, `-p<n>`, `-S[<keyid>]`; `-3`, `-c`, `-i`, `-k`, `-m`, `-n`, `-q`, `-r`,
+      // `-s`, `-u` take none.
+      am: 'CSp',
+      // git-clone(1): `-o <name>`, `-b <name>`, `-u <upload-pack>`, `-c <key>=<value>`, `-j <n>`;
+      // `-l`, `-n`, `-q`, `-s`, `-v` take none.
+      clone: 'bcjou',
+    },
+  },
+  go: {
+    reading: 'whole',
+    reason:
+      'Go’s flag package reads one or two dashes and a whole name (`-cover` is one flag, never `-c -o -v…`); exploded, `go test -cover` met the `go* -o` floor (WP-204, measured)',
+  },
+  find: {
+    reading: 'whole',
+    reason:
+      'find’s primaries (`-fprint`, `-fls`) are whole words of its expression, never clusters',
+  },
+  pip: {
+    reading: 'whole',
+    reason:
+      'not declared by WP-214, whose rows name git: pip’s parser is optparse (`src/pip/_internal/cli/parser.py`), which does cluster (`-qr`), so `pip install -r http*` keeps the whole-word reading and a cluster spelling is a filed residual',
+  },
+  pytest: {
+    reading: 'whole',
+    reason:
+      'its single-dash floors (`-o`, `-c`) are token predicates that read argparse’s cluster themselves (`pytestClusterValueOption`); no glob floor of pytest’s names a short option',
+  },
+  ...Object.fromEntries(
+    MAKE_VERBS.map((verb): [string, FloorOptionReading] => [
+      verb,
+      {
+        reading: 'whole',
+        reason:
+          'its one single-dash floor, `-E`, is a token predicate that reads the cluster itself (`-sE`), and over-reads a value letter’s value rather than under-reads it',
+      },
+    ]),
+  ),
+};
 
 export const DEFAULT_COMMAND_POLICY: ResolvedCommandPolicy = {
   allow: DEFAULT_IMPLEMENTATION_ALLOW,
@@ -2884,10 +2982,13 @@ const splitFlags = (
 // meets an entry's options and operands, and none tests an option on its own (the census in
 // `command-policy.test.ts`). Two facts are program-independent and only tighten: getopt reads a
 // cluster of letters letter by letter, and an operand may stand anywhere among the operands.
-// A `HAZARDOUS_ARGUMENTS` pattern is read through the same functions in the `hazard` reading,
-// which is the one before WP-204 — whole options, operands by index — because a floor is not a
-// block entry and its programs are not getopt's: Go's `-cover` is one option, and exploded it
-// met the `go* -o` floor (measured, 13 rows of `command-policy.test.ts`).
+// A `HAZARDOUS_ARGUMENTS` pattern is read through the same functions in the `hazard` reading —
+// operands by index, as before WP-204 — and its options by the rules of the floored program's own
+// parser (WP-214, backlog 613): a program `FLOOR_OPTION_READINGS` declares getopt-style has its
+// clusters read letter by letter up to the first letter that takes a value (git's `-an` is
+// `-a -n`), and every other program's options stay whole, because a floor's programs are not all
+// getopt's: Go's `-cover` is one option, and exploded it met the `go* -o` floor (measured at
+// WP-204, 13 rows of `command-policy.test.ts`).
 
 /** How a pattern's options and operands are read: a block entry's (WP-204), or a floor's. */
 type PatternReading = 'block' | 'hazard';
@@ -2895,11 +2996,48 @@ type PatternReading = 'block' | 'hazard';
 /** A single-dash cluster of letters only (`-rf`, `-D`, `-qD`), which getopt reads letter by letter. */
 const LETTER_CLUSTER = /^-[A-Za-z]+$/;
 
-/** The one-letter options of every letter-only cluster among `flags` (`-rf` → `-r`, `-f`). */
-const clusterLetters = (flags: readonly string[]): readonly string[] =>
-  flags.flatMap((flag) =>
-    LETTER_CLUSTER.test(flag) ? [...flag.slice(1)].map((letter) => `-${letter}`) : [],
-  );
+/**
+ * The one-letter options of every letter-only cluster among `flags` (`-rf` → `-r`, `-f`). Given a
+ * program's `valued` letters (WP-214, a getopt program's floor), every single-dash word is read as
+ * its parser reads it instead: each character an option, up to and including the first one that
+ * takes a value, whose value is the rest of the word (`-nXours` → `-n`, `-X`; `-mn` → `-m`).
+ */
+const clusterLetters = (flags: readonly string[], valued?: string): readonly string[] =>
+  flags.flatMap((flag) => {
+    if (valued === undefined) {
+      return LETTER_CLUSTER.test(flag) ? [...flag.slice(1)].map((letter) => `-${letter}`) : [];
+    }
+    if (flag.startsWith('--')) {
+      return [];
+    }
+    const letters: string[] = [];
+    for (const letter of flag.slice(1)) {
+      letters.push(`-${letter}`);
+      if (valued.includes(letter)) {
+        break;
+      }
+    }
+    return letters;
+  });
+
+/**
+ * The letters that take a value for the floored program `positional` names by place, when
+ * {@link FLOOR_OPTION_READINGS} declares it getopt-style — `''` for a subcommand its table does not
+ * name, which fails closed — and `undefined` for a program read whole.
+ */
+const getoptValuedLetters = (positional: readonly string[]): string | undefined => {
+  const [program, subcommand] = positional;
+  const declared =
+    program !== undefined && Object.hasOwn(FLOOR_OPTION_READINGS, program)
+      ? FLOOR_OPTION_READINGS[program]
+      : undefined;
+  if (declared?.reading !== 'getopt') {
+    return undefined;
+  }
+  return subcommand !== undefined && Object.hasOwn(declared.valued, subcommand)
+    ? declared.valued[subcommand]
+    : '';
+};
 
 /**
  * Whether the line's options meet every option the entry writes (WP-204 (b)(i)). An entry option
@@ -2907,14 +3045,22 @@ const clusterLetters = (flags: readonly string[]): readonly string[] =>
  * when each of its letters is among the line's exploded letters (`-rf` by `-r -f`, `-fr`, `-rfv`);
  * and any entry option — a glob one in practice — is also met by one exploded letter its glob
  * matches (`-f*` by `git push -uf`). A token with a non-letter (`-n1`, `-I{}`) and a long option
- * stay whole. `--` has already ended the options (`splitFlags`).
+ * stay whole. `--` has already ended the options (`splitFlags`). In the `hazard` reading the
+ * letters are a getopt program's, read with its `valued` letters (`getoptValuedLetters`), and none
+ * for a program read whole.
  */
 const entryFlagsMet = (
   entry: readonly string[],
   line: readonly string[],
   reading: PatternReading = 'block',
+  valued?: string,
 ): boolean => {
-  const letters = reading === 'block' ? clusterLetters(line) : [];
+  const letters =
+    reading === 'block'
+      ? clusterLetters(line)
+      : valued === undefined
+        ? []
+        : clusterLetters(line, valued);
   return entry.every((flag) => {
     const glob = cachedGlob(flag);
     return (
@@ -3016,7 +3162,12 @@ const tokensMatch = (
   const command = splitFlags(commandTokens);
   return (
     entryOperandsMet(pattern.positional, command.positional, reading) &&
-    entryFlagsMet(pattern.flags, command.flags, reading)
+    entryFlagsMet(
+      pattern.flags,
+      command.flags,
+      reading,
+      reading === 'hazard' ? getoptValuedLetters(command.positional) : undefined,
+    )
   );
 };
 

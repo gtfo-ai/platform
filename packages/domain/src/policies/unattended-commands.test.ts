@@ -18,8 +18,10 @@ import {
   environmentSpellsFloor,
   evaluateCommand,
   expansionCompletesBlockEntry,
+  FLOOR_OPTION_READINGS,
   flagValueHidesBlockEntry,
   HAZARDOUS_ARGUMENTS,
+  type HazardousArgument,
   hazardousArguments,
   memoisedCommandTexts,
   optionMayBeBlockEntry,
@@ -5107,6 +5109,157 @@ describe('WP-205, backlogs 592, 596, 601 and 608: a wrapper’s declared grammar
       const command = 'sentry-cli monitors run m -- $x';
       expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
       expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.expandedName]);
+    });
+  });
+});
+
+/**
+ * WP-214, backlog 613: a floor's single-dash option is read by its program's own parser
+ * (`FLOOR_OPTION_READINGS`). git's clusters are read letter by letter up to the first letter that
+ * takes a value (git 2.47.3's manuals and option tables, cited at the table and in PROGRESS
+ * § WP-214); Go's, and every other program's, stay whole.
+ */
+describe('WP-214, backlog 613: a floor’s short option read by its program’s parser', () => {
+  const floored = (command: string): readonly string[] =>
+    hazardousArguments(command).map((entry) => entry.pattern);
+
+  describe('criterion (1): a git cluster carries every letter before its value', () => {
+    it.each([
+      ['git commit -an -m x', 'git commit* -n*'],
+      ['git commit -anm x', 'git commit* -n*'],
+      ['git commit -sn', 'git commit* -n*'],
+      ['git commit -na', 'git commit* -n*'],
+      // git-merge(1): `-n` is `--no-stat` and takes no value, so the strategy is read after it.
+      ['git merge -ns ours origin/main', 'git merge* -s*'],
+      ['git merge -nXours origin/main', 'git merge* -X*'],
+      ['git merge -nXsubtree=x origin/main', 'git merge* -X*'],
+    ])('%j reads ask / hazard / hazard through %j', (command, entry) => {
+      expect(cell(command, policy)).toBe('ask / hazard / hazard');
+      expect(floored(command)).toContain(entry);
+    });
+  });
+
+  describe('criterion (2): a letter that takes a value ends the cluster', () => {
+    it.each([
+      'git commit -mn x',
+      'git commit -Fn x',
+      // `-S[<keyid>]` and `-u[<mode>]` take the rest of the word when there is one.
+      'git commit -Sn -m x',
+      'git commit -un -m x',
+    ])('%j reads allow / allow / allow (`n` is the value)', (command) => {
+      expect(cell(command, policy)).toBe('allow / allow / allow');
+    });
+  });
+
+  describe('criterion (3): the controls keep their cells', () => {
+    it.each(['git commit -am x', 'git commit -m x', 'git commit -mx', 'git commit -qam x'])(
+      '%j reads allow / allow / allow',
+      (command) => {
+        expect(cell(command, policy)).toBe('allow / allow / allow');
+      },
+    );
+
+    it('"git commit -m -n" keeps its cell, floored by the whole word as before', () => {
+      expect(cell('git commit -m -n', policy)).toBe('ask / hazard / hazard');
+    });
+
+    it('"go test -cover -covermode=atomic ./..." stays allow: Go’s flags are whole words', () => {
+      expect(cell('go test -cover -covermode=atomic ./...', policy)).toBe('allow / allow / allow');
+    });
+
+    it.each([
+      ['git rebase -ix origin/main', 'ask / hazard / hazard', 'git * --exec*'],
+      ['git difftool -yx cmd', 'ask / hazard / hazard', 'git * --extcmd*'],
+      [
+        'make -sE',
+        'ask / hazard / hazard',
+        'make -…E… (a single-dash short-option cluster containing E)',
+      ],
+    ])('%j keeps %s through its own predicate', (command, expected, entry) => {
+      expect(cell(command, policy)).toBe(expected);
+      expect(floored(command)).toContain(entry);
+    });
+
+    it.each([
+      // The over-ask, named: a subcommand the table does not declare reads every letter as an
+      // option (`commit-tree`'s `-m` takes a value), and a valued option's next word that is
+      // itself a cluster is read as options.
+      ['git commit-tree -mn x', 'ask / hazard / hazard'],
+      ['git commit -m -an', 'ask / hazard / hazard'],
+      // The residual, tier 3 (TD-030): the letters an expansion supplies are WP-201's rule.
+      ['git commit -$x -m y', 'allow / allow / allow'],
+      ['git commit -a$x -m y', 'allow / allow / allow'],
+    ])('%j reads %s (pinned)', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+  });
+
+  describe('criterion (4): every floor’s short spelling names a program with a declared reading', () => {
+    /** The programs a floor is written for: its verbs, or its pattern's first word. */
+    const programsOf = (entry: HazardousArgument): readonly string[] =>
+      entry.verbs !== undefined && entry.verbs.length > 0
+        ? entry.verbs
+        : [(entry.pattern.split(/\s+/)[0] ?? '').replace(/\*+$/, '')];
+
+    /**
+     * Whether a floor names a single-dash spelling: a pattern word `-<letter>…`, or a predicate
+     * whose source tests one (`/^-[^-]*x/`, `'-o'`). Lexical: a predicate spelling it through a
+     * helper with no dash in the call (`pytestClusterValueOption(flag) === 'o'`) is seen only by
+     * its pattern's text, which names `-o`.
+     */
+    const namesShortOption = (entry: HazardousArgument): boolean =>
+      entry.pattern.split(/\s+/).some((word) => /^-[A-Za-z]/.test(word)) ||
+      (entry.tokens !== undefined && /\^-\[|[\x22\x27\x60]-[A-Za-z]/.test(String(entry.tokens)));
+
+    const undeclared = (entries: readonly HazardousArgument[]): readonly string[] =>
+      [
+        ...new Set(
+          entries
+            .filter(namesShortOption)
+            .flatMap(programsOf)
+            .filter((program) => !Object.hasOwn(FLOOR_OPTION_READINGS, program)),
+        ),
+      ].sort();
+
+    it('names no program without a declared reading', () => {
+      expect(undeclared(HAZARDOUS_ARGUMENTS)).toEqual([]);
+    });
+
+    it('declares no program that no short-option floor names', () => {
+      const named = new Set(HAZARDOUS_ARGUMENTS.filter(namesShortOption).flatMap(programsOf));
+      expect(Object.keys(FLOOR_OPTION_READINGS).filter((program) => !named.has(program))).toEqual(
+        [],
+      );
+    });
+
+    it('names an undeclared program a planted floor is written for', () => {
+      const planted: HazardousArgument = { pattern: 'foo* -z*', kind: 'trust', hazard: 'planted' };
+      expect(undeclared([...HAZARDOUS_ARGUMENTS, planted])).toEqual(['foo']);
+    });
+
+    it('declares git getopt-style, with the valued letters of each subcommand it floors', () => {
+      expect(FLOOR_OPTION_READINGS.git).toEqual({
+        reading: 'getopt',
+        valued: { commit: 'CFSctmu', merge: 'FSXms', am: 'CSp', clone: 'bcjou' },
+      });
+      expect(FLOOR_OPTION_READINGS.go?.reading).toBe('whole');
+    });
+  });
+
+  describe('criterion (5): the reads of git 2.47.3’s manuals', () => {
+    it.each([
+      ['git am -n', 'git am* -n*'],
+      ['git am -3n', 'git am* -n*'],
+      ['git clone -u x y', 'git clone* -u*'],
+      ['git clone -qu x y', 'git clone* -u*'],
+    ])('%j reads ask / hazard / hazard through %j', (command, entry) => {
+      expect(cell(command, policy)).toBe('ask / hazard / hazard');
+      expect(floored(command)).toContain(entry);
+    });
+
+    it('"git push -nf origin agentic/x" is WP-204’s block (`-n` is push’s --dry-run)', () => {
+      expect(cell('git push -nf origin agentic/x', policy)).toBe('block / block / block');
+      expect(auto('git push -nf origin agentic/x').evaluation.matched).toBe('git push -f*');
     });
   });
 });
