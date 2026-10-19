@@ -232,7 +232,8 @@ knowledge pages. PROGRESS backlog 480.
    a verb a program or configuration the policy has not read — `--upload-pack`, `make --eval`,
    `npm --script-shell`, `pytest -c`) or the `trust` kind (it widens what a verb trusts — a refspec to
    a ref of its own choosing, `--no-verify`, `git merge -s ours`/`-X`, an unread package index) stays
-   `deny`. A `path` hazard (a flag that writes a path — `--junitxml`, `go test -coverprofile`) runs,
+   `deny`. A `path` hazard (a flag that writes a path — `--junitxml`, `go test -coverprofile`, and
+   since WP-221 (2026-10-19) `logcli`'s `--cpuprofile`, `--memprofile` and `--part-path-prefix`) runs,
    like any other write in the workspace.
 3. **The git boundary is a hard carve-out, `deny` in every mode and applied to `allow` as well as to
    `ask`**, because the git host is the one place the sandbox can reach that holds other people's

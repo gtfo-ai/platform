@@ -705,7 +705,8 @@ const MAKE_VERBS: readonly [string, ...string[]] = ['make', 'gmake'];
  * pytest-cov's `--cov-report=<kind>:<dest>`, go's build flags `-pkgdir`, `-debug-trace`,
  * `-debug-actiongraph` and `-debug-runtime-trace`, and the test binary's `-test.testlogfile`,
  * `-test.gocoverdir` and `-test.fuzzcachedir`, each in the spellings read off the tools'
- * sources at the entries. Until
+ * sources at the entries — and since WP-221 (backlog 624) logcli's `--cpuprofile`, `--memprofile`
+ * and `--part-path-prefix`, beside go's profile flags. Until
  * WP-104 this docblock called the first three *"contained by the workspace-only writable mount"*;
  * the mount contains a write to the workspace and nothing else, and the workspace is exactly where
  * BD-024's protected paths live — the path guard judges only the Edit and Write tools, so a test
@@ -1116,6 +1117,41 @@ const goPathWritingFloor =
         name.startsWith('go') && flags.some((flag) => spelled.test(flag)),
     };
   };
+
+/**
+ * logcli options that write a file at a path the command line chose (WP-221, backlog 624), as
+ * {@link GO_PATH_WRITING_TEST_FLAGS} are go's. logcli 3.7.7's `cmd/logcli/main.go`
+ * (https://github.com/grafana/loki/blob/v3.7.7/cmd/logcli/main.go): `--cpuprofile` and
+ * `--memprofile` are `os.Create`d, so truncated, right after parsing and before any request;
+ * `--part-path-prefix` (`query`) saves each response to `<prefix>_<start>_<end>.part`, and
+ * `--merge-parts` then deletes those files. All three wrote their file in `platform-runtime:s16`
+ * with `--network none`, the query failing (PROGRESS § WP-221). The skill grammar marks them
+ * (`SKILL_COMMAND_GRAMMARS`' `pathWriting`, held to these floors by the planner's census).
+ */
+export const LOGCLI_PATH_WRITING_OPTIONS: readonly string[] = [
+  'cpuprofile',
+  'memprofile',
+  'part-path-prefix',
+];
+
+/**
+ * One floor per logcli option, by its exact name with two dashes and `=` or a space: kingpin (v2,
+ * logcli's parser) matches a long flag by its whole name (`--cpuprof` is refused, measured) and
+ * reads a single dash as a short flag. The pattern's first word is the glob `logcli*`, never the
+ * bare name, so the floor does not put logcli on {@link FLOORED_NAMES}: a name known there loses
+ * the unknown program rule's reading of its other subcommands (`logcli delete sudo id` reads
+ * uncertain, measured), the reason the skill CLIs' environment sits on
+ * {@link ENVIRONMENT_ONLY_FLOORS}.
+ */
+const logcliPathWritingFloor = (optionName: string): HazardousArgument => {
+  const spelled = new RegExp(`^--${optionName}(?:=|$)`);
+  return {
+    pattern: `logcli* --${optionName} (two dashes, = or a space)`,
+    kind: 'path',
+    hazard: `logcli --${optionName} writes to a path the command line chose, which the path guard never sees (BD-024)`,
+    tokens: ({ name, flags }) => name === 'logcli' && flags.some((flag) => spelled.test(flag)),
+  };
+};
 
 /**
  * pytest 9.0.2's short options that take a value (`-k`, `-m`, `-c`, `-p`, `-o`, `-W`, `-r`): in a
@@ -2059,6 +2095,9 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   ...GO_PATH_WRITING_TEST_FLAGS.map(goPathWritingFloor('optional')),
   // The test binary's own three (review round 1): `test.`-prefixed only, before or after `-args`.
   ...GO_PATH_WRITING_BINARY_FLAGS.map(goPathWritingFloor('required')),
+  // logcli's three (WP-221, backlog 624), as go's: floored always, `--part-path-prefix` with or
+  // without `--merge-parts`.
+  ...LOGCLI_PATH_WRITING_OPTIONS.map(logcliPathWritingFloor),
   {
     pattern: 'pytest -o / --override-ini (any key, any spelling argparse accepts)',
     kind: 'command',

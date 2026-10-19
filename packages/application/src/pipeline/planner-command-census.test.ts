@@ -16,6 +16,7 @@ import {
   environmentSpellsFloor,
   evaluateCommand,
   FLOORED_NAMES,
+  hazardousArguments,
   KNOWN_NON_WRAPPERS,
   PRECISE_ALLOW_ENTRIES,
   PROGRAMS_THAT_RUN_A_COMMAND,
@@ -26,6 +27,7 @@ import {
   COMMAND_ALLOW_BY_STAGE,
   commandBaselineFor,
   SKILL_COMMAND_GRAMMARS,
+  type SkillCommandGrammar,
 } from './planner.js';
 
 const firstToken = (entry: string): string => entry.trim().split(/\s+/)[0] as string;
@@ -170,5 +172,80 @@ describe('WP-211 review round 1: the environment a skill CLI runs a program from
       evaluateCommand({ command: "glab alias set x '!sudo id'" }, BASELINES.implementation)
         .uncertainty,
     ).not.toEqual([]);
+  });
+});
+
+/**
+ * WP-221 ruling (b) (backlog 624): every grammar option marked `pathWriting` meets a `path` floor
+ * of the domain's, in both spellings, on a line its entry admits. Omission fails closed: a marked
+ * option with no floor, or one its grammar does not list, is named.
+ */
+const pathWritingSpellings = (
+  grammars: Readonly<Record<string, SkillCommandGrammar>>,
+): readonly { readonly entry: string; readonly option: string; readonly line: string }[] =>
+  Object.entries(grammars).flatMap(([entry, grammar]) =>
+    (grammar.pathWriting ?? []).flatMap((option) => {
+      const long = option.split('/').at(-1) as string;
+      const admitted = entry.replace(/\s*\*$/, ' x');
+      return [`${long}=f`, `${long} f`].map((spelling) => ({
+        entry,
+        option,
+        line: `${admitted} ${spelling}`,
+      }));
+    }),
+  );
+
+const pathWritingCensus = (
+  grammars: Readonly<Record<string, SkillCommandGrammar>> = SKILL_COMMAND_GRAMMARS,
+): readonly string[] => [
+  ...Object.entries(grammars).flatMap(([entry, grammar]) =>
+    (grammar.pathWriting ?? [])
+      .filter((option) => !grammar.options.includes(option))
+      .map((option) => `${entry}: ${option} is not an option of its grammar`),
+  ),
+  ...pathWritingSpellings(grammars)
+    .filter(({ line }) => !hazardousArguments(line).some((floor) => floor.kind === 'path'))
+    .map(({ entry, line }) => `${entry}: ${JSON.stringify(line)} meets no path floor`),
+];
+
+describe('WP-221, backlog 624: every path-writing grammar option meets a path floor (census)', () => {
+  it('holds every marked option to a path floor, in both spellings', () => {
+    expect(pathWritingSpellings(SKILL_COMMAND_GRAMMARS).map(({ line }) => line)).toEqual([
+      'logcli query x --cpuprofile=f',
+      'logcli query x --cpuprofile f',
+      'logcli query x --memprofile=f',
+      'logcli query x --memprofile f',
+      'logcli query x --part-path-prefix=f',
+      'logcli query x --part-path-prefix f',
+    ]);
+    expect(pathWritingCensus()).toEqual([]);
+  });
+
+  it('refuses a marked option with no floor, naming it', () => {
+    const logcli = SKILL_COMMAND_GRAMMARS['logcli query *'] as SkillCommandGrammar;
+    const marked = {
+      ...SKILL_COMMAND_GRAMMARS,
+      'logcli query *': { ...logcli, pathWriting: [...(logcli.pathWriting ?? []), '--limit'] },
+    };
+    expect(pathWritingCensus(marked)).toEqual([
+      'logcli query *: "logcli query x --limit=f" meets no path floor',
+      'logcli query *: "logcli query x --limit f" meets no path floor',
+    ]);
+  });
+
+  it('refuses a mark its grammar does not list, naming it', () => {
+    const logcli = SKILL_COMMAND_GRAMMARS['logcli query *'] as SkillCommandGrammar;
+    const marked = {
+      ...SKILL_COMMAND_GRAMMARS,
+      'logcli query *': {
+        ...logcli,
+        pathWriting: [...(logcli.pathWriting ?? []), '--cpu-profile'],
+      },
+    };
+    expect(pathWritingCensus(marked)).toEqual([
+      'logcli query *: --cpu-profile is not an option of its grammar',
+      'logcli query *: "logcli query x --cpu-profile=f" meets no path floor',
+      'logcli query *: "logcli query x --cpu-profile f" meets no path floor',
+    ]);
   });
 });

@@ -358,6 +358,12 @@ export interface SkillCommandGrammar {
   readonly cli: string;
   /** Every option the subcommand's `--help` lists, inherited ones included. */
   readonly options: readonly string[];
+  /**
+   * The options among {@link options} that write a file at a path the caller names (WP-221,
+   * backlog 624). Each must meet a `path` floor of the domain's in both spellings, `=` and a space;
+   * the planner's census fails by name on one that does not.
+   */
+  readonly pathWriting?: readonly string[];
 }
 
 const GLAB = 'glab 1.117.0';
@@ -384,7 +390,8 @@ const JIRA_INHERITED = ['-c/--config', '--debug', '-p/--project'];
  *    `ENVIRONMENT_ONLY_FLOORS` (WP-211 review round 1), so a line carrying one is uncertain;
  *  - `--jq` (glab) is an expression glab evaluates in process (gojq, `go.mod` at v1.117.0);
  *  - logcli's `--cpuprofile`, `--memprofile` and `--part-path-prefix` write a file the caller names
- *    — a write, not a program (PROGRESS § WP-211, discovered work).
+ *    — a write, not a program — and are marked `pathWriting`, so each is held to the domain's
+ *    `path` floor (`LOGCLI_PATH_WRITING_OPTIONS`, WP-221, backlog 624).
  */
 export const SKILL_COMMAND_GRAMMARS: Readonly<Record<string, SkillCommandGrammar>> = {
   'logcli query *': {
@@ -448,6 +455,7 @@ export const SKILL_COMMAND_GRAMMARS: Readonly<Record<string, SkillCommandGrammar
       '-f/--[no-]follow',
       '--delay-for',
     ],
+    pathWriting: ['--cpuprofile', '--memprofile', '--part-path-prefix'],
   },
   'sentry-cli issues list *': {
     cli: SENTRY_CLI,

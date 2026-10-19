@@ -20,6 +20,7 @@ import {
   evaluateCommand,
   expansionCompletesBlockEntry,
   FLOOR_OPTION_READINGS,
+  FLOORED_NAMES,
   flagValueHidesBlockEntry,
   GIT_GLOBAL_OPTIONS,
   GIT_GLOBAL_OPTIONS_SOURCE,
@@ -5832,5 +5833,51 @@ describe('WP-211, backlogs 606 and 581: composer is a package runner, and yarn c
     ])('control: %j keeps ask / auto / deny', (command) => {
       expectCells(command, 'ask / auto / deny');
     });
+  });
+});
+
+/**
+ * WP-221, backlog 624: logcli's three path-writing options are on the path floor, as go's profile
+ * flags are. The `loki-logs` skill's entry (`COMMAND_ALLOW_BY_SKILL`, planner.ts) on the
+ * investigator's read-only baseline and the developer's; every row read `allow / allow / allow`
+ * before (PROGRESS § WP-221). Under `auto` the write runs, as any workspace write does (BD-025's
+ * 2026-10-06 amendment §2), so only the attended and `deny` cells move.
+ */
+describe('WP-221, backlog 624: logcli’s path-writing options meet the path floor', () => {
+  const withLoki = (given: ResolvedCommandPolicy): ResolvedCommandPolicy => ({
+    ...given,
+    allow: [...given.allow, 'logcli query *'],
+  });
+  const LOKI_BASELINES = { ro: withLoki(BASELINES.ro), impl: withLoki(BASELINES.impl) };
+
+  it.each([
+    ['logcli query x --cpuprofile=f', 'logcli* --cpuprofile'],
+    ['logcli query x --cpuprofile f', 'logcli* --cpuprofile'],
+    ['logcli query x --memprofile=f', 'logcli* --memprofile'],
+    ['logcli query x --memprofile f', 'logcli* --memprofile'],
+    ['logcli query x --part-path-prefix=p --merge-parts', 'logcli* --part-path-prefix'],
+    ['logcli query x --part-path-prefix p --merge-parts', 'logcli* --part-path-prefix'],
+  ])('%j reads ask / auto / deny (%s)', (command, floor) => {
+    for (const [name, given] of Object.entries(LOKI_BASELINES)) {
+      expect(cell(command, given), name).toBe('ask / auto / deny');
+      expect(
+        hazardousArguments(command).map((entry) => [entry.kind, entry.pattern.split(' (')[0]]),
+        name,
+      ).toEqual([['path', floor]]);
+    }
+  });
+
+  it.each(['logcli query x --since=1h', 'logcli query x --limit 10'])(
+    'control: %j keeps allow / allow / allow',
+    (command) => {
+      for (const [name, given] of Object.entries(LOKI_BASELINES)) {
+        expect(cell(command, given), name).toBe('allow / allow / allow');
+      }
+    },
+  );
+
+  it('keeps logcli off the floored names, so its other subcommands stay read', () => {
+    expect(FLOORED_NAMES.some((name) => name === 'logcli')).toBe(false);
+    expect(cell('logcli delete sudo id', BASELINES.impl)).toBe('ask / uncertain / uncertain');
   });
 });
