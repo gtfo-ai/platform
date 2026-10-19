@@ -2983,7 +2983,9 @@ const splitFlags = (
 // `command-policy.test.ts`). Two facts are program-independent and only tighten: getopt reads a
 // cluster of letters letter by letter, and an operand may stand anywhere among the operands.
 // A `HAZARDOUS_ARGUMENTS` pattern is read through the same functions in the `hazard` reading —
-// operands by index, as before WP-204 — and its options by the rules of the floored program's own
+// its words by place, as before WP-204, except that a word after an option written with no `=`
+// may be left out (WP-217, backlog 616: WP-198's both-ways reading, so `git -C . commit -n` meets
+// `git commit* -n*`) — and its options by the rules of the floored program's own
 // parser (WP-214, backlog 613): a program `FLOOR_OPTION_READINGS` declares getopt-style has its
 // clusters read letter by letter up to the first letter that takes a value (git's `-an` is
 // `-a -n`), and every other program's options stay whole, because a floor's programs are not all
@@ -3021,12 +3023,14 @@ const clusterLetters = (flags: readonly string[], valued?: string): readonly str
   });
 
 /**
- * The letters that take a value for the floored program `positional` names by place, when
+ * The letters that take a value for the floored program `argv` (its words, unquoted) runs, when
  * {@link FLOOR_OPTION_READINGS} declares it getopt-style — `''` for a subcommand its table does not
- * name, which fails closed — and `undefined` for a program read whole.
+ * name, which fails closed — and `undefined` for a program read whole. The subcommand is the one
+ * the program's own parser finds (WP-217, backlog 616): git's past its global options
+ * (`gitSubcommandOf`), so `git -C . commit -mn` is a message `n`, not the `.` read by place.
  */
-const getoptValuedLetters = (positional: readonly string[]): string | undefined => {
-  const [program, subcommand] = positional;
+const getoptValuedLetters = (argv: readonly string[]): string | undefined => {
+  const [program, ...rest] = argv;
   const declared =
     program !== undefined && Object.hasOwn(FLOOR_OPTION_READINGS, program)
       ? FLOOR_OPTION_READINGS[program]
@@ -3034,7 +3038,9 @@ const getoptValuedLetters = (positional: readonly string[]): string | undefined 
   if (declared?.reading !== 'getopt') {
     return undefined;
   }
-  return subcommand !== undefined && Object.hasOwn(declared.valued, subcommand)
+  // git is the one program declared getopt-style; its parser is the subcommand's reader.
+  const subcommand = gitSubcommandOf(program as string, rest);
+  return subcommand !== null && Object.hasOwn(declared.valued, subcommand)
     ? declared.valued[subcommand]
     : '';
 };
@@ -3078,7 +3084,8 @@ const entryFlagsMet = (
  * literal ones — `rm`; `git branch`; `gh release`; `npm publish` — which the program reads by
  * place, so they are matched by place as before. The first word with a glob character is the first
  * operand (`/*` of `rm -rf /*`, `*` of `git branch -D *`). argv[0] is always a command word. The
- * `hazard` reading has no operands: every word by place, as before WP-204.
+ * `hazard` reading has no operands: every word by place, as before WP-204, but a line word after
+ * an option with no `=` may be left out there too (`tokensMatch` hands it `skippable`, WP-217).
  */
 const operandStart = (entry: readonly string[], reading: PatternReading): number => {
   const glob = entry.findIndex((word) => /[*?[]/.test(word));
@@ -3153,6 +3160,16 @@ const entryOperandsMet = (
   return needed.length === 0 || entryReach(needed, line, skippable, reading).has(needed.length);
 };
 
+/**
+ * Whether a candidate argv meets a pattern's options and positionals. In the `hazard` reading a
+ * floor's words are read as a block entry's command words are (WP-217, backlog 616): a word
+ * written after an option with no `=` may be that option's value, so it may be left out
+ * (`flagValuePositions`) — `git -C . commit -n` meets `git commit* -n*` with `.` read as `-C`'s
+ * value, and `pip install -r req.txt -r http://x` meets `pip install -r http*` with `req.txt` the
+ * first `-r`'s. A floor met either way is the floor: the reading only adds matches, so it fails
+ * closed. **The over-ask:** a word after an option that takes none (`git --no-pager log …`) may be
+ * left out too. A block entry's both-ways reading stays `blockEntryBehindFlagValue`'s (`uncertain`).
+ */
 const tokensMatch = (
   patternTokens: readonly string[],
   commandTokens: readonly string[],
@@ -3160,13 +3177,20 @@ const tokensMatch = (
 ): boolean => {
   const pattern = splitFlags(patternTokens);
   const command = splitFlags(commandTokens);
+  const hazard = reading === 'hazard';
   return (
-    entryOperandsMet(pattern.positional, command.positional, reading) &&
+    entryOperandsMet(
+      pattern.positional,
+      command.positional,
+      reading,
+      true,
+      hazard ? flagValuePositions(commandTokens) : [],
+    ) &&
     entryFlagsMet(
       pattern.flags,
       command.flags,
       reading,
-      reading === 'hazard' ? getoptValuedLetters(command.positional) : undefined,
+      hazard ? getoptValuedLetters(commandTokens.map(unquoteToken)) : undefined,
     )
   );
 };

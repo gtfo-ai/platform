@@ -5337,3 +5337,116 @@ describe('WP-216, backlog 614: a wrapper’s option word the shell may split is 
     });
   });
 });
+
+describe('WP-217, backlogs 616 and 617: a floor reads a word after an option both ways', () => {
+  // 616's and 617's verdicts are WP-214's measurement, re-measured in PROGRESS § WP-217 (a);
+  // nothing executes here.
+  const floored = (command: string): readonly string[] =>
+    hazardousArguments(command).map((entry) => entry.pattern);
+
+  describe('criterion (1): a git global option’s value no longer moves a floor’s subcommand', () => {
+    it.each([
+      ['git -C . commit -n -m y', 'git commit* -n*', 'ask / hazard / hazard'],
+      ['git -c user.name=x commit -n -m y', 'git commit* -n*', 'ask / hazard / hazard'],
+      ['git -C . merge -ns ours origin/main', 'git merge* -s*', 'ask / hazard / hazard'],
+      ['git -C . merge -X ours origin/main', 'git merge* -X*', 'ask / hazard / hazard'],
+      ['git -C . am -n x.mbox', 'git am* -n*', 'ask / hazard / hazard'],
+      ['git -C . clone -u x y z', 'git clone* -u*', 'ask / hazard / hazard'],
+      // The boundary refuses `--git-dir` and `--work-tree` before the floor is read (WP-200); the
+      // floor is carried all the same.
+      ['git --git-dir .git commit -n -m y', 'git commit* -n*', 'ask / git / git'],
+      ['git --work-tree . commit -n -m y', 'git commit* -n*', 'ask / git / git'],
+    ])('%j carries %j and reads %s', (command, entry, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+      expect(floored(command)).toContain(entry);
+    });
+
+    it('"git -C . push origin HEAD:main" reads the cell of the line without `-C .`', () => {
+      // The git boundary refuses both (a run pushes only `agentic/` branches), so the row asserts
+      // equality, as criterion (1) allows.
+      expect(cell('git -C . push origin HEAD:main', policy)).toBe(
+        cell('git push origin HEAD:main', policy),
+      );
+      expect(cell('git -C . push origin HEAD:main', policy)).toBe('ask / git / git');
+    });
+  });
+
+  describe('criterion (2): pip’s second `-r` is compared', () => {
+    it.each([
+      'pip install -r req.txt -r http://x/r.txt',
+      'pip --proxy http://p install -r http://x/r.txt',
+    ])('%j reads ask / hazard / hazard through "pip install -r http*"', (command) => {
+      expect(cell(command, policy)).toBe('ask / hazard / hazard');
+      expect(floored(command)).toContain('pip install -r http*');
+    });
+
+    it('"pip --proxy http://p install --target /x" reads "pip install --target /x"’s cell', () => {
+      expect(cell('pip --proxy http://p install --target /x', policy)).toBe(
+        cell('pip install --target /x', policy),
+      );
+      expect(floored('pip --proxy http://p install --target /x')).toContain(
+        'pip install* --target*',
+      );
+    });
+
+    it.each([
+      ['pip install -r req.txt', 'allow / allow / allow'],
+      ['pip install -qr req.txt', 'ask / auto / deny'],
+    ])('control: %j keeps %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+  });
+
+  describe('criterion (3): the valued letters are looked up under the subcommand git finds', () => {
+    it('"git -C . commit -mn" is floored as "git commit -mn" is: a message `n`', () => {
+      expect(floored('git -C . commit -mn')).toEqual(floored('git commit -mn'));
+      expect(floored('git -C . commit -mn')).toEqual([]);
+      // Not allow: the allow entry `git commit *` does not read past `-C .` (unchanged).
+      expect(cell('git -C . commit -mn', policy)).toBe('ask / auto / deny');
+    });
+
+    // Review round 1: a global option's value that is itself a subcommand the table names is not
+    // the subcommand — the letters are git's table for the word git runs, not the first it names.
+    it.each([
+      // clone's `-o` takes a value; commit's does not, so `-n` is read.
+      ['git -C clone commit -on -m y', 'git commit* -n*'],
+      // commit's `-t` takes a value; merge's does not, so `-s` is read.
+      ['git -C commit merge -ts ours origin/main', 'git merge* -s*'],
+    ])('%j carries %j: the value’s table does not hide the floor', (command, entry) => {
+      expect(cell(command, policy)).toBe('ask / hazard / hazard');
+      expect(floored(command)).toContain(entry);
+    });
+
+    it('"git -C am commit -mn" carries no floor: the value’s table does not add one', () => {
+      // am's `-m` takes no value, commit's does: read under `am`, `-mn` would carry `-n`.
+      expect(floored('git -C am commit -mn')).toEqual([]);
+      expect(cell('git -C am commit -mn', policy)).toBe('ask / auto / deny');
+    });
+
+    it('"git -C . commit -anm x" reads hazard under auto', () => {
+      expect(cell('git -C . commit -anm x', policy)).toBe('ask / hazard / hazard');
+      expect(floored('git -C . commit -anm x')).toContain('git commit* -n*');
+    });
+  });
+
+  describe('criterion (4): the controls keep their cells', () => {
+    it.each([
+      ['git --no-pager commit -n -m y', 'ask / hazard / hazard'],
+      ['git -C . commit --no-verify -m y', 'ask / hazard / hazard'],
+      ['git -C . commit -m y', 'ask / auto / deny'],
+      ['git -c user.name=x commit -m y', 'ask / auto / deny'],
+      ['git --git-dir=.git commit -n -m y', 'ask / git / git'],
+    ])('%j reads %s', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+
+    it.each([
+      // The over-ask, named: a word after an option that takes no value (`--upgrade`) may be left
+      // out too, so the operand `foo` no longer hides the floor; without the option it still does.
+      ['pip install --upgrade foo -r http://x/r.txt', 'ask / hazard / hazard'],
+      ['pip install foo -r http://x/r.txt', 'ask / auto / deny'],
+    ])('%j reads %s (pinned)', (command, expected) => {
+      expect(cell(command, policy)).toBe(expected);
+    });
+  });
+});
