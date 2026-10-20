@@ -2364,7 +2364,8 @@ describe('WP-161 — git’s abbreviated long options and the generated tables',
   describe('the generated tables (criterion (3))', () => {
     it('records the git it was read from', () => {
       expect(GIT_LONG_OPTIONS_SOURCE.git).toMatch(/^git version \d+\.\d+\.\d+/);
-      expect(GIT_LONG_OPTIONS_SOURCE.image).toMatch(/^platform-runtime:/);
+      // backlog 635: the image's tag is not part of the table, so `--image <ref>` compares tables
+      expect(Object.keys(GIT_LONG_OPTIONS_SOURCE)).toEqual(['git']);
     });
 
     it('is one table per subcommand: bare spellings, no `--`, no `=`, no duplicates', () => {

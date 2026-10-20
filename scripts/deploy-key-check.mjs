@@ -60,6 +60,18 @@ const {
   REPO_ROOT,
   docker,
 } = await import(new URL('../test/e2e/support/docker-workspace.ts', import.meta.url).href);
+/**
+ * The git list the CLI must see on a deploy-key run (backlog 634): the run's own `insteadOf` entry,
+ * then the platform's, read off `PLATFORM_GIT_CONFIG` — the order `cliEnvironment` numbers them in.
+ * A hand-written `[insteadOf, core.fsmonitor]` went stale when backlog 488 added `core.hooksPath`.
+ */
+const { PLATFORM_GIT_CONFIG } = await import(
+  new URL('../packages/infrastructure/src/runner/options.ts', import.meta.url).href
+);
+const expectedGitKeys = (standin) => [
+  `url.ssh://git@${standin}:443/.insteadOf`,
+  ...PLATFORM_GIT_CONFIG.map((entry) => entry.key),
+];
 
 const RUN_ID = '9f3a1c2e-0000-4000-8000-00000000146a';
 const IDLE_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000146b';
@@ -371,9 +383,8 @@ try {
       told.gitSshCommand.includes('IdentityAgent=/ctl/ssh-agent.sock') &&
       told.gitSshCommand.includes('HostKeyAlias=gitlab.com') &&
       told.gitSshCommand.includes('connect --proxy') &&
-      JSON.stringify(told.gitConfigKeys) ===
-        JSON.stringify([`url.ssh://git@${standin}:443/.insteadOf`, 'core.fsmonitor']),
-    JSON.stringify({ keys: told?.gitConfigKeys }),
+      JSON.stringify(told.gitConfigKeys) === JSON.stringify(expectedGitKeys(standin)),
+    JSON.stringify({ keys: told?.gitConfigKeys, expected: expectedGitKeys(standin) }),
   );
   record(
     'the run container pushed agentic/wp146-check to the stand-in and read it back',

@@ -13,7 +13,6 @@
 /** Where these tables were read. */
 export const GIT_LONG_OPTIONS_SOURCE = {
   git: 'git version 2.47.3',
-  image: 'platform-runtime:wp151',
 } as const;
 
 /** One subcommand's long options, without the leading `--` or a trailing `=`. */

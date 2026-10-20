@@ -26,7 +26,11 @@
  * run image. `node scripts/git-long-options-check.mjs` regenerates and diffs.
  *
  * Usage: `node scripts/git-long-options.mjs [--image <ref>] [--out <path>]`
- * (default image `platform-runtime:${GIT_OPTIONS_IMAGE_TAG:-wp151}`).
+ * (default image `${WORKSPACE_E2E_RUNTIME_IMAGE:-platform-runtime:dev}`, the run image
+ * `build-images.mjs` tags and the e2e support reads — backlog 635).
+ *
+ * The generated file records git's version and **not** the image's name, so `--image <ref>`
+ * compares the table, not the tag: a tag is a name somebody chose, the version is what was read.
  */
 import { execFile, spawnSync } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
@@ -42,7 +46,7 @@ export const GENERATED_PATH = path.join(
   REPO,
   'packages/domain/src/policies/git-long-options.generated.ts',
 );
-export const DEFAULT_IMAGE = `platform-runtime:${process.env.GIT_OPTIONS_IMAGE_TAG ?? 'wp151'}`;
+export const DEFAULT_IMAGE = process.env.WORKSPACE_E2E_RUNTIME_IMAGE ?? 'platform-runtime:dev';
 
 const { POLICY_GIT_SUBCOMMANDS, GIT_ABBREVIATION_HAZARDS } = await import(
   '../packages/domain/src/policies/command-policy.ts'
@@ -182,13 +186,13 @@ export const readTables = async (image = DEFAULT_IMAGE) => {
       throw new Error(`no table holds the hazardous spelling --${spelling}`);
     }
   }
-  return { version, image, tables: result, tableless: tableless.sort() };
+  return { version, tables: result, tableless: tableless.sort() };
 };
 
 const quote = (value) => `'${value}'`;
 
 /** The generated module's text, formatted by biome afterwards. */
-export const render = ({ version, image, tables, tableless }) => {
+export const render = ({ version, tables, tableless }) => {
   const body = Object.entries(tables)
     .map(
       ([sub, table]) =>
@@ -210,7 +214,6 @@ export const render = ({ version, image, tables, tableless }) => {
 /** Where these tables were read. */
 export const GIT_LONG_OPTIONS_SOURCE = {
   git: ${quote(version)},
-  image: ${quote(image)},
 } as const;
 
 /** One subcommand's long options, without the leading \`--\` or a trailing \`=\`. */
