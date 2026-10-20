@@ -1033,6 +1033,42 @@ compose e2e and three documents; WP-239 touches two scripts under `scripts/`. No
 lockfile. No row needs a migration, so the next free number stays **0092**. No row needs a credential.
 Carried entries, with their reasons, are in PROGRESS § "Architect ruling (M15, session 19)".
 
+## Milestone M16 — the go flag values no floor reads, measured where go is (architect, session 19)
+
+**Why this milestone exists.** M15 closed with WP-239 (`289632b4`). Nothing was filed during it: the
+backlog's highest heading is still **640**, and every heading from 634 on is RESOLVED. What is open is
+the set M15 carried, and this pass re-read each entry's reason. One has moved. **639** — go hands the
+values of `-gcflags`, `-ldflags` and `-asmflags` to the compiler, linker and assembler, all three expand
+an `@<file>` word, so `go test -ldflags=all=@f` walks past the `go* -ldflags*extld*` floor, and the
+tools' own path-writing options (`-o`, `-cpuprofile`, `-memprofile`, `-asmhdr`, …) are read by no `path`
+floor — was carried because no image the platform builds ships go, so TD-030 tier 2 had no pinned
+version to measure at. Re-read, that reason is half true. The module's go floors already stand on
+**go1.25.0's sources, read and not run**: WP-120's six `go test` path flags, WP-200's `-extld` floor and
+WP-232's residual paragraph all cite that tag. So the version is pinned by citation, and what 639 lacks
+is the measurement those floors never had. A `golang` image at go1.25.0, pulled by digest for the
+measurement and named in no Dockerfile, no compose file and no test, supplies it; the floor is then
+regressed as every floor is — by its rows and by TD-030 decision 4's corpus diff — and re-measured at
+the same digest. The residual that stays is the one every go floor already carries: a project image
+with another go version is tier 2 at a version nobody measured, and the docblock says so. **617's
+cluster half** (pip's `-qr http…`) has the same route open to it and is not taken this milestone: its
+attended reading is `ask`, not `allow`; M13's third amendment states its reopen trigger and nothing has
+tripped it; and it is the next row on `command-policy.ts` once WP-240 has walked the route once.
+
+**Order.** One row. **WP-240 is the only row on `command-policy.ts`**, so it is serial on nothing. It
+needs the daemon for its (a) — one `docker run` of one pulled image, no compose project, no product
+image — and does not hold it. **No migration**, and the next free number stays **0092**
+(`0091_task_duty_leases.sql` is the last on disk). **No row needs a model credential, a GitLab or a
+Jira.** Disposition of every open entry: PROGRESS § "Architect ruling (M16, session 19)".
+
+| WP | Title | Deps | Acceptance criteria |
+|---|---|---|---|
+| WP-240 | **Scanner: a go `-gcflags`/`-ldflags`/`-asmflags` value is read for an `@<file>` word and for the tools' path-writing options, measured in a pinned go1.25.0 image that is never shipped** (backlog **639**; minor, latent, and a hypothesis until (a): a reading of go1.25.0's sources, not a measurement). **Migration: no.** **Docker for (a)** (a `docker run` of a pulled image; not alone). **Rulings:** **(a) Measured first**, before any change: the `golang` image for go1.25.0 — the version the module's go floors cite — pulled once and recorded in the notes by digest and by `go version`, run with `--network none` over a scratch module with one passing test. Four runs, `f` written inside the module: `go test -ldflags=all=@f ./...` with `f` holding one option the linker refuses (the error naming that option is the expansion); the same for `-gcflags=all=@f` (compiler) and `-asmflags=all=@f` (assembler); and one path-writing option inside a value (`-gcflags=all=-cpuprofile=<p>`, or the one the compiler's `-help` lists) checked for the file it writes. Two controls: `go test -ldflags=-s ./...` passes, and `go test -gcflags=@f ./...` is refused by go itself (639's `missing =<value>` reading). A 1.25 patch tag is acceptable if the notes record it and (c)'s citation moves to it. On this machine a plain `docker run` is rewritten by the shell wrapper (resume note): `rtk proxy docker run`. **(b)** If (a) refutes the reading — no tool expands `@`, or the values do not reach the tools — the row builds nothing: the measurement is filed on 639, the policy docblock's go paragraph is corrected, and the row stops. **(c)** A go value grammar in `command-policy.ts` reads the three flags in both dash forms, with `=` or a following word, with or without `<pattern>=`, split as go splits a value (`quoted.Split`: space-separated, single or double quotes), cited at go1.25.0 with the four files 639 names. An `@` word in a value is floored with the `-extld` floor's kind (`command`); the compiler's, linker's and assembler's path-writing options are `path` floors, their list read off the three tools' `-help` in (a)'s image and quoted in the docblock, as WP-120 did for `go test`'s. A value the reader cannot split is uncertain, never `allow`. **(d)** Rows under a describe naming 639, three baselines: `go test -ldflags=all=@f ./...` and `go test -gcflags=all=@f ./...` read `ask / hazard / hazard` (the `-extld` rows' shape); `go test -gcflags=all=-cpuprofile=/tmp/c ./...` and `go test -ldflags=-o=/tmp/x ./...` read `ask / auto / deny` (WP-120's shape); `go test -ldflags=-s ./...` keeps `allow` and `go test -ldflags=-extld=/bin/id ./...` keeps `ask / hazard / hazard`. **Canary:** drop the `@` reading, and its rows fail by name. **(e)** The corpus diff (TD-030 decision 4) is recorded, every moved line named. **(f)** The docblock's *"go's is a residual, stated"* paragraph is replaced by the floor's statement, carrying the residual the other go floors carry — a project image with another go version is measured at none (rule 83). **Split clause:** (c)'s path-writing half (the three tools' option lists) moves to its own row if the lists take more than a day; the `@` half then stands alone, with (d)'s two `path` rows deferred with it, and the row says so. | WP-232 | **(1)** (a)'s table: digest, `go version`, each of the four runs and two controls with its exit code and the line that names the expanded option or the written file, before any change. **(2)** The grammar's unit cases: both dash forms, `=` and a following word, with and without `<pattern>=`, a quoted value, and an unsplittable value read uncertain. **(3)** (d)'s six lines with their readings; the canary. **(4)** (e)'s diff, or the statement that no committed line moved. **(5)** (f); `grep -ri golang docker compose.yml test` empty; `notices:check` PASS, `THIRD_PARTY_NOTICES.md` unchanged. **(6)** `pnpm run -s verify` PASS. |
+
+**Order and machine.** One row, and the only one on `command-policy.ts`. Its (a) pulls one image and
+runs it with `--network none`; the image is removed afterwards unless the notes say for whom it stays,
+and the volume count returns to the session's baseline. No lockfile change, no migration, no credential.
+Carried entries, with their reasons, are in PROGRESS § "Architect ruling (M16, session 19)".
+
 
 
 ## Suggested agent team for the orchestrator
