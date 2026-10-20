@@ -480,6 +480,16 @@ services:
       BACKUP_KEEP_MONTHS: ${BACKUP_KEEP_MONTHS:-6}
     volumes:
       - backups:/backups
+    # **The image's other `VOLUME`** (WP-235, backlog 631). The pinned image declares
+    # `VOLUME /var/lib/postgresql` beside `/backups`, and the backup container keeps nothing there,
+    # so it is a `tmpfs` rather than the anonymous volume Docker would otherwise create per
+    # container. Measured on Docker 29.4.0 / Compose 5.1.2: without this line a recreate (one
+    # changed environment value, or a changed image, which is the upgrade path) carried the old
+    # anonymous volume into the new container, and `docker compose down -v` then left it behind,
+    # one 1-byte orphan per recreate; with it both legs leave none.
+    # `test/e2e/compose/compose-config.e2e.test.ts` holds every `VOLUME` of the pinned images to a mount.
+    tmpfs:
+      - /var/lib/postgresql
     depends_on:
       db:
         condition: service_healthy

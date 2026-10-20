@@ -62,7 +62,7 @@
  * `platform-egress` only).
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -772,5 +772,80 @@ describe('compose.yml gives the app service the environment the server reads (WP
     expect(result.services['runner']?.environment['APP_LAUNCHER_URL']).toBe('http://launcher:7780');
     expect(result.services['runner']?.environment['APP_LAUNCHER_TOKEN']).toBe('t'.repeat(40));
     expect(result.services['launcher']?.environment['APP_LAUNCHER_TOKEN']).toBe('t'.repeat(40));
+  });
+});
+
+/**
+ * Every `VOLUME` an image declares is mounted by its service (WP-235, backlog 631).
+ *
+ * An image's `VOLUME` that the service does not mount becomes an **anonymous volume per
+ * container**, and a recreate hands it to the new container in a way `docker compose down -v` no
+ * longer removes: measured for `db-backup` (`VOLUME /var/lib/postgresql`), one 1-byte orphan per
+ * recreate, whether the recreate was a changed environment value or a changed image. So the
+ * declarations are read off the images themselves with `docker image inspect` — this is the one
+ * case in the file that needs the daemon, and it pulls a pinned image that is not present, by
+ * digest, so the answer is the pin's and not whatever a tag points at today.
+ *
+ * Scope, stated: the images pinned by digest are inspected. The two unpinned ones are the
+ * product's own, built from `docker/*.Dockerfile`, none of which may carry a `VOLUME` instruction
+ * (asserted below); what their base images declare is not read here.
+ */
+describe('compose.yml mounts every VOLUME its pinned images declare', () => {
+  /**
+   * Declared and unmounted, each with its reason. `db` mounts `db-data` *below* the declared path
+   * (`/var/lib/postgresql/data`), which does not satisfy it: the same recreate leaks one there
+   * (measured at WP-235). Mounting the declared path itself moves the data directory, which is a
+   * decision of its own, so ruling (c)'s split clause moves it out (WP-235's notes, discovered work).
+   */
+  const UNMOUNTED: readonly string[] = ['db /var/lib/postgresql'];
+
+  const declaredVolumes = (image: string): string[] => {
+    const inspect = (): string =>
+      execFileSync('docker', ['image', 'inspect', '--format', '{{json .Config.Volumes}}', image], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    let raw: string;
+    try {
+      raw = inspect();
+    } catch {
+      // stderr piped so a failed pull throws its own reason, not the second inspect's.
+      execFileSync('docker', ['pull', '--quiet', image], { stdio: ['ignore', 'ignore', 'pipe'] });
+      raw = inspect();
+    }
+    return Object.keys((JSON.parse(raw) as Record<string, unknown> | null) ?? {});
+  };
+
+  it('leaves no declared VOLUME of a pinned image to an anonymous volume, in any service', () => {
+    const result = config(['compose.yml'], { COMPOSE_PROFILES: 'backup' }) as unknown as {
+      services: Record<string, { image: string; volumes?: { target: string }[]; tmpfs?: string[] }>;
+    };
+    const unmounted: string[] = [];
+    const unpinned: string[] = [];
+    for (const [name, service] of Object.entries(result.services)) {
+      if (!service.image.includes('@sha256:')) {
+        unpinned.push(service.image.split(':')[0] ?? '');
+        continue;
+      }
+      const mounted = new Set([
+        ...(service.volumes ?? []).map((volume) => volume.target),
+        ...(service.tmpfs ?? []).map((entry) => entry.split(':')[0]),
+      ]);
+      for (const path of declaredVolumes(service.image)) {
+        if (!mounted.has(path)) {
+          unmounted.push(`${name} ${path}`);
+        }
+      }
+    }
+    expect(unmounted.sort()).toEqual([...UNMOUNTED].sort());
+    expect([...new Set(unpinned)].sort()).toEqual(['platform', 'platform-launcher']);
+  });
+
+  it('builds the product images with no VOLUME instruction', () => {
+    const docker = path.join(REPO, 'docker');
+    const withVolume = readdirSync(docker)
+      .filter((file) => file.endsWith('.Dockerfile'))
+      .filter((file) => /^\s*VOLUME\b/im.test(readFileSync(path.join(docker, file), 'utf8')));
+    expect(withVolume).toEqual([]);
   });
 });
