@@ -71,6 +71,7 @@ import {
   readHereDocumentOperator,
   readsHereDocumentsAsScripts,
   splitCommandSegments,
+  splitCommandSegmentsAsWritten,
   unreadableGitWord,
   unreadGitConfigKey,
   withCommandMemo,
@@ -936,7 +937,9 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
    * under `auto`. The parts of a composite are added to the walk, so none is judged only as part of
    * something skipped.
    */
-  const parts = (fragment: string): readonly string[] => splitCommandSegments(fragment);
+  // The parts a fragment is made of, its brace-expanded copy not among them (WP-243 review round
+  // 2): the copy is in the walk already, and counting it made every braced stage composite.
+  const parts = (fragment: string): readonly string[] => splitCommandSegmentsAsWritten(fragment);
   const queue = [...fragments];
   const seen = new Set<string>();
   // WP-200: the first third-band key, reported only when nothing on the line is refused.

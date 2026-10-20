@@ -481,8 +481,17 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   ignores the `$` and double-quotes the text, so every floor reads `npm test $"--script-shell=x"` as
 >   `npm test --script-shell=x` — npm 11.19.0 ran that marker (measured in the run image, which ships
 >   no catalogue); a `$"…"` word a catalogue the run supplies may translate stays a residual (TD-030,
->   amended 2026-10-20). What no floor reads is an expansion (`$x`, `${…}`, `$(…)`, a backtick,
->   braces, a glob). What still writes one without an `ask` is the **repository-content route**:
+>   amended 2026-10-20). Braces are expanded as bash expands them (WP-243, backlog 642): `go test
+>   {-cpuprofile,/tmp/c} ./...` is `go test -cpuprofile /tmp/c ./...` to every reader: the argv
+>   reading carries the expanded words, and a stage whose braces expand is parsed a second time as
+>   those words, so the ask list, the sed/awk reader, `find -exec`/`-ok`, `script -c` and `compgen -C`
+>   judge them too, the stricter of the two readings winning; the readers of the written words (a
+>   command name, a block entry's word, git's verb) also refuse a brace as an expansion — a comma list
+>   and an integer or single-letter sequence, nested, in bash's order, measured against bash 5.2.37
+>   in the run image; at most 256 words made by expansion (`BRACE_EXPANSION_CEILING`), and past it,
+>   or for a form not read (a zero-padded or mixed-case range, one bash leaves as written), the line
+>   is uncertain (`braceExpansion`). What no floor reads is an expansion (`$x`, `${…}`, `$(…)`, a
+>   backtick, a glob). What still writes one without an `ask` is the **repository-content route**:
 >   `make *`, `npm run *`, `pytest` running a `conftest.py` or reading a `pytest.ini` it locates from
 >   its arguments (`pytest sub/` reads a `sub/pytest.ini` the agent wrote), a lockfile install's
 >   lifecycle scripts — whatever the tree says after the agent edits it, which is BD-025's accepted

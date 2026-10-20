@@ -2819,6 +2819,28 @@ describe('WP-198 (b): argv as the shell hands it to the program', () => {
     [String.raw`x "\$" "\`" "\"" "\\" "\a" "\--"`, ['x', '$', '`', '"', '\\', '\\a', '\\--']],
     // WP-244: outside quotes a `$` before `"` goes (no catalogue); inside quotes it stays.
     [String.raw`x $"a\$b" $"\--" "$"x '$"x"'`, ['x', 'a$b', '\\--', '$x', '$"x"']],
+    // WP-243: braces expanded as bash 5.2.37 expands them (each row measured in the run image).
+    ['go test {-cpuprofile,/tmp/c} ./...', ['go', 'test', '-cpuprofile', '/tmp/c', './...']],
+    ['x -ldflags={-s,-o=/tmp/x}', ['x', '-ldflags=-s', '-ldflags=-o=/tmp/x']],
+    ['x a{1,2}{x,y}b {a,b{1,2}c}d', ['x', 'a1xb', 'a1yb', 'a2xb', 'a2yb', 'ad', 'b1cd', 'b2cd']],
+    ['x file{,.bak} {a,b,} {,} go{,,}', ['x', 'file', 'file.bak', 'a', 'b', 'go', 'go', 'go']],
+    [
+      'x {1..10..3} {10..1..-3} {1..3..0} {-3..-1}',
+      ['x', ...'1 4 7 10 10 7 4 1 1 2 3 -3 -2 -1'.split(' ')],
+    ],
+    ['x {e..a} {a..e..2} {A..C}', ['x', 'e', 'd', 'c', 'b', 'a', 'a', 'c', 'e', 'A', 'B', 'C']],
+    [
+      String.raw`x {"a b",c} "{a,b}" '{a,b}' {a\,b,c} \{a,b}`,
+      ['x', 'a b', 'c', '{a,b}', '{a,b}', 'a,b', 'c', '{a,b}'],
+    ],
+    [
+      'x {x},b} {{a,b} {a,b {} {x} {a,{b,c}d}',
+      ['x', 'x}', 'b', '{a', '{b', '{a,b', '{}', '{x}', 'a', 'bd', 'cd'],
+    ],
+    ['x {,a..b} {a..b,c}', ['x', 'a..b', 'a..b', 'c']],
+    ['xargs -I{} echo {}', ['xargs', '-I{}', 'echo', '{}']],
+    // `$(…)` and `${…}` are not looked inside; the braces after one expand.
+    ['x x$(printf %s {a,b})y ${HOME}{a,b}', ['x', 'x$(printf %s {a,b})y', '${HOME}a', '${HOME}b']],
   ])('reads %j as %j', (text, words) => {
     expect(argvWords(text)).toEqual(words);
   });

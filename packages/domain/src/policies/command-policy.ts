@@ -27,9 +27,20 @@
  *     WP-242): inside `"…"` a backslash stays unless `$`, a backtick, `"`, `\` or a newline
  *     follows, so `"\--"` is the positional `\--` the program receives and ends no option
  *     reading. `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no catalogue bash
- *     ignores the `$` and the text is double-quoted, so `$"--script-shell=x"` is that option. The
- *     residual is expansion (`$x`, `${…}`, `$(…)`, a backtick, braces, a glob), which no dequote
- *     reads, and a `$"…"` word a catalogue the run supplies may translate (TD-030, 2026-10-20).
+ *     ignores the `$` and the text is double-quoted, so `$"--script-shell=x"` is that option.
+ *     Braces are expanded on the argv reading as bash expands them (WP-243, backlog 642,
+ *     `expandBraces`): a comma list and an integer or single-letter sequence, bounded at
+ *     `BRACE_EXPANSION_CEILING` words; a brace past it or of a form the port does not read is
+ *     `braceExpansion`. Two places read the expansion: the argv reading (`argvWords`: the block
+ *     matcher, the floors, the git boundary's words), and `parseCommand`, which reads a stage whose
+ *     braces expand a second time as the words bash makes (review round 2) — so every reader,
+ *     the ask list, the sed/awk reader, `find -exec`, `script -c` and `compgen -C` included,
+ *     judges `find . {-ok,sudo} id +` as `find . -ok sudo id +`. Both readings are judged and the
+ *     union only tightens; the readers of the written words (a command name, a block entry's
+ *     word, git's verb) also refuse a brace through `expandsAsName`, and the git boundary asks
+ *     what a fragment is made of without the copy (`splitCommandSegmentsAsWritten`). The residual
+ *     is expansion (`$x`, `${…}`, `$(…)`, a backtick, a glob), which no dequote reads, and a
+ *     `$"…"` word a catalogue the run supplies may translate (TD-030, 2026-10-20).
  *  3. **The allow- and ask-lists stay prefix-anchored globs, and peel far less.** Only the
  *     block-list is generous — being generous with `allow` is how a policy becomes decoration.
  *     `env`-style wrappers are peeled for them; a leading `VAR=value`, `sh -c`, `eval` and `xargs`
@@ -211,12 +222,25 @@ export interface ResolvedCommandPolicy {
 }
 
 /**
+ * How many words the brace expansions of one text may make before the argv reading stops reading
+ * them (WP-243): the largest committed corpus line makes 2, and 256 leaves room for any line a
+ * person writes while bounding what a line can cost (`{1..100000}` is `braceExpansion`).
+ */
+export const BRACE_EXPANSION_CEILING = 256;
+
+/**
  * The constructs the scanner refuses to reason about. Each one floors the verdict at `ask`: the
  * line may be perfectly innocent, but the scanner cannot prove it, and a policy that guesses in
  * the permissive direction is worse than one that asks.
  */
 export const UNCERTAINTY = {
   unbalancedQuote: 'a quote is never closed',
+  /**
+   * WP-243 (backlog 642): the argv reading expands braces as bash does (`expandBraces`), bounded.
+   * A brace it does not read, or one that makes more words than the ceiling, is this — never
+   * `allow`, because the words the program receives are then unknown.
+   */
+  braceExpansion: `a brace expansion the platform does not read (a zero-padded or mixed-case range, a range bash leaves as written, or more than ${BRACE_EXPANSION_CEILING} words made by expansion) — write the words out; the platform reads a comma list ({a,b}) and an integer or single-letter range ({1..3}, {a..c})`,
   unterminatedSubstitution: 'a command or process substitution is never closed',
   unterminatedBacktick: 'a backtick substitution is never closed',
   ansiCQuoting: "ANSI-C quoting ($'…'), whose escapes change what the shell sees",
@@ -1035,9 +1059,9 @@ interface HazardousArgumentShape {
     readonly received?: readonly string[] | undefined;
     /**
      * Beside `received`, per word: whether bash may hand the program other text than `received`
-     * says — a `$` or backtick outside single quotes (an expansion), or an unquoted `{` — and,
-     * kept as an over-ask since WP-242 made the dequote keep it as bash does, a backslash inside
-     * double quotes before a character bash does not escape there.
+     * says — a `$` or backtick outside single quotes (an expansion; a brace is expanded before
+     * the mark is read, WP-243) — and, kept as an over-ask since WP-242 made the dequote keep it
+     * as bash does, a backslash inside double quotes before a character bash does not escape there.
      */
     readonly receivedUnsure?: readonly boolean[] | undefined;
   }) => boolean;
@@ -2312,8 +2336,8 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   ...Object.entries(GO_TOOL_FLAG_OPTIONS).flatMap(([flag, options]) =>
     options.map(goToolPathWritingFloor(flag)),
   ),
-  // Review round 1: `received` comes from the shared dequote (`argvWords`), which reads no
-  // expansion; those values fail closed here. (It also dropped a backslash inside double quotes
+  // Review round 1: `received` comes from the shared dequote (`argvWords`), which reads no `$`
+  // or backtick expansion; those values fail closed here (braces are expanded since WP-243). (It also dropped a backslash inside double quotes
   // that bash keeps, until WP-242 made it keep that backslash for every floor, backlog 642.)
   {
     pattern:
@@ -3356,13 +3380,68 @@ const argvShellWords = (text: string): readonly string[] =>
     .map((word) => word.raw);
 
 /**
+ * {@link argvShellWords} with every brace expansion expanded as bash expands it (WP-243, backlog
+ * 642: {@link expandBraces}), or `null` when the platform cannot read one — a form the port does
+ * not read, or more than {@link BRACE_EXPANSION_CEILING} words made by expansion. `parseCommand`
+ * reports `null` as `UNCERTAINTY.braceExpansion`. Only the argv reading takes these: the readers
+ * of `argvShellWords` ask whether a written word expands, which an expanded word no longer says.
+ */
+const braceExpandedWords = (text: string): readonly string[] | null => {
+  const cached = activeMemo?.braces.get(text);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const words = expandedWords(text);
+  activeMemo?.braces.set(text, words);
+  return words;
+};
+
+const expandedWords = (text: string): readonly string[] | null => {
+  const out: string[] = [];
+  let made = 0;
+  for (const word of argvShellWords(text)) {
+    const words = expandBraces(word, BRACE_EXPANSION_CEILING - made);
+    if (words === null) {
+      return null;
+    }
+    if (words.length === 1 && words[0] === word) {
+      out.push(word);
+      continue;
+    }
+    made += words.length;
+    // An unquoted empty word is removed after expansion (`{a,}` is one word, `a`).
+    out.push(...words.filter((expanded) => expanded !== ''));
+  }
+  return out;
+};
+
+/**
+ * A stage as the words its brace expansions make, joined by blanks (each word keeps its quotes),
+ * or `undefined` when nothing expands or the expansion is unread (`braceExpansion`). Redirections
+ * are not in it; the stage as written keeps them, and both are parsed (`parseCommand`).
+ */
+const expandedStage = (stage: string): string | undefined => {
+  const words = braceExpandedWords(stage);
+  const written = argvShellWords(stage);
+  return words === null ||
+    (words.length === written.length && words.every((word, index) => word === written[index]))
+    ? undefined
+    : words.join(' ');
+};
+
+/** The raw words of the argv reading: expanded, or as written when the line is uncertain. */
+const receivedShellWords = (text: string): readonly string[] =>
+  braceExpandedWords(text) ?? argvShellWords(text);
+
+/**
  * A stage's words **as the shell hands them to the program** (WP-198, backlog 582):
- * {@link argvShellWords}, each dequoted (`unquoteToken`). A redirection stands anywhere in a
- * simple command and is not in argv, so `2>/dev/null sudo id` runs `sudo` with `id`, and
- * `gh >out release create` runs `gh release create`. Exported for its own test.
+ * {@link argvShellWords}, braces expanded (WP-243) and each word dequoted (`unquoteToken`). A
+ * redirection stands anywhere in a simple command and is not in argv, so `2>/dev/null sudo id`
+ * runs `sudo` with `id`, and `gh >out release create` runs `gh release create`; and
+ * `go test {-cpuprofile,/tmp/c} ./...` hands go `-cpuprofile /tmp/c`. Exported for its own test.
  */
 export const argvWords = (text: string): readonly string[] =>
-  argvShellWords(text).map(unquoteToken);
+  receivedShellWords(text).map(unquoteToken);
 
 /**
  * The two readings every deny-direction reader judges (WP-198 (c)): the written words it judged
@@ -3382,6 +3461,7 @@ export const argvWords = (text: string): readonly string[] =>
 interface CommandMemo {
   readonly forms: Map<string, readonly (readonly string[])[]>;
   readonly candidates: Map<string, readonly (readonly string[])[]>;
+  readonly braces: Map<string, readonly string[] | null>;
 }
 let activeMemo: CommandMemo | undefined;
 
@@ -3393,7 +3473,7 @@ export const withCommandMemo = <T>(evaluate: () => T): T => {
   if (activeMemo !== undefined) {
     return evaluate();
   }
-  activeMemo = { forms: new Map(), candidates: new Map() };
+  activeMemo = { forms: new Map(), candidates: new Map(), braces: new Map() };
   try {
     return evaluate();
   } finally {
@@ -3403,7 +3483,9 @@ export const withCommandMemo = <T>(evaluate: () => T): T => {
 
 /** How many texts a memo holds right now — none between calls (a probe for the test). */
 export const memoisedCommandTexts = (): number =>
-  activeMemo === undefined ? 0 : activeMemo.forms.size + activeMemo.candidates.size;
+  activeMemo === undefined
+    ? 0
+    : activeMemo.forms.size + activeMemo.candidates.size + activeMemo.braces.size;
 
 const argvForms = (text: string): readonly (readonly string[])[] => {
   const cached = activeMemo?.forms.get(text);
@@ -3549,12 +3631,13 @@ const argv0Candidates = (tokens: readonly string[]): readonly (readonly string[]
 const RECEIVED_READING = new WeakMap<readonly string[], readonly boolean[]>();
 
 /**
- * Whether bash may hand a program other text for this written word than `unquoteToken` reads: a
- * `$` or backtick outside single quotes (an expansion), or a backslash inside double quotes before
- * anything but `$`, backtick, `"`, `\` or a newline (WP-241 review round 1), or an unquoted `{`,
- * which brace expansion may turn into several words (`-ldflags={-s,-o=/tmp/x}`, review round 2).
- * Read only by the go tool-flag floors. The backslash mark is an over-ask since WP-242 (backlog
- * 642): `unquoteToken` now keeps that backslash as bash does, so `received` is bash's text there;
+ * Whether bash may hand a program other text for this word than `unquoteToken` reads: a `$` or
+ * backtick outside single quotes (an expansion), or a backslash inside double quotes before
+ * anything but `$`, backtick, `"`, `\` or a newline (WP-241 review round 1). An unquoted `{` is no
+ * longer marked (WP-243): the words are read after brace expansion ({@link receivedShellWords}), so
+ * `-ldflags={-s,-o=/tmp/x}` is the two words bash makes, and a brace the port cannot expand makes
+ * the line `braceExpansion`. Read only by the go tool-flag floors. The backslash mark is an
+ * over-ask since WP-242 (backlog 642): `unquoteToken` now keeps that backslash as bash does, so `received` is bash's text there;
  * it is kept because WP-241's `-buildid \'x` rows pin it. A glob (`-[t]mpdir`) is not marked: it
  * expands only against a file the run wrote (TD-030 tier 3).
  */
@@ -3564,7 +3647,7 @@ const receivedMayDiffer = (written: string): boolean => {
     const char = written[index] as string;
     if (quote === "'") {
       quote = char === "'" ? null : quote;
-    } else if (char === '$' || char === '`' || (char === '{' && quote === null)) {
+    } else if (char === '$' || char === '`') {
       return true;
     } else if (char === '\\') {
       if (quote === '"' && !'$`"\\\n'.includes(written[index + 1] ?? '$')) {
@@ -3588,9 +3671,9 @@ const blockCandidates = (text: string): readonly (readonly string[])[] => {
     return cached;
   }
   const [written = [], received = []] = argvForms(text).map(argv0Candidates);
-  // `argvWords` is `argvShellWords` dequoted word by word, and a candidate's words after its name
-  // are a suffix of it (`argv0Candidates`), so the flags align from the end.
-  const unsure = argvShellWords(text).map(receivedMayDiffer);
+  // `argvWords` is `receivedShellWords` dequoted word by word, and a candidate's words after its
+  // name are a suffix of it (`argv0Candidates`), so the flags align from the end.
+  const unsure = receivedShellWords(text).map(receivedMayDiffer);
   for (const candidate of received) {
     RECEIVED_READING.set(
       candidate,
@@ -5933,6 +6016,9 @@ const expandsAsName = (word: string): boolean => !isLiteralJudgedWord(word);
 
 /**
  * Whether the unquoted `{` at `open` starts a brace expansion: a `,` or `..` at its own level.
+ * This is the detector, read where a written word is judged literal; {@link expandBraces} is the
+ * reader the argv reading takes since WP-243, and a word this flags that it cannot expand makes
+ * the line `braceExpansion`.
  * bash closes the brace only at a `}` that follows such a separator — a `}` before one is a literal
  * character, so `x{},a}` is `x}` and `xa` and `{x},b}` is `x}` and `b` (measured, bash 5.3) — and
  * a backslash escapes inside double quotes too, so `{"\"",a}` expands. Before WP-193 both read as
@@ -5961,6 +6047,199 @@ const bracesExpand = (word: string, open: number): boolean => {
     }
   }
   return false;
+};
+
+/**
+ * The index just past a piece of `word` at `at` that brace expansion does not look inside — a
+ * backslash and its character, `'…'`, `"…"`, `` `…` ``, `${…}`, `$(…)`, `<(…)`, `>(…)` — or `at`
+ * when none starts there. bash skips the same (`x$(printf %s {a,b})y` is one word, measured in the
+ * run image). A piece left open runs to the end of the word; the parser reports it as its own reason.
+ */
+const braceOpaqueEnd = (word: string, at: number): number => {
+  const quoted = quotedPieceEnd(word, at);
+  const next = word[at + 1];
+  const opens =
+    (word[at] === '$' && (next === '{' || next === '(')) ||
+    ((word[at] === '<' || word[at] === '>') && next === '(');
+  if (quoted > at || !opens) {
+    return quoted;
+  }
+  // Counted, not recursed: a nested `$(` is one more `(` (a deep nesting costs no stack).
+  const [opener, closer] = next === '{' ? ['{', '}'] : ['(', ')'];
+  let depth = 1;
+  let index = at + 2;
+  while (index < word.length && depth > 0) {
+    const skipped = quotedPieceEnd(word, index);
+    if (skipped > index) {
+      index = skipped;
+      continue;
+    }
+    depth += word[index] === opener ? 1 : word[index] === closer ? -1 : 0;
+    index += 1;
+  }
+  return index;
+};
+
+/** {@link braceOpaqueEnd}'s quoted pieces: a backslash and its character, `'…'`, `"…"`, `` `…` ``. */
+const quotedPieceEnd = (word: string, at: number): number => {
+  const char = word[at];
+  if (char === '\\') {
+    return Math.min(at + 2, word.length);
+  }
+  if (char === "'" || char === '`') {
+    const close = word.indexOf(char, at + 1);
+    return close === -1 ? word.length : close + 1;
+  }
+  if (char === '"') {
+    for (let index = at + 1; index < word.length; index += 1) {
+      if (word[index] === '\\') {
+        index += 1;
+      } else if (word[index] === '"') {
+        return index + 1;
+      }
+    }
+    return word.length;
+  }
+  return at;
+};
+
+/**
+ * The `}` that closes a brace expansion opened at `open`, or -1: bash's `brace_gobbler` closes only
+ * at a `}` of its own level that follows a `,` or `..` of that level, so `x{},a}` is `x}` and `xa`.
+ * `separators` collects the `,` positions of that level, where the amble splits.
+ */
+const braceClose = (word: string, open: number, separators: number[]): number => {
+  let depth = 0;
+  let sequence = false;
+  for (let index = open + 1; index < word.length; index += 1) {
+    const skipped = braceOpaqueEnd(word, index);
+    if (skipped > index) {
+      index = skipped - 1;
+      continue;
+    }
+    const char = word[index];
+    if (char === '{') {
+      depth += 1;
+    } else if (char === '}' && depth > 0) {
+      depth -= 1;
+    } else if (char === '}' && (separators.length > 0 || sequence)) {
+      return index;
+    } else if (depth === 0 && char === ',') {
+      separators.push(index);
+    } else if (depth === 0 && word.startsWith('..', index)) {
+      sequence = true;
+    }
+  }
+  separators.length = 0;
+  return -1;
+};
+
+const BRACE_INTEGER = '(0|-?[1-9][0-9]*)';
+const BRACE_INTEGER_RANGE = new RegExp(
+  `^${BRACE_INTEGER}\\.\\.${BRACE_INTEGER}(?:\\.\\.${BRACE_INTEGER})?$`,
+);
+const BRACE_LETTER_RANGE = new RegExp(
+  `^(?:([a-z])\\.\\.([a-z])|([A-Z])\\.\\.([A-Z]))(?:\\.\\.${BRACE_INTEGER})?$`,
+);
+
+/**
+ * A sequence expression's words (bash *Brace Expansion*: `{x..y[..incr]}`, the increment's sign
+ * ignored, 0 read as 1 — `{1..10..-3}` is `1 4 7 10`, `{1..3..0}` is `1 2 3`, measured), or `null`
+ * for a form the port does not read: zero-padded (`{01..10}`), mixed-case (`{a..Z}`), a sign
+ * written `+`, or one bash leaves as written (`{a..}`, `{1..a}`) — fail closed — or past `budget`.
+ */
+const braceSequence = (amble: string, budget: number): readonly string[] | null => {
+  const integers = BRACE_INTEGER_RANGE.exec(amble);
+  const letters = integers === null ? BRACE_LETTER_RANGE.exec(amble) : null;
+  if (integers === null && letters === null) {
+    return null;
+  }
+  const [from, to, step] =
+    integers !== null
+      ? [Number(integers[1]), Number(integers[2]), integers[3]]
+      : [
+          (letters?.[1] ?? letters?.[3] ?? '').charCodeAt(0),
+          (letters?.[2] ?? letters?.[4] ?? '').charCodeAt(0),
+          letters?.[5],
+        ];
+  const increment = Math.max(Math.abs(Number(step ?? 1)), 1);
+  if (![from, to, increment].every(Number.isSafeInteger)) {
+    return null;
+  }
+  const count = Math.floor(Math.abs(to - from) / increment) + 1;
+  if (count > budget) {
+    return null;
+  }
+  const direction = to >= from ? 1 : -1;
+  return Array.from({ length: count }, (_, index) => {
+    const value = from + direction * index * increment;
+    return integers !== null ? String(value) : String.fromCharCode(value);
+  });
+};
+
+/**
+ * The words bash makes of one word by brace expansion (WP-243, backlog 642; bash *Brace
+ * Expansion*, https://www.gnu.org/software/bash/manual/bash.html#Brace-Expansion): the first
+ * expansion — the first unquoted `{` whose {@link braceClose} exists — splits into a preamble, an
+ * amble and a postscript; a comma list's parts and the postscript are expanded in turn, and the
+ * words come in bash's order (`a{1,2}{x,y}b` is `a1xb a1yb a2xb a2yb`). Quotes are kept for
+ * `unquoteToken` (`{"a b",c}` is `"a b"` and `c`). `null` when a sequence is one
+ * {@link braceSequence} does not read, the words would pass `budget`, the expansions nest or
+ * follow one another past {@link BRACE_EXPANSION_CEILING} levels, or the word holds more unquoted
+ * `{` than that.
+ */
+const expandBraces = (word: string, budget: number, depth = 0): readonly string[] | null => {
+  if (!word.includes('{')) {
+    return [word];
+  }
+  // Each unquoted `{` may scan to the word's end, so their number is bounded too: `{` × 20 000
+  // took 17 s unbounded (measured).
+  let opens = 0;
+  for (let index = 0; index < word.length; index += 1) {
+    const skipped = braceOpaqueEnd(word, index);
+    if (skipped > index) {
+      index = skipped - 1;
+    } else if (word[index] === '{' && ++opens > BRACE_EXPANSION_CEILING) {
+      return null;
+    }
+  }
+  for (let open = 0; open < word.length; open += 1) {
+    const skipped = braceOpaqueEnd(word, open);
+    if (skipped > open) {
+      open = skipped - 1;
+      continue;
+    }
+    const separators: number[] = [];
+    const close = word[open] === '{' ? braceClose(word, open, separators) : -1;
+    if (close === -1) {
+      continue;
+    }
+    // Each expansion is a level: `{1..1}` written 300 times makes one word and 300 levels. And
+    // `{},a}` is left as written at the start of a word, expanded after a preamble (`x{},a}` is `x}`
+    // and `xa`, measured): the port does not read which, so a `{}` opening one is unread.
+    if (depth >= BRACE_EXPANSION_CEILING || word[open + 1] === '}') {
+      return null;
+    }
+    const bounds = [open, ...separators, close];
+    const parts: (readonly string[] | null)[] =
+      separators.length === 0
+        ? [braceSequence(word.slice(open + 1, close), budget)]
+        : bounds
+            .slice(1)
+            .map((end, index) =>
+              expandBraces(word.slice((bounds[index] as number) + 1, end), budget, depth + 1),
+            );
+    const rest = expandBraces(word.slice(close + 1), budget, depth + 1);
+    const amble = parts.every((part): part is readonly string[] => part !== null)
+      ? parts.flat()
+      : null;
+    if (amble === null || rest === null || amble.length * rest.length > budget) {
+      return null;
+    }
+    const preamble = word.slice(0, open);
+    return amble.flatMap((part) => rest.map((after) => `${preamble}${part}${after}`));
+  }
+  return [word];
 };
 
 /** A wrapper's option value or leading operand that is plainly not a command: a number, a duration, a mask, a signal. */
@@ -8674,6 +8953,11 @@ const parseCommand = (
         uncertainty.add(UNCERTAINTY.tooDeep);
       }
     }
+    // WP-243: the argv reading of a text whose braces the port cannot expand is its words as
+    // written, which may not be the program's. A stage's words are its segment's: one check.
+    if (braceExpandedWords(segment) === null) {
+      uncertainty.add(UNCERTAINTY.braceExpansion);
+    }
     // Every stage is a command in its own right, pushed whether or not there are two of them: a
     // segment that begins or ends with a pipe operator — `|& docker run alpine`, which the list
     // pass now hands over whole — has exactly one stage and it is *not* the segment. Requiring
@@ -8743,6 +9027,34 @@ const parseCommand = (
         );
         anyReadsScripts ||= nested.readsScripts;
         fragments.push(script, ...nested.fragments);
+        rawStages.push(...nested.rawStages);
+        programStages.push(...nested.programStages);
+        writeTargets.push(...nested.writeTargets);
+        substitutes ||= nested.substitutes;
+        for (const reason of nested.uncertainty) {
+          uncertainty.add(reason);
+        }
+      }
+      // WP-243 review round 2: a stage whose braces expand is read a second time as the words
+      // bash makes, so every reader of this module — the written-word ones included (`find .
+      // {-ok,sudo} id +`, `compgen {-C,id} x`, the ask list) — judges them; a union, so it only
+      // tightens. The words keep their quotes (`{-e,"1e id"}` is `-e "1e id"`), so the text
+      // re-parses as those words.
+      const expanded = readsExpandedStages ? expandedStage(stage) : undefined;
+      if (expanded !== undefined && depth >= MAX_WRAPPER_DEPTH) {
+        uncertainty.add(UNCERTAINTY.tooDeep);
+      } else if (expanded !== undefined) {
+        const nested = parseCommand(
+          expanded,
+          depth + 1,
+          readsScripts,
+          replace,
+          stagePiped,
+          operands,
+          overRead,
+        );
+        anyReadsScripts ||= nested.readsScripts;
+        fragments.push(...nested.fragments);
         rawStages.push(...nested.rawStages);
         programStages.push(...nested.programStages);
         writeTargets.push(...nested.writeTargets);
@@ -8837,6 +9149,24 @@ const withoutRanges = (text: string, ranges: readonly (readonly [number, number]
  */
 export const splitCommandSegments = (command: string): readonly string[] =>
   parseCommand(command).fragments;
+
+/** Whether `parseCommand` reads a stage again as its brace-expanded words (WP-243 review round 2). */
+let readsExpandedStages = true;
+
+/**
+ * {@link splitCommandSegments} without the brace-expanded copies of a stage: the parts the line is
+ * **made of**. The git boundary asks this whether a fragment is composite; with the copies, every
+ * stage whose braces expand looked composite and its own words went unjudged (`git fetch
+ * {origin,x}` read `allow`, measured in review round 2's sweep).
+ */
+export const splitCommandSegmentsAsWritten = (command: string): readonly string[] => {
+  readsExpandedStages = false;
+  try {
+    return parseCommand(command).fragments;
+  } finally {
+    readsExpandedStages = true;
+  }
+};
 
 /**
  * The command line with every here-document body that is **data** cut out (WP-153 (b)): the lines

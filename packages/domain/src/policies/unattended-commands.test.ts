@@ -12,6 +12,7 @@ import { censusPaths, censusText } from '../../../../scripts/census-files.mjs';
 import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
+  BRACE_EXPANSION_CEILING,
   carriesHazard,
   commandArgvCandidates,
   commandWords,
@@ -1556,7 +1557,7 @@ describe('WP-161 — abbreviations, the depth bound, every push, and an expanded
       '/usr/bin/g[i]t push origin main',
       '/usr/bin/gi? push --force origin main',
       '/usr/bin/g{i..i}t status',
-      '{sudo,x} id',
+      // `{sudo,x} id` left at WP-243: the argv reading is `sudo x id`, `block` (its describe).
       '/usr/bin/sud? id',
       '/usr/bin/[s]udo id',
       'g?t push origin main',
@@ -3371,7 +3372,13 @@ describe('WP-193, backlogs 565 and 566: a brace is literal unless it expands, an
     expect(auto(command).evaluation.uncertainty).toEqual(
       command.includes('"$R"')
         ? [UNCERTAINTY.xargsArguments]
-        : [UNCERTAINTY.expandedName, UNCERTAINTY.xargsArguments],
+        : [
+            // WP-243: the argv reading does not read these braces (a `{}` opening one, a `..`
+            // with no sequence bash would leave as written) — an added reason, the cell unchanged.
+            ...(/(?<!\{)\{\},|\.\.\}/.test(command) ? [UNCERTAINTY.braceExpansion] : []),
+            UNCERTAINTY.expandedName,
+            UNCERTAINTY.xargsArguments,
+          ],
     );
   });
 
@@ -3511,9 +3518,9 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
     it.each([
       'm{1..3}',
       './m{1..3}',
-      "{sh,-c} 'sudo id'",
+      // `{sh,-c} 'sudo id'` (and `… x`) left at WP-243 review round 2: the stage is read again as
+      // `sh -c 'sudo id'`, whose script meets `sudo *` — `block` (WP-243's describe).
       "{bash,-c} 'git push origin main'",
-      "{sh,-c} 'sudo id' x",
       "/bin/{,r}bash -c 'echo x'",
       "/bin/[r]bash -c 'echo x'",
     ])('%j is uncertain (expandedName)', (command) => {
@@ -3538,8 +3545,8 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
       ['gh rel$x create v1', 'gh release *'],
       ['npm pub$x', 'npm publish'],
       ['rm -rf $x', 'rm -rf /*'],
-      ['terraform ap{p,}ly', 'terraform apply'],
-      ['gh rel{e,}ase create v1', 'gh release *'],
+      // `terraform ap{p,}ly` and `gh rel{e,}ase create v1` left at WP-243: bash hands
+      // `terraform apply aply` and `gh release relase …`, which meet the entry (its describe).
       ['terraform $(echo apply)', 'terraform apply'],
       ['terraform ap*', 'terraform apply'],
       ['nice terraform ap$x', 'terraform apply'],
@@ -3600,7 +3607,7 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
       ['git pu$x origin main', 'pu$x'],
       ['git $verb origin main', '$verb'],
       ['git "$verb" origin main', '"$verb"'],
-      ['git pu{s,}h origin main', 'pu{s,}h'],
+      // `git pu{s,}h origin main` left at WP-243: bash hands `git push puh origin main` (its describe).
       ['git $(echo push) origin main', '$(echo push)'],
       ['git -C . $verb origin main', '$verb'],
       ['nice -n 5 git $verb origin main', '$verb'],
@@ -3635,7 +3642,7 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
       ['"$x" id', 'ask / git / git'],
       ['env > out $X', 'ask / git / git'],
       ['./m{a,b}', 'ask / uncertain / uncertain'],
-      ['{sudo,id}', 'ask / uncertain / uncertain'],
+      // `{sudo,id}` is `block / block / block` since WP-243 (bash runs `sudo id`; its describe).
       ['/usr/bin/g[i]t push', 'ask / uncertain / uncertain'],
       ['echo $x', 'ask / auto / deny'],
       ['ls $dir', 'allow / allow / allow'],
@@ -5990,8 +5997,8 @@ describe('WP-241, backlog 641: a path-writing tool option inside a go -gcflags/-
       `go test -ldflags="-buildid \\'x -fipso=/tmp/f -installsuffix \\'" ./...`,
       // An expansion: the value bash hands go is not the one written.
       'go test -ldflags="$X -tmpdir=/tmp/t" ./...',
-      // Review round 2: brace expansion makes two -ldflags words; the last one, -o=…, wins.
-      'go test -ldflags={-s,-o=/tmp/x} ./...',
+      // `-ldflags={-s,-o=/tmp/x}` (review round 2) left at WP-243: the argv reading expands it
+      // to bash's two -ldflags words, and the -o floor reads the last (WP-243's describe).
     ]) {
       expect(cell(command, BASELINES.impl), command).toBe('ask / auto / deny');
       expect(floorsOf(command), command).toContain(UNSPLITTABLE);
@@ -6179,4 +6186,174 @@ describe('WP-244, backlog 643: $"…" is read as bash reads it with no catalogue
       expect(cell(command, BASELINES.impl)).toBe('ask / uncertain / uncertain');
     },
   );
+});
+
+/**
+ * WP-243, backlog 642 (the brace half): the argv reading expands braces as bash does, so a floor
+ * reads the words the program receives — `go test {-cpuprofile,/tmp/c} ./...` hands go
+ * `-cpuprofile /tmp/c` (bash 5.2.37 in `platform-runtime:wp239`, printf). Bounded: a form the port
+ * does not read, or more words than `BRACE_EXPANSION_CEILING`, is `braceExpansion`, never `allow`.
+ */
+describe('WP-243, backlog 642 (brace half): the argv reading expands braces as bash does', () => {
+  // A name, not a literal inside a template: this file's own row reader counts braces there.
+  const OPEN_BRACE = '{';
+
+  it.each([
+    'go test {-cpuprofile,/tmp/c} ./...',
+    // Before by WP-241's unquoted-`{` mark; now bash's two `-ldflags` words, the last of which wins.
+    'go test -ldflags={-s,-o=/tmp/x} ./...',
+    'git log {--output=/tmp/x,x}',
+  ])('%j reads ask / auto / deny', (command) => {
+    expect(cell(command, BASELINES.impl)).toBe('ask / auto / deny');
+  });
+
+  it.each([
+    'npm test {--script-shell=/bin/id,x}',
+    'pnpm test {--script-shell=/bin/id,x}',
+    'npm run build {--script-shell=/bin/id,x}',
+    'pytest {-o,addopts=-p}',
+  ])('%j reads ask / hazard / hazard', (command) => {
+    expect(cell(command, BASELINES.impl)).toBe('ask / hazard / hazard');
+  });
+
+  it.each([
+    'git push {--force,origin}',
+    'git push origin {--force,main}',
+    'rm {-rf,/tmp/x}',
+    'rm -{r,f} /tmp/x',
+    '{sudo,id}',
+    '{sudo,x} id',
+    'terraform ap{p,}ly',
+    'gh rel{e,}ase create v1',
+    "{sh,-c} 'sudo id'",
+    "{sh,-c} 'sudo id' x",
+  ])('%j reads block / block / block (uncertain before)', (command) => {
+    expect(cell(command, BASELINES.impl)).toBe('block / block / block');
+  });
+
+  it('git pu{s,}h origin main reads ask / git / git (uncertain before): bash hands git push puh', () => {
+    expect(cell('git pu{s,}h origin main', BASELINES.impl)).toBe('ask / git / git');
+  });
+
+  it('a command name in braces is still expandedName beside the block it meets', () => {
+    expect(auto('{sudo,x} id', BASELINES.impl).evaluation.uncertainty).toContain(
+      UNCERTAINTY.expandedName,
+    );
+  });
+
+  it('go test -ldflags={-s,-o=/tmp/x} meets the -o floor on the expanded reading', () => {
+    const floors = hazardousArguments('go test -ldflags={-s,-o=/tmp/x} ./...').map(
+      (floor) => floor.pattern,
+    );
+    expect(floors.join('\n')).toContain('-ldflags value: -o');
+  });
+
+  it('logcli query {@f,x} reads ask / auto / deny under the loki-logs entry', () => {
+    const given = { ...BASELINES.impl, allow: [...BASELINES.impl.allow, 'logcli query *'] };
+    expect(cell('logcli query {@f,x}', given)).toBe('ask / auto / deny');
+  });
+
+  // The three committed corpus lines keep their cells; a sequence reads as its words.
+  it.each([
+    ['cat src/{a,b}.ts', 'allow / allow / allow'],
+    ['mkdir -p src/{a,b}', 'ask / auto / deny'],
+    ['cp file{,.bak}', 'ask / auto / deny'],
+    ['echo {1..3}', cell('echo 1 2 3', BASELINES.impl)],
+    ['xargs -I{} echo {}', cell('xargs -I@ echo @', BASELINES.impl)],
+  ])('control: %j keeps %j', (command, expected) => {
+    expect(cell(command, BASELINES.impl)).toBe(expected);
+    expect(auto(command, BASELINES.impl).evaluation.uncertainty).not.toContain(
+      UNCERTAINTY.braceExpansion,
+    );
+  });
+
+  it.each([
+    'echo {1..100000}',
+    `echo {1..${BRACE_EXPANSION_CEILING + 1}}`,
+    `echo {1..${BRACE_EXPANSION_CEILING / 2 + 1}} {1..${BRACE_EXPANSION_CEILING / 2}}`,
+    `echo ${'{a,b}'.repeat(9)}`,
+    `echo ${'{1..1}'.repeat(BRACE_EXPANSION_CEILING + 1)}`,
+    // The number of unquoted `{` is bounded too: each may scan to the end of the word.
+    `echo ${OPEN_BRACE.repeat(BRACE_EXPANSION_CEILING + 1)}`,
+    'echo {01..10}',
+    'echo {-01..2}',
+    'echo {a..Z}',
+    'echo {+1..3}',
+    'echo {a..}',
+    'echo x{},a}',
+    'go test {-cpuprofile,{01..02}} ./...',
+  ])('%j is uncertain (braceExpansion), whatever the words', (command) => {
+    expect(auto(command, BASELINES.impl).evaluation.uncertainty).toContain(
+      UNCERTAINTY.braceExpansion,
+    );
+    expect(cell(command, BASELINES.impl)).not.toContain('allow / allow');
+  });
+
+  it(`the ceiling: ${BRACE_EXPANSION_CEILING} words made by expansion are read`, () => {
+    expect(
+      auto(`echo {1..${BRACE_EXPANSION_CEILING}}`, BASELINES.impl).evaluation.uncertainty,
+    ).toEqual([]);
+  });
+
+  // Review round 1: the sed/awk reader judges the expanded words too (`echo x | sed -n -e p
+  // {-e,"1e echo EXECUTED"}` printed EXECUTED in the run image, bash 5.2.37, GNU sed).
+  it.each([
+    'sed -n -e p {-e,"1e id"}',
+    'sed -n p {x,-e} "1e id"',
+    'sed -n -e p -e "1e id"',
+    `awk {-e,'BEGIN{system("id")}'}`,
+    'gawk {-f,x}',
+    'awk {x,-f} y',
+  ])('%j reads ask / uncertain / uncertain (scriptExecutes)', (command) => {
+    expect(cell(command, BASELINES.impl)).toBe('ask / uncertain / uncertain');
+    expect(auto(command, BASELINES.impl).evaluation.uncertainty).toContain(
+      UNCERTAINTY.scriptExecutes,
+    );
+  });
+
+  // Review round 2: a stage whose braces expand is parsed again as its expanded words, so every
+  // reader judges them — each spelling reads as its control does.
+  it.each([
+    ['find . {-ok,sudo} id +', 'find . -ok sudo id +'],
+    ['find . {-exec,git} push {} +', 'find . -exec git push {} +'],
+    ['script {-c,"sudo id"}', 'script -c "sudo id"'],
+    ['compgen {-C,id} x', 'compgen -C id x'],
+    ['complete {-C,id} x', 'complete -C id x'],
+    ['fc {-e,id}', 'fc -e id'],
+    ['find . {-exec,id} +', 'find . -exec id +'],
+    ['find . -name x {-delete,-print}', 'find . -name x -delete -print'],
+    ['echo $(find . {-ok,sudo} id +)', 'echo $(find . -ok sudo id +)'],
+  ])('%j reads as %j does', (braced, control) => {
+    expect(cell(braced, BASELINES.impl)).toBe(cell(control, BASELINES.impl));
+    expect(cell(braced, BASELINES.impl)).not.toBe('allow / allow / allow');
+    expect(auto(braced, BASELINES.impl).evaluation.uncertainty).toEqual(
+      auto(control, BASELINES.impl).evaluation.uncertainty,
+    );
+  });
+
+  // Review round 2: the copy is not a part the stage is made of — counted as one, it made every
+  // braced stage composite, and the git boundary skipped the stage's own words (these read
+  // `allow / allow / allow` and `ask / auto / deny` with the copy counted, in the sweep).
+  it.each([
+    ['git fetch {origin,x}', 'allow / git / git'],
+    ['git fetch or{igin,y}', 'allow / git / git'],
+    ['git push {origin,agentic/ABC-1}', 'ask / git / git'],
+    ['git push origin {agentic/ABC-1,}', 'ask / git / git'],
+  ])('control: %j keeps %j (the git boundary reads the written words too)', (command, expected) => {
+    expect(cell(command, BASELINES.impl)).toBe(expected);
+  });
+
+  // The written-word readers judge a brace through `expandsAsName`, and fail closed on it.
+  it.each([
+    ['env {sudo,id}', 'block / block / block'],
+    ['timeout 5 {sudo,id}', 'block / block / block'],
+    ['myprog {sudo,x} id', 'ask / uncertain / uncertain'],
+    ['git {-c,core.fsmonitor=id} status', 'ask / git / git'],
+  ])('control: %j reads %j', (command, expected) => {
+    expect(cell(command, BASELINES.impl)).toBe(expected);
+  });
+
+  it.each(['echo "{a,b}"', "echo '{a,b}'"])('control: %j is one word, as written', (command) => {
+    expect(cell(command, BASELINES.impl)).toBe(cell('echo x', BASELINES.impl));
+  });
 });
