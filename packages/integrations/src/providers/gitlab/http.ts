@@ -308,16 +308,19 @@ export interface GitLabHttp {
   /**
    * Every page of a list, following `x-next-page` and concatenating JSON arrays, up to the
    * binding's `max_pages` — or up to `pages` when the caller asks for fewer (WP-110: the
-   * merge-request poller reads only as many pages as its limit needs).
+   * merge-request poller reads only as many pages as its limit needs). `enough`, when given, is
+   * asked after each page with every item read so far, and a `true` stops the walk there (WP-234:
+   * the merged sample stops once no later page can change its answer).
    *
    * **A cut list says so** (WP-209 (c), backlog 577): `truncated` is `true` when the walk stopped at
-   * its bound while GitLab still named a next page, so a caller can tell "every item" from "the
-   * first `bound × perPage`" — before WP-209 the two were the same array.
+   * its bound (or at `enough`) while GitLab still named a next page, so a caller can tell "every
+   * item" from "the first `bound × perPage`" — before WP-209 the two were the same array.
    */
   paginate<TItem>(
     spec: GitLabRequestSpec,
     perPage: number,
     pages?: number,
+    enough?: (items: readonly TItem[]) => boolean,
   ): Promise<GitLabPages<TItem>>;
   readonly maxPages: number;
 }
@@ -493,6 +496,7 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
     spec: GitLabRequestSpec,
     perPage: number,
     pages?: number,
+    enough?: (items: readonly TItem[]) => boolean,
   ): Promise<GitLabPages<TItem>> => {
     const items: TItem[] = [];
     const bound = Math.min(options.maxPages, pages ?? options.maxPages);
@@ -517,6 +521,9 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
       items.push(...response.body);
       visited += 1;
       page = response.headers['x-next-page'];
+      if (enough?.(items) === true) {
+        break;
+      }
     }
     return { items, truncated: page !== undefined && page !== '' };
   };

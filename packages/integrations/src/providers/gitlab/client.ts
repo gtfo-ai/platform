@@ -98,6 +98,9 @@ export interface GitLabClient {
    * wildcards included, paged (WP-141 review round 1) — with `truncated` when the walk stopped at
    * the binding's `max_pages` (WP-220). A cut list can miss the wildcard that opens a branch, so
    * `branchPushProtection` refuses it.
+   *
+   * Every page is read: the answer is the whole rule set, which no order lets a first page stand
+   * for (WP-234).
    */
   protectedBranches(project: string): Promise<{
     readonly rules: z.output<typeof gitlabProtectedBranchSchema>[];
@@ -107,6 +110,8 @@ export interface GitLabClient {
    * WP-146: the project's deploy keys, paged — with `truncated` when the walk stopped at the
    * binding's `max_pages` (WP-220). A cut list can miss the key asked about, so `deployKeyAccess`
    * refuses it.
+   *
+   * Every page is read: the key asked about can be on any page (WP-234).
    */
   deployKeys(project: string): Promise<{
     readonly keys: z.output<typeof gitlabDeployKeySchema>[];
@@ -134,14 +139,17 @@ export interface GitLabClient {
    * `per_page` up to the caller's limit. The endpoint answers the commits reachable from `ref_name`,
    * which is why the adapter passes the project's default branch rather than nothing.
    *
-   * With `truncated` when the walk stopped at the binding's `max_pages` (WP-220). The list is newest
-   * first, so a cut loses the oldest commits; the port's `listCommits` refuses only a cut that
-   * leaves fewer commits than the caller's limit, because then the window held commits it keeps.
+   * At most `pages` pages (WP-234: the caller asks for `ceil(limit / perPage)`), and never more than
+   * the binding's `max_pages`; with `truncated` when the walk stopped at that bound (WP-220). The
+   * list is newest first, so a cut loses the oldest commits; the port's `listCommits` refuses only a
+   * cut that leaves fewer commits than the caller's limit, because then the window held commits it
+   * keeps.
    */
   listCommits(
     project: string,
     query: { readonly since: string; readonly ref_name?: string },
     perPage: number,
+    pages: number,
   ): Promise<{
     readonly commits: readonly z.output<typeof gitlabCommitSchema>[];
     readonly truncated: boolean;
@@ -197,12 +205,17 @@ export interface GitLabClient {
   /**
    * § "List project merge requests" — the history bootstrap's merged sample, newest first.
    *
+   * Up to the binding's `max_pages` pages, stopping after the first page at which `enough` answers
+   * `true` for everything read so far (WP-234: the caller says when no later page can change its
+   * answer).
+   *
    * A cut list is kept: it drops the oldest merge requests of the window, and the caller keeps only
    * the newest `limit` of a sample that never claimed to be the whole history (WP-220).
    */
   listMergeRequests(
     project: string,
     query: Readonly<Record<string, string | number>>,
+    enough: (listed: readonly z.output<typeof gitlabMergeRequestSchema>[]) => boolean,
   ): Promise<z.output<typeof gitlabMergeRequestSchema>[]>;
   /**
    * § "List project merge requests" with `state=opened` and `source_branch` (WP-138) — the open
@@ -227,6 +240,8 @@ export interface GitLabClient {
    * <https://docs.gitlab.com/api/discussions/> § "List all merge request discussion items" — with
    * `truncated` when the walk stopped at the binding's `max_pages` (WP-209 (c)). The port's
    * `listDiscussions` refuses a cut list; the adapter's own readers say what a cut costs them.
+   *
+   * Every page is read: its readers count or search the whole thread list (WP-234).
    */
   listDiscussions(
     project: string,
@@ -307,6 +322,8 @@ export interface GitLabClient {
    * for and the CI gate keeps reading the existing pipeline (a pipeline whose own status is
    * `manual` is still caught, from the pipeline). That decision grants no access and hands no
    * credential, so it is not a permission decision; the gate's status still comes from the pipeline.
+   *
+   * Every page is read: a blocking manual job can be on any page (WP-234).
    */
   pipelineJobs(project: string, pipelineId: number): Promise<z.output<typeof gitlabJobSchema>[]>;
   /** § "Retrieve a job log file" (`GET /projects/:id/jobs/:job_id/trace`). */
@@ -457,8 +474,8 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
         }),
       ),
 
-    listCommits: async (project, query, perPage) => {
-      const pages = await http.paginate(
+    listCommits: async (project, query, perPage, pages) => {
+      const read = await http.paginate(
         {
           method: 'GET',
           path: `/projects/${encodeProjectId(project)}/repository/commits`,
@@ -466,10 +483,11 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
           action: 'list_commits',
         },
         Math.min(Math.max(1, perPage), 100),
+        pages,
       );
       return {
-        commits: parse(z.array(gitlabCommitSchema), pages.items, 'list_commits'),
-        truncated: pages.truncated,
+        commits: parse(z.array(gitlabCommitSchema), read.items, 'list_commits'),
+        truncated: read.truncated,
       };
     },
 
@@ -555,7 +573,7 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
         'list_merge_requests',
       ),
 
-    listMergeRequests: async (project, query) =>
+    listMergeRequests: async (project, query, enough) =>
       parse(
         z.array(gitlabMergeRequestSchema),
         (
@@ -567,6 +585,9 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
               action: 'list_merged_merge_requests',
             },
             100,
+            http.maxPages,
+            (items) =>
+              enough(parse(z.array(gitlabMergeRequestSchema), items, 'list_merged_merge_requests')),
           )
         ).items,
         'list_merged_merge_requests',

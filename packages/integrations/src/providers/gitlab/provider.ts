@@ -239,6 +239,20 @@ const identityOf = (user: {
 const invalidRequest = (action: string, detail: string): IntegrationError =>
   new IntegrationError('invalid_request', GITLAB_PROVIDER_ID, detail, { action });
 
+/**
+ * How far past its own `updated_at` a merge request's `merged_at` may land, for the merged sample's
+ * early stop (WP-234 review round 1). `merged_at ≤ updated_at` is false at the millisecond scale:
+ * `PostMergeService#execute` calls `mark_as_merged` (which saves the row, so `updated_at`) and only
+ * then `create_event`, and `MergeRequestMetricsService#merge` writes `merged_at: event.created_at`
+ * (<https://gitlab.com/gitlab-org/gitlab/-/blob/v18.4.0-ee/app/services/merge_requests/post_merge_service.rb>,
+ * <https://gitlab.com/gitlab-org/gitlab/-/blob/v18.4.0-ee/app/services/merge_request_metrics_service.rb>,
+ * read 2026-10-20). The gap is a few statements of one request; five minutes is a margin far past
+ * it that still lets a sample stop a page or so later. A merge request already read that exceeds
+ * it (an import, say) stops the early stop altogether. Residual, stated: such a merge request on a
+ * page not yet read is not seen, so the sample may omit it — as a walk cut at `max_pages` would.
+ */
+const MERGED_AFTER_UPDATE_MS = 5 * 60_000;
+
 /** GitLab's Maintainer access level: the lowest that can change protected branches (Q40, WP-137). */
 const MAINTAINER_ACCESS_LEVEL = 40;
 
@@ -1540,16 +1554,44 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       }
       // `order_by=merged_at` needs GitLab 17.2; `updated_at` works everywhere, and `merged_at` is
       // then filtered and sorted here — a self-managed instance two versions behind still answers.
-      const listed = await client.listMergeRequests(project, {
-        state: 'merged',
-        updated_after: new Date(sinceMs).toISOString(),
-        order_by: 'updated_at',
-        sort: 'desc',
-      });
-      const merged = listed
-        .filter((mr) => mr.merged_at != null && Date.parse(mr.merged_at) >= sinceMs)
-        .sort((left, right) => Date.parse(right.merged_at ?? '') - Date.parse(left.merged_at ?? ''))
-        .slice(0, limit);
+      const sample = (listed: readonly GitLabMergeRequest[]) =>
+        listed
+          .filter((mr) => mr.merged_at != null && Date.parse(mr.merged_at) >= sinceMs)
+          .sort(
+            (left, right) => Date.parse(right.merged_at ?? '') - Date.parse(left.merged_at ?? ''),
+          )
+          .slice(0, limit);
+      // WP-234: pages come newest update first and a merge lands at most `MERGED_AFTER_UPDATE_MS`
+      // after its last update, so once `limit` merges are no older than the oldest update read plus
+      // that skew, no later page can outrank them. A listing with no `updated_at` makes the bound
+      // `NaN`, and one merged later than the skew allows (an import) refutes the premise: either
+      // way the walk reads on.
+      const enough = (listed: readonly GitLabMergeRequest[]): boolean => {
+        const oldest = sample(listed).at(limit - 1)?.merged_at;
+        const updates = listed.map((mr) => Date.parse(mr.updated_at ?? ''));
+        const premiseHolds = listed.every(
+          (mr, index) =>
+            mr.merged_at == null ||
+            Date.parse(mr.merged_at) <= (updates[index] as number) + MERGED_AFTER_UPDATE_MS,
+        );
+        return (
+          premiseHolds &&
+          oldest != null &&
+          Date.parse(oldest) >= Math.min(...updates) + MERGED_AFTER_UPDATE_MS
+        );
+      };
+      const merged = sample(
+        await client.listMergeRequests(
+          project,
+          {
+            state: 'merged',
+            updated_after: new Date(sinceMs).toISOString(),
+            order_by: 'updated_at',
+            sort: 'desc',
+          },
+          enough,
+        ),
+      );
 
       const results: MergedMergeRequest[] = [];
       for (const mr of merged) {
@@ -1608,14 +1650,32 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         throw invalidRequest('list_commits', 'since must be an ISO-8601 instant');
       }
       const defaultBranch = (await client.project(project)).default_branch ?? undefined;
-      const { commits: listed, truncated } = await client.listCommits(
-        project,
-        {
-          since: new Date(sinceMs).toISOString(),
-          ...(defaultBranch === undefined ? {} : { ref_name: defaultBranch }),
-        },
-        Math.min(options.limit, 100),
-      );
+      const perPage = Math.min(options.limit, 100);
+      // WP-234: newest first is the answer's own order, so the pages the limit needs are all of it.
+      const pages = Math.ceil(options.limit / perPage);
+      const read = (bound: number) =>
+        client.listCommits(
+          project,
+          {
+            since: new Date(sinceMs).toISOString(),
+            ...(defaultBranch === undefined ? {} : { ref_name: defaultBranch }),
+          },
+          perPage,
+          bound,
+        );
+      let { commits: listed, truncated } = await read(pages);
+      // A commit with no date is dropped below, so the limit's own pages can come back short while
+      // GitLab names a next page: then the walk is re-read up to `max_pages`, as before WP-234.
+      // shortcut: the re-read repeats the first `pages` requests; it only happens for an undated
+      // commit, which GitLab is not known to publish.
+      if (
+        truncated &&
+        pages < config.max_pages &&
+        listed.filter((commit) => (commit.committed_date ?? commit.created_at ?? null) !== null)
+          .length < options.limit
+      ) {
+        ({ commits: listed, truncated } = await read(config.max_pages));
+      }
       const commits: RepositoryCommit[] = [];
       for (const commit of listed) {
         const at = commit.committed_date ?? commit.created_at ?? null;

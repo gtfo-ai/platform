@@ -334,6 +334,38 @@ describe('createGitLabHttp — pagination', () => {
     expect(pages).toEqual({ items: [1, 2, 3], truncated: false });
   });
 
+  it('stops after the first page at which enough answers true, and reads on without it (WP-234)', async () => {
+    let page = 0;
+    const { http, calls } = httpWith(() => {
+      page += 1;
+      return json(200, [page], { 'x-next-page': String(page + 1) });
+    });
+    const asked: number[][] = [];
+    const pages = await http.paginate<number>(
+      { method: 'GET', path: '/x', action: 'probe' },
+      1,
+      undefined,
+      (items) => {
+        asked.push([...items]);
+        return items.length === 2;
+      },
+    );
+    expect(asked, 'asked after each page with every item so far').toEqual([[1], [1, 2]]);
+    expect(calls.length).toBe(2);
+    expect(pages, 'a next page was named, so the stop reads as a cut').toEqual({
+      items: [1, 2],
+      truncated: true,
+    });
+
+    page = 0;
+    const without = httpWith(() => {
+      page += 1;
+      return json(200, [page], { 'x-next-page': String(page + 1) });
+    });
+    await without.http.paginate({ method: 'GET', path: '/x', action: 'probe' }, 1);
+    expect(without.calls.length, 'no stop: the bound alone ends the walk').toBe(3);
+  });
+
   it('refuses a page that is not an array', async () => {
     const { http } = httpWith(() => json(200, { not: 'an array' }));
     await expect(

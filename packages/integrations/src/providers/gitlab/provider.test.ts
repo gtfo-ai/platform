@@ -1133,6 +1133,184 @@ describe('listing commits past max_pages (WP-220)', () => {
   });
 });
 
+/**
+ * WP-234, backlog 627: the commit read and the merged sample stop paging once no later page can
+ * change their answer. Every page names a next one and `max_pages` is 10, so a walk that does not
+ * stop reads all ten.
+ */
+describe('reading only the pages an answer needs (WP-234)', () => {
+  const SINCE = '2026-01-01T00:00:00.000Z';
+  const project = {
+    [`GET /projects/${P}`]: {
+      status: 200,
+      body: { id: 1, path_with_namespace: PROJECT, default_branch: 'main', web_url: HOST },
+    },
+  };
+  const requestsTo = (calls: Harness['calls'], prefix: string) =>
+    calls.filter((call) => call.path.startsWith(prefix)).length;
+
+  it('reads one page of commits for a limit of 20, where it read ten', async () => {
+    const page = (n: number) =>
+      `GET /projects/${P}/repository/commits?since=${encodeURIComponent(SINCE)}&ref_name=main&per_page=20&page=${n}`;
+    const script: Record<string, Scripted> = { ...project };
+    for (let n = 1; n <= 10; n += 1) {
+      script[page(n)] = {
+        status: 200,
+        body: Array.from({ length: 20 }, (_, index) => ({
+          id: (n * 100 + index).toString(16).padStart(40, '0'),
+          message: `commit ${String(n)}.${String(index)}`,
+          author_name: 'Dana',
+          committed_date: '2026-06-01T08:00:00.000Z',
+        })),
+        headers: { 'x-next-page': String(n + 1) },
+      };
+    }
+    const { port, calls } = build(script, { config: { max_pages: 10 } });
+    const commits = await port.listCommits(PROJECT, { since: SINCE, limit: 20 });
+    expect(commits).toHaveLength(20);
+    expect(commits.at(-1)?.message).toBe('commit 1.19');
+    expect(requestsTo(calls, `/projects/${P}/repository/commits`)).toBe(1);
+  });
+
+  it('reads on past the limit’s own pages when an undated commit left them short (review round 1)', async () => {
+    const page = (n: number) =>
+      `GET /projects/${P}/repository/commits?since=${encodeURIComponent(SINCE)}&ref_name=main&per_page=20&page=${n}`;
+    const commit = (n: number, dated = true) => ({
+      id: n.toString(16).padStart(40, '0'),
+      message: `commit ${String(n)}`,
+      author_name: 'Dana',
+      ...(dated ? { committed_date: '2026-06-01T08:00:00.000Z' } : {}),
+    });
+    const script: Record<string, Scripted> = {
+      ...project,
+      [page(1)]: {
+        status: 200,
+        body: [commit(0, false), ...Array.from({ length: 19 }, (_, i) => commit(i + 1))],
+        headers: { 'x-next-page': '2' },
+      },
+      [page(2)]: { status: 200, body: [commit(20), commit(21)], headers: { 'x-next-page': '' } },
+    };
+    const { port, calls } = build(script, { config: { max_pages: 10 } });
+    const commits = await port.listCommits(PROJECT, { since: SINCE, limit: 20 });
+    expect(commits.map((c) => c.message).at(-1)).toBe('commit 20');
+    expect(commits).toHaveLength(20);
+    // One read at the limit's own bound, then the re-read up to `max_pages`: page 1 twice.
+    expect(requestsTo(calls, `/projects/${P}/repository/commits`)).toBe(3);
+  });
+
+  const listPage = (n: number) =>
+    `GET /projects/${P}/merge_requests?state=merged&updated_after=${encodeURIComponent(SINCE)}&order_by=updated_at&sort=desc&per_page=100&page=${n}`;
+  const minutesAgo = (minutes: number) =>
+    new Date(Date.parse('2026-06-01T00:00:00.000Z') - Math.round(minutes * 60_000)).toISOString();
+  const MS = 1 / 60_000;
+  const merged = (iid: number, updated: number, mergedAt: number) =>
+    mrBody({
+      iid,
+      state: 'merged',
+      draft: false,
+      updated_at: minutesAgo(updated),
+      merged_at: minutesAgo(mergedAt),
+      web_url: `${HOST}/acme/api/-/merge_requests/${String(iid)}`,
+    });
+  /** Ten list pages, each naming a next one, and an empty discussion list for every iid. */
+  const sampleScript = (pages: readonly (readonly Record<string, unknown>[])[]) => {
+    const script: Record<string, Scripted> = {};
+    pages.forEach((body, index) => {
+      script[listPage(index + 1)] = {
+        status: 200,
+        body,
+        headers: { 'x-next-page': String(index + 2) },
+      };
+      for (const mr of body) {
+        script[
+          `GET /projects/${P}/merge_requests/${String(mr.iid)}/discussions?per_page=100&page=1`
+        ] = { status: 200, body: [], headers: { 'x-next-page': '' } };
+      }
+    });
+    return script;
+  };
+  /** The answer of a walk over every page: the newest `limit` by `merged_at`, stably. */
+  const fullWalk = (pages: readonly (readonly Record<string, unknown>[])[], limit: number) =>
+    pages
+      .flat()
+      .toSorted(
+        (left, right) => Date.parse(String(right.merged_at)) - Date.parse(String(left.merged_at)),
+      )
+      .slice(0, limit)
+      .map((mr) => mr.iid);
+
+  it('reads three pages of merged merge requests for a sample of 200, where it read ten', async () => {
+    // Merged when last updated, newest first: page n holds updates (n-1)·100 … n·100-1 minutes ago.
+    const pages = Array.from({ length: 10 }, (_, p) =>
+      Array.from({ length: 100 }, (_, index) => {
+        const age = p * 100 + index;
+        return merged(age + 1, age, age);
+      }),
+    );
+    const { port, calls } = build(sampleScript(pages), { config: { max_pages: 10 } });
+    const sample = await port.listMergedMergeRequests(PROJECT, SINCE, 200);
+    expect(sample.map((mr) => mr.ref.iid)).toEqual(Array.from({ length: 200 }, (_, i) => i + 1));
+    // Page 3 is read because the skew allowance (`MERGED_AFTER_UPDATE_MS`) asks for five minutes
+    // past the oldest update before the 200th merge can no longer be outranked.
+    expect(requestsTo(calls, `/projects/${P}/merge_requests?`)).toBe(3);
+  });
+
+  it('keeps the full walk’s answer when an old merge was updated recently (ruling (c))', async () => {
+    // Page 1 is two merges from long ago, commented on yesterday; the newest merges are on pages 2
+    // and 3. Pages 4–10 are older still and change nothing.
+    const pages = [
+      [merged(1, 10, 1000), merged(2, 20, 900)],
+      [merged(3, 30, 30)],
+      [merged(4, 40, 40)],
+      ...Array.from({ length: 7 }, (_, p) => [merged(5 + p, 50 + p * 10, 50 + p * 10)]),
+    ];
+    expect(fullWalk(pages, 2)).toEqual([3, 4]);
+
+    const { port, calls } = build(sampleScript(pages), { config: { max_pages: 10 } });
+    const sample = await port.listMergedMergeRequests(PROJECT, SINCE, 2);
+    expect(sample.map((mr) => mr.ref.iid)).toEqual(fullWalk(pages, 2));
+    expect(requestsTo(calls, `/projects/${P}/merge_requests?`)).toBe(4);
+  });
+
+  it('keeps the full walk’s answer when a later page’s merge landed just after its update (review round 1)', async () => {
+    // GitLab writes `updated_at` before `merged_at` in one request, so an untouched merge can have
+    // `merged_at` milliseconds past `updated_at`. Page 2's merge does, and it outranks page 1's.
+    const pages = [
+      [merged(1, 10, 10)],
+      [merged(2, 10 + MS, 10 - MS)],
+      ...Array.from({ length: 8 }, (_, p) => [merged(3 + p, 100 + p, 100 + p)]),
+    ];
+    expect(fullWalk(pages, 1)).toEqual([2]);
+    const { port, calls } = build(sampleScript(pages), { config: { max_pages: 10 } });
+    expect((await port.listMergedMergeRequests(PROJECT, SINCE, 1)).map((mr) => mr.ref.iid)).toEqual(
+      fullWalk(pages, 1),
+    );
+    expect(requestsTo(calls, `/projects/${P}/merge_requests?`)).toBe(3);
+  });
+
+  it('reads on once a merge request read was merged past the skew after its update (an import)', async () => {
+    const pages = [
+      [merged(1, 10, 2)],
+      ...Array.from({ length: 9 }, (_, p) => [merged(2 + p, 100 + p, 100 + p)]),
+    ];
+    const { port, calls } = build(sampleScript(pages), { config: { max_pages: 10 } });
+    expect((await port.listMergedMergeRequests(PROJECT, SINCE, 1)).map((mr) => mr.ref.iid)).toEqual(
+      fullWalk(pages, 1),
+    );
+    expect(requestsTo(calls, `/projects/${P}/merge_requests?`)).toBe(10);
+  });
+
+  it('reads on while a merge request carries no updated_at, since no bound is then known', async () => {
+    const pages = Array.from({ length: 10 }, (_, p) => [merged(p + 1, p, p)]);
+    (pages[0] as Record<string, unknown>[])[0] = { ...pages[0]?.[0], updated_at: null };
+    const { port, calls } = build(sampleScript(pages), { config: { max_pages: 10 } });
+    expect((await port.listMergedMergeRequests(PROJECT, SINCE, 1)).map((mr) => mr.ref.iid)).toEqual(
+      [1],
+    );
+    expect(requestsTo(calls, `/projects/${P}/merge_requests?`)).toBe(10);
+  });
+});
+
 describe('construction', () => {
   it('refuses a binding with no token rather than failing on the first call', () => {
     expect(() =>
