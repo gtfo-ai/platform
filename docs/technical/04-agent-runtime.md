@@ -470,7 +470,8 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   or configuration out of a file the agent can write — `pytest @<file>` and `-c`/`--config-file` —
 >   in the spellings read off the tools' sources (go1.25.0, pytest 9.0.2, pytest-cov 7.1.0; cited at
 >   the entries), and since WP-221 (backlog 624) logcli's `--cpuprofile`, `--memprofile` and
->   `--part-path-prefix` (logcli 3.7.7). What still writes one without an `ask` is the **repository-content route**:
+>   `--part-path-prefix` (logcli 3.7.7), and since WP-231 (backlog 626) an `@<file>` word before
+>   `--` on logcli's line, which kingpin v2.4.0 expands into options as pytest's argparse does. What still writes one without an `ask` is the **repository-content route**:
 >   `make *`, `npm run *`, `pytest` running a `conftest.py` or reading a `pytest.ini` it locates from
 >   its arguments (`pytest sub/` reads a `sub/pytest.ini` the agent wrote), a lockfile install's
 >   lifecycle scripts — whatever the tree says after the agent edits it, which is BD-025's accepted

@@ -5881,3 +5881,53 @@ describe('WP-221, backlog 624: logcli’s path-writing options meet the path flo
     expect(cell('logcli delete sudo id', BASELINES.impl)).toBe('ask / uncertain / uncertain');
   });
 });
+
+/**
+ * WP-231, backlog 626: kingpin (logcli's parser, v2.4.0) replaces an `@<file>` word by the file's
+ * lines, so the word is floored as pytest's is — `path`-kind, so `auto` runs it as it runs a literal
+ * line. Every row read `allow / allow / allow` before (PROGRESS § WP-231). Past a bare `--` kingpin
+ * expands nothing, so the word there stays read as a literal argument.
+ */
+describe('WP-231, backlog 626: logcli’s @<file> argument meets a floor, as pytest’s does', () => {
+  const withLoki = (given: ResolvedCommandPolicy): ResolvedCommandPolicy => ({
+    ...given,
+    allow: [...given.allow, 'logcli query *'],
+  });
+  const LOKI_BASELINES = { ro: withLoki(BASELINES.ro), impl: withLoki(BASELINES.impl) };
+  const FLOOR = 'logcli* @<file> (an argument read from a file, before --)';
+
+  it.each([
+    'logcli query x @args',
+    'logcli query @args',
+    'logcli query "@args" x',
+    'logcli query --limit @args x',
+  ])('%j reads ask / auto / deny', (command) => {
+    for (const [name, given] of Object.entries(LOKI_BASELINES)) {
+      expect(cell(command, given), name).toBe('ask / auto / deny');
+      expect(
+        hazardousArguments(command).map((entry) => entry.pattern),
+        name,
+      ).toEqual([FLOOR]);
+    }
+  });
+
+  it.each([
+    'logcli query x --since=1h',
+    'logcli query x -- @args',
+    'logcli query --query=@x',
+    // kingpin pushes a short option's attached value without expanding it.
+    'logcli query -q@x',
+  ])('control: %j keeps allow / allow / allow', (command) => {
+    for (const [name, given] of Object.entries(LOKI_BASELINES)) {
+      expect(cell(command, given), name).toBe('allow / allow / allow');
+    }
+  });
+
+  it('control: an @ word on another program meets no logcli floor', () => {
+    expect(hazardousArguments('grep @x f').map((entry) => entry.pattern)).not.toContain(FLOOR);
+  });
+
+  it('keeps logcli off the floored names', () => {
+    expect(FLOORED_NAMES.some((name) => name === 'logcli')).toBe(false);
+  });
+});

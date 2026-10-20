@@ -719,7 +719,11 @@ const MAKE_VERBS: readonly [string, ...string[]] = ['make', 'gmake'];
  * `Makefile` or `package.json`, which BD-025 already accepts. **pytest is the exception, and is
  * floored** (WP-120): `pytest @<file>` (argparse's `fromfile_prefix_chars`) and `pytest -c <file>`
  * read arguments or an `addopts` line out of a file the agent can write in an unprotected
- * directory, which walks past every pytest floor on this list, so both ask. **What still reads a
+ * directory, which walks past every pytest floor on this list, so both ask. **logcli is the same
+ * case** (WP-231, backlog 626): kingpin expands `logcli … @<file>` into the file's lines (before a
+ * bare `--` only), which walks past its three path floors, so that line asks too — and, because
+ * every option it can carry is one a literal `logcli query *` line may already run, it runs under
+ * `auto` as a `path` floor rather than being refused as a `command` one. **What still reads a
  * written file as pytest configuration, stated:** an ordinary `pytest sub/` — pytest locates its
  * configuration from the *arguments* upward (`locate_config`: `pytest.toml`, `pytest.ini`,
  * `pyproject.toml`, `tox.ini`, `setup.cfg`), so a `sub/pytest.ini` the agent wrote is read by a line
@@ -2098,6 +2102,27 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   // logcli's three (WP-221, backlog 624), as go's: floored always, `--part-path-prefix` with or
   // without `--merge-parts`.
   ...LOGCLI_PATH_WRITING_OPTIONS.map(logcliPathWritingFloor),
+  // logcli's argument file (WP-231, backlog 626), as pytest's below. kingpin v2.4.0 (the version
+  // logcli 3.7.7 vendors), `parser.go` `ParseContext.Next`
+  // (https://github.com/alecthomas/kingpin/blob/v2.4.0/parser.go): a word starting with `@` that is
+  // not an option is replaced by the file's lines — a flag's separate value too — and after a bare
+  // `--` every word is a literal argument, so the words past it are not read. `=`-attached values
+  // are never expanded. `path`, not `command`: under `auto` the line runs nothing a literal
+  // `logcli query *` line would not (the three options it can carry are `path` floors themselves),
+  // and `logcli*` keeps logcli off {@link FLOORED_NAMES}, as above.
+  {
+    pattern: 'logcli* @<file> (an argument read from a file, before --)',
+    kind: 'path',
+    hazard:
+      'kingpin replaces an argument starting with `@` by the lines of a file the agent may have written, which can carry every logcli option floored here, and no pattern sees them',
+    tokens: ({ name, words }) => {
+      const end = words.indexOf('--');
+      return (
+        name === 'logcli' &&
+        (end < 0 ? words : words.slice(0, end)).some((word) => word.startsWith('@'))
+      );
+    },
+  },
   {
     pattern: 'pytest -o / --override-ini (any key, any spelling argparse accepts)',
     kind: 'command',
