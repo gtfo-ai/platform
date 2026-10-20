@@ -726,11 +726,14 @@ const MAKE_VERBS: readonly [string, ...string[]] = ['make', 'gmake'];
  * `auto` as a `path` floor rather than being refused as a `command` one. **The other skill CLIs do
  * not expand one** (WP-232, backlog 626, measured in `platform-runtime` with `--network none`):
  * glab 1.117.0, jira 1.7.0 and sentry-cli 3.7.0 each took `@<file>` as a literal command or
- * argument, so they get no such floor; `acli` is unpinned and unread. **go's is a residual, stated**
- * (PROGRESS § WP-232, read off go1.25.0's sources, not run): `go` expands nothing itself, but a
- * `-gcflags`/`-ldflags`/`-asmflags` value reaches the compiler, linker or assembler, whose
- * `objabi.Flagparse` expands `@<file>` — so `go test -ldflags=all=@f` can carry the `-extld` the
- * floor below reads only literally — and no floor reads those values. **What still reads a
+ * argument, so they get no such floor; `acli` is unpinned and unread. **go refuses one before any
+ * tool sees it** (WP-240, backlog 639, measured in `golang:1.25.0` by digest, go1.25.0 linux/arm64,
+ * `--network none`): `go test -ldflags=all=@f`, `-gcflags=all=@f` and `-asmflags=all=@f` each exit 1
+ * with *"invalid command-line argument @f in command: …/link"* (`compile`, `asm`), because go1.25.0's
+ * `src/cmd/go/internal/work/shell.go` refuses every word beginning with `@` in any tool command it runs,
+ * so the tools' own `@<file>` reading is never reached and the `-extld` floor below is not walked
+ * past; `-ldflags=@f` without `<pattern>=` is refused at go's flag parse. A project image with
+ * another go version is measured at none. **What still reads a
  * written file as pytest configuration, stated:** an ordinary `pytest sub/` — pytest locates its
  * configuration from the *arguments* upward (`locate_config`: `pytest.toml`, `pytest.ini`,
  * `pyproject.toml`, `tox.ini`, `setup.cfg`), so a `sub/pytest.ini` the agent wrote is read by a line
