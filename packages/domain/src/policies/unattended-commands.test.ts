@@ -4991,8 +4991,8 @@ describe('WP-204, backlogs 598 and 600: a block entry read by getopt’s rules',
 describe('WP-205, backlogs 592, 596, 601 and 608: a wrapper’s declared grammar', () => {
   describe('criterion (1): the trap rows keep their cells', () => {
     it.each([
-      'find . -exec nice {} \;',
-      'find /usr/bin -name sudo -exec nice {} id \;',
+      'find . -exec nice {} ;',
+      'find /usr/bin -name sudo -exec nice {} id ;',
       'echo x | xargs -I{} cat {}',
     ])('%j stays handedCommand', (command) => {
       expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
@@ -5929,5 +5929,97 @@ describe('WP-231, backlog 626: logcli’s @<file> argument meets a floor, as pyt
 
   it('keeps logcli off the floored names', () => {
     expect(FLOORED_NAMES.some((name) => name === 'logcli')).toBe(false);
+  });
+});
+
+/**
+ * WP-241, backlog 641: a `-gcflags`/`-ldflags`/`-asmflags` value is read as go1.25.0 reads it
+ * (`load/flag.go` `PerPackageFlag.set`, `quoted.Split`), and the compiler's, linker's and
+ * assembler's path-writing options inside it are `path` floors, as go's own are. The first three
+ * rows read `allow / allow / allow` before and wrote their file at WP-240 (PROGRESS § WP-240).
+ */
+describe('WP-241, backlog 641: a path-writing tool option inside a go -gcflags/-ldflags/-asmflags value meets a floor', () => {
+  const tool = (flag: string, option: string): string =>
+    `go* -${flag} value: -${option} (either dash form of both, = or the next word, optional <pattern>=)`;
+  const UNSPLITTABLE =
+    'go* -gcflags/-ldflags/-asmflags value the floors cannot read (quoted.Split refuses it, or bash may hand go other text)';
+  const floorsOf = (command: string): readonly string[] =>
+    hazardousArguments(command).map((entry) => entry.pattern);
+
+  it.each([
+    ['go test -gcflags=all=-cpuprofile=/tmp/c ./...', tool('gcflags', 'cpuprofile')],
+    ['go test -ldflags=-cpuprofile=/tmp/l ./...', tool('ldflags', 'cpuprofile')],
+    ['go test -ldflags=-o=/tmp/x ./...', tool('ldflags', 'o')],
+    // The spellings of the first: no <pattern>=, two dashes, the following word, the tool's own
+    // two dashes and the next field, and a quoted field.
+    ['go test -gcflags=-cpuprofile=/tmp/c ./...', tool('gcflags', 'cpuprofile')],
+    ['go test --gcflags=all=-cpuprofile=/tmp/c ./...', tool('gcflags', 'cpuprofile')],
+    ['go test -gcflags all=-cpuprofile=/tmp/c ./...', tool('gcflags', 'cpuprofile')],
+    ['go test -gcflags "all=-N --cpuprofile /tmp/c" ./...', tool('gcflags', 'cpuprofile')],
+    [`go test -gcflags="-N '-cpuprofile=/tmp/c'" ./...`, tool('gcflags', 'cpuprofile')],
+    ['go test -ldflags="-s -w -tmpdir /tmp/t" ./...', tool('ldflags', 'tmpdir')],
+    // A literal quote the program receives splits the value where no space does (`'-s''-o=…'` is
+    // two fields to go), which a second dequote would have merged into `-s-cpuprofile=…`.
+    [`go test -ldflags="-w '-s''-cpuprofile=/tmp/x'" ./...`, tool('ldflags', 'cpuprofile')],
+    [`go test -gcflags="-N 'x'-cpuprofile=/tmp/x" ./...`, tool('gcflags', 'cpuprofile')],
+    // Review round 1: go trims `unicode.IsSpace`, U+0085 included, before it looks for the dash.
+    ['go test -gcflags=\u0085-cpuprofile=/tmp/c ./...', tool('gcflags', 'cpuprofile')],
+    ['go test -ldflags=\u0085-o=/tmp/x ./...', tool('ldflags', 'o')],
+    // One row per table beyond the first three, so no single entry is unguarded (canary 3).
+    ['go test -gcflags=all=-asmhdr=/tmp/h ./...', tool('gcflags', 'asmhdr')],
+    ['go test -gcflags=all=-linkobj=/tmp/l ./...', tool('gcflags', 'linkobj')],
+    ['go test -ldflags=-tmpdir=/tmp/t ./...', tool('ldflags', 'tmpdir')],
+    // asm's -o: measured not to write (go's own -o follows), floored anyway (WP-241's call).
+    ['go test -asmflags=all=-o=/tmp/a.o ./...', tool('asmflags', 'o')],
+  ])('%j reads ask / auto / deny', (command, floor) => {
+    expect(cell(command, BASELINES.impl)).toBe('ask / auto / deny');
+    expect(floorsOf(command)).toContain(floor);
+  });
+
+  it('a value the floors cannot read (Split refuses it, or bash may hand go other text) is never allow', () => {
+    for (const command of [
+      `go test -gcflags="all=-N '-cpuprofile=/tmp/c" ./...`,
+      `go test -ldflags '-s "-w' ./...`,
+      // Review round 1: bash keeps a backslash before `'` inside double quotes, which the shared
+      // dequote drops, so go's Split sees `\'x` as a plain field and the linker gets -tmpdir.
+      `go test -ldflags="-buildid \\'x -tmpdir /tmp/t -installsuffix \\'" ./...`,
+      `go test -ldflags="-buildid \\'x -tmpdir=/tmp/t -installsuffix \\'" ./...`,
+      `go test -ldflags="-buildid \\'x -fipso=/tmp/f -installsuffix \\'" ./...`,
+      // An expansion: the value bash hands go is not the one written.
+      'go test -ldflags="$X -tmpdir=/tmp/t" ./...',
+      // Review round 2: brace expansion makes two -ldflags words; the last one, -o=…, wins.
+      'go test -ldflags={-s,-o=/tmp/x} ./...',
+    ]) {
+      expect(cell(command, BASELINES.impl), command).toBe('ask / auto / deny');
+      expect(floorsOf(command), command).toContain(UNSPLITTABLE);
+    }
+    // A quote further inside a field is an ordinary byte (`quoted.go:27`).
+    expect(floorsOf(`go test "-ldflags=-X=main.v=it's" ./...`)).not.toContain(UNSPLITTABLE);
+  });
+
+  it.each([
+    'go test -ldflags=-s ./...',
+    'go test -ldflags=all=@f ./...',
+    'go test -gcflags=all=-N ./...',
+    // Review round 1's guard reads only what can diverge: plain double quotes still read.
+    'go test -ldflags="-s -w" ./...',
+    // A different option, never a prefix: -memprofilerate is not -memprofile.
+    'go test -gcflags=all=-memprofilerate=1 ./...',
+    // A compiler option handed to the linker is not the linker's.
+    'go test -ldflags=-asmhdr=/tmp/h ./...',
+    // go refuses a value with no <pattern>= that does not open with a dash; nothing runs.
+    'go test -gcflags=cpuprofile ./...',
+  ])('control: %j keeps allow / allow / allow', (command) => {
+    expect(cell(command, BASELINES.impl)).toBe('allow / allow / allow');
+  });
+
+  it('control: -ldflags=-extld keeps ask / hazard / hazard', () => {
+    expect(cell('go test -ldflags=-extld=/bin/id ./...', BASELINES.impl)).toBe(
+      'ask / hazard / hazard',
+    );
+  });
+
+  it('control: the same value on another program meets no go tool floor', () => {
+    expect(floorsOf('grep -gcflags=all=-cpuprofile=/tmp/c f')).toEqual([]);
   });
 });

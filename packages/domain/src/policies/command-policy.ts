@@ -732,8 +732,15 @@ const MAKE_VERBS: readonly [string, ...string[]] = ['make', 'gmake'];
  * with *"invalid command-line argument @f in command: …/link"* (`compile`, `asm`), because go1.25.0's
  * `src/cmd/go/internal/work/shell.go` refuses every word beginning with `@` in any tool command it runs,
  * so the tools' own `@<file>` reading is never reached and the `-extld` floor below is not walked
- * past; `-ldflags=@f` without `<pattern>=` is refused at go's flag parse. A project image with
- * another go version is measured at none. **What still reads a
+ * past; `-ldflags=@f` without `<pattern>=` is refused at go's flag parse. **The tools' own
+ * path-writing options inside those values are floored** (WP-241, backlog 641, on WP-240's
+ * measurement: `-gcflags=all=-cpuprofile=…`, `-ldflags=-cpuprofile=…` and `-ldflags=-o=…` each wrote
+ * the file): the value is read as go1.25.0's `load/flag.go` and `cmd/internal/quoted` read it, in
+ * either dash form, `=`-attached or the next word, with or without `<pattern>=`, and the compiler's,
+ * linker's and assembler's options in it are `path` floors by exact name
+ * ({@link GO_COMPILE_PATH_WRITING_OPTIONS}, {@link GO_LINK_PATH_WRITING_OPTIONS},
+ * {@link GO_ASM_PATH_WRITING_OPTIONS}); a value `quoted.Split` refuses fails closed. A project image
+ * with another go version is measured at none, and the lists are an enumeration. **What still reads a
  * written file as pytest configuration, stated:** an ordinary `pytest sub/` — pytest locates its
  * configuration from the *arguments* upward (`locate_config`: `pytest.toml`, `pytest.ini`,
  * `pyproject.toml`, `tox.ini`, `setup.cfg`), so a `sub/pytest.ini` the agent wrote is read by a line
@@ -1012,6 +1019,18 @@ interface HazardousArgumentShape {
     readonly positional: readonly string[];
     /** Every word after the name, dequoted, in order (WP-161: git's subcommand is read off these). */
     readonly words: readonly string[];
+    /**
+     * The same words exactly as the program receives them — a literal quote inside a word kept —
+     * on the `argvWords` reading only, `undefined` on the written one (WP-241: a go tool flag's
+     * value is split again by go, so its quotes matter, and `words` has taken them off twice).
+     */
+    readonly received?: readonly string[] | undefined;
+    /**
+     * Beside `received`, per word: whether bash may hand the program other text than `received`
+     * says — a `$` or backtick outside single quotes, or a backslash inside double quotes before a
+     * character bash does not escape there (`argvWords` drops that backslash; bash keeps it).
+     */
+    readonly receivedUnsure?: readonly boolean[] | undefined;
   }) => boolean;
 }
 
@@ -1129,6 +1148,176 @@ const goPathWritingFloor =
       hazard: `go test -${flagName} writes to a path the command line chose, which the path guard never sees (BD-024)`,
       tokens: ({ name, flags }) =>
         name.startsWith('go') && flags.some((flag) => spelled.test(flag)),
+    };
+  };
+
+/**
+ * The **compiler's** options that write a path, reached through `go -gcflags` (WP-241, backlog
+ * 641): go1.25.0's `go tool compile -help`, read in `golang:1.25.0` by digest (PROGRESS § WP-240),
+ * lists them as *writing a path* — `-asmhdr`, `-bench` (appends), `-blockprofile`, `-cpuprofile`,
+ * `-json` (`version,file`), `-linkobj`, `-memprofile`, `-mutexprofile`, `-o`, `-traceprofile`.
+ * `go test -gcflags=all=-cpuprofile=/tmp/c.prof ./...` wrote the file (exit 0, measured there).
+ */
+export const GO_COMPILE_PATH_WRITING_OPTIONS: readonly string[] = [
+  'asmhdr',
+  'bench',
+  'blockprofile',
+  'cpuprofile',
+  'json',
+  'linkobj',
+  'memprofile',
+  'mutexprofile',
+  'o',
+  'traceprofile',
+];
+
+/**
+ * The **linker's** options that write a path, reached through `go -ldflags` (WP-241): go1.25.0's
+ * `go tool link -help`, read in the same image — `-benchmarkprofile` (a base name),
+ * `-capturehostobjs` (a directory), `-cpuprofile`, `-fipso`, `-memprofile`, `-o`, `-tmpdir` (a
+ * directory). `-ldflags=-cpuprofile=/tmp/l.prof` wrote the file (exit 0) and `-ldflags=-o=/tmp/x`
+ * wrote the test binary there although go then failed (exit 1), both measured at WP-240.
+ */
+export const GO_LINK_PATH_WRITING_OPTIONS: readonly string[] = [
+  'benchmarkprofile',
+  'capturehostobjs',
+  'cpuprofile',
+  'fipso',
+  'memprofile',
+  'o',
+  'tmpdir',
+];
+
+/**
+ * The **assembler's** option that writes a path, reached through `go -asmflags` (WP-241): `go tool
+ * asm -help` lists `-o` (and `-gensymabis`, which writes to `-o`). **Floored although measured not to
+ * write**: `go test -asmflags=all=-o=/tmp/a.o ./...` exited 0 and wrote nothing at WP-240, because
+ * go1.25.0 puts its own `-o` after the value and the last one wins. That ordering is one go
+ * version's, read nowhere in the source by this row; flooring it over-asks one spelling nobody
+ * needs, leaving it would make the floor's coverage depend on it.
+ */
+export const GO_ASM_PATH_WRITING_OPTIONS: readonly string[] = ['o'];
+
+/** Which tool each go flag hands its value to, and that tool's path-writing options. */
+const GO_TOOL_FLAG_OPTIONS: Readonly<Record<string, readonly string[]>> = {
+  gcflags: GO_COMPILE_PATH_WRITING_OPTIONS,
+  ldflags: GO_LINK_PATH_WRITING_OPTIONS,
+  asmflags: GO_ASM_PATH_WRITING_OPTIONS,
+};
+
+/** go's flag package: one or two dashes, the value `=`-attached or the next word. */
+const GO_TOOL_FLAG = /^--?(gcflags|ldflags|asmflags)(?:=([\s\S]*))?$/;
+
+/**
+ * go1.25.0 `src/cmd/internal/quoted/quoted.go:25-59` (`Split`), ported: fields separated by space,
+ * tab, newline or carriage return; a field that *opens* with `'` or `"` runs to the next same quote
+ * with nothing unescaped, and a quote further inside a field is an ordinary byte. `null` where
+ * `Split` returns *"unterminated %c string"*.
+ */
+const goQuotedSplit = (value: string): readonly string[] | null => {
+  const fields: string[] = [];
+  const space = /[ \t\n\r]/;
+  let rest = value;
+  while (rest.length > 0) {
+    let start = 0;
+    while (start < rest.length && space.test(rest[start] as string)) {
+      start += 1;
+    }
+    rest = rest.slice(start);
+    if (rest.length === 0) {
+      break;
+    }
+    const quote = rest[0] as string;
+    if (quote === '"' || quote === "'") {
+      const close = rest.indexOf(quote, 1);
+      if (close < 0) {
+        return null;
+      }
+      fields.push(rest.slice(1, close));
+      rest = rest.slice(close + 1);
+      continue;
+    }
+    let end = 0;
+    while (end < rest.length && !space.test(rest[end] as string)) {
+      end += 1;
+    }
+    fields.push(rest.slice(0, end));
+    rest = rest.slice(end);
+  }
+  return fields;
+};
+
+/**
+ * go1.25.0's `strings.TrimSpace` (`strings/strings.go:1093-1125`), which trims `unicode.IsSpace`
+ * (`unicode/graphic.go:128-138`): `\t \n \v \f \r`, space, U+0085 and U+00A0, and above Latin-1 the
+ * `White_Space` table (`unicode/tables.go:8570-8581`). Not JS `trim`, which drops U+0085 and adds
+ * U+FEFF (review round 1: a leading NEL read as a `<pattern>=` cut, `allow`).
+ */
+const GO_SPACE =
+  '[\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]';
+const GO_TRIM_SPACE = new RegExp(`^${GO_SPACE}+|${GO_SPACE}+$`, 'g');
+
+/**
+ * The words go hands its tool for one `-gcflags`/`-ldflags`/`-asmflags` value, read as go1.25.0's
+ * `src/cmd/go/internal/load/flag.go:42-78` (`PerPackageFlag.set`) reads it: trimmed; a value not
+ * opening with `-` is `<pattern>=<flags>`, cut at its first `=` (`:54-68`), and go refuses one with
+ * no `=`, an empty pattern or a leading quote — nothing runs, so it yields no words; the rest is
+ * `quoted.Split` (`:69`), whose refusal is `null` here.
+ */
+const goToolValueWords = (raw: string): readonly string[] | null => {
+  let value = raw.replace(GO_TRIM_SPACE, '');
+  if (value !== '' && !value.startsWith('-')) {
+    const cut = value.indexOf('=');
+    if (cut <= 0 || value.startsWith("'") || value.startsWith('"')) {
+      return [];
+    }
+    value = value.slice(cut + 1);
+  }
+  return goQuotedSplit(value);
+};
+
+/**
+ * Every value of `flag` on a go command line, split as go splits it — `null` for one `Split`
+ * refuses, and for one whose words bash may hand go differently (`unsure`, review round 1).
+ */
+const goToolValues = (
+  words: readonly string[],
+  unsure: readonly boolean[],
+  flag: string,
+): readonly (readonly string[] | null)[] =>
+  words.flatMap((word, index) => {
+    const spelled = GO_TOOL_FLAG.exec(word);
+    if (spelled === null || spelled[1] !== flag) {
+      return [];
+    }
+    const valueAt = spelled[2] === undefined ? index + 1 : index;
+    const raw = spelled[2] ?? words[valueAt];
+    if (raw === undefined) {
+      return [];
+    }
+    return [unsure[index] === true || unsure[valueAt] === true ? null : goToolValueWords(raw)];
+  });
+
+/**
+ * One floor per tool option, by its exact name — the tools parse with go's flag package
+ * (`objabi.Flagparse`), so one or two dashes and `=` or the next word, and `-memprofilerate` is a
+ * different option. `go*` as the binary, like {@link goPathWritingFloor}'s; an option is matched
+ * wherever it sits in the value, which can only over-read.
+ */
+const goToolPathWritingFloor =
+  (flag: string) =>
+  (optionName: string): HazardousArgument => {
+    const spelled = new RegExp(`^--?${optionName}(?:=|$)`);
+    return {
+      pattern: `go* -${flag} value: -${optionName} (either dash form of both, = or the next word, optional <pattern>=)`,
+      kind: 'path',
+      hazard: `go -${flag} hands its tool -${optionName}, which writes to a path the command line chose, which the path guard never sees (BD-024)`,
+      tokens: ({ name, received, receivedUnsure = [] }) =>
+        name.startsWith('go') &&
+        received !== undefined &&
+        goToolValues(received, receivedUnsure, flag).some(
+          (options) => options !== null && options.some((option) => spelled.test(option)),
+        ),
     };
   };
 
@@ -2109,6 +2298,28 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   ...GO_PATH_WRITING_TEST_FLAGS.map(goPathWritingFloor('optional')),
   // The test binary's own three (review round 1): `test.`-prefixed only, before or after `-args`.
   ...GO_PATH_WRITING_BINARY_FLAGS.map(goPathWritingFloor('required')),
+  // The compiler's, linker's and assembler's (WP-241, backlog 641), read inside the value go hands
+  // each tool. `path`, as go's own: under `auto` the line runs, as `go test` runs repository code.
+  ...Object.entries(GO_TOOL_FLAG_OPTIONS).flatMap(([flag, options]) =>
+    options.map(goToolPathWritingFloor(flag)),
+  ),
+  // Review round 1: `received` comes from the shared dequote (`argvWords`), which drops a backslash
+  // inside double quotes that bash keeps and reads no expansion; those values fail closed here
+  // rather than by changing that dequote. **Residual, stated:** every other floor still reads the
+  // shared dequote, so the divergence is theirs until it is filed and fixed there.
+  {
+    pattern:
+      'go* -gcflags/-ldflags/-asmflags value the floors cannot read (quoted.Split refuses it, or bash may hand go other text)',
+    kind: 'path',
+    hazard:
+      'a tool flag value the floors above cannot read fails closed: one `quoted.Split` refuses (go refuses it too, `load/flag.go:69-71`), or one holding a `$`, a backtick or a backslash inside double quotes, where the dequoted words this module reads may not be what bash hands go',
+    tokens: ({ name, received, receivedUnsure = [] }) =>
+      name.startsWith('go') &&
+      received !== undefined &&
+      Object.keys(GO_TOOL_FLAG_OPTIONS).some((flag) =>
+        goToolValues(received, receivedUnsure, flag).includes(null),
+      ),
+  },
   // logcli's three (WP-221, backlog 624), as go's: floored always, `--part-path-prefix` with or
   // without `--merge-parts`.
   ...LOGCLI_PATH_WRITING_OPTIONS.map(logcliPathWritingFloor),
@@ -3305,6 +3516,41 @@ const argv0Candidates = (tokens: readonly string[]): readonly (readonly string[]
 };
 
 /**
+ * The candidates {@link blockCandidates} read off `argvWords` — words already as the program
+ * receives them, so a second `unquoteToken` would take off quotes the program sees (WP-241).
+ */
+const RECEIVED_READING = new WeakMap<readonly string[], readonly boolean[]>();
+
+/**
+ * Whether bash may hand a program other text for this written word than `unquoteToken` reads: a
+ * `$` or backtick outside single quotes (an expansion), or a backslash inside double quotes before
+ * anything but `$`, backtick, `"`, `\` or a newline, which bash keeps and `unquoteToken` drops
+ * (WP-241 review round 1), or an unquoted `{`, which brace expansion may turn into several words
+ * (`-ldflags={-s,-o=/tmp/x}`, review round 2). Read only by the go tool-flag floors; the shared
+ * dequote is unchanged (backlog 642). A glob (`-[t]mpdir`) is not marked: it expands only against a
+ * file the run wrote (TD-030 tier 3).
+ */
+const receivedMayDiffer = (written: string): boolean => {
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < written.length; index += 1) {
+    const char = written[index] as string;
+    if (quote === "'") {
+      quote = char === "'" ? null : quote;
+    } else if (char === '$' || char === '`' || (char === '{' && quote === null)) {
+      return true;
+    } else if (char === '\\') {
+      if (quote === '"' && !'$`"\\\n'.includes(written[index + 1] ?? '$')) {
+        return true;
+      }
+      index += 1;
+    } else if (char === '"' || char === "'") {
+      quote = quote === null ? char : char === quote ? null : quote;
+    }
+  }
+  return false;
+};
+
+/**
  * `argv0Candidates` over both of `argvForms`' readings, read once per text within one evaluation
  * (`CommandMemo`; review round 1: the block matcher asked for them once per entry).
  */
@@ -3313,7 +3559,17 @@ const blockCandidates = (text: string): readonly (readonly string[])[] => {
   if (cached !== undefined) {
     return cached;
   }
-  const candidates = argvForms(text).flatMap(argv0Candidates);
+  const [written = [], received = []] = argvForms(text).map(argv0Candidates);
+  // `argvWords` is `argvShellWords` dequoted word by word, and a candidate's words after its name
+  // are a suffix of it (`argv0Candidates`), so the flags align from the end.
+  const unsure = argvShellWords(text).map(receivedMayDiffer);
+  for (const candidate of received) {
+    RECEIVED_READING.set(
+      candidate,
+      unsure.slice(unsure.length - Math.max(candidate.length - 1, 0)),
+    );
+  }
+  const candidates = [...written, ...received];
   activeMemo?.candidates.set(text, candidates);
   return candidates;
 };
@@ -3982,6 +4238,8 @@ export const carriesHazard =
             flags,
             positional,
             words: rest.map(unquoteToken),
+            received: RECEIVED_READING.has(candidate) ? rest : undefined,
+            receivedUnsure: RECEIVED_READING.get(candidate),
           });
         });
 
