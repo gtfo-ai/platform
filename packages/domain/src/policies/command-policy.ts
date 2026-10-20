@@ -723,7 +723,14 @@ const MAKE_VERBS: readonly [string, ...string[]] = ['make', 'gmake'];
  * case** (WP-231, backlog 626): kingpin expands `logcli … @<file>` into the file's lines (before a
  * bare `--` only), which walks past its three path floors, so that line asks too — and, because
  * every option it can carry is one a literal `logcli query *` line may already run, it runs under
- * `auto` as a `path` floor rather than being refused as a `command` one. **What still reads a
+ * `auto` as a `path` floor rather than being refused as a `command` one. **The other skill CLIs do
+ * not expand one** (WP-232, backlog 626, measured in `platform-runtime` with `--network none`):
+ * glab 1.117.0, jira 1.7.0 and sentry-cli 3.7.0 each took `@<file>` as a literal command or
+ * argument, so they get no such floor; `acli` is unpinned and unread. **go's is a residual, stated**
+ * (PROGRESS § WP-232, read off go1.25.0's sources, not run): `go` expands nothing itself, but a
+ * `-gcflags`/`-ldflags`/`-asmflags` value reaches the compiler, linker or assembler, whose
+ * `objabi.Flagparse` expands `@<file>` — so `go test -ldflags=all=@f` can carry the `-extld` the
+ * floor below reads only literally — and no floor reads those values. **What still reads a
  * written file as pytest configuration, stated:** an ordinary `pytest sub/` — pytest locates its
  * configuration from the *arguments* upward (`locate_config`: `pytest.toml`, `pytest.ini`,
  * `pyproject.toml`, `tox.ini`, `setup.cfg`), so a `sub/pytest.ini` the agent wrote is read by a line
