@@ -20,7 +20,7 @@
 
 > **Note from the product owner — 2026-10-08, HIGH PRIORITY.** Backlog **535** (tracker statuses: the pick-up status, in progress, review, a human QA phase, loaded statuses and the mapping), **536** (an agent claims the ticket so no second instance works it) and **537** (code-review findings, answers and replies live on the merge request, and every agent reads them) go ahead of every other open entry when the next milestone is planned. The Autix + Jira example (AUT-6327, autix!2715) is recorded in 535 and 537.
 
-**Session 19 — 2026-10-20.** `main` opened at **`a2c1699d`** (WP-230's code commit, pushed by session 18, whose context ended before its ledger row); the tree carried WP-230's uncommitted notes and the person's untracked `.serena/`, and the worktree `../wt-wp233` held WP-233's finished, unreviewed build (its notes report `PASS: verify`). No notes from the person starting the session. `RELEASE_VERSIONING` unset. Session 18's last docs commit `d4bcadf2` read `ci` `39332969103` and `image` `39332969066` **completed success**; `a2c1699d` read `ci` `39336173738` and `image` `39336174397` **completed success**, `release` job skipped. **WP-230 is DONE at `a2c1699d`** — 630 closed. **WP-233 is DONE at `65eab400`** (`ci` `39344832118`, `image` `39344832034` **completed success**) — 628 and 629 closed; **637** (minor, test-only) and **638** (nit) filed, unowned. **WP-231 is DONE at `69fc933d`** (`ci` `39346292341`, `image` `39346292121` **completed success**) — 626's logcli half closed; the orchestrator ruled the floor `path`-kind (plan row amended). **WP-234 is DONE at `0b66dbef`** (`ci` `39349872053`, `image` `39349872246` **completed success**) — 627 and 638 closed; two review rounds (round 1 found the merged-sample stop failed open on GitLab's millisecond gap between `updated_at` and `merged_at`; plan ruling (c) amended). **WP-232 is DONE at `87d498d1`** (`ci` `39352696044`, `image` `39352696067` **completed success**) — 626 closed; go's half split off on a reading as **639** (minor, latent, unowned). **WP-235 is DONE at `e7d6a313`** (`ci` `39356513165`, `image` `39356513003` **completed success**) — 631 closed; its build filed **640** (minor: `db`'s own anonymous volume, no data at risk). **Every M14 row is DONE.** Next: the architect pass that writes M15 from the open backlog. **Machine note:** on this machine a plain `docker run` is rewritten by the `rtk` shell wrapper and reports a local image missing — use `rtk proxy docker run`; and in zsh a `$ids` list does not word-split in a `for` loop (use `${(s:,:)ids}`). Next after them: WP-232 (serial after WP-231), WP-234, WP-235 (Docker alone). Next free migration **0092**.
+**Session 19 — 2026-10-20.** `main` opened at **`a2c1699d`** (WP-230's code commit, pushed by session 18, whose context ended before its ledger row); the tree carried WP-230's uncommitted notes and the person's untracked `.serena/`, and the worktree `../wt-wp233` held WP-233's finished, unreviewed build (its notes report `PASS: verify`). No notes from the person starting the session. `RELEASE_VERSIONING` unset. Session 18's last docs commit `d4bcadf2` read `ci` `39332969103` and `image` `39332969066` **completed success**; `a2c1699d` read `ci` `39336173738` and `image` `39336174397` **completed success**, `release` job skipped. **WP-230 is DONE at `a2c1699d`** — 630 closed. **WP-233 is DONE at `65eab400`** (`ci` `39344832118`, `image` `39344832034` **completed success**) — 628 and 629 closed; **637** (minor, test-only) and **638** (nit) filed, unowned. **WP-231 is DONE at `69fc933d`** (`ci` `39346292341`, `image` `39346292121` **completed success**) — 626's logcli half closed; the orchestrator ruled the floor `path`-kind (plan row amended). **WP-234 is DONE at `0b66dbef`** (`ci` `39349872053`, `image` `39349872246` **completed success**) — 627 and 638 closed; two review rounds (round 1 found the merged-sample stop failed open on GitLab's millisecond gap between `updated_at` and `merged_at`; plan ruling (c) amended). **WP-232 is DONE at `87d498d1`** (`ci` `39352696044`, `image` `39352696067` **completed success**) — 626 closed; go's half split off on a reading as **639** (minor, latent, unowned). **WP-235 is DONE at `e7d6a313`** (`ci` `39356513165`, `image` `39356513003` **completed success**) — 631 closed; its build filed **640** (minor: `db`'s own anonymous volume, no data at risk). **Every M14 row is DONE.** **The architect's M15 pass** (§ "Architect ruling (M15, session 19)", plan § "Milestone M15") wrote four rows — **WP-236** (637, parallel-safe), **WP-237** (636, Docker alone), **WP-238** (640, Docker alone, after WP-237; `tmpfs` over `db`'s declared parent, data untouched), **WP-239** (634, 635, Docker alone, after WP-238); 5 owned, 34 carried (639 joins them), 1 declined (440); no migration (0092 next); no row touches `command-policy.ts`. Next: WP-236, then WP-237 → WP-238 → WP-239. **Machine note:** on this machine a plain `docker run` is rewritten by the `rtk` shell wrapper and reports a local image missing — use `rtk proxy docker run`; and in zsh a `$ids` list does not word-split in a `for` loop (use `${(s:,:)ids}`). Next after them: WP-232 (serial after WP-231), WP-234, WP-235 (Docker alone). Next free migration **0092**.
 
 **Session 18 — 2026-10-19.** `main` opened at **`dd0113b2`**, tree clean but for the person's untracked `.serena/`. Session 17's PENDING runs read **completed success**: WP-205's `3c2c5002` (`ci` `39219160224`, `image` `39219160202`) and its docs commit `dd0113b2` (`ci` `39219327912`, `image` `39219327984`, `release` job **skipped**). `RELEASE_VERSIONING` unset. Docker volume baseline **71**. No notes from the person starting the session. Commits carry `Signed-off-by` only — the person's global instructions forbid `Co-Authored-By` and `Claude-Session` trailers, which override 15-orchestrator-prompt's trailer sentence. **The architect's M12 second amendment** (§ "Architect ruling (M12 second amendment, session 18)") placed **614** as its own row **WP-216** (TD-030 tier 1: a wrapper's option word that may split is a possible command word), right after WP-214 and before WP-211, serial on `command-policy.ts`. **WP-215 is DONE at `97bc35c8`** (`ci` `39227218770`, `image` `39227218788` **completed success**; its docs commit `8eeb3eb9` `ci` `39227459392`, `image` `39227459479` **completed success**) — 612 closed; **615** filed (minor, unowned: the installed `.git/hooks/*` once pointed at another session's scratch copy). WP-214's build filed **616** (major, fail-open, live: a git global option displaces every floor's words), **617** and **618**; **the architect's M12 third amendment** (`353dffef`) placed 616 as **WP-217** (floors read a word after an option both ways, as WP-198's block entries do; 617's second-`-r` half folded), 617's cluster half carried, 618 into WP-213 (that half after WP-214's merge). **WP-214 is DONE at `c9d67632`** (`image` `39235144351` **completed success**; its `ci` was cancelled by the docs push `7db5011f`, whose `ci` `39235358027` and `image` `39235358151` read **completed success** — from WP-216 on, a row's docs push waits for its code commit's `ci`) — 613 closed; built in `../wt-wp214` and ported to the main checkout (a three-way apply of the notes conflicted only at the file's end; both rows' notes kept). **WP-216 is DONE at `dc345e34`** (`ci` `39240633370`, `image` `39240633475` **completed success**) — 614 closed. **WP-217 is DONE at `265bd0a6`** (`ci` `39249127457`, `image` `39249127505` **completed success**) — 616 and 617's second-`-r` half closed; its reviewer filed **621** (major, fail-open, live: `--shallow-file` missing from the git global-option list) and its implementer **620** (minor, masked). **The architect's M12 fourth amendment** placed 621 as **WP-218** (git's global options one grammar cited from `handle_options` at 2.47.3, one reader; an undeclared option reads uncertain; 620 folded as its (c)), 615 as **WP-219** (tooling), 619 carried. **WP-212 is DONE at `b00e2002`** (`ci` `39254663044`, `image` `39254662853` **completed success**) — 550's audit half and 594 closed. **WP-218 is DONE at `d72ed8eb`** — 621 and 620 closed; the orchestrator measured 621 live at git 2.47.3 in `platform-runtime:s16`. **WP-213 is DONE at `78cd5263`** (`d72ed8eb`'s `ci` `39270096577` and `image` `39270096855` read **completed success**; `78cd5263`'s `ci` `39270730494` **failed** — `unit + contract`: two `collection-watchdog.test.ts` assertions matched `/Tests\s+6 passed/` against a scratch vitest whose summary CI coloured; reproduced locally with `CI=true GITHUB_ACTIONS=true FORCE_COLOR=1`, fixed at **`5167b883`** (scratch runs drop `FORCE_COLOR`, set `NO_COLOR=1`), whose `ci` `39274885160` and `image` `39274885136` read **completed success**; the fix's single-file runs started at load 16.6, over the gate — recorded) — 597 and 618 closed after two review rounds. **WP-219 is DONE at `a72b7068`** (`ci` `39279720979`, `image` `39279721068` **completed success**, after about 40 minutes queued behind GitHub's runner backlog) — 615 closed, regraded major by measurement; **622**–**625** filed (lefthook bump, lefthook's auto-install, `logcli` profile writes, `GLAB_PAGER`). **WP-211 is DONE at `930402e2`** (`ci` `39286116584`, `image` `39286116442` **completed success**) — 606, 607, 581 and 625 closed after three review rounds and one orchestrator-directed fix (Composer read by exact canonical name only). **Every M12 row is DONE.** The new `hooks:check` caught a live rewrite of the shared hooks on its first day: WP-211's reviewer's scratch copy kept a `.git` link and its `pnpm install` repointed them (reinstalled from main). Next: M12 is closed; **the architect's M13 pass** (§ "Architect ruling (M13, session 18)", plan § "Milestone M13") wrote eight rows — WP-220 (610, first, parallel-safe), WP-221 (624, the only `command-policy.ts` row), WP-222 (622, 623; merges alone: lockfile and notices), WP-223 (436's audit half, 619 folded), WP-224 (589), WP-225 (Q122 (a), a counts-only census), WP-226 (534), WP-227 (433's grace half, Docker alone) — with 9 entries owned, 33 carried, 1 declined (440); 535–537 were already resolved, 538 waits on Q118; no migration (next free 0092). **WP-221 is DONE at `222b32a0`** (`ci` `39294857194`, `image` `39294857444` **completed success**) — 624 closed; **626** filed (logcli `@args` files, minor, unowned). **WP-220 is DONE at `cc45faa8`** (`ci` `39301401661`, `image` `39301401515` **completed success**) — 610 closed; **627** filed. **WP-222 is DONE at `fed4d2b3`** (`ci` `39303727432`, `image` `39303727556` **completed success**) — 622 and 623 closed; lefthook 2.2.2 with `no_auto_install`, hooks reinstalled from main. **WP-223 is DONE at `622ca113`** (`ci` `39310470471`, `image` `39310470649` **completed success**) — 436's audit half and 619 closed; **628** and **629** filed. **WP-224 is DONE at `194d1190`** (`ci` `39314689101`, `image` `39314688565` **completed success**) — 589 closed; ruling (a) corrected in the plan (the create answer is the largest); **630** filed. **WP-225 is DONE at `2078cb1f`** (`ci` `39319397446`, `image` `39319397449` **completed success**; its dogfood measurement (d) deferred: no platform database on this machine; Q122 stays open). **WP-227 is DONE at `808d00c6`** (`ci` `39323235461`, `image` `39323234123` **completed success**) — 433's grace half closed; **631**, **632** and **633** (major: the operator guide's restore runs `pg_restore` on gzipped plain SQL) filed. **Every M13 row is DONE.** Owed from WP-224: `scripts/launcher-control-plane-check.mjs` — run by WP-229, 58/58 PASS. **M13 closed; the architect's M14 pass** (§ "Architect ruling (M14, session 18)", plan § "Milestone M14") wrote eight rows: **WP-228** (633 + 632, Docker alone: a restore the guide states and a Docker script runs — `gzip -t`, stop writers, recreate, `gunzip -c | psql -v ON_ERROR_STOP=1`), **WP-229** (Docker alone: rebuild images, run `launcher-control-plane-check.mjs` and any Docker check whose inputs changed), **WP-230** (630), **WP-231** (626 logcli `@file`, `command-policy.ts`), **WP-232** (626 other programs, serial after WP-231), **WP-233** (628, 629), **WP-234** (627), **WP-235** (631, Docker alone, after WP-228); 8 owned, 33 carried, 1 declined; no migration (0092 next). **WP-228 is DONE at `5ff68285`** (`ci` `39329535174`, `image` `39329534795` **completed success**) — 633 and 632 closed; the restore and the rollback are executed by `scripts/restore-check.mjs` (not yet by `image.yml` — file it as backlog). **WP-229 is DONE** (notes only): the launcher control-plane check WP-224 owed passes 58/58; `deploy-key-check` fails 10/11 on its own stale expectations (filed). The `*:wp228` and `*:wp229` images are on the daemon. Next: WP-230, WP-231 → WP-232 (serial, `command-policy.ts`), WP-233, WP-234, WP-235 (Docker alone). **WP-226 is DONE at `ae21df45`** (`ci` `39318271975`, `image` `39318271815` **completed success**) — 534 closed, measured clean. Next: WP-227 (Docker alone), with `scripts/launcher-control-plane-check.mjs` for WP-224 in the same window. Worktrees from here on install with `--ignore-scripts` and copy the gitleaks binary in by hand; scratch copies run vitest by its binary, never `pnpm exec`. **Two more machine notes**: a wait loop that counts `grep -c '[v]itest'` over `ps` matches its own command line and never ends (it held a chain for 30 minutes) — count `pgrep -f 'vitest\.mjs'`; and `biome check --write` over a test file rewrites `'{} \;'` to `'{} ;'` in old rows (WP-216 and WP-218 both shipped it to review) — say so in scanner briefs. And a test that asserts on a child vitest's (or any CLI's) printed text must start it with colour off (`NO_COLOR=1`, no `FORCE_COLOR`): CI colours output and no local tier does, so the assertion is green everywhere but CI (WP-213, `ci` `39270730494`). Linked worktrees share `.git/hooks`: a worktree's `pnpm install` rewrites them unless run with `--ignore-scripts`, and WP-219's reviewer rewrote them once with a mis-directed `lefthook install` — after either, `pnpm exec lefthook install` from the main checkout restores them. **Machine rule learned this session**: the load gate reads only at a tier's start, so two `verify` runs started a minute apart in two checkouts timed each other out (5 s test timeouts and the 30 s property test, both runs `FAIL: verify` at 14:06; both green alone) — run every tier through one serial queue across checkouts, and tell reviewers to wait for no other `vitest` before their own `verify`.
 
@@ -21287,6 +21287,27 @@ migration, and the next free number stays **0092**. No row needs a credential.
 | WP-233 | **Jira: a rule read counts its pages as a `keys` read counts its searches, and a failed read's row carries the count it was charged for** | DONE | `65eab400` | Built in `../wt-wp233` over `5ff68285`, session 18; reviewed, verified and ported to the main checkout in session 19 (a three-way apply; the notes conflicted only at the file's end, both kept). Folds **628** and **629**. (a) measured: a 45-issue label rule 3 searches / one token / null `result` before, `{ searches: 3 }` / 3 tokens after; a throwing `keys` read 5 searches / null before, `{ searches: 5 }` after. (e) recorded: the bootstrap does not read at `TICKET_POLL_MAX_LIMIT`. Review: one round, **APPROVE**; canaries — the rule branch stops counting: dead by `jira-one-wrap` and Jira's paging contract case, **survived the shared clause** (filed **637**); failed row back to `null`: dead by the integration case and the executor unit case; the whole-number check dropped: dead; the error text added to `result`: dead; `onSearches` once per page: dead; the fake reporting twice or 1.5 (inverted, since the fake never reports): dead by the shared clause. **638** filed (the failed row's key is `searches` for any provider). Orchestrator: on the worktree `PASS: verify:integration` (901 passed) and `PASS: verify:e2e` twice (301 passed each, `platform-*:wp229` images; volumes 69 → 69); on the ported main checkout `PASS: verify` (15626 passed, 19 skipped). `ci` `39344832118` and `image` `39344832034` **completed success**, `release` job skipped. |
 | WP-234 | **GitLab: the commit read and the merged sample stop paging once no later page can change their answer** | DONE | `0b66dbef` | Built in `../wt-wp234` over `69fc933d`, session 19; ported to the main checkout. Folds **627**; answers **638** by its second branch (no GitLab request declares `providerRequests`). (a) commits at limit 20: 10 → 1 requests; the merged sample at N = 200: 10 → 3 (2 before round 1's margin); answers equal the full walk's. `paginate` gained an optional `enough` check (split clause not used: one optional parameter). **Ruling (c)'s premise amended** (plan row): `merged_at ≤ updated_at` is false at the millisecond scale (GitLab `v18.4.0` saves the row in `mark_as_merged`, then writes `merged_at` from the merge event), so the stop needs a 5-minute margin, `MERGED_AFTER_UPDATE_MS`, and an MR read past it disables the stop; residual stated for one on a page not yet read. An undated commit now triggers one re-read up to `max_pages` (replacing, never appending) instead of refusing the window. Review: two rounds — round 1 REQUEST_CHANGES (major: the stop failed open on the millisecond gap; minor: one undated commit dropped the bootstrap's commit half; stale wording; census counted `http.maxPages` as bounded; no direct `enough` test), round 2 **APPROVE** with two nits (the docblock's residual sentence added by the orchestrator). Canaries: no `pages`; stop at `ceil(limit/100)`; `>=` → `>`; largest `updated_at`; `enough` ignored; a census declaration removed; `ceil` → `floor`; skew 0; the import guard removed; the re-read disabled or appending; the census counting `maxPages` — all dead. Orchestrator on the round-1 tree: `PASS: verify` (15646), `PASS: verify:integration` (901), `PASS: verify:e2e` twice (301 each; volumes 69 → 69); after the nit `PASS: verify`. `ci` `39349872053` and `image` `39349872246` **completed success**, `release` job skipped. |
 | WP-235 | **Operations: `db-backup` gets no anonymous volume, and the compose e2e holds every path the pinned image declares as a `VOLUME` to a mount** | DONE | `e7d6a313` | Built in `../wt-wp235` over `87d498d1`, session 19, Docker alone (volumes 69 → 69, dangling set unchanged by name: 40). Folds **631**. (a) with `db` + `db-backup` under the `backup` profile: an environment change and an image change each left one 1-byte dangling volume (the recreate re-attaches the anonymous volume; `down -v` leaves it); after the change both legs leave none. (b) `db-backup` mounts `/var/lib/postgresql` as a `tmpfs`, measurement in the comment; `/backup.sh` exited 0 and wrote its dumps. (c) the compose e2e reads every pinned image's `VOLUME`s over `docker compose config` (backup profile) and holds the unmounted set to an exact list; **split clause used for `db`** (its own parent path leaks the same way; `PGDATA` sits inside `db-data`, no data at risk — filed as **640**). Review: one round, **APPROVE**; canaries — tmpfs removed, `db` removed from the exceptions, an extra exception, a `VOLUME` planted in `docker/base.Dockerfile` — all dead; the minor (the fallback pull's stderr) fixed by the orchestrator. Orchestrator: `PASS: verify` (15646), `PASS: verify:integration` (901), `PASS: verify:e2e` twice (303 each); after the fix `PASS: verify` and the file alone 28/28. `ci` `39356513165` and `image` `39356513003` **completed success**, `release` job skipped. |
+
+**M15 — the clause every provider inherits, the check that keeps the restore true, and the volume `db`
+leaks** (architect, session 19; plan § "Milestone M15"; the disposition of every open backlog heading and
+open question is § "Architect ruling (M15, session 19)" after the M14 ruling). No major is open and no
+money row leads: the four rows are the guards M14's rows left weaker than they read — **637** (the shared
+contract clause a provider that stops counting passes), **636** (`restore-check.mjs`, the guard of 633,
+run by nobody), **640** (`db`'s anonymous volume per recreate, the mechanism 631 measured) and **634**
+with **635** (two Docker checks that read `FAIL` or need a hand-made tag on a correct product). **639** is
+carried: a reading of go1.25.0 with no image that ships go, as 617's pip half is. Recommended order is the
+table's. **WP-237, WP-238 and WP-239 are Docker alone**, serial on the daemon in that order (WP-237
+measures `restore-check`, WP-238 changes what it restores on, WP-239 rebuilds the run images); WP-236
+needs no daemon and is parallel-safe with every row. **No row touches `command-policy.ts`.** No row
+changes the lockfile. No row needs a migration, and the next free number stays **0092**. No row needs a
+credential.
+
+| WP | Title | Status | Commit | Notes |
+|---|---|---|---|---|
+| WP-236 | **Providers: the shared task-management clause holds a provider that declares it counts to exactly one `onSearches` call over a read that spans more than one page** | TODO | | Folds **637**. Parallel-safe, no Docker. After WP-233. |
+| WP-237 | **Operations: `image.yml` runs the restore check beside the other compose checks, so the guide's restore and the pinned backup image are held on every push** | TODO | | Folds **636**. Docker alone for (a). After WP-228. |
+| WP-238 | **Operations: `db` gets no anonymous volume — the declared path is a `tmpfs` over the named volume that stays where it is — and the compose e2e's `UNMOUNTED` list is empty** | TODO | | Folds **640**. Docker alone, after WP-237's window. After WP-235. Ruling (f): if the `tmpfs` parent or an existing volume fails (a), the row builds nothing and files the measurement. |
+| WP-239 | **Instruments: the deploy-key check derives its expected git keys from the product's own table, and the long-options check runs against a tag `build-images.mjs` makes** | TODO | | Folds **634** and **635**. Docker alone, after WP-238's window. After WP-229. |
 
 ## WP notes (decisions, assumptions, reviewer findings)
 
@@ -50121,6 +50142,140 @@ Each row states its answer in its notes, and none of them blocks its row.
 **Next: WP-228** in a Docker window with no e2e tier, with **WP-230** and **WP-231** beside it for free
 implementers (they share no file with it, and WP-231 holds `command-policy.ts`). Then the table's order.
 The next free migration number is still **0092**, and no row is expected to take it.
+
+### Architect ruling (M15, session 19) — four rows, and the clause every provider inherits comes first
+
+Written 2026-10-20 at `5ea4718e`. M14 is closed: every row in its table is DONE (WP-228…WP-235). This
+pass covers **every open `### NNN.` heading** of § "Open findings backlog" (thirty-nine, with the two
+briefs and fifteen closed-and-carried entries, plus 617's cluster half), § 7, the two blocker briefs and
+every item under *Open* in `docs/OPEN-QUESTIONS.md`. **Nothing was measured by this pass** (rule 98).
+The verdicts come from the entries, from session 19's M14 WP notes and rows (WP-229's table of Docker
+checks, WP-232's go reading, WP-233's and WP-234's reviews, WP-235's measurement), from the M14 ruling,
+and from reading `compose.yml`'s `db` service, the compose e2e's `UNMOUNTED` list, the shared contract
+suite's two clauses, `image.yml`'s compose-check job and the two scripts 634 and 635 name. Read-only on
+source. The last migration on disk is `0091_task_duty_leases.sql`, so **0092** is still free, and no row
+takes it.
+
+**The product owner's priority first.** The 2026-10-08 note's **535**, **536** and **537** are RESOLVED.
+Their one open residual is still **538**, which waits on the founder's ratification of Q118; nothing in
+session 19 touched Q118, and both endings stand as M13 and M14 stated them.
+
+**What leads, and why.** No major is open, and no open entry is a fail-open or fail-closed defect that
+can spend money or brick a run — M14's 628 and 629 were the record's last money rows, and they are
+closed. What is left are five guards that are weaker than they read, and the protocol's order among
+them is providers, operations, instruments. **637** leads: the shared task-management clause holds a
+rule read to *at most one* `onSearches` count, so a provider that reports nothing passes, and the
+reviewer's canary (Jira's rule branch stops counting) survived the shared suite on the fake and on Jira
+and died only by two Jira-specific tests. The next provider that implements `matchTickets` inherits the
+weak clause and not the two tests, and 628 comes back under a different name. The fix is a declaration
+on the suite's context — the fake keeps divergence 17 and *at most once* — and an *exactly once* over a
+read that spans more than one page. **636** is the guard of the one major M14 fixed, and nothing runs it:
+633 was wrong for as long as it was because the restore was never run, and `restore-check.mjs` has the
+same shape today. **WP-237** puts it in `image.yml` beside the three compose checks, after measuring its
+wall-clock and that its compose project collides with none of theirs on one daemon. **640** is 631's
+mechanism on `db`, measured by WP-235: one anonymous volume per recreate, so one per upgrade, with no
+data at risk because `PGDATA` is explicit inside the named volume. **The mount is decided here: the data
+stays where it is.** The declared path gets a `tmpfs` over the named volume, as WP-235 gave `db-backup`.
+Moving `db-data` to the declared path is declined: it moves every existing install's cluster relative to
+its volume — a data migration with an upgrade note — to remove the same clutter. **WP-238** measures the
+candidate first, including a volume populated under today's layout starting under the new one, and its
+ruling (f) builds nothing if that reading fails. **634** and **635** are two Docker checks that read
+`FAIL` or need a hand-made tag on a correct product, so a real regression on the deploy-key path would
+hide behind the known failure. **WP-239** derives the deploy-key expectation from `PLATFORM_GIT_CONFIG`,
+as backlog 503 did for the launcher check, and gives the long-options check a tag `build-images.mjs`
+makes.
+
+**What is carried, and why.** **639** is a reading of go1.25.0's sources, not a measurement, and no
+image the platform builds ships go, so TD-030 tier 2 has no pinned version to measure at — the reason
+617's pip half is carried. A scratch `golang` image would measure a version no project pins, and a
+floor written to it would be a floor nobody can regress against. It waits, as 617 does, for a run image
+that ships the program. **638** is RESOLVED by WP-234's second branch and is not a disposition.
+
+**The rows, in order** (plan § "Milestone M15"):
+1. **WP-236: Providers, the shared clause's exactly-once under a declaration** (637). No Docker.
+2. **WP-237: Operations, `restore-check.mjs` in `image.yml`** (636). Docker alone for its measurement.
+3. **WP-238: Operations, `db`'s anonymous volume** (640). Docker alone, after WP-237.
+4. **WP-239: Instruments, the two stale Docker checks** (634, 635). Docker alone, after WP-238.
+
+**Decisions.** None is written or amended. 640's mount choice keeps `compose.yml`'s data layout and
+adds a `tmpfs` where WP-235 added one, so no TD is needed; the decision is stated here and in the three
+documents WP-238 corrects (technical/03, technical/11, the operator guide), which today prescribe a mount
+the product does not use. 636's CI step is the shape the other three compose checks already have in
+`image.yml`, so it needs no decision. **Upstream check for brief 2**: StrykerJS 6210 and 6231 were read **open** by M13's pass on
+2026-10-19, and this pass did not re-read them. No `docs/research/` file is written (rule 98). No
+`[unverified]` claim is introduced by this pass; the rows' own unmeasured points are their (a)s.
+
+#### Disposition — every open backlog heading
+
+| Entry | Grade | Disposition |
+|---|---|---|
+| 1 (blocker brief) | blocker for WP-17's evals | carried. Its owner row is WP-33 (BLOCKED), and it waits on a model credential |
+| 2 (blocker brief) | blocker for WP-78 | carried. Its owner row is WP-78 (BLOCKED). StrykerJS 6210 and 6231 were open at M13's check, 2026-10-19 |
+| 7 (section) | carried bullets | carried, unchanged; every bullet is still trigger-shaped |
+| 122, 123, 125, 145, 207, 219, 266, 305, 308, 313, 321, 345, 353, 374, 397 | nit to small | carried, **closed** (declined for 0.1 at M7). M14 brought no new evidence on any of them |
+| 132 | observation | carried. It waits for its next occurrence; none in session 19 |
+| 171 | small-to-major | carried. Still no accepted page in the Autix vault (rule 39) |
+| 232 | small | carried. It is the founder's, under Q108 |
+| 238 | small | carried. No history-bootstrap batch has run on Autix |
+| 367 | nit | carried. Latent below 50 waiting rows of one kind |
+| 422 | nit | carried. No performance theme, and a year-old `pgboss.job` is still needed |
+| 439 | nit | carried. A harness side effect with no failing case |
+| 440 | nit (flake) | **declined**, standing from M13: not recurred since session 10. Its heading is still unmarked, and a recurrence is filed again with its trace |
+| 446 | minor | carried. It still needs fake providers reachable from a compose stack, and no M15 row builds them |
+| 505 | nit (measurement) | carried. It needs a real CLI, and it is on the next dogfood session's checklist beside WP-225 (d) |
+| 538 | minor, latent | carried. It waits on Q118's ratification |
+| 555 | nit | carried. The fake-Claude e2e still waits on a measured frequency |
+| 556 | minor (flake) | carried. No recurrence in session 19; reproduced before fixed (rule 27) |
+| 570 | minor (flake) | carried. No recurrence in session 19; the trace is kept next time |
+| 587 | tier 3 | carried. It waits on Q122's count, which WP-225's instrument takes on the dogfood database |
+| 617 (cluster half) | minor, latent | carried. pip is still in no image the platform builds, so tier 2 has no pinned version |
+| **634** | minor, check-only, live | **→ WP-239 (a), (c)** |
+| **635** | minor, check-only | **→ WP-239 (b), (c)** |
+| **636** | minor, the guard of a major | **→ WP-237** |
+| **637** | minor, test-only | **→ WP-236**, first row |
+| 639 | minor, latent, hypothesis | carried. No image the platform builds ships go, so TD-030 tier 2 has no pinned version — 617's reason. Its *done when* stands; its first step is the measurement an image with go makes possible |
+| **640** | minor, operations, live | **→ WP-238**. The mount is decided above: the data stays, the declared path gets a `tmpfs` |
+
+**Counts.** Forty dispositions: **owned 5** (634, 635, 636, 637, 640), **carried 34** (the two briefs,
+§ 7, the fifteen closed entries, 132, 171, 232, 238, 367, 422, 439, 446, 505, 538, 555, 556, 570, 587,
+617's cluster half — the same thirty-three M14 carried, each reason re-read above and still holding —
+and 639), **declined 1** (440, M13's, standing). 638 is RESOLVED (WP-234) and is not counted. **No major
+is open**, so no major needs an owner row. The only blockers are the two briefs, and each already has
+its BLOCKED owner row.
+
+#### Disposition — the open questions
+
+An open question is implemented per its recommendation and never waited on.
+
+| Question | Disposition |
+|---|---|
+| Q36, Q38, Q39, Q40, Q41, Q46, Q47, Q51, Q62, Q65, Q68, Q71, Q72, Q73, Q74, Q76, Q78, Q79, Q80, Q82, Q83, Q86, Q87, Q88, Q91, Q92, Q93, Q94 | implemented; only the founder's confirmation remains (unchanged since M7) |
+| Q43, Q49, Q53, Q56, Q57, Q58, Q63, Q66, Q67, Q75, Q81, Q84, Q85 | the remaining half is declined for 0.1 or is the founder's; not scheduled (Q58's residual is backlog 171) |
+| Q48, Q100, Q103 | implemented (WP-95, WP-94, WP-93); reversible |
+| Q95, Q97, Q101, Q102, Q104, Q105 | implemented per recommendation; the founder confirms |
+| Q96 | implemented at WP-71. `RELEASE_VERSIONING` is still unset; the founder's |
+| Q108 | open for the founder; not built (backlog 232) |
+| Q112, Q113, Q116, Q117 | implemented per recommendation (a); the founder confirms |
+| Q120, Q121 | the product owner's, with their recommendations (a). No M15 criterion depends on either |
+| Q122 | carried, as at M14. WP-225's instrument exists and no dogfood database was reachable in session 19 either; the count is on the next dogfood session's checklist, and zero or non-zero is the next architect pass's to read. No M15 row builds an exec-time reader before the count |
+
+Q118 stays in the decision log, answered per (a) and awaiting the founder, with 538 hanging on it. **No
+question is new**: 640's mount is a technical choice made above, not a product one, and 639 waits on an
+image, not on an answer.
+
+**Could not decide here, and left to the rows' measurements:**
+- whether the suite's context can seed a rule read that spans more than one page (WP-236 (c));
+- `restore-check.mjs`'s wall-clock, whether `--tag ci` builds, and its project name against the three CI checks' (WP-237 (a));
+- whether the `postgres:18` entrypoint accepts a `tmpfs` parent over the named volume, and whether a volume populated under today's layout starts under it with its rows intact (WP-238 (a)); a no on either ends the row at (f);
+- the size of `db`'s leaked volume (WP-238 (a));
+- whether any other Docker check carries a hand-written copy of a product table (WP-239 (d)).
+
+Each row states its answer in its notes, and none of them blocks its row except WP-238's (a), which (f)
+turns into a filed measurement rather than a build.
+
+**Next: WP-236** for a free implementer (no daemon), with **WP-237** in the first Docker window; then
+WP-238 and WP-239 in their own windows, in the table's order. The next free migration number is still
+**0092**, and no row is expected to take it.
 
 ## WP notes — session 14 (M10)
 
