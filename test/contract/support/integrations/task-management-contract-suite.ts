@@ -11,6 +11,14 @@
  * The suite asks the harness for a **fresh context per test**: several cases mutate the ticket
  * (labels, status, comments), and a suite whose cases depend on each other's order is a suite that
  * cannot be read.
+ *
+ * **What a read cost** (WP-236, backlog 637): a provider that reports `matchTickets`' cost through
+ * `onSearches` declares it with `countsSearches` on its context, and the rule and `keys` clauses
+ * then hold it to **exactly one** call — the rule read over more pick-up tickets than one page, so
+ * a count of one request is refused too. The fake does not declare it: its read is one request it
+ * never reports (its divergence 17), so without the declaration both clauses keep *at most once*,
+ * and zero calls passes them. Until WP-236 that was the only shape, and a provider whose rule branch
+ * stopped counting passed the shared suite on Jira (backlog 637's canary).
  */
 import type {
   ExternalIdentity,
@@ -105,6 +113,12 @@ export interface TaskManagementContractContext {
    */
   readonly lifecycle?: TaskManagementLifecycleContext;
   /**
+   * Present when the provider reports what a `matchTickets` read cost through `onSearches`
+   * (WP-236, backlog 637; the file docblock has the reasoning). `seedPastOnePage` labels enough
+   * tickets with `pickupLabel` that a rule read at the default limit spans more than one page.
+   */
+  readonly countsSearches?: { seedPastOnePage(): Promise<void> };
+  /**
    * The executor this harness's composition holds, and the audit log it writes (WP-212, backlog 550).
    *
    * An obligation of the contract (standing rule 23): a provider makes **no** executor call of its
@@ -143,6 +157,26 @@ export interface TaskManagementContractHarness {
 }
 
 const WORKPAD_MARKER = 'agentic:workpad';
+
+/**
+ * WP-223's rule for every `matchTickets` read: its cost is one whole count of at least `least`
+ * requests — reported exactly once by a provider that declares `countsSearches` (WP-236), at most
+ * once by one that does not.
+ */
+const expectOneCount = (
+  context: TaskManagementContractContext,
+  searches: readonly number[],
+  least: number,
+): void => {
+  if (context.countsSearches === undefined) {
+    expect(searches.length, 'onSearches is called at most once').toBeLessThanOrEqual(1);
+  } else {
+    expect(searches.length, 'onSearches is called exactly once (countsSearches)').toBe(1);
+  }
+  for (const count of searches) {
+    expect(Number.isInteger(count) && count >= least, `searches ${count}`).toBe(true);
+  }
+};
 
 // ── The ticket lifecycle (WP-171) ───────────────────────────────────────────
 //
@@ -483,18 +517,17 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
         expect(matches.map((match) => match.ref.key)).toContain(context.ticket.key);
       });
 
-      it('reports what a rule read cost at most once, as a whole count (WP-233, backlog 628)', async () => {
+      it('reports what a rule read cost once, as a whole count (WP-233, backlog 628; WP-236)', async () => {
+        await context.countsSearches?.seedPastOnePage();
         const searches: number[] = [];
         const matches = await port.matchTickets(
           { kind: 'label', label: context.pickupLabel },
           { onSearches: (count) => searches.push(count) },
         );
         expect(matches.map((match) => match.ref.key)).toContain(context.ticket.key);
-        // The `keys` clause's rule (WP-223), for every rule: one report per read, never one per page.
-        expect(searches.length, 'onSearches is called at most once').toBeLessThanOrEqual(1);
-        for (const count of searches) {
-          expect(Number.isInteger(count) && count >= 1, `searches ${count}`).toBe(true);
-        }
+        // The `keys` clause's rule (WP-223), for every rule: one report per read, never one per page;
+        // a declared read spans pages, so it cost more than one request.
+        expectOneCount(context, searches, context.countsSearches === undefined ? 1 : 2);
       });
     });
 
@@ -555,13 +588,11 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
           { onSearches: (count) => searches.push(count) },
         );
         expect(matches.map((match) => match.ref.key)).toEqual([context.ticket.key]);
-        // WP-223 (backlog 436): what the read cost is reported at most once, as one whole count of
-        // at least one request — a provider that reported per request would undercount the
-        // caller's charge to its last request, and a zero would read as a read that cost nothing.
-        expect(searches.length, 'onSearches is called at most once').toBeLessThanOrEqual(1);
-        for (const count of searches) {
-          expect(Number.isInteger(count) && count >= 1, `searches ${count}`).toBe(true);
-        }
+        // WP-223 (backlog 436): what the read cost is reported once (exactly once under
+        // `countsSearches`, WP-236; at most once without), as one whole count of at least one
+        // request — a provider that reported per request would undercount the caller's charge to
+        // its last request, and a zero would read as a read that cost nothing.
+        expectOneCount(context, searches, 1);
         expect(await port.matchTickets({ kind: 'keys', keys: [context.missingTicketKey] })).toEqual(
           [],
         );

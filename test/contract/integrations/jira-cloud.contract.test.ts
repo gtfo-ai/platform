@@ -73,112 +73,134 @@ const withoutSelfAccountId = (): typeof globalThis.fetch => {
   };
 };
 
-runTaskManagementContract({
-  name: 'jira-cloud (recorded fixtures)',
-  create: async (): Promise<TaskManagementContractContext> => {
-    const binding = createJiraBinding();
-    // The lifecycle half's ticket starts unassigned (`TaskManagementLifecycleContext`); the issue
-    // fixture is assigned to the directory's developer, so the double releases it first.
-    binding.replay.assign(JIRA_TICKET.key, null);
-    let deliveries = 0;
-    const nextDeliveryId = (): string => {
-      deliveries += 1;
-      return `00000000-0000-4000-8000-0000000d00${deliveries}`;
-    };
+const createJiraContext = async (): Promise<TaskManagementContractContext> => {
+  const binding = createJiraBinding();
+  // The lifecycle half's ticket starts unassigned (`TaskManagementLifecycleContext`); the issue
+  // fixture is assigned to the directory's developer, so the double releases it first.
+  binding.replay.assign(JIRA_TICKET.key, null);
+  let deliveries = 0;
+  const nextDeliveryId = (): string => {
+    deliveries += 1;
+    return `00000000-0000-4000-8000-0000000d00${deliveries}`;
+  };
 
-    return {
-      // The adapter itself (WP-212): the shared suite's one-wrap clause composes the executor call.
-      port: binding.adapter,
-      ticket: JIRA_TICKET,
-      missingTicketKey: 'ACME-404',
-      statuses: { initial: 'To pick up', target: 'In Progress' },
-      unknownStatus: 'Shipped To Mars',
-      pickupLabel: JIRA_PICKUP_LABEL,
-      knownAuthor: { providerUserId: DEV_ACCOUNT_ID, email: 'dev@example.test' },
-      emitComment: (text) =>
-        binding.replay.delivery('webhook-comment-created.json', {
-          deliveryId: nextDeliveryId(),
-          patch: (body) => {
-            (body.comment as { body: unknown }).body = {
-              type: 'doc',
-              version: 1,
-              content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
-            };
-          },
-        }),
-      /**
-       * Jira sends `jira:issue_created` with the same envelope as an update and no changelog, so
-       * the corpus's documented update fixture is patched into one rather than a second document
-       * being invented — the idiom `jira-cloud-webhook.contract.test.ts` already uses for this
-       * event, and the reason the fixture corpus stays exactly as honest as it was.
-       */
-      emitTicketCreated: () =>
-        binding.replay.delivery('webhook-issue-updated-labels.json', {
-          deliveryId: nextDeliveryId(),
-          patch: (body) => {
-            body.webhookEvent = 'jira:issue_created';
-            delete body.changelog;
-          },
-        }),
-      /** Atlassian's own documented example: a `summary` change (WP-60). */
-      emitTicketUpdated: () =>
-        binding.replay.delivery('webhook-issue-updated-summary.json', {
-          deliveryId: nextDeliveryId(),
-        }),
-      updatedField: 'summary',
-      emitStatusChange: (to) =>
-        binding.replay.delivery('webhook-issue-updated-status.json', {
-          deliveryId: nextDeliveryId(),
-          patch: (body) => {
-            const changelog = body.changelog as { items: { toString: string }[] };
-            (changelog.items[0] as { toString: string }).toString = to;
-          },
-        }),
-      unhandled: {
-        // Well-formed, correctly signed, and about an event this provider does not act on — which
-        // is a different answer from the fake's `malformed_payload`, and the reason the suite asks
-        // the harness for both the delivery and the reason. Until WP-60 this was the documented
-        // summary edit; an edit is now `ticket.updated`, so the unhandled delivery is the
-        // documented worklog event the webhook contract test already drops by name.
-        delivery: () =>
-          binding.replay.delivery('webhook-worklog-created.json', {
-            deliveryId: nextDeliveryId(),
-          }),
-        reason: 'unsupported_event',
-      },
-      /**
-       * The binding's own switch (WP-87): the same recorded search the pick-up case replays, asked
-       * through the plan the configuration states rather than a rule the test wrote.
-       */
-      polling: {
-        port: createJiraBinding({ config: { poll_enabled: true, poll_interval_seconds: 90 } })
-          .adapter,
-        intervalSeconds: 90,
-      },
-      /**
-       * WP-172: the lifecycle members against the documented J1 document
-       * (`project-statuses-acme.json`, invented neutral names) and the double's assignee.
-       */
-      lifecycle: {
-        expectedCategories: {
-          'To pick up': 'todo',
-          Doing: 'in_progress',
-          'Sent back': 'todo',
-          Done: 'done',
-          'Awaiting an answer': 'unknown',
+  return {
+    // The adapter itself (WP-212): the shared suite's one-wrap clause composes the executor call.
+    port: binding.adapter,
+    ticket: JIRA_TICKET,
+    missingTicketKey: 'ACME-404',
+    statuses: { initial: 'To pick up', target: 'In Progress' },
+    unknownStatus: 'Shipped To Mars',
+    pickupLabel: JIRA_PICKUP_LABEL,
+    knownAuthor: { providerUserId: DEV_ACCOUNT_ID, email: 'dev@example.test' },
+    emitComment: (text) =>
+      binding.replay.delivery('webhook-comment-created.json', {
+        deliveryId: nextDeliveryId(),
+        patch: (body) => {
+          (body.comment as { body: unknown }).body = {
+            type: 'doc',
+            version: 1,
+            content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+          };
         },
-        assignElsewhere: async () => {
-          binding.replay.assign(JIRA_TICKET.key, DEV_ACCOUNT_ID);
-          return DEV_ACCOUNT_ID;
+      }),
+    /**
+     * Jira sends `jira:issue_created` with the same envelope as an update and no changelog, so
+     * the corpus's documented update fixture is patched into one rather than a second document
+     * being invented — the idiom `jira-cloud-webhook.contract.test.ts` already uses for this
+     * event, and the reason the fixture corpus stays exactly as honest as it was.
+     */
+    emitTicketCreated: () =>
+      binding.replay.delivery('webhook-issue-updated-labels.json', {
+        deliveryId: nextDeliveryId(),
+        patch: (body) => {
+          body.webhookEvent = 'jira:issue_created';
+          delete body.changelog;
         },
+      }),
+    /** Atlassian's own documented example: a `summary` change (WP-60). */
+    emitTicketUpdated: () =>
+      binding.replay.delivery('webhook-issue-updated-summary.json', {
+        deliveryId: nextDeliveryId(),
+      }),
+    updatedField: 'summary',
+    emitStatusChange: (to) =>
+      binding.replay.delivery('webhook-issue-updated-status.json', {
+        deliveryId: nextDeliveryId(),
+        patch: (body) => {
+          const changelog = body.changelog as { items: { toString: string }[] };
+          (changelog.items[0] as { toString: string }).toString = to;
+        },
+      }),
+    unhandled: {
+      // Well-formed, correctly signed, and about an event this provider does not act on — which
+      // is a different answer from the fake's `malformed_payload`, and the reason the suite asks
+      // the harness for both the delivery and the reason. Until WP-60 this was the documented
+      // summary edit; an edit is now `ticket.updated`, so the unhandled delivery is the
+      // documented worklog event the webhook contract test already drops by name.
+      delivery: () =>
+        binding.replay.delivery('webhook-worklog-created.json', {
+          deliveryId: nextDeliveryId(),
+        }),
+      reason: 'unsupported_event',
+    },
+    /**
+     * The binding's own switch (WP-87): the same recorded search the pick-up case replays, asked
+     * through the plan the configuration states rather than a rule the test wrote.
+     */
+    polling: {
+      port: createJiraBinding({ config: { poll_enabled: true, poll_interval_seconds: 90 } })
+        .adapter,
+      intervalSeconds: 90,
+    },
+    /**
+     * WP-172: the lifecycle members against the documented J1 document
+     * (`project-statuses-acme.json`, invented neutral names) and the double's assignee.
+     */
+    lifecycle: {
+      expectedCategories: {
+        'To pick up': 'todo',
+        Doing: 'in_progress',
+        'Sent back': 'todo',
+        Done: 'done',
+        'Awaiting an answer': 'unknown',
       },
-      // The executor the harness composes: the adapter is handed none since WP-212.
-      composition: { executor: binding.executor, audit: binding.audit },
-      projectId: JIRA_PROJECT_ID,
-      integrationId: JIRA_INTEGRATION_ID,
-      cleanup: async () => {},
-    };
-  },
+      assignElsewhere: async () => {
+        binding.replay.assign(JIRA_TICKET.key, DEV_ACCOUNT_ID);
+        return DEV_ACCOUNT_ID;
+      },
+    },
+    /**
+     * WP-236 (backlog 637): Jira reports every search through `onSearches`. 45 labelled tickets
+     * past the seeded one is three pages of the replay's `REPLAY_SEARCH_PAGE_CAP` (20) at the
+     * default limit of 50.
+     */
+    countsSearches: {
+      seedPastOnePage: async () => {
+        for (let index = 0; index < 45; index += 1) {
+          await binding.port.createTicket({
+            project_key: 'ACME',
+            issue_type: 'Task',
+            title: `Bulk ${index}`,
+            description: '',
+            labels: [JIRA_PICKUP_LABEL],
+          });
+        }
+      },
+    },
+    // The executor the harness composes: the adapter is handed none since WP-212.
+    composition: { executor: binding.executor, audit: binding.audit },
+    projectId: JIRA_PROJECT_ID,
+    integrationId: JIRA_INTEGRATION_ID,
+    cleanup: async () => {},
+  };
+};
+
+runTaskManagementContract({ name: 'jira-cloud (recorded fixtures)', create: createJiraContext });
+
+// Without the declaration the shared clauses fall back to "at most once" silently (WP-236 review).
+it('declares countsSearches, so the shared clauses hold Jira to one whole count', async () => {
+  expect((await createJiraContext()).countsSearches).toBeDefined();
 });
 
 describe('jira-cloud — reaching the provider', () => {
