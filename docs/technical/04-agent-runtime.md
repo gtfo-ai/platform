@@ -505,7 +505,14 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   `${…}`) is uncertain at the git boundary (WP-250, backlog 650): bash hands it as zero, one or
 >   many words, so which word git reads as the value is the shell's (`git -C $(pwd) -c
 >   core.fsmonitor=x status` ran the monitor under `auto` before); a double-quoted value is one word
->   and is read as written, and `git -C $(pwd) status` reading uncertain is the stated over-ask. What no floor reads is an expansion (`$x`, `${…}`, `$(…)`, a
+>   and is read as written, and `git -C $(pwd) status` reading uncertain is the stated over-ask. A
+>   command or process substitution whose body holds an unquoted `case` word or a comment is not
+>   read (WP-251, backlog 651): the scanner's matcher has no case-pattern or comment state, so a
+>   pattern's or a comment's `)` closed `<(case x in x) true;; esac)` early and the `-c` behind it
+>   went unseen (bash 5.3.20 ran the monitor, measured on a scratch repository; 3.2.57 refuses the
+>   `case` form and closes `<(` at the comment's `)`), and the line is uncertain
+>   (`unreadSubstitutionBody`) — `echo $(echo case)` reading uncertain is the stated over-ask, and
+>   `$((…))`, where `case` is a variable name (`$(( case + 1 ))`), is never such a body. What no floor reads is an expansion (`$x`, `${…}`, `$(…)`, a
 >   backtick, a glob). What still writes one without an `ask` is the **repository-content route**:
 >   `make *`, `npm run *`, `pytest` running a `conftest.py` or reading a `pytest.ini` it locates from
 >   its arguments (`pytest sub/` reads a `sub/pytest.ini` the agent wrote), a lockfile install's

@@ -6671,3 +6671,64 @@ describe('WP-250, backlog 650: a git global option value the shell splits is unc
     },
   );
 });
+
+/**
+ * WP-251 (backlog 651): `findClosingParen` counts every `)` outside quotes and here-document bodies,
+ * so a `case` pattern's `)` or a `)` in a comment closed `<(…)`/`$(…)` early and the git option
+ * after it was not seen — `git --namespace <(case x in x) true;; esac) -c core.fsmonitor=<script>
+ * status` read `ask / auto / deny` and the monitor ran on a scratch repository (bash 5.3.20, git
+ * 2.56.0). bash 3.2.57 refuses the `case` form and closes `<(` at the comment's `)`, so no single
+ * reading is bash's: such a body is not read (`UNCERTAINTY.unreadSubstitutionBody`).
+ */
+describe('WP-251, backlog 651: a substitution body holding a case word or a comment is not read', () => {
+  const tail = '-c core.fsmonitor=/tmp/m status';
+  it.each([
+    `git --namespace <(case x in x) true;; esac) ${tail}`,
+    `git --namespace $(case x in x) true;; esac) ${tail}`,
+    `git --namespace $(case x in (x) true;; esac) ${tail}`,
+    `git --namespace >(case x in x) true;; esac) ${tail}`,
+    `git > out --namespace <(case x in x) true;; esac) ${tail}`,
+    `git --namespace <(case\tx in x) true;; esac) ${tail}`,
+    `git --namespace <(true;case x in x) true;; esac) ${tail}`,
+    `git --namespace <(: # )\n) ${tail}`,
+    `git --namespace $(: # )\n) ${tail}`,
+    `git --namespace $(echo y # )\n) ${tail}`,
+    `git > out --namespace <(: # )\n) ${tail}`,
+    `git --namespace <(true;# )\n) ${tail}`,
+    `git --namespace <(true|# )\ncat) ${tail}`,
+    // Toward refusal, accepted: the optional `(` made the pattern balance, and the git boundary
+    // refused it before.
+    `git --namespace <(case x in (x) true;; esac) ${tail}`,
+    // The over-ask: a body is not read wherever the substitution stands, and `case` as an argument
+    // is a `case` word to this check.
+    'echo $(case x in x) echo y;; esac)',
+    'echo $(echo case)',
+  ])('%j reads ask / uncertain / uncertain in every baseline, with the reason', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toContain(UNCERTAINTY.unreadSubstitutionBody);
+  });
+
+  it.each([
+    // A `#` that starts no comment, and a here-document's `)`.
+    [`git --namespace <(echo a#) ${tail}`, 'ask / git / git'],
+    // A quoted `"case"` is an argument, not the reserved word.
+    [`git --namespace <(echo "case" x) ${tail}`, 'ask / git / git'],
+    [`git --namespace <(echo "#)") ${tail}`, 'ask / git / git'],
+    [`git --namespace <(cat <<E\n)\nE\n) ${tail}`, 'ask / git / git'],
+    // A top-level `case` is read by the scanner as it was.
+    ['case x in x) git -c core.fsmonitor=/tmp/m status;; esac', 'ask / git / git'],
+    ['diff <(true) <(true)', 'ask / auto / deny'],
+  ])('control: %j keeps %s in every baseline', (command, expected) => {
+    expectCells(command, expected);
+    expect(auto(command).evaluation.uncertainty).not.toContain(UNCERTAINTY.unreadSubstitutionBody);
+  });
+
+  // `case` in arithmetic is a variable name (bash 5.3.20 and 3.2.57 print `1` for `$(( case + 1 ))`).
+  it.each(['echo $((16#ff))', 'echo $(( case + 1 ))'])(
+    'an arithmetic expansion is never a command body: %j reads uncertain for arithmetic alone',
+    (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([UNCERTAINTY.arithmetic]);
+    },
+  );
+});

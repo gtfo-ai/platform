@@ -17567,7 +17567,7 @@ Which reader drops the word is **not measured**. Hypothesis: the same as 645. In
 
 **Depends on** WP-246's merge (it changes `scan`, `droppedSegments` and `boundaryArgvs`). Serial with it on `command-policy.ts` and `unattended-commands.ts`.
 
-### 651. **The scanner closes a `<(…)` / `$(…)` substitution at a `case` pattern's unmatched `)`. The body is cut short, and a git global option behind the substitution is not seen: `git --namespace <(case x in x) true;; esac) -c core.fsmonitor=x status` reads `ask / auto / deny`** (TODO, **major**: a **live fail-open on `main`**. It was already there at `115b387c` and WP-246 does not change it. **TD-030 tier 1**: floors read argv *as the shell builds it*. Found by WP-246's reviewer in review round 1, session 20. **Separate from 650**: 650 is about how many words a command substitution yields, and this is about where the substitution ends. The refiner ran nothing. **No work package owns it.**)
+### 651. **The scanner closes a `<(…)` / `$(…)` substitution at a `case` pattern's unmatched `)`. The body is cut short, and a git global option behind the substitution is not seen: `git --namespace <(case x in x) true;; esac) -c core.fsmonitor=x status` reads `ask / auto / deny`** (**RESOLVED** pending merge, WP-251, session 20 — a command or process substitution whose body holds an unquoted `case` word or a comment is not read: `scan` passes its uncertainty to `findClosingParen`, which adds `UNCERTAINTY.unreadSubstitutionBody`, so both measured lines and the comment spelling `<(: # )⏎)` read `ask / uncertain / uncertain` in all three baselines; the program half ran the monitor under bash 5.3.20 on a scratch repository; notes `#### WP-251`. Was: TODO, **major**: a **live fail-open on `main`**. It was already there at `115b387c` and WP-246 does not change it. **TD-030 tier 1**: floors read argv *as the shell builds it*. Found by WP-246's reviewer in review round 1, session 20. **Separate from 650**: 650 is about how many words a command substitution yields, and this is about where the substitution ends. The refiner ran nothing. **No work package owns it.**)
 
 **Evidence.** From WP-246's reviewer, round 1. The scanner is the substitution matcher in `packages/domain/src/policies/command-policy.ts` that finds the close of `<(…)` / `$(…)`.
   - `git --namespace <(case x in x) true;; esac) -c core.fsmonitor=x status` reads `ask / auto / deny` on base and on head.
@@ -58265,3 +58265,113 @@ Built on `main` at `0fc7ef65`, session 20. Not committed. Parallel-safe: no poli
   the table (a `readdirSync` walk is now named in the docblock as unseen). Seven cited figures
   were found exactly in the downloaded logs. *Sentences falsified:* 649's "unmeasured" and "No work
   package owns it", resolved at the ledger row. Orchestrator: `PASS: verify` (15851).
+
+#### WP-251 — a substitution body holding a `case` word or a comment is not read (backlog 651)
+
+Built on `main` at `f6759cb2` (policy sources identical to `97f66da9`), session 20. Not committed.
+
+- **(a) Measured first, before any change.** Cells (`evaluateCommand` / `decideUnattendedCommand`
+  `auto` / `deny`), the same in `DEFAULT_READ_ONLY_ALLOW`, `DEFAULT_VERIFICATION_ALLOW` and
+  `DEFAULT_IMPLEMENTATION_ALLOW`, read from a base tree (`git archive 97f66da9`); `⏎` is a newline;
+  the tail is `-c core.fsmonitor=/tmp/m status`:
+
+  | Line | Before | After |
+  |---|---|---|
+  | `git --namespace <(case x in x) true;; esac)` + tail | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | `git --namespace >(case x in x) true;; esac)` + tail | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | `git --namespace <(: # )⏎)` + tail | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | `git --namespace $(case x in x) true;; esac)`, its `(x)` form, `$(: # )⏎)`, `$(case x in x) echo y;; esac)`, `$(echo y # )⏎)` (+ tail) | `ask / uncertain / uncertain` (WP-250's `splits`) | same, with `unreadSubstitutionBody` beside it |
+  | `git --namespace <(case x in (x) true;; esac)`, `<(true # x⏎)`, `"$(case x in x) echo y;; esac)"` (+ tail) | `ask / git / git` | `ask / uncertain / uncertain` (toward refusal) |
+  | `echo $(case x in x) true;; esac; git -c core.fsmonitor=/tmp/m status)` | `ask / git / git` | `ask / uncertain / uncertain` |
+  | `npm test <(case x in x) true;; esac) --script-shell=/bin/id` | `ask / hazard / hazard` | `ask / uncertain / uncertain` (a refusal either way) |
+  | `rm $(case …) -rf /`, `git branch $(case …) -D main`, `rm <(: # )⏎) -rf /` | `block / block / block` | same |
+  | `<(echo a#)`, `<(echo "#)")`, `<(cat <<E⏎)⏎E⏎)` (+ tail); top-level `case x in x) git -c core.fsmonitor=/tmp/m status;; esac` | `ask / git / git` | same |
+  | `diff <(true) <(true)`; `echo $(cat <<E⏎# )⏎E⏎)` | `ask / auto / deny` | same |
+  | `echo $((16#ff))` | `ask / uncertain / uncertain` (`arithmetic` alone) | same |
+  | `echo $(case x in x) echo y;; esac)`, `echo $(echo case)` (the over-ask) | `ask / auto / deny` | `ask / uncertain / uncertain` |
+
+  Shell, `printf '[%s]'`: bash 5.3.20 hands `a <(case x in x) true;; esac) b` and `a <(case x in
+  (x) true;; esac) b` as `[a][/dev/fd/63][b]`, `a $(case x in x) echo z;; esac) b` as `[a][z][b]`,
+  `a <(: # )⏎) b` as `[a][/dev/fd/63][b]` and `a $(echo z # )⏎) b` as `[a][z][b]`; `/bin/bash`
+  3.2.57 refuses both `case` forms (*syntax error near unexpected token `;;'*), prints
+  `[a][/dev/fd/63⏎)][b]` for the `<(` comment (it closes there) and `[a][z][b]` for the `$(` one.
+  Both print `[a#][#)][255]` for `$(echo a#) $(echo "#)") $((16#ff))`. 5.3.20 also accepts
+  `<(case⇥x …)`, `<(true;case …)`, `<(true;# )⏎)` and `<(true|# )⏎cat)`, and refuses `case⏎x`.
+  Program half (`scratchpad/wp251/program.mjs`, WP-250's shape): a repository made by
+  `initScratchRepository` under the scratchpad, one commit, `core.fsmonitor` a script that only
+  touches a marker under the scratch root; git 2.56.0, bash 5.3.20. Marker **present** for
+  `--namespace <(case x in x) true;; esac) -c …` and `--namespace <(: # )⏎) -c …` (the live
+  fail-open, first measured here), for `$(case x in x) echo y;; esac)` and `$(echo y # )⏎)` (one
+  word), and for the control `<(true) -c …`; **absent** (exit 1) for `$(case x in x) true;; esac)`
+  and `$(: # )⏎)`, which are zero words, so git takes `-c` as the namespace; absent for `<(true)
+  status`. Nothing ran against this checkout.
+  **The deciding reader, by canary:** the check sits in `findClosingParen` and reports only through
+  `scan`'s set; C5 (scan passes no set) put every 651 row back, so `scan`'s substitution branch is
+  the reader that decides.
+- **The change** (`command-policy.ts`). `findClosingParen` takes an optional set; given one, an
+  unquoted `#` or `case` word at a word start (`startsComment`'s rule — the text's start, a blank or
+  an operator character before it; `case` followed by a blank, an operator character or the end)
+  between the open and the close it finds adds `UNCERTAINTY.unreadSubstitutionBody`. Here-document
+  bodies are skipped as before, so `$(cat <<E⏎# )⏎E⏎)` is unchanged. **(b) Callers:** `scan`'s
+  `$(…)`/`<(…)`/`>(…)` branch takes the rule (it is the one caller with an uncertainty set, and every
+  substitution of the line, quoted or not, passes through it, nested bodies and handed scripts
+  through their own `scan`); `scan`'s `$((…))` branch does not (`16#ff` is a base, `case` a variable
+  name — `$(( case + 1 ))` is `1` in both bashes); `doubleQuoteEnd`, `shellWords` and
+  `isOneExpansion` do not — they bound words over text `scan` has already read, and have no channel
+  for a reason; the line is uncertain from `scan` wherever they read it.
+- **(c) Rows** (`unattended-commands.test.ts`, describe *WP-251, backlog 651*): 16 lines at `ask /
+  uncertain / uncertain` in every baseline with the reason in `auto` — the measured `<(case …)`,
+  `$(case …)`, its `(x)` form, `>(case …)`, `> out` in front, `case⇥`, `;case`, the `<(` and `$(`
+  comment forms, `$(echo y # )⏎)`, `> out` in front of a comment, `;#`, `|#`, `<(case x in (x) …)`
+  (toward refusal) and the two over-ask lines; five controls without the reason (`a#`, `"#)"`, the
+  here-document, the top-level `case`, `diff <(true) <(true)`); `$((16#ff))` and `$(( case + 1 ))`
+  with `arithmetic` as the only reason.
+- **Canaries** (`scratchpad/wp251/canaries.sh`, each alone, `vitest -t 651`, restored and compared
+  byte for byte): C0 planted throw → 16 fail; C1 `case` check removed → 10; C2 comment check
+  removed → 6; C3 rule applied to `$((…))` → 0 at first: `$((16#ff))` cannot catch it (the `#`
+  follows a digit), so the `$(( case + 1 ))` row was added, and C3 → 1; C4 any `#` → 1 (`a#`); C5
+  `scan` passes no set → 16; C6 the blank dropped from the `case` lookahead → 1 (`case⇥`); C7 the
+  word-start test dropped → 1 (`a#`).
+- **(d) Sweep** (`scratchpad/wp251/sweep651.mjs`, base tree against the working tree): 19 bodies
+  (`case` with and without `(`, nested, `;&`, `;;&`, `case⇥`, `;case`, `echo y`, comments holding
+  `)` after `:`, `echo y`, `;` and `|`, `a#`, `a#)`, `"#)"`, `'#)'`, `echo case`, two
+  here-documents) × `<(`, `>(`, `$(`, plus `"$(case …)"`, `"$(: # )⏎)"`, `$((16#ff))`, `$(( case +
+  1 ))` — each after every corpus line's program name, bare after `git` on every git line of the
+  corpus and the test file, and as the value of each `separate` option of `GIT_GLOBAL_OPTIONS` plus
+  `--exec-path` × WP-250's six tails, × four prefixes (`''`, `> out `, `X=; `, both): **410,052**
+  cells, **0 looser**, **27,843 tighter** (`ask / auto / deny` → `ask / uncertain / uncertain`),
+  **51,834 reason only** (26,631 `git` and 25,203 `hazard` → `uncertain`, a refusal before and
+  after); every moved line holds `case` or `#`. WP-250's sweep set re-run unchanged
+  (`sweep250.mjs`): **1,145,157** cells, 0 changed. WP-198's property and the policy suites:
+  `vitest run packages/domain/src/policies --project unit` green with the gate seed and
+  `PROPERTY_SEED` 1, 7 and 424242 (4,345 passed, 5 skipped, each).
+- **(e) Corpus diff:** **0** cells moved (`command-corpus.test.ts` in the run above).
+- **(f)** Docblocks: `findClosingParen` (what it counts, what it lacks, the rule and who passes the
+  set), `scan`'s substitution branch, the new reason; `04-agent-runtime.md` (the reading paragraph);
+  651's heading restated as resolved pending merge.
+- **Sentences falsified** (grep for *findClosingParen*, *counts every*, *honouring quotes*,
+  *comment*, *case* over the module, `04`, `05`, TD-030): `findClosingParen`'s one-line docblock
+  stated no gap — replaced. `05`'s WP-153 sentence on bash 3.2 closing `$(cat <<'EOF'` at a body's
+  `)` is still true and unchanged. TD-030 does not name the matcher (not edited: decisions out of
+  scope). 651's *"No work package owns it"* and *"No file:line was given for the matcher"* are
+  superseded by the restated heading.
+- **Discovered work.** `findClosingParen` does not skip a backtick substitution either: a `)`
+  inside `` `…` `` in a `<(…)`/`$(…)` body counts. Policy only, measured: `git --namespace <(echo X) -c
+  core.fsmonitor=/tmp/m status` with `X` a backtick substitution of `echo )`, and its `$(` form, read `ask / uncertain /
+  uncertain` (the early close leaves an unterminated backtick), and bash 5.3.20 hands the `<(`
+  form as `/dev/fd/63`; no fail-open is known. Filed here for the refiner, not done.
+- **Verify.** `vitest run scripts/citations.test.ts --project unit`: 13 passed. `pnpm run -s
+  verify` (load 3.1; the three untracked directories under `.claude/` — `autoharness/`,
+  `skills/test-tier-run-discipline/` and a third that appeared during the session,
+  `skills/parallel-worktree-port/` — set aside in the scratchpad and moved back): `PASS: verify`
+  (15903 passed, 19 skipped).
+- **Review** (session 20, one round, **APPROVE-with-nits**; fixed by the orchestrator). Canaries: drop
+  the `case` check (10 rows), drop the comment check (6), apply to `$((…))` (1), a `#` after a word
+  character as a comment (1), `scan` passing no set (16) — dead; a quoted `"case"` read as the word
+  **survived** (stricter only): the orchestrator added the control `<(echo "case" x)` and re-ran it,
+  dead by that row. The docblock and `docs/technical/04-agent-runtime.md` gave `16#ff` as the reason
+  `$((…))` is exempt, but that `#` follows a digit and never counts; both now give `$(( case + 1 ))`.
+  Reviewer's base-against-head hunt (about 110 lines, bash 5.3.20 and 3.2.57 for the shell facts):
+  nothing looser; the three other `findClosingParen` callers misbound nothing `scan` leaves read.
+  The first `verify:e2e` overlapped the reviewer's in-place canaries and is not counted; a third run
+  replaces it.

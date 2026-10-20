@@ -246,6 +246,14 @@ export const UNCERTAINTY = {
    */
   braceExpansion: `a brace expansion the platform does not read (a zero-padded or mixed-case range, a range bash leaves as written, or more than ${BRACE_EXPANSION_CEILING} words made by expansion) — write the words out; the platform reads a comma list ({a,b}) and an integer or single-letter range ({1..3}, {a..c})`,
   unterminatedSubstitution: 'a command or process substitution is never closed',
+  /**
+   * WP-251 (backlog 651): the substitution matcher (`findClosingParen`) has no `case` pattern and
+   * no comment state, so a pattern's `)` or a `)` in a comment closed `<(…)`/`$(…)` early and a
+   * git option after it went unseen. bash 5.3.20 and 3.2.57 disagree on both constructs
+   * (measured), so the body is not read rather than parsed one bash's way.
+   */
+  unreadSubstitutionBody:
+    'a command or process substitution whose body holds a case command or a comment, where the shells disagree on which ) closes it — move the case or the comment out of the substitution; the platform does not read a substitution body that holds either',
   unterminatedBacktick: 'a backtick substitution is never closed',
   ansiCQuoting: "ANSI-C quoting ($'…'), whose escapes change what the shell sees",
   arithmetic: 'arithmetic expansion ($((…))), whose result can become a command',
@@ -5407,8 +5415,22 @@ const feedsScriptReader = (segment: string): boolean => {
   );
 };
 
-/** Index of the `)` closing the `(` at `openIndex`, honouring quotes, or -1 when unbalanced. */
-const findClosingParen = (text: string, openIndex: number, hereDocuments = false): number => {
+/**
+ * Index of the `)` closing the `(` at `openIndex`, honouring quotes, or -1 when unbalanced.
+ *
+ * It counts every unquoted `)` outside a here-document body: it has no `case` pattern state and no
+ * comment state, so `<(case x in x) …` and `<(: # )⏎)` close early (backlog 651). Given `unread`
+ * (`scan`'s command and process substitutions — never `$((…))`, where `case` is a variable name,
+ * `$(( case + 1 ))`; the `#` of a base, `16#ff`, follows a digit and starts no comment anyway), a
+ * body holding an unquoted `case` word or a `#` that starts a comment between the open and the
+ * close it finds adds `UNCERTAINTY.unreadSubstitutionBody`, so the early close is never read.
+ */
+const findClosingParen = (
+  text: string,
+  openIndex: number,
+  hereDocuments = false,
+  unread?: Set<UncertaintyReason>,
+): number => {
   let depth = 0;
   let quote: '"' | "'" | null = null;
   // A command substitution's body is commands, so a here-document in it is skipped here as the
@@ -5459,6 +5481,14 @@ const findClosingParen = (text: string, openIndex: number, hereDocuments = false
         index = at.resume - 1;
       }
       continue;
+    }
+    // `startsComment` is bash's word start, for the `case` word as for the `#`.
+    if (
+      unread !== undefined &&
+      startsComment(text, index) &&
+      (char === '#' || /^case(?:[\s;&|()<>]|$)/.test(text.slice(index, index + 5)))
+    ) {
+      unread.add(UNCERTAINTY.unreadSubstitutionBody);
     }
     if (char === '(') {
       depth += 1;
@@ -5600,11 +5630,12 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
     }
 
     // Command substitution `$( … )` and process substitution `<( … )` / `>( … )`. bash runs the
-    // body of all three.
+    // body of all three. A body holding a `case` word or a comment is not read (backlog 651): the
+    // matcher may have closed it at a pattern's or a comment's `)`, so the line is uncertain.
     const opensSubstitution =
       rest.startsWith('$(') || rest.startsWith('<(') || rest.startsWith('>(');
     if (opensSubstitution) {
-      const close = findClosingParen(command, index + 1, true);
+      const close = findClosingParen(command, index + 1, true, uncertainty);
       if (close === -1) {
         uncertainty.add(UNCERTAINTY.unterminatedSubstitution);
         substitutions.push(command.slice(index + 2));
