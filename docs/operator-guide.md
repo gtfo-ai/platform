@@ -1075,6 +1075,19 @@ appears the first time a run happens, so finish a teardown with
 `docker volume rm agentic-repo-cache` and ignore a "no such volume" on an instance that never ran
 one.
 
+The two PostgreSQL images each declare `VOLUME /var/lib/postgresql`, and `compose.yml` covers that
+path with a `tmpfs` in `db` and in `db-backup`, so neither creates an anonymous volume and `down -v`
+leaves nothing behind even after a recreate (measured). `db`'s data is not there: it is in `db-data`,
+mounted at `/var/lib/postgresql/data` with `PGDATA` inside it, which is unchanged. An instance
+started before `db` had its `tmpfs` still has the one empty anonymous volume its first `db`
+container got; compose keeps carrying it into every recreated container. To drop it once, list
+`docker volume ls -qf dangling=true` first, then run `docker compose up -d --renew-anon-volumes db`.
+That **recreates `db`**, so the stack loses its database for a few seconds: do it in a maintenance
+window, or with `app` and `runner` stopped as the restore block above does. It never touches the
+named `db-data`, which is where the data is. Then list the dangling volumes again and
+`docker volume rm` only the one that newly appeared — the others may belong to other projects on the
+same daemon. (Or remove that one volume after your next `down -v`.)
+
 ## 7. Security posture
 
 The honest version, in one place.

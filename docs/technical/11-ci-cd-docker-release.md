@@ -47,7 +47,7 @@ credential; `mutation.yml` is a plan row of its own (WP-71's notes).
 ## Compose
 ```yaml
 services:
-  db:       image: postgres:18 (volume /var/lib/postgresql) ; healthcheck
+  db:       image: postgres:18 (volume db-data at /var/lib/postgresql/data, PGDATA inside it; tmpfs /var/lib/postgresql) ; healthcheck
   migrate:  image: platform ; command: node dist/migrate.js ; depends_on: db: service_healthy
   app:      image: platform ; ROLE=all ; depends_on: migrate: service_completed_successfully ; ports 8080
   runner:   image: platform ; ROLE=runner ; volumes: workspaces ; (isolation per TD-021)

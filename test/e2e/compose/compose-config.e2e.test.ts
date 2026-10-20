@@ -792,12 +792,11 @@ describe('compose.yml gives the app service the environment the server reads (WP
  */
 describe('compose.yml mounts every VOLUME its pinned images declare', () => {
   /**
-   * Declared and unmounted, each with its reason. `db` mounts `db-data` *below* the declared path
-   * (`/var/lib/postgresql/data`), which does not satisfy it: the same recreate leaks one there
-   * (measured at WP-235). Mounting the declared path itself moves the data directory, which is a
-   * decision of its own, so ruling (c)'s split clause moves it out (WP-235's notes, discovered work).
+   * Declared and unmounted, each with its reason. Empty since WP-238 (backlog 640): `db` covers
+   * the declared path with a `tmpfs` and keeps `db-data` below it, so a new residual is a decision
+   * somebody writes here with its reason.
    */
-  const UNMOUNTED: readonly string[] = ['db /var/lib/postgresql'];
+  const UNMOUNTED: readonly string[] = [];
 
   const declaredVolumes = (image: string): string[] => {
     const inspect = (): string =>
@@ -839,6 +838,48 @@ describe('compose.yml mounts every VOLUME its pinned images declare', () => {
     }
     expect(unmounted.sort()).toEqual([...UNMOUNTED].sort());
     expect([...new Set(unpinned)].sort()).toEqual(['platform', 'platform-launcher']);
+  });
+
+  /**
+   * The `tmpfs` over `/var/lib/postgresql` (WP-238) is safe only while the cluster is in the named
+   * volume mounted *below* it: a `PGDATA` the `tmpfs` covers with nothing deeper is a database in
+   * RAM that every stop deletes, and the e2e has no other case that would notice.
+   */
+  it("keeps db's PGDATA in a named volume mounted deeper than any tmpfs over it", () => {
+    const db = (
+      config(['compose.yml']) as unknown as {
+        services: Record<
+          string,
+          {
+            environment: Record<string, string>;
+            volumes?: { type: string; target: string }[];
+            tmpfs?: string[];
+          }
+        >;
+      }
+    ).services['db'];
+    const under = (child: string, parent: string): boolean =>
+      child === parent || child.startsWith(`${parent.replace(/\/$/, '')}/`);
+    const pgdata = db?.environment['PGDATA'] ?? '';
+    const volume = (db?.volumes ?? []).find(
+      (entry) => entry.type === 'volume' && under(pgdata, entry.target),
+    );
+    expect(volume, `db: PGDATA ${pgdata} is in no named volume`).toBeDefined();
+    // Ruling (b): an existing install's cluster is found only at this exact layout; any move
+    // of either half makes an upgrade initdb an empty cluster beside the old one.
+    expect([volume?.target, pgdata]).toEqual([
+      '/var/lib/postgresql/data',
+      '/var/lib/postgresql/data/pgdata',
+    ]);
+    const covering = (db?.tmpfs ?? [])
+      .map((entry) => entry.split(':')[0] ?? '')
+      .filter((tmpfs) => under(pgdata, tmpfs));
+    for (const tmpfs of covering) {
+      expect(
+        volume !== undefined && volume.target !== tmpfs && under(volume.target, tmpfs),
+        `db: PGDATA ${pgdata} is under the tmpfs ${tmpfs} with no named volume mounted deeper`,
+      ).toBe(true);
+    }
   });
 
   it('builds the product images with no VOLUME instruction', () => {

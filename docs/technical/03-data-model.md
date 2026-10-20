@@ -221,7 +221,7 @@
 ## Retention and backups
 - Default keep forever. Optional `APP_TRANSCRIPT_RETENTION_DAYS` drops whole `run_messages` partitions older than N days; metadata, artifacts, events, cost stay.
 - Compose ships a `db-backup` sidecar (`pg_dump` daily/weekly/monthly rotation) with a documented restore; pgBackRest/WAL-G as a later profile.
-- Docker: mount `/var/lib/postgresql` (not `/data`) for the `postgres:18` image (research/07 gotcha).
+- Docker: `compose.yml` mounts the `db-data` volume at `/var/lib/postgresql/data` and sets `PGDATA` to `/var/lib/postgresql/data/pgdata`, inside it, so the cluster is in the named volume; the image's declared `VOLUME /var/lib/postgresql` is a `tmpfs`, so no anonymous volume is created and `docker compose down -v` leaves nothing after a recreate (WP-238). research/07's gotcha — mounting `/data` loses data — holds for the image's default `PGDATA` (`/var/lib/postgresql/18/docker`) only, which this layout does not use.
 
 ## Redaction (TD-012)
 Single persistence path function applied to `run_messages`, `integration_actions`, `events.payload`, `config_audit`: (1) exact match of every secret value the platform injected into the run, (2) regex rules derived from gitleaks' rule set (generic API keys, private keys, cloud/provider tokens, JWTs, connection strings), (3) optional entropy heuristic; placeholders `[REDACTED sha256:ab12cd]`; counts and `redaction_log` rows; originals never stored.

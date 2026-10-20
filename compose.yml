@@ -106,6 +106,18 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - db-data:/var/lib/postgresql/data
+    # **The image's declared `VOLUME /var/lib/postgresql`** (WP-238, backlog 640, as WP-235 did for
+    # `db-backup`). `db-data` sits one level below it and `PGDATA` inside `db-data`, so the cluster
+    # is in the named volume and the declared path holds nothing; a `tmpfs` covers it rather than
+    # the anonymous volume Docker would otherwise create. Measured on Docker 29.4.0 / Compose 5.1.2:
+    # without this line a recreate (a changed environment value, or a changed image) carried the
+    # 0-byte anonymous volume into the new container and `docker compose down -v` left it behind;
+    # with it both legs leave none, and a `db-data` populated without it starts with its rows.
+    # The data does not move, so this needs no upgrade step. An install that ran before this line
+    # keeps its one old anonymous volume (compose carries it over beside the `tmpfs`) until
+    # `docker compose up -d --renew-anon-volumes db` detaches it for `docker volume rm`.
+    tmpfs:
+      - /var/lib/postgresql
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app}']
       interval: 5s
