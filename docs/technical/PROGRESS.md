@@ -58122,3 +58122,118 @@ Built on `main` at `0fc7ef65` (policy sources identical to `5f33f404`), session 
   states that `expandsUnquoted` does not read `\'` inside `$'…'` and relies on the scanner reading
   `$'…'` uncertain. Reviewer's base-against-head hunt: 23 760 cells, 0 looser. Discovered: an
   unquoted glob as a separate value (`git -C * …`) still reads `auto` — filed.
+
+#### WP-249 — the whole-tree census cases carry a timeout stated against their CI duration (backlog 649)
+
+Built on `main` at `0fc7ef65`, session 20. Not committed. Parallel-safe: no policy source touched.
+
+- **(a) Measured first.** The unit job (`unit + contract`) of the last ten green `ci` runs on `main`:
+  `39474429961`, `39459759999`, `39458565468`, `39456298958`, `39416250036`, `39406182730`,
+  `39403396684` (attempt 2 — `gh run view --log` serves the last attempt, so attempt 1's 5101 ms is
+  quoted from 649, not read here), `39390759746`, `39387686028`, `39385932865`. **Vitest does print
+  per-case timing in CI logs**, but only for a case slower than its `slowTestThreshold` (300 ms), under
+  the file line that prints the file's duration. So a case's figure is its own when printed; a case
+  printed in no run is stated as *under 300 ms in all ten*, which is the bound. 649's list of 18 was
+  checked and extended by the guard below (a walk of `censusPaths`/`censusFiles`/`'ls-files'` and the
+  helpers that reach them, rooted at this checkout): **37 suites, 110 cases** under the 5 s default.
+  No walk case's slowest CI figure is over 15 s (the largest is 8069 ms), so the shared walk stays
+  declined, per ruling (b). The table, sorted by the slowest walk case (file figures include every
+  case of the file, walks or not):
+
+| Suite | Walk cases | File slowest / median (ms) | Slowest walk case: slowest / median (ms) | Timeout |
+|---|---|---|---|---|
+| `scripts/source-scanner.test.ts` | 2 | 8138 / 7522 | 8069 / 7455 | 30_000 |
+| `packages/application/src/pipeline/default-branch-readers.test.ts` | 3 | 8483 / 8066 | 4188 / 3978 | 15_000 |
+| `packages/infrastructure/src/db/projects-column-ownership.test.ts` | 9 | 23859 / 22146 | 3032 / 2355 | 15_000 |
+| `scripts/git-scratch-env-census.test.ts` | 2 | 3133 / 2959 | 3018 / 2821 | 15_000 |
+| `scripts/citations.test.ts` | 2 | 5337 / 4856 | 2815 / 2456 | 15_000 |
+| `packages/application/src/pipeline/task-save-sites.test.ts` | 9 | 11309 / 8850 | 2776 / 1940 | 15_000 |
+| `apps/launcher/src/docker-access.test.ts` | 3 | 4861 / 4650 | 2631 / 2367 | 15_000 |
+| `packages/domain/src/policies/unattended-commands.test.ts` | 1 | 125416 / 115329 | 2566 / 2200 | 15_000 |
+| `apps/server/src/queries/integration-config-writers.test.ts` | 1 | 2575 / 2282 | 2543 / 2243 | 15_000 |
+| `packages/infrastructure/src/workspace/egress-log-level.test.ts` | 2 | 2801 / 2580 | 2435 / 2273 | 15_000 |
+| `packages/infrastructure/src/maintenance/maintenance-blocker-writers.test.ts` | 1 | 2396 / 2269 | 2390 / 2264 | 15_000 |
+| `packages/application/src/pipeline/task-management-call-sites.test.ts` | 2 | 4344 / 4225 | 2370 / 2138 | 15_000 |
+| `packages/application/src/pipeline/compile-sites.test.ts` | 3 | 6514 / 6222 | 2323 / 1927 | 15_000 |
+| `packages/application/src/pipeline/wip-commit-sites.test.ts` | 3 | 4336 / 4056 | 2198 / 2020 | 15_000 |
+| `packages/application/src/pipeline/project-stream-sites.test.ts` | 2 | 800 / 755 | 787 / 737 | 15_000 |
+| `apps/server/src/run-secrets-composition.test.ts` | 1 | 874 / 760 | 777 / 676 | 15_000 |
+| `scripts/coverage-ratchet.test.ts` | 5 | 1484 / 1366 | 553 / 498 | 15_000 |
+| `scripts/property-seed.test.ts` | 2 | 1015 / 875 | 446 / 388 | 15_000 |
+| `packages/infrastructure/src/pipeline/tasks-column-ownership.test.ts` | 4 | 1006 / 920 | 393 / 364 | 15_000 |
+| `apps/server/src/pipeline-census.test.ts` | 2 | 1326 / 1149 | 371 / 323 | 15_000 |
+| `apps/server/src/routes/endpoint-callers.test.ts` | 2 | 728 / 685 | 363 / 338 | 15_000 |
+| `apps/server/src/routes/client-census.test.ts` | 17 | 3982 / 3835 | 319 / < 300 | 15_000 |
+| `apps/server/src/routes/scope.test.ts` | 2 | 46 / 43 | < 300 (unprinted) / < 300 | 15_000 |
+| `apps/server/src/routes/settings-mirror.test.ts` | 1 | 1146 / 1027 | < 300 (unprinted) / < 300 | 15_000 |
+| `packages/application/src/pipeline/config-refusal-readers.test.ts` | 1 | 99 / 79 | < 300 (unprinted) / < 300 | 15_000 |
+| `packages/application/src/testing/pipeline-harness.test.ts` | 2 | 762 / 641 | < 300 (unprinted) / < 300 | 15_000 |
+| `packages/domain/src/config/feature-readers.test.ts` | 1 | 42 / 33 | < 300 (unprinted) / < 300 | 15_000 |
+| `packages/domain/src/policies/autonomy-readers.test.ts` | 6 | 156 / 124 | < 300 (unprinted) / < 300 | 15_000 |
+| `packages/infrastructure/src/db/pool-errors.test.ts` | 2 | 608 / 467 | < 300 (unprinted) / < 300 | 15_000 |
+| `packages/infrastructure/src/human-time/human-time-writers.test.ts` | 2 | 508 / 461 | < 300 (unprinted) / < 300 | 15_000 |
+| `packages/infrastructure/src/stats/stats-writers.test.ts` | 1 | 872 / 814 | < 300 (unprinted) / < 300 | 15_000 |
+| `scripts/census-files.test.ts` | 2 | 563 / 508 | < 300 (unprinted) / < 300 | 15_000 |
+| `scripts/check-data-model.test.ts` | 1 | 651 / 614 | < 300 (unprinted) / < 300 | 15_000 |
+| `scripts/coverage-budget.test.ts` | 3 | 170 / 139 | < 300 (unprinted) / < 300 | 15_000 |
+| `scripts/nested-checkouts.test.ts` | 1 | 1403 / 1294 | < 300 (unprinted) / < 300 | 15_000 |
+| `scripts/release.test.ts` | 6 | 619 / 550 | < 300 (unprinted) / < 300 | 15_000 |
+| `scripts/verify.test.ts` | 1 | 162 / 153 | < 300 (unprinted) / < 300 | 15_000 |
+
+- **(b) The timeouts.** Each of the 108 walk cases that had none carries one, as the call's last
+  argument, with a one-line comment above the case citing its figure:
+  `// WP-249: slowest of 10 green CI runs <n> ms (median <m> ms); 2× it, 15 s floor.` or, for a case
+  vitest never printed, `// WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration);
+  the 15 s floor.` The value is `max(15 s, 2 × slowest rounded up to the second)`; every one is
+  `15_000`, because the slowest walk case without a timeout was 4188 ms
+  (`default-branch-readers.test.ts`'s third case; 649's failing attempt read 5101 ms, still under
+  7.5 s). The two `source-scanner.test.ts` walk cases already carried `WHOLE_TREE_TIMEOUT_MS =
+  30_000` with their own reasoning (8069 ms × 2 = 16.1 s < 30 s), and were left alone. No case's
+  slowest CI reading is within 2× of its timeout. `vitest.config.ts`'s `testTimeout` is unchanged.
+  The edits were applied by a scratch script from the measured table and formatted by biome; the 36
+  edited suites ran green (3111 tests).
+- **(c) The guard** is `scripts/census-timeouts.test.ts` (unit). Walkers are discovered from disk:
+  an exported function of a non-test module mentioning `census-files` or `ls-files` whose body,
+  expanded through its own module's declarations, reaches `'ls-files'` or another walker
+  (`censusPaths`, `censusFiles`, `webSourceFiles`, `gitSpawnSites`, `propertyFiles`, `ratchet`, …).
+  A walk case is an `it`/`test`/`beforeAll`/`beforeEach` in a test file under the 5 s default
+  (`PROCESS_SUITES`, integration and e2e have project timeouts and are out) whose callback, expanded
+  through the file's top-level and `describe`-level **functions**, names a walker, and whose reach
+  names this checkout (`import.meta.dirname`, `process.cwd()`, `new URL('..', import.meta.url)`,
+  `dirname(fileURLToPath(import.meta.url))`, or a rooted export such as `repositoryRoot`). A value
+  computed while the file loads is not followed (no timeout covers it); a function's parameters
+  shadow file names. Admitted: a timeout ≥ 15 000 ms as a literal, `{ timeout }`, or a name the file
+  binds to a literal. The docblock states the spellings it cannot see (cross-module helpers that are
+  not walkers, `.each`/`.for`, destructuring, computed/imported timeouts, shell strings, and the
+  over-ask of name-based matching — e.g. `census-files.test.ts`'s planted-import case, which walks
+  a scratch repository but calls a helper that names `import.meta`). It reuses `matchingClose` from
+  `scripts/git-spawn-sites.ts`, now exported; regular-expression literals are blanked first because
+  that matcher does not skip them (an unbalanced `\(` in a census's pattern swallowed whole files in
+  the first draft).
+- **The stripper-shape census** (`source-scanner.test.ts`, WP-96) found the regex-literal blanker's
+  `=== '/'` as a `chars` shape; it is listed in `SHAPED` with what it does (it reads
+  `withoutComments`'s output and strips no comment).
+- **Canary.** `names the case whose timeout was removed`: `default-branch-readers.test.ts` read from
+  disk passes; with its last `}, 15_000);` removed in memory, the guard names exactly
+  `…:<line> 'has no member left that answers “which branch” on the provider’s behalf' (timeout none)`.
+  Calibrated with planted throws: (1) `walks` forced false in `walkCases` — both cases fail (the
+  anchor and the canary); (2) one real timeout removed from `compile-sites.test.ts` — the guard
+  fails naming `compile-sites.test.ts:220 'has exactly the sites …' (timeout none)`. Both restored.
+- **Assumption.** The rule applies to every walk case rooted at this checkout, including a narrow
+  pathspec (`.github/workflows/*.yml` in `release.test.ts`): a static guard cannot tell a cheap walk
+  from a costly one, and the 15 s floor costs nothing on a fast case. A 15 s timeout on a case that
+  reads under 300 ms is the price of a rule with no exceptions list.
+- **Discovered work.** `matchingClose` in `scripts/git-spawn-sites.ts` does not skip regular-expression
+  literals, so `gitSpawnSites` can mis-bound a call whose arguments hold one with an unbalanced
+  bracket (not measured live; the guard here blanks them first). The new guard case has no CI figure
+  yet: its 15 s should be re-cited against the first green runs.
+- **Review** (session 20, one round, **APPROVE-with-nits**; nits fixed by the orchestrator). Canaries:
+  a timeout removed in `release.test.ts`, lowered to 14 999 in `citations.test.ts`, held in a
+  10 000 constant in `scope.test.ts`, and a local walk helper in `docker-access.test.ts` — each dead
+  by the guard naming the case; an import alias (`censusPaths as walkTree`) and a timeout name bound
+  in two scopes **survived** — both now stated in the guard's docblock under *What it cannot see*.
+  Of 649's candidates, `platform-marker-census.test.ts` walks one ring with `readdirSync` and
+  `planner-command-census.test.ts` and `command-census.test.ts` make no walk call, so none is in
+  the table (a `readdirSync` walk is now named in the docblock as unseen). Seven cited figures
+  were found exactly in the downloaded logs. *Sentences falsified:* 649's "unmeasured" and "No work
+  package owns it", resolved at the ledger row. Orchestrator: `PASS: verify` (15851).

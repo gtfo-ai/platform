@@ -289,6 +289,7 @@ const STRUCTURAL_WAIT_IMPORT =
 const TEST_FILE = /\.test\.tsx?$/;
 
 describe('the process project’s membership', () => {
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('is exactly the test files that import a structural wait, in both directions', () => {
     const importers = censusFiles(repositoryRoot, { include: (path) => TEST_FILE.test(path) })
       .filter((file) => STRUCTURAL_WAIT_IMPORT.test(file.contents))
@@ -296,7 +297,7 @@ describe('the process project’s membership', () => {
       .sort();
     expect(importers.length, 'no test file imports structural-wait.js').toBeGreaterThan(0);
     expect(importers).toEqual([...STRUCTURAL_WAIT_SUITES].sort());
-  });
+  }, 15_000);
 
   it('is the structural waits, the git-fixture reproduction, the commit hook and the collection watchdog, and nothing else (WP-162, WP-215, WP-213)', () => {
     expect([...PROCESS_SUITES].sort()).toEqual(

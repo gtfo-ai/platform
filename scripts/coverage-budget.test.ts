@@ -67,6 +67,7 @@ const countedFiles = (): readonly string[] => {
 };
 
 describe('the coverage budget', () => {
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('counts the files the config includes, and the corpus is not empty', () => {
     expect(coverage.include).toEqual(COVERAGE_INCLUDE);
     const files = countedFiles();
@@ -74,8 +75,9 @@ describe('the coverage budget', () => {
     expect(files.length).toBeGreaterThan(400);
     expect(files).toContain('packages/domain/src/index.ts');
     expect(files).toContain('apps/server/src/runtime.ts');
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('includes every app with TypeScript sources except the browser bundle, so a new app is counted', () => {
     // Review round 1: `COVERAGE_INCLUDE` names apps one by one, and a new `apps/<name>/src` was
     // neither counted nor gated while the partition below stayed green. `apps/web` is the ui tier's.
@@ -88,14 +90,15 @@ describe('the coverage budget', () => {
     const included = picomatch(coverage.include);
     const uncounted = [...apps].filter((app) => !included(`apps/${app}/src/index.ts`));
     expect(uncounted).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('holds every counted file in exactly one ring', () => {
     const misplaced = countedFiles()
       .map((path) => ({ path, rings: ringsOf(path) }))
       .filter((entry) => entry.rings.length !== 1);
     expect(misplaced).toEqual([]);
-  });
+  }, 15_000);
 
   it('would see a file that falls between the rings, and one held by two', () => {
     // The other direction: the partition check is not blind to either failure.

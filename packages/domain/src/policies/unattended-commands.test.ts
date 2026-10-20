@@ -5578,6 +5578,7 @@ describe('WP-218, backlogs 621 and 620: git’s global options are one declared 
      * counted; a computed property of a module namespace is not), and anything outside those two
      * directories.
      */
+    // WP-249: slowest of 10 green CI runs 2566 ms (median 2200 ms); 2× it, 15 s floor.
     it('exactly one function reads the grammar: readGitGlobalOptions', () => {
       const root = fileURLToPath(new URL('../../../../', import.meta.url));
       const files = censusPaths(root, {
@@ -5599,7 +5600,7 @@ describe('WP-218, backlogs 621 and 620: git’s global options are one declared 
         'packages/domain/src/policies/command-policy.ts › GIT_GLOBAL_OPTIONS',
         'packages/domain/src/policies/command-policy.ts › readGitGlobalOptions',
       ]);
-    });
+    }, 15_000);
 
     /**
      * Review round 1: every declared option's shape, held by a list written apart from the grammar

@@ -200,6 +200,8 @@ describe('a comment stripper is recognised by its shape', () => {
     'scripts/release.test.ts slashStar': 'a trailing `/**` in a CODEOWNERS row',
     'scripts/citations.ts slashSlash':
       'the decoration of a comment line a citation may sit on — it reads prose in comments on purpose',
+    'scripts/census-timeouts.test.ts chars':
+      'the opening `/` of a regular-expression literal, blanked so a bracket in it does not unbalance the call matcher — it reads the scanner’s output, so comments are already gone (WP-249)',
     'apps/launcher/src/runtime.test.ts slashSlash':
       'the third slash of `unix:///path` in an error message',
   };

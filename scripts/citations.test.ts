@@ -280,6 +280,7 @@ describe('every citation in this checkout', () => {
   const sitesOf = ({ sources, read }: Corpus) =>
     sources.flatMap((path) => citationSites(read(path)).map((site) => ({ ...site, source: path })));
 
+  // WP-249: slowest of 10 green CI runs 2815 ms (median 2456 ms); 2× it, 15 s floor.
   it('names a test that exists', () => {
     const { sources, read } = checkout();
     const failures = resolveCitations({
@@ -288,8 +289,9 @@ describe('every citation in this checkout', () => {
       read,
     });
     expect(failures.map(describeFailure)).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 2546 ms (median 2450 ms); 2× it, 15 s floor.
   it('was read at every site where one opens, so a parser with a blind spot cannot pass', () => {
     const citations = citationsOf(checkout());
     const sites = sitesOf(checkout());
@@ -308,5 +310,5 @@ describe('every citation in this checkout', () => {
     const markdown = sites.filter((site) => site.source.endsWith('.md')).length;
     expect(sites.length - markdown).toBeGreaterThanOrEqual(MINIMUM_CITATION_SITES.code);
     expect(markdown).toBeGreaterThanOrEqual(MINIMUM_CITATION_SITES.markdown);
-  });
+  }, 15_000);
 });

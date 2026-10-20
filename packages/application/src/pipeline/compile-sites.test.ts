@@ -216,6 +216,7 @@ export const unfrozenCalls = (found: ReadonlyMap<string, string[][]>): string[] 
   );
 
 describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
+  // WP-249: slowest of 10 green CI runs 2311 ms (median 2200 ms); 2× it, 15 s floor.
   it('has exactly the sites this work package states a resolution for, and no others', () => {
     const counts = Object.fromEntries(
       [...census()].map(([file, calls]) => [file, calls.length]).sort(),
@@ -226,19 +227,21 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
         .sort(),
     );
     expect(counts).toEqual(expected);
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 2323 ms (median 1927 ms); 2× it, 15 s floor.
   it('counts thirty-five — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178, thirty-four before WP-184 — and states how each resolves the dial', () => {
     const total = [...census().values()].reduce((sum, calls) => sum + calls.length, 0);
     expect(total).toBe(35);
     for (const [file, entry] of Object.entries(EXPECTED_SITES)) {
       expect(entry.how.length, file).toBeGreaterThan(20);
     }
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 2184 ms (median 2008 ms); 2× it, 15 s floor.
   it('passes every site the task’s frozen copy of the dial and of qa_stage, so none asks the settings port', () => {
     expect(unfrozenCalls(census())).toEqual([]);
-  });
+  }, 15_000);
 
   it('sees a call after a `//` inside a string, and drops a trailing comment from its arguments (backlog 269)', () => {
     // Until WP-96 this file dropped only whole comment lines, so a trailing comment inside a call

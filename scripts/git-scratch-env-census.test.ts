@@ -65,6 +65,7 @@ const unscrubbedGitSpawns = (root: string): GitSpawnSite[] =>
 const repositoryRoot = join(import.meta.dirname, '..');
 
 describe('every git spawn in a test takes the helper’s environment', () => {
+  // WP-249: slowest of 10 green CI runs 3018 ms (median 2821 ms); 2× it, 15 s floor.
   it('finds no unscrubbed site in this repository but the exempt ones', () => {
     const sites = unscrubbedGitSpawns(repositoryRoot);
     expect(
@@ -74,8 +75,9 @@ describe('every git spawn in a test takes the helper’s environment', () => {
     ).toEqual([]);
     // Both directions: an exemption whose site is gone is a stale excuse.
     expect([...new Set(sites.map((site) => site.path))].sort()).toEqual([...EXEMPT.keys()].sort());
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('reaches the sites it exists for (an anchor, standing rule 10)', () => {
     // The census must be reading the files that build scratch repositories, or a green answer above
     // would be vacuous: these use the helper today, so they are read and admitted.
@@ -90,7 +92,7 @@ describe('every git spawn in a test takes the helper’s environment', () => {
     ]) {
       expect(read, path).toContain(path);
     }
-  });
+  }, 15_000);
 });
 
 describe('the census against a repository built for it', () => {

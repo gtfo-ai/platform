@@ -410,6 +410,7 @@ describe('the jobs seam every composition shares', () => {
     ).toEqual([{ callee: 'composeKnowledgeIndexing', value: 'jobsRuntime.jobs' }]);
   });
 
+  // WP-249: slowest of 10 green CI runs 371 ms (median 323 ms); 2× it, 15 s floor.
   it('builds the process’s only queue client in the one file that wraps it', () => {
     /**
      * The half a census of one file cannot see: a *fourth runtime* composed in a **new file** with
@@ -421,7 +422,7 @@ describe('the jobs seam every composition shares', () => {
       .filter((path) => withoutComments(readSource(path)).includes('createPgBossJobs('))
       .toSorted();
     expect(builders).toEqual([ROOT]);
-  });
+  }, 15_000);
 });
 
 /**
@@ -649,6 +650,7 @@ describe('every runtime’s optional collaborators (WP-96, backlog 104)', () => 
     expect([...new Set(extended)].toSorted()).toEqual(Object.keys(RUNTIME_EXTENDS).toSorted());
   });
 
+  // WP-249: slowest of 10 green CI runs 304 ms (median under 300 ms); 2× it, 15 s floor.
   it('covers every runtime this process composes, read off disk', () => {
     const composed = new Set<string>();
     for (const path of sourceFilesUnder('apps/server/src')) {
@@ -665,5 +667,5 @@ describe('every runtime’s optional collaborators (WP-96, backlog 104)', () => 
         .filter((call) => call.startsWith('create'))
         .toSorted(),
     ).toEqual(CENSUSED_RUNTIMES.toSorted());
-  });
+  }, 15_000);
 });

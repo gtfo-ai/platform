@@ -176,12 +176,14 @@ const census = (): Map<string, number> => {
 };
 
 describe('the whole-row `tasks.save` census (WP-15e)', () => {
+  // WP-249: slowest of 10 green CI runs 2776 ms (median 1940 ms); 2× it, 15 s floor.
   it('has exactly the call sites this work package gave an ending, and no others', () => {
     expect(Object.fromEntries([...census()].sort())).toEqual(
       Object.fromEntries([...EXPECTED_SITES].sort()),
     );
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 2775 ms (median 1861 ms); 2× it, 15 s floor.
   it('counts thirty-eight, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
@@ -224,7 +226,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
     expect(total).toBe(38);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
-  });
+  }, 15_000);
 
   it('sees a site written after a `//` inside a string on the same line (backlog 269)', () => {
     // The line-by-line stripper this file carried until WP-96 cut the line at the URL's `//`.
@@ -233,6 +235,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     expect(withoutComments(`${planted} // tasks.save(tx, t)`).match(SAVE_CALL)).toHaveLength(1);
   });
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('reads a tree that includes untracked sources, so a planted site is seen (rule 85)', () => {
     // The scope itself, asserted: `git ls-files --others --exclude-standard` is what makes an
     // uncommitted new file visible, and it is the half the pool census was missing when it shipped
@@ -240,7 +243,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     const all = sources();
     expect(all).toContain('packages/application/src/pipeline/saga.ts');
     expect(all).toContain('packages/application/src/pipeline/task-save-sites.test.ts');
-  });
+  }, 15_000);
 });
 
 /**
@@ -299,6 +302,7 @@ const escalationCensus = (): Map<string, { escalations: number; closes: number }
 };
 
 describe('every escalation closes the parked stage’s row (WP-46, backlog 160)', () => {
+  // WP-249: slowest of 10 green CI runs 880 ms (median 540 ms); 2× it, 15 s floor.
   it('matches each `escalateTask` with a `closeParkedStageRow`, file by file', () => {
     const census = escalationCensus();
     const unmatched = [...census]
@@ -308,8 +312,9 @@ describe('every escalation closes the parked stage’s row (WP-46, backlog 160)'
         ([file, counts]) => `${file}: ${counts.escalations} escalations, ${counts.closes} closes`,
       );
     expect(unmatched).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 758 ms (median 585 ms); 2× it, 15 s floor.
   it('finds the escalations it claims to, so a vacuous census cannot pass', () => {
     // Calibrate the instrument (standing rule 21): the modules backlog 160 named, plus the saga's
     // own six, are all in the census with a close for each escalation.
@@ -326,7 +331,7 @@ describe('every escalation closes the parked stage’s row (WP-46, backlog 160)'
     for (const file of ROW_CLOSED_BY_ITS_OWN_WRITE.keys()) {
       expect(census.get(file)?.escalations, file).toBeGreaterThan(0);
     }
-  });
+  }, 15_000);
 });
 
 /**
@@ -358,13 +363,15 @@ describe('every entry, completion and cancellation closes the attempt it ends (W
     return found;
   };
 
+  // WP-249: slowest of 10 green CI runs 798 ms (median 613 ms); 2× it, 15 s floor.
   it('matches each ending with a `closeCurrentStageRow`, file by file', () => {
     const unmatched = [...census()]
       .filter(([, counts]) => counts.endings !== counts.closes)
       .map(([file, counts]) => `${file}: ${counts.endings} endings, ${counts.closes} closes`);
     expect(unmatched).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 1549 ms (median 1146 ms); 2× it, 15 s floor.
   it('finds the endings it claims to, so a vacuous census cannot pass', () => {
     // Two entries (`enter` and `resumeAtStage`, backlog 495) and two completions in the
     // transitions, one cancellation in the commands.
@@ -376,7 +383,7 @@ describe('every entry, completion and cancellation closes the attempt it ends (W
       endings: 1,
       closes: 1,
     });
-  });
+  }, 15_000);
 });
 
 /**
@@ -410,13 +417,15 @@ describe('every stage entry opens its attempt’s row (PROGRESS backlog 495)', (
     return found;
   };
 
+  // WP-249: slowest of 10 green CI runs 812 ms (median 581 ms); 2× it, 15 s floor.
   it('matches each `enterStage`/`resumeStage` with a `.recordStageEntered`, file by file', () => {
     const unmatched = [...census()]
       .filter(([, counts]) => counts.entries !== counts.opens)
       .map(([file, counts]) => `${file}: ${counts.entries} entries, ${counts.opens} row opens`);
     expect(unmatched).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 1500 ms (median 1278 ms); 2× it, 15 s floor.
   it('finds the entries it claims to, so a vacuous census cannot pass', () => {
     // `enter`'s `enterStage` and `resumeAtStage`'s `resumeStage`, and nowhere else.
     expect(census().get('packages/application/src/pipeline/transitions.ts')).toEqual({
@@ -424,5 +433,5 @@ describe('every stage entry opens its attempt’s row (PROGRESS backlog 495)', (
       opens: 2,
     });
     expect(census().get('packages/application/src/pipeline/saga.ts')).toBeUndefined();
-  });
+  }, 15_000);
 });

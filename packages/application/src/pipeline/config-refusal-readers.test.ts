@@ -190,9 +190,10 @@ const unguardedReads = (): Map<string, number> => {
 };
 
 describe('the readers of a configuration that cannot be read (WP-106 review round 1)', () => {
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('decides every settings read: guarded within the window, or declared with its reason', () => {
     const found = unguardedReads();
     const declared = new Map(Object.entries(DECLARED).map(([file, entry]) => [file, entry.count]));
     expect(Object.fromEntries(found)).toEqual(Object.fromEntries(declared));
-  });
+  }, 15_000);
 });

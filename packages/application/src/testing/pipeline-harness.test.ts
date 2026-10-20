@@ -125,6 +125,7 @@ describe('the scripts declared deliberately invalid', () => {
     'packages/application/src/pipeline/stage-executor.test.ts': 2,
   };
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('are exactly the declared list, in both directions', () => {
     const found: Record<string, number> = {};
     for (const file of censusPaths(REPO_ROOT, { pathspecs: ['*.ts', '*.tsx'] })) {
@@ -134,7 +135,7 @@ describe('the scripts declared deliberately invalid', () => {
       if (count > 0) found[file] = count;
     }
     expect(found).toEqual(DECLARED);
-  });
+  }, 15_000);
 });
 
 /**
@@ -242,6 +243,7 @@ describe('the runs declared unable to start', () => {
     'packages/application/src/shadow/batch.test.ts': 7,
   };
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('are exactly the declared list, in both directions', () => {
     const found: Record<string, number> = {};
     for (const file of censusPaths(REPO_ROOT, { pathspecs: ['*.ts', '*.tsx'] })) {
@@ -251,7 +253,7 @@ describe('the runs declared unable to start', () => {
       if (count > 0) found[file] = count;
     }
     expect(found).toEqual(DECLARED);
-  });
+  }, 15_000);
 });
 
 /**

@@ -167,11 +167,13 @@ const productionImporters = (root: string): string[] =>
   });
 
 describe('who may import census-files.mjs', () => {
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('is imported from a production source nowhere in this repository', () => {
     const root = fileURLToPath(new URL('..', import.meta.url));
     expect(productionImporters(root)).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('refuses a planted production import, tracked or untracked, and admits a test', () => {
     const root = repository();
     const env = scratchGitEnv(root);
@@ -205,5 +207,5 @@ describe('who may import census-files.mjs', () => {
       'packages/domain/src/tracked.ts',
       'packages/domain/src/untracked.ts',
     ]);
-  });
+  }, 15_000);
 });

@@ -250,6 +250,7 @@ const probe = async (path: string): Promise<Probe> => {
 };
 
 describe('the client’s endpoint list against the server’s router', () => {
+  // WP-249: slowest of 10 green CI runs 319 ms (median under 300 ms); 2× it, 15 s floor.
   it('finds the client’s paths on disk, including a file that is not committed yet', () => {
     // The scope, asserted before anything is concluded from it (standing rule 4): a census whose
     // sweep found nothing would report a perfectly clean result.
@@ -273,8 +274,9 @@ describe('the client’s endpoint list against the server’s router', () => {
         { path: 'fake2.ts', source: '// also /api/never-called-either\nconst b = 2;\n' },
       ]),
     ).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves every path the client names, or admits the gap with the row that owns it', async () => {
     const paths = clientPaths(
       webSourceFiles().map((path) => ({
@@ -297,8 +299,9 @@ describe('the client’s endpoint list against the server’s router', () => {
     expect(
       Object.keys(ADMITTED_GAPS).filter((path) => served.has(path) || !known.has(path)),
     ).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves each route listed before its caller, guarded, and no client names it yet (WP-181)', async () => {
     const paths = new Set(
       clientPaths(
@@ -319,7 +322,7 @@ describe('the client’s endpoint list against the server’s router', () => {
       // Direction 2: once `caller` gives it one, the client names the path and this entry must go.
       expect(paths.has(path), `${path} is called now (${caller}); remove its entry`).toBe(false);
     }
-  });
+  }, 15_000);
 
   it('serves this iteration’s five endpoints', async () => {
     // Named positively as well, because "not in the gap list" is satisfied by a path the sweep
@@ -335,6 +338,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
   });
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves the artifact body WP-52 added, and the client calls it', async () => {
     // PROGRESS backlog 85: the task projection published `url: null` as a literal and no route
     // served a body, so every artifact on every task screen was a row a reader could see and not
@@ -352,7 +356,7 @@ describe('the client’s endpoint list against the server’s router', () => {
       })),
     );
     expect(paths).toContain('/api/artifacts/{}');
-  });
+  }, 15_000);
 
   it('serves the four knowledge endpoints WP-18b took off the gap list', async () => {
     for (const path of [
@@ -365,6 +369,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
   });
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves the model list WP-159 added, guarded, and the client calls it', async () => {
     // Both directions, named (standing rule 10): the router serves it and refuses an anonymous
     // caller, and the client's own sweep finds the path *Retry run* reads its options from.
@@ -379,7 +384,7 @@ describe('the client’s endpoint list against the server’s router', () => {
       })),
     );
     expect(paths).toContain('/api/org/models');
-  });
+  }, 15_000);
 
   it('serves the seven reads WP-15h part 2 took off the gap list', async () => {
     // The other direction of the equality above, named (standing rule 10): "not in the gap list"
@@ -415,6 +420,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
   });
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves the provider catalogue and the configuration repair WP-100 added, guarded', async () => {
     // Named positively (standing rule 10), and each asked by its own method with no body: the
     // PATCH takes a body, so a guard that slipped back to `preHandler` would answer 400 here.
@@ -435,8 +441,9 @@ describe('the client’s endpoint list against the server’s router', () => {
         `${method} ${path} -> 401 unauthenticated`,
       );
     }
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves the re-seal and the retire WP-114 added, and refuses an anonymous caller on each', async () => {
     // Named positively (standing rule 10), each by its own method with no body: the re-seal takes a
     // body, so a guard that slipped back to `preHandler` would answer 400 here, not 401.
@@ -455,7 +462,7 @@ describe('the client’s endpoint list against the server’s router', () => {
         `${method} ${path} -> 401 unauthenticated`,
       );
     }
-  });
+  }, 15_000);
 
   it('serves the statistics pair WP-41 added', async () => {
     // Named positively (standing rule 10): "not in the gap list" is also satisfied by a path the
@@ -642,6 +649,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     );
   });
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves the three ask-the-task paths WP-31 added, and the client calls all three', async () => {
     // Criterion 7's other half. `POST /api/tasks/:id/ask` was the route this census was blind to by
     // construction — the SPA did not call it — and `features/ask-thread.tsx` is what changed that,
@@ -661,8 +669,9 @@ describe('the client’s endpoint list against the server’s router', () => {
       expect(probed.code, path).toBe('unauthenticated');
       expect(paths, path).toContain(path);
     }
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves the identity pair the settings page calls, by each of its own methods', async () => {
     // `POST /api/org/identities` is the writer `user_identities` had never had (WP-31, PROGRESS
     // backlog 79) and `GET` is the list beside it. **No screen called either until WP-43**, which
@@ -693,8 +702,9 @@ describe('the client’s endpoint list against the server’s router', () => {
     // The screen calls it — the inverse of the pre-WP-43 assertion, so a screen that lost the call
     // fails here rather than quietly returning the product to `unmapped_identity`.
     expect(paths).toContain('/api/org/identities');
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves the take-over, hand-back, breakdown and download paths WP-44 gave a screen', async () => {
     // **Two hand-written cases used to stand here** — take-over/hand-back (WP-27) and the breakdown
     // pair (WP-40) — asserting routes no screen called, which a client-driven census cannot see.
@@ -734,8 +744,9 @@ describe('the client’s endpoint list against the server’s router', () => {
         `POST ${path} -> 401 unauthenticated`,
       );
     }
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves the kb health read WP-95 gave a screen, and the client calls it', async () => {
     // `GET /api/projects/:id/kb/health` reads `kb_health_reports` (WP-18b, migration 0018). Until
     // WP-95 **no screen asked for it**, so it was in neither half of the comparison above and this
@@ -755,8 +766,9 @@ describe('the client’s endpoint list against the server’s router', () => {
       })),
     );
     expect(paths).toContain('/api/projects/{}/kb/health');
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves the run settings read WP-112 added, the client calls it, and it refuses an anonymous caller', async () => {
     // PROGRESS backlog 309: `runs.settings_snapshot` had a writer (WP-91) and no reader. Named in
     // both directions (standing rule 10): the run screen's Settings tab is the caller, so a screen
@@ -772,8 +784,9 @@ describe('the client’s endpoint list against the server’s router', () => {
     const probed = await probe('/api/runs/{}/settings');
     expect(probed.served).toBe(true);
     expect(`${probed.status} ${probed.code}`).toBe('401 unauthenticated');
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves the task export WP-112 added, the client calls it, and it refuses an anonymous caller', async () => {
     // PROGRESS backlog 310 served it and 381 gave it a caller: the task page's *Download JSON*
     // (WP-122), so the two-way equality above now covers it and the hand assertion that stood here
@@ -788,8 +801,9 @@ describe('the client’s endpoint list against the server’s router', () => {
     const probed = await probe('/api/tasks/{}/export');
     expect(probed.served).toBe(true);
     expect(`${probed.status} ${probed.code}`).toBe('401 unauthenticated');
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves the manual start WP-122 added, the client calls it, and it refuses an anonymous caller by POST before validating the body', async () => {
     // product/04's manual Start (backlog 379). The path has a `GET` sibling — the board's task
     // read — so the probe above meets that one; the `POST` is asked by its own method, with no
@@ -804,8 +818,9 @@ describe('the client’s endpoint list against the server’s router', () => {
     const response = await app.inject({ method: 'POST', url: probeUrl('/api/projects/{}/tasks') });
     const body = response.json() as ApiErrorBody;
     expect(`${response.statusCode} ${body.error?.code ?? ''}`).toBe('401 unauthenticated');
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves the dead-letter pair WP-95 added, the client calls both, and each refuses an anonymous caller by its own method', async () => {
     // PROGRESS backlog 126: a dead-lettered event was a gauge and a hand-typed `update`. Named
     // positively (standing rule 10) and matched against the client's own sweep, and each method is
@@ -831,8 +846,9 @@ describe('the client’s endpoint list against the server’s router', () => {
         `${method} ${url} -> 401 unauthenticated`,
       );
     }
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves the failed-jobs read WP-108 added, the client calls it, and it refuses an anonymous caller', async () => {
     // PROGRESS backlog 325: a job pg-boss gave up on had no list. Named positively (standing rule
     // 10), and asked with an invalid limit so a guard that slipped to `preHandler` answers 400.
@@ -847,8 +863,9 @@ describe('the client’s endpoint list against the server’s router', () => {
     const response = await app.inject({ method: 'GET', url: '/api/org/failed-jobs?limit=0' });
     const body = response.json() as ApiErrorBody;
     expect(`${response.statusCode} ${body.error?.code ?? ''}`).toBe('401 unauthenticated');
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('refuses an anonymous caller on every served path that is not deliberately public', async () => {
     const paths = clientPaths(
       webSourceFiles().map((path) => ({
@@ -875,7 +892,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     ).toEqual([]);
     expect(probes.some((entry) => isPublic(entry.path))).toBe(true);
     expect(probes.some((entry) => !isPublic(entry.path))).toBe(true);
-  });
+  }, 15_000);
 });
 
 describe('the census’s own instruments', () => {

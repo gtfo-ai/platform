@@ -56,9 +56,10 @@ describe('the feature reader table', () => {
     }
   });
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('cites, for every key, a file git knows about that names the key', () => {
     expect(unresolvedFeatureReaders(FEATURE_READERS, treeFiles(), readSource)).toEqual([]);
-  });
+  }, 15_000);
 
   it('refuses a citation that is missing, silent, or the defaults module (the check can fail)', () => {
     const tree = new Set(['a.ts', 'b.ts', DEFAULTS_MODULE]);

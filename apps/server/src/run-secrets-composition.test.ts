@@ -106,6 +106,7 @@ describe('the run credentials reach every sink WP-76 composed them into', () => 
     expect((settled as Error).message).not.toContain(TOKEN);
   });
 
+  // WP-249: slowest of 10 green CI runs 777 ms (median 676 ms); 2× it, 15 s floor.
   it('builds the registry once in the whole server: the minter and the sinks cannot diverge', () => {
     const sites = sourceFilesUnder('apps/server/src').flatMap((file) => {
       const source = withoutComments(readSource(file));
@@ -116,7 +117,7 @@ describe('the run credentials reach every sink WP-76 composed them into', () => 
       .reduce((sum, n) => sum + n, 0);
     expect(sites).toEqual(['apps/server/src/pipeline.ts']);
     expect(count).toBe(1);
-  });
+  }, 15_000);
 
   it.each([
     ['the executor', /^\s*redactor: platformRedactor,$/m, 1],

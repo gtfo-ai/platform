@@ -180,6 +180,7 @@ describe('the comparison', () => {
 });
 
 describe('this repository', () => {
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('describes every table its migrations and its migrator create', () => {
     const result = checkDataModel(repositoryRoot);
     expect(result.problems).toEqual([]);
@@ -192,7 +193,7 @@ describe('this repository', () => {
     expect([...result.tables.keys()].filter((name) => /_\d{4}_\d{2}$/.test(name))).toEqual([]);
     expect(Object.keys(UNDOCUMENTED_TABLES)).toEqual([]);
     expect(Object.keys(SPECIFIED_NOT_CREATED)).toEqual(['feedback']);
-  });
+  }, 15_000);
 
   it('prints one PASS line and exits 0', () => {
     const run = spawnSync(process.execPath, [join(SCRIPTS, 'check-data-model.mjs')], {

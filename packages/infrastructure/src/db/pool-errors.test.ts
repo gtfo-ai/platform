@@ -166,6 +166,7 @@ const poolSites = (root: string): string[] =>
     .map(({ path }) => path);
 
 describe('the census that keeps every pool guarded', () => {
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('finds no unguarded pool construction in a source file of this repository', () => {
     const root = fileURLToPath(new URL('../../../../', import.meta.url));
     const found = poolSites(root);
@@ -174,7 +175,7 @@ describe('the census that keeps every pool guarded', () => {
     // vacuously green (standing rule 10).
     expect(found).not.toHaveLength(0);
     expect(found.filter((path) => !POOL_SITES_ALLOWED.has(path)).sort()).toEqual([]);
-  });
+  }, 15_000);
 
   it('names a planted pool whether it is tracked or merely untracked, and skips an ignored one', () => {
     // The positive proof, run against a repository built for it rather than against prose. Three
@@ -263,6 +264,7 @@ const clientSites = (root: string): string[] =>
     .map(({ path }) => path);
 
 describe('the census that keeps every bare client owned by the harness', () => {
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('finds no bare client constructed outside the files that account for one', () => {
     const root = fileURLToPath(new URL('../../../../', import.meta.url));
     const found = clientSites(root);
@@ -277,7 +279,7 @@ describe('the census that keeps every bare client owned by the harness', () => {
         .map((path) => `${path} constructs a bare pg client; use createTestClient or withClient`)
         .sort(),
     ).toEqual([]);
-  });
+  }, 15_000);
 
   it('names a planted client whether it is tracked or merely untracked, and skips an ignored one', () => {
     const root = mkdtempSync(join(tmpdir(), 'client-census-'));

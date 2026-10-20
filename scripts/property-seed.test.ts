@@ -100,6 +100,7 @@ describe('the seed census', () => {
     include: (path) => /\.(?:ts|tsx|mjs)$/.test(path),
   });
 
+  // WP-249: slowest of 10 green CI runs 446 ms (median 388 ms); 2× it, 15 s floor.
   it('finds the property files, in more than one package', () => {
     const files = propertyFiles(repositoryRoot);
     expect(files.length).toBeGreaterThanOrEqual(40);
@@ -108,7 +109,7 @@ describe('the seed census', () => {
     expect(files).toContain('packages/application/src/events/event-bus.property.test.ts');
     expect(files).toContain('packages/infrastructure/src/runlet/framing.test.ts');
     expect(files).not.toContain('scripts/property-seed.test.ts');
-  });
+  }, 15_000);
 
   it('puts the setup file in every vitest project', () => {
     expect(projects.length).toBeGreaterThanOrEqual(6);
@@ -118,6 +119,7 @@ describe('the seed census', () => {
     expect(without).toEqual([]);
   });
 
+  // WP-249: slowest of 10 green CI runs 413 ms (median 350 ms); 2× it, 15 s floor.
   it('runs every property file under a project the exploration run names', () => {
     const collectedBy = (file: string): string[] =>
       projects
@@ -131,7 +133,7 @@ describe('the seed census', () => {
       .map((file) => ({ file, projects: collectedBy(file) }))
       .filter((entry) => !entry.projects.some((name) => EXPLORATION_PROJECTS.includes(name)));
     expect(stranded).toEqual([]);
-  });
+  }, 15_000);
 
   it('finds no file that sets a seed of its own', () => {
     expect(sources.length).toBeGreaterThan(400);

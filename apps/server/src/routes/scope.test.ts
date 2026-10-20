@@ -55,6 +55,7 @@ export const preHandlers = (source: string): string[] => {
 };
 
 describe('the project-scope preHandler and the permission guard travel together', () => {
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('reads every route module off disk, including one that is not committed yet', () => {
     // The scope, before anything is concluded from it (standing rule 4).
     const modules = routeModules();
@@ -72,8 +73,9 @@ describe('the project-scope preHandler and the permission guard travel together'
       sources.flatMap(preHandlers).some((handler) => /requirePermission\(/.test(handler)),
     ).toBe(true);
     expect(sources.some((source) => source.includes('preValidation:'))).toBe(true);
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('never resolves a project without deciding a permission, and never the reverse', () => {
     const offences: string[] = [];
     for (const path of routeModules()) {
@@ -96,5 +98,5 @@ describe('the project-scope preHandler and the permission guard travel together'
       }
     }
     expect(offences).toEqual([]);
-  });
+  }, 15_000);
 });

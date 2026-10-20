@@ -128,6 +128,7 @@ const writersOf = (statements: readonly Statement[]): Map<string, number> => {
 };
 
 describe('the writers of integrations.config (backlog 130)', () => {
+  // WP-249: slowest of 10 green CI runs 2543 ms (median 2243 ms); 2× it, 15 s floor.
   it('is exactly the declared list, in both directions', () => {
     const statements = census(repositoryRoot);
 
@@ -144,7 +145,7 @@ describe('the writers of integrations.config (backlog 130)', () => {
       ]),
     );
     expect([...writersOf(statements)].sort()).toEqual([...CONFIG_WRITERS].sort());
-  });
+  }, 15_000);
 
   it('names a planted second writer whether it is tracked or untracked, and skips an ignored one', () => {
     // The calibration (standing rules 42/43): a census nobody has watched fail is a census nobody

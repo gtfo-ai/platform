@@ -81,6 +81,7 @@ describe('every client command has a control', () => {
     expect(hooks).toContain('useFailedJobs');
   });
 
+  // WP-249: slowest of 10 green CI runs 363 ms (median 338 ms); 2× it, 15 s floor.
   it('fires every mutation `app/queries.ts` declares from somewhere outside it', () => {
     const fired = new Set(
       sourcesExcept([QUERIES]).flatMap(({ source }) =>
@@ -99,8 +100,9 @@ describe('every client command has a control', () => {
     expect(
       Object.keys(ADMITTED_GAPS).filter((name) => fired.has(name) || !declared.includes(name)),
     ).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 302 ms (median under 300 ms); 2× it, 15 s floor.
   it('calls every read hook `app/queries.ts` exports from somewhere outside it', () => {
     const used = sourcesExcept([QUERIES])
       .map(({ source }) => source)
@@ -109,5 +111,5 @@ describe('every client command has a control', () => {
       .filter((name) => !new RegExp(`\\b${name}\\(`).test(used))
       .sort();
     expect(uncalled.filter((name) => ADMITTED_GAPS[name] === undefined)).toEqual([]);
-  });
+  }, 15_000);
 });

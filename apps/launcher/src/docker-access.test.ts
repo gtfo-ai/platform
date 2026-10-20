@@ -92,12 +92,13 @@ const isShippedRing = (file: string): boolean =>
   file.startsWith('apps/') || file.startsWith('packages/');
 
 describe('TD-021: exactly one component reaches the Docker daemon', () => {
+  // WP-249: slowest of 10 green CI runs 2631 ms (median 2367 ms); 2× it, 15 s floor.
   it('constructs a Docker client in one file, and it is the launcher’s composition root', () => {
     // The strong claim, and it has no exceptions: `scripts/` is **in** scope here, and the two
     // launcher verification scripts pass it because they compose `buildLauncher` rather than
     // assembling a provider of their own.
     expect(filesMatching(CONSTRUCTS_ENGINE)).toEqual(['apps/launcher/src/runtime.ts']);
-  });
+  }, 15_000);
 
   /**
    * **In the rings that ship, `DOCKER_HOST` is read in exactly one file.**
@@ -115,6 +116,7 @@ describe('TD-021: exactly one component reaches the Docker daemon', () => {
    * direction, so a new script that reads the daemon's address is a visible diff rather than a
    * suppressed one (standing rule 7's corollary — an allow-list drifts silently).
    */
+  // WP-249: slowest of 10 green CI runs 2370 ms (median 2228 ms); 2× it, 15 s floor.
   it('reads DOCKER_HOST in one shipped file, and names every script that reads it', () => {
     const readers = filesMatching(READS_DOCKER_HOST);
     expect(readers.filter(isShippedRing)).toEqual(['apps/launcher/src/config.ts']);
@@ -127,7 +129,7 @@ describe('TD-021: exactly one component reaches the Docker daemon', () => {
       'scripts/runlet-launcher-check.mjs',
       'scripts/runlet-launcher-inner.mjs',
     ]);
-  });
+  }, 15_000);
 
   /**
    * The instrument, before the claims (standing rule 21): a check that reads the repository must be
@@ -164,6 +166,7 @@ describe('TD-021: exactly one component reaches the Docker daemon', () => {
     ).toBe(true);
   });
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('has a non-empty scope, so neither claim above can pass over nothing', () => {
     // The two `expect(...).toEqual([one file])` cases above would also pass if `git ls-files`
     // returned nothing and every file were filtered out — they would just be empty-versus-one and
@@ -185,5 +188,5 @@ describe('TD-021: exactly one component reaches the Docker daemon', () => {
     for (const file of untracked) {
       expect(sources).toContain(file);
     }
-  });
+  }, 15_000);
 });

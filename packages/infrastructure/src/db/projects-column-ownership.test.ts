@@ -503,6 +503,7 @@ describe('`projects` column ownership (WP-129)', () => {
     expect(Object.keys(COLUMN_WRITERS).sort()).toEqual([...TABLE_COLUMNS].sort());
   });
 
+  // WP-249: slowest of 10 green CI runs 3032 ms (median 2355 ms); 2× it, 15 s floor.
   it('parses every write of `projects` it finds into plain column names', () => {
     // Fail closed (standing rule 20): a statement this census cannot attribute is reported by name.
     expect(
@@ -510,28 +511,32 @@ describe('`projects` column ownership (WP-129)', () => {
         .filter((write) => write.unreadable !== undefined)
         .map((write) => `${write.file}: ${write.unreadable}`),
     ).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 2935 ms (median 2895 ms); 2× it, 15 s floor.
   it('gives every column exactly its declared writing statements', () => {
     expect(columnWriters(allWrites())).toEqual(sortedDeclaration(COLUMN_WRITERS));
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 2941 ms (median 2462 ms); 2× it, 15 s floor.
   it('has one runtime writer per column, except the declared co-owners, and reports nothing', () => {
     expect(findings(allWrites(), COLUMN_WRITERS)).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 2749 ms (median 2297 ms); 2× it, 15 s floor.
   it('creates rows only where it says it does, and never by an upsert', () => {
     const sites: Record<string, number> = {};
     for (const write of allWrites()) {
       if (write.kind === 'insert') sites[write.file] = (sites[write.file] ?? 0) + 1;
     }
     expect(sites).toEqual(INSERT_SITES);
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 2663 ms (median 2271 ms); 2× it, 15 s floor.
   it('agrees with WP-113’s stricter half on `maintenance_last_blocker`', () => {
     // `maintenance/maintenance-blocker-writers.test.ts` names this one file for the column.
     expect(columnWriters(allWrites()).maintenance_last_blocker).toEqual([BLOCKER_STORE]);
-  });
+  }, 15_000);
 
   describe('calibration (standing rule 21)', () => {
     it('sees every spelling of a write…', () => {
@@ -667,6 +672,7 @@ describe('`projects` column ownership (WP-129)', () => {
   describe('canaries: the census fails on what it exists to refuse', () => {
     const tree = (): ProjectsWrite[] => allWrites();
 
+    // WP-249: slowest of 10 green CI runs 2803 ms (median 2424 ms); 2× it, 15 s floor.
     it('fails on a whole-row `update projects`', () => {
       const wholeRow = writesIn(
         'packages/infrastructure/src/onboarding/postgres-project-store.ts',
@@ -683,8 +689,9 @@ describe('`projects` column ownership (WP-129)', () => {
         expect(problems.some((problem) => problem.startsWith(`${column}: written by`))).toBe(true);
       }
       expect(problems).toContain('readiness_level: 2 runtime writing statements');
-    });
+    }, 15_000);
 
+    // WP-249: slowest of 10 green CI runs 2746 ms (median 2258 ms); 2× it, 15 s floor.
     it('fails on a whole-row Drizzle `.set(row)`', () => {
       const wholeRow = writesIn(
         'apps/server/src/x.ts',
@@ -693,15 +700,17 @@ describe('`projects` column ownership (WP-129)', () => {
       expect(findings([...tree(), ...wholeRow], COLUMN_WRITERS)).toEqual([
         'apps/server/src/x.ts: unreadable update (a set of `row`, not a literal)',
       ]);
-    });
+    }, 15_000);
 
+    // WP-249: slowest of 10 green CI runs 2816 ms (median 2368 ms); 2× it, 15 s floor.
     it('fails on a column nobody declared', () => {
       const { maintenance_last_blocker: _dropped, ...declared } = COLUMN_WRITERS;
       expect(findings(tree(), declared)).toEqual([
         'maintenance_last_blocker: a column with no declared writers',
       ]);
-    });
+    }, 15_000);
 
+    // WP-249: slowest of 10 green CI runs 2808 ms (median 2289 ms); 2× it, 15 s floor.
     it('fails on a second writer of a single-owner column', () => {
       const second = writesIn(
         'packages/application/src/x.ts',
@@ -711,6 +720,6 @@ describe('`projects` column ownership (WP-129)', () => {
         `maintenance_last_blocker: written by ${JSON.stringify(['packages/application/src/x.ts', BLOCKER_STORE].sort())}, declared ${JSON.stringify([BLOCKER_STORE])}`,
         'maintenance_last_blocker: 2 runtime writing statements',
       ]);
-    });
+    }, 15_000);
   });
 });

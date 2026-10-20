@@ -334,6 +334,7 @@ const isInside = (root: string, path: string): boolean => {
 const everythingCollected = (): readonly string[] => [...collected.values()].flat();
 
 describe('vitest project scoping', () => {
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('plants nothing inside this checkout, so no census of it can list a fixture (WP-128)', () => {
     // Backlog 390: a fixture under a tree the censuses read vanished between a parallel census's
     // listing and its read. Every fixture is in the mirror or the scratch repository now.
@@ -349,7 +350,7 @@ describe('vitest project scoping', () => {
     ).toStrictEqual([]);
     // The mirror is a checkout of its own, as the ruling asks: its own `.git`, its own root.
     expect(isSeparateCheckout(mirrorRoot)).toBe(true);
-  });
+  }, 15_000);
 
   it('resolves the same six projects with the fixtures in place', () => {
     const projects = [...collected.keys()].sort();

@@ -73,10 +73,12 @@ const sitesOf = (files: readonly string[]): string[] =>
     .sort();
 
 describe('the check-only egress log level (WP-140)', () => {
+  // WP-249: slowest of 10 green CI runs 2435 ms (median 2273 ms); 2× it, 15 s floor.
   it('is spelled only by the renderer, the provider, the launcher’s forwarder and the check', () => {
     expect(sitesOf(candidates())).toEqual(EXPECTED_SITES);
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 363 ms (median 327 ms); 2× it, 15 s floor.
   it('is read from no environment variable of the product: the launcher’s config, its entrypoint and every compose file are silent', () => {
     const product = candidates().filter(
       (file) =>
@@ -97,7 +99,7 @@ describe('the check-only egress log level (WP-140)', () => {
       ]),
     );
     expect(sitesOf(product)).toEqual([]);
-  });
+  }, 15_000);
 
   it('would see a new site: a planted spelling is found by the same scan', () => {
     expect(SPELLINGS.test(withoutComments('const x = { logAllowedConnects: true };'))).toBe(true);

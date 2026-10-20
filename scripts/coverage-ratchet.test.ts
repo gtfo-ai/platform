@@ -214,12 +214,14 @@ describe('the whole check, against this repository’s configuration', () => {
     });
   };
 
+  // WP-249: slowest of 10 green CI runs 389 ms (median 342 ms); 2× it, 15 s floor.
   it('passes every ring sitting exactly on its floor', () => {
     const result = run(summaryAtFloors());
     expect(result.out).toMatch(/^PASS: coverage:ratchet \(10 rings × 4 metrics over \d+ files/);
     expect(result.code).toBe(0);
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 317 ms (median under 300 ms); 2× it, 15 s floor.
   it('fails one covered branch short of the server floor, and names the ring', () => {
     const server = counted.find((path) => ringOf(path) === 'server') ?? '';
     const serverFloor = vitestConfig.COVERAGE_RINGS.server?.thresholds.branches ?? 0;
@@ -232,8 +234,9 @@ describe('the whole check, against this repository’s configuration', () => {
     expect(result.err).toContainEqual(
       expect.stringMatching(/^server branches: measured .* is below its floor 57/),
     );
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('fails a debt ring that earned a higher floor, and passes a ring held at the bar', () => {
     const result = run(summaryAtFloors(() => 1000));
     expect(result.code).toBe(1);
@@ -242,8 +245,9 @@ describe('the whole check, against this repository’s configuration', () => {
       expect.arrayContaining(['server', 'infrastructure', 'launcher']),
     );
     expect(refused.some((line) => line.startsWith('application '))).toBe(false);
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 553 ms (median 498 ms); 2× it, 15 s floor.
   it('refuses a summary from before the target, or one missing a counted file', () => {
     const stale = run(summaryAtFloors(), String(Date.now() + 60_000));
     expect(stale.code).toBe(2);
@@ -253,8 +257,9 @@ describe('the whole check, against this repository’s configuration', () => {
     const missing = run(partial);
     expect(missing.code).toBe(2);
     expect(missing.err.join('\n')).toMatch(/lacks 1 file\(s\) this checkout counts/);
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('refuses no summary at all, naming the step that writes it', () => {
     const result = ratchet({
       root: repositoryRoot,
@@ -265,5 +270,5 @@ describe('the whole check, against this repository’s configuration', () => {
     });
     expect(result.code).toBe(2);
     expect(result.err[0]).toMatch(/could not read .* run `pnpm test` first/);
-  });
+  }, 15_000);
 });

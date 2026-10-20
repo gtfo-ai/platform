@@ -74,20 +74,22 @@ const production = (paths: readonly string[]): string[] =>
 describe('the census that keeps human_time_entries to one writer', () => {
   const root = fileURLToPath(new URL('../../../../', import.meta.url));
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('finds the projection’s adapter and no other SQL writer', () => {
     const found = production(writerSites(root, SQL_WRITE));
     // A positive anchor: if the pattern stopped matching, the assertion below would be vacuously
     // green (standing rule 10).
     expect(found).not.toHaveLength(0);
     expect(found.filter((path) => !WRITER_SITES_ALLOWED.has(path)).sort()).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('finds no write through the Drizzle table either', () => {
     // The read side (`apps/server/src/queries/pipeline-queries.ts`) names `humanTimeEntries` and
     // must only ever `select` from it, so this census has **no** allowed site and is asserted empty.
     // Its own anchor is the planted case below, which proves the pattern bites.
     expect(production(writerSites(root, DRIZZLE_WRITE))).toEqual([]);
-  });
+  }, 15_000);
 
   it('names a planted writer whether it is tracked or merely untracked, and skips an ignored one', () => {
     const temporary = mkdtempSync(join(tmpdir(), 'human-time-census-'));

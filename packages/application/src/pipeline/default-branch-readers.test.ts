@@ -56,18 +56,21 @@ const census = (pattern: RegExp): Record<string, number> => {
 };
 
 describe('the provider’s default branch is read by the prefill and the notice only (WP-142)', () => {
+  // WP-249: slowest of 10 green CI runs 2353 ms (median 2047 ms); 2× it, 15 s floor.
   it('calls the provider’s whole repository answer from the read behind GET …/repository alone', () => {
     expect(census(/\)\s*\.\s*repositorySettings\s*\(/g)).toEqual({
       'apps/server/src/project-config.ts': 1,
     });
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 2063 ms (median 1986 ms); 2× it, 15 s floor.
   it('reaches the port member only inside the two gitReads wrappers', () => {
     expect(census(/\bport\s*\.\s*repositorySettings\s*\(/g)).toEqual({
       'packages/application/src/pipeline/integrations.ts': 2,
     });
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 4188 ms (median 3978 ms); 2× it, 15 s floor.
   it('has no member left that answers “which branch” on the provider’s behalf', () => {
     expect(census(/\bgetDefaultBranchHead\b/g)).toEqual({});
     // The pipeline's default-branch head is asked by name, from these two readers only.
@@ -75,5 +78,5 @@ describe('the provider’s default branch is read by the prefill and the notice 
       'packages/application/src/pipeline/coverage.ts': 1,
       'packages/application/src/pipeline/mr-poll.ts': 1,
     });
-  });
+  }, 15_000);
 });

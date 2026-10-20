@@ -157,10 +157,12 @@ const asObject = (entries: ReadonlyMap<string, number>): Record<string, number> 
   Object.fromEntries([...entries].sort());
 
 describe('product/19 §7 — the take-over and an unsuccessful run are the only `wip:` commits (WP-27, backlog 467)', () => {
+  // WP-249: slowest of 10 green CI runs 2198 ms (median 2020 ms); 2× it, 15 s floor.
   it('finds the two writers and the places that quote them, and nothing else', () => {
     expect(asObject(census(WIP_LITERAL))).toEqual(asObject(EXPECTED_WIP_SITES));
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 2183 ms (median 2001 ms); 2× it, 15 s floor.
   it('has two production sites that decide a commit message: the take-over and the unfinished work', () => {
     // One walk of the tree, read twice: the census is the slow half, and under load two walks
     // crossed the default five seconds (backlog 467's verify run).
@@ -170,7 +172,7 @@ describe('product/19 §7 — the take-over and an unsuccessful run are the only 
     // declarations and six forwards are not writers, so the writers are the total minus eleven.
     const sites = [...found.values()].reduce((sum, count) => sum + count, 0);
     expect(sites - 11).toBe(2);
-  });
+  }, 15_000);
 
   it('sees a writer after a `//` inside a string on the same line (backlog 269)', () => {
     // The line-by-line stripper this file carried until WP-96 cut the line at the URL's `//`.
@@ -179,9 +181,10 @@ describe('product/19 §7 — the take-over and an unsuccessful run are the only 
     expect(withoutComments(planted).match(WIP_LITERAL)).toHaveLength(1);
   });
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('reads a tree that includes untracked sources, so a planted writer is seen (rule 85)', () => {
     const all = sources();
     expect(all).toContain('packages/application/src/pipeline/commands.ts');
     expect(all).toContain('packages/application/src/pipeline/wip-commit-sites.test.ts');
-  });
+  }, 15_000);
 });

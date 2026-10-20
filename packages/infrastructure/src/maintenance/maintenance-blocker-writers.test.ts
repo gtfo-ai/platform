@@ -82,6 +82,7 @@ const writers = (): { readonly file: string; readonly writes: readonly string[] 
 };
 
 describe('`projects.maintenance_last_blocker` has one writer (WP-113)', () => {
+  // WP-249: slowest of 10 green CI runs 2390 ms (median 2264 ms); 2× it, 15 s floor.
   it('is written by the blocker store’s compare-and-set and by nothing else', () => {
     expect(writers()).toEqual([
       {
@@ -89,7 +90,7 @@ describe('`projects.maintenance_last_blocker` has one writer (WP-113)', () => {
         writes: ['maintenance_last_blocker ='],
       },
     ]);
-  });
+  }, 15_000);
 
   it('sees every spelling of a write, and not a comment, a read or the schema’s definition', () => {
     // Calibration (standing rule 21): each spelling planted alone is found…

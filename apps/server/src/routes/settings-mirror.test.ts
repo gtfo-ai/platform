@@ -178,6 +178,7 @@ describe('the settings screens mirror the wizard (product/18:55)', () => {
 });
 
 describe('the mirror census’s own instruments', () => {
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('follows a relative import across the closure and ignores a call in a comment', () => {
     // Calibrated on the real tree: `operating-mode.tsx` is reached from `onboarding.tsx` only
     // through its import, so a sweep that did not follow imports would find none of its commands.
@@ -192,5 +193,5 @@ describe('the mirror census’s own instruments', () => {
         MUTATION_CALL,
       ),
     ]).toEqual([]);
-  });
+  }, 15_000);
 });

@@ -93,18 +93,20 @@ const sites = (): Site[] => {
 };
 
 describe('every task-management port call is inside one executor call (WP-212)', () => {
+  // WP-249: slowest of 10 green CI runs 2370 ms (median 2138 ms); 2× it, 15 s floor.
   it('calls the port members from the pipeline’s ticket wrappers alone, fifteen times', () => {
     const counts: Record<string, number> = {};
     for (const site of sites()) {
       counts[site.file] = (counts[site.file] ?? 0) + 1;
     }
     expect(counts).toEqual({ 'packages/application/src/pipeline/integrations.ts': 15 });
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 2203 ms (median 1957 ms); 2× it, 15 s floor.
   it('makes every one of them the body of a perform lambda handed to read or mutate', () => {
     const bare = sites().filter((site) => !site.wrapped);
     expect(bare.map((site) => `${site.file} › port.${site.member}`)).toEqual([]);
-  });
+  }, 15_000);
 
   it('tells a wrapped call from a bare one (the census’s own control, rule 42)', () => {
     const wrapped =

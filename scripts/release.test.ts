@@ -109,6 +109,7 @@ const runScript = (text: string, stepName: string): string => {
  * go together, and this asserts the absence rather than trusting it.
  */
 describe('release-please, retired', () => {
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('has no workflow, no configuration and no manifest left to run from', () => {
     for (const path of [
       '.github/workflows/release.yml',
@@ -120,7 +121,7 @@ describe('release-please, retired', () => {
     const workflows = tracked('.github/workflows/*.yml');
     expect(workflows.length).toBeGreaterThanOrEqual(3);
     for (const path of workflows) expect(read(path), path).not.toContain('release-please-action');
-  });
+  }, 15_000);
 
   /*
    * The documents' half, kept from the amendment's round: `CONTRIBUTING.md` no longer tells an
@@ -646,13 +647,14 @@ describe("the workflow linters in ci.yml's lint job", () => {
     expect(lint).toMatch(step);
   });
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('lints every Dockerfile git knows about, and names no other', () => {
     const args = /name: hadolint\n[\s\S]*?\n {10}args: (.+)\n/.exec(lint)?.[1] ?? '';
     const named = args.split(/\s+/).filter((arg) => arg !== '');
     const dockerfiles = tracked('docker/*.Dockerfile');
     expect(dockerfiles.length).toBeGreaterThanOrEqual(5);
     expect([...named].sort()).toEqual([...dockerfiles].sort());
-  });
+  }, 15_000);
 
   /**
    * The second decision backlog 117 asked to be stated rather than defaulted: which hadolint rules
@@ -801,13 +803,14 @@ describe('the repository settings CONTRIBUTING.md asks an administrator for', ()
    * listed one for two sessions that never existed), and the setting must be written down where the
    * ruleset is.
    */
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('records CodeQL as a setting, and no workflow claims to be it', () => {
     const workflows = tracked('.github/workflows/*');
     expect(workflows.length).toBeGreaterThan(0);
     expect(workflows.filter((path) => /codeql/i.test(path))).toEqual([]);
     for (const path of workflows) expect(read(path), path).not.toContain('github/codeql-action');
     expect(section()).toContain('**CodeQL default setup**');
-  });
+  }, 15_000);
 
   /**
    * The switch the release job tests and the switch the document tells an administrator to set are
@@ -908,6 +911,7 @@ describe('untrusted contexts in run: scripts', () => {
     ]);
   });
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('are expanded in no workflow this repository runs', () => {
     const workflows = tracked('.github/workflows/*.yml');
     expect(workflows.length).toBeGreaterThanOrEqual(3);
@@ -917,7 +921,7 @@ describe('untrusted contexts in run: scripts', () => {
       untrustedExpansions(read(path)).map((finding) => `${path} ${finding}`),
     );
     expect(findings, 'pass these through `env:` and read "$NAME" in the script').toEqual([]);
-  });
+  }, 15_000);
 });
 
 /**
@@ -983,6 +987,7 @@ describe("the Node a workflow's scripts run on (WP-118 follow-up)", () => {
     expect(jobsRunningNodeUnpinned(planted)).toEqual(['late', 'unpinned']);
   });
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('holds in every workflow this repository runs', () => {
     const workflows = tracked('.github/workflows/*.yml');
     expect(workflows.length).toBeGreaterThanOrEqual(3);
@@ -999,7 +1004,7 @@ describe("the Node a workflow's scripts run on (WP-118 follow-up)", () => {
       findings,
       'add actions/setup-node with node-version-file: .nvmrc before the first run',
     ).toEqual([]);
-  });
+  }, 15_000);
 });
 
 /**
@@ -1153,6 +1158,7 @@ describe('every workflow job is bounded (WP-126)', () => {
     ]);
   });
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('holds in every workflow this repository runs', () => {
     const workflows = tracked('.github/workflows/*.yml');
     expect(workflows).toEqual(
@@ -1166,7 +1172,7 @@ describe('every workflow job is bounded (WP-126)', () => {
       unboundedJobs(read(path)).map((finding) => `${path} ${finding}`),
     );
     expect(findings, 'give the job a timeout-minutes from its measured duration').toEqual([]);
-  });
+  }, 15_000);
 });
 
 /**

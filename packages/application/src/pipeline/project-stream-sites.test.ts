@@ -67,6 +67,7 @@ const census = (): Map<string, number> => {
 };
 
 describe('the stream-sequence read census (WP-109)', () => {
+  // WP-249: slowest of 10 green CI runs 787 ms (median 737 ms); 2× it, 15 s floor.
   it('has exactly the classified sites, and no knowledge or onboarding writer among them', () => {
     const found = census();
     expect(Object.fromEntries([...found].sort())).toEqual(
@@ -81,11 +82,12 @@ describe('the stream-sequence read census (WP-109)', () => {
           file.includes('/src/bootstrap/'),
       ),
     ).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('reads a tree that includes this file, so an untracked new site is seen (rule 85)', () => {
     const all = censusPaths(REPO_ROOT, { pathspecs: ['packages/application/src/*.ts'] });
     expect(all).toContain('packages/application/src/pipeline/project-stream-sites.test.ts');
     expect(all).toContain('packages/application/src/knowledge/apply.ts');
-  });
+  }, 15_000);
 });

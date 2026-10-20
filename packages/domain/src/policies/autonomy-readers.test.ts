@@ -162,15 +162,17 @@ describe('the dial’s reader table (standing rule 18)', () => {
 });
 
 describe('the citation behind every claimed reader', () => {
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('resolves to a file git knows about that names the policy', () => {
     expect(unresolvedReaderCitations(AUTONOMY_POLICY_READERS, treeFiles(), readSource)).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('reads a tree that includes untracked sources, so a new reader is visible (rule 85)', () => {
     const tree = treeFiles();
     expect(tree.has('packages/application/src/pipeline/saga.ts')).toBe(true);
     expect(tree.has('packages/domain/src/policies/autonomy-readers.test.ts')).toBe(true);
-  });
+  }, 15_000);
 
   /**
    * The canary, and the first thing that was run: the entry as it **shipped** in round 1.
@@ -179,6 +181,7 @@ describe('the citation behind every claimed reader', () => {
    * so the check that was promised would have refused it on the day it was written. Keeping the
    * literal here means the defect is recorded where it recurs rather than only in the ledger.
    */
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('refuses the entry that shipped claiming a reader nobody wrote', () => {
     const asShipped = {
       ...AUTONOMY_POLICY_READERS,
@@ -190,8 +193,9 @@ describe('the citation behind every claimed reader', () => {
     expect(unresolvedReaderCitations(asShipped, treeFiles(), readSource)).toEqual([
       `suggestedReadinessMin: names no repository path outside ${TABLE_MODULE}`,
     ]);
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('refuses a path that no longer exists, which is what a rename leaves behind', () => {
     const renamed = {
       ...AUTONOMY_POLICY_READERS,
@@ -203,8 +207,9 @@ describe('the citation behind every claimed reader', () => {
     expect(unresolvedReaderCitations(renamed, treeFiles(), readSource)).toEqual([
       'probation: cites packages/application/src/pipeline/saga-gates.ts, which git does not know about',
     ]);
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('refuses a real file that does not mention the policy, which is what a stale entry is', () => {
     const stale = {
       ...AUTONOMY_POLICY_READERS,
@@ -213,8 +218,9 @@ describe('the citation behind every claimed reader', () => {
     expect(unresolvedReaderCitations(stale, treeFiles(), readSource)).toEqual([
       'probationTasks: no cited file mentions it — apps/server/src/app.ts',
     ]);
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('refuses the table’s own module, because it declares every field', () => {
     const circular = {
       ...AUTONOMY_POLICY_READERS,
@@ -223,7 +229,7 @@ describe('the citation behind every claimed reader', () => {
     expect(unresolvedReaderCitations(circular, treeFiles(), readSource)).toEqual([
       `planApproval: names no repository path outside ${TABLE_MODULE}`,
     ]);
-  });
+  }, 15_000);
 });
 
 /**

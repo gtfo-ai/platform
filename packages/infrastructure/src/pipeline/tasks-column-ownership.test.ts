@@ -321,6 +321,7 @@ const isTracked = (file: string): boolean =>
     .some((line) => line.trim() === file);
 
 describe('`tasks` column ownership (WP-15e)', () => {
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('drops only paths that are genuinely gone, and says which', () => {
     // Dropping a vanished path tolerates a race; silently, it would also tolerate a **tracked**
     // file this census cannot read, which looks exactly like a file with no `update tasks` in it.
@@ -343,8 +344,9 @@ describe('`tasks` column ownership (WP-15e)', () => {
       }
     });
     expect(trackedButMissing).toEqual([]);
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('parses every `update tasks` statement it finds into plain column names', () => {
     // Fail closed: a set clause this guard cannot read is a statement whose columns cannot be
     // attributed, and reporting it as "no columns" would be a silent hole (standing rule 20).
@@ -356,8 +358,9 @@ describe('`tasks` column ownership (WP-15e)', () => {
         );
       }
     }
-  });
+  }, 15_000);
 
+  // WP-249: slowest of 10 green CI runs 393 ms (median 364 ms); 2× it, 15 s floor.
   it('gives every column exactly one writing statement', () => {
     const owners = new Map<string, string[]>();
     for (const [index, statement] of allStatements().entries()) {
@@ -390,8 +393,9 @@ describe('`tasks` column ownership (WP-15e)', () => {
     // `workpad_ref` was in this list on `main` at 5121d73 — written by `save` and by `saveWorkpad`
     // — which is the defect, not a false positive.
     expect(Object.fromEntries(contested)).toEqual({});
-  });
+  }, 15_000);
 
+  // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('writes exactly the columns this change says it writes, per file', () => {
     const byFile = new Map<string, Set<string>>();
     for (const statement of allStatements()) {
@@ -410,5 +414,5 @@ describe('`tasks` column ownership (WP-15e)', () => {
         Object.entries(EXPECTED_OWNERSHIP).map(([file, columns]) => [file, [...columns].sort()]),
       ),
     );
-  });
+  }, 15_000);
 });

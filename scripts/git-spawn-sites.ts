@@ -39,7 +39,7 @@ export const isTestSource = (path: string): boolean => {
 };
 
 /** The index just past the bracket matching the one at `open`, skipping strings and templates. */
-const matchingClose = (source: string, open: number): number => {
+export const matchingClose = (source: string, open: number): number => {
   const closers: string[] = [];
   const pairs: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
   let index = open;
