@@ -17391,7 +17391,7 @@ go's own `-o`/`-cpuprofile` floors are `GO_PATH_WRITING_TEST_FLAGS`/`_BUILD_FLAG
 
 **Depends on** WP-240's merge, which carries the corrected go docblock paragraph this floor amends and 639's measurement.
 
-### 642. **The shared dequote (`unquoteToken`) drops a backslash inside `"…"` before any character, where bash keeps it unless the next character is `$`, a backtick, `"`, `\` or a newline, and `carriesHazard` takes quotes off the `argvWords` reading a second time. So a floor's predicate can read a different string than the program receives. A predicate that only asks whether a backslash-free text is *contained* fails closed. One that splits a value into fields, walks escapes, or stops at a dequoted `--` can fail open** (**Dequote and `--` halves RESOLVED** at `84325606`, WP-242, session 19 — measured major (npm 11.19.0 ran a `--script-shell` after `"\--"`), fixed in the shared dequote; the brace half is WP-243's; was TODO, **minor as measured; the `--` half is a major candidate, unmeasured** — below. **TD-030 tier 1**: quoting is bash's grammar, and WP-198's rule is that the floors read argv *as the shell builds it*. The cause is one function and one double application, so this is one entry with two symptom classes, not one per floor. Found by WP-241's implementer and reviewer, session 19 (`#### WP-241`, *A scanner fact the row did not foresee*, and the review-round-1 comment above its fail-closed floor, on the uncommitted tree `wt-wp241` at `48889218`). WP-241 closes it **for its own go tool-flag floors only**, by failing closed (a `received` reading plus a `receivedUnsure` flag). That row is **in review**, so its final shape is not recorded here. The refiner read `command-policy.ts` on `main` and the WP-241 tree, TD-030 and the bash manual, and ran nothing. **No work package owns it — an architect pass places it.**)
+### 642. **The shared dequote (`unquoteToken`) drops a backslash inside `"…"` before any character, where bash keeps it unless the next character is `$`, a backtick, `"`, `\` or a newline, and `carriesHazard` takes quotes off the `argvWords` reading a second time. So a floor's predicate can read a different string than the program receives. A predicate that only asks whether a backslash-free text is *contained* fails closed. One that splits a value into fields, walks escapes, or stops at a dequoted `--` can fail open** (**RESOLVED** — the brace half at `cdf99495`, WP-243, session 19 (every reader judges the words bash makes); the dequote and `--` halves at `84325606`, WP-242, session 19 — measured major (npm 11.19.0 ran a `--script-shell` after `"\--"`), fixed in the shared dequote; the brace half is WP-243's; was TODO, **minor as measured; the `--` half is a major candidate, unmeasured** — below. **TD-030 tier 1**: quoting is bash's grammar, and WP-198's rule is that the floors read argv *as the shell builds it*. The cause is one function and one double application, so this is one entry with two symptom classes, not one per floor. Found by WP-241's implementer and reviewer, session 19 (`#### WP-241`, *A scanner fact the row did not foresee*, and the review-round-1 comment above its fail-closed floor, on the uncommitted tree `wt-wp241` at `48889218`). WP-241 closes it **for its own go tool-flag floors only**, by failing closed (a `received` reading plus a `receivedUnsure` flag). That row is **in review**, so its final shape is not recorded here. The refiner read `command-policy.ts` on `main` and the WP-241 tree, TD-030 and the bash manual, and ran nothing. **No work package owns it — an architect pass places it.**)
 
 **Evidence.** The dequote, on `main`: `packages/domain/src/policies/command-policy.ts:2724` (`unquoteToken`). Its branch `else if (char === '\\' && quote !== "'")` (`:2736`) drops the backslash and keeps the next character, whatever the quote state. bash, *Double Quotes* (https://www.gnu.org/software/bash/manual/bash.html#Double-Quotes): *"The backslash retains its special meaning only when followed by one of the following characters: '$', '`', '"', '\', or newline."* So `"\--"` is `\--` to the program and `--` to the scanner. `argvWords` (`:3126–3127`) is `argvShellWords(text).map(unquoteToken)`. The divergence was already recorded once, for one site: the `isWriteTarget` docblock (`:5036–5041`, backlog 462) refuses to dequote a redirection target because *"`"/dev/nul\l"` is `/dev/null` to the one and `/dev/nul\l` to the other"*. The double strip: `argvForms` (`:3170–3178`) returns `[tokenise(text), argvWords(text)]`, and `carriesHazard` (`:3966–3985`) hands every `tokens` predicate `words: rest.map(unquoteToken)` and `splitFlags(rest)`, which unquotes each word again (`:3341`). The `argvWords` reading is therefore dequoted twice. `commandWords` (`:8584–8585`) and `commandArgvCandidates` (`:8632–8635`), the git boundary's readers, do the same. WP-241's measurement of the double strip, quoted: *"`go test -ldflags="-w '-s''-cpuprofile=/tmp/x'" ./...` (go splits `-s`, `-cpuprofile=/tmp/x` — two fields) read `-s-cpuprofile=…` and stayed `allow` (measured on the first version of the floor), and an unterminated inner quote was invisible."* WP-241's own residual, at its fail-closed floor: *"every other floor still reads the shared dequote, so the divergence is theirs until it is filed and fixed there."*
 
@@ -21501,7 +21501,7 @@ No migration, and the next free number stays **0092**. No credential.
 |---|---|---|---|---|
 | WP-242 | **Scanner: the shared dequote keeps a double-quoted backslash as bash does, the argv reading is dequoted once, and a `"\--"` no longer ends option reading for any floor** | DONE | `84325606` | Built in `../wt-wp242` over `b8e59c95`, session 19. Backlog **642** (dequote and stop-word halves): (a) measured first in `platform-runtime:wp239` — npm 11.19.0 read `--script-shell` past a `\--` positional (marker present) and logcli 3.7.7 expanded `@f` past it, so 642 stayed major; pnpm is absent from the image. Six cells moved from `allow` (npm, pnpm, `npm run build`, pytest, npm `-c`, logcli); corpus 0; `received` kept. Review APPROVE (one minor fixed: `\$` in the escape set); filed **643** (major) and **644** (minor), rowed below. Notes `#### WP-242`. The review's bash fuzz: 240 separator spellings through real `/bin/bash`, 0 fail-opens; canaries — the backslash branch, the second dequote in `carriesHazard`, `splitFlags`, `commandArgvCandidates` — dead; the escape-set row's canary dead. Orchestrator: `PASS: verify` (15688, then 15689), `PASS: verify:integration` (901), `PASS: verify:e2e` twice (304). `ci` `39385932865` and `image` `39385932917` **completed success**, `release` job skipped. |
 | WP-244 | **Scanner: `$"…"` is read as bash reads it with no catalogue — the `$` goes and the text is double-quoted — so a floor reads the option the program receives** | DONE | `7184f5fb` | Backlog **643** (major: TD-030 tier 1, stock-image program). **First after WP-242**, before the brace half: a live fail-open on `npm test` comes first. Measured by the architect, policy and shell, § "Architect ruling (M17 amendment, session 19)"; no Docker required. TD-030 amended 2026-10-20 (the tier-3 *locale string* is the translation, not the quoting). Built in `../wt-wp244` over `84325606`, session 19. `unquoteToken` drops a `| WP-244 | **Scanner: `$"…"` is read as bash reads it with no catalogue — the `$` goes and the text is double-quoted — so a floor reads the option the program receives** | DONE | `7184f5fb` | Backlog **643** (major: TD-030 tier 1, stock-image program). **First after WP-242**, before the brace half: a live fail-open on `npm test` comes first. Measured by the architect, policy and shell, § "Architect ruling (M17 amendment, session 19)"; no Docker required. TD-030 amended 2026-10-20 (the tier-3 *locale string* is the translation, not the quoting). outside quotes directly before `"`, which opens double quoting; inside quotes the `| WP-244 | **Scanner: `$"…"` is read as bash reads it with no catalogue — the `$` goes and the text is double-quoted — so a floor reads the option the program receives** | DONE | `7184f5fb` | Backlog **643** (major: TD-030 tier 1, stock-image program). **First after WP-242**, before the brace half: a live fail-open on `npm test` comes first. Measured by the architect, policy and shell, § "Architect ruling (M17 amendment, session 19)"; no Docker required. TD-030 amended 2026-10-20 (the tier-3 *locale string* is the translation, not the quoting). stays; `…'` stays uncertain. The measured lines move off `allow` (npm, pnpm, `npm run build`, pytest `-o`: `ask / hazard / hazard`; `npm test $"-c"`: uncertain; go `-cpuprofile`, `git log --output`, logcli `@f`: `ask / auto / deny`); five that already refused now meet the block list or the git boundary on the word bash hands (accepted: toward refusal); nothing moves toward `allow`; corpus 0 cells. Review: one round, **APPROVE** — `$"…"` adjacencies read against bash 5.3.20 and 5.2.37 (`printf` only); a 5,229-word fuzz found 0 readings more permissive than bash's word with the change, 490 on the base; canaries dead but one masked (`| WP-244 | **Scanner: `$"…"` is read as bash reads it with no catalogue — the `$` goes and the text is double-quoted — so a floor reads the option the program receives** | DONE | `7184f5fb` | Backlog **643** (major: TD-030 tier 1, stock-image program). **First after WP-242**, before the brace half: a live fail-open on `npm test` comes first. Measured by the architect, policy and shell, § "Architect ruling (M17 amendment, session 19)"; no Docker required. TD-030 amended 2026-10-20 (the tier-3 *locale string* is the translation, not the quoting). dropped before `'`: `ansiCQuoting` decides first, no fail-open); two minors fixed by the orchestrator (the doc paragraph's `>` prefix; control rows, with `bash $"-c"` and `sed $"…"` pinned at their stricter `ask / uncertain / uncertain`). Orchestrator: `PASS: verify` (15706, then 15711), `PASS: verify:e2e` (304). `ci` `39390759746` and `image` `39390759738` **completed success**, `release` job skipped. |
-| WP-243 | **Scanner: the argv reading expands braces as bash does, so a floor reads the words the program receives** | TODO | — | Backlog **642** (brace half). Serial after WP-244 (was: after WP-242; amended 2026-10-20). |
+| WP-243 | **Scanner: the argv reading expands braces as bash does, so a floor reads the words the program receives** | DONE | `cdf99495` | Backlog **642** (brace half). Serial after WP-244 (was: after WP-242; amended 2026-10-20). Built in `../wt-wp243` over `7184f5fb`, session 19. `expandBraces` (comma lists, integer and same-case letter sequences, nested, bash's order; 88 spellings matched bash 5.2.37) bounded by `BRACE_EXPANSION_CEILING` (256 words, depth, unquoted `{` per word; past it or an unread form → `braceExpansion` uncertain). **Deviation, then generalised:** expansion lives in `argvWords`, not `argvShellWords`; after two review rounds found readers still judging written words (sed's `-e` — measured, `echo x | sed -n -e p {-e,"1e echo EXECUTED"}` printed `EXECUTED` in the run image — then `find . {-ok,sudo} id +` reading `allow` against a blocked twin, `script -c`, `compgen`/`fc`, the ask list), `parseCommand` reads any braced stage a second time as the expanded words and the stricter verdict wins, so every reader sees bash's words; the git boundary splits a fragment as written (the second reading had loosened 27 cells, fixed and pinned). WP-241's go-only `{` mark folded. Corpus 0 cells; sweep of 20,580 cells vs `7184f5fb`: 0 looser, 423 tighter. Review: three rounds — REQUEST_CHANGES, REQUEST_CHANGES, **APPROVE** (nit left: `readsExpandedStages` is a module-level flag restored in `try/finally`). Canaries: expansion off, ceiling off, quoted braces expanded, step ignored, the second reading off, the git split reverted, the flag left flipped — all dead. Orchestrator: `PASS: verify` (15757, 15767, 15780), `PASS: verify:integration` (901), `PASS: verify:e2e` (304, five runs). `ci` `39403396684 (attempt 1 failed: `packages/application/src/pipeline/default-branch-readers.test.ts`'s whole-tree census case timed out at 5101 ms under CI load — 546 ms locally, untouched by the row; the failed job re-run, attempt 2 **success**)` and `image` `39403396662` **completed success**, `release` job skipped. |
 | WP-245 | **Scanner: every reader of the argv reading takes its words as they are, so there is one reading per word** | TODO | — | Backlog **644** (minor, covered). Serial after WP-243; its own row because neither WP-244 nor WP-243 touches the readers it names. |
 
 ## WP notes (decisions, assumptions, reviewer findings)
@@ -57108,3 +57108,179 @@ are the architect's measurement (§ "Architect ruling (M17 amendment, session 19
   `ask / uncertain / uncertain`, stricter than their twins (the written word's reading, unchanged by
   this row). *(nit)* `$$"x"` reads `$x` where bash hands `<pid>x`; neither starts with `-`, no verdict
   moves.
+
+#### WP-243 — the argv reading expands braces as bash does, bounded (backlog 642, brace half)
+
+Implementer, session 19, worktree `wt-wp243` over `7184f5fb`.
+
+- **(1) (a), the shell fact, recorded.** `rtk proxy docker run --rm --network none --user agentic
+  --entrypoint bash platform-runtime:wp239 -c 'printf "%s\n" "$BASH_VERSION"; printf "%s\n"
+  {-cpuprofile,/tmp/c}'` → `5.2.37(1)-release`, `-cpuprofile`, `/tmp/c` (the image's entrypoint is
+  the runlet, so `--entrypoint bash`). Nothing but `printf` ran (two scripts of `printf` lines fed on
+  stdin, 88 spellings, plus one `$(printf …)` and one backtick `printf` inside a word). Docker after:
+  volumes 70, dangling volumes 41, containers 59, each **equal by name** to the lists taken before.
+- **(b) The reading.** `expandBraces` (beside `bracesExpand`) expands one raw word — quotes kept for
+  `unquoteToken` — as bash does: the first unquoted `{` with a close (`braceClose`: bash's
+  `brace_gobbler`, which closes only at a `}` of its level after a `,` or `..` of that level, so
+  `{x},b}` is `x}` `b`), preamble × amble × postscript in bash's order, a comma list's parts
+  and the postscript expanded recursively, `${…}`, `$(…)`, `<(…)`, `>(…)`, quotes, backticks and a
+  backslash skipped as bash skips them (`x$(printf %s {a,b})y` is one word, measured), an unquoted
+  empty word removed (`{a,}` is `a`, `{,}` is nothing, measured). Sequences: integer (`0` or no
+  leading zero, either sign written `-` only) and same-case single letter, an optional increment
+  whose sign is ignored and whose 0 reads as 1 (both measured). **Differential:** 88 spellings run
+  through bash 5.2.37 in the run image against `argvWords`: every spelling the port reads gives
+  bash's words; the differences are the parameter and command expansions (`${HOME}`, `$(…)`, which
+  no dequote reads, as before) and the forms the port refuses.
+  - **Deviation, stated:** the row says `argvShellWords` expands. It does not: its other five readers
+    (`blockEntryBehindExpansion`, `expandsCommandName`, `unknownProgramReasons`,
+    `scriptExecutesReasons`, `unreadableGitWord`) ask whether a **written** word expands
+    (`expandsAsName`), which an expanded word can no longer say — `{sudo,id}` would lose
+    `expandedName`. So `argvWords` (and through it `argvForms`/`blockCandidates`, and
+    `blockCandidates`' `receivedUnsure` alignment) reads `receivedShellWords`: the expansion, or the
+    words as written when the line is uncertain.
+  - **The bound (the implementer's ceiling): `BRACE_EXPANSION_CEILING = 256`** — the same number as
+    WP-206's `BRACE_WORDS_LIMIT` — on the words expansion makes in one text (the largest committed
+    corpus line makes 2), on the levels of nesting or chaining (`{1..1}` × 257), and on the unquoted
+    `{` in one word (each may scan to the word's end: `{` × 20 000 took **17 s** before that bound,
+    16 ms after; a 20 KB word with 256 open braces 135 ms, against 163 ms for the same line on
+    `7184f5fb`, with the expansion memoised per evaluation in `CommandMemo.braces`).
+  - **Uncertain (`UNCERTAINTY.braceExpansion`, beside `unbalancedQuote`)**, checked per segment in
+    `parseCommand` at every level: past the bound; zero-padded (`{01..10}`, `{-01..2}`, bash pads);
+    mixed-case (`{a..Z}`, bash yields punctuation); a `+` sign or `-0` increment (bash reads them;
+    over-ask); a `..` bash leaves as written (`{a..}`, `{1..a}`, `{..}`, `{aa..b}`; over-ask); and a
+    brace opening `{}` (`{},a}` is left as written at a word's start, expanded after a preamble —
+    `-I{},a}` is `-I}` `-Ia`, measured; the port does not read which, over-ask).
+  - The written reading (`tokenise`) is unchanged; both readings are judged, so the union only
+    tightens.
+- **(c)** `receivedMayDiffer`'s unquoted-`{` mark is **removed**; `go test -ldflags={-s,-o=/tmp/x} ./...`
+  keeps `ask / auto / deny`, now by the `-ldflags value: -o` floor on bash's two `-ldflags` words.
+  WP-241's unsplittable-floor list lost that line (comment left there), and a WP-243 row asserts it.
+- **(2) Cells before → after** (`DEFAULT_IMPLEMENTATION_ALLOW`, attended / auto / deny):
+  `go test {-cpuprofile,/tmp/c} ./...` `allow / allow / allow` → `ask / auto / deny` (control `go test
+  -cpuprofile /tmp/c ./...` `ask / auto / deny`); `npm test`, `pnpm test`, `npm run build
+  {--script-shell=/bin/id,x}` and `pytest {-o,addopts=-p}` `allow / allow / allow` → `ask / hazard /
+  hazard`; `git log {--output=/tmp/x,x}` `allow` → `ask / auto / deny`; `logcli query {@f,x}` (with
+  `logcli query *`) `allow` → `ask / auto / deny`; `git push {--force,origin}`, `git push origin
+  {--force,main}` `ask / git / git` → `block / block / block`; `rm {-rf,/tmp/x}`, `rm -{r,f} /tmp/x`,
+  `{sudo,id}`, `{sudo,x} id`, `terraform ap{p,}ly`, `gh rel{e,}ase create v1` `ask / uncertain /
+  uncertain` → `block / block / block`; `git pu{s,}h origin main` `ask / uncertain / uncertain` → `ask
+  / git / git` (bash hands `git push puh origin main`); `echo {1..100000}`, `{01..10}`, `{a..Z}` `ask /
+  auto / deny` → `ask / uncertain / uncertain`. Kept: `cat src/{a,b}.ts` `allow`; `mkdir -p src/{a,b}`
+  and `cp file{,.bak}` `ask / auto / deny` (**the row's "keep allow" is not their committed cell** —
+  `developer-lines.verdicts.json` records `ask: unmatched` for both, and they keep it); `echo {1..3}`
+  reads as `echo 1 2 3` (`ask / auto / deny`, `echo` is on no allow list — the row's `allow` is not
+  its cell); `xargs -I{} echo {}` unchanged; `"{a,b}"`/`'{a,b}'` one word.
+  Rows: `unattended-commands.test.ts`, describe `WP-243, backlog 642 (brace half)` (40 cases), and
+  the `argvWords` reading rows in `command-policy.test.ts` (WP-198 (b)'s table, eleven lines, every
+  word measured in the run image).
+- **Unit cases that moved, each a word bash hands differently than the old reading** (the old argv
+  reading kept the braces; bash expands them): criterion (6)'s `{sudo,x} id`, criterion (3)'s
+  `terraform ap{p,}ly` and `gh rel{e,}ase create v1`, criterion (5)'s `{sudo,id}` — `uncertain` →
+  `block`; criterion (4)'s `git pu{s,}h origin main` — `uncertain` → `git` (both refuse under
+  `auto`/`deny`); each moved into WP-243's describe with its new cell, a comment left at the old site.
+  WP-193's `xargs -I{},a}`, `-I{..}`, `-I{a..}`: cell unchanged, `braceExpansion` added to the
+  reasons (the expectation names it). **No case moved where bash hands the same text; no cell moved
+  toward `allow`.**
+- **Canaries** (in place, `cp` backup, restored, `cmp` identical, each run): expansion off
+  (`receivedShellWords` = `argvShellWords`) — 18 fail, `"go test {-cpuprofile,/tmp/c} ./..." reads
+  ask / auto / deny` by name (and the `-ldflags={-s,-o=…}` row, which shows (c) holds by the
+  expansion); the ceiling off (both budget checks and the per-text budget) — 4 fail,
+  `"echo {1..100000}" is uncertain (braceExpansion)` by name; the `parseCommand` check off — the 12
+  uncertain rows fail.
+- **(3) Corpus diff** (`node scripts/command-corpus.mjs`): `agent-lines.txt: 0 cells changed`,
+  `developer-lines.txt: 0 cells changed`, `PASS: command-corpus`; the three brace lines keep their
+  cells. **A sweep beyond the corpus** (a scratch copy of `packages/domain/src` with `7184f5fb`'s
+  `command-policy.ts`, deleted after): every corpus line plus 16 hazard lines, each word wrapped six
+  ways (`{w,x}`, `{x,w}`, `{w}`, `{w,}`, a split `ab{cd,y}`, two words joined `{w1,w2}`), under three
+  policies: **20 052 cells, 0 looser, 282 tighter.**
+- **(f)** The module docblock's quoting paragraph (rule 2) states the expansion, the ceiling and the
+  residual (expansion now lists no braces); `bracesExpand`'s docblock names `expandBraces` as the
+  reader; `receivedMayDiffer`'s and `receivedUnsure`'s docblocks, the go unsplittable floor's comment,
+  and `04-agent-runtime.md`'s floor paragraph state the reading and the 256 bound.
+- **Sentences falsified (rule 83).** Grepped `brace`, `{`, `receivedMayDiffer`, `642` over `docs`,
+  `CLAUDE.md`, `packages`, `test`. Changed: the docblocks above and `04-agent-runtime.md:484`. Left,
+  still true: `command-policy.ts` on `expandedName`, `isLiteralWord`, `expandsAsName`,
+  `mayBeSeveralWords` and the block-entry reasons (they read the **written** word, which still
+  carries the brace); `05-workspaces-and-security.md:47,57,58` (the same written-word rules);
+  `TD-030:37` (brace expansion listed as tier-1 grammar, which this row implements). Historical and
+  left: `13-implementation-plan.md`'s rows and backlog 642's evidence (the brace paragraph describes
+  the defect as found; its heading is the orchestrator's).
+- **Discovered work.** WP-206's `braceWords` (`command-policy.ts`, `judgedNameIn`) is a second brace
+  expander, quote-blind and not in bash's order (its `{a..c..2}` ignores the step, and its close is
+  the first `}` at depth 0, so `x{},a}` reads differently) — fine for its use (a set of candidate
+  names, over-read) but a second reading of one grammar; it could take `expandBraces` on a word
+  with its quotes on. Not this row's (a reader that moves cells only toward refusal, not touched).
+- **Verify.** `biome check --diagnostic-level=error` on the three touched sources (repo-relative, no
+  `--write` but one `biome format --write` of `command-policy.test.ts`, whose diff holds only this
+  row's lines): clean. `vitest run scripts/citations.test.ts --project unit`: 13 passed. `pnpm run -s
+  verify` at load under 8 with no other vitest: `PASS: verify` (15757 passed, 19 skipped).
+- **Review round 1 (REQUEST_CHANGES), fixed.** *(major, measured by the reviewer)* `scriptExecutesReasons`
+  judged only the written words, so a `-e` made by a brace was unseen: `sed -n -e p {-e,"1e id"}` and
+  `sed -n p {x,-e} "1e id"` read `ask / auto / deny` (the reviewer's `echo x | sed -n -e p {-e,"1e echo
+  EXECUTED"}` printed `EXECUTED` in `platform-runtime:wp239`). It now judges the written words **and**
+  `receivedShellWords` (a union; `scriptExecutesIn` is the old body). Both read `ask / uncertain /
+  uncertain` (`scriptExecutes`), as the control `sed -n -e p -e "1e id"`. awk (`awk {-e,'BEGIN{system("id")}'}`,
+  `gawk {-f,x}`, `awk {x,-f} y`) is the same function and read uncertain already (a non-literal
+  first operand is `null`); rows hold all six. **Canary:** the expanded reading removed from the
+  union — the two sed rows fail by name, the awk rows stay green (as stated); restored, `cmp` equal.
+  **The deviation note, completed:** of `argvShellWords`' readers, `scriptExecutesReasons` now reads
+  both; the other four (`blockEntryBehindExpansion`, `expandsCommandName`, `unknownProgramReasons`,
+  `unreadableGitWord`) fail closed on a brace through `expandsAsName` — control rows: `env {sudo,id}`
+  and `timeout 5 {sudo,id}` `block / block / block`, `myprog {sudo,x} id` `ask / uncertain /
+  uncertain`, `git {-c,core.fsmonitor=id} status` `ask / git / git`. *(minor)* the module docblock
+  and `04-agent-runtime.md` no longer say "every floor": they name the argv reading's readers and the
+  written-word readers that refuse a brace through `expandsAsName`.
+  `pnpm run -s verify`: `PASS: verify` (15767 passed, 19 skipped); citations 13 passed; corpus 0 cells changed.
+- **Review round 2 (REQUEST_CHANGES, the last round), fixed by the general union.** The reviewer
+  measured three more readers judging braced words as written (`wrappedScript`: `find . {-ok,sudo}
+  id +` `allow`, `find . {-exec,git} push {} +` `allow`, `script {-c,"sudo id"}` `ask / auto / deny`;
+  `storesCommand`: `compgen {-C,id} x`, `complete {-C,id} x`, `fc {-e,id}` `ask / auto / deny`; the ask
+  list: `find . {-exec,id} +`, `find . -name x {-delete,-print}` `allow`). **The mechanism:**
+  `parseCommand` reads a stage whose braces expand (`expandedStage`: the expansion within the bound
+  and different from the written words) a second time as those words joined by blanks — each keeps
+  its quotes, so the text re-parses as exactly those words — at `depth + 1` with the stage's own
+  piping, merging fragments, stages, write targets and reasons. Every reader of the module then
+  judges the expanded stage beside the written one, and the evaluator's most-restrictive fold
+  takes the stricter. Redirections are not in the copy; the written stage keeps them. Past
+  `MAX_WRAPPER_DEPTH` the copy is `tooDeep`. Round 1's per-reader union in `scriptExecutesReasons`
+  is **reverted**: the mechanism covers it (its two sed rows fail under the mechanism's canary).
+  - **One structural catch, found by the sweep and fixed before anything else:** the git
+    boundary decides whether a fragment is composite by splitting it, and the copy made every
+    braced stage split in two, so the stage's own words were skipped — `git fetch {origin,x}`,
+    `git fetch or{igin,y}` went `allow / git / git` → `allow / allow / allow`, and `git push
+    {origin,agentic/ABC-1}`, `git push origin {agentic/ABC-1,}` `ask / git / git` → `ask / auto /
+    deny` (27 looser cells of 20 580). The boundary now splits with `splitCommandSegmentsAsWritten`
+    (the parse without the copies; the copies stay in its walk from the line's own split). Four
+    control rows hold those cells; **canary:** the boundary's split back to `splitCommandSegments` —
+    the four rows fail by name; restored, `cmp` equal.
+  - **Rows** (WP-243's describe): the nine spellings — the reviewer's eight and `echo $(find .
+    {-ok,sudo} id +)` — each equal to its control's cell **and** reasons (`block`, `ask / git / git`,
+    `ask / uncertain / uncertain` `handedCommand`, `ask / auto / deny`). One unit case moved, toward
+    refusal: WP-201 criterion (2)'s `{sh,-c} 'sudo id'` and `… x` `ask / uncertain / uncertain` →
+    `block / block / block` (bash runs `sh -c 'sudo id'`, whose script meets `sudo *`), moved into
+    WP-243's block rows. **Canary:** the copy off (`expandedStage` not called) — 13 rows fail by name
+    (the nine, the two sed rows, the two `{sh,-c}` rows); restored, `cmp` equal.
+  - **Corpus:** 0 cells changed in both files. **Sweep** against `7184f5fb`'s `command-policy.ts`
+    and `unattended-commands.ts` (seven more hazard lines: `find -ok/-exec`, `script -c`, `compgen
+    -C`, `fc -e`, `find -delete`, sed `1e`): **20 580 cells, 0 looser, 423 tighter.**
+  - **Performance** (`decideUnattendedCommand`, auto, mean of 10): `echo {1..256}` 10.6 ms (1.5 on
+    `7184f5fb`), `find . {-name,-print} {1..254}` 7.3 ms (0.8), `echo {a,b}×8` (256 words) 13.3 ms
+    (0.6), `sed -n {1..250}p f` 4.1 ms (2.4); a 20 KB word ending in `{a,b}` 235 ms (85) — the
+    second parse of the whole stage.
+  - **Docs:** the module docblock's rule 2 and `04-agent-runtime.md` say the expansion reaches every
+    reader (the argv reading, and the second parse), and name the written-word readers and the
+    boundary's split.
+  `pnpm run -s verify`: `PASS: verify` (15780 passed, 19 skipped); citations 13 passed.
+- **Review round 3 (APPROVE, one nit).** Every round-2 spelling reads exactly as its written-out
+  control (`find . {-ok,sudo} id +`, `find . -exec{,dir} sudo id +`, `script {-c,"sudo id"}`,
+  `sh -c {x,"sudo id"}` and `echo $(find . {-ok,sudo} id +)` two `$(…)` deep → `block`; `compgen`/
+  `complete {-C,id}`, `fc {-e,id}`, `mapfile {-C,id}` → uncertain; both `find` ask-list lines →
+  `ask / auto / deny`). Re-quoting: 27 spellings (`#` leading an expanded word, quoted items, `\"`,
+  an empty `""`, an escaped space, a `*` item) read as or tighter than their controls. Bounded: the
+  worst pathological line 384 ms, 197 MB peak. Canaries: the second reading off — dead (13); the git
+  boundary's split reverted — dead (exactly the 4 rows); the flag left flipped — dead (13). *(nit,
+  left)* `readsExpandedStages` is a module-level flag restored in `try/finally`; the call is
+  synchronous, no cache depends on it and nothing re-enters `parseCommand` from the flipped side; a
+  parameter would be cleaner. Discovered (not filed, minor): WP-206's looser `braceWords` could
+  reuse `expandBraces`. Orchestrator on this tree: `PASS: verify` (15780), `PASS: verify:integration`
+  (901), `PASS: verify:e2e` twice (304).
