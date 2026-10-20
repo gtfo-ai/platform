@@ -306,7 +306,7 @@ planned: `renovate.json` is what keeps the pins current.
   globally — the launcher is handed it by name — and the checks' docblocks say so. The upgrade note
   is in `docs/operator-guide.md` § 5. `scripts/compose-isolation-check.mjs` starts two projects at
   once and asserts each `app` resolves and connects to its own `db`; `image.yml`'s `build` job runs
-  it beside the other two checks, and on the old file it fails by name.
+  it beside the other image checks (four since WP-237 added `restore-check.mjs`), and on the old file it fails by name.
 - **The image checks' shape is shared** (`scripts/compose-check-support.mjs`, backlogs 348 and
   349): a refusal below Node 24, every HTTP call on a ref'd deadline that names the request, the
   stage plus `compose ps --all` and the app's log printed before the teardown, a `beforeExit`

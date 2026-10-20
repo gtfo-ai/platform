@@ -1168,3 +1168,48 @@ describe('every workflow job is bounded (WP-126)', () => {
     expect(findings, 'give the job a timeout-minutes from its measured duration').toEqual([]);
   });
 });
+
+/**
+ * **`image.yml` runs every compose check against the image it has just built** (WP-237, PROGRESS
+ * backlog 636).
+ *
+ * `scripts/restore-check.mjs` ran the operator guide's restore block (WP-228) only when somebody ran
+ * it by hand, and backlog 633 is what an unrun restore costs: it was wrong for as long as nothing ran
+ * it. Each check runs in the `build` job with `--tag ci`, before the `if: always()` teardown, and the
+ * teardown names the restore check's project with the `backup` profile, without which a `down`
+ * leaves its `db-backup` running (measured, WP-237's notes).
+ */
+const COMPOSE_CHECKS = [
+  'web-compose-check.mjs',
+  'compose-stock-check.mjs',
+  'compose-isolation-check.mjs',
+  'restore-check.mjs',
+];
+
+describe('the compose checks image.yml runs (WP-237)', () => {
+  it('runs each against the image just built, before the teardown', () => {
+    const lines = jobOf(read(IMAGE_WORKFLOW), 'build').split('\n');
+    const teardown = lines.findIndex((line) =>
+      line.includes('name: tear down the compose projects'),
+    );
+    expect(teardown, 'no teardown step').toBeGreaterThan(0);
+    expect(lines[teardown + 1]).toMatch(/^\s+if: always\(\)$/);
+    for (const script of COMPOSE_CHECKS) {
+      const at = lines.findIndex(
+        (line) =>
+          !line.trimStart().startsWith('#') && line.includes(`node scripts/${script} --tag ci`),
+      );
+      expect(at, `image.yml's build job does not run ${script} --tag ci`).toBeGreaterThan(0);
+      expect(at, `${script} runs after the teardown`).toBeLessThan(teardown);
+      // A step-level `if:` would quietly skip the check on some events (ruling (b): every event).
+      const step = lines.slice(0, at).findLastIndex((line) => /^\s+- name:/.test(line));
+      expect(
+        lines.slice(step, at).filter((line) => /^\s+if:/.test(line)),
+        `${script}'s step has an if:`,
+      ).toEqual([]);
+    }
+    const loop = lines.slice(teardown).join('\n');
+    expect(loop).toContain('agentic-restore-check-"${suffix}"');
+    expect(loop).toContain('--profile backup down -v --remove-orphans');
+  });
+});

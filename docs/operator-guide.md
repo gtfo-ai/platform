@@ -1037,7 +1037,8 @@ What each line is for:
 `node scripts/restore-check.mjs` runs exactly this block, read from this page between its markers,
 against a dump the pinned `db-backup` image made **and** against one § 5's pre-upgrade line made
 (read from its own markers), and compares every table's row count and the applied migrations with
-each dump (PROGRESS WP-228). The sentence was `stop app launcher` until
+each dump (PROGRESS WP-228); `.github/workflows/image.yml` runs it on every push and pull request
+against the image it has just built (WP-237). The sentence was `stop app launcher` until
 WP-135 (PROGRESS backlog 433), and the block ran `pg_restore` until WP-228 (backlog 633).
 
 ### What is deliberately **not** backed up

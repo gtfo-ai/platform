@@ -1,7 +1,7 @@
 /**
- * What the three image checks share (WP-126): `web-compose-check.mjs`, `compose-stock-check.mjs`
- * and `compose-isolation-check.mjs` each start compose projects from `compose.yml` against images
- * already built, and each must end — by name — however the instance under it behaves.
+ * What the image checks share (WP-126): `web-compose-check.mjs`, `compose-stock-check.mjs`,
+ * `compose-isolation-check.mjs` and `restore-check.mjs` (WP-228) each start compose projects from
+ * `compose.yml` against images already built, and each must end — by name — however the instance under it behaves.
  *
  * The shape is the one the WP-118 follow-up gave the web check after it failed on CI with exit 13
  * and no `FAIL:` line (PROGRESS backlog 349 found the stock check without it):

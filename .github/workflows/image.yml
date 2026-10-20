@@ -208,6 +208,15 @@ jobs:
           node scripts/compose-isolation-check.mjs --tag ci
           --project-suffix ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
 
+      # WP-237 (PROGRESS backlog 636): the operator guide's restore and rollback blocks, run as text
+      # against a dump the pinned `db-backup` image made (WP-228). Until this step nothing ran them,
+      # which is how backlog 633's restore was wrong for as long as it was. It starts nothing it does
+      # not have (`up --no-build`); 24 s locally (WP-237's notes).
+      - name: the guide's restore restores a db-backup dump
+        run: >-
+          node scripts/restore-check.mjs --tag ci
+          --project agentic-restore-check-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+
       # The scripts tear their own projects down in a `finally`; these repeat it unconditionally.
       # Every command below ends `|| true` on purpose: this is cleanup after the verdict, and a
       # teardown that fails must not turn a green build red or hide a red one — it is silent where
@@ -221,14 +230,17 @@ jobs:
           suffix=ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
           for project in agentic-web-check-"${suffix}" agentic-stock-check-"${suffix}" \
             agentic-stock-check-"${suffix}"-lm \
-            agentic-isolation-check-"${suffix}"-a agentic-isolation-check-"${suffix}"-b; do
+            agentic-isolation-check-"${suffix}"-a agentic-isolation-check-"${suffix}"-b \
+            agentic-restore-check-"${suffix}"; do
             # `ctl` and `repo-cache` are named globally in compose.yml, so every check gives them
             # `<project>-ctl`/`<project>-repo-cache` (`composeEnvironment`); the `down` names the
-            # same, or interpolating /dev/null would name the defaults instead.
+            # same, or interpolating /dev/null would name the defaults instead. `--profile backup`
+            # because a `down` without it leaves the restore check's `db-backup` running (measured,
+            # WP-237).
             APP_WORKSPACE_CONTROL_VOLUME="${project}-ctl" \
               APP_WORKSPACE_CACHE_VOLUME="${project}-repo-cache" \
               docker compose -p "${project}" --env-file /dev/null -f compose.yml \
-              down -v --remove-orphans || true
+              --profile backup down -v --remove-orphans || true
             docker volume rm -f "${project}-ctl" "${project}-repo-cache" >/dev/null 2>&1 || true
           done
 

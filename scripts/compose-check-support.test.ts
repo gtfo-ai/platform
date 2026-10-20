@@ -18,7 +18,7 @@ import {
 } from './compose-check-support.mjs';
 
 /**
- * What the three image checks share (WP-126, PROGRESS backlogs 348 and 349). The checks themselves
+ * What the image checks share (WP-126, PROGRESS backlogs 348 and 349). The checks themselves
  * need a daemon and are run by `image.yml`; what is asserted here is every piece of their shape that
  * can fail without one — and, in a real Node process, the two endings a pending wait can have.
  */
