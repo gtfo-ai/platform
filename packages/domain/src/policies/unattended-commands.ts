@@ -893,7 +893,13 @@ export const computesCommandName = (command: string): boolean => {
 /**
  * A word the shell reads as a redirection: `2>&1`, `>out`, `>>log`, `&>/dev/null`, `<in`, and bash
  * 4.1+'s named descriptor `{fd}>out` (WP-245 round 2). Tested on dequoted words, so it also drops a
- * quoted `"2>sub"` the program is handed: an over-ask reading beside `commandArgvsAsWritten`.
+ * quoted `"2>sub"` the program is handed: an over-ask reading beside `commandArgvsAsWritten`. So is
+ * the process substitution it matches (backlog 645): `<(…)`, `>(…)`, `2<(…)` and `{fd}<(…)` are one
+ * argument each (bash manual, *Process Substitution*; `printf '[%s]' 2<(true)` prints
+ * `[2/dev/fd/63]`), which the scanner leaves in the fragment as `/dev/fd/63` and the written reading
+ * keeps. The only one this sees is a quoted `'<(true)'`, dequoted; keeping it here and in
+ * `NUMBERED_REDIRECTION_WORD` together loosened 873 sweep cells (`git '<(true)' push` read `auto`: its
+ * verb became `<(true)`), so the drop stays in both. Either one alone loosens nothing measured.
  */
 const REDIRECTION_WORD = /^(?:\d+|&|\{[A-Za-z_]\w*\})?(?:>>?|<)/;
 
@@ -911,7 +917,9 @@ const DETACHED_REDIRECTION = /^(?:\d+|&|\{[A-Za-z_]\w*\})?[<>&|]+$/;
  * the written reading while the argv reading held the expansion, and ran under `auto` where `git
  * fetch or{igin,y}` is refused (WP-198's property). And with a named descriptor's word kept
  * (`NUMBERED_REDIRECTION_WORD`, review round 3): bash 3.2 runs `git -C {fd}>sub push` as `git -C
- * {fd} push`, whose verb is where the word keeps it.
+ * {fd} push`, whose verb is where the word keeps it. A process substitution is an argument (backlog
+ * 645): the scanner leaves it in the fragment as `/dev/fd/63`, and `commandArgvsAsWritten` keeps one
+ * written in quotes, which these readings drop as an over-ask (`REDIRECTION_WORD`).
  */
 const boundaryArgvs = (candidate: readonly string[]): readonly (readonly string[])[] => {
   const numbered = candidate.filter(

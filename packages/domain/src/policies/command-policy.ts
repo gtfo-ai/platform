@@ -4603,6 +4603,12 @@ interface ScanResult {
    * text from here again, from a fresh state.
    */
   readonly resumeFrom: number | null;
+  /**
+   * Each of `segments` with its process substitutions' words left out, as the scanner read them
+   * before backlog 645: the same text as `segments` unless one was there. `parseCommand` reads it
+   * beside the segment, so keeping the word only tightens.
+   */
+  readonly droppedSegments: readonly string[];
 }
 
 // ── here-documents (WP-153) ──────────────────────────────────────────────────
@@ -5204,7 +5210,8 @@ const DECLARATION_BUILTINS: ReadonlySet<string> = new Set([
 const ELEMENT_ASSIGNMENT = /^(?:[A-Za-z_][A-Za-z0-9_]*)?\[([\s\S]*)\]\+?=/;
 
 /**
- * One stage's words, split as the shell splits them — quotes honoured, substitutions left out — by
+ * One stage's words, split as the shell splits them — quotes honoured, a command substitution left
+ * out and a process substitution read as the `/dev/fd/63` bash hands (backlog 645) — by
  * the scanner itself with blanks as the operators. A redirection word is dropped: it names no
  * variable.
  */
@@ -5498,6 +5505,13 @@ const isWriteTarget = (target: string): boolean =>
   target.length > 0 && !target.startsWith('&') && target !== '/dev/null';
 
 /**
+ * The word a process substitution `<(…)` / `>(…)` leaves in its fragment: the path bash hands the
+ * program (bash manual, *Process Substitution*; `printf '[%s]' <(true)` prints `[/dev/fd/63]` on
+ * bash 3.2.57 and 5.3.20). The number varies; the floors read the word, not the number.
+ */
+const PROCESS_SUBSTITUTION_ARGUMENT = '/dev/fd/63';
+
+/**
  * One quote-aware pass over a command line, splitting on `operators`.
  *
  * Single quotes protect everything; double quotes protect the operators but *not* substitution,
@@ -5539,13 +5553,25 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
   // Where the segment being read starts in `command`: its raw text keeps the substitutions and
   // backticks that `current` leaves out (WP-160, `rawSegments`).
   let segmentStart = 0;
+  // Where `current` holds a process substitution's word (backlog 645), for `droppedSegments`.
+  let substitutionWordsAt: number[] = [];
+  const droppedSegments: string[] = [];
   const push = (end = index): void => {
     const segment = current.trim();
     if (segment.length > 0) {
       segments.push(segment);
       rawSegments.push(command.slice(segmentStart, end).trim());
+      droppedSegments.push(
+        substitutionWordsAt
+          .reduceRight(
+            (text, at) => text.slice(0, at) + text.slice(at + PROCESS_SUBSTITUTION_ARGUMENT.length),
+            current,
+          )
+          .trim(),
+      );
     }
     current = '';
+    substitutionWordsAt = [];
   };
 
   while (index < command.length) {
@@ -5588,6 +5614,14 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       }
       substitutions.push(command.slice(index + 2, close));
       substitutionOffsets.push(index + 2);
+      // A process substitution is an argument: bash hands the program `/dev/fd/N` (and `2<(…)` is
+      // the one word `2/dev/fd/N`), so its word stays where it was written (backlog 645). Inside
+      // double quotes too: bash hands `"<(true)"` as written, the scanner lifts its body there all
+      // the same (an over-read), and either way the word is one word.
+      if (rest[0] !== '$') {
+        substitutionWordsAt.push(current.length);
+        current += PROCESS_SUBSTITUTION_ARGUMENT;
+      }
       index = close + 1;
       continue;
     }
@@ -5836,6 +5870,7 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
     hereDocuments,
     bodyRanges,
     resumeFrom,
+    droppedSegments,
   };
 };
 
@@ -9146,6 +9181,32 @@ const parseCommand = (
         }
       }
     }
+    // Backlog 645: a segment that held a process substitution is read a second time with its word
+    // left out, as it was read before the word was kept. Only an over-ask beside bash's reading
+    // (`git <(true) push origin +x` stays `block`); a union, so it only tightens.
+    const dropped = outer.droppedSegments[segmentIndex] as string;
+    if (dropped !== segment && depth >= MAX_WRAPPER_DEPTH) {
+      uncertainty.add(UNCERTAINTY.tooDeep);
+    } else if (dropped !== segment) {
+      const nested = parseCommand(
+        dropped,
+        depth + 1,
+        readsScripts,
+        replace,
+        piped,
+        operands,
+        overRead,
+      );
+      anyReadsScripts ||= nested.readsScripts;
+      fragments.push(...nested.fragments);
+      rawStages.push(...nested.rawStages);
+      programStages.push(...nested.programStages);
+      writeTargets.push(...nested.writeTargets);
+      substitutes ||= nested.substitutes;
+      for (const reason of nested.uncertainty) {
+        uncertainty.add(reason);
+      }
+    }
   }
 
   // WP-160 (e): after a here-document the walk did not recognise, bash resumes at its own
@@ -9355,7 +9416,8 @@ export const commandArgvCandidates = (fragment: string): readonly (readonly stri
  * beside its own filter over the dequoted words (backlog 488), which dropped `"{fd}>sub"` and
  * `"2>sub"` too: `git -C "{fd}>sub" -c core.fsmonitor=x status` lost `-C`'s value and ran. The
  * written one is read twice, as bash 4.1+ reads a named descriptor (`{fd}>out` is a redirection)
- * and as bash 3.2 does (`{fd}` is an argument, `>out` the redirection).
+ * and as bash 3.2 does (`{fd}` is an argument, `>out` the redirection). A process substitution
+ * is an argument, never a redirection (`WRITTEN_REDIRECTION`, backlog 645).
  */
 export const commandArgvsAsWritten = (fragment: string): readonly (readonly string[])[] =>
   blockCandidates(fragment)
@@ -9375,19 +9437,28 @@ export const commandArgvsAsWritten = (fragment: string): readonly (readonly stri
       ]);
     });
 
-/** A named descriptor written in front of a redirection operator: the `{fd}` of `{fd}>out`. */
-const NAMED_DESCRIPTOR = /^\{[A-Za-z_]\w*\}(?=[<>&])/;
+/**
+ * A named descriptor written in front of a redirection operator: the `{fd}` of `{fd}>out`. Not in
+ * front of a process substitution: `{fd}<(…)` is one argument in bash 3.2 and 5.3 (backlog 645).
+ */
+const NAMED_DESCRIPTOR = /^\{[A-Za-z_]\w*\}(?=[<>&](?!\())/;
 
 /**
  * A word written as a redirection — an unquoted operator, after an optional descriptor: `2>&1`,
- * `>out`, `>>log`, `&>/dev/null`, `<in`, and bash 4.1+'s `{fd}>out`.
+ * `>out`, `>>log`, `&>/dev/null`, `<in`, and bash 4.1+'s `{fd}>out`. Never a process substitution
+ * (backlog 645): `<(…)`, `>(…)`, `2<(…)` and `{fd}<(…)` are one argument each (bash manual,
+ * *Process Substitution*).
  */
-const WRITTEN_REDIRECTION = /^(?:\d+|&|\{[A-Za-z_]\w*\})?(?:>>?|<)/;
+const WRITTEN_REDIRECTION = /^(?:\d+|&|\{[A-Za-z_]\w*\})?(?:>>?|<)(?!\()/;
 
 /** A written redirection with no target in it (`>`, `2>`, `{fd}>`, `&>`): its target is the next word. */
 const DETACHED_WRITTEN_REDIRECTION = /^(?:\d+|&|\{[A-Za-z_]\w*\})?[<>&|]+$/;
 
-/** Written words (quotes on) with each written redirection, and a detached one's target, left out. */
+/**
+ * Written words (quotes on) with each written redirection, and a detached one's target, left out.
+ * A process substitution stays: it is an argument (backlog 645); `< <(…)` is a redirection, so its
+ * target goes with it.
+ */
 const withoutWrittenRedirections = (words: readonly string[]): readonly string[] =>
   words.filter(
     (word, index) =>

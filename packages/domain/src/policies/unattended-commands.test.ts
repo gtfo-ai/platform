@@ -15,6 +15,7 @@ import {
   BRACE_EXPANSION_CEILING,
   carriesHazard,
   commandArgvCandidates,
+  commandArgvsAsWritten,
   commandWords,
   DEFAULT_COMMAND_POLICY,
   DEFAULT_IMPLEMENTATION_ALLOW,
@@ -35,6 +36,7 @@ import {
   optionMayBeBlockEntry,
   type ResolvedCommandPolicy,
   runCommandPolicy,
+  splitCommandSegments,
   UNCERTAINTY,
   unattendedCommandModeOf,
   unknownProgramRunsJudgedName,
@@ -6526,4 +6528,77 @@ describe('WP-245, review round 2: a quoted redirection is the program’s argume
   ])('%j reads ask / git / git in every baseline', (command) => {
     expectCells(command, 'ask / git / git');
   });
+});
+
+/**
+ * WP-246 (backlog 645): a process substitution `<(…)` / `>(…)` is an argument — bash hands the
+ * program `/dev/fd/63`, and `2<(…)` / `{fd}<(…)` are the one word `2/dev/fd/63` / `{fd}/dev/fd/63`
+ * (bash 3.2.57 and 5.3.20, `printf '[%s]'`). The scanner lifted the body and left no word, so `git
+ * --namespace <(true) -c core.fsmonitor=<script> status` read `ask / auto / deny` and the monitor
+ * ran on a scratch repository (git 2.56.0). The scanner now leaves `/dev/fd/63` and reads the
+ * segment a second time without it (the older reading, kept as an over-ask); the three redirection
+ * filters never match a process substitution either.
+ */
+describe('WP-246, backlog 645: a process substitution is the argument bash hands', () => {
+  it.each([
+    'git --namespace <(true) -c core.fsmonitor=/tmp/m status',
+    'git --attr-source <(true) -c core.fsmonitor=/tmp/m status',
+    'git --namespace >(true) -c core.fsmonitor=/tmp/m status',
+    'git -C <(true) -c core.fsmonitor=/tmp/m status',
+    'git --namespace <(true) -c core.sshCommand=/tmp/m fetch origin',
+    'git --namespace 2<(true) -c core.fsmonitor=/tmp/m status',
+    'git --namespace {fd}<(true) -c core.fsmonitor=/tmp/m status',
+    'git > out --namespace <(true) -c core.fsmonitor=/tmp/m status',
+    // The script `sh` is handed, read from the stage as written (`rawSegments`).
+    'sh -c "git --namespace <(true) -c core.fsmonitor=/tmp/m status"',
+  ])('%j reads ask / git / git in every baseline', (command) => {
+    expectCells(command, 'ask / git / git');
+  });
+
+  it.each([
+    // A redirection's target, not an argument.
+    ['git status < <(true)', 'ask / auto / deny'],
+    ['git diff <(true) x', 'ask / auto / deny'],
+    ['diff <(true) <(true)', 'ask / auto / deny'],
+    ['git --namespace "<(true)" -c core.fsmonitor=/tmp/m status', 'ask / git / git'],
+    ["git --namespace '<(true)' -c core.fsmonitor=/tmp/m status", 'ask / git / git'],
+    ['git --namespace=<(true) -c core.fsmonitor=/tmp/m status', 'ask / git / git'],
+    ['git --namespace <(true) push --force', 'block / block / block'],
+    // The older reading, kept: with the word, `+agentic/x` is behind an option value (uncertain).
+    ['git <(true) push origin +agentic/x', 'block / block / block'],
+  ])('control: %j keeps %s', (command, expected) => {
+    expect(cell(command, BASELINES.impl)).toBe(expected);
+  });
+
+  it('the scanner leaves the word bash hands, and the segment without it beside', () => {
+    expect(splitCommandSegments('git --namespace <(true) -c x status')).toEqual([
+      'git --namespace /dev/fd/63 -c x status',
+      'git --namespace  -c x status',
+      'true',
+    ]);
+    expect(splitCommandSegments('git -C 2<(true) status')[0]).toBe('git -C 2/dev/fd/63 status');
+    // Quoted, bash hands `<(true)`; the scanner lifts the body there too and keeps one word.
+    expect(splitCommandSegments('git -C "<(true)" status')[0]).toBe('git -C "/dev/fd/63" status');
+  });
+
+  // The written reading meets a process substitution only in a fragment the scanner did not make;
+  // every reading keeps it (`WRITTEN_REDIRECTION`, and `NAMED_DESCRIPTOR` does not split `{fd}<(`).
+  it.each(['<(true)', '>(true)', '2<(true)', '{fd}<(true)'])(
+    'the written readings keep %j as an argument',
+    (word) => {
+      for (const reading of commandArgvsAsWritten(`git --namespace ${word} -c x status`)) {
+        expect(reading).toContain(word);
+      }
+    },
+  );
+
+  // The dequoted readings still drop a quoted `'<(true)'` (`REDIRECTION_WORD`), an over-ask beside
+  // the written reading: keeping it in both dequoted regexes made git's verb `<(true)` and loosened
+  // 873 sweep cells. These rows pin that combined change only; either regex alone loosens no row.
+  it.each(["git '<(true)' push origin main", "git '2<(true)' push origin main"])(
+    'over-ask: %j reads ask / git / git in every baseline',
+    (command) => {
+      expectCells(command, 'ask / git / git');
+    },
+  );
 });

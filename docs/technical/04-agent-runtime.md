@@ -494,7 +494,13 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   and an integer or single-letter sequence, nested, in bash's order, measured against bash 5.2.37
 >   in the run image; at most 256 words made by expansion (`BRACE_EXPANSION_CEILING`), and past it,
 >   or for a form not read (a zero-padded or mixed-case range, one bash leaves as written), the line
->   is uncertain (`braceExpansion`). What no floor reads is an expansion (`$x`, `${…}`, `$(…)`, a
+>   is uncertain (`braceExpansion`). A process substitution is an argument (WP-246, backlog 645):
+>   bash hands `<(…)` and `>(…)` to the program as `/dev/fd/63`, and `2<(…)`, `{fd}<(…)` as the one
+>   word `2/dev/fd/63`, `{fd}/dev/fd/63`, so every floor reads that word where it was written and
+>   `git --namespace <(true) -c core.fsmonitor=x status` is refused at the git boundary (it ran under
+>   `auto` before: git 2.56.0 ran the monitor, measured on a scratch repository); no redirection
+>   filter takes it for one, and the line is also read with the word left out, the older reading
+>   kept as an over-ask (`git <(true) push origin +x` stays `block`). What no floor reads is an expansion (`$x`, `${…}`, `$(…)`, a
 >   backtick, a glob). What still writes one without an `ask` is the **repository-content route**:
 >   `make *`, `npm run *`, `pytest` running a `conftest.py` or reading a `pytest.ini` it locates from
 >   its arguments (`pytest sub/` reads a `sub/pytest.ini` the agent wrote), a lockfile install's

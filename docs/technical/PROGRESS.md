@@ -17517,7 +17517,7 @@ The reviewer ran 240 separator spellings through real `/bin/bash` in front of si
 
 **Depends on** WP-242's merge. Serial with WP-243 and 643 on `command-policy.ts`. It is natural to bundle it with 643's row, since both touch the shared dequote's callers.
 
-### 645. **The git boundary drops a process substitution `<(…)` / `>(…)` as if it were a redirection, but bash passes it to the program as an argument (a `/dev/fd/N` path). So a git global option that takes a value loses its value, the next word is read as the value instead, and an option behind it is not seen: `git --namespace <(true) -c core.fsmonitor=<script> status` reads `ask / auto / deny`, and the fsmonitor script ran** (TODO, **major**: a **live fail-open on `main`**, pre-existing at `cdf99495`, not caused by WP-243 or WP-245. **TD-030 tier 1**: what is an argument and what is a redirection is bash's grammar, and WP-198's rule is that floors read argv *as the shell builds it*. Same class as WP-245's round-2 blocker: a word bash passes as an argument, dropped by a redirection filter. Found by WP-245's reviewer, review round 3, session 20 (tree `wt-wp245` over `cdf99495`). The refiner read the boundary's filter on `main` and the WP-245 tree, and ran nothing. **No work package owns it.**)
+### 645. **The git boundary drops a process substitution `<(…)` / `>(…)` as if it were a redirection, but bash passes it to the program as an argument (a `/dev/fd/N` path). So a git global option that takes a value loses its value, the next word is read as the value instead, and an option behind it is not seen: `git --namespace <(true) -c core.fsmonitor=<script> status` reads `ask / auto / deny`, and the fsmonitor script ran** (**RESOLVED** at WP-246 pending merge, session 20 — the reader that dropped the word was the scanner, which lifted the body and left nothing; it now leaves `/dev/fd/63`, the word bash hands, and reads the segment again without it as an over-ask; the five measured lines read `ask / git / git` in all three baselines (were `ask / auto / deny`), sweep 0 looser, corpus 0. Was TODO, **major**: a **live fail-open on `main`**, pre-existing at `cdf99495`, not caused by WP-243 or WP-245. **TD-030 tier 1**: what is an argument and what is a redirection is bash's grammar, and WP-198's rule is that floors read argv *as the shell builds it*. Same class as WP-245's round-2 blocker: a word bash passes as an argument, dropped by a redirection filter. Found by WP-245's reviewer, review round 3, session 20 (tree `wt-wp245` over `cdf99495`). The refiner read the boundary's filter on `main` and the WP-245 tree, and ran nothing. Owned by WP-246.)
 
 **Evidence.** Measured by WP-245's reviewer with git 2.56.0 and bash 5.3.20 on a scratch repository:
   - `git --namespace <(true) -c core.fsmonitor=<script> status` reads `ask / auto / deny`, and the fsmonitor script **ran**;
@@ -17547,6 +17547,45 @@ Sites on `main` at `cdf99495`: `REDIRECTION_WORD` in `packages/domain/src/polici
 **What it costs to leave.** A red `ci` on a commit that changed nothing the failing test reads, and a re-run per occurrence, which teaches readers to re-run a red `ci` rather than read it.
 
 **Done when** the census cases' CI durations are recorded and either they share one walk of the tree per worker or they carry an explicit timeout stated against the measured CI figure; no census case reads within 2× of its timeout on CI.
+
+### 650. **The git boundary drops a command substitution `$(…)` / `` `…` `` given as a git global option's value, the way 645 dropped a process substitution. The option loses its value, the next word is read as the value, and an option behind it is not seen: `git -C $(pwd) -c core.fsmonitor=<script> status` reads `ask / auto / deny`, and the fsmonitor script ran** (TODO, **major**: a **live fail-open on `main`**, pre-existing, not caused by WP-246. **TD-030 tier 1**: WP-198's rule is that floors read argv *as the shell builds it*. Same class as 645. Found by WP-246's implementer, session 20, under that row's *Discovered work* in its notes (`#### WP-246`). WP-246's ruling scoped it to `<(…)`/`>(…)`, so its fix does not cover this. The refiner read those notes and ran nothing. **No work package owns it.**)
+
+**Evidence.** Measured by WP-246's implementer on `main` and on the WP-246 tree, git 2.56.0, bash 5.3.20, a scratch repository. Quoted from the notes: *"`git -C $(pwd) -c core.fsmonitor=<script> status`, `git --namespace $(echo x) …` and the backtick form read `ask / auto / deny` on `main` and with this row, and the monitor **ran** for all three on a scratch repository"*.
+
+Which reader drops the word is **not measured**. Hypothesis: the same as 645. In 645 it was the scanner (`scan` in `command-policy.ts`): it lifts a substitution's body into a fragment of its own and leaves nothing in the word's place. The redirection regexes (`REDIRECTION_WORD`, `NUMBERED_REDIRECTION_WORD`, `WRITTEN_REDIRECTION`, `NAMED_DESCRIPTOR`, read by `boundaryArgvs` in `unattended-commands.ts`) were ruled out for 645 by canary, not for this. **Needs measurement** before starting.
+
+**Why 645's fix does not carry.** A process substitution is always one word (`/dev/fd/63`). A command substitution's output is not: unquoted, word splitting makes it zero or more words; quoted (`"$(pwd)"`), it is exactly one word. So it needs its own ruling on what the argv reading is. One candidate: read it both as one word and as zero words and judge the union, which only tightens (the second-reading shape of WP-243 and WP-246's `droppedSegments`). The implementer's alternative: uncertain at the git boundary wherever a substitution stands where a global option's value is read. Which one is a ruling for the architect; the over-ask of each needs a measured count first.
+
+**What it costs to leave.** Same as 645. A run under `auto` can set `core.fsmonitor`, or any `-c` key the boundary refuses, and git runs that program. Live on every project, and `$(pwd)` as a `-C` value is an ordinary spelling for an agent to write.
+
+**Done when**
+  - the three measured lines (`$(pwd)`, `$(echo x)`, backtick) are refused by the git boundary in `auto` and `deny`, pinned in all three baselines;
+  - a quoted `"$(pwd)"` is read as one word, with a reading row;
+  - a sweep puts the substitution forms (`$(…)`, backtick, quoted and unquoted, one-word and empty output) as the value of each git global option that takes a value, and reports **0 looser** against the base;
+  - the readers that drop the word are named by a canary run, not by reading, with a canary per reader;
+  - the corpus diff is recorded.
+
+**Depends on** WP-246's merge (it changes `scan`, `droppedSegments` and `boundaryArgvs`). Serial with it on `command-policy.ts` and `unattended-commands.ts`.
+
+### 651. **The scanner closes a `<(…)` / `$(…)` substitution at a `case` pattern's unmatched `)`. The body is cut short, and a git global option behind the substitution is not seen: `git --namespace <(case x in x) true;; esac) -c core.fsmonitor=x status` reads `ask / auto / deny`** (TODO, **major**: a **live fail-open on `main`**. It was already there at `115b387c` and WP-246 does not change it. **TD-030 tier 1**: floors read argv *as the shell builds it*. Found by WP-246's reviewer in review round 1, session 20. **Separate from 650**: 650 is about how many words a command substitution yields, and this is about where the substitution ends. The refiner ran nothing. **No work package owns it.**)
+
+**Evidence.** From WP-246's reviewer, round 1. The scanner is the substitution matcher in `packages/domain/src/policies/command-policy.ts` that finds the close of `<(…)` / `$(…)`.
+  - `git --namespace <(case x in x) true;; esac) -c core.fsmonitor=x status` reads `ask / auto / deny` on base and on head.
+  - `git --namespace $(case x in x) true;; esac) -c core.fsmonitor=x status` reads the same.
+  - Host bash 5.3.20 accepts the line and hands `/dev/fd/63`. Only `printf` was run, never git, so **the program half is not measured**.
+  - If the pattern is opened with its optional `(`, as in `(x)`, the line is refused. That points at paren matching as the cause.
+
+No file:line was given for the matcher. **Needs a read** to locate it.
+
+**What it costs to leave.** Same as 645 and 650. A run under `auto` or `deny` can put any `-c` key the boundary refuses behind a substitution whose body holds a `case`, and git reads that key. Writing such a body is unusual, which makes it a crafted spelling rather than an accidental one. The boundary is still open.
+
+**Done when**
+  - the scanner closes a substitution the way bash's parser does, so a `case … in` pattern's `)` does not close it. If that cannot be done cleanly, a substitution whose body contains `case` is read as unparsed and refused or asked: fail closed, with the over-ask stated;
+  - both measured lines are refused by the git boundary in `auto` and `deny`, pinned in all three baselines;
+  - the program half is measured on a scratch repository only;
+  - a sweep reports **0 looser** against the base.
+
+**Depends on** WP-246's merge (it changes `scan`). Serial with it and with 650 on `command-policy.ts`.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -57749,3 +57788,102 @@ Implementer, session 20, same worktree. No Docker.
   14.5, over the brief's 12; the full file afterwards started at 11.5.
 - `vitest run packages/domain/src/policies/unattended-commands.test.ts --project unit`: 2738 passed.
   Citations test: 13 passed.
+
+## WP notes — session 20 (M18)
+
+#### WP-246 — a process substitution is the argument bash hands, at the scanner and the git boundary (backlog 645)
+
+Built on `main` at `115b387c` (policy sources identical to `773ab8f4`), session 20. Not committed.
+
+- **(a) Measured first, before any change.** Cells (`evaluateCommand` / `decideUnattendedCommand`
+  `auto` / `deny`) were identical in `DEFAULT_READ_ONLY_ALLOW`, `DEFAULT_VERIFICATION_ALLOW` and
+  `DEFAULT_IMPLEMENTATION_ALLOW`:
+
+  | Line | Before | After |
+  |---|---|---|
+  | `git --namespace <(true) -c core.fsmonitor=/tmp/m status` | `ask / auto / deny` | `ask / git / git` |
+  | `git --attr-source <(true) …` (same tail) | `ask / auto / deny` | `ask / git / git` |
+  | `git --namespace >(true) …` | `ask / auto / deny` | `ask / git / git` |
+  | `git -C <(true) …` | `ask / auto / deny` | `ask / git / git` |
+  | `git --namespace <(true) -c core.sshCommand=/tmp/m fetch origin` | `ask / auto / deny` | `ask / git / git` |
+  | `git --namespace 2<(true) …`, `{fd}<(true) …`, `2>(true) …` | `ask / git / git` | same |
+  | `git status < <(true)`, `git diff <(true) x`, `diff <(true) <(true)` | `ask / auto / deny` | same |
+  | `git --namespace "<(true)" …`, `git --namespace=<(true) …` | `ask / git / git` | same |
+  | `git --namespace <(true) push --force` | `block / block / block` | same |
+
+  Shell, `printf '[%s]'`: bash 5.3.20 hands `>(true)` as `/dev/fd/63`, `2>(true)` as
+  `2/dev/fd/62`, `"<(true)"` as `<(true)`; `/bin/bash` 3.2.57 hands `a<(true)` as `a/dev/fd/63`,
+  `<(true)x` as `/dev/fd/62x`, `2<(true)` as `2/dev/fd/61`, `{fd}<(true)` as `{fd}/dev/fd/60`.
+  An empty `<()` hands **no** word under both; the scanner reads it as `/dev/fd/63` and, beside
+  it, with no word (the dropped reading), so it is read both ways.
+  Program half (`scratchpad/wp246/program.mjs`): a repository made by `initScratchRepository`
+  under the scratchpad, one commit, `core.fsmonitor` a script that only touches a marker under
+  the scratch root; git 2.56.0. The marker was **present** for `--namespace <(true)`,
+  `--attr-source <(true)` (bash 3.2: git exited 128 after the monitor ran), `--namespace >(true)`,
+  `2<(true)`, `{fd}<(true)`, under both bashes. Nothing ran against this checkout.
+  **Which reader dropped the word, by canary:** the `(?!\()` lookahead on `REDIRECTION_WORD`,
+  `NUMBERED_REDIRECTION_WORD` and `WRITTEN_REDIRECTION` in turn, and on all three together — the
+  first line read `ask / auto / deny` **in all four**. The reader the pass did not name is the
+  **scanner** (`scan` in `command-policy.ts`): it lifts a substitution's body into a fragment of
+  its own and left **nothing** in the word's place, so the boundary's fragment was
+  `git --namespace  -c x status` (the whole line is composite and skipped), and `-c` became
+  `--namespace`'s value. The three regexes never see a `<(` the scanner made: why `2<(true)` and
+  `{fd}<(true)` were refused already (the `2`/`{fd}` stays as the value).
+- **The change.** `scan` leaves `PROCESS_SUBSTITUTION_ARGUMENT` (`/dev/fd/63`) where a `<(…)` /
+  `>(…)` stood — `2<(…)` is then `2/dev/fd/63`, bash's one word — inside double quotes too (the
+  body is lifted there as well; bash would hand `<(true)`; either way one word). That alone moved
+  **6,474** sweep cells toward `allow` (`git <(true) push origin +agentic/x` from `block` to
+  `ask / uncertain / uncertain`: with the word, `+agentic/x` sits behind an option value, as for
+  `git --namespace x push --force`). So `ScanResult.droppedSegments` keeps each segment as read
+  before, and `parseCommand` reads it a second time (the brace-expansion shape of WP-243): a union,
+  so it only tightens. `WRITTEN_REDIRECTION` gets the lookahead, and `NAMED_DESCRIPTOR` (a fourth
+  regex in the same reader) no longer splits `{fd}` off `{fd}<(…)`.
+- **Deviation from ruling (b), measured.** The lookahead on `REDIRECTION_WORD` and
+  `NUMBERED_REDIRECTION_WORD` moved **873** sweep cells toward `allow`, every one a single-quoted
+  `'<(true)'` (`git '<(true)' push origin main`: `ask / git / git` → `ask / auto / deny`; kept on
+  the dequoted reading, git's verb became `<(true)`). The ruling's premise — "that only tightens" —
+  is false for these two, and the only `<(` they see is that quoted one, which the written reading
+  keeps anyway. Both are **unchanged**; their docblock states the drop as an over-ask with the
+  count. `boundaryArgvs`' docblock states the rule.
+- **Rows** (`unattended-commands.test.ts`, describe *WP-246, backlog 645*): the five measured lines
+  plus `2<(true)`, `{fd}<(true)`, `git > out --namespace <(true) …` and `sh -c "git --namespace
+  <(true) …"` at `ask / git / git` in every baseline; controls `git status < <(true)`,
+  `git diff <(true) x`, `diff <(true) <(true)` (`ask / auto / deny`), quoted `"…"` / `'…'` and
+  `--namespace=` (`ask / git / git`), `git --namespace <(true) push --force` and `git <(true) push
+  origin +agentic/x` (`block`); a reading row on `splitCommandSegments` (the word, the dropped
+  copy, `2/dev/fd/63`, the quoted case); a reading row per spelling on `commandArgvsAsWritten`;
+  the over-ask pinned by `git '<(true)' push origin main` and `git '2<(true)' push origin main`.
+- **Canaries** (`scratchpad/wp246/canary.py`, each applied alone, `vitest -t 645`, restored),
+  calibrated with a planted throw in the module (suite failed to load, rc 1): no word left → 8 rows
+  fail; no dropped reading → 3 (both `block` controls); the double-quote guard put back → the
+  reading row; `WRITTEN_REDIRECTION` without the lookahead → 4; `NAMED_DESCRIPTOR` without it → 1
+  (`{fd}<(true)`); the lookahead added to `REDIRECTION_WORD` and `NUMBERED_REDIRECTION_WORD`
+  together → the 2 over-ask rows (each alone is covered by the other reading: 0).
+- **(d) Sweep** (`scratchpad/wp246/sweep.mjs`, against the base sources): the 1,047 corpus cells,
+  each corpus line with 12 spellings after its program name, every git line of the corpus and of
+  this test file with each spelling bare and as the value of each `separate` option of
+  `GIT_GLOBAL_OPTIONS` plus `--exec-path`, and the options × spellings × six tails (the three of
+  (d), `push --force`, `branch -D main`, `status`), each with and without `> out` in front; three
+  baselines × attended / `auto` / `deny`: **286,347** common cells, **0 looser**, **14,121
+  tighter**, 7,632 reason only.
+- **(e) Corpus diff:** **0** cells moved (`command-corpus.test.ts` green; 1,047 cells in the sweep).
+- WP-198's property and the policy suites: `vitest run packages/domain/src/policies --project unit`
+  green with the gate seed and `PROPERTY_SEED` 1, 7 and 424242 (4,293 passed each).
+- **(f)** Docblocks: `PROCESS_SUBSTITUTION_ARGUMENT`, the scan branch, `droppedSegments`,
+  `parseCommand`'s second reading, `REDIRECTION_WORD`, `boundaryArgvs`, `WRITTEN_REDIRECTION`,
+  `withoutWrittenRedirections`, `commandArgvsAsWritten`, `NAMED_DESCRIPTOR`, `wordsOf`;
+  `04-agent-runtime.md` (the reading-contract paragraph); 645's heading restated as resolved.
+- **Sentences falsified** (grep for *lift*, *left out*, *process substitution* over the two
+  modules, `04`, `05`, TD-030): `wordsOf`'s "substitutions left out" (corrected). TD-030 and `05`
+  name process substitution only as a construct the scanner reads — still true; TD-030 is not
+  edited (decisions are out of this row's scope).
+- **Discovered work.** **Major, live, same class:** a **command** substitution as a git global
+  option's value is dropped the same way — `git -C $(pwd) -c core.fsmonitor=<script> status`,
+  `git --namespace $(echo x) …` and the backtick form read `ask / auto / deny` on `main` and with
+  this row, and the monitor **ran** for all three on a scratch repository (git 2.56.0, bash
+  5.3.20). Its word count is unknown (zero or more words), so `/dev/fd/63`'s answer does not
+  carry; it wants its own ruling (likely uncertain at the git boundary when a substitution stands
+  where a global option's value is read). Not done here: the ruling scopes 645 to `<(…)`/`>(…)`.
+- **Verify.** `vitest run scripts/citations.test.ts --project unit`: 13 passed. `pnpm run -s
+  verify` (load 2.5, `.claude/autoharness/` set aside in the scratchpad and moved back): `PASS:
+  verify` (15849 passed, 19 skipped).
