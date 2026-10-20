@@ -17548,7 +17548,7 @@ Sites on `main` at `cdf99495`: `REDIRECTION_WORD` in `packages/domain/src/polici
 
 **Done when** the census cases' CI durations are recorded and either they share one walk of the tree per worker or they carry an explicit timeout stated against the measured CI figure; no census case reads within 2× of its timeout on CI.
 
-### 650. **The git boundary drops a command substitution `$(…)` / `` `…` `` given as a git global option's value, the way 645 dropped a process substitution. The option loses its value, the next word is read as the value, and an option behind it is not seen: `git -C $(pwd) -c core.fsmonitor=<script> status` reads `ask / auto / deny`, and the fsmonitor script ran** (TODO, **major**: a **live fail-open on `main`**, pre-existing, not caused by WP-246. **TD-030 tier 1**: WP-198's rule is that floors read argv *as the shell builds it*. Same class as 645. Found by WP-246's implementer, session 20, under that row's *Discovered work* in its notes (`#### WP-246`). WP-246's ruling scoped it to `<(…)`/`>(…)`, so its fix does not cover this. The refiner read those notes and ran nothing. **No work package owns it.**)
+### 650. **The git boundary drops a command substitution `$(…)` / `` `…` `` given as a git global option's value, the way 645 dropped a process substitution. The option loses its value, the next word is read as the value, and an option behind it is not seen: `git -C $(pwd) -c core.fsmonitor=<script> status` reads `ask / auto / deny`, and the fsmonitor script ran** (**RESOLVED** pending merge, WP-250, session 20 — the deciding reader was `unreadableGitWord`, whose docblock excluded a global option's value: a separate value with an unquoted expansion (`$(…)`, a backtick, `$name`, `${…}`) now answers `uncertain` at the git boundary with a reason of its own (`splitGitOptionValue`), and a double-quoted one is read as one word; the ten measured lines (`-C $(pwd)`, `--namespace $(echo x)`, the backtick, `--attr-source`, the `core.sshCommand` tail, `X=; … $X`/`${X} --namespace -c …`, `X='a -c …'`, the two many-word `$(echo "… -c …")`) read `ask / uncertain / uncertain` in all three baselines (were `ask / auto / deny`), corpus 0. Was TODO, **major**: a **live fail-open on `main`**, pre-existing, not caused by WP-246. **TD-030 tier 1**: WP-198's rule is that floors read argv *as the shell builds it*. Same class as 645. Found by WP-246's implementer, session 20, under that row's *Discovered work* in its notes (`#### WP-246`). WP-246's ruling scoped it to `<(…)`/`>(…)`, so its fix does not cover this. The refiner read those notes and ran nothing. **No work package owns it.**)
 
 **Evidence.** Measured by WP-246's implementer on `main` and on the WP-246 tree, git 2.56.0, bash 5.3.20, a scratch repository. Quoted from the notes: *"`git -C $(pwd) -c core.fsmonitor=<script> status`, `git --namespace $(echo x) …` and the backtick form read `ask / auto / deny` on `main` and with this row, and the monitor **ran** for all three on a scratch repository"*.
 
@@ -58019,3 +58019,106 @@ Built on `main` at `115b387c` (policy sources identical to `773ab8f4`), session 
 - **Verify.** `vitest run scripts/citations.test.ts --project unit`: 13 passed. `pnpm run -s
   verify` (load 2.5, `.claude/autoharness/` set aside in the scratchpad and moved back): `PASS:
   verify` (15849 passed, 19 skipped).
+
+#### WP-250 — a git global option's separate value the shell word-splits is uncertain at the boundary (backlog 650)
+
+Built on `main` at `0fc7ef65` (policy sources identical to `5f33f404`), session 20. Not committed.
+
+- **(a) Measured first, before any change.** Cells (`evaluateCommand` / `decideUnattendedCommand`
+  `auto` / `deny`), identical in `DEFAULT_READ_ONLY_ALLOW`, `DEFAULT_VERIFICATION_ALLOW` and
+  `DEFAULT_IMPLEMENTATION_ALLOW`, read from a base tree (`git archive 0fc7ef65`):
+
+  | Line | Before | After |
+  |---|---|---|
+  | `git -C $(pwd) -c core.fsmonitor=/tmp/m status` | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | `git --namespace $(echo x) …`, `` `echo x` ``, `--attr-source $(echo x) …` (fsmonitor tail) | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | `git --namespace $(echo x) -c core.sshCommand=/tmp/m fetch origin` | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | `X=; git --namespace $X --namespace -c core.fsmonitor=/tmp/m status`, and `${X}` | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | `X='a -c core.fsmonitor=/tmp/m'; git --namespace $X status` | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | `git --namespace $(echo "a -c core.fsmonitor=/tmp/m") status`, `git -C $(echo ". -c core.fsmonitor=/tmp/m") status` | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | `--namespace "$(echo x)"`, `` "`echo x`" ``, `"$X"`, `$(echo x)y` (fsmonitor tail) | `ask / git / git` | same |
+  | `git --namespace "$(echo "a -c …")" status`, `git -C "$(pwd)" status`, `git log $(git merge-base HEAD main)..HEAD`, `git diff $(git merge-base origin/main HEAD)` | `ask / auto / deny` | same |
+  | `git --namespace $(echo x) push --force`, `git -C $(pwd) branch -D main` | `block / block / block` | same |
+  | `--upload-pack` tail | `ask / hazard / hazard` | same |
+  | `git --namespace=$X status` | `ask / uncertain / uncertain` (`unreadableGitVerb`) | same, same reason |
+  | `git -C $(pwd) status`, `git -C $dir log` (the over-ask) | `ask / auto / deny` | `ask / uncertain / uncertain` |
+
+  Shell, `printf '[%s]'`, bash 5.3.20 and `/bin/bash` 3.2.57 identical: `a $(echo x y) b` →
+  `[a][x][y][b]`; `a "$(echo x y)" b` → `[a][x y][b]`; `a $(true) b` → `[a][b]`; the backtick as
+  the unquoted form; `X=; a $X b` and `a ${X} b` → `[a][b]`; `X="p -c q"; a $X b` →
+  `[a][p][-c][q][b]`, `"$X"` → `[a][p -c q][b]`; `a $(echo "p -c q")y b` → `[a][p][-c][qy][b]`;
+  `--namespace=$(echo "a -c x") s` → `[--namespace=a][-c][x][s]`; `-C $(echo ". -c
+  core.fsmonitor=/tmp/m") status` → `[-C][.][-c][core.fsmonitor=/tmp/m][status]`.
+  Program half (`scratchpad/wp250/program.mjs`): a repository made by `initScratchRepository`
+  under the scratchpad, one commit, `core.fsmonitor` a script that only touches a marker under the
+  scratch root; git 2.56.0, both bashes. Marker **present** for `-C $(pwd)`, `--namespace $(echo
+  x)`, the backtick, `X=; --namespace $X --namespace -c …` and `--namespace $(echo "a -c …")` (the
+  live fail-open), and for the double-quoted `--namespace "$(echo x)" -c …` (one word; the policy
+  refuses it at the boundary, before and after); absent for `git -C "$(pwd)" status`. Nothing ran
+  against this checkout.
+  **The deciding reader, by canary:** the check added to `unreadableGitWord` alone (no other reader
+  touched) moved all ten 650 lines, and removing it alone (canary C1) put every one back — so it is
+  the reader that decides; no reader the pass did not name was found.
+- **The change.** `unreadableGitWord` (`command-policy.ts`) answers a new reason `splits` for a
+  separate value (`readGitGlobalOptions`' option written whole, not an `=` spelling) whose written
+  form carries an expansion outside single and double quotes (`expandsUnquoted`: a backtick, or `$`
+  before `(`, `{`, `[`, a name or a special parameter; `$'…'` and `$"…"` are quoting). The
+  boundary answers it `uncertain` with `splitGitOptionValue` (`unattended-commands.ts`), checked
+  after every refusal on the line, so `block` and `hazard` keep their cells. `scan` is unchanged.
+- **Rows** (`unattended-commands.test.ts`, describe *WP-250, backlog 650*): the ten measured lines
+  plus `git -c $X status`, `git > out -C $(pwd) -c core.fsmonitor=… status` and `env git -C $(pwd)
+  -c core.fsmonitor=… status` at `ask / uncertain / uncertain` in every baseline, each with the
+  reason naming its word; the controls of ruling (c) in every baseline; `--namespace=$X` with its
+  own reason; the over-ask pinned by `git -C $(pwd) status` and `git -C $dir log`. (`$'x y'` as a
+  control was dropped: the scanner already reads it `ansiCQuoting`.)
+- **Canaries** (`scratchpad/wp250/canary.py`, each alone, `vitest -t 650`, restored, the restore
+  compared byte for byte): planted throw → suite failed to load (rc 1); C1 value check removed →
+  15 fail; C2 the check applied inside double quotes → 2 (the one-word controls `"$(echo "a -c
+  …")"` and `-C "$(pwd)"`); C3 `$(` dropped → 9; C4 the backtick dropped → 1; C5 `$name` dropped →
+  4; C6 `${` dropped → 1; C7 the boundary's `splits` branch removed → 13 (the two over-ask rows
+  read uncertain through the `undeclared` fall-through, the reason rows catch it).
+- **(d) Sweep** (`scratchpad/wp250/sweep.mjs`, WP-246's sweep with the values extended, base tree
+  `git archive 0fc7ef65` against the working tree, the git lines of this test file read once for
+  both): the corpus cells, each corpus line with 22 spellings after its program name (WP-246's 12
+  plus `$(true)`, `$(pwd)`, `$(echo a b)`, `$(echo "a -c core.fsmonitor=x")`, the backtick, `$X`,
+  `${X}`, `"$(pwd)"`, `"$X"`, `x$(true)`), every git line of the corpus and of this test file with
+  each spelling bare and as the value of each `separate` option of `GIT_GLOBAL_OPTIONS` plus
+  `--exec-path`, and the options × spellings × six tails (`-c core.fsmonitor=x status`,
+  `-c core.sshCommand=x fetch origin`, `--upload-pack=x fetch origin`, `push --force`,
+  `branch -D main`, `status`), each with and without `X=; ` and `> out` in front (four prefixes);
+  three baselines × attended / `auto` / `deny`: **1,139,877** cells, **0 looser**, **77,736
+  tighter** (every one `ask / auto / deny` → `ask / uncertain / uncertain`), 0 reason only. No
+  line whose only expansions are double-quoted moved (the 1,248 moved lines holding `"$(pwd)"` or
+  `"$X"` each carry a second, unquoted one, e.g. `-C $dir`). WP-198's property and the policy
+  suites: `vitest run packages/domain/src/policies --project unit` green with the gate seed and
+  `PROPERTY_SEED` 1, 7 and 424242 (4,320 passed, 5 skipped, each).
+- **(e) Corpus diff:** **0** cells moved (`command-corpus.test.ts`, 15 passed; none of the sweep's moved cells is a
+  corpus line).
+- **(f)** Docblocks: `unreadableGitWord` (the value sentence restated, the over-ask), the new
+  `expandsUnquoted` and `splitGitOptionValue`, `GitBoundaryViolation`; `04-agent-runtime.md`
+  (the reading-contract paragraph); 650's heading restated as resolved with the measured cells.
+- **Sentences falsified** (grep for *global option's value*, *value is not one*, `-C $dir`,
+  *separate value*, *unreadableGitWord* over the two modules, `04`, `05`, TD-030):
+  `unreadableGitWord`'s "A global option's value is not one (`-C $dir`…)" (replaced). `05`'s WP-201
+  site (iii) names git's verb or an option word only — still true; TD-030 does not name the
+  reader. Not edited (decisions out of scope).
+- **Discovered work.** An unquoted **glob** as a separate value (`git --namespace * status` with a
+  file named `-c` in the working directory) is also many words to bash and is not covered by this
+  rule (ruling (b) names `$(…)`, backticks, `$name`, `${…}` only); crafted and multi-step (the run
+  must first create such a file), not measured. Filed here for the refiner, not done.
+- **Verify.** `vitest run scripts/citations.test.ts --project unit`: 13 passed. `pnpm run -s
+  verify` (load 2.0; `.claude/autoharness/` and a second untracked directory that appeared during
+  the session, `.claude/skills/test-tier-run-discipline/`, whose `.sidecar.json` failed biome's
+  format, set aside in the scratchpad and moved back; `hooks:check` first failed because the
+  shared `.git/hooks` pointed into `wt-wp249` — reinstalled from this checkout with `pnpm exec
+  lefthook install`, the check's own remedy): `PASS: verify` (15876 passed, 19 skipped).
+- **Review** (session 20, one round, **APPROVE-with-nits**; fixed by the orchestrator). The reviewer's
+  canary c4 — special parameters dropped from `expandsUnquoted`'s `$` lookahead — survived every row
+  while `git --namespace $@ --namespace -c core.fsmonitor=/tmp/m status` read `ask / auto / deny`
+  under it (`$@` and `$*` with no positional parameters are zero words). Two rows added, `$@` and
+  `$*`; c4 re-run by the orchestrator: dead by exactly those two. The other canaries (value check
+  removed, check inside double quotes, `$name`, `$(…)`, backtick, `${…}`, the branch moved before
+  the refusals) were dead; treating `$'…'`/`$"…"` as expansions only tightens. A docblock line now
+  states that `expandsUnquoted` does not read `\'` inside `$'…'` and relies on the scanner reading
+  `$'…'` uncertain. Reviewer's base-against-head hunt: 23 760 cells, 0 looser. Discovered: an
+  unquoted glob as a separate value (`git -C * …`) still reads `auto` — filed.

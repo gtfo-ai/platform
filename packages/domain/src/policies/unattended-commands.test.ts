@@ -53,6 +53,7 @@ import {
   INERT_GIT_CONFIG_KEYS,
   isGuardedGitConfigKey,
   isInertGitConfigKey,
+  splitGitOptionValue,
   UNATTENDED_ALTERNATIVES,
   undeclaredGitOption,
   unreadableGitVerb,
@@ -6599,6 +6600,73 @@ describe('WP-246, backlog 645: a process substitution is the argument bash hands
     'over-ask: %j reads ask / git / git in every baseline',
     (command) => {
       expectCells(command, 'ask / git / git');
+    },
+  );
+});
+
+/**
+ * WP-250 (backlog 650): a git global option's separate value that carries an unquoted expansion is
+ * zero, one or many words to bash (`$(true)`, `$(pwd)`, `$(echo "a -c …")`; 3.2.57 and 5.3.20,
+ * `printf '[%s]'`), so the boundary cannot know which word git reads as the value. `git -C $(pwd)
+ * -c core.fsmonitor=<script> status` read `ask / auto / deny` and the monitor ran on a scratch
+ * repository (git 2.56.0). Such a value is uncertain (`unreadableGitWord`'s `splits`); a
+ * double-quoted one is one word and is read as before.
+ */
+describe('WP-250, backlog 650: a git global option value the shell splits is uncertain', () => {
+  it.each([
+    ['git -C $(pwd) -c core.fsmonitor=/tmp/m status', '$(pwd)'],
+    ['git --namespace $(echo x) -c core.fsmonitor=/tmp/m status', '$(echo x)'],
+    ['git --namespace `echo x` -c core.fsmonitor=/tmp/m status', '`echo x`'],
+    ['git --attr-source $(echo x) -c core.fsmonitor=/tmp/m status', '$(echo x)'],
+    ['git --namespace $(echo x) -c core.sshCommand=/tmp/m fetch origin', '$(echo x)'],
+    ['X=; git --namespace $X --namespace -c core.fsmonitor=/tmp/m status', '$X'],
+    ['X=; git --namespace ${X} --namespace -c core.fsmonitor=/tmp/m status', '${X}'],
+    ["X='a -c core.fsmonitor=/tmp/m'; git --namespace $X status", '$X'],
+    [
+      'git --namespace $(echo "a -c core.fsmonitor=/tmp/m") status',
+      '$(echo "a -c core.fsmonitor=/tmp/m")',
+    ],
+    ['git -C $(echo ". -c core.fsmonitor=/tmp/m") status', '$(echo ". -c core.fsmonitor=/tmp/m")'],
+    ['git -c $X status', '$X'],
+    // A special parameter: `$@` and `$*` with no positional parameters are zero words.
+    ['git --namespace $@ --namespace -c core.fsmonitor=/tmp/m status', '$@'],
+    ['git --namespace $* --namespace -c core.fsmonitor=/tmp/m status', '$*'],
+    ['git > out -C $(pwd) -c core.fsmonitor=/tmp/m status', '$(pwd)'],
+    ['env git -C $(pwd) -c core.fsmonitor=/tmp/m status', '$(pwd)'],
+  ])('%j reads ask / uncertain / uncertain in every baseline', (command, word) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).reason).toContain(splitGitOptionValue(word));
+  });
+
+  it.each([
+    // Every expansion double-quoted: one word, and the option behind it is read.
+    ['git --namespace "$(echo x)" -c core.fsmonitor=/tmp/m status', 'ask / git / git'],
+    ['git --namespace "`echo x`" -c core.fsmonitor=/tmp/m status', 'ask / git / git'],
+    ['X=; git --namespace "$X" -c core.fsmonitor=/tmp/m status', 'ask / git / git'],
+    // Unquoted, but a refusal is read on the line first.
+    ['git --namespace $(echo x)y -c core.fsmonitor=/tmp/m status', 'ask / git / git'],
+    ['git --namespace "$(echo "a -c core.fsmonitor=/tmp/m")" status', 'ask / auto / deny'],
+    ['git -C "$(pwd)" status', 'ask / auto / deny'],
+    // After the verb: an argument, not a global option's value.
+    ['git log $(git merge-base HEAD main)..HEAD', 'ask / auto / deny'],
+    ['git diff $(git merge-base origin/main HEAD)', 'ask / auto / deny'],
+    ['git --namespace $(echo x) push --force', 'block / block / block'],
+    ['git -C $(pwd) branch -D main', 'block / block / block'],
+    ['git --namespace $(echo x) --upload-pack=/tmp/m fetch origin', 'ask / hazard / hazard'],
+  ])('control: %j keeps %s in every baseline', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it('an expanding option word keeps its own reason', () => {
+    expectCells('git --namespace=$X status', 'ask / uncertain / uncertain');
+    expect(auto('git --namespace=$X status').reason).toContain(unreadableGitVerb('--namespace=$X'));
+  });
+
+  // The over-ask, stated at `unreadableGitWord`: quoting the value keeps today's reading.
+  it.each(['git -C $(pwd) status', 'git -C $dir log'])(
+    'over-ask: %j reads ask / uncertain / uncertain in every baseline',
+    (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
     },
   );
 });

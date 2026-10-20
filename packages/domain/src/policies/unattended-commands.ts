@@ -109,7 +109,10 @@ export interface UnattendedCommandDecision {
 
 /**
  * A refusal of the git boundary: the fragment, and what it would have done — or, as `uncertain`, a
- * git configuration key nobody read (WP-200's third band), whose `detail` is `unreadGitConfigKey`.
+ * git configuration key nobody read (WP-200's third band), whose `detail` is `unreadGitConfigKey`,
+ * or a word of git's that nobody can read before it runs (`unreadableGitWord`): an expanding
+ * option or verb (`unreadableGitVerb`), a global option's separate value the shell word-splits
+ * (`splitGitOptionValue`, WP-250), or an undeclared option (`undeclaredGitOption`).
  */
 export interface GitBoundaryViolation {
   readonly kind: 'boundary' | 'uncertain';
@@ -1051,6 +1054,11 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
   if (unreadable?.reason === 'expands') {
     return { kind: 'uncertain', fragment: command, detail: unreadableGitVerb(unreadable.word) };
   }
+  // WP-250 (backlog 650): a global option's separate value the shell splits — after every refusal
+  // above, so `git -C $(pwd) branch -D main` keeps its block.
+  if (unreadable?.reason === 'splits') {
+    return { kind: 'uncertain', fragment: command, detail: splitGitOptionValue(unreadable.word) };
+  }
   if (unread !== null) {
     return { kind: 'uncertain', fragment: unread.fragment, detail: unreadGitConfigKey(unread.key) };
   }
@@ -1064,6 +1072,13 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
 /** WP-201: the reason for {@link unreadableGitWord}'s word, read as "… carries <this>." */
 export const unreadableGitVerb = (word: string): string =>
   `a git subcommand or global option, \`${word}\`, that the shell expands when it runs — write it literally; the platform reads what git does from the words as written and cannot read a word the shell finishes`;
+
+/**
+ * WP-250 (backlog 650): the reason for a git global option's separate value that carries an
+ * unquoted expansion, read as "… carries <this>."
+ */
+export const splitGitOptionValue = (word: string): string =>
+  `a git global option’s value, \`${word}\`, with an unquoted expansion — the shell decides how many words it is (none, one or several), so the platform cannot tell which word git reads as the value or what follows it; quote it (\`"$(…)"\`, \`"$name"\`) to keep it one word`;
 
 /**
  * WP-218: the reason for a word before git's verb that git's declared grammar does not name

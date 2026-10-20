@@ -500,7 +500,12 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   `git --namespace <(true) -c core.fsmonitor=x status` is refused at the git boundary (it ran under
 >   `auto` before: git 2.56.0 ran the monitor, measured on a scratch repository); no redirection
 >   filter takes it for one, and the line is also read with the word left out, the older reading
->   kept as an over-ask (`git <(true) push origin +x` stays `block`). What no floor reads is an expansion (`$x`, `${…}`, `$(…)`, a
+>   kept as an over-ask (`git <(true) push origin +x` stays `block`). A git global option's
+>   **separate** value with an unquoted expansion (`-C $(pwd)`, `--namespace $X`, a backtick,
+>   `${…}`) is uncertain at the git boundary (WP-250, backlog 650): bash hands it as zero, one or
+>   many words, so which word git reads as the value is the shell's (`git -C $(pwd) -c
+>   core.fsmonitor=x status` ran the monitor under `auto` before); a double-quoted value is one word
+>   and is read as written, and `git -C $(pwd) status` reading uncertain is the stated over-ask. What no floor reads is an expansion (`$x`, `${…}`, `$(…)`, a
 >   backtick, a glob). What still writes one without an `ask` is the **repository-content route**:
 >   `make *`, `npm run *`, `pytest` running a `conftest.py` or reading a `pytest.ini` it locates from
 >   its arguments (`pytest sub/` reads a `sub/pytest.ini` the agent wrote), a lockfile install's

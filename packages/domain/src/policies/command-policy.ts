@@ -6129,6 +6129,30 @@ const commandPositions = (argv: readonly ShellWord[]): CommandStarts => {
 const expandsAsName = (word: string): boolean => !isLiteralJudgedWord(word);
 
 /**
+ * WP-250 (backlog 650): whether a word as written carries an expansion bash word-splits — a
+ * backtick body, or a `$` before `(`, `{`, `[`, a name or a special parameter — outside single
+ * and double quotes. Such a word is handed as zero, one or many words; a double-quoted one
+ * (`"$(pwd)"`) is exactly one, and `$'…'` / `$"…"` are quoting, not expansions. A `\'` inside
+ * `$'…'` is not read (`$'a\'b'$(pwd)` answers false): the scanner already reads `$'…'` uncertain.
+ */
+const expandsUnquoted = (raw: string): boolean => {
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index] as string;
+    if (char === '\\') {
+      index += 1;
+    } else if (char === "'") {
+      const close = raw.indexOf("'", index + 1);
+      index = close === -1 ? raw.length : close;
+    } else if (char === '"') {
+      index = doubleQuoteEnd(raw, index) - 1;
+    } else if (char === '`' || (char === '$' && /^[({[\w@*#?$!-]/.test(raw[index + 1] ?? ''))) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/**
  * Whether the unquoted `{` at `open` starts a brace expansion: a `,` or `..` at its own level.
  * This is the detector, read where a written word is judged literal; {@link expandBraces} is the
  * reader the argv reading takes since WP-243, and a word this flags that it cannot expand makes
@@ -9358,8 +9382,17 @@ export const commandWords = (fragment: string): readonly string[] => {
  * substitution kept (`Parsed.rawStages`), wrappers peeled — that says what git does and is not
  * literal: its verb (`git pu$x origin main`, `git "$verb" …`, `git $(echo push) …`) or a global
  * option before it (`git -$x push`). The git boundary decides by that word, so for a word nobody
- * can read it answers uncertain rather than its own verdict (`gitBoundaryViolation`). A global
- * option's value is not one (`-C $dir`; `-c`'s key is the boundary's three bands).
+ * can read it answers uncertain rather than its own verdict (`gitBoundaryViolation`).
+ *
+ * WP-250 (backlog 650): a global option's **separate** value (`-C`, `-c`, `--namespace`, every
+ * `separate` entry of {@link GIT_GLOBAL_OPTIONS}) that carries an expansion outside double quotes
+ * ({@link expandsUnquoted}: `$(…)`, a backtick body, `$name`, `${…}`) is answered as `splits`: bash
+ * hands it as zero, one or many words (`$(true)`, `$(pwd)`, `$(echo "a -c …")`, measured), so which
+ * word git reads as the value, and what follows it, is the shell's to decide —
+ * `git -C $(pwd) -c core.fsmonitor=<script> status` ran the monitor while every other reading took
+ * `-c` for `-C`'s value. A value whose every expansion is double-quoted (`-C "$(pwd)"`, `"$X"`) is
+ * one word and is read as before; one written attached (`--namespace=$X`) is the option word, above.
+ * The over-ask, stated: `git -C $(pwd) status` and `git -C $dir log` read uncertain too.
  *
  * WP-218: so is a literal word before the verb that starts with `-` and git's declared grammar
  * ({@link GIT_GLOBAL_OPTIONS}) does not name — `git --shallow-file=x push …`, `git --super-prefix p/
@@ -9368,7 +9401,7 @@ export const commandWords = (fragment: string): readonly string[] => {
  */
 export const unreadableGitWord = (
   command: string,
-): { readonly word: string; readonly reason: 'expands' | 'undeclared' } | null => {
+): { readonly word: string; readonly reason: 'expands' | 'splits' | 'undeclared' } | null => {
   for (const stage of parseCommand(command).rawStages) {
     const words = argvShellWords(stage);
     for (const start of argvStarts(words).starts) {
@@ -9376,12 +9409,21 @@ export const unreadableGitWord = (
       if (name === undefined || expandsAsName(name) || argv0Name(name) !== 'git') {
         continue;
       }
-      const reading = readGitGlobalOptions(rest.map(unquoteToken));
+      const dequoted = rest.map(unquoteToken);
+      const reading = readGitGlobalOptions(dequoted);
       const stop = reading.undeclared ?? reading.verb;
       const read = [...reading.options.map(({ index }) => index), ...(stop === null ? [] : [stop])];
       const expands = read.map((index) => rest[index] as string).find(expandsAsName);
       if (expands !== undefined) {
         return { word: expands, reason: 'expands' };
+      }
+      // A separate value is the word after an option written whole (an `equals` one is not).
+      const splits = reading.options
+        .filter(({ option, value, index }) => value !== null && dequoted[index] === option)
+        .map(({ index }) => rest[index + 1] as string)
+        .find(expandsUnquoted);
+      if (splits !== undefined) {
+        return { word: splits, reason: 'splits' };
       }
       if (reading.undeclared !== null) {
         return { word: rest[reading.undeclared] as string, reason: 'undeclared' };
