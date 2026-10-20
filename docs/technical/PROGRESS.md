@@ -17391,7 +17391,7 @@ go's own `-o`/`-cpuprofile` floors are `GO_PATH_WRITING_TEST_FLAGS`/`_BUILD_FLAG
 
 **Depends on** WP-240's merge, which carries the corrected go docblock paragraph this floor amends and 639's measurement.
 
-### 642. **The shared dequote (`unquoteToken`) drops a backslash inside `"…"` before any character, where bash keeps it unless the next character is `$`, a backtick, `"`, `\` or a newline, and `carriesHazard` takes quotes off the `argvWords` reading a second time. So a floor's predicate can read a different string than the program receives. A predicate that only asks whether a backslash-free text is *contained* fails closed. One that splits a value into fields, walks escapes, or stops at a dequoted `--` can fail open** (TODO, **minor as measured; the `--` half is a major candidate, unmeasured** — below. **TD-030 tier 1**: quoting is bash's grammar, and WP-198's rule is that the floors read argv *as the shell builds it*. The cause is one function and one double application, so this is one entry with two symptom classes, not one per floor. Found by WP-241's implementer and reviewer, session 19 (`#### WP-241`, *A scanner fact the row did not foresee*, and the review-round-1 comment above its fail-closed floor, on the uncommitted tree `wt-wp241` at `48889218`). WP-241 closes it **for its own go tool-flag floors only**, by failing closed (a `received` reading plus a `receivedUnsure` flag). That row is **in review**, so its final shape is not recorded here. The refiner read `command-policy.ts` on `main` and the WP-241 tree, TD-030 and the bash manual, and ran nothing. **No work package owns it — an architect pass places it.**)
+### 642. **The shared dequote (`unquoteToken`) drops a backslash inside `"…"` before any character, where bash keeps it unless the next character is `$`, a backtick, `"`, `\` or a newline, and `carriesHazard` takes quotes off the `argvWords` reading a second time. So a floor's predicate can read a different string than the program receives. A predicate that only asks whether a backslash-free text is *contained* fails closed. One that splits a value into fields, walks escapes, or stops at a dequoted `--` can fail open** (**Dequote and `--` halves RESOLVED** at `84325606`, WP-242, session 19 — measured major (npm 11.19.0 ran a `--script-shell` after `"\--"`), fixed in the shared dequote; the brace half is WP-243's; was TODO, **minor as measured; the `--` half is a major candidate, unmeasured** — below. **TD-030 tier 1**: quoting is bash's grammar, and WP-198's rule is that the floors read argv *as the shell builds it*. The cause is one function and one double application, so this is one entry with two symptom classes, not one per floor. Found by WP-241's implementer and reviewer, session 19 (`#### WP-241`, *A scanner fact the row did not foresee*, and the review-round-1 comment above its fail-closed floor, on the uncommitted tree `wt-wp241` at `48889218`). WP-241 closes it **for its own go tool-flag floors only**, by failing closed (a `received` reading plus a `receivedUnsure` flag). That row is **in review**, so its final shape is not recorded here. The refiner read `command-policy.ts` on `main` and the WP-241 tree, TD-030 and the bash manual, and ran nothing. **No work package owns it — an architect pass places it.**)
 
 **Evidence.** The dequote, on `main`: `packages/domain/src/policies/command-policy.ts:2724` (`unquoteToken`). Its branch `else if (char === '\\' && quote !== "'")` (`:2736`) drops the backslash and keeps the next character, whatever the quote state. bash, *Double Quotes* (https://www.gnu.org/software/bash/manual/bash.html#Double-Quotes): *"The backslash retains its special meaning only when followed by one of the following characters: '$', '`', '"', '\', or newline."* So `"\--"` is `\--` to the program and `--` to the scanner. `argvWords` (`:3126–3127`) is `argvShellWords(text).map(unquoteToken)`. The divergence was already recorded once, for one site: the `isWriteTarget` docblock (`:5036–5041`, backlog 462) refuses to dequote a redirection target because *"`"/dev/nul\l"` is `/dev/null` to the one and `/dev/nul\l` to the other"*. The double strip: `argvForms` (`:3170–3178`) returns `[tokenise(text), argvWords(text)]`, and `carriesHazard` (`:3966–3985`) hands every `tokens` predicate `words: rest.map(unquoteToken)` and `splitFlags(rest)`, which unquotes each word again (`:3341`). The `argvWords` reading is therefore dequoted twice. `commandWords` (`:8584–8585`) and `commandArgvCandidates` (`:8632–8635`), the git boundary's readers, do the same. WP-241's measurement of the double strip, quoted: *"`go test -ldflags="-w '-s''-cpuprofile=/tmp/x'" ./...` (go splits `-s`, `-cpuprofile=/tmp/x` — two fields) read `-s-cpuprofile=…` and stayed `allow` (measured on the first version of the floor), and an unterminated inner quote was invisible."* WP-241's own residual, at its fail-closed floor: *"every other floor still reads the shared dequote, so the divergence is theirs until it is filed and fixed there."*
 
@@ -17423,7 +17423,7 @@ Excluded: `joinedText`/`joinedNameIn` (`:6672`, `:6766`). They delete every back
   19. the `logcli @<file>` floor's `words.indexOf('--')` (`:2129`).
   20. `runnerOptions` (`:7469`).
 
-`grep "'--'"` finds about ten more `=== '--'` comparisons (`:2928`, `:2984`, `:7276`, `:7379`, `:7431`, `:7582`, `:7685`, `:7760`, …). The refiner has not traced them, and some may already read the word literally. The candidate spellings use two stock-image programs: `docker/runtime.Dockerfile` ships `logcli` (`:48`, `:74–82`) and node's npm, and `npm test *` is on `PROJECT_COMMAND_ALLOW` (`command-policy.ts:759`).
+`grep "'--'"` finds about ten more `=== '--'` comparisons (`:2928`, `:2984`, `:7276`, `:7379`, `:7431`, `:7582`, `:7685`, `:7760`, …). The refiner has not traced them, and some may already read the word literally. The candidate spellings use two stock-image programs: `docker/runtime.Dockerfile` ships `logcli` (`:48`, `:74–82`) and node's npm, and `npm test *` is on `PROJECT_COMMAND_ALLOW` (`command-policy.ts:769` on `main`).
   - `npm test "\--" --script-shell=/bin/id`. nopt stops only at a bare `--`, so npm would read `--script-shell`. This is a `command`-kind floor, refused under `auto`.
   - `logcli query "\--" @f`. kingpin would expand `@f`. This is a `path` kind, so it bites only in the attended and `deny` modes.
 
@@ -17440,6 +17440,80 @@ Either way, the rows pin the measured cells above, `npm test -- --script-shell=/
 **Brace expansion, added by the orchestrator from WP-241's review round 2.** The shared reader does not see bash brace expansion either: `go test {-cpuprofile,/tmp/c} ./...` reads `allow` on the go floors WP-120 added (the reviewer's reading on a copy, not a run), because bash makes two words of one. WP-241 marks an unquoted `{` in its own floors' words only. The same either-or applies: a bash-faithful reader, or each listed site failing closed on an unquoted `{`.
 
 **Depends on** WP-241's merge (its `received` reading is what (a) replaces or (b) generalises), and on the measurement above.
+
+### 643. **bash reads `$"…"` as quoting, and the scanner reads it as an expansion. `$"…"` is locale translation: with no message catalogue, bash drops the `$` and the program gets the quoted text. The shared dequote (`unquoteToken`) keeps the `$`. So `npm test $"--script-shell=/bin/id"` hands npm `--script-shell=/bin/id`, but the `--script-shell` floor reads `$--script-shell=/bin/id`, which is not an option, and the line reads `allow` under `auto`. `$'…'` is already read as uncertain. `$"…"` is not** (TODO, **major**, graded below. **TD-030 tier 1**: quoting is bash's grammar, and WP-198's rule is that floors read argv *as the shell builds it*. Older than WP-242, which neither caused nor closed it. Found by WP-242's reviewer, session 19 (`#### WP-242`, *Review*, on the uncommitted tree `wt-wp242` at `b8e59c95`). The refiner read the reviewer's probe output, `command-policy.ts` on `main` and on the WP-242 tree, TD-030 and the bash manual, and ran nothing. **No work package owns it.** WP-243, the next row on the same reader, covers braces only.)
+
+**Evidence.** The reviewer's policy reading, run on a copy of the tree (`evaluateCommand` / `decideUnattendedCommand` `auto` / `deny`, on `DEFAULT_IMPLEMENTATION_ALLOW`). It is the reviewer's reading, not a run in the image. The cells are the same before and after WP-242:
+  - `npm test $"--script-shell=/bin/id"` reads `allow / allow / allow`.
+  - `npm test $'--script-shell=/bin/id'` reads `ask / uncertain / uncertain`, and so does `npm test $'\--' --script-shell=/bin/id`.
+  - `npm test $"\--" --script-shell=/bin/id` reads `ask / hazard / hazard`. The `$` is kept here too, so `$\--` is not a stop word and the floor sees the option.
+
+bash, *Locale-Specific Translation* (https://www.gnu.org/software/bash/manual/bash.html#Locale-Translation): a double-quoted string preceded by `$` is translated through the current locale. *"If the current locale is `C` or `POSIX`, if there are no translations available, or if the string is not translated, the dollar sign is ignored"*, and the string is then read as double-quoted. It is quoting, not an expansion.
+
+The scanner:
+  - `unquoteToken` (`packages/domain/src/policies/command-policy.ts:2935` on `main`, `:2948` on the WP-242 tree) has no `$"` case, so the `$` is kept as a literal character.
+  - The tokeniser gives `$'` its own state and an `ansiCQuoting` uncertainty (`:5433–5436`, reason at `:216`). It has no `$"` counterpart.
+  - `joinedText` already reads `$"` as bash does: *"`$'`, `$"`, `$(`: the `$` goes, the rest is read on"* (`:6939`). So the module has two readings of one construct, and the floors get the wrong one.
+  - The `$` makes the word non-literal in `literalWord` (`:5793`, its `$` branch). WP-207 deliberately does not make an expansion handed to a *known* program uncertain, so `npm` is judged by its floor, and the floor misreads the word.
+
+The program half is measured. WP-242 ran npm 11.19.0 in `platform-runtime:wp239`, and `npm test --script-shell=<marker>` ran the marker (`#### WP-242`, (1) (a), the table). bash's `$"…"` is the same string, by the manual. Needs measurement: one `bash -c` of the line in the image, to confirm that bash 5.2.37 there has no catalogue for the string. That is a confirmation, not a precondition.
+
+**How the docs hide it.**
+  - WP-242's new quoting paragraph says *"The residual is expansion (`$…`, a backtick, braces, a glob), which no dequote reads"* (`command-policy.ts:29` on the WP-242 tree).
+  - `04-agent-runtime.md:480` on the WP-242 tree says *"What no floor reads is an expansion (`$…`, a backtick, braces, a glob)"*.
+  - Both put `$"…"` under "expansion", but bash's grammar says it is quoting.
+  - The module docblock's *What it still does not read* list (`:155` on `main`) and TD-030's tier-3 list (decision 1) both name *"a locale string"*. technical/05's residual paragraph names *"`$'git'` or a locale string"*. Read in context, all three are about a **name composed at run time**: a catalogue could translate the text into anything. None of them is about the scanner misreading the untranslated text that bash hands on when there is no catalogue.
+
+**The grade: major.** By TD-030 decision 1, this is tier 1. Decision 1's tier-3 rule gives a residual *"the literal read (tier 1's four rules)"*, and the literal read of `$"x"` is `x`, not `$x`. So the defect is in the read tier 3 is promised, not in the translation. By decision 2, the npm spelling meets all three major conditions:
+  - it is literal (no catalogue gives a fixed string);
+  - it is one line;
+  - npm ships in the stock image, and `npm test *` is on `PROJECT_COMMAND_ALLOW` (`command-policy.ts:769` on `main`).
+
+It undoes a `command`-kind floor under `auto`. The control reading (*`npm test` already runs a `test` script the run can write*) is the one 642 recorded, and WP-242 graded 642 major anyway, so the same grade applies here. The reason it might not be major: TD-030's tier-3 list says "a locale string" with no qualifier, and read by its letter that makes this a pinned nit. The refiner reads that text as being about names. If the architect reads it the other way, TD-030's wording is what has to change, either way.
+
+**Other floors the same spelling may undo** (the refiner's reading of the predicates in 642's list, items 1–14, not measured). 642's "fails closed" argument needs the scanner's word to be a *subsequence* of the program's word. A kept `$` is an *added* character, so that argument does not apply. A predicate anchored at the start of a word fails open. A *contains* predicate may still match.
+  - `git -c $"core.fsmonitor=x" status`: the value reads `$core.fsmonitor=x`.
+  - `pytest $"-o" addopts=-p\ x` or `pytest -o $"addopts=-p x"`.
+  - `logcli query $"@f"`: the `@<file>` floor tests a leading `@` (`:2340`/`:2348` on `main`). This is `path` kind, so it bites only in the attended and `deny` modes.
+  - `git $"--upload-pack=x" fetch …`.
+
+Needs measurement: these cells, on a copy of the tree.
+
+**What it costs to leave.** One `$` undoes a stock-image `command` floor under `auto`. It also undoes every start-anchored floor and every option-word test (`isFlagToken`) that reads the shared dequote, because a word written `$"-…"` is never a flag to the scanner.
+
+**Done when** `$"…"` reads as bash reads it with no catalogue: `unquoteToken` drops the `$` before a `"` that is outside quotes. Or, failing closed as `$'…'` does, `$"` raises its own uncertainty in the tokeniser. The architect picks one, and the bash-faithful reading is preferred because `joinedText` already reads it that way. Then:
+  - rows under a describe naming **643**: the npm line, plus at least two other floors from the list above (`git -c` and `pytest -o` or `logcli @`), each moving from `allow`;
+  - `npm test "--script-shell=/bin/id"` keeps today's verdict;
+  - a canary: the `$"` case reverted fails the rows by name;
+  - the corpus diff (`node scripts/command-corpus.mjs`) recorded with its count, as TD-030 decision 4 requires;
+  - the two residual sentences above changed to call `$"…"` quoting;
+  - if the uncertainty form is chosen, TD-030's tier-3 "locale string" says *a name a catalogue may translate*.
+
+**Depends on** WP-242's merge (the dequote it rewrote is the one this changes). Serial with WP-243 on `command-policy.ts`.
+
+### 644. **Some readers still take quotes off the argv reading a second time after WP-242: `argv0Candidates`, `walkCommandStarts`, `tokensMatch` and the block-entry readers. So on that reading, a `"\--"` reads `--` there. No live fail-open was found** (TODO, **minor**: a consistency cleanup that removes a covered divergence. **TD-030 tier 1**, WP-198's "argv as the shell builds it". This is the rest of 642's double-strip cause, which WP-242 closed at its three sites (`carriesHazard`, `commandWords`, `commandArgvCandidates`). Found by WP-242's implementer (`#### WP-242`, *Discovered work*). The reviewer confirmed it covered (*Review*, session 19, tree `wt-wp242` at `b8e59c95`). The refiner ran nothing. **No work package owns it.**)
+
+**Evidence.** Quoted from WP-242's implementer: *"Other readers still re-dequote a `blockCandidates` candidate of the argv reading: `argv0Candidates`' wrapper `--` (`unquoteToken(token) === '--'`) and `walkCommandStarts`' flag test, `tokensMatch` (`splitFlags`, `flagValuePositions`, `getoptValuedLetters`), and the block-entry readers that call `splitFlags(candidate)`/`flagValuePositions(candidate)` (`xargsBlockPrefix`, `blockEntryBehindFlagValue`, …). Outside the row's three sites; the block list's whole-line glob and the written reading cover the cells measured, but a `"\--"` there still reads `--` on the argv reading."*
+
+Sites on the WP-242 tree (they shift at merge):
+  - `argv0Candidates` (`:3515`) and its `--` test (`:3523`);
+  - `walkCommandStarts` (`:3438`), via `isFlagToken(unquoteToken(token))` (`:3470`, `:5896`);
+  - `tokensMatch` (`:3824`);
+  - `splitFlags` (`:3607`) and `flagValuePositions` (`:3855`), called from these readers;
+  - `blockEntryBehindFlagValue` (`:3884`) and `xargsBlockPrefix` (`:4360`);
+  - `RECEIVED_READING` (`:3536`), the marker WP-242 added to tell the argv reading's candidates apart.
+
+The reviewer ran 240 separator spellings through real `/bin/bash` in front of six hazards (`git branch X -D main`, `git reset X --hard`, `npm test X --script-shell`, …) and got **0 fail-opens**. The second dequote here can only make a `\--` read as `--`. The wrapper peeler then over-reads, and the whole-line glob and the written reading catch the line. That is why this is covered rather than live.
+
+**What it costs to leave.** No verdict, today. The scanner holds two contracts for one reading, though: three sites dequote once and these dequote twice. The next floor or block entry written against one of these readers inherits whichever it picks, which is how 642's double strip reached WP-241 as a measured fail-open.
+
+**Done when** each of these readers takes the argv reading's words as they are (WP-242's pattern: `RECEIVED_READING` or `splitFlags`' identity `dequote`) and dequotes only the written reading, so there is one reading per word. Then:
+  - the corpus diff is recorded (expected 0, as WP-242's was);
+  - no cell moves toward `allow`, and any cell that moves is named;
+  - a reading row per reader, in the shape of WP-242's reading row (the written reading masks every cell): on the argv reading, `"\--"` is `\--` for that reader;
+  - a canary per site.
+
+**Depends on** WP-242's merge. Serial with WP-243 and 643 on `command-policy.ts`. It is natural to bundle it with 643's row, since both touch the shared dequote's callers.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -21425,8 +21499,10 @@ No migration, and the next free number stays **0092**. No credential.
 
 | WP | Title | Status | Commit | Notes |
 |---|---|---|---|---|
-| WP-242 | **Scanner: the shared dequote keeps a double-quoted backslash as bash does, the argv reading is dequoted once, and a `"\--"` no longer ends option reading for any floor** | TODO | — | Backlog **642** (dequote and stop-word halves). (a) first: npm, pnpm and logcli past `\--` in the run image, `--network none`. |
-| WP-243 | **Scanner: the argv reading expands braces as bash does, so a floor reads the words the program receives** | TODO | — | Backlog **642** (brace half). Serial after WP-242. |
+| WP-242 | **Scanner: the shared dequote keeps a double-quoted backslash as bash does, the argv reading is dequoted once, and a `"\--"` no longer ends option reading for any floor** | DONE | `84325606` | Built in `../wt-wp242` over `b8e59c95`, session 19. Backlog **642** (dequote and stop-word halves): (a) measured first in `platform-runtime:wp239` — npm 11.19.0 read `--script-shell` past a `\--` positional (marker present) and logcli 3.7.7 expanded `@f` past it, so 642 stayed major; pnpm is absent from the image. Six cells moved from `allow` (npm, pnpm, `npm run build`, pytest, npm `-c`, logcli); corpus 0; `received` kept. Review APPROVE (one minor fixed: `\$` in the escape set); filed **643** (major) and **644** (minor), rowed below. Notes `#### WP-242`. The review's bash fuzz: 240 separator spellings through real `/bin/bash`, 0 fail-opens; canaries — the backslash branch, the second dequote in `carriesHazard`, `splitFlags`, `commandArgvCandidates` — dead; the escape-set row's canary dead. Orchestrator: `PASS: verify` (15688, then 15689), `PASS: verify:integration` (901), `PASS: verify:e2e` twice (304). `ci` `39385932865` and `image` `39385932917` **completed success**, `release` job skipped. |
+| WP-244 | **Scanner: `$"…"` is read as bash reads it with no catalogue — the `$` goes and the text is double-quoted — so a floor reads the option the program receives** | TODO | — | Backlog **643** (major: TD-030 tier 1, stock-image program). **First after WP-242**, before the brace half: a live fail-open on `npm test` comes first. Measured by the architect, policy and shell, § "Architect ruling (M17 amendment, session 19)"; no Docker required. TD-030 amended 2026-10-20 (the tier-3 *locale string* is the translation, not the quoting). |
+| WP-243 | **Scanner: the argv reading expands braces as bash does, so a floor reads the words the program receives** | TODO | — | Backlog **642** (brace half). Serial after WP-244 (was: after WP-242; amended 2026-10-20). |
+| WP-245 | **Scanner: every reader of the argv reading takes its words as they are, so there is one reading per word** | TODO | — | Backlog **644** (minor, covered). Serial after WP-243; its own row because neither WP-244 nor WP-243 touches the readers it names. |
 
 ## WP notes (decisions, assumptions, reviewer findings)
 
@@ -50663,6 +50739,117 @@ scanner's contract (TD-030), not a product one.
 no compose project, no product image built unless `wp239` is gone). Then WP-243, serial. The next
 free migration number is still **0092**, and neither row takes it.
 
+### Architect ruling (M17 amendment, session 19) — the `$` bash drops comes before the braces it expands
+
+Written 2026-10-20 at `84325606` (WP-242 merged; its notes `#### WP-242`). WP-242's review filed
+**643** (major by the refiner's reading, with the TD-030 tier-3 question left to the architect) and
+**644** (minor). This amendment grades 643, decides the tier question, chooses the remedy, places
+both, and reorders M17. Read-only on source; no test tier; the ledger edits of WP-242 kept.
+
+**This pass measured**, policy and shell, because the refiner ran nothing and the entry's grade
+turned on two facts it could not read: what the scanner answers for the other floors, and what bash
+hands a program for `$"…"` in the run image.
+
+*Policy* (`corpusCells` on `DEFAULT_COMMAND_POLICY`, attended / `auto` / `deny`, from a scratch
+script over `packages/domain/src/testing/command-corpus.ts` at `84325606`; the logcli lines through
+`evaluateCommand` and `decideUnattendedCommand` with `logcli query *` added to `allow`):
+
+| Spelling | Cells today | Control |
+|---|---|---|
+| `npm test $"--script-shell=/bin/id"` | **`allow / allow / allow`** | `npm test --script-shell=/bin/id` and `npm test "--script-shell=/bin/id"` → `ask / hazard / hazard` |
+| `pnpm test $"--script-shell=/bin/id"`; `npm run build $"--script-shell=/bin/id"` | `allow / allow / allow` | same floor |
+| `npm test $"\--" --script-shell=/bin/id` | `ask / hazard / hazard` — `$\--` is no stop word, so the floor sees the option | — |
+| `npm test $'--script-shell=/bin/id'` | `uncertain: ansiCQuoting` | — |
+| `pytest $"-o" addopts=-p` | `allow / allow / allow` | `pytest -o addopts=-p` and `pytest -o $"addopts=-p"` → `ask / hazard / hazard` |
+| `npm test $"-c" /bin/id` | `allow / allow / allow` | `npm test -c /bin/id` → `uncertain: npxCall` |
+| `go test $"-cpuprofile" /tmp/c ./...` | `allow / allow / allow` | `go test -cpuprofile /tmp/c ./...` → `ask / auto / deny` |
+| `git log $"--output=/tmp/x"` | `allow / allow / allow` — the `git * --output*` glob is undone too: the kept `$` defeats the dequoted whole line, which 642's `"\--"` did not | `git log --output=/tmp/x` → `ask / auto / deny` |
+| `logcli query $"@f"` (with `logcli query *`) | `allow / allow / allow` | `logcli query @f` → `ask / auto / deny` |
+| `git -c $"core.fsmonitor=x" status` | `uncertain: unreadGitConfigKey($core.fsmonitor)` — closed | `git -c core.fsmonitor=x status` → the git boundary's refusal |
+| `git $"--upload-pack=x" fetch origin` | uncertain (a global option the shell expands) — closed | `hazard: git * --upload-pack*` |
+| `rm $"-rf" /tmp/x` | `uncertain: expansionCompletesBlockEntry(rm -rf /*)` — closed | `block: rm -rf /*` |
+| `$"git" push --force`; `bash $"-c" "id"` | `uncertain: expandedName` — closed | `block: git push --force*`; `ask: unmatched` |
+| `git push $"--force"` | the git boundary refuses `$--force` as a remote — closed | `block` |
+| `git branch $"-D" main` | `ask: unmatched` — a block entry **demoted to `ask`**, not an `allow` | `block: git branch -D *` |
+| `echo $"hi"`; `ls $"-la"`; `sed $"s/a/b/" x` | `ask: unmatched`; `allow`; `uncertain: scriptExecutes` | — |
+
+*Shell*, in the run image (`rtk proxy docker run --rm --network none --user agentic --entrypoint
+bash platform-runtime:wp239`, a probe script mounted read-only; bash 5.2.37, npm 11.19.0, node
+v24.21.0; `LANG`, `LC_ALL`, `TEXTDOMAIN`, `TEXTDOMAINDIR` all unset; `locale -a` is `C`, `C.utf8`,
+`POSIX`; **0** `.mo` files anywhere in the image): `printf '%s' $"--script-shell=/bin/id"` prints
+`--script-shell=/bin/id`; `$"\--"` → `\--`; `$"a\$b"` → `a$b`; `$"-c"` → `-c`; `"$"x` → `$x`;
+`'$"x"'` → `$"x"`; under `LANG=cs_CZ.UTF-8` and under `TEXTDOMAIN=foo TEXTDOMAINDIR=/tmp` the first
+word prints the same. **The program half:** a scratch package whose `test` is `echo ran` and a marker
+script that only creates `/tmp/marker`; `bash -c 'npm --prefix /tmp/pkg test
+$"--script-shell=/tmp/marker.sh"'` → exit 0, **marker present**, stdout `> echo ran` — npm ran the
+marker as its script shell; the `"…"` control the same; `npm test $"-c" /tmp/marker.sh` → marker
+absent, `ran` printed (the `-c` row is a lost uncertainty, not a measured execution). No container of
+this pass left.
+
+**The TD-030 question, decided: 643 is tier 1, and major.** Decision 1's tier-3 list says *a locale
+string* beside `$'…'` under *a name composed at run time*. That item is the **translation** — a
+catalogue the scanner cannot read turning `$"x"` into something else — and the sandbox holds it:
+a catalogue is a `.mo` under a directory bash searches, the image ships none, and the run user
+cannot write where bash looks without a `TEXTDOMAINDIR` bound outside the line, which the docblock
+already lists as a residual (*a name bound outside the line*). It is **not** the quoting: bash's
+*Locale-Specific Translation* is a section of *Quoting*, with no translation *the dollar sign is
+ignored* and the word is double-quoted, and the literal read tier 3 is promised is exactly that
+reading. The scanner gives neither: it keeps the `$`, hands the floor `$--script-shell=…`, which is
+no option, and reads `allow` under `auto`. Decision 2's three conditions hold — literal (no
+catalogue gives a fixed string), one line, `npm test` on `PROJECT_COMMAND_ALLOW` in the stock image
+— and the program half is measured above. **Major**, as 642 was and for the same control (641's:
+`npm test` already runs a script the run writes, so the sandbox holds and the floor's promise is
+what is lost). Read by its letter the tier-3 item would make this a pinned nit, which is the refiner's
+doubt; the letter is what changes. **TD-030 is amended** (2026-10-20, on the decision file): the
+tier-3 item reads *a `$"…"` word a catalogue the run supplies may translate*; `$'…'` stays listed
+with its own reason (its escapes compose a name — `$'\x67it'` — a decoding the scanner refuses as
+`ansiCQuoting`, which `$"…"` has no counterpart of).
+
+**The remedy: bash's reading, not a refusal.** `unquoteToken` drops a `$` outside quotes that
+immediately precedes a `"`, and the `"` opens double quoting; inside `"…"` and `'…'` a `$` stays
+(`"$"x` is `$x`, measured). Not the `$'…'` route (`uncertain`), for three reasons: `$"…"` has no
+escapes to decode, so a refusal guards nothing a reading does not; `joinedText` (`:6961`) already
+reads it bash's way, so the refusal would keep two readings of one construct, which is how 643 came
+to be; and TD-030 decision 3 asks a row to ship the rule, not a mark. The over-ask of the reading
+is nil (no committed corpus line carries `$"`), and the one residual — a catalogue — is stated where
+the docblock states the others. `literalWord` is **not** taught `$"` in the row: a `$"…"` word stays
+non-literal, so a judged word inside one keeps today's refusal (`rm $"-rf" x`, `$"git" …` above), an
+over-ask the corpus does not pay; the floors read the argv reading whatever its literalness
+(WP-207), which is what moves the eight cells.
+
+**644: its own row, last.** The readers it names — `argv0Candidates` (`:3515`), `walkCommandStarts`
+(`:3438`), `tokensMatch` (`:3824`), `flagValuePositions` (`:3855`), `blockEntryBehindFlagValue`
+(`:3884`), `xargsBlockPrefix` (`:4360`) — are touched by neither WP-244 (one branch in
+`unquoteToken`, `:2948`) nor WP-243 (`argvShellWords`, `bracesExpand`, `receivedMayDiffer`), so
+folding it into either would widen a major's diff for a covered divergence, or a brace reading's for
+a dequote one. It is not carried: the cost the entry states — the next reader written against one
+of these inherits whichever contract it picks, which is how 642's double strip reached WP-241 as a
+measured fail-open — is a cost paid at the next floor, and the row is a day's work with WP-242 (c)'s
+pattern already in the module. The refiner's bundling with 643 is declined: 643's row touches the
+dequote's body, not its callers.
+
+**The rows** (plan § "Milestone M17", amended):
+1. **WP-242** — DONE at `84325606`.
+2. **WP-244: Scanner, `$"…"` is read as bash reads it with no catalogue** (643, major). No Docker:
+   this pass's measurement is the evidence. **First on `command-policy.ts` after WP-242** — a live
+   fail-open on a stock-image program before the brace half.
+3. **WP-243: Scanner, the argv reading expands braces as bash does** (642, brace half). Serial after
+   WP-244; its dependency moved from WP-242.
+4. **WP-245: Scanner, every reader of the argv reading takes its words as they are** (644, minor).
+   Serial after WP-243.
+
+**Decisions.** TD-030 amended as above; the M17 ruling's *"None is written or amended"* is
+superseded for that one decision. No `docs/research/` file is written; the measurement is in this
+section, at a pinned image and version. No `[unverified]` claim is introduced.
+
+**Could not decide here, and left to the row:** whether `receivedMayDiffer`'s `$` mark moves any cell
+once the `$` is dropped (WP-244 (b): kept unless shown to); where `git branch $"-D" main` lands after
+the row (recorded, not asserted — the block entry is a whole-line glob over the written line, and the
+dequoted line is what the ask-list sees).
+
+**Next: WP-244** for a free implementer; no daemon needed. Then WP-243, then WP-245, serial. The
+next free migration number is still **0092**, and no row takes it.
+
 ## WP notes — session 14 (M10)
 
 #### WP-162
@@ -56742,3 +56929,108 @@ evidence (`golang@sha256:5502b0e5…`, go1.25.0 linux/arm64), quoted in the tabl
   same gap in go's own WP-120 floors (`go test {-cpuprofile,/tmp/c} ./...` reads `allow`) is the shared
   reader's, added to backlog 642. *(nit)* a glob (`-[t]mpdir`) expands only against a file the run
   wrote (TD-030 tier 3); stated in the docblock, not marked.
+
+#### WP-242 — the shared dequote keeps a double-quoted backslash as bash does, and the argv reading is dequoted once (backlog 642, dequote and stop-word halves)
+
+Implementer, session 19, worktree `wt-wp242` over `b8e59c95`.
+
+- **(1) (a), measured before any change** — one `rtk proxy docker run --rm --network none --user agentic
+  --entrypoint bash platform-runtime:wp239` (npm pin unchanged on `main`: the image's node is the base
+  image's, `docker/runtime.Dockerfile` names no npm version). Versions: node v24.21.0, npm 11.19.0,
+  pnpm **absent** from the run image (so the pnpm row is policy only), logcli 3.7.7, bash 5.2.37. A
+  scratch `/tmp/pkg/package.json` whose `test`/`build` are `echo ran`; `--script-shell` named a
+  marker script `/tmp/marker.sh` that only creates `/tmp/marker` (the row's `/bin/echo` replaced by the
+  marker: its existence is the evidence). Each line through `bash -c`:
+
+  | Line | Exit | Marker | Deciding stdout |
+  |---|---|---|---|
+  | `npm test "\--" --script-shell=<marker>` | 0 | **present** | `> echo ran \--` (nopt read the option past the positional `\--`) |
+  | `npm test -- --script-shell=<marker>` | 0 | absent | `ran --script-shell=/tmp/marker.sh` |
+  | `npm test --script-shell=<marker>` | 0 | present | — |
+  | `npm run build "\--" --script-shell=<marker>` | 0 | **present** | `> echo ran \--` |
+  | `npm test \-- --script-shell=<marker>` | 0 | absent | `ran --script-shell=/tmp/marker.sh` |
+  | `npm test '\--' --script-shell=<marker>` | 0 | present | `> echo ran \--` |
+  | `logcli query "\--" @f` (`f` = `--help`) | 0 | — | `usage: logcli query [<flags>] <query>` (kingpin expanded `@f` past `\--`) |
+  | `logcli query -- @f` | 1 | — | `query=%40f` sent, connection refused (not expanded) |
+
+  **Grade: the fail-open is live; 642 stays major** on the policy half. Docker afterwards: volumes 70,
+  dangling 41, containers 59, each **equal by name** to the lists taken before the run (the session's
+  count when this row started was 70/41, not the brief's 69/40); no container of this row left.
+- **(b) The dequote.** `unquoteToken`'s backslash branch: inside `"…"` the backslash is kept unless the
+  next character is `$`, a backtick, `"`, `\` or a newline (bash *Double Quotes*, cited in the
+  docblock); outside quotes and inside `'…'` unchanged, and a double-quoted `\<newline>` keeps today's
+  reading (the backslash dropped, the newline kept). **Two functions remain**: `literalValue`
+  reads a word `isLiteralWord` admitted (balanced quotes, no expansion; an unbalanced `'` would make
+  its `indexOf` slice wrong) and drops `\<newline>` anywhere; `unquoteToken` reads every word every
+  floor shares, unbalanced included. Stated in the docblock. `isWriteTarget`'s docblock (backlog 462):
+  its reason ("`"/dev/nul\l"` is `/dev/null` to `unquoteToken`") is false now; the refusal is **kept**
+  (nothing needs a quoted bit bucket, over-ask is safe) and the docblock says so.
+- **(c) The double strip.** `carriesHazard` hands the `argvWords` reading's words through as they are
+  (`words` = `rest` on that reading) and `splitFlags` takes the already-dequoted words with an
+  identity `dequote` (a new optional parameter, default `unquoteToken`); `commandWords` dequotes only
+  the written reading; `commandArgvCandidates` passes a `RECEIVED_READING` candidate through. **`received`
+  is kept** as the reading's name: it now equals `words` on the argv reading, but WP-241's two floors
+  must still refuse the written reading (`-ldflags "-s -w"` is two tokens there). `receivedUnsure` is
+  unchanged, **including its double-quoted-backslash mark** — now an over-ask (the dequote reads that
+  backslash as bash does), kept because WP-241's `-buildid \'x` rows assert the unsplittable floor and
+  the row says they stay unchanged. Split clause not triggered: (c) moved no corpus cell and no unit
+  case.
+- **(2) Rows** — `unattended-commands.test.ts`, describe `WP-242, backlog 642: …`, cells on
+  `DEFAULT_IMPLEMENTATION_ALLOW` (before → after): `npm test "\--" --script-shell=/bin/id`,
+  `pnpm test "\--" --script-shell=/bin/id`, `npm run build "\--" --script-shell=/bin/id`, `pytest "\--"
+  -o addopts=-p`: `allow / allow / allow` → `ask / hazard / hazard`; `npm test "\--" -c /bin/id`:
+  `allow` → uncertainty `[npxCall]`, as `npm test -c /bin/id`; `logcli query "\--" @f` with `logcli
+  query *`: `allow / allow / allow` → `ask / auto / deny`. Controls kept: `npm test -- …` and `npm test
+  \-- …` `allow / allow / allow`; `npm test '\--' …` and `npm test "'--'" …` `ask / hazard / hazard`;
+  `git log "\--" --output=/tmp/x` `ask / auto / deny`; `sed "s/a/b\\\/e;s/c/d/" x` `[scriptExecutes]`;
+  WP-241's rows untouched and green. All six moving rows were red before the change (`6 failed | 6
+  passed`). **A reading row** was added because the written reading masks the double strip on every
+  cell (both readings are judged, and the written one dequotes `"\--"` once): a probe `tokens` entry
+  over `carriesHazard` must see no `--` and no `--script-shell` positional for `npm test "\--" …` (and
+  must for `npm test \-- …`), and `commandArgvCandidates`/`commandWords` of `git push "\--" x` hold `\--`
+  and no `--`.
+- **Canaries** (in place, `cp` backup, each restored and `cmp` identical): backslash branch reverted →
+  `6 failed` (npm, pnpm, npm run build, pytest, npm `-c`, logcli rows, by name). Second strip put back
+  in `carriesHazard`'s `words` → **`0 failed` on the cell rows** (the written reading catches every
+  spelling — so the row's predicted "WP-241's literal-quote row fails" does not hold while `received`
+  stays its own field) and `1 failed` with the reading row. `splitFlags`' second strip back → 2 failed
+  (pytest row, reading row). `commandWords` dequoting both readings → 1 failed (reading row).
+  `commandArgvCandidates` dequoting both → 1 failed (reading row).
+- **(3) Corpus diff** (`node scripts/command-corpus.mjs`): `agent-lines.txt: 0 cells changed`,
+  `developer-lines.txt: 0 cells changed`, `PASS: command-corpus` — matching the expected 0 (no committed
+  line has a backslash inside double quotes). Unit tier of `packages/domain/src/policies`: no existing
+  case moved (every case green after the change, 4131 passed, with no existing assertion edited).
+- **(f)** The module docblock's quoting paragraph (rule 2) states the once-and-bash rule and the residual
+  (expansion); WP-241's `received`/`receivedUnsure`/`receivedMayDiffer` docblocks and the comment above
+  its unsplittable floor amended; `commandWords`/`commandArgvCandidates` say "dequoted once";
+  `04-agent-runtime.md`'s floor paragraph states the reading and the npm measurement. **642's items
+  restated as closed, with the measured cells**: 15 (sed) refuted at M17 and held by the control row;
+  17 (`splitFlags`), 18 (`npmOptionWords`), 19 (logcli's `indexOf('--')`) and 20 (`runnerOptions`, the
+  `-c` row) read `\--` now, by the cells above. The entry's heading is left for the orchestrator.
+- **Sentences falsified (rule 83).** Grepped `unquoteToken`, `argvWords`, `received`, `receivedMayDiffer`,
+  `strips quotes`, `642` (plus "off twice", "drops a backslash") over `docs`, `CLAUDE.md`, `packages`,
+  `test`. Changed: the docblocks above and `04-agent-runtime.md`. Left: `13-implementation-plan.md`:1081,
+  :1100 and backlog 642's evidence describe the defect as found (historical); `05-workspaces-and-security.md`:54
+  ("the matcher dequotes each word") and `command-policy.ts:176` (tokenise's orphan quote) still true.
+- **Discovered work.** Other readers still re-dequote a `blockCandidates` candidate of the argv reading:
+  `argv0Candidates`' wrapper `--` (`unquoteToken(token) === '--'`) and `walkCommandStarts`' flag test,
+  `tokensMatch` (`splitFlags`, `flagValuePositions`, `getoptValuedLetters`), and the block-entry readers
+  that call `splitFlags(candidate)`/`flagValuePositions(candidate)` (`xargsBlockPrefix`,
+  `blockEntryBehindFlagValue`, …). Outside the row's three sites; the block list's whole-line glob and the
+  written reading cover the cells measured, but a `"\--"` there still reads `--` on the argv reading.
+- **Verify.** `biome check --diagnostic-level=error` on the two touched sources (repo-relative): clean,
+  no `--write`. `vitest run scripts/citations.test.ts --project unit`: 13 passed. `pnpm run -s verify`
+  at load under 12 with no other vitest: `PASS: verify` (15688 passed, 19 skipped).
+- **Review (APPROVE, one minor fixed by the orchestrator, one major filed, one nit).** The reviewer
+  generated 240 separator spellings from 15 pieces (`"\--"`, `"\-"`, `\-`, `'-'`, `$'-'`, `$"-"`,
+  `"\\"`, `"\$"`, …) in front of six hazards and ran each through real `/bin/bash` for the argument
+  word: wherever bash's word was not `--`, nothing read `allow` — **0 fail-opens**; `grep "\-v" x`,
+  `ls "\--" -la` and `cat "C:\temp\x"` did not move. Corpus 0 cells. Canaries: the backslash branch
+  reverted, the second dequote back in `carriesHazard`, in `splitFlags`, `commandArgvCandidates`
+  dequoting both readings — all dead. *(minor, fixed)* `\$` inside `"…"` kept survived the policy
+  tests: `argvWords` now has a row, ``x "\$" "\`" "\"" "\\" "\a" "\--"`` → ``x $ ` " \ \a \--``
+  (**canary:** `$` dropped from the escape set — the row fails; restored, `cmp` equal). *(major,
+  older than this change)* `npm test $"--script-shell=/bin/id"` reads `allow` before and after —
+  `$"…"` is locale quoting, not an expansion; filed as backlog **643**. The double dequote left in
+  `argv0Candidates`, `walkCommandStarts`, `tokensMatch` and the block readers is covered (no live
+  fail-open found) and filed as **644**. *(nit)* the technical/04 sentence's placement.

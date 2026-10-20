@@ -142,3 +142,26 @@ command and `s///e` flag; awk's `system()`, `cmd | getline`, `print | "cmd"`) or
 orchestrator over a full sed/awk grammar after a safety classifier stopped the first implementer. The over-ask
 is accepted under this decision's grading rule (an awk `|` inside a string next to `print`; `sed "s/x$/y/"`); the
 committed corpus moved no line. The run image's `awk` is mawk 1.3.4 (measured), so gawk's `@load` is latent.
+
+## Amendment 2026-10-20 (backlog 643, architect session 19)
+
+Decision 1's tier-3 list names *a locale string* beside `$'…'` under *a name composed at run time*. That
+item is the **translation**: a `$"…"` word that a message catalogue may turn into other text, which no
+scanner can read and the sandbox holds — a catalogue is a `.mo` file under a directory bash searches, and
+the run image ships none (measured at this amendment, `platform-runtime:wp239`, bash 5.2.37: `find / -name
+'*.mo'` finds 0, `locale -a` lists `C`, `C.utf8` and `POSIX`, and `LANG`, `LC_ALL`, `TEXTDOMAIN` and
+`TEXTDOMAINDIR` are unset). It is **not** the quoting. bash's *Locale-Specific Translation* is a section of
+*Quoting* (https://www.gnu.org/software/bash/manual/bash.html#Locale-Translation): with no translation
+*"the dollar sign is ignored"* and the word is read as double-quoted, so `$"--script-shell=/bin/id"` is
+`--script-shell=/bin/id` to the program — in the image under `LANG=cs_CZ.UTF-8` and under
+`TEXTDOMAIN=foo TEXTDOMAINDIR=/tmp` alike. That reading is **tier 1** (quoting is the shell's grammar), and
+it is the literal read tier 3 is promised. A scanner that keeps the `$` gives neither: it hands a floor
+`$--script-shell=…`, which is no option, and `npm test $"--script-shell=/bin/id"` read `allow` under
+`auto` on a stock-image program — backlog 643, **major** by decision 2 (literal, one line, npm ships in
+the image), as 642 was. The tier-3 item now reads *a `$"…"` word a catalogue the run supplies may
+translate*; `$'…'` stays on the list with its own reason — its escapes compose a name (`$'\x67it'`), a
+decoding the scanner refuses as `ansiCQuoting`, which `$"…"` has no counterpart of. The reading that closes
+643 (WP-244) drops the `$` as bash does rather than refusing the word: the construct has no escapes to
+decode, the module already reads it that way in `joinedText`, and a refusal would ship a mark where
+decision 3 asks for the rule while leaving two readings of one construct. Decision 1's text is unchanged
+above; this amendment is the wording.
