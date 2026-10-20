@@ -20,7 +20,7 @@
 
 > **Note from the product owner — 2026-10-08, HIGH PRIORITY.** Backlog **535** (tracker statuses: the pick-up status, in progress, review, a human QA phase, loaded statuses and the mapping), **536** (an agent claims the ticket so no second instance works it) and **537** (code-review findings, answers and replies live on the merge request, and every agent reads them) go ahead of every other open entry when the next milestone is planned. The Autix + Jira example (AUT-6327, autix!2715) is recorded in 535 and 537.
 
-**Session 19 — 2026-10-20.** `main` opened at **`a2c1699d`** (WP-230's code commit, pushed by session 18, whose context ended before its ledger row); the tree carried WP-230's uncommitted notes and the person's untracked `.serena/`, and the worktree `../wt-wp233` held WP-233's finished, unreviewed build (its notes report `PASS: verify`). No notes from the person starting the session. `RELEASE_VERSIONING` unset. Session 18's last docs commit `d4bcadf2` read `ci` `39332969103` and `image` `39332969066` **completed success**; `a2c1699d` read `ci` `39336173738` and `image` `39336174397` **completed success**, `release` job skipped. **WP-230 is DONE at `a2c1699d`** — 630 closed. **WP-233 is DONE at `65eab400`** (`ci` `39344832118`, `image` `39344832034` **completed success**) — 628 and 629 closed; **637** (minor, test-only) and **638** (nit) filed, unowned. **WP-231 is DONE at `69fc933d`** (`ci` `39346292341`, `image` `39346292121` **completed success**) — 626's logcli half closed; the orchestrator ruled the floor `path`-kind (plan row amended). **WP-234 is DONE at `0b66dbef`** (`ci` `39349872053`, `image` `39349872246` **completed success**) — 627 and 638 closed; two review rounds (round 1 found the merged-sample stop failed open on GitLab's millisecond gap between `updated_at` and `merged_at`; plan ruling (c) amended). **WP-232 is DONE at `87d498d1`** (`ci` `39352696044`, `image` `39352696067` **completed success**) — 626 closed; go's half split off on a reading as **639** (minor, latent, unowned). **WP-235 is DONE at `e7d6a313`** (`ci` `39356513165`, `image` `39356513003` **completed success**) — 631 closed; its build filed **640** (minor: `db`'s own anonymous volume, no data at risk). **Every M14 row is DONE.** **The architect's M15 pass** (§ "Architect ruling (M15, session 19)", plan § "Milestone M15") wrote four rows — **WP-236** (637, parallel-safe), **WP-237** (636, Docker alone), **WP-238** (640, Docker alone, after WP-237; `tmpfs` over `db`'s declared parent, data untouched), **WP-239** (634, 635, Docker alone, after WP-238); 5 owned, 34 carried (639 joins them), 1 declined (440); no migration (0092 next); no row touches `command-policy.ts`. Next: WP-236, then WP-237 → WP-238 → WP-239. **Machine note:** on this machine a plain `docker run` is rewritten by the `rtk` shell wrapper and reports a local image missing — use `rtk proxy docker run`; and in zsh a `$ids` list does not word-split in a `for` loop (use `${(s:,:)ids}`). Next after them: WP-232 (serial after WP-231), WP-234, WP-235 (Docker alone). Next free migration **0092**.
+**Session 19 — 2026-10-20.** `main` opened at **`a2c1699d`** (WP-230's code commit, pushed by session 18, whose context ended before its ledger row); the tree carried WP-230's uncommitted notes and the person's untracked `.serena/`, and the worktree `../wt-wp233` held WP-233's finished, unreviewed build (its notes report `PASS: verify`). No notes from the person starting the session. `RELEASE_VERSIONING` unset. Session 18's last docs commit `d4bcadf2` read `ci` `39332969103` and `image` `39332969066` **completed success**; `a2c1699d` read `ci` `39336173738` and `image` `39336174397` **completed success**, `release` job skipped. **WP-230 is DONE at `a2c1699d`** — 630 closed. **WP-233 is DONE at `65eab400`** (`ci` `39344832118`, `image` `39344832034` **completed success**) — 628 and 629 closed; **637** (minor, test-only) and **638** (nit) filed, unowned. **WP-231 is DONE at `69fc933d`** (`ci` `39346292341`, `image` `39346292121` **completed success**) — 626's logcli half closed; the orchestrator ruled the floor `path`-kind (plan row amended). **WP-234 is DONE at `0b66dbef`** (`ci` `39349872053`, `image` `39349872246` **completed success**) — 627 and 638 closed; two review rounds (round 1 found the merged-sample stop failed open on GitLab's millisecond gap between `updated_at` and `merged_at`; plan ruling (c) amended). **WP-232 is DONE at `87d498d1`** (`ci` `39352696044`, `image` `39352696067` **completed success**) — 626 closed; go's half split off on a reading as **639** (minor, latent, unowned). **WP-235 is DONE at `e7d6a313`** (`ci` `39356513165`, `image` `39356513003` **completed success**) — 631 closed; its build filed **640** (minor: `db`'s own anonymous volume, no data at risk). **Every M14 row is DONE.** **The architect's M15 pass** (§ "Architect ruling (M15, session 19)", plan § "Milestone M15") wrote four rows — **WP-236** (637, parallel-safe), **WP-237** (636, Docker alone), **WP-238** (640, Docker alone, after WP-237; `tmpfs` over `db`'s declared parent, data untouched), **WP-239** (634, 635, Docker alone, after WP-238); 5 owned, 34 carried (639 joins them), 1 declined (440); no migration (0092 next); no row touches `command-policy.ts`. **WP-236 is DONE at `1145ab9d`** (`ci` `39359979243`, `image` `39359979100` **completed success**) — 637 closed. **WP-237 is DONE at `3819ceb2`** (`ci` `39361467264`, `image` `39361467307` **completed success**) — 636 closed; the restore step reads 31–34 s on CI. In flight: WP-238 (640, Docker alone) in `../wt-wp238`. Next: WP-239 (Docker alone). **Machine note:** on this machine a plain `docker run` is rewritten by the `rtk` shell wrapper and reports a local image missing — use `rtk proxy docker run`; and in zsh a `$ids` list does not word-split in a `for` loop (use `${(s:,:)ids}`). Next after them: WP-232 (serial after WP-231), WP-234, WP-235 (Docker alone). Next free migration **0092**.
 
 **Session 18 — 2026-10-19.** `main` opened at **`dd0113b2`**, tree clean but for the person's untracked `.serena/`. Session 17's PENDING runs read **completed success**: WP-205's `3c2c5002` (`ci` `39219160224`, `image` `39219160202`) and its docs commit `dd0113b2` (`ci` `39219327912`, `image` `39219327984`, `release` job **skipped**). `RELEASE_VERSIONING` unset. Docker volume baseline **71**. No notes from the person starting the session. Commits carry `Signed-off-by` only — the person's global instructions forbid `Co-Authored-By` and `Claude-Session` trailers, which override 15-orchestrator-prompt's trailer sentence. **The architect's M12 second amendment** (§ "Architect ruling (M12 second amendment, session 18)") placed **614** as its own row **WP-216** (TD-030 tier 1: a wrapper's option word that may split is a possible command word), right after WP-214 and before WP-211, serial on `command-policy.ts`. **WP-215 is DONE at `97bc35c8`** (`ci` `39227218770`, `image` `39227218788` **completed success**; its docs commit `8eeb3eb9` `ci` `39227459392`, `image` `39227459479` **completed success**) — 612 closed; **615** filed (minor, unowned: the installed `.git/hooks/*` once pointed at another session's scratch copy). WP-214's build filed **616** (major, fail-open, live: a git global option displaces every floor's words), **617** and **618**; **the architect's M12 third amendment** (`353dffef`) placed 616 as **WP-217** (floors read a word after an option both ways, as WP-198's block entries do; 617's second-`-r` half folded), 617's cluster half carried, 618 into WP-213 (that half after WP-214's merge). **WP-214 is DONE at `c9d67632`** (`image` `39235144351` **completed success**; its `ci` was cancelled by the docs push `7db5011f`, whose `ci` `39235358027` and `image` `39235358151` read **completed success** — from WP-216 on, a row's docs push waits for its code commit's `ci`) — 613 closed; built in `../wt-wp214` and ported to the main checkout (a three-way apply of the notes conflicted only at the file's end; both rows' notes kept). **WP-216 is DONE at `dc345e34`** (`ci` `39240633370`, `image` `39240633475` **completed success**) — 614 closed. **WP-217 is DONE at `265bd0a6`** (`ci` `39249127457`, `image` `39249127505` **completed success**) — 616 and 617's second-`-r` half closed; its reviewer filed **621** (major, fail-open, live: `--shallow-file` missing from the git global-option list) and its implementer **620** (minor, masked). **The architect's M12 fourth amendment** placed 621 as **WP-218** (git's global options one grammar cited from `handle_options` at 2.47.3, one reader; an undeclared option reads uncertain; 620 folded as its (c)), 615 as **WP-219** (tooling), 619 carried. **WP-212 is DONE at `b00e2002`** (`ci` `39254663044`, `image` `39254662853` **completed success**) — 550's audit half and 594 closed. **WP-218 is DONE at `d72ed8eb`** — 621 and 620 closed; the orchestrator measured 621 live at git 2.47.3 in `platform-runtime:s16`. **WP-213 is DONE at `78cd5263`** (`d72ed8eb`'s `ci` `39270096577` and `image` `39270096855` read **completed success**; `78cd5263`'s `ci` `39270730494` **failed** — `unit + contract`: two `collection-watchdog.test.ts` assertions matched `/Tests\s+6 passed/` against a scratch vitest whose summary CI coloured; reproduced locally with `CI=true GITHUB_ACTIONS=true FORCE_COLOR=1`, fixed at **`5167b883`** (scratch runs drop `FORCE_COLOR`, set `NO_COLOR=1`), whose `ci` `39274885160` and `image` `39274885136` read **completed success**; the fix's single-file runs started at load 16.6, over the gate — recorded) — 597 and 618 closed after two review rounds. **WP-219 is DONE at `a72b7068`** (`ci` `39279720979`, `image` `39279721068` **completed success**, after about 40 minutes queued behind GitHub's runner backlog) — 615 closed, regraded major by measurement; **622**–**625** filed (lefthook bump, lefthook's auto-install, `logcli` profile writes, `GLAB_PAGER`). **WP-211 is DONE at `930402e2`** (`ci` `39286116584`, `image` `39286116442` **completed success**) — 606, 607, 581 and 625 closed after three review rounds and one orchestrator-directed fix (Composer read by exact canonical name only). **Every M12 row is DONE.** The new `hooks:check` caught a live rewrite of the shared hooks on its first day: WP-211's reviewer's scratch copy kept a `.git` link and its `pnpm install` repointed them (reinstalled from main). Next: M12 is closed; **the architect's M13 pass** (§ "Architect ruling (M13, session 18)", plan § "Milestone M13") wrote eight rows — WP-220 (610, first, parallel-safe), WP-221 (624, the only `command-policy.ts` row), WP-222 (622, 623; merges alone: lockfile and notices), WP-223 (436's audit half, 619 folded), WP-224 (589), WP-225 (Q122 (a), a counts-only census), WP-226 (534), WP-227 (433's grace half, Docker alone) — with 9 entries owned, 33 carried, 1 declined (440); 535–537 were already resolved, 538 waits on Q118; no migration (next free 0092). **WP-221 is DONE at `222b32a0`** (`ci` `39294857194`, `image` `39294857444` **completed success**) — 624 closed; **626** filed (logcli `@args` files, minor, unowned). **WP-220 is DONE at `cc45faa8`** (`ci` `39301401661`, `image` `39301401515` **completed success**) — 610 closed; **627** filed. **WP-222 is DONE at `fed4d2b3`** (`ci` `39303727432`, `image` `39303727556` **completed success**) — 622 and 623 closed; lefthook 2.2.2 with `no_auto_install`, hooks reinstalled from main. **WP-223 is DONE at `622ca113`** (`ci` `39310470471`, `image` `39310470649` **completed success**) — 436's audit half and 619 closed; **628** and **629** filed. **WP-224 is DONE at `194d1190`** (`ci` `39314689101`, `image` `39314688565` **completed success**) — 589 closed; ruling (a) corrected in the plan (the create answer is the largest); **630** filed. **WP-225 is DONE at `2078cb1f`** (`ci` `39319397446`, `image` `39319397449` **completed success**; its dogfood measurement (d) deferred: no platform database on this machine; Q122 stays open). **WP-227 is DONE at `808d00c6`** (`ci` `39323235461`, `image` `39323234123` **completed success**) — 433's grace half closed; **631**, **632** and **633** (major: the operator guide's restore runs `pg_restore` on gzipped plain SQL) filed. **Every M13 row is DONE.** Owed from WP-224: `scripts/launcher-control-plane-check.mjs` — run by WP-229, 58/58 PASS. **M13 closed; the architect's M14 pass** (§ "Architect ruling (M14, session 18)", plan § "Milestone M14") wrote eight rows: **WP-228** (633 + 632, Docker alone: a restore the guide states and a Docker script runs — `gzip -t`, stop writers, recreate, `gunzip -c | psql -v ON_ERROR_STOP=1`), **WP-229** (Docker alone: rebuild images, run `launcher-control-plane-check.mjs` and any Docker check whose inputs changed), **WP-230** (630), **WP-231** (626 logcli `@file`, `command-policy.ts`), **WP-232** (626 other programs, serial after WP-231), **WP-233** (628, 629), **WP-234** (627), **WP-235** (631, Docker alone, after WP-228); 8 owned, 33 carried, 1 declined; no migration (0092 next). **WP-228 is DONE at `5ff68285`** (`ci` `39329535174`, `image` `39329534795` **completed success**) — 633 and 632 closed; the restore and the rollback are executed by `scripts/restore-check.mjs` (not yet by `image.yml` — file it as backlog). **WP-229 is DONE** (notes only): the launcher control-plane check WP-224 owed passes 58/58; `deploy-key-check` fails 10/11 on its own stale expectations (filed). The `*:wp228` and `*:wp229` images are on the daemon. Next: WP-230, WP-231 → WP-232 (serial, `command-policy.ts`), WP-233, WP-234, WP-235 (Docker alone). **WP-226 is DONE at `ae21df45`** (`ci` `39318271975`, `image` `39318271815` **completed success**) — 534 closed, measured clean. Next: WP-227 (Docker alone), with `scripts/launcher-control-plane-check.mjs` for WP-224 in the same window. Worktrees from here on install with `--ignore-scripts` and copy the gitleaks binary in by hand; scratch copies run vitest by its binary, never `pnpm exec`. **Two more machine notes**: a wait loop that counts `grep -c '[v]itest'` over `ps` matches its own command line and never ends (it held a chain for 30 minutes) — count `pgrep -f 'vitest\.mjs'`; and `biome check --write` over a test file rewrites `'{} \;'` to `'{} ;'` in old rows (WP-216 and WP-218 both shipped it to review) — say so in scanner briefs. And a test that asserts on a child vitest's (or any CLI's) printed text must start it with colour off (`NO_COLOR=1`, no `FORCE_COLOR`): CI colours output and no local tier does, so the assertion is green everywhere but CI (WP-213, `ci` `39270730494`). Linked worktrees share `.git/hooks`: a worktree's `pnpm install` rewrites them unless run with `--ignore-scripts`, and WP-219's reviewer rewrote them once with a mis-directed `lefthook install` — after either, `pnpm exec lefthook install` from the main checkout restores them. **Machine rule learned this session**: the load gate reads only at a tier's start, so two `verify` runs started a minute apart in two checkouts timed each other out (5 s test timeouts and the 30 s property test, both runs `FAIL: verify` at 14:06; both green alone) — run every tier through one serial queue across checkouts, and tell reviewers to wait for no other `vitest` before their own `verify`.
 
@@ -17291,7 +17291,7 @@ Both callers are operator-started and occasional: the history bootstrap is per p
 
 **Depends on** nothing.
 
-### 636. **`scripts/restore-check.mjs`, which runs the operator guide's restore and upgrade-rollback blocks against a real `db-backup` dump, is not run by `.github/workflows/image.yml`, so a change to those blocks, to `compose.yml`'s `db-backup` pin or to its environment is checked only when someone runs it by hand** (TODO, **minor**, though it guards backlog 633, a **major** that WP-228 has just closed. The guide is correct at `5ff68285`. What is missing is the thing that keeps it correct, and backlog 633 shows how this goes wrong: the documented restore was never run, and it was wrong for that whole time. Found by WP-228's implementer, session 18 (`#### WP-228`, *The check is not in CI* and *Discovered work*). The refiner read the notes and `image.yml` and ran nothing. **No work package owns it — an architect pass places it.**)
+### 636. **`scripts/restore-check.mjs`, which runs the operator guide's restore and upgrade-rollback blocks against a real `db-backup` dump, is not run by `.github/workflows/image.yml`, so a change to those blocks, to `compose.yml`'s `db-backup` pin or to its environment is checked only when someone runs it by hand** (**RESOLVED** at `3819ceb2`, WP-237, session 19 — `image.yml` runs it on every push and pull request, 31–34 s a leg; was TODO, **minor**, though it guards backlog 633, a **major** that WP-228 has just closed. The guide is correct at `5ff68285`. What is missing is the thing that keeps it correct, and backlog 633 shows how this goes wrong: the documented restore was never run, and it was wrong for that whole time. Found by WP-228's implementer, session 18 (`#### WP-228`, *The check is not in CI* and *Discovered work*). The refiner read the notes and `image.yml` and ran nothing. **No work package owns it — an architect pass places it.**)
 
 **Evidence.** WP-228's notes, quoted: *"Like `compose-stock-check.mjs` it needs a daemon, and unlike it `image.yml` does not run it yet. Wiring it in is a decision about `image.yml`, so it is listed below rather than done."* `image.yml` runs three compose checks against the image it has just built: `web-compose-check.mjs --tag ci --no-build` (`.github/workflows/image.yml:184`), `compose-stock-check.mjs --tag ci` (`:198`) and `compose-isolation-check.mjs --tag ci` (`:208`). `grep restore-check .github/workflows/*.yml` finds nothing. The guide says the script runs its block (`docs/operator-guide.md:1037`). WP-228's last run: `node scripts/restore-check.mjs --tag wp228 --project wp228-probe` gave 13 `ok` lines and `PASS: restore-check`. WP-229's table records it as current only because nothing changed since `5ff68285`.
 
@@ -17301,7 +17301,7 @@ Both callers are operator-started and occasional: the history bootstrap is per p
 
 **Depends on** nothing (WP-228 is merged at `5ff68285`).
 
-### 637. **The shared task-management clause that holds a rule read to one count admits a provider that stops counting: it reads a single-page label rule, and *at most one call* is satisfied by zero calls** (TODO, **minor — test-only**: the product counts correctly at WP-233's tree, and two Jira-specific tests catch the regression the shared clause misses. What is weak is the clause every future provider will inherit. Found by WP-233's reviewer, session 19, over WP-233's uncommitted tree. The refiner read the clause, the fake's divergence register and the two Jira tests, and ran nothing. **No work package owns it — an architect pass places it.**)
+### 637. **The shared task-management clause that holds a rule read to one count admits a provider that stops counting: it reads a single-page label rule, and *at most one call* is satisfied by zero calls** (**RESOLVED** at `1145ab9d`, WP-236, session 19 — a provider that declares `countsSearches` is held to exactly one whole count over a multi-page read; was TODO, **minor — test-only**: the product counts correctly at WP-233's tree, and two Jira-specific tests catch the regression the shared clause misses. What is weak is the clause every future provider will inherit. Found by WP-233's reviewer, session 19, over WP-233's uncommitted tree. The refiner read the clause, the fake's divergence register and the two Jira tests, and ran nothing. **No work package owns it — an architect pass places it.**)
 
 **Evidence.** The clause is *reports what a rule read cost at most once, as a whole count (WP-233, backlog 628)* in `test/contract/support/integrations/task-management-contract-suite.ts:486-497`. It reads `{ kind: 'label', label: context.pickupLabel }`, a one-page read, and asserts `searches.length` `toBeLessThanOrEqual(1)` (`:494`), then checks each reported count is an integer ≥ 1, a loop that runs zero times when nothing was reported. The WP-110 `keys` clause at `:555-561` has the same shape and the same gap. *At most once* rather than *exactly once* is deliberate: the fake never calls `onSearches` (`packages/integrations/src/task-management/fake.ts:111`, divergence 17). The reviewer's canary made the Jira adapter's rule branch stop counting. It **survived** the shared clause on both the fake and Jira, and was killed only by these two Jira-specific tests:
   - `test/integration/integrations/jira-one-wrap.integration.test.ts` › "records the pages it read in its one row and takes a token for each (criteria 1–2)"
@@ -21304,8 +21304,8 @@ credential.
 
 | WP | Title | Status | Commit | Notes |
 |---|---|---|---|---|
-| WP-236 | **Providers: the shared task-management clause holds a provider that declares it counts to exactly one `onSearches` call over a read that spans more than one page** | TODO | | Folds **637**. Parallel-safe, no Docker. After WP-233. |
-| WP-237 | **Operations: `image.yml` runs the restore check beside the other compose checks, so the guide's restore and the pinned backup image are held on every push** | TODO | | Folds **636**. Docker alone for (a). After WP-228. |
+| WP-236 | **Providers: the shared task-management clause holds a provider that declares it counts to exactly one `onSearches` call over a read that spans more than one page** | DONE | `1145ab9d` | Built in `../wt-wp236` over `e8172a21`, session 19. Folds **637**. (a) the silenced rule branch survived the shared clause on the fake and on Jira before, dies by it on Jira after (the two Jira-specific tests kill it both times). `countsSearches?: { seedPastOnePage() }` on the suite's context, set by the Jira runner only (divergence 17 unchanged); with it the rule and `keys` clauses require exactly one call with a whole count (≥ 2 for the rule read seeded to three pages of 20). No new fixture; split clause unused. Review: one round, **APPROVE**; canaries — `{count: 0}` on the rule and `keys` branches, one report per page, a multi-page read reporting 1 — all dead; the declaration removed **survived**, fixed by the orchestrator with a case holding the Jira runner to it (canary dead: `expected undefined to be defined`). Orchestrator: `PASS: verify` (15646), `PASS: verify:integration` (901); after the fix `PASS: verify` (15647). `ci` `39359979243` and `image` `39359979100` **completed success**, `release` job skipped. |
+| WP-237 | **Operations: `image.yml` runs the restore check beside the other compose checks, so the guide's restore and the pinned backup image are held on every push** | DONE | `3819ceb2` | Built in `../wt-wp237` over `1145ab9d`, session 19, Docker alone (volumes 69 → 69, dangling set unchanged). Folds **636**. (a) `restore-check.mjs --tag wp228` 24 s locally, `PASS: restore-check`; `--tag` alone builds nothing; project names collide with none of the three other checks'. The teardown's `down` gained `--profile backup` (without it `db-backup` kept running, measured). The step passes `--project agentic-restore-check-ci-<run_id>-<attempt>-<arch>` beside `--tag ci` so the teardown can name it (a stated addition to ruling (b)). **(d) measured on CI**: `image` `39361467307`, the restore step took **31 s** (amd64) and **34 s** (arm64); the build jobs 4.4 and 4.6 min against `timeout-minutes: 15` — more than twice over, so the timeout stays. Review: one round, **APPROVE**; canaries — step removed, after the teardown, `--tag dev`, the teardown not naming the project, the step in `merge` — all dead; two minors fixed by the orchestrator (the case now skips comment lines and refuses a step-level `if:` — canary dead; a test docblock no longer counts three checks); the nit (the timeout comment predates the fourth check) answered by (d)'s reading above. Orchestrator: `PASS: verify` (15648) and after the fixes `PASS: verify`. `ci` `39361467264` and `image` `39361467307` **completed success**, `release` job skipped. |
 | WP-238 | **Operations: `db` gets no anonymous volume — the declared path is a `tmpfs` over the named volume that stays where it is — and the compose e2e's `UNMOUNTED` list is empty** | TODO | | Folds **640**. Docker alone, after WP-237's window. After WP-235. Ruling (f): if the `tmpfs` parent or an existing volume fails (a), the row builds nothing and files the measurement. |
 | WP-239 | **Instruments: the deploy-key check derives its expected git keys from the product's own table, and the long-options check runs against a tag `build-images.mjs` makes** | TODO | | Folds **634** and **635**. Docker alone, after WP-238's window. After WP-229. |
 
@@ -55818,3 +55818,154 @@ of them dangling, none mine.
   second inspect's "No such image"; its stderr is now piped into the thrown error. *(nits)* the
   operator guide's teardown sentence and the `db` docs are backlog 640's; the product images' base
   images' `VOLUME`s are unread (stated in the docblock).
+
+#### WP-236 — the shared task-management clause holds a provider that declares it counts to exactly one `onSearches` call over a multi-page read (backlog 637)
+
+**(a) The canary, before and after.** The canary is the reviewer's: the Jira adapter's rule branch
+passes a throwaway `{ count: 0 }` to `searchUpTo` in place of `requests`, so a rule read makes its
+searches and reports none. It was applied in place over a `cp` backup, which was restored and
+compared with `cmp` after each run. Contract runs covered `task-management.contract.test.ts` and
+`jira-cloud.contract.test.ts`. The integration run covered `jira-one-wrap.integration.test.ts`.
+
+| Test | Before | After |
+|---|---|---|
+| shared rule clause on the fake (`task-management.contract.test.ts`) | survived | survived (by design: the fake declares nothing) |
+| shared rule clause on Jira (`jira-cloud.contract.test.ts`, `TaskManagement contract — jira-cloud`) | **survived** | **killed**: `onSearches is called exactly once (countsSearches): expected +0 to be 1` |
+| `test/integration/integrations/jira-one-wrap.integration.test.ts` › "records the pages it read in its one row and takes a token for each (criteria 1–2)" | killed | killed |
+| `test/contract/integrations/jira-cloud.contract.test.ts` › "pages through nextPageToken up to the limit, oldest first (WP-87 review round 2)" | killed | killed (`expected [] to deeply equal [ 3 ]`) |
+
+A second canary went on the `keys` branch (`searchKeys` given `{ count: 0 }`). Under the declaration
+the shared `keys` clause on Jira (*answers the existing tickets when a keys rule also names one
+that does not exist (WP-110)*) failed on it, beside two Jira-specific WP-134 tests. Its fake and
+refusing-stub runs passed. Both canaries were restored, and `cmp` matched the backup.
+
+**(b) The declaration.** `TaskManagementContractContext.countsSearches?: { seedPastOnePage(): Promise<void> }`.
+Whether it is present is the declaration, and the seeder is what (c) needs. The Jira runner sets
+it, and the fake's runner and the refusing stub do not. Divergence 17 in
+`packages/integrations/src/task-management/fake.ts` is unchanged. The rule clause and the `keys`
+clause share one helper, `expectOneCount`. With the declaration it asserts exactly one call;
+without it, at most one, as before. Every reported count must be an integer of at least 1. A
+declared rule read must report at least 2, because it spans pages: a provider that reported only
+one page is refused too, and so is one that reported per page (two or more calls). The rule
+clause's name is now *reports what a rule read cost once, as a whole count (WP-233, backlog 628;
+WP-236)*. The old name is quoted in backlog 637 and in WP-233's notes as history. Neither quote
+is a `›` citation.
+
+**(c) Multi-page, with no new fixture.** The suite's context could already seed the read: Jira's
+`seedPastOnePage` creates 45 tickets labelled `JIRA_PICKUP_LABEL` through `binding.port.createTicket`
+on the replay double. This is the idiom of the WP-87 paging test. At the default limit of 50 and
+`REPLAY_SEARCH_PAGE_CAP` 20, the read is three searches; the canary's failure on the paging test
+reads `[ 3 ]`. No HTTP fixture was added, so `SOURCES.md` is unchanged. The split clause was not needed.
+
+**(d)** The canary dies on Jira by the shared clause alone. The two Jira-specific tests stay: they
+assert the count equals the requests the double saw, which the shared suite cannot know.
+
+**Sentences falsified (rule 83).** I grepped `at most once`, `onSearches`, `divergence 17` and
+`countsSearches` across `docs`, `CLAUDE.md`, `packages`, `apps` and `test`. The suite's own `keys`
+clause comment (*"reported at most once"*) is rewritten. Nothing else is falsified:
+- the port's `onSearches` docblock (*"called exactly once when the read made any request … the fake
+  may not call it"*) is the rule the clause now holds;
+- the fake's divergence 17 and technical/06's WP-223 passage describe adapters, not the suite;
+- the other `divergence 17` hits are the git fake's, an unrelated register;
+- the other `at most once` hits are unrelated.
+
+**Discovered work.** None.
+
+**Verify.** `scripts/citations.test.ts` passed (13/13). `pnpm run -s verify` printed `PASS: verify`.
+`pnpm run -s verify:integration` printed `Test Files 93 passed`, `Tests 901 passed` and
+`PASS: verify:integration`. That run started at a one-minute load of 13.76, just after `verify`
+had finished, which is above the brief's ~12 gate. The command printed the reading but did not
+gate on it.
+- **Review (APPROVE, one minor, one nit).** Canaries on a copy: the rule branch reporting `{count: 0}`,
+  one report per page, a multi-page read reporting 1, and the `keys` branch reporting `{count: 0}` —
+  all dead by the shared clauses on Jira; the seeding reaches the clause's own label read (three
+  reports, one per page, in the per-page canary). *(minor, fixed by the orchestrator)* Removing
+  `countsSearches` from the Jira runner survived, silently returning Jira to *at most once*. The
+  runner's context factory is now a named `createJiraContext`, and a case asserts it carries the
+  declaration (*declares countsSearches, so the shared clauses hold Jira to one whole count*).
+  **Canary:** the declaration renamed — that case fails (`expected undefined to be defined`); the file
+  restored from its copy and compared with `cmp`. *(nit)* Table (a) names the shared clause in prose
+  rather than by its new name, *reports what a rule read cost once, as a whole count (WP-233, backlog
+  628; WP-236)*; left as written.
+
+#### WP-237 — `image.yml` runs the restore check beside the other compose checks (backlog 636)
+
+Built in the worktree `wt-wp237` over `1145ab9d`, installed with `--ignore-scripts`. Docker (OrbStack),
+Compose v5.1.2; the daemon held alone.
+
+- **(1) Ruling (a), measured first.** `node scripts/restore-check.mjs --tag wp228` (the images already
+  on the daemon: `platform:wp228`, `platform-launcher:wp228`; there is no `:ci` locally) gave 13 `ok`
+  lines and `PASS: restore-check`, exit 0, in **24 s** wall-clock, at load 5.26.
+  - **The build question: `--tag` alone builds nothing.** The script inspects `platform:<tag>` and
+    `platform-launcher:<tag>` and exits 1 naming the `build-images.mjs` line when either is missing,
+    and its only `up` is `--profile backup up -d --no-build`. The run printed no build output. So it
+    needs no `--no-build` flag of its own; no image was built for this row.
+  - **The project-name table.** No two prefixes are equal, so nothing collides on one daemon:
+
+    | check | compose project(s) | named volumes outside the project |
+    |---|---|---|
+    | `web-compose-check.mjs` | `agentic-web-check-<suffix>` | `<project>-ctl`, `<project>-repo-cache` |
+    | `compose-stock-check.mjs` | `agentic-stock-check-<suffix>`, `…-lm` | the same, per project |
+    | `compose-isolation-check.mjs` | `agentic-isolation-check-<suffix>-a`, `…-b` | the same, per project |
+    | `restore-check.mjs` | default `agentic-restore-check-${GITHUB_RUN_ID:-local}`; in CI `--project agentic-restore-check-<suffix>` | the same (`composeEnvironment`) |
+
+    `<suffix>` is `ci-<run_id>-<run_attempt>-<arch>`. The default would not collide either; the step
+    passes `--project` with the same suffix only so the `if: always()` teardown can name it, as it
+    names the others (assumption, the ruling's step was `--tag ci` alone).
+- **A measurement the teardown needed.** In a scratch project `agentic-restore-check-wp237-probe`
+  (`db` and `db-backup`, `--profile backup up -d --no-build`), the teardown's own line
+  `docker compose -p … --env-file /dev/null -f compose.yml down -v --remove-orphans` exited 0 and
+  **left `db-backup` running** ("Network … Resource is still in use"). With `--profile backup` added
+  the same `down` removed the container, the network and the volume. So the teardown's `down` now
+  carries `--profile backup` for every project (a no-op for the projects with no `db-backup`).
+- **(2) The step**, in the `build` job after `compose-isolation-check.mjs` and before the teardown,
+  with no `if:` (pull requests and pushes alike):
+
+  ```yaml
+  - name: the guide's restore restores a db-backup dump
+    run: >-
+      node scripts/restore-check.mjs --tag ci
+      --project agentic-restore-check-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+  ```
+
+  and the teardown loop gained `agentic-restore-check-"${suffix}"`. **Ruling (d), the CI half: the
+  first `image.yml` run that carries the step, its id and the step's duration are the orchestrator's
+  to record here after the push.** The `build` job's `timeout-minutes` is **15** (5.2 min max): the
+  local 24 s keeps it above twice the slowest, so it is unchanged.
+- **(3) Ruling (c).** Neither `scripts/release.test.ts` nor `scripts/compose-check-support.test.ts`
+  named the three compose steps as a set, so the case is new, in `release.test.ts` (the test that
+  holds `image.yml`): *the compose checks image.yml runs (WP-237)* — each of the four scripts runs in
+  the `build` job with `--tag ci` before the `if: always()` teardown, and the teardown names
+  `agentic-restore-check-"${suffix}"` with `--profile backup`. **Canary**, in place with a `cp`
+  backup: the step (and its comment) removed from `image.yml`, the case failed with
+  *"image.yml's build job does not run restore-check.mjs --tag ci: expected -1 to be greater than 0"*;
+  the file was restored and `cmp` read identical.
+- **(4) The guide** (`docs/operator-guide.md` § 6): the sentence that says the script runs the block
+  now says `image.yml` runs it on every push and pull request against the image it has just built.
+- **Docker hygiene.** 69 volumes and 40 dangling before; 69 and 40 after, and both name lists equal
+  (`cmp`); `docker ps -a` and `docker network ls` equal to the baseline. Nothing pruned; no image built
+  or removed.
+- **Sentences falsified** (grep of `restore-check`, `not run by`, `runs its block`, `image.yml`
+  across `docs`, `CLAUDE.md`, `scripts`, `.github`): `scripts/compose-check-support.mjs`'s docblock
+  said "the three image checks" — it now names `restore-check.mjs` too (it has imported the module
+  since WP-228). technical/11's WP-126 bullet said `image.yml` runs the isolation check "beside the
+  other two checks" — now "the other image checks (four since WP-237 …)". Backlog 636's own title
+  (*"is not run by `image.yml`"*) is the item this row resolves, left for the orchestrator.
+  `release.test.ts`'s Node-pin case says the build job "runs three repository scripts"; it has run
+  more since WP-126 and the assertion is `some(...)`, so it is left and listed here.
+- **Verify.** `pnpm run -s verify` started at load 2.43 with no other vitest: `PASS: verify` (15648 passed, 19 skipped). `scripts/citations.test.ts` 13/13.
+- **Discovered work:** none.
+- **Review (APPROVE, two minors, one nit).** The reviewer confirmed the `build` job's `arch` matrix,
+  the step's place (after the isolation check, before the `if: always()` teardown, no `if:` of its
+  own), the house style (the other three write `github.run_id`, `run_attempt` and `matrix.arch` into
+  `run:` the same way), the teardown's `--profile backup` as harmless for projects without it, and the
+  timeout: run `39356513003`'s build job took 4.3 min (amd64) and 4.0 (arm64), the three checks about
+  17 s, 87 s and 13 s, so 15 minutes holds about three times over. Canaries: the step removed, after
+  the teardown, `--tag dev`, the teardown not naming the project, the step in the `merge` job — all
+  dead. *(minor, fixed by the orchestrator)* the case searched lines, so a step-level `if:` or a
+  commented copy of the command passed; it now skips comment lines and refuses an `if:` between a
+  check's `- name:` and its command (**canary:** `if: github.event_name != 'pull_request'` on the
+  restore step — the case fails with *restore-check.mjs's step has an if:*; restored, `cmp` equal).
+  *(minor, fixed)* `scripts/compose-check-support.test.ts`'s docblock no longer counts three checks.
+  *(nit)* the `timeout-minutes` comment predates the fourth check; ruling (d)'s CI measurement is the
+  orchestrator's, below.
