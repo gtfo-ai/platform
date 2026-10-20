@@ -23,7 +23,10 @@
  *     compared by basename, so `FOO=1 /usr/bin/sudo reboot` is a `sudo` command. The tokens are
  *     read twice (WP-198, `argvForms`): as written, and as argv — the parser's words with every
  *     redirection removed and the quotes taken off — so `2>/dev/null sudo id` is a `sudo` command
- *     too; a match on either is a match.
+ *     too; a match on either is a match. Quotes come off **once**, by bash's rule (`unquoteToken`,
+ *     WP-242): inside `"…"` a backslash stays unless `$`, a backtick, `"`, `\` or a newline
+ *     follows, so `"\--"` is the positional `\--` the program receives and ends no option
+ *     reading. The residual is expansion (`$…`, a backtick, braces, a glob), which no dequote reads.
  *  3. **The allow- and ask-lists stay prefix-anchored globs, and peel far less.** Only the
  *     block-list is generous — being generous with `allow` is how a policy becomes decoration.
  *     `env`-style wrappers are peeled for them; a leading `VAR=value`, `sh -c`, `eval` and `xargs`
@@ -1022,13 +1025,16 @@ interface HazardousArgumentShape {
     /**
      * The same words exactly as the program receives them — a literal quote inside a word kept —
      * on the `argvWords` reading only, `undefined` on the written one (WP-241: a go tool flag's
-     * value is split again by go, so its quotes matter, and `words` has taken them off twice).
+     * value is split again by go, so its quotes matter). Since WP-242 `words` is dequoted once, so
+     * on that reading the two are equal; `received` stays as the reading's name, because the go
+     * tool-flag floors must not read the written one (`-ldflags "-s -w"` is two tokens there).
      */
     readonly received?: readonly string[] | undefined;
     /**
      * Beside `received`, per word: whether bash may hand the program other text than `received`
-     * says — a `$` or backtick outside single quotes, or a backslash inside double quotes before a
-     * character bash does not escape there (`argvWords` drops that backslash; bash keeps it).
+     * says — a `$` or backtick outside single quotes (an expansion), or an unquoted `{` — and,
+     * kept as an over-ask since WP-242 made the dequote keep it as bash does, a backslash inside
+     * double quotes before a character bash does not escape there.
      */
     readonly receivedUnsure?: readonly boolean[] | undefined;
   }) => boolean;
@@ -2303,10 +2309,9 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   ...Object.entries(GO_TOOL_FLAG_OPTIONS).flatMap(([flag, options]) =>
     options.map(goToolPathWritingFloor(flag)),
   ),
-  // Review round 1: `received` comes from the shared dequote (`argvWords`), which drops a backslash
-  // inside double quotes that bash keeps and reads no expansion; those values fail closed here
-  // rather than by changing that dequote. **Residual, stated:** every other floor still reads the
-  // shared dequote, so the divergence is theirs until it is filed and fixed there.
+  // Review round 1: `received` comes from the shared dequote (`argvWords`), which reads no
+  // expansion; those values fail closed here. (It also dropped a backslash inside double quotes
+  // that bash keeps, until WP-242 made it keep that backslash for every floor, backlog 642.)
   {
     pattern:
       'go* -gcflags/-ldflags/-asmflags value the floors cannot read (quoted.Split refuses it, or bash may hand go other text)',
@@ -2931,6 +2936,14 @@ const wrapperGrammarKey = (name: string): string =>
  *
  * Unbalanced quotes are simply dropped: a line whose quoting does not close is already floored at
  * `ask` by rule 5, so being generous here can only tighten.
+ *
+ * Inside `"…"` a backslash is kept unless the next character is `$`, a backtick, `"`, `\` or a
+ * newline (bash, *Double Quotes*: https://www.gnu.org/software/bash/manual/bash.html#Double-Quotes;
+ * WP-242, backlog 642): `"\--"` is `\--` to the program, a positional after which npm's nopt goes
+ * on reading options (measured, npm 11.19.0). {@link literalValue} carries the same rule and stays
+ * a function of its own: it reads a word `isLiteralWord` has admitted (balanced, no expansion) and
+ * drops a `\<newline>` anywhere, while this one reads every word every floor shares, unbalanced
+ * quotes included, and leaves a newline as it was.
  */
 const unquoteToken = (token: string): string => {
   if (!/["'\\]/.test(token)) {
@@ -2946,7 +2959,8 @@ const unquoteToken = (token: string): string => {
       quote = null;
     } else if (char === '\\' && quote !== "'") {
       index += 1;
-      out += token[index] ?? '';
+      const next = token[index] ?? '';
+      out += quote === '"' && !'$`"\\\n'.includes(next) ? `\\${next}` : next;
     } else {
       out += char;
     }
@@ -3524,11 +3538,12 @@ const RECEIVED_READING = new WeakMap<readonly string[], readonly boolean[]>();
 /**
  * Whether bash may hand a program other text for this written word than `unquoteToken` reads: a
  * `$` or backtick outside single quotes (an expansion), or a backslash inside double quotes before
- * anything but `$`, backtick, `"`, `\` or a newline, which bash keeps and `unquoteToken` drops
- * (WP-241 review round 1), or an unquoted `{`, which brace expansion may turn into several words
- * (`-ldflags={-s,-o=/tmp/x}`, review round 2). Read only by the go tool-flag floors; the shared
- * dequote is unchanged (backlog 642). A glob (`-[t]mpdir`) is not marked: it expands only against a
- * file the run wrote (TD-030 tier 3).
+ * anything but `$`, backtick, `"`, `\` or a newline (WP-241 review round 1), or an unquoted `{`,
+ * which brace expansion may turn into several words (`-ldflags={-s,-o=/tmp/x}`, review round 2).
+ * Read only by the go tool-flag floors. The backslash mark is an over-ask since WP-242 (backlog
+ * 642): `unquoteToken` now keeps that backslash as bash does, so `received` is bash's text there;
+ * it is kept because WP-241's `-buildid \'x` rows pin it. A glob (`-[t]mpdir`) is not marked: it
+ * expands only against a file the run wrote (TD-030 tier 3).
  */
 const receivedMayDiffer = (written: string): boolean => {
   let quote: '"' | "'" | null = null;
@@ -3585,16 +3600,19 @@ const isFlagToken = (token: string): boolean =>
  * Both the classification and the tokens it returns are **dequoted**, because that is what the
  * program receives: `git fetch "--upload-pack=x"` passes a flag, not a file name, and no amount of
  * quoting makes it stop being one. Written on the raw token, this classification was the single
- * hole under every `HAZARDOUS_ARGUMENTS` entry and under `find * -exec*` before it.
+ * hole under every `HAZARDOUS_ARGUMENTS` entry and under `find * -exec*` before it. Words that are
+ * dequoted already (`carriesHazard`'s) pass `dequote` as the identity, so no quote is taken off
+ * twice (WP-242).
  */
 const splitFlags = (
   tokens: readonly string[],
+  dequote: (token: string) => string = unquoteToken,
 ): { readonly flags: readonly string[]; readonly positional: readonly string[] } => {
   const flags: string[] = [];
   const positional: string[] = [];
   let literal = false;
   for (const written of tokens) {
-    const token = unquoteToken(written);
+    const token = dequote(written);
     if (!literal && token === '--') {
       literal = true;
       continue;
@@ -4232,13 +4250,16 @@ export const carriesHazard =
           if (name === undefined) {
             return false;
           }
-          const { flags, positional } = splitFlags(rest);
+          // The argv reading is dequoted already (WP-242: a second pass made `"\--"` a `--`).
+          const received = RECEIVED_READING.has(candidate);
+          const words = received ? rest : rest.map(unquoteToken);
+          const { flags, positional } = splitFlags(words, (word) => word);
           return (entry.tokens as NonNullable<HazardousArgument['tokens']>)({
             name,
             flags,
             positional,
-            words: rest.map(unquoteToken),
-            received: RECEIVED_READING.has(candidate) ? rest : undefined,
+            words,
+            received: received ? rest : undefined,
             receivedUnsure: RECEIVED_READING.get(candidate),
           });
         });
@@ -5293,9 +5314,10 @@ const DESCRIPTOR_WORD = /^(?:\d+-?|-)$/;
  * `/dev/null` is compared **as written, unquoted** — `2>/dev/null`, `>/dev/null`, `&>/dev/null`,
  * `>>/dev/null`, `2>>/dev/null`, `>|/dev/null`, `>&/dev/null` — and every other spelling is a
  * write target (backlog 462, decided and tested): `/dev/nullx` and `/dev/null/../x` are other
- * paths, and a quoted `"/dev/null"` or `'/dev/null'` floors too, because taking quotes off here
- * would be `unquoteToken`'s reading and not bash's (`"/dev/nul\l"` is `/dev/null` to the one and
- * `/dev/nul\l` to the other). Over-asking a quoted bit bucket is the safe direction.
+ * paths, and a quoted `"/dev/null"` or `'/dev/null'` floors too. The reason first given — that
+ * `unquoteToken` read `"/dev/nul\l"` as `/dev/null` where bash keeps the backslash — no longer
+ * holds (WP-242 made it keep that backslash, as bash does); the refusal is kept because nothing
+ * needs a quoted bit bucket, and over-asking one is the safe direction.
  */
 const isWriteTarget = (target: string): boolean =>
   target.length > 0 && !target.startsWith('&') && target !== '/dev/null';
@@ -8835,12 +8857,14 @@ export const commandWriteTargets = (command: string): readonly string[] =>
 
 /**
  * One fragment's words as the program receives them: split as `tokenise` splits, each word's
- * quoting and escaping taken off (`unquoteToken`), followed by the argv words (WP-198,
+ * quoting and escaping taken off (`unquoteToken`), followed by the argv words, dequoted once (WP-198,
  * `argvForms`) — so a word the blank split cuts inside its quotes is there whole as well. The
  * unattended git boundary reads these, for an assignment anywhere among them.
  */
-export const commandWords = (fragment: string): readonly string[] =>
-  argvForms(fragment).flat().map(unquoteToken);
+export const commandWords = (fragment: string): readonly string[] => {
+  const [written = [], received = []] = argvForms(fragment);
+  return [...written.map(unquoteToken), ...received];
+};
 
 /**
  * WP-201 site (iii): the first word of a `git` argv on this line — at any depth, as written, a
@@ -8883,14 +8907,19 @@ export const unreadableGitWord = (
 /**
  * The argv lists one fragment could really run as — the **block** list's generous reading (rule 2):
  * every leading wrapper and assignment peeled in turn, argv[0] reduced to its basename, every word
- * dequoted, in both of `argvForms`' readings (WP-198). The unattended git boundary judges each, so
+ * dequoted once, in both of `argvForms`' readings (WP-198; the argv reading is dequoted already,
+ * WP-242). The unattended git boundary judges each, so
  * `env git push …`, `nice -n 5 git push …`, `GIT_TRACE=1 git push …` and `2>/dev/null git push …`
  * are all a `git push`.
  */
 export const commandArgvCandidates = (fragment: string): readonly (readonly string[])[] =>
   blockCandidates(fragment)
     .filter((candidate) => candidate.length > 0)
-    .map(([name, ...rest]) => [name as string, ...rest.map(unquoteToken)]);
+    .map((candidate) =>
+      RECEIVED_READING.has(candidate)
+        ? candidate
+        : [candidate[0] as string, ...candidate.slice(1).map(unquoteToken)],
+    );
 
 // ── evaluation ───────────────────────────────────────────────────────────────
 

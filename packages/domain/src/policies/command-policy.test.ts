@@ -2815,6 +2815,8 @@ describe('WP-198 (b): argv as the shell hands it to the program', () => {
     ['terraform "apply"', ['terraform', 'apply']],
     ['echo "a > b" \'c d\'', ['echo', 'a > b', 'c d']],
     ['su\\\ndo id', ['sudo', 'id']],
+    // WP-242: inside "…" bash drops a backslash only before $, `, ", \ or a newline.
+    [String.raw`x "\$" "\`" "\"" "\\" "\a" "\--"`, ['x', '$', '`', '"', '\\', '\\a', '\\--']],
   ])('reads %j as %j', (text, words) => {
     expect(argvWords(text)).toEqual(words);
   });

@@ -473,7 +473,11 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   `--part-path-prefix` (logcli 3.7.7), and since WP-231 (backlog 626) an `@<file>` word before
 >   `--` on logcli's line, which kingpin v2.4.0 expands into options as pytest's argparse does, and since
 >   WP-241 (backlog 641) the compiler's, linker's and assembler's path-writing options inside a go
->   `-gcflags`/`-ldflags`/`-asmflags` value, read as go1.25.0 splits it. What still writes one without an `ask` is the **repository-content route**:
+>   `-gcflags`/`-ldflags`/`-asmflags` value, read as go1.25.0 splits it. Every floor reads a word with
+>   its quotes taken off once, as bash takes them off (WP-242, backlog 642): inside `"…"` a backslash
+>   stays unless `$`, a backtick, `"`, `\` or a newline follows, so `"\--"` is the positional `\--`
+>   and ends no option reading — npm 11.19.0 reads `--script-shell` past it (measured in the run
+>   image). What no floor reads is an expansion (`$…`, a backtick, braces, a glob). What still writes one without an `ask` is the **repository-content route**:
 >   `make *`, `npm run *`, `pytest` running a `conftest.py` or reading a `pytest.ini` it locates from
 >   its arguments (`pytest sub/` reads a `sub/pytest.ini` the agent wrote), a lockfile install's
 >   lifecycle scripts — whatever the tree says after the agent edits it, which is BD-025's accepted

@@ -12,6 +12,9 @@ import { censusPaths, censusText } from '../../../../scripts/census-files.mjs';
 import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
+  carriesHazard,
+  commandArgvCandidates,
+  commandWords,
   DEFAULT_COMMAND_POLICY,
   DEFAULT_IMPLEMENTATION_ALLOW,
   DEFAULT_READ_ONLY_ALLOW,
@@ -6021,5 +6024,78 @@ describe('WP-241, backlog 641: a path-writing tool option inside a go -gcflags/-
 
   it('control: the same value on another program meets no go tool floor', () => {
     expect(floorsOf('grep -gcflags=all=-cpuprofile=/tmp/c f')).toEqual([]);
+  });
+});
+
+/**
+ * WP-242, backlog 642 (the dequote and stop-word halves): inside `"…"` bash keeps a backslash
+ * unless the next character is `$`, a backtick, `"`, `\` or a newline, so `"\--"` hands the program
+ * `\--` — a positional, after which npm's nopt, pytest and kingpin go on reading options (measured
+ * in `platform-runtime:wp239`, npm 11.19.0: `npm test "\--" --script-shell=<marker>` ran the marker).
+ * The shared dequote read `--` there, and every floor stopped reading options at it.
+ */
+describe('WP-242, backlog 642: a double-quoted backslash is kept as bash keeps it, and "\\--" ends no option reading', () => {
+  it.each([
+    String.raw`npm test "\--" --script-shell=/bin/id`,
+    String.raw`pnpm test "\--" --script-shell=/bin/id`,
+    String.raw`npm run build "\--" --script-shell=/bin/id`,
+    String.raw`pytest "\--" -o addopts=-p`,
+    // Controls: single quotes keep the backslash; the written reading already catches `'--'`.
+    String.raw`npm test '\--' --script-shell=/bin/id`,
+    String.raw`npm test "'--'" --script-shell=/bin/id`,
+  ])('%j reads ask / hazard / hazard', (command) => {
+    expect(cell(command, BASELINES.impl)).toBe('ask / hazard / hazard');
+  });
+
+  it('npm test "\\--" -c /bin/id is uncertain (npxCall), as npm test -c /bin/id is', () => {
+    for (const command of [String.raw`npm test "\--" -c /bin/id`, 'npm test -c /bin/id']) {
+      expect(auto(command).evaluation.uncertainty, command).toEqual([UNCERTAINTY.npxCall]);
+    }
+  });
+
+  it('logcli query "\\--" @f reads ask / auto / deny under the loki-logs entry', () => {
+    const given = { ...BASELINES.impl, allow: [...BASELINES.impl.allow, 'logcli query *'] };
+    expect(cell(String.raw`logcli query "\--" @f`, given)).toBe('ask / auto / deny');
+  });
+
+  it.each([
+    // nopt stops at a bare `--`, and an unquoted `\--` is `--` to bash.
+    'npm test -- --script-shell=/bin/id',
+    String.raw`npm test \-- --script-shell=/bin/id`,
+  ])('control: %j keeps allow / allow / allow', (command) => {
+    expect(cell(command, BASELINES.impl)).toBe('allow / allow / allow');
+  });
+
+  it('control: git log "\\--" --output=/tmp/x keeps ask / auto / deny (a glob entry reads the line)', () => {
+    expect(cell(String.raw`git log "\--" --output=/tmp/x`, BASELINES.impl)).toBe(
+      'ask / auto / deny',
+    );
+  });
+
+  // The argv reading is dequoted once (ruling (c)): a second pass made its `\--` a `--`. The
+  // written reading hides that from the floors above (both are judged), so these read it directly.
+  it('every floor, and the git boundary, reads "\\--" as \\-- on both readings', () => {
+    const probe: HazardousArgument = {
+      pattern: 'probe',
+      kind: 'path',
+      hazard: 'probe',
+      tokens: ({ words, positional }) =>
+        words.includes('--') || positional.includes('--script-shell=/bin/id'),
+    };
+    expect(carriesHazard(String.raw`npm test "\--" --script-shell=/bin/id`)(probe)).toBe(false);
+    expect(carriesHazard(String.raw`npm test \-- --script-shell=/bin/id`)(probe)).toBe(true);
+    const candidates = commandArgvCandidates(String.raw`git push "\--" x`);
+    expect(candidates.length).toBeGreaterThan(1);
+    for (const candidate of candidates) {
+      expect(candidate).toContain(String.raw`\--`);
+      expect(candidate).not.toContain('--');
+    }
+    expect(commandWords(String.raw`git push "\--" x`)).not.toContain('--');
+  });
+
+  it('control: the sed reader was bash-faithful already (item 15 refuted)', () => {
+    expect(auto(String.raw`sed "s/a/b\\\/e;s/c/d/" x`).evaluation.uncertainty).toEqual([
+      UNCERTAINTY.scriptExecutes,
+    ]);
   });
 });
