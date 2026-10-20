@@ -17441,7 +17441,7 @@ Either way, the rows pin the measured cells above, `npm test -- --script-shell=/
 
 **Depends on** WP-241's merge (its `received` reading is what (a) replaces or (b) generalises), and on the measurement above.
 
-### 643. **bash reads `$"…"` as quoting, and the scanner reads it as an expansion. `$"…"` is locale translation: with no message catalogue, bash drops the `$` and the program gets the quoted text. The shared dequote (`unquoteToken`) keeps the `$`. So `npm test $"--script-shell=/bin/id"` hands npm `--script-shell=/bin/id`, but the `--script-shell` floor reads `$--script-shell=/bin/id`, which is not an option, and the line reads `allow` under `auto`. `$'…'` is already read as uncertain. `$"…"` is not** (TODO, **major**, graded below. **TD-030 tier 1**: quoting is bash's grammar, and WP-198's rule is that floors read argv *as the shell builds it*. Older than WP-242, which neither caused nor closed it. Found by WP-242's reviewer, session 19 (`#### WP-242`, *Review*, on the uncommitted tree `wt-wp242` at `b8e59c95`). The refiner read the reviewer's probe output, `command-policy.ts` on `main` and on the WP-242 tree, TD-030 and the bash manual, and ran nothing. **No work package owns it.** WP-243, the next row on the same reader, covers braces only.)
+### 643. **bash reads `$"…"` as quoting, and the scanner reads it as an expansion. `$"…"` is locale translation: with no message catalogue, bash drops the `$` and the program gets the quoted text. The shared dequote (`unquoteToken`) keeps the `$`. So `npm test $"--script-shell=/bin/id"` hands npm `--script-shell=/bin/id`, but the `--script-shell` floor reads `$--script-shell=/bin/id`, which is not an option, and the line reads `allow` under `auto`. `$'…'` is already read as uncertain. `$"…"` is not** (**RESOLVED** at `7184f5fb`, WP-244, session 19 — `$"…"` read as bash reads it with no catalogue; TD-030 amended; was TODO, **major**, graded below. **TD-030 tier 1**: quoting is bash's grammar, and WP-198's rule is that floors read argv *as the shell builds it*. Older than WP-242, which neither caused nor closed it. Found by WP-242's reviewer, session 19 (`#### WP-242`, *Review*, on the uncommitted tree `wt-wp242` at `b8e59c95`). The refiner read the reviewer's probe output, `command-policy.ts` on `main` and on the WP-242 tree, TD-030 and the bash manual, and ran nothing. **No work package owns it.** WP-243, the next row on the same reader, covers braces only.)
 
 **Evidence.** The reviewer's policy reading, run on a copy of the tree (`evaluateCommand` / `decideUnattendedCommand` `auto` / `deny`, on `DEFAULT_IMPLEMENTATION_ALLOW`). It is the reviewer's reading, not a run in the image. The cells are the same before and after WP-242:
   - `npm test $"--script-shell=/bin/id"` reads `allow / allow / allow`.
@@ -21500,7 +21500,7 @@ No migration, and the next free number stays **0092**. No credential.
 | WP | Title | Status | Commit | Notes |
 |---|---|---|---|---|
 | WP-242 | **Scanner: the shared dequote keeps a double-quoted backslash as bash does, the argv reading is dequoted once, and a `"\--"` no longer ends option reading for any floor** | DONE | `84325606` | Built in `../wt-wp242` over `b8e59c95`, session 19. Backlog **642** (dequote and stop-word halves): (a) measured first in `platform-runtime:wp239` — npm 11.19.0 read `--script-shell` past a `\--` positional (marker present) and logcli 3.7.7 expanded `@f` past it, so 642 stayed major; pnpm is absent from the image. Six cells moved from `allow` (npm, pnpm, `npm run build`, pytest, npm `-c`, logcli); corpus 0; `received` kept. Review APPROVE (one minor fixed: `\$` in the escape set); filed **643** (major) and **644** (minor), rowed below. Notes `#### WP-242`. The review's bash fuzz: 240 separator spellings through real `/bin/bash`, 0 fail-opens; canaries — the backslash branch, the second dequote in `carriesHazard`, `splitFlags`, `commandArgvCandidates` — dead; the escape-set row's canary dead. Orchestrator: `PASS: verify` (15688, then 15689), `PASS: verify:integration` (901), `PASS: verify:e2e` twice (304). `ci` `39385932865` and `image` `39385932917` **completed success**, `release` job skipped. |
-| WP-244 | **Scanner: `$"…"` is read as bash reads it with no catalogue — the `$` goes and the text is double-quoted — so a floor reads the option the program receives** | TODO | — | Backlog **643** (major: TD-030 tier 1, stock-image program). **First after WP-242**, before the brace half: a live fail-open on `npm test` comes first. Measured by the architect, policy and shell, § "Architect ruling (M17 amendment, session 19)"; no Docker required. TD-030 amended 2026-10-20 (the tier-3 *locale string* is the translation, not the quoting). |
+| WP-244 | **Scanner: `$"…"` is read as bash reads it with no catalogue — the `$` goes and the text is double-quoted — so a floor reads the option the program receives** | DONE | `7184f5fb` | Backlog **643** (major: TD-030 tier 1, stock-image program). **First after WP-242**, before the brace half: a live fail-open on `npm test` comes first. Measured by the architect, policy and shell, § "Architect ruling (M17 amendment, session 19)"; no Docker required. TD-030 amended 2026-10-20 (the tier-3 *locale string* is the translation, not the quoting). Built in `../wt-wp244` over `84325606`, session 19. `unquoteToken` drops a `| WP-244 | **Scanner: `$"…"` is read as bash reads it with no catalogue — the `$` goes and the text is double-quoted — so a floor reads the option the program receives** | DONE | `7184f5fb` | Backlog **643** (major: TD-030 tier 1, stock-image program). **First after WP-242**, before the brace half: a live fail-open on `npm test` comes first. Measured by the architect, policy and shell, § "Architect ruling (M17 amendment, session 19)"; no Docker required. TD-030 amended 2026-10-20 (the tier-3 *locale string* is the translation, not the quoting). outside quotes directly before `"`, which opens double quoting; inside quotes the `| WP-244 | **Scanner: `$"…"` is read as bash reads it with no catalogue — the `$` goes and the text is double-quoted — so a floor reads the option the program receives** | DONE | `7184f5fb` | Backlog **643** (major: TD-030 tier 1, stock-image program). **First after WP-242**, before the brace half: a live fail-open on `npm test` comes first. Measured by the architect, policy and shell, § "Architect ruling (M17 amendment, session 19)"; no Docker required. TD-030 amended 2026-10-20 (the tier-3 *locale string* is the translation, not the quoting). stays; `…'` stays uncertain. The measured lines move off `allow` (npm, pnpm, `npm run build`, pytest `-o`: `ask / hazard / hazard`; `npm test $"-c"`: uncertain; go `-cpuprofile`, `git log --output`, logcli `@f`: `ask / auto / deny`); five that already refused now meet the block list or the git boundary on the word bash hands (accepted: toward refusal); nothing moves toward `allow`; corpus 0 cells. Review: one round, **APPROVE** — `$"…"` adjacencies read against bash 5.3.20 and 5.2.37 (`printf` only); a 5,229-word fuzz found 0 readings more permissive than bash's word with the change, 490 on the base; canaries dead but one masked (`| WP-244 | **Scanner: `$"…"` is read as bash reads it with no catalogue — the `$` goes and the text is double-quoted — so a floor reads the option the program receives** | DONE | `7184f5fb` | Backlog **643** (major: TD-030 tier 1, stock-image program). **First after WP-242**, before the brace half: a live fail-open on `npm test` comes first. Measured by the architect, policy and shell, § "Architect ruling (M17 amendment, session 19)"; no Docker required. TD-030 amended 2026-10-20 (the tier-3 *locale string* is the translation, not the quoting). dropped before `'`: `ansiCQuoting` decides first, no fail-open); two minors fixed by the orchestrator (the doc paragraph's `>` prefix; control rows, with `bash $"-c"` and `sed $"…"` pinned at their stricter `ask / uncertain / uncertain`). Orchestrator: `PASS: verify` (15706, then 15711), `PASS: verify:e2e` (304). `ci` `39390759746` and `image` `39390759738` **completed success**, `release` job skipped. |
 | WP-243 | **Scanner: the argv reading expands braces as bash does, so a floor reads the words the program receives** | TODO | — | Backlog **642** (brace half). Serial after WP-244 (was: after WP-242; amended 2026-10-20). |
 | WP-245 | **Scanner: every reader of the argv reading takes its words as they are, so there is one reading per word** | TODO | — | Backlog **644** (minor, covered). Serial after WP-243; its own row because neither WP-244 nor WP-243 touches the readers it names. |
 
@@ -57034,3 +57034,77 @@ Implementer, session 19, worktree `wt-wp242` over `b8e59c95`.
   `$"…"` is locale quoting, not an expansion; filed as backlog **643**. The double dequote left in
   `argv0Candidates`, `walkCommandStarts`, `tokensMatch` and the block readers is covered (no live
   fail-open found) and filed as **644**. *(nit)* the technical/04 sentence's placement.
+
+#### WP-244 — `$"…"` is read as bash reads it with no catalogue (backlog 643)
+
+Implementer, session 19, worktree `wt-wp244` over `84325606`. No Docker: the shell and program halves
+are the architect's measurement (§ "Architect ruling (M17 amendment, session 19)"), not re-run.
+
+- **(b) The reading.** `unquoteToken`: a `$` outside quotes immediately before a `"` is dropped and the
+  `"` opens double quoting; inside `"…"` and `'…'` a `$` stays; an escaped `\$"x"` is untouched (the
+  backslash branch consumes the `$` first). Cited in the docblock: bash *Locale-Specific Translation*
+  beside *Double Quotes*, and TD-030's amendment of 2026-10-20. Nothing else in the function or the
+  tokeniser changed. **`$'…'`** stays `uncertain: ansiCQuoting` (control row). **`literalWord`** not
+  taught `$"`. **`receivedMayDiffer`'s `$` mark** kept: no cell of this row depends on it (the eight
+  moving cells are `command`/`path` floors and glob entries, not WP-241's two go floors).
+- **(1) Cells**, before → after, from `corpusCells` (`DEFAULT_COMMAND_POLICY`; the rows assert the same
+  on `DEFAULT_IMPLEMENTATION_ALLOW`): `npm test $"--script-shell=/bin/id"`, `pnpm test …`, `npm run build
+  …` and `pytest $"-o" addopts=-p`: `allow / allow / allow` → `ask / hazard / hazard`; `npm test $"-c"
+  /bin/id`: `allow` → `uncertain: npxCall`; `go test $"-cpuprofile" /tmp/c ./...`: `allow` → `ask / auto
+  / deny` (`go -cpuprofile`); `git log $"--output=/tmp/x"`: `allow` → `ask / auto / deny` (`git *
+  --output*`); `logcli query $"@f"` with `logcli query *`: `allow` → `ask / auto / deny`.
+  **Controls kept:** `npm test "--script-shell=/bin/id"`, `npm test --script-shell=/bin/id`,
+  `npm test $"\--" --script-shell=/bin/id` `ask / hazard / hazard`; `npm test $'--script-shell=/bin/id'`
+  `uncertain: ansiCQuoting`; `bash $"-c" "id"` `uncertain: expandedName`; `ls $"-la"` `allow`; `echo
+  $"hi"` `ask: unmatched`; `sed $"s/a/b/" x` `uncertain: scriptExecutes`.
+  **Deviation from the row, all toward refusal** — the row predicted these "closed today" cells keep
+  their verdict; they moved further, because the block list's token match reads the argv reading and
+  now sees the word bash hands: `rm $"-rf" /tmp/x` `uncertain: expansionCompletesBlockEntry` → `block:
+  rm -rf /*`; `$"git" push --force` `uncertain: expandedName` → `block: git push --force*`; `git push
+  $"--force"` `ask / git / git` (`$--force` not `origin`) → `block: git push --force*`; `git branch $"-D"
+  main` `ask: unmatched` (the demotion the row asked to record) → `block: git branch -D *`; `git -c
+  $"core.fsmonitor=x" status` `ask / uncertain / uncertain` (`unreadGitConfigKey($core.fsmonitor)`) →
+  `ask / git / git` (the boundary names `core.fsmonitor`); `git $"--upload-pack=x" fetch origin`
+  `ask / uncertain / uncertain` → `ask / hazard / hazard` (`git * --upload-pack*`). No cell moved toward
+  `allow`. The rows assert the new cells as controls.
+- **Rows:** `unattended-commands.test.ts`, describe `WP-244, backlog 643: …` (eight moving cells, the
+  controls above); `command-policy.test.ts`'s WP-198 (b) `argvWords` table extended by
+  `x $"a\$b" $"\--" "$"x '$"x"'` → `x`, `a$b`, `\--`, `$x`, `$"x"` (before: `$a$b`, `$\--`).
+- **Canary** (in place, `cp` backup, restored, `cmp` equal): the `$"` branch's condition replaced by
+  `false` → `14 failed | 15 passed` — the eight moving rows, the five moved controls and the
+  `argvWords` row, by name.
+- **(2) Corpus diff** (`node scripts/command-corpus.mjs`): `agent-lines.txt: 0 cells changed`,
+  `developer-lines.txt: 0 cells changed`, `PASS: command-corpus` — expected 0 (no committed line
+  carries `$"`; `grep -c '$"'` 0 and 0). Unit tier of `packages/domain/src` after the change and before
+  the rows: 77 files, 5521 passed, no existing case moved.
+- **(e) Docblocks.** Module docblock rule 2 (`:27–32`): `$"…"` is quoting, the residual is expansion
+  and a catalogue-translated `$"…"` word; the *What it still does not read* item: *a `$'…'` string or a
+  `$"…"` word a catalogue the run supplies may translate*; `joinedText`'s comment; `04-agent-runtime.md`'s
+  floor paragraph (the reading, the npm measurement, the residual, TD-030's amendment). **643's *How the
+  docs hide it*, closed:** `command-policy.ts:29` and `04-agent-runtime.md:480` no longer list `$"…"`
+  under expansion; the docblock's "locale string" now names the translation; TD-030's tier-3 item was
+  amended by the architect.
+- **Sentences falsified (rule 83).** Grepped `$"`, `locale`, "expansion (`$`", `unquoteToken`, `643`
+  over `docs`, `CLAUDE.md`, `packages`, `test`. Changed: the four above. Left, still true:
+  `05-workspaces-and-security.md:58` (WP-203's residual *"a locale-translated string as an argument
+  (`frob $"git" push`)"* — a translated string is the residual; the line reads
+  `uncertain: unknownProgramRunsJudgedName(frob, git)` today); `13-implementation-plan.md` and
+  backlog 643's evidence describe the defect as found (historical).
+- **Verify.** `biome check --diagnostic-level=error` on the touched sources (repo-relative): clean,
+  `--write` changed only the new rows' formatting. `vitest run scripts/citations.test.ts --project
+  unit`: 13 passed. `pnpm run -s verify`: `PASS: verify` (15706 passed, 19 skipped).
+- **Discovered work:** none.
+- **Review (APPROVE, two minors fixed by the orchestrator, one nit).** The reviewer read every
+  `$"…"` adjacency against bash 5.3.20 locally and bash 5.2.37 in `platform-runtime:wp239` (`printf`
+  only): `a$"b"c`→`abc`, `$"a"$"b"`→`ab`, `"$"x`→`$x`, `\$"x"`→`$x`, `$"a\"b"`→`a"b`, `$"\--"`→`\--`;
+  the policy reads the word bash hands. Fuzz: 5,229 words over 9 programs, each compared with its
+  twin written as bash's word — **0** read more permissively with the change, **490** on the base
+  (e.g. `npm test -$"-"--script-shell=…`); no plain command over-blocked. Canaries: the new branch
+  disabled — dead (14); `$` dropped inside `"…"` — dead; the opening `"` skipped — dead; `$` dropped
+  before `'` — survived, masked by `ansiCQuoting` being decided first (no fail-open). *(minor,
+  fixed)* the technical/04 lines lacked the paragraph's `>` prefix. *(minor, fixed)* rows for the
+  controls: `git $"--upload-pack=x" fetch origin` `ask / hazard / hazard`; `ls $"-la"` and
+  `echo $"hi"` read as their plain twins; `bash $"-c" "id"` and `sed $"s/a/b/" x` stay
+  `ask / uncertain / uncertain`, stricter than their twins (the written word's reading, unchanged by
+  this row). *(nit)* `$$"x"` reads `$x` where bash hands `<pid>x`; neither starts with `-`, no verdict
+  moves.
