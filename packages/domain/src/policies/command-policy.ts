@@ -26,7 +26,10 @@
  *     too; a match on either is a match. Quotes come off **once**, by bash's rule (`unquoteToken`,
  *     WP-242): inside `"…"` a backslash stays unless `$`, a backtick, `"`, `\` or a newline
  *     follows, so `"\--"` is the positional `\--` the program receives and ends no option
- *     reading. The residual is expansion (`$…`, a backtick, braces, a glob), which no dequote reads.
+ *     reading. `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no catalogue bash
+ *     ignores the `$` and the text is double-quoted, so `$"--script-shell=x"` is that option. The
+ *     residual is expansion (`$x`, `${…}`, `$(…)`, a backtick, braces, a glob), which no dequote
+ *     reads, and a `$"…"` word a catalogue the run supplies may translate (TD-030, 2026-10-20).
  *  3. **The allow- and ask-lists stay prefix-anchored globs, and peel far less.** Only the
  *     block-list is generous — being generous with `allow` is how a policy becomes decoration.
  *     `env`-style wrappers are peeled for them; a leading `VAR=value`, `sh -c`, `eval` and `xargs`
@@ -155,8 +158,8 @@
  * without reopening the class, and a wrapper the image ships is listed by name, so a wrapper the
  * image does not ship, handed an expansion, is the sandbox's: BD-025, 2026-10-06, decision 1),
  * a project's own wide entry (`tar *` admits `tar --to-command`: its allow entry is its door), a
- * `$'…'` or locale string, a prompt variable or an alias set by
- * a start-up file, an option's value attached to its option (`read -aNAME`), a name taken by a
+ * `$'…'` string or a `$"…"` word a catalogue the run supplies may translate, a prompt variable
+ * or an alias set by a start-up file, an option's value attached to its option (`read -aNAME`), a name taken by a
  * builtin it does not list (`getopts`, `wait -p`, `exec {var}>…`), an attribute (`-i`, `-n`) given
  * to a variable outside the line, a name bound outside the line (`hash -p` in an earlier call, if
  * the CLI's Bash tool keeps a shell — not measured), and the leading operand of a wrapper that
@@ -2944,6 +2947,14 @@ const wrapperGrammarKey = (name: string): string =>
  * a function of its own: it reads a word `isLiteralWord` has admitted (balanced, no expansion) and
  * drops a `\<newline>` anywhere, while this one reads every word every floor shares, unbalanced
  * quotes included, and leaves a newline as it was.
+ *
+ * A `$` outside quotes immediately before a `"` is dropped and the `"` opens double quoting (bash,
+ * *Locale-Specific Translation*: https://www.gnu.org/software/bash/manual/bash.html#Locale-Translation
+ * — with no translation *the dollar sign is ignored*; WP-244, backlog 643; TD-030's amendment of
+ * 2026-10-20): `$"--script-shell=/bin/id"` is `--script-shell=/bin/id` to npm (measured, bash 5.2.37
+ * in the run image, which ships no catalogue). Inside `"…"` or `'…'` the `$` stays (`"$"x` is `$x`).
+ * `$'…'` is not read here: the tokeniser refuses it (`ansiCQuoting`), because its escapes compose a
+ * name. The residual is a catalogue the run supplies, which may translate the text into anything.
  */
 const unquoteToken = (token: string): string => {
   if (!/["'\\]/.test(token)) {
@@ -2953,7 +2964,9 @@ const unquoteToken = (token: string): string => {
   let quote: '"' | "'" | null = null;
   for (let index = 0; index < token.length; index += 1) {
     const char = token[index] as string;
-    if (quote === null && (char === '"' || char === "'")) {
+    if (quote === null && char === '$' && token[index + 1] === '"') {
+      // `$"…"` with no catalogue: bash ignores the `$` and the text is double-quoted (WP-244).
+    } else if (quote === null && (char === '"' || char === "'")) {
       quote = char;
     } else if (quote !== null && char === quote) {
       quote = null;
@@ -6958,7 +6971,8 @@ const joinedText = (text: string): string => {
       out += joinedText(EXPANSION_WORD.exec(text.slice(index + 2, close))?.[1] ?? '');
       index = close;
     } else if (char === '$') {
-      // `$x`, `$1`: the name goes with it; `$'`, `$"`, `$(`: the `$` goes, the rest is read on.
+      // `$x`, `$1`: the name goes with it; `$'`, `$"`, `$(`: the `$` goes, the rest is read on
+      // (`$"…"` as `unquoteToken` reads it; a `$"…"` word a catalogue the run supplies may translate).
       index += /^(?:[A-Za-z_]\w*|[0-9@*#?$!-])/.exec(text.slice(index + 1))?.[0].length ?? 0;
     } else if (char !== '\\' && char !== '"' && char !== "'") {
       out += char;

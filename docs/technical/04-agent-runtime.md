@@ -477,7 +477,12 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   its quotes taken off once, as bash takes them off (WP-242, backlog 642): inside `"…"` a backslash
 >   stays unless `$`, a backtick, `"`, `\` or a newline follows, so `"\--"` is the positional `\--`
 >   and ends no option reading — npm 11.19.0 reads `--script-shell` past it (measured in the run
->   image). What no floor reads is an expansion (`$…`, a backtick, braces, a glob). What still writes one without an `ask` is the **repository-content route**:
+>   image). `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no message catalogue bash
+>   ignores the `$` and double-quotes the text, so every floor reads `npm test $"--script-shell=x"` as
+>   `npm test --script-shell=x` — npm 11.19.0 ran that marker (measured in the run image, which ships
+>   no catalogue); a `$"…"` word a catalogue the run supplies may translate stays a residual (TD-030,
+>   amended 2026-10-20). What no floor reads is an expansion (`$x`, `${…}`, `$(…)`, a backtick,
+>   braces, a glob). What still writes one without an `ask` is the **repository-content route**:
 >   `make *`, `npm run *`, `pytest` running a `conftest.py` or reading a `pytest.ini` it locates from
 >   its arguments (`pytest sub/` reads a `sub/pytest.ini` the agent wrote), a lockfile install's
 >   lifecycle scripts — whatever the tree says after the agent edits it, which is BD-025's accepted

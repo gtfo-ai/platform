@@ -2817,6 +2817,8 @@ describe('WP-198 (b): argv as the shell hands it to the program', () => {
     ['su\\\ndo id', ['sudo', 'id']],
     // WP-242: inside "…" bash drops a backslash only before $, `, ", \ or a newline.
     [String.raw`x "\$" "\`" "\"" "\\" "\a" "\--"`, ['x', '$', '`', '"', '\\', '\\a', '\\--']],
+    // WP-244: outside quotes a `$` before `"` goes (no catalogue); inside quotes it stays.
+    [String.raw`x $"a\$b" $"\--" "$"x '$"x"'`, ['x', 'a$b', '\\--', '$x', '$"x"']],
   ])('reads %j as %j', (text, words) => {
     expect(argvWords(text)).toEqual(words);
   });

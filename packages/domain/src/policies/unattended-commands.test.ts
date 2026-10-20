@@ -6099,3 +6099,84 @@ describe('WP-242, backlog 642: a double-quoted backslash is kept as bash keeps i
     ]);
   });
 });
+
+/**
+ * WP-244, backlog 643: `$"…"` is quoting. With no message catalogue bash ignores the `$` and the text
+ * is double-quoted (*Locale-Specific Translation*), so `npm test $"--script-shell=/bin/id"` hands npm
+ * `--script-shell=/bin/id` (measured, bash 5.2.37 and npm 11.19.0 in `platform-runtime:wp239`: the
+ * marker ran). The shared dequote kept the `$`, and every floor read `$--script-shell=…`, no option.
+ */
+describe('WP-244, backlog 643: $"…" is read as bash reads it with no catalogue', () => {
+  it.each([
+    'npm test $"--script-shell=/bin/id"',
+    'pnpm test $"--script-shell=/bin/id"',
+    'npm run build $"--script-shell=/bin/id"',
+    'pytest $"-o" addopts=-p',
+    // Controls: the floor read these before.
+    'npm test "--script-shell=/bin/id"',
+    'npm test --script-shell=/bin/id',
+  ])('%j reads ask / hazard / hazard', (command) => {
+    expect(cell(command, BASELINES.impl)).toBe('ask / hazard / hazard');
+  });
+
+  it('npm test $"-c" /bin/id is uncertain (npxCall), as npm test -c /bin/id is', () => {
+    expect(auto('npm test $"-c" /bin/id', BASELINES.impl).evaluation.uncertainty).toEqual([
+      UNCERTAINTY.npxCall,
+    ]);
+  });
+
+  it.each(['go test $"-cpuprofile" /tmp/c ./...', 'git log $"--output=/tmp/x"'])(
+    '%j reads ask / auto / deny',
+    (command) => {
+      expect(cell(command, BASELINES.impl)).toBe('ask / auto / deny');
+    },
+  );
+
+  it('logcli query $"@f" reads ask / auto / deny under the loki-logs entry', () => {
+    const given = { ...BASELINES.impl, allow: [...BASELINES.impl.allow, 'logcli query *'] };
+    expect(cell('logcli query $"@f"', given)).toBe('ask / auto / deny');
+  });
+
+  it("control: $'…' stays uncertain (ansiCQuoting), its escapes compose a name", () => {
+    expect(
+      auto("npm test $'--script-shell=/bin/id'", BASELINES.impl).evaluation.uncertainty,
+    ).toEqual([UNCERTAINTY.ansiCQuoting]);
+  });
+
+  // Refused before (uncertain, or the git boundary on `$--force`); the argv reading now meets the
+  // block entry or the git boundary itself, which is the word bash hands.
+  it.each([
+    'rm $"-rf" /tmp/x',
+    '$"git" push --force',
+    'git push $"--force"',
+    'git branch $"-D" main',
+  ])('control: %j reads block / block / block', (command) => {
+    expect(cell(command, BASELINES.impl)).toBe('block / block / block');
+  });
+
+  it('control: git -c $"core.fsmonitor=x" status stays refused unattended', () => {
+    expect(cell('git -c $"core.fsmonitor=x" status', BASELINES.impl)).toBe('ask / git / git');
+  });
+
+  it('control: git $"--upload-pack=x" fetch origin reads ask / hazard / hazard', () => {
+    expect(cell('git $"--upload-pack=x" fetch origin', BASELINES.impl)).toBe(
+      'ask / hazard / hazard',
+    );
+  });
+
+  // Review: a plain word in $"…" reads as the word bash hands, no stricter and no looser.
+  it.each([
+    ['ls $"-la"', 'ls -la'],
+    ['echo $"hi"', 'echo hi'],
+  ])('control: %j reads as %j does', (quoted, plain) => {
+    expect(cell(quoted, BASELINES.impl)).toBe(cell(plain, BASELINES.impl));
+  });
+
+  // A script-reading program keeps its stricter reading of the written word (unchanged by WP-244).
+  it.each(['bash $"-c" "id"', 'sed $"s/a/b/" x'])(
+    'control: %j stays ask / uncertain / uncertain',
+    (command) => {
+      expect(cell(command, BASELINES.impl)).toBe('ask / uncertain / uncertain');
+    },
+  );
+});
