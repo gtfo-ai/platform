@@ -6357,3 +6357,173 @@ describe('WP-243, backlog 642 (brace half): the argv reading expands braces as b
     expect(cell(command, BASELINES.impl)).toBe(cell('echo x', BASELINES.impl));
   });
 });
+
+/**
+ * WP-245, backlog 644: the block-entry readers read the argv reading's words as handed — once —
+ * where they took quotes off it a second time, so a `"\--"` (bash hands `\--`) read `--` there. The
+ * written reading covers that unless a redirection stands among an entry's command words: then
+ * `git >o branch "\--" -D main` ran under `auto` on `cdf99495`, and git deleted `main` (measured,
+ * bash 5.3.20 and git 2.54.0 on a scratch repository: git reads `-D` past the positional `\--`).
+ * The second dequote is kept beside the handed reading as a stated over-ask (`OVER_READ`), because
+ * taking it away moved 930 sweep cells toward `allow` (`rm -rf "\/"`, `git commit "\-n"`).
+ */
+describe('WP-245, backlog 644: the block-entry readers read "\\--" as the \\-- bash hands', () => {
+  // `tokensMatch`, the block reading.
+  it.each([
+    String.raw`git >o branch "\--" -D main`,
+    String.raw`git >o branch $"\--" -D main`,
+    String.raw`git >o branch '\--' -D main`,
+    String.raw`git >o reset "\--" --hard origin/main`,
+    String.raw`git >o push "\--" --force origin main`,
+    // `argv0Candidates`' wrapper `--`: `\--` is no `--`, so rm's words start after the real one.
+    String.raw`start-stop-daemon >o -S --exec=/bin/rm "\--" -- -rf /`,
+  ])('%j reads block / block / block', (command) => {
+    expect(cell(command, BASELINES.impl)).toBe('block / block / block');
+  });
+
+  // `tokensMatch`, the hazard reading (a floor's glob entry).
+  it('git >o -C . commit "\\--" -n -m x reads ask / hazard / hazard', () => {
+    expect(cell(String.raw`git >o -C . commit "\--" -n -m x`, BASELINES.impl)).toBe(
+      'ask / hazard / hazard',
+    );
+  });
+
+  it('blockEntryBehindFlagValue: git >o -C d branch "\\--" -D x is uncertain', () => {
+    expect(
+      auto(String.raw`git >o -C d branch "\--" -D x`, BASELINES.impl).evaluation.uncertainty,
+    ).toEqual([flagValueHidesBlockEntry('git branch -D *')]);
+  });
+
+  it('blockEntryUnderUnreadOption: git >o branch "\\--" --show-current is uncertain', () => {
+    expect(
+      auto(String.raw`git >o branch "\--" --show-current`, BASELINES.impl).evaluation.uncertainty,
+    ).toEqual([optionMayBeBlockEntry('git branch -D *', '--show-current')]);
+  });
+
+  // xargs is handed `\-x`, no option of its, so it is the command xargs runs; the prefix reader
+  // reads a command's name as `argv0Name` does (a name keeps its dequote), hence `-x` and `rm -rf /*`.
+  it('xargsBlockPrefix: xargs >o -n1 "\\-x" echo is uncertain', () => {
+    expect(
+      auto(String.raw`xargs >o -n1 "\-x" echo < list`, BASELINES.impl).evaluation.uncertainty,
+    ).toEqual([xargsCompletesBlockEntry('rm -rf /*')]);
+  });
+
+  // `walkCommandStarts`' option test: `\-x` is no option, so the window does not reach `sudo`. The
+  // verdict is the over-read's, which still reads `-x`.
+  it('walkCommandStarts: the argv reading of nice a b c d e f g "\\-x" sudo id has no start at sudo', () => {
+    const at = (command: string) =>
+      commandArgvCandidates(command).some(([name]) => name === 'sudo');
+    expect(at(String.raw`nice a b c d e f g "\-x" sudo id`)).toBe(false);
+    expect(at('nice a b c d e f g -x sudo id')).toBe(true);
+    expect(cell(String.raw`nice a b c d e f g "\-x" sudo id`, BASELINES.impl)).toBe(
+      'block / block / block',
+    );
+  });
+
+  it.each([
+    // An unquoted `\--` is `--` to bash; nothing moves.
+    [String.raw`git >o branch \-- -D main`, 'ask / auto / deny'],
+    [String.raw`git >o -C . commit \-- -n -m x`, 'ask / auto / deny'],
+    [String.raw`start-stop-daemon >o -S --exec=/bin/rm \-- -- -rf /`, 'ask / auto / deny'],
+    [String.raw`xargs >o -n1 -x echo < list`, 'ask / auto / deny'],
+    // The over-read, kept: bash hands `\/` and `\-n`, the second dequote reads `/` and `-n`.
+    [String.raw`rm -rf "\/"`, 'block / block / block'],
+    [String.raw`git commit "\-n" -m x`, 'ask / hazard / hazard'],
+  ])('control: %j keeps %s', (command, expected) => {
+    expect(cell(command, BASELINES.impl)).toBe(expected);
+  });
+});
+
+/**
+ * WP-245, orchestrator round: a redirection whose target is the next word (`> out`, `2> /dev/null`)
+ * left that target in the git boundary's argv on the written reading — `git > out fetch or{igin,y}`
+ * read `out` as git's verb — while the argv reading held the brace expansion (WP-243), so nothing
+ * read the written remote and the line ran under `auto` where `git fetch or{igin,y}` is refused.
+ * WP-198's property forbids a redirection relaxing a verdict; the boundary now also reads each
+ * candidate with a detached redirection's target out (`boundaryArgvs`).
+ */
+describe('WP-245, orchestrator round: a redirection never changes the git boundary’s verdict', () => {
+  it.each([
+    ['git fetch or{igin,y}', 'git > out fetch or{igin,y}'],
+    ['git fetch or{igin,y}', 'git >o fetch or{igin,y}'],
+    ['git fetch or{igin,y}', 'git 2>/dev/null fetch or{igin,y}'],
+    ['git fetch or{igin,y}', 'git 2> /dev/null fetch or{igin,y}'],
+    // bash 4.1+ reads `{fd}>out` as a redirection to a descriptor it allocates (round 2).
+    ['git fetch or{igin,y}', 'git {fd}>out fetch or{igin,y}'],
+    ['git fetch or{igin,y}', 'git {fd}> out fetch or{igin,y}'],
+    ['git fetch upstream', 'git > out fetch upstream'],
+    ['rm {-rf,x} /', 'rm > out {-rf,x} /'],
+  ])('%j and %j read the same auto / deny in every baseline', (plain, redirected) => {
+    // The attended column may only tighten: a redirection writing a path floors it at `ask` (rule 4).
+    const unattended = (command: string, given: ResolvedCommandPolicy) =>
+      cell(command, given).split(' / ').slice(1).join(' / ');
+    for (const [name, given] of Object.entries(BASELINES)) {
+      expect(unattended(redirected, given), name).toBe(unattended(plain, given));
+    }
+  });
+
+  it('git fetch or{igin,y} is refused at the git boundary (ask / git / git)', () => {
+    expect(cell('git > out fetch or{igin,y}', BASELINES.ro)).toBe('ask / git / git');
+    expect(cell('git {fd}>out fetch or{igin,y}', BASELINES.ro)).toBe('ask / git / git');
+  });
+});
+
+/**
+ * WP-245 review round 1: pins for readings the rows above leave unpinned. A quoted `">"` is the
+ * program's argument, so `boundaryArgvs` keeps the reading with only redirection words out beside
+ * the one with a detached target out; and each block-entry reader keeps the over-read
+ * (`OVER_READ`) on its own — each row below is a cell only that reader's over-read gives.
+ */
+describe('WP-245, review round 1: the kept readings are pinned', () => {
+  it.each(['cp ">" .git/hooks/pre-commit', "cp '>' .git/hooks/pre-commit", 'tee ">" .git/config'])(
+    '%j reads ask / git / git in every baseline (the quoted > is an argument)',
+    (command) => {
+      expectCells(command, 'ask / git / git');
+    },
+  );
+
+  it.each([
+    // `argvReadings`' third reading (`xargsCommandWords`): xargs is handed `\--`.
+    [String.raw`xargs "\--" -n1 echo < list`, xargsCompletesBlockEntry('rm -rf /*')],
+    // `blockEntryBehindFlagValue`: git is handed `\-D`, a positional.
+    [String.raw`git -C d branch "\-D" x`, flagValueHidesBlockEntry('git branch -D *')],
+    // `blockEntryUnderUnreadOption`: git is handed `\-m`, a positional.
+    [String.raw`git branch "\-m" a b`, optionMayBeBlockEntry('git branch -D *', '-m')],
+  ])('control: %j stays uncertain through the over-read', (command, reason) => {
+    expect(cell(command, BASELINES.impl)).toBe('ask / uncertain / uncertain');
+    expect(auto(command, BASELINES.impl).evaluation.uncertainty).toEqual([reason]);
+  });
+});
+
+/**
+ * WP-245 review round 2: the boundary's redirection filter ran on dequoted words, so a quoted
+ * `"{fd}>sub"` or `"2>sub"` — the program's argument — was dropped as a redirection, and with it
+ * `-C`'s value: `git -C "{fd}>sub" -c core.fsmonitor=x status` read `auto` (the reviewer ran the
+ * hook with git 2.54.0). `commandArgvsAsWritten` drops a redirection only as written; the dequoted
+ * filter stays beside it as an over-ask, and a named descriptor's word is also kept (bash 3.2).
+ */
+describe('WP-245, review round 2: a quoted redirection is the program’s argument', () => {
+  it.each([
+    'git -C "{fd}>sub" -c core.fsmonitor=x status',
+    "git -C '{fd}>sub' -c core.fsmonitor=x status",
+    "git -C '{fd}>sub' push origin main",
+    'git -C "2>sub" -c core.fsmonitor=x status',
+    'git -C ">sub" -c core.fsmonitor=x status',
+    // bash 3.2 hands `{fd}` and runs `git -C {fd} push origin main` (the as-written bash 3.2
+    // reading, and the numbered one), with a detached redirection in front too.
+    'git -C {fd}>sub push origin main',
+    'git > out -C {fd}>sub push origin main',
+    // The numbered reading's over-ask: `"2>sub"` out, `"{fd}>sub"` kept as `-C`'s value.
+    'git "2>sub" -C "{fd}>sub" -c core.fsmonitor=x status',
+    // The dequoted filter's over-ask: git is handed `{fd}>sub` as its verb.
+    'git "{fd}>sub" push',
+    // A quoted and an unquoted named descriptor on one line: only the unquoted one is out.
+    "git -C '{fd}>sub' {fd}>out fetch or{igin,y}",
+    // A quoted or escaped operator is no redirection as written, however it dequotes (review round 3).
+    String.raw`git -C \>sub fetch or{igin,y}`,
+    `git > out -C "{fd}"'>'sub fetch or{igin,y}`,
+    'git > out -C {fd}">"sub fetch or{igin,y}',
+  ])('%j reads ask / git / git in every baseline', (command) => {
+    expectCells(command, 'ask / git / git');
+  });
+});

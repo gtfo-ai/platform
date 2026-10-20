@@ -56,6 +56,7 @@ import {
   type CommandEvaluation,
   type CommandRequest,
   commandArgvCandidates,
+  commandArgvsAsWritten,
   commandWords,
   commandWriteTargets,
   environmentNamePattern,
@@ -889,8 +890,50 @@ export const computesCommandName = (command: string): boolean => {
  * `uncertain` only after the whole walk found nothing refused, so a guarded key or a bad push
  * elsewhere on the line keeps the boundary's own message.
  */
-/** A word the shell reads as a redirection: `2>&1`, `>out`, `>>log`, `&>/dev/null`, `<in`. */
-const REDIRECTION_WORD = /^(?:\d+|&)?(?:>>?|<)/;
+/**
+ * A word the shell reads as a redirection: `2>&1`, `>out`, `>>log`, `&>/dev/null`, `<in`, and bash
+ * 4.1+'s named descriptor `{fd}>out` (WP-245 round 2). Tested on dequoted words, so it also drops a
+ * quoted `"2>sub"` the program is handed: an over-ask reading beside `commandArgvsAsWritten`.
+ */
+const REDIRECTION_WORD = /^(?:\d+|&|\{[A-Za-z_]\w*\})?(?:>>?|<)/;
+
+/** {@link REDIRECTION_WORD} without the named descriptor: bash 3.2 hands `{fd}` to the program. */
+const NUMBERED_REDIRECTION_WORD = /^(?:\d+|&)?(?:>>?|<)/;
+
+/** A redirection word with no target in it (`>`, `2>`, `>>`, `<`, `&>`): its target is the next word. */
+const DETACHED_REDIRECTION = /^(?:\d+|&|\{[A-Za-z_]\w*\})?[<>&|]+$/;
+
+/**
+ * The argvs a candidate is read as at the boundary: its redirection words out (backlog 488) — and,
+ * when one has its target in the next word (`> out`, `2> /dev/null`), also with that target out
+ * (WP-245). Both, because a candidate's words are dequoted and a quoted `">"` is an argument: the
+ * union only tightens. Without the second, `git > out fetch or{igin,y}` read `out` as git's verb on
+ * the written reading while the argv reading held the expansion, and ran under `auto` where `git
+ * fetch or{igin,y}` is refused (WP-198's property). And with a named descriptor's word kept
+ * (`NUMBERED_REDIRECTION_WORD`, review round 3): bash 3.2 runs `git -C {fd}>sub push` as `git -C
+ * {fd} push`, whose verb is where the word keeps it.
+ */
+const boundaryArgvs = (candidate: readonly string[]): readonly (readonly string[])[] => {
+  const numbered = candidate.filter(
+    (word, index) => index === 0 || !NUMBERED_REDIRECTION_WORD.test(word),
+  );
+  const kept = candidate.filter((word, index) => index === 0 || !REDIRECTION_WORD.test(word));
+  const targets = new Set(
+    candidate.flatMap((word, index) =>
+      index > 0 && DETACHED_REDIRECTION.test(word) ? [index + 1] : [],
+    ),
+  );
+  if (targets.size === 0) {
+    return [numbered, kept];
+  }
+  return [
+    numbered,
+    kept,
+    candidate.filter(
+      (word, index) => index === 0 || (!REDIRECTION_WORD.test(word) && !targets.has(index)),
+    ),
+  ];
+};
 
 export const gitBoundaryViolation = (command: string): GitBoundaryViolation | null => {
   // Read on the raw line, here-document bodies included: a body is data to the shell, but it may
@@ -965,10 +1008,15 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
       queue.push(...pieces);
       continue;
     }
-    for (const candidate of commandArgvCandidates(fragment)) {
-      // A redirection (`2>&1`, `>/dev/null`, `2>err.log`) is the shell's, not the program's
-      // argument (backlog 488); where it writes is judged above by `commandWriteTargets`.
-      const argv = candidate.filter((word, index) => index === 0 || !REDIRECTION_WORD.test(word));
+    // A redirection (`2>&1`, `>/dev/null`, `2>err.log`) is the shell's, not the program's argument
+    // (backlog 488); where it writes is judged above by `commandWriteTargets`. Read both ways: out
+    // as written (`commandArgvsAsWritten`, WP-245 review round 2), and the dequoted words'
+    // filter kept beside it as an over-ask (`boundaryArgvs`), so the union only tightens.
+    const argvs = [
+      ...commandArgvsAsWritten(fragment),
+      ...commandArgvCandidates(fragment).flatMap(boundaryArgvs),
+    ];
+    for (const argv of argvs) {
       const [name] = argv as [string, ...string[]];
       if (name === 'git' || name.startsWith('git-')) {
         const keys: UnreadKeys = [];

@@ -26,8 +26,12 @@
  *     too; a match on either is a match. Quotes come off **once**, by bash's rule (`unquoteToken`,
  *     WP-242): inside `"…"` a backslash stays unless `$`, a backtick, `"`, `\` or a newline
  *     follows, so `"\--"` is the positional `\--` the program receives and ends no option
- *     reading. `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no catalogue bash
- *     ignores the `$` and the text is double-quoted, so `$"--script-shell=x"` is that option.
+ *     reading. Every reader of the argv reading takes its words as handed, the block-entry
+ *     readers too (WP-245, backlog 644), with two exceptions, both over-asks: those readers also
+ *     read it dequoted a second time (`OVER_READ`: taking that away moved 930 sweep cells toward
+ *     `allow`), and a command's name is read through `argv0Name`, which dequotes it. `$"…"` is
+ *     quoting, not an expansion (WP-244, backlog 643): with no catalogue bash ignores the `$` and
+ *     the text is double-quoted, so `$"--script-shell=x"` is that option.
  *     Braces are expanded on the argv reading as bash expands them (WP-243, backlog 642,
  *     `expandBraces`): a comma list and an integer or single-letter sequence, bounded at
  *     `BRACE_EXPANSION_CEILING` words; a brace past it or of a form the port does not read is
@@ -3560,9 +3564,14 @@ const walkCommandStarts = (
   return { starts, tooDeep: false };
 };
 
-/** The peel of `argv0Candidates` over written tokens. */
-const argvStarts = (tokens: readonly string[]): CommandStarts =>
-  walkCommandStarts(tokens, isWrapperAt, (token) => isFlagToken(unquoteToken(token)));
+/**
+ * The peel of `argv0Candidates` over one of `argvForms`' readings; `dequote` is how that reading's
+ * words read (`asHanded` on the argv reading, which is dequoted already — WP-245).
+ */
+const argvStarts = (
+  tokens: readonly string[],
+  dequote: (token: string) => string = unquoteToken,
+): CommandStarts => walkCommandStarts(tokens, isWrapperAt, (token) => isFlagToken(dequote(token)));
 
 /**
  * The command with leading environment wrappers removed, when there are any. Returns nothing when
@@ -3605,9 +3614,13 @@ const stripEnvironmentPrefix = (text: string): readonly string[] => {
  * a wrapper's own flags and their values (`nice -n 5 sudo id`) sit between the two commands. How
  * far that goes is `walkCommandStarts`'s, and past its bound the line is uncertain (WP-161 (d)).
  * Every caller reads it over both of `argvForms`' readings (WP-198), so a redirection in front of
- * the command (`2>/dev/null sudo id`) is not argv[0].
+ * the command (`2>/dev/null sudo id`) is not argv[0]. The argv reading is read as handed
+ * (`dequote` = `asHanded`, WP-245): its `\--` is no wrapper's `--`.
  */
-const argv0Candidates = (tokens: readonly string[]): readonly (readonly string[])[] => {
+const argv0Candidates = (
+  tokens: readonly string[],
+  dequote: (token: string) => string = unquoteToken,
+): readonly (readonly string[])[] => {
   const withBasename = (list: readonly string[]): readonly string[] =>
     list.length === 0 ? list : [argv0Name(list[0] as string), ...list.slice(1)];
 
@@ -3615,11 +3628,11 @@ const argv0Candidates = (tokens: readonly string[]): readonly (readonly string[]
   // backlog 601) is a start of its own, followed by its arguments: the words after the wrapper's
   // first `--`, which the wrapper consumes (review round 1: kept, `rm -- -rf /` is no `rm -rf /*`).
   const inside = commandNameWalk(tokens).attached.map(({ index, command }) => {
-    const end = tokens.findIndex((token, at) => at > index && unquoteToken(token) === '--');
+    const end = tokens.findIndex((token, at) => at > index && dequote(token) === '--');
     return withBasename([command, ...(end === -1 ? [] : tokens.slice(end + 1))]);
   });
   return [
-    ...argvStarts(tokens).starts.map((start) => withBasename(tokens.slice(start))),
+    ...argvStarts(tokens, dequote).starts.map((start) => withBasename(tokens.slice(start))),
     ...inside,
   ];
 };
@@ -3629,6 +3642,31 @@ const argv0Candidates = (tokens: readonly string[]): readonly (readonly string[]
  * receives them, so a second `unquoteToken` would take off quotes the program sees (WP-241).
  */
 const RECEIVED_READING = new WeakMap<readonly string[], readonly boolean[]>();
+
+/** How a word of the argv reading reads: as handed, since it is dequoted already (WP-242, WP-245). */
+const asHanded = (word: string): string => word;
+
+/** How the words of a {@link blockCandidates} candidate read: once, whichever reading it is of. */
+const readingOf = (candidate: readonly string[]): ((token: string) => string) =>
+  RECEIVED_READING.has(candidate) ? asHanded : unquoteToken;
+
+/**
+ * `argvForms`' readings, each with how its words read — the written one's dequoted once, and the
+ * argv reading twice: as handed, and dequoted a second time ({@link OVER_READ}'s over-ask, WP-245).
+ */
+const argvReadings = (
+  text: string,
+): readonly {
+  readonly tokens: readonly string[];
+  readonly dequote: (token: string) => string;
+}[] => {
+  const [written = [], received = []] = argvForms(text);
+  return [
+    { tokens: written, dequote: unquoteToken },
+    { tokens: received, dequote: asHanded },
+    { tokens: received, dequote: unquoteToken },
+  ];
+};
 
 /**
  * Whether bash may hand a program other text for this word than `unquoteToken` reads: a `$` or
@@ -3670,7 +3708,9 @@ const blockCandidates = (text: string): readonly (readonly string[])[] => {
   if (cached !== undefined) {
     return cached;
   }
-  const [written = [], received = []] = argvForms(text).map(argv0Candidates);
+  const [writtenWords = [], receivedWords = []] = argvForms(text);
+  const written = argv0Candidates(writtenWords);
+  const received = argv0Candidates(receivedWords, asHanded);
   // `argvWords` is `receivedShellWords` dequoted word by word, and a candidate's words after its
   // name are a suffix of it (`argv0Candidates`), so the flags align from the end.
   const unsure = receivedShellWords(text).map(receivedMayDiffer);
@@ -3681,8 +3721,34 @@ const blockCandidates = (text: string): readonly (readonly string[])[] => {
     );
   }
   const candidates = [...written, ...received];
+  // Only a word a second dequote changes makes an over-read that differs from `received`.
+  OVER_READ.set(
+    candidates,
+    receivedWords.some((word) => unquoteToken(word) !== word) ? argv0Candidates(receivedWords) : [],
+  );
   activeMemo?.candidates.set(text, candidates);
   return candidates;
+};
+
+/**
+ * The argv reading dequoted a **second** time, kept beside `blockCandidates` for the block-entry
+ * readers only (WP-245, backlog 644): `tokensMatch` (so `matchesBlockPattern`, the floors' glob
+ * entries included), `blockEntryBehindFlagValue` and `blockEntryUnderUnreadOption`; and
+ * `argvReadings`' third reading, for `xargsCommandWords` (so `xargsBlockPrefix`), the peel's bound
+ * (`tooDeep`) and `feedsScriptReader`. Those readers now read the argv reading's words as handed,
+ * which the written reading did not cover when a redirection stands among an entry's command words: `git >o branch "\--" -D main` ran under `auto` (git reads
+ * `-D` past the positional `\--`). Taking the over-read away as well moved 930 sweep cells toward
+ * `allow` — `rm -rf "\/"` (bash hands `\/`), `git "\push" --force origin main`, `git commit "\-n"`
+ * — so it is kept as a stated over-ask, a candidate set of its own: unmarked, so each reader takes
+ * quotes off it once more, as before WP-245. The floors' `tokens` predicates
+ * (`carriesHazard`) and `commandArgvCandidates` do not read it (WP-242).
+ */
+const OVER_READ = new WeakMap<readonly (readonly string[])[], readonly (readonly string[])[]>();
+
+/** {@link blockCandidates} and its over-read: the candidate set of the block-entry readers. */
+const blockEntryCandidates = (text: string): readonly (readonly string[])[] => {
+  const candidates = blockCandidates(text);
+  return [...candidates, ...(OVER_READ.get(candidates) ?? [])];
 };
 
 // ── block matching (token-aware, plus the whole-line glob) ───────────────────
@@ -3697,8 +3763,8 @@ const isFlagToken = (token: string): boolean =>
  * program receives: `git fetch "--upload-pack=x"` passes a flag, not a file name, and no amount of
  * quoting makes it stop being one. Written on the raw token, this classification was the single
  * hole under every `HAZARDOUS_ARGUMENTS` entry and under `find * -exec*` before it. Words that are
- * dequoted already (`carriesHazard`'s) pass `dequote` as the identity, so no quote is taken off
- * twice (WP-242).
+ * dequoted already (`carriesHazard`'s, WP-242; the argv reading's for every block-entry reader,
+ * `readingOf`, WP-245) pass `dequote` as the identity, so no quote is taken off twice.
  */
 const splitFlags = (
   tokens: readonly string[],
@@ -3923,7 +3989,8 @@ const tokensMatch = (
   reading: PatternReading,
 ): boolean => {
   const pattern = splitFlags(patternTokens);
-  const command = splitFlags(commandTokens);
+  const dequote = readingOf(commandTokens);
+  const command = splitFlags(commandTokens, dequote);
   const hazard = reading === 'hazard';
   return (
     entryOperandsMet(
@@ -3931,13 +3998,13 @@ const tokensMatch = (
       command.positional,
       reading,
       true,
-      hazard ? flagValuePositions(commandTokens) : [],
+      hazard ? flagValuePositions(commandTokens, dequote) : [],
     ) &&
     entryFlagsMet(
       pattern.flags,
       command.flags,
       reading,
-      hazard ? getoptValuedLetters(commandTokens.map(unquoteToken)) : undefined,
+      hazard ? getoptValuedLetters(commandTokens.map(dequote)) : undefined,
     )
   );
 };
@@ -3946,14 +4013,18 @@ const tokensMatch = (
  * For each positional `splitFlags` returns from `tokens`, whether it may be the value of the
  * option written just before it with no `=` (WP-198, backlog 584): `gh -R o/r release create`
  * runs `gh release create` with `-R`'s value `o/r`. The block matcher does not know which option
- * takes a value, so such a word is read both ways. Nothing after a bare `--` is a value.
+ * takes a value, so such a word is read both ways. Nothing after a bare `--` is a value. `dequote`
+ * is `splitFlags`' (WP-245: the identity on the argv reading).
  */
-const flagValuePositions = (tokens: readonly string[]): readonly boolean[] => {
+const flagValuePositions = (
+  tokens: readonly string[],
+  dequote: (token: string) => string = unquoteToken,
+): readonly boolean[] => {
   const values: boolean[] = [];
   let literal = false;
   let afterOption = false;
   for (const written of tokens) {
-    const token = unquoteToken(written);
+    const token = dequote(written);
     if (!literal && token === '--') {
       literal = true;
       afterOption = false;
@@ -3981,7 +4052,7 @@ const blockEntryBehindFlagValue = (
   fragment: string,
   block: readonly string[],
 ): string | undefined => {
-  const candidates = blockCandidates(fragment);
+  const candidates = blockEntryCandidates(fragment);
   return block.find((entry) => {
     const pattern = splitFlags(tokenise(entry));
     // Only a command named by the entry's first word can match it (review round 1: the search is
@@ -3994,7 +4065,7 @@ const blockEntryBehindFlagValue = (
       return false;
     }
     return named.some((candidate) => {
-      const command = splitFlags(candidate);
+      const command = splitFlags(candidate, readingOf(candidate));
       return (
         entryFlagsMet(pattern.flags, command.flags) &&
         entryOperandsMet(
@@ -4002,7 +4073,7 @@ const blockEntryBehindFlagValue = (
           command.positional,
           'block',
           true,
-          flagValuePositions(candidate),
+          flagValuePositions(candidate, readingOf(candidate)),
         )
       );
     });
@@ -4024,7 +4095,7 @@ const blockEntryUnderUnreadOption = (
   fragment: string,
   block: readonly string[],
 ): { readonly entry: string; readonly option: string } | undefined => {
-  const candidates = blockCandidates(fragment);
+  const candidates = blockEntryCandidates(fragment);
   for (const entry of block) {
     const pattern = splitFlags(tokenise(entry));
     if (
@@ -4035,7 +4106,7 @@ const blockEntryUnderUnreadOption = (
       continue;
     }
     for (const candidate of candidates) {
-      const command = splitFlags(candidate);
+      const command = splitFlags(candidate, readingOf(candidate));
       const [first] = command.flags;
       if (
         first !== undefined &&
@@ -4326,7 +4397,7 @@ export const matchesBlockPattern = (
   if (matchesCommandPattern(pattern, command)) {
     return true;
   }
-  return blockCandidates(command).some((candidate) =>
+  return blockEntryCandidates(command).some((candidate) =>
     tokensMatch(patternTokens, candidate, reading),
   );
 };
@@ -4401,7 +4472,9 @@ const binaryBans = (block: readonly string[]): readonly string[] =>
  * and since WP-204 (backlog 600) the block matcher blocks it, `sudo *`'s trailing `*` meeting no word.
  */
 const xargsBannedEntry = (text: string, block: readonly string[]): string | undefined => {
-  for (const [run] of xargsCommandWords(text)) {
+  for (const {
+    words: [run],
+  } of xargsCommandWords(text)) {
     const name = argv0Name(run as string);
     const entry = block.find((pattern) =>
       binaryBans([pattern]).some((ban) => cachedGlob(ban).test(name)),
@@ -4417,19 +4490,25 @@ const xargsBannedEntry = (text: string, block: readonly string[]): string | unde
  * For each `xargs` at a command start in this piece of command line, the words written for the
  * command it runs: its command word (after xargs' own options, `readXargsOptions`) and every word
  * after it. Never empty. Read in both of `argvForms`' readings (WP-198), so a redirection between
- * `xargs` and its command (`xargs 2>/dev/null sudo`) is not taken for the command word.
+ * `xargs` and its command (`xargs 2>/dev/null sudo`) is not taken for the command word. Each comes
+ * with how its reading's words read (`dequote`: the argv reading's as handed, WP-245).
  */
-const xargsCommandWords = (text: string): readonly (readonly string[])[] =>
+const xargsCommandWords = (
+  text: string,
+): readonly { readonly words: readonly string[]; readonly dequote: (token: string) => string }[] =>
   // Both readings (WP-198): `xargs 2>/dev/null sudo` runs `sudo`, not a command named `2>/dev/null`.
-  argvForms(text).flatMap((tokens) =>
-    argvStarts(tokens).starts.flatMap((start) => {
+  argvReadings(text).flatMap(({ tokens, dequote }) =>
+    argvStarts(tokens, dequote).starts.flatMap((start) => {
       const word = tokens[start];
       if (word === undefined || argv0Name(word) !== 'xargs') {
         return [];
       }
       const args = tokens.slice(start + 1);
-      const at = readXargsOptions(args.map((raw): ShellWord => ({ raw }))).command;
-      return at === null || at < 0 || at >= args.length ? [] : [args.slice(at)];
+      const at = readXargsOptions(
+        args.map((raw): ShellWord => ({ raw })),
+        dequote,
+      ).command;
+      return at === null || at < 0 || at >= args.length ? [] : [{ words: args.slice(at), dequote }];
     }),
   );
 
@@ -4454,7 +4533,7 @@ const ENDS_WRITTEN_WORDS = /[<>|&;]/;
  * which arrives; `cat ids | xargs gh issue view` is a prefix of no entry and is not touched.
  */
 const xargsBlockPrefix = (text: string, block: readonly string[]): string | undefined => {
-  for (const words of xargsCommandWords(text)) {
+  for (const { words, dequote } of xargsCommandWords(text)) {
     const end = words.findIndex((word) => ENDS_WRITTEN_WORDS.test(word));
     const [name, ...rest] = end < 0 ? words : words.slice(0, end);
     if (name === undefined) {
@@ -4464,8 +4543,8 @@ const xargsBlockPrefix = (text: string, block: readonly string[]): string | unde
     // prefix (review round 3 — `xargs terraform -chdir=x` completes to a blocked line).
     // A word after an option written with no `=` may be its value, so it may be left out of the
     // prefix (WP-198, backlog 584: `xargs gh -R o/r release`).
-    const value = flagValuePositions([argv0Name(name), ...rest]);
-    const written = splitFlags([argv0Name(name), ...rest]);
+    const value = flagValuePositions([argv0Name(name), ...rest], dequote);
+    const written = splitFlags([argv0Name(name), ...rest], dequote);
     const entry = block.find((pattern) => {
       const { flags, positional } = splitFlags(tokenise(pattern));
       // The written words are a live prefix of the entry, and the input may supply what they
@@ -5306,12 +5385,12 @@ const feedsScriptReader = (segment: string): boolean => {
       .split(/[\s|&;()<>]+/)
       .some((word) => word.length > 0 && HERE_DOCUMENT_SCRIPT_READERS.has(argv0Name(word))) ||
     scan(text, PIPE_OPERATORS).segments.some((stage) =>
-      argvForms(stage).some((tokens) => {
+      argvReadings(stage).some(({ tokens, dequote }) => {
         const head = tokens.find((token) => !isAssignment(token));
         if (head !== undefined && (argv0Name(head) === '[' || argv0Name(head) === '[[')) {
           return false;
         }
-        return argv0Candidates(tokens).some(
+        return argv0Candidates(tokens, dequote).some(
           ([name]) =>
             name === '.' ||
             (name !== undefined && /[*?[{]/.test(name) && !isWrapperToken(name) && name !== '['),
@@ -7840,12 +7919,15 @@ interface XargsOptions {
  * the next word — so `-0IR` replaces `R` and `-iI` replaces `I` (WP-164 review round 2, backlog
  * 560); a long option resolves by {@link xargsLongOption}, and `--repl=X` replaces `X`.
  */
-const readXargsOptions = (args: readonly ShellWord[]): XargsOptions => {
+const readXargsOptions = (
+  args: readonly ShellWord[],
+  dequote: (token: string) => string = unquoteToken,
+): XargsOptions => {
   let replace: string | null = null;
   let opaqueReplace = false;
   for (let index = 0; index < args.length; index += 1) {
     const raw = (args[index] as ShellWord).raw;
-    const value = unquoteToken(raw);
+    const value = dequote(raw);
     if (value === '--') {
       return { command: index + 1 < args.length ? index + 1 : -1, replace, opaqueReplace };
     }
@@ -7870,7 +7952,7 @@ const readXargsOptions = (args: readonly ShellWord[]): XargsOptions => {
       const rest = value.slice(at + 1);
       if (XARGS_VALUE_SHORT.includes(letter)) {
         const operandRaw = rest === '' ? (args[index + 1]?.raw ?? '') : raw;
-        const operand = rest === '' ? unquoteToken(operandRaw) : rest;
+        const operand = rest === '' ? dequote(operandRaw) : rest;
         if (letter === 'I' || letter === 'J') {
           replace = operand || '{}';
           opaqueReplace ||= !isLiteralWord(operandRaw);
@@ -8949,7 +9031,7 @@ const parseCommand = (
         uncertainty.add(UNCERTAINTY.evaluatedText);
       }
       // WP-161 (d): the peel the block list reads stopped at its bound.
-      if (argvForms(stage).some((words) => argvStarts(words).tooDeep)) {
+      if (argvReadings(stage).some(({ tokens, dequote }) => argvStarts(tokens, dequote).tooDeep)) {
         uncertainty.add(UNCERTAINTY.tooDeep);
       }
     }
@@ -9264,6 +9346,54 @@ export const commandArgvCandidates = (fragment: string): readonly (readonly stri
         ? candidate
         : [candidate[0] as string, ...candidate.slice(1).map(unquoteToken)],
     );
+
+/**
+ * {@link commandArgvCandidates} with each redirection left out **as written** (WP-245 review round
+ * 2): the argv reading has none and is unchanged, and the written one drops a word that is an
+ * unquoted redirection, with a detached one's target (`> out`), before its quotes come off — never
+ * a quoted `">sub"` or `"{fd}>sub"`, which the program is handed. The git boundary reads these
+ * beside its own filter over the dequoted words (backlog 488), which dropped `"{fd}>sub"` and
+ * `"2>sub"` too: `git -C "{fd}>sub" -c core.fsmonitor=x status` lost `-C`'s value and ran. The
+ * written one is read twice, as bash 4.1+ reads a named descriptor (`{fd}>out` is a redirection)
+ * and as bash 3.2 does (`{fd}` is an argument, `>out` the redirection).
+ */
+export const commandArgvsAsWritten = (fragment: string): readonly (readonly string[])[] =>
+  blockCandidates(fragment)
+    .filter((candidate) => candidate.length > 0)
+    .flatMap((candidate) => {
+      if (RECEIVED_READING.has(candidate)) {
+        return [candidate];
+      }
+      const [name, ...words] = candidate as [string, ...string[]];
+      const bash32 = words.flatMap((word) => {
+        const descriptor = NAMED_DESCRIPTOR.exec(word)?.[0];
+        return descriptor === undefined ? [word] : [descriptor, word.slice(descriptor.length)];
+      });
+      return [words, bash32].map((reading) => [
+        name,
+        ...withoutWrittenRedirections(reading).map(unquoteToken),
+      ]);
+    });
+
+/** A named descriptor written in front of a redirection operator: the `{fd}` of `{fd}>out`. */
+const NAMED_DESCRIPTOR = /^\{[A-Za-z_]\w*\}(?=[<>&])/;
+
+/**
+ * A word written as a redirection — an unquoted operator, after an optional descriptor: `2>&1`,
+ * `>out`, `>>log`, `&>/dev/null`, `<in`, and bash 4.1+'s `{fd}>out`.
+ */
+const WRITTEN_REDIRECTION = /^(?:\d+|&|\{[A-Za-z_]\w*\})?(?:>>?|<)/;
+
+/** A written redirection with no target in it (`>`, `2>`, `{fd}>`, `&>`): its target is the next word. */
+const DETACHED_WRITTEN_REDIRECTION = /^(?:\d+|&|\{[A-Za-z_]\w*\})?[<>&|]+$/;
+
+/** Written words (quotes on) with each written redirection, and a detached one's target, left out. */
+const withoutWrittenRedirections = (words: readonly string[]): readonly string[] =>
+  words.filter(
+    (word, index) =>
+      !WRITTEN_REDIRECTION.test(word) &&
+      !(index > 0 && DETACHED_WRITTEN_REDIRECTION.test(words[index - 1] as string)),
+  );
 
 // ── evaluation ───────────────────────────────────────────────────────────────
 

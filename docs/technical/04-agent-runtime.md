@@ -477,7 +477,11 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   its quotes taken off once, as bash takes them off (WP-242, backlog 642): inside `"…"` a backslash
 >   stays unless `$`, a backtick, `"`, `\` or a newline follows, so `"\--"` is the positional `\--`
 >   and ends no option reading — npm 11.19.0 reads `--script-shell` past it (measured in the run
->   image). `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no message catalogue bash
+>   image). Since WP-245 (backlog 644) the block-entry readers, and a floor written as a glob, read
+>   the argv reading that way too, so `git >o branch "\--" -D main` is `git branch -D *` (it ran
+>   under `auto` before: git 2.54.0 deleted `main`, measured on a scratch repository); they also
+>   read it with its quotes taken off a second time, a stated over-ask kept because removing it
+>   moved 930 sweep cells toward `allow` (`rm -rf "\/"`). `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no message catalogue bash
 >   ignores the `$` and double-quotes the text, so every floor reads `npm test $"--script-shell=x"` as
 >   `npm test --script-shell=x` — npm 11.19.0 ran that marker (measured in the run image, which ships
 >   no catalogue); a `$"…"` word a catalogue the run supplies may translate stays a residual (TD-030,

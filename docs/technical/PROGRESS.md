@@ -17515,6 +17515,37 @@ The reviewer ran 240 separator spellings through real `/bin/bash` in front of si
 
 **Depends on** WP-242's merge. Serial with WP-243 and 643 on `command-policy.ts`. It is natural to bundle it with 643's row, since both touch the shared dequote's callers.
 
+### 645. **The git boundary drops a process substitution `<(…)` / `>(…)` as if it were a redirection, but bash passes it to the program as an argument (a `/dev/fd/N` path). So a git global option that takes a value loses its value, the next word is read as the value instead, and an option behind it is not seen: `git --namespace <(true) -c core.fsmonitor=<script> status` reads `ask / auto / deny`, and the fsmonitor script ran** (TODO, **major**: a **live fail-open on `main`**, pre-existing at `cdf99495`, not caused by WP-243 or WP-245. **TD-030 tier 1**: what is an argument and what is a redirection is bash's grammar, and WP-198's rule is that floors read argv *as the shell builds it*. Same class as WP-245's round-2 blocker: a word bash passes as an argument, dropped by a redirection filter. Found by WP-245's reviewer, review round 3, session 20 (tree `wt-wp245` over `cdf99495`). The refiner read the boundary's filter on `main` and the WP-245 tree, and ran nothing. **No work package owns it.**)
+
+**Evidence.** Measured by WP-245's reviewer with git 2.56.0 and bash 5.3.20 on a scratch repository:
+  - `git --namespace <(true) -c core.fsmonitor=<script> status` reads `ask / auto / deny`, and the fsmonitor script **ran**;
+  - `git --attr-source <(true) -c core.fsmonitor=<script> status` reads the same, and the script ran.
+
+Sites on `main` at `cdf99495`: `REDIRECTION_WORD` in `packages/domain/src/policies/unattended-commands.ts` (`:893`) and the filter in `gitBoundaryViolation` that drops every word it matches before `checkGitArgv` reads the argv (`:971`). On the WP-245 tree the filter is a function, `boundaryArgvs` (`unattended-commands.ts:916`), beside `WRITTEN_REDIRECTION` in `command-policy.ts` (`:9385`); those names do not exist on `main` yet. The reviewer reports that a `(?!\()` lookahead on `WRITTEN_REDIRECTION` alone does **not** fix it: another reader of the boundary drops the word too. Which reader is not named in the report — **needs a read** of every redirection filter the boundary passes the argv through before starting.
+
+**What it costs to leave.** A run under `auto` can set `core.fsmonitor` (or any `-c` key the boundary refuses) and git runs that program: a configuration-to-execution path the boundary exists to close (backlog 488's `GIT_CONFIG_*` list pins `core.fsmonitor` for the same reason). Live on every project; the trigger is only a line spelled this way.
+
+**Done when** every reader of the boundary keeps `<(…)` and `>(…)` as an argument word. Then:
+  - the two measured lines are pinned tightened in all three baselines;
+  - a sweep places `<(…)` and `>(…)` as the value of each git global option that takes a value, and reports **0 looser** against the base;
+  - a canary per reader that dropped the word.
+
+**Depends on** WP-245's merge (it rewrites the boundary's redirection filter). Serial with it on `command-policy.ts` and `unattended-commands.ts`.
+
+### 646. **WP-206's `braceWords` and WP-243's `expandBraces` both expand braces in `packages/domain/src/policies/command-policy.ts` (`:7064` and `:6191` at `cdf99495`); the first could reuse the second** (TODO, **nit**: a refactor, no verdict moves. Found during WP-243/WP-245, session 19, recorded in the session-19 resume note. **No work package owns it.** Done when one expander serves both, with the corpus diff 0 and the sweep 0 looser.)
+
+### 647. **`commandNameWalk` (`command-policy.ts:6623`) and `argv0Name` (`:3305`, `basename(unquoteToken(token))`) still take quotes off the argv reading a second time: the rest of 642's and 644's double-strip class** (TODO, **minor**: a consistency cleanup, no fail-open measured. **TD-030 tier 1**. Found during WP-243/WP-245, session 19, resume note. Not in 644's site list, and WP-245 (644's row) does not name them. **No work package owns it.** Done in 644's shape: each reads the argv reading's words as they are and dequotes only the written reading; a reading row and a canary per site; corpus diff recorded, 0 looser. **Depends on** WP-245's merge.)
+
+### 648. **The resolved-binary path in `command-policy.ts` re-parses the argv reading instead of taking the one already built** (TODO, **nit**: efficiency only, no verdict moves. Found during WP-243/WP-245, session 19, resume note; the function is not named there — **needs a read** to locate it. **No work package owns it.**)
+
+### 649. **Whole-tree census tests run close to vitest's 5 s default timeout on CI: WP-243's `ci` run `39403396684` failed its first attempt because `packages/application/src/pipeline/default-branch-readers.test.ts`'s whole-tree census case timed out at 5101 ms (546 ms locally) and passed on re-run** (TODO, **minor**: a CI flake risk, no defect in the product. Found by the orchestrator, session 19 (WP-243's row in the M17 table). **No work package owns it.**)
+
+**Evidence.** One measured timeout, quoted from WP-243's row: *"attempt 1 failed: `packages/application/src/pipeline/default-branch-readers.test.ts`'s whole-tree census case timed out at 5101 ms under CI load — 546 ms locally, untouched by the row; the failed job re-run, attempt 2 success"*. The other census suites are the same shape (a walk over every file git knows about) and are candidates, **unmeasured**: in `packages/application/src/pipeline/` — `task-management-call-sites.test.ts`, `wip-commit-sites.test.ts`, `platform-marker-census.test.ts`, `project-stream-sites.test.ts`, `planner-command-census.test.ts`, `compile-sites.test.ts`, `config-refusal-readers.test.ts`, `task-save-sites.test.ts`; in `packages/infrastructure/src/` — `pipeline/tasks-column-ownership.test.ts`, `db/projects-column-ownership.test.ts`, `db/pool-errors.test.ts`, `human-time/human-time-writers.test.ts`, `maintenance/maintenance-blocker-writers.test.ts`, `stats/stats-writers.test.ts`; in `packages/domain/src/` — `config/feature-readers.test.ts`, `policies/autonomy-readers.test.ts`; in `scripts/` — `git-scratch-env-census.test.ts`, `command-census.test.ts`. That list is a grep for `census` and its neighbours, not a timing — **needs measurement**: each suite's duration on a CI runner, from the job logs, before choosing a remedy.
+
+**What it costs to leave.** A red `ci` on a commit that changed nothing the failing test reads, and a re-run per occurrence, which teaches readers to re-run a red `ci` rather than read it.
+
+**Done when** the census cases' CI durations are recorded and either they share one walk of the tree per worker or they carry an explicit timeout stated against the measured CI figure; no census case reads within 2× of its timeout on CI.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -57284,3 +57315,275 @@ Implementer, session 19, worktree `wt-wp243` over `7184f5fb`.
   parameter would be cleaner. Discovered (not filed, minor): WP-206's looser `braceWords` could
   reuse `expandBraces`. Orchestrator on this tree: `PASS: verify` (15780), `PASS: verify:integration`
   (901), `PASS: verify:e2e` twice (304).
+
+#### WP-245 — the block-entry readers read the argv reading as handed, with the second dequote kept as a stated over-read (backlog 644)
+
+Implementer, session 19, worktree `wt-wp245` over `cdf99495`. No Docker.
+
+- **(a) The readers.** Each reader 644 names now takes the argv reading's words as handed, through a
+  `dequote` it is given (`asHanded` for the argv reading, `unquoteToken` for the written one; a
+  `blockCandidates` candidate's is `readingOf(candidate)`, keyed on WP-242's `RECEIVED_READING`):
+  `argv0Candidates`' wrapper `--` test and its peel (`argvStarts`, so `walkCommandStarts`' option
+  test); `tokensMatch` (`splitFlags`, `flagValuePositions`, `getoptValuedLetters`);
+  `blockEntryBehindFlagValue`; `blockEntryUnderUnreadOption`; and `xargsCommandWords` (its peel and
+  `readXargsOptions`, which took a `dequote` parameter) for `xargsBlockPrefix`. Two more callers of
+  the peel over `argvForms` read the same way: the `tooDeep` check in `parseCommand` and
+  `feedsScriptReader`.
+- **The finding that decided the shape: removing the second dequote alone moved 930 sweep cells
+  toward `allow`, so ruling (a)'s "stays as it is" was not enough and the reading was made stricter
+  instead.** Attributed by applying each site alone over the moved lines: `tokensMatch` 606 looser,
+  `blockEntryBehindFlagValue` 162, `xargsCommandWords`/`xargsBlockPrefix` 48,
+  `blockEntryUnderUnreadOption` 24; the wrapper `--` test, the peel's option test, `tooDeep` and
+  `feedsScriptReader` 0. Every looser cell was a word bash hands with a backslash or a quote the
+  second dequote took off — `rm -rf "\/"` (bash hands `\/`) `block` → `ask / auto / deny`,
+  `git "\push" --force origin main` `block` → auto, `git commit "\-n" -m x`
+  `ask / hazard / hazard` → `allow / allow / allow`, `xargs "\--" -n1 echo < list` `uncertain` →
+  auto: over-asks the old reading made, but cells toward `allow` all the same (TD-030 decision 4).
+  **The resolution:** the argv reading dequoted a second time is kept **beside** the handed reading,
+  as a stated over-ask — `OVER_READ`, an unmarked candidate set `blockCandidates` computes only when
+  a second dequote changes some word, read by `tokensMatch` (so `matchesBlockPattern`, a floor's glob
+  entry included), `blockEntryBehindFlagValue` and `blockEntryUnderUnreadOption`
+  (`blockEntryCandidates`), and a third reading in `argvReadings` for `xargsCommandWords`, `tooDeep`
+  and `feedsScriptReader`. Each reader therefore reads the union of the handed reading and the old
+  one, which only tightens. WP-242's three sites (`carriesHazard`'s `tokens` predicates,
+  `commandWords`, `commandArgvCandidates`) do not read it and are unchanged. **Exceptions named**
+  (module docblock rule 2): the over-read itself, and a command's name, which `argv0Name` still
+  dequotes (not one of 644's readers; `xargs >o -n1 "\-x" echo` below is uncertain through it).
+- **Live fail-open found and closed (on `cdf99495`, not recorded before).** The written reading masks
+  the double strip only when the entry's command words stand together; a redirection between them
+  (`git >o branch …`) leaves the argv reading alone, and its second dequote read `"\--"` as `--`:
+  `git >o branch "\--" -D main` read `ask / auto / deny` — **measured**: in a scratch repository
+  (`env -i`, `/opt/homebrew/bin/bash` 5.3.20, git 2.54.0, also bash 3.2.57) it printed `error: branch
+  '\--' not found` and `Deleted branch main`. Now `block / block / block`. WP-242's reviewer's 240
+  spellings stood in front of the hazard with no redirection between the command words.
+- **(b) Rows** — `unattended-commands.test.ts`, describe `WP-245, backlog 644: …` (17 cases), cells on
+  `DEFAULT_IMPLEMENTATION_ALLOW`, before → after: `git >o branch "\--" -D main`, `… $"\--" …`,
+  `… '\--' …`, `git >o reset "\--" --hard origin/main` `ask / auto / deny` → `block / block / block`;
+  `git >o push "\--" --force origin main` `ask / git / git` → `block`; `start-stop-daemon >o -S
+  --exec=/bin/rm "\--" -- -rf /` `ask / auto / deny` → `block` (the wrapper `--` test: `\--` is no
+  `--`, so rm's words start after the real one); `git >o -C . commit "\--" -n -m x` `ask / auto /
+  deny` → `ask / hazard / hazard` (the hazard reading); `git >o -C d branch "\--" -D x` → uncertain
+  `flagValueHidesBlockEntry(git branch -D *)`; `git >o branch "\--" --show-current` → uncertain
+  `optionMayBeBlockEntry(git branch -D *, --show-current)` (the over-ask that reader states);
+  `xargs >o -n1 "\-x" echo < list` → uncertain `xargsCompletesBlockEntry(rm -rf /*)` (xargs is handed
+  the command `\-x`, whose name `argv0Name` reads as `-x`: an over-ask through the name exception).
+  `walkCommandStarts` moves no cell (the over-read keeps the window): its row reads the argv reading
+  through `commandArgvCandidates` — no candidate at `sudo` for `nice a b c d e f g "\-x" sudo id`,
+  one for `-x` — and the cell stays `block`. Controls kept: the unquoted `\--` spellings (`ask / auto /
+  deny`), `xargs >o -n1 -x echo < list`, and the over-read's `rm -rf "\/"` (`block`) and `git commit
+  "\-n" -m x` (`ask / hazard / hazard`). On `cdf99495`'s `command-policy.ts` the describe reads
+  `11 failed | 6 passed` (every moving row red, every control green).
+- **Canaries** (in place, `cp` backup, restored and `cmp` equal after each): the second dequote put back
+  at the wrapper `--` test → 1 failed (the start-stop-daemon row); the peel's option test → 1 (the
+  `walkCommandStarts` row); `tokensMatch` → 6 (the five block rows, the hazard row);
+  `blockEntryBehindFlagValue` → 1; `blockEntryUnderUnreadOption` → 1; `argvReadings`' handed reading
+  (xargs, `tooDeep`, `feedsScriptReader`) → 1 (the xargs row); the over-read removed → 2 (the two
+  over-read controls), each by name.
+- **(c) Corpus diff** (`node scripts/command-corpus.mjs`): `agent-lines.txt: 0 cells changed`,
+  `developer-lines.txt: 0 cells changed`, `PASS: command-corpus`. **Sweep** (a scratch script over the
+  worktree, `cdf99495`'s `command-policy.ts` swapped in for the base and restored): every corpus line,
+  WP-243's 23 hazard lines and 34 of this row's own (`nice -n 5 sudo id`, `gh -R o/r release create
+  v1`, `git -C d branch -D x`, nine xargs lines, `start-stop-daemon … --exec=/bin/rm -- -rf /`, `nice`
+  ×8 …), each also with `>o` after its first word; each word wrapped six ways (`"w"`, `'w'`, `$"w"`,
+  `"\w"`, `\w`, and its first letter alone as `"\x"`) and three brace ways, and eight separators inserted at every position
+  (`"\--"`, `$"\--"`, `\--`, `--`, `'\--'`, `"\-n"`, `"\-"-`, `"\-x"`); three policies (the default,
+  `DEFAULT_IMPLEMENTATION_ALLOW`, and that plus `logcli query *`): **170 697 cells, 0 looser, 162
+  tighter** — all on a line with `>o` among the command words: the `git branch`/`reset`/`push`/`commit`
+  and `start-stop-daemon` spellings above in `"\--"`, `$"\--"`, `'\--'` and `"\-"-` form, `git >o
+  branch … --show-current` with a backslash word (uncertain, `optionMayBeBlockEntry`), and xargs with
+  `"\-n"`/`"\-x"`/`"\-n1"` (uncertain through the name). Without the over-read: 930 looser, 138
+  tighter (above).
+- **WP-243's second reading** (`readsExpandedStages`): it re-parses an expanded stage as text with the
+  quotes kept, so its words reach these readers through `argvForms` as any stage's do — not fed
+  differently. The sweep's brace variants (`{w,x}`, `{x,w}`, `{w,}`, `{w1,w2}`) moved no cell.
+- **(d) Docblocks:** module rule 2 (the readers read as handed; the two exceptions), `OVER_READ`,
+  `argvReadings`, `readingOf`, `asHanded`, `argvStarts`, `argv0Candidates`, `splitFlags`,
+  `flagValuePositions`, `xargsCommandWords`; `04-agent-runtime.md`'s floor paragraph (the fail-open
+  and the over-ask). **WP-242's *Discovered work* (backlog 644) is closed** by this row, with the
+  over-read stated rather than removed.
+- **Sentences falsified (rule 83).** Grepped "twice", "second dequote", `644` and the five reader names
+  over `docs`, `CLAUDE.md`, `packages`, `test`. Changed: `04-agent-runtime.md` (its "every floor
+  reads a word with its quotes taken off once" was already false for a glob floor through
+  `tokensMatch`, and is now qualified by the over-read) and the `splitFlags` docblock. Left, still
+  true: `command-policy.ts`'s readers that read each piece "twice — with its quotes off, and as
+  written" (the written-word readers, another subject); `unattended-commands.test.ts:5972` (WP-241's
+  go floor, `received`); `05-workspaces-and-security.md:62–63` and the `OPTION_READERS`/`BLOCK_READERS`
+  census in `command-policy.test.ts` (unchanged by this row); `13-implementation-plan.md` and backlog
+  644's evidence (historical).
+- **Discovered work.** (1) The resolved-binary path in `evaluateOnce` joins each `argvForms` reading
+  back into text and evaluates it as a line, so the argv reading's words are parsed — and dequoted —
+  again; only with a `resolvedBinary`, and an added candidate only tightens, so not this row's.
+  (2) `commandNameWalk` (the wrapper grammar walk `argv0Candidates` and `walkCommandStarts` call) and
+  `argv0Name` still dequote an argv-reading word a second time; outside 644's list, and the over-read
+  now covers the block-entry readers either way.
+  (3) **Older than this row, fixed in the orchestrator round below:** `git > out fetch or{igin,y}` reads
+  `ask / auto / deny` under the read-only baseline while `git fetch or{igin,y}` is refused at the git
+  boundary (it names `or{igin,y}`, not `origin`: the written word's over-ask — bash hands `git fetch
+  origin y`, itself `auto`). With the redirection inside the command words the written candidate's
+  verb is `>`, and the argv reading's words are the expansion, so nothing reads the written remote.
+  WP-198's property *never moves a refused row to a run by a redirection* samples its rows off
+  `unattended-commands.test.ts` itself, so this row's new cases shifted its fixed-seed sample onto that
+  pair (`seed 20260927, path 823:2`). **Proved pre-existing:** `cdf99495`'s `command-policy.ts` with
+  this row's test file fails the property on the same counterexample; the policy change does not
+  touch it (both trees give the same two cells). No fail-open (the line bash runs is `auto` either
+  way); a loosening of an over-ask by a redirection, which the property forbids. Not fixed here (the
+  git boundary's written reading, outside 644's readers): the orchestrator's call.
+- **Verify.** `biome check --diagnostic-level=error` on the two touched sources: clean (`biome format
+  --write` changed only this row's lines). `vitest run scripts/citations.test.ts --project unit`:
+  13 passed. `pnpm run -s verify`: `FAIL: verify` — every static, type and bundle step `PASS`, tests
+  `1 failed | 15796 passed | 19 skipped`, the one failure the property above. Unit tier of
+  `packages/domain/src/policies` before the rows: 4224 passed, no existing case moved.
+- **Orchestrator round (the property failure, fixed at its root).** *Root cause:* the git boundary
+  took a redirection out of each candidate by `REDIRECTION_WORD`, which removes an attached one
+  (`>o`, `2>/dev/null`) but only the operator of a detached one, so `git > out fetch or{igin,y}`'s
+  written candidate was `git out fetch …` (verb `out`). Before WP-243 the argv reading (redirections
+  out, braces as written) still read the remote `or{igin,y}` and refused; WP-243 made the argv
+  reading the expansion (`origin y`), so nothing read the written remote and the line ran under
+  `auto`. *Fix* (`unattended-commands.ts`, `boundaryArgvs`): each candidate is also read with a
+  detached redirection's target taken out (`DETACHED_REDIRECTION`: a word of only an optional
+  descriptor and operator characters), **beside** the old reading, because a candidate's words are
+  dequoted and a quoted `">"` is git's argument — the union only tightens.
+  *Rows* (describe `WP-245, orchestrator round: …`): `git fetch or{igin,y}` against `> out`, `>o`,
+  `2>/dev/null` and `2> /dev/null`, `git fetch upstream` against `> out`, and `rm {-rf,x} /` against
+  `> out` read the same auto / deny in every baseline (the attended column may only tighten, rule 4:
+  a path write floors it at `ask`), and `git > out fetch or{igin,y}` reads `ask / git / git` under
+  the read-only baseline. *Canary:* `unattended-commands.ts` restored from `cdf99495` (backup `cmp`
+  equal after) — 3 failed by name (`> out`, `2> /dev/null`, the read-only cell); the attached
+  spellings and `upstream` stay green, as the argv reading holds them. *Property*
+  (WP-198's, unchanged) at the gate seed and at `PROPERTY_SEED=1` and `PROPERTY_SEED=424242`: passed
+  each time. *Sweep* against `cdf99495` (both files swapped in for the base, restored, `cmp` equal):
+  the earlier set 170 697 cells, 0 looser, 162 tighter (unchanged); a second set with ` > out ` and
+  ` 2> /dev/null ` after the first word instead of `>o`: 233 025 cells, **0 looser, 408 tighter**, 42
+  refusals changing reason only (`uncertain` → `git_boundary`). The tighter cells: this row's readers
+  under a detached redirection (as with `>o` above), the braced git lines whose plain twins the
+  boundary refuses (`git > out push {origin,agentic/ABC-1}`, `git 2> /dev/null fetch {origin,x}`
+  `auto` → `git`), and a quoted or escaped `">"`/`"2>"` before `push --force`, `-c
+  core.fsmonitor=x` (`auto` → `git`: an over-ask, git is handed `>` as an argument). Corpus 0
+  cells. `pnpm run -s verify`: `PASS: verify` (15804 passed, 19 skipped).
+
+##### Round 2 (review round 1's findings: pins over correct code)
+
+Implementer, session 20, same worktree. No Docker.
+
+- **Rows added** (`unattended-commands.test.ts`, describe `WP-245, review round 1: the kept readings
+  are pinned`, 6 cases): `cp ">" .git/hooks/pre-commit`, `cp '>' .git/hooks/pre-commit` and `tee ">"
+  .git/config` read `ask / git / git` in all three baselines (`expectCells`) — `boundaryArgvs`' kept
+  reading, the quoted `>` an argument; and one control per block-entry reader of the over-read, each
+  `ask / uncertain / uncertain` on `DEFAULT_IMPLEMENTATION_ALLOW` with its one reason:
+  `xargs "\--" -n1 echo < list` (`argvReadings`' third reading, `xargsCompletesBlockEntry(rm -rf /*)`),
+  `git -C d branch "\-D" x` (`blockEntryBehindFlagValue`, `flagValueHidesBlockEntry(git branch -D *)`),
+  `git branch "\-m" a b` (`blockEntryUnderUnreadOption`, `optionMayBeBlockEntry(git branch -D *, -m)`).
+  Each was chosen by probing the cell with that one reader's over-read taken away (it moves to `ask /
+  auto / deny`) and with the other two taken away (it stays).
+- **Canaries** (in place, `cp` backup, `diff` shown, restored and `cmp` equal after each; `vitest -t
+  WP-245`, 32 cases): c4, `boundaryArgvs` returning only the detached-target reading → 3 failed, the
+  three `>` rows by name; `argvReadings`' `{ tokens: received, dequote: unquoteToken }` removed → 1, the
+  xargs control; `blockEntryBehindFlagValue` on `blockCandidates` → 1, the `git -C d branch "\-D" x`
+  control; `blockEntryUnderUnreadOption` on `blockCandidates` → 1, the `git branch "\-m" a b` control;
+  the `{fd}` fix reverted (below) → 3, its two pairs and its read-only cell.
+- **`{fd}>` at the boundary.** Measured in a scratch directory (`env -i`): bash 5.3.20 reads
+  `printf '<%s>' {fd}>out fetch or{igin,y}` as `<fetch><origin><ory>` with `fd=10` written to `out`
+  (also `{fd}> o3`, detached); bash 3.2.57 reads `{fd}` as an argument. **Older than WP-245:** with
+  `cdf99495`'s two policy files swapped in (restored, `cmp` equal) `git {fd}>out fetch or{igin,y}` and
+  `git {fd}> out fetch or{igin,y}` read `ask / auto / deny` in the read-only and implementation
+  baselines, as they did on this row's round-1 tree. Cause: the argv reading already takes `{fd}>out`
+  out (its candidate is `git fetch origin ory`), but `REDIRECTION_WORD`/`DETACHED_REDIRECTION` knew
+  only a digit or `&` descriptor, so the written candidate's verb was `{fd}>out`. **Fixed** (a small
+  extension of `boundaryArgvs`' reading): both regexes accept bash's `{name}` descriptor
+  (`\{[A-Za-z_]\w*\}`). Rows: `git {fd}>out fetch or{igin,y}` and `git {fd}> out fetch or{igin,y}`
+  added to the orchestrator round's pairs, and `git {fd}>out fetch or{igin,y}` reads `ask / git / git`
+  read-only. *Sweep* (a scratch script, the regexes reverted for the base and restored): every line of
+  `test/fixtures/commands/{agent,developer}-lines.txt` with `{fd}>out`, `{fd}> out`, `"{fd}>out"`,
+  `{fd}<in`, `{x_1}>>log`, `{fd}>&2`, `{fd}>&-`, `{fd}<>f` after its first word, three baselines:
+  20 568 cells, **0 looser, 582 tighter**, 24 changing reason only (`hazard` → `git`). The tighter cells
+  are the unquoted forms' braced git lines (24 each) and, 438 of them, the quoted `"{fd}>out"`, which
+  git is handed as an argument: an over-ask of the same shape as the quoted `">"`'s above.
+  `commandWriteTargets` already reads `echo x {fd}>.git/config` as `ask / git / git`.
+- **Sentences falsified (rule 83).** Grepped `{fd}`, `REDIRECTION_WORD`, `detached redirection` over
+  `docs`, `CLAUDE.md`, `packages`, `test`, `scripts`: only `REDIRECTION_WORD`'s own docblock named the
+  descriptor forms (updated); the orchestrator round's "a word of only an optional descriptor and
+  operator characters" stays true. Found, not this round's: the round-1 notes above say bash hands
+  `git fetch origin y` for `or{igin,y}` — it hands `origin ory` (measured above); the cells are
+  unaffected.
+- **Verify.** `biome format --write` on the test file (this round's rows only); `vitest run
+  scripts/citations.test.ts --project unit`: 13 passed; `pnpm run -s verify`: `PASS: verify` (15812
+  passed, 19 skipped).
+
+##### Round 3 (review round 2: the named-descriptor regex opened a fail-open)
+
+Implementer, session 20, same worktree. No Docker.
+
+- **The defect, and the older one under it.** The boundary's redirection filter (`REDIRECTION_WORD`,
+  backlog 488) is tested on words **after** quote removal, so a quoted `"2>sub"`/`">sub"` — git's
+  argument — was dropped, and with it `-C`'s value: `git -C "2>sub" -c core.fsmonitor=x status`
+  read `auto` already on `cdf99495`. Round 2's `{name}` extension added `"{fd}>sub"`/`'{fd}>sub'` to
+  the same hole: `git -C "{fd}>sub" -c core.fsmonitor=x status` and `git -C '{fd}>sub' push origin
+  main` went `git` → `auto` (the reviewer's git 2.54.0 ran the fsmonitor; a reconstruction of round
+  2's `unattended-commands.ts` reads both lines `ask / auto / deny` again). Round 2's sweep never put
+  a quoted spelling at an option's value.
+- **The fix, at the root.** `commandArgvsAsWritten` (`command-policy.ts`, beside
+  `commandArgvCandidates`): the written reading drops a word only when it is a redirection **as
+  written** (`WRITTEN_REDIRECTION`/`DETACHED_WRITTEN_REDIRECTION` on the quoted word: an unquoted
+  operator after an optional digit, `&` or `{name}` descriptor), with a detached one's target, before
+  its quotes come off. It is read twice: as bash 4.1+ reads `{fd}>out` (a redirection) and as bash
+  3.2 does (`NAMED_DESCRIPTOR` splits off `{fd}`, an argument, from the `>out` redirection). The argv
+  reading is unchanged (it has no redirections). The boundary reads these **beside** `boundaryArgvs`'
+  dequoted readings, kept as an over-ask (round 2's two, plus one with `NUMBERED_REDIRECTION_WORD`,
+  the dequoted filter without `{name}`, which is `cdf99495`'s reading). The union only tightens. A
+  first cut without the bash 3.2 written reading failed WP-198's property in `verify` (`git > out -C
+  {fd}>sub push origin main` read `allow` under `ro`/auto, seed 20260927, path 378).
+- **Rows** (describe `WP-245, review round 2: a quoted redirection is the program’s argument`, 10
+  cases, `ask / git / git` in all three baselines): `git -C "{fd}>sub" -c core.fsmonitor=x status`,
+  `git -C '{fd}>sub' -c core.fsmonitor=x status`, `git -C '{fd}>sub' push origin main`, `git -C
+  "2>sub" -c core.fsmonitor=x status`, `git -C ">sub" -c core.fsmonitor=x status`, `git -C {fd}>sub
+  push origin main`, `git > out -C {fd}>sub push origin main`, `git "2>sub" -C "{fd}>sub" -c
+  core.fsmonitor=x status`, `git "{fd}>sub" push`, `git -C '{fd}>sub' {fd}>out fetch or{igin,y}`.
+  Each was chosen off a mutation sweep (below) as a cell that moves when one piece goes.
+- **Canaries** (in place, backups, restored and `cmp` equal; `vitest -t WP-245`, 42 cases): the whole
+  fix reverted (no as-written reading, no numbered reading) → 9 failed, every row but `git
+  "{fd}>sub" push`; the as-written reading alone → 4 (`"2>sub"`, `">sub"`, `> out -C {fd}>sub`, the
+  mixed `'{fd}>sub' {fd}>out` line); its bash 3.2 half alone → 1 (`git > out -C {fd}>sub push origin
+  main`); the numbered reading → 1 (`git "2>sub" -C "{fd}>sub" …`); `boundaryArgvs`' `kept`
+  reading → 1 (`git "{fd}>sub" push`); round 2's `{name}` in `REDIRECTION_WORD`/
+  `DETACHED_REDIRECTION` → 1 (the same); the `{name}` in the written regexes → 1 (the mixed line).
+  Round 1's three over-read canaries still kill their controls by name. **Falsified by this round:**
+  round 2's c4 (only the detached-target reading) now kills nothing — the as-written reading also
+  keeps the quoted `">"`'s path, so the `cp ">"` rows are held by two readings; and round 2's "the
+  `{fd}` fix reverted → 3" is now split across the two regex pairs above.
+- **Sweep** (scratch script; `cdf99495`'s two policy files and a reconstruction of round 2's swapped
+  in for the bases, restored, `cmp` equal): every `test/fixtures/commands/{agent,developer}-lines.txt`
+  line with 15 spellings (`"{fd}>sub"`, `'{fd}>sub'`, `"2>sub"`, `">sub"`, `'>sub'`, `\>sub`,
+  `"{fd}>"`, `">"`, `"2>&1"`, `{fd}>sub`, `2>sub`, `> sub`, `{fd}> sub`, `"&>sub"`, `"<in"`) after its
+  first word, and 372 git lines (the corpus's and this test file's) with each spelling after `git`
+  and as the value of `-C`, `-c`, `--git-dir` and `--work-tree`, each of those also with `> out`
+  after `git`; three baselines, 164 835 cells. Against round 2: **0 looser**, 6957 tighter, 6420
+  reason only. Against `cdf99495`: **0 looser**, 7986 tighter, 6765 reason only. Removing any one
+  piece makes cells looser (the as-written reading 5043, its bash 3.2 half 486, the numbered reading
+  90, `kept` 1248, round 2's `{name}` 1386, the written `{name}` 75). A simpler shape (no numbered
+  reading, no `{name}` in the written regexes) measured 24 looser against `cdf99495` and was not
+  taken.
+- **WP-198's property** at the gate seed and `PROPERTY_SEED` 1, 424242 and 7: the policies directory
+  passed each time (4266 passed); the last two runs started at a 1-minute load of 13.1 and 12.4,
+  over the brief's 12.
+- **Sentences falsified (rule 83).** Grepped `REDIRECTION_WORD`, `backlog 488`, `{fd}`, `detached
+  redirection` over `docs`, `CLAUDE.md`, `packages`, `test`: changed `REDIRECTION_WORD`'s and
+  `boundaryArgvs`' docblocks and the boundary's loop comment; round 2's c4 and `{fd}` canary results
+  are corrected above, and its "34 cases" is now 32 (the nit). Round 2's sweep claim (0 looser) holds
+  for the set it measured, which had no quoted word at an option's value.
+- **Verify.** `biome check` on the three sources clean; `vitest run scripts/citations.test.ts
+  --project unit`: 13 passed; `pnpm run -s verify`: `PASS: verify` (15822 passed, 19 skipped). The
+  first `verify` of this round read `FAIL: verify` on the WP-198 property (above), before the bash 3.2
+  written reading.
+
+##### Round 3 — review
+
+- **Canary c3 had no pin** (the reviewer's): `withoutWrittenRedirections` testing
+  `unquoteToken(word)` instead of the word as written passed every `-t WP-245` case while loosening
+  92 cells. **Rows added** to the round-2 describe, each `ask / git / git` in all three baselines:
+  `git -C \>sub fetch or{igin,y}`, `git > out -C "{fd}"'>'sub fetch or{igin,y}`, `git > out -C
+  {fd}">"sub fetch or{igin,y}`. No source changed.
+- **c3 applied** in place (backup, `diff` shown, restored and `cmp` equal), `vitest -t WP-245`: 3
+  failed | 42 passed — *dead by* those three rows by name. That run started at a 1-minute load of
+  14.5, over the brief's 12; the full file afterwards started at 11.5.
+- `vitest run packages/domain/src/policies/unattended-commands.test.ts --project unit`: 2738 passed.
+  Citations test: 13 passed.
