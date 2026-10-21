@@ -6184,6 +6184,13 @@ const expandsAsName = (word: string): boolean => !isLiteralJudgedWord(word);
  * and double quotes. Such a word is handed as zero, one or many words; a double-quoted one
  * (`"$(pwd)"`) is exactly one, and `$'…'` / `$"…"` are quoting, not expansions. A `\'` inside
  * `$'…'` is not read (`$'a\'b'$(pwd)` answers false): the scanner already reads `$'…'` uncertain.
+ *
+ * WP-253 (backlog 652): so is an unquoted `*`, `?` or `[` — pathname expansion (bash manual,
+ * *Pathname Expansion*) hands the word as one word per matching file, so the directory decides how
+ * many it is: with files `+c` and `-c`, `git --namespace ?c core.fsmonitor=<script> status` is
+ * `--namespace +c -c core.fsmonitor=<script> status` and ran the monitor (both bashes, git 2.56.0).
+ * A quoted or escaped one (`"*"`, `'?'`, `\[`) is one word. A `[` with no `]` is literal to bash
+ * and counted here, which can only over-read.
  */
 const expandsUnquoted = (raw: string): boolean => {
   for (let index = 0; index < raw.length; index += 1) {
@@ -6196,6 +6203,8 @@ const expandsUnquoted = (raw: string): boolean => {
     } else if (char === '"') {
       index = doubleQuoteEnd(raw, index) - 1;
     } else if (char === '`' || (char === '$' && /^[({[\w@*#?$!-]/.test(raw[index + 1] ?? ''))) {
+      return true;
+    } else if (char === '*' || char === '?' || char === '[') {
       return true;
     }
   }
@@ -9393,13 +9402,17 @@ export const commandWords = (fragment: string): readonly string[] => {
  *
  * WP-250 (backlog 650): a global option's **separate** value (`-C`, `-c`, `--namespace`, every
  * `separate` entry of {@link GIT_GLOBAL_OPTIONS}) that carries an expansion outside double quotes
- * ({@link expandsUnquoted}: `$(…)`, a backtick body, `$name`, `${…}`) is answered as `splits`: bash
- * hands it as zero, one or many words (`$(true)`, `$(pwd)`, `$(echo "a -c …")`, measured), so which
+ * ({@link expandsUnquoted}: `$(…)`, a backtick body, `$name`, `${…}`, a glob) is answered as
+ * `splits`: bash hands it as zero, one or many words (`$(true)`, `$(pwd)`, `$(echo "a -c …")`, measured), so which
  * word git reads as the value, and what follows it, is the shell's to decide —
  * `git -C $(pwd) -c core.fsmonitor=<script> status` ran the monitor while every other reading took
  * `-c` for `-C`'s value. A value whose every expansion is double-quoted (`-C "$(pwd)"`, `"$X"`) is
  * one word and is read as before; one written attached (`--namespace=$X`) is the option word, above.
  * The over-ask, stated: `git -C $(pwd) status` and `git -C $dir log` read uncertain too.
+ * WP-253 (backlog 652) widened it to an unquoted glob (`git --namespace ?c …`, which a directory
+ * holding `+c` and `-c` hands as `+c -c …`); the over-ask is `git -C src* log` and `git -C ./*
+ * status`, and `git -C "src*" log` is one word, read as before. A glob after the verb (`git log *`)
+ * is an argument and not read here.
  *
  * WP-218: so is a literal word before the verb that starts with `-` and git's declared grammar
  * ({@link GIT_GLOBAL_OPTIONS}) does not name — `git --shallow-file=x push …`, `git --super-prefix p/

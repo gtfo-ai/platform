@@ -17587,7 +17587,7 @@ No file:line was given for the matcher. **Needs a read** to locate it.
 
 **Depends on** WP-246's merge (it changes `scan`). Serial with it and with 650 on `command-policy.ts`.
 
-### 652. **An unquoted glob given as a git global option's separate value is many words to bash, and WP-250's ruling does not cover it: `git -C * …` and `git --namespace * -c core.fsmonitor=… status` still read `auto`, and a file named `-c` in the working directory becomes an option** (TODO, **unmeasured, potentially major**: it would be major if measured live, and nobody has measured it. **TD-030 tier 1**: floors read argv *as the shell builds it*. Same class as 650, a separate cause: 650 is about expansions, this is about pathname expansion. Found by WP-250's implementer and confirmed by its reviewer, session 20 (`#### WP-250`, its *Discovered work* and *Review* paragraphs). The refiner ran nothing. **No work package owns it.** **Re-graded minor** by the M19 architect pass's measurement (§ "Architect ruling (M19, session 20)", policy at `981b7117`): `git --namespace * -c …` and `git -C * -c …` are already refused, and only the shape where the glob itself becomes the option (`[-]c`, `*`, `?c` resolving to `-c` with a file named `-c` present) reads `ask / auto / deny`; **WP-253 owns it**, which supersedes "no work package owns it".)
+### 652. **An unquoted glob given as a git global option's separate value is many words to bash, and WP-250's ruling does not cover it: `git -C * …` and `git --namespace * -c core.fsmonitor=… status` still read `auto`, and a file named `-c` in the working directory becomes an option** (**RESOLVED** by WP-253, session 20 — `expandsUnquoted` (`command-policy.ts`), the reader WP-250's `splits` answer asks, now counts an unquoted `*`, `?` or `[` too, so a git global option's separate value holding an unquoted glob is `uncertain` at the git boundary with `splitGitOptionValue`'s reason (widened to name the glob); a quoted or escaped one (`"*"`, `'?'`, `\[`) is one word, read as before. Measured first: with only `-c` in the directory the glob is the option's **value** and nothing ran; with `+c` and `-c` present, `git --namespace ?c core.fsmonitor=<script> status` (and `[+-]c`, `*`) is `--namespace +c -c core.fsmonitor=<script> status` and **ran the monitor** (both bashes, git 2.56.0, scratch repository). The ruled lines (`[-]c`, `?c`, `-[c]`, `*c`, `-?`, `-C [-]c`, the `core.sshCommand` and `--upload-pack` tails) read `ask / uncertain / uncertain` in all three baselines (were `ask / auto / deny`); over-ask `git -C src* log`; corpus 0 (`#### WP-253`). Was TODO, **unmeasured, potentially major**: it would be major if measured live, and nobody has measured it. **TD-030 tier 1**: floors read argv *as the shell builds it*. Same class as 650, a separate cause: 650 is about expansions, this is about pathname expansion. Found by WP-250's implementer and confirmed by its reviewer, session 20 (`#### WP-250`, its *Discovered work* and *Review* paragraphs). The refiner ran nothing. **No work package owns it.** **Re-graded minor** by the M19 architect pass's measurement (§ "Architect ruling (M19, session 20)", policy at `981b7117`): `git --namespace * -c …` and `git -C * -c …` are already refused, and only the shape where the glob itself becomes the option (`[-]c`, `*`, `?c` resolving to `-c` with a file named `-c` present) reads `ask / auto / deny`; **WP-253 owns it**, which supersedes "no work package owns it".)
 
 **Evidence.** Thin, and labelled as such. WP-250's implementer, in *Discovered work*: *"An unquoted **glob** as a separate value (`git --namespace * status` with a file named `-c` in the working directory) is also many words to bash and is not covered by this rule (ruling (b) names `$(…)`, backticks, `$name`, `${…}` only); crafted and multi-step (the run must first create such a file), not measured."* WP-250's reviewer, in *Review*: *"Discovered: an unquoted glob as a separate value (`git -C * …`) still reads `auto` — filed."*
 
@@ -17688,6 +17688,27 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
   - **the ruling is stated** on whether the `fetch` / `ls-remote` cells go back to `auto`. The refiner recommends **no**: they stay `ask / git / git`. A substitution cannot be shown to name origin, and "name origin or nothing" admits only a remote the policy can read.
 
 **Depends on** WP-252 landing. It touches the same two files (`command-policy.ts`, `unattended-commands.ts`) as WP-253 to WP-255, so it goes after them serially or into one of them.
+
+### 659. **An extended glob in a git global option's separate value, behind `shopt -s extglob` on an earlier line of the same command string, is many words to bash: `git --namespace @(+c|-c) core.fsmonitor=<script> status` reads `ask / auto / deny` and ran the monitor** (TODO, **major**, **live on `main` and on WP-253's tree**: policy and program half both measured. **TD-030 tier 1**: floors read argv *as the shell builds it*. Same class as 652, a separate spelling the M19 ruling ruled out. Found by WP-253's reviewer, session 20 (`#### WP-253`, its *Review* paragraph). The refiner ran nothing. **No work package owns it.**)
+
+**What is wrong.** The M19 ruling for WP-253 (plan `docs/technical/13-implementation-plan.md`, the WP-253 row, line 1229) excludes extglob with the reason *"both bashes refuse it at parse with `extglob` off, its default (measured)."* The architect table in § "Architect ruling (M19, session 20)" (its extglob row) records `git --namespace @(x) …`, `!(x)` and `+(x)` as *"not a fail-open: both bashes refuse `@(c)` at parse (`extglob` off, the default)."* That holds only when the glob is on the same line. Bash parses a command string line by line, so a `shopt -s extglob` on an earlier line turns extglob on before the later line is parsed. So this is a **defect in the ruling's premise**, not only in the code.
+
+**Evidence.** WP-253's reviewer, in *Review*: *"an extended glob behind `shopt -s extglob` on an earlier line of the same command string — `git --namespace @(+c|-c) core.fsmonitor=<script> status` — reads `ask / auto / deny` and the monitor ran (both bashes); the ruling's "refused at parse" holds only on one line."* From the orchestrator's report of the same review:
+  - `shopt -s extglob`, a newline, then `git --namespace @(+c|-c) core.fsmonitor=<script> status`, as one command string, reads **`ask / auto / deny`** in all three baselines. The monitor **ran** on a scratch repository under bash 5.3.20 and `/bin/bash` 3.2.57.
+  - `+(+c|-c)` and `x@(…)` also read `auto`.
+  - `@(-c)` **without** the shopt line reads `ask / auto / deny` too. The policy does not refuse it; only bash's parse error does.
+  - Not stated in the report: which files were in the scratch directory, the git version, and the cells for `!(…)`, `*(…)` and `?(…)`. Needs measurement for those three operators.
+
+**What it costs to leave.** A run under `auto` writes two literal lines and gets past the boundary's refusal of `core.fsmonitor`, the key it exists to refuse. Git then runs a script the run chose. As with 652, the run must first create files that match (here `+c` and `-c`), so it is crafted, not accidental. It is the only major open.
+
+**Done when**
+  - measured first, before any change: the cells (attended / `auto` / `deny`, all three baselines) for each extglob operator `@(…)`, `!(…)`, `+(…)`, `*(…)`, `?(…)`, with and without the `shopt` line, under bash 5.3.20 and 3.2.57, and the marker result on a **scratch repository only**, with the directory's files recorded;
+  - a ruling on the remedy. Suggested by the reviewer, not yet ruled: in `expandsUnquoted` (`packages/domain/src/policies/command-policy.ts`), treat an unquoted `@`, `!`, `+`, `*` or `?` followed by `(` as a glob. The expected over-ask is nil, because without extglob these spellings are syntax errors;
+  - every extglob operator pinned as `uncertain` in `auto` and `deny` in all three baselines, with a canary per operator;
+  - a sweep in WP-253's shape reports **0 looser** against the base, and the corpus diff is recorded;
+  - the plan's WP-253 row and the M19 table's extglob line carry a note that the "refused at parse" reason is wrong across lines (docs first).
+
+**Depends on** WP-253 landing (it touches `expandsUnquoted`, the same reader). Serial with WP-254 and WP-255 on `command-policy.ts`.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -59025,3 +59046,113 @@ Built on `main` at `cbb9ecf9` (policy sources identical to `981b7117`), session 
   `> 0` for `> 1` (30) — none survived. Reviewer: 216 wrapper × value × tail combinations read
   `ask / git / git`; `commandStageCount` never counts a one-stage line as more (a `{ a; }` group
   counts 2, its parts queued and read); base against head on 280 lines, nothing looser.
+
+#### WP-253 — a git global option's separate value that carries an unquoted glob is uncertain at the boundary (backlog 652)
+
+Built on `main` at `0cb1606d` (WP-252's merge), session 20. Not committed.
+
+- **(a) Measured first, before any change.** Cells (`evaluateCommand` / `decideUnattendedCommand`
+  `auto` / `deny`), identical in `DEFAULT_READ_ONLY_ALLOW`, `DEFAULT_VERIFICATION_ALLOW` and
+  `DEFAULT_IMPLEMENTATION_ALLOW`, read from a base tree (`git archive 0cb1606d`):
+
+  | Line | Before | After |
+  |---|---|---|
+  | `git --namespace [-]c core.fsmonitor=/tmp/m status`; `?c`, `-[c]`, `*c`, `-?`, `[+-]c`, `*`, `x*`, `x?`, `x[c]`; `git -C [-]c …`; `[-]c core.sshCommand=/tmp/m fetch origin`; `[-]-upload-pack=x fetch origin` | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | over-ask: `git -C src* log`, `git -C ./* status` | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | `git -c safe.directory=* status` | `ask / uncertain / uncertain` (`unreadGitConfigKey`) | same cell, `splitGitOptionValue`'s reason |
+  | `git --namespace * -c …`, `"*"`, `\*`, `'?'`, `\[` (fsmonitor `-c` tail) | `ask / git / git` | same |
+  | `git --namespace "[-]c" …`, `'?c'`, `\[-]c`; `git -C "src*" log`; `git --namespace {-c,x} …`; `git --namespace @(c) …` | `ask / auto / deny` | same |
+  | `git log *`, `git diff -- *` | `allow / allow / allow` | same |
+  | `git --namespace * push --force` (`flagValueHidesBlockEntry`); `git --namespace=[-]c …` (`unreadableGitVerb`) | `ask / uncertain / uncertain` | same, same reason |
+  | `git branch * -D main` | `block / block / block` | same |
+
+  Shell (`scratchpad/wp253/program.mjs`, `program2.mjs`), bash 5.3.20 and `/bin/bash` 3.2.57
+  identical, a directory holding only `-c`: `printf '[%s]' x * y`, `x [-]c y`, `x ?c y` →
+  `[x][-c][y]`; `x "*" y` → `[x][*][y]`; `x "[-]c" y` → `[x][[-]c][y]`; `x [z]q y` → `[x][[z]q][y]`;
+  `x @(c) y` → syntax error (exit 2). Program half: a repository made by `initScratchRepository`
+  under the scratchpad, the monitor outside the work tree and only touching a marker; git 2.56.0.
+  **With only `-c` in the work tree the marker is absent** for `git --namespace [-]c
+  core.fsmonitor=<script> status` and `?c` (and `"[-]c"`, `x`): the glob is `--namespace`'s value,
+  `core.fsmonitor=…` is then the verb (`is not a git command`, exit 1), and `git -C [-]c …` fails to
+  change into `-c` (exit 128). So the ruling's "the glob becomes the option" does not hold for one
+  match. **With `+c` and `-c` present the marker is PRESENT** (exit 0, both bashes) for `git
+  --namespace ?c core.fsmonitor=<script> status`, `[+-]c` and `*`: bash hands `+c -c`, `+c` is the
+  namespace and `-c core.fsmonitor=<script>` the option — the live fail-open, two files the run
+  must write first (minor, as graded). `[-]c` alone stays absent; `-C ?c` fails on `+c`. Nothing
+  ran against this checkout. **The deciding reader:** the change is in the reader the ruling named
+  (`expandsUnquoted`, asked only by `unreadableGitWord`'s `splits` filter); the planted throw (below)
+  failed exactly the 652 rows plus WP-198's property, so no other path decides these lines.
+- **The change.** `expandsUnquoted` (`command-policy.ts`) returns true on an unquoted `*`, `?` or
+  `[` in the same quote walk that reads `$` and backticks (single quotes, double quotes and a
+  backslash skip as before), so the check runs on the word **as written**, never dequoted (WP-245
+  round 2): a quoted or escaped glob is one word and is read as before. A `[` with no `]` is counted
+  (over-read only). `splitGitOptionValue`'s reason now says "an unquoted expansion or glob" and adds
+  `"*"` to its quoting example. No ordering changed in `gitBoundaryViolation`: every refusal is still
+  read first, so `git --namespace * -c core.fsmonitor=… status` keeps the boundary's refusal.
+- **Rows** (`unattended-commands.test.ts`, describe *WP-253, backlog 652*): the sixteen lines of the
+  first three table rows at `ask / uncertain / uncertain` in every baseline, each with
+  `splitGitOptionValue(word)` in its reason; eleven controls in every baseline; the hidden-block-entry
+  and attached-option-word reasons. **Moved row:** WP-200's `git -c safe.directory=* status` (pinned
+  for `unreadGitConfigKey('safe.directory')`) now names the glob first; WP-200's row is written
+  `'safe.directory=*'` (quoted, so the key reading it pins is unchanged) and the unquoted form is
+  pinned in WP-253's describe with the new reason.
+- **Canaries** (`scratchpad/wp253/canary.py`, each alone, the whole file run, restored and compared
+  byte for byte): planted throw → 17 fail (the 16 rows that reach a glob value, plus WP-198's
+  property); the glob check removed → 16 (every 652 row); applied inside quotes (`/[*?[]/` on the
+  raw word) → 6 (the `"[-]c"`, `'?c'`, `\[-]c`, `"src*"` controls, WP-200's quoted row, WP-252's
+  `env git --namespace "*" status` control); `*` dropped → 6 (`*c`, `*`, `x*`, `src*`, `./*`,
+  `safe.directory=*`); `?` dropped → 3 (`?c`, `-?`, `x?`); `[` dropped → 7 (`[-]c` ×4 spellings,
+  `-[c]`, `[+-]c`, `x[c]`). None survived.
+- **(d) Sweep** (`scratchpad/wp253/sweep.mjs`: WP-252's sweep, which holds WP-250's, WP-248's and
+  WP-252's sets, with `*`, `?`, `[-]c`, `?c`, `x*`, `"*"`, `'?'`, `\[`, `{-c,x}`, `[+-]c`, `-[c]`,
+  `*c`, `-?` added to WP-250's value set, so they also run under WP-252's wrappers × options ×
+  tails × `X=; ` / `> out` / `| cat`; the git lines of the working tree's test file, this row's
+  included, read once for both trees; base tree `git archive 0cb1606d` against the working tree):
+  **987,134** lines, **2,961,402** cells, **0 looser**, **87,264 tighter** (all `ask / auto / deny`
+  → `ask / uncertain / uncertain`, 29,088 lines, every one carrying an unquoted `*`, `?` or `[`),
+  0 same-rank rule moves. **Reasons** (WP-252's lesson; `reasons.mjs`, `auto` in each baseline, the
+  310,012 glob-bearing lines that are not `ask / auto / deny` or `allow` at base): 84,528 reasons
+  moved, **all uncertain → uncertain**: 56,622 `unreadGitConfigKey` → `splitGitOptionValue` (e.g.
+  `git --config-env * status`: the glob is answered before the key, as WP-250 already did for
+  `git -c $X status`); 22,530 `splitGitOptionValue` naming an earlier word (`git -C * --namespace
+  $(…) status` now names `*`); 4,080 `unreadableGitVerb` → `splitGitOptionValue` (`git
+  --attr-source <() --namespace [-]c …`: the other reading takes `[-]c` for the verb, the written
+  one now answers first, same word); 1,296 `undeclaredGitOption` → `splitGitOptionValue` (`git
+  --shallow-file * --no-such-option …`). WP-198's property and the policy suites: `vitest run
+  packages/domain/src/policies --project unit` green with the gate seed and `PROPERTY_SEED` 1, 7 and
+  424242 (4,428 passed, 5 skipped, each).
+- **(e) Corpus diff:** **0** of 371 lines of `test/fixtures/commands/*-lines.txt` moved
+  (`command-corpus.test.ts`, 15 passed).
+- **(f)** Docblocks: `expandsUnquoted` (the WP-253 paragraph, bash's *Pathname Expansion* cited
+  with the measured `+c -c` line), `unreadableGitWord`'s WP-250 paragraph (the glob and the
+  over-ask), `GitBoundaryViolation` and `splitGitOptionValue` in `unattended-commands.ts`;
+  `04-agent-runtime.md` (the reading-contract paragraph, after WP-250's sentence); 652's heading
+  restated as resolved with the measured cells.
+- **Sentences falsified** (grep for *unquoted expansion*, *word-splits*, *splitGitOptionValue*,
+  *expandsUnquoted*, *backlog 650*, *separate value* over the two modules and their tests, `04`,
+  `05`, TD-030 and 650's/652's headings): `GitBoundaryViolation`'s "a global option's separate value
+  the shell word-splits" (now "word-splits or globs"); `unreadableGitWord`'s list of
+  `expandsUnquoted`'s forms (a glob added); the reason's "with an unquoted expansion" (widened);
+  652's "Which check lets it through … nothing in it reads `*`, `?` or `[`" (now false; the heading
+  says resolved; the body is left as the record, and it names `unattended-commands.ts` where the
+  function lives in `command-policy.ts`). `04`'s "What no floor reads is an expansion (… a glob)"
+  stays true: this is the boundary's uncertainty, not a floor. `05` and TD-030 do not name the
+  reader. Not edited: decisions (out of scope).
+- **Assumption.** The ruling's measured shape (one file `-c`, "the glob becomes the option") did not
+  run the monitor; the fail-open needs two matches. The rule ruled covers both, so the change is as
+  ruled; the extra spellings `[+-]c` and `*` (fsmonitor tail, no `-c`) are pinned.
+- **Discovered work.** Backlog **659** (major, found at review): an extglob after `shopt -s extglob` on an earlier line.
+- **Verify.** `vitest run scripts/citations.test.ts --project unit`: 13 passed. `pnpm run -s
+  verify` (load 2.0; the four untracked `.claude/` directories set aside in the scratchpad and moved
+  back): `PASS: verify` (15987 passed, 19 skipped).
+- **Review** (session 20, one round, **APPROVE**; one major outside the ruling filed as **659**).
+  Canaries: glob check removed (16 rows), applied inside single quotes (the `'?c'` control and
+  WP-200's quoted row), inside double quotes (three controls), `*`/`?`/`[` each dropped (6/3/7),
+  `\*` read as unquoted (the `\[-]c` control) — none survived. WP-200's purpose holds: its quoted
+  row keeps `unreadGitConfigKey('safe.directory')`, live by canary. **Found:** an extended glob behind
+  `shopt -s extglob` on an earlier line of the same command string — `git --namespace @(+c|-c)
+  core.fsmonitor=<script> status` — reads `ask / auto / deny` and the monitor ran (both bashes); the
+  ruling's "refused at parse" holds only on one line. *Incident:* the reviewer's first canary script
+  restored `command-policy.ts` from a stale scratch copy of an earlier session and clobbered this
+  row's edit; it was rebuilt from `HEAD` plus the printed hunks (+15 −2), and the canary counts
+  match the implementer's exactly. Orchestrator re-ran `verify` on the rebuilt file.

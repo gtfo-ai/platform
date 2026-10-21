@@ -112,8 +112,8 @@ export interface UnattendedCommandDecision {
  * A refusal of the git boundary: the fragment, and what it would have done — or, as `uncertain`, a
  * git configuration key nobody read (WP-200's third band), whose `detail` is `unreadGitConfigKey`,
  * or a word of git's that nobody can read before it runs (`unreadableGitWord`): an expanding
- * option or verb (`unreadableGitVerb`), a global option's separate value the shell word-splits
- * (`splitGitOptionValue`, WP-250), or an undeclared option (`undeclaredGitOption`).
+ * option or verb (`unreadableGitVerb`), a global option's separate value the shell word-splits or
+ * globs (`splitGitOptionValue`, WP-250 and WP-253), or an undeclared option (`undeclaredGitOption`).
  */
 export interface GitBoundaryViolation {
   readonly kind: 'boundary' | 'uncertain';
@@ -1087,10 +1087,10 @@ export const unreadableGitVerb = (word: string): string =>
 
 /**
  * WP-250 (backlog 650): the reason for a git global option's separate value that carries an
- * unquoted expansion, read as "… carries <this>."
+ * unquoted expansion or (WP-253, backlog 652) an unquoted glob, read as "… carries <this>."
  */
 export const splitGitOptionValue = (word: string): string =>
-  `a git global option’s value, \`${word}\`, with an unquoted expansion — the shell decides how many words it is (none, one or several), so the platform cannot tell which word git reads as the value or what follows it; quote it (\`"$(…)"\`, \`"$name"\`) to keep it one word`;
+  `a git global option’s value, \`${word}\`, with an unquoted expansion or glob — the shell decides how many words it is (none, one or several), so the platform cannot tell which word git reads as the value or what follows it; quote it (\`"$(…)"\`, \`"$name"\`, \`"*"\`) to keep it one word`;
 
 /**
  * WP-218: the reason for a word before git's verb that git's declared grammar does not name

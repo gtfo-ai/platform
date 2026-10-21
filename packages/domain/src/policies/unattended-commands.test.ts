@@ -3193,7 +3193,8 @@ describe('WP-200, backlogs 585 and 586: git configuration keys, HOME and the pag
     ['git -c pager.log=x log', 'pager.log'],
     // Criterion (6): the over-ask, pinned — write `git --no-pager log`.
     ['git -c core.pager=cat log', 'core.pager'],
-    ['git -c safe.directory=* status', 'safe.directory'],
+    // WP-253: quoted, because an unquoted `*` there is a glob, answered by its own reason (652).
+    ["git -c 'safe.directory=*' status", 'safe.directory'],
     ['git -c commit.gpgsign=false commit -m x', 'commit.gpgsign'],
     ['git -c core.editor=true rebase --continue', 'core.editor'],
     ['git config core.filemode false', 'core.filemode'],
@@ -6901,4 +6902,73 @@ describe('WP-252, backlog 656: a one-stage fragment is judged even when the spli
       });
     },
   );
+});
+
+/**
+ * WP-253 (backlog 652): an unquoted `*`, `?` or `[` in a git global option's separate value is
+ * pathname expansion, so the directory decides how many words it is — with files `+c` and `-c`,
+ * `git --namespace ?c core.fsmonitor=<script> status` is `--namespace +c -c core.fsmonitor=<script>
+ * status` and ran the monitor on a scratch repository (bash 5.3.20 and 3.2.57, git 2.56.0; with
+ * `-c` alone the glob is the namespace and nothing ran). Such a value answers `splits`, as an
+ * unquoted expansion does (WP-250); a quoted or escaped one is one word and is read as before.
+ */
+describe('WP-253, backlog 652: a git global option value holding an unquoted glob is uncertain', () => {
+  it.each([
+    ['git --namespace [-]c core.fsmonitor=/tmp/m status', '[-]c'],
+    ['git -C [-]c core.fsmonitor=/tmp/m status', '[-]c'],
+    ['git --namespace ?c core.fsmonitor=/tmp/m status', '?c'],
+    ['git --namespace -[c] core.fsmonitor=/tmp/m status', '-[c]'],
+    ['git --namespace *c core.fsmonitor=/tmp/m status', '*c'],
+    ['git --namespace -? core.fsmonitor=/tmp/m status', '-?'],
+    ['git --namespace [+-]c core.fsmonitor=/tmp/m status', '[+-]c'],
+    ['git --namespace * core.fsmonitor=/tmp/m status', '*'],
+    ['git --namespace [-]c core.sshCommand=/tmp/m fetch origin', '[-]c'],
+    ['git --namespace [-]-upload-pack=x fetch origin', '[-]-upload-pack=x'],
+    // Each of the three characters alone.
+    ['git --namespace x* core.fsmonitor=/tmp/m status', 'x*'],
+    ['git --namespace x? core.fsmonitor=/tmp/m status', 'x?'],
+    ['git --namespace x[c] core.fsmonitor=/tmp/m status', 'x[c]'],
+    // The over-ask: quoting keeps today's reading (below).
+    ['git -C src* log', 'src*'],
+    ['git -C ./* status', './*'],
+    // A moved reason: WP-200 read this line's key (`unreadGitConfigKey`); the glob is answered first.
+    ['git -c safe.directory=* status', 'safe.directory=*'],
+  ])('%j reads ask / uncertain / uncertain in every baseline, naming the glob', (command, word) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).reason).toContain(splitGitOptionValue(word));
+  });
+
+  it.each([
+    // The refusal is checked first: every reading takes the glob as one word, so `-c` is seen.
+    ['git --namespace * -c core.fsmonitor=/tmp/m status', 'ask / git / git'],
+    ['git --namespace "*" -c core.fsmonitor=/tmp/m status', 'ask / git / git'],
+    ['git --namespace \\* -c core.fsmonitor=/tmp/m status', 'ask / git / git'],
+    // Quoted or escaped: one word, which git reads as a namespace.
+    ['git --namespace "[-]c" core.fsmonitor=/tmp/m status', 'ask / auto / deny'],
+    ["git --namespace '?c' core.fsmonitor=/tmp/m status", 'ask / auto / deny'],
+    ['git --namespace \\[-]c core.fsmonitor=/tmp/m status', 'ask / auto / deny'],
+    ['git -C "src*" log', 'ask / auto / deny'],
+    // After the verb: an argument, not a global option's value.
+    ['git log *', 'allow / allow / allow'],
+    ['git diff -- *', 'allow / allow / allow'],
+    ['git branch * -D main', 'block / block / block'],
+    // A brace is the argv reading's (WP-243), and `{-c,x}` hands `-c` as the namespace.
+    ['git --namespace {-c,x} core.fsmonitor=/tmp/m status', 'ask / auto / deny'],
+  ])('control: %j keeps %s in every baseline', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it('a hidden block entry keeps its own reason', () => {
+    const command = 'git --namespace * push --force';
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual([
+      flagValueHidesBlockEntry('git push --force*'),
+    ]);
+  });
+
+  it('an attached option word keeps its own reason', () => {
+    const command = 'git --namespace=[-]c core.fsmonitor=/tmp/m status';
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).reason).toContain(unreadableGitVerb('--namespace=[-]c'));
+  });
 });
