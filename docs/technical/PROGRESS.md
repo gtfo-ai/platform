@@ -58388,3 +58388,103 @@ Built on `main` at `f6759cb2` (policy sources identical to `97f66da9`), session 
   nothing looser; the three other `findClosingParen` callers misbound nothing `scan` leaves read.
   The first `verify:e2e` overlapped the reviewer's in-place canaries and is not counted; a third run
   replaces it.
+
+#### WP-247 — the wrapper walk reads the argv reading as handed; a command's name keeps its second dequote (backlog 647)
+
+Built on `main` at `3cfa3b02` (policy sources identical to `0ce76c28`), session 20. Not committed. No Docker.
+
+- **(c) Probe, before any change** (`evaluateCommand` / `decideUnattendedCommand` `auto` / `deny`, the
+  default policy; the shell facts `printf '[%s]'` under `env -i`, bash 5.3.20 and `/bin/bash`
+  3.2.57, both alike: `"\git"` → `\git`, `$"git"` → `git`, `$"\git"` → `\git`, `"\--"` → `\--`,
+  `"\-u"` → `\-u`). **No fail-open**: every probe is refused where its control is, so 647 stays
+  **minor**.
+
+  | Line | Cell | Control | Cell |
+  |---|---|---|---|
+  | `"\git" -c core.fsmonitor=x status` (also `\git`, `'\git'`) | `ask / git / git` | `git -c core.fsmonitor=x status` | `ask / git / git` |
+  | `"\git" push --force`, `$"git" push --force`, `$"\git" push --force` | `block` ×3 | `git push --force` | `block` |
+  | `$"git" -c core.fsmonitor=x status` | `ask / uncertain / uncertain` | — | — |
+  | `env`, `command`, `nice`, `timeout 5` + `"\--" git -c core.fsmonitor=x status` | `ask / uncertain / uncertain` | the same with `--` | `ask / git / git` |
+  | the same four + `"\--" git push --force`; `timeout "\--" 5 git push --force`; `env >o "\--" git push --force` | `block` | `timeout -- 5 git push --force` | `block` |
+  | `env "\-u" sudo id`, `nice "\-n" 5 git push --force`, `"\sudo" id`, `env "\sudo" id` | `block` | `env -u sudo id` | `ask / auto / deny` |
+
+  Bash runs a program named `\git`, `\--`, `\-u` in every one of those (not found): each refusal is
+  an over-ask. The probe reads the same after the change (diffed, 31 lines).
+- **(a) The change** (`command-policy.ts`). `commandNameWalk` takes the reading's `dequote` (default
+  `unquoteToken`) for every word it reads — the `--`/flag/`[` test (`value`), a wrapper's name
+  (`argv0NameAs`, a new two-argument form of `argv0Name`), the entrypoint test and the generic
+  option's next word — and `argv0Candidates` (its `attached` walk) and `walkCommandStarts` (its
+  `skipped` walk, through `argvStarts`) pass `asHanded` on the argv reading. **Exception kept** (ruling
+  (a)): `argv0Candidates`' basename of a candidate's **name** still dequotes it (`argv0Name`). Read as
+  handed it moved **3 135 sweep cells toward `allow`**, every one a quoted name: `"'git'"`,
+  `'"git"'`, `"'/usr/bin/git'"`, `"'make'"`, with or without `> out` or a wrapper in front —
+  `"'git'" -c core.fsmonitor=x status` `ask / git / git` → `ask / auto / deny` (bash runs `'git'`,
+  not found). Attributed by applying each half alone over the 1 075 moved lines: the name 3 225
+  changed cells (3 135 looser, 90 reason only), the walk 0. Named in the module docblock rule 2 with that cell. (`basename` splits on
+  a backslash too, so `"\git"`'s name was `git` on both readings; only quote characters tell them
+  apart.)
+- **(b) Rows** — `unattended-commands.test.ts`, describe `WP-247, backlog 647: …` (6 cases), each
+  reading the argv reading through `commandArgvCandidates` (a `>p` keeps the written reading's
+  candidate apart) and pinning the cell in all three baselines: `env "\-u" sudo >p id`, `env "\--" -u
+  sudo >p id`, `"'env'" -u sudo id` have a start at `["sudo","id"]` (`block`); `start-stop-daemon -S
+  "\--exec=/bin/rm" -- -rf /` has no `["rm","-rf","/"]` candidate while the unquoted spelling does
+  (`block`). Controls (the kept name): `"'git'" -c core.fsmonitor=x status` (`ask / git / git`) and
+  `"'git'" push --force` (`block`) have a candidate named `git`. On `0ce76c28`'s `command-policy.ts`
+  the describe reads `4 failed | 2 passed` (every reading row red, both controls green).
+- **Canaries** (`canary.py`: in place, restored and `cmp` equal after each; `vitest -t 647`): planted
+  throw in `walkCommandStarts` → rc 1 (the file fails to load: calibrated); `walkCommandStarts`'
+  walk back to `unquoteToken` → 3 failed (the three start rows); `argv0Candidates`' attached walk →
+  1 (start-stop-daemon); the walk's `value` → 3 (`"\-u"`, `"\--"`, start-stop-daemon); the walk's
+  name → 1 (`"'env'"`); the candidate's name read as handed → 2 (the two controls), each by name.
+  **Two pieces have no row and cannot have one:** the entrypoint test and the generic option's
+  next-word test change only the walk's `words`/`command`, and on the argv reading only `skipped` and
+  `attached` are read (a generic option ends `precise`, so no later grammar skips or attaches;
+  the entrypoint has no grammar). Measured: each reverted alone moves **0** of 43 885 sweep lines'
+  `commandArgvCandidates` (the other four: 1 615, 61, 1 630, 16). Kept so the walk reads one way.
+- **(d) Corpus diff** (`node scripts/command-corpus.mjs`): `agent-lines.txt: 0 cells changed`,
+  `developer-lines.txt: 0 cells changed`, `PASS: command-corpus`. **Sweep** (a scratch script; the
+  base is `0ce76c28`'s `command-policy.ts` swapped in and restored, `cmp` equal): every corpus line
+  plus 15 wrapper/xargs/runner lines, each word wrapped seven ways (`"w"`, `'w'`, `$"w"`, `"\w"`,
+  `"'w'"`, `$"\w"`, `\w`), nine separators at every position (`"\--"`, `$"\--"`, `'\--'`,
+  `"\-u"`, `"\-n"`, `"\-x"`, `"'--'"`, `"\-s"`, `"\-S"`), 21 wrapper prefixes (`env`, `command`,
+  `nice`, `timeout 5`, each with `"\--"`, `"\-u"`/`"\-n"`/`"\-s"`, `>o`, `"'--'"`, `$"\--"`,
+  `'\--'`, and `"\env"`/`"'env'"`/`"\nice"`/`"\timeout"`); nine names for git (`"\git"`, `"'git'"`,
+  `$"git"`, `$"\git"`, `"g"it`, `'"git"'`, `\git`, `"\/usr/bin/git"`, `"'/usr/bin/git'"`) behind
+  none and the eight wrappers, before six tails and every git line of the corpus and the test file
+  (421); and nine spellings as the value of every separate-value git global option
+  (`GIT_GLOBAL_OPTIONS` plus `--exec-path`) before the six tails; each git half also with `> out` in
+  front. Three baselines × attended / `auto` / `deny`: **131 655 cells, 0 changed — 0 looser,
+  0 tighter.** With the name read as handed: 3 135 looser (above). *Corrected at review:* the
+  sweep's set missed 14 lines that do tighten — 8 `"'env'" -u|$"-u" {sudo id | git push --force |
+  rm -rf / | "\sudo" id}` from `uncertain` to `block`, and 6 `timeout {"\--"|'\--'|"'--'"|"\-p"|
+  "\-s"…} "'git'" -c core.fsmonitor=x status` from `auto`/`deny` unmatched to the git boundary's
+  refusal (not a fail-open at base: GNU timeout rejects `\--` as a duration). None looser.
+- **WP-198's property** at the gate seed and `PROPERTY_SEED` 1, 424242 and 7: the policies directory
+  passed each time (4352 passed); every run started at a 1-minute load under 6.
+- **(e) Docblocks:** module rule 2 (the walk reads as handed; the name exception with its cell; the
+  readers not yet changed, below), `argv0NameAs`, `walkCommandStarts`, `argv0Candidates`,
+  `commandNameWalk`; `04-agent-runtime.md`'s floor paragraph.
+- **Sentences falsified (rule 83).** Grepped `argv0Name`, `commandNameWalk`, `second dequote`,
+  `dequoted a second`, `double strip`, `647` over `docs/technical/04-*`, `05-*`, `CLAUDE.md`,
+  `packages`, `test`, `docs/decisions`. Changed: module rule 2's "Every reader of the argv reading
+  takes its words as handed … with two exceptions" — already false before this row (the readers in
+  *Discovered work* double-strip too) — now names them; `04-agent-runtime.md` gains the walk.
+  Left, still true: WP-245's test comment "a name keeps its dequote" (`unattended-commands.test.ts`,
+  the xargs row), `OVER_READ`'s and `argvReadings`' docblocks, `05-workspaces-and-security.md:63`
+  (WP-205's walk grammar; unchanged), backlog 644 and 647's evidence (historical).
+- **Discovered work.** (1) Three more readers dequote an argv-reading word a second time and are
+  outside 647's two sites: the peel's wrapper test (`isWrapperToken` through `isWrapperAt`, so
+  `argvStarts`' `chain`, and `isAssignment`) and `runnerSubcommandAt`/`runnerName`. Not measured;
+  as with the walk, the written reading and `OVER_READ` likely hold the cells, so expected minor.
+  (2) None else.
+- **Review** (session 20, one round, **APPROVE-with-nits**; fixed by the orchestrator). Canaries:
+  the walk's dequote put back (4 reading rows), `argv0NameAs` → `argv0Name` (1), `walkCommandStarts`
+  without `asHanded` (3), `argv0Candidates` without `asHanded` (1) — dead; the entrypoint piece and
+  the generic option's next-word piece **survived**, accepted as inert: on the argv reading only
+  `skipped` and `attached` are read, pushed only while `precise` holds, which the generic branch
+  clears and the entrypoint check reads with the same dequote that set `wrapper`. The `argv0Name`
+  exception confirmed: read as handed it loosened 130 of the reviewer's probe lines, every one a
+  `"'git'"` name. Reviewer's hunt over twelve wrappers: 0 looser; 14 lines tighter, which the
+  "0 tighter" claims had missed — both corrected (sweep bullet above, the describe's docblock).
+  Discovered: `isWrapperToken`, `isAssignment`, `runnerSubcommandAt`, `runnerName` still dequote
+  twice on the argv reading — filed.

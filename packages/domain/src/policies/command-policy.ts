@@ -26,12 +26,17 @@
  *     too; a match on either is a match. Quotes come off **once**, by bash's rule (`unquoteToken`,
  *     WP-242): inside `"…"` a backslash stays unless `$`, a backtick, `"`, `\` or a newline
  *     follows, so `"\--"` is the positional `\--` the program receives and ends no option
- *     reading. Every reader of the argv reading takes its words as handed, the block-entry
- *     readers too (WP-245, backlog 644), with two exceptions, both over-asks: those readers also
- *     read it dequoted a second time (`OVER_READ`: taking that away moved 930 sweep cells toward
- *     `allow`), and a command's name is read through `argv0Name`, which dequotes it. `$"…"` is
- *     quoting, not an expansion (WP-244, backlog 643): with no catalogue bash ignores the `$` and
- *     the text is double-quoted, so `$"--script-shell=x"` is that option.
+ *     reading. The readers of the argv reading take its words as handed, the block-entry
+ *     readers too (WP-245, backlog 644), and the wrapper walk `commandNameWalk` (WP-247, backlog
+ *     647: `env "\-u" sudo id` hands env the command `\-u`), with two exceptions, both over-asks:
+ *     the block-entry readers also read it dequoted a second time (`OVER_READ`: taking that away
+ *     moved 930 sweep cells toward `allow`), and a candidate's name is read through `argv0Name`,
+ *     which dequotes it (read as handed it moved 3 135: `"'git'" -c core.fsmonitor=x status`, git
+ *     boundary → `auto`, where bash runs `'git'`). Not yet read as handed, and not measured: the
+ *     peel's wrapper test (`isWrapperToken`, `isAssignment`) and a package runner's subcommand
+ *     (`runnerSubcommandAt`), which dequote an argv-reading word again (WP-247's discovered work).
+ *     `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no catalogue bash ignores
+ *     the `$` and the text is double-quoted, so `$"--script-shell=x"` is that option.
  *     Braces are expanded on the argv reading as bash expands them (WP-243, backlog 642,
  *     `expandBraces`): a comma list and an integer or single-letter sequence, bounded at
  *     `BRACE_EXPANSION_CEILING` words; a brace past it or of a form the port does not read is
@@ -3314,7 +3319,14 @@ const isWrapperAt = (words: readonly string[], index: number): boolean =>
   runnerSubcommandAt(words, index) !== null;
 
 /** The name a token would run under: quoting off, then the last path segment. */
-const argv0Name = (token: string): string => basename(unquoteToken(token));
+const argv0Name = (token: string): string => argv0NameAs(token, unquoteToken);
+
+/**
+ * {@link argv0Name} with the reading's own dequote (`asHanded` on the argv reading): how
+ * {@link commandNameWalk} reads a wrapper's name (WP-247).
+ */
+const argv0NameAs = (token: string, dequote: (token: string) => string): string =>
+  basename(dequote(token));
 
 /**
  * The shells, as **one** set (WP-160 (b)): each takes a script as its `-c` argument, reads one
@@ -3540,18 +3552,20 @@ interface CommandStarts {
  * no longer hide the tenth word (measured `unattended_auto` before WP-161). `flag` says what an
  * option is. A word a wrapper's **declared grammar** reads as an option's value or its operand
  * (`commandNameWalk`'s `skipped`: `env -u sudo id`, `xargs -I {} grep x`) is no start (WP-205);
- * under a wrapper with none, every word still is.
+ * under a wrapper with none, every word still is. The walk reads `words` by `dequote`, the
+ * reading's (WP-247).
  */
 const walkCommandStarts = (
   words: readonly string[],
   chain: (words: readonly string[], index: number) => boolean,
   flag: (word: string) => boolean,
+  dequote: (token: string) => string = unquoteToken,
 ): CommandStarts => {
   const starts = [0];
   if (words[0] === undefined || !chain(words, 0)) {
     return { starts, tooDeep: false };
   }
-  const values = new Set(commandNameWalk(words).skipped);
+  const values = new Set(commandNameWalk(words, dequote).skipped);
   let peeled = 1;
   let limit = MAX_WRAPPER_DEPTH;
   for (let index = 1; index < words.length && index <= limit; index += 1) {
@@ -3579,7 +3593,8 @@ const walkCommandStarts = (
 const argvStarts = (
   tokens: readonly string[],
   dequote: (token: string) => string = unquoteToken,
-): CommandStarts => walkCommandStarts(tokens, isWrapperAt, (token) => isFlagToken(dequote(token)));
+): CommandStarts =>
+  walkCommandStarts(tokens, isWrapperAt, (token) => isFlagToken(dequote(token)), dequote);
 
 /**
  * The command with leading environment wrappers removed, when there are any. Returns nothing when
@@ -3623,7 +3638,9 @@ const stripEnvironmentPrefix = (text: string): readonly string[] => {
  * far that goes is `walkCommandStarts`'s, and past its bound the line is uncertain (WP-161 (d)).
  * Every caller reads it over both of `argvForms`' readings (WP-198), so a redirection in front of
  * the command (`2>/dev/null sudo id`) is not argv[0]. The argv reading is read as handed
- * (`dequote` = `asHanded`, WP-245): its `\--` is no wrapper's `--`.
+ * (`dequote` = `asHanded`, WP-245), the wrapper walk's words included (WP-247): its `\--` is no
+ * wrapper's `--` and its `\--exec=/bin/rm` names no program. The candidate's name is the
+ * exception, still dequoted (`argv0Name`; module rule 2 has the cell).
  */
 const argv0Candidates = (
   tokens: readonly string[],
@@ -3635,7 +3652,7 @@ const argv0Candidates = (
   // A program a declared grammar names by an option (`--exec=sudo -- id`, `-x /bin/rm -- -rf /`,
   // backlog 601) is a start of its own, followed by its arguments: the words after the wrapper's
   // first `--`, which the wrapper consumes (review round 1: kept, `rm -- -rf /` is no `rm -rf /*`).
-  const inside = commandNameWalk(tokens).attached.map(({ index, command }) => {
+  const inside = commandNameWalk(tokens, dequote).attached.map(({ index, command }) => {
     const end = tokens.findIndex((token, at) => at > index && dequote(token) === '--');
     return withBasename([command, ...(end === -1 ? [] : tokens.slice(end + 1))]);
   });
@@ -6787,10 +6804,14 @@ const commandNameWords = (tokens: readonly string[]): readonly string[] =>
  * several words (`!isOneWord`: `-n$n`, `--adjustment=$n`, `-$x`) is listed as a possible command
  * word by the generic option branch, which a declared grammar's `unknown` reading and every
  * undeclared wrapper reach (WP-216); `walkCommandStarts` already starts a command there, since
- * the word is never `skipped`.
+ * the word is never `skipped`. `dequote` is how the reading's words read (WP-247, backlog 647):
+ * `asHanded` on the argv reading, so `env "\-u" sudo id` is the command `\-u` and no `-u` that
+ * skips `sudo`. On that reading only `skipped` and `attached` are read; the entrypoint test and the
+ * generic option's next word change `words` and `command` alone, so no row can see their dequote.
  */
 const commandNameWalk = (
   tokens: readonly string[],
+  dequote: (token: string) => string = unquoteToken,
 ): {
   readonly words: readonly string[];
   readonly command?: number;
@@ -6813,7 +6834,7 @@ const commandNameWalk = (
   let opaqueRunner = false;
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index] as string;
-    const value = unquoteToken(token);
+    const value = dequote(token);
     const afterWrapper = words.length > 0;
     // An assignment, an element assignment (`y[x]=1`, `[x]=1` inside `y=( … )`) or a wrapper's `--`.
     if (isAssignment(token) || ELEMENT_ASSIGNMENT.test(value) || (afterWrapper && value === '--')) {
@@ -6824,7 +6845,7 @@ const commandNameWalk = (
     }
     if (
       wrapper === NODE_ENTRYPOINT &&
-      argv0Name(tokens[index - 1] ?? '') === NODE_ENTRYPOINT &&
+      argv0NameAs(tokens[index - 1] ?? '', dequote) === NODE_ENTRYPOINT &&
       isFlagToken(value)
     ) {
       // `docker-entrypoint.sh -e '…'` is `node -e '…'`: the entrypoint is the command.
@@ -6883,7 +6904,7 @@ const commandNameWalk = (
       if (
         !value.includes('=') &&
         next !== undefined &&
-        !isFlagToken(unquoteToken(next)) &&
+        !isFlagToken(dequote(next)) &&
         !(WRAPPER_FLAGS_WITHOUT_VALUE[wrapperGrammarKey(wrapper)]?.has(value) ?? false)
       ) {
         words.push(next);
@@ -6904,7 +6925,7 @@ const commandNameWalk = (
       continue;
     }
     words.push(token);
-    const name = argv0Name(token);
+    const name = argv0NameAs(token, dequote);
     // A package runner's exec form and its subcommand are wrappers too (WP-196 (b)).
     const found = runnerSubcommandAt(tokens, index);
     const subcommand = typeof found === 'number' ? found : null;

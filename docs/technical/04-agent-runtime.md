@@ -481,7 +481,12 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   the argv reading that way too, so `git >o branch "\--" -D main` is `git branch -D *` (it ran
 >   under `auto` before: git 2.54.0 deleted `main`, measured on a scratch repository); they also
 >   read it with its quotes taken off a second time, a stated over-ask kept because removing it
->   moved 930 sweep cells toward `allow` (`rm -rf "\/"`). `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no message catalogue bash
+>   moved 930 sweep cells toward `allow` (`rm -rf "\/"`). Since WP-247 (backlog 647) the wrapper
+>   walk that finds the command behind `env`, `nice`, `timeout` and the other declared grammars reads
+>   it as handed too — `env "\-u" sudo id` hands env the command `\-u`, no `-u` that skips `sudo` —
+>   while a command's name keeps its second dequote, an over-ask: `"'git'" -c core.fsmonitor=x
+>   status` is refused at the git boundary, where bash runs a program named `'git'`; read as handed
+>   it moved 3 135 sweep cells toward `allow`. `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no message catalogue bash
 >   ignores the `$` and double-quotes the text, so every floor reads `npm test $"--script-shell=x"` as
 >   `npm test --script-shell=x` — npm 11.19.0 ran that marker (measured in the run image, which ships
 >   no catalogue); a `$"…"` word a catalogue the run supplies may translate stays a residual (TD-030,

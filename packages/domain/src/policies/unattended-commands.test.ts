@@ -6732,3 +6732,51 @@ describe('WP-251, backlog 651: a substitution body holding a case word or a comm
     },
   );
 });
+
+/**
+ * WP-247, backlog 647: `commandNameWalk` — the wrapper grammar walk the block peel reads for its
+ * starts (`walkCommandStarts`' skipped words) and for a program an option names (`argv0Candidates`'
+ * attached command) — reads the argv reading's words as handed, as WP-245 made the block-entry
+ * readers do: `"\-u"` is the `\-u` bash hands (env runs it as the command; it is no `-u`), `"\--"`
+ * is `\--`, `"'env'"` is `'env'`. Each row reads the argv reading through `commandArgvCandidates`,
+ * where a `>p` keeps the written reading's candidate apart. No cell moves looser (the written reading
+ * and `OVER_READ` hold every verdict); 14 lines tighten, `"'env'" -u sudo id` from `uncertain` to
+ * `block` among them (WP-247's review, base against head). A command's **name** keeps its
+ * second dequote (`argv0Candidates`' basename): read as handed it moved 3 135 sweep cells toward
+ * `allow`, `"'git'" -c core.fsmonitor=x status` among them (`git` → `auto`; bash runs `'git'`).
+ */
+describe('WP-247, backlog 647: the wrapper walk reads "\\-u" as the \\-u bash hands', () => {
+  const has = (command: string, argv: readonly string[]) =>
+    commandArgvCandidates(command).some(
+      (candidate) => JSON.stringify(candidate) === JSON.stringify(argv),
+    );
+
+  it.each([
+    // `walkCommandStarts`: the walk no longer reads `\-u` as env's `-u`, so `sudo` is a start.
+    [String.raw`env "\-u" sudo >p id`, ['sudo', 'id']],
+    // The walk's `--`: `\--` is no wrapper's `--`, so `-u` is not env's option either.
+    [String.raw`env "\--" -u sudo >p id`, ['sudo', 'id']],
+    // The walk's name: `'env'` is no wrapper, so it has no grammar to skip `sudo` by.
+    [String.raw`"'env'" -u sudo id`, ['sudo', 'id']],
+  ])('the argv reading of %j has a start at %j', (command, argv) => {
+    expect(has(command, argv)).toBe(true);
+    expectCells(command, 'block / block / block');
+  });
+
+  // `argv0Candidates`' attached command: `\--exec=/bin/rm` is no `--exec`, so it names no program.
+  it('the argv reading of start-stop-daemon -S "\\--exec=/bin/rm" -- -rf / names no rm', () => {
+    const command = String.raw`start-stop-daemon -S "\--exec=/bin/rm" -- -rf /`;
+    expect(has(command, ['rm', '-rf', '/'])).toBe(false);
+    expect(has('start-stop-daemon -S --exec=/bin/rm -- -rf /', ['rm', '-rf', '/'])).toBe(true);
+    expectCells(command, 'block / block / block');
+  });
+
+  // The name's second dequote, kept: bash runs `'git'`, the policy reads `git` (an over-ask).
+  it.each([
+    [String.raw`"'git'" -c core.fsmonitor=x status`, 'ask / git / git'],
+    [String.raw`"'git'" push --force`, 'block / block / block'],
+  ])('control: %j reads its name as git and keeps %s', (command, expected) => {
+    expect(commandArgvCandidates(command).some(([name]) => name === 'git')).toBe(true);
+    expectCells(command, expected);
+  });
+});
