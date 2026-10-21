@@ -17628,6 +17628,20 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
 
 **Depends on** WP-251's merge. Serial with 650, 651 and 652 on `command-policy.ts`.
 
+### 655. **The peel's wrapper test (`isWrapperToken`, `isAssignment`) and a package runner's subcommand (`runnerSubcommandAt`, `runnerName`) still dequote an argv-reading word a second time, which bash does not; the rest of 642/644/647's double-strip class** (TODO, **minor** expected, **unmeasured**: a hypothesis until probed. **TD-030 tier 1**: floors read argv *as the shell builds it*. Found by WP-247's implementer and confirmed by its reviewer, session 20 (`#### WP-247`, its *Discovered work* and *Review* paragraphs). The refiner ran nothing. **No work package owns it.**)
+
+**Evidence.** WP-247's implementer, in *Discovered work*: *"Three more readers dequote an argv-reading word a second time and are outside 647's two sites: the peel's wrapper test (`isWrapperToken` through `isWrapperAt`, so `argvStarts`' `chain`, and `isAssignment`) and `runnerSubcommandAt`/`runnerName`. Not measured; as with the walk, the written reading and `OVER_READ` likely hold the cells, so expected minor."* WP-247's reviewer, in *Review*: *"`isWrapperToken`, `isAssignment`, `runnerSubcommandAt`, `runnerName` still dequote twice on the argv reading — filed."* The module docblock (`packages/domain/src/policies/command-policy.ts:36-38`) names them as not yet read as handed. The sites are `command-policy.ts:3045` (`isAssignment`), `:3048` (`isWrapperToken`, through `argv0Name`), `:3055` (`runnerName`, through `argv0Name`) and `:3245` (`runnerSubcommandAt`). Nobody has probed them: there is no cell, looser or tighter.
+
+**What it costs to leave.** Expected to be over-asks only, as at 647, where the probe found no fail-open and the walk alone moved 0 sweep cells. That is a guess, not a measurement. It becomes **major** if a probe finds a line that reads looser than bash's reading in any baseline.
+
+**Done when** (WP-247's shape)
+  - measured first, before any change: a policy-only probe of each site (attended / `auto` / `deny`, default policy, the shell facts under bash 5.3.20 and 3.2.57), with the lines tried recorded; a fail-open refiles this as **major**;
+  - each site reads its word as handed where no corpus or sweep cell loosens; where one does, the site keeps its dequote as a named exception in module rule 2, with the cell, as `argv0Candidates`' name is;
+  - one row per site in `unattended-commands.test.ts`, pinned in all three baselines, each with a canary (the site's dequote put back turns its row red);
+  - the corpus diff and a sweep in WP-247's shape report **0 looser** against the base, and the tighter cells are listed.
+
+**Depends on** WP-247's merge. Serial with 650, 651, 652 and 654 on `command-policy.ts`.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -58488,3 +58502,105 @@ Built on `main` at `3cfa3b02` (policy sources identical to `0ce76c28`), session 
   "0 tighter" claims had missed — both corrected (sweep bullet above, the describe's docblock).
   Discovered: `isWrapperToken`, `isAssignment`, `runnerSubcommandAt`, `runnerName` still dequote
   twice on the argv reading — filed.
+
+#### WP-248 — one brace expander: `braceWords` is `expandBraces`; the resolved-binary branch keeps its line reading (backlogs 646, 648)
+
+Built on `main` at `85106b4a`, session 20. Not committed. No Docker, nothing executed in a repository (no
+program half: the row moves no verdict toward a program running).
+
+- **(a) 646, done.** `braceWords` (`command-policy.ts`, WP-206's name search in an unknown program's
+  arguments, read by `boundedNameIn` and `joinedNameIn`) is now `expandBraces(word', BRACE_EXPANSION_CEILING)`;
+  `firstBraceAlternatives` and `BRACE_WORDS_LIMIT` are deleted. **Measured first, the two expanders
+  disagree** (a differential over generated braced words, `judgedNameIn` old against new, the judged
+  names `git`, `sudo`, `rm`, `sh`): with the bare reuse, **38 looser** in 400 000 — two classes, both
+  WP-206 over-reads bash does not make. Each is kept by rewriting the word before `expandBraces` reads it,
+  so the result is **0 looser** over 2.1 M generated words (seeds 12345 and 1, 99, 4242, and 777 and 31337
+  without the mixed-case atom, whose `null` crowded the rest out):
+  - **quoting**: the old expander read through `"`, `'`, `\` and `$`, `expandBraces` does not (bash 5.3.20:
+    `'a"s{u,}do'` is `[a"s{u,}do]`). `word'` reads each of the four as a blank — a blank bounds a name as
+    each of them does (`NAME_BOUNDARY`, `JOINED_PART`), so no name is lost or made. A backtick is not in the
+    class: both readers split a piece at it first, so it never reaches `braceWords`.
+  - **an increment**: the old expander ignored `..n` (`{f..h..2}it` held `git`; bash 5.3.20 makes `fit hit`,
+    3.2.57 leaves it as written). `BRACE_INCREMENT` drops the increment before expansion.
+  - **stricter, as `expandBraces` declines the form** (the word is unread, and named in the reason): a
+    zero-padded or mixed-case range, `{a..}`, a `{}` opening an expansion (`x{},a}`: bash makes `x}` `xa`),
+    a `+` increment. Every such word already makes its line `braceExpansion`, so no cell moves; the reason
+    list gains `unknownProgramRunsJudgedName(<program>, <word>)`.
+  - **a live crash, closed**: the old expander never returned on a range from a number to a letter
+    (`Number('a')` is `NaN`, so its loop never met its end): `fakeroot {1..a}` and `frobnicate {1..a}`
+    exhausted a 4 GB heap and aborted node in about 10 s at `85106b4a` (measured, `evaluateCommand` on
+    the default policy; `echo {1..a}`, `git log {1..a}`, `npm test {1..a}` returned, since only an unknown
+    program's arguments reach `braceWords`). Now `uncertain` (`braceExpansion`) at once. bash 5.3.20
+    leaves `{1..a}` as written. See *Discovered work*.
+- **(b) 648, declined per the split clause.** `parseCommand` builds no reading of the whole line: it reads
+  each **stage** (`argvReadings(stage)`), and `argvForms` is memoised for the evaluation, so for a
+  one-stage line the branch's `argvForms(line)` is already a memo hit — measured over the corpus × seven
+  resolved binaries × three baselines (16 065 evaluations): **14 715 hits, 1 350 misses**, every miss a
+  line of more than one stage. The built readings are therefore **not the same set**: replacing argv[0] of
+  each built stage reading moves **3 cells** (one line × three baselines), and the union moves the same 3:
+  `echo hi > out; tf apply` with `/usr/bin/terraform` reads `ask / auto / deny` → `block / block / block`.
+  Both the replacement and the union move a cell, so (b) is declined and the branch is unchanged. That
+  line also shows the branch's own reading: it puts the resolved binary in place of the line's first word
+  (`terraform hi > out; tf apply`), not of the stage it was resolved for. See *Discovered work*.
+- **(c) Corpus diff** (`node scripts/command-corpus.mjs`): `agent-lines.txt: 0 cells changed`,
+  `developer-lines.txt: 0 cells changed`, `PASS: command-corpus`. **Sweep** (`sweep248.mjs`, WP-247's set
+  plus this row's lines; the base is `85106b4a`'s two policy sources in a scratch copy): WP-247's whole set
+  (the corpus, the test file's 421 git lines, the wrapped names and separators); nineteen brace spellings
+  (`s{u,}do`, `{f..h..2}it`, `'a"s{u,}do'`, `"a's{u,}do"`, `'a\{gi,x}t'`, `'a${gi,x}t'`, `x{},a}`, `{g,x}it`,
+  `{-c,x}`, `{core.fsmonitor=x,y}`, `-c{,}`, `f{01..03}`, `{a..Z}`, `x{1..3}y`, `{f..h}it`, `"{g,x}it"`,
+  `'{g,x}it'`, `\{g,x}it`, `${x,git}`) and WP-246's four process substitutions as the value of every
+  separate-value git global option before WP-247's six tails; the brace spellings after `-c`, and as the
+  argument of eleven programs (`frobnicate`, `fakeroot`, `sg grp`, `catchsegv`, `parallel`,
+  `./tools/wrap`, `env`, `nice`, `timeout 5`, `xargs`, `sudo`) alone, before `id` and after `--` before
+  `push --force`; every `frobnicate`/`fakeroot` line of the test file; this row's ten lines; all of it
+  also with `> out` in front. A line with a number-to-letter range is left out of both runs (the base
+  aborts): 0 were. Three baselines × attended / `auto` / `deny`: **143 241 cells, 0 changed — 0 looser,
+  0 tighter.**
+- **(d) Canaries** (`vcanary.py`: in place, restored and `cmp` equal after each; `vitest -t WP-248`).
+  Calibrated: a planted throw in `braceWords` → 12 of 12 red. Each piece alone, a named row red: `"` out of
+  the class → `'a"s{u,}do'`; `'` → `"a's{u,}do"`; `\` → `'a\{gi,x}t'`; `$` → `'a${gi,x}t'`; the increment
+  rewrite out → `{f..h..2}it` — each 1 red, and each of those lines reads `ask / auto / deny` under its
+  canary (a looser cell, so each piece is load-bearing). **The ruled canary**, `BRACE_EXPANSION_CEILING`
+  lowered to 1: 8 red on this row's code, among them `frobnicate s{u,}do` and `frobnicate {f..h}it` (the
+  word is now unread, so the reason names the word rather than `sudo`/`git`); the same lowering on
+  `85106b4a`'s source leaves those naming rows green (its expander had its own limit) — the reuse is live.
+  *Corrected at review:* the 8 hold for the constant itself; lowering only `braceWords`' budget argument to
+  1 turns 6 red (the five over-read rows and the control), and the two naming rows pin the argv-reading half.
+- **Rows** — `unattended-commands.test.ts`, describe `WP-248, backlog 646: …` (12 cases, all three
+  baselines): nine lines `ask / uncertain / uncertain` with the name in the reason (the five over-reads,
+  `s{u,}do`, `{f..h}it`, and the unread `x{},a}` and `file{01..03}.txt` naming their word);
+  `frobnicate {1..a}` and `fakeroot {1..a}` returning `uncertain` with `braceExpansion`; the control
+  `frobnicate x{1..3}y` at `ask / auto / deny`. On `85106b4a` the describe aborts the worker (`{1..a}`);
+  without those two rows, the two unread-word rows are red there (their reason is new) and the rest green.
+- **WP-198's property** at the gate seed and `PROPERTY_SEED` 1, 424242 and 7: the policies directory passed
+  each time (4364 passed); every run started at a 1-minute load under 6.
+- **Docblocks:** `braceWords` (what it reads and why each rewrite), `BRACE_INCREMENT`, module rule 2's
+  "Two places read the expansion" → three, naming `braceWords`.
+- **Sentences falsified (rule 83).** Grepped `braceWords`, `BRACE_WORDS_LIMIT`, `firstBraceAlternatives`,
+  `second expander`, `its own expander`, `Two places read the expansion`, `brace` over
+  `docs/technical/04-*`, `05-*`, `docs/decisions` (TD-030), `CLAUDE.md` and `packages`. Changed: module rule
+  2's "Two places read the expansion". Left, still true: `04-agent-runtime.md:493-502` (the argv reading's
+  expansion, unchanged), `05-workspaces-and-security.md:58` (WP-203: an argument read "its braces
+  expanded"), the module docblock's WP-203 paragraph ("split on operators and its braces expanded"),
+  TD-030's tier list ("braces"). Backlog 646's and 648's own text is for the orchestrator to restate.
+- **Discovered work.** (1) **The `{1..a}` crash was live on `main`** until this row: any line handing an
+  unknown program a word with a number-to-letter range (`fakeroot {1..a}`) aborted the process evaluating
+  it on heap exhaustion — the runner's `canUseTool` evaluates the model's commands, so one model line
+  could take the process and its runs down. Closed here by the reuse (rows above); not filed as a backlog
+  entry, since nothing is left open — the orchestrator may want it named in 646's closing. (2)
+  `resolvedBinary` has **no production producer**: only tests and `commandVerdictFor`
+  (`effective-config.ts`, itself called only by its test) pass it, so the branch of (b) is reached by tests
+  alone, and on a line of more than one stage it replaces the line's first word, not the stage's (the
+  measured `echo hi > out; tf apply`). A nit; not filed.
+- **Review** (session 20, one round, **APPROVE-with-nits**; fixed by the orchestrator). The rewrite is
+  sound: `NAME_BOUNDARY` and `JOINED_PART` already treat `"`, `'`, `\` and `$` as boundaries, and a
+  dropped range step only adds words; base against head over 21 brace spellings, 0 cells differ.
+  Canaries: the global ceiling at 1 (8 red), the `braceWords` budget alone at 1 (6), each rewrite
+  dropped (`"`, `'`, `\`, `$`, the step — each dead by its row), an unreadable form read instead
+  (dead by the `x{},a}` and `file{01..03}.txt` rows), the old body put back (the worker aborts);
+  removing the `Number.isSafeInteger` guard survived, expected — the range regex rejects a
+  number-to-letter range before it. **The crash was live on `main`**: at `85106b4a` `{1..a}`,
+  `{1..Z}` and `{-1..a}` ran out of a 256 MB heap in 0.6 s (a 4 GB heap in about 10 s), so one model
+  command could abort the evaluating process and every run in it; on this row each of five spellings
+  reads `uncertain` in about 0.1 s. It had no backlog entry; it is recorded with 646's resolution.
+  `resolvedBinary` has no production producer (nit, unfiled).

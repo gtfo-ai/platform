@@ -40,7 +40,9 @@
  *     Braces are expanded on the argv reading as bash expands them (WP-243, backlog 642,
  *     `expandBraces`): a comma list and an integer or single-letter sequence, bounded at
  *     `BRACE_EXPANSION_CEILING` words; a brace past it or of a form the port does not read is
- *     `braceExpansion`. Two places read the expansion: the argv reading (`argvWords`: the block
+ *     `braceExpansion`. Three places read the expansion: the name search in an unknown program's
+ *     arguments (`braceWords`, since WP-248, backlog 646, where it was a second expander), the argv
+ *     reading (`argvWords`: the block
  *     matcher, the floors, the git boundary's words), and `parseCommand`, which reads a stage whose
  *     braces expand a second time as the words bash makes (review round 2) — so every reader,
  *     the ask list, the sed/awk reader, `find -exec`, `script -c` and `compgen -C` included,
@@ -7243,87 +7245,26 @@ export const FLOORED_NAMES: readonly string[] = HAZARDOUS_ARGUMENTS.flatMap((ent
   ...(entry.kind === 'command' ? entry.verbs : []),
 ]);
 
-/** At most this many words of a brace expansion are read; past it the word is judged unread. */
-const BRACE_WORDS_LIMIT = 256;
+/** A sequence with an increment, `{x..y..n}`, as WP-206's expander read it: the increment unread. */
+const BRACE_INCREMENT = /\{(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])\.\.-?\d+\}/g;
 
 /**
- * The words a brace expansion yields (`s{u,}do` → `sudo`, `sdo`; `{a..c}`), on text with its quotes
- * already off; `null` past {@link BRACE_WORDS_LIMIT}. A `{` with no `,` or `..` at its own level is
- * a literal character, as bash reads it.
+ * The words a brace expansion yields (`s{u,}do` → `sudo`, `sdo`; `{a..c}`), for the readers that
+ * look for a program's name in an argument; `null` when the word is unread. Since WP-248 (backlog
+ * 646) this is {@link expandBraces} with its bound, {@link BRACE_EXPANSION_CEILING}, over the word
+ * made to over-read where WP-206's own expander did, because a name it found is a name these readers
+ * must still find: a quote, a backslash or a `$` is read as a blank — a blank, as each of them, bounds
+ * a name ({@link NAME_BOUNDARY}, {@link JOINED_PART}) — so a brace inside quotes is expanded too
+ * (`'a"s{f..h}'` holds `sh`), and a sequence's increment is ignored (`{f..h..2}it` holds `git`).
+ * Where `expandBraces` declines a form (`{01..03}`, `{a..Z}`, `{a..}`, a `{}` opening one, and
+ * `{1..a}`, on which the old expander never returned), the word is unread, which is the stricter
+ * reading.
  */
-const braceWords = (word: string): readonly string[] | null => {
-  const done: string[] = [];
-  const pending = [word];
-  while (pending.length > 0) {
-    const current = pending.pop() as string;
-    const alternatives = firstBraceAlternatives(current);
-    if (alternatives === 'unbounded') {
-      return null;
-    }
-    if (alternatives === null) {
-      done.push(current);
-    } else {
-      pending.push(...alternatives);
-    }
-    if (done.length + pending.length > BRACE_WORDS_LIMIT) {
-      return null;
-    }
-  }
-  return done;
-};
-
-/**
- * The first brace expansion in `text`, expanded one level; `null` when it has none, and
- * `'unbounded'` for a sequence longer than {@link BRACE_WORDS_LIMIT}.
- */
-const firstBraceAlternatives = (text: string): readonly string[] | null | 'unbounded' => {
-  for (let open = text.indexOf('{'); open !== -1; open = text.indexOf('{', open + 1)) {
-    let depth = 0;
-    const commas: number[] = [];
-    let close = -1;
-    for (let index = open + 1; index < text.length && close === -1; index += 1) {
-      const char = text[index] as string;
-      if (char === '{') {
-        depth += 1;
-      } else if (char === '}' && depth > 0) {
-        depth -= 1;
-      } else if (char === '}') {
-        close = index;
-      } else if (char === ',' && depth === 0) {
-        commas.push(index);
-      }
-    }
-    if (close === -1) {
-      continue;
-    }
-    const before = text.slice(0, open);
-    const body = text.slice(open + 1, close);
-    const after = text.slice(close + 1);
-    if (commas.length > 0) {
-      const parts = [open, ...commas].map((at, index) =>
-        text.slice(at + 1, [...commas, close][index] as number),
-      );
-      return parts.map((part) => `${before}${part}${after}`);
-    }
-    const range = /^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])(?:\.\.-?\d+)?$/.exec(body);
-    if (range !== null) {
-      const numeric = /\d/.test(range[1] as string);
-      const [from, to] = [range[1] as string, range[2] as string].map((end) =>
-        numeric ? Number(end) : end.charCodeAt(0),
-      ) as [number, number];
-      if (Math.abs(to - from) >= BRACE_WORDS_LIMIT) {
-        return 'unbounded';
-      }
-      const step = from <= to ? 1 : -1;
-      const values: string[] = [];
-      for (let value = from; value !== to + step; value += step) {
-        values.push(numeric ? String(value) : String.fromCharCode(value));
-      }
-      return values.map((value) => `${before}${value}${after}`);
-    }
-  }
-  return null;
-};
+const braceWords = (word: string): readonly string[] | null =>
+  expandBraces(
+    word.replace(/["'\\$]/g, ' ').replace(BRACE_INCREMENT, '{$1..$2}'),
+    BRACE_EXPANSION_CEILING,
+  );
 
 /**
  * Where a program name ends inside an argument (WP-206 ruling (b), review round 1, backlog 604): a

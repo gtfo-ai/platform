@@ -6780,3 +6780,47 @@ describe('WP-247, backlog 647: the wrapper walk reads "\\-u" as the \\-u bash ha
     expectCells(command, expected);
   });
 });
+
+/**
+ * WP-248, backlog 646: `braceWords` — the brace reader of the name search in an unknown program's
+ * arguments (`boundedNameIn`, `joinedNameIn`) — is `expandBraces` since WP-248, where it was WP-206's
+ * second expander. Where the two disagreed the stricter reading is kept, each with a row: WP-206's
+ * over-reads (a brace inside quotes or behind a backslash or a `$`, a sequence's increment), and
+ * `expandBraces`' unread forms, which name the word. The old expander never returned on a range from
+ * a number to a letter: `fakeroot {1..a}` exhausted a 4 GB heap (measured at `85106b4a`).
+ */
+describe('WP-248, backlog 646: the name search in an argument expands braces with expandBraces', () => {
+  it.each([
+    // WP-206's over-reads, kept: bash expands none of these (`fit hit`; quoted; escaped; `${…}`).
+    ['frobnicate {f..h..2}it', 'git'],
+    [`frobnicate 'a"s{u,}do'`, 'sudo'],
+    [`frobnicate "a's{u,}do"`, 'sudo'],
+    [String.raw`frobnicate 'a\{gi,x}t'`, 'git'],
+    ["frobnicate 'a${gi,x}t'", 'git'],
+    // The argv-reading half: the line's own argv reading expands this word under
+    // `BRACE_EXPANSION_CEILING`, so lowering that constant to 1 leaves it unread; `braceWords`' budget
+    // alone does not reach these two rows (the over-read rows pin it).
+    ['frobnicate s{u,}do', 'sudo'],
+    ['frobnicate {f..h}it', 'git'],
+    // `expandBraces` declines these forms: the word is unread, and named.
+    ['frobnicate x{},a}', 'x{},a}'],
+    ['frobnicate file{01..03}.txt', 'file{01..03}.txt'],
+  ])('%j reads ask / uncertain / uncertain in every baseline, naming %s', (command, word) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toContain(
+      unknownProgramRunsJudgedName('frobnicate', word),
+    );
+  });
+
+  it.each(['frobnicate {1..a}', 'fakeroot {1..a}'])(
+    '%j returns, uncertain: a range from a number to a letter is unread',
+    (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toContain(UNCERTAINTY.braceExpansion);
+    },
+  );
+
+  it('control: frobnicate x{1..3}y names nothing and keeps ask / auto / deny', () => {
+    expectCells('frobnicate x{1..3}y', 'ask / auto / deny');
+  });
+});
