@@ -58838,3 +58838,59 @@ program half: the row moves no verdict toward a program running).
   command could abort the evaluating process and every run in it; on this row each of five spellings
   reads `uncertain` in about 0.1 s. It had no backlog entry; it is recorded with 646's resolution.
   `resolvedBinary` has no production producer (nit, unfiled).
+
+#### WP-256 — `gitSpawnSites` blanks regular-expression literals before it bounds a call; the timeout guard's own case cites its CI figure (backlog 653)
+
+Built on `main` at `cbb9ecf9`, session 20, in its own worktree. Not committed. Parallel-safe: `scripts/` only.
+
+- **(a) One blanker.** `blankRegularExpressions` moved out of `scripts/census-timeouts.test.ts` into
+  `scripts/git-spawn-sites.ts`, beside `matchingClose`, as an export; `skipString`, which it calls,
+  moved with it and is exported too, because the guard's `statementEnd` and `callArguments` still use it
+  (no second copy of either). `gitSpawnSites` blanks the comment-free source once per file and calls
+  `matchingClose` on the blanked text; the call is still **sliced from the unblanked source** (offsets
+  are kept), so what the census reads in a call — `'git'`, a script name, `env:` — is unchanged.
+  `matchingClose` is unchanged. The stripper-shape census (`source-scanner.test.ts`, `SHAPED`) follows
+  the blanker's `=== '/'` to its new file: `scripts/git-spawn-sites.ts chars`.
+- **(b) The case** is in `scripts/git-scratch-env-census.test.ts` (the census's own file; there is no
+  `git-spawn-sites.test.ts`): `bounds a call at its own close when a regular-expression literal holds
+  unbalanced brackets (backlog 653)`. A scratch file with an unscrubbed `execFileSync('git', ['grep',
+  '-E', /\(\[\{/.source], { cwd: root })` and, on the next line, an admitted call with `env:
+  scratchGitEnv(root)`; both are found, each bounded at its own `)`, and the first is **not
+  admitted**. **Canary**: `matchingClose(blanked, open)` put back to `matchingClose(source, open)` —
+  the case fails by name (the first call runs to the end of the file and borrows the second's `env`,
+  so a real unscrubbed spawn reads admitted); restored, green.
+- **(c) The guard's 15 s.** Green `ci` runs on `main` at or after `97f66da9` (`gh run list … --status
+  success --limit 20`, kept by `git merge-base --is-ancestor 97f66da9 <head>`): **seven** exist —
+  `39531518714`, `39526117667`, `39524580187`, `39518222099`, `39516553098`, `39498503782`,
+  `39494994957`. Each `unit + contract` job log was saved and grepped. `finds no walk case in this
+  repository without an explicit timeout of at least 15 s`: 7770, 7755, 6964, 5520, 3902, 3859,
+  3415 ms — **slowest 7770, median 5520**. 2× the slowest is 15 540 ms, which exceeds 15 s, so per the
+  ruling the timeout is raised to `16_000` (2× rounded up to the second), with
+  `// WP-256: slowest of 7 green CI runs 7770 ms (median 5520 ms); 2× it, 15 s floor.` The canary case
+  beside it was printed in no run (under 300 ms) and carries no timeout: it reads one file, so it is
+  not a walk case. The guard's `MINIMUM_TIMEOUT_MS` (the 15 s floor it admits) is unchanged.
+- **(d) Counts.** A scratch script ran `gitSpawnSites` over this checkout before and after: **55**
+  sites under `isTestSource` (1 unadmitted, the exempt `test/e2e/support/docker-workspace.ts`) and
+  **79** over every non-`node_modules` file, the per-site `path:line admitted call` list
+  byte-identical before and after.
+- **Sentences falsified** (rule 83): the guard's *What it cannot see* item *"a regular-expression
+  literal holding an unbalanced bracket: the bracket matcher skips strings and templates, not regular
+  expressions"* was rewritten to the residual that is true — a literal the blanker does not read as one
+  (a `/` after `)`, `]`, an identifier or a keyword other than `return`) — and the census's docblock
+  gained the same residual. 653's text and WP-249's notes are history and were left as written.
+- **Verify.** `pnpm run -s verify` → `PASS: verify`. The first run failed only in `scripts/gitleaks.test.ts`
+  (and `git-fixture-isolation.test.ts`, which runs it): this worktree was installed with
+  `--ignore-scripts`, so `@b12k/gitleaks`'s postinstall never fetched its binary (`Binary not found`).
+  The binary was copied from the main checkout's `node_modules` (same 8.30.1 package, ignored path);
+  nothing tracked changed for it.
+- **Review** (session 20, one round, **APPROVE-with-nits**; fixed by the orchestrator). Canaries: the
+  blank removed from `gitSpawnSites` and the call cut from the blanked text — each dead by the
+  backlog-653 case; a second blanker copy left in the guard — dead by `source-scanner.test.ts`'s
+  shape census (a copy spelled without `=== '/'` would survive); the guard's timeout back to
+  `15_000` survived, expected (the ruling asks for the citation). All seven cited CI figures match
+  the logs; an eighth green run (`39532913959`, at `cbb9ecf9`) read 5080 ms, inside `16_000`.
+  **A residual the other way round**, stated in both docblocks: a division after `++`/`--`
+  (`n++ / 2`) or a JSX `</p>` is read as a literal and blanked to the end of its line, so a call
+  there could borrow the next call's `env:` on the same line; nothing on this tree hits it (the
+  55/79 counts are unchanged). The worktree was installed with `--ignore-scripts`, so its gitleaks
+  binary was copied in by hand from the main checkout.

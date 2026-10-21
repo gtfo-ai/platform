@@ -68,6 +68,64 @@ export const matchingClose = (source: string, open: number): number => {
   return source.length;
 };
 
+/** The index just past the string or template that opens at `start`. */
+export const skipString = (source: string, start: number): number => {
+  const quote = source[start];
+  let index = start + 1;
+  while (index < source.length && source[index] !== quote) {
+    if (source[index] === '\\') index += 2;
+    else if (quote === '`' && source.startsWith('${', index))
+      index = matchingClose(source, index + 1);
+    else index += 1;
+  }
+  return index + 1;
+};
+
+/**
+ * `source` with every regular-expression literal's body blanked to spaces, so a bracket inside one
+ * (`/\bsave\s*\(/g`) does not unbalance the matcher. Offsets and newlines are kept. A `/` is read
+ * as a literal's start after an operator, a bracket, a comma or the start, and after `return`.
+ * The other way round, a division after `++`/`--` (`n++ / 2`) or a JSX closing tag (`</p>`) is read
+ * as a literal and blanked to the end of its line, so a call there can run past its close (review,
+ * WP-256). An unterminated literal at the end of the source adds one character.
+ */
+export const blankRegularExpressions = (source: string): string => {
+  let output = '';
+  let index = 0;
+  let previous = '';
+  while (index < source.length) {
+    const char = source[index] as string;
+    if (`'"\``.includes(char)) {
+      const end = skipString(source, index);
+      output += source.slice(index, end);
+      index = end;
+      previous = char;
+    } else if (
+      char === '/' &&
+      (/^$|[(,=:[!&|?{};+\-*%<>~^]$/.test(previous) || /\breturn$/.test(output.trimEnd()))
+    ) {
+      let end = index + 1;
+      let inClass = false;
+      while (end < source.length && source[end] !== '\n') {
+        const next = source[end] as string;
+        if (next === '\\') end += 1;
+        else if (next === '[') inClass = true;
+        else if (next === ']') inClass = false;
+        else if (next === '/' && !inClass) break;
+        end += 1;
+      }
+      output += `/${' '.repeat(end - index - 1)}/`;
+      index = end + 1;
+      previous = '/';
+    } else {
+      output += char;
+      index += 1;
+      if (!/\s/.test(char)) previous = char;
+    }
+  }
+  return output;
+};
+
 /** Identifiers this file binds to a helper call, directly or as an arrow returning one. */
 const helperBindings = (source: string): Set<string> => {
   const bindings = new Set<string>();
@@ -115,12 +173,13 @@ export const gitSpawnSites = (
 ): GitSpawnSite[] =>
   censusFiles(root, { include }).flatMap(({ path, contents }) => {
     const source = withoutComments(contents);
+    const blanked = blankRegularExpressions(source);
     const bindings = helperBindings(source);
     const constants = scriptConstants(source);
     const sites: GitSpawnSite[] = [];
     for (const match of source.matchAll(callees(source))) {
       const open = (match.index ?? 0) + match[0].length - 1;
-      const call = source.slice(open, matchingClose(source, open));
+      const call = source.slice(open, matchingClose(blanked, open));
       const runsGit = /^\(\s*['"`]git['"`]\s*[,)]/.test(call);
       const runsScript =
         GIT_RUNNING_SCRIPTS.test(call) ||

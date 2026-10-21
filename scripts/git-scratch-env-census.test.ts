@@ -40,6 +40,11 @@ import { type GitSpawnSite, gitSpawnSites, isTestSource } from './git-spawn-site
  *   matched across the whole file, not per scope, so a binding in one test admits a call in another;
  * - an `env` whose value only **starts** with the helper: `{ ...scratchGitEnv(root), ...process.env }`
  *   is admitted although the second spread puts every `GIT_*` name back (review nit, WP-162);
+ * - a call bounded through a regular-expression literal `blankRegularExpressions` does not read as
+ *   one (a `/` after `)`, `]`, an identifier or a keyword other than `return`): an unbalanced
+ *   bracket in it can still run the call past its close (backlog 653's residual); and the other way
+ *   round, a division after `++`/`--` or a JSX closing tag blanked as a literal to the end of its
+ *   line, which can run a call into the next call's `env:` on the same line (WP-256's review);
  * - a whole command line as one string (`execSync('git ls-files')`): only a literal `'git'` as the
  *   first argument is read as a git spawn (no test file uses the string form today);
  * - a production module a test calls **in-process** with a scratch root (`censusPaths(root)`): it
@@ -175,6 +180,29 @@ describe('the census against a repository built for it', () => {
       'test/e2e/support/harness.ts:1',
       'test/integration/alias.integration.test.ts:2',
     ]);
+  });
+
+  it('bounds a call at its own close when a regular-expression literal holds unbalanced brackets (backlog 653)', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'git-spawn-census-')));
+    roots.push(root);
+    initScratchRepository(root);
+    plant(
+      root,
+      'scripts/regex.test.ts',
+      [
+        `${'execFileSync'}('git', ['grep', '-E', /\\(\\[\\{/.source], { cwd: root });`,
+        `${'execFileSync'}('git', ['status'], { cwd: root, env: scratchGitEnv(root) });`,
+        '',
+      ].join('\n'),
+    );
+
+    // Unblanked, the first call ran to the end of the file and borrowed the second call's `env`.
+    expect(gitSpawnSites(root).map((site) => `${site.line} ${site.admitted} ${site.call}`)).toEqual(
+      [
+        "1 false ('git', ['grep', '-E', /\\(\\[\\{/.source], { cwd: root })",
+        "2 true ('git', ['status'], { cwd: root, env: scratchGitEnv(root) })",
+      ],
+    );
   });
 });
 

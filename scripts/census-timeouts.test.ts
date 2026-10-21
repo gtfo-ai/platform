@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { PROCESS_SUITES } from '../vitest.config.js';
 import { censusFiles } from './census-files.mjs';
-import { matchingClose } from './git-spawn-sites.js';
+import { blankRegularExpressions, matchingClose, skipString } from './git-spawn-sites.js';
 import { withoutComments } from './source-scanner.mjs';
 
 /**
@@ -43,8 +43,9 @@ import { withoutComments } from './source-scanner.mjs';
  * - a `readdirSync` walk: only `census-files` and `ls-files` walks are walkers here;
  * - a timeout computed (`20 * 1000`) or imported: only a numeric literal, or a name this file binds
  *   to one, is read, so such a case is refused rather than guessed at;
- * - a regular-expression literal holding an unbalanced bracket: the bracket matcher skips strings
- *   and templates, not regular expressions;
+ * - a regular-expression literal `blankRegularExpressions` (`git-spawn-sites.ts`) does not read as
+ *   one — a `/` after `)`, `]`, an identifier or a keyword other than `return` is division to it —
+ *   so an unbalanced bracket in such a literal still reaches the bracket matcher;
  * - a `git ls-files` inside a shell string or a command name held in a variable;
  * - whether the cited figure is true: the ≥ 2× rule is the reviewer's, against the table in the
  *   WP-249 notes.
@@ -59,61 +60,6 @@ const LS_FILES = /['"`]ls-files['"`]/;
  */
 const ROOT_EXPRESSION =
   /import\.meta\.dirname|process\.cwd\(\)|new URL\(\s*['"]\.\.[./]*['"]\s*,\s*import\.meta\.url|dirname\(\s*fileURLToPath\(\s*import\.meta\.url/;
-
-/** The index just past the string or template that opens at `start`. */
-const skipString = (source: string, start: number): number => {
-  const quote = source[start];
-  let index = start + 1;
-  while (index < source.length && source[index] !== quote) {
-    if (source[index] === '\\') index += 2;
-    else if (quote === '`' && source.startsWith('${', index))
-      index = matchingClose(source, index + 1);
-    else index += 1;
-  }
-  return index + 1;
-};
-
-/**
- * `source` with every regular-expression literal's body blanked to spaces, so a bracket inside one
- * (`/\bsave\s*\(/g`) does not unbalance the matcher. Offsets and newlines are kept. A `/` is read
- * as a literal's start after an operator, a bracket, a comma or the start, and after `return`.
- */
-const blankRegularExpressions = (source: string): string => {
-  let output = '';
-  let index = 0;
-  let previous = '';
-  while (index < source.length) {
-    const char = source[index] as string;
-    if (`'"\``.includes(char)) {
-      const end = skipString(source, index);
-      output += source.slice(index, end);
-      index = end;
-      previous = char;
-    } else if (
-      char === '/' &&
-      (/^$|[(,=:[!&|?{};+\-*%<>~^]$/.test(previous) || /\breturn$/.test(output.trimEnd()))
-    ) {
-      let end = index + 1;
-      let inClass = false;
-      while (end < source.length && source[end] !== '\n') {
-        const next = source[end] as string;
-        if (next === '\\') end += 1;
-        else if (next === '[') inClass = true;
-        else if (next === ']') inClass = false;
-        else if (next === '/' && !inClass) break;
-        end += 1;
-      }
-      output += `/${' '.repeat(end - index - 1)}/`;
-      index = end + 1;
-      previous = '/';
-    } else {
-      output += char;
-      index += 1;
-      if (!/\s/.test(char)) previous = char;
-    }
-  }
-  return output;
-};
 
 /** The index just past the statement that runs from `from`, or at the block that encloses it. */
 const statementEnd = (source: string, from: number): number => {
@@ -374,7 +320,7 @@ const unadmitted = (cases: readonly WalkCase[]): string[] =>
     .map((walk) => `${walk.path}:${walk.line} ${walk.name} (timeout ${walk.timeout ?? 'none'})`);
 
 describe('every whole-tree census case carries its own timeout (WP-249)', () => {
-  // WP-249: a new case with no CI figure yet; 1.0–1.3 s locally, so the 15 s floor.
+  // WP-256: slowest of 7 green CI runs 7770 ms (median 5520 ms); 2× it, 15 s floor.
   it('finds no walk case in this repository without an explicit timeout of at least 15 s', () => {
     const sources = censusFiles(REPOSITORY_ROOT, {
       include: (path) => SOURCE.test(path) && !path.startsWith('node_modules/'),
@@ -395,7 +341,7 @@ describe('every whole-tree census case carries its own timeout (WP-249)', () => 
       'packages/application/src/pipeline/default-branch-readers.test.ts',
     );
     expect(unadmitted(cases)).toEqual([]);
-  }, 15_000);
+  }, 16_000);
 
   it('names the case whose timeout was removed (the canary)', () => {
     const path = 'packages/application/src/pipeline/default-branch-readers.test.ts';
