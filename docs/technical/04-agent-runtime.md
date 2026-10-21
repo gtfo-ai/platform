@@ -517,7 +517,16 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   went unseen (bash 5.3.20 ran the monitor, measured on a scratch repository; 3.2.57 refuses the
 >   `case` form and closes `<(` at the comment's `)`), and the line is uncertain
 >   (`unreadSubstitutionBody`) — `echo $(echo case)` reading uncertain is the stated over-ask, and
->   `$((…))`, where `case` is a variable name (`$(( case + 1 ))`), is never such a body. What no floor reads is an expansion (`$x`, `${…}`, `$(…)`, a
+>   `$((…))`, where `case` is a variable name (`$(( case + 1 ))`), is never such a body. The git
+>   boundary skips a fragment as made of others only when it is more than one **stage** at its own
+>   level — a list or a pipe — (WP-252, backlog 656): a one-stage fragment is judged as an argv and
+>   what the splitter hands out of it (a `-c` body, a substitution) is judged beside it. Before, any
+>   second part made it composite, and behind a wrapper the splitter read a `-c` value as a script
+>   handed out of a glob-shaped word, so `env git --namespace "*" -c core.fsmonitor=x status` read
+>   `auto` (git 2.56.0 ran the monitor, and a `core.hooksPath` hook, measured on a scratch
+>   repository); `git push origin x 2>&1 | tail -5` stays composite (backlog 488), and a line whose
+>   separate value is a substitution in front of a refused key (`git -C $(pwd) -c core.fsmonitor=x
+>   status`) now reads that key's refusal instead of WP-250's uncertainty. What no floor reads is an expansion (`$x`, `${…}`, `$(…)`, a
 >   backtick, a glob). What still writes one without an `ask` is the **repository-content route**:
 >   `make *`, `npm run *`, `pytest` running a `conftest.py` or reading a `pytest.ini` it locates from
 >   its arguments (`pytest sub/` reads a `sub/pytest.ini` the agent wrote), a lockfile install's

@@ -9315,7 +9315,8 @@ let readsExpandedStages = true;
 
 /**
  * {@link splitCommandSegments} without the brace-expanded copies of a stage: the parts the line is
- * **made of**. The git boundary asks this whether a fragment is composite; with the copies, every
+ * **made of**. The git boundary asks this, beside {@link commandStageCount}, whether a fragment is
+ * composite; with the copies, every
  * stage whose braces expand looked composite and its own words went unjudged (`git fetch
  * {origin,x}` read `allow`, measured in review round 2's sweep).
  */
@@ -9327,6 +9328,19 @@ export const splitCommandSegmentsAsWritten = (command: string): readonly string[
     readsExpandedStages = true;
   }
 };
+
+/**
+ * How many stages `command` is made of **at its own level** (WP-252, backlog 656): its list's
+ * commands (`;`, `&&`, `||`, `&`, a newline, a `( … )` body) and each one's pipe stages, counted
+ * by the scanner's own passes. What a stage hands out — a `-c` body, a substitution — is not a
+ * stage of this level, so `env git --namespace "*" -c core.fsmonitor=x status` is one stage while
+ * `git push origin x 2>&1 | tail -5` is two.
+ */
+export const commandStageCount = (command: string): number =>
+  scan(command, LIST_OPERATORS).segments.reduce(
+    (count, segment) => count + scan(segment, PIPE_OPERATORS).segments.length,
+    0,
+  );
 
 /**
  * The command line with every here-document body that is **data** cut out (WP-153 (b)): the lines

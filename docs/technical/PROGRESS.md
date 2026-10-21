@@ -17548,7 +17548,7 @@ Sites on `main` at `cdf99495`: `REDIRECTION_WORD` in `packages/domain/src/polici
 
 **Done when** the census cases' CI durations are recorded and either they share one walk of the tree per worker or they carry an explicit timeout stated against the measured CI figure; no census case reads within 2× of its timeout on CI.
 
-### 650. **The git boundary drops a command substitution `$(…)` / `` `…` `` given as a git global option's value, the way 645 dropped a process substitution. The option loses its value, the next word is read as the value, and an option behind it is not seen: `git -C $(pwd) -c core.fsmonitor=<script> status` reads `ask / auto / deny`, and the fsmonitor script ran** (**RESOLVED** at `9567d700`, WP-250, session 20 — the deciding reader was `unreadableGitWord`, whose docblock excluded a global option's value: a separate value with an unquoted expansion (`$(…)`, a backtick, `$name`, `${…}`) now answers `uncertain` at the git boundary with a reason of its own (`splitGitOptionValue`), and a double-quoted one is read as one word; the ten measured lines (`-C $(pwd)`, `--namespace $(echo x)`, the backtick, `--attr-source`, the `core.sshCommand` tail, `X=; … $X`/`${X} --namespace -c …`, `X='a -c …'`, the two many-word `$(echo "… -c …")`) read `ask / uncertain / uncertain` in all three baselines (were `ask / auto / deny`), corpus 0. Was TODO, **major**: a **live fail-open on `main`**, pre-existing, not caused by WP-246. **TD-030 tier 1**: WP-198's rule is that floors read argv *as the shell builds it*. Same class as 645. Found by WP-246's implementer, session 20, under that row's *Discovered work* in its notes (`#### WP-246`). WP-246's ruling scoped it to `<(…)`/`>(…)`, so its fix does not cover this. The refiner read those notes and ran nothing. **No work package owns it.**)
+### 650. **The git boundary drops a command substitution `$(…)` / `` `…` `` given as a git global option's value, the way 645 dropped a process substitution. The option loses its value, the next word is read as the value, and an option behind it is not seen: `git -C $(pwd) -c core.fsmonitor=<script> status` reads `ask / auto / deny`, and the fsmonitor script ran** (**RESOLVED** at `9567d700`, WP-250, session 20 — the deciding reader was `unreadableGitWord`, whose docblock excluded a global option's value: a separate value with an unquoted expansion (`$(…)`, a backtick, `$name`, `${…}`) now answers `uncertain` at the git boundary with a reason of its own (`splitGitOptionValue`), and a double-quoted one is read as one word; the ten measured lines (`-C $(pwd)`, `--namespace $(echo x)`, the backtick, `--attr-source`, the `core.sshCommand` tail, `X=; … $X`/`${X} --namespace -c …`, `X='a -c …'`, the two many-word `$(echo "… -c …")`) read `ask / uncertain / uncertain` in all three baselines (were `ask / auto / deny`), corpus 0. Since WP-252 (backlog 656) the five of them whose `-c` key the boundary refuses (`-C $(pwd)`, `--namespace $(echo x)`, the backtick, `--attr-source`, the `core.sshCommand` tail) read that refusal instead, `ask / git / git`: their one-stage fragment is now judged. Was TODO, **major**: a **live fail-open on `main`**, pre-existing, not caused by WP-246. **TD-030 tier 1**: WP-198's rule is that floors read argv *as the shell builds it*. Same class as 645. Found by WP-246's implementer, session 20, under that row's *Discovered work* in its notes (`#### WP-246`). WP-246's ruling scoped it to `<(…)`/`>(…)`, so its fix does not cover this. The refiner read those notes and ran nothing. **No work package owns it.**)
 
 **Evidence.** Measured by WP-246's implementer on `main` and on the WP-246 tree, git 2.56.0, bash 5.3.20, a scratch repository. Quoted from the notes: *"`git -C $(pwd) -c core.fsmonitor=<script> status`, `git --namespace $(echo x) …` and the backtick form read `ask / auto / deny` on `main` and with this row, and the monitor **ran** for all three on a scratch repository"*.
 
@@ -17642,7 +17642,7 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
 
 **Depends on** WP-247's merge. Serial with 650, 651, 652 and 654 on `command-policy.ts`.
 
-### 656. **Behind a wrapper (`env`, `nice`, `timeout`, `command`, `stdbuf`, `nohup`, `time`, `exec`, …), a git global option's value that holds a glob or brace character, even quoted, hides the `-c` behind it: `env git --namespace "*" -c core.fsmonitor=/tmp/m status` reads `ask / auto / deny`** (TODO, **major**, **live on `main`**, policy measured, program half not run. **TD-030 tier 1**: the boundary's structural reading of fragments. Found by the M19 architect pass while probing 652, session 20 (§ "Architect ruling (M19, session 20)", its *656* tables). Numbered by that ruling; this heading is the refiner's. The refiner ran nothing. **Owned by WP-252**, first in M19.)
+### 656. **Behind a wrapper (`env`, `nice`, `timeout`, `command`, `stdbuf`, `nohup`, `time`, `exec`, …), a git global option's value that holds a glob or brace character, even quoted, hides the `-c` behind it: `env git --namespace "*" -c core.fsmonitor=/tmp/m status` reads `ask / auto / deny`** (**RESOLVED** by WP-252, session 20 — the deciding reader was the composite skip in `gitBoundaryViolation`, confirmed by canary: a fragment is now skipped as made of others only when it is more than one stage at its own level (`commandStageCount`: a list or a pipe), and a one-stage fragment is judged as an argv with its parts queued beside it; every measured spelling (the nine wrappers, the values `'*'`, `\*`, `"?"`, `"[x]"`, `"{a,b}"`, `*`, `?`, `x*`, `{a,b}`, `-C "*"`, `env X=1`, the `core.hooksPath` tail, the `| cat` suffix) reads `ask / git / git` in all three baselines (was `ask / auto / deny`), backlog 488's pipeline keeps its cells, corpus 0; the program half ran the monitor and the hook on a scratch repository before the change (`#### WP-252`). Was TODO, **major**, **live on `main`**, policy measured, program half not run. **TD-030 tier 1**: the boundary's structural reading of fragments. Found by the M19 architect pass while probing 652, session 20 (§ "Architect ruling (M19, session 20)", its *656* tables). Numbered by that ruling; this heading is the refiner's. The refiner ran nothing. **Owned by WP-252**, first in M19.)
 
 **Evidence.** The architect pass at `981b7117`, policy only: `evaluateCommand` / `decideUnattendedCommand` on `DEFAULT_COMMAND_POLICY` with `allow` set to each of `DEFAULT_READ_ONLY_ALLOW`, `DEFAULT_VERIFICATION_ALLOW` and `DEFAULT_IMPLEMENTATION_ALLOW`, attended / `auto` / `deny`. Every cell is identical in the three baselines unless stated.
   - `env git --namespace "*" -c core.fsmonitor=/tmp/m status` reads **`ask / auto / deny`**. The controls `env git --namespace x -c …` and `git --namespace "*" -c …` get the git boundary's refusal.
@@ -17671,6 +17671,23 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
 **Done when** that trigger's row lands with the per-stage reading pinned. Until then it is closed as declined.
 
 **Depends on** a production producer of `resolvedBinary`, and none is planned.
+
+### 658. **Since WP-252 a one-stage fragment is also read as written, so a command substitution in a git remote or branch position is split at its spaces: the reason names a fragment of the substitution (`$(echo`, `$(git`, `--show-current)`), and `git fetch $(echo origin)` / `git ls-remote $(git config remote.origin.url)` moved to the boundary's refusal** (nit, **over-ask**: stricter only, no fail-open. **TD-030 tier 1**, the as-written reading of a git argv. Found by WP-252's reviewer, session 20, and recorded as the residual in `#### WP-252`'s *Residual* and *Review* bullets. This heading is the refiner's. The refiner ran nothing. **No work package owns it.**)
+
+**Evidence.** WP-252's *Residual* bullet, as corrected at review. These are policy cells, attended / `auto` / `deny`, measured by WP-252's implementer and reviewer and uncommitted when this was filed:
+  - `git fetch $(echo origin)` and `git ls-remote $(git config remote.origin.url)` move from **`ask / auto / deny`** to **`ask / git / git`**. Their reasons name the broken word `$(echo` / `$(git`.
+  - `git push origin $(git branch --show-current)` keeps `ask / git / git`. Its reason now names the push option `--show-current)` where it used to name the missing branch.
+  - `git push $(echo origin) main` keeps its cell, with `$(echo` in its reason.
+  - The bullet's own diagnosis: *"the as-written reading splits a substitution at its spaces. All stricter, consistent with "name origin or nothing"; reading a substitution as one word there is filed."* The review found nothing looser across 280 lines, base against head.
+
+**What it costs to leave.** No cell is looser. Two read-only lines (`fetch`, `ls-remote`) now ask a person where `auto` used to allow them. Four reasons name a word the run never wrote, which misleads whoever reads the refusal. **Trigger:** a project whose runs routinely write a substituted remote in these positions. Needs measurement: how often runs write this. Nothing has counted it.
+
+**Done when:**
+  - the as-written reading treats a `$(…)` (and a backtick substitution) as one unreadable word in the remote and branch positions, so each of the four reasons names the substitution and not a fragment of it;
+  - the four lines above are pinned with their cells and reasons, and a sweep against the WP-252 head reports **0 looser**;
+  - **the ruling is stated** on whether the `fetch` / `ls-remote` cells go back to `auto`. The refiner recommends **no**: they stay `ask / git / git`. A substitution cannot be shown to name origin, and "name origin or nothing" admits only a remote the policy can read.
+
+**Depends on** WP-252 landing. It touches the same two files (`command-policy.ts`, `unattended-commands.ts`) as WP-253 to WP-255, so it goes after them serially or into one of them.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -58894,3 +58911,117 @@ Built on `main` at `cbb9ecf9`, session 20, in its own worktree. Not committed. P
   there could borrow the next call's `env:` on the same line; nothing on this tree hits it (the
   55/79 counts are unchanged). The worktree was installed with `--ignore-scripts`, so its gitleaks
   binary was copied in by hand from the main checkout.
+
+## WP notes — session 20 (M19)
+
+#### WP-252 — the git boundary judges a one-stage fragment's own argv even when the splitter hands a script out of it (backlog 656)
+
+Built on `main` at `cbb9ecf9` (policy sources identical to `981b7117`), session 20. Not committed.
+
+- **(a) Measured first, before any change.** Cells (`evaluateCommand` / `decideUnattendedCommand`
+  `auto` / `deny`), identical in `DEFAULT_READ_ONLY_ALLOW`, `DEFAULT_VERIFICATION_ALLOW` and
+  `DEFAULT_IMPLEMENTATION_ALLOW` unless stated, read from a base tree (`git archive cbb9ecf9`):
+
+  | Line | Before | After |
+  |---|---|---|
+  | `env`, `nice`, `nice -n 5`, `timeout 5`, `command`, `stdbuf -o0`, `nohup`, `time`, `exec` before `git --namespace "*" -c core.fsmonitor=/tmp/m status` | `ask / auto / deny` | `ask / git / git` |
+  | the values `'*'`, `\*`, `"?"`, `"[x]"`, `"{a,b}"`, `*`, `?`, `x*`, `{a,b}` behind `env` | `ask / auto / deny` | `ask / git / git` |
+  | `nice git -C "*" -c …`; `env git -C "a" --namespace "*" -c …`; `env X=1 git --namespace "*" -c …` | `ask / auto / deny` | `ask / git / git` |
+  | `env git --namespace "*" -c core.hooksPath=/tmp/h commit -m x`; the `\| cat` suffix | `ask / auto / deny` | `ask / git / git` |
+  | `env git --namespace x -c …`; `git --namespace "*" -c …`; `env sh -c "git -c core.fsmonitor=x status"` | `ask / git / git` | same |
+  | `git push origin agentic/x 2>&1 \| tail -5`; `git push origin agentic/x && git log -5` | `allow / allow / allow` (implementation), `ask / auto / deny` (the other two) | same |
+  | `env git --namespace "*" status` | `ask / auto / deny` | same |
+  | `env git push "*" -c x --force`; `sudo git --namespace "*" -c …` | `block / block / block` | same |
+  | `env pytest "*" -c x -p evil` | `ask / hazard / hazard` | same |
+  | `xargs git --namespace "*" -c …`; `env npm test "*" -c x --script-shell=/bin/id` | `ask / uncertain / uncertain` | same |
+
+  Shell, `printf '[%s]' "*" '*' \* "?" "[x]" "{a,b}" x` in the scratch repository, bash 5.3.20 and
+  `/bin/bash` 3.2.57 identical: `[*][*][*][?][[x]][{a,b}][x]` — every quoted or escaped value is one
+  literal word. Program half (`scratchpad/wp252/program.mjs`): a repository made by
+  `initScratchRepository` under the scratchpad, one commit, `core.fsmonitor` a script and a
+  `pre-commit` hook that only touch a marker under the scratch root; git 2.56.0, both bashes, exit 0
+  each. Marker **present** for `env git --namespace "*" -c core.fsmonitor=<script> status`, `nice git
+  --namespace "?" -c core.fsmonitor=<script> status` and `env git --namespace "*" -c
+  core.hooksPath=<dir> commit --allow-empty -m x` (the live fail-open, monitor and hook); absent for
+  the control `env git --namespace x status`. Nothing ran against this checkout.
+  **The deciding reader, by canary:** on a copy of the base tree, the composite skip at
+  `unattended-commands.ts:1018` made to judge exactly the fragment `env git --namespace "*" -c
+  core.fsmonitor=/tmp/m status` moved that line alone to `ask / git / git` (the `nice` line beside
+  it stayed `ask / auto / deny`). `splitCommandSegmentsAsWritten` on it answers the line and
+  `core.fsmonitor=/tmp/m` (with `x` for `"*"`, the line alone), as the architect's probe said. After
+  the change every measured spelling moved, so no reader the pass did not name decides.
+- **The change.** `commandStageCount` (`command-policy.ts`, new, exported) counts a fragment's
+  stages at its own level with the scanner's own passes: `scan(…, LIST_OPERATORS)`'s segments, each
+  `scan(…, PIPE_OPERATORS)`'s stages, summed — a structural test, never a substring one (WP-161 (e)).
+  `gitBoundaryViolation` queues a fragment's parts whenever the splitter finds more than one, and
+  skips the fragment's own argv only when it **also** has more than one stage; both conditions are
+  required to skip, so against the base the change can only judge more. The splitter is unchanged.
+- **Rows** (`unattended-commands.test.ts`, describe *WP-252, backlog 656*): the twenty-three lines
+  of the first four table rows at `ask / git / git` in every baseline; the controls of ruling (c)
+  in every baseline; backlog 488's pipeline and a `&&` list at their per-baseline cells; and one row
+  on `gitBoundaryViolation` itself for the parts of a one-stage fragment (ten nested `echo $(…)`
+  around `git -c core.fsmonitor=x status`: the boundary refuses it, the cells read `ask / uncertain
+  / uncertain` by the depth bound either way). **Moved rows:** seven of WP-250's
+  `ask / uncertain / uncertain` lines (`-C $(pwd)`, `--namespace $(echo x)`, the backtick,
+  `--attr-source`, the `core.sshCommand` tail, `> out -C $(pwd)`, `env git -C $(pwd)`) read
+  `ask / git / git`: the substitution is a part the splitter hands out, so the fragment had been
+  skipped and only its lifted copy (the key read as `-C`'s value) was judged. They moved out of
+  WP-250's describe into WP-252's, with that reason; WP-250's other rows and its controls are
+  unchanged.
+- **Canaries** (`scratchpad/wp252/canary.py`, each alone, `vitest -t 656`, restored and compared
+  byte for byte): planted throw → the suite failed to load (rc 1); the composite test put back →
+  30 fail (every 656 row and the seven moved 650 rows); the stage test removed (every fragment
+  judged as one argv) → 2 (the pipe and the `&&` controls); `commandStageCount` counting list
+  segments only → 1 (the pipe control); pipe stages only → 1 (the `&&` control); the parts not
+  queued for a one-stage fragment → first **0** — ruling (c) expected the `env sh -c "git -c …"`
+  control to fail, but the line's own split already holds the handed script, so it survived; the
+  depth-bound row was added for it, and the canary then failed exactly that row.
+- **(d) Sweep** (`scratchpad/wp252/sweep.mjs`; base tree `git archive cbb9ecf9` against a copy of
+  the working tree, the git lines of this test file read once for both, WP-252's rows included):
+  WP-250's set and WP-248's set as their notes state them, plus the nine wrapper prefixes and none ×
+  the values `"*"`, `'*'`, `\*`, `*`, `?`, `"?"`, `[x]`, `"[x]"`, `{a,b}`, `"{a,b}"`, `x*`, `~`, `x`,
+  WP-250's twenty-two and WP-247/248's nine quoted spellings × each `separate` option of
+  `GIT_GLOBAL_OPTIONS` plus `--exec-path` × WP-250's six tails plus `-c core.hooksPath=x commit -m
+  x`, each with and without `X=; `, `> out` in front and `| cat` behind (and `> out` after `git`
+  behind a wrapper); three baselines × attended / `auto` / `deny`: **673,436** lines, **2,020,308**
+  cells, **0 looser**, **61,395 tighter** (61,167 `ask / auto / deny` → `ask / git / git`, 228 →
+  `ask / uncertain / uncertain`, e.g. `git "<(true)" -c core.pager=cat log`, whose literal
+  `<(true)` word is now read as an unread verb), **43,524** same-rank (33,225 `uncertain` → `git`,
+  10,299 `hazard` → `git`, e.g. `git --exec-path 2<(true) push` behind which the boundary's
+  refusal now answers first). WP-198's property and the policy suites: `vitest run
+  packages/domain/src/policies --project unit` green with the gate seed and `PROPERTY_SEED` 1, 7 and
+  424242 (4,399 passed, 5 skipped, each).
+- **(e) Corpus diff:** **0** cells moved (no line of `test/fixtures/commands/*-lines.txt` is among
+  the 34,973 moved lines; `command-corpus.test.ts`, 15 passed).
+- **(f)** Docblocks: `gitBoundaryViolation`'s composite paragraph (WP-161 (e)'s rule restated with
+  the stage test), `splitCommandSegmentsAsWritten` (it is asked beside `commandStageCount`), the new
+  `commandStageCount`; `04-agent-runtime.md` (the reading-contract paragraph); `05`'s WP-161
+  amendment sentence; 656's heading restated as resolved and 650's heading told which of its lines
+  now read the refusal.
+- **Sentences falsified** (grep for *more than one part*, *is composite*, *composite when*,
+  *splitter, run on it*, *made of other fragments*, *whether a fragment is composite* over the two
+  modules and their tests, `04`, `05`, TD-030, and 517's/650's headings): the composite paragraph's
+  "a fragment is composite when the splitter, run on it, finds more than one part" (restated);
+  `splitCommandSegmentsAsWritten`'s "The git boundary asks this whether a fragment is composite"
+  (now beside `commandStageCount`); `05`'s "skips a fragment only when the splitter finds it made of
+  other fragments" (qualified); 650's "the ten measured lines … read `ask / uncertain / uncertain`"
+  (five now read the refusal; told). 517's heading states the substring defect and stays true.
+  TD-030 does not name the reader. Not edited: decisions (out of scope).
+- **Residual, reason only.** A one-stage fragment holding a substitution is now read as written by
+  the push reader too, so `git push origin $(git branch --show-current)` keeps `ask / git / git` but
+  its reason names "the push option `--show-current)`" where it named the missing branch before.
+  *Corrected at review:* cells do move in the remote position — `git fetch $(echo origin)` and
+  `git ls-remote $(git config remote.origin.url)` go from `ask / auto / deny` to `ask / git / git`
+  (reasons naming the broken word `$(echo` / `$(git`), and `git push $(echo origin) main` keeps its
+  cell with `$(echo` in its reason: the as-written reading splits a substitution at its spaces. All
+  stricter, consistent with "name origin or nothing"; reading a substitution as one word there is filed.
+- **Discovered work.** None filed beyond the residual above.
+- **Verify.** `vitest run scripts/citations.test.ts --project unit`: 13 passed. `pnpm run -s
+  verify` (load 2.0; the three untracked `.claude/` directories set aside in the scratchpad and moved
+  back): `PASS: verify` (15958 passed, 19 skipped).
+- **Review** (session 20, one round, **APPROVE**, one minor fixed by the orchestrator: the residual
+  above extended to the remote-position cell moves). Canaries: old skip back (30 red), stage test
+  removed (5), list-only count (4), pipe-only count (1), parts not queued (1, the depth-bound row),
+  `> 0` for `> 1` (30) — none survived. Reviewer: 216 wrapper × value × tail combinations read
+  `ask / git / git`; `commandStageCount` never counts a one-stage line as more (a `{ a; }` group
+  counts 2, its parts queued and read); base against head on 280 lines, nothing looser.

@@ -6615,11 +6615,6 @@ describe('WP-246, backlog 645: a process substitution is the argument bash hands
  */
 describe('WP-250, backlog 650: a git global option value the shell splits is uncertain', () => {
   it.each([
-    ['git -C $(pwd) -c core.fsmonitor=/tmp/m status', '$(pwd)'],
-    ['git --namespace $(echo x) -c core.fsmonitor=/tmp/m status', '$(echo x)'],
-    ['git --namespace `echo x` -c core.fsmonitor=/tmp/m status', '`echo x`'],
-    ['git --attr-source $(echo x) -c core.fsmonitor=/tmp/m status', '$(echo x)'],
-    ['git --namespace $(echo x) -c core.sshCommand=/tmp/m fetch origin', '$(echo x)'],
     ['X=; git --namespace $X --namespace -c core.fsmonitor=/tmp/m status', '$X'],
     ['X=; git --namespace ${X} --namespace -c core.fsmonitor=/tmp/m status', '${X}'],
     ["X='a -c core.fsmonitor=/tmp/m'; git --namespace $X status", '$X'],
@@ -6632,8 +6627,6 @@ describe('WP-250, backlog 650: a git global option value the shell splits is unc
     // A special parameter: `$@` and `$*` with no positional parameters are zero words.
     ['git --namespace $@ --namespace -c core.fsmonitor=/tmp/m status', '$@'],
     ['git --namespace $* --namespace -c core.fsmonitor=/tmp/m status', '$*'],
-    ['git > out -C $(pwd) -c core.fsmonitor=/tmp/m status', '$(pwd)'],
-    ['env git -C $(pwd) -c core.fsmonitor=/tmp/m status', '$(pwd)'],
   ])('%j reads ask / uncertain / uncertain in every baseline', (command, word) => {
     expectCells(command, 'ask / uncertain / uncertain');
     expect(auto(command).reason).toContain(splitGitOptionValue(word));
@@ -6823,4 +6816,89 @@ describe('WP-248, backlog 646: the name search in an argument expands braces wit
   it('control: frobnicate x{1..3}y names nothing and keeps ask / auto / deny', () => {
     expectCells('frobnicate x{1..3}y', 'ask / auto / deny');
   });
+});
+
+/**
+ * WP-252 (backlog 656): behind a wrapper, the splitter reads a git option's `-c` value as a script
+ * handed out of a candidate that starts at a glob- or brace-shaped value, so the one-stage fragment
+ * had two parts, was skipped as composite, and its own git argv was never judged: `env git
+ * --namespace "*" -c core.fsmonitor=<script> status` read `ask / auto / deny` and the monitor ran on
+ * a scratch repository (bash 5.3.20 and 3.2.57, git 2.56.0). A fragment is composite only when it is
+ * more than one stage (a list or a pipe); a one-stage fragment is judged and its parts queued.
+ */
+describe('WP-252, backlog 656: a one-stage fragment is judged even when the splitter hands a script out of it', () => {
+  const tail = '-c core.fsmonitor=/tmp/m status';
+  it.each([
+    ...[
+      'env',
+      'nice',
+      'nice -n 5',
+      'timeout 5',
+      'command',
+      'stdbuf -o0',
+      'nohup',
+      'time',
+      'exec',
+    ].map((wrapper) => `${wrapper} git --namespace "*" ${tail}`),
+    ...[`'*'`, '\\*', '"?"', '"[x]"', '"{a,b}"', '*', '?', 'x*', '{a,b}'].map(
+      (value) => `env git --namespace ${value} ${tail}`,
+    ),
+    `nice git -C "*" ${tail}`,
+    `env git -C "a" --namespace "*" ${tail}`,
+    `env X=1 git --namespace "*" ${tail}`,
+    'env git --namespace "*" -c core.hooksPath=/tmp/h commit -m x',
+    `env git --namespace "*" ${tail} | cat`,
+  ])('%j reads ask / git / git in every baseline', (command) => {
+    expectCells(command, 'ask / git / git');
+  });
+
+  // WP-250's lines whose value is a substitution: the substitution is a part the splitter hands
+  // out, so the fragment was skipped and only its lifted copy (`git -C  -c core.fsmonitor=… status`,
+  // the key read as -C's value) was judged. Judged now, the key's refusal — read before the split
+  // value's uncertainty — answers: `ask / uncertain / uncertain` → `ask / git / git`.
+  it.each([
+    'git -C $(pwd) -c core.fsmonitor=/tmp/m status',
+    'git --namespace $(echo x) -c core.fsmonitor=/tmp/m status',
+    'git --namespace `echo x` -c core.fsmonitor=/tmp/m status',
+    'git --attr-source $(echo x) -c core.fsmonitor=/tmp/m status',
+    'git --namespace $(echo x) -c core.sshCommand=/tmp/m fetch origin',
+    'git > out -C $(pwd) -c core.fsmonitor=/tmp/m status',
+    'env git -C $(pwd) -c core.fsmonitor=/tmp/m status',
+  ])('backlog 650’s %j reads ask / git / git in every baseline', (command) => {
+    expectCells(command, 'ask / git / git');
+  });
+
+  it.each([
+    [`env git --namespace x ${tail}`, 'ask / git / git'],
+    [`git --namespace "*" ${tail}`, 'ask / git / git'],
+    ['env sh -c "git -c core.fsmonitor=x status"', 'ask / git / git'],
+    ['env git --namespace "*" status', 'ask / auto / deny'],
+    ['env git push "*" -c x --force', 'block / block / block'],
+    [`sudo git --namespace "*" ${tail}`, 'block / block / block'],
+    ['env pytest "*" -c x -p evil', 'ask / hazard / hazard'],
+    [`xargs git --namespace "*" ${tail}`, 'ask / uncertain / uncertain'],
+    ['env npm test "*" -c x --script-shell=/bin/id', 'ask / uncertain / uncertain'],
+  ])('control: %j keeps %s in every baseline', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  // The parts of a one-stage fragment are queued beside it: past the depth bound the line's own
+  // split stops, and the walk's re-split of each one-stage `echo $(…)` is what reaches the `-c`.
+  it('a one-stage fragment’s parts are judged: the boundary reads the key past the depth bound', () => {
+    const deep = `${'echo $('.repeat(10)}git -c core.fsmonitor=x status${')'.repeat(10)}`;
+    expect(gitBoundaryViolation(deep)).toMatchObject({ kind: 'boundary' });
+    expectCells(deep, 'ask / uncertain / uncertain');
+  });
+
+  // A pipe and a list are each more than one stage, so neither is read as the push's options.
+  it.each(['git push origin agentic/x 2>&1 | tail -5', 'git push origin agentic/x && git log -5'])(
+    'control: %j stays composite (backlog 488)',
+    (command) => {
+      expectCells(command, {
+        ro: 'ask / auto / deny',
+        ver: 'ask / auto / deny',
+        impl: 'allow / allow / allow',
+      });
+    },
+  );
 });

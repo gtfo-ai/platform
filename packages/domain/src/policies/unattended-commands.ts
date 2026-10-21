@@ -57,6 +57,7 @@ import {
   type CommandRequest,
   commandArgvCandidates,
   commandArgvsAsWritten,
+  commandStageCount,
   commandWords,
   commandWriteTargets,
   environmentNamePattern,
@@ -986,10 +987,19 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
    * judged on their own; the assignment check below still reads it whole.
    *
    * Decided by **structure, never by substring** (WP-161 (e), backlog 517): a fragment is composite
-   * when the splitter, run on it, finds more than one part. The test was `fragment.includes(other)`
-   * until WP-161, so `git push origin main; m` skipped the push — `m` is inside `main` — and ran
-   * under `auto`. The parts of a composite are added to the walk, so none is judged only as part of
-   * something skipped.
+   * when it is more than one **stage** at its own level — a list (`;`, `&&`, `||`, `&`) or a pipe
+   * (`commandStageCount`) — and the splitter, run on it, finds more than one part. The test was
+   * `fragment.includes(other)` until WP-161, so `git push origin main; m` skipped the push — `m` is
+   * inside `main` — and ran under `auto`. The parts the splitter finds are added to the walk
+   * whether or not the fragment is composite, so none is judged only as part of something skipped.
+   *
+   * A part count alone is not the stage count (WP-252, backlog 656): the splitter also hands out
+   * what a stage runs as a script — a `-c` body, a substitution — and behind a wrapper it read
+   * `git --namespace "*" -c core.fsmonitor=x status`'s `-c` value as one, so the one-stage fragment
+   * had two parts, was skipped, and its own git argv was never judged (the first part *is* the
+   * fragment, already seen). `env git --namespace "*" -c core.fsmonitor=<script> status` read
+   * `auto` and ran the monitor (measured). A one-stage fragment is now judged as an argv **and**
+   * its parts are queued beside it; both conditions are required to skip, so this only tightens.
    */
   // The parts a fragment is made of, its brace-expanded copy not among them (WP-243 review round
   // 2): the copy is in the walk already, and counting it made every braced stage composite.
@@ -1017,7 +1027,9 @@ export const gitBoundaryViolation = (command: string): GitBoundaryViolation | nu
     const pieces = parts(fragment);
     if (pieces.length > 1) {
       queue.push(...pieces);
-      continue;
+      if (commandStageCount(fragment) > 1) {
+        continue;
+      }
     }
     // A redirection (`2>&1`, `>/dev/null`, `2>err.log`) is the shell's, not the program's argument
     // (backlog 488); where it writes is judged above by `commandWriteTargets`. Read both ways: out
