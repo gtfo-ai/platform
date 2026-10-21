@@ -315,6 +315,23 @@ export const UNCERTAINTY = {
    */
   expandedName:
     "a command name the shell expands — a variable or command substitution joined to other text, a glob (*, ?, [) or a brace expansion ({a,b}, {a..b}) — write the command's name literally; the platform cannot read a name the shell expands",
+  /**
+   * WP-257 (backlog 659): `@(`, `!(`, `+(`, `*(` and `?(` unquoted in a word open an extended glob
+   * (bash manual, *Pattern Matching*). With `extglob` off it is a syntax error; with it on — a
+   * `shopt -s extglob` on an earlier line of the same string (*The Shopt Builtin*), `bash -O
+   * extglob`, `BASHOPTS` — it is a pattern whose words the directory decides: behind the `shopt`
+   * line `git --namespace @(+c|-c) core.fsmonitor=<script> status` ran the monitor under bash
+   * 5.3.20 and 3.2.57 in the C and C.UTF-8 locales, where `+c` sorts first (under en_US.UTF-8 `-c`
+   * sorts first and git refuses the verb `+c`; `git @(-c) core.fsmonitor=<script> status` ran it in
+   * all three; measured). A line continuation inside the opener (`@\⏎(`) is removed text and
+   * read through (`isContinuationAt`). The scanner read `@` and a subshell. It never reads the option
+   * state, so the opener is uncertain wherever it appears; `[[ … == @(a|b) ]]`, a `case` pattern
+   * and `!(cmd)` are the stated over-ask. A block entry still ranks first (`git push origin
+   * +(--force)` is `block`); a git refusal does not (`@(--force)` reads uncertain). An opener at the
+   * end of a redirection target (`>@(x)`) is read where the target is consumed.
+   */
+  extendedGlob:
+    'an extended glob (@(…), !(…), +(…), *(…) or ?(…)), which the shell reads as a pattern whose words the directory decides, or refuses, depending on an option (extglob) the run can set — quote it, or write the words out; the platform does not read extended globs',
   /** WP-161 criterion (12), backlog 522: `hash -p FILE NAME` makes `NAME` run `FILE`. */
   reboundName:
     'hash -p, which binds a command name to another program — run the program by its own name; the platform reads a command by the name it is written with',
@@ -4593,7 +4610,9 @@ const xargsBlockPrefix = (text: string, block: readonly string[]): string | unde
 /**
  * Operators that separate one command from the next. `&&` and `||` are listed before `&` and `|`
  * so the two-character forms win the longest-match test; `(`, `)`, `{` and `}` are here because a
- * subshell or a group body is a command list of its own.
+ * subshell or a group body is a command list of its own. A `(` right after an unquoted `@ ! + * ?`
+ * is still split here, but it may open an extended glob rather than a subshell, so `scan` also
+ * reports it uncertain (`opensExtendedGlob`, WP-257).
  */
 const LIST_OPERATORS = ['&&', '||', ';', '&', '\n', '(', ')'] as const;
 /**
@@ -5561,6 +5580,102 @@ const isWriteTarget = (target: string): boolean =>
 const PROCESS_SUBSTITUTION_ARGUMENT = '/dev/fd/63';
 
 /**
+ * WP-257 (backlog 659): every reader that decides an extended-glob opener reads the text with line
+ * continuations removed, as bash removes them before it reads a word (`@\⏎(x)` is `@(x)`, `$\⏎$@(`
+ * is `$$@(`, measured, both bashes; review rounds 2 to 4). This is the one definition of a
+ * continuation they share: a `\` directly followed by a newline (a carriage return in between is
+ * not one), at a position each caller reaches walking forward, so an escaped `\\` never is. Its readers: `scan`'s backslash branch (the plain run goes
+ * on across it), {@link opensExtendedGlob} (the argument path, through {@link withoutContinuations})
+ * and {@link redirectionTargetOpensExtendedGlob} (a redirection target, read forward). A single
+ * quote never reaches it: `scan` and the target reader skip quoted text whole.
+ */
+const isContinuationAt = (command: string, at: number): boolean =>
+  command[at] === '\\' && command[at + 1] === '\n';
+
+/** `text` with its line continuations removed; `text` is a plain run, whose every `\` starts one. */
+const withoutContinuations = (text: string): string => {
+  let out = '';
+  for (let at = 0; at < text.length; at += 1) {
+    if (isContinuationAt(text, at)) {
+      at += 1;
+    } else {
+      out += text[at];
+    }
+  }
+  return out;
+};
+
+/**
+ * Whether a run of plain characters (continuations already removed) ends in an extended-glob
+ * opener: its last character is `@ ! + * ?`, and the `$` run before that is even. After an odd run
+ * it is a special parameter (`$@(`, `$?(` hand the parameter and a literal `(…)`, measured); after
+ * an even run (`$$@(`) it is a glob again.
+ */
+const runOpensExtendedGlob = (run: string): boolean => {
+  if (!'@!+*?'.includes(run[run.length - 1] as string)) {
+    return false;
+  }
+  let dollars = 0;
+  while (run[run.length - 2 - dollars] === '$') {
+    dollars += 1;
+  }
+  return dollars % 2 === 0;
+};
+
+/**
+ * Whether the unquoted `(` at `index` opens an extended glob (`UNCERTAINTY.extendedGlob`), on the
+ * argument path: `plainFrom`…`lastPlain` is the run of plain characters `scan` read, continuations
+ * included, which end just before the `(`.
+ */
+const opensExtendedGlob = (
+  command: string,
+  index: number,
+  plainFrom: number,
+  lastPlain: number,
+): boolean =>
+  lastPlain === index - 1 &&
+  runOpensExtendedGlob(withoutContinuations(command.slice(plainFrom, index)));
+
+/**
+ * Whether the redirection target word starting at `from` reaches an extended-glob opener (review
+ * rounds 1 to 4): `scan`'s target loop stops at the `(` and at a continuation's newline, so the word
+ * is read again here, forward, as bash reads it — a continuation removed, an escaped or quoted
+ * character ending the plain run, a blank or an operator ending the word.
+ */
+const redirectionTargetOpensExtendedGlob = (command: string, from: number): boolean => {
+  let run = '';
+  for (let at = from; at < command.length; at += 1) {
+    const char = command[at] as string;
+    if (isContinuationAt(command, at)) {
+      at += 1;
+    } else if (char === '(') {
+      return runOpensExtendedGlob(run);
+    } else if (/[\s;&|)<>]/.test(char)) {
+      return false;
+    } else if (char === '\\') {
+      at += 1;
+      run = '';
+    } else if (char === "'") {
+      const close = command.indexOf("'", at + 1);
+      if (close === -1) {
+        return false;
+      }
+      at = close;
+      run = '';
+    } else if (char === '"') {
+      at += 1;
+      while (at < command.length && command[at] !== '"') {
+        at += command[at] === '\\' ? 2 : 1;
+      }
+      run = '';
+    } else {
+      run += char;
+    }
+  }
+  return false;
+};
+
+/**
  * One quote-aware pass over a command line, splitting on `operators`.
  *
  * Single quotes protect everything; double quotes protect the operators but *not* substitution,
@@ -5589,6 +5704,11 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
   let current = '';
   let inDouble = false;
   let index = 0;
+  // The run of characters read as plain unquoted text that ends at `lastPlain` (WP-257): a quoted,
+  // escaped or consumed character is never in it, so `"@"(` and `\@(` are not extglob openers; a line
+  // continuation (`\⏎`) is removed text and the run goes on across it.
+  let plainFrom = 0;
+  let lastPlain = -1;
 
   const recordBodies = (bodies: readonly HereDocumentBody[]): void => {
     for (const body of bodies) {
@@ -5747,6 +5867,10 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
     }
 
     if (char === '\\') {
+      // A line continuation is removed text: the plain run goes on across it (WP-257 round 2).
+      if (isContinuationAt(command, index) && lastPlain === index - 1) {
+        lastPlain = index + 1;
+      }
       current += command.slice(index, index + 2);
       index += 2;
       continue;
@@ -5803,6 +5927,7 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
         cursor += 1;
       }
       let target = '';
+      let wordFrom = cursor;
       while (cursor < command.length && !/[\s;&|()<>]/.test(command[cursor] as string)) {
         target += command[cursor];
         cursor += 1;
@@ -5819,6 +5944,7 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
           cursor += 1;
         }
         let word = '';
+        wordFrom = cursor;
         while (cursor < command.length && !/[\s;&|()<>]/.test(command[cursor] as string)) {
           word += command[cursor];
           cursor += 1;
@@ -5827,6 +5953,10 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       }
       if (isWriteTarget(target)) {
         writeTargets.push(target);
+      }
+      // An extended-glob opener in the target (`>@(x)`, `>$\⏎$@(x)`) is read again here.
+      if (redirectionTargetOpensExtendedGlob(command, wordFrom)) {
+        uncertainty.add(UNCERTAINTY.extendedGlob);
       }
       // The target is consumed here, so the walk's own `$` check never reaches it (WP-158 round 1).
       if (wordEvaluatesVariableText(command, index, cursor)) {
@@ -5855,6 +5985,10 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       current += '|&';
       index += 2;
       continue;
+    }
+
+    if (char === '(' && opensExtendedGlob(command, index, plainFrom, lastPlain)) {
+      uncertainty.add(UNCERTAINTY.extendedGlob);
     }
 
     const operator = operators.find((candidate) => rest.startsWith(candidate));
@@ -5898,6 +6032,10 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       segmentStart = index;
       continue;
     }
+    if (lastPlain !== index - 1) {
+      plainFrom = index;
+    }
+    lastPlain = index;
     current += char;
     index += 1;
   }
@@ -6190,7 +6328,9 @@ const expandsAsName = (word: string): boolean => !isLiteralJudgedWord(word);
  * many it is: with files `+c` and `-c`, `git --namespace ?c core.fsmonitor=<script> status` is
  * `--namespace +c -c core.fsmonitor=<script> status` and ran the monitor (both bashes, git 2.56.0).
  * A quoted or escaped one (`"*"`, `'?'`, `\[`) is one word. A `[` with no `]` is literal to bash
- * and counted here, which can only over-read.
+ * and counted here, which can only over-read. An extended glob (`@(…)`, `!(…)`, …) is not this
+ * reader's: the scanner reads every unquoted opener as `UNCERTAINTY.extendedGlob` (WP-257), so a
+ * line holding one is uncertain before the git boundary is asked (`decideUnattendedCommand`).
  */
 const expandsUnquoted = (raw: string): boolean => {
   for (let index = 0; index < raw.length; index += 1) {

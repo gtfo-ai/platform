@@ -17689,7 +17689,7 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
 
 **Depends on** WP-252 landing. It touches the same two files (`command-policy.ts`, `unattended-commands.ts`) as WP-253 to WP-255, so it goes after them serially or into one of them.
 
-### 659. **An extended glob in a git global option's separate value, behind `shopt -s extglob` on an earlier line of the same command string, is many words to bash: `git --namespace @(+c|-c) core.fsmonitor=<script> status` reads `ask / auto / deny` and ran the monitor** (TODO, **major**, **live on `main` and on WP-253's tree**: policy and program half both measured. **TD-030 tier 1**: floors read argv *as the shell builds it*. Same class as 652, a separate spelling the M19 ruling ruled out. Found by WP-253's reviewer, session 20 (`#### WP-253`, its *Review* paragraph). The refiner ran nothing. **Re-graded minor** by the M19 amendment (§ "Architect ruling (M19 amendment, session 20)", 165 policy lines at `95ac954f`): TD-030 decision 2 grades by control, and the control is 652's (a non-literal word that needs files the run wrote first: one, `-c`, in git's verb position, two in the separate-value position), which was graded minor; **WP-257 owns it**, first of what remains; it had no owner when filed.)
+### 659. **An extended glob in a git global option's separate value, behind `shopt -s extglob` on an earlier line of the same command string, is many words to bash: `git --namespace @(+c|-c) core.fsmonitor=<script> status` reads `ask / auto / deny` and ran the monitor** (**RESOLVED** by WP-257, session 20, not yet merged — the scanner (`scan`, `opensExtendedGlob` in `command-policy.ts`) reads an unquoted `(` directly after an unquoted `@`, `!`, `+`, `*` or `?` as `UNCERTAINTY.extendedGlob`, wherever it appears, so every 659 line reads `ask / uncertain / uncertain` in all three baselines; a quoted or escaped opener and a special parameter (`$@(`, `$?(`) read as before; the over-ask (`[[ … == @(a|b) ]]`, a `case` pattern, `!(cmd)`) is pinned. Measured first: the monitor ran behind the `shopt` line for `@(+c|-c)`, `!(x)`, `+(+c|-c)` and the verb-position `@(-c)` in both bashes; the deciding reader was the scanner's `(` (canary). Notes `#### WP-257`. Was: TODO, **major**, **live on `main` and on WP-253's tree**: policy and program half both measured. **TD-030 tier 1**: floors read argv *as the shell builds it*. Same class as 652, a separate spelling the M19 ruling ruled out. Found by WP-253's reviewer, session 20 (`#### WP-253`, its *Review* paragraph). The refiner ran nothing. **Re-graded minor** by the M19 amendment (§ "Architect ruling (M19 amendment, session 20)", 165 policy lines at `95ac954f`): TD-030 decision 2 grades by control, and the control is 652's (a non-literal word that needs files the run wrote first: one, `-c`, in git's verb position, two in the separate-value position), which was graded minor; **WP-257 owns it**, first of what remains; it had no owner when filed.)
 
 **What is wrong.** The M19 ruling for WP-253 (plan `docs/technical/13-implementation-plan.md`, the WP-253 row, line 1229) excludes extglob with the reason *"both bashes refuse it at parse with `extglob` off, its default (measured)."* The architect table in § "Architect ruling (M19, session 20)" (its extglob row) records `git --namespace @(x) …`, `!(x)` and `+(x)` as *"not a fail-open: both bashes refuse `@(c)` at parse (`extglob` off, the default)."* That holds only when the glob is on the same line. Bash parses a command string line by line, so a `shopt -s extglob` on an earlier line turns extglob on before the later line is parsed. So this is a **defect in the ruling's premise**, not only in the code.
 
@@ -17733,6 +17733,14 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
 
 **Depends on** WP-257 landing (the extglob element and the same scanner). Serial on `command-policy.ts` and `unattended-commands.ts` before WP-254 and WP-255; WP-254's base moves to WP-258's merge.
 
+
+### 661. **`startsComment` reads the newline of a line continuation as a blank, so `a\⏎#…` is taken as a comment where bash reads the one word `a#…`: `ls a\⏎#;sudo id` reads `allow_list` and bash runs `sudo id`** (TODO, **blocker**: a live fail-open to `allow` on `main`, pre-existing — WP-257's diff does not touch the reader. **TD-030 tier 1**: bash removes a continuation before it reads words. Found by WP-257's round-4 reviewer, session 20 (`#### WP-257`, *Review*). **No work package owns it** — to be placed next by an M19 amendment.)
+
+- **The reader.** `startsComment` in `packages/domain/src/policies/command-policy.ts` (about line 2683), used by `scan`'s comment branch and by `joinQuotedContinuations`, treats the newline of `\⏎` as the blank before a `#`.
+- **Measured** by the reviewer: `bash -c $'echo a\\\n#;echo RAN'` prints `a#` and then `RAN` under bash 3.2.57 and 5.3.20. `ls a\⏎#;sudo id` and `git status a\⏎#;sudo id` read `allow_list`. The same flaw hides an extended-glob opener (`git --namespace a\⏎#@(+c|-c) …` reads `unattended_auto`; the word starts with `a#`, so a monitor run is not expected). The reviewer's differential over 93 554 lines found 175 looser lines, every one containing `\⏎#`.
+- **Done when:** measured at the base first; every reader that decides a comment boundary uses WP-257's `isContinuationAt`; the measured lines are refused; a differential with `\⏎` before every `#` position reports 0 looser. The suggested remedy — a `#` straight after a continuation that follows a non-blank is not a comment — only tightens; to be ruled.
+
+### 662. **The scanner splits a redirection target at a continuation's newline, so `ls >$\⏎@(x)` and `ls >$\⏎$\⏎$@(x)` read `uncertain` where their joined forms read `auto`** (TODO, **minor**, stricter only. Found by WP-257's implementer, round 4 (`#### WP-257`, *Discovered work*), confirmed by its reviewer. **No work package owns it.** A ruling is needed: joining the target would loosen other cells — `ls >a\⏎sudo id` reads `block` today.)
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -59367,3 +59375,353 @@ Built on `main` at `0cb1606d` (WP-252's merge), session 20. Not committed.
   restored `command-policy.ts` from a stale scratch copy of an earlier session and clobbered this
   row's edit; it was rebuilt from `HEAD` plus the printed hunks (+15 −2), and the canary counts
   match the implementer's exactly. Orchestrator re-ran `verify` on the rebuilt file.
+
+#### WP-257 — an extended-glob opener is uncertain wherever it appears (backlog 659)
+
+Built on `main` at `67e07924` (WP-253's merge `95ac954f` plus docs), session 20. Not committed.
+
+- **(a) Measured first, before any change.** Cells (`evaluateCommand` / `decideUnattendedCommand`
+  `auto` / `deny`) read from a base tree (`git archive 67e07924`), identical in
+  `DEFAULT_READ_ONLY_ALLOW`, `DEFAULT_VERIFICATION_ALLOW` and `DEFAULT_IMPLEMENTATION_ALLOW` unless
+  stated. The amendment's 165 lines re-read at the base: **identical** to its table, cell for cell
+  (`scratchpad/wp257/a-amend-base.txt` against `m19a/cells-95ac954f.txt`, `cmp`).
+
+  | Line | Before | After |
+  |---|---|---|
+  | `git --namespace <op>(+c\|-c) core.fsmonitor=/tmp/m status`, with and without `shopt -s extglob` and a newline; `git <op>(-c) core.fsmonitor=/tmp/m status`; for `@`, `!`, `+` | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | the same three lines for `*`, `?` | `ask / uncertain / uncertain` (WP-253's glob character) | same, now also `extendedGlob` |
+  | `rm <op>(-rf) /`, `git branch <op>(-D) main`, all five operators | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | `@(su) id`, `env @(su) id`, `bash -O extglob -c 'git --namespace @(+c\|-c) …'` | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | `npm test @(--script-shell=/bin/id)` | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | over-ask: `[[ $x == @(a\|b) ]] && echo y`, `case x in @(a\|b)) echo y;; esac`, `!(true)` | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | `echo $$@(x)`, `echo "$"@(x)`, `echo \$@(x)` (an extglob: the `@` is plain) | `ask / auto / deny` | `ask / uncertain / uncertain` |
+  | `git push origin @(--force)` | `ask / git / git` | `ask / uncertain / uncertain` (see *Assumption*) |
+  | controls: `"@(+c\|-c)"`, `'@(-c)'`, `\@\(-c\)` behind the `shopt` line; `echo \@(x)`, `echo '@'(x)`, `echo "@"(x)`; `echo $@(x)`, `$*(x)`, `$?(x)`, `$!(x)`; `f() { echo x; }; f`, `a=(1 2); echo x`, `! (true)`, `echo $(true)` | `ask / auto / deny` | same |
+  | controls: `git --namespace x -c core.fsmonitor=/tmp/m status`; `git push origin +(--force)`; `git log -- *.ts` | `ask / git / git`; `block`; `allow` | same |
+
+  *Shell* (`scratchpad/wp257/shell.mjs`, bash 5.3.20 and `/bin/bash` 3.2.57, `--norc --noprofile`,
+  a scratch directory holding only `+c` and `-c`, `printf '[%s]'`): on one line every operator is a
+  syntax error (exit 2); after `shopt -s extglob` and a newline every operator expands (`@(+c|-c)`,
+  `+(…)`, `*(…)`, `?(…)` → `[-c][+c]` under 5.3.20, `[+c][-c]` under 3.2.57; `!(+c)` → `[-c]`);
+  after `shopt -s extglob;`, `&&` and `&&` plus a newline it is a syntax error; `-O extglob` expands
+  in both; `BASHOPTS=extglob` expands under 5.3.20 and is a syntax error under 3.2.57; `eval` of the
+  two-line string expands, of the `;` form fails; a quoted opener is literal; `[[ -c == @(…) ]]`
+  without `shopt` is a syntax error in both. **The `$` forms:** `$@(+c)` and `$*(+c)` hand
+  `[P][Q(+c)]` (the parameter, then a literal `(+c)`), `$?(+c)` → `[0(+c)]`, `$!(+c)` → `[(+c)]` —
+  a special parameter, never a glob; `$$@(+c)` → `[<pid>@(+c)]`, `"$"@(+c)` and `\$@(+c)` →
+  `[$@(+c)]` (globs that matched nothing); `\@(+c)`, `'@'(+c)` and `"@"(+c)` are a syntax error
+  **with** `extglob` on (both bashes). `!(true)` behind the `shopt` line ran the matching file as a
+  command (`-c` under 5.3.20, `+c` under 3.2.57: `command not found`).
+
+  *Program* (`scratchpad/wp257/program.mjs`; a repository made by `initScratchRepository` under the
+  scratchpad, work tree holding `+c` and `-c`, the monitor outside it touching only a marker; git
+  2.56.0): behind `shopt -s extglob` and a newline the **marker is PRESENT** (exit 0, both bashes)
+  for `git --namespace @(+c|-c) core.fsmonitor=<mon> status`, `+(+c|-c)`, `!(x)` and the verb
+  position `git @(-c) core.fsmonitor=<mon> status`; `!(+c)` matches only `-c` (one word, the
+  namespace) and ran nothing (`is not a git command`, exit 1). On one line every one is a syntax
+  error and absent. Nothing ran against this checkout.
+
+  *The pinned CLI* (read, not run: strings of the SDK's `claude-agent-sdk-darwin-arm64@0.3.267`
+  binary): for a bash shell it prefixes the command with `shopt -u extglob 2>/dev/null || true`
+  (`{ shopt -u extglob || setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL; }` under
+  `CLAUDE_CODE_SHELL_PREFIX`). So `extglob` starts off, and what reaches bash with it on is the
+  run's own doing: a `shopt -s extglob` line earlier in the same string (if the string is run as
+  lines; how the CLI joins prefix and command was not read) and `bash -O extglob -c`, which is a
+  new shell the prefix does not touch. The rule does not depend on either.
+
+  *The deciding reader, by canary on the base tree:* `(` removed from `LIST_OPERATORS`
+  (`command-policy.ts:4598`) moves `git @(-c) …`, `@(su) id`, `env @(su) id`, `rm *(-rf) /` and
+  `rm ?(-rf) /` to `uncertain` (and `npm test @(--script-shell=/bin/id)` to `allow` in two
+  baselines), while the separate-value line stays `auto` — the scanner's `(` decides every position,
+  and `expandsUnquoted` (no `@`, `!`, `+`) misses the separate value as the amendment read.
+- **The change.** `scan` (`command-policy.ts`) tracks the run of characters it reads as plain
+  unquoted text (`plainFrom`…`lastPlain`; a quoted, escaped or consumed character ends it), and at an
+  unquoted `(` asks `opensExtendedGlob`: the character before it is a plain `@`, `!`, `+`, `*` or
+  `?`, and the plain `$` run before that is even (odd: a special parameter). Then it adds
+  `UNCERTAINTY.extendedGlob` (new; the reason cites the option and says to quote it). The `(` is
+  split as before. The rule never reads `shopt`, `-O` or `BASHOPTS`. The check runs on the word **as
+  written** (WP-245 round 2): no dequoted reading.
+- **Rows** (`unattended-commands.test.ts`, describe *WP-257, backlog 659*): 35 rows at `ask /
+  uncertain / uncertain` in every baseline, each with `extendedGlob` in `evaluation.uncertainty`
+  (the five operators × the `shopt` git line, the plain git line, the verb position, `rm`, `git
+  branch`; `@(su) id`, `env @(su) id`, `npm test …`, `bash -O extglob -c …`; `$$@(x)`, `"$"@(x)`,
+  `\$@(x)`; the three over-ask lines); 17 controls; the moved `git push origin @(--force)` row.
+- **Canaries** (`scratchpad/wp257/canary.mjs`, each alone, `vitest run packages/domain/src/policies`,
+  the file restored from the script's own copy and `cmp`-identical): planted throw in
+  `opensExtendedGlob` → 94 fail (the path is live); rule removed → 36 (every row, the moved one
+  included); `@` dropped → 15; `!` → 6; `+` → 5; `*` → 5 and `?` → 5 (each held by `rm *(-rf) /`,
+  `git branch ?(-D) main` and the reason pin on the git lines); the plain-run requirement dropped →
+  1 (`echo \@(x)`); the `plainFrom` bound dropped (an escaped `$` counted) → 1 (`echo \$@(x)`); the
+  `$` exclusion removed → 4 (`$@(`, `$*(`, `$?(`, `$!(`); the even-run reading removed → 1
+  (`$$@(x)`); the rule applied inside quotes (any `[@!+*?](` in the raw line) → 7 (the `"…"` and
+  `'…'` controls, the four `$` controls, `echo \@(x)`). None survived.
+- **(d) Sweep** (`scratchpad/wp257/sweep.mjs`: WP-253's sweep, unchanged, plus this row's set —
+  each operator × the bodies `-c`, `+c|-c`, `x`, `*` × the prefixes none and `x` (40 words), as the
+  separate value of each `separate` option of `GIT_GLOBAL_OPTIONS` (and `--exec-path`) and as the
+  `--opt=` value of the long ones, before each of WP-250's six tails; as git's verb; as the argument
+  of `rm … /`, `rm -rf … /`, `git branch … main`, `npm test`, `git log --`, `git push origin`, a
+  command name and `env`'s command; and this row's own 53 rows and controls — each written plain,
+  behind `> out`, behind `shopt -s extglob` and a newline, after `shopt -s extglob;`, and inside
+  `bash -O extglob -c '…'`; base tree `git archive 67e07924`, the same code as `95ac954f`, against
+  the working tree): **1,029,140** lines, **3,087,420** cells, **0 looser**, **19,089 tighter**
+  (all `ask / auto / deny` → `ask / uncertain / uncertain`), and **34,242 same-rank rule moves**:
+  26,046 `ask / git / git` → `ask / uncertain / uncertain` and 8,196 `ask / hazard / hazard` →
+  `ask / uncertain / uncertain` (e.g. `git --exec-path 2>(true) push origin @(--force)`), both deny
+  → deny. Every one of the 17,777 changed lines holds a `[@!+*?](`. **Reasons** (WP-252's lesson;
+  `reasons.mjs`, the `auto` reason in each baseline, over the 37,540 opener-bearing lines that are
+  not `allow` or `block` at base): 112,458 reasons moved, **every one to the scanner's reason
+  naming the extended glob** (36,069 already the scanner's, now with `extendedGlob` added; the rest
+  from `splitGitOptionValue`, `unreadableGitVerb`, `unreadGitConfigKey`, a hazard or a git refusal).
+  WP-198's property and the policy suites: `vitest run packages/domain/src/policies --project unit`
+  green with the gate seed and `PROPERTY_SEED` 1, 7 and 424242 (4,481 passed, 5 skipped, each).
+- **(e) Corpus diff:** **0** of 371 lines of `test/fixtures/commands/*-lines.txt` moved; none holds
+  an opener.
+- **(f) Docblocks:** `UNCERTAINTY.extendedGlob` (new, citing bash's *Pattern Matching* and *The
+  Shopt Builtin* and the measured line); `LIST_OPERATORS` (the `(` is still split, and also
+  reported); `opensExtendedGlob` (new); `expandsUnquoted`'s WP-253 paragraph (an extended glob is
+  the scanner's, answered before the git boundary); `04-agent-runtime.md` (the reading-contract
+  paragraph, after WP-253's sentence); `05-workspaces-and-security.md` (two residual sentences, below);
+  659's heading restated as resolved.
+- **Sentences falsified** (grep for *extglob*, *extended glob*, *refused at parse*, *at parse*,
+  *subshell* over `command-policy.ts`, `unattended-commands.ts` and their tests, `04`, `05`, TD-030
+  and `docs/decisions`): `05`'s WP-203 amendment named "an extglob, off in a non-interactive bash, in
+  an argument … beside `rm -rf @(/)`" as a residual — `rm -rf @(/)` now reads `ask / uncertain /
+  uncertain`; amended in place with a pointer to this row. `05`'s WP-204 residual list ("extglob")
+  — annotated "uncertain since WP-257". The plan's WP-253 "refused at parse" sentence was already
+  corrected by the M19 amendment's note (plan line 1245); not touched. TD-030 and the decisions do
+  not name extglob. `04`'s "What no floor reads is an expansion (… a glob)" stays true. Not edited:
+  decisions (out of scope).
+- **Assumption.** The ruling lists `git push origin @(--force)` as a control keeping "(refusal)".
+  It now reads `ask / uncertain / uncertain`: `decideUnattendedCommand` answers the scanner's
+  uncertainty before the git boundary for every construct (at the base, `git -c
+  core.fsmonitor=/tmp/m status $((1))` already reads `uncertain`, not `git`). The verdict is still a
+  refusal under both modes; only the rule names the scanner. Pinned as its own test rather than
+  reordering `decideOnce`, which is outside the row.
+- **Discovered work.** `05`'s WP-203 amendment says `frob +(sudo) id` "reads `auto`"; it reads
+  `block / block / block` at the base already (an earlier row's change, not this one). Left as the
+  record; noted here only.
+- **Verify.** `vitest run scripts/citations.test.ts --project unit`: 13 passed. `pnpm run -s
+  verify` (the four untracked `.claude/` directories set aside in the scratchpad and moved back):
+  `PASS: verify` (16,040 passed, 19 skipped). The first run failed on biome's formatting of this
+  row's own `it.each` call; formatted, re-run green.
+
+##### Round 2
+
+Review round 1 was **REQUEST_CHANGES**, with one blocker inside 659: an opener at the end of a
+redirection target was missed. `scan`'s redirection branch consumes the target and stops at the
+`(`, so the `@` never joined the plain run (the reviewer measured that behind `shopt -s extglob`,
+`git >@(x) -c core.fsmonitor=<script> status` ran the monitor under both bashes, and `rm >@(x) -rf /`
+read `auto`).
+- **Measured** (base → head, all three baselines the same): `ls <op>@(x)`, `ls <op>x@(y)` and
+  `ls <op> @(x)` for `>`, `>>`, `>|`, `<>`, `>&`, `&>`, `&>>` and `2>`, plus the reviewer's lines
+  (`shopt…\ngit >@(x) -c …`, `shopt…\nrm >@(x) -rf /`, `git status &>@(x)`, `ls >!(x)`, `>+(x)`,
+  `>*(x)`, `>?(x)`), went from `ask / auto / deny` to `ask / uncertain / uncertain`. `<@(x)` and
+  `<<<@(x)` are not consumed by that branch: the round-1 rule already read them `uncertain` at the
+  head, and they are pinned now. The controls `<op>"@"(x)`, `<op>\@(x)` and `<op>$@(x)` stay at
+  `ask / auto / deny`. Shell facts, both bashes, behind the `shopt` line: `>@(x)` is a pattern (with
+  no match it writes the file `@(x)`), and `>"@"(x)` and `>\@(x)` are syntax errors.
+- **Fix.** After the target is consumed, if the next character is `(`, the branch asks
+  `opensExtendedGlob` about the target's last word. The plain run starts after its last quote
+  character or escaped character (`plainStartOf`, new), and `opensExtendedGlob` now also refuses an
+  operator character that lies outside the run (`plainFrom > index - 1`). The `UNCERTAINTY.extendedGlob`
+  docblock now states that the redirection target is covered, and that a block entry ranks first
+  while a git refusal does not.
+- **Rows:** 37 rows (the reviewer's 7 lines, plus 3 shapes × 10 operators), each pinning
+  `extendedGlob`; 30 controls (quoted, escaped, `$@`, × 10 operators); and the minor finding, as a
+  row: `git push origin +(--force)` stays `block` with rule `block_list`.
+- **Canaries** (`scratchpad/wp257/r2/canary2.mjs`, the script's own copy, compared with `cmp`):
+  - redirection fix removed → 31 fail (every redirection row the branch reads);
+  - `plainStartOf` bypassed → 8 (the `\@(x)` controls);
+  - the `plainFrom` guard removed → 8 (the same controls).
+  - A fourth canary, which dropped `wordFrom`'s reset in the `>&word` sub-branch, **survived**. The
+    reset was redundant (the `&` and the blanks before the word are never quotes or `$`), so it is
+    deleted rather than pinned.
+- **Sweep, re-run** (round 1's set plus each of the 40 opener words and `"@"(x)`, `\@(x)`,
+  `$@(x)`, `$$@(x)`, `'@'(x)`, behind each of `>`, `>>`, `>|`, `<>`, `>&`, `&>`, `&>>`, `2>`, `<`,
+  `<<<` and `2>&`, glued and after a blank, in 8 commands: `git … -c core.fsmonitor=x status`,
+  `git … status`, `rm … -rf /`, `rm -rf / …`, `ls …`, `git push origin --force …`,
+  `git --namespace x … -c core.sshCommand=x fetch origin` and `sudo … id`. Each is written plain,
+  behind `> out`, behind the `shopt` line, after `;`, and in `bash -O extglob -c`):
+  **1,093,588** lines, **3,280,764** cells, **0 looser**, **85,557 tighter** (all `ask / auto /
+  deny` → `ask / uncertain / uncertain`). There are 43,686 rule moves at the same rank: 35,070 git →
+  uncertain and 8,616 hazard → uncertain, deny → deny in both. All 43,081 changed lines hold a
+  `[@!+*?](`, and 21,956 of them have it in a redirection target.
+- **Sentences falsified:** `04`'s new sentence now names the redirection target. Round 1's own
+  docblock ("the run of characters the scan read") is still true, because the redirection target is
+  read separately and is documented at `plainStartOf`. No other sentence names a target's opener.
+
+##### Round 3
+
+Review round 2 was **REQUEST_CHANGES**, with one blocker: a line continuation between the glob
+character and `(` hid the opener. bash removes a backslash and the newline after it before it
+reads the word, so `@\⏎(x)` is `@(x)`. The scanner read the `\` as an escape and started a new
+plain run after it. The reviewer measured that, behind the `shopt` line, `git >@\⏎(x) -c
+core.fsmonitor=<script> status` (both bashes) and `git --namespace @\⏎(+c|-c) …` (3.2) ran the
+monitor, while the policy read `ask / auto / deny`.
+- **Measured** (shell facts: both bashes, `LC_ALL=C`, files `+c` and `-c`): `@\⏎(+c|-c)` and
+  `@\⏎\⏎(+c|-c)` → `[+c][-c]`. `$\⏎$@(+c)` → `[<pid>@(+c)]` (that is `$$@(`). `$\⏎@(+c)` →
+  `[P][Q(+c)]` (that is `$@(`). `\\\⏎@(…)` is a glob. `\@\⏎(+c)` is a syntax error. Policy, base →
+  head, all three baselines: the reviewer's three lines, `ls >@\⏎\⏎(x)`, `echo $\⏎$@(x)`, `echo
+  @\⏎\⏎(x)`, `rm -rf @\⏎(/)` and `git branch @\⏎(-D) main` moved from `ask / auto / deny` to `ask
+  / uncertain / uncertain`. `echo $\⏎@(x)`, `$@\⏎(x)`, `ls >$@\⏎(x)`, `echo \@\⏎(x)`, `ls
+  >\@\⏎(x)`, `ls >"@"\⏎(x)`, `echo @\\⏎(x)` and `ls >@\\⏎(x)` (an escaped backslash, then a newline
+  that ends the line), `echo a\⏎b` and `ls >@x⏎(x)` all stay at `ask / auto / deny`.
+- **Fix.**
+  - In `scan`'s backslash branch, a `\` followed by a newline that continues the plain run leaves
+    the run open (`lastPlain` moves past it).
+  - `opensExtendedGlob` steps back over continuations both to the operator and through the `$`
+    parity run (`beforeContinuations`, new).
+  - When a redirection target ends in `\` and the next character is a newline, the branch skips
+    that continuation and every one after it before it looks for the `(`. After an escaped
+    backslash (`\\⏎`) the character before the last `\` is itself a `\`, so the check cannot match.
+    That makes a backslash-parity count redundant: its canary survived, so I deleted it.
+- **Rows:** 8 rows (each pins `extendedGlob`) and 10 controls.
+- **Canaries** (`scratchpad/wp257/r3/canary3.mjs`, the script's own copy, restored and compared
+  with `cmp`):
+
+  | Canary | Failing tests |
+  |---|---|
+  | `scan`'s continuation handling removed | 6 (5 rows and the `$\⏎@(x)` control) |
+  | `beforeContinuations` disabled | 6 |
+  | the `$`-run skip removed | 1 (`$\⏎$@(x)`) |
+  | the redirection continuation removed | 3 (the three `>@\⏎` rows) |
+  | the multiple-continuation loop removed | 1 (`ls >@\⏎\⏎(x)`) |
+  | the backslash check in the redirection branch removed | 1 (the `ls >@x⏎(x)` control) |
+
+  The parity canary survived and its code was deleted (above). No other canary survived.
+- **Sweep, re-run** (round 2's set, plus a continuation (`\⏎`, once and twice) after every
+  character up to the `(` of each of the 40 opener words and of `$$@(x)`, `$@(x)`, `\@(x)`,
+  `"@"(x)` and `@\\(x)`. Each is placed as a `--namespace` value, as git's verb before each tail,
+  in `rm -rf … /`, `git branch … main`, `npm test`, a command name and `echo`, and behind `>`,
+  `>>`, `&>`, `2>`, `<`, `<<<` and `>&` in four commands. The set also holds this row's 138 rows
+  and controls. Each is written plain, behind `> out`, behind the `shopt` line, after `;`, and in
+  `bash -O extglob -c`): **1,147,753** lines, **3,443,259** cells, **0 looser**, **147,420
+  tighter**. There are 46,044 rule moves at the same rank: 35,076 git → uncertain and 10,968 hazard
+  → uncertain, deny → deny in both. All 64,488 changed lines hold an opener (continuations
+  allowed between the character and the `(`), and 21,309 of them carry a continuation.
+- **Minor:** `05` line 58 now says `frob +(sudo) id` reads `block / block / block` at WP-257's
+  base. **Nit:** the program half depends on the locale. Re-measured on the scratch repository:
+  under `LC_ALL=C` and the inherited `LANG=C.UTF-8`, both bashes sort `+c` before `-c` and the
+  monitor ran for `--namespace @(+c|-c)`. Under `LC_ALL=en_US.UTF-8`, `-c` sorts first, git refuses
+  the verb `+c`, and nothing ran. `git @(-c) …` ran the monitor in all three locales. The
+  `extendedGlob` docblock and `04` now say so. Round 1's table was measured with the inherited
+  `LANG=C.UTF-8`.
+- **The pinned CLI, observed:** this session's own Claude Code shell runs each command as
+  `… && setopt NO_EXTENDED_GLOB … && eval '<command>'` (seen in `pgrep -fl`), so a multi-line
+  command string reaches the shell's `eval` whole. That is the shape round 1's shell facts measured
+  expanding (the two-line string under `eval`).
+- **Sentences falsified:**
+  - The `opensExtendedGlob` docblock and the comment on scan's plain-run variables now mention
+    continuations.
+  - `04`'s sentence names the continuation.
+  - My round-2 note that round 1's plain-run docblock "is still true" is superseded by this edit.
+
+##### Round 4
+
+Review round 3 was **REQUEST_CHANGES**: `plainStartOf` read a backslash-newline as an escaped
+character. So in `>$\⏎$@(x)` it counted one `$` (odd, a special parameter), while bash removes the
+continuation first and reads `$$@(` (even, a glob). The reviewer measured that `git >$\⏎$@(x) -c
+core.fsmonitor=<script> status` ran the monitor (both bashes, C and en_US.UTF-8).
+
+**Rounds 2, 3 and 4 found one defect class: readers that decide the opener without first removing
+line continuations.** I patched the readers one site at a time in round 3 (`beforeContinuations`,
+`plainStartOf`, a trailing-continuation special case), and each site still had its own idea of what
+a continuation is. Round 4 replaces all of that with one definition.
+
+- **Fix (`command-policy.ts`):**
+  - `isContinuationAt` is the single definition of a continuation: a `\` followed directly by a
+    newline, at a position the caller reaches walking forward, so an escaped `\\` never is one, and
+    a backslash, CR, LF sequence is not one.
+  - Three readers use it, and its docblock names them: `scan`'s backslash branch (the plain run goes
+    on across a continuation); `opensExtendedGlob` on the argument path, through
+    `withoutContinuations`; and `redirectionTargetOpensExtendedGlob`, which re-reads a redirection
+    target forward as bash reads it. That reader removes continuations, lets an escaped or quoted
+    character end the plain run, and stops at a blank or an operator. `scan`'s target loop stops at
+    the `(` and at a continuation's newline, which is why the target must be re-read.
+  - One decision serves both paths: `runOpensExtendedGlob` (the last character is an operator and
+    the `$` run before it is even).
+  - `beforeContinuations` and `plainStartOf` are deleted, with round 3's special case for a trailing
+    continuation. `>&word` resets `wordFrom` again: the forward reader needs the word's start.
+- **Measured** (shell facts: `printf` and a redirect, both bashes, `LC_ALL=C`, files `+c` and
+  `-c`):
+  - `$\⏎$@(+c|-c)` → `[<pid>@(+c|-c)]`, and the redirect writes the file `<pid>@(+c|-c)`: a
+    glob with no match.
+  - `x$\⏎$@(…)` and `$\⏎\⏎$@(…)` give the same result.
+  - `$\⏎@(…)` → `[P][Q(+c|-c)]`, and `$\⏎$\⏎$@(…)` → `[<pid>P][Q(+c|-c)]`: special parameters,
+    and the redirect fails as ambiguous.
+
+  Policy, base → head, all three baselines: the reviewer's four lines, plus `ls >&$\⏎$@(x)`,
+  `ls 2\⏎>@(x)`, `ls >\⏎@(x)` and `ls >"$"\⏎@(x)`, moved from `ask / auto / deny` to `ask /
+  uncertain / uncertain`. Controls at `ask / auto / deny`: `echo $\⏎$\⏎$@(x)`, `ls > (x)`,
+  `ls >&(x)`, `ls >@\x(y)`, `ls >@'x'(y)`, `ls >@"x"(y)` (the last three are syntax errors in both
+  bashes) and `ls >a #@(x)`.
+- **The two lines asked for as controls cannot stay at `auto`, so they are pinned as over-asks.**
+  `ls >$\⏎@(x)` and `ls >$\⏎$\⏎$@(x)` read `uncertain`. The opener reader answers *no* for both
+  (canary below), but `scan`'s target loop stops at the continuation's newline, and the newline then
+  **splits** the line, so the rest of the word (`@(x)`, `$\⏎$@(x)`) is read as a new command. That
+  split predates WP-257: at the base, `ls >$\⏎$\⏎$@(x)` was already `uncertain` (as an expanded
+  command name) and `ls >a\⏎sudo id` reads `block` where bash runs `ls >asudo id`. Making the target
+  loop continue across a continuation would correct both, but it moves cells looser (the `sudo`
+  line), outside 659, so it is filed below rather than done.
+- **Rows:** 8 rows (each pins `extendedGlob`), 8 controls, and 2 pinned over-asks.
+- **Canaries, one reader at a time** (`scratchpad/wp257/r4/canary4b.mjs`, the script's own copy,
+  restored and compared with `cmp`):
+
+  | Canary | Failing tests |
+  |---|---|
+  | `scan`'s use of `isContinuationAt` | 6 |
+  | the argument path without `withoutContinuations` | 6 |
+  | the redirection reader's continuation | 8 (all `>…\⏎` rows) |
+  | the redirection reader's call | 40 |
+  | `>&`'s `wordFrom` reset | 4 |
+  | the `$` parity | 7 |
+  | the run's start set to `-1` | 39 |
+  | the target reader's escape reset | 1 (`ls >@\x(y)`) |
+  | its single-quote reset | 1 |
+  | its double-quote reset | 1 |
+  | its blank/operator stop | 1 (`ls >a #@(x)`) |
+
+  Two canaries survived and their code was deleted rather than pinned: an empty-run guard, which
+  `includes(undefined)` already answers, and a `lastPlain = -2` start, which `plainFrom = 0`
+  already covers.
+- **Generated sweep (the one rounds 2 and 3 lacked):** round 3's set, plus a continuation (`\⏎` and
+  `\⏎\⏎`) at **every** position of every opener spelling (the 40 opener words, `$@(x)`, `$$@(x)`,
+  `$$$@(x)`, `x$$@(x)`, `\@(x)`, `"@"(x)`, `"$"@(x)`, `'@'(x)`). Each is placed as every `separate`
+  git option's value (two tails), as git's verb, in `rm -rf`, `git branch`, `npm test`, a command
+  name and `echo`. The same continuations go at every position of `<op><sep><spelling>`, so inside
+  the operator and before or after the descriptor, for `>`, `>>`, `>|`, `<>`, `>&`, `&>`, `&>>`,
+  `2>`, `<`, `<<<` and `2>&`, glued and after a blank, in four commands. The set includes this
+  row's 155 rows and controls. Each line is written plain, behind `> out`, behind the `shopt`
+  line, after `;`, and in `bash -O extglob -c`.
+  - Base `67e07924` against the working tree: **1,865,671** lines, **5,597,013** cells, **0
+    looser**, **979,866 tighter**.
+  - 129,990 rule moves at the same rank: 96,078 git → uncertain and 33,912 hazard → uncertain.
+  - All 369,952 changed lines hold an opener; 326,773 of them carry a continuation.
+  - **Oracle:** each of the 770,488 swept lines that holds a continuation was compared with the same
+    line with its continuations removed the way bash removes them (outside single quotes, never an
+    escaped `\\`), in the implementation baseline under `auto`. **0** lines read looser than their
+    joined form (`scratchpad/wp257/r4/oracle.mjs`).
+- **Sentences falsified:**
+  - `UNCERTAINTY.extendedGlob`'s docblock named `beforeContinuations`; it now names
+    `isContinuationAt`.
+  - The redirection comment that named `plainStartOf` is replaced.
+  - Round 3's notes describe helpers that no longer exist. They are left as the record, and this
+    round supersedes them.
+  - `04` ("a line continuation inside the opener … being removed text") stays true.
+- **Discovered work.** `scan`'s redirection target loop stops at a line continuation's newline, and
+  the newline then splits the line: `ls >a\⏎sudo id` reads `block / block / block` where bash runs
+  `ls >asudo id`, and `ls >$\⏎@(x)` reads `uncertain`. Both are over-reads; correcting them moves
+  cells looser, and that needs its own row.
+- **Review** (session 20, four rounds; round 4 an orchestrator exception to the three-round rule, because
+  rounds 2–4 found one class). Round 1: an opener in a redirection target (`git >@(x) -c …` ran the
+  monitor). Round 2: a line continuation between the operator and `(` (`@\⏎(x)`, ran the monitor).
+  Round 3: a continuation inside a redirection target's `$` run (`>$\⏎$@(x)`, ran the monitor). Round 4,
+  narrow: every opener reader uses `isContinuationAt` (`scan`'s backslash branch, `withoutContinuations`,
+  `redirectionTargetOpensExtendedGlob`), each killed by its own canary (6 / 6 / 8 rows); the reviewer's
+  independent differential (93 554 lines, continuations at every index and every pair) found 175 looser
+  lines, **all** containing `\⏎#` — a different, pre-existing reader: `startsComment` takes the newline
+  of a continuation as a blank, so `a\⏎#…` is read as a comment where bash reads the word `a#…`;
+  `ls a\⏎#;sudo id` reads `allow_list` and bash runs `sudo id` (measured, 3.2.57 and 5.3.20). Excluding
+  those, 0 looser. The round-4 claim "the class is closed" holds for the opener readers only; the
+  comment reader is filed as **661** (blocker) and placed next, not fixed in this row. The split of a
+  redirection target at a continuation's newline (stricter only) is filed as **662**.

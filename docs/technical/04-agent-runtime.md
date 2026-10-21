@@ -515,7 +515,18 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   many words it is, and with files `+c` and `-c` present `git --namespace ?c core.fsmonitor=x
 >   status` is `--namespace +c -c core.fsmonitor=x status` (both bashes; git 2.56.0 ran the monitor,
 >   measured on a scratch repository); `"*"`, `'?'` and `\[` are one word each, a glob after the
->   verb (`git log *`) is an argument, and `git -C src* log` reading uncertain is the over-ask. A
+>   verb (`git log *`) is an argument, and `git -C src* log` reading uncertain is the over-ask. An
+>   extended-glob opener — an unquoted `(` directly after an unquoted `@`, `!`, `+`, `*` or `?` in
+>   a word, a redirection target's included (`>@(x)`) — is uncertain wherever it appears (WP-257,
+>   backlog 659, `extendedGlob`): the scanner
+>   does not read `shopt`, `-O` or `BASHOPTS`, and with `shopt -s extglob` on an earlier line of the
+>   same string `git --namespace @(+c|-c) core.fsmonitor=x status` hands the files `+c` and `-c`
+>   as two words (both bashes; git 2.56.0 ran the monitor in the C and C.UTF-8 locales, where `+c`
+>   sorts first — under en_US.UTF-8 `-c` sorts first and git refuses `+c`, while `git @(-c) …` ran it
+>   in every locale; measured on a scratch repository), a line continuation inside the opener
+>   (`@\⏎(x)`, also in a redirection target) being removed text, where the scanner had read `@` and a subshell; a quoted or escaped opener and a
+>   special parameter (`$@(`, `$?(`) are read as before, and `[[ $x == @(a|b) ]]`, a `case`
+>   pattern and `!(cmd)` reading uncertain are the stated over-ask. A
 >   command or process substitution whose body holds an unquoted `case` word or a comment is not
 >   read (WP-251, backlog 651): the scanner's matcher has no case-pattern or comment state, so a
 >   pattern's or a comment's `)` closed `<(case x in x) true;; esac)` early and the `-c` behind it

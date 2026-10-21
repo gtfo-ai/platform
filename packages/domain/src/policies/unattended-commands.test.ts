@@ -6972,3 +6972,180 @@ describe('WP-253, backlog 652: a git global option value holding an unquoted glo
     expect(auto(command).reason).toContain(unreadableGitVerb('--namespace=[-]c'));
   });
 });
+
+/**
+ * WP-257 (backlog 659): an extended-glob opener is uncertain wherever it appears, because an earlier
+ * line of the same string (`shopt -s extglob`), `bash -O extglob` or `BASHOPTS` can turn the grammar
+ * on, and then the directory decides the words (measured: the monitor ran behind the `shopt` line).
+ * The scanner used to read `@` and a subshell.
+ */
+describe('WP-257, backlog 659: an extended-glob opener is uncertain wherever it appears', () => {
+  const tail = 'core.fsmonitor=/tmp/m status';
+  const rows = ['@', '!', '+', '*', '?'].flatMap((op) => [
+    `shopt -s extglob\ngit --namespace ${op}(+c|-c) ${tail}`,
+    `git --namespace ${op}(+c|-c) ${tail}`,
+    `git ${op}(-c) ${tail}`,
+    `rm ${op}(-rf) /`,
+    `git branch ${op}(-D) main`,
+  ]);
+  it.each([
+    ...rows,
+    '@(su) id',
+    'env @(su) id',
+    'npm test @(--script-shell=/bin/id)',
+    `bash -O extglob -c 'git --namespace @(+c|-c) ${tail}'`,
+    // An even run of `$` is `$$` and then the glob; a quoted or escaped `$` leaves the `@` plain.
+    'echo $$@(x)',
+    'echo "$"@(x)',
+    'echo \\$@(x)',
+    // The over-ask: a pattern in `[[` or `case`, and `!(cmd)` with no blank.
+    '[[ $x == @(a|b) ]] && echo y',
+    'case x in @(a|b)) echo y;; esac',
+    '!(true)',
+  ])(
+    '%j reads ask / uncertain / uncertain in every baseline, naming the extended glob',
+    (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toContain(UNCERTAINTY.extendedGlob);
+    },
+  );
+
+  it.each([
+    // Quoted or escaped: one literal word.
+    [`shopt -s extglob\ngit --namespace "@(+c|-c)" ${tail}`, 'ask / auto / deny'],
+    [`shopt -s extglob\ngit --namespace '@(-c)' ${tail}`, 'ask / auto / deny'],
+    [`shopt -s extglob\ngit --namespace \\@\\(-c\\) ${tail}`, 'ask / auto / deny'],
+    [`git --namespace x -c ${tail}`, 'ask / git / git'],
+    ['git push origin +(--force)', 'block / block / block'],
+    ['git log -- *.ts', 'allow / allow / allow'],
+    ['f() { echo x; }; f', 'ask / auto / deny'],
+    ['a=(1 2); echo x', 'ask / auto / deny'],
+    ['! (true)', 'ask / auto / deny'],
+    ['echo $(true)', 'ask / auto / deny'],
+    // A special parameter, then a literal `(…)` (measured: `$@(+c)` hands `Q(+c)`).
+    ['echo $@(x)', 'ask / auto / deny'],
+    ['echo $*(x)', 'ask / auto / deny'],
+    ['echo $?(x)', 'ask / auto / deny'],
+    ['echo $!(x)', 'ask / auto / deny'],
+    // A quoted or escaped operator is no opener (both bashes: a syntax error even with extglob on).
+    ['echo \\@(x)', 'ask / auto / deny'],
+    ["echo '@'(x)", 'ask / auto / deny'],
+    ['echo "@"(x)', 'ask / auto / deny'],
+  ])('control: %j keeps %s in every baseline', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it('a git refusal beside the opener is answered by the scanner first, as for every construct', () => {
+    // `git push origin @(--force)` was the boundary's refusal; scanner uncertainty precedes it.
+    expectCells('git push origin @(--force)', 'ask / uncertain / uncertain');
+  });
+
+  it('a block entry ranks before the scanner: `+(--force)` matches `git push --force`, so it stays block', () => {
+    expectCells('git push origin +(--force)', 'block / block / block');
+    expect(auto('git push origin +(--force)').rule).toBe('block_list');
+  });
+
+  // Review round 1: a redirection target is consumed whole and stopped at the `(`, so the opener
+  // after it was never a plain character (measured: behind the `shopt` line `git >@(x) -c
+  // core.fsmonitor=<script> status` ran the monitor, both bashes).
+  const redirections = ['>', '>>', '>|', '<>', '>&', '&>', '&>>', '2>', '<', '<<<'];
+  it.each([
+    `shopt -s extglob\ngit >@(x) -c ${tail}`,
+    'shopt -s extglob\nrm >@(x) -rf /',
+    'git status &>@(x)',
+    'ls >!(x)',
+    'ls >+(x)',
+    'ls >*(x)',
+    'ls >?(x)',
+    ...redirections.flatMap((op) => [`ls ${op}@(x)`, `ls ${op}x@(y)`, `ls ${op} @(x)`]),
+  ])('%j (an opener in a redirection target) reads ask / uncertain / uncertain', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toContain(UNCERTAINTY.extendedGlob);
+  });
+
+  it.each(redirections.flatMap((op) => [`ls ${op}"@"(x)`, `ls ${op}\\@(x)`, `ls ${op}$@(x)`]))(
+    'control: %j (quoted, escaped or a parameter in the target) keeps ask / auto / deny',
+    (command) => {
+      expectCells(command, 'ask / auto / deny');
+    },
+  );
+
+  // Review round 2: bash removes a line continuation before it reads the word, so `@\⏎(x)` is
+  // `@(x)` (measured: behind the `shopt` line the first two lines ran the monitor).
+  it.each([
+    `shopt -s extglob\ngit >@\\\n(x) -c ${tail}`,
+    `shopt -s extglob\ngit --namespace @\\\n(+c|-c) ${tail}`,
+    'ls >@\\\n(x)',
+    'ls >@\\\n\\\n(x)',
+    'echo $\\\n$@(x)',
+    'echo @\\\n\\\n(x)',
+    'rm -rf @\\\n(/)',
+    'git branch @\\\n(-D) main',
+  ])('%j (a line continuation inside the opener) reads ask / uncertain / uncertain', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toContain(UNCERTAINTY.extendedGlob);
+  });
+
+  it.each([
+    // `$@(x)` once the continuation is gone: a special parameter.
+    'echo $\\\n@(x)',
+    'echo $@\\\n(x)',
+    'ls >$@\\\n(x)',
+    // An escaped or quoted operator, then a continuation: still no opener.
+    'echo \\@\\\n(x)',
+    'ls >\\@\\\n(x)',
+    'ls >"@"\\\n(x)',
+    // An escaped backslash, then a newline that ends the line.
+    'echo @\\\\\n(x)',
+    'ls >@\\\\\n(x)',
+    'echo a\\\nb',
+    // A newline with no continuation ends the target's line: `(x)` is a subshell after it.
+    'ls >@x\n(x)',
+  ])('control: %j keeps ask / auto / deny', (command) => {
+    expectCells(command, 'ask / auto / deny');
+  });
+
+  // Review round 3: one class with rounds 1 and 2 — a reader that decided the opener without
+  // removing line continuations first. `>$\⏎$@(x)` is `>$$@(x)` to bash (an even `$` run: a glob;
+  // measured, the monitor ran behind the `shopt` line, both bashes).
+  it.each([
+    `shopt -s extglob\ngit >$\\\n$@(x) -c ${tail}`,
+    `shopt -s extglob\ngit >$\\\n\\\n$@(x) -c ${tail}`,
+    'ls >$\\\n$@(x)',
+    'ls >x$\\\n$@(x)',
+    'ls >&$\\\n$@(x)',
+    'ls 2\\\n>@(x)',
+    'ls >\\\n@(x)',
+    'ls >"$"\\\n@(x)',
+  ])('%j (a continuation in a redirection target) reads ask / uncertain / uncertain', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toContain(UNCERTAINTY.extendedGlob);
+  });
+
+  it.each([
+    // `$$$@(x)` once both continuations are gone: an odd run, a special parameter (measured).
+    'echo $\\\n$\\\n$@(x)',
+    // No character before the `(`: not an opener.
+    'ls > (x)',
+    'ls >&(x)',
+    // An escaped or quoted character between the operator and the `(` ends the run (both bashes:
+    // a syntax error).
+    'ls >@\\x(y)',
+    "ls >@'x'(y)",
+    'ls >@"x"(y)',
+    // The target ends at a blank: a comment after it is not read as part of it.
+    'ls >a #@(x)',
+  ])('control: %j keeps ask / auto / deny', (command) => {
+    expectCells(command, 'ask / auto / deny');
+  });
+
+  it.each(['ls >$\\\n@(x)', 'ls >$\\\n$\\\n$@(x)'])(
+    'over-ask: %j is uncertain though bash reads a special parameter',
+    (command) => {
+      // `scan`'s target loop stops at the continuation's newline and the rest of the word is read as
+      // a new command (`@(x)`, `$\⏎$@(x)`): an over-read that predates WP-257 — the second line was
+      // already uncertain at the base as an expanded command name.
+      expectCells(command, 'ask / uncertain / uncertain');
+    },
+  );
+});
