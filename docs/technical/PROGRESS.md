@@ -20,7 +20,7 @@
 
 > **Note from the product owner — 2026-10-08, HIGH PRIORITY.** Backlog **535** (tracker statuses: the pick-up status, in progress, review, a human QA phase, loaded statuses and the mapping), **536** (an agent claims the ticket so no second instance works it) and **537** (code-review findings, answers and replies live on the merge request, and every agent reads them) go ahead of every other open entry when the next milestone is planned. The Autix + Jira example (AUT-6327, autix!2715) is recorded in 535 and 537.
 
-**Session 20 — 2026-10-20.** `main` opened at **`9231fe98`** (session 19's stop note), clean but for the person's untracked `.serena/` and `.claude/autoharness/`; `ci` `39416250036` and `image` `39416249990` **completed success**. No notes from the person starting the session. `RELEASE_VERSIONING` unset. **WP-245 is DONE at `25bb823a`** (`ci` `39456298958`, `image` `39456297470` **completed success**, `release` job skipped) — 644 closed and the live `git >o branch "\--" -D main` fail-open with it; review rounds 2 and 3 found a fail-open the round-2 fix opened (a quoted `"{fd}>sub"` dropped as a redirection) and a missing pin; both closed. Its review filed **645** (**major, live on `main`, pre-existing**: a process substitution `<(…)` is dropped at the git boundary, so `git --namespace <(true) -c core.fsmonitor=<script> status` reads `auto` and ran the monitor) and the refiner **646**–**649** (session 19's unfiled discovered work). **Every M17 row is DONE.** **The architect's M18 pass** (§ "Architect ruling (M18, session 20)", plan § "Milestone M18") wrote four rows — **WP-246** (645, major, first), **WP-247** (647), **WP-248** (646, 648), serial on `command-policy.ts`, and **WP-249** (649, parallel-safe); 5 owned, 33 carried, 1 declined (440); no Docker, no migration. **WP-246 is DONE at `5f33f404`** (`ci` `39474429961`, `image` `39474430054` **completed success**) — 645 closed; it filed **650** and **651** (both major, live). **The M18 amendment** (§ "Architect ruling (M18 amendment, session 20)") placed them as **WP-250** (650) and **WP-251** (651); order WP-250 → WP-251 → WP-247 → WP-248, WP-249 parallel-safe. **WP-250 is DONE at `9567d700`** (`ci` `39494511725`, `image` `39494511877`) — 650 closed. **WP-249 is DONE at `97f66da9`** (`ci` `39494994957`, `image` `39494995048`) — 649 closed. Filed **652** (unquoted glob as a git option value, unmeasured, potentially major) and **653** (minor), unowned. **WP-251 is DONE at `0ce76c28`** (`ci` `39516553098`, `image` `39516553152`) — 651 closed; filed **654** (minor). **WP-247 is DONE at `85106b4a`** (`ci` `39524580187`, `image` `39524580179`) — 647 closed; filed **655** (minor). **Next: WP-248** (in progress), the last M18 row; then the architect's pass for 652–655. Untracked `.claude/skills/test-tier-run-discipline/` (another local plugin's) joins `.claude/autoharness/` as a dir to set aside for `verify`; a worktree's `pnpm install` repoints the shared `.git/hooks` into it — reinstall with `pnpm exec lefthook install` from the main checkout. **Machine note:** the person's `.claude/autoharness/` (a local plugin's session JSON) makes `verify`'s lint step FAIL on formatting, and a `.git/info/exclude` line for it makes `ignored:check` FAIL instead (`.claude/` is tracked); this session moved it to the scratchpad for the `verify` run and back. Docker baseline: **70** volumes. Next free migration **0092**.
+**Session 20 — 2026-10-20.** `main` opened at **`9231fe98`** (session 19's stop note), clean but for the person's untracked `.serena/` and `.claude/autoharness/`; `ci` `39416250036` and `image` `39416249990` **completed success**. No notes from the person starting the session. `RELEASE_VERSIONING` unset. **WP-245 is DONE at `25bb823a`** (`ci` `39456298958`, `image` `39456297470` **completed success**, `release` job skipped) — 644 closed and the live `git >o branch "\--" -D main` fail-open with it; review rounds 2 and 3 found a fail-open the round-2 fix opened (a quoted `"{fd}>sub"` dropped as a redirection) and a missing pin; both closed. Its review filed **645** (**major, live on `main`, pre-existing**: a process substitution `<(…)` is dropped at the git boundary, so `git --namespace <(true) -c core.fsmonitor=<script> status` reads `auto` and ran the monitor) and the refiner **646**–**649** (session 19's unfiled discovered work). **Every M17 row is DONE.** **The architect's M18 pass** (§ "Architect ruling (M18, session 20)", plan § "Milestone M18") wrote four rows — **WP-246** (645, major, first), **WP-247** (647), **WP-248** (646, 648), serial on `command-policy.ts`, and **WP-249** (649, parallel-safe); 5 owned, 33 carried, 1 declined (440); no Docker, no migration. **WP-246 is DONE at `5f33f404`** (`ci` `39474429961`, `image` `39474430054` **completed success**) — 645 closed; it filed **650** and **651** (both major, live). **The M18 amendment** (§ "Architect ruling (M18 amendment, session 20)") placed them as **WP-250** (650) and **WP-251** (651); order WP-250 → WP-251 → WP-247 → WP-248, WP-249 parallel-safe. **WP-250 is DONE at `9567d700`** (`ci` `39494511725`, `image` `39494511877`) — 650 closed. **WP-249 is DONE at `97f66da9`** (`ci` `39494994957`, `image` `39494995048`) — 649 closed. Filed **652** (unquoted glob as a git option value, unmeasured, potentially major) and **653** (minor), unowned. **WP-251 is DONE at `0ce76c28`** (`ci` `39516553098`, `image` `39516553152`) — 651 closed; filed **654** (minor). **WP-247 is DONE at `85106b4a`** (`ci` `39524580187`, `image` `39524580179`) — 647 closed; filed **655** (minor). **WP-248 is DONE at `981b7117`** (`ci` `39531518714`, `image` `39531518819`) — 646 closed, 648 declined by its split clause, and a live `{1..a}` heap-exhaustion crash closed. **Every M18 row is DONE.** **The architect's M19 pass** (§ "Architect ruling (M19, session 20)", plan § "Milestone M19") measured 652 mostly closed (re-graded minor: only a glob resolving to `-c` with such a file present) and found **656** (**major, live**: behind a wrapper, a git option value holding a glob or brace character, even quoted, hides the `-c` — `env git --namespace "*" -c core.fsmonitor=… status` reads `auto`); five rows — **WP-252** (656, first), **WP-253** (652), **WP-254** (654), **WP-255** (655), serial on `command-policy.ts`, and **WP-256** (653, `scripts/` only, parallel-safe); 5 owned, 33 carried, 3 declined (440, 648, 657). No migration (0092 next). **Next: WP-252** beside WP-256. Untracked `.claude/skills/test-tier-run-discipline/` (another local plugin's) joins `.claude/autoharness/` as a dir to set aside for `verify`; a worktree's `pnpm install` repoints the shared `.git/hooks` into it — reinstall with `pnpm exec lefthook install` from the main checkout. **Machine note:** the person's `.claude/autoharness/` (a local plugin's session JSON) makes `verify`'s lint step FAIL on formatting, and a `.git/info/exclude` line for it makes `ignored:check` FAIL instead (`.claude/` is tracked); this session moved it to the scratchpad for the `verify` run and back. Docker baseline: **70** volumes. Next free migration **0092**.
 
 **Session 19 — 2026-10-20.** `main` opened at **`a2c1699d`** (WP-230's code commit, pushed by session 18, whose context ended before its ledger row); the tree carried WP-230's uncommitted notes and the person's untracked `.serena/`, and the worktree `../wt-wp233` held WP-233's finished, unreviewed build (its notes report `PASS: verify`). No notes from the person starting the session. `RELEASE_VERSIONING` unset. Session 18's last docs commit `d4bcadf2` read `ci` `39332969103` and `image` `39332969066` **completed success**; `a2c1699d` read `ci` `39336173738` and `image` `39336174397` **completed success**, `release` job skipped. **WP-230 is DONE at `a2c1699d`** — 630 closed. **WP-233 is DONE at `65eab400`** (`ci` `39344832118`, `image` `39344832034` **completed success**) — 628 and 629 closed; **637** (minor, test-only) and **638** (nit) filed, unowned. **WP-231 is DONE at `69fc933d`** (`ci` `39346292341`, `image` `39346292121` **completed success**) — 626's logcli half closed; the orchestrator ruled the floor `path`-kind (plan row amended). **WP-234 is DONE at `0b66dbef`** (`ci` `39349872053`, `image` `39349872246` **completed success**) — 627 and 638 closed; two review rounds (round 1 found the merged-sample stop failed open on GitLab's millisecond gap between `updated_at` and `merged_at`; plan ruling (c) amended). **WP-232 is DONE at `87d498d1`** (`ci` `39352696044`, `image` `39352696067` **completed success**) — 626 closed; go's half split off on a reading as **639** (minor, latent, unowned). **WP-235 is DONE at `e7d6a313`** (`ci` `39356513165`, `image` `39356513003` **completed success**) — 631 closed; its build filed **640** (minor: `db`'s own anonymous volume, no data at risk). **Every M14 row is DONE.** **The architect's M15 pass** (§ "Architect ruling (M15, session 19)", plan § "Milestone M15") wrote four rows — **WP-236** (637, parallel-safe), **WP-237** (636, Docker alone), **WP-238** (640, Docker alone, after WP-237; `tmpfs` over `db`'s declared parent, data untouched), **WP-239** (634, 635, Docker alone, after WP-238); 5 owned, 34 carried (639 joins them), 1 declined (440); no migration (0092 next); no row touches `command-policy.ts`. **WP-236 is DONE at `1145ab9d`** (`ci` `39359979243`, `image` `39359979100` **completed success**) — 637 closed. **WP-237 is DONE at `3819ceb2`** (`ci` `39361467264`, `image` `39361467307` **completed success**) — 636 closed; the restore step reads 31–34 s on CI. **WP-238 is DONE at `9af4c8b8`** (`ci` `39368062494`, `image` `39368062482` **completed success**) — 640 closed after two review rounds; TD-006 amended. **WP-239 is DONE at `289632b4`** (`ci` `39370161045`, `image` `39370161036` **completed success**) — 634 and 635 closed. **Every M15 row is DONE.** **The architect's M16 pass** (§ "Architect ruling (M16, session 19)", plan § "Milestone M16") wrote one row, **WP-240** (639: go's `-gcflags`/`-ldflags`/`-asmflags` values read for an `@<file>` word and path-writing options, measured first in a `golang` image pulled by digest and named nowhere in the product; the only `command-policy.ts` row); 1 owned, 33 carried, 1 declined (440); what unblocks the carried set is a model credential, a reachable dogfood install, an upstream StrykerJS release, founder answers (Q108, Q118) or a next occurrence. No migration (0092 next). **WP-240 is DONE at `48889218`** (`ci` `39373181239`, `image` `39373181104` **completed success**) — stopped at its ruling (b): measured in go1.25.0, go refuses `@` words in tool commands, so 639's `@<file>` half is refuted; its path-writing half filed as **641** and placed by the architect's **M16 amendment** as **WP-241**. **WP-241 is DONE at `e11a364c`** (`ci` `39378446104`, `image` `39378445863` **completed success**) — 641 closed after two review rounds; its review filed **642** (the shared dequote reads double-quoted backslashes, a dequoted `--` and brace expansion unlike bash, about 20 floor sites; one unmeasured spelling, `npm test "\--" --script-shell=/bin/id` on stock npm, may be major — measure it first). **Every M16 row is DONE.** **The architect's M17 pass** (§ "Architect ruling (M17, session 19)", plan § "Milestone M17") measured 642's policy cells first (nothing executed): `npm test "\--" --script-shell=/bin/id` reads `allow / allow / allow` against its control's `ask / hazard / hazard` — major on the policy half; the program half is WP-242 (a)'s, in the run image — and wrote two rows, **WP-242** (the shared dequote reads bash's double-quoted backslash, the argv reading dequoted once; the only Docker use is one `docker run` of the run image for (a)) and **WP-243** (brace expansion in the argv reading; serial after WP-242); item 15 (sed) refuted; 1 owned, 33 carried, 1 declined (440). No migration (0092 next). **WP-242 DONE at `84325606`** (npm 11.19.0 measured running a `--script-shell` after `"\--"`; fixed), its review filed **643** (major) and **644**; the **M17 amendment** placed them as WP-244 (first) and WP-245. **WP-244 DONE at `7184f5fb`** (643, `$"…"` read as bash reads it; TD-030 amended). **WP-243 DONE at `cdf99495`** (642's brace half; every reader judges the words bash makes; three review rounds; its `ci` failed once on a whole-tree census timeout under load, 5.1 s against ~0.5 s locally, and passed on re-run). **Session stopped by the person** (2026-10-20, "when possible, stop development") with **WP-245 IN_PROGRESS**: built, all tiers green, review round 1 REQUEST_CHANGES on two missing test pins and one minor; it is **uncommitted in `../wt-wp245`** (over `cdf99495`) and its row in the M17 table says exactly what remains. It closes a **live fail-open still on `main`** (`git >o branch "\--" -D main` reads `ask / auto / deny` and deleted `main` on a scratch repository) — **finish it first** when work resumes. After it, M17 is complete and the next step is an architect pass for M18; unfiled discovered work from WP-243/WP-245 (WP-206's `braceWords` could reuse `expandBraces`; `commandNameWalk`/`argv0Name` still dequote twice; the resolved-binary path re-parses the argv reading; the whole-tree census tests near vitest's 5 s limit on CI) goes to a refiner then. Docker baseline at the stop: **70** volumes, **41** dangling (one MariaDB anonymous volume of another project, created 06:31). `platform-{base,runtime,egress}:wp239` are on the daemon, built at `289632b4`'s parent; `verify:e2e` can run with `WORKSPACE_E2E_RUNTIME_IMAGE=platform-runtime:wp239` and `WORKSPACE_E2E_EGRESS_IMAGE=platform-egress:wp239`. **Machine note:** on this machine a plain `docker run` is rewritten by the `rtk` shell wrapper and reports a local image missing — use `rtk proxy docker run`; and in zsh a `$ids` list does not word-split in a `for` loop (use `${(s:,:)ids}`). Next after them: WP-232 (serial after WP-231), WP-234, WP-235 (Docker alone). Next free migration **0092**.
 
@@ -17534,11 +17534,11 @@ Sites on `main` at `cdf99495`: `REDIRECTION_WORD` in `packages/domain/src/polici
 
 **Depends on** WP-245's merge (it rewrites the boundary's redirection filter). Serial with it on `command-policy.ts` and `unattended-commands.ts`.
 
-### 646. **WP-206's `braceWords` and WP-243's `expandBraces` both expand braces in `packages/domain/src/policies/command-policy.ts` (`:7064` and `:6191` at `cdf99495`); the first could reuse the second** (TODO, **nit**: a refactor, no verdict moves. Found during WP-243/WP-245, session 19, recorded in the session-19 resume note. **No work package owns it.** Done when one expander serves both, with the corpus diff 0 and the sweep 0 looser.)
+### 646. **WP-206's `braceWords` and WP-243's `expandBraces` both expand braces in `packages/domain/src/policies/command-policy.ts` (`:7064` and `:6191` at `cdf99495`); the first could reuse the second** (**RESOLVED** at `981b7117`, WP-248, session 20. Was TODO, **nit**: a refactor, no verdict moves. Found during WP-243/WP-245, session 19, recorded in the session-19 resume note. **No work package owns it.** Done when one expander serves both, with the corpus diff 0 and the sweep 0 looser.)
 
 ### 647. **`commandNameWalk` (`command-policy.ts:6623`) and `argv0Name` (`:3305`, `basename(unquoteToken(token))`) still take quotes off the argv reading a second time: the rest of 642's and 644's double-strip class** (**RESOLVED** at `85106b4a`, WP-247, session 20. Was TODO, **minor**: a consistency cleanup, no fail-open measured. **TD-030 tier 1**. Found during WP-243/WP-245, session 19, resume note. Not in 644's site list, and WP-245 (644's row) does not name them. **No work package owns it.** Done in 644's shape: each reads the argv reading's words as they are and dequotes only the written reading; a reading row and a canary per site; corpus diff recorded, 0 looser. **Depends on** WP-245's merge.)
 
-### 648. **The resolved-binary path in `command-policy.ts` re-parses the argv reading instead of taking the one already built** (TODO, **nit**: efficiency only, no verdict moves. Found during WP-243/WP-245, session 19, resume note; the function is not named there — **needs a read** to locate it. **No work package owns it.**)
+### 648. **The resolved-binary path in `command-policy.ts` re-parses the argv reading instead of taking the one already built** (**DECLINED** at `981b7117`, WP-248's split clause, session 20 — the stage readings move 3 cells toward refusal. Was TODO, **nit**: efficiency only, no verdict moves. Found during WP-243/WP-245, session 19, resume note; the function is not named there — **needs a read** to locate it. **No work package owns it.**)
 
 ### 649. **Whole-tree census tests run close to vitest's 5 s default timeout on CI: WP-243's `ci` run `39403396684` failed its first attempt because `packages/application/src/pipeline/default-branch-readers.test.ts`'s whole-tree census case timed out at 5101 ms (546 ms locally) and passed on re-run** (**RESOLVED** at `97f66da9`, WP-249, session 20. Was TODO, **minor**: a CI flake risk, no defect in the product. Found by the orchestrator, session 19 (WP-243's row in the M17 table). **No work package owns it.**)
 
@@ -17587,7 +17587,7 @@ No file:line was given for the matcher. **Needs a read** to locate it.
 
 **Depends on** WP-246's merge (it changes `scan`). Serial with it and with 650 on `command-policy.ts`.
 
-### 652. **An unquoted glob given as a git global option's separate value is many words to bash, and WP-250's ruling does not cover it: `git -C * …` and `git --namespace * -c core.fsmonitor=… status` still read `auto`, and a file named `-c` in the working directory becomes an option** (TODO, **unmeasured, potentially major**: it would be major if measured live, and nobody has measured it. **TD-030 tier 1**: floors read argv *as the shell builds it*. Same class as 650, a separate cause: 650 is about expansions, this is about pathname expansion. Found by WP-250's implementer and confirmed by its reviewer, session 20 (`#### WP-250`, its *Discovered work* and *Review* paragraphs). The refiner ran nothing. **No work package owns it.**)
+### 652. **An unquoted glob given as a git global option's separate value is many words to bash, and WP-250's ruling does not cover it: `git -C * …` and `git --namespace * -c core.fsmonitor=… status` still read `auto`, and a file named `-c` in the working directory becomes an option** (TODO, **unmeasured, potentially major**: it would be major if measured live, and nobody has measured it. **TD-030 tier 1**: floors read argv *as the shell builds it*. Same class as 650, a separate cause: 650 is about expansions, this is about pathname expansion. Found by WP-250's implementer and confirmed by its reviewer, session 20 (`#### WP-250`, its *Discovered work* and *Review* paragraphs). The refiner ran nothing. **No work package owns it.** **Re-graded minor** by the M19 architect pass's measurement (§ "Architect ruling (M19, session 20)", policy at `981b7117`): `git --namespace * -c …` and `git -C * -c …` are already refused, and only the shape where the glob itself becomes the option (`[-]c`, `*`, `?c` resolving to `-c` with a file named `-c` present) reads `ask / auto / deny`; **WP-253 owns it**, which supersedes "no work package owns it".)
 
 **Evidence.** Thin, and labelled as such. WP-250's implementer, in *Discovered work*: *"An unquoted **glob** as a separate value (`git --namespace * status` with a file named `-c` in the working directory) is also many words to bash and is not covered by this rule (ruling (b) names `$(…)`, backticks, `$name`, `${…}` only); crafted and multi-step (the run must first create such a file), not measured."* WP-250's reviewer, in *Review*: *"Discovered: an unquoted glob as a separate value (`git -C * …`) still reads `auto` — filed."*
 
@@ -17641,6 +17641,36 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
   - the corpus diff and a sweep in WP-247's shape report **0 looser** against the base, and the tighter cells are listed.
 
 **Depends on** WP-247's merge. Serial with 650, 651, 652 and 654 on `command-policy.ts`.
+
+### 656. **Behind a wrapper (`env`, `nice`, `timeout`, `command`, `stdbuf`, `nohup`, `time`, `exec`, …), a git global option's value that holds a glob or brace character, even quoted, hides the `-c` behind it: `env git --namespace "*" -c core.fsmonitor=/tmp/m status` reads `ask / auto / deny`** (TODO, **major**, **live on `main`**, policy measured, program half not run. **TD-030 tier 1**: the boundary's structural reading of fragments. Found by the M19 architect pass while probing 652, session 20 (§ "Architect ruling (M19, session 20)", its *656* tables). Numbered by that ruling; this heading is the refiner's. The refiner ran nothing. **Owned by WP-252**, first in M19.)
+
+**Evidence.** The architect pass at `981b7117`, policy only: `evaluateCommand` / `decideUnattendedCommand` on `DEFAULT_COMMAND_POLICY` with `allow` set to each of `DEFAULT_READ_ONLY_ALLOW`, `DEFAULT_VERIFICATION_ALLOW` and `DEFAULT_IMPLEMENTATION_ALLOW`, attended / `auto` / `deny`. Every cell is identical in the three baselines unless stated.
+  - `env git --namespace "*" -c core.fsmonitor=/tmp/m status` reads **`ask / auto / deny`**. The controls `env git --namespace x -c …` and `git --namespace "*" -c …` get the git boundary's refusal.
+  - The same line behind `nice`, `nice -n 5`, `timeout 5`, `command`, `stdbuf -o0`, `nohup`, `time` and `exec` reads **`ask / auto / deny`**. So do these values behind `env`: `'*'`, `\*`, `"?"`, `"[x]"`, `"{a,b}"`, `*`, `?`, `x*` and `{a,b}`. So do `nice git -C "*" -c …`, `env git -C "a" --namespace "*" -c …`, a `| cat` suffix and `env X=1 git …`.
+  - `env git --namespace "*" -c core.hooksPath=/tmp/h commit -m x` reads **`ask / auto / deny`**: a second key the boundary exists to refuse (backlog 488).
+  - Closed, and pinned as controls: a value with no glob or brace character (`"a b"`, `"$X"`, `"x"`, `'x'`, `~`, `"a=b"`), `GIT_X=1 git …`, `--config-env=core.fsmonitor=X` and `env sh -c "git -c …"` get the refusal. `sudo git --namespace "*" -c …`, `env git push "*" -c x --force` and `nice rm "*" -c x -rf /` read `block`. `env pytest "*" -c x -p evil` reads `hazard`, while `env npm test … --script-shell=/bin/id` and `xargs git --namespace "*" -c …` read `uncertain`.
+  - Shell: `"*"` is one literal word under both bash 5.3.20 and `/bin/bash` 3.2.57 (`printf '[%s]'`).
+  - **Cause, by probe only, not yet by canary.** `splitCommandSegmentsAsWritten` returns the line **and** `core.fsmonitor=/tmp/m` (with `x` for `"*"` it returns the line alone). The `-c` value is read as a handed script of a candidate that starts at the glob-shaped word (`commandArgvCandidates` lists `["*","-c",…]` among its suffixes). Because there are two parts, `gitBoundaryViolation` treats the fragment as composite (`unattended-commands.ts:1018`) and queues its parts. The first part **is** the fragment, which is already in `seen`, so its git argv is never judged. WP-161 (e)'s composite rule did not foresee a part that is the fragment itself. WP-252 (a) confirms the deciding reader by canary.
+
+**What it costs to leave.** A run under `auto` writes one literal line with stock-image programs (`env`, `nice`, `timeout`, git) and gets past the boundary's refusal of `core.fsmonitor` and `core.hooksPath`, the keys it exists to refuse. If the program half holds, git runs a script the run chose. That half is **not measured**: WP-252 (a) runs it on a scratch repository only. It is the only major open.
+
+**Done when** WP-252's acceptance holds:
+  - (a)'s table is recorded before any change: the cells, the shell facts, the marker result for the three scratch-repository spellings, and the deciding reader;
+  - a one-stage fragment is judged as an argv, and what the splitter hands out of it is queued beside it. A fragment is composite only when it is more than one stage (a list or a pipe), so 488's pipeline keeps today's cells;
+  - (c)'s rows read the git boundary's refusal in `auto` and `deny` in all three baselines, with the controls and one canary per half;
+  - (d)'s sweep reports **0 looser** against `981b7117`, and (e)'s corpus diff is recorded.
+
+**Depends on** nothing: first in M19. WP-253, WP-254 and WP-255 follow it serially on `command-policy.ts` and `unattended-commands.ts`.
+
+### 657. **`resolvedBinary` has no production producer: only tests and `commandVerdictFor` (`effective-config.ts`, itself called only by its test) pass it, and on a line of more than one stage the branch puts the resolved binary in place of the line's first word, not the stage's** (nit, **latent**, **declined** by the M19 ruling with a trigger. Found by WP-248's implementer and reviewer, session 20 (`#### WP-248`, its *Discovered work* and *Review* paragraphs), unfiled there. Numbered by § "Architect ruling (M19, session 20)"; this heading is the refiner's. The residue of 648. **No work package owns it**, by decision.)
+
+**Evidence.** From WP-248's *Discovered work* paragraph: *"`resolvedBinary` has **no production producer**: only tests and `commandVerdictFor` (`effective-config.ts`, itself called only by its test) pass it, so the branch of (b) is reached by tests alone, and on a line of more than one stage it replaces the line's first word, not the stage's (the measured `echo hi > out; tf apply`)."* WP-248's reviewer wrote: *"`resolvedBinary` has no production producer (nit, unfiled)."* 648's split-clause measurement found that a per-stage reading moves 3 cells (`echo hi > out; tf apply` with `/usr/bin/terraform`, from `ask / auto / deny` to `block`).
+
+**What it costs to leave.** Nothing today, because no production caller reaches the branch. **Trigger:** the first row to add a production producer reads it per stage and pins `echo hi > out; tf apply` first. Deleting the branch is not ruled: it is a parameter of the policy's public request shape, and removing it would be a contract change nobody has asked for.
+
+**Done when** that trigger's row lands with the per-stage reading pinned. Until then it is closed as declined.
+
+**Depends on** a production producer of `resolvedBinary`, and none is planned.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -21650,8 +21680,29 @@ RESOLVED. No Docker, no lockfile change, no migration (next free **0092**), no c
 | WP-250 | **Scanner: a git global option's separate value that carries an unquoted expansion is uncertain at the boundary, because the shell decides how many words it is** | DONE | `9567d700` | Backlog **650** (major, live) closed. Built in the main checkout, session 20. **Measured first:** the ten lines read `ask / auto / deny` in every baseline and the monitor ran for all five spellings (bash 5.3.20 and 3.2.57, scratch repository only); `unreadableGitWord` alone moves every line, so it is the deciding reader. It now answers `splits` for a separate global-option value with an unquoted expansion (`expandsUnquoted`: backticks, `$(`, `${`, `$[`, a name, a special parameter; `$'…'`/`$"…"` are quoting), and the boundary answers `uncertain` (`splitGitOptionValue`) after every refusal. Sweep 1 139 877 cells, 0 looser, 77 736 tighter; corpus 0 moved; WP-198's property green at four seeds. Review: one round, **APPROVE-with-nits** — reviewer's hunt 23 760 cells base-vs-head 0 looser; canary c4 (special parameters dropped) **survived** while `git --namespace $@ --namespace -c core.fsmonitor=… status` loosened: the orchestrator added `$@`/`$*` rows and re-ran c4, dead by exactly those two; a docblock line on `\'` inside `$'…'`. Accepted over-ask: `git -C $(pwd) status` reads `uncertain`. Orchestrator: `PASS: verify` (15876), `PASS: verify:integration` (901), `PASS: verify:e2e` twice (304); after nits `PASS: verify` (15878). CI `ci` `39494511725`, `image` `39494511877` **completed success**, `release` skipped. Discovered: **652** (unquoted glob as a separate value, unmeasured). No migration. |
 | WP-251 | **Scanner: a command substitution's body that holds a `case` word or a comment is not read, so a `)` the matcher cannot place never hides a git option** | DONE | `0ce76c28` | Backlog **651** (major, live) closed. Built in the main checkout, session 20. **Measured first:** the program half ran for the first time — on a scratch repository (bash 5.3.20, git 2.56.0) the monitor **ran** for `<(case x in x) …` and for a comment's `)` (`<(: # )⏎)`); bash 3.2.57 refuses the `case` form and closes at the comment's `)`. `findClosingParen` takes an optional uncertainty set from `scan`'s `$(…)`/`<(…)`/`>(…)` branch only and adds `UNCERTAINTY.unreadSubstitutionBody` for a body holding an unquoted `case` word or a comment-starting `#`; `$((…))` exempt. Sweep 410 052 cells, 0 looser, 27 843 tighter, 51 834 reason-only; WP-250's set 0 changed; corpus 0. Review: one round, **APPROVE-with-nits** — canaries dead (case check 10 rows, comment check 6, `$((…))` 1, `#` after a word char 1, no set passed 16); a quoted `"case"` read as the word **survived** (stricter only): the orchestrator added the `<(echo "case" x)` control, c4 then dead by it; the stated reason for the arithmetic exemption corrected (`$(( case + 1 ))`, not `16#ff`). Reviewer's hunt about 110 lines, nothing looser. Orchestrator: `PASS: verify` (15903), `PASS: verify:integration` (901), `PASS: verify:e2e` twice (304) — the first overlapped the reviewer's in-place canaries and is not counted; after nits `PASS: verify` (15904) and a third `PASS: verify:e2e` (304). CI `ci` `39516553098`, `image` `39516553152` **completed success**, `release` skipped. Discovered: **654** (minor, a `)` inside backticks). No migration. |
 | WP-247 | **Scanner: `commandNameWalk` and `argv0Name` take the argv reading's words as handed** | DONE | `85106b4a` | Backlog **647** (minor) closed. Built in the main checkout, session 20. **Probe (c) first:** no fail-open — every probe line refused where its control is, so the grade stays minor and no program half ran. `commandNameWalk` takes the dequote it uses; `argv0NameAs` reads the wrapper's name with it; `argv0Candidates` and `walkCommandStarts` pass the handed reading. **Exception under ruling (a):** a command's name keeps its second dequote through `argv0Name` — read as handed it loosened 3 135 sweep cells (`"'git'" -c core.fsmonitor=x status` → `auto`, though bash runs `'git'`); named in the module docblock with that cell. Corpus 0; 14 lines tighter, none looser (the build's "0 tighter" missed them; corrected at review). Review: one round, **APPROVE-with-nits** — canaries dead (walk dequote 4 rows, `argv0NameAs` 1, `walkCommandStarts` 3, `argv0Candidates` 1); the entrypoint and generic-option pieces survived, accepted as inert (only `skipped`/`attached` are read on the argv reading, pushed only while `precise` holds). Reviewer's hunt over twelve wrappers: 0 looser. Orchestrator: `PASS: verify` (15910), `PASS: verify:integration` (901), `PASS: verify:e2e` twice (304); after nits `PASS: verify` (15910). CI `ci` `39524580187`, `image` `39524580179` **completed success**, `release` skipped. Discovered: **655** (minor, the rest of the class: `isWrapperToken`, `isAssignment`, `runnerSubcommandAt`, `runnerName`). No migration. |
-| WP-248 | **Scanner: one brace expander and one argv parse** | TODO | — | Backlog **646** and **648** (nits). Serial after WP-247. 648 located: `evaluateCommand`'s `resolvedBinary` branch re-runs `argvForms(line)`. Split clause: (b) declined if the readings differ and the union moves a cell. |
+| WP-248 | **Scanner: one brace expander and one argv parse** | DONE | `981b7117` | Backlog **646** (nit) closed; **648** (nit) **declined** under the split clause. Built in the main checkout, session 20. (a) `braceWords` calls `expandBraces` under `BRACE_EXPANSION_CEILING`; `firstBraceAlternatives` and `BRACE_WORDS_LIMIT` deleted; plain reuse loosened 38 of 400 000 generated words, so the word is rewritten first (`"`, `'`, `\`, `$` as blanks, a range step dropped) — 0 looser over 2.1 M words, each rewrite pinned. (b) measured and declined: `parseCommand` reads stages, not the line; its readings (and the union) move 3 cells toward refusal (`echo hi > out; tf apply` → `block`). Corpus 0; sweep 143 241 cells, 0 changed. **A live crash on `main`, closed here:** the old expander never returned on a number-to-letter range — at `85106b4a` `{1..a}`, `{1..Z}`, `{-1..a}` ran out of a 256 MB heap in 0.6 s (`fakeroot {1..a}` filled 4 GB in about 10 s), so one model command could abort the evaluating process and every run in it; now `uncertain` in about 0.1 s. It had no backlog entry. Review: one round, **APPROVE-with-nits** — canaries: global ceiling at 1 (8 red), `braceWords` budget alone at 1 (6), each rewrite (dead by its row), unreadable form read (dead), old body (worker aborts); the `Number.isSafeInteger` guard's removal survived, expected (the range regex rejects first); the canary's two halves stated in the test comment and notes. Orchestrator: `PASS: verify` (15922), `PASS: verify:integration` (901), `PASS: verify:e2e` twice (304); after nits `PASS: verify` (15922). CI `ci` `39531518714`, `image` `39531518819` **completed success**, `release` skipped. Unfiled nit: `resolvedBinary` has no production producer (to the M19 pass). No migration. |
 | WP-249 | **CI: the whole-tree census tests carry a timeout stated against their measured CI duration** | DONE | `97f66da9` | Backlog **649** (minor) closed. Built in `../wt-wp249` at `0fc7ef65` beside WP-250, ported by 3-way patch after WP-250 merged (notes appended), session 20. Measured from the unit-job logs of the ten last green `ci` runs: 37 suites, 110 walk cases, slowest 8069 ms (`source-scanner`, keeps its 30 s); 108 cases carry `15_000` with a `// WP-249:` reason citing the figure; global `testTimeout` unchanged. Guard `scripts/census-timeouts.test.ts`. Review: one round, **APPROVE-with-nits** — canaries (timeout removed, 14 999, a 10 000 constant, a local walk helper) dead by the guard naming the case; an import alias and a timeout name bound in two scopes **survived**, stated in the guard's docblock by the orchestrator, with `readdirSync` walks and the three excluded candidates; seven cited figures found exactly in the CI logs. Orchestrator: worktree `PASS: verify` (15851); main after port `PASS: verify` (15880). Test-only: no integration/e2e input changed. CI `ci` `39494994957`, `image` `39494995048` **completed success**, `release` skipped. Discovered: **653** (minor). |
+
+**M19 — the fragment the boundary never judges, the glob a value cannot count, and the last
+readers that read twice** (architect, session 20; plan § "Milestone M19"; the disposition of every
+open backlog heading and open question is § "Architect ruling (M19, session 20)" after the M18
+amendment). Filed during M18: 645–651 (RESOLVED, 646 and 648 by WP-248's row), **652**–**655**.
+**Measured by the pass, policy only, at `981b7117`:** 652 as filed is mostly closed (`git
+--namespace * -c core.fsmonitor=/tmp/m status` is refused); its open shape is a glob that becomes
+the option (`git --namespace [-]c core.fsmonitor=/tmp/m status`, `ask / auto / deny`, minor: a
+planted `-c` file). The probe found **656** (major, live): `env git --namespace "*" -c
+core.fsmonitor=/tmp/m status` reads `ask / auto / deny` in all three baselines behind nine
+wrappers — the git boundary's composite skip never judges the fragment. **WP-252 first**, then
+WP-253, WP-254, WP-255 serial; WP-256 parallel-safe. No Docker, no lockfile change, no migration
+(next free **0092**), no credential.
+
+| WP | Title | Status | Commit | Notes |
+|---|---|---|---|---|
+| WP-252 | **Scanner: the git boundary judges a one-stage fragment's own argv even when the splitter also hands a script out of it** | TODO | — | Backlog **656** (major, live; numbered by § "Architect ruling (M19, session 20)", heading the refiner's). First. Program half on a scratch repository only (fsmonitor and `core.hooksPath` markers). Deciding reader by canary: the composite skip at `unattended-commands.ts:1018`. |
+| WP-253 | **Scanner: a git global option's separate value that carries an unquoted glob is uncertain at the boundary** | TODO | — | Backlog **652** (minor). Serial after WP-252. Extends WP-250's `splits` to unquoted `*`, `?`, `[`; program half with a file named `-c` in a scratch repository only. Over-ask pinned: `git -C src* log`. |
+| WP-254 | **Scanner: `findClosingParen` keeps backtick state** | TODO | — | Backlog **654** (minor, latent). Serial after WP-253. Hunt first; split clause lands the docblock and pins if the state moves a cell toward `allow`. |
+| WP-255 | **Scanner: the peel's wrapper test and a package runner's subcommand take the argv reading's words as handed** | TODO | — | Backlog **655** (minor expected). Serial after WP-254. WP-247's shape: probe first, a named exception per site that cannot move. |
+| WP-256 | **Scripts: `gitSpawnSites` blanks regular-expression literals, and the timeout guard's 15 s cites its CI figure** | TODO | — | Backlog **653** (minor, latent) and its nit. Parallel-safe (`scripts/` only). |
 
 ## WP notes (decisions, assumptions, reviewer findings)
 
@@ -51268,6 +51319,189 @@ No `[unverified]` claim is introduced. No question is new.
 
 **Next: WP-250** for a free implementer; no daemon needed. **WP-249** may still start beside it.
 The next free migration number is still **0092**, and no row takes it.
+
+### Architect ruling (M19, session 20) — the fragment the boundary never judges comes first, and the glob 652 named is mostly closed
+
+Written 2026-10-21 at `981b7117` (WP-248 merged; its notes `#### WP-248`). M18's rows are all
+merged. This pass covers **every open `### NNN.` heading** of § "Open findings backlog", § 7, the
+two blocker briefs and every item under *Open* in `docs/OPEN-QUESTIONS.md`. **Filed during M18:**
+645, 647, 649, 650, 651 (RESOLVED), 646 and 648 (closed by WP-248's row: 646 done, 648 declined by
+its split clause), and **652**–**655**, open and unowned. Read-only on source; no test tier, no
+Docker. WP-248's row and the Resume note are the orchestrator's and are not touched.
+
+**This pass measured** (policy and shell only; a scratch script calling `evaluateCommand` and
+`decideUnattendedCommand` on `DEFAULT_COMMAND_POLICY` with `allow` set in turn to
+`DEFAULT_READ_ONLY_ALLOW`, `DEFAULT_VERIFICATION_ALLOW` and `DEFAULT_IMPLEMENTATION_ALLOW`, plus
+`corpusCells` for the reasons; `printf '[%s]'` under the host's bash 5.3.20 and `/bin/bash` 3.2.57
+in a scratch directory holding one empty file named `-c`; no git was run, nothing in a repository).
+Every cell below is identical in the three baselines unless stated.
+
+*652, policy:*
+
+| Spelling | Cells today | Note |
+|---|---|---|
+| `git --namespace * -c core.fsmonitor=/tmp/m status`; the same with `?`, `x*`, `**`, `"*"`, `'*'`, `\*`, `--namespace=*`, `{a,b}`, `~`; `git -C * -c …`; `--attr-source *`; a `core.sshCommand … fetch origin` tail; `X=; ` or `> out` in front | the git boundary's refusal — **closed** | every reading takes the glob as one word, so `-c` is seen |
+| `git --namespace [-]c core.fsmonitor=/tmp/m status`; `?c`, `-[c]`, `*c`, `-?`; `git -C [-]c …`; `[-]c core.sshCommand=/tmp/m fetch origin`; `[-]-upload-pack=/tmp/m fetch origin` | **`ask / auto / deny`** | the glob **is** the option once a matching file exists |
+| `git --namespace "[-]c" core.fsmonitor=/tmp/m status` | `ask / auto / deny` — correct | one word; git reads it as a namespace |
+| `git --namespace * status`, `git -C * status`, `git -C src* log`, `git -C ./* status` | `ask / auto / deny` | read as today; WP-253 moves them to `uncertain` (the over-ask) |
+| `git --namespace * push --force`; `git -C * branch -D main` | `uncertain: flagValueHidesBlockEntry` — closed | — |
+| `git --namespace * --upload-pack=/tmp/m fetch origin`; `--exec-path *` | `hazard` — closed | — |
+| `git --git-dir *`, `--work-tree *` | the git boundary's refusal — closed | — |
+| `git -c * status`, `--config-env * status` | `uncertain: unreadGitConfigKey(*)` — closed | — |
+| `git * status`, `git -* status`, `git --namespace=[-]c …` | `uncertain` (`unreadableGitVerb`) — closed | — |
+| `git log *`, `git diff -- *` | `allow` | after the verb; correct |
+| `git --namespace @(x) …`, `!(x)`, `+(x)` (fsmonitor tail) | `ask / auto / deny` | not a fail-open: both bashes refuse `@(c)` at parse (`extglob` off, the default) |
+| `npm test * --script-shell=/bin/id`; `rm * -rf /`; `git branch * -D main` | `hazard`; `block`; `block` — as their controls | — |
+
+*652, shell* (both bashes identical, the directory holding only `-c`): `x * y`, `x [-]c y` and `x
+?c y` → `[x][-c][y]`; `x "*" y` → `[x][*][y]`; `x "[-]c" y` → `[x][[-]c][y]`; `x [z]q y` (no match)
+→ `[x][[z]q][y]`; `x @(c) y` → syntax error; with a second file `b`, `*` → `[-c][b]`. A glob is
+zero (literal), one or many words, and which is the directory's to decide.
+
+*656, found by this pass while probing 652, policy:*
+
+| Spelling | Cells today | Control |
+|---|---|---|
+| `env git --namespace "*" -c core.fsmonitor=/tmp/m status` | **`ask / auto / deny`** | `env git --namespace x -c …` and `git --namespace "*" -c …` → the git boundary's refusal |
+| the same behind `nice`, `nice -n 5`, `timeout 5`, `command`, `stdbuf -o0`, `nohup`, `time`, `exec` | **`ask / auto / deny`** | — |
+| the value `'*'`, `\*`, `"?"`, `"[x]"`, `"{a,b}"`, `*`, `?`, `x*`, `{a,b}` behind `env`; `nice git -C "*" -c …`; `env git -C "a" --namespace "*" -c …`; a `\| cat` suffix; `env X=1 git …` | **`ask / auto / deny`** | — |
+| `env git --namespace "*" -c core.hooksPath=/tmp/h commit -m x` | **`ask / auto / deny`** | a second key the boundary exists to refuse |
+| `env git --namespace "a b"`, `"$X"`, `"x"`, `'x'`, `~`, `"a=b"` (fsmonitor tail) | the git boundary's refusal — closed | no glob or brace character |
+| `GIT_X=1 git --namespace "*" -c …`; `env git --namespace "*" --config-env=core.fsmonitor=X status`; `env sh -c "git -c core.fsmonitor=x status"` | the git boundary's refusal — closed | — |
+| `sudo git --namespace "*" -c …`; `env git push "*" -c x --force`; `nice git branch "*" -c x -D main`; `nice rm "*" -c x -rf /` | `block` — closed | — |
+| `env pytest "*" -c x -p evil`; `env npm test "*" -c x --script-shell=/bin/id`; `xargs git --namespace "*" -c …`; `env "*" -c "git -c …"` | `hazard`; `uncertain`; `uncertain`; `uncertain` — closed | — |
+| `git push origin agentic/x 2>&1 \| tail -5` | `allow` (implementation), `ask / auto / deny` (the other two) | backlog 488's reading; WP-252 keeps it |
+
+*656, which reader, by probe (WP-252 (a) confirms by canary):* `splitCommandSegmentsAsWritten` on
+`env git --namespace "*" -c core.fsmonitor=/tmp/m status` answers the line **and**
+`core.fsmonitor=/tmp/m`; with `x` for `"*"` it answers the line alone. The extra fragment is the
+`-c` value read as a handed script of a candidate that starts at the glob-shaped word (the generous
+wrapper reading; `commandArgvCandidates` lists `["*","-c",…]` among its suffixes). Two parts make
+`gitBoundaryViolation` treat the fragment as composite (`unattended-commands.ts:1018`), so it
+queues the parts and skips the fragment. The first part **is** the fragment, already in `seen`, so
+its git argv is never judged. Without a wrapper there is no such suffix, and the line is refused.
+The rule WP-161 (e) wrote ("composite when the splitter, run on it, finds more than one part") did
+not foresee a part that is the fragment itself.
+
+**The grades.** **656 is major**: TD-030 tier 1 (the boundary's structural reading of fragments),
+literal (`"*"` is one word in both bashes), one line, and `env`, `nice`, `timeout` and git are in
+the stock image; the `core.fsmonitor` and `core.hooksPath` keys are the ones the boundary exists to
+refuse (backlog 488). Its program half has not been run; WP-252 (a) runs it on a scratch
+repository. It is the only major open, so **WP-252 comes first**. **652 is minor**: tier 1
+(pathname expansion is the shell's grammar), but the open shape needs a file the run wrote and a
+glob, a non-literal word, which decision 2 grades minor. The closed shapes are pinned as controls in
+WP-253, not re-fixed. **653** stays minor (latent; scripts only). **654** stays minor (latent;
+WP-254 (a)'s hunt may raise it). **655** stays minor expected (WP-255 (a)'s probe may raise it).
+
+**The remedies.**
+- **656: judge the one-stage fragment, keep the splitter.** Changing the over-read that hands `-c
+  core.fsmonitor=/tmp/m` out as a script would loosen whatever that reading catches elsewhere, and
+  it only adds fragments. The defect is the skip. Rule: a fragment is skipped as composite only when
+  it is more than one **stage** at its own level (a list or a pipe). A one-stage fragment is judged
+  as an argv, and what the splitter hands out of it is queued beside it. 488's pipeline stays
+  composite, so its over-ask does not come back.
+- **652: WP-250's reader, one class wider.** `unreadableGitWord`'s `splits` answer gains the
+  unquoted `*`, `?` and `[`; a quoted or escaped one is one word. Not a refusal of every glob on a
+  git line: `git log *` and `git diff -- *` are ordinary and come after the verb. The over-ask:
+  `git -C src* log` and `git -C ./* status` move to `uncertain`; quoting keeps them. Corpus 0 (no
+  corpus line puts a git global option before the verb; checked by grep over
+  `test/fixtures/commands/*.txt`).
+- **654: backtick state in the matcher**, with a split clause that falls back to the docblock and
+  pins if the state moves a cell toward `allow`. The divergence from bash is a single reader's,
+  and today a second check (the unterminated backtick) covers it. TD-030 decision 3 asks for the
+  structural rule, not a reliance.
+- **655: WP-247's shape**, four sites.
+- **653: one blanker.** The timeout guard already blanks regex literals before `matchingClose`; the
+  census takes the same function rather than a second copy.
+
+**The rows** (plan § "Milestone M19"):
+1. **WP-252: Scanner, the git boundary judges a one-stage fragment's own argv** (656, major). No Docker. First.
+2. **WP-253: Scanner, an unquoted glob in a git global option's separate value is uncertain** (652, minor). Serial after WP-252.
+3. **WP-254: Scanner, `findClosingParen` keeps backtick state** (654, minor). Serial after WP-253.
+4. **WP-255: Scanner, the last four double-dequote sites read as handed** (655, minor). Serial after WP-254.
+5. **WP-256: Scripts, `gitSpawnSites` blanks regex literals; the guard's 15 s cites CI** (653 and its nit). Parallel-safe.
+
+**Canary expectation, every row.** A canary that loosens a sweep cell and fails no row is a
+**missing pin** (the session's recurring review finding: WP-250's c4, WP-251's c4). The row adds the
+row that kills it before review. **Sweeps:** each row's sweep includes every line the row itself
+adds as a row or control, and its base is the previous row's merge; 0 looser, or the row stops.
+
+**656 and 657 are numbered here.** This pass writes only the M19 table and this section, so their
+`### NNN.` headings are the refiner's, from this text: **656** as above (owned by WP-252); **657**
+— WP-248's unfiled nit — `resolvedBinary` has no production producer (only tests and
+`commandVerdictFor` in `effective-config.ts`, itself called only by its test, pass it), and on a
+line of more than one stage the branch puts the resolved binary in place of the line's first word,
+not the stage's (WP-248 measured `echo hi > out; tf apply`). **Declined, no row**: no production
+caller reaches it, so neither the reading nor the dead branch moves a verdict. **Trigger:** the row
+that adds a production producer reads it per stage and pins that line first. Deleting the branch is
+not ruled: it is a parameter of the policy's public request shape, and removing it is a contract
+change nobody has asked for.
+
+**Decisions.** None is written or amended: WP-252, WP-253, WP-254 and WP-255 are TD-030 tier 1
+under decision 3's fail-closed form, with decision 4's instruments; WP-256 changes no decision. No
+`docs/research/` file; the measurement is in this section. No `[unverified]` claim is introduced.
+
+#### Disposition — every open backlog heading
+
+| Entry | Grade | Disposition |
+|---|---|---|
+| 1 (blocker brief) | blocker for WP-17's evals | carried. WP-33 BLOCKED; a model credential, the person who holds the Anthropic account |
+| 2 (blocker brief) | blocker for WP-78 | carried. WP-78 BLOCKED. **Re-read 2026-10-21** (`gh`): `stryker-mutator/stryker-js#6210` and `#6231` both OPEN; latest release still v10.0.0 of 2026-08-14 |
+| 7 (section) | carried bullets | carried, unchanged; every bullet is still trigger-shaped |
+| 122, 123, 125, 145, 207, 219, 266, 305, 308, 313, 321, 345, 353, 374, 397 | nit to small | carried, **closed** (declined for 0.1 at M7). M18 brought no new evidence on any of them |
+| 132 | observation | carried. Its next occurrence; none in M18 |
+| 171 | small-to-major | carried. No accepted page in the Autix vault (rule 39) |
+| 232 | small | carried. The founder's, under Q108 |
+| 238 | small | carried. No history-bootstrap batch on Autix |
+| 367 | nit | carried. Latent below 50 waiting rows of one kind |
+| 422 | nit | carried. No performance theme |
+| 439 | nit | carried. A harness side effect with no failing case |
+| 440 | nit (flake) | **declined**, standing from M13: not recurred (every `ci` on `main` from `773ab8f4` to `043180bf` completed success) |
+| 446 | minor | carried. Fake providers reachable from a compose stack; no M19 row builds them |
+| 505 | nit (measurement) | carried. A real CLI; the next dogfood session |
+| 538 | minor, latent | carried. Q118's ratification; the founder's |
+| 555 | nit | carried. A measured frequency from a real launcher run |
+| 556 | minor (flake) | carried. No recurrence in M18 |
+| 570 | minor (flake) | carried. No recurrence in M18 |
+| 587 | tier 3 | carried. Q122's count on a dogfood database |
+| 617 (cluster half) | minor, latent | carried. Its trigger (a project image with pip) has not tripped; no M18 row added an image |
+| 646 | nit | closed by WP-248 (`981b7117`): one expander; the `{1..a}` heap crash it closed is recorded with it. Heading restatement the orchestrator's, with WP-248's row |
+| 648 | nit | **declined** by WP-248 (b)'s split clause, measured: the built readings are per stage, and both the replacement and the union move 3 cells (`echo hi > out; tf apply` with `/usr/bin/terraform`, `ask / auto / deny` → `block`). No row; the heading's restatement is the orchestrator's, with WP-248's row. Its residue is 657 |
+| **652** | **minor** (measured: the open shape needs a planted file) | **→ WP-253** |
+| 653 | minor, latent (and its 15 s nit) | **→ WP-256**, parallel-safe |
+| 654 | minor, latent | **→ WP-254** |
+| 655 | minor expected | **→ WP-255** |
+| **656** (numbered here) | **major, live, policy measured** | **→ WP-252**, first |
+| 657 (numbered here) | nit | **declined**, with a trigger: no production producer of `resolvedBinary` |
+
+**Counts.** Forty-one dispositions: **owned 5** (652, 653, 654, 655, 656 — five rows), **carried
+33** (M18's set, each reason re-read above, brief 2 re-read today), **declined 3** (440 standing;
+648 by measurement; 657 with a trigger). 646 is closed, not counted. **One major is open** (656)
+and its row is first. The only blockers are the two briefs, each with its BLOCKED owner row.
+
+**What unblocks the carried set, and who holds it.** Unchanged from M18: a model credential (brief
+1, 505, 555); a dogfood install with its database reachable (587, 171, 238); an upstream StrykerJS
+release (brief 2); the founder's answers (232, 538); a next occurrence (132, 556, 570, 440); fake
+providers reachable from compose (446); a project image with pip (617's half).
+
+#### Disposition — the open questions
+
+Unchanged from M18, line for line: Q122 carried (no dogfood database in M18); Q120 and Q121 the
+product owner's, with no M19 criterion depending on either; Q118 answered per (a) with 538 hanging
+on it. **No question is new**: what the boundary judges as a fragment and what bash hands for a
+glob are the scanner's contract (TD-030); the census's regex handling is the test strategy's
+(technical/10).
+
+**Could not decide here, and left to the row's measurement:**
+- whether git takes `--namespace '*'` and runs the monitor and the hook behind it (WP-252 (a)'s program half);
+- whether a reader other than the composite skip lets 656's line through (WP-252 (a)'s canary);
+- whether the planted-file glob runs the monitor (WP-253 (a)); the policy half is measured above;
+- whether any backtick spelling reads looser than bash (WP-254 (a)); a yes makes 654 major;
+- whether any of the four 655 sites fails open (WP-255 (a)); a yes makes 655 major.
+
+**Next: WP-252** for a free implementer; no daemon needed. **WP-256** may start beside it in its
+own worktree. Then WP-253, WP-254 and WP-255, serial. The next free migration number is still
+**0092**, and no row takes it.
 
 ## WP notes — session 14 (M10)
 
