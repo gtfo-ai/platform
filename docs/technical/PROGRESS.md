@@ -17615,7 +17615,7 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
 
 **Depends on** nothing.
 
-### 654. **`findClosingParen` counts a `)` inside a backtick substitution toward closing an enclosing `$(…)`/`<(…)`, which bash does not; every measured line already reads `uncertain`, so no fail-open is known** (TODO, **minor**, **latent**. **TD-030 tier 1**: floors read argv *as the shell builds it*. Found by WP-251's implementer and confirmed by its reviewer, session 20 (`#### WP-251`, its *Discovered work* and *Review* paragraphs). Separate from 651: 651 is a `case` word or a comment in the body, this is a backtick. The refiner ran nothing. **No work package owns it.**)
+### 654. **`findClosingParen` counts a `)` inside a backtick substitution toward closing an enclosing `$(…)`/`<(…)`, which bash does not; every measured line already reads `uncertain`, so no fail-open is known** (**RESOLVED** by WP-254, session 20, not yet committed — `findClosingParen` skips a backtick substitution in a command body, unquoted or inside double quotes, to the next unescaped backtick (`backtickEnd`), so its `)` closes nothing, as in bash 5.3.20 and 3.2.57; a backtick never closed in the body, or whose pair spans a newline while a here-document is pending, leaves the body unread (`unreadSubstitutionBody`); `$((…))` keeps its reading. The two measured lines read `ask / git / git` (were `ask / uncertain / uncertain`). The hunt (1 413 616 generated lines and 43 hand-built ones, both bashes) found no spelling looser than bash before the change, so the grade stays minor and the program half did not run. Sweep: 56 002 of 311 570 lines moved, 5 545 toward a run, each equal to the base's reading of the same line with the backtick substitution's `)` or the whole substitution written as a plain word, 0 looser than that reading — a move to bash's own reading, which § "Architect ruling (M19 fifth amendment, session 20)" rules is not the split clause firing; corpus 0. Notes `#### WP-254`. Was: TODO, **minor**, **latent**. **TD-030 tier 1**: floors read argv *as the shell builds it*. Found by WP-251's implementer and confirmed by its reviewer, session 20 (`#### WP-251`, its *Discovered work* and *Review* paragraphs). Separate from 651: 651 is a `case` word or a comment in the body, this is a backtick. The refiner ran nothing. **No work package owns it.**)
 
 **Evidence.** WP-251's implementer, in *Discovered work*: *"`findClosingParen` does not skip a backtick substitution either: a `)` inside `` `…` `` in a `<(…)`/`$(…)` body counts. Policy only, measured: `git --namespace <(echo X) -c core.fsmonitor=/tmp/m status` with `X` a backtick substitution of `echo )`, and its `$(` form, read `ask / uncertain / uncertain` (the early close leaves an unterminated backtick), and bash 5.3.20 hands the `<(` form as `/dev/fd/63`; no fail-open is known."* WP-251's reviewer, in *Review*, hunted base against head over about 110 lines (bash 5.3.20 and 3.2.57): *"nothing looser; the three other `findClosingParen` callers misbound nothing `scan` leaves read."* The orchestrator reports that the reviewer tried several backtick forms and all were denied; the *Review* paragraph does not list them. The matcher is `packages/domain/src/policies/command-policy.ts:5428`.
 
@@ -17759,6 +17759,10 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
 ### 670. **An npm option word that starts with a literal `-` and holds an unquoted glob inside its name is not read by the nopt floor, and reads `allow / allow / allow` in the verification and implementation baselines where the literal option is `hazard`** (TODO, **minor** — the notes' own candidate grade, "by the same control as 660": a non-literal word that needs a planted path. **What is wrong:** the nopt floor reads an option name by its spelling, so a word such as `--<name with a glob>` is not matched to the floored option it can expand to; WP-258's rule does not reach it because ruling (b) reads only a word whose *first* pattern element is a glob, and this word starts with a literal `-`. **Evidence** (`#### WP-258`, *Discovered work* (a), quoted): "such a word reads `allow / allow / allow` in the verification and implementation baselines where the literal option is `hazard`, and with a planted path bash hands the option"; "policy only, no shell measurement beyond this row's". The notes give **no example line** — needs measurement: a concrete spelling (e.g. the floored `--script-shell` with a glob inside its name), its three cells at the base, and the `printf '[%s]'` shell half with the planted path, before the work is understood. **Cost to leave:** a run in the verification or implementation baseline executes an npm hazardous option (`--script-shell=…`) written with a glob inside its name, given a planted file that the glob matches — `allow`, not `ask`. **Done:** an option word of a floored program whose name holds an unquoted `?`, `*`, bracket expression or extglob opener reads `uncertain` (as WP-258 reads a leading glob) in `auto` and `deny`; a quoted or escaped glob reads as today; rows under a describe naming 670 with a canary; the sweep 0 looser. **Depends on:** WP-258 merged (its `globMayBeFloorOption` is the reader to extend). Found by WP-258's implementer, session 20. Owner: **unowned — for the next architect pass**.)
 
 ### 671. **WP-258's over-ask is wider than its ruling's two pinned examples: any unquoted glob before `--` beside any floored program reads `uncertain`** (TODO, **nit** — a TD-030 decision 3 over-ask record, every move toward refusal. **What is wrong:** ruling (c) pinned `rm * /` and `npm test *` as the over-ask; the rule as built makes a glob anywhere before `--` beside every floored program uncertain, including a `path`-kind floor's glob spelling, whose literal spelling runs under `auto`. Working as built; the ruling's record of the over-ask is what is short. **Evidence** (`#### WP-258`, *Discovered work* (b) and (5), quoted): "a glob anywhere before `--` beside any floored program (`git`, `go`, `cargo`, `pytest`, `rg`, `find`, `pip`, `make`, `npm`/`pnpm`/`npx`/`pnpx`, `logcli`, by prefix) is uncertain, including a `path`-kind floor's glob spelling, whose literal spelling runs under `auto`; the corpus holds none and the sweep's 683 are listed in (5)"; "The 683 new refusals are globs given to a floored program or beside a block entry's operands (`git … branch -D *`, `git … log *`, `cargo ? build`, `go * build`)"; corpus "0 of 371 lines of `test/fixtures/commands/*-lines.txt` moved". **Cost to leave:** an unattended run that globs an argument to one of these programs before `--` stops for a person; none in the corpus today, so the cost is unobserved. **Done:** the next architect pass either records the wider over-ask as accepted in WP-258's ruling (the program list and the `path`-floor case named) or rules a narrowing with its own row; trigger to revisit: a corpus line moves. **Depends on:** WP-258 merged. Found by WP-258's implementer, session 20. Owner: **unowned — for the next architect pass**.)
+
+### 672. **A newline inside a backtick in a substitution body is over-read: `` node <(echo `⏎x`) $script `` reads `ask / git / git` where `node <(echo x) $script` reads `ask / auto / deny`** (TODO, **nit** — an over-ask, every move toward refusal; no fail-open. **What is wrong:** a reader after the scanner treats the newline inside the backtick of a process-substitution body as more than the backtick's own text, so the line is refused where the same line without the backtick runs under `auto`. Which reader is not known. **Evidence** (`#### WP-254`, *Discovered work* (a), quoted): "`` node <(echo `⏎x`) $script `` reads `ask / git / git` at the base and the head while `node <(echo x) $script` reads `ask / auto / deny`: a newline inside a backtick in a substitution body is over-read by a reader after the scanner (an over-ask, toward refusal; not traced)." Pre-existing (the base reads it too). Needs measurement: the deciding reader (a canary), and whether other substitution forms (`$(…)`, `>(…)`) and other programs than `node` over-read the same way; the notes give this one line only. **Cost to leave:** an unattended run that writes a multi-line backtick inside a process substitution stops for a person; none known in the corpus (unmeasured). **Done:** the deciding reader named; the line reads its no-backtick sibling's cells, or the over-ask is recorded as accepted under TD-030 decision 3; a row under a describe naming 672. **Depends on:** WP-254 merged. Found by WP-254's implementer, session 20. Owner: **unowned — for the next architect pass**.)
+
+### 673. **`scan`'s backtick branch, `doubleQuoteEnd`, `shellWords` and `isOneExpansion` close a backtick at the next backtick with `indexOf`, ignoring `` \` ``, where bash skips an escaped backtick** (TODO, **minor**, latent — no fail-open known; every such line seen reads `uncertain`. **What is wrong:** four readers in `packages/domain/src/policies/command-policy.ts` find a backtick substitution's end by the next backtick, escaped or not, so a body holding `` \` `` is cut short of bash's reading. **TD-030 tier 1**: the readers are to read the text as bash does. **Evidence** (`#### WP-254`, *Discovered work* (b), quoted): "`scan`'s own backtick branch, `doubleQuoteEnd`, `shellWords` and `isOneExpansion` close a backtick at the next backtick with `indexOf`, escaped or not, where bash skips `` \` ``; every such line seen here read `uncertain` (an unterminated backtick), so no fail-open is known." The notes give no example line and no count. Needs measurement: lines with `` \` `` inside a backtick body (alone, inside `"…"`, inside `$(…)`) through the policy in all three baselines, and the shell half (`printf '[%s]'`) for any that does not read `uncertain`; a cell looser than its bash reading would re-grade this. **Cost to leave:** today an over-ask (`uncertain`) on such lines; the trigger that makes it urgent is a spelling where the early close leaves a balanced remainder, so a reader sees a command bash does not run, or misses one it does. **Done:** the four readers skip `` \` `` as bash does (one shared helper or each fixed), rows under a describe naming 673 with a canary per reader, the sweep 0 looser. **Depends on:** WP-254 merged. Found by WP-254's implementer, session 20. Owner: **unowned — for the next architect pass**.)
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -52195,6 +52199,63 @@ lexer's. No `[unverified]` claim.
 re-grade and 669's owner line are the refiner's to write into the headings**, from this text. **Next:
 WP-262.** No daemon, no migration (still **0092**), no credential.
 
+### Architect ruling (M19 fifth amendment, session 20) — a cell that moves to bash's own reading is the rule working, not the split clause firing
+
+Written 2026-10-22 on WP-254's uncommitted tree at `35f21f06` (WP-258 merged at `4816b3d6`), after
+review round 1. Read-only on source; no test tier, no git write, no Docker. The question is the
+reviewer's: WP-254's split clause says *"if the backtick state moves any sweep cell toward `allow`,
+the state is declined"*, unqualified, and the state moves **5 545 sweep lines (33 270 cells)**
+`ask / uncertain / uncertain` → `ask / auto / deny`. The implementer read the clause as "toward
+`allow` past bash's reading" (notes `#### WP-254`, (4)); the reviewer ruled that reading
+inadmissible — the clause carries no qualifier, the third amendment wrote its qualifier out, and
+WP-246/247 kept bash-equal loosenings as named exceptions — and verified the substance.
+
+**The evidence, the reviewer's own.** A seeded stratified sample of **296** of the 5 545 (19 strata):
+each line's head cell equals the base's reading of its bash-equivalent line (the backtick's `)` written
+`x`, or the whole pair written `x`); **584** shell runs, bash 5.3 and 3.2, `printf`/`echo` only, end
+the outer substitution where the equivalent does — 13 differ in an empty value only, none in a parse
+error. With the implementer's full count (every one of the 5 545 equal to that reading, 0 looser) the
+fact is settled twice: no moved cell is looser than bash.
+
+**Ruling: (b). The split clause is amended with the third amendment's qualifier; the code stands.**
+
+1. **The reviewer was right about the text, and the remedy is to amend it, not to read it.** A clause
+   is applied as written; an implementer who reads a qualifier into it has decided a question that was
+   the architect's. So the qualifier is written into the row now, and the notes' *Assumption (the split
+   clause)* becomes a citation of this ruling.
+2. **TD-030 decision 3 makes the split clause the fallback for a narrowing, not a veto over tier 1.**
+   *"The fail-closed form ships and the narrowing is the split clause."* WP-254's rule is not a
+   narrowing: it is bash's grammar for the backquoted form (tier 1, *command and process
+   substitution*), and the M19 ruling scheduled it because *"TD-030 decision 3 asks for the structural
+   rule, not a reliance."* Option (a) would ship exactly the reliance that ruling refused — a divergence
+   from bash held safe only by the unterminated-backtick check — and pin 5 545 lines at a reading the
+   shell never makes.
+3. **The cells that move were over-asks, and decision 3 prices an over-ask, it does not protect one.**
+   Each `uncertain` came from the early close manufacturing an unterminated backtick that bash never
+   sees. A cell that moves to bash's reading of the same line is the same move the third amendment
+   allowed (*"cells that move toward `allow`, each equal to bash's reading"*) and the same guard holds:
+   **a move toward `allow` not equal to bash's reading is a defect, not a price.** None moved to
+   attended `allow`; every one stops at `ask / auto / deny`, which is the base's cell for the
+   equivalent line.
+4. **WP-246/247's named exceptions are not a precedent against this.** There the site kept a dequote
+   because removing it loosened a cell *with no measured equality to bash* at the time; the exception
+   was the cautious answer to an unmeasured move. Here the move is measured both by the full sweep and
+   by an independent sample under two bashes.
+
+**Declined:** (a). It is the safe-looking option, but it keeps a known divergence from tier 1 and buys
+no refusal bash would make.
+
+**What the implementer changes before the row is committed** (docs only; no source, no row, no
+canary):
+- notes `#### WP-254`, (4): the sentence *Assumption (the split clause) …* is replaced by one citing
+  this ruling, and the reviewer's sample (296 lines, 19 strata, 584 runs, the 13 empty-value
+  differences, the scratch path) is recorded beside the implementer's count;
+- backlog **654**'s resolution text names this ruling after *"0 looser than that reading"*.
+
+**Decisions.** None written or amended: TD-030 decision 3 already says the split clause is the
+fallback, and tier 1 is bash's grammar. No `[unverified]` claim. **Next:** WP-254 to commit after
+the two edits above and the rest of review round 1's findings, then WP-255.
+
 ## WP notes — session 14 (M10)
 
 #### WP-162
@@ -60742,3 +60803,110 @@ is `attended / auto / deny`, the same in all three baselines unless stated. Scra
   `notices:check`, `ignored:check`, `nul:check`, `conflict:check`, `data-model:check`, `hooks:check`,
   `typecheck`, `bundle:check`, `test` (16 518 passed, 19 skipped) and `coverage:ratchet` each exit 0 /
   `PASS`; `vitest run scripts/citations.test.ts --project unit`: 13 passed.
+
+#### WP-254 — a `)` inside a backtick substitution never closes the substitution around it (backlog 654)
+
+Built on `main` at `35f21f06` (WP-258's merge `4816b3d6` plus docs), session 20. Not committed. A cell
+is `attended / auto / deny`, the same in all three baselines unless stated; `⏎` is a newline and *T*
+the tail `-c core.fsmonitor=/tmp/m status`. Scratch: `…/scratchpad/wp254/` (`bin/` holds every script
+named below; `base/` is `git archive 35f21f06` of `packages` and `scripts`, `own/` a whole-tree copy
+for the canaries).
+
+- **(1) Measured first, before any change — the hunt ruling (a) asks for.** Cells (`bin/cell.mjs`
+  against `base/`) and shell facts (`bin/oracle.mjs`: the line with `git` replaced by `printf '[%s]'`,
+  one `bash --norc --noprofile -c` per line, empty environment, stdin `/dev/null`, in a fresh empty
+  directory, bash 5.3.20 and `/bin/bash` 3.2.57; inner commands `echo`, `:` and a missing `x` only).
+  A line is a **fail-open** when the policy's read-only `auto` rule is not a refusal and either bash
+  hands `[--namespace][<one word>][-c][core.fsmonitor=/tmp/m][status]`.
+  **Hand-built (43 lines, `bin/hand.mjs` and four probes):** the two measured lines `git --namespace
+  <(echo `` `echo )` ``) T` and its `$(` form read `ask / uncertain / uncertain` (*a backtick
+  substitution is never closed*); a second pair, a quoted `` '`' `` before the pair, a `(` inside it,
+  a pair across a newline, a pair on a here-document's operator line, `>(`, `> out` in front and
+  `"$(…)"` the same; `` "`echo ")"`" `` inside the body `uncertain` (an unbalanced quote too); an
+  escaped backtick (`` <(echo \`echo ) ``), a quoted or escaped `)` inside the pair and an empty pair
+  `ask / git / git`; `` echo `echo )` `` at the top level `ask / auto / deny`. Both bashes hand
+  `[--namespace][/dev/fd/63][-c][core.fsmonitor=/tmp/m][status]` for every `<(`/`>(` form and zero
+  words for the `$(` form (the inner `echo )` is a syntax error), `[)]` for `` $(echo `echo ')'`) ``,
+  and refuse an unterminated pair at parse. **Generated (`bin/hunt.mjs`, `<(` and `$(` around every
+  body before *T*):** 11 tokens (`` ` ``, `` \` ``, `)`, `(`, `"`, `'`, `x`, a blank, `echo `, `;`,
+  `\`) up to 5 — 354 312 lines, 15 780 not refused; the same with three whole backtick chunks added, up
+  to 4 — 82 742 lines, 1 866; five tokens (`` ` ``, `` \` ``, `)`, `"`, `x`) up to 8 — 976 562 lines,
+  35 136. Every one of the 52 782 lines not refused was asked of both bashes: **0 fail-opens** — each
+  is a stray `)` that bash refuses at parse, or a `$(` that hands zero words. **No spelling read looser
+  than bash, so 654 stays minor and the program half did not run.** At the row's head the three
+  candidate sets are byte-identical to the base's.
+- **(2) The change** (`command-policy.ts`). `findClosingParen`, given `hereDocuments` (every caller
+  but `scan`'s `$((…))` branch), meets a backtick unquoted or inside double quotes and skips to the
+  next unescaped backtick (`backtickEnd`: a `\` escapes the next character, as bash reads the
+  backquoted form — bash manual, *Command Substitution*), so a `)` inside closes nothing. A backtick
+  never closed, or whose pair spans a newline while a here-document is pending (where its body would
+  start), is read as before, a plain character, and adds `UNCERTAINTY.unreadSubstitutionBody` given
+  the set (WP-251's reason, its text widened to name the backtick). An escaped backtick outside a pair
+  is consumed by the existing `\` branch first, so it opens nothing. `$((…))` keeps its reading.
+  **Assumption (ruling (c)):** the row expected the `$(` measured line to read `uncertain` from WP-250's
+  `splits`; it reads `ask / git / git`, exactly as the base reads `git --namespace $(echo x) T` and
+  `` $(echo `echo x`) `` (both refusals; recorded rather than forced).
+- **(3) Rows and cells** (`unattended-commands.test.ts`, describe *WP-254, backlog 654*, 25 cases,
+  three baselines): `ask / uncertain / uncertain` → `ask / git / git` with no reason left — the two
+  measured lines, `>(`, `> out` in front, `"$(…)"`, the second pair, the quoted `` '`' ``, the `(`
+  inside, `` "`echo ")"`" ``, the pair across a newline, the pair on a here-document operator line.
+  **↑ toward `allow`:** `` echo $(echo `echo )`) `` and `` diff <(echo `echo )`) <(true) ``
+  `ask / uncertain / uncertain` → `ask / auto / deny`, each row also asserting the base's reading of
+  its `echo x` form, which it now equals. With `unreadSubstitutionBody`: the unterminated `<(`/`$(`
+  forms (uncertain → uncertain, the reason added), `` <(`\`) `` `ask / git / git` → `ask / uncertain /
+  uncertain` (toward refusal; both bashes refuse it at parse), the here-document pair across a newline
+  (uncertain → uncertain). Controls unchanged: the two escaped-backtick lines, `')'`, `\)` and the
+  empty pair `ask / git / git`; `` echo `echo )` `` `ask / auto / deny`; `` $(( `echo )` )) `` and
+  `` $(( `echo ))` )) `` uncertain with their reasons pinned. WP-251's rows and controls unchanged.
+- **Canaries** (`bin/canary.py`: each alone on `own/`'s copy of `command-policy.ts`, restored from
+  `keep/<name>.keep` and `cmp`-checked against it and against the checkout; `vitest run --root own
+  packages/domain/src/policies --project unit`, calibrated unmutated at **8 failed**, the git-tree
+  censuses `own/` cannot satisfy, so a canary's count is beyond 8): backtick state removed → 17 (every
+  moved row); an escaped backtick an opener → 2 (both escaped controls); the double-quote half removed
+  → 1; the unterminated reason dropped → 4; the here-document guard dropped → 1; the state applied to
+  `$((…))` → 1 (the `` $(( `echo ))` )) `` row, added after a first run found none); escapes ignored
+  inside a pair → 1 (the `` <(`\`) `` row, added after `bin/mutdiff.mjs` found 17 858 lines that
+  differ and the first run found none). **None survived.**
+- **(4) The sweep** (`bin/lines254.mjs`, `bin/sweep.mjs`, `bin/sweep-ref.mjs`): WP-251 (d)'s
+  construction with 22 backtick bodies added (each in `<(`, `>(`, `$(`, plus `"$(…)"` and two `$((…))`
+  forms) and WP-253's sweep set (its `B.ndjson`'s lines) — 1 413 925 lines, read at the base. A line with
+  no backtick never reaches the new branch and is answered alike by construction; the 300 258 that hold
+  one, and every hundredth other line (11 312), were read at the head. **56 002 lines moved, all with
+  a backtick; 0 of the sample.** 34 484 `uncertain` → `git`, 8 269 → `hazard`, 7 704 → `block`
+  (refusals both sides); **5 545 `ask / uncertain / uncertain` → `ask / auto / deny`** (33 270 cells
+  toward a run). Each of the 5 545 equals the base's reading of a bash-equivalent line: 3 943 the same
+  line with the backtick's `)` written `x`, the other 1 602 (a comment, `` `: # )` ``, or a newline,
+  `` `⏎)` ``, inside the pair) the same line with the whole substitution written as the word `x`; **0
+  looser than that reading.** Both bashes hand `[a][/dev/fd/63][z]` for `` a <(echo `: # )`) z `` and
+  `` a <(echo `⏎)`) z ``, and `[a][z]` for their `$(` forms: inside a pair the `)` closes nothing in
+  either shell, so WP-251's disagreement does not arise there. **The split clause did not fire:** a
+  move toward `allow` that equals bash's own reading is the rule working, as ruled in § "Architect
+  ruling (M19 fifth amendment, session 20)" (option (b); the plan row's clause carries WP-260's
+  qualifier). **The reviewer's sample** (round 1): 296 of the 5 545 toward-run lines, seed 254, 19
+  strata, each equal to the base's reading of a bash-equivalent line; 584 shell runs on bash 5.3 and
+  3.2 — 571 end the outer substitution where the equivalent does, 13 `$(` lines differ in an empty
+  value only, no parse errors; evidence in `…/scratchpad/reviewer-wp254/`. **Corpus diff:** 0
+  (`command-corpus.test.ts` green in `own/` and in `test`).
+- **(5) Docblocks**: `findClosingParen` (its first paragraph's "counts every unquoted `)`" bounded,
+  a paragraph for the backtick rule), `backtickEnd` (new), `UNCERTAINTY.unreadSubstitutionBody` (its
+  text and docblock name the backtick); `04-agent-runtime.md` one sentence after WP-251's. 654 restated
+  as resolved.
+- **Sentences falsified** (rule 83; grep for *findClosingParen*, *counts every*, *backtick*,
+  *unreadSubstitutionBody* and 654's *counts a `)` inside a backtick* over `packages/domain/src`, `04`,
+  `05`): `findClosingParen`'s "It counts every unquoted `)` outside a here-document body" — bounded;
+  `unreadSubstitutionBody`'s text "holds a case command or a comment" — widened. Confirmed still true:
+  WP-251's test docblock "counts every `)` outside quotes and here-document bodies" (it states what
+  the matcher did when 651 was found); 04's "the scanner's matcher has no case-pattern or comment
+  state"; 05's WP-153 sentence. TD-030 does not name the matcher.
+- **Discovered work.** (a) `` node <(echo `⏎x`) $script `` reads `ask / git / git` at the base and the
+  head while `node <(echo x) $script` reads `ask / auto / deny`: a newline inside a backtick in a
+  substitution body is over-read by a reader after the scanner (an over-ask, toward refusal; not
+  traced). (b) `scan`'s own backtick branch, `doubleQuoteEnd`, `shellWords` and `isOneExpansion` close a
+  backtick at the next backtick with `indexOf`, escaped or not, where bash skips `` \` ``; every such
+  line seen here read `uncertain` (an unterminated backtick), so no fail-open is known. Neither filed.
+- **Verify** (the person's untracked `.claude/` directories left in place, so `verify`'s `lint` step was
+  not run whole; each step alone): `biome check` over the two changed sources exit 0 (no diagnostic in
+  a changed line); `schemas:check`, `notices:check`, `ignored:check`, `nul:check`, `conflict:check`,
+  `data-model:check`, `hooks:check`, `typecheck`, `bundle:check`, `test` (16 544 passed, 19 skipped)
+  and `coverage:ratchet` each exit 0 / `PASS`; `vitest run scripts/citations.test.ts --project unit`:
+  13 passed.

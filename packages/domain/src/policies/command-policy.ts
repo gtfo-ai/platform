@@ -265,10 +265,11 @@ export const UNCERTAINTY = {
    * WP-251 (backlog 651): the substitution matcher (`findClosingParen`) has no `case` pattern and
    * no comment state, so a pattern's `)` or a `)` in a comment closed `<(…)`/`$(…)` early and a
    * git option after it went unseen. bash 5.3.20 and 3.2.57 disagree on both constructs
-   * (measured), so the body is not read rather than parsed one bash's way.
+   * (measured), so the body is not read rather than parsed one bash's way. WP-254 (backlog 654):
+   * a backtick in the body that is never closed is not read either.
    */
   unreadSubstitutionBody:
-    'a command or process substitution whose body holds a case command or a comment, where the shells disagree on which ) closes it — move the case or the comment out of the substitution; the platform does not read a substitution body that holds either',
+    'a command or process substitution whose body holds a case command, a comment or a backtick that is never closed, where the shells disagree on which ) closes it — move the case, the comment or the backtick out of the substitution; the platform does not read a substitution body that holds any of them',
   unterminatedBacktick: 'a backtick substitution is never closed',
   ansiCQuoting: "ANSI-C quoting ($'…'), whose escapes change what the shell sees",
   arithmetic: 'arithmetic expansion ($((…))), whose result can become a command',
@@ -5476,10 +5477,11 @@ const feedsScriptReader = (segment: BashText): boolean => {
 /**
  * Index of the `)` closing the `(` at `openIndex`, honouring quotes, or -1 when unbalanced.
  *
- * It counts every unquoted `)` outside a here-document body: it has no `case` pattern state and no
- * comment state, so `<(case x in x) …` and `<(: # )⏎)` close early (backlog 651). Given `unread`
- * (`scan`'s command and process substitutions — never `$((…))`, where `case` is a variable name,
- * `$(( case + 1 ))`; the `#` of a base, `16#ff`, follows a digit and starts no comment anyway), a
+ * It counts every unquoted `)` outside a here-document body and a backtick substitution (below):
+ * it has no `case` pattern state and no comment state, so `<(case x in x) …` and `<(: # )⏎)`
+ * close early (backlog 651). Given `unread` (`scan`'s command and process substitutions — never
+ * `$((…))`, where `case` is a variable name, `$(( case + 1 ))`; the `#` of a base, `16#ff`,
+ * follows a digit and starts no comment anyway), a
  * body holding an unquoted `case` word or a `#` that starts a comment between the open and the
  * close it finds adds `UNCERTAINTY.unreadSubstitutionBody`, so the early close is never read.
  * Where a `#` or a `case` word starts is {@link WordStart}'s answer (WP-259), so `$(ls a\⏎# x)` and
@@ -5487,6 +5489,15 @@ const feedsScriptReader = (segment: BashText): boolean => {
  * same rule. Its record of each `(` is exact for `$(`, `<(`, `>(` and `a=(`; a `case` pattern's
  * `)` in the body pops the record of an open `(` it does not close, but the `case` word before it
  * has added the reason by then.
+ *
+ * A backtick substitution in a command body, unquoted or inside double quotes, is skipped to the
+ * next unescaped backtick, so a `)` in it closes nothing (WP-254, backlog 654; bash manual,
+ * *Command Substitution*, the backquoted form): `` <(echo `echo )`) `` closes at its last `)`,
+ * as in bash 5.3.20 and 3.2.57 (measured). An escaped backtick opens nothing. A backtick that is
+ * never closed — or whose pair spans a newline while a here-document is pending, where its body
+ * would start — is read as before, a plain character, and adds `unreadSubstitutionBody` given
+ * `unread`.
+ * `$((…))` (no `hereDocuments`) keeps its reading: a backtick's `)` still counts there.
  */
 const findClosingParen = (
   text: string,
@@ -5509,6 +5520,16 @@ const findClosingParen = (
       readInsideWord(words);
       index += 1;
       continue;
+    }
+    // A backtick substitution (WP-254): `hereDocuments` tells `$((…))` apart, read as before.
+    if (hereDocuments && char === '`' && quote !== "'") {
+      const close = backtickEnd(text, index);
+      if (close !== -1 && !(pending.length > 0 && text.slice(index, close).includes('\n'))) {
+        index = close;
+        readInsideWord(words);
+        continue;
+      }
+      unread?.add(UNCERTAINTY.unreadSubstitutionBody);
     }
     if (quote !== null) {
       if (char === quote) {
@@ -5568,6 +5589,18 @@ const findClosingParen = (
       if (depth === 0) {
         return index;
       }
+    }
+  }
+  return -1;
+};
+
+/** Index of the backtick closing the one at `openIndex` (a `\` escapes the next one), or -1. */
+const backtickEnd = (text: string, openIndex: number): number => {
+  for (let index = openIndex + 1; index < text.length; index += 1) {
+    if (text[index] === '\\') {
+      index += 1;
+    } else if (text[index] === '`') {
+      return index;
     }
   }
   return -1;

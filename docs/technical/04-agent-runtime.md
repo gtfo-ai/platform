@@ -548,7 +548,10 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   went unseen (bash 5.3.20 ran the monitor, measured on a scratch repository; 3.2.57 refuses the
 >   `case` form and closes `<(` at the comment's `)`), and the line is uncertain
 >   (`unreadSubstitutionBody`) — `echo $(echo case)` reading uncertain is the stated over-ask, and
->   `$((…))`, where `case` is a variable name (`$(( case + 1 ))`), is never such a body. A `#`
+>   `$((…))`, where `case` is a variable name (`$(( case + 1 ))`), is never such a body. The
+>   matcher skips a backtick substitution in a command body, unquoted or inside double quotes, to
+>   the next unescaped backtick, so its `)` closes nothing, as in bash (WP-254, backlog 654); a
+>   backtick in the body that is never closed leaves the body unread for the same reason. A `#`
 >   opens a comment only where bash begins a word (WP-259, backlogs 661 and 663): after a blank
 >   (space or tab), a newline or an operator character, with any line continuation between them
 >   removed, and never after the `)` of `$(…)`, `$((…))`, `<(…)`, `>(…)` or `a=(…)`, nor after an

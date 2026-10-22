@@ -6810,6 +6810,88 @@ describe('WP-251, backlog 651: a substitution body holding a case word or a comm
 });
 
 /**
+ * WP-254 (backlog 654): `findClosingParen` kept no backtick state, so a `)` inside `` `…` `` in a
+ * `<(…)`/`$(…)` body closed it early and the rest read as the outer command — `git --namespace
+ * <(echo `echo )`) -c core.fsmonitor=/tmp/m status` read `ask / uncertain / uncertain` only because
+ * the cut left an unterminated backtick. bash 5.3.20 and 3.2.57 hand it `[--namespace][/dev/fd/63][-c]
+ * [core.fsmonitor=/tmp/m][status]`: the backquoted form runs to the next unescaped backtick (bash
+ * manual, *Command Substitution*), so that `)` closes nothing. No spelling read looser than bash
+ * before the change (the hunt in PROGRESS `#### WP-254`).
+ */
+describe('WP-254, backlog 654: a ) inside a backtick substitution never closes the substitution around it', () => {
+  const tail = '-c core.fsmonitor=/tmp/m status';
+  it.each([
+    `git --namespace <(echo \`echo )\`) ${tail}`,
+    `git --namespace >(echo \`echo )\`) ${tail}`,
+    `git > out --namespace <(echo \`echo )\`) ${tail}`,
+    // bash hands zero words here (the inner `echo )` is a syntax error), so `-c` is the namespace;
+    // the git boundary refuses it as it refuses `$(echo \`echo x\`)`, which is one word.
+    `git --namespace $(echo \`echo )\`) ${tail}`,
+    `git --namespace "$(echo \`echo )\`)" ${tail}`,
+    // A second pair, a quoted backtick before the pair, a `(` inside it.
+    `git --namespace <(echo \`echo )\` \`echo )\`) ${tail}`,
+    `git --namespace <(echo '\`' \`echo )\`) ${tail}`,
+    `git --namespace <(echo \`echo (\`) ${tail}`,
+    // Inside double quotes a backtick is a substitution too, and its own quotes are its own.
+    `git --namespace <(echo "\`echo ")"\`") ${tail}`,
+    // A backtick pair across a newline, and one on a here-document's operator line.
+    `git --namespace <(echo \`\n)\`) ${tail}`,
+    `git --namespace <(cat <<E \`echo )\`\nx\nE\n) ${tail}`,
+  ])('%j reads the git boundary refusal in every baseline', (command) => {
+    expectCells(command, 'ask / git / git');
+    expect(auto(command).evaluation.uncertainty).toEqual([]);
+  });
+
+  // Toward `allow`, each as the base read the same line with the backtick's `)` written `x`.
+  it.each(['echo $(echo `echo )`)', 'diff <(echo `echo )`) <(true)'])(
+    '%j reads ask / auto / deny in every baseline',
+    (command) => {
+      expectCells(command, 'ask / auto / deny');
+      expectCells(command.replace('echo )', 'echo x'), 'ask / auto / deny');
+    },
+  );
+
+  it.each([
+    // An unterminated backtick leaves the body unread.
+    `git --namespace <(echo \`echo )) ${tail}`,
+    `git --namespace $(echo \`echo )) ${tail}`,
+    // An escaped backtick inside a pair closes nothing, so this one never closes (both bashes
+    // refuse the line at parse).
+    `git --namespace <(\`\\\`) ${tail}`,
+    // A backtick pair across a newline while a here-document is pending is not skipped.
+    `git --namespace <(cat <<E \`\n)\nE\n\`) ${tail}`,
+  ])('%j reads ask / uncertain / uncertain in every baseline, with the reason', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toContain(UNCERTAINTY.unreadSubstitutionBody);
+  });
+
+  it.each([
+    // An escaped backtick opens nothing: the `)` closes the substitution, as in bash.
+    [`git --namespace <(echo \\\`echo ) ${tail}`, 'ask / git / git'],
+    [`git --namespace $(echo \\\`echo ) ${tail}`, 'ask / git / git'],
+    // A `)` quoted or escaped inside the backticks, and an empty pair.
+    [`git --namespace <(echo \`echo ')'\`) ${tail}`, 'ask / git / git'],
+    [`git --namespace <(echo \`echo \\)\`) ${tail}`, 'ask / git / git'],
+    [`git --namespace <(echo \`\`) ${tail}`, 'ask / git / git'],
+    // At the top level the scanner's own backtick reading is unchanged.
+    ['echo `echo )`', 'ask / auto / deny'],
+  ])('control: %j keeps %s in every baseline', (command, expected) => {
+    expectCells(command, expected);
+    expect(auto(command).evaluation.uncertainty).not.toContain(UNCERTAINTY.unreadSubstitutionBody);
+  });
+
+  // `$((…))` is not changed: its matcher still counts the backtick's `)`, so `echo $(( `echo ))` ))`
+  // still closes inside the backticks and leaves one unterminated.
+  it.each([
+    ['echo $(( `echo )` ))', [UNCERTAINTY.arithmetic]],
+    ['echo $(( `echo ))` ))', [UNCERTAINTY.arithmetic, UNCERTAINTY.unterminatedBacktick]],
+  ])('an arithmetic expansion keeps its reading: %j', (command, reasons) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toEqual(reasons);
+  });
+});
+
+/**
  * WP-247, backlog 647: `commandNameWalk` — the wrapper grammar walk the block peel reads for its
  * starts (`walkCommandStarts`' skipped words) and for a program an option names (`argv0Candidates`'
  * attached command) — reads the argv reading's words as handed, as WP-245 made the block-entry
