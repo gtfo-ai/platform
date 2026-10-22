@@ -7149,3 +7149,137 @@ describe('WP-257, backlog 659: an extended-glob opener is uncertain wherever it 
     },
   );
 });
+
+/**
+ * WP-259 (backlogs 661 and 663): a `#` opens a comment only where bash begins a word — the walk's
+ * own state, carried forward (`WordStart` in `command-policy.ts`). A line continuation is removed
+ * text, so `ls a\⏎#;sudo id` is the word `a#` and then `sudo id` (it read `allow`), and the `)` of
+ * `$(…)`, `$((…))`, `<(…)` or `>(…)` ends no word, so `ls $(echo a)#;rm -rf /` hides nothing (it
+ * read `auto`). Measured with `printf` under bash 5.3.20 and 3.2.57: the second command ran in each.
+ * `⏎` is a newline below.
+ */
+describe('WP-259, backlogs 661 and 663: a # begins a comment only where bash begins a word', () => {
+  const C = '\\\n';
+  const tail = 'core.fsmonitor=/tmp/m status';
+  /** The cell of `command` in every baseline equals the cell of the line as bash reads it. */
+  const expectJoined = (command: string, joined: string) => {
+    for (const [name, given] of Object.entries(BASELINES)) {
+      expect(cell(command, given), name).toBe(cell(joined, given));
+    }
+  };
+
+  it.each([
+    // 661: a continuation after a word is removed text, never the blank before a `#`.
+    `ls a${C}#;sudo id`,
+    `git status a${C}#;sudo id`,
+    `ls a${C}${C}#;sudo id`,
+    `ls a${C}#;rm -rf /`,
+    `X=a${C}#;sudo id`,
+    `ls >a${C}#;sudo id`,
+    `ls >&a${C}#;sudo id`,
+    `echo $(ls a${C}#;sudo id)`,
+    // 663: the `)` of a substitution ends no word.
+    `ls $(echo a)#;rm -rf /`,
+    `x=$(echo a)#;sudo id`,
+    `git status $(echo a)#;git push --force`,
+    `ls >(cat)#;rm -rf /`,
+    `ls <(true)#;sudo id`,
+    `ls $(echo a)${C}#;sudo id`,
+    `ls >(cat)${C}#;rm -rf /`,
+    // Nor does an array assignment's `)` (measured: `a=(1 2)#;echo RAN` ran `echo`).
+    'a=(1 2)#;sudo id',
+    // An escaped blank, and the characters bash keeps inside a word, are no blank (measured).
+    'ls a\\ #;sudo id',
+    'ls a\r#;sudo id',
+    'ls a\v#;sudo id',
+    'ls a\f#;sudo id',
+    'ls a #;sudo id',
+    // A substitution or a backtick is lifted out of the segment text, which then must not read the
+    // `#` after it as a comment either (the pipe pass and the here-document's script reader).
+    'ls $(x)#|sudo id',
+    'ls `x`#|sudo id',
+    'ls $(x)$(y)#|sudo id',
+    `ls $(x)${C}#|sudo id`,
+    '$(x)#|sudo id',
+    'ls $(x)#|sh <<EOF\nsudo id\nEOF',
+    'ls `x`#|sh <<EOF\nsudo id\nEOF',
+    'echo $(ls $(x)#|sudo id)',
+    // A split the scanner makes inside a word (a continuation between `$` and `(`) starts a segment
+    // whose first `#` is not a comment either.
+    `ls $${C}(x)#|sudo id`,
+    `ls $${C}(x)#|sh <<EOF\nsudo id\nEOF`,
+  ])('%j reads block / block / block in every baseline', (command) => {
+    expectCells(command, 'block / block / block');
+  });
+
+  it.each([
+    [`ls a${C}#|sh`, 'ls a#|sh', 'ask / uncertain / uncertain'],
+    ['ls $((1))#;rm -rf /', 'ls 1#;rm -rf /', 'block / block / block'],
+    [`git -C a${C}# ${C}-c ${tail}`, `git -C a# -c ${tail}`, 'ask / git / git'],
+    // The exact half: each was `block` or `uncertain` because a comment was read where bash reads a
+    // word, and now reads the line as bash does — a cell toward `allow`, equal to the joined line's.
+    [`ls a${C}# x ${C}sudo id`, 'ls a# x sudo id', 'allow / allow / allow'],
+    [`ls a${C}# <<EOF\nsudo id\nEOF`, 'ls a# <<EOF\nsudo id\nEOF', 'allow / allow / allow'],
+    [`ls $(echo a)# x ${C}sudo id`, 'ls $(echo a)# x sudo id', 'ask / auto / deny'],
+    [
+      'ls $(echo a)# x <<EOF\nsudo id\nEOF',
+      'ls $(echo a)# x <<EOF\nsudo id\nEOF',
+      'ask / auto / deny',
+    ],
+    [
+      'ls $((1))# <<EOF\nsudo id\nEOF',
+      'ls $((1))# <<EOF\nsudo id\nEOF',
+      'ask / uncertain / uncertain',
+    ],
+    [`echo $(ls a${C}# x)`, 'echo $(ls a# x)', 'ask / auto / deny'],
+    ['echo $(ls $(echo a)# x)', 'echo $(ls $(echo a)# x)', 'ask / auto / deny'],
+    ['echo $(ls <(true)# x)', 'echo $(ls <(true)# x)', 'ask / auto / deny'],
+    // `$(\⏎(` is `$((` once the continuation is removed: an arithmetic expansion.
+    [
+      `ls $(${C}(1))# <<EOF\nsudo id\nEOF`,
+      'ls $((1))# <<EOF\nsudo id\nEOF',
+      'ask / uncertain / uncertain',
+    ],
+  ])('%j reads the cells of %j as bash joins it: %s', (command, joined, expected) => {
+    expectCells(command, expected);
+    expectJoined(command, joined);
+  });
+
+  it('a continued word ahead of an extended glob is the opener WP-257 refuses', () => {
+    const command = `git --namespace a${C}#@(+c|-c) ${tail}`;
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toContain(UNCERTAINTY.extendedGlob);
+  });
+
+  it('a body the matcher may close early at a comment after a jumped newline stays unread', () => {
+    // The here-document's line has a newline inside quotes, so its body is not skipped there and
+    // the `#` that starts the next line is a comment (`findClosingParen`'s newline).
+    expectCells('echo $(cat <<EOF "a\nb"\n# ) x\nEOF\n)', 'ask / uncertain / uncertain');
+  });
+
+  it.each([
+    // A continuation after a blank: the `#` still begins a word, and a `\` in a comment is text.
+    [`ls ${C}#;sudo id`, 'allow / allow / allow'],
+    [`ls ${C}${C}#;sudo id`, 'allow / allow / allow'],
+    [`ls ${C}# x ${C}sudo id`, 'block / block / block'],
+    [`ls ${C}# <<EOF\nsudo id\nEOF`, 'block / block / block'],
+    // An escaped backslash, then a real newline: a comment.
+    ['ls a\\\\\n#;sudo id', 'ask / auto / deny'],
+    // A subshell's `)` ends a word (`(ls)#;sudo id` is an over-ask: bash runs only `ls`).
+    [`(ls)# x ${C}sudo id`, 'block / block / block'],
+    ['(ls)#;sudo id', 'ask / auto / deny'],
+    ['((1))#;sudo id', 'ask / uncertain / uncertain'],
+    ['case x in x)#;sudo id\nesac', 'ask / auto / deny'],
+    [`ls # x ${C}sudo id`, 'block / block / block'],
+    ['ls a#;sudo id', 'block / block / block'],
+    ['ls a\t#;sudo id', 'allow / allow / allow'],
+    [`echo "a${C}#";sudo id`, 'block / block / block'],
+    [`ls 'a${C}'#;sudo id`, 'block / block / block'],
+    ['ls `echo a`#;sudo id', 'block / block / block'],
+    ['ls "a"#;sudo id', 'block / block / block'],
+    // After a redirection operator a `#` begins a word (bash: a syntax error).
+    [`ls 2>${C}#;sudo id`, 'ask / auto / deny'],
+  ])('control: %j keeps %s in every baseline', (command, expected) => {
+    expectCells(command, expected);
+  });
+});

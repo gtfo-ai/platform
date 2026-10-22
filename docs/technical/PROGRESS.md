@@ -17734,17 +17734,19 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
 **Depends on** WP-257 landing (the extglob element and the same scanner). Serial on `command-policy.ts` and `unattended-commands.ts` before WP-254 and WP-255; WP-254's base moves to WP-258's merge.
 
 
-### 661. **`startsComment` reads the newline of a line continuation as a blank, so `a\⏎#…` is taken as a comment where bash reads the one word `a#…`: `ls a\⏎#;sudo id` reads `allow_list` and bash runs `sudo id`** (TODO, **blocker**: a live fail-open to `allow` on `main`, pre-existing — WP-257's diff does not touch the reader. **TD-030 tier 1**: bash removes a continuation before it reads words. Found by WP-257's round-4 reviewer, session 20 (`#### WP-257`, *Review*). Owned by **WP-259** (M19 second amendment), with 663.)
+### 661. **`startsComment` reads the newline of a line continuation as a blank, so `a\⏎#…` is taken as a comment where bash reads the one word `a#…`: `ls a\⏎#;sudo id` reads `allow_list` and bash runs `sudo id`** (**RESOLVED** by WP-259, session 20, not yet committed — every reader that decides where a comment begins (`scan`, `joinQuotedContinuations`, `findClosingParen`, `readShellContext`) carries one forward word-start state (`WordStart` in `command-policy.ts`) on which a line continuation (`isContinuationAt`) changes nothing; `ls a\⏎#;sudo id`, `git status a\⏎#;sudo id`, `ls a\⏎\⏎#;sudo id`, `ls a\⏎#;rm -rf /`, `X=a\⏎#;sudo id` and `ls >a\⏎#;sudo id` read `block / block / block` in all three baselines (were `allow / allow / allow`, or `ask / auto / deny` for the last two), `ls a\⏎#|sh` reads its joined form's `ask / uncertain / uncertain`, and the controls `ls \⏎#;sudo id` (`allow`) and `ls \⏎# x \⏎sudo id` (`block`) keep their cells; the deciding reader was `scan` (canary). Notes `#### WP-259`. Was: TODO, **blocker**: a live fail-open to `allow` on `main`, pre-existing — WP-257's diff does not touch the reader. **TD-030 tier 1**: bash removes a continuation before it reads words. Found by WP-257's round-4 reviewer, session 20 (`#### WP-257`, *Review*). Owned by **WP-259** (M19 second amendment), with 663.)
 
 - **The reader.** `startsComment` in `packages/domain/src/policies/command-policy.ts` (about line 2683), used by `scan`'s comment branch and by `joinQuotedContinuations`, treats the newline of `\⏎` as the blank before a `#`.
 - **Measured** by the reviewer: `bash -c $'echo a\\\n#;echo RAN'` prints `a#` and then `RAN` under bash 3.2.57 and 5.3.20. `ls a\⏎#;sudo id` and `git status a\⏎#;sudo id` read `allow_list`. The same flaw hides an extended-glob opener (`git --namespace a\⏎#@(+c|-c) …` reads `unattended_auto`; the word starts with `a#`, so a monitor run is not expected). The reviewer's differential over 93 554 lines found 175 looser lines, every one containing `\⏎#`.
 - **Done when:** measured at the base first; every reader that decides a comment boundary uses WP-257's `isContinuationAt`; the measured lines are refused; a differential with `\⏎` before every `#` position reports 0 looser. The suggested remedy — a `#` straight after a continuation that follows a non-blank is not a comment — only tightens; to be ruled.
 
-### 662. **The scanner splits a redirection target at a continuation's newline, so `ls >$\⏎@(x)` and `ls >$\⏎$\⏎$@(x)` read `uncertain` where their joined forms read `auto`** (TODO, **minor**, stricter only. Found by WP-257's implementer, round 4 (`#### WP-257`, *Discovered work*), confirmed by its reviewer. **No work package owns it.** A ruling is needed: joining the target would loosen other cells — `ls >a\⏎sudo id` reads `block` today.)
+### 662. **The scanner splits a redirection target at a continuation's newline, so `ls >$\⏎@(x)` and `ls >$\⏎$\⏎$@(x)` read `uncertain` where their joined forms read `auto`** (TODO, **major** — *re-graded by WP-259's implementer and reviewer, session 20: not stricter only;* `git >o\⏎ut --namespace x -c core.fsmonitor=… status` reads `ask / auto / deny` where the joined line reads the git boundary's refusal (2 278 differential cells, pre-existing, policy cells only). Was **minor**, stricter only. Found by WP-257's implementer, round 4 (`#### WP-257`, *Discovered work*), confirmed by its reviewer. **No work package owns it.** A ruling is needed: joining the target would loosen other cells — `ls >a\⏎sudo id` reads `block` today.)
 
-### 663. **The comment reader treats the closing `)` of `$(…)`, `$((…))`, `<(…)` or `>(…)` as the end of a word, so a `#` glued after it starts a comment that hides the next command: `ls $(echo a)#;rm -rf /` reads `ask / auto / deny`** (TODO, **major**: a live fail-open on `main`. **TD-030 tier 1**: bash reads `$(echo a)#` as one word. Found by the M19 second amendment's measurement, session 20 (§ "Architect ruling (M19 second amendment, session 20)"). Owned by **WP-259** with 661.)
+### 663. **The comment reader treats the closing `)` of `$(…)`, `$((…))`, `<(…)` or `>(…)` as the end of a word, so a `#` glued after it starts a comment that hides the next command: `ls $(echo a)#;rm -rf /` reads `ask / auto / deny`** (**RESOLVED** by WP-259, session 20, not yet committed — with 661, by the same `WordStart`: the `)` of `$(`, `$((`, `<(`, `>(` and an array assignment's `(` ends no word, and a `#` glued to a substitution `scan` lifts out of a segment is kept literal there (`\#`), because the pipe pass and `feedsScriptReader` read the segment text; `ls $(echo a)#;rm -rf /`, `x=$(echo a)#;sudo id`, `git status $(echo a)#;git push --force`, `ls >(cat)#;rm -rf /`, `ls $((1))#;rm -rf /` and the pipe siblings `ls $(x)#|sudo id` and `` ls `x`#|sudo id `` (pre-existing for the backtick) read `block / block / block` in all three baselines; the control `(ls)#;sudo id` keeps `ask / auto / deny`. Notes `#### WP-259`. Was: TODO, **major**: a live fail-open on `main`. **TD-030 tier 1**: bash reads `$(echo a)#` as one word. Found by the M19 second amendment's measurement, session 20 (§ "Architect ruling (M19 second amendment, session 20)"). Owned by **WP-259** with 661.)
 
 ### 664. **A here-document terminator split by a line continuation is not read as bash reads it; unattended refuses, attended asks where it should block** (TODO, **minor**. Found by the M19 second amendment's base differential (3 of its 13 looser lines), session 20. **Carried** with a trigger by that ruling.)
+
+### 665. **A line continuation inside a substitution opener (`$\⏎(`) is not read as `$(`: `git -C $\⏎(pwd) -c core.fsmonitor=… status` reads `ask / auto / deny`** (TODO, **major**: live, literal, pre-existing. **TD-030 tier 1**: bash removes the continuation and reads `$(pwd)`, a value WP-250 makes `splits`. Found by WP-259's implementer (`#### WP-259`, *Discovered work* (b)), confirmed by its reviewer, session 20; policy cells only, the program half unmeasured. **No work package owns it.** Same class as WP-257's: a reader that decides a construct without WP-257's `isContinuationAt`.)
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -59860,3 +59862,147 @@ a continuation is. Round 4 replaces all of that with one definition.
   those, 0 looser. The round-4 claim "the class is closed" holds for the opener readers only; the
   comment reader is filed as **661** (blocker) and placed next, not fixed in this row. The split of a
   redirection target at a continuation's newline (stricter only) is filed as **662**.
+
+#### WP-259 — a `#` begins a comment only where bash begins a word (backlogs 661, 663)
+
+Built on `main` at `bb0f767c` (WP-257's merge `c009ae39` plus docs), session 20. Not committed. `⏎` is a
+newline, `\⏎` a line continuation; a cell is `attended / auto / deny`, the same in all three baselines
+unless stated.
+
+- **(1) Measured first, before any change.** The amendment's 661 and 663 tables re-read at the base
+  (`git archive bb0f767c`): **identical** to its tables, cell for cell (`ls a\⏎#;sudo id`, `git status
+  a\⏎#;sudo id`, `ls a\⏎\⏎#;sudo id`, `ls a\⏎#;rm -rf /`, `ls a\⏎#|sh` `allow / allow / allow`; `X=a\⏎#;sudo
+  id`, `ls >a\⏎#;sudo id`, `ls $(echo a)#;rm -rf /`, `x=$(echo a)#;sudo id`, `git status $(echo
+  a)#;git push --force`, `ls >(cat)#;rm -rf /` `ask / auto / deny`; `ls $((1))#;rm -rf /` and `echo
+  $(ls a\⏎#;sudo id)` `ask / uncertain / uncertain`; the controls as tabled). *Shell facts* (`printf
+  '[%s]'` and `echo RAN` only, bash 5.3.20 and `/bin/bash` 3.2.57, `--norc --noprofile`, `LC_ALL=C`, an
+  empty scratch directory): every 661/663 line printed the word with its `#` (`[a#]`, `[/dev/fd/63#]`,
+  `[1#]`) and then `RAN`; `ls \⏎#`, `ls a\\⏎#`, `ls \⏎# x \⏎…`, `(ls)#`, `((1))#`, `case x in x)#` and
+  `a\t#` are comments (both bashes). **Found beyond the tables, same reader, same rule:** `a\ #`,
+  `a\r#`, `a\v#`, `a\f#`, `a<NBSP>#`, `` `x`# ``, `${x}#`, `$[1]#`, `"a"#`, `$'x'#` and `a=(1 2)#` are
+  one word in both bashes (`RAN` printed); at the base `ls a\ #;sudo id`, `ls a\r#;sudo id` (and `\v`,
+  `\f`, NBSP) read **`allow / allow / allow`**, `a=(1 2)#;sudo id` `ask / auto / deny`, and the pipe
+  siblings `ls $(x)#|sudo id` and `` ls `x`#|sudo id `` `ask / auto / deny` (the last pre-existing:
+  the backtick was never a word end, but the segment text the pipe pass re-reads has it lifted out).
+  No program half beyond `printf`: the row names none (its (1)).
+- **(2) The deciding reader, and each reader alone.** Reconstructed on the head by putting the other
+  three readers back on today's peek (`mutations.py` in the scratchpad): **`scan` alone** moves 33 of the
+  40 moved lines (every fail-open: the 661/663 rows, the blanks, the pipe siblings) — the deciding
+  reader, as the amendment read; **`joinQuotedContinuations` alone** and **`readShellContext` alone**
+  move only the two backtick pipe lines (through `scan`'s literal `\#`, below, which the per-reader
+  canary leaves in place); **`findClosingParen` alone** moves 7, five of them `uncertain` → `auto`, and **two of
+  those looser than bash** (`echo $(ls a\⏎#;sudo id)` and `echo $(ls $(x)#|sudo id)`): exact in the matcher
+  but peeking in `scan`, a body the matcher no longer refuses is read by a scanner that still hides
+  its second command. So the matcher's exactness is safe only beside `scan`'s; the ruling's "may keep
+  'may be a comment'" would also have been safe, and exact is what the shared definition gives.
+  **A fifth reader found by canary, not by grep:** the segment text. `scan` lifts a command
+  substitution or backtick out of `current` (WP-160), so `ls $(x)#|sudo id` is `ls #|sudo id` to the
+  pipe pass and to `feedsScriptReader`, which then read a comment; with `scan` fixed alone,
+  `ls $(x)#|sh <<EOF⏎sudo id⏎EOF` moved **`block` → `ask / auto / deny`** (bash runs `sudo id`). The
+  same holds at a segment start the list pass cuts inside a word (`ls $\⏎(x)#|…`, split at the `(`).
+- **(3) The change** (`command-policy.ts`). `startsComment` (a peek at `text[index - 1]` with `\s`) is
+  deleted. One definition, `WordStart`, with `readWordCharacter` (a continuation changes nothing; a `(`
+  records whether its `)` ends a word — only when it began one and was not `<(`/`>(`; a `)` pops that
+  record, an unmatched one, a `case` pattern's, ends a word; otherwise bash's blanks, newline and
+  operator characters `[ \t\n;&|<>]`) and `readInsideWord` (a quoted, escaped or expanded unit). Its
+  readers: `scan` (every branch; the `#` test is `words.atWordStart`), `joinQuotedContinuations`,
+  `findClosingParen` (`#` and the `case` word; the `case` word's own end keeps its old class) and
+  `readShellContext` (comment ranges and the refusal; `$((…))`'s close ends no word, an arithmetic
+  command's does). `scan`'s own two pieces: a redirection target ending in a continuation's `\`
+  leaves the newline after it as removed text (`continuedNewline`; the split itself, 662, is kept),
+  and where a re-reader of `current` would begin a word and the walk does not — after a lifted
+  substitution or backtick, or at a segment start — a `#` is written `\#` (`rereadAtWordStart`), the
+  same literal to bash. And `$(\⏎(` is read as `$((` (the regex the arithmetic-command check already
+  uses): found by the differential, `ls $(\⏎(1))# <<EOF…` had moved `block` → `auto` once the comment
+  was gone. The test is carried forward in every reader; nothing peeks backward.
+- **(4) Rows** (`unattended-commands.test.ts`, describe *WP-259, backlogs 661 and 663*): 31 rows at
+  `block / block / block` (the plan's ten, `ls >&a\⏎#;…`, `echo $(ls a\⏎#;sudo id)`, `ls <(true)#;…`,
+  the continuation-before-`#` forms, `a=(1 2)#`, the five blanks, the lifted pipe and here-document
+  siblings, `ls $\⏎(x)#|…`); 12 rows pinned **equal to their joined line** in every baseline
+  (`ls a\⏎#|sh` → `ask / uncertain / uncertain`, `ls $((1))#;rm -rf /` → `block`, `git -C a\⏎#
+  \⏎-c core.fsmonitor=…` → `ask / git / git`, and the exact half below); the extglob row (`git
+  --namespace a\⏎#@(+c|-c) …` → `ask / uncertain / uncertain`, `extendedGlob`); the matcher's jumped
+  newline (`echo $(cat <<EOF "a⏎b"⏎# ) x⏎EOF⏎)` stays `uncertain`); 17 controls (the plan's, plus
+  `ls a\t#` `allow`, `((1))#` and `case x in x)#` today's cells, `` `echo a`#``/`"a"#` `block`, `ls
+  2>\⏎#;sudo id` `ask / auto / deny`).
+  **Cells that move toward `allow` (the exact half, each equal to the joined line):** `ls a\⏎# x
+  \⏎sudo id` and `ls a\⏎# <<EOF⏎sudo id⏎EOF` `block` → `allow` (bash runs one `ls`; the second's
+  `sudo id` is its here-document); `ls $(echo a)# x \⏎sudo id` and `ls $(echo a)# x <<EOF…` `block` →
+  `ask / auto / deny`; `ls $((1))# <<EOF…` `block` → `ask / uncertain / uncertain`; `echo $(ls a\⏎#
+  x)`, `echo $(ls $(echo a)# x)`, `echo $(ls <(true)# x)` `uncertain` → `ask / auto / deny`. The
+  ruling's exactness requires them (both wrong answers loosen); they are the price of no peek.
+- **Canaries** (`canary.sh`, each alone on the checkout file, restored from the script's own copy
+  `own-head-v4-command-policy.ts.keep` and `cmp`-checked after every run; `vitest run
+  packages/domain/src/policies --project unit`): planted throw in `readWordCharacter` → 1190 (live);
+  today's peek put back in `scan` → 37, in `joinQuotedContinuations` → 1 (`git -C a\⏎# \⏎-c …`), in
+  `findClosingParen` → 3, in `readShellContext` → 4; a substitution's `)` taken as a word end in `scan`
+  → 17 (every 663 row), in `readWordCharacter`'s pop → 6; "never a comment after a continuation" → 3
+  (`ls \⏎#;sudo id`, `ls \⏎\⏎#…`, `ls \⏎# x \⏎sudo id`); `\s` for the blank class → 4; the redirection
+  continuation → 2; the redirection operator's read → 1; `<`/`>` before `(` → 1; the glued-`(` record
+  → 5; `$((…))` in `readShellContext` → 2; its `$(` read → 2; the matcher's newline after a jumped
+  line → 1; the literal `\#` → 10; its inheritance across lifts → 1; across continuations → 1; at a
+  segment start → 2; `$(\⏎(` as arithmetic → 1. **None survived.**
+- **(5) The differential** (`diff-gen.mjs`, `oracle-run.mjs`, `diff-cmp.mjs`): 1,816 lines — the rows,
+  controls and pins, the amendment's sixteen, each again behind `> out `, the twelve spellings as the
+  value of each of the nine separate git options (and behind `> out`), and WP-257's 1,448 sweep lines
+  holding a `#` — with `\⏎` inserted at every position: 101,526 lines. **Bash's reading is bash's own**,
+  not a re-implemented one: each line, the joined line and the newline-at-the-position line are
+  defined as a function body and reprinted by bash 5.3.20's `declare -f` (nothing runs: `PATH` empty,
+  stdin `/dev/null`), and the reference is whichever reprint the continued line's equals. Results,
+  nine cells each (the amendment's ranking): **judged 89,068: 122 looser, 45 tighter; `\⏎` straight
+  before a `#` (1,782): 0 looser.** All 122 are one pre-existing class, the same cells at the base: a
+  continuation **inside a substitution opener** (`$\⏎(`, `<\⏎(`, `2>\⏎(`), which `scan` does not read
+  as an opener (`git -C $\⏎(pwd) -c core.fsmonitor=/tmp/m status` reads `ask / auto / deny`, joined
+  `ask / git / git`) — not a comment boundary; filed below. Not judged: 3,114 positions directly
+  after an escaping or continuing `\` (excluded by the ruling; 82 looser, two head-looser than base,
+  `ls $(\\⏎⏎(1))# <<EOF…` read `auto` where the base read `block` by accident and bash runs the
+  commands `\` and `1`), 230 here-document positions (**664**: 6 looser, all `cat a#<<EOF⏎x⏎E\⏎OF⏎…`),
+  4,740 positions inside a redirection operator or target (**662**: 2,278 looser, every one the base's
+  cell too — see below), 3,921 bash syntax errors (0 looser) and 453 neither (0 looser).
+- **(6) Corpus diff:** 0 of 371 lines of `test/fixtures/commands/*-lines.txt` moved; none holds a `#`.
+- **(7) The sweep** (`sweep.mjs`): WP-257's 1,865,671 lines against `bb0f767c` (the code of
+  `c009ae39`), **5,597,013 cells: 0 changed, 0 looser**. This row's own 102,996 lines (every line of
+  (5), continued and not): 25,266 cells changed, 23,670 tighter, 588 same-rank (`uncertain` → `git`),
+  **1,008 looser than the base on 336 lines, none looser than bash's reading** (none in (5)'s looser
+  set): the exact half above and its continued forms (`block → allow` 63 cells, `block → uncertain`
+  297, `block → auto` 204, `uncertain → auto` 432, `auto → allow` 6, `uncertain → allow` 6). WP-198's
+  property and the policy suites: green with the gate seed and `PROPERTY_SEED` 1, 7 and 424242 (4,646
+  passed, 5 skipped, each).
+- **(8) Docblocks:** `WordStart` (new: the rule, both `)` kinds, the blanks, its readers, `scan`'s two
+  pieces), `isContinuationAt`'s reader list, `readShellContext` (the `\s` sentence replaced),
+  `findClosingParen` (its word start and what its `(` record cannot tell), `scan`'s comment branch,
+  `joinQuotedContinuations`'s docblock moved back onto it; `04-agent-runtime.md` (one sentence after
+  WP-251's); 661 and 663 restated as resolved.
+- **Sentences falsified** (grep for *startsComment*, *comment state*, *wider than bash's blanks*,
+  *blank or an operator*, *word start* over `packages/domain/src`, `04`, `05` and `docs/decisions`):
+  `readShellContext`'s "`\s` is wider than bash's blanks on purpose: it finds more comments" — false
+  (it read `$(x)#` as a comment and hid a script reader), replaced. `UNCERTAINTY.unreadSubstitutionBody`
+  and `04`'s WP-251 sentence say the matcher has "no comment state": still true (it finds where a
+  comment starts, it does not skip one); left. 661's "the suggested remedy … only tightens" was the
+  reviewer's; the exact rule also loosens the lines above, by the ruling's design; the heading now
+  says so through its cells. The amendment's "662 … stricter only" is **false**: see below. TD-030 and
+  the decisions name none of these; not edited.
+- **Discovered work.** (a) **662 is not stricter only** (policy measured, pre-existing, the same cells
+  at the base): `scan`'s redirection target loop splits the line at a continuation's newline, and the
+  rest is read as a new command, so `git >o\⏎ut --namespace x -c core.fsmonitor=/tmp/m status` and
+  `git > o\⏎ut -C $(pwd) -c core.fsmonitor=/tmp/m status` read **`ask / auto / deny`** where the joined
+  lines read `ask / git / git` — literal, one line, stock git: by TD-030 decision 2's control it reads
+  **major**; (5) counts 2,278 such cells. Joining the target is the fix; the ruling deferred it because
+  `ls >a\⏎sudo id` would move from `block` to bash's `ask / auto / deny`. Recommend re-grading 662 and
+  owning it next. (b) **A continuation inside a substitution opener** (new, pre-existing): `scan` reads
+  `$\⏎(`, `<\⏎(`, `>\⏎(` as `$`/`<`/`>` and a subshell, so `git -C $\⏎(pwd) -c core.fsmonitor=/tmp/m
+  status` and `git --namespace <\⏎(true) -c core.fsmonitor=/tmp/m status` read `ask / auto / deny`
+  (joined: `ask / git / git`); literal, **major** by the same control; 122 cells in (5). This row read
+  only `$(\⏎(` (as `$((`), because the differential showed this row's change exposing it. (c) The
+  program half of (a) and (b) was not run (the row's program half is `printf`).
+- **Verify.** `vitest run scripts/citations.test.ts --project unit`: 13 passed. `pnpm run -s verify` (the
+  four untracked `.claude/` directories set aside in the scratchpad and moved back): `PASS: verify`. The
+  first two runs failed on biome's formatting of this row's own test rows; formatted, re-run green.
+- **Review** (session 20, one round, **APPROVE-with-nits**; nits are the orchestrator's). The 136 lines of
+  the reviewer's 962 that move toward allow are each bash's own reading (`sudo id` an argument of the one
+  `ls`, or a here-document body) — the plan's ruling (3) states the readers are exact and that "never a
+  comment" loosens; among 550 lines where bash runs `sudo id`, none reads below `block` except syntax
+  errors and lines uncertain at the base. Hunt over every `#` shape with zero, one and two continuations
+  before it: nothing looser. Canaries: each reader's `WordStart` reverted alone (37 / 1 / 3 / 4), the `\#`
+  rewrite off (10), `$(\⏎(` off (1), the array-assignment rule off (5) — none survived. Discovered work
+  filed by the orchestrator: 662 re-graded **major**, **665** (major) new.

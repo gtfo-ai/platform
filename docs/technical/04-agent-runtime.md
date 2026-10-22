@@ -533,7 +533,17 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   went unseen (bash 5.3.20 ran the monitor, measured on a scratch repository; 3.2.57 refuses the
 >   `case` form and closes `<(` at the comment's `)`), and the line is uncertain
 >   (`unreadSubstitutionBody`) — `echo $(echo case)` reading uncertain is the stated over-ask, and
->   `$((…))`, where `case` is a variable name (`$(( case + 1 ))`), is never such a body. The git
+>   `$((…))`, where `case` is a variable name (`$(( case + 1 ))`), is never such a body. A `#`
+>   opens a comment only where bash begins a word (WP-259, backlogs 661 and 663): after a blank
+>   (space or tab), a newline or an operator character, with any line continuation between them
+>   removed, and never after the `)` of `$(…)`, `$((…))`, `<(…)`, `>(…)` or `a=(…)`, nor after an
+>   escaped or quoted character or a `\r`, `\v` or `\f`, which bash keeps inside a word. The
+>   scanner, the continuation joiner, the substitution matcher and the here-document context
+>   reader carry that state forward, and a `#` glued to a substitution the scanner lifts out of a
+>   segment is kept literal there; before, each peeked at the character in front of the `#`, so
+>   `ls a\⏎#;sudo id` read `allow` and `ls $(echo a)#;rm -rf /` read `auto` while both bashes ran
+>   the second command (measured with `printf`). The exact reading also moves a line toward `allow`
+>   where a comment was read that bash does not see: `ls a\⏎# x \⏎sudo id` is one `ls`. The git
 >   boundary skips a fragment as made of others only when it is more than one **stage** at its own
 >   level — a list or a pipe — (WP-252, backlog 656): a one-stage fragment is judged as an argv and
 >   what the splitter hands out of it (a `-c` body, a substitution) is judged beside it. Before, any
