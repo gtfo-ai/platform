@@ -427,7 +427,9 @@ export const expansionCompletesBlockEntry = (entry: string) =>
  * writes an option while the entry's own options are not all met (`rm -Rf /` against `rm -rf /*`,
  * `git branch --delete --force main` against `git branch -D *`). Whether that option is the
  * entry's by another name is a per-program fact the platform does not have, so the honest verdict
- * is uncertain, as for {@link xargsCompletesBlockEntry} (`blockEntryUnderUnreadOption`).
+ * is uncertain, as for {@link xargsCompletesBlockEntry} (`blockEntryUnderUnreadOption`). Since
+ * WP-258 (backlog 660) the option may be a word whose first pattern element can match `-`
+ * (`rm [-]rf /`, `git branch ?D main`), which a file the run wrote turns into one.
  */
 export const optionMayBeBlockEntry = (entry: string, option: string) =>
   `an option, ${option}, beside the operands of the block-list entry "${entry}", which may be that entry's option by another name — write the entry's own option letters, or run the command without the option; the platform does not know which options of a program are aliases of each other` as const;
@@ -460,8 +462,16 @@ export const unreadGitConfigKey = (key: string) =>
 export const unknownProgramRunsJudgedName = (program: string, name: string) =>
   `an argument naming ${name} given to ${program}, a program the platform does not know — it may run its arguments as a command, as sg, chroot or fakeroot do — run the command itself, not through ${program}; the platform judges a command only where it knows the program in front of it` as const;
 
+/**
+ * WP-258 (backlog 660): a word whose first pattern element can match `-` beside a program a floor
+ * reads options of (`floorOptionBehindGlob`). The files the run wrote decide which option it is.
+ */
+export const globMayBeFloorOption = (verb: string) =>
+  `a word beginning with an unquoted glob (*, ? or [) given to ${verb}, whose options the platform floors — with a file whose name begins with "-" present, the shell hands that file name as an option; write the option or the file name literally, or quote the word; the platform cannot tell which files the pattern matches` as const;
+
 export type UncertaintyReason =
   | (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY]
+  | ReturnType<typeof globMayBeFloorOption>
   | ReturnType<typeof environmentSpellsFloor>
   | ReturnType<typeof unreadGitConfigKey>
   | ReturnType<typeof xargsCompletesBlockEntry>
@@ -3650,6 +3660,26 @@ const argv0Candidates = (
  */
 const RECEIVED_READING = new WeakMap<readonly string[], readonly boolean[]>();
 
+/**
+ * WP-258 (backlog 660): whether a word as written — before quote removal — has a first pattern
+ * element that can match a leading `-`: an unquoted `*`, `?` or bracket expression, after nothing
+ * but empty quotes. With a file `-rf` present, bash hands `[-]rf` as `-rf` (both bashes,
+ * measured), so such a word may be an option by another name. A word whose first character is a
+ * literal (`src*`, `x?`) is not, and neither is a quoted or escaped one (`"[-]rf"`, `\*D`), which
+ * is one literal word. Every bracket expression counts, `[x]` and a `[` with no `]` too, which can
+ * only over-read. An extended-glob opener (`@(`, `!(`, `+(`) needs no case here: the scanner reads
+ * every unquoted one as `UNCERTAINTY.extendedGlob` (WP-257), and such a line's command never
+ * reaches these readers (measured: a case for it here changed no cell).
+ */
+const mayMatchLeadingDash = (raw: string): boolean => /^(?:''|""|\$''|\$"")*[*?[]/.test(raw);
+
+/**
+ * Per {@link blockCandidates} candidate of the written and the argv reading, per word (the name's
+ * `false`): {@link mayMatchLeadingDash} of the word as written. The over-read has none: its words
+ * are dequoted, so a quoted glob would read as an unquoted one.
+ */
+const OPTION_GLOBS = new WeakMap<readonly string[], readonly boolean[]>();
+
 /** How a word of the argv reading reads: as handed, since it is dequoted already (WP-242, WP-245). */
 const asHanded = (word: string): string => word;
 
@@ -3720,12 +3750,16 @@ const blockCandidates = (text: string): readonly (readonly string[])[] => {
   const received = argv0Candidates(receivedWords, asHanded);
   // `argvWords` is `receivedShellWords` dequoted word by word, and a candidate's words after its
   // name are a suffix of it (`argv0Candidates`), so the flags align from the end.
-  const unsure = receivedShellWords(text).map(receivedMayDiffer);
+  const shellWords = receivedShellWords(text);
+  const unsure = shellWords.map(receivedMayDiffer);
+  const globs = shellWords.map(mayMatchLeadingDash);
   for (const candidate of received) {
-    RECEIVED_READING.set(
-      candidate,
-      unsure.slice(unsure.length - Math.max(candidate.length - 1, 0)),
-    );
+    const from = shellWords.length - Math.max(candidate.length - 1, 0);
+    RECEIVED_READING.set(candidate, unsure.slice(from));
+    OPTION_GLOBS.set(candidate, [false, ...globs.slice(from)]);
+  }
+  for (const candidate of written) {
+    OPTION_GLOBS.set(candidate, [false, ...candidate.slice(1).map(mayMatchLeadingDash)]);
   }
   const candidates = [...written, ...received];
   // Only a word a second dequote changes makes an over-read that differs from `received`.
@@ -3772,21 +3806,24 @@ const isFlagToken = (token: string): boolean =>
  * hole under every `HAZARDOUS_ARGUMENTS` entry and under `find * -exec*` before it. Words that are
  * dequoted already (`carriesHazard`'s, WP-242; the argv reading's for every block-entry reader,
  * `readingOf`, WP-245) pass `dequote` as the identity, so no quote is taken off twice.
+ * `optionGlobs` marks, by index, a word that is a flag though it does not start with `-`
+ * (`OPTION_GLOBS`, WP-258); only `blockEntryUnderUnreadOption` passes it.
  */
 const splitFlags = (
   tokens: readonly string[],
   dequote: (token: string) => string = unquoteToken,
+  optionGlobs: readonly boolean[] = [],
 ): { readonly flags: readonly string[]; readonly positional: readonly string[] } => {
   const flags: string[] = [];
   const positional: string[] = [];
   let literal = false;
-  for (const written of tokens) {
+  for (const [index, written] of tokens.entries()) {
     const token = dequote(written);
     if (!literal && token === '--') {
       literal = true;
       continue;
     }
-    if (!literal && isFlagToken(token)) {
+    if (!literal && (isFlagToken(token) || optionGlobs[index] === true)) {
       flags.push(token);
     } else {
       positional.push(token);
@@ -4097,6 +4134,13 @@ const blockEntryBehindFlagValue = (
  * origin/x x`, `git branch --list 'x*'` and `git reset --soft origin/main`. An entry with no
  * operand after its command words (`git push --force*`) or no option is never read here, so
  * `git push -u origin agentic/x` and `git branch -a` are untouched.
+ *
+ * Since WP-258 (backlog 660) an option is also a word whose first pattern element can match `-`
+ * (`OPTION_GLOBS`): with a file `-rf` present bash hands `rm [-]rf /` as `rm -rf /`, and with a
+ * file `-D` `git branch ?D main` deleted `main` (a scratch repository, both bashes). So
+ * `rm [-]rf /` and `git branch ?D main` are uncertain, as `rm -[r]f /` is; a quoted or escaped
+ * glob is one literal word and is read as before. **The over-ask:** a glob beside an entry's
+ * operands (`rm * /`).
  */
 const blockEntryUnderUnreadOption = (
   fragment: string,
@@ -4113,7 +4157,7 @@ const blockEntryUnderUnreadOption = (
       continue;
     }
     for (const candidate of candidates) {
-      const command = splitFlags(candidate, readingOf(candidate));
+      const command = splitFlags(candidate, readingOf(candidate), OPTION_GLOBS.get(candidate));
       const [first] = command.flags;
       if (
         first !== undefined &&
@@ -4128,6 +4172,42 @@ const blockEntryUnderUnreadOption = (
         );
         return { entry, option: unread ?? first };
       }
+    }
+  }
+  return undefined;
+};
+
+/**
+ * The programs a {@link HAZARDOUS_ARGUMENTS} floor reads options of: an entry's declared `verbs`,
+ * else its pattern's first word without a trailing `*` (`go*`, `pip`, `find`, `logcli*`). Matched
+ * by prefix, as `XARGS_FLOORED_VERBS` is, because that is as far as the floors reach.
+ */
+const FLOORED_PROGRAMS: readonly string[] = [
+  ...new Set(
+    HAZARDOUS_ARGUMENTS.flatMap(
+      (entry) => entry.verbs ?? [(entry.pattern.split(' ')[0] as string).replace(/\*$/, '')],
+    ),
+  ),
+];
+
+/**
+ * The hazard floor's half of WP-258 (backlog 660): the floored program of this piece of command
+ * line when a word before its first `--` has a first pattern element that can match `-`
+ * (`OPTION_GLOBS`). With the path `--script-shell=/bin/id` present, bash hands
+ * `npm test ?-script-shell=/bin/id` as `npm test --script-shell=/bin/id` (both bashes, measured).
+ * A floor reads an option by its spelling and a pattern has none, so the line is uncertain rather
+ * than floored, as an option the block list cannot read is. **The over-ask, stated:** any such
+ * word beside a floored program — `npm test *`, `git add *.ts` — whichever floor it could be.
+ */
+const floorOptionBehindGlob = (fragment: string): string | undefined => {
+  for (const candidate of blockCandidates(fragment)) {
+    const [name = '', ...rest] = candidate;
+    const globs = OPTION_GLOBS.get(candidate) ?? [];
+    const verb = FLOORED_PROGRAMS.find((program) => name.startsWith(program));
+    const dequote = readingOf(candidate);
+    const end = rest.findIndex((word) => dequote(word) === '--');
+    if (verb !== undefined && globs.slice(1, end < 0 ? undefined : end + 1).includes(true)) {
+      return verb;
     }
   }
   return undefined;
@@ -9519,7 +9599,8 @@ export const commandWords = (fragment: string): readonly string[] => {
  * WP-253 (backlog 652) widened it to an unquoted glob (`git --namespace ?c …`, which a directory
  * holding `+c` and `-c` hands as `+c -c …`); the over-ask is `git -C src* log` and `git -C ./*
  * status`, and `git -C "src*" log` is one word, read as before. A glob after the verb (`git log *`)
- * is an argument and not read here.
+ * is an argument and not read here; `floorOptionBehindGlob` reads it as a possible option of git
+ * (WP-258, backlog 660), so the line is uncertain before this boundary is asked.
  *
  * WP-218: so is a literal word before the verb that starts with `-` and git's declared grammar
  * ({@link GIT_GLOBAL_OPTIONS}) does not name — `git --shallow-file=x push …`, `git --super-prefix p/
@@ -9756,7 +9837,8 @@ const evaluateOnce = (
   // value (WP-198), the one whose operands a line meets beside an option it cannot read (WP-204),
   // the one an expansion could complete (WP-201), and a program the stage's
   // policy does not know handed a judged name (WP-203) — the only reasons that
-  // need the policy's lists, a project's included — and a sed or awk script that executes (WP-210).
+  // need the policy's lists, a project's included — and a sed or awk script that executes (WP-210)
+  // and a glob that may be a floored program's option (WP-258).
   const uncertainty: readonly UncertaintyReason[] = [
     ...new Set([
       ...parsed.uncertainty,
@@ -9772,6 +9854,11 @@ const evaluateOnce = (
       ...parsed.fragments.flatMap((fragment) => {
         const found = blockEntryUnderUnreadOption(fragment, policy.block);
         return found === undefined ? [] : [optionMayBeBlockEntry(found.entry, found.option)];
+      }),
+      // WP-258: a glob that may be an option of a program a floor reads.
+      ...parsed.fragments.flatMap((fragment) => {
+        const verb = floorOptionBehindGlob(fragment);
+        return verb === undefined ? [] : [globMayBeFloorOption(verb)];
       }),
       // WP-201: the block entry an expansion could complete, read on each stage as written.
       ...parsed.rawStages.flatMap((stage) => {

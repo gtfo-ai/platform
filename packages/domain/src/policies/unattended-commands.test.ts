@@ -35,6 +35,7 @@ import {
   flagValueHidesBlockEntry,
   GIT_GLOBAL_OPTIONS,
   GIT_GLOBAL_OPTIONS_SOURCE,
+  globMayBeFloorOption,
   HAZARDOUS_ARGUMENTS,
   type HazardousArgument,
   hasOutputRedirection,
@@ -3824,10 +3825,6 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
       // (3) A script that may rewrite its positional parameters before `"$@"`.
       [`sh -c 'shift; "$@"' _ ls git push origin main`, UNCERTAINTY.expandedName],
       [`sh -c 'set -- git push origin main; "$@"' _ ls`, UNCERTAINTY.expandedName],
-      // (4) A glob before `--` may be the flag a block entry needs (a file named `-rf`).
-      ['rm * /tmp', expansionCompletesBlockEntry('rm -rf /*')],
-      ['rm * /', expansionCompletesBlockEntry('rm -rf /*')],
-      ['touch -- -rf; rm * /tmp', expansionCompletesBlockEntry('rm -rf /*')],
       // Round 1b: an unquoted expansion in an option splits into options and positionals alike
       // (`x="rf /"; rm -$x` is `rm -rf /`).
       ['rm -$x', expansionCompletesBlockEntry('rm -rf /*')],
@@ -3838,6 +3835,16 @@ describe('WP-201, backlogs 591 and 593: a judged word is judged only when it is 
     ])('%j is uncertain', (command, reason) => {
       expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
       expect(auto(command).evaluation.uncertainty).toEqual([reason]);
+    });
+
+    // (4) A glob before `--` may be the flag a block entry needs (a file named `-rf`). Since WP-258
+    // (backlog 660) the getopt reading takes the glob as an option too, and names it first.
+    it.each(['rm * /tmp', 'rm * /', 'touch -- -rf; rm * /tmp'])('%j is uncertain', (command) => {
+      expect(cell(command, policy)).toBe('ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toEqual([
+        optionMayBeBlockEntry('rm -rf /*', '*'),
+        expansionCompletesBlockEntry('rm -rf /*'),
+      ]);
     });
 
     it('reads a function that runs "$@" as the unknown program it is, too (WP-203)', () => {
@@ -6916,7 +6923,7 @@ describe('WP-252, backlog 656: a one-stage fragment is judged even when the spli
       'time',
       'exec',
     ].map((wrapper) => `${wrapper} git --namespace "*" ${tail}`),
-    ...[`'*'`, '\\*', '"?"', '"[x]"', '"{a,b}"', '*', '?', 'x*', '{a,b}'].map(
+    ...[`'*'`, '\\*', '"?"', '"[x]"', '"{a,b}"', 'x*', '{a,b}'].map(
       (value) => `env git --namespace ${value} ${tail}`,
     ),
     `nice git -C "*" ${tail}`,
@@ -6927,6 +6934,16 @@ describe('WP-252, backlog 656: a one-stage fragment is judged even when the spli
   ])('%j reads ask / git / git in every baseline', (command) => {
     expectCells(command, 'ask / git / git');
   });
+
+  // An unquoted `*` or `?` first may be one of git's options (WP-258, backlog 660), which is
+  // answered before the boundary's `-c`: `ask / git / git` → `ask / uncertain / uncertain`.
+  it.each(['*', '?'].map((value) => `env git --namespace ${value} ${tail}`))(
+    '%j reads ask / uncertain / uncertain in every baseline (WP-258)',
+    (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toContain(globMayBeFloorOption('git'));
+    },
+  );
 
   // WP-250's lines whose value is a substitution: the substitution is a part the splitter hands
   // out, so the fragment was skipped and only its lifted copy (`git -C  -c core.fsmonitor=… status`,
@@ -6989,16 +7006,8 @@ describe('WP-252, backlog 656: a one-stage fragment is judged even when the spli
  */
 describe('WP-253, backlog 652: a git global option value holding an unquoted glob is uncertain', () => {
   it.each([
-    ['git --namespace [-]c core.fsmonitor=/tmp/m status', '[-]c'],
-    ['git -C [-]c core.fsmonitor=/tmp/m status', '[-]c'],
-    ['git --namespace ?c core.fsmonitor=/tmp/m status', '?c'],
     ['git --namespace -[c] core.fsmonitor=/tmp/m status', '-[c]'],
-    ['git --namespace *c core.fsmonitor=/tmp/m status', '*c'],
     ['git --namespace -? core.fsmonitor=/tmp/m status', '-?'],
-    ['git --namespace [+-]c core.fsmonitor=/tmp/m status', '[+-]c'],
-    ['git --namespace * core.fsmonitor=/tmp/m status', '*'],
-    ['git --namespace [-]c core.sshCommand=/tmp/m fetch origin', '[-]c'],
-    ['git --namespace [-]-upload-pack=x fetch origin', '[-]-upload-pack=x'],
     // Each of the three characters alone.
     ['git --namespace x* core.fsmonitor=/tmp/m status', 'x*'],
     ['git --namespace x? core.fsmonitor=/tmp/m status', 'x?'],
@@ -7013,9 +7022,32 @@ describe('WP-253, backlog 652: a git global option value holding an unquoted glo
     expect(auto(command).reason).toContain(splitGitOptionValue(word));
   });
 
+  // A value whose first pattern element can match `-` may be one of git's options itself (WP-258,
+  // backlog 660), which `evaluateCommand` answers before the boundary's split value: the cells are
+  // unchanged, the reason moved.
+  it.each([
+    'git --namespace [-]c core.fsmonitor=/tmp/m status',
+    'git -C [-]c core.fsmonitor=/tmp/m status',
+    'git --namespace ?c core.fsmonitor=/tmp/m status',
+    'git --namespace *c core.fsmonitor=/tmp/m status',
+    'git --namespace [+-]c core.fsmonitor=/tmp/m status',
+    'git --namespace * core.fsmonitor=/tmp/m status',
+    'git --namespace [-]c core.sshCommand=/tmp/m fetch origin',
+    'git --namespace [-]-upload-pack=x fetch origin',
+    // Was a control at `ask / git / git`: the glob is answered before the boundary's `-c`.
+    'git --namespace * -c core.fsmonitor=/tmp/m status',
+    // Was a control at `allow`: the over-ask WP-258 states, a glob after the verb.
+    'git log *',
+  ])(
+    '%j reads ask / uncertain / uncertain in every baseline, naming the glob (WP-258)',
+    (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toContain(globMayBeFloorOption('git'));
+    },
+  );
+
   it.each([
     // The refusal is checked first: every reading takes the glob as one word, so `-c` is seen.
-    ['git --namespace * -c core.fsmonitor=/tmp/m status', 'ask / git / git'],
     ['git --namespace "*" -c core.fsmonitor=/tmp/m status', 'ask / git / git'],
     ['git --namespace \\* -c core.fsmonitor=/tmp/m status', 'ask / git / git'],
     // Quoted or escaped: one word, which git reads as a namespace.
@@ -7024,7 +7056,6 @@ describe('WP-253, backlog 652: a git global option value holding an unquoted glo
     ['git --namespace \\[-]c core.fsmonitor=/tmp/m status', 'ask / auto / deny'],
     ['git -C "src*" log', 'ask / auto / deny'],
     // After the verb: an argument, not a global option's value.
-    ['git log *', 'allow / allow / allow'],
     ['git diff -- *', 'allow / allow / allow'],
     ['git branch * -D main', 'block / block / block'],
     // A brace is the argv reading's (WP-243), and `{-c,x}` hands `-c` as the namespace.
@@ -7038,6 +7069,7 @@ describe('WP-253, backlog 652: a git global option value holding an unquoted glo
     expectCells(command, 'ask / uncertain / uncertain');
     expect(auto(command).evaluation.uncertainty).toEqual([
       flagValueHidesBlockEntry('git push --force*'),
+      globMayBeFloorOption('git'),
     ]);
   });
 
@@ -7525,5 +7557,138 @@ describe('WP-262, backlogs 668 and 669: the character before the ( decides an ex
       kind: 'boundary',
       fragment: 'cat /ctl/x',
     });
+  });
+});
+
+/**
+ * WP-258 (backlog 660): a word whose first pattern element is an unquoted `?`, `*` or bracket
+ * expression can match a leading `-`, so with a file `-rf` present bash hands `rm [-]rf /` as
+ * `rm -rf /`, with a file `-D` `git branch ?D main` deleted `main` (a scratch repository, both
+ * bashes), and with the path `--script-shell=/bin/id` npm is handed that option (`printf` only, bash
+ * 5.3.20 and 3.2.57). The block list's getopt reading and the hazard floor's option reading took
+ * only a word that starts with `-`; they take such a word too, so each line is uncertain. A quoted
+ * or escaped glob is one literal word, and a word whose first character is a literal is read as
+ * before. Every line was `ask / auto / deny`, or `allow` in the verification and implementation
+ * baselines for the `npm` ones.
+ */
+describe('WP-258, backlog 660: a glob that can match a leading - is an option by another name', () => {
+  const shell = '-script-shell=/bin/id';
+  it.each([
+    ['rm [-]rf /', optionMayBeBlockEntry('rm -rf /*', '[-]rf')],
+    ['rm [!x]rf /', optionMayBeBlockEntry('rm -rf /*', '[!x]rf')],
+    ["rm ''[-]rf /", optionMayBeBlockEntry('rm -rf /*', '[-]rf')],
+    ['git branch ?D main', optionMayBeBlockEntry('git branch -D *', '?D')],
+    ['git branch *D main', optionMayBeBlockEntry('git branch -D *', '*D')],
+    ['git branch [-]D main', optionMayBeBlockEntry('git branch -D *', '[-]D')],
+    [`npm test ?${shell}`, globMayBeFloorOption('npm')],
+    [`npm test *${shell}`, globMayBeFloorOption('npm')],
+    [`npm test [-]${shell}`, globMayBeFloorOption('npm')],
+    // A floor's program is matched by name prefix, as the literal spelling's floor is.
+    ['go1.22 build ?toolexec=x', globMayBeFloorOption('go')],
+    // The over-ask, stated: a glob beside a block entry's operands, or given to a floored program.
+    ['rm * /', optionMayBeBlockEntry('rm -rf /*', '*')],
+    ['npm test *', globMayBeFloorOption('npm')],
+  ])('%j reads ask / uncertain / uncertain in every baseline', (command, reason) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toContain(reason);
+  });
+
+  // Ruling (a)'s probe: each block entry with an option and each floored option, its leading `-`
+  // replaced by `?`, `*` and `[-]`.
+  const probes: readonly (readonly [string, string])[] = [
+    ['rm -rf /', '-rf'],
+    ['git push --force origin main', '--force'],
+    ['git push -f origin main', '-f'],
+    ['git push --delete origin x', '--delete'],
+    ['git push -d origin x', '-d'],
+    ['git branch -D main', '-D'],
+    ['git reset --hard origin/main', '--hard'],
+    ['git fetch --upload-pack=x origin', '--upload-pack=x'],
+    ['git push --receive-pack=x origin main', '--receive-pack=x'],
+    ['git clone -ux repo', '-ux'],
+    ['git rebase --exec=x main', '--exec=x'],
+    ['git difftool --extcmd=x', '--extcmd=x'],
+    ['git log --ext-diff', '--ext-diff'],
+    ['git log --textconv', '--textconv'],
+    ['git log --output=x', '--output=x'],
+    ['git commit --no-verify -m x', '--no-verify'],
+    ['git commit -n -m x', '-n'],
+    ['git merge -s ours x', '-s'],
+    ['git merge --strategy=ours x', '--strategy=ours'],
+    ['git merge -Xours x', '-Xours'],
+    ['rg --pre=x foo', '--pre=x'],
+    ['rg --hostname-bin=x foo', '--hostname-bin=x'],
+    ['find . -fprint x', '-fprint'],
+    ['find . -fls x', '-fls'],
+    ['pip install --target=x y', '--target=x'],
+    ['pip install --root=x y', '--root=x'],
+    ['pip install --prefix=x y', '--prefix=x'],
+    ['pip install --log=x y', '--log=x'],
+    ['pip install --report=x y', '--report=x'],
+    ['pip install --index-url=x y', '--index-url=x'],
+    ['pip install --extra-index-url=x y', '--extra-index-url=x'],
+    ['pip install --find-links=x y', '--find-links=x'],
+    ['make --eval=x', '--eval=x'],
+    ['make -E x', '-E'],
+    ['go build -exec=x', '-exec=x'],
+    ['go build -toolexec=x', '-toolexec=x'],
+    ['go build -ldflags=-extld=x', '-ldflags=-extld=x'],
+    ['go build -o x', '-o'],
+    ['go test -coverprofile=x', '-coverprofile=x'],
+    ['go test -pkgdir=x', '-pkgdir=x'],
+    ['cargo build --config=x', '--config=x'],
+    ['cargo build --target-dir=x', '--target-dir=x'],
+    ['npm test --script-shell=/bin/id', '--script-shell=/bin/id'],
+    ['npm test --node-options=x', '--node-options=x'],
+    ['pnpm test --config.x=y', '--config.x=y'],
+    ['npm edit --editor=x', '--editor=x'],
+    ['npm docs --browser=x', '--browser=x'],
+    ['npm help --viewer=x', '--viewer=x'],
+    ['pytest --basetemp=x', '--basetemp=x'],
+    ['pytest --junitxml=x', '--junitxml=x'],
+    ['pytest --debug=x', '--debug=x'],
+    ['pytest --cov-report=xml:x', '--cov-report=xml:x'],
+    ['pytest --log-file=x', '--log-file=x'],
+    ['pytest --rootdir=x', '--rootdir=x'],
+    ['pytest -o x=y', '-o'],
+    ['pytest -c x', '-c'],
+    ['pytest --config-file=x', '--config-file=x'],
+    ['logcli query --cpuprofile=x', '--cpuprofile=x'],
+  ];
+  it.each(
+    probes.flatMap(([line, word]) =>
+      ['?', '*', '[-]'].map((glob) => line.replace(word, () => glob + word.slice(1))),
+    ),
+  )('probe %j reads ask / uncertain / uncertain in every baseline', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+  });
+
+  const verificationAllow = {
+    ro: 'ask / auto / deny',
+    ver: 'allow / allow / allow',
+    impl: 'allow / allow / allow',
+  };
+  it.each([
+    // Uncertain already, unchanged.
+    ['rm ?rf /', 'ask / uncertain / uncertain'],
+    ['rm -[r]f /', 'ask / uncertain / uncertain'],
+    ['git branch -[D] main', 'ask / uncertain / uncertain'],
+    // Quoted or escaped: one literal word.
+    [`npm test "?${shell}"`, verificationAllow],
+    ['rm "[-]rf" /', 'ask / auto / deny'],
+    ['rm \\[-]rf /', 'ask / auto / deny'],
+    ["git branch '?D' main", 'ask / auto / deny'],
+    ['git branch \\*D main', 'ask / auto / deny'],
+    // A literal first character: read as before.
+    ['rm x?rf /', 'ask / auto / deny'],
+    ['rm src* /', 'ask / auto / deny'],
+    // A refusal before, a refusal now (the git boundary's, then the glob's, which ranks first).
+    ['git push origin ?-force', 'ask / uncertain / uncertain'],
+    // No block operand or floored program beside the glob, or the glob after `--`.
+    ['rm *.log', 'ask / auto / deny'],
+    ['npm test -- src/*.test.ts', verificationAllow],
+    ['npm test -- *.test.ts', verificationAllow],
+  ] as const)('control: %j keeps %j', (command, expected) => {
+    expectCells(command, expected);
   });
 });
