@@ -7069,7 +7069,14 @@ describe('WP-257, backlog 659: an extended-glob opener is uncertain wherever it 
     'env @(su) id',
     'npm test @(--script-shell=/bin/id)',
     `bash -O extglob -c 'git --namespace @(+c|-c) ${tail}'`,
-    // An even run of `$` is `$$` and then the glob; a quoted or escaped `$` leaves the `@` plain.
+    // The character before the `(` decides, never the `$` run (WP-262, backlog 668): behind the
+    // `shopt` line bash folds `(x)` into the word after `$@`, `$*`, `$?` and `$!` too (it hands the
+    // parameter and a literal `(x)`), and without it each is a syntax error. Until WP-262 these four
+    // were controls at `ask / auto / deny`; `$$@(x)` is `$$` and then the glob.
+    'echo $@(x)',
+    'echo $*(x)',
+    'echo $?(x)',
+    'echo $!(x)',
     'echo $$@(x)',
     'echo "$"@(x)',
     'echo \\$@(x)',
@@ -7097,11 +7104,6 @@ describe('WP-257, backlog 659: an extended-glob opener is uncertain wherever it 
     ['a=(1 2); echo x', 'ask / auto / deny'],
     ['! (true)', 'ask / auto / deny'],
     ['echo $(true)', 'ask / auto / deny'],
-    // A special parameter, then a literal `(…)` (measured: `$@(+c)` hands `Q(+c)`).
-    ['echo $@(x)', 'ask / auto / deny'],
-    ['echo $*(x)', 'ask / auto / deny'],
-    ['echo $?(x)', 'ask / auto / deny'],
-    ['echo $!(x)', 'ask / auto / deny'],
     // A quoted or escaped operator is no opener (both bashes: a syntax error even with extglob on).
     ['echo \\@(x)', 'ask / auto / deny'],
     ["echo '@'(x)", 'ask / auto / deny'],
@@ -7133,13 +7135,16 @@ describe('WP-257, backlog 659: an extended-glob opener is uncertain wherever it 
     'ls >*(x)',
     'ls >?(x)',
     ...redirections.flatMap((op) => [`ls ${op}@(x)`, `ls ${op}x@(y)`, `ls ${op} @(x)`]),
+    // WP-262 (backlog 668): a special parameter before the opener changes nothing; until WP-262
+    // `ls ${op}$@(x)` was a control at `ask / auto / deny`.
+    ...redirections.map((op) => `ls ${op}$@(x)`),
   ])('%j (an opener in a redirection target) reads ask / uncertain / uncertain', (command) => {
     expectCells(command, 'ask / uncertain / uncertain');
     expect(auto(command).evaluation.uncertainty).toContain(UNCERTAINTY.extendedGlob);
   });
 
-  it.each(redirections.flatMap((op) => [`ls ${op}"@"(x)`, `ls ${op}\\@(x)`, `ls ${op}$@(x)`]))(
-    'control: %j (quoted, escaped or a parameter in the target) keeps ask / auto / deny',
+  it.each(redirections.flatMap((op) => [`ls ${op}"@"(x)`, `ls ${op}\\@(x)`]))(
+    'control: %j (quoted or escaped in the target) keeps ask / auto / deny',
     (command) => {
       expectCells(command, 'ask / auto / deny');
     },
@@ -7153,6 +7158,10 @@ describe('WP-257, backlog 659: an extended-glob opener is uncertain wherever it 
     'ls >@\\\n(x)',
     'ls >@\\\n\\\n(x)',
     'echo $\\\n$@(x)',
+    // `$@(x)` once the continuation is gone, an opener (WP-262; controls until then).
+    'echo $\\\n@(x)',
+    'echo $@\\\n(x)',
+    'ls >$@\\\n(x)',
     'echo @\\\n\\\n(x)',
     'rm -rf @\\\n(/)',
     'git branch @\\\n(-D) main',
@@ -7162,10 +7171,6 @@ describe('WP-257, backlog 659: an extended-glob opener is uncertain wherever it 
   });
 
   it.each([
-    // `$@(x)` once the continuation is gone: a special parameter.
-    'echo $\\\n@(x)',
-    'echo $@\\\n(x)',
-    'ls >$@\\\n(x)',
     // An escaped or quoted operator, then a continuation: still no opener.
     'echo \\@\\\n(x)',
     'ls >\\@\\\n(x)',
@@ -7192,14 +7197,14 @@ describe('WP-257, backlog 659: an extended-glob opener is uncertain wherever it 
     'ls 2\\\n>@(x)',
     'ls >\\\n@(x)',
     'ls >"$"\\\n@(x)',
+    // `$$$@(x)` once both continuations are gone (WP-262; a control at `ask / auto / deny` until then).
+    'echo $\\\n$\\\n$@(x)',
   ])('%j (a continuation in a redirection target) reads ask / uncertain / uncertain', (command) => {
     expectCells(command, 'ask / uncertain / uncertain');
     expect(auto(command).evaluation.uncertainty).toContain(UNCERTAINTY.extendedGlob);
   });
 
   it.each([
-    // `$$$@(x)` once both continuations are gone: an odd run, a special parameter (measured).
-    'echo $\\\n$\\\n$@(x)',
     // No character before the `(`: not an opener.
     'ls > (x)',
     'ls >&(x)',
@@ -7215,13 +7220,14 @@ describe('WP-257, backlog 659: an extended-glob opener is uncertain wherever it 
   });
 
   it.each(['ls >$\\\n@(x)', 'ls >$\\\n$\\\n$@(x)'])(
-    '%j reads its joined line, a special parameter (WP-260, backlog 662)',
+    '%j reads its joined line, an extended-glob opener (WP-260 and WP-262, backlogs 662 and 668)',
     (command) => {
-      // Uncertain until WP-260: `scan`'s target loop stopped at the continuation's newline and read
-      // the rest of the word as a new command. Joined, it is `ls >$@(x)` and `ls >$$$@(x)`, which
-      // bash reads as a parameter and a literal `(x)` (measured, WP-257).
-      expectCells(command, 'ask / auto / deny');
-      expectCells(command.replaceAll('\\\n', ''), 'ask / auto / deny');
+      // Joined, it is `ls >$@(x)` and `ls >$$$@(x)`. WP-260 moved both to `ask / auto / deny` on
+      // WP-257's odd-`$` exemption; with extglob on bash folds `(x)` into the word after the `@`
+      // whatever `$` run precedes it, and without it the line is a syntax error (measured, WP-262),
+      // so both read the opener again.
+      expectCells(command, 'ask / uncertain / uncertain');
+      expectCells(command.replaceAll('\\\n', ''), 'ask / uncertain / uncertain');
     },
   );
 });
@@ -7422,7 +7428,6 @@ describe('WP-260, backlogs 662, 664, 665, 666 and 667: a continuation is removed
     [`ls >a${C}sudo id`, 'ls >asudo id', 'ask / auto / deny'],
     [`git status >${C}&2`, 'git status >&2', 'allow / allow / allow'],
     [`ls <${C}<< x`, 'ls <<< x', 'allow / allow / allow'],
-    [`ls >${D}@(x)`, 'ls >$@(x)', 'ask / auto / deny'],
     [`cat <<EOF\nx${C}EOF\nsudo id\nEOF`, 'cat <<EOF\nxEOF\nsudo id\nEOF', 'allow / allow / allow'],
   ])('%j moves to its joined line %j: %s', (command, joined, expected) => {
     expectJoined(command, joined, expected);
@@ -7475,5 +7480,50 @@ describe('WP-260, backlogs 662, 664, 665, 666 and 667: a continuation is removed
     const joined = 'go build "-ldflags=-s -w" ./...';
     expect(HAZARDOUS_ARGUMENTS.filter(carriesHazard(raw))).toEqual([]);
     expect(HAZARDOUS_ARGUMENTS.filter(carriesHazard(joined))).toEqual([]);
+  });
+});
+
+/**
+ * WP-262 (backlogs 668 and 669): with extglob on, bash's lexer folds `(…)` into the word whenever the
+ * unquoted character before the `(` is `@ ! + * ?`, whatever `$` run comes before that character;
+ * the run decides what the word expands to, never where it ends. Measured with `printf` under bash
+ * 5.3.20 and 3.2.57: behind `shopt -s extglob`, `printf '[%s]' 2>$@(t) -rf /` printed `[-rf][/]` and
+ * wrote the file `(t)`; `$?(` hands `0(x)`, `$+(` a glob; `$#(` is a syntax error, extglob on or off.
+ * WP-257's odd-`$` exemption read these as a parameter and no opener, so `scan`'s target loop split
+ * at the `(` and the prefix line hid the command from the block list (`ask / auto / deny`).
+ * `⏎` is a newline below.
+ */
+describe('WP-262, backlogs 668 and 669: the character before the ( decides an extended-glob opener', () => {
+  const X = 'shopt -s extglob\n';
+  const parameters = ['$@', '$*', '$?', '$!', '$+'];
+
+  it.each(
+    parameters.flatMap((p) => [
+      `${X}rm &>${p}(x) -rf /`,
+      `${X}git >${p}(x) -c core.fsmonitor=x status`,
+      `${X}ls ${p}(x)`,
+    ]),
+  )('%j reads ask / uncertain / uncertain, naming the extended glob', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(auto(command).evaluation.uncertainty).toContain(UNCERTAINTY.extendedGlob);
+  });
+
+  it.each([
+    // Bash refuses both (a syntax error near `(`); recorded, no fail-open either way.
+    ['true\nrm &>$@(x) -rf /', 'ask / uncertain / uncertain'],
+    [`${X}rm &>$#(x) -rf /`, 'ask / auto / deny'],
+    // The whole line still reaches the block list without the prefix line.
+    ['rm &>$@(x) -rf /', 'block / block / block'],
+  ])('%j reads %s', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it('669: the git boundary reads the line joined, as bash does, when it is asked directly', () => {
+    // `decideUnattendedCommand` hands it a joined line already; only the boundary's own join
+    // answers a raw one (`/c\⏎tl/x` is `/ctl/x` to bash).
+    expect(gitBoundaryViolation('cat /c\\\ntl/x')).toMatchObject({
+      kind: 'boundary',
+      fragment: 'cat /ctl/x',
+    });
   });
 });

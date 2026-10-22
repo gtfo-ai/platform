@@ -524,8 +524,11 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   as two words (both bashes; git 2.56.0 ran the monitor in the C and C.UTF-8 locales, where `+c`
 >   sorts first — under en_US.UTF-8 `-c` sorts first and git refuses `+c`, while `git @(-c) …` ran it
 >   in every locale; measured on a scratch repository), a line continuation inside the opener
->   (`@\⏎(x)`, also in a redirection target) being removed text, where the scanner had read `@` and a subshell; a quoted or escaped opener and a
->   special parameter (`$@(`, `$?(`) are read as before, and `[[ $x == @(a|b) ]]`, a `case`
+>   (`@\⏎(x)`, also in a redirection target) being removed text, where the scanner had read `@` and a subshell; a quoted or escaped opener is read
+>   as before, and a `$` run before the opener changes nothing (WP-262, backlog 668: `$@(`, `$?(`
+>   and `$+(` are openers too — bash folds the `(…)` into the word whatever the run, which decides
+>   only what the word expands to — where WP-257 had exempted an odd run, and behind the `shopt`
+>   line `rm &>$@(x) -rf /` read `auto` where bash hands `rm` the words `-rf /`), and `[[ $x == @(a|b) ]]`, a `case`
 >   pattern and `!(cmd)` reading uncertain are the stated over-ask. A
 >   command or process substitution whose body holds an unquoted `case` word or a comment is not
 >   read (WP-251, backlog 651): the scanner's matcher has no case-pattern or comment state, so a

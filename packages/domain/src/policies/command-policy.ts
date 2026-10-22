@@ -336,7 +336,10 @@ export const UNCERTAINTY = {
    * never reads the option state, so the opener is uncertain wherever it appears; `[[ … == @(a|b) ]]`, a `case` pattern
    * and `!(cmd)` are the stated over-ask. A block entry still ranks first (`git push origin
    * +(--force)` is `block`); a git refusal does not (`@(--force)` reads uncertain). An opener at the
-   * end of a redirection target (`>@(x)`) is read where the target is consumed.
+   * end of a redirection target (`>@(x)`) is read where the target is consumed. The character
+   * before the `(` decides, never a `$` run before it: `$@(x)` and `>$@(x)` are openers too (WP-262,
+   * backlog 668 — WP-257 read an odd run as a special parameter and no opener, and behind the
+   * `shopt` line `rm &>$@(x) -rf /` read `auto` where bash reads `rm -rf /`).
    */
   extendedGlob:
     'an extended glob (@(…), !(…), +(…), *(…) or ?(…)), which the shell reads as a pattern whose words the directory decides, or refuses, depending on an option (extglob) the run can set — quote it, or write the words out; the platform does not read extended globs',
@@ -5531,26 +5534,21 @@ const PROCESS_SUBSTITUTION_ARGUMENT = '/dev/fd/63';
 
 /**
  * Whether a run of plain characters ends in an extended-glob opener (WP-257, backlog 659; read on the
- * joined text, {@link joinLineContinuations}, so `@\⏎(x)` is `@(x)` and `$\⏎$@(` is `$$@(` here as
- * in bash): its last character is `@ ! + * ?`, and the `$` run before that is even. After an odd run
- * it is a special parameter (`$@(`, `$?(` hand the parameter and a literal `(…)`, measured); after
- * an even run (`$$@(`) it is a glob again.
+ * joined text, {@link joinLineContinuations}, so `@\⏎(x)` is `@(x)` here as in bash): its last
+ * character is `@ ! + * ?`, whatever comes before it (WP-262, backlog 668). With extglob on, bash's
+ * lexer folds the `(…)` into the word after any of the five; a `$` run before it decides only what
+ * the word expands to — `$@(x)`, `$*(x)`, `$!(x)` hand the parameter and a literal `(x)`, `$?(x)`
+ * hands `0(x)`, `$+(x)` and `$$@(x)` a glob — never where the word ends (measured, bash 5.3.20 and
+ * 3.2.57; `$#(`, `$$(`, `$-(`, `$0(` are a syntax error with extglob on or off). With extglob off
+ * every one is a syntax error, so the opener is uncertain.
  */
-const runOpensExtendedGlob = (run: string): boolean => {
-  if (!'@!+*?'.includes(run[run.length - 1] as string)) {
-    return false;
-  }
-  let dollars = 0;
-  while (run[run.length - 2 - dollars] === '$') {
-    dollars += 1;
-  }
-  return dollars % 2 === 0;
-};
+const runOpensExtendedGlob = (run: string): boolean =>
+  '@!+*?'.includes(run[run.length - 1] as string);
 
 /**
  * Whether the unquoted `(` at `index` opens an extended glob (`UNCERTAINTY.extendedGlob`), on the
  * argument path: `plainFrom`…`lastPlain` is the run of plain characters `scan` read, which end just
- * before the `(`.
+ * before the `(`. `ls $@(x)` is an opener as `ls @(x)` is (WP-262).
  */
 const opensExtendedGlob = (
   command: string,
@@ -5563,7 +5561,10 @@ const opensExtendedGlob = (
  * Whether the redirection target word starting at `from` reaches an extended-glob opener (review
  * rounds 1 to 4): `scan`'s target loop stops at the `(`, so the word is read again here, forward, as
  * bash reads it — an escaped or quoted character ending the plain run, a blank or an operator ending
- * the word.
+ * the word. A special parameter before the opener changes nothing (WP-262, backlog 668: behind
+ * `shopt -s extglob`, bash reads `rm &>$@(x) -rf /` as `rm -rf /` with the target `(x)` — measured
+ * with `printf` — where the loop's split read a subshell and the prefix line hid `rm` from the
+ * block list).
  */
 const redirectionTargetOpensExtendedGlob = (command: string, from: number): boolean => {
   let run = '';
