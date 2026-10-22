@@ -118,9 +118,10 @@
  * a `command`-kind floor is written for (since WP-164: `make`, `go`, `cargo`, `npm`, `pnpm`,
  * `pytest`, `rg`, and `gmake` since WP-186 — `XARGS_FLOORED_VERBS`), whose floored argument the input can carry, or a script
  * shell whatever its own words (since WP-185), or that replaces a string that is not literal
- * (WP-185) — `xargsArguments`. A line continuation is joined before any word is classified, inside a word
- * as between words (`normaliseCommand`), and git's abbreviated long options are resolved by git's
- * rule (`HAZARDOUS_ARGUMENTS`).
+ * (WP-185) — `xargsArguments`. A line continuation is removed before anything is read, once, at
+ * every export that reads command text (`joinLineContinuations`, WP-260: no reader here sees one
+ * bash removes), and git's abbreviated long options are resolved by git's rule
+ * (`HAZARDOUS_ARGUMENTS`).
  *
  * **A program the policy does not know may be a wrapper** (WP-203, backlog 599): one no `allow` or
  * `ask` entry of the stage's policy begins with, on no wrapper set, no shell or package runner, with
@@ -213,6 +214,13 @@
 import type { CommandPolicy, UnattendedCommandMode, VerificationMode } from '@platform/contracts';
 import { DEFAULT_UNATTENDED_COMMAND_MODE } from '@platform/contracts';
 import { PolicyViolationError } from '../errors.js';
+import {
+  type BashText,
+  joinLineContinuations,
+  readInsideWord,
+  readWordCharacter,
+  wordStart,
+} from './bash-text.js';
 import { GIT_LONG_OPTIONS, type GitLongOptionTable } from './git-long-options.generated.js';
 
 export type CommandVerdict = 'allow' | 'ask' | 'block';
@@ -323,9 +331,9 @@ export const UNCERTAINTY = {
    * line `git --namespace @(+c|-c) core.fsmonitor=<script> status` ran the monitor under bash
    * 5.3.20 and 3.2.57 in the C and C.UTF-8 locales, where `+c` sorts first (under en_US.UTF-8 `-c`
    * sorts first and git refuses the verb `+c`; `git @(-c) core.fsmonitor=<script> status` ran it in
-   * all three; measured). A line continuation inside the opener (`@\⏎(`) is removed text and
-   * read through (`isContinuationAt`). The scanner read `@` and a subshell. It never reads the option
-   * state, so the opener is uncertain wherever it appears; `[[ … == @(a|b) ]]`, a `case` pattern
+   * all three; measured). A line continuation inside the opener (`@\⏎(`) is gone before the
+   * scanner reads it (`joinLineContinuations`, WP-260). The scanner read `@` and a subshell. It
+   * never reads the option state, so the opener is uncertain wherever it appears; `[[ … == @(a|b) ]]`, a `case` pattern
    * and `!(cmd)` are the stated over-ask. A block entry still ranks first (`git push origin
    * +(--force)` is `block`); a git refusal does not (`@(--force)` reads uncertain). An opener at the
    * end of a redirection target (`>@(x)`) is read where the target is consumed.
@@ -2668,124 +2676,12 @@ export const POLICY_GIT_SUBCOMMANDS: readonly string[] = [
 const REGEX_SPECIALS = /[.+^${}()|[\]\\]/g;
 
 /**
- * Where an unquoted `#` opens a comment (WP-259, backlogs 661 and 663): only where it **begins a word
- * in the text as bash reads it** (bash manual, *Comments*: "a word beginning with `#`"; *Escape
- * Character*: a `\`-newline pair "is removed from the input stream"). That is the text's start, or
- * after a blank (space or tab), a newline, or an operator character the walk read as one — `;` `&`
- * `|` `<` `>`, a `(` and a `)` that closes a subshell, a group, an arithmetic command or a `case`
- * pattern — with every line continuation ({@link isContinuationAt}) between it and the `#` removed:
- * `ls \⏎#;x` is a comment, `ls a\⏎#;x` the word `a#` and then `x` (measured, bash 5.3.20 and
- * 3.2.57). A `)` that closes `$(`, `$((`, `<(`, `>(` or an array assignment (`a=(…)`) ends no word,
- * nor does a quoted, escaped or expanded character, nor `\r`, `\v`, `\f` or a non-ASCII space, which
- * bash keeps inside a word: `$(echo a)#`, `a\ #`, `"a"#` and `a\r#` are each one word (measured).
- *
- * The state is carried **forward** by the walk that reads the text, never read off a peek backward:
- * `a\\⏎#` is an escaped `\` and then a real newline, so its `#` is a comment, which only a forward
- * walk tells from `a\⏎#`. Its readers, each carrying one {@link WordStart}: `scan`,
- * `joinQuotedContinuations`, `findClosingParen` (its `#` and its `case` word) and
- * `readShellContext` (its comment ranges and its here-document refusal). `scan` adds two pieces of
- * its own: a redirection target that ends in a continuation's `\` leaves the newline after it as
- * removed text, and a `#` glued to a substitution it lifts out of the segment text is written `\#`
- * there, because the pipe pass and `feedsScriptReader` read that text and would see a blank before
- * it (`ls $(x)#|sudo id` is `ls #|sudo id` with the substitution lifted).
- */
-interface WordStart {
-  /** Whether the next character begins a word. */
-  atWordStart: boolean;
-  /** The last character read as itself (`''` after a quoted, escaped or expanded unit). */
-  last: string;
-  /** Per open `(`: whether its `)` ends a word (a subshell or group did not start inside a word). */
-  readonly closesWord: boolean[];
-}
-
-const wordStart = (): WordStart => ({ atWordStart: true, last: '', closesWord: [] });
-
-/** bash's blanks, its newline and its operator characters (`(` and `)` are read apart). */
-const WORD_BREAK = /[ \t\n;&|<>]/;
-
-/**
- * The state after the walk reads the unquoted, unescaped character at `index` as itself. A line
- * continuation is removed text and changes nothing; the caller steps over its newline.
- */
-const readWordCharacter = (state: WordStart, text: string, index: number): void => {
-  if (isContinuationAt(text, index)) {
-    return;
-  }
-  const char = text[index] as string;
-  if (char === '(') {
-    state.closesWord.push(state.atWordStart && state.last !== '<' && state.last !== '>');
-    state.atWordStart = true;
-  } else if (char === ')') {
-    state.atWordStart = state.closesWord.pop() ?? true;
-  } else {
-    state.atWordStart = WORD_BREAK.test(char);
-  }
-  state.last = char;
-};
-
-/** The state after a unit that stays inside a word: a quoted or escaped character, an expansion. */
-const readInsideWord = (state: WordStart): void => {
-  state.atWordStart = false;
-  state.last = '';
-};
-
-/**
- * `text` with every line continuation (`\` + newline) outside single quotes taken out — once, as
- * bash takes it out before it splits words (WP-161 criterion (10), backlog 520). `su\⏎do id` is
- * `sudo id` to bash, and read with the backslash kept it was `su` and `do` to every classifier here,
- * so the block list, the git boundary and the hazard floor never saw it. Inside single quotes the
- * pair is two literal characters; an escaped backslash (`\\`) is kept whole, so the newline after
- * it stays a newline. A here-document body is not in the text this reads: the scanner cuts a body
- * that is data out of every fragment, and a body a shell runs is joined by that shell too.
- */
-const joinQuotedContinuations = (text: string): string => {
-  if (!text.includes('\\\n')) {
-    return text;
-  }
-  let out = '';
-  let quote: '"' | "'" | null = null;
-  const words = wordStart();
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index] as string;
-    if (quote === null && char === '#' && words.atWordStart) {
-      // A comment runs to the newline, and a backslash in it is not a continuation (WP-161
-      // criterion (14)): `ls # x \⏎sudo id` runs `sudo id` in bash 3.2, 5.2 and dash.
-      const end = text.indexOf('\n', index);
-      out += text.slice(index, end === -1 ? text.length : end);
-      index = (end === -1 ? text.length : end) - 1;
-    } else if (quote === "'") {
-      quote = char === "'" ? null : quote;
-      out += char;
-      readInsideWord(words);
-    } else if (char === '\\') {
-      // A line continuation is removed text: it changes no word state.
-      if (!isContinuationAt(text, index)) {
-        out += text.slice(index, index + 2);
-        readInsideWord(words);
-      }
-      index += 1;
-    } else {
-      if (char === '"' || char === "'") {
-        quote = quote === char ? null : quote === null ? char : quote;
-        readInsideWord(words);
-      } else if (quote === null) {
-        readWordCharacter(words, text, index);
-      } else {
-        readInsideWord(words);
-      }
-      out += char;
-    }
-  }
-  return out;
-};
-
-/**
  * Collapses whitespace so `npm  test` and `npm test` are the same command, after taking out the
- * line continuations bash takes out (`joinQuotedContinuations`): every word this module classifies
- * is split from here (`tokenise`), so a continuation is removed before any word is read.
+ * line continuations bash takes out ({@link joinLineContinuations}): every word this module
+ * classifies is split from here (`tokenise`), so a continuation is removed before any word is read.
  */
 export const normaliseCommand = (command: string): string =>
-  joinQuotedContinuations(command).trim().replace(/\s+/g, ' ');
+  joinLineContinuations(command).trim().replace(/\s+/g, ' ');
 
 const globToRegExp = (glob: string): RegExp =>
   new RegExp(
@@ -3097,7 +2993,7 @@ const unquoteToken = (token: string): string => {
     } else if (char === '\\' && quote !== "'") {
       index += 1;
       const next = token[index] ?? '';
-      out += quote === '"' && !'$`"\\\n'.includes(next) ? `\\${next}` : next;
+      out += quote === '"' && !'$`"\\'.includes(next) ? `\\${next}` : next;
     } else {
       out += char;
     }
@@ -3482,7 +3378,7 @@ const tokenise = (text: string): readonly string[] =>
  * reads these, because whether the shell expands a name is a question about its quoting.
  */
 const argvShellWords = (text: string): readonly string[] =>
-  shellWords(joinQuotedContinuations(text))
+  shellWords(text)
     .filter((word) => word.redirect === undefined)
     .map((word) => word.raw);
 
@@ -3548,7 +3444,7 @@ const receivedShellWords = (text: string): readonly string[] =>
  * `go test {-cpuprofile,/tmp/c} ./...` hands go `-cpuprofile /tmp/c`. Exported for its own test.
  */
 export const argvWords = (text: string): readonly string[] =>
-  receivedShellWords(text).map(unquoteToken);
+  receivedShellWords(joinLineContinuations(text)).map(unquoteToken);
 
 /**
  * The two readings every deny-direction reader judges (WP-198 (c)): the written words it judged
@@ -3796,7 +3692,7 @@ const receivedMayDiffer = (written: string): boolean => {
     } else if (char === '$' || char === '`') {
       return true;
     } else if (char === '\\') {
-      if (quote === '"' && !'$`"\\\n'.includes(written[index + 1] ?? '$')) {
+      if (quote === '"' && !'$`"\\'.includes(written[index + 1] ?? '$')) {
         return true;
       }
       index += 1;
@@ -4515,12 +4411,12 @@ export const matchesBlockPattern = (
  * for the `tokens` census in `command-policy.test.ts` (WP-186), which runs it over an entry that is
  * not on the list.
  */
-export const carriesHazard =
-  (command: string) =>
-  (entry: HazardousArgument): boolean =>
+export const carriesHazard = (command: string) => {
+  const text = joinLineContinuations(command);
+  return (entry: HazardousArgument): boolean =>
     entry.tokens === undefined
-      ? matchesBlockPattern(entry.pattern, command, 'hazard')
-      : blockCandidates(command).some((candidate) => {
+      ? matchesBlockPattern(entry.pattern, text, 'hazard')
+      : blockCandidates(text).some((candidate) => {
           const [name, ...rest] = candidate;
           if (name === undefined) {
             return false;
@@ -4538,6 +4434,7 @@ export const carriesHazard =
             receivedUnsure: RECEIVED_READING.get(candidate),
           });
         });
+};
 
 /**
  * The first `HAZARDOUS_ARGUMENTS` entry this piece of command line carries, if any. Its only
@@ -4687,15 +4584,15 @@ const LIST_OPERATORS = ['&&', '||', ';', '&', '\n', '(', ')'] as const;
 const PIPE_OPERATORS = ['|&', '|'] as const;
 
 interface ScanResult {
-  readonly segments: readonly string[];
+  readonly segments: readonly BashText[];
   /**
    * Each of `segments` as written, in the same order: its substitutions and backticks kept, which
    * `segments` lifts out (WP-160 — a string handed to a trap or a shell is literal only if nothing
    * in it expands). Here-document bodies are not in either.
    */
-  readonly rawSegments: readonly string[];
+  readonly rawSegments: readonly BashText[];
   /** Bodies of `$(…)`, `` `…` ``, `<(…)` and `>(…)`, which the shell executes in their own right. */
-  readonly substitutions: readonly string[];
+  readonly substitutions: readonly BashText[];
   /** Redirection targets that are paths — a duplication (`2>&1`) or `/dev/null` is not one. */
   readonly writeTargets: readonly string[];
   /** Constructs the scanner will not reason about; each one floors the verdict at `ask`. */
@@ -4718,7 +4615,7 @@ interface ScanResult {
    * before backlog 645: the same text as `segments` unless one was there. `parseCommand` reads it
    * beside the segment, so keeping the word only tightens.
    */
-  readonly droppedSegments: readonly string[];
+  readonly droppedSegments: readonly BashText[];
 }
 
 // ── here-documents (WP-153) ──────────────────────────────────────────────────
@@ -4773,8 +4670,8 @@ const HERE_DOCUMENT_OPERATOR =
  * being recognised (its body read as commands: an apostrophe in it was `unbalancedQuote`). bash
  * reads a here-document after each of them (measured). So this walks `before` as the shell does —
  * quotes honoured, a comment running to the end of its line and only where bash begins a word
- * ({@link WordStart}, WP-259: after a blank, a newline or an operator character, a continuation
- * removed, never after the `)` of `$(`, `$((`, `<(` or `>(`; it was `\s` and a peek at the previous
+ * ({@link WordStart}, WP-259: after a blank, a newline or an operator character, never after the
+ * `)` of `$(`, `$((`, `<(` or `>(`; it was `\s` and a peek at the previous
  * character, which read `$(x)#` as a comment and so hid the `sh` of `ls $(x)#|sh <<EOF` from
  * `feedsScriptReader`), `${`, `$[`, `((`/`$((` and `[[` counted until they close, a substitution's
  * text with a quote state of its own — and refuses only when one of them is open at the end, or
@@ -4806,9 +4703,7 @@ const readShellContext = (
       continue;
     }
     if (char === '\\') {
-      if (!isContinuationAt(before, index)) {
-        readInsideWord(words);
-      }
+      readInsideWord(words);
       index += 1;
       continue;
     }
@@ -5002,9 +4897,7 @@ const unrecognisedOperator = (
   let quoted = false;
   while (cursor < text.length && !/[ \t\n;&|()<>]/.test(text[cursor] as string)) {
     const char = text[cursor] as string;
-    if (char === '\\' && text[cursor + 1] === '\n') {
-      cursor += 2; // a line continuation joins the word, quoting nothing (review round 1)
-    } else if (char === '\\') {
+    if (char === '\\') {
       quoted = true;
       delimiter += text[cursor + 1] ?? '';
       cursor += 2;
@@ -5089,8 +4982,7 @@ export const hereDocumentsAtNewline = (
   pending: readonly HereDocumentOperator[],
   pendingFrom: number,
 ): HereDocumentsAtNewline => {
-  // A line continuation (`\` + newline) does not end the line (review round 1: `cat <<\⏎EOF`).
-  if (joinContinuations(text.slice(pendingFrom, newline)).includes('\n')) {
+  if (text.slice(pendingFrom, newline).includes('\n')) {
     return { resume: newline, bodies: [], range: null };
   }
   const { end, bodies } = readHereDocumentBodies(text, newline, pending);
@@ -5238,49 +5130,15 @@ const evaluatesVariableText = (text: string, index: number): boolean => {
   return evaluatesAfterName(text, at);
 };
 
-/**
- * `text` with every line continuation (`\\` + newline) taken out, as bash takes it out before it
- * reads a word — outside single quotes, in double quotes and in an unquoted body alike — so
- * `$\\⏎{y[x]}` and `${y\\⏎[x]}` are `${y[x]}` (measured, bash 5.2 and 3.2; review round 1). An
- * escaped backslash (`\\\\`) is kept whole, so the newline after it stays a newline.
- */
-const joinContinuations = (text: string): string => {
-  if (!text.includes('\\\n')) {
-    return text;
-  }
-  let out = '';
-  for (let index = 0; index < text.length; index += 1) {
-    if (text[index] === '\\') {
-      if (!isLineContinuation(text, index)) {
-        out += text.slice(index, index + 2);
-      }
-      index += 1;
-    } else {
-      out += text[index];
-    }
-  }
-  return out;
-};
-
-/**
- * Whether a backslash at `index` starts a line continuation, which bash removes outside single
- * quotes. One test for the scanner (`joinContinuations`) and the git boundary's computed-name walk
- * (`computesCommandName`), so the two cannot read a continued line differently (WP-201 review
- * round 3: `X=1 \⏎$CMD id` was exempt as computed, and the boundary never read `$CMD`).
- */
-export const isLineContinuation = (text: string, index: number): boolean =>
-  text[index] === '\\' && text[index + 1] === '\n';
-
-/** The detector at the `$` at `text[index]`, over the text as bash reads it (continuations joined). */
+/** The detector at the `$` at `text[index]` (the text is joined, {@link joinLineContinuations}). */
 const evaluatesExpansionAt = (text: string, index: number): boolean =>
-  evaluatesVariableText(joinContinuations(text.slice(index)), 0);
+  evaluatesVariableText(text.slice(index), 0);
 
 /**
  * The same detector over an unquoted here-document body, where quotes are plain characters and only
  * a backslash keeps a `$` from expanding.
  */
-const bodyEvaluatesVariableText = (body: string): boolean => {
-  const joined = joinContinuations(body);
+const bodyEvaluatesVariableText = (joined: string): boolean => {
   for (let index = 0; index < joined.length; index += 1) {
     if (joined[index] === '\\') {
       index += 1;
@@ -5340,7 +5198,7 @@ const ELEMENT_ASSIGNMENT = /^(?:[A-Za-z_][A-Za-z0-9_]*)?\[([\s\S]*)\]\+?=/;
  * the scanner itself with blanks as the operators. A redirection word is dropped: it names no
  * variable.
  */
-const wordsOf = (stage: string): readonly string[] =>
+const wordsOf = (stage: BashText): readonly string[] =>
   scan(stage, [' ', '\t']).segments.filter(
     (word, index, all) =>
       !/^[0-9]*[<>&]/.test(word) &&
@@ -5381,8 +5239,8 @@ interface TestState {
  * stage to stage — a `-v` test or an arithmetic comparison whose operands are not both plain
  * numbers. `((…))` is the walk's (`scan`), because the list split cuts it at `(`.
  */
-const stageEvaluatesText = (stage: string, state: TestState): boolean => {
-  const words = wordsOf(joinContinuations(stage));
+const stageEvaluatesText = (stage: BashText, state: TestState): boolean => {
+  const words = wordsOf(stage);
   let evaluates = false;
   for (const [index, word] of words.entries()) {
     if (word === '[[') {
@@ -5510,8 +5368,8 @@ export const HERE_DOCUMENT_SCRIPT_READERS: ReadonlySet<string> = new Set([
  * is the command: not a peeled token (an assignment, a wrapper — `{` is one), not `[`, and nothing
  * inside a `[`/`[[` test.
  */
-const feedsScriptReader = (segment: string): boolean => {
-  const text = joinContinuations(withoutRanges(segment, readShellContext(segment).comments));
+const feedsScriptReader = (segment: BashText): boolean => {
+  const text = withoutRanges(segment, readShellContext(segment).comments);
   return (
     text
       .split(/[\s|&;()<>]+/)
@@ -5565,9 +5423,7 @@ const findClosingParen = (
   for (let index = openIndex; index < text.length; index += 1) {
     const char = text[index] as string;
     if (char === '\\') {
-      if (!isContinuationAt(text, index)) {
-        readInsideWord(words);
-      }
+      readInsideWord(words);
       index += 1;
       continue;
     }
@@ -5674,38 +5530,9 @@ const isWriteTarget = (target: string): boolean =>
 const PROCESS_SUBSTITUTION_ARGUMENT = '/dev/fd/63';
 
 /**
- * WP-257 (backlog 659): every reader that decides an extended-glob opener reads the text with line
- * continuations removed, as bash removes them before it reads a word (`@\⏎(x)` is `@(x)`, `$\⏎$@(`
- * is `$$@(`, measured, both bashes; review rounds 2 to 4). This is the one definition of a
- * continuation they share: a `\` directly followed by a newline (a carriage return in between is
- * not one), at a position each caller reaches walking forward, so an escaped `\\` never is. Its readers: `scan`'s backslash branch (the plain run goes
- * on across it), {@link opensExtendedGlob} (the argument path, through {@link withoutContinuations})
- * and {@link redirectionTargetOpensExtendedGlob} (a redirection target, read forward). A single
- * quote never reaches it: `scan` and the target reader skip quoted text whole. Since WP-259 the
- * comment readers take it too, through {@link WordStart}: `scan`, `joinQuotedContinuations`,
- * `findClosingParen` and `readShellContext` — a continuation changes no word state, so `ls a\⏎#`
- * is the word `a#` and `ls \⏎#` a comment — and `scan`'s redirection branch, whose target loop stops
- * at a continuation's newline (backlog 662) and leaves that newline to the walk as removed text.
- */
-const isContinuationAt = (command: string, at: number): boolean =>
-  command[at] === '\\' && command[at + 1] === '\n';
-
-/** `text` with its line continuations removed; `text` is a plain run, whose every `\` starts one. */
-const withoutContinuations = (text: string): string => {
-  let out = '';
-  for (let at = 0; at < text.length; at += 1) {
-    if (isContinuationAt(text, at)) {
-      at += 1;
-    } else {
-      out += text[at];
-    }
-  }
-  return out;
-};
-
-/**
- * Whether a run of plain characters (continuations already removed) ends in an extended-glob
- * opener: its last character is `@ ! + * ?`, and the `$` run before that is even. After an odd run
+ * Whether a run of plain characters ends in an extended-glob opener (WP-257, backlog 659; read on the
+ * joined text, {@link joinLineContinuations}, so `@\⏎(x)` is `@(x)` and `$\⏎$@(` is `$$@(` here as
+ * in bash): its last character is `@ ! + * ?`, and the `$` run before that is even. After an odd run
  * it is a special parameter (`$@(`, `$?(` hand the parameter and a literal `(…)`, measured); after
  * an even run (`$$@(`) it is a glob again.
  */
@@ -5722,31 +5549,27 @@ const runOpensExtendedGlob = (run: string): boolean => {
 
 /**
  * Whether the unquoted `(` at `index` opens an extended glob (`UNCERTAINTY.extendedGlob`), on the
- * argument path: `plainFrom`…`lastPlain` is the run of plain characters `scan` read, continuations
- * included, which end just before the `(`.
+ * argument path: `plainFrom`…`lastPlain` is the run of plain characters `scan` read, which end just
+ * before the `(`.
  */
 const opensExtendedGlob = (
   command: string,
   index: number,
   plainFrom: number,
   lastPlain: number,
-): boolean =>
-  lastPlain === index - 1 &&
-  runOpensExtendedGlob(withoutContinuations(command.slice(plainFrom, index)));
+): boolean => lastPlain === index - 1 && runOpensExtendedGlob(command.slice(plainFrom, index));
 
 /**
  * Whether the redirection target word starting at `from` reaches an extended-glob opener (review
- * rounds 1 to 4): `scan`'s target loop stops at the `(` and at a continuation's newline, so the word
- * is read again here, forward, as bash reads it — a continuation removed, an escaped or quoted
- * character ending the plain run, a blank or an operator ending the word.
+ * rounds 1 to 4): `scan`'s target loop stops at the `(`, so the word is read again here, forward, as
+ * bash reads it — an escaped or quoted character ending the plain run, a blank or an operator ending
+ * the word.
  */
 const redirectionTargetOpensExtendedGlob = (command: string, from: number): boolean => {
   let run = '';
   for (let at = from; at < command.length; at += 1) {
     const char = command[at] as string;
-    if (isContinuationAt(command, at)) {
-      at += 1;
-    } else if (char === '(') {
+    if (char === '(') {
       return runOpensExtendedGlob(run);
     } else if (/[\s;&|)<>]/.test(char)) {
       return false;
@@ -5784,10 +5607,10 @@ const redirectionTargetOpensExtendedGlob = (command: string, from: number): bool
  * on its line, and at that line's newline the bodies are skipped — never a segment, never quote
  * state — and the pass resumes after the last terminator line.
  */
-const scan = (command: string, operators: readonly string[]): ScanResult => {
-  const segments: string[] = [];
-  const rawSegments: string[] = [];
-  const substitutions: string[] = [];
+const scan = (command: BashText, operators: readonly string[]): ScanResult => {
+  const segments: BashText[] = [];
+  const rawSegments: BashText[] = [];
+  const substitutions: BashText[] = [];
   const substitutionOffsets: number[] = [];
   const writeTargets: string[] = [];
   const uncertainty = new Set<UncertaintyReason>();
@@ -5803,20 +5626,17 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
   let inDouble = false;
   let index = 0;
   // The run of characters read as plain unquoted text that ends at `lastPlain` (WP-257): a quoted,
-  // escaped or consumed character is never in it, so `"@"(` and `\@(` are not extglob openers; a line
-  // continuation (`\⏎`) is removed text and the run goes on across it.
+  // escaped or consumed character is never in it, so `"@"(` and `\@(` are not extglob openers.
   let plainFrom = 0;
   let lastPlain = -1;
-  // Where a `#` begins a word (WP-259, `WordStart`), carried forward; and the newline of a line
-  // continuation a redirection target ended at, which the walk still splits at (backlog 662) but
-  // which is removed text for the word state.
+  // Where a `#` begins a word (WP-259, `WordStart`), carried forward.
   const words = wordStart();
-  let continuedNewline = -1;
   // `current` is what later readers of the segment re-scan (the pipe pass, `feedsScriptReader`).
   // Where they would begin a word and the walk does not, a `#` there is written `\#` — the same
   // literal to bash: after a command substitution or a backtick lifted out of `current` (`ls $(x)#|y`
   // is `ls #|y` there), and at a segment's start after a split at a `(` or `)` inside a word
-  // (`ls $\⏎(x)#|y`). Lifts and continuations keep the state; anything else read clears it.
+  // (`ls $(x)#|y` split by the list pass at the `(`). Lifts keep the state; anything else read
+  // clears it.
   let rereadAtWordStart = false;
 
   const recordBodies = (bodies: readonly HereDocumentBody[]): void => {
@@ -5833,19 +5653,24 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
   let segmentStart = 0;
   // Where `current` holds a process substitution's word (backlog 645), for `droppedSegments`.
   let substitutionWordsAt: number[] = [];
-  const droppedSegments: string[] = [];
+  const droppedSegments: BashText[] = [];
+  // Every piece this pass hands out is cut from the joined `command` (or from `current`, its read).
+  const piece = (text: string): BashText => text as BashText;
   const push = (end = index): void => {
     const segment = current.trim();
     if (segment.length > 0) {
-      segments.push(segment);
-      rawSegments.push(command.slice(segmentStart, end).trim());
+      segments.push(piece(segment));
+      rawSegments.push(piece(command.slice(segmentStart, end).trim()));
       droppedSegments.push(
-        substitutionWordsAt
-          .reduceRight(
-            (text, at) => text.slice(0, at) + text.slice(at + PROCESS_SUBSTITUTION_ARGUMENT.length),
-            current,
-          )
-          .trim(),
+        piece(
+          substitutionWordsAt
+            .reduceRight(
+              (text, at) =>
+                text.slice(0, at) + text.slice(at + PROCESS_SUBSTITUTION_ARGUMENT.length),
+              current,
+            )
+            .trim(),
+        ),
       );
     }
     current = '';
@@ -5856,11 +5681,10 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
     const char = command[index] as string;
     const rest = command.slice(index);
     const reread = rereadAtWordStart;
-    // `$(\⏎(` is `$((` to bash: the continuation is removed before the word is read (WP-259).
-    const arithmetic = /^\$\((?:\\\n)*\(/.test(rest);
+    const arithmetic = rest.startsWith('$((');
     if ((rest.startsWith('$(') && !arithmetic) || char === '`') {
       rereadAtWordStart ||= words.atWordStart;
-    } else if (!isContinuationAt(command, index)) {
+    } else {
       rereadAtWordStart = false;
     }
 
@@ -5895,12 +5719,12 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       const close = findClosingParen(command, index + 1, true, uncertainty);
       if (close === -1) {
         uncertainty.add(UNCERTAINTY.unterminatedSubstitution);
-        substitutions.push(command.slice(index + 2));
+        substitutions.push(piece(command.slice(index + 2)));
         substitutionOffsets.push(index + 2);
         index = command.length;
         continue;
       }
-      substitutions.push(command.slice(index + 2, close));
+      substitutions.push(piece(command.slice(index + 2, close)));
       substitutionOffsets.push(index + 2);
       // A process substitution is an argument: bash hands the program `/dev/fd/N` (and `2<(…)` is
       // the one word `2/dev/fd/N`), so its word stays where it was written (backlog 645). Inside
@@ -5919,12 +5743,12 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       const close = command.indexOf('`', index + 1);
       if (close === -1) {
         uncertainty.add(UNCERTAINTY.unterminatedBacktick);
-        substitutions.push(command.slice(index + 1));
+        substitutions.push(piece(command.slice(index + 1)));
         substitutionOffsets.push(index + 1);
         index = command.length;
         continue;
       }
-      substitutions.push(command.slice(index + 1, close));
+      substitutions.push(piece(command.slice(index + 1, close)));
       substitutionOffsets.push(index + 1);
       index = close + 1;
       readInsideWord(words);
@@ -5991,13 +5815,7 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
     }
 
     if (char === '\\') {
-      // A line continuation is removed text: the plain run goes on across it (WP-257 round 2).
-      if (isContinuationAt(command, index) && lastPlain === index - 1) {
-        lastPlain = index + 1;
-      }
-      if (!isContinuationAt(command, index)) {
-        readInsideWord(words);
-      }
+      readInsideWord(words);
       current += command.slice(index, index + 2);
       index += 2;
       continue;
@@ -6006,8 +5824,8 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
     // A comment runs to the newline, which still separates commands: a `\` before that newline is
     // part of the comment, not a continuation (WP-161 criterion (14) — `ls # x \⏎sudo id` was one
     // segment, `ls`, and `allow_list` in every baseline while bash ran `sudo id`).
-    // It begins only where bash begins a word (`WordStart`, WP-259): never after a continuation that
-    // follows a word (`ls a\⏎#;x`), nor after the `)` of a substitution (`ls $(echo a)#;x`).
+    // It begins only where bash begins a word (`WordStart`, WP-259): never inside a word (`ls a\⏎#;x`
+    // is `ls a#;x` once joined), nor after the `)` of a substitution (`ls $(echo a)#;x`).
     if (char === '#' && words.atWordStart) {
       const end = command.indexOf('\n', index);
       const stop = end === -1 ? command.length : end;
@@ -6019,7 +5837,7 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
 
     // An arithmetic command, `((…))` or `for ((…))` (WP-158). `$((` and `<((` never reach here:
     // both are consumed above. Read here and not per stage, because the list split cuts at `(`.
-    if (/^\((?:\\\n)*\(/.test(rest)) {
+    if (rest.startsWith('((')) {
       uncertainty.add(UNCERTAINTY.evaluatedText);
     }
 
@@ -6085,16 +5903,10 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       if (isWriteTarget(target)) {
         writeTargets.push(target);
       }
-      // The operator ends a word; a target character does not. The loop stops at any newline, so
-      // one ending in a continuation's `\` leaves that newline to the walk (backlog 662).
+      // The operator ends a word; a target character does not.
       readWordCharacter(words, command, wordFrom - 1);
-      for (let at = wordFrom; at < cursor; at += 1) {
-        if (isContinuationAt(command, at)) {
-          continuedNewline = at + 1;
-          break;
-        }
+      if (cursor > wordFrom) {
         readInsideWord(words);
-        at += command[at] === '\\' ? 1 : 0;
       }
       // An extended-glob opener in the target (`>@(x)`, `>$\⏎$@(x)`) is read again here.
       if (redirectionTargetOpensExtendedGlob(command, wordFrom)) {
@@ -6136,9 +5948,7 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
     }
 
     const operator = operators.find((candidate) => rest.startsWith(candidate));
-    if (index !== continuedNewline) {
-      readWordCharacter(words, command, index + (operator?.length ?? 1) - 1);
-    }
+    readWordCharacter(words, command, index + (operator?.length ?? 1) - 1);
     if (operator !== undefined) {
       push();
       rereadAtWordStart = true;
@@ -9270,7 +9080,7 @@ const canonicalShellStage = (stage: string): string =>
     : stage;
 
 interface Parsed {
-  readonly fragments: readonly string[];
+  readonly fragments: readonly BashText[];
   readonly writeTargets: readonly string[];
   readonly uncertainty: readonly UncertaintyReason[];
   /** Whether the line, at any depth, carries a command or process substitution. */
@@ -9284,12 +9094,12 @@ interface Parsed {
   /** Whether any level read its here-documents as scripts (`HERE_DOCUMENT_SCRIPT_READERS`). */
   readonly readsScripts: boolean;
   /**
-   * Every pipeline stage of every level as written — a substitution kept, continuations joined —
-   * for the readers that ask whether a judged word is literal (WP-201).
+   * Every pipeline stage of every level as written — a substitution kept — for the readers that
+   * ask whether a judged word is literal (WP-201).
    */
-  readonly rawStages: readonly string[];
+  readonly rawStages: readonly BashText[];
   /** {@link rawStages} less those of an operand over-read (`HandedScript.overRead`, WP-203). */
-  readonly programStages: readonly string[];
+  readonly programStages: readonly BashText[];
 }
 
 /**
@@ -9302,7 +9112,7 @@ interface Parsed {
  * shell's operands as a command only in case (`HandedScript.overRead`).
  */
 const parseCommand = (
-  command: string,
+  command: BashText,
   depth = 0,
   scripted = false,
   replace: string | null = null,
@@ -9310,9 +9120,9 @@ const parseCommand = (
   operands = false,
   overRead = false,
 ): Parsed => {
-  const fragments: string[] = [];
-  const rawStages: string[] = [];
-  const programStages: string[] = [];
+  const fragments: BashText[] = [];
+  const rawStages: BashText[] = [];
+  const programStages: BashText[] = [];
   // Whether the git boundary's computed-name walk reads this level's stages as the scanner splits
   // them: only at the top, and not when an array assignment is on the line — the scanner splits
   // `x=(a) $GIT push` at the `(`, the boundary does not (review round 1).
@@ -9331,8 +9141,9 @@ const parseCommand = (
   // same as `sh -c '…'`. Its range stays out of `bodyRanges` — it is not data.
   for (const hereDocument of outer.hereDocuments) {
     if (readsScripts && depth < MAX_WRAPPER_DEPTH) {
+      // The shell reading the body joins its own input (a quoted body is kept by this level's join).
       const nested = parseCommand(
-        hereDocument.body,
+        joinLineContinuations(hereDocument.body),
         depth + 1,
         true,
         replace,
@@ -9368,7 +9179,7 @@ const parseCommand = (
   const piped =
     fed ||
     scan(command, PIPE_OPERATORS).segments.length > 1 ||
-    /(?:^|[\s;&|(){}])exec\b[^\n;&|]*</.test(joinContinuations(command)) ||
+    /(?:^|[\s;&|(){}])exec\b[^\n;&|]*</.test(command) ||
     outer.segments.some((segment) =>
       scan(segment, PIPE_OPERATORS).segments.some(movesStandardInput),
     );
@@ -9401,15 +9212,12 @@ const parseCommand = (
       // `curl * | sh`; without the second, `| bash` and `| /bin/sh` are not either. Both are
       // spellings of the same pipeline, so both are offered to the matcher rather than the
       // pattern being loosened.
-      fragments.push(pipeline.segments.join(' | '));
-      fragments.push(pipeline.segments.map(canonicalShellStage).join(' | '));
+      fragments.push(pipeline.segments.join(' | ') as BashText);
+      fragments.push(pipeline.segments.map(canonicalShellStage).join(' | ') as BashText);
     }
-    // WP-160: what a stage hands over as a string, read off its words as written.
-    // Line continuations joined as bash joins them, as `wordsOf` reads (review round 1: `find . \⏎
-    // -exec sudo id \;` and `| \⏎bash` were `unattended_auto`).
-    const stages = scan(outer.rawSegments[segmentIndex] as string, PIPE_OPERATORS).rawSegments.map(
-      joinContinuations,
-    );
+    // WP-160: what a stage hands over as a string, read off its words as written (joined, as every
+    // reader's text is: `find . \⏎-exec sudo id \;` and `| \⏎bash` were `unattended_auto`).
+    const stages = scan(outer.rawSegments[segmentIndex] as BashText, PIPE_OPERATORS).rawSegments;
     for (const [stageIndex, stage] of stages.entries()) {
       rawStages.push(stage);
       if (!overRead) {
@@ -9447,8 +9255,10 @@ const parseCommand = (
           uncertainty.add(UNCERTAINTY.handedCommand);
           continue;
         }
+        // A handed script is read by a shell of its own, which joins it (`sh -c 'su\⏎do id'`).
+        const joined = joinLineContinuations(script);
         const nested = parseCommand(
-          script,
+          joined,
           depth + 1,
           readsScripts,
           inner ?? replace,
@@ -9457,7 +9267,7 @@ const parseCommand = (
           overRead || over === true,
         );
         anyReadsScripts ||= nested.readsScripts;
-        fragments.push(script, ...nested.fragments);
+        fragments.push(joined, ...nested.fragments);
         rawStages.push(...nested.rawStages);
         programStages.push(...nested.programStages);
         writeTargets.push(...nested.writeTargets);
@@ -9476,7 +9286,8 @@ const parseCommand = (
         uncertainty.add(UNCERTAINTY.tooDeep);
       } else if (expanded !== undefined) {
         const nested = parseCommand(
-          expanded,
+          // Its words are the stage's, so the text is joined already.
+          expanded as BashText,
           depth + 1,
           readsScripts,
           replace,
@@ -9498,7 +9309,7 @@ const parseCommand = (
     // Backlog 645: a segment that held a process substitution is read a second time with its word
     // left out, as it was read before the word was kept. Only an over-ask beside bash's reading
     // (`git <(true) push origin +x` stays `block`); a union, so it only tightens.
-    const dropped = outer.droppedSegments[segmentIndex] as string;
+    const dropped = outer.droppedSegments[segmentIndex] as BashText;
     if (dropped !== segment && depth >= MAX_WRAPPER_DEPTH) {
       uncertainty.add(UNCERTAINTY.tooDeep);
     } else if (dropped !== segment) {
@@ -9528,7 +9339,7 @@ const parseCommand = (
   // level spawns one such read, so the chain ends; its bodies are not this level's data.
   if (outer.resumeFrom !== null) {
     const resumed = parseCommand(
-      command.slice(outer.resumeFrom),
+      command.slice(outer.resumeFrom) as BashText,
       depth,
       scripted,
       replace,
@@ -9593,9 +9404,14 @@ const parseCommand = (
   };
 };
 
-/** `text` with `ranges` (sorted, non-overlapping) cut out. */
-const withoutRanges = (text: string, ranges: readonly (readonly [number, number])[]): string =>
-  outsideRanges(text, 0, text.length, ranges);
+/**
+ * `text` with `ranges` (sorted, non-overlapping) cut out. The ranges are here-document bodies and
+ * comments, each a run of whole lines or the rest of one, so a cut of a {@link BashText} is read as one.
+ */
+const withoutRanges = <T extends string>(
+  text: T,
+  ranges: readonly (readonly [number, number])[],
+): T => outsideRanges(text, 0, text.length, ranges) as T;
 
 /**
  * Every fragment of a command line that the shell would run as a command in its own right.
@@ -9605,7 +9421,7 @@ const withoutRanges = (text: string, ranges: readonly (readonly [number, number]
  * reports (see `commandUncertainty`), and an uncertain line can never be `allow`.
  */
 export const splitCommandSegments = (command: string): readonly string[] =>
-  parseCommand(command).fragments;
+  parseCommand(joinLineContinuations(command)).fragments;
 
 /** Whether `parseCommand` reads a stage again as its brace-expanded words (WP-243 review round 2). */
 let readsExpandedStages = true;
@@ -9620,7 +9436,7 @@ let readsExpandedStages = true;
 export const splitCommandSegmentsAsWritten = (command: string): readonly string[] => {
   readsExpandedStages = false;
   try {
-    return parseCommand(command).fragments;
+    return parseCommand(joinLineContinuations(command)).fragments;
   } finally {
     readsExpandedStages = true;
   }
@@ -9634,7 +9450,7 @@ export const splitCommandSegmentsAsWritten = (command: string): readonly string[
  * `git push origin x 2>&1 | tail -5` is two.
  */
 export const commandStageCount = (command: string): number =>
-  scan(command, LIST_OPERATORS).segments.reduce(
+  scan(joinLineContinuations(command), LIST_OPERATORS).segments.reduce(
     (count, segment) => count + scan(segment, PIPE_OPERATORS).segments.length,
     0,
   );
@@ -9645,30 +9461,32 @@ export const commandStageCount = (command: string): number =>
  * it for commands. What reads a whole line — the whole-line candidate here, the git boundary's
  * assignment check, the unattended hazard check — reads this instead of the raw text.
  */
-export const withoutHereDocumentBodies = (command: string): string =>
-  withoutRanges(command, parseCommand(command).bodyRanges);
+export const withoutHereDocumentBodies = (command: string): string => {
+  const text = joinLineContinuations(command);
+  return withoutRanges(text, parseCommand(text).bodyRanges);
+};
 
 /**
  * Whether this line hands any of its here-documents to a script reader (a shell, `eval`, `source`,
  * `.`), so their bodies are commands rather than data. `computesCommandName` reads them then.
  */
 export const readsHereDocumentsAsScripts = (command: string): boolean =>
-  parseCommand(command).readsScripts;
+  parseCommand(joinLineContinuations(command)).readsScripts;
 
 /** Does the command redirect output to a path (`> file`), rather than to a descriptor or `/dev/null`? */
 export const hasOutputRedirection = (command: string): boolean =>
-  parseCommand(command).writeTargets.length > 0;
+  parseCommand(joinLineContinuations(command)).writeTargets.length > 0;
 
 /** The constructs in this command that the scanner will not reason about (rule 5). */
 export const commandUncertainty = (command: string): readonly UncertaintyReason[] =>
-  parseCommand(command).uncertainty;
+  parseCommand(joinLineContinuations(command)).uncertainty;
 
 /**
  * The redirection targets in this command that write a path (rule 4's floor), as written — for the
  * unattended git boundary, which refuses a write into `.git` or the control mount.
  */
 export const commandWriteTargets = (command: string): readonly string[] =>
-  parseCommand(command).writeTargets;
+  parseCommand(joinLineContinuations(command)).writeTargets;
 
 /**
  * One fragment's words as the program receives them: split as `tokenise` splits, each word's
@@ -9710,7 +9528,7 @@ export const commandWords = (fragment: string): readonly string[] => {
 export const unreadableGitWord = (
   command: string,
 ): { readonly word: string; readonly reason: 'expands' | 'splits' | 'undeclared' } | null => {
-  for (const stage of parseCommand(command).rawStages) {
+  for (const stage of parseCommand(joinLineContinuations(command)).rawStages) {
     const words = argvShellWords(stage);
     for (const start of argvStarts(words).starts) {
       const [name, ...rest] = words.slice(start);
@@ -9929,7 +9747,9 @@ const evaluateOnce = (
       'the fallback verdict may not be "allow": it is also the floor an unmatched or unparseable command lands on (product/19 §3, rules 4 and 5)',
     );
   }
-  const parsed = parseCommand(request.command);
+  // The line as bash reads it (WP-260): every reader below, and the fragment a decision names.
+  const command = joinLineContinuations(request.command);
+  const parsed = parseCommand(command);
   // The scanner's reasons, and five the policy adds: the block entry an `xargs` could complete
   // from its input (WP-197), the one a line matches only when a word is read as an option's
   // value (WP-198), the one whose operands a line meets beside an option it cannot read (WP-204),
@@ -9978,7 +9798,7 @@ const evaluateOnce = (
   }
   // The whole line as the shell reads it for commands: a here-document body that is data is not
   // part of it, so `timeout 5 cat <<'EOF'` over a body line `git push --force` is not a push.
-  const line = withoutRanges(request.command, parsed.bodyRanges);
+  const line = withoutRanges(command, parsed.bodyRanges);
 
   if (request.resolvedBinary !== undefined) {
     const name = basename(request.resolvedBinary);
@@ -10033,7 +9853,7 @@ const evaluateOnce = (
     return {
       verdict: mostRestrictive('ask', fallback),
       matched: null,
-      segment: request.command,
+      segment: command,
       uncertainty,
     };
   }

@@ -538,12 +538,21 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   (space or tab), a newline or an operator character, with any line continuation between them
 >   removed, and never after the `)` of `$(…)`, `$((…))`, `<(…)`, `>(…)` or `a=(…)`, nor after an
 >   escaped or quoted character or a `\r`, `\v` or `\f`, which bash keeps inside a word. The
->   scanner, the continuation joiner, the substitution matcher and the here-document context
+>   join pass, the scanner, the substitution matcher and the here-document context
 >   reader carry that state forward, and a `#` glued to a substitution the scanner lifts out of a
 >   segment is kept literal there; before, each peeked at the character in front of the `#`, so
 >   `ls a\⏎#;sudo id` read `allow` and `ls $(echo a)#;rm -rf /` read `auto` while both bashes ran
 >   the second command (measured with `printf`). The exact reading also moves a line toward `allow`
->   where a comment was read that bash does not see: `ls a\⏎# x \⏎sudo id` is one `ls`. The git
+>   where a comment was read that bash does not see: `ls a\⏎# x \⏎sudo id` is one `ls`. A line
+>   continuation is removed **once, before any reader runs** (WP-260, backlogs 662, 664, 665, 666
+>   and 667: `joinLineContinuations` in `packages/domain/src/policies/bash-text.ts`), as bash's
+>   lexer removes it — everywhere but inside `'…'` and `$'…'`, in a comment, after an escaping `\`
+>   and in a quoted here-document's body, an unquoted body and its terminator line joined, a
+>   backtick body read flat — at every export that reads command text and again for each script a
+>   nested shell reads; no other reader tests for one. Before, each reader handled continuations
+>   itself and several did not: `ls "$\⏎(sudo id)"` and `find . $\⏎'-delete'` read `allow`, and a
+>   redirection target split at a continuation's newline (`git >o\⏎ut … -c core.fsmonitor=x
+>   status`) hid the `-c` from the git boundary (measured with `printf`, both bashes). The git
 >   boundary skips a fragment as made of others only when it is more than one **stage** at its own
 >   level — a list or a pipe — (WP-252, backlog 656): a one-stage fragment is judged as an argv and
 >   what the splitter hands out of it (a `-c` body, a substitution) is judged beside it. Before, any

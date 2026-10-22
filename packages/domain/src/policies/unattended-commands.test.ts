@@ -11,16 +11,22 @@ import { describe, expect, it } from 'vitest';
 import { censusPaths, censusText } from '../../../../scripts/census-files.mjs';
 import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
+import { joinLineContinuations } from './bash-text.js';
 import {
+  argvWords,
   BRACE_EXPANSION_CEILING,
   carriesHazard,
   commandArgvCandidates,
   commandArgvsAsWritten,
+  commandStageCount,
+  commandUncertainty,
   commandWords,
+  commandWriteTargets,
   DEFAULT_COMMAND_POLICY,
   DEFAULT_IMPLEMENTATION_ALLOW,
   DEFAULT_READ_ONLY_ALLOW,
   DEFAULT_VERIFICATION_ALLOW,
+  dequoteCommand,
   environmentSpellsFloor,
   evaluateCommand,
   expansionCompletesBlockEntry,
@@ -31,16 +37,23 @@ import {
   GIT_GLOBAL_OPTIONS_SOURCE,
   HAZARDOUS_ARGUMENTS,
   type HazardousArgument,
+  hasOutputRedirection,
   hazardousArguments,
+  matchesBlockPattern,
   memoisedCommandTexts,
+  normaliseCommand,
   optionMayBeBlockEntry,
   type ResolvedCommandPolicy,
+  readsHereDocumentsAsScripts,
   runCommandPolicy,
   splitCommandSegments,
+  splitCommandSegmentsAsWritten,
   UNCERTAINTY,
   unattendedCommandModeOf,
   unknownProgramRunsJudgedName,
+  unreadableGitWord,
   unreadGitConfigKey,
+  withoutHereDocumentBodies,
   withVerificationMode,
   wrappersWithoutGrammar,
   xargsCompletesBlockEntry,
@@ -594,9 +607,9 @@ describe('WP-153 — a here-document body is data, and every way it is not (back
   );
 
   it('refuses a body line the shell joins into the terminator (`E\\` + `OF`, measured)', () => {
+    // WP-260 (backlog 664): the join ends the body where bash ends it, so the push is read.
     const decision = auto(`cat <<EOF\nE\\\nOF\n${pushed}\nEOF`);
-    expect(decision).toMatchObject({ decision: 'deny', rule: 'uncertain' });
-    expect(decision.evaluation.uncertainty).toEqual([UNCERTAINTY.hereDocumentExpansion]);
+    expect(decision).toMatchObject({ decision: 'deny', rule: 'block_list' });
   });
 
   it('still refuses the control mount inside a body, which a program may read', () => {
@@ -3036,6 +3049,71 @@ describe('WP-198: the deny-direction readers read argv as the shell builds it, b
           },
         ),
         { numRuns: 1_000 },
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
+
+  /**
+   * WP-260 ruling (5): every export that reads command text answers a line exactly as it answers
+   * that line's join, and the join is idempotent — over this file's rows with one or two line
+   * continuations (`\⏎`, `\⏎\⏎`) inserted at any index, quotes, comments and here-documents
+   * included. `assertCommandAllowed` is the one export left out: its message quotes the line as
+   * written, for the audit.
+   */
+  const answers = (line: string): string =>
+    JSON.stringify([
+      Object.values(BASELINES).flatMap((given) => [
+        evaluateCommand({ command: line }, given),
+        decideUnattendedCommand({ command: line }, given, 'auto'),
+        decideUnattendedCommand({ command: line }, given, 'deny'),
+      ]),
+      gitBoundaryViolation(line),
+      computesCommandName(line),
+      normaliseCommand(line),
+      dequoteCommand(line),
+      argvWords(line),
+      splitCommandSegments(line),
+      splitCommandSegmentsAsWritten(line),
+      commandStageCount(line),
+      withoutHereDocumentBodies(line),
+      readsHereDocumentsAsScripts(line),
+      hasOutputRedirection(line),
+      commandUncertainty(line),
+      commandWriteTargets(line),
+      commandWords(line),
+      unreadableGitWord(line),
+      commandArgvCandidates(line),
+      commandArgvsAsWritten(line),
+      hazardousArguments(line).map(({ pattern }) => pattern),
+      HAZARDOUS_ARGUMENTS.filter(carriesHazard(line)).map(({ pattern }) => pattern),
+      matchesBlockPattern('sudo *', line),
+    ]);
+  const CONTINUED = fc
+    .record({
+      row: fc.constantFrom(...ROWS),
+      at: fc.nat(),
+      also: fc.nat(),
+      twice: fc.boolean(),
+    })
+    .map(({ row, at, also, twice }) => {
+      const pair = twice ? '\\\n\\\n' : '\\\n';
+      const first = at % (row.length + 1);
+      const once = `${row.slice(0, first)}${pair}${row.slice(first)}`;
+      const second = also % (once.length + 1);
+      return also % 3 === 0 ? `${once.slice(0, second)}\\\n${once.slice(second)}` : once;
+    });
+
+  it(
+    'WP-260: answers a line with a continuation exactly as its join, and the join is idempotent (property)',
+    () => {
+      fc.assert(
+        fc.property(CONTINUED, (line) => {
+          const joined = joinLineContinuations(line);
+          expect(joinLineContinuations(joined), JSON.stringify(line)).toBe(joined);
+          expect(answers(line), JSON.stringify(line)).toBe(answers(joined));
+        }),
+        { numRuns: 400 },
       );
     },
     PROPERTY_TEST_TIMEOUT_MS,
@@ -7140,12 +7218,13 @@ describe('WP-257, backlog 659: an extended-glob opener is uncertain wherever it 
   });
 
   it.each(['ls >$\\\n@(x)', 'ls >$\\\n$\\\n$@(x)'])(
-    'over-ask: %j is uncertain though bash reads a special parameter',
+    '%j reads its joined line, a special parameter (WP-260, backlog 662)',
     (command) => {
-      // `scan`'s target loop stops at the continuation's newline and the rest of the word is read as
-      // a new command (`@(x)`, `$\⏎$@(x)`): an over-read that predates WP-257 — the second line was
-      // already uncertain at the base as an expanded command name.
-      expectCells(command, 'ask / uncertain / uncertain');
+      // Uncertain until WP-260: `scan`'s target loop stopped at the continuation's newline and read
+      // the rest of the word as a new command. Joined, it is `ls >$@(x)` and `ls >$$$@(x)`, which
+      // bash reads as a parameter and a literal `(x)` (measured, WP-257).
+      expectCells(command, 'ask / auto / deny');
+      expectCells(command.replaceAll('\\\n', ''), 'ask / auto / deny');
     },
   );
 });
@@ -7277,9 +7356,127 @@ describe('WP-259, backlogs 661 and 663: a # begins a comment only where bash beg
     [`ls 'a${C}'#;sudo id`, 'block / block / block'],
     ['ls `echo a`#;sudo id', 'block / block / block'],
     ['ls "a"#;sudo id', 'block / block / block'],
-    // After a redirection operator a `#` begins a word (bash: a syntax error).
-    [`ls 2>${C}#;sudo id`, 'ask / auto / deny'],
+    // After a redirection operator a `#` begins a word (bash: a syntax error, both bashes). Read as
+    // its joined line `ls 2>#;sudo id` since WP-260: `ask / auto / deny` before, now the stricter
+    // `block`.
+    [`ls 2>${C}#;sudo id`, 'block / block / block'],
   ])('control: %j keeps %s in every baseline', (command, expected) => {
     expectCells(command, expected);
+  });
+});
+
+/**
+ * WP-260 (backlogs 662, 664, 665, 666 and 667): bash removes a line continuation before it reads
+ * anything, and so does the scanner — once, at the entry (`joinLineContinuations`). Every line of the
+ * M19 third amendment's policy table reads its joined form's cells; the controls keep theirs. A cell
+ * that moves toward `allow` is pinned equal to the joined line, which is bash's reading (PROGRESS §
+ * WP-260 lists each before → after). Nothing here executes a line.
+ */
+describe('WP-260, backlogs 662, 664, 665, 666 and 667: a continuation is removed once, before any reader', () => {
+  const C = '\\\n';
+  const D = `$${C}`;
+  const M = '-c core.fsmonitor=/tmp/m status';
+  /** The cells of `command`, pinned, and equal to those of `joined` (bash's reading). */
+  const expectJoined = (command: string, joined: string, expected: string) => {
+    expectCells(command, expected);
+    expectCells(joined, expected);
+  };
+
+  it.each([
+    // 666, blockers: a substitution opener split inside double quotes was never lifted.
+    [`ls "${D}(sudo id)"`, 'ls "$(sudo id)"', 'block / block / block'],
+    [`git status "${D}(sudo id)"`, 'git status "$(sudo id)"', 'block / block / block'],
+    [`ls "\${x:-${D}(sudo id)}"`, 'ls "${x:-$(sudo id)}"', 'block / block / block'],
+    [`echo "${D}(rm -rf /)"`, 'echo "$(rm -rf /)"', 'block / block / block'],
+    // 667, blockers: `$\⏎'…'` is an ANSI-C string, not `$` and a single-quoted word.
+    [`find . ${D}'-delete'`, "find . $'-delete'", 'ask / uncertain / uncertain'],
+    [`git log ${D}'--output=x'`, "git log $'--output=x'", 'ask / uncertain / uncertain'],
+    [`ls ${D}'x'`, "ls $'x'", 'ask / uncertain / uncertain'],
+    [
+      `npm test ${D}'--script-shell=/bin/id'`,
+      "npm test $'--script-shell=/bin/id'",
+      'ask / uncertain / uncertain',
+    ],
+    [`pytest ${D}'-p' evil`, "pytest $'-p' evil", 'ask / uncertain / uncertain'],
+    // 662: a redirection operator or target split at a continuation's newline.
+    [`git >o${C}ut --namespace x ${M}`, `git >out --namespace x ${M}`, 'ask / git / git'],
+    [`git > o${C}ut -C $(pwd) ${M}`, `git > out -C $(pwd) ${M}`, 'ask / git / git'],
+    [`git 2>o${C}ut ${M}`, `git 2>out ${M}`, 'ask / git / git'],
+    [`git >${C}out ${M}`, `git >out ${M}`, 'ask / git / git'],
+    // 665: a continuation inside `$(`, `<(` and `>(`.
+    [`git -C ${D}(pwd) ${M}`, `git -C $(pwd) ${M}`, 'ask / git / git'],
+    [`git --namespace <${C}(true) ${M}`, `git --namespace <(true) ${M}`, 'ask / git / git'],
+    [`git --namespace >${C}(true) ${M}`, `git --namespace >(true) ${M}`, 'ask / git / git'],
+    // 664: a here-document's terminator line joined (`E\⏎OF` is `EOF`), here behind `<<-` too.
+    ['cat <<EOF\nx\nE\\\nOF\nsudo id', 'cat <<EOF\nx\nEOF\nsudo id', 'block / block / block'],
+    [
+      'cat <<-EOF\n\tx\n\tE\\\nOF\nsudo id',
+      'cat <<-EOF\n\tx\n\tEOF\nsudo id',
+      'block / block / block',
+    ],
+    [`cat <<E${C}OF\nz\nEOF\nsudo id`, 'cat <<EOF\nz\nEOF\nsudo id', 'block / block / block'],
+  ])('%j reads its joined line %j: %s', (command, joined, expected) => {
+    expectJoined(command, joined, expected);
+  });
+
+  it.each([
+    // Toward allow, each bash's own reading (before → after in PROGRESS § WP-260): the target is
+    // `asudo`, the operator `>&2` and `<<<`, and a body `xEOF` that runs on to the last `EOF`.
+    [`ls >a${C}sudo id`, 'ls >asudo id', 'ask / auto / deny'],
+    [`git status >${C}&2`, 'git status >&2', 'allow / allow / allow'],
+    [`ls <${C}<< x`, 'ls <<< x', 'allow / allow / allow'],
+    [`ls >${D}@(x)`, 'ls >$@(x)', 'ask / auto / deny'],
+    [`cat <<EOF\nx${C}EOF\nsudo id\nEOF`, 'cat <<EOF\nxEOF\nsudo id\nEOF', 'allow / allow / allow'],
+  ])('%j moves to its joined line %j: %s', (command, joined, expected) => {
+    expectJoined(command, joined, expected);
+  });
+
+  it.each([
+    // Equal before WP-260, and still.
+    [`ls ${D}(sudo id)`, 'block / block / block'],
+    [`x=${D}(sudo id)`, 'block / block / block'],
+    [`ls <${C}(sudo id)`, 'block / block / block'],
+    [`ls "$(${C}sudo id)"`, 'block / block / block'],
+    [`ls "\`sudo${C} id\`"`, 'block / block / block'],
+    [`git -${C}c core.fsmonitor=/tmp/m status`, 'ask / git / git'],
+    [`git 2${C}>out ${M}`, 'ask / git / git'],
+    [`git -C "${D}(pwd)x" ${M}`, 'ask / git / git'],
+    // Kept where bash keeps the pair: after an escaping `\`, in a quoted body, in quotes, in a
+    // comment (the first continuation is removed, the one in the comment is not).
+    ['ls a\\\\\nsudo id', 'block / block / block'],
+    [`cat <<'EOF'\nx${C}EOF\nsudo id`, 'block / block / block'],
+    [`ls 'a${C}';sudo id`, 'block / block / block'],
+    [`ls $'a${C}b'`, 'ask / uncertain / uncertain'],
+    [`ls ${C}# x ${C}sudo id`, 'block / block / block'],
+    // A substitution has a quote state of its own (bash 5.3): a comment and a quoted body inside
+    // `"$(…)"` keep their pair, so the next line runs.
+    [`ls "$(ls # x ${C}sudo id\n)"`, 'block / block / block'],
+    [`echo "$(cat <<'EOF'\nx${C}EOF\nsudo id\nEOF\n)"`, 'block / block / block'],
+    // An ANSI-C string is closed by its own quote, and a quoted body after it is still kept.
+    [`cat $'x' <<'EOF'\na${C}EOF\nsudo id\nEOF`, 'block / block / block'],
+    // A script a shell reads is joined by that shell.
+    [`sh -c 'su${C}do id'`, 'block / block / block'],
+    [`eval 'su${C}do id'`, 'block / block / block'],
+    [`bash <<'EOF'\nsu${C}do id\nEOF`, 'block / block / block'],
+    // … and read by the nested parse itself, not only by the word readers after it.
+    [`bash <<'EOF'\nls "${D}(sudo id)"\nEOF`, 'block / block / block'],
+    [`sh -c 'ls "${D}(sudo id)"'`, 'block / block / block'],
+    [`eval 'ls "${D}(sudo id)"'`, 'block / block / block'],
+    // A `<<` in `$[…]`, `$((…))`, `((…))` or `${…}` is no here-document, so the next line is
+    // commands and its comment keeps its pair (`$[1<<2]` read as one hid `sudo id`, found in review).
+    [`echo $[1<<2]\nls # x ${C}sudo id`, 'block / block / block'],
+    [`echo $((1<<2))\nls # x ${C}sudo id`, 'block / block / block'],
+    [`(( x << 2 ))\nls # x ${C}sudo id`, 'block / block / block'],
+    [`echo \${x:-<<EOF}\nls # x ${C}sudo id`, 'block / block / block'],
+  ])('control: %j keeps %s', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it('the hazard reader joins its own text: a continuation in a go tool flag value is no unread value', () => {
+    // The argv reading's "bash may hand go other text" mark read the raw `\⏎` inside the quotes.
+    const raw = `go build "-ldflags=-s${C} -w" ./...`;
+    const joined = 'go build "-ldflags=-s -w" ./...';
+    expect(HAZARDOUS_ARGUMENTS.filter(carriesHazard(raw))).toEqual([]);
+    expect(HAZARDOUS_ARGUMENTS.filter(carriesHazard(joined))).toEqual([]);
   });
 });

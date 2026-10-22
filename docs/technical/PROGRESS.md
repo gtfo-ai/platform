@@ -17740,17 +17740,17 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
 - **Measured** by the reviewer: `bash -c $'echo a\\\n#;echo RAN'` prints `a#` and then `RAN` under bash 3.2.57 and 5.3.20. `ls a\⏎#;sudo id` and `git status a\⏎#;sudo id` read `allow_list`. The same flaw hides an extended-glob opener (`git --namespace a\⏎#@(+c|-c) …` reads `unattended_auto`; the word starts with `a#`, so a monitor run is not expected). The reviewer's differential over 93 554 lines found 175 looser lines, every one containing `\⏎#`.
 - **Done when:** measured at the base first; every reader that decides a comment boundary uses WP-257's `isContinuationAt`; the measured lines are refused; a differential with `\⏎` before every `#` position reports 0 looser. The suggested remedy — a `#` straight after a continuation that follows a non-blank is not a comment — only tightens; to be ruled.
 
-### 662. **The scanner splits a redirection target at a continuation's newline, so `ls >$\⏎@(x)` and `ls >$\⏎$\⏎$@(x)` read `uncertain` where their joined forms read `auto`** (TODO, **major** — *re-graded by WP-259's implementer and reviewer, session 20: not stricter only;* `git >o\⏎ut --namespace x -c core.fsmonitor=… status` reads `ask / auto / deny` where the joined line reads the git boundary's refusal (2 278 differential cells, pre-existing, policy cells only). Was **minor**, stricter only. Found by WP-257's implementer, round 4 (`#### WP-257`, *Discovered work*), confirmed by its reviewer. **Owned by **WP-260** (M19 third amendment).** A ruling is needed: joining the target would loosen other cells — `ls >a\⏎sudo id` reads `block` today.)
+### 662. **The scanner splits a redirection target at a continuation's newline, so `ls >$\⏎@(x)` and `ls >$\⏎$\⏎$@(x)` read `uncertain` where their joined forms read `auto`** (**RESOLVED** by WP-260, session 20, not yet committed — a line continuation is removed once, before any reader runs (`joinLineContinuations`, `packages/domain/src/policies/bash-text.ts`), so no reader splits a redirection operator or target at one: `git >o\⏎ut --namespace x -c core.fsmonitor=/tmp/m status`, `git > o\⏎ut -C $(pwd) …`, `git 2>o\⏎ut …` and `git >\⏎out …` read `ask / git / git` in all three baselines; `ls >$\⏎@(x)` and `ls >$\⏎$\⏎$@(x)` read `ask / auto / deny`, as their joined forms; the ruling's moves toward `allow`, each the joined line's cells: `ls >a\⏎sudo id` `block` → `ask / auto / deny` (the target `asudo`), `git status >\⏎&2` and `ls <\⏎<< x` → `allow`. Notes `#### WP-260`. Was: TODO, **major** — *re-graded by WP-259's implementer and reviewer, session 20: not stricter only;* `git >o\⏎ut --namespace x -c core.fsmonitor=… status` reads `ask / auto / deny` where the joined line reads the git boundary's refusal (2 278 differential cells, pre-existing, policy cells only). Was **minor**, stricter only. Found by WP-257's implementer, round 4 (`#### WP-257`, *Discovered work*), confirmed by its reviewer. **Owned by **WP-260** (M19 third amendment).** A ruling is needed: joining the target would loosen other cells — `ls >a\⏎sudo id` reads `block` today.)
 
 ### 663. **The comment reader treats the closing `)` of `$(…)`, `$((…))`, `<(…)` or `>(…)` as the end of a word, so a `#` glued after it starts a comment that hides the next command: `ls $(echo a)#;rm -rf /` reads `ask / auto / deny`** (**RESOLVED** at `2374abd3`, WP-259, session 20, not yet committed — with 661, by the same `WordStart`: the `)` of `$(`, `$((`, `<(`, `>(` and an array assignment's `(` ends no word, and a `#` glued to a substitution `scan` lifts out of a segment is kept literal there (`\#`), because the pipe pass and `feedsScriptReader` read the segment text; `ls $(echo a)#;rm -rf /`, `x=$(echo a)#;sudo id`, `git status $(echo a)#;git push --force`, `ls >(cat)#;rm -rf /`, `ls $((1))#;rm -rf /` and the pipe siblings `ls $(x)#|sudo id` and `` ls `x`#|sudo id `` (pre-existing for the backtick) read `block / block / block` in all three baselines; the control `(ls)#;sudo id` keeps `ask / auto / deny`. Notes `#### WP-259`. Was: TODO, **major**: a live fail-open on `main`. **TD-030 tier 1**: bash reads `$(echo a)#` as one word. Found by the M19 second amendment's measurement, session 20 (§ "Architect ruling (M19 second amendment, session 20)"). Owned by **WP-259** with 661.)
 
-### 664. **A here-document terminator split by a line continuation is not read as bash reads it; unattended refuses, attended asks where it should block** (TODO, **minor**. Found by the M19 second amendment's base differential (3 of its 13 looser lines), session 20. **Carried** with a trigger by that ruling.)
+### 664. **A here-document terminator split by a line continuation is not read as bash reads it; unattended refuses, attended asks where it should block** (**RESOLVED** by WP-260, session 20, not yet committed — the join reads a here-document's delimiter word, joins an unquoted body line by line (`\\` kept) and compares the joined line, `<<-`'s tabs off it, and keeps a quoted body as written: `cat <<EOF⏎x⏎E\⏎OF⏎sudo id`, `cat <<-EOF⏎\tx⏎\tE\⏎OF⏎sudo id` and `cat <<E\⏎OF⏎z⏎EOF⏎sudo id` read `block`; `cat <<'EOF'⏎x\⏎EOF⏎sudo id` keeps `block`; `cat <<EOF⏎x\⏎EOF⏎sudo id⏎EOF` moves `block` → `allow`, bash's reading (the body is `xEOF⏎sudo id`). Notes `#### WP-260`. Was: TODO, **minor**. Found by the M19 second amendment's base differential (3 of its 13 looser lines), session 20. **Carried** with a trigger by that ruling.)
 
-### 665. **A line continuation inside a substitution opener (`$\⏎(`) is not read as `$(`: `git -C $\⏎(pwd) -c core.fsmonitor=… status` reads `ask / auto / deny`** (TODO, **major**: live, literal, pre-existing. **TD-030 tier 1**: bash removes the continuation and reads `$(pwd)`, a value WP-250 makes `splits`. Found by WP-259's implementer (`#### WP-259`, *Discovered work* (b)), confirmed by its reviewer, session 20; policy cells only, the program half unmeasured. **Owned by **WP-260** (M19 third amendment).** Same class as WP-257's: a reader that decides a construct without WP-257's `isContinuationAt`.)
+### 665. **A line continuation inside a substitution opener (`$\⏎(`) is not read as `$(`: `git -C $\⏎(pwd) -c core.fsmonitor=… status` reads `ask / auto / deny`** (**RESOLVED** by WP-260, session 20, not yet committed — the opener is joined before any reader runs: `git -C $\⏎(pwd) -c core.fsmonitor=/tmp/m status`, `git --namespace <\⏎(true) …` and `git --namespace >\⏎(true) …` read `ask / git / git` in all three baselines; WP-257's `isContinuationAt` is deleted. Notes `#### WP-260`. Was: TODO, **major**: live, literal, pre-existing. **TD-030 tier 1**: bash removes the continuation and reads `$(pwd)`, a value WP-250 makes `splits`. Found by WP-259's implementer (`#### WP-259`, *Discovered work* (b)), confirmed by its reviewer, session 20; policy cells only, the program half unmeasured. **Owned by **WP-260** (M19 third amendment).** Same class as WP-257's: a reader that decides a construct without WP-257's `isContinuationAt`.)
 
-### 666. **A line continuation inside a double-quoted substitution opener is not read: `ls "$\⏎(sudo id)"` and `git status "$\⏎(sudo id)"` read `allow / allow / allow`** (TODO, **blocker**: a live fail-open to `allow` on `main`. **TD-030 tier 1**: bash removes the continuation inside double quotes and runs the substitution — `printf` shows `[X]` for a substituted `X` in 5.3 and 3.2. Found by the M19 third amendment's measurement, session 20 (§ "Architect ruling (M19 third amendment, session 20)"). Owned by **WP-260**.)
+### 666. **A line continuation inside a double-quoted substitution opener is not read: `ls "$\⏎(sudo id)"` and `git status "$\⏎(sudo id)"` read `allow / allow / allow`** (**RESOLVED** by WP-260, session 20, not yet committed — the join removes the pair inside `"…"` before the scanner reads the opener: `ls "$\⏎(sudo id)"`, `git status "$\⏎(sudo id)"`, `ls "${x:-$\⏎(sudo id)}"` and `echo "$\⏎(rm -rf /)"` read `block / block / block` in all three baselines, and so do `sh -c`, `eval` and `bash <<'EOF'` handed `ls "$\⏎(sudo id)"`. Notes `#### WP-260`. Was: TODO, **blocker**: a live fail-open to `allow` on `main`. **TD-030 tier 1**: bash removes the continuation inside double quotes and runs the substitution — `printf` shows `[X]` for a substituted `X` in 5.3 and 3.2. Found by the M19 third amendment's measurement, session 20 (§ "Architect ruling (M19 third amendment, session 20)"). Owned by **WP-260**.)
 
-### 667. **A line continuation before `$'…'` is not read: `find . $\⏎'-delete'` reads `allow` in all three baselines; `npm test $\⏎'--script-shell=/bin/id'` and `pytest $\⏎'-p' evil` read `allow` in two** (TODO, **blocker**: a live fail-open to `allow` on `main`. **TD-030 tier 1**: bash removes the continuation and hands `-delete` — `printf` shows `[-delete]` in 5.3 and 3.2. Found by the M19 third amendment's measurement, session 20. Owned by **WP-260**.)
+### 667. **A line continuation before `$'…'` is not read: `find . $\⏎'-delete'` reads `allow` in all three baselines; `npm test $\⏎'--script-shell=/bin/id'` and `pytest $\⏎'-p' evil` read `allow` in two** (**RESOLVED** by WP-260, session 20, not yet committed — `$\⏎'…'` is joined into an ANSI-C string before any reader runs: `find . $\⏎'-delete'`, `git log $\⏎'--output=x'`, `ls $\⏎'x'`, `npm test $\⏎'--script-shell=/bin/id'` and `pytest $\⏎'-p' evil` read `ask / uncertain / uncertain` in all three baselines; `ls $'a\⏎b'` keeps its pair and its cells. Notes `#### WP-260`. Was: TODO, **blocker**: a live fail-open to `allow` on `main`. **TD-030 tier 1**: bash removes the continuation and hands `-delete` — `printf` shows `[-delete]` in 5.3 and 3.2. Found by the M19 third amendment's measurement, session 20. Owned by **WP-260**.)
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -60184,3 +60184,200 @@ unless stated.
   before it: nothing looser. Canaries: each reader's `WordStart` reverted alone (37 / 1 / 3 / 4), the `\#`
   rewrite off (10), `$(\⏎(` off (1), the array-assignment rule off (5) — none survived. Discovered work
   filed by the orchestrator: 662 re-graded **major**, **665** (major) new.
+
+#### WP-260 — bash removes a line continuation before it reads anything, and so does the scanner (backlogs 662, 664, 665, 666, 667)
+
+Built on `main` at `91fec1a1` (WP-259's merge `2374abd3` plus docs; the policy code is byte-identical),
+session 20. Not committed. `⏎` is a newline, `\⏎` a line continuation; a cell is `attended / auto /
+deny`, the same in all three baselines unless stated. Scratch: `…/scratchpad/wp260/` (`bin/` holds every
+script named below).
+
+- **(1) Measured first, before any change.** The ruling's policy table re-read at the base (`git archive
+  91fec1a1`, `bin/cells.mjs` over `bin/lines-ruling.mjs`): **identical** to the M19 third amendment's
+  table, cell for cell, the controls included (`npm test $\⏎'--script-shell=/bin/id'` and `pytest $\⏎'-p'
+  evil` `ask / auto / deny` read-only, `allow` in the other two). Its shell table re-run (`printf '[%s]'`,
+  `read -r -d ''`, `echo RAN` only; bash 5.3.20 and `/bin/bash` 3.2.57, `--norc --noprofile`, `env -i`,
+  `LC_ALL=C`, stdin `/dev/null`, an empty scratch directory): identical in both bashes and to the table.
+  **Beyond the table, measured for the join's states** (both bashes unless stated): a backtick body is
+  joined **flat** — `` `printf '%s' 'a\⏎b'` `` hands `[ab]`, a comment and a quoted here-document in one
+  do not keep a pair, `\\` and `` \` `` do; `$(…)`, `<(…)` and `"$(…)"` keep a pair in their own `'…'`
+  and `$'…'` (`[a\⏎b]`); `"${x:-'a\⏎b'}"` hands `['ab']` (a single quote is a plain character in
+  double-quoted `${…}`), `${x:-'a\⏎b'}` keeps it; `"$'a\⏎b'"` and `"$\⏎'x'"` are literal `$'ab'`,
+  `$'x'`; a here-document delimiter is read as a word (`<<'E\⏎OF'` keeps its pair and is never matched);
+  an unquoted body is joined line by line, `\\⏎` kept, and the joined line is compared — `<<-` strips
+  the **joined** line's leading tabs (`\tE\⏎OF` ends the body, `\tE\⏎\tOF` does not, `a\⏎\t\tb` is
+  `a\t\tb`); `<\⏎<EOF`, `<<\⏎-EOF` and `$\⏎\⏎(` are the operators; `EOF\⏎echo RAN` is the body line
+  `EOFecho RAN`. **Where the bashes differ** (5.3 parses a `$(…)` body as a command, 3.2 does not): a
+  comment in `$(printf c # x \⏎echo d⏎)` ends at its newline in 5.3 (`[cd]`) and swallows `echo d` in 3.2
+  (`[c]`); a quoted body in `"$(cat <<'EOF'⏎a\⏎b⏎EOF⏎)"` is kept in 5.3 and joined in 3.2. The join
+  follows 5.3; both keep text the readers then read as commands, so 3.2's is the narrower reading.
+  Syntax errors (nothing runs, both bashes): `ls 2>#;…`, `[[ a <<'b' ]]`, `cat <<# x`.
+- **(2) The change.** `packages/domain/src/policies/bash-text.ts` (new): `BashText` (a branded string)
+  and `joinLineContinuations`, one forward walk with a frame stack — a command (the line, `$(…)`,
+  `<(…)`, `>(…)`: its own `WordStart`, parentheses, `case` count and pending here-documents), `"…"`,
+  `${…}` (quoted or not), `$((…))`/`((…))`/`$[…]` — `'…'`, `$'…'`, a comment (begun where `WordStart`
+  says) and a quoted body kept byte for byte, a backtick body read flat, an escaping `\` kept with its
+  character, a delimiter word read and joined, each pending body read at its command's next newline
+  (an unquoted one joined, `\\` kept). `WordStart`, `wordStart`, `readWordCharacter` and
+  `readInsideWord` moved there from `command-policy.ts`, the continuation branch gone. **Entries** (the
+  census of both modules' exports that read command text): `evaluateCommand` (the line, its fragments
+  and the segment it names are the joined line's), `decideUnattendedCommand` (its messages and
+  `whereOf` read the joined line), `gitBoundaryViolation`, `computesCommandName`, `normaliseCommand`
+  (so `tokenise`, `dequoteCommand` and `matchesCommandPattern`), `splitCommandSegments`,
+  `splitCommandSegmentsAsWritten`, `commandStageCount`, `withoutHereDocumentBodies`,
+  `readsHereDocumentsAsScripts`, `hasOutputRedirection`, `commandUncertainty`, `commandWriteTargets`,
+  `unreadableGitWord`, `carriesHazard` (so `hazardousArgument(s)`), `argvWords`; and in `parseCommand`
+  a here-document body a shell reads and a handed script (`-c`, `eval`, `trap`, …), which the child
+  shell joins. `commandWords`, `commandArgvCandidates`, `commandArgvsAsWritten` and
+  `matchesBlockPattern` read through `argvForms`, both of whose readings join (`tokenise`,
+  `argvWords`): a join of their own was an equivalent mutant (its canary survived with nothing to
+  find), so it is not there; the same for a brace-expanded stage, whose words are the stage's. The raw
+  text stays only in the request and `assertCommandAllowed`'s message. **The brand**: `parseCommand`,
+  `scan`, `wordsOf`, `stageEvaluatesText`, `feedsScriptReader`, `ScanResult`'s pieces and `Parsed`'s
+  fragments and stages take or carry `BashText`, so `tsc` refuses a raw string at the walk; the word
+  readers below them (`argvForms`, `shellWords`, `findClosingParen`, `readShellContext`, the
+  here-document readers) still take `string` — branding ten more of them met 17 call sites over stage
+  strings in a dozen readers and was backed out (see *Discovered work*). **Deleted**:
+  `isContinuationAt`, `isLineContinuation` (and its import in `unattended-commands.ts`),
+  `joinContinuations`, `joinQuotedContinuations`, `withoutContinuations`, `scan`'s `continuedNewline`
+  and its target-loop break, the `$(\⏎(` and `(\⏎(` regexes (`startsWith('$((')`, `startsWith('((')`),
+  `scan`'s backslash-branch run extension, `readWordCharacter`'s branch, `findClosingParen`'s and
+  `readShellContext`'s `isContinuationAt` tests, `redirectionTargetOpensExtendedGlob`'s,
+  `unrecognisedOperator`'s and `hereDocumentsAtNewline`'s continuation handling, `unattended-commands.ts`'s
+  three (`:760`, `:772`, the `replace(/^(?:\\\n)+/, '')`), and the newline in `unquoteToken`'s and
+  `receivedMayDiffer`'s double-quote escape sets. **Kept**: nothing that tests for a continuation (the
+  census is green); a `\` pair a reader still meets is one bash keeps.
+- **(3) Checks and rows.** `bash-text.test.ts`: the join over every measured row above (removed and
+  kept, each also idempotent) and the **census** — every non-test `.ts` under `policies/` git knows
+  about (tracked and untracked, `censusPaths`) but `bash-text.ts`, read without comments, refusing an
+  escaped `\` and newline in one literal or regex, a line comparing to `'\\'` and `'\n'`, the char codes
+  92 and 10 on one line, and the six deleted names; planted cases for each spelling; its docblock
+  lists what it cannot see. **The property** (`unattended-commands.test.ts`, inside WP-198's describe,
+  over its rows, the gate seed): every export above — evaluation, both decisions in all three
+  baselines, and the twenty readers — answers a row with one or two `\⏎` (or `\⏎\⏎`) at any index
+  exactly as it answers its join, and the join is idempotent; 400 runs. **Rows** (describe *WP-260,
+  backlogs 662, 664, 665, 666 and 667*, nine cells each): the ruling's table at its joined cells (666
+  `block`; 667 `ask / uncertain / uncertain`; 662 and 665 `ask / git / git`; 664 `block`, behind
+  `<<-` and `<<E\⏎OF` too), each also equal to the joined line; the controls (equal today, and kept);
+  own-state rows (`ls "$(ls # x \⏎sudo id⏎)"`, `echo "$(cat <<'EOF'⏎x\⏎EOF⏎sudo id⏎EOF⏎)"`, `cat $'x'
+  <<'EOF'⏎a\⏎EOF⏎sudo id⏎EOF` `block`); the nested reads (`sh -c`, `eval`, `bash <<'EOF'` over `ls
+  "$\⏎(sudo id)"` and `su\⏎do id`, `block`); a `<<` in `$[…]`, `$((…))`, `((…))`, `${…}` (`block`);
+  and `carriesHazard` over `go build "-ldflags=-s\⏎ -w"`. **Cells before → after** (each equal to the
+  joined line; moves toward `allow` marked ↑): 666 `allow` → `block` ×4 lines (and `echo "$\⏎(rm -rf /)"`
+  `ask / auto / deny` → `block`); 667 `allow` → `ask / uncertain / uncertain` (npm and pytest from
+  `ask / auto / deny` read-only); 662 `ask / auto / deny` → `ask / git / git` ×4; 665 the same ×3; 664
+  `ask / uncertain / uncertain` → `block` (×2 with `<<-`); ↑ `ls >a\⏎sudo id` `block` → `ask / auto /
+  deny` (target `asudo`); ↑ `git status >\⏎&2` `ask / auto / deny` → `allow`; ↑ `ls <\⏎<< x` `ask /
+  uncertain / uncertain` → `allow`; ↑ `ls >$\⏎@(x)`, `ls >$\⏎$\⏎$@(x)` `ask / uncertain / uncertain` →
+  `ask / auto / deny` (a special parameter); ↑ `cat <<EOF⏎x\⏎EOF⏎sudo id⏎EOF` `block` → `allow` (the body
+  is `xEOF⏎sudo id`, `cat` prints it); `cat <<EOF⏎E\⏎OF⏎<push>⏎EOF` `uncertain` → `block`; `ls 2>\⏎#;sudo id`
+  `ask / auto / deny` → `block` (a syntax error in bash). Four existing rows moved with them (WP-153's
+  `E\`+`OF` row, WP-257's two `>$\⏎…@(x)` over-asks, WP-259's `2>\⏎#` control).
+- **(4) Canaries** (`bin/canary.py`, each alone on the checkout file, restored from its own copy
+  `own/head-v3-*.keep` and `cmp`-checked, `vitest run packages/domain/src/policies --project unit`):
+  planted throw in the join → 126 failures (live). **The join skipped at each entry, one canary per
+  entry**: `evaluateCommand` 64, `decideUnattendedCommand` 1 (the property), `gitBoundaryViolation` 1,
+  `computesCommandName` 9, `normaliseCommand` 3, `splitCommandSegments` 2,
+  `splitCommandSegmentsAsWritten` 1, `commandStageCount` 1, `withoutHereDocumentBodies` 1,
+  `readsHereDocumentsAsScripts` 1, `hasOutputRedirection` 1, `commandUncertainty` 4,
+  `commandWriteTargets` 1, `unreadableGitWord` 1, `carriesHazard` 1 (its own row: the go tool-flag
+  floor read the raw `\⏎` inside the quotes as "bash may hand go other text"), `argvWords` 2; nested
+  reads: a shell's here-document body 1, a handed script 2 (their rows read `ls "$\⏎(sudo id)"` inside
+  them — `su\⏎do id` alone was masked by the word readers' own join). **Kept regions**: `$'…'` read as
+  `"…"` 5 (the policy row `cat $'x' <<'EOF'⏎a\⏎EOF⏎sudo id⏎EOF` among them), a quoted body joined 6
+  (`cat <<'EOF'⏎x\⏎EOF⏎sudo id`), a comment joined 21 (`ls \⏎# x \⏎sudo id`), an escaped `\` joined 5
+  (`ls a\\⏎sudo id`), **one flat quote state across a substitution** 5 (`ls "$(ls # x \⏎sudo id⏎)"` and
+  `echo "$(cat <<'EOF'⏎x\⏎EOF⏎sudo id⏎EOF⏎)"`, both written for it), `'…'` joined 9, an unquoted body
+  kept 11, `<<-` tabs not stripped 1, `case` not counted 1, a quoted delimiter read unquoted 6, a
+  backtick body given its own quote state 3, `$[…]` not arithmetic 2 (`echo $[1<<2]⏎ls # x \⏎sudo id`:
+  found by reading the join against `readShellContext`'s refusals, `ask / uncertain / uncertain` until
+  the frame was added, bash runs `sudo id`); **the join removed** (every reader back on the raw text,
+  the old readers' continuation tests already gone) 122, every 666 row among them. **None survived.**
+  Five more canaries survived with nothing to find — a join of their own at `commandWords`,
+  `commandArgvCandidates`, `commandArgvsAsWritten`, `matchesBlockPattern` and on a brace-expanded
+  stage — so those joins were removed as equivalent ((2)). All 32 re-run on the final file, each alone.
+- **(5) The differential** (`bin/base-lines.mjs`, `bin/diff-worker.mjs`, `bin/oracle2.sh`): 115 409 base lines —
+  WP-259's 102 996 (`wp259/sw/extra.ndjson`), the amendment's 422 (423 before its `#`/`<<` filter; the
+  423 are used), and 12 000 of WP-257's 1 865 671 sweep lines drawn with a seeded mulberry32 (seed 260)
+  — with `\⏎` inserted at **every** index and, separately, `\⏎\⏎`: 6 960 201 positions, **13 920 402
+  items**. **Bash's reading is bash's own**: each item, its line and the newline-at-the-position line
+  are defined as `f() { … }` and reprinted by `declare -f` (the function never called) under `env -i
+  PATH= LC_ALL=C` bash 5.3.20 `--norc --noprofile -r`, stdin a pipe, in an empty scratch directory;
+  `declare -F` must list exactly `f`, or the item is excluded (**0 excluded**). A string holding a `}`
+  is defined in a subshell, any other in the oracle's own shell and unset again (8× faster; it agreed
+  with WP-259's per-string subshell oracle on 69 836 strings, 0 differing); 1 423 definitions made that
+  shell exit (an unterminated substitution) and were asked again in a subshell of a fresh one.
+  **Results** (`\⏎` / `\⏎\⏎`): bash removed the pair (`joined`) 3 826 592 / 3 826 592, `both` 724 325 /
+  724 325, read it as a newline (a comment, after an escaping `\`) 1 768 609 / 1 768 608 — **0 looser,
+  0 tighter** across the nine cells of all three baselines; bash **kept** it (`'…'`, `$'…'`, a quoted
+  body) 160 640 / 160 655 — the join keeps every one (0 removed); a bash syntax error 480 035 / 480 021.
+  An item whose join equals its reference's join is answered alike by construction (the property) and
+  was not evaluated; 48 334 of them, one in 199, were evaluated on the raw line: 0 differ. **Syntax
+  errors**: 658 / 658 read looser than the line itself, each a pair inserted after a `\` that makes a
+  later line a syntax error (`ls >a\\⏎⏎#;su\⏎do id`: bash runs `ls >a\` and stops at `do`); against what
+  bash runs before the error — the longest newline-cut prefix the oracle accepts (`bin/err-check.mjs`)
+  — 4 are looser by rank, each `uncertain` (an `@(…)` after the prefix) against the prefix's git
+  refusal (`git --exec-path \\`): both refuse, by WP-257's stated order. **0 looser toward a run.**
+  The ruling's 664 exclusion is lifted: here-document positions are in every class above.
+- **(6) Corpus diff**: 0 of 371 lines of `test/fixtures/commands/*-lines.txt` moved (none holds a
+  continuation). **The sweep** (`bin/sweep.mjs`, `bin/sweep-cmp.mjs`, `bin/sweep-check.mjs`): WP-257's 1 865 671 lines against
+  `2374abd3`'s cells (WP-259's `sw/H.ndjson`, re-read at this row's base on 1 872 lines: 0 differ):
+  **4 146 lines changed** (24 876 cells): 4 134 toward `allow` (24 804 cells), 72 cells tighter. Each one
+  reads **exactly as the base read its joined line** (4 146 of 4 146) — none looser than bash's reading
+  as the ruling defines it. They are one family, a continuation in a redirection target before
+  `@(x)` (`ls &>$\⏎@(x)`, `git >>$\⏎\⏎@(x) -c core.fsmonitor=x status`, `rm >\⏎| $@(x) -rf /`): 3 942
+  `uncertain` → `auto / deny`, 192 `git` → `auto / deny`, 12 `uncertain` → `git` — the 662 split made
+  them uncertain by accident. Bash's oracle refuses all 4 146 inside a function (extglob is off at parse
+  time); **3 108 carry `shopt -s extglob` on an earlier line**, and there bash runs the command with the
+  target `$@(x)`, which is *Discovered work* (a): the joined spellings read `ask / auto / deny` at the
+  base already, and these spellings now share their cells. **The git option sweep** (`bin/gitopt-sweep.mjs`,
+  the brief's): 20 continuation spellings as the value of each of git's 8 separate and 7 attached global
+  options, bare, behind `> out ` and behind `env ` (900 lines): bash reprints every line as its join; 255
+  changed, 90 looser than the base — `$\⏎'x'` and `$\⏎'-c'` values, `git` → `uncertain` (both refuse;
+  the joined `$'x'` is uncertain, which ranks first) — and **0 looser than the base's reading of the
+  joined line**. WP-198's property and the policy suites: green with the gate seed and `PROPERTY_SEED` 1,
+  7 and 424242 (4 736 passed, 5 skipped, each).
+- **(7) Docblocks**: `bash-text.ts` (the rule, the kept regions, the 3.2/5.3 choice, its callers);
+  `WordStart` moved there without its continuation sentences; `runOpensExtendedGlob`,
+  `opensExtendedGlob`, `redirectionTargetOpensExtendedGlob` and `UNCERTAINTY.extendedGlob` lose theirs;
+  `scan`'s redirection branch and comment branch; `readShellContext`'s word-start sentence; the module
+  docblock's continuation sentence; `normaliseCommand`. `04-agent-runtime.md`: the WP-259 sentence's
+  "continuation joiner" is the join pass, and one sentence for WP-260 after it. `05-workspaces-and-security.md`:
+  WP-201's "one test, `isLineContinuation`" gets its WP-260 clause. 662, 664, 665, 666 and 667 restated
+  as resolved.
+- **Sentences falsified** (grep for the deleted names, *continuation joiner*, *removed text*,
+  *continuation's newline*, *one definition of a continuation*, *joined as bash joins* over
+  `packages/domain/src`, `packages/application/src`, `packages/infrastructure/src`, `04`, `05` and
+  `docs/decisions`): `isContinuationAt`'s docblock ("the one definition of a continuation they share")
+  and `joinQuotedContinuations`'s, deleted with them; `scan`'s "a redirection target that ends in a
+  continuation's `\` leaves the newline after it as removed text" (WordStart's docblock) — false, removed;
+  `readShellContext`'s "a continuation removed" — removed; `04`'s "the continuation joiner" — replaced;
+  `05`'s WP-201 clause ("the two read a line continuation through one test, `isLineContinuation`") —
+  annotated; 662's "A ruling is needed: joining the target would loosen other cells" — the ruling was
+  given (WP-260's, `ls >a\⏎sudo id` → bash's `ask / auto / deny`); 665's "a reader that decides a
+  construct without WP-257's `isContinuationAt`" — the function is gone. `04`'s "a line continuation
+  inside the opener … being removed text" and `05`'s WP-158/WP-160 "read with bash's line continuations
+  joined as bash joins them" stay true. TD-030 names none of these; not edited.
+- **Discovered work.** (a) **A `(` right after a special parameter in a redirection target is read as a subshell**
+  (pre-existing, not a continuation; candidate **blocker** by TD-030 decision 2's control). With
+  `shopt -s extglob` on an earlier line of the string bash hands `$@` and a literal `(x)` as the target
+  (measured: `printf "[%s]" 2>$@(x) -rf /` printed `[-rf][/]` and wrote the file `(x)`, both bashes run
+  it; without extglob the line is a syntax error). `scan`'s target loop stops at the `(`, the segment
+  splits, and the block list sees `rm -rf /` only in the whole line, which a prefix line takes away: at
+  the base `shopt -s extglob⏎rm &>$@(x) -rf /` and `shopt -s extglob⏎git >$@(x) -c core.fsmonitor=x
+  status` read **`ask / auto / deny`** in all three baselines (`true⏎rm &>$@(x) -rf /` too, which bash
+  refuses). WP-257's special-parameter exemption (`runOpensExtendedGlob`'s odd `$` run) is the reader;
+  the `(` there is never a subshell. Recommend an architect ruling (uncertain, as an extglob opener is).
+  (b) **The brand stops at the walk**: `parseCommand`, `scan` and their pieces take `BashText`; the
+  word readers (`argvForms`, `shellWords`, `findClosingParen`, `readShellContext`, the here-document
+  readers) take `string`. Branding them met 17 call sites over stage strings in a dozen readers; backed
+  out to keep the row's scope; the census and the property hold the line meanwhile. (c) The join reads
+  `$((…) )` as arithmetic where bash reads a command substitution holding a subshell (`echo $((echo a)
+  )` prints `a`), so a comment's pair inside one is joined; the scanner reads `$((` as arithmetic, which
+  is uncertain, so no line reaches `allow` — unmeasured beyond that shape. (d) Two shell measurements
+  ran `cat` (a here-document's body) and `ls -A` (the empty scratch directory) beyond the row's
+  `printf`/`read`/`echo`; nothing else ran. (e) `assertCommandAllowed`'s message quotes the raw line,
+  for the audit; the property leaves it out.
+- **Verify.** `vitest run scripts/citations.test.ts --project unit`: 13 passed. `pnpm run -s verify` (the
+  four untracked `.claude/` directories set aside in the scratchpad and moved back): `PASS: verify`
+  (16 301 passed, 19 skipped).

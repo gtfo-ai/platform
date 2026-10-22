@@ -51,6 +51,7 @@
  * a model writes in the ordinary way; it is not the boundary of what a run can do.
  */
 import type { UnattendedCommandMode } from '@platform/contracts';
+import { joinLineContinuations } from './bash-text.js';
 import {
   COMPUTED_NAME_WRAPPERS,
   type CommandEvaluation,
@@ -66,7 +67,6 @@ import {
   type HereDocumentOperator,
   hazardousArguments,
   hereDocumentsAtNewline,
-  isLineContinuation,
   REDIRECTION_OPERATOR,
   type ResolvedCommandPolicy,
   readGitGlobalOptions,
@@ -721,7 +721,8 @@ const redirectionAt = (command: string, index: number): string | null => {
  * skips exactly what the scanner skips — and skips nothing on a line that hands its here-documents
  * to a shell (`readsHereDocumentsAsScripts`), where a body is the script that runs.
  */
-export const computesCommandName = (command: string): boolean => {
+export const computesCommandName = (raw: string): boolean => {
+  const command = joinLineContinuations(raw);
   let quote: '"' | "'" | null = null;
   let atCommand = true;
   let word = '';
@@ -757,7 +758,7 @@ export const computesCommandName = (command: string): boolean => {
     }
     if (quote !== null) {
       if (char === '\\' && quote === '"') {
-        word += isLineContinuation(command, index) ? '' : char + (command[index + 1] ?? '');
+        word += char + (command[index + 1] ?? '');
         index += 1;
       } else {
         if (char === quote) {
@@ -768,8 +769,7 @@ export const computesCommandName = (command: string): boolean => {
       continue;
     }
     if (char === '\\') {
-      // A line continuation is removed, as the scanner removes it (`isLineContinuation`).
-      word += isLineContinuation(command, index) ? '' : char + (command[index + 1] ?? '');
+      word += char + (command[index + 1] ?? '');
       index += 1;
       continue;
     }
@@ -818,10 +818,7 @@ export const computesCommandName = (command: string): boolean => {
         word === '' &&
         target === 'none' &&
         char === '"' &&
-        command
-          .slice(index + 1)
-          .replace(/^(?:\\\n)+/, '')
-          .startsWith('$')
+        command.startsWith('$', index + 1)
       ) {
         return true;
       }
@@ -947,7 +944,9 @@ const boundaryArgvs = (candidate: readonly string[]): readonly (readonly string[
   ];
 };
 
-export const gitBoundaryViolation = (command: string): GitBoundaryViolation | null => {
+export const gitBoundaryViolation = (raw: string): GitBoundaryViolation | null => {
+  // The line as bash reads it (WP-260): every reader below, and the fragment a refusal names.
+  const command = joinLineContinuations(raw);
   // Read on the raw line, here-document bodies included: a body is data to the shell, but it may
   // be a program's input (`python3 - <<'EOF'` naming the credential socket), and the control mount
   // is never a word a run needs.
@@ -1190,13 +1189,15 @@ const decideOnce = (
 ): UnattendedCommandDecision => {
   const evaluation = evaluateCommand(request, policy);
   const fragment = evaluation.segment;
+  // The line as bash reads it (WP-260), which the evaluation's fragments are cut from.
+  const command = joinLineContinuations(request.command);
 
   if (evaluation.verdict === 'block') {
     return deny(
       'block_list',
       evaluation,
       fragment,
-      `${whereOf(fragment, request.command)} matches the block-list entry "${evaluation.matched}", which no run may execute. Do not retry it under another spelling.`,
+      `${whereOf(fragment, command)} matches the block-list entry "${evaluation.matched}", which no run may execute. Do not retry it under another spelling.`,
     );
   }
   if (evaluation.uncertainty.length > 0) {
@@ -1207,13 +1208,13 @@ const decideOnce = (
       `the platform’s shell scanner cannot follow ${evaluation.uncertainty.join('; ')} in this line, so it cannot tell what would run. Rewrite it without that construct — plain quoting, one command per call.`,
     );
   }
-  const boundary = gitBoundaryViolation(request.command);
+  const boundary = gitBoundaryViolation(command);
   if (boundary?.kind === 'boundary') {
     return deny(
       'git_boundary',
       evaluation,
       boundary.fragment,
-      `${whereOf(boundary.fragment, request.command)} is refused at the git boundary: ${boundary.detail}.`,
+      `${whereOf(boundary.fragment, command)} is refused at the git boundary: ${boundary.detail}.`,
     );
   }
   // WP-200: a git configuration key nobody read. After a refused hazard on an `ask` line, whose
@@ -1226,7 +1227,7 @@ const decideOnce = (
           'uncertain',
           evaluation,
           boundary.fragment,
-          `${whereOf(boundary.fragment, request.command)} carries ${boundary.detail}.`,
+          `${whereOf(boundary.fragment, command)} carries ${boundary.detail}.`,
         );
   if (evaluation.verdict === 'allow') {
     return (
@@ -1235,27 +1236,27 @@ const decideOnce = (
         rule: 'allow_list',
         evaluation,
         fragment,
-        reason: `command policy: allow (${matchedText(evaluation, request.command)})`,
+        reason: `command policy: allow (${matchedText(evaluation, command)})`,
       }
     );
   }
 
   // `ask` from here on: an ask-list match, an unmatched fragment, a redirection to a path, or a
   // hazardous argument flooring an allow.
-  const hazard = refusedHazard(request.command);
+  const hazard = refusedHazard(command);
   if (hazard !== null) {
-    return hazardDeny(evaluation, hazard.fragment, request.command, hazard.hazard);
+    return hazardDeny(evaluation, hazard.fragment, command, hazard.hazard);
   }
   if (unreadKey !== null) {
     return unreadKey;
   }
-  const where = whereOf(fragment, request.command);
+  const where = whereOf(fragment, command);
   if (mode === 'deny') {
     return deny(
       'unattended_deny',
       evaluation,
       fragment,
-      `${where} is not on this run’s allow list (${matchedText(evaluation, request.command)}), and this project runs unattended commands in \`deny\` mode, so nothing outside the allow list runs.`,
+      `${where} is not on this run’s allow list (${matchedText(evaluation, command)}), and this project runs unattended commands in \`deny\` mode, so nothing outside the allow list runs.`,
     );
   }
   return {
@@ -1263,6 +1264,6 @@ const decideOnce = (
     rule: 'unattended_auto',
     evaluation,
     fragment,
-    reason: `unattended: ask allowed in the sandbox (${matchedText(evaluation, request.command)}${fragment === null || fragment === request.command ? '' : ` at ${quoted(fragment)}`})`,
+    reason: `unattended: ask allowed in the sandbox (${matchedText(evaluation, command)}${fragment === null || fragment === command ? '' : ` at ${quoted(fragment)}`})`,
   };
 };
