@@ -17752,9 +17752,9 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
 
 ### 667. **A line continuation before `$'…'` is not read: `find . $\⏎'-delete'` reads `allow` in all three baselines; `npm test $\⏎'--script-shell=/bin/id'` and `pytest $\⏎'-p' evil` read `allow` in two** (**RESOLVED** at `866d0b21`, WP-260, session 20 — `$\⏎'…'` is joined into an ANSI-C string before any reader runs: `find . $\⏎'-delete'`, `git log $\⏎'--output=x'`, `ls $\⏎'x'`, `npm test $\⏎'--script-shell=/bin/id'` and `pytest $\⏎'-p' evil` read `ask / uncertain / uncertain` in all three baselines; `ls $'a\⏎b'` keeps its pair and its cells. Notes `#### WP-260`. Was: TODO, **blocker**: a live fail-open to `allow` on `main`. **TD-030 tier 1**: bash removes the continuation and hands `-delete` — `printf` shows `[-delete]` in 5.3 and 3.2. Found by the M19 third amendment's measurement, session 20. Owned by **WP-260**.)
 
-### 668. **Behind `shopt -s extglob`, a `(` right after a special parameter in a redirection target is read as a subshell: `shopt -s extglob⏎rm &>$@(x) -rf /` reads `ask / auto / deny`, and bash runs `rm -rf /`** (TODO, **blocker (candidate; measured as a policy reading, not run)** — TD-030 decision 2's control; needs an architect ruling to confirm the grade. **What is wrong:** `scan`'s target loop stops at the `(`, the segment splits, and the block list sees `rm -rf /` only in the whole line, which a prefix line takes away; WP-257's special-parameter exemption (`runOpensExtendedGlob`'s odd `$` run) is the reader, and the `(` there is never a subshell. Pre-existing, not a continuation defect. **Evidence** (`#### WP-260`, *Discovered work* (a), quoted): "measured: `printf "[%s]" 2>$@(x) -rf /` printed `[-rf][/]` and wrote the file `(x)`, both bashes run it; without extglob the line is a syntax error"; "at the base `shopt -s extglob⏎rm &>$@(x) -rf /` and `shopt -s extglob⏎git >$@(x) -c core.fsmonitor=x status` read **`ask / auto / deny`** in all three baselines (`true⏎rm &>$@(x) -rf /` too, which bash refuses)". **Live from `866d0b21`, widened by WP-260's sweep** (notes (6)): 4 146 lines moved, "3 942 `uncertain` → `auto / deny`, 192 `git` → `auto / deny`, 12 `uncertain` → `git`", each reading exactly as the base read its joined line; "**3 108 carry `shopt -s extglob` on an earlier line**, and there bash runs the command with the target `$@(x)`" — so 3 108 extglob lines that refused before WP-260 now read `auto / deny` on this defect. The ruling permitted the move (each equals its joined form's cells at the base); the defect under it is this entry. Only the policy half is measured: no program was run with the command, and the shell fact is `printf` alone. **Cost to leave:** a run in `auto` executes a block-listed command (`rm -rf /`, a git `core.fsmonitor` override) written behind an extglob redirection target, on a stock image. **Done:** the `(` after a special parameter in a redirection target is read as an extglob opener (uncertain, as WP-257 reads one elsewhere), never a subshell split; both lines above and the 3 108 refuse in `auto` and `deny`; the differential 0 looser. **Depends on:** WP-260 merged (its sweep set is the base). Found by WP-260's implementer, confirmed by its reviewer, session 20. Owned by **WP-262** (proposed, M19; before WP-258).)
+### 668. **Behind `shopt -s extglob`, a `(` right after a special parameter in a redirection target is read as a subshell: `shopt -s extglob⏎rm &>$@(x) -rf /` reads `ask / auto / deny`, and bash runs `rm -rf /`** (TODO, **major** — re-graded by § "Architect ruling (M19 fourth amendment, session 20)" (an extglob prefix line then `auto`, as 659, 662 and 665; blocker is kept for `allow` cells); **owned by WP-262**. Was: blocker candidate. **What is wrong:** `scan`'s target loop stops at the `(`, the segment splits, and the block list sees `rm -rf /` only in the whole line, which a prefix line takes away; WP-257's special-parameter exemption (`runOpensExtendedGlob`'s odd `$` run) is the reader, and the `(` there is never a subshell. Pre-existing, not a continuation defect. **Evidence** (`#### WP-260`, *Discovered work* (a), quoted): "measured: `printf "[%s]" 2>$@(x) -rf /` printed `[-rf][/]` and wrote the file `(x)`, both bashes run it; without extglob the line is a syntax error"; "at the base `shopt -s extglob⏎rm &>$@(x) -rf /` and `shopt -s extglob⏎git >$@(x) -c core.fsmonitor=x status` read **`ask / auto / deny`** in all three baselines (`true⏎rm &>$@(x) -rf /` too, which bash refuses)". **Live from `866d0b21`, widened by WP-260's sweep** (notes (6)): 4 146 lines moved, "3 942 `uncertain` → `auto / deny`, 192 `git` → `auto / deny`, 12 `uncertain` → `git`", each reading exactly as the base read its joined line; "**3 108 carry `shopt -s extglob` on an earlier line**, and there bash runs the command with the target `$@(x)`" — so 3 108 extglob lines that refused before WP-260 now read `auto / deny` on this defect. The ruling permitted the move (each equals its joined form's cells at the base); the defect under it is this entry. Only the policy half is measured: no program was run with the command, and the shell fact is `printf` alone. **Cost to leave:** a run in `auto` executes a block-listed command (`rm -rf /`, a git `core.fsmonitor` override) written behind an extglob redirection target, on a stock image. **Done:** the `(` after a special parameter in a redirection target is read as an extglob opener (uncertain, as WP-257 reads one elsewhere), never a subshell split; both lines above and the 3 108 refuse in `auto` and `deny`; the differential 0 looser. **Depends on:** WP-260 merged (its sweep set is the base). Found by WP-260's implementer, confirmed by its reviewer, session 20. Owned by **WP-262** (proposed, M19; before WP-258).)
 
-### 669. **WP-260's ruling (3) says every internal reader of command text takes `BashText`; the brand stops at the walk** (TODO, **minor** — a stated deviation, no measured fail-open. **What is wrong:** `parseCommand`, `scan`, `wordsOf`, `stageEvaluatesText`, `feedsScriptReader`, `ScanResult`'s pieces and `Parsed`'s fragments and stages carry `BashText`; the word readers `argvForms`, `shellWords`, `findClosingParen`, `readShellContext` and the here-document readers still take `string`, so `tsc` does not refuse a raw string there. **Evidence** (`#### WP-260`, *Discovered work* (b), quoted): "Branding them met 17 call sites over stage strings in a dozen readers; backed out to keep the row's scope; the census and the property hold the line meanwhile." **Folded nit** (WP-260's reviewer, round 1): skipping the join at `gitBoundaryViolation` (`packages/domain/src/policies/unattended-commands.ts:949`, `const command = joinLineContinuations(raw);`) is pinned only by the property, by no policy row. **Cost to leave:** a future reader added below the walk can take an unjoined string and `tsc` will not say so; today the census and the property are the only guards, and only the property catches the `gitBoundaryViolation` skip. **Done:** the listed readers take `BashText` (or the ruling's sentence is amended to "the walk", with the reason), and one row in `unattended-commands.test.ts` fails when the join at `:949` is skipped. **Depends on:** WP-260 merged. Found by WP-260's implementer (b) and reviewer (nit), session 20. **Unowned** — for the next architect pass.)
+### 669. **WP-260's ruling (3) says every internal reader of command text takes `BashText`; the brand stops at the walk** (TODO, **minor** — **owned by WP-262** (§ "Architect ruling (M19 fourth amendment, session 20)": the `gitBoundaryViolation` row added there; ruling (3)'s sentence amended to "the walk"). A stated deviation, no measured fail-open. **What is wrong:** `parseCommand`, `scan`, `wordsOf`, `stageEvaluatesText`, `feedsScriptReader`, `ScanResult`'s pieces and `Parsed`'s fragments and stages carry `BashText`; the word readers `argvForms`, `shellWords`, `findClosingParen`, `readShellContext` and the here-document readers still take `string`, so `tsc` does not refuse a raw string there. **Evidence** (`#### WP-260`, *Discovered work* (b), quoted): "Branding them met 17 call sites over stage strings in a dozen readers; backed out to keep the row's scope; the census and the property hold the line meanwhile." **Folded nit** (WP-260's reviewer, round 1): skipping the join at `gitBoundaryViolation` (`packages/domain/src/policies/unattended-commands.ts:949`, `const command = joinLineContinuations(raw);`) is pinned only by the property, by no policy row. **Cost to leave:** a future reader added below the walk can take an unjoined string and `tsc` will not say so; today the census and the property are the only guards, and only the property catches the `gitBoundaryViolation` skip. **Done:** the listed readers take `BashText` (or the ruling's sentence is amended to "the walk", with the reason), and one row in `unattended-commands.test.ts` fails when the join at `:949` is skipped. **Depends on:** WP-260 merged. Found by WP-260's implementer (b) and reviewer (nit), session 20. **Unowned** — for the next architect pass.)
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -52006,6 +52006,10 @@ no reader to know a continuation exists.
    an `eval` operand), because the child shell joins its own input. Every internal reader of command
    text takes `BashText`; `tsc` is the enforcement. The raw text is kept for display (`whereOf`) and
    the audit only, and a message names the fragment as read.
+   *Amended by § "Architect ruling (M19 fourth amendment, session 20)" (backlog 669):* "every internal
+   reader" reads **the walk** — `parseCommand`, `scan`, `wordsOf`, `stageEvaluatesText`,
+   `feedsScriptReader` and the pieces they return take `BashText`; the word readers below them take
+   `string`, held by WP-260's census and property, not by `tsc`.
 3. **The per-reader handling is deleted**, not left dormant: `isContinuationAt`,
    `isLineContinuation`, `joinContinuations`, `withoutContinuations`, `continuedNewline`, the
    `$(\⏎(` regex, `unattended-commands.ts:760`/`:772`. A `\`-newline left in `BashText` is one bash
@@ -52079,6 +52083,113 @@ first is bash's order. No `[unverified]` claim.
 second amendment's 36 less 662 and 664), declined 3. **666's and 667's headings are the
 refiner's**, from this text, as are the owner lines of 662, 664 and 665. **Next: WP-260.** No
 daemon, no migration (still **0092**), no credential.
+
+### Architect ruling (M19 fourth amendment, session 20) — the `$` run decides what an extended glob expands to, never where its word ends
+
+Written 2026-10-22 at `0ef1a69f` (WP-260 merged at `866d0b21`, 662, 664, 665, 666 and 667 closed).
+WP-260's implementer filed **668** (blocker candidate) and **669** (minor) in its *Discovered work*
+(a) and (b), and the refiner proposed **WP-262** for 668 without a ruling. This amendment measures
+668 first, **re-grades it major**, **replaces the proposed row's rule (2)** — its list of special
+parameters is wrong in both directions — and folds 669. Read-only on source; no test tier, no git
+write, no Docker. The M19 status rows and the Resume note are the orchestrator's; one row is ruled.
+
+**This pass measured** policy and shell only: a scratch script calling `evaluateCommand` /
+`decideUnattendedCommand` on `DEFAULT_COMMAND_POLICY` with each of the three baselines' `allow`,
+attended / `auto` / `deny`, at `0ef1a69f`; `printf '[%s]'` and `echo RAN` under bash 5.3.20 and
+`/bin/bash` 3.2.57 (`--norc --noprofile`, `env -i`, stdin `/dev/null`, an empty scratch directory
+outside the checkout). Nothing else ran. `⏎` is a newline. A cell holds in all three baselines.
+
+*The shell fact, both bashes, identical output* (`P` is the text before `(x)`; `<pid>` varies).
+
+| Text | Bash hands |
+|---|---|
+| `shopt -s extglob⏎printf '[%s]' P(x) a; echo RAN`, `P` = `$@`, `$*`, `$!` | `[(x)][a]RAN`: one word, the parameter and a literal `(x)` |
+| the same, `P` = `$?`; `$+`; `$$@`; `$$$@`; `@` | `[0(x)]`; `[$+(x)]`; `[<pid>@(x)]`; `[<pid>(x)]`; `[@(x)]` — each one word, then `[a]RAN` |
+| the same, `P` = `$#`, `$$`, `$-`, `$0`, `$1` | a syntax error near `(`, nothing printed — with extglob on and off |
+| every line above with `true` for the `shopt` line | a syntax error near `(`, nothing printed |
+| `shopt -s extglob⏎printf '[%s]' OP$@(t) -rf /; echo RAN`, `OP` = `>`, `2>`, `&>` | `RAN`, `[-rf][/]RAN`, `RAN`; the file `(t)` written; `>$?(q)` writes `0(q)`; `>$#(h)` a syntax error |
+
+So bash's lexer folds `(…)` into the word whenever the unquoted character before the `(` is `@`,
+`!`, `+`, `*` or `?` and extglob is on, **whatever comes before that character**; the `$` run before
+it decides only what the word then expands to (a parameter and a literal, or a glob), never where
+the word ends. WP-257's measurement (`$@(+c)` hands the parameter and a literal) was right about the
+expansion; the exemption drawn from it — "after an odd `$` run it is a special parameter", so no
+opener — is a conclusion about the lexer the measurement never made.
+
+*Policy cells at `0ef1a69f`.*
+
+| Spelling | Cells | Bash | Entry |
+|---|---|---|---|
+| `shopt -s extglob⏎rm &>$@(x) -rf /`, `shopt -s extglob⏎git >$@(x) -c core.fsmonitor=x status` | `ask / auto / deny` | runs the command | **668** |
+| the same two with `$@` replaced by `$*`, `$?`, `$!` or `$+` | `ask / auto / deny` | runs it | 668 (`$+` is no special parameter: the exemption read its odd `$` run) |
+| `true⏎rm &>$@(x) -rf /`; the 668 line with `$#` for `$@` | `ask / auto / deny` | refuses (syntax error) | recorded, no fail-open |
+| controls: the 668 line without its `shopt` line | `block` | refuses | — |
+| controls: `@(` or `$$@(` for `$@(` behind the `shopt` line; `$@(x)` as a value of `git -C` or `--namespace`; `$@(`, `$*(`, `$?(`, `$!(`, `$+(` as an argument of `rm` | `ask / uncertain / uncertain` | — | — |
+| `shopt -s extglob⏎ls $@(x)`; `ls >$@(x)` | `ask / auto / deny` | `ls (x)`; a syntax error alone | moves with the rule, toward refusal |
+
+**668 is confirmed and re-graded major.** The defect is real and pre-existing (WP-257's exemption),
+and WP-260's sweep widened it to 3 108 extglob lines that refused before only because a continuation
+split them. But its cells are `ask / auto / deny` behind a `shopt` line: by TD-030 decision 2's
+control as this house has applied it, that is 659's grade (the same shape — an extglob prefix line,
+`auto`, the program ran — major) and 662's and 665's (`ask / auto / deny` where a refusal is due,
+major); blocker is the grade of a cell at `allow` (661, 666, 667). The class still goes **first**:
+a major before three minors.
+
+**Rule (2) of the proposed row is replaced.** It named `$@ $* $# $? $- $$ $! $0–$9` as the parameters
+whose `(` is an opener. Measured: five of those (`$#`, `$$`, `$-`, `$0`–`$9`) end in a character that
+never folds — bash refuses the line with extglob on or off, so a rule for them decides nothing — and
+`$+`, which is no special parameter, is folded and is live today because the exemption counted its
+`$`. A list of parameters is the wrong shape; the deciding fact is the character before the `(`. So:
+**WP-257's odd-`$` exemption is deleted**; `runOpensExtendedGlob` reads the run's last character only,
+on both paths that call it (`opensExtendedGlob`, argument; `redirectionTargetOpensExtendedGlob`,
+target), and every such `(` reads `UNCERTAINTY.extendedGlob`, as WP-257 reads `@(` elsewhere.
+`scan`'s target loop is **not** changed: the uncertainty refuses in `auto` and `deny`, and teaching
+the loop to keep the `(…)` in the word would mean reading extglob bodies (`|`, nesting), which tier 1
+does not promise. **Declined:** reading `$@(x)` precisely as a parameter and a literal (an
+`auto` cell where bash agrees) — it is right only when extglob is on, which the scanner cannot know
+(659), and a syntax error otherwise; uncertain is the boring answer and over-asks only.
+
+**Cells that move, all toward refusal** (recorded before → after in the row's notes, no `↑`):
+WP-257's four `echo $@(x)`-shaped controls and its `ls ${op}$@(x)` target controls; WP-260's two
+`ls >$\⏎@(x)` / `ls >$\⏎$\⏎$@(x)` rows, which WP-260 moved to `ask / auto / deny` on the exemption
+(its notes' ↑ list) and which return to `ask / uncertain / uncertain`. Their comments, which state the
+exemption as bash's reading, are rewritten with this ruling's table.
+
+**669 is folded, half by wording.** WP-260 branded the walk (`parseCommand`, `scan`, `wordsOf`,
+`stageEvaluatesText`, `feedsScriptReader`, the pieces they return) and backed out branding the word
+readers below it (17 call sites); the census and the property are the enforcement there. That is an
+honest scope line, not a fail-open: the third amendment's remedy item 2 is **amended in place** to say
+"the walk". The other half — the join at `gitBoundaryViolation` pinned by the property alone — gets
+one policy row in WP-262, killed by its own canary. The `BashText` brand on the word readers is not
+scheduled; a later reader that needs it is the trigger.
+
+**WP-261 is retired, not reused.** WP-260 landed whole (664 closed without the split clause); a
+number once reserved in a ruling is not given to other work, so a grep for it finds only that clause
+and this sentence.
+
+**The rows** (plan § "Milestone M19", fourth amendment):
+10. **WP-262: Scanner, a `(` straight after an unquoted `@ ! + * ?` is an extended-glob opener
+    whatever `$` run comes before it** (668 major, 669 minor folded). Serial after WP-260. **First of
+    what remains.**
+
+**Order.** WP-262, then WP-258, WP-254, WP-255, serial on `command-policy.ts`. WP-258's base moves to
+WP-262's merge, and each later base follows.
+
+**Decisions.** None written or amended: TD-030 tier 1 is bash's grammar, and the word boundary is the
+lexer's. No `[unverified]` claim.
+
+#### Disposition — the headings filed since the third amendment
+
+| Entry | Grade | Disposition |
+|---|---|---|
+| 662, 664, 665, 666, 667 | major, minor, major, blocker, blocker | closed by WP-260 (`866d0b21`) |
+| **668** | **major** (re-graded from blocker candidate) | **→ WP-262**, first |
+| **669** | minor | **→ WP-262** (the `:949` row); the brand half answered by amending the third amendment's wording |
+| 660, 654, 655 | minor | unchanged: **→ WP-258**, **→ WP-254**, **→ WP-255**, after WP-262 |
+
+**Counts** after this amendment: owned 5 (654, 655, 660, 668, 669), carried 34, declined 3. **668's
+re-grade and 669's owner line are the refiner's to write into the headings**, from this text. **Next:
+WP-262.** No daemon, no migration (still **0092**), no credential.
 
 ## WP notes — session 14 (M10)
 
