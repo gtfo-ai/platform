@@ -44,20 +44,26 @@ describe('the agent-line corpus (test/fixtures/commands/)', () => {
     expect(Object.keys(recorded)).toEqual(lines);
   });
 
-  it.each(CORPORA)('%s: every recorded cell is the one the default policy answers', (name) => {
-    const { lines, recorded } = read(name);
-    const { changes, newlyRefused, newlyAllowed, newlyAsked } = corpusDiff(recorded, lines);
-    const diff = [
-      'line | cell | before | after',
-      ...changes.map(
-        ({ line, cell, before, after }) =>
-          `${JSON.stringify(line)} | ${cell} | ${before} | ${after}`,
-      ),
-      `${changes.length} cells changed: ${newlyRefused} newly refused, ${newlyAllowed} newly allowed, ${newlyAsked} newly asked`,
-      'If the change is intended: node scripts/command-corpus.mjs --write, and record the counts.',
-    ].join('\n');
-    expect(changes, diff).toEqual([]);
-  });
+  // The timeout is measured: the whole file ran 3.3–4.5 s in CI's unit job, and this case 5460 ms
+  // once (ci 39751616460) against vitest's 5 s default.
+  it.each(CORPORA)(
+    '%s: every recorded cell is the one the default policy answers',
+    { timeout: 30_000 },
+    (name) => {
+      const { lines, recorded } = read(name);
+      const { changes, newlyRefused, newlyAllowed, newlyAsked } = corpusDiff(recorded, lines);
+      const diff = [
+        'line | cell | before | after',
+        ...changes.map(
+          ({ line, cell, before, after }) =>
+            `${JSON.stringify(line)} | ${cell} | ${before} | ${after}`,
+        ),
+        `${changes.length} cells changed: ${newlyRefused} newly refused, ${newlyAllowed} newly allowed, ${newlyAsked} newly asked`,
+        'If the change is intended: node scripts/command-corpus.mjs --write, and record the counts.',
+      ].join('\n');
+      expect(changes, diff).toEqual([]);
+    },
+  );
 });
 
 describe('corpusLines refuses what the verdicts cannot key', () => {
