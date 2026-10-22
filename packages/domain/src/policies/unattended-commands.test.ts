@@ -3104,20 +3104,17 @@ describe('WP-198: the deny-direction readers read argv as the shell builds it, b
       return also % 3 === 0 ? `${once.slice(0, second)}\\\n${once.slice(second)}` : once;
     });
 
-  it(
-    'WP-260: answers a line with a continuation exactly as its join, and the join is idempotent (property)',
-    () => {
-      fc.assert(
-        fc.property(CONTINUED, (line) => {
-          const joined = joinLineContinuations(line);
-          expect(joinLineContinuations(joined), JSON.stringify(line)).toBe(joined);
-          expect(answers(line), JSON.stringify(line)).toBe(answers(joined));
-        }),
-        { numRuns: 400 },
-      );
-    },
-    PROPERTY_TEST_TIMEOUT_MS,
-  );
+  // The timeout is measured: ~6 s alone locally, 36 220 ms in CI's unit job (ci 39747117863).
+  it('WP-260: answers a line with a continuation exactly as its join, and the join is idempotent (property)', () => {
+    fc.assert(
+      fc.property(CONTINUED, (line) => {
+        const joined = joinLineContinuations(line);
+        expect(joinLineContinuations(joined), JSON.stringify(line)).toBe(joined);
+        expect(answers(line), JSON.stringify(line)).toBe(answers(joined));
+      }),
+      { numRuns: 400 },
+    );
+  }, 120_000);
 });
 
 /**
