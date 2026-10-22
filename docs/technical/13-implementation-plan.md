@@ -1278,6 +1278,18 @@ that returns a branded `BashText`, and every per-reader continuation test delete
 census. **Order: WP-260, then WP-258, WP-254, WP-255**, serial on `command-policy.ts`; WP-258's
 base moves to WP-260's merge. No Docker, migration or credential.
 
+*Proposed by the refiner 2026-10-22, from WP-260's Discovered work (a); not yet ruled (PROGRESS backlog **668**):*
+**WP-262** is added for backlog **668** (blocker candidate: behind `shopt -s extglob`, a `(` right
+after a special parameter in a redirection target is read as a subshell, so
+`shopt -s extglob⏎rm &>$@(x) -rf /` reads `ask / auto / deny` while bash runs the command; WP-260's
+sweep moved 3 108 such extglob lines onto it). **WP-261** stays reserved for WP-260's split clause.
+**Order: WP-260, then WP-262, then WP-258, WP-254, WP-255**, serial on `command-policy.ts`;
+WP-258's base moves to WP-262's merge. No Docker, migration or credential.
+
+| WP | Title | Deps | Acceptance criteria |
+|---|---|---|---|
+| WP-262 | **Scanner: a `(` right after a special parameter in a redirection target is an extglob opener, never a subshell** (backlog **668**, blocker candidate, live from `866d0b21`: `shopt -s extglob⏎rm &>$@(x) -rf /` and `shopt -s extglob⏎git >$@(x) -c core.fsmonitor=x status` read `ask / auto / deny` in all three baselines; 3 108 of WP-260's sweep lines carry `shopt -s extglob` and read the same). **Migration: no.** **Docker: none.** **Rulings:** **(1) Measured first**, before any change, recorded in the notes: 668's cells re-read at the row's base in all three baselines, attended / `auto` / `deny`; the shell fact re-run with `printf '[%s]'` and `echo` only (bash 5.3.20 and `/bin/bash` 3.2.57, `--norc --noprofile`, `env -i`, stdin `/dev/null`, an empty scratch directory; never `rm`, `sudo` or a git command), with and without `shopt -s extglob`; then the deciding reader by canary (the notes name `scan`'s target loop and `runOpensExtendedGlob`'s odd-`$` exemption; one the pass did not name is named and covered). **(2) The rule:** in a redirection target, a `(` after a special parameter (`$@`, `$*`, `$#`, `$?`, `$-`, `$$`, `$!`, `$0`–`$9`) reads as an extended-glob opener — uncertain, as WP-257 reads one elsewhere — and never splits the segment. **(3) Rows** under a describe naming 668 in `unattended-commands.test.ts`, nine cells each: both lines above refuse in `auto` and `deny`; `true⏎rm &>$@(x) -rf /` (bash refuses it) recorded; controls without extglob keep their cells. **(4) Canaries**, each alone, each killed by a named row: the exemption restored; the target loop splitting at `(`. **(5) The differential**: WP-260's sweep set and the 3 108 extglob lines against bash's reading as WP-259's oracle took it: **0 looser**, three baselines × three modes, tighter and excluded counts recorded; corpus diff recorded. **(6) Docblocks** (rule 83): `runOpensExtendedGlob`, `scan`'s redirection branch; 668 restated as closed with the measured cells. | WP-260 | **(1)** (1)'s cells and shell facts before any change. **(2)** (3)'s cells before → after. **(3)** (4): none surviving. **(4)** (5): 0 looser, counts recorded. **(5)** (6). **(6)** `pnpm run -s verify` PASS. |
+
 
 
 ## Suggested agent team for the orchestrator
