@@ -566,7 +566,14 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   the scanner's own backtick branch and the double-quote reader keep the next backtick, escaped
 >   or not, as named exceptions, because each alone read a line looser than bash: the scanner
 >   hands a body on with the backslashes bash removes, so ``` echo `echo \`sudo id\`` ``` would
->   read `ask / auto / deny` where bash runs `sudo id`. A `#`
+>   read `ask / auto / deny` where bash runs `sudo id`. The git boundary's computed-name walk reads
+>   a double quote as bash does (WP-267, backlogs 678 and 680): a double-quoted word that opens on
+>   `$` or a backtick in command position is a computed name, so `` "`echo sudo`" id `` reads
+>   `ask / git / git` like `"$(echo sudo)" id`, and a `$(` or backtick inside `"…"` opens a
+>   substitution with its own command position, so `echo "$($(echo sudo))"` reads its unquoted
+>   twin's `ask / git / git`; both read `ask / auto / deny` before while both bashes ran `sudo`
+>   (measured with `printf`). Outside a double quote a backtick pair is still read as two
+>   openings, so `` echo `x` $script `` over-asks (`ask / git / git`, backlog 672, carried). A `#`
 >   opens a comment only where bash begins a word (WP-259, backlogs 661 and 663): after a blank
 >   (space or tab), a newline or an operator character, with any line continuation between them
 >   removed, and never after the `)` of `$(…)`, `$((…))`, `<(…)`, `>(…)` or `a=(…)`, nor after an

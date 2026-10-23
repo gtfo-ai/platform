@@ -7980,9 +7980,9 @@ describe('WP-264, backlog 673: a backtick substitution ends at the next unescape
     // `doubleQuoteEnd`: with `backtickEnd` the word runs to the line's end against `scan`'s
     // reading and the line reads `ask / auto / deny`; bash refuses it at parse.
     'git --namespace "`\\`" "``" -c core.fsmonitor=/tmp/m status',
-    // Held by both: with both lifted, `isOneExpansion` takes the word for one expansion the git
-    // boundary does not refuse — `ask / auto / deny`, where `"$(echo $(x))" push origin main` reads
-    // `ask / git / git`.
+    // Held by both: with both lifted it read `ask / auto / deny` at WP-264 (`isOneExpansion` took
+    // the word for one expansion the git boundary did not refuse); since WP-267 (backlog 678) it
+    // reads `ask / git / git`, its `"$(echo $(x))" push origin main` twin's cell.
     '"`echo \\`x\\``" push origin main',
   ])('exception: %j keeps ask / uncertain / uncertain in every baseline', (command) => {
     expectCells(command, 'ask / uncertain / uncertain');
@@ -7999,10 +7999,12 @@ describe('WP-264, backlog 673: a backtick substitution ends at the next unescape
 
 /**
  * WP-264 (backlog 672, carried): the deciding reader is the git boundary's `computesCommandName`,
- * none of backlog 673's four. Its walk opens a frame at **every** backtick, the closing one too, so
- * the word after a backtick pair is read in command position and `$script` there is a computed
- * name. A newline in the pair is not the trigger. Closing the frame at the pair's end (the canary)
- * moves each line below to its `$(…)` twin's `ask / auto / deny`.
+ * none of backlog 673's four. Outside a double quote its walk opens a frame at **every** backtick,
+ * the closing one too, so the word after a backtick pair is read in command position and `$script`
+ * there is a computed name. A newline in the pair is not the trigger. WP-267 measured the close at
+ * the pair's end and dropped it under its split clause: it moved 1 626 lines toward a run past their
+ * `$(…)` twins (`echo `\\\\\$;`` `ask / auto / deny`, `echo $(\\$;)` `ask / uncertain / uncertain`;
+ * PROGRESS `#### WP-267`), so these keep `ask / git / git`.
  */
 describe('WP-264, backlog 672: a backtick pair before an expansion reads as a computed name', () => {
   it.each([
@@ -8022,4 +8024,92 @@ describe('WP-264, backlog 672: a backtick pair before an expansion reads as a co
       expect(computesCommandName(command)).toBe(false);
     },
   );
+});
+
+/**
+ * WP-267 (backlog 678): inside double quotes only `$` and a backtick expand (bash manual, *Double
+ * Quotes*), so a double-quoted word that opens on a backtick in command position is a computed name,
+ * as `"$(…)"` is. Every line below read `ask / auto / deny` and both bashes run `sudo` (or the git
+ * tail, or `rm`) with `printf` stand-ins; each now reads its `"$(…)"` twin's `ask / git / git`.
+ */
+describe('WP-267, backlog 678: a double-quoted backtick in command position is a computed name', () => {
+  it.each([
+    '"`echo sudo`" id',
+    'ls; "`echo sudo`" id',
+    'true && "`echo sudo`" id',
+    'FOO=1 "`echo sudo`" id',
+    '( "`echo sudo`" id )',
+    '{ "`echo sudo`" id; }',
+    'time "`echo sudo`" id',
+    '"`printf sudo`" id',
+    '"`echo sudo`" -n id',
+    '"`echo sudo`"',
+    '"`echo git`" -c core.fsmonitor=/tmp/m status',
+    '"`echo rm`" -rf /',
+    'nice "`echo sudo`" id',
+    'env "`echo sudo`" id',
+    // twins
+    '"$(echo sudo)" id',
+    '`echo sudo` id',
+    '"$(echo sudo)"',
+  ])('%j reads ask / git / git', (command) => {
+    expectCells(command, 'ask / git / git');
+    expect(computesCommandName(command)).toBe(true);
+  });
+
+  it.each([
+    // bash looks up a literal name
+    ["'`echo sudo`' id", 'ask / auto / deny'],
+    ['"\\`echo sudo\\`" id', 'ask / auto / deny'],
+    ['"x`echo sudo`" id', 'ask / uncertain / uncertain'],
+  ])('control: %j keeps %s', (command, expected) => {
+    expectCells(command, expected);
+  });
+});
+
+/**
+ * WP-267 (backlog 680): a `$(` or an unescaped backtick inside `"…"` opens a substitution with its
+ * own command position, as it does outside, and its close returns the walk to the double quote — a
+ * backtick one's at `backtickEnd`'s close (the row's split clause, backlog 672). Before, the walk held a `"…"` word as opaque, so a computed name inside a double-quoted
+ * substitution was never seen: the first four lines read `ask / auto / deny` and both bashes run
+ * `sudo`. Each now reads its unquoted twin's `ask / git / git`.
+ */
+describe('WP-267, backlog 680: a substitution inside double quotes is walked', () => {
+  it.each([
+    'echo "$($(echo sudo))"',
+    'x="$($(echo sudo))"',
+    'echo "$(ls; $(echo sudo))"',
+    'echo "$(`echo sudo`)"',
+    // twin
+    'echo $($(echo sudo))',
+  ])('%j reads ask / git / git', (command) => {
+    expectCells(command, 'ask / git / git');
+    expect(computesCommandName(command)).toBe(true);
+  });
+
+  it.each([
+    'echo "$($(echo sudo) id)"',
+    'ls "$($(echo rm) -rf /)"',
+    'echo "$($(echo git) -c core.fsmonitor=/tmp/m status)"',
+  ])('%j keeps ask / uncertain / uncertain and is now computed', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+    expect(computesCommandName(command)).toBe(true);
+  });
+
+  it.each([
+    // The frame's close puts the double quote back: without it the `"` after `$(ls)` or a
+    // backtick pair opens a new quote and the computed name after `;` is never seen.
+    ['echo "$(ls)"; $(echo sudo)', 'ask / git / git'],
+    ['echo "`ls`"; `echo sudo` id', 'ask / git / git'],
+    // A backtick frame inside a double-quoted substitution ends at `backtickEnd`'s close.
+    ['echo "$(echo `ls`)"; $(echo sudo)', 'ask / git / git'],
+    // A backtick body's end closes the frames opened inside it, too.
+    ['echo "`echo (ls`"; "$(echo sudo)"', 'ask / git / git'],
+    // ...and `; $X` inside the quote stays quoted text.
+    ['echo "$(ls) ; $X"', 'ask / auto / deny'],
+    ['echo "`ls` ; $X"', 'ask / auto / deny'],
+    ['echo "a\\`b"', 'ask / auto / deny'],
+  ])('%j reads %s', (command, expected) => {
+    expectCells(command, expected);
+  });
 });

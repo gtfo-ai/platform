@@ -53,6 +53,7 @@
 import type { UnattendedCommandMode } from '@platform/contracts';
 import { joinLineContinuations } from './bash-text.js';
 import {
+  backtickEnd,
   COMPUTED_NAME_WRAPPERS,
   type CommandEvaluation,
   type CommandRequest,
@@ -709,11 +710,20 @@ const redirectionAt = (command: string, index: number): string | null => {
 };
 
 /**
- * Whether a command's **name** is computed when it runs — `$X …`, `"$X" …`, `$(…) …`, `` `…` … `` in
- * command position, after any assignments, environment wrappers and redirections (WP-198: a
- * redirection's target, attached or apart, is no command word, so `X=1 2>/dev/null $CMD` is
- * computed) — which the policy cannot read. A quote-aware walk of the raw line, separate from the scanner because the scanner lifts a
+ * Whether a command's **name** is computed when it runs — `$X …`, `"$X" …`, `$(…) …`, `` `…` … ``,
+ * `` "`…`" … `` in command position, after any assignments, environment wrappers and redirections
+ * (WP-198: a redirection's target, attached or apart, is no command word, so `X=1 2>/dev/null $CMD`
+ * is computed) — which the policy cannot read. A quote-aware walk of the raw line, separate from the scanner because the scanner lifts a
  * substitution out of the fragment it sat in (`$(echo git) push x` reads as `push x` there).
+ *
+ * A double-quoted word that opens on `$` or a backtick is computed: inside double quotes only those
+ * two expand (bash manual, *Double Quotes*; WP-267, backlog 678). A `$(` or an unescaped backtick
+ * inside `"…"` opens a substitution with its own command position, as outside, and its close
+ * returns the walk to the double quote (backlog 680): `echo "$($(echo sudo))"` is computed. A
+ * backtick frame opened there ends at `backtickEnd`'s close; one opened outside a double quote is
+ * still closed only by a `)`, so the word after an unquoted backtick pair is read in command
+ * position (backlog 672, carried under WP-267's split clause: closing it moved lines toward a run
+ * past their `$(…)` twins).
  *
  * A here-document's body is data, not commands (WP-153): `cat > a.php <<'EOF'` followed by PHP
  * whose lines start with `$` must not read as computed command names. The operator and the bodies
@@ -730,8 +740,6 @@ export const computesCommandName = (raw: string): boolean => {
   // apart (`> out $X`): `pending` until its first character, `started` until it ends.
   type Target = 'none' | 'pending' | 'started';
   let target: Target = 'none';
-  const restore: boolean[] = [];
-  const targets: Target[] = [];
   const skipsBodies = !readsHereDocumentsAsScripts(command);
   let pending: HereDocumentOperator[] = [];
   let pendingFrom = -1;
@@ -751,12 +759,57 @@ export const computesCommandName = (raw: string): boolean => {
     }
     word = '';
   };
+  // WP-267: one frame per `(`, `$(` and backtick, with what its close restores — the double quote
+  // a substitution opened inside of included. A backtick frame opened inside a double quote (or
+  // inside a substitution opened there) ends at `backtickEnd`'s close, `end`; every other one is
+  // closed by a `)` only, as before (backlog 672, carried under WP-267's split clause). A frame
+  // opened inside a double quote keeps where its body starts in `skipped` (`context`), because a
+  // here-document operator in it is read in the body's context, not the quote's.
+  type Frame = {
+    atCommand: boolean;
+    target: Target;
+    quote: '"' | null;
+    end: number | null;
+    context: number | null;
+  };
+  const frames: Frame[] = [];
+  const openFrame = (restored: boolean, body: number, end: number | null = null): void => {
+    let context: number | null = null;
+    if (quote === '"') {
+      skipped += command.slice(skippedUpTo, body);
+      skippedUpTo = body;
+      context = skipped.length;
+    }
+    frames.push({ atCommand: restored, target, quote: quote === '"' ? '"' : null, end, context });
+    quote = null;
+    target = 'none';
+    atCommand = true;
+  };
+  const closeFrame = (): void => {
+    finishWord();
+    const frame = frames.pop() as Frame;
+    atCommand = frame.atCommand;
+    target = frame.target;
+    quote = frame.quote;
+  };
   for (let index = 0; index < command.length; index += 1) {
     const char = command[index] as string;
+    const ending = frames.findIndex((frame) => frame.end === index);
+    if (ending !== -1) {
+      // bash finds a backtick body's end before it parses the body, so whatever opened inside it
+      // ends here too.
+      frames.length = ending + 1;
+      closeFrame();
+      continue;
+    }
     if (target === 'pending' && quote === null && !/\s/.test(char)) {
       target = 'started';
     }
-    if (quote !== null) {
+    // Inside `"…"` a `$(` or an unescaped backtick opens a substitution with its own command
+    // position, as it does outside (bash manual, *Double Quotes*); it is read below with `quote`
+    // cleared, and its close puts the double quote back.
+    const opensInQuote = quote === '"' && (char === '`' || command.startsWith('$(', index));
+    if (quote !== null && !opensInQuote) {
       if (char === '\\' && quote === '"') {
         word += char + (command[index + 1] ?? '');
         index += 1;
@@ -776,7 +829,12 @@ export const computesCommandName = (raw: string): boolean => {
     if (char === '<' && command.startsWith('<<', index)) {
       skipped += command.slice(skippedUpTo, index);
       skippedUpTo = index;
-      const operator = readHereDocumentOperator(command, index, skipped);
+      const inQuote = frames.findLast((frame) => frame.context !== null);
+      const operator = readHereDocumentOperator(
+        command,
+        index,
+        skipped.slice(inQuote?.context ?? 0),
+      );
       if (operator !== null) {
         finishWord();
         if (pending.length === 0) {
@@ -813,12 +871,14 @@ export const computesCommandName = (raw: string): boolean => {
       continue;
     }
     if (char === '"' || char === "'") {
+      // Inside double quotes only `$` and a backtick expand, so a double-quoted word that opens on
+      // either is a computed name.
       if (
         atCommand &&
         word === '' &&
         target === 'none' &&
         char === '"' &&
-        command.startsWith('$', index + 1)
+        (command[index + 1] === '$' || command[index + 1] === '`')
       ) {
         return true;
       }
@@ -830,10 +890,7 @@ export const computesCommandName = (raw: string): boolean => {
       if (atCommand && word === '' && target === 'none') {
         return true;
       }
-      restore.push(atCommand);
-      targets.push(target);
-      target = 'none';
-      atCommand = true;
+      openFrame(atCommand, index + 2);
       word = '';
       index += 1;
       continue;
@@ -842,10 +899,12 @@ export const computesCommandName = (raw: string): boolean => {
       if (atCommand && word === '' && target === 'none') {
         return true;
       }
-      restore.push(atCommand);
-      targets.push(target);
-      target = 'none';
-      atCommand = true;
+      if (quote === '"' || frames.some((frame) => frame.quote === '"')) {
+        const close = backtickEnd(command, index);
+        openFrame(atCommand, index + 1, close === -1 ? command.length : close);
+      } else {
+        openFrame(atCommand, index + 1);
+      }
       word = '';
       continue;
     }
@@ -854,16 +913,11 @@ export const computesCommandName = (raw: string): boolean => {
     }
     if (char === '(') {
       finishWord();
-      restore.push(false);
-      targets.push(target);
-      target = 'none';
-      atCommand = true;
+      openFrame(false, index + 1);
       continue;
     }
-    if (char === ')' && restore.length > 0) {
-      finishWord();
-      atCommand = restore.pop() as boolean;
-      target = targets.pop() ?? 'none';
+    if (char === ')' && frames.at(-1)?.end === null) {
+      closeFrame();
       continue;
     }
     if (/[;&|(){}\n]/.test(char)) {

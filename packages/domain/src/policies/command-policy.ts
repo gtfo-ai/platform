@@ -176,7 +176,8 @@
  *
  * **A backtick substitution ends at the next unescaped backtick** (bash manual, *Command
  * Substitution*, the backquoted form). `findClosingParen` (WP-254), `shellWords` and
- * `isOneExpansion` (WP-264, backlog 673) find that end through `backtickEnd`. Two readers keep the
+ * `isOneExpansion` (WP-264, backlog 673) find that end through `backtickEnd`, and so does the git
+ * boundary's `computesCommandName` for a backtick inside a double quote (WP-267). Two readers keep the
  * next backtick, escaped or not, as named exceptions (WP-264's split clause), because each, lifted
  * alone, moves a cell toward a run that is not bash's reading: `scan`'s backtick branch, whose body
  * would be handed on with the backslashes bash removes from it first (before `$`, a backtick or
@@ -5707,7 +5708,7 @@ const findClosingParen = (
  * Index of the backtick closing the one at `openIndex` (a `\` escapes the next one), or -1. Its
  * readers and the two that keep the plain search are named in the module docblock (WP-264).
  */
-const backtickEnd = (text: string, openIndex: number): number => {
+export const backtickEnd = (text: string, openIndex: number): number => {
   for (let index = openIndex + 1; index < text.length; index += 1) {
     if (text[index] === '\\') {
       index += 1;
@@ -7305,9 +7306,10 @@ const commandNameWalk = (
  * Whether a word is **exactly one** expansion — `$x`, `${…}`, `$1`, `$@`, `$(…)`, `` `…` ``, or one
  * of those inside one pair of double quotes — and nothing else (WP-201 ruling (d)). `$((…))` is
  * not: an arithmetic result is `UNCERTAINTY.arithmetic`'s. A backtick ends through `backtickEnd`
- * (WP-264); its carve-out leans on the two exceptions there, because the git boundary refuses no
- * `"` before a backtick in command position: with `scan`'s and `doubleQuoteEnd`'s both lifted,
- * ``` "`echo \`x\``" push origin main ``` would read `ask / auto / deny` (PROGRESS `#### WP-264`).
+ * (WP-264). Its carve-out no longer leans on the two exceptions there: since WP-267 the git
+ * boundary refuses a `"` before a backtick in command position as it refuses `"$(` (backlog 678),
+ * so with `scan`'s and `doubleQuoteEnd`'s both lifted ``` "`echo \`x\``" push origin main ``` reads
+ * `ask / git / git`, its `"$(echo $(x))"` twin's cell (WP-264 measured `ask / auto / deny` before).
  */
 const isOneExpansion = (word: string): boolean => {
   const inner =
