@@ -486,7 +486,12 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   it as handed too — `env "\-u" sudo id` hands env the command `\-u`, no `-u` that skips `sudo` —
 >   while a command's name keeps its second dequote, an over-ask: `"'git'" -c core.fsmonitor=x
 >   status` is refused at the git boundary, where bash runs a program named `'git'`; read as handed
->   it moved 3 135 sweep cells toward `allow`. `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no message catalogue bash
+>   it moved 3 135 sweep cells toward `allow`. Since WP-255 (backlog 655) the peel's wrapper test
+>   and a package runner's exec form read it as handed as well: `"X\=1" sudo id` runs the command
+>   `X\=1`, no assignment, and `npm "\--" exec rm -rf /` hands npm the command `\--`; Yarn's, Bun's,
+>   Composer's and sentry-cli's subcommand keeps its second dequote, an over-ask, until their lookup
+>   is read (§ "Architect ruling (M19 sixth amendment, session 20)"; sentry-cli by the
+>   orchestrator's application of its principle, review round 2). `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no message catalogue bash
 >   ignores the `$` and double-quotes the text, so every floor reads `npm test $"--script-shell=x"` as
 >   `npm test --script-shell=x` — npm 11.19.0 ran that marker (measured in the run image, which ships
 >   no catalogue); a `$"…"` word a catalogue the run supplies may translate stays a residual (TD-030,

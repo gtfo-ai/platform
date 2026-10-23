@@ -6899,9 +6899,11 @@ describe('WP-254, backlog 654: a ) inside a backtick substitution never closes t
  * is `\--`, `"'env'"` is `'env'`. Each row reads the argv reading through `commandArgvCandidates`,
  * where a `>p` keeps the written reading's candidate apart. No cell moves looser (the written reading
  * and `OVER_READ` hold every verdict); 14 lines tighten, `"'env'" -u sudo id` from `uncertain` to
- * `block` among them (WP-247's review, base against head). A command's **name** keeps its
- * second dequote (`argv0Candidates`' basename): read as handed it moved 3 135 sweep cells toward
- * `allow`, `"'git'" -c core.fsmonitor=x status` among them (`git` → `auto`; bash runs `'git'`).
+ * `block` among them (WP-247's review, base against head) — and that one is `uncertain` again
+ * since WP-255, whose peel no longer reads `'env'` as a wrapper (its describe). A command's
+ * **name** keeps its second dequote (`argv0Candidates`' basename): read as handed it moved 3 135
+ * sweep cells toward `allow`, `"'git'" -c core.fsmonitor=x status` among them (`git` → `auto`;
+ * bash runs `'git'`).
  */
 describe('WP-247, backlog 647: the wrapper walk reads "\\-u" as the \\-u bash hands', () => {
   const has = (command: string, argv: readonly string[]) =>
@@ -6914,8 +6916,9 @@ describe('WP-247, backlog 647: the wrapper walk reads "\\-u" as the \\-u bash ha
     [String.raw`env "\-u" sudo >p id`, ['sudo', 'id']],
     // The walk's `--`: `\--` is no wrapper's `--`, so `-u` is not env's option either.
     [String.raw`env "\--" -u sudo >p id`, ['sudo', 'id']],
-    // The walk's name: `'env'` is no wrapper, so it has no grammar to skip `sudo` by.
-    [String.raw`"'env'" -u sudo id`, ['sudo', 'id']],
+    // The walk's name: `'env'` is no wrapper, so it has no grammar to skip `sudo` by. Behind `nice`
+    // since WP-255: in front, the peel no longer reads `'env'` as a wrapper at all (its row below).
+    [`nice "'env'" -u sudo >p id`, ['sudo', 'id']],
   ])('the argv reading of %j has a start at %j', (command, argv) => {
     expect(has(command, argv)).toBe(true);
     expectCells(command, 'block / block / block');
@@ -7772,5 +7775,84 @@ describe('WP-258, backlog 660: a glob that can match a leading - is an option by
     ['npm test -- *.test.ts', verificationAllow],
   ] as const)('control: %j keeps %j', (command, expected) => {
     expectCells(command, expected);
+  });
+});
+
+/**
+ * WP-255, backlog 655: the peel's wrapper test (`isWrapperToken`, `isAssignment`) and a package
+ * runner's exec form (`runnerName`, `runnerSubcommandAt`) read the argv reading's words as handed,
+ * as WP-247 made the wrapper walk do: `"X\=1"` is the `X\=1` bash runs as a command (both bashes:
+ * not found), `"'env'"` is `'env'`, `"'npm'"` is `'npm'`, and `npm "\--" exec` hands npm the
+ * command `\--`. Each row reads the argv reading through `commandArgvCandidates` (a `>p` keeps the
+ * written reading's candidate apart); `OVER_READ` keeps the block cells. Cells move toward a run
+ * only to their twin's: the same program handed a word that is no wrapper and no exec subcommand,
+ * which is what bash hands it and, for npm, what npm's exact lookup reads. **Yarn, Bun, Composer and
+ * sentry-cli keep the second dequote** (§ "Architect ruling (M19 sixth amendment, session 20)"): their
+ * subcommand lookup is unread, so their rows are pinned at the base's cells.
+ */
+describe('WP-255, backlog 655: the peel and a runner read the argv reading as handed', () => {
+  const has = (command: string, argv: readonly string[]) =>
+    commandArgvCandidates(command).some(
+      (candidate) => JSON.stringify(candidate) === JSON.stringify(argv),
+    );
+
+  it.each([
+    // `isAssignment`: `X\=1` is no assignment, so the peel does not step past it.
+    String.raw`"X\=1" sudo >p id`,
+    // `isWrapperToken`'s name: `'env'` is no wrapper.
+    `"'env'" sudo >p id`,
+    // `runnerName`: `'npm'` is no package runner.
+    `"'npm'" exec sudo >p id`,
+    // `runnerSubcommandAt`'s words: `\--` is no `--`, and `\exec` no exec subcommand.
+    String.raw`npm "\--" exec sudo >p id`,
+    String.raw`npm "\exec" sudo >p id`,
+  ])('the argv reading of %j has no start at sudo, and the line stays blocked', (command) => {
+    expect(has(command, ['sudo', 'id'])).toBe(false);
+    expectCells(command, 'block / block / block');
+  });
+
+  it.each(['X=1 sudo >p id', 'env sudo >p id', 'npm exec sudo >p id', 'npm -- exec sudo >p id'])(
+    'control: the argv reading of %j has a start at sudo',
+    (command) => {
+      expect(has(command, ['sudo', 'id'])).toBe(true);
+      expectCells(command, 'block / block / block');
+    },
+  );
+
+  // The same reading where no cell sees it: the walk's assignment test (`X\=1` is timeout's duration).
+  it('the argv reading of timeout "X\\=1" 5 sudo >p id has a start at 5', () => {
+    const command = String.raw`timeout "X\=1" 5 sudo >p id`;
+    expect(has(command, ['5', 'sudo', 'id'])).toBe(true);
+    expectCells(command, 'block / block / block');
+  });
+
+  // Toward a run (attended `block` → `ask`; the git boundary → `auto`), each to its twin's cell.
+  it.each([
+    [`"'env'" -u sudo id`, 'x -u sudo id', 'ask / uncertain / uncertain'],
+    [
+      String.raw`npm "\exec" git push origin main`,
+      'npm foo git push origin main',
+      'ask / auto / deny',
+    ],
+  ])('%j reads as its twin %j: %s', (command, twin, expected) => {
+    expectCells(command, expected);
+    expectCells(twin, expected);
+  });
+
+  // The exceptions, at the base's cells: Yarn's, Bun's and sentry-cli's subcommand and Composer's
+  // command word are still read dequoted again, so `\exec`, `\--`, `\run` and `\install` read as
+  // `exec`, `--`, `run` and `install` (sentry-cli: the sixth amendment's principle, review round 2).
+  it.each([
+    String.raw`yarn "\exec" git -c core.fsmonitor=/tmp/m status`,
+    String.raw`bun "\--" x git -c core.fsmonitor=/tmp/m status`,
+    String.raw`sentry-cli monitors "\run" slug -- git -c core.fsmonitor=/tmp/m status`,
+  ])('exception: %j keeps the git boundary', (command) => {
+    expectCells(command, 'ask / git / git');
+  });
+
+  it('exception: composer "\\install" sudo >p id has no start at sudo and stays blocked', () => {
+    const command = String.raw`composer "\install" sudo >p id`;
+    expect(has(command, ['sudo', 'id'])).toBe(false);
+    expectCells(command, 'block / block / block');
   });
 });

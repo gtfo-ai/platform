@@ -17628,7 +17628,7 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
 
 **Depends on** WP-251's merge. Serial with 650, 651 and 652 on `command-policy.ts`.
 
-### 655. **The peel's wrapper test (`isWrapperToken`, `isAssignment`) and a package runner's subcommand (`runnerSubcommandAt`, `runnerName`) still dequote an argv-reading word a second time, which bash does not; the rest of 642/644/647's double-strip class** (TODO, **minor** expected, **unmeasured**: a hypothesis until probed. **TD-030 tier 1**: floors read argv *as the shell builds it*. Found by WP-247's implementer and confirmed by its reviewer, session 20 (`#### WP-247`, its *Discovered work* and *Review* paragraphs). The refiner ran nothing. **No work package owns it.**)
+### 655. **The peel's wrapper test (`isWrapperToken`, `isAssignment`) and a package runner's subcommand (`runnerSubcommandAt`, `runnerName`) still dequote an argv-reading word a second time, which bash does not; the rest of 642/644/647's double-strip class** (**RESOLVED** by WP-255, session 20, not yet committed — each of the four takes the reading's `dequote`, `asHanded` on the argv reading (through `isWrapperAt`, `argvStarts`' chain and `commandNameWalk`), so `"X\=1" sudo id` is the command `X\=1` and `npm "\--" exec` hands npm the command `\--`; **four named exceptions**: under § "Architect ruling (M19 sixth amendment, session 20)" `runnerSubcommandAt` keeps the second dequote for Yarn and Bun and for Composer's half, and — the orchestrator's application of that ruling's principle, review round 2 — for sentry-cli, whose subcommand lookup is unread too (lifted, Yarn and Bun move 4 221 sweep lines toward a run and sentry-cli 1 560 of 10 240 probe lines; Composer moves no cell toward a run and tightens 8 of review round 2's 450 probe lines, `ask / uncertain` → `block`). Measured first: 630 probe pairs under bash 5.3.20 and 3.2.57, **0 looser than the control**, so the grade stays minor and the program half did not run. Sweep: 1 372 of 431 229 lines moved, 1 302 toward a run (none to `allow`), each equal to its twin — the line with the spelled word written as a plain one, which bash hands as the argv reading reads it (and npm's exact lookup reads); corpus 0. Notes `#### WP-255`. Was: TODO, **minor** expected, **unmeasured**: a hypothesis until probed. **TD-030 tier 1**: floors read argv *as the shell builds it*. Found by WP-247's implementer and confirmed by its reviewer, session 20 (`#### WP-247`, its *Discovered work* and *Review* paragraphs). The refiner ran nothing. **No work package owns it.**)
 
 **Evidence.** WP-247's implementer, in *Discovered work*: *"Three more readers dequote an argv-reading word a second time and are outside 647's two sites: the peel's wrapper test (`isWrapperToken` through `isWrapperAt`, so `argvStarts`' `chain`, and `isAssignment`) and `runnerSubcommandAt`/`runnerName`. Not measured; as with the walk, the written reading and `OVER_READ` likely hold the cells, so expected minor."* WP-247's reviewer, in *Review*: *"`isWrapperToken`, `isAssignment`, `runnerSubcommandAt`, `runnerName` still dequote twice on the argv reading — filed."* The module docblock (`packages/domain/src/policies/command-policy.ts:36-38`) names them as not yet read as handed. The sites are `command-policy.ts:3045` (`isAssignment`), `:3048` (`isWrapperToken`, through `argv0Name`), `:3055` (`runnerName`, through `argv0Name`) and `:3245` (`runnerSubcommandAt`). Nobody has probed them: there is no cell, looser or tighter.
 
@@ -17763,6 +17763,12 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
 ### 672. **A newline inside a backtick in a substitution body is over-read: `` node <(echo `⏎x`) $script `` reads `ask / git / git` where `node <(echo x) $script` reads `ask / auto / deny`** (TODO, **nit** — an over-ask, every move toward refusal; no fail-open. **What is wrong:** a reader after the scanner treats the newline inside the backtick of a process-substitution body as more than the backtick's own text, so the line is refused where the same line without the backtick runs under `auto`. Which reader is not known. **Evidence** (`#### WP-254`, *Discovered work* (a), quoted): "`` node <(echo `⏎x`) $script `` reads `ask / git / git` at the base and the head while `node <(echo x) $script` reads `ask / auto / deny`: a newline inside a backtick in a substitution body is over-read by a reader after the scanner (an over-ask, toward refusal; not traced)." Pre-existing (the base reads it too). Needs measurement: the deciding reader (a canary), and whether other substitution forms (`$(…)`, `>(…)`) and other programs than `node` over-read the same way; the notes give this one line only. **Cost to leave:** an unattended run that writes a multi-line backtick inside a process substitution stops for a person; none known in the corpus (unmeasured). **Done:** the deciding reader named; the line reads its no-backtick sibling's cells, or the over-ask is recorded as accepted under TD-030 decision 3; a row under a describe naming 672. **Depends on:** WP-254 merged. Found by WP-254's implementer, session 20. Owner: **unowned — for the next architect pass**.)
 
 ### 673. **`scan`'s backtick branch, `doubleQuoteEnd`, `shellWords` and `isOneExpansion` close a backtick at the next backtick with `indexOf`, ignoring `` \` ``, where bash skips an escaped backtick** (TODO, **minor**, latent — no fail-open known; every such line seen reads `uncertain`. **What is wrong:** four readers in `packages/domain/src/policies/command-policy.ts` find a backtick substitution's end by the next backtick, escaped or not, so a body holding `` \` `` is cut short of bash's reading. **TD-030 tier 1**: the readers are to read the text as bash does. **Evidence** (`#### WP-254`, *Discovered work* (b), quoted): "`scan`'s own backtick branch, `doubleQuoteEnd`, `shellWords` and `isOneExpansion` close a backtick at the next backtick with `indexOf`, escaped or not, where bash skips `` \` ``; every such line seen here read `uncertain` (an unterminated backtick), so no fail-open is known." The notes give no example line and no count. Needs measurement: lines with `` \` `` inside a backtick body (alone, inside `"…"`, inside `$(…)`) through the policy in all three baselines, and the shell half (`printf '[%s]'`) for any that does not read `uncertain`; a cell looser than its bash reading would re-grade this. **Cost to leave:** today an over-ask (`uncertain`) on such lines; the trigger that makes it urgent is a spelling where the early close leaves a balanced remainder, so a reader sees a command bash does not run, or misses one it does. **Done:** the four readers skip `` \` `` as bash does (one shared helper or each fixed), rows under a describe naming 673 with a canary per reader, the sweep 0 looser. **Depends on:** WP-254 merged. Found by WP-254's implementer, session 20. Owner: **unowned — for the next architect pass**.)
+
+### 674. **`feedsScriptReader`'s first-word test and `movesStandardInput` still dequote an argv-reading word a second time, after WP-255 made the peel's wrapper test and a package runner's exec form read it as handed** (TODO, **minor** at most — a hypothesis, unmeasured; no line is known to move. **What is wrong:** two readers in `packages/domain/src/policies/command-policy.ts` outside WP-255's block candidates read a word that is already the argv reading through a second `dequote`, so a word whose as-handed text differs from its twice-dequoted text is read as a word bash does not see. Module rule 2 names both; WP-255 left them. **Evidence** (`#### WP-255`, *Discovered work* (a), quoted): "Two readers outside the block candidates still dequote an argv-reading word a second time, unmeasured: `feedsScriptReader`'s first-word test (`isAssignment` over `argvReadings`, whose `dequote` is in scope) and `movesStandardInput` (`isAssignment` and `argv0Name` over `argvWords`). Both are named in module rule 2; neither is filed." The notes give no example line and no count. Needs measurement: a line per reader whose first word dequotes differently once and twice (a quoted `=` for `isAssignment`, a quoted program name for `argv0Name`), its cells in all three baselines at the base, and the shell half (`printf '[%s]'`) for what bash hands; a cell looser than its bash reading re-grades this. **Cost to leave:** unknown until measured; the trigger that makes it urgent is a line where the second dequote turns a word into an assignment or a program name (or out of one) and the cell is looser than bash's reading. **Done:** both readers take the argv reading as handed (as WP-255's do), module rule 2's list emptied of them, rows under a describe naming 674 with a canary per reader, the sweep 0 looser. **Depends on:** WP-255 merged. Found by WP-255's implementer, session 20. Owner: **unowned — for the next architect pass**.)
+
+### 675. **`basename` splits on a backslash, so the as-handed name `\env` is still read as the wrapper `env`: `"\env" -u sudo id` reads `ask / auto / deny` where bash runs `\env` (not found)** (TODO, **nit** — an over-read, not a fail-open; pre-existing, unchanged by WP-255. **What is wrong:** the name lookup drops everything up to a backslash as if it were a path separator, so a backslash-spelled wrapper word is peeled as the wrapper and its operands read as the command, where bash looks up a program literally named `\env`. **Evidence** (`#### WP-255`, *Discovered work* (b), quoted): "`basename` splits on a backslash, so the as-handed name `\env` (from `"\env"`) is still the wrapper `env` — `"\env" -u sudo id` reads `ask / auto / deny` at the base and the head, where bash runs `\env` (not found): an over-read, not a fail-open, unchanged here." The notes give this one line only; other wrappers and other backslash spellings are unmeasured. **Cost to leave:** a line bash fails on (command not found) is policed as the wrapped command; no line runs that should not, so the cost is a mis-stated cell, none known in the corpus. **Done:** a backslash in an as-handed name is not a separator (only `/` is), the line reads as an unknown program in all three baselines, or the over-read is recorded as accepted under TD-030 decision 3; a row under a describe naming 675. **Depends on:** WP-255 merged. Found by WP-255's implementer, session 20. Owner: **unowned — for the next architect pass**.)
+
+### 676. **Yarn's, Bun's and Composer's subcommand lookup is unread, so WP-255's three named exceptions in `runnerSubcommandAt` (Yarn, Bun) and `composerSubcommandAt` keep a second dequote on an assumption rather than on evidence** (TODO, **minor** — an over-ask held fail-closed by TD-030 decision 3; no fail-open. **Widened by WP-255's review round 2** (orchestrator, session 20): **`sentry-cli`** is a fourth exception on the same principle — its lookup is unread, and with its second dequote lifted 1 560 of 10 240 probe lines moved toward a run; and **Composer's** exception only tightens (lifting it moves nothing toward a run and tightens 8 of 450 probe lines), so whether amended ruling (b) should read Composer as handed is open for the architect. **What is wrong:** a package runner's subcommand word is read **by the program**, not by bash, so reading it as handed is equal to its twin only if the program resolves the first word by exact name; for Yarn, Bun and Composer nobody has read how they resolve it (exact name, alias, prefix or abbreviation, and whether any quote or backslash is stripped), so their halves keep the base's second dequote as named exceptions in module rule 2. **Evidence** (`### Architect ruling (M19 sixth amendment, session 20)`, quoted): "That premise is **settled for npm** by its source (npm 11.19.0 `lib/utils/cmd-list.js`, `deref`: exact, alias, unique prefix; every name is lower-case letters and hyphens, so a word holding `\` or `'` cannot resolve to `exec` or `x`), **moot for pnpm** (an unknown subcommand is already read as its implicit exec, so the spelled word cannot read looser), and **unread for Yarn, Bun and Composer** (Composer's Symfony Console abbreviation and alternative lookup is the nearest counter-example: a name it does not hold exactly is not necessarily an error)"; "Exceptions: `runnerSubcommandAt` for **Yarn and Bun**, and **Composer's half** (`composerSubcommandAt`)"; "Keeping the second dequote on three runners refuses nothing bash would allow — it keeps the base's cell, an over-ask decision 3 prices." The ruling gives no line for the exceptions and no count of their cells. Needs measurement: each exception's cells as the sweep shows them moving when it is lifted (ruling (d)). **Cost to leave:** lines whose Yarn, Bun or Composer subcommand word is quoted or backslash-spelled keep the base's twice-dequoted reading, an over-ask; the risk runs the other way if a lookup is lifted unread — Composer's abbreviation lookup could resolve a word that is not an exact name. **Done:** each program's lookup read from its documented behaviour or its source (version and file cited, as npm's `deref` is), stating exact/alias/prefix/abbreviation and any quote or backslash stripping; each exception lifted (where the lookup is settled and the sweep shows 0 looser than the twin) or kept with its cells recorded in module rule 2; WP-255's ruling (b) updated with the outcome. **Depends on:** WP-255 merged. Found by the M19 sixth amendment, session 20. Owner: **unowned — for the next architect pass**.)
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -52256,6 +52262,90 @@ canary):
 fallback, and tier 1 is bash's grammar. No `[unverified]` claim. **Next:** WP-254 to commit after
 the two edits above and the rest of review round 1's findings, then WP-255.
 
+### Architect ruling (M19 sixth amendment, session 20) — a move is the rule working only where the reading it moves to is settled
+
+Written 2026-10-22 on WP-255's uncommitted tree at `6242f55f` (WP-254 merged at `a6f1b3d8`), after
+review round 1. Read-only on source; no test tier, no git write, no Docker. The question is the
+reviewer's: WP-255's ruling (b) keeps a site's dequote as a named exception when reading as handed
+moves *"a corpus or sweep cell"*, and (d) asks for *"0 looser"*, both unqualified; the row moves
+**5 761 of 431 229 sweep lines, 5 523 toward a run (33 138 cells)** — none to attended `allow`, 225
+attended `block` → `ask`, 124 lines `block` → `ask / auto / deny` — corpus 0, and keeps no exception.
+The implementer read the fifth amendment's qualifier into (b) (notes `#### WP-255`, (2), *Assumption*);
+the reviewer ruled that inadmissible, since the fifth amendment was WP-254's and its point 1 makes a
+qualifier the architect's to write, and verified the substance.
+
+**The evidence, the reviewer's own** (scratch `…/scratchpad/reviewer-wp255/`). A seeded sample of
+**391** moved lines over all 7 strata, **all 124** `block` → `auto` lines among them: of 304 toward a
+run, **299** equal the base's reading of their twin (the spelled word written as a plain word; `foo`
+in subcommand position, because `x` is npm's exec alias) and 5 stop tighter; **838** `printf` runs
+under bash 5.3 and 3.2 agree that each spelled word reaches the program with its backslash or quote.
+The twin is bash's own reading wherever the word is read **by bash**. Where the word is read **by the
+program** — a package runner's subcommand — the twin is equal only if the program looks the
+subcommand up by exact name. That premise is **settled for npm** by its source (npm 11.19.0
+`lib/utils/cmd-list.js`, `deref`: exact, alias, unique prefix; every name is lower-case letters and
+hyphens, so a word holding `\` or `'` cannot resolve to `exec` or `x`), **moot for pnpm** (an unknown
+subcommand is already read as its implicit exec, so the spelled word cannot read looser), and
+**unread for Yarn, Bun and Composer** (Composer's Symfony Console abbreviation and alternative
+lookup is the nearest counter-example: a name it does not hold exactly is not necessarily an error).
+
+**Ruling: (b'), narrowed. WP-255's (b) and (d) are amended with the fifth amendment's qualifier,
+limited to readings that are settled; `runnerSubcommandAt`'s Yarn, Bun and Composer halves keep their
+dequote as named exceptions.**
+
+1. **The reviewer was right about the text, as at WP-254**, and the remedy is the same: the qualifier
+   is written into the row, and the notes' *Assumption* becomes a citation of this ruling.
+2. **The fifth amendment's guard is *equal to bash's reading*, and that is only a guard where the
+   reading is known.** For `isAssignment`, `isWrapperToken` and `runnerName` the word is bash's to
+   read (an assignment needs an unquoted, unescaped `=`; a command name is looked up literally), and
+   838 runs measured it: TD-030 tier 1, *argv as the shell builds it*. For `runnerSubcommandAt` the
+   reading after bash is the runner's grammar. Where that grammar has been read (npm) or cannot
+   loosen (pnpm), the twin is the reading and the move is the rule working. Where it has not, a move
+   toward a run is unmeasured, and an unmeasured move is what WP-246/247's exceptions were kept for
+   (fifth amendment, point 4).
+3. **TD-030 decision 3 settles the remainder: the fail-closed form ships.** Keeping the second
+   dequote on three runners refuses nothing bash would allow — it keeps the base's cell, an over-ask
+   decision 3 prices. Admitting them would ship a move held safe only by an assumption about three
+   programs nobody read.
+4. **Option (a) declined.** Applied as written it keeps all four dequotes and changes no cell, pinning
+   thousands of lines at a reading neither bash nor npm makes — the reliance the M19 ruling refused.
+
+**The amended rulings** (plan row WP-255, written there):
+- **(b)** a site reads as handed where every cell it moves is either tighter or equal to the base's
+  reading of its **twin** under a **settled** reading — bash's grammar, measured with `printf` under
+  both bashes, or a program's documented or source-read lookup, cited; a move toward a run that is
+  not settled so keeps the site's dequote (for that program) as a named exception in module rule 2,
+  with its cells, as `argv0Name` is. Settled today: the three bash-grammar sites, and
+  `runnerSubcommandAt` for npm and pnpm (`corepack pnpm` included). Exceptions: `runnerSubcommandAt`
+  for **Yarn and Bun**, and **Composer's half** (`composerSubcommandAt`).
+- **(d)** **0 looser than the base's reading of the line's twin**; the moves toward a run are counted
+  and recorded, none to attended `allow`; every exception's cells are those the sweep shows moving
+  when it is lifted.
+
+**What the implementer changes before the row is committed.**
+- **Code** (`command-policy.ts`): `runnerSubcommandAt` reads its words through the default dequote
+  when the runner is Yarn or Bun, and does not pass the argv reading's `dequote` to
+  `composerSubcommandAt`. Nothing else changes.
+- **Tests** (`unattended-commands.test.ts`, WP-255's describe): the `yarn "\exec" git -c
+  core.fsmonitor=/tmp/m status` and `bun "\--" x …` twin rows and the `composer "\install" sudo >p
+  id` row become **exception rows** pinned at the base's cells; one canary per exception (the
+  argv reading's `dequote` handed to that half, its row fails by name); the npm rows, the three
+  bash-grammar rows and their canaries stay.
+- **Measurements:** the sweep re-run, the 5 523 split into admitted (npm, pnpm and the bash-grammar
+  sites; each equal to its twin) and held by the exceptions, each with its line and cell count; the
+  probe's 18 head-looser Yarn lines re-read (each back at its control); the corpus diff; the
+  reviewer's sample beside the implementer's count.
+- **Docs:** notes `#### WP-255`, (2): the *Assumption* sentence replaced by a citation of this ruling
+  and the exceptions named; module rule 2 and (e)'s quoting paragraph name the three exceptions with
+  their cells; backlog **655**'s resolution text changed from *"no exception kept"* to the three
+  exceptions and this ruling; the refiner files the next backlog entry: *Yarn's, Bun's and Composer's
+  subcommand lookup read from their source or documentation, and each exception lifted that the
+  reading settles* (minor, an over-ask only; depends on WP-255 merged).
+
+**Decisions.** None written or amended: TD-030 tier 1 and decision 3 already say it. The npm and
+pnpm facts are the reviewer's, cited above by file; no `[unverified]` claim is introduced, and the
+Yarn, Bun and Composer behaviour is stated as unread, not guessed. **Next:** WP-255 to commit after
+the edits above and the rest of review round 1's findings.
+
 ## WP notes — session 14 (M10)
 
 #### WP-162
@@ -60910,3 +61000,193 @@ for the canaries).
   `data-model:check`, `hooks:check`, `typecheck`, `bundle:check`, `test` (16 544 passed, 19 skipped)
   and `coverage:ratchet` each exit 0 / `PASS`; `vitest run scripts/citations.test.ts --project unit`:
   13 passed.
+
+#### WP-255 — the peel's wrapper test and a package runner's exec form read the argv reading as handed (backlog 655)
+
+Built on `main` at `6242f55f` (WP-254's merge `a6f1b3d8` plus docs), session 20. Not committed. No Docker,
+no git run anywhere (no program half: the probe found no fail-open). A cell is `attended / auto / deny`,
+the same in all three baselines unless stated. Scratch: `…/scratchpad/wp255/` (`bin/` holds every
+script named below; `base/` is `git archive 6242f55f` of `packages` and `scripts`, `head/` the same with
+this row's `command-policy.ts`, `own/` a whole-tree copy for the canaries).
+
+- **(1) Measured first, before any change — ruling (a)'s probe.** The four sites, re-located at the
+  base: `isAssignment` and `isWrapperToken` (`command-policy.ts:3038`/`:3041`, the second through
+  `argv0Name`), `runnerName` (`:3048`) and `runnerSubcommandAt` (`:3238`, with Composer's half
+  `composerSubcommandAt`); the module docblock's quoting paragraph at `:29-37`. Shell facts
+  (`bin/facts.mjs`: `printf '[%s]'` only, `bash --norc --noprofile -c`, empty environment, stdin
+  `/dev/null`, an empty scratch directory; bash 5.3.20 and `/bin/bash` 3.2.57, alike): `"\env"`,
+  `$"\env"`, `'\env'`, `"\exec"`, `"\npx"`, `"\x"`, `"\dlx"` are handed with their backslash, `$"env"`
+  and `\env` as `env`; `"\--"`, `$"\--"`, `'\--'` as `\--`, `$"--"` and `\--` as `--`; `"X\=1"`,
+  `$"X\=1"`, `'X\=1'` as `X\=1`, `$"X=1"` and `X\=1` as `X=1`. Run as a command, every one of
+  `"X\=1"`, `$"X\=1"`, `$"X=1"`, `X\=1` is *not found* (no assignment: bash recognises one only with
+  an unquoted, unescaped `=`), as are `"\env"`, `$"\env"`, `"\exec"`; `env "\--" printf …` is env's
+  *No such file* for `\--`. **The probe** (`bin/probe.mjs`, `bin/cell.mjs`, `bin/cmp.mjs`): 630 pairs,
+  732 lines — five spellings (`"\w"`, `$"w"`, `$"\w"`, `\w`, `'\w'`) of `env`, `exec`, `npx`, `nice`,
+  `command`; five of the assignment (`"X\=1"`, `$"X\=1"`, `$"X=1"`, `'X\=1'`, `X\=1`); the five of `--`
+  after twelve wrappers and runners; and, for `npm exec`/`x`, `pnpm exec`/`dlx`, `yarn exec`/`dlx`,
+  `bun x`, `composer exec`, the subcommand, the runner's name and a `--` between them spelled the five
+  ways — each in front of `git -c core.fsmonitor=/tmp/m status`, `git push --force` and `rm -rf /`,
+  against its unquoted control. **No fail-open: 0 looser than the control**, 5 tighter (`npm "\--"`,
+  `npm $"\--"`, `npm '\--'` before the fsmonitor tail `uncertain` where `npm -- …` reads `ask / auto /
+  deny`), 625 the same. So 655 stays **minor** and the program half did not run.
+- **(2) The change** (`command-policy.ts`). Each of the four takes the reading's `dequote` (default
+  `unquoteToken`, so every other caller reads as before): `isAssignment(token, dequote)`;
+  `isWrapperToken(token, dequote)` reads the name through `argv0NameAs(token, dequote)`;
+  `runnerName(word, dequote)` likewise; `runnerSubcommandAt(words, head, dequote)` reads its words and
+  passes `dequote` to `composerSubcommandAt`. `isWrapperAt` passes it on, `argvStarts` hands
+  `walkCommandStarts` a chain that carries its own `dequote` (`asHanded` on the argv reading), and
+  `commandNameWalk` passes its `dequote` to its own `isAssignment`, `runnerSubcommandAt` and
+  `runnerName`. The over-read (`OVER_READ`) still reads through the default, so it keeps every
+  block-entry cell it held. **Four named exceptions** (round 3 added sentry-cli's, below). Three per § "Architect ruling (M19 sixth amendment,
+  session 20)" (ruling (b) amended): `runnerSubcommandAt` reads its words through `unquoteToken` for
+  Yarn and Bun, and hands `composerSubcommandAt` `unquoteToken`, because how those three programs
+  look a subcommand up is unread; npm's is settled (npm 11.19.0 `lib/utils/cmd-list.js`, `deref`,
+  read by the reviewer) and pnpm cannot read looser (an unknown word is its implicit exec already).
+  Their cells, the sweep with each exception lifted (round 1's code): Yarn 2 926 lines, 2 814 toward
+  a run (`yarn "\exec" git -c core.fsmonitor=/tmp/m status` git boundary → `ask / auto / deny`); Bun
+  1 463, 1 407 toward a run (`bun "\--" x …` the same); together 4 221 lines and 25 326 cells toward
+  a run; Composer **0** cells toward a run — lifted, it adds a candidate (`composer "\install" sudo >p id`
+  then has a start at `sudo`), and on review round 2's probe tightens 8 of 450 lines (`ask /
+  uncertain` → `block`). Named in module rule 2 and `04-agent-runtime.md`. Round 1 read the
+  fifth amendment's qualifier into (b) and kept no exception; the reviewer ruled that inadmissible
+  and the sixth amendment wrote the narrowed qualifier into the row.
+- **(3) The sweep and the corpus** (round 1's figures, then round 2's split below) (`bin/lines255.mjs`, `bin/sweep.mjs`, `bin/sweep-cmp.mjs`, base
+  `base/` against `head/`). **431 229 lines**: 219 036 of WP-247's shape — the corpus and 19 wrapper and
+  runner lines, each word wrapped seven ways and fourteen separators and assignments (`"\--"`, `$"\--"`,
+  `'\--'`, `"\-u"`, `"\-n"`, `"\-x"`, `"'--'"`, `"\-s"`, `"\-S"`, `"X\=1"`, `$"X\=1"`, `"'X=1'"`,
+  `X\=1`, `'X\=1'`) at every position; 17 wrappers and runners (`env`, `command`, `nice`, `timeout 5`,
+  `exec`, `nohup`, `X=1`, `npx`, `npm exec`, `npm x`, `pnpm exec`, `pnpm dlx`, `yarn exec`, `yarn dlx`,
+  `bun x`, `composer exec`, `corepack pnpm@9 dlx`) with each word wrapped seven ways and a `--` spelled
+  five ways after the name or between runner and subcommand, plus four assignment spellings, in front
+  of six git names before WP-247's six tails, `rm -rf /`, `sudo id`, `"\sudo" id`, `id` and every git
+  line of the corpus and the test file, each also with `> out` in front — and 212 193 of WP-254's set
+  (its `sw/lines.ndjson`): the 200 119 a second dequote can reach (a `\`, or both quote kinds) and every
+  hundredth other line. 3 881 061 cells. **5 761 lines moved, every one in reach; 0 of the 74 820 out
+  of reach.** **5 523 toward a run** (33 138 cells), none to `allow` in any column: 3 788 git boundary →
+  `ask / auto / deny`, 858 `uncertain` → `auto`, 652 hazard → `auto`, 124 `block` → `ask / auto /
+  deny`, 101 `block` → `ask / uncertain / uncertain` — every one a runner handed a spelled subcommand
+  or `--` (`npm "\exec" git push origin main`, `yarn "'--'" exec …`, `bun $"\x" …`: 5 437) or a
+  spelled command name (`"'env'" git >o branch "\--" -D main`, `"X\=1" git …`, `"'npm'" exec …`: 86).
+  **Each equals its twin** (`bin/twin.mjs`): the line with that word written `x` (a name) or `foo` (an
+  argument), read at the base — 5 507 alike, and the other 16 (`npm $"\exec" …`, `npm $"\--" …`) stop
+  at `ask / uncertain / uncertain`, short of that twin and equal to the `$"foo"` twin. The 30 distinct
+  words replaced are handed by both bashes exactly as the argv reading reads them
+  (`bin/words-oracle.mjs`, `printf` only: 30 of 30). **238 lines refusal → refusal**: 196 git boundary
+  → hazard (same rank), 42 `uncertain` → hazard (tighter), e.g. `npm "\exec" git config --edit`;
+  228 of them refuse where their twin reads `auto`. Corpus diff (`node scripts/command-corpus.mjs`):
+  `agent-lines.txt: 0 cells changed`, `developer-lines.txt: 0 cells changed`, `PASS: command-corpus`.
+  The probe at round 1's head against its controls: 607 the same, the same 5 tighter, and 18 looser,
+  every one a `yarn` or `bun` line (`yarn "\exec" git -c core.fsmonitor=/tmp/m status` git → `ask /
+  auto / deny`).
+  **Round 2 (the exceptions in, the whole sweep re-run against `6242f55f`, `head2/`):** 1 372 lines
+  moved; **admitted, 1 302 toward a run** (7 812 cells; none to `allow` in any column): 86 the
+  bash-grammar sites (a spelled name: `"'env'"`, `"X\=1"`, `"'npm'"`, …) and 1 216 npm (a spelled
+  subcommand or `--`) — 890 git boundary → `auto`, 211 hazard → `auto`, 60 `uncertain` → `auto`, 40
+  `block` → `ask / auto / deny`, 101 `block` → `ask / uncertain / uncertain`; each equal to its twin at
+  the base (1 286 the plain twin, 16 `npm $"\…"` lines the `$"foo"` twin, as in round 1); 70 refusal →
+  refusal (git boundary → hazard). **Held by the exceptions: 4 221** of round 1's 5 523 (Yarn 2 814,
+  Bun 1 407), now at the base's cells; no line moved in round 2 that did not move in round 1. The
+  probe at round 2's head: **identical to the base**, all 630 pairs — the 18 Yarn and Bun lines back at
+  their controls' cells. Corpus diff again `0 cells changed` in both files, `PASS: command-corpus`.
+  **The reviewer's sample** (round 1, `…/scratchpad/reviewer-wp255/`): 391 moved lines over the 7
+  strata, all 124 `block` → `auto` among them; of 304 toward a run, 299 equal their `foo` twin (`foo`
+  in subcommand position, because `x` is npm's exec alias) and 5 stop tighter; 838 `printf` runs under
+  bash 5.3 and 3.2 agree that each spelled word reaches the program with its backslash or quote;
+  npm's `deref` in `lib/utils/cmd-list.js` read (exact, alias, unique prefix over lower-case names).
+- **(4) Rows** — `unattended-commands.test.ts`, describe `WP-255, backlog 655: …` (16 cases since round 2, the cells in
+  all three baselines, each reading the argv reading through `commandArgvCandidates` with a `>p` where
+  the written reading would share the candidate): `"X\=1" sudo >p id` (`isAssignment`), `"'env'" sudo
+  >p id` (`isWrapperToken`), `"'npm'" exec sudo >p id` (`runnerName`), `npm "\--" exec sudo >p id` and
+  `npm "\exec" sudo >p id` (`runnerSubcommandAt`) have no start at `["sudo","id"]` and stay `block`;
+  their controls (`X=1`, `env`, `npm exec`, `npm -- exec`) have it; `timeout "X\=1" 5 sudo >p id` and
+  `nice sentry-cli "\--" monitors run -s sudo >p id` have a start (the walk's assignment test, the
+  walk's exec-form test); `"'env'" -u sudo id` and
+  `npm "\exec" git push origin main` read as their twins (`x -u sudo id` `ask / uncertain /
+  uncertain`; `npm foo git push origin main` `ask / auto / deny`). Round 2: the exception rows —
+  `yarn "\exec" git -c core.fsmonitor=/tmp/m status` and `bun "\--" x …` keep `ask / git / git`, and
+  `composer "\install" sudo >p id` has no start at `sudo` and stays `block` (the base's readings);
+  the Composer row moved there from the start rows. On the base's `command-policy.ts` the describe
+  and WP-247's read `9 failed | 13 passed` (every reading row and both twin rows red; the controls,
+  the three exception rows and WP-247's six green). **WP-247's row changed**: `"'env'" -u
+  sudo id` is no longer read with a start at `sudo` — the peel no longer takes `'env'` for a wrapper,
+  and the line reads `ask / uncertain / uncertain` again (`block` since WP-247; bash runs `'env'`), so
+  that row is now `nice "'env'" -u sudo >p id`, which keeps the walk's name in reach; its docblock says so.
+- **Round 2 canaries** (the same script, `own/` refreshed, calibrated at 8): `isAssignment` → 10,
+  `isWrapperToken` → 10, `runnerName` → 9, `runnerSubcommandAt`'s words → 12 (the npm rows and twin
+  row), and **each exception lifted** (the argv reading's `dequote` handed to that half): Yarn → 9
+  (`yarn "\exec" …` keeps the git boundary), Bun → 9 (`bun "\--" x …`), Composer → 9 (`composer
+  "\install" sudo >p id`) — each by name; the walk's `isAssignment` → 9, the walk's
+  `runnerSubcommandAt` → 9. Every one restored and `cmp`-checked.
+- **Canaries, round 1** (`bin/canary.py`: each alone on `own/`'s copy of `command-policy.ts`, restored from
+  `keep/<name>.keep` and `cmp`-checked against it and against the checkout; `vitest run --root own
+  packages/domain/src/policies --project unit`, calibrated unmutated at **8 failed** — the git-tree
+  censuses `own/` cannot satisfy — so a canary's count is beyond 8). **The four ruled** (the site's
+  second dequote put back): `isAssignment` → 9 (`"X\=1" sudo >p id`); `isWrapperToken`'s name → 10
+  (`"'env'" sudo >p id`, the `"'env'" -u sudo id` twin row); `runnerName` → 9 (`"'npm'" exec`);
+  `runnerSubcommandAt`'s words → 12 (both `npm` rows, the `yarn` and `bun` twin rows) — each by name.
+  The chain's `dequote` dropped in `argvStarts` → 16. Composer's half → 9, the walk's `isAssignment` →
+  9, the walk's `runnerSubcommandAt` → 9, each by its row (added after a first run where all three
+  survived). WP-247's walk-name canary on the moved row → 9 (`nice "'env'" -u sudo >p id`). **One
+  piece survives and is inert:** the walk's `runnerName` (`runner`, which only selects `sentry-cli
+  run`'s grammar) — put back, it moved **0** cells over the sweep's 93 833 runner lines (`mut/`,
+  `sw/mut-changes.txt`), and where it changes a candidate it adds one (`nice "x\sentry-cli" monitors run
+  -s sudo >p id`), so no cell can loosen by it; kept so the walk reads one way.
+- **WP-198's property** at the gate seed and `PROPERTY_SEED` 1, 424242 and 7: the policies directory
+  passed each time (5000 passed); every run started at a 1-minute load under 4.
+- **(5) Docblocks:** module rule 2 (the readers that take the argv reading as handed now name the peel's
+  wrapper test and the runner's exec form; the "not yet read as handed" sentence replaced by the two
+  readers outside the block candidates that still dequote twice, below); `isAssignment`,
+  `isWrapperToken`, `runnerName`, `runnerSubcommandAt`, `isWrapperAt`; `04-agent-runtime.md`'s floor
+  paragraph gains one sentence after WP-247's. 655 restated as resolved.
+- **Sentences falsified (rule 83).** Grepped `isWrapperToken`, `isAssignment`, `runnerSubcommandAt`,
+  `runnerName`, `not yet read as handed`, `double strip`, `second dequote`, `dequoted a second`,
+  `dequote an argv`, `655` over `docs/technical/04-*`, `05-*`, `CLAUDE.md`, `docs/decisions` and
+  `packages`. Changed: module rule 2's *"Not yet read as handed, and not measured: the peel's wrapper
+  test (`isWrapperToken`, `isAssignment`) and a package runner's subcommand (`runnerSubcommandAt`), which
+  dequote an argv-reading word again"* — false now; WP-247's test docblock *"14 lines tighten, `"'env'"
+  -u sudo id` from `uncertain` to `block` among them"* — that line is `uncertain` again, said there.
+  Confirmed still true: `04-agent-runtime.md`'s *"a command's name keeps its second dequote"* (the
+  `argv0Candidates` exception is untouched), `OVER_READ`'s and `argvReadings`' docblocks (the over-read
+  still dequotes twice, by design), WP-245's *"a name keeps its dequote"* test comment, `dequoteCommand`'s
+  *"Dequoting a single token is how every classification works (`unquoteToken`, `argv0Name`)"* (the
+  written reading's), and backlog 647's and WP-247's text (history). TD-030 names none of these readers.
+- **Discovered work.** (a) Two readers outside the block candidates still dequote an argv-reading word a
+  second time, unmeasured: `feedsScriptReader`'s first-word test (`isAssignment` over `argvReadings`,
+  whose `dequote` is in scope) and `movesStandardInput` (`isAssignment` and `argv0Name` over
+  `argvWords`). Both are named in module rule 2; neither is filed. (b) `basename` splits on a backslash,
+  so the as-handed name `\env` (from `"\env"`) is still the wrapper `env` — `"\env" -u sudo id` reads
+  `ask / auto / deny` at the base and the head, where bash runs `\env` (not found): an over-read, not a
+  fail-open, unchanged here. Filed as **674** (a) and **675** (b), unowned.
+- **Verify** (the person's untracked `.claude/` directories left in place, so `verify`'s `lint` step was
+  not run whole; each step alone): `biome check` over the two changed sources exit 0 (no diagnostic in
+  a changed line); `schemas:check`, `notices:check`, `ignored:check`, `nul:check`, `conflict:check`,
+  `data-model:check`, `hooks:check`, `typecheck`, `bundle:check`, `test` (16 559 passed, 19 skipped)
+  and `coverage:ratchet` each exit 0 / `PASS`; `vitest run scripts/citations.test.ts --project unit`:
+  13 passed.
+- **Verify, round 2:** `biome check` over the two changed sources exit 0 (after one `biome format`
+  of the new npm twin row); `typecheck` 0; `test` 0 (16 560 passed, 19 skipped); `coverage:ratchet`
+  `PASS`; `vitest run scripts/citations.test.ts --project unit`: 13 passed.
+- **Round 3 (review round 2's fixes).** **A fourth exception, sentry-cli** — the orchestrator's
+  application of § "Architect ruling (M19 sixth amendment, session 20)"'s principle (TD-030 decision
+  3, fail-closed where a lookup is unread), found by review round 2: `runnerSubcommandAt` reads
+  sentry-cli's words through `unquoteToken` as it does Yarn's and Bun's. Its cells, measured with
+  `bin/sentry.mjs` (sentry-cli's exec form with `monitors`, `run` and the `--` each spelled eight ways,
+  before ten tails, with and without `> out` in front: 10 240 lines): lifted (round 2's code), **1 560
+  lines move toward a run** (`sentry-cli monitors "\run" slug -- git -c core.fsmonitor=x status` git
+  boundary → `ask / auto / deny`; `… git >o branch "\--" -D main` `block` → `ask / auto / deny`); with
+  the exception, all 10 240 read as at the base. The sweep's 148 sentry-cli lines read the same at
+  round 2's and round 3's head and at the base, so **the split stands: admitted 1 302 lines (86
+  bash-grammar, 1 216 npm), held 4 221 (Yarn 2 814, Bun 1 407) plus sentry-cli's 1 560 probe
+  lines.** Corpus diff again `0 cells changed`, `PASS: command-corpus`. Exception row: `sentry-cli
+  monitors "\run" slug -- git -c core.fsmonitor=/tmp/m status` keeps `ask / git / git`. **Composer:**
+  its exception's cells restated — no cell toward a run, and 8 of review round 2's 450 probe lines
+  tighter (`ask / uncertain` → `block`) when lifted; `composerSubcommandAt` lost its `dequote`
+  parameter (only ever `unquoteToken`). **The walk's exec-form pin is gone:** `nice sentry-cli "\--"
+  monitors run -s sudo >p id` relied on sentry-cli reading `\--` as handed, and with the exception
+  its argv reading is the base's (no start at `sudo`). The walk's `runnerSubcommandAt` is now inert —
+  only `sentry-cli run` declares a grammar, and sentry-cli's words are read dequoted either way: put
+  back, it moved **0** cells over 104 221 runner lines (the sweep's runner lines, its sentry-cli lines
+  and the 10 240). **Canaries** (calibrated at 8, each restored and `cmp`-checked): Yarn → 9, Bun → 9,
+  **sentry-cli → 9** (its row), Composer (its words read as handed) → 9, `runnerSubcommandAt`'s words
+  → 11 (the three npm rows), each by name; the walk's `runnerSubcommandAt` → 8, survives, inert.
+  `04-agent-runtime.md` cites the sixth amendment and names sentry-cli.

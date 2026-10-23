@@ -28,13 +28,23 @@
  *     follows, so `"\--"` is the positional `\--` the program receives and ends no option
  *     reading. The readers of the argv reading take its words as handed, the block-entry
  *     readers too (WP-245, backlog 644), and the wrapper walk `commandNameWalk` (WP-247, backlog
- *     647: `env "\-u" sudo id` hands env the command `\-u`), with two exceptions, both over-asks:
+ *     647: `env "\-u" sudo id` hands env the command `\-u`), and the peel's wrapper test
+ *     (`isWrapperToken`, `isAssignment`) and a package runner's exec form (`runnerName`,
+ *     `runnerSubcommandAt`) (WP-255, backlog 655: `"X\=1" sudo id` runs the command `X\=1`, and
+ *     `npm "\--" exec` hands npm the command `\--`), with three classes of exception, all over-asks:
  *     the block-entry readers also read it dequoted a second time (`OVER_READ`: taking that away
  *     moved 930 sweep cells toward `allow`), and a candidate's name is read through `argv0Name`,
  *     which dequotes it (read as handed it moved 3 135: `"'git'" -c core.fsmonitor=x status`, git
- *     boundary → `auto`, where bash runs `'git'`). Not yet read as handed, and not measured: the
- *     peel's wrapper test (`isWrapperToken`, `isAssignment`) and a package runner's subcommand
- *     (`runnerSubcommandAt`), which dequote an argv-reading word again (WP-247's discovered work).
+ *     boundary → `auto`, where bash runs `'git'`), and Yarn's, Bun's, Composer's and sentry-cli's
+ *     subcommand is read dequoted again (`runnerSubcommandAt`; their lookup is unread, WP-255's
+ *     sixth-amendment exceptions, sentry-cli by the orchestrator's application of its principle in
+ *     review round 2: lifted, Yarn's and Bun's move 4 221 sweep lines toward a run, `yarn "\exec"
+ *     git -c core.fsmonitor=x status` git boundary → `auto`, and sentry-cli's 1 560 of 10 240 probe
+ *     lines, `sentry-cli monitors "\run" slug -- git -c core.fsmonitor=x status` the same; Composer's
+ *     moves no cell toward a run and tightens 8 of review round 2's 450 probe lines, `ask /
+ *     uncertain` → `block`). Two readers outside the block candidates still dequote an
+ *     argv-reading word again, unmeasured: `feedsScriptReader`'s first word and
+ *     `movesStandardInput`'s.
  *     `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no catalogue bash ignores
  *     the `$` and the text is double-quoted, so `$"--script-shell=x"` is that option.
  *     Braces are expanded on the argv reading as bash expands them (WP-243, backlog 642,
@@ -3034,18 +3044,27 @@ const unquoteToken = (token: string): string => {
 export const dequoteCommand = (command: string): string =>
   tokenise(command).map(unquoteToken).join(' ');
 
-/** `FOO=1 sudo …` — a leading assignment is environment, not the command. */
-const isAssignment = (token: string): boolean =>
-  /^[A-Za-z_][A-Za-z0-9_]*=/.test(unquoteToken(token));
+/**
+ * `FOO=1 sudo …` — a leading assignment is environment, not the command. `dequote` is how the
+ * reading's words read: `asHanded` on the argv reading (WP-255, backlog 655), where `"X\=1"` is the
+ * `X\=1` bash runs as a command and no assignment.
+ */
+const isAssignment = (token: string, dequote: (token: string) => string = unquoteToken): boolean =>
+  /^[A-Za-z_][A-Za-z0-9_]*=/.test(dequote(token));
 
-const isWrapperToken = (token: string): boolean =>
-  isArgv0Wrapper(argv0Name(token)) || isAssignment(token);
+/** A wrapper's name or an assignment, its word read by the reading's `dequote` (WP-255). */
+const isWrapperToken = (
+  token: string,
+  dequote: (token: string) => string = unquoteToken,
+): boolean => isArgv0Wrapper(argv0NameAs(token, dequote)) || isAssignment(token, dequote);
 
 /**
  * The name a package runner runs under: `argv0Name` with corepack's version pin taken off, so
- * `corepack pnpm@9 dlx …` is a `pnpm` (WP-196 review round 1).
+ * `corepack pnpm@9 dlx …` is a `pnpm` (WP-196 review round 1); the word read by the reading's
+ * `dequote` (WP-255).
  */
-const runnerName = (word: string): string => argv0Name(word).replace(/@[\s\S]*$/, '');
+const runnerName = (word: string, dequote: (token: string) => string = unquoteToken): string =>
+  argv0NameAs(word, dequote).replace(/@[\s\S]*$/, '');
 
 /**
  * pnpm's spellings of `recursive` (pnpm 11 `pnpm/src/cmd/recursive.ts`, `commandNames`), which run
@@ -3234,12 +3253,21 @@ const composerSubcommandAt = (
  * can resolve to `exec` (`e` and `ex` are ambiguous there and run nothing: an over-read); Yarn 1
  * runs `yarn workspace <name> <cmd>` as `yarn <cmd>`, so `workspace` and its name are skipped; and
  * `yarn workspaces …` (`foreach … exec` in Yarn 2+, `run` in Yarn 1) is `'unknown'`.
+ * `dequote` is how the reading's words read: `asHanded` on the argv reading (WP-255, backlog 655),
+ * so `npm "\--" exec rm -rf /` hands npm the command `\--`, no `--` — npm's lookup is exact, by alias
+ * or by unique prefix over lower-case names (npm 11.19.0 `lib/utils/cmd-list.js`, `deref`), and an
+ * unknown pnpm word is its implicit exec already. **Yarn, Bun, Composer and sentry-cli keep the
+ * second dequote**, named exceptions (§ "Architect ruling (M19 sixth amendment, session 20)";
+ * sentry-cli by the orchestrator's application of its principle, review round 2): how each looks a
+ * subcommand up is unread, so `yarn "\exec" git -c core.fsmonitor=x status` stays the git
+ * boundary's refusal rather than `auto`.
  */
 const runnerSubcommandAt = (
   words: readonly string[],
   head: number,
+  dequote: (token: string) => string = unquoteToken,
 ): number | null | 'unknown' | 'string' => {
-  const name = runnerName(words[head] ?? '');
+  const name = runnerName(words[head] ?? '', dequote);
   if (!Object.hasOwn(RUNNER_EXEC_SUBCOMMANDS, name)) {
     return null;
   }
@@ -3248,11 +3276,12 @@ const runnerSubcommandAt = (
   }
   const subcommands = RUNNER_EXEC_SUBCOMMANDS[name] as ReadonlySet<string>;
   const yarn = name === 'yarn' || name === 'yarnpkg';
+  const read = yarn || name === 'bun' || name === 'sentry-cli' ? unquoteToken : dequote;
   let valueMayFollow = false;
   let option = '';
   let monitors = false;
   for (let index = head + 1; index < words.length; index += 1) {
-    const value = unquoteToken(words[index] as string);
+    const value = read(words[index] as string);
     if (value === '--') {
       continue;
     }
@@ -3304,12 +3333,16 @@ const isRedirectionWord = (token: string): boolean =>
 
 /**
  * A wrapper at `index` of `words`: a wrapper token, a redirection word, or a package runner in its
- * exec form.
+ * exec form, each word read by the reading's `dequote` (WP-255).
  */
-const isWrapperAt = (words: readonly string[], index: number): boolean =>
-  isWrapperToken(words[index] as string) ||
+const isWrapperAt = (
+  words: readonly string[],
+  index: number,
+  dequote: (token: string) => string = unquoteToken,
+): boolean =>
+  isWrapperToken(words[index] as string, dequote) ||
   isRedirectionWord(words[index] as string) ||
-  runnerSubcommandAt(words, index) !== null;
+  runnerSubcommandAt(words, index, dequote) !== null;
 
 /** The name a token would run under: quoting off, then the last path segment. */
 const argv0Name = (token: string): string => argv0NameAs(token, unquoteToken);
@@ -3587,7 +3620,12 @@ const argvStarts = (
   tokens: readonly string[],
   dequote: (token: string) => string = unquoteToken,
 ): CommandStarts =>
-  walkCommandStarts(tokens, isWrapperAt, (token) => isFlagToken(dequote(token)), dequote);
+  walkCommandStarts(
+    tokens,
+    (words, index) => isWrapperAt(words, index, dequote),
+    (token) => isFlagToken(dequote(token)),
+    dequote,
+  );
 
 /**
  * The command with leading environment wrappers removed, when there are any. Returns nothing when
@@ -7060,7 +7098,11 @@ const commandNameWalk = (
     const value = dequote(token);
     const afterWrapper = words.length > 0;
     // An assignment, an element assignment (`y[x]=1`, `[x]=1` inside `y=( … )`) or a wrapper's `--`.
-    if (isAssignment(token) || ELEMENT_ASSIGNMENT.test(value) || (afterWrapper && value === '--')) {
+    if (
+      isAssignment(token, dequote) ||
+      ELEMENT_ASSIGNMENT.test(value) ||
+      (afterWrapper && value === '--')
+    ) {
       continue;
     }
     if (value === '[' || value === '[[') {
@@ -7150,7 +7192,7 @@ const commandNameWalk = (
     words.push(token);
     const name = argv0NameAs(token, dequote);
     // A package runner's exec form and its subcommand are wrappers too (WP-196 (b)).
-    const found = runnerSubcommandAt(tokens, index);
+    const found = runnerSubcommandAt(tokens, index, dequote);
     const subcommand = typeof found === 'number' ? found : null;
     if (expandsAsName(token)) {
       break;
@@ -7168,7 +7210,7 @@ const commandNameWalk = (
     }
     opaqueRunner ||= found === 'unknown' || found === 'string';
     runnerSubcommand = subcommand ?? runnerSubcommand;
-    runner = typeof found === 'number' ? runnerName(token) : runner;
+    runner = typeof found === 'number' ? runnerName(token, dequote) : runner;
     // A package runner's exec form has its grammar under `<runner> <subcommand>` (WP-205, 608).
     grammarKey =
       index === runnerSubcommand && Object.hasOwn(WRAPPER_GRAMMARS, `${runner} ${name}`)
