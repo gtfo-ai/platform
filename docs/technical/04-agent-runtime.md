@@ -561,7 +561,12 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   `$((…))`, where `case` is a variable name (`$(( case + 1 ))`), is never such a body. The
 >   matcher skips a backtick substitution in a command body, unquoted or inside double quotes, to
 >   the next unescaped backtick, so its `)` closes nothing, as in bash (WP-254, backlog 654); a
->   backtick in the body that is never closed leaves the body unread for the same reason. A `#`
+>   backtick in the body that is never closed leaves the body unread for the same reason. The
+>   shell-word splitter and the one-expansion test end a backtick there too (WP-264, backlog 673);
+>   the scanner's own backtick branch and the double-quote reader keep the next backtick, escaped
+>   or not, as named exceptions, because each alone read a line looser than bash: the scanner
+>   hands a body on with the backslashes bash removes, so ``` echo `echo \`sudo id\`` ``` would
+>   read `ask / auto / deny` where bash runs `sudo id`. A `#`
 >   opens a comment only where bash begins a word (WP-259, backlogs 661 and 663): after a blank
 >   (space or tab), a newline or an operator character, with any line continuation between them
 >   removed, and never after the `)` of `$(…)`, `$((…))`, `<(…)`, `>(…)` or `a=(…)`, nor after an

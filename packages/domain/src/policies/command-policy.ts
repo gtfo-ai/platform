@@ -174,6 +174,20 @@
  * `perl -e`, `ruby -e`, `php -r`) keeps WP-206's literal read (Q121), and `git -C <dir>` or
  * `cd <dir>; git …` into a repository the run wrote keeps its cell (backlog 587).
  *
+ * **A backtick substitution ends at the next unescaped backtick** (bash manual, *Command
+ * Substitution*, the backquoted form). `findClosingParen` (WP-254), `shellWords` and
+ * `isOneExpansion` (WP-264, backlog 673) find that end through `backtickEnd`. Two readers keep the
+ * next backtick, escaped or not, as named exceptions (WP-264's split clause), because each, lifted
+ * alone, moves a cell toward a run that is not bash's reading: `scan`'s backtick branch, whose body
+ * would be handed on with the backslashes bash removes from it first (before `$`, a backtick or
+ * `\`, and `"` inside double quotes), so ``` echo `echo \`sudo id\`` ``` would read `ask / auto /
+ * deny` where bash runs `sudo id` (7 641 of WP-264's 106 432 generated lines toward a run); and
+ * `doubleQuoteEnd`, whose word would then run past `scan`'s close, so ``` git --namespace "`\`"
+ * "``" -c core.fsmonitor=/tmp/m status ```, which bash refuses at parse, would read `ask / auto /
+ * deny`. Both read `ask / uncertain / uncertain`. Two more readers still close a backtick at the next
+ * one, outside 673's scope and not yet measured: `readShellContext` and `substitutionsDeleted`
+ * (backlog 679).
+ *
  * **What it still does not read:** a script in a file (`bash file`, `bash < file`, `. ./x.sh`,
  * `run-parts dir`, `scriptlive` — a file the run wrote, backlog 481's residual and the unattended
  * module's, and `--to-command=./x.sh` over one; `sed -f`, `awk -f` and a `sed … e` over a file are
@@ -5689,7 +5703,10 @@ const findClosingParen = (
   return -1;
 };
 
-/** Index of the backtick closing the one at `openIndex` (a `\` escapes the next one), or -1. */
+/**
+ * Index of the backtick closing the one at `openIndex` (a `\` escapes the next one), or -1. Its
+ * readers and the two that keep the plain search are named in the module docblock (WP-264).
+ */
 const backtickEnd = (text: string, openIndex: number): number => {
   for (let index = openIndex + 1; index < text.length; index += 1) {
     if (text[index] === '\\') {
@@ -5948,6 +5965,7 @@ const scan = (command: BashText, operators: readonly string[]): ScanResult => {
       continue;
     }
 
+    // WP-264's named exception: the next backtick, escaped or not (module docblock).
     if (char === '`') {
       const close = command.indexOf('`', index + 1);
       if (close === -1) {
@@ -6270,7 +6288,10 @@ const closingBraceEnd = (text: string, open: number): number => {
   return text.length;
 };
 
-/** Index one past the double-quoted string that opens at `open`, or the text's end. */
+/**
+ * Index one past the double-quoted string that opens at `open`, or the text's end. A backtick in it
+ * ends at the next backtick, escaped or not: WP-264's named exception, as `scan`'s (module docblock).
+ */
 const doubleQuoteEnd = (text: string, open: number): number => {
   for (let index = open + 1; index < text.length; index += 1) {
     const char = text[index] as string;
@@ -6330,7 +6351,7 @@ const shellWords = (text: string): readonly ShellWord[] => {
     } else if (rest.startsWith('${')) {
       end = closingBraceEnd(text, index + 1);
     } else if (char === '`') {
-      const close = text.indexOf('`', index + 1);
+      const close = backtickEnd(text, index);
       end = close === -1 ? text.length : close + 1;
     } else if (char === '<' || char === '>' || rest.startsWith('&>')) {
       const operator = (REDIRECTION_OPERATOR.exec(rest) as RegExpExecArray)[0];
@@ -7283,7 +7304,10 @@ const commandNameWalk = (
 /**
  * Whether a word is **exactly one** expansion — `$x`, `${…}`, `$1`, `$@`, `$(…)`, `` `…` ``, or one
  * of those inside one pair of double quotes — and nothing else (WP-201 ruling (d)). `$((…))` is
- * not: an arithmetic result is `UNCERTAINTY.arithmetic`'s.
+ * not: an arithmetic result is `UNCERTAINTY.arithmetic`'s. A backtick ends through `backtickEnd`
+ * (WP-264); its carve-out leans on the two exceptions there, because the git boundary refuses no
+ * `"` before a backtick in command position: with `scan`'s and `doubleQuoteEnd`'s both lifted,
+ * ``` "`echo \`x\``" push origin main ``` would read `ask / auto / deny` (PROGRESS `#### WP-264`).
  */
 const isOneExpansion = (word: string): boolean => {
   const inner =
@@ -7299,7 +7323,7 @@ const isOneExpansion = (word: string): boolean => {
   if (inner.startsWith('$(') && !inner.startsWith('$((')) {
     return findClosingParen(inner, 1, true) === inner.length - 1;
   }
-  return inner.startsWith('`') && inner.indexOf('`', 1) === inner.length - 1;
+  return inner.startsWith('`') && backtickEnd(inner, 0) === inner.length - 1;
 };
 
 /**
