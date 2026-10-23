@@ -7091,8 +7091,6 @@ describe('WP-252, backlog 656: a one-stage fragment is judged even when the spli
  */
 describe('WP-253, backlog 652: a git global option value holding an unquoted glob is uncertain', () => {
   it.each([
-    ['git --namespace -[c] core.fsmonitor=/tmp/m status', '-[c]'],
-    ['git --namespace -? core.fsmonitor=/tmp/m status', '-?'],
     // Each of the three characters alone.
     ['git --namespace x* core.fsmonitor=/tmp/m status', 'x*'],
     ['git --namespace x? core.fsmonitor=/tmp/m status', 'x?'],
@@ -7123,6 +7121,10 @@ describe('WP-253, backlog 652: a git global option value holding an unquoted glo
     'git --namespace * -c core.fsmonitor=/tmp/m status',
     // Was a control at `allow`: the over-ask WP-258 states, a glob after the verb.
     'git log *',
+    // Moved from the rows above by WP-263 (backlog 670): a value starting with `-` whose name
+    // holds a glob may be one of git's options too; the cells are unchanged, the reason moved.
+    'git --namespace -[c] core.fsmonitor=/tmp/m status',
+    'git --namespace -? core.fsmonitor=/tmp/m status',
   ])(
     '%j reads ask / uncertain / uncertain in every baseline, naming the glob (WP-258)',
     (command) => {
@@ -7652,8 +7654,8 @@ describe('WP-262, backlogs 668 and 669: the character before the ( decides an ex
  * bashes), and with the path `--script-shell=/bin/id` npm is handed that option (`printf` only, bash
  * 5.3.20 and 3.2.57). The block list's getopt reading and the hazard floor's option reading took
  * only a word that starts with `-`; they take such a word too, so each line is uncertain. A quoted
- * or escaped glob is one literal word, and a word whose first character is a literal is read as
- * before. Every line was `ask / auto / deny`, or `allow` in the verification and implementation
+ * or escaped glob is one literal word, and a word whose first character is a literal other than
+ * `-` is read as before (a literal `-` is WP-263's, below). Every line was `ask / auto / deny`, or `allow` in the verification and implementation
  * baselines for the `npm` ones.
  */
 describe('WP-258, backlog 660: a glob that can match a leading - is an option by another name', () => {
@@ -7773,6 +7775,100 @@ describe('WP-258, backlog 660: a glob that can match a leading - is an option by
     ['rm *.log', 'ask / auto / deny'],
     ['npm test -- src/*.test.ts', verificationAllow],
     ['npm test -- *.test.ts', verificationAllow],
+  ] as const)('control: %j keeps %j', (command, expected) => {
+    expectCells(command, expected);
+  });
+});
+
+/**
+ * WP-263 (backlog 670): a word that starts with a literal `-` and holds an unquoted `?`, `*` or
+ * bracket expression in its name part — before its first unquoted `=` — can expand to an option
+ * too: with a file `-exec` present both bashes hand `find . -exe? id \;` as `find . -exec id \;`,
+ * and find ran the command (a scratch directory, bash 5.3.20 and 3.2.57). Each line reads its
+ * leading-glob twin's cells (WP-258's), `ask / uncertain / uncertain`. A glob only after the `=`
+ * leaves the name literal (pathname expansion keeps a literal prefix), and a quoted or escaped glob
+ * is one literal word; both read as before.
+ */
+describe('WP-263, backlog 670: a glob in a dash-word’s name is an option by another name', () => {
+  const ALLOW_EVERYWHERE = 'allow / allow / allow';
+  const VERIFICATION_ALLOW = {
+    ro: 'ask / auto / deny',
+    ver: 'allow / allow / allow',
+    impl: 'allow / allow / allow',
+  };
+  type Cells = string | Record<'ro' | 'ver' | 'impl', string>;
+  // [line, its leading-glob twin, the floored program named, the cells before WP-263]
+  it.each([
+    ['find . -exe? id \\;', 'find . ?exec id \\;', 'find', ALLOW_EVERYWHERE],
+    ['find . -ex*c id \\;', 'find . ?exec id \\;', 'find', ALLOW_EVERYWHERE],
+    ['find . -exe[c] id \\;', 'find . ?exec id \\;', 'find', ALLOW_EVERYWHERE],
+    ['find . -o? id \\;', 'find . ?ok id \\;', 'find', ALLOW_EVERYWHERE],
+    ['find . -delet?', 'find . ?delete', 'find', ALLOW_EVERYWHERE],
+    ['find . -fprin? x', 'find . ?fprint x', 'find', ALLOW_EVERYWHERE],
+    ['find . -fl? x', 'find . ?fls x', 'find', ALLOW_EVERYWHERE],
+    ['rg --pr? x foo', 'rg ?-pre x foo', 'rg', ALLOW_EVERYWHERE],
+    ['rg --pr*=x foo', 'rg ?-pre=x foo', 'rg', ALLOW_EVERYWHERE],
+    ['git log --outpu? x', 'git log ?-output x', 'git', ALLOW_EVERYWHERE],
+    ['git log --outpu[t] x', 'git log ?-output x', 'git', ALLOW_EVERYWHERE],
+    ['git diff --ext-dif? x', 'git diff ?-ext-diff x', 'git', ALLOW_EVERYWHERE],
+    ['go build -toolexe?=x', 'go build ?toolexec=x', 'go', 'ask / auto / deny'],
+    ['go build -toolexe[c]=x', 'go build ?toolexec=x', 'go', 'ask / auto / deny'],
+    ['go build -toolexe? x', 'go build ?toolexec x', 'go', 'ask / auto / deny'],
+    ['cargo build --conf?g=x', 'cargo build ?-config=x', 'cargo', 'ask / auto / deny'],
+    ['pip install --index-ur?=x y', 'pip install ?-index-url=x y', 'pip', 'ask / auto / deny'],
+    ['go test -exe?=x', 'go test ?exec=x', 'go', VERIFICATION_ALLOW],
+    ['cargo test --conf*', 'cargo test ?-config', 'cargo', VERIFICATION_ALLOW],
+    ['make -?', 'make ?E', 'make', VERIFICATION_ALLOW],
+    // A quoted or escaped `-` is still a literal first character; the glob after it is unquoted.
+    ['find . "-"exe? id \\;', 'find . ?exec id \\;', 'find', ALLOW_EVERYWHERE],
+    ["find . '-'exe? id \\;", 'find . ?exec id \\;', 'find', ALLOW_EVERYWHERE],
+    ['find . \\-exe? id \\;', 'find . ?exec id \\;', 'find', ALLOW_EVERYWHERE],
+    ['find . $"-"exe? id \\;', 'find . ?exec id \\;', 'find', ALLOW_EVERYWHERE],
+    ['find . ""-exe? id \\;', 'find . ?exec id \\;', 'find', ALLOW_EVERYWHERE],
+    // A floor that read the spelling already (npm's nopt floor): a refusal before, the glob's now.
+    [
+      'npm test --script-s?ell=/bin/id',
+      'npm test ?-script-shell=/bin/id',
+      'npm',
+      'ask / hazard / hazard',
+    ],
+    [
+      'pnpm test --script-s?ell=/bin/id',
+      'pnpm test ?-script-shell=/bin/id',
+      'pnpm',
+      'ask / hazard / hazard',
+    ],
+    // The git boundary's refusal before, the glob's now.
+    ['git push --forc?', 'git push ?-force', 'git', 'ask / git / git'],
+    // The over-ask, stated: a glob in an attached value with no `=` (quoting keeps it, below).
+    ['rg -g*.ts foo', 'rg ?g*.ts foo', 'rg', ALLOW_EVERYWHERE],
+  ] as readonly (readonly [string, string, string, Cells])[])(
+    '%j reads its twin %j’s ask / uncertain / uncertain (%s; was %j)',
+    (command, twin, verb) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+      expectCells(twin, 'ask / uncertain / uncertain');
+      expect(auto(command).evaluation.uncertainty).toContain(globMayBeFloorOption(verb));
+    },
+  );
+
+  it.each([
+    // Quoted or escaped: one literal word (find refuses `-exe?`).
+    ['find . "-exe?" id \\;', ALLOW_EVERYWHERE],
+    ['find . -exe\\? id \\;', ALLOW_EVERYWHERE],
+    ["find . -exe'?' id \\;", ALLOW_EVERYWHERE],
+    ['find . "\\-"exe? id \\;', ALLOW_EVERYWHERE],
+    ['rg "--pr?=x" foo', ALLOW_EVERYWHERE],
+    ["rg -g '*.ts' foo", ALLOW_EVERYWHERE],
+    // The glob only after the first unquoted `=`: the name stays literal.
+    ['git log --grep=fix*', ALLOW_EVERYWHERE],
+    ['go test -run=Test*', VERIFICATION_ALLOW],
+    ['npm test --script-shell=/bin/i?', 'ask / hazard / hazard'],
+    // Braces are expanded before the reading (WP-248).
+    ['find . -{exec,x} id \\;', 'ask / auto / deny'],
+    ['go build -toolexe{c,}=x', 'ask / hazard / hazard'],
+    // The literal options, unchanged.
+    ['find . -exec id \\;', 'ask / auto / deny'],
+    ['npm test --script-shell=/bin/id', 'ask / hazard / hazard'],
   ] as const)('control: %j keeps %j', (command, expected) => {
     expectCells(command, expected);
   });

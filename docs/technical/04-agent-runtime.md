@@ -544,7 +544,12 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   an option that may be the entry's (`optionMayBeBlockEntry`), and given to a program a floor
 >   reads (`npm`, `git`, `pytest`, `go`, …) before its `--` it may be the floored option
 >   (`globMayBeFloorOption`). A quoted or escaped glob is one literal word and a word whose first
->   character is a literal (`src*`) is read as before; `rm * /`, `npm test *`, `git log *` and a
+>   character is a literal other than `-` (`src*`) is read as before. A word that starts with a
+>   literal `-` and holds such a glob in its name, before its first unquoted `=`, is read the same
+>   way (WP-263, backlog 670): with a file `-exec` present both bashes hand `find . -exe? id \;` as
+>   `find . -exec id \;` and find ran it (a scratch directory), where the line read `allow` in every
+>   baseline; a glob only after the `=` (`--grep=fix*`) can only become the same option and is read
+>   as before. `rm * /`, `npm test *`, `git log *`, `rg -g*.ts foo` and a
 >   floored path option's glob spelling (read `auto` written literally) reading uncertain are the
 >   stated over-ask. A
 >   command or process substitution whose body holds an unquoted `case` word or a comment is not

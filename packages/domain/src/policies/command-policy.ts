@@ -476,9 +476,10 @@ export const unknownProgramRunsJudgedName = (program: string, name: string) =>
 /**
  * WP-258 (backlog 660): a word whose first pattern element can match `-` beside a program a floor
  * reads options of (`floorOptionBehindGlob`). The files the run wrote decide which option it is.
+ * Since WP-263 (backlog 670) also a word starting with `-` whose name holds one (`find . -exe?`).
  */
 export const globMayBeFloorOption = (verb: string) =>
-  `a word beginning with an unquoted glob (*, ? or [) given to ${verb}, whose options the platform floors — with a file whose name begins with "-" present, the shell hands that file name as an option; write the option or the file name literally, or quote the word; the platform cannot tell which files the pattern matches` as const;
+  `a word beginning with an unquoted glob (*, ? or [), or starting with "-" and holding one before any unquoted "=", given to ${verb}, whose options the platform floors — with a file whose name begins with "-" present, the shell hands that file name as an option; write the option or the file name literally, or quote the word; the platform cannot tell which files the pattern matches` as const;
 
 export type UncertaintyReason =
   | (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY]
@@ -3704,13 +3705,68 @@ const RECEIVED_READING = new WeakMap<readonly string[], readonly boolean[]>();
  * element that can match a leading `-`: an unquoted `*`, `?` or bracket expression, after nothing
  * but empty quotes. With a file `-rf` present, bash hands `[-]rf` as `-rf` (both bashes,
  * measured), so such a word may be an option by another name. A word whose first character is a
- * literal (`src*`, `x?`) is not, and neither is a quoted or escaped one (`"[-]rf"`, `\*D`), which
+ * literal other than `-` (`src*`, `x?`) is not, and neither is a quoted or escaped one (`"[-]rf"`, `\*D`), which
  * is one literal word. Every bracket expression counts, `[x]` and a `[` with no `]` too, which can
  * only over-read. An extended-glob opener (`@(`, `!(`, `+(`) needs no case here: the scanner reads
  * every unquoted one as `UNCERTAINTY.extendedGlob` (WP-257), and such a line's command never
  * reaches these readers (measured: a case for it here changed no cell).
+ *
+ * Since WP-263 (backlog 670) it is also true for a word whose first character is a literal `-` and
+ * whose **name part** — the text before its first unquoted `=`, or the whole word — holds an
+ * unquoted glob ({@link nameHoldsGlob}): with a file `-exec` present both bashes hand `find . -exe?
+ * id \;` as `find . -exec id \;`, and find ran it (a scratch directory, both bashes). A glob only
+ * after the `=` (`--grep=fix*`, `-run=Test*`) is not, because pathname expansion keeps a literal
+ * prefix: such a word can only become the same option. **The over-ask, stated:** a glob in an
+ * option's attached value with no `=` (`rg -g*.ts foo`) reads as a possible option; quoting it
+ * keeps it literal.
  */
-const mayMatchLeadingDash = (raw: string): boolean => /^(?:''|""|\$''|\$"")*[*?[]/.test(raw);
+const mayMatchLeadingDash = (raw: string): boolean =>
+  /^(?:''|""|\$''|\$"")*[*?[]/.test(raw) || nameHoldsGlob(raw);
+
+/**
+ * WP-263 (backlog 670): whether a word as written starts with a literal `-`, quoted or not, and
+ * holds an unquoted `*`, `?` or `[` before its first unquoted `=`. A backslash escapes the next
+ * character, as inside double quotes it escapes only `$`, backtick, `"`, `\`. `$"…"` reads as
+ * `"…"`, and `$'…'` as `'…'`: the scanner refuses every ANSI-C quoted word first. A first character
+ * an expansion supplies (`$x-exe?`) is not a literal one, and the word reads as before (TD-030 tier 3).
+ */
+const nameHoldsGlob = (raw: string): boolean => {
+  let quote: "'" | '"' | null = null;
+  let first: string | undefined;
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index] as string;
+    if (quote === "'") {
+      if (char === "'") {
+        quote = null;
+      } else {
+        first ??= char;
+      }
+    } else if (quote === '"') {
+      if (char === '"') {
+        quote = null;
+      } else if (char === '\\' && '$`"\\'.includes(raw[index + 1] ?? '')) {
+        first ??= raw[index + 1];
+        index += 1;
+      } else {
+        first ??= char;
+      }
+    } else if (char === "'" || char === '"') {
+      quote = char;
+    } else if (char === '$' && (raw[index + 1] === "'" || raw[index + 1] === '"')) {
+      // `$` before a quote opens it: nothing else is consumed.
+    } else if (char === '\\') {
+      first ??= raw[index + 1];
+      index += 1;
+    } else if (char === '=') {
+      return false;
+    } else if ('*?['.includes(char)) {
+      return first === '-';
+    } else {
+      first ??= char;
+    }
+  }
+  return false;
+};
 
 /**
  * Per {@link blockCandidates} candidate of the written and the argv reading, per word (the name's
@@ -3846,7 +3902,8 @@ const isFlagToken = (token: string): boolean =>
  * dequoted already (`carriesHazard`'s, WP-242; the argv reading's for every block-entry reader,
  * `readingOf`, WP-245) pass `dequote` as the identity, so no quote is taken off twice.
  * `optionGlobs` marks, by index, a word that is a flag though it does not start with `-`
- * (`OPTION_GLOBS`, WP-258); only `blockEntryUnderUnreadOption` passes it.
+ * (`OPTION_GLOBS`, WP-258; a word that starts with `-` is a flag already, so WP-263's marks change
+ * nothing here); only `blockEntryUnderUnreadOption` passes it.
  */
 const splitFlags = (
   tokens: readonly string[],
@@ -4231,8 +4288,8 @@ const FLOORED_PROGRAMS: readonly string[] = [
 
 /**
  * The hazard floor's half of WP-258 (backlog 660): the floored program of this piece of command
- * line when a word before its first `--` has a first pattern element that can match `-`
- * (`OPTION_GLOBS`). With the path `--script-shell=/bin/id` present, bash hands
+ * line when a word before its first `--` has a first pattern element that can match `-`, or
+ * (WP-263, backlog 670) starts with `-` and holds a glob in its name (`OPTION_GLOBS`). With the path `--script-shell=/bin/id` present, bash hands
  * `npm test ?-script-shell=/bin/id` as `npm test --script-shell=/bin/id` (both bashes, measured).
  * A floor reads an option by its spelling and a pattern has none, so the line is uncertain rather
  * than floored, as an option the block list cannot read is. **The over-ask, stated:** any such

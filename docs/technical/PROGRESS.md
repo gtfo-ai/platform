@@ -15874,7 +15874,7 @@ The same lines at `HEAD` (`9f162f9f`) are `:642`, `:874`, `:1037`, `:1074`. WP-1
 
 **Depends on** WP-163.
 
-### 556. **CI's `unit + contract` job failed once in the runlet conformance case for a close after the session's `result`, with `Error: write EPIPE` reaching the runner's `errors` list** (TODO, **minor — a flake; one occurrence, green on a rerun of the failed job. Found by the orchestrator on `090618e2`, session 16; no work package owns it**)
+### 556. **CI's `unit + contract` job failed once in the runlet conformance case for a close after the session's `result`, with `Error: write EPIPE` reaching the runner's `errors` list** (TODO, **minor — a flake; two occurrences: `090618e2` (session 16) and `d8090d0b` (`ci` `39984613997`, a docs-only commit whose code tree passed on `2e7e5b6a`; session 20), each in the `process` project, the same case and message. Found by the orchestrator on `090618e2`, session 16; no work package owns it**)
 
 **What happened.** `ci` `39018227172` on `090618e2` (a commit that changed only test roots and two `bash` spawns in `scripts/release.test.ts`, nothing under `packages/infrastructure/src/runlet/`) failed once with one `Error: write EPIPE` (its `telemetryMessage` names a Claude Code process error, its `errorClass` is a process error) in the runner's `errors` list, at the `expect(errors).toEqual([])` of `packages/infrastructure/src/runlet/conformance.contract.test.ts` › "logs no error-level line when the run shim closes after the session’s result". The rerun of the failed job passed, and the previous head's `ci` had passed. So a write to the shim's stdin can race the shim's close after the `result` on Linux, and the `EPIPE` reaches the error path the case asserts is silent.
 
@@ -17758,9 +17758,9 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
 
 ### 669. **WP-260's ruling (3) says every internal reader of command text takes `BashText`; the brand stops at the walk** (**RESOLVED** by WP-262, session 20 — the brand half by the fourth amendment's wording ("the walk"); the join at `gitBoundaryViolation` is pinned by one row in `unattended-commands.test.ts` (`gitBoundaryViolation('cat /c\⏎tl/x')` names the fragment `cat /ctl/x`; skipped, it answers `null`), killed by its canary. Notes `#### WP-262`. Was: TODO, **minor** — **owned by WP-262** (§ "Architect ruling (M19 fourth amendment, session 20)": the `gitBoundaryViolation` row added there; ruling (3)'s sentence amended to "the walk"). A stated deviation, no measured fail-open. **What is wrong:** `parseCommand`, `scan`, `wordsOf`, `stageEvaluatesText`, `feedsScriptReader`, `ScanResult`'s pieces and `Parsed`'s fragments and stages carry `BashText`; the word readers `argvForms`, `shellWords`, `findClosingParen`, `readShellContext` and the here-document readers still take `string`, so `tsc` does not refuse a raw string there. **Evidence** (`#### WP-260`, *Discovered work* (b), quoted): "Branding them met 17 call sites over stage strings in a dozen readers; backed out to keep the row's scope; the census and the property hold the line meanwhile." **Folded nit** (WP-260's reviewer, round 1): skipping the join at `gitBoundaryViolation` (`packages/domain/src/policies/unattended-commands.ts:949`, `const command = joinLineContinuations(raw);`) is pinned only by the property, by no policy row. **Cost to leave:** a future reader added below the walk can take an unjoined string and `tsc` will not say so; today the census and the property are the only guards, and only the property catches the `gitBoundaryViolation` skip. **Done:** the listed readers take `BashText` (or the ruling's sentence is amended to "the walk", with the reason), and one row in `unattended-commands.test.ts` fails when the join at `:949` is skipped. **Depends on:** WP-260 merged. Found by WP-260's implementer (b) and reviewer (nit), session 20. **Unowned** — for the next architect pass.)
 
-### 670. **An npm option word that starts with a literal `-` and holds an unquoted glob inside its name is not read by the nopt floor, and reads `allow / allow / allow` in the verification and implementation baselines where the literal option is `hazard`** (TODO, **minor** — the notes' own candidate grade, "by the same control as 660": a non-literal word that needs a planted path. **What is wrong:** the nopt floor reads an option name by its spelling, so a word such as `--<name with a glob>` is not matched to the floored option it can expand to; WP-258's rule does not reach it because ruling (b) reads only a word whose *first* pattern element is a glob, and this word starts with a literal `-`. **Evidence** (`#### WP-258`, *Discovered work* (a), quoted): "such a word reads `allow / allow / allow` in the verification and implementation baselines where the literal option is `hazard`, and with a planted path bash hands the option"; "policy only, no shell measurement beyond this row's". The notes give **no example line** — needs measurement: a concrete spelling (e.g. the floored `--script-shell` with a glob inside its name), its three cells at the base, and the `printf '[%s]'` shell half with the planted path, before the work is understood. **Cost to leave:** a run in the verification or implementation baseline executes an npm hazardous option (`--script-shell=…`) written with a glob inside its name, given a planted file that the glob matches — `allow`, not `ask`. **Done:** an option word of a floored program whose name holds an unquoted `?`, `*`, bracket expression or extglob opener reads `uncertain` (as WP-258 reads a leading glob) in `auto` and `deny`; a quoted or escaped glob reads as today; rows under a describe naming 670 with a canary; the sweep 0 looser. **Depends on:** WP-258 merged (its `globMayBeFloorOption` is the reader to extend). Found by WP-258's implementer, session 20. Owner: **WP-263** (M20 ruling; this record corrected there: the npm shape is already floored, the open cells are find, rg, git log/diff, go, cargo, pip and make).)
+### 670. **An npm option word that starts with a literal `-` and holds an unquoted glob inside its name is not read by the nopt floor, and reads `allow / allow / allow` in the verification and implementation baselines where the literal option is `hazard`** (**RESOLVED** by WP-263, session 20, not yet committed — a word whose first character is a literal `-` (quoted or not) and whose name part, before its first unquoted `=`, holds an unquoted `?`, `*` or bracket expression is read as WP-258 reads a leading glob (`mayMatchLeadingDash`, `nameHoldsGlob` in `command-policy.ts`), so `find . -exe? id \;`, `-delet?`, `-fprin? x`, `-fl? x`, `rg --pr? x foo`, `git log --outpu? x`, `git diff --ext-dif? x` (`allow / allow / allow` in all three baselines), `go build -toolexe?=x`, `cargo build --conf?g=x`, `pip install --index-ur?=x y` (`ask / auto / deny`) and `go test -exe?=x`, `cargo test --conf*`, `make -?` (`allow` in two baselines) read `ask / uncertain / uncertain`, their leading-glob twin's cells (`globMayBeFloorOption`). **Corrected record:** the npm shape this entry names was already floored (`ask / hazard / hazard`; it reads `ask / uncertain / uncertain` now, a refusal either way); the open cells were find, rg, git log/diff, go, cargo, pip and make. A glob only after the `=` (`--grep=fix*`, `-run=Test*`) and a quoted or escaped glob read as before. Program half: with a file `-exec` in a scratch directory, `find . -exe? touch <marker> \;` wrote the marker in both bashes and `"-exe?"` was refused by find. Sweep: 47 883 of 734 715 candidate lines moved, 0 cells toward a run; corpus 0 of 371; the split clause did not fire. Over-ask `rg -g*.ts foo` recorded beside 671. Notes `#### WP-263`. Was: TODO, **minor** — the notes' own candidate grade, "by the same control as 660": a non-literal word that needs a planted path. **What is wrong:** the nopt floor reads an option name by its spelling, so a word such as `--<name with a glob>` is not matched to the floored option it can expand to; WP-258's rule does not reach it because ruling (b) reads only a word whose *first* pattern element is a glob, and this word starts with a literal `-`. **Evidence** (`#### WP-258`, *Discovered work* (a), quoted): "such a word reads `allow / allow / allow` in the verification and implementation baselines where the literal option is `hazard`, and with a planted path bash hands the option"; "policy only, no shell measurement beyond this row's". The notes give **no example line** — needs measurement: a concrete spelling (e.g. the floored `--script-shell` with a glob inside its name), its three cells at the base, and the `printf '[%s]'` shell half with the planted path, before the work is understood. **Cost to leave:** a run in the verification or implementation baseline executes an npm hazardous option (`--script-shell=…`) written with a glob inside its name, given a planted file that the glob matches — `allow`, not `ask`. **Done:** an option word of a floored program whose name holds an unquoted `?`, `*`, bracket expression or extglob opener reads `uncertain` (as WP-258 reads a leading glob) in `auto` and `deny`; a quoted or escaped glob reads as today; rows under a describe naming 670 with a canary; the sweep 0 looser. **Depends on:** WP-258 merged (its `globMayBeFloorOption` is the reader to extend). Found by WP-258's implementer, session 20. Owner: **WP-263** (M20 ruling; this record corrected there: the npm shape is already floored, the open cells are find, rg, git log/diff, go, cargo, pip and make).)
 
-### 671. **WP-258's over-ask is wider than its ruling's two pinned examples: any unquoted glob before `--` beside any floored program reads `uncertain`** (TODO, **nit** — a TD-030 decision 3 over-ask record, every move toward refusal. **What is wrong:** ruling (c) pinned `rm * /` and `npm test *` as the over-ask; the rule as built makes a glob anywhere before `--` beside every floored program uncertain, including a `path`-kind floor's glob spelling, whose literal spelling runs under `auto`. Working as built; the ruling's record of the over-ask is what is short. **Evidence** (`#### WP-258`, *Discovered work* (b) and (5), quoted): "a glob anywhere before `--` beside any floored program (`git`, `go`, `cargo`, `pytest`, `rg`, `find`, `pip`, `make`, `npm`/`pnpm`/`npx`/`pnpx`, `logcli`, by prefix) is uncertain, including a `path`-kind floor's glob spelling, whose literal spelling runs under `auto`; the corpus holds none and the sweep's 683 are listed in (5)"; "The 683 new refusals are globs given to a floored program or beside a block entry's operands (`git … branch -D *`, `git … log *`, `cargo ? build`, `go * build`)"; corpus "0 of 371 lines of `test/fixtures/commands/*-lines.txt` moved". **Cost to leave:** an unattended run that globs an argument to one of these programs before `--` stops for a person; none in the corpus today, so the cost is unobserved. **Done:** the next architect pass either records the wider over-ask as accepted in WP-258's ruling (the program list and the `path`-floor case named) or rules a narrowing with its own row; trigger to revisit: a corpus line moves. **Depends on:** WP-258 merged. Found by WP-258's implementer, session 20. Owner: **declined** by the M20 ruling — the wider over-ask recorded there as accepted; trigger: a corpus line moves, or WP-263's split clause fires.)
+### 671. **WP-258's over-ask is wider than its ruling's two pinned examples: any unquoted glob before `--` beside any floored program reads `uncertain`** (TODO, **nit** — a TD-030 decision 3 over-ask record, every move toward refusal. **What is wrong:** ruling (c) pinned `rm * /` and `npm test *` as the over-ask; the rule as built makes a glob anywhere before `--` beside every floored program uncertain, including a `path`-kind floor's glob spelling, whose literal spelling runs under `auto`. Working as built; the ruling's record of the over-ask is what is short. **Evidence** (`#### WP-258`, *Discovered work* (b) and (5), quoted): "a glob anywhere before `--` beside any floored program (`git`, `go`, `cargo`, `pytest`, `rg`, `find`, `pip`, `make`, `npm`/`pnpm`/`npx`/`pnpx`, `logcli`, by prefix) is uncertain, including a `path`-kind floor's glob spelling, whose literal spelling runs under `auto`; the corpus holds none and the sweep's 683 are listed in (5)"; "The 683 new refusals are globs given to a floored program or beside a block entry's operands (`git … branch -D *`, `git … log *`, `cargo ? build`, `go * build`)"; corpus "0 of 371 lines of `test/fixtures/commands/*-lines.txt` moved". **Cost to leave:** an unattended run that globs an argument to one of these programs before `--` stops for a person; none in the corpus today, so the cost is unobserved. **Done:** the next architect pass either records the wider over-ask as accepted in WP-258's ruling (the program list and the `path`-floor case named) or rules a narrowing with its own row; trigger to revisit: a corpus line moves. **Depends on:** WP-258 merged. Found by WP-258's implementer, session 20. Owner: **declined** by the M20 ruling — the wider over-ask recorded there as accepted; trigger: a corpus line moves, or WP-263's split clause fires. **WP-263 widens it by the same rule** (session 20, not yet committed): a word starting with `-` whose name part holds an unquoted glob beside a floored program reads `uncertain` too — `rg -g*.ts foo` (`allow / allow / allow` → `ask / uncertain / uncertain`; `rg -g '*.ts' foo` keeps `allow`), and a `=` inside quotes does not end the name part (`git log --"grep=fix"*`); 0 of 371 corpus lines moved, so the split clause did not fire.)
 
 ### 672. **A newline inside a backtick in a substitution body is over-read: `` node <(echo `⏎x`) $script `` reads `ask / git / git` where `node <(echo x) $script` reads `ask / auto / deny`** (TODO, **nit** — an over-ask, every move toward refusal; no fail-open. **What is wrong:** a reader after the scanner treats the newline inside the backtick of a process-substitution body as more than the backtick's own text, so the line is refused where the same line without the backtick runs under `auto`. Which reader is not known. **Evidence** (`#### WP-254`, *Discovered work* (a), quoted): "`` node <(echo `⏎x`) $script `` reads `ask / git / git` at the base and the head while `node <(echo x) $script` reads `ask / auto / deny`: a newline inside a backtick in a substitution body is over-read by a reader after the scanner (an over-ask, toward refusal; not traced)." Pre-existing (the base reads it too). Needs measurement: the deciding reader (a canary), and whether other substitution forms (`$(…)`, `>(…)`) and other programs than `node` over-read the same way; the notes give this one line only. **Cost to leave:** an unattended run that writes a multi-line backtick inside a process substitution stops for a person; none known in the corpus (unmeasured). **Done:** the deciding reader named; the line reads its no-backtick sibling's cells, or the over-ask is recorded as accepted under TD-030 decision 3; a row under a describe naming 672. **Depends on:** WP-254 merged. Found by WP-254's implementer, session 20. Owner: **WP-264**, folded (M20 ruling; the trigger is a backtick before an expansion word, not the newline).)
 
@@ -61373,3 +61373,123 @@ this row's `command-policy.ts`, `own/` a whole-tree copy for the canaries).
   **sentry-cli → 9** (its row), Composer (its words read as handed) → 9, `runnerSubcommandAt`'s words
   → 11 (the three npm rows), each by name; the walk's `runnerSubcommandAt` → 8, survives, inert.
   `04-agent-runtime.md` cites the sixth amendment and names sentry-cli.
+
+## WP notes — session 20 (M20)
+
+#### WP-263 — a glob in a dash-word's name part is an option by another name (backlog 670)
+
+Built on `main` at `d8090d0b` (WP-255's merge `2e7e5b6a` plus docs), session 20. Not committed. A cell
+is `attended / auto / deny`, the same in all three baselines unless stated. Scratch: `…/scratchpad/wp263/`
+(`bin/` holds every script named below; `base/` is a copy of `packages/domain` and `packages/contracts` at
+the base, `headroot/` the same at this row's code, `own/` a whole-tree copy for the canaries).
+
+- **(1) Measured first, before any change.** The ruling's 670 table re-read at the base (`bin/cells.mjs`
+  against `base/`): **identical**, cell for cell — the six npm spellings `ask / hazard / hazard`; `find .
+  -exe? id \;`, `-ex*c`, `-exe[c]`, `-o?`, `-delet?`, `-fprin? x`, `-fl? x`, `rg --pr? x foo`, `rg --pr*=x
+  foo`, `git log --outpu? x`, `--outpu[t]`, `git diff --ext-dif? x` and the over-ask `rg -g*.ts foo` `allow /
+  allow / allow`; `go build -toolexe?=x`, `-toolexe[c]=x`, `-toolexe? x`, `cargo build --conf?g=x`, `pip
+  install --index-ur?=x y` `ask / auto / deny`; `go test -exe?=x`, `cargo test --conf*`, `make -?` `ask / auto /
+  deny` read-only and `allow / allow / allow` in the other two; the literal options and the leading-glob twins,
+  the quoted and escaped controls, the braces and `--grep=fix*`/`-run=Test*` as the table states. **Shell**
+  (`bin/shell.sh`: `printf '[%s]'` only, bash 5.3.20 and `/bin/bash` 3.2.57, `--norc --noprofile`, `env -i
+  LC_ALL=C`, stdin `/dev/null`, in `sh/` holding the empty files `-exec`, `-ok`, `-delete`, `-fprint`, `-fls`,
+  `--pre`, `--output`, `--ext-diff`, `-toolexec=x`, `--config`, `--config=x`, `--index-url=x`, `-exec=x` and
+  `-E`): identical in both bashes — `find . -exe? id \;`, `-ex*c`, `-exe[c]` hand `[find][.][-exec][id][;]`;
+  `-o?` `[-ok]`; `-delet?` `[-delete]`; `rg --pr? x foo` `[rg][--pre][x][foo]`; `git log --outpu? x`
+  `[--output]`; `git diff --ext-dif? x` `[--ext-diff]`; `go build -toolexe?=x` `[-toolexec=x]`; `cargo build
+  --conf?g=x` `[--config=x]`; `pip install --index-ur?=x y` `[--index-url=x]`; `go test -exe?=x` `[-exec=x]`;
+  `cargo test --conf*` `[--config][--config=x]`; `make -?` `[make][-E]`; `"-exe?"`, `-exe\?`, `-exe'?'` and
+  `"\-"exe?` stay literal (`[-exe?]`, `[\-exe?]`); `"-"exe?`, `\-exe?`, `""-exe?` and `$"-"exe?` hand
+  `[-exec]`; `--grep=fix*`, `-run=Test*`, `rg -g*.ts` and `rg --pr*=x` stay literal (no match).
+  **Program half** (the one run ruling (a) allows): a scratch directory holding only a file `-exec`, each bash
+  as `--norc --noprofile -c`: `find . -exe? touch <dir>/marker-<v> \;` exited 0 and wrote `marker-5` and
+  `marker-3`; `find . "-exe?" touch … \;` was refused by find (`-exe?: unknown primary or operator`, exit 1) and
+  wrote nothing. No other program ran.
+- **(2) The change** (`command-policy.ts`). `mayMatchLeadingDash` answers true also for
+  `nameHoldsGlob(raw)`: a word as written whose first character is a literal `-` — unquoted, quoted (`"-"`,
+  `$"-"`) or escaped (`\-`) — and that holds an unquoted `*`, `?` or `[` before its first unquoted `=`. Quote
+  state is tracked as bash removes quotes: a backslash escapes the next character, inside double quotes only
+  before `$`, backtick, `"` or `\` (so `"\-"exe?` starts with `\` and reads as before); `$"…"` reads as `"…"`
+  and `$'…'` as `'…'` — the scanner refuses every ANSI-C quoted word first (`find . $'\x2d'exe? id \;` was
+  uncertain at the base). A first character an expansion supplies (`$x-exe?`) is TD-030 tier 3 and reads as
+  before (`find . $x id \;` is `allow` at the base and the head alike). **Both consumers unchanged**, as ruled:
+  `floorOptionBehindGlob` answers the floored program, so the reason is `globMayBeFloorOption(verb)`; the block
+  half (`blockEntryUnderUnreadOption`) gains nothing, because `splitFlags` files a word starting with `-` as a
+  flag already (`rm -r? /` was uncertain at the base). **No third reader**: with the hazard half removed the
+  find rows fail (canary below), so the ask list's `find * -exec*`, `-delete*`, `-ok*` entries are not decided
+  by another reader; the floor half decides them. `globMayBeFloorOption`'s text names the new shape ("or
+  starting with "-" and holding one before any unquoted "="").
+- **(3) Rows and cells.** A describe *WP-263, backlog 670* in `unattended-commands.test.ts`, three baselines
+  (`expectCells`), each row asserting its own cells, its leading-glob twin's cells (`find . -exe? id \;` with
+  `find . ?exec id \;`, …) and the named reason. **Cells before → after, every one toward refusal** (no ↑):
+  `allow / allow / allow` → `ask / uncertain / uncertain` for the seven find, two rg and three git lines, `"-"exe?`,
+  `\-exe?`, `$"-"exe?`, `""-exe?` and the over-ask `rg -g*.ts foo`; `ask / auto / deny` → uncertain for the
+  five go/cargo/pip lines; `ask / auto / deny | allow | allow` → uncertain for `go test -exe?=x`, `cargo test
+  --conf*`, `make -?`; `ask / hazard / hazard` → uncertain for `npm test --script-s?ell=/bin/id` and the pnpm
+  form; `ask / git / git` → uncertain for `git push --forc?`. **Controls** unchanged: `"-exe?"`, `-exe\?`,
+  `-exe'?'`, `"\-"exe?`, `rg "--pr?=x" foo`, `rg -g '*.ts' foo`, `git log --grep=fix*`, `go test -run=Test*`,
+  `npm test --script-shell=/bin/i?`, `find . -{exec,x} id \;`, `go build -toolexe{c,}=x`, `find . -exec id \;`,
+  `npm test --script-shell=/bin/id`. **Existing rows moved:** WP-253's `git --namespace -[c] …` and `-? …`
+  keep `ask / uncertain / uncertain` and now name the glob's reason (moved into WP-258's list beside them).
+  **Assumption, recorded:** ruling (c) lists "the npm rows" among the controls that "read as today", and ruling
+  (b) says both consumers take the word unchanged. Those cannot both hold: the hazard half answers before the
+  nopt floor, so the npm glob spellings move `ask / hazard / hazard` → `ask / uncertain / uncertain`, a refusal
+  either way (the order WP-258 measured for its own 33 453 hazard lines). The consumers were kept unchanged and
+  the npm rows are pinned at the new cells, with the literal `--script-shell=/bin/id` and the post-`=` glob
+  `--script-shell=/bin/i?` as the unchanged controls.
+- **(4) Canaries** (`bin/canary.py`: each alone on `own/`'s copy of `command-policy.ts`, restored from
+  `keep/<name>.keep` and `cmp`-checked against it and against the checkout; `vitest run --root own
+  packages/domain/src/policies --project unit`, calibrated unmutated at **8 failed**, the git-tree censuses
+  `own/` cannot satisfy, so a canary's count is beyond 8): the name-part check removed → 38 (every 670 row);
+  the `=` boundary ignored → 12 (`--grep=fix*`, `-run=Test*`, `--script-shell=/bin/i?`, WP-250's attached
+  option word); a quoted glob read as unquoted → 11 (`"-exe?"`, `-exe'?'`, `rg "--pr?=x"`); an escaped glob
+  read as unquoted → 9 (`-exe\?`); any literal first character → 19 (WP-253's `x*`, `x?`, `src*`, `./*`
+  rows); a backslash inside double quotes always an escape → 9 (`"\-"exe?`); an unquoted backslash kept literal
+  → 9 (`\-exe?`); `$` before a quote not opening it → 9 (`$"-"exe?`, added after the first canary set, with
+  `""-exe?`); the hazard half removed → 222 (every 670 row and WP-258's floors — the third-reader canary). An
+  earlier draft read an escape inside `$'…'` as `-`; its canary survived (8), because the scanner refuses
+  every `$'…'` word first, so the case was removed as an equivalent mutant, as WP-258 removed its extglob
+  case, and the 3 508 sweep lines holding `$'` or `$"` read identically with and without it. **None survived.**
+- **(5) The sweep** (`bin/gen.mjs`, `bin/filter.mjs`, `bin/sweep.mjs`, `bin/classify.mjs`): WP-258's sweep set
+  (WP-257 r4's `B.ndjson`, 1 865 671 lines) plus every option a block entry, an ask entry or a hazard floor
+  names (WP-258's 58 probes and the ask list's `-exec`, `-ok`, `-delete`, `git rebase -x`/`--exec`, with
+  `--force-with-lease`, `go test -exec=x`, `cargo test --config`, `rg --pre`, `git log --output`, `git diff
+  --ext-diff`) with each name character after the first replaced by `?`, by a one-character bracket, and a `*`
+  suffix — 1 016 lines. A line with no `-` or no `*`, `?`, `[` has no word the rule marks and is answered alike
+  by construction; the 734 715 that hold both were read at the base (`base/`) and the head (`headroot/`).
+  **47 883 lines moved, 0 cells toward a run** (attended rank, or `auto`/`deny` from a refusal to
+  `allow_list`/`unattended_auto`): 19 849 `ask / git / git` and 13 254 `ask / hazard / hazard` → `ask /
+  uncertain / uncertain` (refusals both sides), 13 772 uncertain → uncertain with the evaluation's reason added,
+  526 `ask / auto / deny` → uncertain, 235 `allow` in two baselines, 71 `allow` in implementation only and 176
+  `allow` in all three → uncertain. Of the 1 016 generated lines 970 moved and the other 46 were uncertain or
+  `block` already. **This row's own lines** (the table, the controls, the shell lines, 78): 36 moved, 0 toward
+  a run. Every move is toward refusal, so the M19 fifth amendment's equality clause has nothing to measure.
+  **Corpus diff:** 0 of 371 lines of `test/fixtures/commands/*-lines.txt` moved (base and head identical; the
+  corpus test green). **The split clause did not fire.**
+- **(6) Docblocks**: `mayMatchLeadingDash` (a WP-263 paragraph and the over-ask), `nameHoldsGlob` (new),
+  `globMayBeFloorOption` (its docblock and text), `splitFlags`' `optionGlobs` (WP-263's marks change nothing
+  there), `floorOptionBehindGlob` (its first sentence); `04-agent-runtime.md` one passage after WP-258's. 670
+  restated as resolved with the corrected record; the over-ask recorded on 671.
+- **Sentences falsified** (rule 83; grep for *first character is a literal*, *first pattern element*,
+  *starts with a literal `-`*, *glob inside its name*, *leading-glob*, *does not start with `-`*, *by another
+  name* and *670* over `packages/domain/src`, `04`, `05`, `10`, `docs/decisions` and `CLAUDE.md`):
+  `mayMatchLeadingDash`'s "A word whose first character is a literal (`src*`, `x?`) is not" — narrowed to a
+  literal other than `-`; 04's "a word whose first character is a literal (`src*`) is read as before" —
+  narrowed, with the WP-263 sentence; WP-258's test docblock "a word whose first character is a literal is read
+  as before" — narrowed; `floorOptionBehindGlob`'s "a first pattern element that can match `-`" — extended;
+  `globMayBeFloorOption`'s text "a word beginning with an unquoted glob" — extended. Confirmed still true:
+  `optionMayBeBlockEntry`'s and `blockEntryUnderUnreadOption`'s WP-258 sentences (the block half is
+  unchanged), `globMayBeFloorOption`'s WP-258 docblock sentence, WP-253's test comment "A value whose first
+  pattern element can match `-`" (the two moved rows carry their own comment), `unreadableGitWord`'s `git log *`
+  sentence. TD-030 does not name the reader; not edited.
+- **Discovered work.** None filed. (a) A first character an expansion supplies (`find . $x-exe? id \;`, `find .
+  $x id \;`) reads `allow` at the base and the head: TD-030 tier 3, pinned by decision rather than a finding.
+  (b) A `=` inside quotes does not end the name part (`git log --"grep=fix"*` reads uncertain), as ruled; an
+  over-ask, recorded on 671. (c) **Machine discipline, stated:** a wait loop written for the sweep busy-waited
+  one core for ten minutes (a `while` on `date`) before it was noticed; the one-minute load stayed under 12
+  (8.5 at most) and later waits used `caffeinate -w`, which sleeps. No `rm` and no `git` ran.
+- **Verify** (the person's untracked `.claude/` directories left in place, so `verify`'s `lint` step was
+  not run whole; each step alone): `biome check` over the two changed sources exit 0 (it ignores the two Markdown files); `schemas:check`,
+  `notices:check`, `ignored:check`, `nul:check`, `conflict:check`, `data-model:check`, `hooks:check`,
+  `typecheck`, `bundle:check`, `test` (16 601 passed, 19 skipped) and `coverage:ratchet` each exit 0 /
+  `PASS`; `vitest run scripts/citations.test.ts --project unit` green.
