@@ -7956,36 +7956,37 @@ describe('WP-255, backlog 655: the peel and a runner read the argv reading as ha
 /**
  * WP-264 (backlog 673): four readers ended a backtick substitution at the next backtick, escaped or
  * not, where bash skips `` \` `` (bash manual, *Command Substitution*, the backquoted form). Two
- * now take WP-254's `backtickEnd`: `shellWords` and `isOneExpansion`. `scan` and `doubleQuoteEnd`
- * keep the plain search as named exceptions (the row's split clause, module docblock): each, lifted
- * alone, moves a cell toward a run that is not bash's reading. No line read looser than bash before the change (the hunt in PROGRESS
- * `#### WP-264`); every move here is between refusals.
+ * took WP-254's `backtickEnd` there: `shellWords` and `isOneExpansion`. `scan` and `doubleQuoteEnd`
+ * kept the plain search as named exceptions (the row's split clause): each, lifted alone, moved a
+ * cell toward a run that is not bash's reading. WP-268 (backlog 677) lifted both, with `scan` handing
+ * the body on as bash parses it and the git boundary walking the same body; the cells below are
+ * after it, each one's WP-264 cell in its comment. Every move is between refusals or onto bash's
+ * reading.
  */
 describe('WP-264, backlog 673: a backtick substitution ends at the next unescaped backtick', () => {
   it.each([
-    // bash refuses both at parse (an unterminated backtick). The first is `shellWords`'; the
-    // second moves only with both readers on `backtickEnd`, so either alone leaves its cell.
-    ['x=`\\`\\`sudo id``; git -c core.fsmonitor=/tmp/m status', 'ask / git / git'],
+    // bash refuses all three at parse (an unterminated backtick). The first was `ask / git / git`
+    // and the third `ask / git / git` (`isOneExpansion`'s, a computed name); since WP-268 `scan`
+    // hands the first body on as ``` ``sudo id ``` (`sudo id` after an empty substitution) and the
+    // third as `` `x ``, unterminated.
+    ['x=`\\`\\`sudo id``; git -c core.fsmonitor=/tmp/m status', 'block / block / block'],
     ['`\\`  `` push origin main', 'ask / uncertain / uncertain'],
-    // `isOneExpansion`: the first word is one backtick expansion, a computed name.
-    ['`\\`x` ` push origin main', 'ask / git / git'],
+    ['`\\`x` ` push origin main', 'ask / uncertain / uncertain'],
   ])('%j reads %s in every baseline', (command, expected) => {
     expectCells(command, expected);
   });
 
   it.each([
-    // `scan`: its body keeps the backslashes bash removes, so with `backtickEnd` the body reads
-    // `echo \`sudo id\`` — `ask / auto / deny` — where bash runs `sudo id`.
-    'echo `echo \\`sudo id\\``',
-    // `doubleQuoteEnd`: with `backtickEnd` the word runs to the line's end against `scan`'s
-    // reading and the line reads `ask / auto / deny`; bash refuses it at parse.
-    'git --namespace "`\\`" "``" -c core.fsmonitor=/tmp/m status',
-    // Held by both: with both lifted it read `ask / auto / deny` at WP-264 (`isOneExpansion` took
-    // the word for one expansion the git boundary did not refuse); since WP-267 (backlog 678) it
-    // reads `ask / git / git`, its `"$(echo $(x))" push origin main` twin's cell.
-    '"`echo \\`x\\``" push origin main',
-  ])('exception: %j keeps ask / uncertain / uncertain in every baseline', (command) => {
-    expectCells(command, 'ask / uncertain / uncertain');
+    // `scan`'s exception, lifted (WP-268): the body is `echo `sudo id``, and bash runs `sudo id`.
+    // It read `ask / uncertain / uncertain`.
+    ['echo `echo \\`sudo id\\``', 'block / block / block'],
+    // `doubleQuoteEnd`'s exception, lifted (WP-268): bash refuses it at parse, and it keeps its cell.
+    ['git --namespace "`\\`" "``" -c core.fsmonitor=/tmp/m status', 'ask / uncertain / uncertain'],
+    // Both lifted: its `"$(echo $(x))" push origin main` twin's cell (WP-267, backlog 678). It read
+    // `ask / uncertain / uncertain`.
+    ['"`echo \\`x\\``" push origin main', 'ask / git / git'],
+  ])('lifted exception: %j reads %s in every baseline', (command, expected) => {
+    expectCells(command, expected);
   });
 
   it.each([
@@ -8111,5 +8112,124 @@ describe('WP-267, backlog 680: a substitution inside double quotes is walked', (
     ['echo "a\\`b"', 'ask / auto / deny'],
   ])('%j reads %s', (command, expected) => {
     expectCells(command, expected);
+  });
+});
+
+/**
+ * WP-268 (backlog 677): bash removes a `\` before `$`, a backtick or `\` in a backtick body — and,
+ * inside double quotes, before `"` — before it parses the body (bash manual, *Command
+ * Substitution*). `scan` handed the body on with those backslashes kept and the git boundary's
+ * `computesCommandName` walked it the same way, so `\$` read as a literal dollar where bash expands
+ * it: every line of the first table read `ask / auto / deny` and both bashes run the blocked command
+ * (`printf` stand-ins). Both readers now take the body from `backtickSubstitution`, and each line
+ * reads its `$(…)` twin's cell (`echo `\$(echo sudo)`` as `echo $($(echo sudo))`).
+ */
+describe('WP-268, backlog 677: a backtick body is read as bash parses it', () => {
+  it.each([
+    ['echo `\\$""sudo id`', 'block / block / block'],
+    ['echo `\\$(echo sudo) id`', 'ask / uncertain / uncertain'],
+    ['echo $(echo `\\$(echo sudo) id`)', 'ask / uncertain / uncertain'],
+    ['x=`\\$(echo sudo) id`; ls', 'ask / uncertain / uncertain'],
+    ['echo `\\$(echo git) -c core.fsmonitor=/tmp/m status`', 'ask / uncertain / uncertain'],
+    ['echo `\\$""git -c core.fsmonitor=/tmp/m status`', 'ask / uncertain / uncertain'],
+    ['echo `\\$""rm -rf /`', 'block / block / block'],
+    // WP-264's hunt (its `gen5.mjs`): the eight of its ten lines that still read `ask / auto /
+    // deny` at WP-267's merge; WP-267 had moved the two `push origin main` lines to `ask / git /
+    // git`, and they move again here, between refusals.
+    ['echo "`\\$""sudo id`"', 'block / block / block'],
+    ['echo $(echo `\\$""sudo id`)', 'block / block / block'],
+    ['git log `\\$""sudo id`', 'block / block / block'],
+    ["echo `\\$''sudo id`", 'ask / uncertain / uncertain'],
+    ['echo "`\\$\'\'sudo id`"', 'ask / uncertain / uncertain'],
+    ["echo $(echo `\\$''sudo id`)", 'ask / uncertain / uncertain'],
+    ["git log `\\$''sudo id`", 'ask / uncertain / uncertain'],
+    ['"`\\$""sudo id`" push origin main', 'block / block / block'],
+    ['"`\\$\'\'sudo id`" push origin main', 'ask / uncertain / uncertain'],
+  ])('%j reads %s, where it read ask / auto / deny or ask / git / git', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it.each([
+    'echo `\\$(echo sudo)`',
+    'echo "`\\$(echo sudo)`"',
+    // `computesCommandName` reads the body bash parses: `\`` there is a nested substitution.
+    'echo `\\`echo sudo\\``',
+    // `shellWords`' `backtickEnd` (WP-264): with the next backtick the word ends early and the line
+    // reads `ask / uncertain / uncertain`; it read so before WP-268 too. Its twin is
+    // `$($(x)) push origin main`.
+    '`\\`x\\`` push origin main',
+    // Outside double quotes the `\` before `"` stays: the body is `\";$(echo sudo)`, whose
+    // `$(echo sudo)` is a command position. Read as inside quotes, the `"` would hide it.
+    'echo `\\";\\$(echo sudo)`',
+    // twins
+    'echo $($(echo sudo))',
+    'echo "$($(echo sudo))"',
+  ])('%j reads ask / git / git, computed by computesCommandName', (command) => {
+    expectCells(command, 'ask / git / git');
+    expect(computesCommandName(command)).toBe(true);
+  });
+
+  it.each([
+    // Inside double quotes bash also removes the `\` before `"`: the body is `"$(echo sudo)"`,
+    // its `echo "$("$(echo sudo)")"` twin's cell; both bashes run `sudo`. It read `ask / auto / deny`.
+    ['echo "`\\"\\$(echo sudo)\\"`"', 'ask / uncertain / uncertain'],
+    // ...so the `;` here is quoted: both bashes print `a;sudo id` and run no `sudo`, as for the
+    // `echo "$(echo "a;sudo id")"` twin. It read `block / block / block`, a move toward a run that is
+    // bash's reading. Outside double quotes the `\"` stays and bash runs `sudo`.
+    ['echo "`echo \\"a;sudo id\\"`"', 'ask / auto / deny'],
+    ['echo `echo \\"a;sudo id\\"`', 'block / block / block'],
+  ])('%j reads %s', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it.each([
+    ['echo `\\$(sudo id)`', 'block / block / block'],
+    ['git status `\\$(sudo id)`', 'block / block / block'],
+    ['ls "`\\$(sudo id)`"', 'block / block / block'],
+    ['`\\$(echo sudo)` id', 'ask / git / git'],
+    // bash runs no `sudo`: it looks up `$(sudo` and `$sudo`. Each read `ask / auto / deny`; its
+    // body is now read as bash parses it, and the body written bare (`$\(sudo id\)`, `"$""sudo"
+    // id`) and the `$(…)` twin read `ask / uncertain / uncertain`, a name the shell expands — an
+    // over-ask, never a run.
+    ['echo `\\$\\(sudo id\\)`', 'ask / uncertain / uncertain'],
+    ['echo `"\\$""sudo" id`', 'ask / uncertain / uncertain'],
+  ])('control: %j reads %s', (command, expected) => {
+    expectCells(command, expected);
+  });
+
+  it('a here-document body in a body bash removed a backslash from is cut where it sits', () => {
+    // The body is shorter than the text it came from, so its range maps back through the origins.
+    expect(
+      withoutHereDocumentBodies("x=`echo \\\\\\\\; cat <<'EOF'\ngit push --force\nEOF\n`; ls"),
+    ).toBe("x=`echo \\\\\\\\; cat <<'EOF'\n`; ls");
+  });
+});
+
+/**
+ * WP-268 (backlog 679): two more readers closed a backtick at the next one, escaped or not. Each was
+ * measured alone on `backtickEnd` over WP-268's sweep (0 lines moved) and on these lines, and taken.
+ * `readShellContext`: an early close read the `${` or `((` behind `` \` `` as open at a here-document
+ * operator, so the body below was read as commands and `sudo id` there was refused; bash ends the
+ * backtick at the last one, hands `cat` to `echo` and runs no `sudo` (both bashes, `printf`
+ * stand-ins). `substitutionsDeleted`: `` g`\``it `` is `git` once the substitution, which prints
+ * nothing, is deleted whole, and both bashes hand `git` to the program.
+ */
+describe('WP-268, backlog 679: every reader ends a backtick through backtickEnd', () => {
+  it.each([
+    "echo `\\` ${` cat <<'EOF'\nsudo id\nEOF",
+    "echo `\\`` cat <<'EOF'\nsudo id\nEOF",
+    'echo `\\` ((` cat <<EOF\nsudo id\nEOF',
+  ])('readShellContext: %j reads ask / uncertain / uncertain, where it read block', (command) => {
+    expectCells(command, 'ask / uncertain / uncertain');
+  });
+
+  it('substitutionsDeleted: fakeroot is handed git in "fakeroot g`\\``it push --force"', () => {
+    const { uncertainty } = evaluateCommand(
+      { command: 'fakeroot g`\\``it push --force' },
+      BASELINES.ro,
+    );
+    expect(
+      uncertainty.some((reason) => reason.startsWith('an argument naming git given to fakeroot')),
+    ).toBe(true);
   });
 });

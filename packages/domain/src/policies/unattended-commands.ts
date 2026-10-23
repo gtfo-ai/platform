@@ -54,6 +54,7 @@ import type { UnattendedCommandMode } from '@platform/contracts';
 import { joinLineContinuations } from './bash-text.js';
 import {
   backtickEnd,
+  backtickSubstitution,
   COMPUTED_NAME_WRAPPERS,
   type CommandEvaluation,
   type CommandRequest,
@@ -723,7 +724,10 @@ const redirectionAt = (command: string, index: number): string | null => {
  * backtick frame opened there ends at `backtickEnd`'s close; one opened outside a double quote is
  * still closed only by a `)`, so the word after an unquoted backtick pair is read in command
  * position (backlog 672, carried under WP-267's split clause: closing it moved lines toward a run
- * past their `$(…)` twins).
+ * past their `$(…)` twins). A backtick body bash removes a backslash from (before `$`, a backtick or
+ * `\`, and `"` inside double quotes) is also walked as bash parses it, from `backtickSubstitution` —
+ * the body `scan` hands on — so `` echo `\`echo sudo\`` `` and `` echo `\$(echo sudo)` `` are
+ * computed (WP-268, backlog 677). The walk of the raw line stays: the union only tightens.
  *
  * A here-document's body is data, not commands (WP-153): `cat > a.php <<'EOF'` followed by PHP
  * whose lines start with `$` must not read as computed command names. The operator and the bodies
@@ -897,6 +901,12 @@ export const computesCommandName = (raw: string): boolean => {
     }
     if (char === '`') {
       if (atCommand && word === '' && target === 'none') {
+        return true;
+      }
+      // WP-268 (backlog 677): bash parses the body with the backslashes it removes gone, so a
+      // `` \` `` there opens a nested substitution and `\$(` a `$(`: that body is walked too.
+      const { body, origins } = backtickSubstitution(command, index, quote === '"');
+      if (body.length !== (origins.at(-1) as number) - index - 1 && computesCommandName(body)) {
         return true;
       }
       if (quote === '"' || frames.some((frame) => frame.quote === '"')) {

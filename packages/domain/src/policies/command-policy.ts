@@ -177,17 +177,16 @@
  * **A backtick substitution ends at the next unescaped backtick** (bash manual, *Command
  * Substitution*, the backquoted form). `findClosingParen` (WP-254), `shellWords` and
  * `isOneExpansion` (WP-264, backlog 673) find that end through `backtickEnd`, and so does the git
- * boundary's `computesCommandName` for a backtick inside a double quote (WP-267). Two readers keep the
- * next backtick, escaped or not, as named exceptions (WP-264's split clause), because each, lifted
- * alone, moves a cell toward a run that is not bash's reading: `scan`'s backtick branch, whose body
- * would be handed on with the backslashes bash removes from it first (before `$`, a backtick or
- * `\`, and `"` inside double quotes), so ``` echo `echo \`sudo id\`` ``` would read `ask / auto /
- * deny` where bash runs `sudo id` (7 641 of WP-264's 106 432 generated lines toward a run); and
- * `doubleQuoteEnd`, whose word would then run past `scan`'s close, so ``` git --namespace "`\`"
- * "``" -c core.fsmonitor=/tmp/m status ```, which bash refuses at parse, would read `ask / auto /
- * deny`. Both read `ask / uncertain / uncertain`. Two more readers still close a backtick at the next
- * one, outside 673's scope and not yet measured: `readShellContext` and `substitutionsDeleted`
- * (backlog 679).
+ * boundary's `computesCommandName` for a backtick inside a double quote (WP-267). Since WP-268
+ * (backlogs 677 and 679) every reader does: `doubleQuoteEnd`, `readShellContext` and
+ * `substitutionsDeleted` through `backtickEnd`, and `scan`'s backtick branch through
+ * `backtickSubstitution`, which also hands the body on **as bash parses it** — bash removes a `\`
+ * before `$`, a backtick or `\`, and before `"` inside double quotes, before it parses the body, so
+ * `` echo `\$""sudo id` `` runs `sudo id` and reads `block`, its `echo $($""sudo id)` twin's cell
+ * (it read `ask / auto / deny`). The git boundary's `computesCommandName` walks the same body, so a
+ * `` \` `` there is a nested substitution: `` echo `\`echo sudo\`` `` reads `ask / git / git`, as
+ * `echo $($(echo sudo))` does. The two change together: `scan` alone moved 278 of WP-268's sweep
+ * lines from `ask / git / git` to `ask / auto / deny`. WP-264's two named exceptions are lifted.
  *
  * **What it still does not read:** a script in a file (`bash file`, `bash < file`, `. ./x.sh`,
  * `run-parts dir`, `scriptlive` — a file the run wrote, backlog 481's residual and the unattended
@@ -4793,6 +4792,11 @@ interface ScanResult {
   readonly uncertainty: readonly UncertaintyReason[];
   /** Where each of `substitutions` starts in the scanned text, in the same order. */
   readonly substitutionOffsets: readonly number[];
+  /**
+   * For a backtick body bash removed a backslash from (WP-268), keyed by its index in
+   * `substitutions`: where each of its characters sits in the scanned text (`backtickSubstitution`).
+   */
+  readonly backtickOrigins: ReadonlyMap<number, readonly number[]>;
   /** The here-documents this pass skipped (only a pass that splits on newlines reads them). */
   readonly hereDocuments: readonly HereDocumentBody[];
   /** `[newline, end)` of every skipped body, terminator line included, in the scanned text. */
@@ -4921,7 +4925,7 @@ const readShellContext = (
       continue;
     }
     if (char === '`') {
-      const close = before.indexOf('`', index + 1);
+      const close = backtickEnd(before, index);
       if (close === -1) {
         return unfollowable;
       }
@@ -5706,7 +5710,7 @@ const findClosingParen = (
 
 /**
  * Index of the backtick closing the one at `openIndex` (a `\` escapes the next one), or -1. Its
- * readers and the two that keep the plain search are named in the module docblock (WP-264).
+ * readers are named in the module docblock (WP-264, WP-268).
  */
 export const backtickEnd = (text: string, openIndex: number): number => {
   for (let index = openIndex + 1; index < text.length; index += 1) {
@@ -5717,6 +5721,38 @@ export const backtickEnd = (text: string, openIndex: number): number => {
     }
   }
   return -1;
+};
+
+/**
+ * The backtick substitution opening at `openIndex`: its closing backtick (`backtickEnd`, -1 when
+ * unclosed, the body then running to the text's end) and its body **as bash parses it** (WP-268,
+ * backlog 677). Bash removes a `\` before `$`, a backtick or `\` — and, inside double quotes
+ * (`inDouble`), before `"` — before it parses the body (bash manual, *Command Substitution*; the `"`
+ * measured by WP-264, both bashes); every other `\` stays. `origins[i]` is where `body[i]` sits in
+ * `text`, and `origins[body.length]` is the body's end.
+ */
+export const backtickSubstitution = (
+  text: string,
+  openIndex: number,
+  inDouble: boolean,
+): { readonly end: number; readonly body: string; readonly origins: readonly number[] } => {
+  const end = backtickEnd(text, openIndex);
+  const stop = end === -1 ? text.length : end;
+  let body = '';
+  const origins: number[] = [];
+  for (let index = openIndex + 1; index < stop; index += 1) {
+    const next = text[index + 1];
+    if (
+      text[index] === '\\' &&
+      (next === '$' || next === '`' || next === '\\' || (inDouble && next === '"'))
+    ) {
+      index += 1;
+    }
+    body += text[index];
+    origins.push(index);
+  }
+  origins.push(stop);
+  return { end, body, origins };
 };
 
 /** Index of the `'` closing an ANSI-C `$'…'` starting at `openIndex`, or -1. */
@@ -5839,6 +5875,7 @@ const scan = (command: BashText, operators: readonly string[]): ScanResult => {
   const rawSegments: BashText[] = [];
   const substitutions: BashText[] = [];
   const substitutionOffsets: number[] = [];
+  const backtickOrigins = new Map<number, readonly number[]>();
   const writeTargets: string[] = [];
   const uncertainty = new Set<UncertaintyReason>();
   const readsLines = operators.includes('\n');
@@ -5966,18 +6003,19 @@ const scan = (command: BashText, operators: readonly string[]): ScanResult => {
       continue;
     }
 
-    // WP-264's named exception: the next backtick, escaped or not (module docblock).
+    // A backtick body ends at `backtickEnd`'s close and is handed on as bash parses it (WP-268).
     if (char === '`') {
-      const close = command.indexOf('`', index + 1);
+      const { end: close, body, origins } = backtickSubstitution(command, index, inDouble);
+      if (body.length !== (origins.at(-1) as number) - index - 1) {
+        backtickOrigins.set(substitutions.length, origins);
+      }
+      substitutions.push(piece(body));
+      substitutionOffsets.push(index + 1);
       if (close === -1) {
         uncertainty.add(UNCERTAINTY.unterminatedBacktick);
-        substitutions.push(piece(command.slice(index + 1)));
-        substitutionOffsets.push(index + 1);
         index = command.length;
         continue;
       }
-      substitutions.push(piece(command.slice(index + 1, close)));
-      substitutionOffsets.push(index + 1);
       index = close + 1;
       readInsideWord(words);
       continue;
@@ -6239,6 +6277,7 @@ const scan = (command: BashText, operators: readonly string[]): ScanResult => {
     rawSegments,
     substitutions,
     substitutionOffsets,
+    backtickOrigins,
     writeTargets,
     uncertainty: [...uncertainty],
     hereDocuments,
@@ -6291,7 +6330,7 @@ const closingBraceEnd = (text: string, open: number): number => {
 
 /**
  * Index one past the double-quoted string that opens at `open`, or the text's end. A backtick in it
- * ends at the next backtick, escaped or not: WP-264's named exception, as `scan`'s (module docblock).
+ * ends at `backtickEnd`'s close, as `scan`'s does (WP-268, module docblock).
  */
 const doubleQuoteEnd = (text: string, open: number): number => {
   for (let index = open + 1; index < text.length; index += 1) {
@@ -6306,7 +6345,7 @@ const doubleQuoteEnd = (text: string, open: number): number => {
     } else if (text.startsWith('${', index)) {
       index = closingBraceEnd(text, index + 1) - 1;
     } else if (char === '`') {
-      const close = text.indexOf('`', index + 1);
+      const close = backtickEnd(text, index);
       index = close === -1 ? text.length : close;
     }
   }
@@ -7306,10 +7345,10 @@ const commandNameWalk = (
  * Whether a word is **exactly one** expansion — `$x`, `${…}`, `$1`, `$@`, `$(…)`, `` `…` ``, or one
  * of those inside one pair of double quotes — and nothing else (WP-201 ruling (d)). `$((…))` is
  * not: an arithmetic result is `UNCERTAINTY.arithmetic`'s. A backtick ends through `backtickEnd`
- * (WP-264). Its carve-out no longer leans on the two exceptions there: since WP-267 the git
+ * (WP-264). Its carve-out no longer leans on WP-264's two exceptions: since WP-267 the git
  * boundary refuses a `"` before a backtick in command position as it refuses `"$(` (backlog 678),
- * so with `scan`'s and `doubleQuoteEnd`'s both lifted ``` "`echo \`x\``" push origin main ``` reads
- * `ask / git / git`, its `"$(echo $(x))"` twin's cell (WP-264 measured `ask / auto / deny` before).
+ * so with `scan`'s and `doubleQuoteEnd`'s both lifted (WP-268) ``` "`echo \`x\``" push origin main ```
+ * reads `ask / git / git`, its `"$(echo $(x))"` twin's cell (WP-264 measured `ask / auto / deny`).
  */
 const isOneExpansion = (word: string): boolean => {
   const inner =
@@ -7795,7 +7834,7 @@ const substitutionsDeleted = (text: string): string => {
       } while (index < text.length && !(depth === 0 && text[index - 1] === ')'));
       index -= 1;
     } else if (char === '`') {
-      const close = text.indexOf('`', index + 1);
+      const close = backtickEnd(text, index);
       index = close === -1 ? text.length : close;
     } else {
       out += char;
@@ -9617,8 +9656,14 @@ const parseCommand = (
       rawStages.push(...nested.rawStages);
       programStages.push(...nested.programStages);
       writeTargets.push(...nested.writeTargets);
+      // A backtick body bash removed a backslash from maps back through its origins (WP-268).
+      const origins = outer.backtickOrigins.get(position);
+      const at = (index: number): number =>
+        origins === undefined ? index + offset : (origins[index] as number);
       bodyRanges.push(
-        ...nested.bodyRanges.map(([start, end]) => [start + offset, end + offset] as const),
+        ...nested.bodyRanges.map(
+          ([start, end]) => [at(start), end > start ? at(end - 1) + 1 : at(start)] as const,
+        ),
       );
       for (const reason of nested.uncertainty) {
         uncertainty.add(reason);

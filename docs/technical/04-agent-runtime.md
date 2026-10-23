@@ -563,10 +563,15 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   the next unescaped backtick, so its `)` closes nothing, as in bash (WP-254, backlog 654); a
 >   backtick in the body that is never closed leaves the body unread for the same reason. The
 >   shell-word splitter and the one-expansion test end a backtick there too (WP-264, backlog 673);
->   the scanner's own backtick branch and the double-quote reader keep the next backtick, escaped
+>   the scanner's own backtick branch and the double-quote reader kept the next backtick, escaped
 >   or not, as named exceptions, because each alone read a line looser than bash: the scanner
->   hands a body on with the backslashes bash removes, so ``` echo `echo \`sudo id\`` ``` would
->   read `ask / auto / deny` where bash runs `sudo id`. The git boundary's computed-name walk reads
+>   handed a body on with the backslashes bash removes, so ``` echo `echo \`sudo id\`` ``` would
+>   have read `ask / auto / deny` where bash runs `sudo id`. Since WP-268 (backlogs 677 and 679)
+>   every reader ends a backtick there, and the scanner hands the body on as bash parses it — a `\`
+>   before `$`, a backtick or `\`, and before `"` inside double quotes, removed — while the
+>   computed-name walk reads the same body: `` echo `\$""sudo id` `` and
+>   `` echo `\$(echo sudo)` `` read `ask / auto / deny` while both bashes ran `sudo`, and now read
+>   `block` and `ask / git / git`, the cells of their `$(…)` twins. The git boundary's computed-name walk reads
 >   a double quote as bash does (WP-267, backlogs 678 and 680): a double-quoted word that opens on
 >   `$` or a backtick in command position is a computed name, so `` "`echo sudo`" id `` reads
 >   `ask / git / git` like `"$(echo sudo)" id`, and a `$(` or backtick inside `"…"` opens a
