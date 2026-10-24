@@ -1347,6 +1347,70 @@ WP-265 and WP-266's code**, serial on `command-policy.ts` and `unattended-comman
 starts when WP-264 has merged, and WP-265's base moves to WP-268's merge. WP-266 (a) is unchanged.
 No Docker, migration (still **0092**) or credential.
 
+## Milestone M21 — the directory word Berry dispatches past, and two waits that bind the wrong signal (architect, session 20)
+
+**Why this milestone exists.** M20 closed with WP-266 (`70f4eaea`); every M20 row is DONE. The
+person's instruction of 2026-10-24 ("check all of the possible security holes and try to fix them.
+Check all other caveats and analyze open backlog entries for severity") replaced the 2026-10-23
+stop, so this pass re-graded every open backlog heading for security against reliability. **It
+measured first**, at `db0a5a74`, and ran nothing but policy cells (`evaluateCommand` /
+`decideUnattendedCommand` on `DEFAULT_COMMAND_POLICY` with each of the three allow baselines), the
+Write guard (`guardWritePath`) on a bare repository layout, and git 2.56.0 **read-only** on a scratch
+layout; no Yarn, no Docker, no test tier.
+
+**686 is major, and live for every project that is a Berry project.** `yarn ./d exec sudo id`,
+`yarn ./ exec sudo id`, `yarn ./src exec sudo id`, `yarn a/b exec sudo id`, `yarn sub/dir dlx sudo
+id`, `yarn ./d exec rm -rf /`, `yarn ./d exec git -c core.fsmonitor=/tmp/m status`, `yarnpkg ./d
+exec sudo id`, `yarn "@\x" exec sudo id`, `yarn "\x@y" exec rm -rf /` and `yarn ./d ./e exec sudo
+id` read **`ask / auto / deny` in all three baselines**, where `yarn exec sudo id`, `yarn --cwd d
+exec sudo id`, `yarn dlx sudo id` and `corepack yarn ./d exec sudo id` read `block`. Berry's
+`EntryCommand` (`packages/plugin-essentials/sources/commands/entries/run.ts:12-14` at tag
+`@yarnpkg/cli/4.18.1`, fetched by this pass) takes a first word that matches `/[\\/]/` and that
+`structUtils.tryParseIdent` refuses as a working directory and runs the remaining words there, so
+the line is `yarn exec sudo id` in `./src` — and `./` or `./src` exists in every checkout: the line
+is **literal and nothing is planted** (TD-030 decision 2, the standard 677 and 678 were graded by).
+The stock image's Yarn 1.22.22 reaches Berry through the project's own `yarnPath`
+(`docs/research/16-runner-subcommand-lookup.md:113-114`), which is how a Berry project is laid out;
+a project that is not one needs a planted `.yarnrc.yml` and release file, where the grade is minor.
+The program half is **read, not run**; WP-269 (1) runs it on a scratch project on the host.
+
+**587 is not a security hole beyond BD-025 decision 1's accepted class**, and its chain was measured
+end to end rather than assumed. The Write guard admits a bare layout (`planted/HEAD`,
+`planted/config`, `planted/objects/info/x` and `planted/refs/heads/main` are `allow`; every path
+with a `.git` segment is `deny`, `path-guard.ts:293`); `mkdir -p planted/objects planted/refs` and
+`printf … > planted/config` read `ask / auto / deny`; git 2.56.0 discovers the result as a bare
+repository (`rev-parse --is-bare-repository` → `true`); `git -C planted fetch origin` reads
+`ask / auto / deny` in all three baselines; and a planted `credential.helper` is collected **beside**
+the platform's command-line helper (both listed by `git config --get-all`; `core.fsmonitor` and
+`core.hooksPath` are outranked by `GIT_CONFIG_COUNT`, WP-104 and WP-118) — git sends `store` to
+every helper after a success (`credential.c`, `credential_approve`). But that chain ends where
+`bash ./x.sh` already ends: `ask / auto / deny` in all three baselines, and a script the run wrote
+can call the helper binary itself (`packages/infrastructure/src/runlet/credential-helper.ts:27-29`
+states it). The token is run-scoped and revoked (BD-025); what a planted helper would hand the
+model is what the container already holds. Carried, tier 3, with the one hardening (an empty
+`credential.helper` entry ahead of the platform's resets the list — gitcredentials, *helper*) recorded
+in the ruling and declined as a row: TD-025's amendment refuses a key supplied twice, and it gains
+nothing over the script path until Q122's exec-time reader exists.
+
+**No other open entry is a security hole.** 538 is one operator's one credential in two
+installations: duplicated work, no boundary crossed. 132 is an authenticated `200` with zero bytes:
+nothing disclosed, and the per-route `401` census (`apps/server/src/routes/client-census.test.ts`)
+is deterministic. 171 is search precision. 658, 672, 681, 682, 683 and 685 are over-asks, every
+move toward refusal.
+
+| WP | Title | Deps | Acceptance criteria |
+|---|---|---|---|
+| WP-269 | **Scanner: a Yarn word holding `\` or `/` that is no package ident is Berry's working directory, and the words after it are read as `yarn …`** (backlog **686**, **major**, live for a Berry project, literal: eleven lines at `ask / auto / deny` in all three baselines at `db0a5a74`; minor where a `.yarnrc.yml` must be planted). **Migration: no.** **Docker: none.** **Rulings:** **(1) Measured first**, recorded: the pass's 23 lines (plan § M21's paragraph; PROGRESS § "Architect ruling (M21, session 20)") re-read at the row's base in all three baselines. The program half runs on a scratch project on the host, no Docker: a `package.json`, a `.yarnrc.yml` naming `yarnPath`, Berry's `@yarnpkg/cli/4.18.1` release file (its digest recorded), then `node <release> ./d exec <canary>` with `./d` an existing directory and the canary a `printf` into a marker file; the Yarn 1 half is not run (its `yarnPath` dispatch is read, `src/cli/index.js:631-655`). If the release cannot be fetched, the row records "source-read, not run" and the reading stands (`run.ts:12-14`). **(2) The rule**, in `runnerSubcommandAt` (`command-policy.ts:3297`, the yarn branch) and nowhere else. For `yarn` and `yarnpkg`, a positional word (not a flag, not the value an option takes) whose dequoted text matches `/[\\/]/` and does not match Berry's `IDENT_REGEXP`, `/^(?:@([^/]+?)\/)?([^@/]+)$/` (`structUtils.ts:343`; docs/research/16:139-141), is Berry's directory word: it is skipped and the reading continues with the next word in the subcommand position — again for a second such word, because Berry re-dispatches (`cli.run(this.args, {cwd})`). `exec` or `dlx` there is the exec subcommand (`block` for `sudo id`); `workspace`, `workspaces` and every other word read as today. The word is read **as handed** (WP-265's rule): `"@\x"` dequotes to `@\x`, which holds `@`, no `/`, and is no ident. Yarn 1 reads the same line as `yarn run <word> …`, a script the word names, so Berry's reading is equal or tighter for every line (decision 3's fail-closed form); the docblock says why one reading serves both. **(3) Rows** under a describe naming 686 in `unattended-commands.test.ts`, three baselines: the eleven lines above read `block` (the `sudo` and `rm` lines) or their `yarn exec git -c …` twin's cell; `yarn ./d add left-pad` and `yarn ./d run build` read as `yarn add left-pad` and `yarn run build`; the two backslash spellings stand beside the slash ones, so a fix keyed on `/` alone fails them. **Controls:** `yarn . exec sudo id` (no `/`: `yarn run .`, as today), `yarn "\exec" git -c core.fsmonitor=x status` (a backslash with neither `@` nor `/` is an ident; WP-266's lift stands), `yarn foo`, `yarn --cwd d exec sudo id` and `corepack yarn ./d exec sudo id` as today. **(4) Canaries**, each alone, each killed by a named row: the ident test's `@` clause dropped (the `"@\x"` row fails); the skip not repeated (`./d ./e` fails); a word with `\` and neither `@` nor `/` skipped (the `"\exec"` control fails); the skip applied to `npm`, `pnpm` or `bun` (a control per runner). **(5) The sweep:** WP-266's sweep set (its 6 472 lines whose spelled word holds `@` or `/` included) plus this row's lines, against WP-266's merge (`70f4eaea`), three baselines × three modes: **0 toward a run**, moves counted and recorded. **(6) Corpus diff** recorded, expected 0 (no corpus line is known to spell `yarn <path> …`; the count is the record). **(7) Docblocks** (rule 83): `runnerSubcommandAt`'s yarn paragraph, module rule 2's exception list, `docs/research/16-runner-subcommand-lookup.md` (the directory branch is read as a dispatch, not only stated), `04-agent-runtime.md` where it lists the package-runner forms; 686 restated with its cells and the program half's outcome. **Split clause:** if the program half shows Berry does **not** run `exec` after a directory word, the rule is still taken (tighter; it costs an over-ask on a `yarn <dir> …` nobody is known to write), 686 is re-graded minor and the record says so; if a corpus line moves, the row narrows to the shape that moved and records the cell. | — | **(1)** (1)'s table and the program half's marker, or "source-read, not run" with the reason. **(2)** (3)'s cells before → after with (4)'s canaries, none surviving. **(3)** (5)'s sweep: 0 toward a run, counts recorded. **(4)** (6)'s count; (7). **(5)** `pnpm run -s verify` PASS. |
+| WP-270 | **Tests: two CI flakes bind their waits to the signal the assertion needs, and `verify`'s census knows the local plugin's files** (backlogs **684**, minor, a test-only flake, one occurrence; **556**, minor, a flake, two occurrences in the `process` project; and the untracked `.claude/` caveat of the Resume note). **Migration: no.** **Docker: none.** **Rulings:** **(a) 684.** `test/integration/jobs/job-expiry.integration.test.ts:177-178` waits for pg-boss's `active` and then asserts `hanging.seen.started`, which `active` does not imply (the row is marked at fetch, before the handler runs). The case waits on the handler's own signal — a promise `hangingHandler` (`:71-78`) resolves on entry — per rule 87; the file's other `waitForState` sites (`:130`, `:186`, `:220`, all `failed`) are read and left alone or changed with the same reason. **Measured first:** the mechanism is confirmed by a read of pg-boss's fetch (the `active` update precedes the handler call) or by a reproduction under load, and the record says which. **(b) 556.** `packages/infrastructure/src/runlet/conformance.contract.test.ts:364-439`: a `write EPIPE` reached the runner's `errors` list after the shim closed after the session's `result`. Measured first: the order of the runner's last stdin write against the shim's close (the adapter's close-after-result branch is `spawn-adapter.ts:580`). Then one of two, decided by the measurement and recorded: a write that meets `EPIPE` or `ECONNRESET` after the `result` is treated as the close it is (the adapter's info branch, no error line, `exitCode null` as today), or the case's wait binds the shim's close before the last write. Rule 27: no fix before the reproduction; if 50 runs under load do not reproduce it, the record says so and 556 stays open with the count. **(c) The local plugin's files.** `verify` reads `FAIL` while the person's untracked `.claude/autoharness/` and `.claude/skills/<name>/{.sidecar.json,.sidecar.json.lock,.ledger.jsonl}` are present, and the orchestrator sets them aside for every run (PROGRESS.md:59768, :60144, :60249). Measured first: which step fails and on which file (the record names it). Then the plugin's **state files** are declared where the harness's own are — root-anchored `.gitignore` entries and the matching `LOCAL_TOOL_PATHS` entries (`scripts/os-artefacts.mjs:53-60`), both or neither, so `ignored:check` stays green. A `SKILL.md` or `references/*.md` is **not** ignored: whether an agent-written skill is committed is the person's decision, not this row's. **(d) Rows:** (a) and (b) are the existing cases, re-bound; (c) adds a `check-ignored` unit case with the plugin's paths present. **Split clause:** a half that cannot be measured (no reproduction, no failing step) is recorded with its count and left open; the other halves land. | — | **(1)** (a)'s mechanism confirmed and the wait re-bound. **(2)** (b)'s measurement and its outcome, or the 50-run record. **(3)** (c)'s failing step named, the two lists changed together, `verify` PASS with the directories present. **(4)** `pnpm run -s verify` and `pnpm run -s verify:integration` PASS. |
+
+**Order and machine.** **WP-269 first**: it is the only open entry that runs a blocked program
+under `auto` on a literal line. **WP-270 may start beside it** — it touches two test files and two
+scripts, none of them `command-policy.ts` or `unattended-commands.ts`. **No row needs Docker**:
+WP-269's program half is a scratch project on the host under `node`, and WP-270's halves are the
+test tiers and `verify`. No lockfile change, **no migration** (the next free number stays
+**0092**), no credential, no GitLab or Jira. Disposition of every open entry and question, the
+caveat dispositions and the severity summary: PROGRESS § "Architect ruling (M21, session 20)".
+
 ## Suggested agent team for the orchestrator
 - **Architect (this role, read-only)** for questions about decisions; **Backend developer** (domain/application/infrastructure), **Integrations developer** (providers + contract tests), **Runner/security developer** (SDK runner, launcher, isolation), **Frontend developer** (SPA), **Prompt engineer** (roles, evals), **Reviewer** (fresh context, security checklist), **Docs writer**. Sequence M1 WPs by dependencies; WP-13 early because the whole runner path depends on it.
 
