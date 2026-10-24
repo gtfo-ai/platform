@@ -7984,6 +7984,72 @@ describe('WP-266, backlog 676: Yarn, Bun, sentry-cli and Composer read the word 
 });
 
 /**
+ * WP-269, backlog 686: Berry 4.18.1 takes a word holding `\` or `/` that is no package ident as a
+ * working directory and dispatches the rest again there (`entries/run.ts:12-14`; run on the
+ * release, PROGRESS § WP-269), so `yarn ./d exec rm -rf /` is `yarn exec rm -rf /`. Each line read
+ * `ask / auto / deny` before; the backslash spellings stand beside the slash ones, so a rule keyed
+ * on `/` alone fails them. Yarn 1 reads each as `yarn run <word> …`, which Berry's reading is equal
+ * to or tighter than.
+ */
+describe('WP-269, backlog 686: a Yarn directory word is skipped, as Berry skips it', () => {
+  it.each([
+    'yarn ./d exec sudo id',
+    'yarn ./d exec rm -rf /',
+    'yarn ./src exec sudo id',
+    'yarn ./ exec sudo id',
+    'yarn a/b exec sudo id',
+    'yarn sub/dir dlx sudo id',
+    'yarnpkg ./d exec sudo id',
+    String.raw`yarn "@\x" exec sudo id`,
+    String.raw`yarn "\x@y" exec rm -rf /`,
+    String.raw`yarn "\x/y" exec sudo id`,
+    'yarn ./d ./e exec sudo id',
+    String.raw`yarn "@\x" ./d exec sudo id`,
+    'yarn ./d --cwd x exec sudo id',
+    'yarn ./d workspace a exec sudo id',
+    // An ident's scope is non-empty: `@/x` and `@s/` are no idents, so they are directories too.
+    'yarn @/x exec sudo id',
+    'yarn @s/ exec sudo id',
+  ])('%j reads as yarn exec does: block (was ask / auto / deny)', (command) => {
+    expectCells(command, 'block / block / block');
+  });
+
+  it('yarn ./d exec git -c core.fsmonitor=… reads as yarn exec does: the git boundary', () => {
+    expectCells('yarn ./d exec git -c core.fsmonitor=/tmp/m status', 'ask / git / git');
+    expectCells('yarn exec git -c core.fsmonitor=/tmp/m status', 'ask / git / git');
+  });
+
+  it.each([
+    ['yarn ./d add left-pad', 'yarn add left-pad'],
+    ['yarn ./d run build', 'yarn run build'],
+  ])('%j reads as %j', (command, twin) => {
+    expectCells(command, 'ask / auto / deny');
+    expectCells(twin, 'ask / auto / deny');
+  });
+
+  it.each([
+    // No `\` or `/`: `yarn run .`, as today.
+    ['yarn . exec sudo id', 'ask / auto / deny'],
+    // A backslash with neither `@` nor `/` is an ident (WP-266's lift stands): `yarn run \exec`.
+    [String.raw`yarn "\exec" git -c core.fsmonitor=x status`, 'ask / auto / deny'],
+    [String.raw`yarn "a\b" exec sudo id`, 'ask / auto / deny'],
+    [String.raw`yarn "\x" exec sudo id`, 'ask / auto / deny'],
+    // A scoped ident is a package name, not a directory.
+    ['yarn @s/p exec sudo id', 'ask / auto / deny'],
+    ['yarn foo', 'ask / auto / deny'],
+    ['yarn --cwd d exec sudo id', 'block / block / block'],
+    ['corepack yarn ./d exec sudo id', 'block / block / block'],
+    // Berry's directory word is Yarn's alone: npm, pnpm and Bun read it as today.
+    ['npm ./d exec sudo id', 'ask / auto / deny'],
+    // An unknown pnpm word is its implicit exec, as today; with `./d` skipped it read `auto`.
+    ['pnpm ./d test sudo id', 'block / block / block'],
+    ['bun ./d x sudo id', 'ask / auto / deny'],
+  ])('control: %j reads %s', (command, expected) => {
+    expectCells(command, expected);
+  });
+});
+
+/**
  * WP-264 (backlog 673): four readers ended a backtick substitution at the next backtick, escaped or
  * not, where bash skips `` \` `` (bash manual, *Command Substitution*, the backquoted form). Two
  * took WP-254's `backtickEnd` there: `shellWords` and `isOneExpansion`. `scan` and `doubleQuoteEnd`

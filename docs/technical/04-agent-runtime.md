@@ -492,7 +492,11 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   Composer's and sentry-cli's subcommand kept its second dequote under WP-255 until WP-266
 >   (backlog 676) read each lookup from its source — exact, by name or a declared alias, no prefix,
 >   nothing stripped (`docs/research/16-runner-subcommand-lookup.md`) — and lifted all four:
->   `yarn "\exec" git -c core.fsmonitor=x status` hands Yarn the script name `\exec`. `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no message catalogue bash
+>   `yarn "\exec" git -c core.fsmonitor=x status` hands Yarn the script name `\exec`. Since WP-269
+>   (backlog 686) a Yarn word holding `\` or `/` that is no package ident is read as Berry reads it, a
+>   working directory it dispatches the rest past (`entries/run.ts:12-14`, run on the 4.18.1 release):
+>   `yarn ./d exec sudo id` and `yarn "@\x" exec sudo id` are `yarn exec sudo id`, blocked, where Yarn 1
+>   reads `yarn run ./d …`. `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no message catalogue bash
 >   ignores the `$` and double-quotes the text, so every floor reads `npm test $"--script-shell=x"` as
 >   `npm test --script-shell=x` — npm 11.19.0 ran that marker (measured in the run image, which ships
 >   no catalogue); a `$"…"` word a catalogue the run supplies may translate stays a residual (TD-030,

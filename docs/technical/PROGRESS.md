@@ -333,6 +333,8 @@ here**: the pre-push hook rejected a status row tonight because I attributed a t
 
 Each of these cost at least one review round to learn; all are evidenced in the notes below.
 
+101. **A wait loop never asks `pgrep -f` for a pattern its own command line contains: it matches itself and never ends; wait on a file's existence, or on a PID the loop was given.** Session 20, WP-269: the implementer's `until [ -f … ] && ! pgrep -f sweep-cmp.mjs …` loops outlived the work they watched by up to two hours (the files existed, no `sweep-cmp.mjs` ran) because `zsh -c '…pgrep -f sweep-cmp.mjs…'` is itself a process whose command line holds the pattern; the orchestrator found five idle loops by their parents and stopped them, each confirmed to be WP-269's first. A brief that asks an agent to wait says how.
+
 100. **An agent waiting on its own background run is a hang when that run has ended: the orchestrator checks for the agent's processes after twenty quiet minutes and reads its output files itself.** Session 17, WP-207: the reviewer started its canary runs in the background and waited for the completion notice; every run had finished and written its JSON, the notice was never delivered, and the reviewer sat ~40 minutes with no process of its own (`ps` empty, load 1.5) and did not answer a message, because a message reaches an agent only at its next tool round. The orchestrator stopped it, removed its worktrees and summarised `can-c0.json`…`can-c5.json` (failed-test counts and first names) and its probe TSVs, which were enough to finish the round. **How to apply:** a reviewer or implementer brief says to run canaries in the foreground with a bound (`perl -e 'alarm N; exec @ARGV'`), never as a background job it waits on; the orchestrator, when an agent is quiet for twenty minutes, looks for its processes before waiting longer.
 
 99. **A tier chain is stopped by its process tree's PIDs and `SIGKILL`, and an e2e tier stopped mid-run is cleaned by its own label.** Session 16, WP-163: the orchestrator sent `SIGTERM` to its tier script while `verify:e2e` ran under it; the script died, the `pnpm` → `verify.mjs` → vitest chain beneath it did not, and the e2e workers kept creating containers, `ws-*` volumes and an `agentic-e2e-<suffix>` network for minutes (volumes 71 → 90). Only `kill -9` on each PID in the tree stopped them, and the debris was removed by `com.agentic.e2e.pid=<the worker's pid>` and the network's suffix, never by a name pattern (rule 96). Better: do not stop an e2e tier at all — let it finish and re-run on the next tree.
@@ -17783,7 +17785,7 @@ The `auto` cell is the reviewer's reading. The `deny` cell, the three baselines 
 ### 683. **bash 5.3 keeps a backtick body's trailing `\` and bash 3.2 drops it: `` echo `\\\`\\` `` runs `` `\ `` under one and `` ` `` under the other** (TODO, **nit** — a version difference, no cell known to depend on it. **What is wrong:** the policy reads a backtick body one way while the two shells the platform measures against disagree on its last byte. **Evidence** (`#### WP-268`, *Discovered work* (c), quoted): "bash 5.3 keeps a backtick body's trailing `\` and 3.2 drops it (`` echo `\\\`\\` `` runs `` `\ `` and `` ` ``); no cell measured here depends on it." Compare 681's 371 twins that end their body on a `\` and are not equivalent. **Cost to leave:** none known; the trigger is a line whose cell depends on that byte (a name that is a program under one bash and not the other). **Done:** a recorded reading — which bash the policy follows for a trailing `\`, or a refusal where they differ — with a row pinning `` echo `\\\`\\` ``. **Depends on:** WP-268 merged. Found by WP-268's implementer, session 20. Owner: **none**.)
 ### 684. **CI's `integration` job failed once in the job-expiry measurement's supervisor case: the test waits for the row to be `active` and then asserts the handler has started, which pg-boss's `active` does not imply** (TODO, **minor** — a test-only flake, no product behaviour wrong; one occurrence; the rerun of the failed job **passed** (same run `40034126911`), so this is a transient. **What is wrong:** a structural wait bound to the wrong signal. pg-boss marks the row `active` when it fetches the job, before the worker's handler has run, so `waitForState(id, 'active')` can return while `hanging.seen.started` (set on the handler's first line, `test/integration/jobs/job-expiry.integration.test.ts:78`) is still `false`. **Evidence:** `ci` `40034126911` on `82b1864b` (WP-268, a change only under `packages/domain/src/policies/`, nothing on the job path) failed its `integration` job once with `AssertionError: expected false to be true` at `test/integration/jobs/job-expiry.integration.test.ts:178`, the `expect(hanging.seen.started).toBe(true)` right after `await waitForState(id, 'active')` at line 177. The case is the in-a-process-that-stopped one under WP-156 (a) / backlog 421, where the supervisor fails the job with a fixed `job timed out` output. The mechanism is the orchestrator's reading of pg-boss's fetch order, not a reproduction: a hypothesis until the rerun or a read of pg-boss's `dist/` confirms it. **Cost to leave:** a red `integration` job on unrelated commits, read as noise; the rest of the case is not reached on that run. **Done:** the case waits on the handler's own signal (for instance a promise `hangingHandler` resolves when entered) rather than on the row's state, per rule 87 (the wait binds what the assertion needs) and WP-69's structural-wait suites; check the file's other `waitForState(…, 'active')` sites for the same shape. **Depends on:** nothing. Found by the orchestrator, session 20. Owner: **WP-270** (a) (M21 ruling, session 20: minor, a test-only flake, measured before it is re-bound. Was: **none**, no row proposed while the person's stop stood).)
 ### 685. **A quoted `[` in a command name reads as an expanded name: `"\[" <<E` with a body reads `block` where bash runs `\[`, not found, and the body is data** (TODO, **nit** — an over-ask, every move toward refusal; no fail-open. **What is wrong:** since WP-265 a command name that is a quoted `[` (`"\["`) is read as a name the shell expands, so the line is refused where bash looks up the literal name `\[`, finds nothing, and runs nothing. Not 681: that reader answers `uncertain` (`UNCERTAINTY.expandedName`) on a `$` after an escaped backslash, this one answers `block` on a line with no `$`; whether one reader decides both is unmeasured. **Evidence** (PROGRESS.md:62025-62027, WP-265's *Discovered work* (a), quoted): "A quoted `[` in a command name now reads as an expanded name (`"\[" <<E` with a body: `ask / auto / deny` → `block`; bash runs `\[`, not found, and the body is data): an over-ask the sweep's 4 719 `→ block` lines are mostly made of; a nit". The sweep (PROGRESS.md:61977-61991, WP-265's (4)): 646 302 lines, 30 845 moved, 24 100 tighter, of which 4 719 went to `block`; its probe (PROGRESS.md:61972-61974, (3)) lists `"\[" <<E` `ask / auto / deny` → `block` among the 14 lines tighter than bash. Needs measurement: "mostly" is not counted (how many of the 4 719 are this spelling), and the deciding reader is not named (a canary). **Cost to leave:** a run writing such a line stops at `block`; the corpus diff moved 0 cells (`agent-lines.txt`, `developer-lines.txt`), so no known run line is affected. **Done:** `"\[" <<E` with a body reads its pre-WP-265 cell (`ask / auto / deny`) or its twin's in all three baselines, a row under a describe naming 685 with a canary; the 4 719 `→ block` lines re-counted. **Depends on:** WP-265 merged. Found by WP-265's implementer, session 20. Owner: **none** (no row proposed: the person said no new work starts this session).)
-### 686. **Berry takes a first word holding a backslash or a slash (and no package name) as a working directory and dispatches the next word: `yarn ./d exec rm -rf /` is `yarn exec rm -rf /` in `./d`, as are `yarn "@\x" exec sudo id` and `yarn "\x@y" exec rm -rf /`, and the policy reads them `ask / auto / deny`** (TODO, **potentially major — measure first**: a policy cell of `auto` on a line that would run a blocked command if Berry dispatches as its source reads; the program half is **unmeasured** (no Yarn was run), so this is a hypothesis about the run, measured on the policy only. **What is wrong:** Berry's entry command reads an unmatched first word that holds `\` **or** `/` (`/[\\/]/`, `packages/plugin-essentials/sources/commands/entries/run.ts:12`, Berry 4.18.1) and does not parse as a package name (`IDENT_REGEXP`, `structUtils.ts:343`) as a directory — `./d`, `a/b`, and the backslash spellings `@\x` (from `"@\x"`) and `\x@y` (from `"\x@y"`), found by WP-266's review round 1, both read `ask / auto / deny` at WP-266's base and head — and re-dispatches the rest there, so `exec`/`dlx` after it is Yarn's exec form; the policy reads that first word as a non-exec subcommand, so the command after `exec` is never read as a command (pre-existing, unchanged by WP-266; not a second-dequote question). **Evidence** (PROGRESS.md:62138-62147, `#### WP-266`, *Discovered work* (a), quoted): "`EntryCommand` (`packages/plugin-essentials/sources/commands/entries/run.ts:12-14`) takes a first word that holds `/` and is no package name as a working directory and dispatches the **next** word, so `yarn ./d exec rm -rf /` is `yarn exec rm -rf /` in `./d`. The policy reads `yarn ./d exec sudo id`, `yarn ./d exec rm -rf /`, `yarn sub/dir dlx sudo id`, `yarn ./d exec git -c core.fsmonitor=/tmp/m status` and `yarnpkg ./d exec sudo id` **`ask / auto / deny`** at the base and the head (`yarn --cwd d exec sudo id` and `yarn exec sudo id` read `block`)." Source reading in docs/research/16-runner-subcommand-lookup.md:133-142 (Berry 4.18.1: the directory branch needs a word matching `/[\\/]/` that `structUtils.tryParseIdent` refuses, `IDENT_REGEXP` at `structUtils.ts:343`), and :111-112 (Yarn 1.22.22 `src/cli/index.js:631-655` runs a project's `yarnPath` with the arguments unchanged; `src/rc.js:58-60` reads it from `.yarnrc.yml` too). WP-266's sweep moved 0 of its 6 472 lines whose spelled word holds `@` or `/` (a backslash word with neither is an ident, so `yarn run`), so its lift does not reach these cells. Needs measurement: run Berry 4.18.1 (via a scratch project's `yarnPath`) on `yarn ./d exec <canary>` in a container and record whether the canary runs; and whether Yarn 1 without `yarnPath` treats `./d` as a script/file name. **Cost to leave:** if the source reading holds, a run in a project whose `.yarnrc`/`.yarnrc.yml` names a Berry `yarnPath` can run `sudo`, `rm -rf /` or a `core.fsmonitor` git under `auto`, a fail-open; the stock image's Yarn 1 reaches Berry only through that file, which a run in the checkout can write. If Berry does not dispatch so, it is nothing. **Done:** the Berry dispatch measured (version cited); if it holds, a first Yarn word that holds `\` **or** `/` and is no ident (`IDENT_REGEXP`) is read as Berry reads it (the rest read as `yarn …`, so the five slash lines above and the two backslash spellings read as `yarn exec …` does, `block` for `sudo id` and `rm -rf /`) or is refused, with rows under a describe naming 686 that include both backslash spellings (`yarn "@\x" exec sudo id`, `yarn "\x@y" exec rm -rf /`) beside the slash ones, so a fix keyed on `/` alone fails them, a canary naming the deciding reader, and a sweep showing no move toward a run. **Depends on:** WP-266 merged. **Place it first when the next milestone is planned**: it may be a live fail-open. Found by WP-266's implementer, session 20. Owner: **WP-269** (M21 ruling, session 20: **major** — the policy half measured at `db0a5a74`, eleven lines at `ask / auto / deny` in all three baselines; the program half read from Berry's `run.ts:12-14`, fetched; literal and nothing planted in a Berry project. Was: **none**, no row proposed while the person's stop stood).)
+### 686. **Berry takes a first word holding a backslash or a slash (and no package name) as a working directory and dispatches the next word: `yarn ./d exec rm -rf /` is `yarn exec rm -rf /` in `./d`, as are `yarn "@\x" exec sudo id` and `yarn "\x@y" exec rm -rf /`, and the policy reads them `ask / auto / deny`** (**RESOLVED** by WP-269, session 20 — **measured, live, major as graded**: Berry 4.18.1's release file (`repo.yarnpkg.com`, sha256 `a28ad591…970907e`, byte-identical to the npm `@yarnpkg/cli-dist@4.18.1` tarball's `bin/yarn.js`) run on a scratch project with a `yarnPath` ran the canary inside the named directory for `./d`, `@\x`, `\x@y` and `./d ./e`, and ran nothing for `.` and `a\b` (`yarn run`); `runnerSubcommandAt`'s yarn branch now skips a positional word matching `/[\\/]/` that fails `BERRY_IDENT` (Berry's `IDENT_REGEXP`), as often as it occurs. Cells: the twelve lines of the M21 table `ask / auto / deny` → `block / block / block` (the `git -c core.fsmonitor` one → `ask / git / git`, its `yarn exec` twin's), in all three baselines; `yarn ./d add left-pad`, `yarn ./d run build` and every control unchanged. Sweep (WP-266's 446 763 lines plus a 153 500-line probe and the row's lines, 599 406, against `70f4eaea`): 32 221 moved, **0 cells toward a run**, 26 933 `auto` → refusal and 5 288 refusal → refusal; corpus 0. Notes `#### WP-269`. Was: TODO, **potentially major — measure first**: a policy cell of `auto` on a line that would run a blocked command if Berry dispatches as its source reads; the program half is **unmeasured** (no Yarn was run), so this is a hypothesis about the run, measured on the policy only. **What is wrong:** Berry's entry command reads an unmatched first word that holds `\` **or** `/` (`/[\\/]/`, `packages/plugin-essentials/sources/commands/entries/run.ts:12`, Berry 4.18.1) and does not parse as a package name (`IDENT_REGEXP`, `structUtils.ts:343`) as a directory — `./d`, `a/b`, and the backslash spellings `@\x` (from `"@\x"`) and `\x@y` (from `"\x@y"`), found by WP-266's review round 1, both read `ask / auto / deny` at WP-266's base and head — and re-dispatches the rest there, so `exec`/`dlx` after it is Yarn's exec form; the policy reads that first word as a non-exec subcommand, so the command after `exec` is never read as a command (pre-existing, unchanged by WP-266; not a second-dequote question). **Evidence** (PROGRESS.md:62138-62147, `#### WP-266`, *Discovered work* (a), quoted): "`EntryCommand` (`packages/plugin-essentials/sources/commands/entries/run.ts:12-14`) takes a first word that holds `/` and is no package name as a working directory and dispatches the **next** word, so `yarn ./d exec rm -rf /` is `yarn exec rm -rf /` in `./d`. The policy reads `yarn ./d exec sudo id`, `yarn ./d exec rm -rf /`, `yarn sub/dir dlx sudo id`, `yarn ./d exec git -c core.fsmonitor=/tmp/m status` and `yarnpkg ./d exec sudo id` **`ask / auto / deny`** at the base and the head (`yarn --cwd d exec sudo id` and `yarn exec sudo id` read `block`)." Source reading in docs/research/16-runner-subcommand-lookup.md:133-142 (Berry 4.18.1: the directory branch needs a word matching `/[\\/]/` that `structUtils.tryParseIdent` refuses, `IDENT_REGEXP` at `structUtils.ts:343`), and :111-112 (Yarn 1.22.22 `src/cli/index.js:631-655` runs a project's `yarnPath` with the arguments unchanged; `src/rc.js:58-60` reads it from `.yarnrc.yml` too). WP-266's sweep moved 0 of its 6 472 lines whose spelled word holds `@` or `/` (a backslash word with neither is an ident, so `yarn run`), so its lift does not reach these cells. Needs measurement: run Berry 4.18.1 (via a scratch project's `yarnPath`) on `yarn ./d exec <canary>` in a container and record whether the canary runs; and whether Yarn 1 without `yarnPath` treats `./d` as a script/file name. **Cost to leave:** if the source reading holds, a run in a project whose `.yarnrc`/`.yarnrc.yml` names a Berry `yarnPath` can run `sudo`, `rm -rf /` or a `core.fsmonitor` git under `auto`, a fail-open; the stock image's Yarn 1 reaches Berry only through that file, which a run in the checkout can write. If Berry does not dispatch so, it is nothing. **Done:** the Berry dispatch measured (version cited); if it holds, a first Yarn word that holds `\` **or** `/` and is no ident (`IDENT_REGEXP`) is read as Berry reads it (the rest read as `yarn …`, so the five slash lines above and the two backslash spellings read as `yarn exec …` does, `block` for `sudo id` and `rm -rf /`) or is refused, with rows under a describe naming 686 that include both backslash spellings (`yarn "@\x" exec sudo id`, `yarn "\x@y" exec rm -rf /`) beside the slash ones, so a fix keyed on `/` alone fails them, a canary naming the deciding reader, and a sweep showing no move toward a run. **Depends on:** WP-266 merged. **Place it first when the next milestone is planned**: it may be a live fail-open. Found by WP-266's implementer, session 20. Owner: **WP-269** (M21 ruling, session 20: **major** — the policy half measured at `db0a5a74`, eleven lines at `ask / auto / deny` in all three baselines; the program half read from Berry's `run.ts:12-14`, fetched; literal and nothing planted in a Berry project. Was: **none**, no row proposed while the person's stop stood).)
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -62376,3 +62378,142 @@ copied from its scratch, never modified there; `twin.mjs`'s base path is repoint
   `conflict:check`, `data-model:check`, `hooks:check`, `typecheck`, `bundle:check`, `test` (16 710 passed,
   19 skipped) and `coverage:ratchet` each exit 0 / `PASS`. Every test run started at a one-minute load
   under 10.
+
+## WP notes — session 20 (M21)
+
+#### WP-269 — Berry's directory word is skipped and the words after it read as `yarn …` (backlog 686)
+
+Built on `main` at `33d0903e` (M21's plan; its sources are `70f4eaea`'s, WP-266's merge — the two
+commits between touch only `docs/technical`), session 20. Not committed. No Docker and no git in the
+measurements; the only program run besides the two bashes and Node is the fetched Berry release,
+below. A cell is `attended / auto / deny`, the same in all three baselines unless stated. Scratch:
+`…/scratchpad/wp269/` (`bin/` holds every script named below; `base/` is a copy of this checkout's
+`packages` and `scripts` before the change, `head/` with it, `own/` a whole-tree copy for the canaries,
+`mut-<runner>/` head with the skip applied to that runner, `yarn/` the program half). WP-266's
+`sweep.mjs` and `sweep-cmp.mjs` and the architect's `l686.txt` were copied, never modified there.
+
+- **(1) Measured first.** *The policy* (`bin/cell269.mjs` over the architect's 23 lines, `sw/l686.txt`):
+  every cell of the M21 table re-read at the base, identical — the twelve spellings `yarn ./d exec sudo
+  id`, `yarn ./d exec rm -rf /`, `yarn ./src exec sudo id`, `yarn ./ exec sudo id`, `yarn a/b exec sudo
+  id`, `yarn sub/dir dlx sudo id`, `yarn ./d exec git -c core.fsmonitor=/tmp/m status`, `yarnpkg ./d exec
+  sudo id`, `yarn "@\x" exec sudo id`, `yarn "\x@y" exec rm -rf /`, `yarn ./d ./e exec sudo id` and
+  `yarn ./d --cwd x exec sudo id` read **`ask / auto / deny`**, and the controls as the table says
+  (the row's "eleven" counts the table's twelve less one; all twelve are pinned). *The shell*
+  (`bin/facts269.mjs`: `printf '[%s]'` only, `--norc --noprofile`, `env -i`, stdin `/dev/null`, an
+  empty scratch directory; bash 5.3.20 and `/bin/bash` 3.2.57, byte-identical): `./d`, `./`, `./src`,
+  `.`, `a/b`, `sub/dir`, `"@\x"`, `"\x@y"`, `"\exec"`, `"a\b"`, `"\x/y"`, `@s/p`, `'@\x'`, `@\x`,
+  `"./d"` reach the program as `[./d][./][./src][.][a/b][sub/dir][@\x][\x@y][\exec][a\b][\x/y][@s/p][@\x][@x][./d]`.
+  *The program* — **run, not "source-read, not run"**: Berry's release file fetched from
+  `https://repo.yarnpkg.com/4.18.1/packages/yarnpkg-cli/bin/yarn.js` into `yarn/dl/` (3 784 940 bytes,
+  sha256 `a28ad591febb769f939c11f82f89bacad0b0fac0c884d3b78fa2aaaee970907e`, `version:"4.18.1"` in the
+  file), and the npm registry's `@yarnpkg/cli-dist@4.18.1` tarball into `yarn/npm/` (sha1
+  `b278373a401e6332fcb4ac264afc1fa418f1e635`, the registry's `dist.shasum`), whose `bin/yarn.js` is
+  byte-identical (`cmp`). Scratch project `yarn/proj/`: `package.json` (`{"name":"scratch269","private":true}`),
+  `.yarnrc.yml` (`yarnPath:` the release file, so Berry's `usePathCheck` runs it in place, plus
+  `enableTelemetry: false`, `enableNetwork: false`), the directories `d`, `d/e`, `@\x`, `\x@y`, and a
+  **hand-written workspace-only `yarn.lock`** (`__metadata` version 10, the one `scratch269@workspace:.`
+  entry): without it `exec`'s `restoreInstallState` stopped at *"This package doesn't seem to be present
+  in your lockfile"* — itself the exec command's own error, so the dispatch had already happened; with
+  version 8 the same. No install step ran; Berry's light resolution wrote `.yarn/install-state.gz`.
+  `bin/run-berry.mjs <word…>` runs `/usr/bin/env -i HOME=<scratch>/home PATH=<scratch>/nodebin
+  YARN_ENABLE_NETWORK=0 node <release> <word…> exec "/usr/bin/printf '%s' 'RAN-686 <word>' > marker"`,
+  cwd the project, stdin `/dev/null`:
+
+  | Words before `exec` | Exit | Marker |
+  |---|---|---|
+  | `./d` | 0 | `d/marker` = `RAN-686 ./d` |
+  | `@\x` | 0 | `@\x/marker` = `RAN-686 @\x` |
+  | `\x@y` | 0 | `\x@y/marker` = `RAN-686 \x@y` |
+  | `./d ./e` | 0 | `d/e/marker` = `RAN-686 ./d ./e` (the re-dispatch, twice) |
+  | `.` | 1 | none — `Usage Error: Couldn't find a script named "."` (`yarn run .`) |
+  | `a\b` | 1 | none — `Couldn't find a script named "a\b"` (an ident: `yarn run a\b`) |
+
+  No marker at the project root in any run. So the source reading holds: Berry dispatches past a word
+  holding `\` or `/` that is no ident, runs `exec` in that directory, and does it again for a second
+  such word. 686 stays **major** (the split clause does not apply). The Yarn 1 half was not run (its
+  `yarnPath` dispatch is read, `src/cli/index.js:631-655`).
+- **(2) The change** (`command-policy.ts`). `BERRY_IDENT`, Berry's `IDENT_REGEXP` beside
+  `runnerSubcommandAt`, and one branch in its yarn path, after `workspace`: for `yarn`/`yarnpkg`, a
+  positional word whose reading (`dequote`, as handed on the argv reading) matches `/[\\/]/` and fails
+  `BERRY_IDENT` is skipped with `valueMayFollow` reset, so the loop reads the next word in the subcommand
+  position, as often as such words occur. Nothing else reads it: `runnerOptions` and `wrappedScript` take
+  the subcommand from `runnerSubcommandAt`; `yarnCreateHandsString` is left as it is (Berry's `create`
+  hands `dlx` an array and only Berry reads a directory word — its docblock says so). Docblocks: module
+  rule 2, `runnerSubcommandAt`'s Berry paragraph, `BERRY_IDENT`, `yarnCreateHandsString`.
+- **(3) Rows** — `unattended-commands.test.ts`, describe `WP-269, backlog 686: …`, 28 cases, three
+  baselines each. Cells before → after:
+
+  | Line | Before | After |
+  |---|---|---|
+  | the eleven `sudo`/`rm` spellings of (1), plus `yarn "\x/y" exec sudo id`, `yarn "@\x" ./d exec sudo id`, `yarn ./d workspace a exec sudo id` | `ask / auto / deny` | **`block / block / block`** (`yarn exec sudo id`'s) |
+  | `yarn ./d exec git -c core.fsmonitor=/tmp/m status` | `ask / auto / deny` | **`ask / git / git`** (its `yarn exec …` twin's) |
+  | `yarn ./d add left-pad`, `yarn ./d run build` | `ask / auto / deny` | unchanged, = `yarn add left-pad`, `yarn run build` |
+  | controls `yarn . exec sudo id`, `yarn "\exec" git -c core.fsmonitor=x status`, `yarn "a\b" exec sudo id`, `yarn "\x" exec sudo id`, `yarn @s/p exec sudo id`, `yarn foo`, `npm ./d exec sudo id`, `bun ./d x sudo id` | `ask / auto / deny` | unchanged |
+  | controls `yarn --cwd d exec sudo id`, `corepack yarn ./d exec sudo id`, `pnpm ./d test sudo id` | `block / block / block` | unchanged |
+
+- **Canaries** (`bin/canary269.py`: each alone on `own/`'s copy of `command-policy.ts`, restored from
+  `keep/<name>.keep` and `cmp`-checked against it and against the checkout; `vitest run --root own
+  packages/domain/src/policies --project unit`, calibrated unmutated at **8 failed** — the git-tree
+  censuses `own/` cannot satisfy):
+
+  | Canary | Failed | Killed by |
+  |---|---|---|
+  | the branch removed | 23 | all fifteen moved rows |
+  | the ident's `@` clause dropped (`([^/]+)$`) | 11 | `"@\x" exec`, `"@\x" ./d exec`, `"\x@y" exec rm -rf /` |
+  | keyed on `/` alone (`/\//`) | 11 | the same three |
+  | the skip not repeated (once per line) | 10 | `./d ./e exec`, `"@\x" ./d exec` |
+  | a `\` word with neither `@` nor `/` skipped | 10 | controls `"a\b" exec`, `"\x" exec` |
+  | the ident test dropped | 11 | controls `@s/p exec`, `"a\b" exec`, `"\x" exec` |
+  | the skip applied to npm | 9 | control `npm ./d exec sudo id` |
+  | the skip applied to pnpm | 9 | control `pnpm ./d test sudo id` |
+  | the skip applied to Bun | 9 | control `bun ./d x sudo id` |
+
+  Two pins were missing on the first run and were closed before this report: the ruling's
+  `"\exec"` control does **not** kill the `\`-word canary (skipped, `\exec` leaves `git` in the
+  subcommand position, which is no exec subcommand either, so the cell is the same), so `"a\b" exec`
+  and `"\x" exec` were added; and `pnpm ./d test` survived the pnpm canary (the allow glob is prefix
+  anchored, so the reading never reached a cell), while the canary's own sweep over the 230 444
+  runner lines (`sw/mut-pnpm-moved.txt`) moved 56 lines toward a run (`pnpm ./d test sudo id`, `block`
+  → `auto`), so that line is the pnpm control. The npm and Bun canaries' sweeps moved 0 and 12 lines
+  by rank (Bun's 12 are git boundary → `uncertain`, refusal → refusal), each killed by its control.
+- **(4) The sweep** (ruling (5)). Lines: WP-266's 446 763 (`sw/all.ndjson` there), this row's probe
+  (`bin/probe269.mjs`: a directory word spelled nine ways — `./d`, `./`, `a/b`, `@\x`, `\x@y`, `\x/y`,
+  `@s/p`, `a\b`, `.`, `@x` — plus `..`, `../d`, `/tmp`, `~/d` and `"./d ./e"`, once, twice, after and
+  before `--cwd x` and before `workspace a`, under `yarn`/`yarnpkg`, before `exec`, `dlx`, `run`,
+  `add`, `workspaces foreach exec`, `foo`, `--`, `-- exec`, with npm, pnpm, Bun, `corepack yarn` and
+  `npx yarn` controls, before WP-266's ten tails, with and without `> out`: 153 500) and the row's own
+  lines — **599 406 lines** after deduplication, `base/` (the sources of `70f4eaea`) against `head/`.
+  **32 221 moved, 0 cells toward a run** (no moved cell is `allow` or `auto` at the head; none to
+  attended `allow`), all Yarn: 26 933 `auto` → refusal (14 908 → `block`, 7 416 → `uncertain`, 3 169
+  → git boundary, 1 440 → hazard) and 5 288 refusal → refusal (git boundary or hazard → `uncertain`,
+  every one a `deny` either way). 448 of the moved lines are WP-266's (its probe's Berry directory
+  words), 31 773 this row's. Twins (`bin/twin269.mjs`, each line with its directory words removed,
+  read at the base): 28 185 equal to `yarn …`; the other 4 036 are tighter or the same decision — a
+  `$"…"` directory word is a name the shell expands on the written reading (`uncertain`, pre-existing,
+  TD-030's residual), and `"./d ./e"` is one word the twin script cannot split.
+- **(5) Corpus** (ruling (6), `node scripts/command-corpus.mjs`): `agent-lines.txt: 0 cells changed`,
+  `developer-lines.txt: 0 cells changed`, `PASS: command-corpus`; no corpus line spells `yarn` or
+  `yarnpkg` before a word holding `\` or `/` (grep, 0 and 0).
+- **Sentences falsified (rule 83).** Grepped `686`, `Berry`, `directory`, `yarn run`, `workspace` over
+  `packages/domain/src/policies`, `docs/technical/04-*`, `05-*`, `CLAUDE.md` and
+  `docs/research/16-runner-subcommand-lookup.md`. Changed: module rule 2 (the runner list gains the
+  directory word: *"and since WP-269, backlog 686, a Yarn word holding `\` or `/` that is no package
+  ident is Berry's working directory, skipped"*); `runnerSubcommandAt`'s docblock (a Berry paragraph;
+  its *"Yarn 1 runs `yarn workspace <name> <cmd>` as `yarn <cmd>`"* still true); `yarnCreateHandsString`'s
+  *"`create` is found as `runnerSubcommandAt` finds an exec form"* — no longer the whole truth, so it
+  now says why the directory word is not skipped there; `04-agent-runtime.md`'s package-runner
+  paragraph (a WP-269 sentence after WP-266's); research 16's Berry table row (*"taken as a
+  **directory**"* now *"and the rest dispatched there (run at WP-269)"*) and a new section, *"The
+  directory branch is a dispatch"*, with the run; backlog 686 restated as resolved with its cells.
+  Confirmed still true: research 16's header *"Nothing was installed or run"* (WP-266's reading; the
+  run is dated in its own section), its *"Settled"* paragraph (a word the WP-266 lift moved never held
+  `@` or `/`), module rule 2's two exception classes, `RUNNER_EXEC_SUBCOMMANDS`' docblock. TD-030 names
+  none of these readers.
+- **Discovered work.** None.
+- **Verify** (the person's untracked `.claude/` directories left in place, so `verify`'s `lint` step was
+  not run whole; each step alone): `biome check` over the two changed sources exit 0 (20 warnings and 6
+  infos, the same as WP-266's, none in a changed line); `schemas:check`, `notices:check`,
+  `ignored:check`, `nul:check`, `conflict:check`, `data-model:check`, `hooks:check`, `typecheck`,
+  `bundle:check`, `test` (16 738 passed, 19 skipped — WP-266's 16 710 plus this row's 28) and
+  `coverage:ratchet` each exit 0 / `PASS`; `scripts/citations.test.ts` green over these notes. Every
+  test run started at a one-minute load under 7.

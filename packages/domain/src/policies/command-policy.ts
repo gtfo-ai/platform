@@ -34,11 +34,13 @@
  *     `npm "\--" exec` hands npm the command `\--`), Yarn's, Bun's, sentry-cli's and Composer's
  *     included since WP-266 (backlog 676: each program's lookup read from its source and exact,
  *     `docs/research/16-runner-subcommand-lookup.md`, so `yarn "\exec" git -c core.fsmonitor=x
- *     status` reads as `yarn foo …`, `auto`), with two classes of exception, both over-asks:
- *     the block-entry readers also read it dequoted a second time (`OVER_READ`: taking that away
- *     moved 930 sweep cells toward `allow`), and a candidate's name is read through `argv0Name`,
- *     which dequotes it (read as handed it moved 3 135: `"'git'" -c core.fsmonitor=x status`, git
- *     boundary → `auto`, where bash runs `'git'`). The two readers outside the block candidates
+ *     status` reads as `yarn foo …`, `auto`; and since WP-269, backlog 686, a Yarn word holding
+ *     `\` or `/` that is no package ident is Berry's working directory, skipped, so `yarn ./d exec
+ *     sudo id` and `yarn "@\x" exec sudo id` read as `yarn exec sudo id`, `block`), with two
+ *     classes of exception, both over-asks: the block-entry readers also read it dequoted a
+ *     second time (`OVER_READ`: taking that away moved 930 sweep cells toward `allow`), and a
+ *     candidate's name is read through `argv0Name`, which dequotes it (read as handed it moved
+ *     3 135: `"'git'" -c core.fsmonitor=x status`, git boundary → `auto`, where bash runs `'git'`). The two readers outside the block candidates
  *     that dequoted an argv-reading word again, `feedsScriptReader`'s first word and
  *     `movesStandardInput`'s, read it as handed too (WP-265, backlog 674: `"\exec" <x` is the command `\exec`, no `exec`), and a
  *     name's last segment is cut at `/` only (`basename`, backlog 675: `"\env"` is no `env`).
@@ -3258,6 +3260,13 @@ const composerSubcommandAt = (
 };
 
 /**
+ * Berry's package ident, `IDENT_REGEXP` (`packages/yarnpkg-core/sources/structUtils.ts:343`, Berry
+ * 4.18.1, which `tryParseIdent` matches): an optional `@scope/` and a name holding neither `@` nor
+ * `/`.
+ */
+const BERRY_IDENT = /^(?:@([^/]+?)\/)?([^@/]+)$/;
+
+/**
  * Where a package runner's exec subcommand stands, when `words[head]` is a runner (WP-196 (b)):
  * the first word after the runner that is neither one of its options nor possibly an option's
  * value (a word after an option with no `=`) — or such a value, read closed, so `npm --prefix exec
@@ -3280,6 +3289,18 @@ const composerSubcommandAt = (
  * on clipanion's exact statics; Bun 1.4.4 `ExactSizeMatcher`; sentry-cli 3.7.0 on clap with no
  * `infer_subcommands`; `docs/research/16-runner-subcommand-lookup.md`), so `yarn "\exec" git -c
  * core.fsmonitor=x status` hands Yarn the script name `\exec` and reads as `yarn foo …` does.
+ *
+ * **Berry's directory word** (WP-269, backlog 686): Berry 4.18.1's `EntryCommand` takes a
+ * positional word that holds `\` or `/` and is no package ident ({@link BERRY_IDENT}) as a working
+ * directory and dispatches the rest again there
+ * (`packages/plugin-essentials/sources/commands/entries/run.ts:12-14`, `this.cli.run(this.args,
+ * {cwd})`), so `yarn ./d exec rm -rf /` is `yarn exec rm -rf /` in `./d` — measured on the release,
+ * and again for a second such word (`yarn ./d ./e exec …`). Such a word is skipped and the next
+ * word is read in the subcommand position; the word is read as handed, so `"@\x"` is `@\x` (an `@`
+ * with no `/` after a scope: no ident) while `"\exec"` (neither `@` nor `/`) is an ident and stays
+ * `yarn run \exec`. Yarn 1 reads the same line as `yarn run <word> …`, a script the word names, and
+ * a project's `yarnPath` hands it to Berry unchanged — one reading serves both, and Berry's is
+ * equal or tighter for every line.
  */
 const runnerSubcommandAt = (
   words: readonly string[],
@@ -3326,6 +3347,10 @@ const runnerSubcommandAt = (
       return 'unknown';
     } else if (yarn && value === 'workspace') {
       index += 1;
+      valueMayFollow = false;
+    } else if (yarn && /[\\/]/.test(value) && !BERRY_IDENT.test(value)) {
+      // Berry's directory word: the rest is dispatched there, its next word the subcommand.
+      // An option's value reaching here is skipped the same way, which reads alike.
       valueMayFollow = false;
     } else if (name === 'pnpm' && PNPM_RECURSIVE.has(value)) {
       valueMayFollow = false;
@@ -8511,7 +8536,9 @@ const SHELL_PLAIN_WORD = /^[A-Za-z0-9_./@%+=:,-]+$/;
  * `UNCERTAINTY.runnerString`. The first word of the string is Yarn's own path to `create-<name>`,
  * so a plain word is only ever its argument. `create` is found as `runnerSubcommandAt` finds an exec
  * form: past options and possibly their values, and past `workspace <name>`. Berry's `create` hands
- * `dlx` an argument array (`plugin-dlx/sources/commands/create.ts`, `this.cli.run(['dlx', …])`).
+ * `dlx` an argument array (`plugin-dlx/sources/commands/create.ts`, `this.cli.run(['dlx', …])`),
+ * which is why Berry's directory word, skipped by `runnerSubcommandAt` (WP-269), is not skipped
+ * here: only Berry reads a word as a directory, and no string reaches a shell after it.
  */
 const yarnCreateHandsString = (name: string, args: readonly ShellWord[]): boolean => {
   if (name !== 'yarn' && name !== 'yarnpkg') {

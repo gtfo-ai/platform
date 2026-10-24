@@ -21,7 +21,7 @@
 | **sentry-cli 3.7.0** (pinned, `docker/runtime.Dockerfile:49`) on clap_builder 4.6.0 | exact name or a declared alias; `monitors` and `run` declare no alias | no: clap infers only under `infer_subcommands`, which sentry-cli never sets | no | settled, exact |
 | **Bun 1.4.4** (the latest release when read; no image and no corpus line names a version) | exact bytes against a fixed table (`x`, `exec` and the other names, aliases listed in the table) | no | no | settled, exact |
 | **Yarn 1.22.22** (the stock run image's `yarn` and `yarnpkg`, measured at WP-196) | `hasOwnProperty` on its command table, aliases in the table | no | no | settled, exact |
-| **Yarn 4.18.1** (Berry, the latest `@yarnpkg/cli` release when read; reached from Yarn 1 by a project's `yarnPath`) | clipanion's exact static match on the path segment; an unmatched first word goes to the entry command | no (clipanion's prefix branch is completion only) | no; but an unmatched word that holds `\` or `/` and is no package name is taken as a **directory** (`entries/run.ts:12`, `/[\\/]/`) | settled, exact for a subcommand name |
+| **Yarn 4.18.1** (Berry, the latest `@yarnpkg/cli` release when read; reached from Yarn 1 by a project's `yarnPath`) | clipanion's exact static match on the path segment; an unmatched first word goes to the entry command | no (clipanion's prefix branch is completion only) | no; but an unmatched word that holds `\` or `/` and is no package name is taken as a **directory** (`entries/run.ts:12`, `/[\\/]/`) and the rest dispatched there (run at WP-269) | settled, exact for a subcommand name; the directory word skipped |
 
 **Every one of the four lookups is exact.** None infers a prefix or an abbreviation, and none takes a
 quote or a backslash off the word bash hands it. The subcommand names they hold (`exec`, `x`, `dlx`,
@@ -150,6 +150,27 @@ where it holds neither `@` nor `/` (`\exec`, `\--`), so it is an ident and takes
 branch, as its twin `foo` does; such a word holding `@` or `/` reads as no exec subcommand under
 either dequote, so it does not reach the lifted cells (PROGRESS `#### WP-266`, (3): 0 of the 6 472
 moved lines' spelled words hold `@` or `/`).
+
+### The directory branch is a dispatch (WP-269, backlog 686)
+
+`:14` is `return await this.cli.run(this.args, {cwd: newCwd})`: the words after the directory are
+processed again as a whole command line, in that directory, so the next word is read in the
+subcommand position — `exec`, `dlx`, a second directory word, or anything else. The policy reads it
+so (`runnerSubcommandAt`'s yarn branch, `BERRY_IDENT` beside it): a positional word that matches
+`/[\\/]/` and fails `IDENT_REGEXP` is skipped, as often as it occurs. Yarn 1 without a `yarnPath`
+reads the same line as `yarn run <word> …` (`src/cli/index.js:220-224`), a script the word names, so
+Berry's reading is equal or tighter for every line and one reading serves both.
+
+**Run, not only read** (WP-269, 2026-10-24): the release file
+`https://repo.yarnpkg.com/4.18.1/packages/yarnpkg-cli/bin/yarn.js` (sha256
+`a28ad591febb769f939c11f82f89bacad0b0fac0c884d3b78fa2aaaee970907e`, byte-identical to `bin/yarn.js`
+in the npm registry's `@yarnpkg/cli-dist@4.18.1` tarball) was run on the host as `node <release>
+<word> exec "/usr/bin/printf … > marker"` in a scratch project (`package.json`, `.yarnrc.yml` naming
+that file as `yarnPath`, a hand-written workspace-only `yarn.lock`; no install), with `env -i
+HOME=<scratch> PATH=<node only> YARN_ENABLE_NETWORK=0` and stdin `/dev/null`. `./d`, `@\x`, `\x@y`
+and `./d ./e` each exited 0 and wrote the marker **inside the named directory** (`d/e/marker` for
+the last); `.` (no `\` or `/`) and `a\b` (an ident) answered `Couldn't find a script named …` and
+wrote nothing. PROGRESS `#### WP-269` has the transcript.
 
 ## Composer (for completeness)
 
