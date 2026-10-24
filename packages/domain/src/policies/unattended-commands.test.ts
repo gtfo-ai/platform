@@ -15,6 +15,7 @@ import { joinLineContinuations } from './bash-text.js';
 import {
   argvWords,
   BRACE_EXPANSION_CEILING,
+  basename,
   carriesHazard,
   commandArgvCandidates,
   commandArgvsAsWritten,
@@ -8231,5 +8232,80 @@ describe('WP-268, backlog 679: every reader ends a backtick through backtickEnd'
     expect(
       uncertainty.some((reason) => reason.startsWith('an argument naming git given to fakeroot')),
     ).toBe(true);
+  });
+});
+
+/**
+ * WP-265, backlog 674: `movesStandardInput` and `feedsScriptReader`'s first word read the argv
+ * reading's words as handed, as WP-255 made the peel do. Both bashes hand `"'exec'"` as `'exec'`
+ * and `"X\=1"` as `X\=1`, and run each as a command that is not found: no `exec` moves standard
+ * input, so the `bash` after it reads what the `bash` of the twin line reads. Each moved cell is
+ * its twin's — the line with that word written `x` — or tighter.
+ */
+describe('WP-265, backlog 674: the exec reader and the script reader read the argv reading as handed', () => {
+  it.each([
+    // `movesStandardInput`'s name.
+    [`"'exec'" <x; bash`, 'x <x; bash'],
+    // `movesStandardInput`'s assignment test.
+    [String.raw`"X\=1" exec 2>&1 <<<"echo hi"; bash`, 'x exec 2>&1 <<<"echo hi"; bash'],
+  ])('%j moves no standard input and reads as its twin %j', (command, twin) => {
+    expectCells(command, 'ask / auto / deny');
+    expectCells(twin, 'ask / auto / deny');
+  });
+
+  it.each([`exec <x; bash`, 'X=1 exec 2>&1 <<<"echo hi"; bash'])(
+    'control: %j moves standard input',
+    (command) => {
+      expectCells(command, 'ask / uncertain / uncertain');
+    },
+  );
+
+  // `feedsScriptReader`'s first word: the command is `X\=1`, not the test `[`, so the line is not
+  // exempt from the script-reader test, and the body is read (an over-read, as its twin's).
+  it('X=1 "X\\=1" [ "\\." <<E reads its body as its twin does', () => {
+    const command = String.raw`X=1 "X\=1" [ "\." <<'E'` + '\nsudo id\nE';
+    expect(readsHereDocumentsAsScripts(command)).toBe(true);
+    expectCells(command, 'block / block / block');
+    expectCells(String.raw`X=1 x [ "\." <<'E'` + '\nsudo id\nE', 'block / block / block');
+  });
+});
+
+/**
+ * WP-265, backlog 675: a backslash is not a path separator, so the as-handed name `\env` (from
+ * `"\env"`, `'\env'`) and `a\env` name no wrapper; both bashes look each up literally and find no
+ * program. The line reads as its twin `x -u sudo id`, an unknown program. `"\env" sudo id` stays
+ * `block` through the over-read (`OVER_READ`, which dequotes `\env` to `env`).
+ */
+describe('WP-265, backlog 675: a backslash is not a path separator in a command name', () => {
+  it('basename cuts at `/` only', () => {
+    expect(basename('a\\env')).toBe('a\\env');
+    expect(basename('/usr/bin/x\\sudo')).toBe('x\\sudo');
+  });
+
+  it.each([
+    [String.raw`"\env" -u sudo id`, 'x -u sudo id', 'ask / uncertain / uncertain'],
+    [String.raw`'\env' -u sudo id`, 'x -u sudo id', 'ask / uncertain / uncertain'],
+    [String.raw`"a\env" -u sudo id`, 'x -u sudo id', 'ask / uncertain / uncertain'],
+    [String.raw`'a\env' sudo id`, 'x sudo id', 'ask / uncertain / uncertain'],
+    [String.raw`"\exec" <x; bash`, 'x <x; bash', 'ask / auto / deny'],
+    [
+      String.raw`"a\git" -c core.fsmonitor=/tmp/m status`,
+      'x -c core.fsmonitor=/tmp/m status',
+      'ask / auto / deny',
+    ],
+  ])('%j reads as its twin %j: %s', (command, twin, expected) => {
+    expectCells(command, expected);
+    expectCells(twin, expected);
+  });
+
+  it.each([String.raw`"\env" sudo id`, String.raw`'\env' sudo id`, 'env sudo id'])(
+    'control: %j stays blocked',
+    (command) => {
+      expectCells(command, 'block / block / block');
+    },
+  );
+
+  it('control: env -u sudo id reads as env', () => {
+    expectCells('env -u sudo id', 'ask / auto / deny');
   });
 });

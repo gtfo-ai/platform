@@ -42,9 +42,10 @@
  *     git -c core.fsmonitor=x status` git boundary → `auto`, and sentry-cli's 1 560 of 10 240 probe
  *     lines, `sentry-cli monitors "\run" slug -- git -c core.fsmonitor=x status` the same; Composer's
  *     moves no cell toward a run and tightens 8 of review round 2's 450 probe lines, `ask /
- *     uncertain` → `block`). Two readers outside the block candidates still dequote an
- *     argv-reading word again, unmeasured: `feedsScriptReader`'s first word and
- *     `movesStandardInput`'s.
+ *     uncertain` → `block`). The two readers outside the block candidates that dequoted an
+ *     argv-reading word again, `feedsScriptReader`'s first word and `movesStandardInput`'s, read it
+ *     as handed too (WP-265, backlog 674: `"\exec" <x` is the command `\exec`, no `exec`), and a
+ *     name's last segment is cut at `/` only (`basename`, backlog 675: `"\env"` is no `env`).
  *     `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no catalogue bash ignores
  *     the `$` and the text is double-quoted, so `$"--script-shell=x"` is that option.
  *     Braces are expanded on the argv reading as bash expands them (WP-243, backlog 642,
@@ -2785,10 +2786,13 @@ const bestMatch = (
 
 // ── argv[0] normalisation ────────────────────────────────────────────────────
 
-/** The last path segment of a resolved binary path, on either path separator. */
+/**
+ * The last `/`-separated segment of a path. A backslash is no separator (WP-265, backlog 675): bash
+ * looks `"\env"` up as a program named `\env`, and no such program is the wrapper `env`.
+ */
 export const basename = (binaryPath: string): string =>
   binaryPath
-    .split(/[/\\]/)
+    .split('/')
     .filter((part) => part.length > 0)
     .at(-1) ?? binaryPath;
 
@@ -5574,8 +5578,10 @@ const feedsScriptReader = (segment: BashText): boolean => {
       .some((word) => word.length > 0 && HERE_DOCUMENT_SCRIPT_READERS.has(argv0Name(word))) ||
     scan(text, PIPE_OPERATORS).segments.some((stage) =>
       argvReadings(stage).some(({ tokens, dequote }) => {
-        const head = tokens.find((token) => !isAssignment(token));
-        if (head !== undefined && (argv0Name(head) === '[' || argv0Name(head) === '[[')) {
+        // The reading's own dequote (WP-265, backlog 674): as handed, `"X\=1"` is no assignment.
+        const head = tokens.find((token) => !isAssignment(token, dequote));
+        const name = head === undefined ? undefined : argv0NameAs(head, dequote);
+        if (name === '[' || name === '[[') {
           return false;
         }
         return argv0Candidates(tokens, dequote).some(
@@ -9343,10 +9349,12 @@ const storesCommand = (stage: string): boolean => {
  * redirections reads (`ShellWord.redirect`, an operator starting `<`).
  */
 const movesStandardInput = (stage: string): boolean => {
-  const head = argvWords(stage).find((word) => !isAssignment(word));
+  // The argv words as handed (WP-265, backlog 674): `"\exec" <x` runs the command `\exec`, and
+  // `"X\=1" exec <x` the command `X\=1`.
+  const head = argvWords(stage).find((word) => !isAssignment(word, asHanded));
   return (
     head !== undefined &&
-    argv0Name(head) === 'exec' &&
+    argv0NameAs(head, asHanded) === 'exec' &&
     shellWords(stage).some((word) => word.redirect?.operator.startsWith('<') === true)
   );
 };

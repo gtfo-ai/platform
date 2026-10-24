@@ -584,7 +584,8 @@ describe('output redirection', () => {
 describe('resolved binary (BD-025: "the real binary, not the name")', () => {
   it('takes the basename of a path', () => {
     expect(basename('/usr/bin/docker')).toBe('docker');
-    expect(basename('C:\\Windows\\system32\\cmd.exe')).toBe('cmd.exe');
+    // A backslash is no separator (WP-265, backlog 675): bash looks such a name up literally.
+    expect(basename('C:\\Windows\\system32\\cmd.exe')).toBe('C:\\Windows\\system32\\cmd.exe');
     expect(basename('docker')).toBe('docker');
     expect(basename('/usr/bin/')).toBe('bin');
   });
