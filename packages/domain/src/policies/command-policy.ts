@@ -31,20 +31,16 @@
  *     647: `env "\-u" sudo id` hands env the command `\-u`), and the peel's wrapper test
  *     (`isWrapperToken`, `isAssignment`) and a package runner's exec form (`runnerName`,
  *     `runnerSubcommandAt`) (WP-255, backlog 655: `"X\=1" sudo id` runs the command `X\=1`, and
- *     `npm "\--" exec` hands npm the command `\--`), with three classes of exception, all over-asks:
+ *     `npm "\--" exec` hands npm the command `\--`), Yarn's, Bun's, sentry-cli's and Composer's
+ *     included since WP-266 (backlog 676: each program's lookup read from its source and exact,
+ *     `docs/research/16-runner-subcommand-lookup.md`, so `yarn "\exec" git -c core.fsmonitor=x
+ *     status` reads as `yarn foo …`, `auto`), with two classes of exception, both over-asks:
  *     the block-entry readers also read it dequoted a second time (`OVER_READ`: taking that away
  *     moved 930 sweep cells toward `allow`), and a candidate's name is read through `argv0Name`,
  *     which dequotes it (read as handed it moved 3 135: `"'git'" -c core.fsmonitor=x status`, git
- *     boundary → `auto`, where bash runs `'git'`), and Yarn's, Bun's, Composer's and sentry-cli's
- *     subcommand is read dequoted again (`runnerSubcommandAt`; their lookup is unread, WP-255's
- *     sixth-amendment exceptions, sentry-cli by the orchestrator's application of its principle in
- *     review round 2: lifted, Yarn's and Bun's move 4 221 sweep lines toward a run, `yarn "\exec"
- *     git -c core.fsmonitor=x status` git boundary → `auto`, and sentry-cli's 1 560 of 10 240 probe
- *     lines, `sentry-cli monitors "\run" slug -- git -c core.fsmonitor=x status` the same; Composer's
- *     moves no cell toward a run and tightens 8 of review round 2's 450 probe lines, `ask /
- *     uncertain` → `block`). The two readers outside the block candidates that dequoted an
- *     argv-reading word again, `feedsScriptReader`'s first word and `movesStandardInput`'s, read it
- *     as handed too (WP-265, backlog 674: `"\exec" <x` is the command `\exec`, no `exec`), and a
+ *     boundary → `auto`, where bash runs `'git'`). The two readers outside the block candidates
+ *     that dequoted an argv-reading word again, `feedsScriptReader`'s first word and
+ *     `movesStandardInput`'s, read it as handed too (WP-265, backlog 674: `"\exec" <x` is the command `\exec`, no `exec`), and a
  *     name's last segment is cut at `/` only (`basename`, backlog 675: `"\env"` is no `env`).
  *     `$"…"` is quoting, not an expansion (WP-244, backlog 643): with no catalogue bash ignores
  *     the `$` and the text is double-quoted, so `$"--script-shell=x"` is that option.
@@ -3227,14 +3223,17 @@ const composerCommandOf = (word: string): string | null =>
  * command word at all, is `'unknown'` — an alias, a prefix, a case-folded name, a script or a typo, any of which Composer may run as a
  * `composer.json` script — and any other command is `null`. **The cost, stated:** `composer EXEC
  * git push --no-verify` reads `runnerSubcommand` rather than the git boundary's reason; the block
- * list still reads past the word (`composer EXEC sudo id` is blocked).
+ * list still reads past the word (`composer EXEC sudo id` is blocked). `dequote` is the reading's
+ * (WP-266, backlog 676): read as handed, `"\install"` is the word `\install`, no canonical name, so
+ * `'unknown'` — tighter than the second dequote's `install`, and the only way the reading can move.
  */
 const composerSubcommandAt = (
   words: readonly string[],
   head: number,
+  dequote: (token: string) => string,
 ): number | null | 'unknown' | 'string' => {
   for (let index = head + 1; index < words.length; index += 1) {
-    const value = unquoteToken(words[index] as string);
+    const value = dequote(words[index] as string);
     if (value === '--') {
       continue;
     }
@@ -3275,11 +3274,12 @@ const composerSubcommandAt = (
  * `dequote` is how the reading's words read: `asHanded` on the argv reading (WP-255, backlog 655),
  * so `npm "\--" exec rm -rf /` hands npm the command `\--`, no `--` — npm's lookup is exact, by alias
  * or by unique prefix over lower-case names (npm 11.19.0 `lib/utils/cmd-list.js`, `deref`), and an
- * unknown pnpm word is its implicit exec already. **Yarn, Bun, Composer and sentry-cli keep the
- * second dequote**, named exceptions (§ "Architect ruling (M19 sixth amendment, session 20)";
- * sentry-cli by the orchestrator's application of its principle, review round 2): how each looks a
- * subcommand up is unread, so `yarn "\exec" git -c core.fsmonitor=x status` stays the git
- * boundary's refusal rather than `auto`.
+ * unknown pnpm word is its implicit exec already. Yarn, Bun and sentry-cli read it as handed too
+ * since WP-266 (backlog 676; WP-255's exceptions lifted): each matches the word exactly, by name or
+ * a declared alias, with no prefix and nothing stripped (Yarn 1.22.22 `src/cli/index.js:191`; Berry
+ * on clipanion's exact statics; Bun 1.4.4 `ExactSizeMatcher`; sentry-cli 3.7.0 on clap with no
+ * `infer_subcommands`; `docs/research/16-runner-subcommand-lookup.md`), so `yarn "\exec" git -c
+ * core.fsmonitor=x status` hands Yarn the script name `\exec` and reads as `yarn foo …` does.
  */
 const runnerSubcommandAt = (
   words: readonly string[],
@@ -3291,16 +3291,15 @@ const runnerSubcommandAt = (
     return null;
   }
   if (name === 'composer') {
-    return composerSubcommandAt(words, head);
+    return composerSubcommandAt(words, head, dequote);
   }
   const subcommands = RUNNER_EXEC_SUBCOMMANDS[name] as ReadonlySet<string>;
   const yarn = name === 'yarn' || name === 'yarnpkg';
-  const read = yarn || name === 'bun' || name === 'sentry-cli' ? unquoteToken : dequote;
   let valueMayFollow = false;
   let option = '';
   let monitors = false;
   for (let index = head + 1; index < words.length; index += 1) {
-    const value = read(words[index] as string);
+    const value = dequote(words[index] as string);
     if (value === '--') {
       continue;
     }

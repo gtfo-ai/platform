@@ -7883,9 +7883,9 @@ describe('WP-263, backlog 670: a glob in a dash-word’s name is an option by an
  * command `\--`. Each row reads the argv reading through `commandArgvCandidates` (a `>p` keeps the
  * written reading's candidate apart); `OVER_READ` keeps the block cells. Cells move toward a run
  * only to their twin's: the same program handed a word that is no wrapper and no exec subcommand,
- * which is what bash hands it and, for npm, what npm's exact lookup reads. **Yarn, Bun, Composer and
- * sentry-cli keep the second dequote** (§ "Architect ruling (M19 sixth amendment, session 20)"): their
- * subcommand lookup is unread, so their rows are pinned at the base's cells.
+ * which is what bash hands it and, for npm, what npm's exact lookup reads. Yarn, Bun, Composer and
+ * sentry-cli kept the second dequote here (§ "Architect ruling (M19 sixth amendment, session 20)")
+ * until WP-266 read their lookups and lifted all four; their rows are WP-266's, below.
  */
 describe('WP-255, backlog 655: the peel and a runner read the argv reading as handed', () => {
   const has = (command: string, argv: readonly string[]) =>
@@ -7935,21 +7935,50 @@ describe('WP-255, backlog 655: the peel and a runner read the argv reading as ha
     expectCells(command, expected);
     expectCells(twin, expected);
   });
+});
 
-  // The exceptions, at the base's cells: Yarn's, Bun's and sentry-cli's subcommand and Composer's
-  // command word are still read dequoted again, so `\exec`, `\--`, `\run` and `\install` read as
-  // `exec`, `--`, `run` and `install` (sentry-cli: the sixth amendment's principle, review round 2).
+/**
+ * WP-266, backlog 676: WP-255's four exceptions lifted. Yarn (1.22.22 and Berry), Bun and sentry-cli
+ * match the word after their name exactly, by name or a declared alias, with no prefix and nothing
+ * stripped (`docs/research/16-runner-subcommand-lookup.md`), so a word that still holds `\` or `'`
+ * after bash is a script, a file or an unknown subcommand to them, as `foo` is: each row reads as its
+ * twin. Composer's half can only tighten: `\install` is no canonical name, so `'unknown'`, and the
+ * peel reads through it to a start at `sudo`.
+ */
+describe('WP-266, backlog 676: Yarn, Bun, sentry-cli and Composer read the word as handed', () => {
   it.each([
-    String.raw`yarn "\exec" git -c core.fsmonitor=/tmp/m status`,
-    String.raw`bun "\--" x git -c core.fsmonitor=/tmp/m status`,
-    String.raw`sentry-cli monitors "\run" slug -- git -c core.fsmonitor=/tmp/m status`,
-  ])('exception: %j keeps the git boundary', (command) => {
+    [
+      String.raw`yarn "\exec" git -c core.fsmonitor=/tmp/m status`,
+      'yarn foo git -c core.fsmonitor=/tmp/m status',
+    ],
+    [
+      String.raw`bun "\--" x git -c core.fsmonitor=/tmp/m status`,
+      'bun foo x git -c core.fsmonitor=/tmp/m status',
+    ],
+    [
+      String.raw`sentry-cli monitors "\run" slug -- git -c core.fsmonitor=/tmp/m status`,
+      'sentry-cli monitors foo slug -- git -c core.fsmonitor=/tmp/m status',
+    ],
+  ])('%j reads as its twin %j: ask / auto / deny (was the git boundary)', (command, twin) => {
+    expectCells(command, 'ask / auto / deny');
+    expectCells(twin, 'ask / auto / deny');
+  });
+
+  it.each([
+    'yarn exec git -c core.fsmonitor=/tmp/m status',
+    'bun x git -c core.fsmonitor=/tmp/m status',
+    'sentry-cli monitors run slug -- git -c core.fsmonitor=/tmp/m status',
+  ])('control: %j keeps the git boundary', (command) => {
     expectCells(command, 'ask / git / git');
   });
 
-  it('exception: composer "\\install" sudo >p id has no start at sudo and stays blocked', () => {
+  it('composer "\\install" sudo >p id has a start at sudo and stays blocked', () => {
     const command = String.raw`composer "\install" sudo >p id`;
-    expect(has(command, ['sudo', 'id'])).toBe(false);
+    expect(
+      commandArgvCandidates(command).some(
+        (candidate) => JSON.stringify(candidate) === JSON.stringify(['sudo', 'id']),
+      ),
+    ).toBe(true);
     expectCells(command, 'block / block / block');
   });
 });
