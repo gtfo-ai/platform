@@ -198,6 +198,8 @@ describe('a comment stripper is recognised by its shape', () => {
     'packages/domain/src/policies/unattended-commands.ts probe':
       "a branch name with an empty path segment, `includes('//')` (BD-025's 2026-10-06 amendment)",
     'scripts/release.test.ts slashStar': 'a trailing `/**` in a CODEOWNERS row',
+    'scripts/os-artefacts.mjs probe':
+      "a one-segment wildcard in a local tool's path, `split('*')` (WP-270)",
     'scripts/citations.ts slashSlash':
       'the decoration of a comment line a citation may sit on — it reads prose in comments on purpose',
     'scripts/git-spawn-sites.ts chars':

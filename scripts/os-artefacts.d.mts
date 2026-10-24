@@ -5,7 +5,7 @@
  */
 export declare const OS_ARTEFACT_NAMES: ReadonlySet<string>;
 
-/** Root-anchored paths the local tools write; an entry ending in `/` is a directory. */
+/** Root-anchored paths the local tools write; an entry ending in `/` is a directory, `*` one segment. */
 export declare const LOCAL_TOOL_PATHS: ReadonlySet<string>;
 
 export declare function isLocalToolPath(path: string): boolean;

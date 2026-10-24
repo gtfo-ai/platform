@@ -28,8 +28,9 @@
 export const OS_ARTEFACT_NAMES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
 
 /**
- * The files the **local tools** write into this checkout — Claude Code's harness today — named by
- * their path from the repository root (WP-162 (f), PROGRESS backlog 532).
+ * The files the **local tools** write into this checkout — Claude Code's harness, and since WP-270 a
+ * local plugin's state — named by their path from the repository root (WP-162 (f), PROGRESS
+ * backlog 532).
  *
  * **Why they are here.** `check-ignored.mjs` walks every top-level directory git tracks anything
  * in, and `.claude/` qualifies (`.claude/agents/*.md`, `.claude/skills/`). The harness writes its
@@ -43,7 +44,7 @@ export const OS_ARTEFACT_NAMES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini
  * a `scheduled_tasks.lock` anywhere else is still reported, because that would be a file of this
  * repository's own that something hides. `check-ignored.mjs` consults the set only for what its walk
  * of **untracked** files finds, so a tracked path is checked whatever its name. A directory entry
- * ends in `/` and covers what is under it.
+ * ends in `/` and covers what is under it; a `*` stands for one path segment, as in `.gitignore`.
  *
  * **Rejected: reporting only what a committed `.gitignore` matches.** It would silence every
  * private exclude (`.git/info/exclude`, the user's `core.excludesFile`), which is the class the guard
@@ -57,9 +58,25 @@ export const LOCAL_TOOL_PATHS = new Set([
   '.claude/routines/.state/',
   '.claude/checkpoints/',
   '.claude/mailbox/',
+  // A local plugin's state (WP-270 (c)): its own directory, and the three files it writes beside a
+  // skill it manages. The skill's `SKILL.md` and `references/*.md` are not here: whether an
+  // agent-written skill is committed is the person's decision. Each entry is matched by the
+  // root-anchored `.gitignore` line of the same spelling, so the two lists move together.
+  '.claude/autoharness/',
+  '.claude/skills/*/.sidecar.json',
+  '.claude/skills/*/.sidecar.json.lock',
+  '.claude/skills/*/.ledger.jsonl',
 ]);
 
+const escapeRegExp = (text) => text.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+
+/** An entry as a root-anchored pattern: `*` is one path segment, as in `.gitignore`. */
+const entryPattern = (entry) =>
+  new RegExp(
+    `^${entry.split('*').map(escapeRegExp).join('[^/]+')}${entry.endsWith('/') ? '' : '$'}`,
+  );
+
+const LOCAL_TOOL_PATTERNS = [...LOCAL_TOOL_PATHS].map(entryPattern);
+
 /** Is `path` (repository-relative, `/`-separated) one of {@link LOCAL_TOOL_PATHS} or under one? */
-export const isLocalToolPath = (path) =>
-  LOCAL_TOOL_PATHS.has(path) ||
-  [...LOCAL_TOOL_PATHS].some((entry) => entry.endsWith('/') && path.startsWith(entry));
+export const isLocalToolPath = (path) => LOCAL_TOOL_PATTERNS.some((pattern) => pattern.test(path));

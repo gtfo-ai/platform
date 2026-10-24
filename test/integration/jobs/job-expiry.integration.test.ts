@@ -74,8 +74,13 @@ const hangingHandler = () => {
     release = resolve;
   });
   const seen = { started: false, settled: false, threw: false, aborted: false };
+  let markEntered: () => void = () => {};
+  const entered = new Promise<void>((resolve) => {
+    markEntered = resolve;
+  });
   const handler = async (job: { readonly signal: AbortSignal }): Promise<void> => {
     seen.started = true;
+    markEntered();
     try {
       await gate;
       seen.aborted = job.signal.aborted;
@@ -85,7 +90,7 @@ const hangingHandler = () => {
       seen.settled = true;
     }
   };
-  return { handler, seen, release: () => release() };
+  return { handler, seen, entered, release: () => release() };
 };
 
 beforeAll(async () => {
@@ -174,8 +179,21 @@ describe('a last try that expires while active (WP-156 (a), backlog 421)', () =>
         expireInSeconds: 60 * 60,
       });
       const id = (sent as { readonly jobId: string }).jobId;
-      await waitForState(id, 'active');
+      // The handler's own entry, not the row's `active`: pg-boss's fetch commits `active` and only
+      // then calls the handler (`dist/worker.js` `fetch` → `onFetch`, `dist/manager.js`
+      // `#processJobs`), so `active` alone can be read before `started` is set (backlog 684).
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        hanging.entered,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`the handler for job ${id} was not entered`)),
+            WAIT_TIMEOUT_MS,
+          );
+        }),
+      ]).finally(() => clearTimeout(timer));
       expect(hanging.seen.started).toBe(true);
+      await waitForState(id, 'active');
 
       // The hour passes: only the claim's age is written, nothing else of the row.
       await handle.pool.query(

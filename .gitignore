@@ -53,3 +53,12 @@ coverage/
 # they contain rather than of this pattern; see `isSeparateCheckout` there.
 /.claude/settings.local.json
 /.claude/worktrees/
+
+# A local plugin's state (WP-270 (c)): its own directory, and the files it keeps beside each skill
+# it manages. `scripts/os-artefacts.mjs`'s `LOCAL_TOOL_PATHS` names the same four, so
+# `ignored:check` stays green; change both or neither. A skill's `SKILL.md` and `references/` are
+# not ignored — whether an agent-written skill is committed is the person's decision.
+/.claude/autoharness/
+/.claude/skills/*/.sidecar.json
+/.claude/skills/*/.sidecar.json.lock
+/.claude/skills/*/.ledger.jsonl

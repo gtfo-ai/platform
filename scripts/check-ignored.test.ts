@@ -300,7 +300,78 @@ describe('check-ignored.mjs', () => {
     FIXTURE_TIMEOUT_MS,
   );
 
+  /**
+   * WP-270 (c): a local plugin's state files are ignored by the repository's **own** `.gitignore`
+   * (copied, not restated) and skipped by `LOCAL_TOOL_PATHS`, so dropping either list's entry fails
+   * here; the skill's `SKILL.md` and `references/*.md` are neither, and a rule that hides one is
+   * still reported.
+   */
+  it(
+    'skips a local plugin’s state files under the repository’s own .gitignore, and still reports a hidden SKILL.md',
+    () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'ignored-check-plugin-')));
+      roots.push(root);
+
+      write(join(root, '.claude', 'agents', 'implementer.md'), '# an agent\n');
+      copyFileSync(join(dirname(GUARD), '..', '.gitignore'), join(root, '.gitignore'));
+      mkdirSync(join(root, 'scripts'), { recursive: true });
+      copyFileSync(GUARD, join(root, 'scripts', 'check-ignored.mjs'));
+      copyFileSync(OS_ARTEFACTS_MODULE, join(root, 'scripts', 'os-artefacts.mjs'));
+      initScratchRepository(root, { author: FIXTURE_AUTHOR, initArgs: ['-b', 'main', '.'] });
+      git(root, 'add', '-A');
+      git(root, 'commit', '-q', '-m', 'fixture');
+
+      const state = [
+        '.claude/autoharness/requests.lock',
+        '.claude/autoharness/autoharness/last_run.json',
+        '.claude/skills/a-skill/.sidecar.json',
+        '.claude/skills/a-skill/.sidecar.json.lock',
+        '.claude/skills/a-skill/.ledger.jsonl',
+      ];
+      const skill = ['.claude/skills/a-skill/SKILL.md', '.claude/skills/a-skill/references/e.md'];
+      for (const path of [...state, ...skill]) {
+        write(join(root, path), '{}\n');
+      }
+      const ignoredStatus = (path: string): number | null =>
+        spawnSync('git', ['check-ignore', '--no-index', '-q', path], {
+          cwd: root,
+          env: gitEnv(root),
+          encoding: 'utf8',
+        }).status;
+      for (const path of state) {
+        expect(ignoredStatus(path), `${path} is not ignored by .gitignore`).toBe(0);
+      }
+      for (const path of skill) {
+        expect(ignoredStatus(path), `${path} is ignored, and it is the person's to commit`).toBe(1);
+      }
+
+      const clean = runGuard(root);
+      expect(reportedPaths(clean.stderr)).toEqual([]);
+      // 6: four tracked files plus the untracked `SKILL.md` and its reference; the five state files
+      // are skipped by path, so they are not counted.
+      expect(clean.stdout.trim()).toBe('PASS: ignored:check (6 files, none ignored)');
+      expect(clean.status).toBe(0);
+
+      // The guard is still live under `.claude/skills/`: a private rule hiding the skill is named.
+      write(join(root, '.git', 'info', 'exclude'), 'SKILL.md\n');
+      const hidden = runGuard(root);
+      expect(reportedPaths(hidden.stderr)).toEqual(['.claude/skills/a-skill/SKILL.md']);
+      expect(hidden.status).toBe(1);
+    },
+    FIXTURE_TIMEOUT_MS,
+  );
+
   it('holds the local tools’ paths to the root: a name is not an entry', () => {
+    expect(isLocalToolPath('.claude/skills/a/.sidecar.json')).toBe(true);
+    expect(isLocalToolPath('.claude/autoharness/x')).toBe(true);
+    expect(isLocalToolPath('.claude/skills/a/SKILL.md')).toBe(false);
+    expect(isLocalToolPath('.claude/skills/a/references/e.md')).toBe(false);
+    expect(isLocalToolPath('.claude/skills/a/b/.sidecar.json')).toBe(false);
+    expect(isLocalToolPath('.claude/skills/a/.sidecar.jsonl')).toBe(false);
+    expect(isLocalToolPath('.claude/skills//.sidecar.json')).toBe(false);
+    expect(isLocalToolPath('.claude/skills/a/Xsidecar.json')).toBe(false);
+    expect(isLocalToolPath('.claude/settings.local.json.bak')).toBe(false);
+    expect(isLocalToolPath('apps/.claude/skills/a/.ledger.jsonl')).toBe(false);
     expect(isLocalToolPath('.claude/scheduled_tasks.lock')).toBe(true);
     expect(isLocalToolPath('.claude/settings.local.json')).toBe(true);
     expect(isLocalToolPath('.claude/routines/.state/x')).toBe(true);
