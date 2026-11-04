@@ -4,6 +4,8 @@
 
 ## Resume note
 
+> **Session 21 — 2026-11-04, running (orchestrator).** `main` at **`823caa38`** (pushed). **Milestone M22 (worker mode)** — design BD-032/TD-031/TD-032 committed at `9f37337e` after three design review rounds; **WP-271 `fd0e6a22`, WP-272 `a487521c`, WP-273 `c8d97738` DONE**; WP-291 (owner request: sign-in redesign + first-sign-in hint, migration 0093) DONE `d32166fc`; ci-fix `77f1a700` (fixtures dated from the clock). Architect rulings on 690/691/693 appended to TD-031/TD-032 at `823caa38`. **Next row: WP-274** (offers I; migration **0094**; scanner amendment first). Machine: the owner's other project runs a Docker VM here (~100 % CPU, five-minute load 15–25): property tests near their 30 s timeout fail under load — rerun the file alone; `docker-workspace.e2e`/`harness-volumes.e2e` fail only because `platform-runtime:dev` is not built locally (CI builds it). **Push from a clean tree** (the pre-push unit tier collides with an implementer's coverage run in the same checkout — push from a worktree with its own `node_modules` if one is busy). **Rule 102**: trailers in one heredoc block. The owner's **Autix** core runs at agentic.autix.eu (infra repo `~/www/autix/autix-infrastructure`, `stacks/agentic/IMAGE_TAG` = `sha-369b38f`, workers-only); ghcr packages are private, so a new tag is copied to reddwarf and rimmer with `docker save | ssh docker load` (docs/AGENTIC.md there).
+
 > **Session 5 — 2026-09-12.** Read this, then the **"Blocker briefs needing a human"** (one, WP-17's evals),
 > then the **"Open findings backlog"**, then "Standing rules earned by evidence" — **ninety rules**, each
 > with its evidence, each paid for with a review round. Then continue the loop in
