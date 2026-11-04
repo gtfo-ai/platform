@@ -853,3 +853,53 @@ offers wait — bounded by `offer_timeout` — and the settings screen says so. 
 at once but keeps its `server_from`** (never null), so a server runner that was down when the offer was
 written still takes it when it returns; a stale liveness read can only let workers claim as early as
 the server, never keep the server from a run. `server_only` never sets `workers_from`, unconditionally.
+
+## Amendment (2026-11-05, architect, session 22) — decision 2: a remote mint failure is a start failure, not a release (backlog 740)
+
+**Context.** §2 (line 120-123) says a mint failure after the claim commits *"releases the offer
+(`release_reason = credential_unavailable`, retryable under Q59a's bound)"*. The two halves contradict
+each other: Q59(a)'s bound is the stage entry's **failed runs** (`settle.ts:157`, `MAX_RUN_START_ATTEMPTS =
+3`; `settle.ts:1365-1396`, `startFailures` + 1) and a release **keeps** the run and fails nothing
+(amendment §4: `starting → created`). As built in S-22.6 (`remote-runs.ts:497-509` calls `release` with
+`credential_unavailable`; `remote-package.ts:22`, `:102-110`), the offer is open again at once, with no
+delay and no counter: every eligible worker's claim long-poll re-claims it and re-calls the provider's
+token API at request rate, and the task never escalates. The server claimant meets the same error
+differently: `workspaces.ts:203-213` re-throws it and `classifyProvisionFailure`
+(`workspace-runner.ts:224-237`) calls anything not a `WorkspaceError` terminal, so a provider `503` there
+escalates on the first try. Mint errors are `IntegrationError`s, which already say whether a retry could
+help (`ports/integrations/common.ts:93-114`: `retryable` for `rate_limited` and `unavailable`).
+
+**Decision.**
+
+1. **A mint failure after a remote claim settles the run `not_started` through `settleRun`**, exactly as
+   `settleUnpackaged` (`remote-runs.ts:354-375`) settles every other packaging failure — never a release.
+   The packager's `credential_unavailable` answer becomes a `RunStartError` (diagnosis reason
+   `run_credential_unavailable`, `ports/workspace.ts`), `retryable` = the mint error's
+   `IntegrationError.retryable`; any other error is terminal. The run fails, the offer is `settled`, and
+   Q59(a) does the rest unchanged: re-planned after `RUN_START_RETRY_MS` (30 s, `stage-enqueue.ts:21`) as a
+   new run and a new offer, at most `MAX_RUN_START_ATTEMPTS` (3) per stage entry, then `needs_human` with
+   the existing start-failure brief (*"the run could not be started (…)"*). Each attempt is one visible
+   failed `runs` row — Q59(a)'s stated reason for counting rows.
+2. **The binding-changed race** (`remote-package.ts:126-131`: the mint returned a static or deploy-key
+   credential after a claim that admitted only `minted`) is **retryable** under the same bound: the
+   re-planned offer's eligibility (§8) then answers who may claim it.
+3. **The server claimant classifies the same way**: `classifyProvisionFailure` returns
+   `IntegrationError.retryable` for an `IntegrationError`, so a provider `503` on either claimant is three
+   spaced attempts and an escalation, and a `403` on either is one attempt and an escalation.
+4. **No worker is excluded.** The fault is the provider's or the binding's, not the worker's; excluding it
+   would only move the next mint to the next worker and could leave a `workers_only` offer with no
+   eligible claimant until `offer_timeout`. **No migration**: no column on `run_offers`, no backoff field.
+5. **`credential_unavailable` leaves `runReleaseReasonSchema`** (`contracts/src/events.ts:872-878`) and §1's
+   `release_reason` note; a release is the claimant's own act (§6's four reasons, which
+   `workerReleaseReasonSchema` already is). S-22.6 is unmerged, so no stored event carries it.
+
+**Rejected.** *A release counter on the offer* (`release_count`, escalate at N): a migration and a second
+bound beside Q59(a)'s for the same fact — a run that could not start. *A `claimable_from` backoff on the
+offer*: spaces the calls but never ends them, and needs the claim SQL, the server's poll and the
+long-poll wake-up to learn a fourth timestamp. *Excluding the failing worker*: see 4.
+
+**Residuals.** A provider outage escalates every task whose stage entry spent its three attempts inside
+it — bounded, visible, and the same trade Q59(a) made for a launcher that is down. The worst case per
+stage entry is three mint calls over ≥ 60 s (plus whatever retry the call itself makes), not unbounded.
+
+**Built by S-22.6** (WP-281 item 2), before merge.
