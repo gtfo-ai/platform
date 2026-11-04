@@ -1413,6 +1413,29 @@ caveat dispositions and the severity summary: PROGRESS § "Architect ruling (M21
 
 ## Milestone M22 — worker mode: one offer pool, remote workers on developers' machines, and updates that run themselves (architect, session 21)
 
+### M22's remaining work as lean-loop slices (2026-11-04, technical/14)
+
+WP-271…WP-275 are merged (LEDGER.md). The rows below them stay as each slice's **detailed acceptance
+reference**; a slice's PR meets every criterion of the rows it names, and docs a slice makes false are
+fixed in the same PR (so WP-290's sweep shrinks to a final check). Risk **high** = the reviewer's
+security checklist and canaries (technical/14).
+
+| Slice | Title | Rows | Depends | Risk | Parallel with |
+|---|---|---|---|---|---|
+| **S-22.1** | The run plan is stored and the run's lifecycle follows the offer | WP-275a, WP-275b | — | high (migration, sealed spec) | S-22.4, S-22.5 |
+| **S-22.2** | The job ends at the offer: the server's claimant loop, gates on every worker, `workers_only` readiness | WP-276, WP-277 | S-22.1 | high | S-22.4, S-22.5 |
+| **S-22.3** | Execution settings: mode, preference, fallback, assignee window, offer timeout | WP-278 | S-22.2 | low | S-22.4, S-22.5 |
+| **S-22.4** | The launcher writes the skills it is given and runs only the digests it is told | WP-279 | — | high (relayed SSH) | S-22.1…3 |
+| **S-22.5** | Workers and the device flow | WP-280 | — | high (credentials) | S-22.1…3 |
+| **S-22.6** | Worker protocol I: handshake, claim, heartbeat with commands, release, finish, late cost | WP-281 | S-22.3, S-22.5 | high | — |
+| **S-22.7** | Worker protocol II: transcript ingest and re-redaction, platform tools, approvals, mirror, SSH signing, static-token opt-in | WP-282 | S-22.6 | high | — |
+| **S-22.8** | The first usable worker: `ROLE=remote-worker`, the fake-worker e2e, `compose.worker.yml`, `GET compose.yml` | WP-283, WP-284 | S-22.7, S-22.4 | high | — |
+| **S-22.9** | Usage limit and lost worker | WP-285, WP-286 | S-22.8 | low | S-22.10 |
+| **S-22.10** | The updater, worker mode | WP-287 | S-22.8 | high | S-22.9 |
+| **S-22.11** | The updater, core `self` and `external` modes, the Swarm reference | WP-288, WP-289 | S-22.10 | high | — |
+| **S-22.12** | Final docs check: worker mode, updates, deployment shapes | WP-290 | S-22.11 | low | — |
+
+
 **Why this milestone exists.** M21 closed with WP-270 (`62488b9a`). On 2026-11-04 the product owner
 decided worker mode (BD-032): agent runs may execute on developers' machines with each developer's own
 Claude subscription, beside (`hybrid`) or instead of (`workers_only`) the server's runner, and the

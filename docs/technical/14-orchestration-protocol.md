@@ -1,53 +1,95 @@
-# 14 — Orchestration protocol for the autonomous implementation session
+# 14 — The lean loop: how this repository is built
 
-> How a single long-running Claude Code session delivers `13-implementation-plan.md` without losing context. The session's main agent is the **Orchestrator**; it delegates every work package to a fresh-context **implementer** subagent and every result to a fresh-context **reviewer** subagent (`.claude/agents/`). The **architect** agent is available read-only for design questions, and the **refiner** agent turns a finding that is bigger than the work package that found it into a scheduled piece of work.
+> Replaces the session-1…21 orchestration protocol (its text is in git history; its ledger,
+> `PROGRESS.md`, is **frozen** as history). Decided by the product owner on 2026-11-04: keep the roles
+> and the quality gates, drop the weight.
 
-## Principles
-1. **State lives in files, not in the conversation.** `docs/technical/PROGRESS.md` is the ledger (status per WP, decisions, discovered work, blockers). The orchestrator re-reads it at every iteration; after any compaction or restart it can continue from the ledger alone.
-2. **Fresh context per unit of work.** The orchestrator never reads source files or large outputs itself; it reads subagent reports (≤ 300–400 words) and the ledger. Implementers and reviewers start clean every time.
-3. **Independent verification.** A WP is done only when: the implementer reports DONE, `pnpm run -s verify` passes in the orchestrator's own shell, the WP's test target passes, and the reviewer returns APPROVE. Loops are bounded: max 3 review rounds, then the WP is marked BLOCKED with the findings in the ledger and the orchestrator moves on.
-4. **Small, green commits, pushed.** One commit per accepted WP (or per accepted review round if large), conventional message `feat(scope): WP-nn <title>` with `Signed-off-by`, pushed to `origin/main` immediately. Build in public: never commit secrets; the pre-commit hook (gitleaks) must be installed in WP-00.
-5. **Dogfood the product's rules.** Refine before building (read the WP and its docs), plan briefly, implement, verify with deterministic checks, review with fresh eyes, retro into the ledger.
+## Roles
 
-## The loop
+| Role | Who | Does | Never |
+|---|---|---|---|
+| **Orchestrator** | the main session (`/orchestrate`) | picks the next slice, writes its brief, routes findings, merges | writes product code, reads large outputs |
+| **Architect** | `.claude/agents/architect.md`, on demand | takes a **decision** when a slice needs one: a short TD/BD or an amendment (≤ 1 page) | specifies code line by line; runs per slice |
+| **Implementer** | `.claude/agents/implementer.md` | builds one slice with its tests in a worktree, runs `verify`, pushes a branch, opens a PR | commits to `main`; edits `docs/decisions/**` or `docs/product/**` |
+| **Reviewer** | `.claude/agents/reviewer.md` | one pass over the PR diff with fresh eyes | edits files; blocks on nits |
+
+## The loop (one slice)
+
 ```
-repeat:
-  1. Read PROGRESS.md. Pick the next WP whose dependencies are DONE, in plan order; prefer WPs marked parallel-safe when two implementers can run at once (different packages, no shared files).
-  2. Ensure clean tree and green verify on main (git status; pnpm run -s verify). If red: spawn implementer "fix main" before anything else.
-  3. Spawn implementer(s) with: WP id, the exact rows/docs to read, notes from the ledger, and the report format. Parallel implementers run in isolated worktrees (Agent tool isolation: worktree); sequential ones work on main.
-  4. On report: run pnpm run -s verify and the WP's test target yourself. FAIL → send the failure to the same implementer (SendMessage) with "fix, then re-report" (max 2 times), then treat as review round.
-  4b. Route the findings that are not this WP's. A report or a review that surfaces a defect **bigger than the work package it was found in**, or a product improvement, goes to a fresh-context **refiner** agent (`.claude/agents/refiner.md`), which turns it into a backlog entry, a plan row with an acceptance criterion, an OPEN-QUESTIONS entry with a recommendation, or a decision-record amendment — carrying the measurement that earned it. It is **not** fixed in the current WP and **not** left in the report. The refiner writes only `PROGRESS.md`, `13-implementation-plan.md`, `OPEN-QUESTIONS.md` and `TODO.md`; the orchestrator still owns the ledger's own sections.
-  5. Spawn reviewer with the WP id and diff range. REQUEST_CHANGES → send findings to the implementer (new invocation with the findings from the ledger), max 3 rounds. APPROVE → commit, push, update PROGRESS.md (status DONE, commit sha, decisions, discovered work).
-  6. For worktree WPs: merge the worktree branch into main (fast-forward or merge), run verify on main, push.
-  7. Every 5 WPs or at milestone boundaries: run the full test suite incl. integration/e2e targets, check `gh run list --limit 5` for CI status on GitHub and fix-forward failures as a WP "ci-fix"; write a short milestone note in PROGRESS.md (what works end-to-end, what is missing).
-until all WPs are DONE or BLOCKED.
+1. Orchestrator: pick the next slice from 13-implementation-plan.md; if it needs a decision the
+   docs do not hold, ask the architect first (one short record, then continue).
+2. Orchestrator: write the brief (template below) — ≤ 40 lines.
+3. Implementer (worktree, branch slice/<id>): build + tests; `pnpm run -s verify` must PASS;
+   push the branch; `gh pr create` with the PR template filled in. Report ≤ 200 words.
+4. In parallel:  CI runs every tier on the PR (lint … integration, e2e, web-e2e, DCO).
+                 Reviewer reviews the PR diff — one pass.
+5. Verdict:
+   - APPROVE / APPROVE-with-nits → the implementer (same agent, a message) fixes nits on the branch
+     without a new review; the orchestrator checks the diff of the fix.
+   - REQUEST_CHANGES (blocker/major only) → implementer fixes; the reviewer re-checks only the
+     findings (a second pass is the exception, a third means the slice is split or sent to the
+     architect).
+6. Merge when CI is green and the review approved: `git push origin slice/<id>:main`
+   (fast-forward; rebase on origin/main first if it moved — CI must be green on the pushed head).
+   GitHub marks the PR merged. One line in LEDGER.md (same commit or the next).
 ```
 
-## Context hygiene for the orchestrator
-- Keep every tool output short — but **never `| tail` a run you may need to diagnose**: a pipeline exits with `tail`'s status (so a `FAIL` inside an `&&` chain scrolls past and the chain continues), and the failing test's name is destroyed with the rest of the output. Redirect to a file and filter the file: `pnpm run -s verify > /tmp/v.log 2>&1; echo $?; grep -E '^(PASS|FAIL):' /tmp/v.log`. Both halves of that cost this project a standing rule (61, 75). `git log --oneline -5` is fine; never `cat` sources.
-- Ask subagents for the report format only; if a report exceeds the limit, ask for the summary again.
-- Do not keep an in-conversation task list; PROGRESS.md is the list. Update it with small Edit calls.
-- When the conversation gets long, write a "resume note" section at the top of PROGRESS.md (current WP, current round, next step) before continuing; after compaction, read it first.
+**Parallel slices**: two implementers at once in two worktrees when the plan marks the slices
+independent (different packages, no shared migration number).
 
-## Blockers and questions
-- Product ambiguity → `docs/OPEN-QUESTIONS.md` entry with a recommendation; implement the recommendation; continue.
-- **A finding too big for the WP that found it** → refiner agent, then continue the WP. Absorbing it makes the WP unreviewable; dropping it loses the measurement someone paid a review round for. The largest gap in this project's history — `createPipelineRuntime` composed only by a test harness, through twenty-three work packages — was a finding **no work package owned**, which is exactly the shape this step exists to catch.
-- External blocker (missing credential, unavailable service) → mark WP BLOCKED with the exact human action needed (blocker brief: what is missing, why it blocks, what to do), continue with other WPs. Never wait idle if any WP can proceed.
-- Only when no WP can proceed: write the blocker briefs at the top of PROGRESS.md and stop with a summary.
+## Slices
 
-## Commit and push policy
-- Commit only accepted WPs; push after every commit. Work directly on `main` (single-team phase); worktree branches `wp/nn` are merged and deleted.
-- Never rewrite history, never force-push, never amend pushed commits.
-- If GitHub CI fails on a pushed commit, the next iteration starts with a `ci-fix` WP.
-- **The git hooks are the main checkout's to install** (WP-219, PROGRESS backlog 615). Every linked worktree and every copy that shares this `.git` runs the same hooks, and `lefthook install` — run on every `pnpm install` by the root `prepare` script and by lefthook's own npm `postinstall` — rewrites them with the **installing** copy's absolute path to its binary (measured, lefthook 2.1.12). So a session's worktree or copy that shares this `.git` installs its dependencies with **`pnpm install --ignore-scripts`**, never a plain `pnpm install`: `LEFTHOOK=0 pnpm install` and `CI=1 pnpm install` both still rewrite the hooks (measured). Only the main checkout writes them, with `pnpm exec lefthook install` (an up-to-date `pnpm install` leaves a copy's hooks in place, measured). A worktree commits only after that install: with no `node_modules`, the hook's `pnpm lefthook` fallback installs the worktree's dependencies **with** their scripts and rewrites the hooks (measured). **That fallback is the accepted residual** (WP-222, backlog 623): the hooks are lefthook's generated shims and are not patched, the `--ignore-scripts` install puts a lefthook where the hook's absolute-path or `node_modules` branch finds it before `pnpm lefthook`, and `hooks:check` is the detector when the rule is broken. Revisit it when upstream issue 1398 (https://github.com/evilmartians/lefthook/issues/1398) is fixed or PR 1526 (https://github.com/evilmartians/lefthook/pull/1526) ships. Since lefthook 2.1.15 (pinned at 2.2.2) the absolute path in the shim is quoted, so a space in the checkout's path no longer skips that branch (measured, WP-222). A hook run never re-syncs the hooks: `no_auto_install: true` in `lefthook.yml` stops lefthook's run-time auto-install, which re-installed the shared hooks from any worktree whose `lefthook.yml` differed from the recorded checksum (measured, WP-219 and WP-222). So after a change to `lefthook.yml` lands, run `pnpm exec lefthook install` in the main checkout. **Nothing detects hooks that are stale against `lefthook.yml`, and that gap is accepted** (WP-222 review round 1): `hooks:check` reads paths only, and lefthook's `.git/info/lefthook.checksum` is the md5 of its own internal compact dump of the parsed config. That is neither the file's md5 nor the md5 of `lefthook dump --format=json` (measured at 2.2.2), and it is not documented, so reading it would depend on a lefthook internal. `hooks:check` names a path under any other worktree, including one nested in the main tree (`/.claude/worktrees/`). `pnpm run -s hooks:check`, a `verify:static` step, names every path in the hooks outside the main checkout and the checkout running it; `assert_lefthook_installed: true` in `lefthook.yml` makes a hook that finds no lefthook refuse the commit rather than skip the secret scan.
+A slice is **one coherent capability**, one PR, usually what used to be 2–3 work packages. Its plan
+entry is short:
 
-## Verification script contract (created in WP-00)
+```
+| S-nn | Title | Depends | Decision(s) | Acceptance (≤ 6 bullets: observable behaviour + the test that proves it) | Risk: low/high |
+```
 
-> **Invocation form (WP-00, verified):** pnpm 12 rejects a global flag before an implicit script name — `pnpm -s verify` errors with `unexpected argument '-s' found`. Always use `pnpm run -s <target>`.
+Design detail lives in the decision records, not in the plan row. **Risk: high** = touches
+credentials, the worker protocol, the updater, money (cost ledger), migrations that are not plainly
+additive, or authz — those get the reviewer's security checklist and canaries.
 
-`pnpm run -s verify` = the static checks + typecheck + the bundle budget + unit, contract and process tests + the coverage ratchet (`scripts/verify-targets.ts` has every step); `pnpm run -s verify:integration` = Testcontainers suites; `pnpm run -s verify:e2e` = fake-Claude application e2e (whole `apps/server` instances on the Testcontainers database, not `docker compose`); `pnpm run -s verify:ui` = web tests. Each target prints a one-line PASS/FAIL summary at the end.
+## The brief (orchestrator → implementer)
 
-`verify` is itself the concatenation of four sub-targets — `verify:static`, `verify:types`, `verify:bundle`, `verify:tests` — which exist so that CI does not carry a second copy of the list: each is one workflow job's one command, so a step added to `verify` is a step CI runs. This was earned: `ignored:check` sat in `verify` and in **no** CI job from WP-06 until WP-10, because the two lists were maintained by hand. The table is `scripts/verify-targets.ts` and `scripts/verify.test.ts` fails when a target or group of it is not invoked by `.github/workflows/ci.yml`. **`verify:tests` is two steps since WP-97**: `test` (the coverage run) and then `coverage:ratchet`, which reads the figures that run just measured and fails a ring below its floor or above it by more than the slack without a re-pin (technical/10 § Coverage and gates) — it runs where coverage is measured, so it is CI's unit job and never a census. **`verify:static` reads git history since WP-271**: its `migrations:check` step compares the migrations directory with the push's base commit (resolved as `verify:commits` resolves its range — `--from`/`COMMIT_RANGE_FROM`, the GitHub event payload, then `@{upstream}`; a branch with no upstream, such as a worktree's, falls back to its merge base with `origin/main`), refuses a shallow clone by name, and so needs a checkout with `origin/main` fetched — CI's lint job checks out with `fetch-depth: 0`. It fails a new migration without a class header, an `additive` one holding a statement off TD-032's allow-list, a `contract` whose `expands:` was not released by an earlier push, a `raises-rollback-floor` without the image label moving, any edit to an applied file, and (since WP-272, backlog 689) a new file that sorts before a file already at the base, naming the next free number (`scripts/check-migrations.ts` has the rules). **`protocol:check` joined it at WP-273** (TD-032 decision 7): it reads `WORKER_PROTOCOL_VERSION` and `ACCEPTED_WORKER_PROTOCOLS` (`packages/contracts/src/worker.ts`) as literals in the working tree, at the same base `migrations:check` resolves (through the same function, never a second resolver) and at that base's first parent — "one release earlier", since every push to `main` is a release — and fails a bump that is not the base's value + 1, a bump whose accepted list drops the base's value, a bump whose base itself differs from its first parent (no two bumps in consecutive pushes), and a change to the accepted list without a bump; `scripts/check-protocol.ts` has the rules and the one thing it cannot see (a previous push of several commits whose last commit did not touch the constant). `scripts/verify.mjs` hands every step `VERIFY_TARGET_STARTED_AT`, which is how the ratchet refuses a summary from an earlier run.
+```
+Slice S-nn — <title>
+Worktree: <path>  Branch: slice/<id>  Base: <sha>
+Goal: <2–3 sentences: the capability and why>
+Acceptance: <the plan row's bullets>
+Read: <the decision sections + the 3–6 files that matter>
+Decided, do not reopen: <bullets>
+Constraints: CLAUDE.md non-negotiables; docs/technical/16-engineering-checklist.md
+Done = verify PASS + PR open + report (files, acceptance → test names, anything found)
+```
 
-## Definition of done per WP
-Acceptance criteria from the plan met; tests per `10-testing-strategy.md`; `pnpm run -s verify` green; reviewer APPROVE; ledger updated; commit pushed; no new `[unverified]` claims in docs without a TODO entry; `.env.example` and `CLAUDE.md` updated when relevant.
+## Gates (what "quality" means here)
+
+- **Tests in every slice** (technical/10): unit/property for domain, contract tests for ports, an
+  integration or fake-Claude e2e for pipeline and protocol behaviour.
+- **`pnpm run -s verify` passes locally** before the PR; **CI green on the PR head** before merge —
+  CI is the integration/e2e verdict (no local load-gated tiers, no double e2e runs).
+- **One review per PR.** Risk-high slices: the reviewer runs 2–4 calibrated canaries on the
+  security-relevant lines and checks the 16-checklist's security section.
+- **Docs first for decisions only**: a slice that changes a decision gets the architect's record
+  merged with (or before) it. Docs a slice makes false are fixed in the same PR.
+- `CLAUDE.md`'s non-negotiables, DCO, no secrets — unchanged.
+
+## State, findings, history
+
+- **`docs/technical/LEDGER.md`** — one line per merged slice: id, title, PR, merge sha, date, one
+  sentence of note. This is the state: the next slice is the first plan row without a LEDGER line.
+- **`docs/technical/BACKLOG.md`** — one line per open finding (grade, owner, item). Implementer and
+  reviewer add a line there in their PR when they find something outside the slice; nobody else
+  "refines" it. The orchestrator schedules majors into a slice or a decision.
+- **`docs/technical/16-engineering-checklist.md`** — the ≤ 15 rules that still catch defects
+  (distilled from PROGRESS's 102). A new rule needs a real defect and one line of evidence.
+- **PR descriptions** hold the implementer's notes and the review verdict.
+- `PROGRESS.md` is read only when an old entry is cited (`PROGRESS #NNN`).
+
+## Machine
+
+The owner's machine also runs other projects (a Docker VM); heavy tiers run on CI for that reason.
+Locally: `verify` only, never `pkill`/`killall`, push only from a clean tree (the pre-push hook
+tests the working tree), implementers in worktrees with `pnpm install --frozen-lockfile --offline
+--ignore-scripts` (so the shared git hooks stay pointed at the main checkout).

@@ -1,4 +1,6 @@
-# PROGRESS — implementation ledger
+# PROGRESS — implementation ledger (FROZEN 2026-11-04)
+
+> **Frozen history.** Since 2026-11-04 the repository is built with the lean loop (`docs/technical/14-orchestration-protocol.md`): state in `docs/technical/LEDGER.md`, open findings in `docs/technical/BACKLOG.md`, the rules in `docs/technical/16-engineering-checklist.md`. Nothing new is written here; entries stay citable as `PROGRESS #NNN`.
 
 > Maintained by the orchestrator (docs/technical/14-orchestration-protocol.md). Statuses: TODO · IN_PROGRESS · REVIEW · DONE · BLOCKED. Keep entries short; details go in the WP's notes section below.
 
