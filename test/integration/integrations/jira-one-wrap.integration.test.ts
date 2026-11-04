@@ -54,6 +54,7 @@ import {
   type JiraReplay,
   REPLAY_SEARCH_PAGE_CAP,
 } from '../../contract/support/integrations/jira-cloud-replay.js';
+import { recentInstant } from '../../support/recent-instant.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestPool } from '../support/postgres.js';
 
@@ -115,7 +116,12 @@ const compose = async (): Promise<Composed> => {
   const replay = createJiraReplay();
   vi.stubGlobal('fetch', replay.fetch);
   const timer = createVirtualTimer({ autoAdvance: true });
+  // The adapter lives in the replay's frozen world (its JQL and the fixtures' timestamps are read
+  // against it). The executor's clock only stamps the audit row and the `integration.action.*` event,
+  // which the event log refuses before the previous UTC month, so it reads the wall clock's instant
+  // instead of the replay's (`test/support/recent-instant.ts`).
   const clock = fixedClock(JIRA_REPLAY_NOW as `${string}T${string}`, 0);
+  const auditClock = fixedClock(recentInstant(), 0);
   const executor = createIntegrationActionExecutor({
     auditLog: integrationAdapters.createPostgresIntegrationAuditLog({
       unitOfWork: eventing.unitOfWork,
@@ -126,7 +132,7 @@ const compose = async (): Promise<Composed> => {
     egress: allowAnyIntegrationHost(),
     redactor: noSecretsRedactor(),
     timer,
-    clock,
+    clock: auditClock,
     rateLimits: pipelineRateLimitPolicy,
   });
   const port = createPipelineProviderRegistry({ clock, timer })

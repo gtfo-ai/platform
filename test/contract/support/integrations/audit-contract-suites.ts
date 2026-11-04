@@ -37,6 +37,7 @@ import type {
 } from '@platform/application';
 import type { Id, IsoDateTime, JsonObject } from '@platform/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { recentInstant } from '../../../support/recent-instant.js';
 
 /** One recorded row, as an implementation lets the suite read it back. */
 export interface RecordedAuditRow {
@@ -72,7 +73,11 @@ export interface IdempotencyContractContext {
   cleanup(): Promise<void>;
 }
 
-const OCCURRED_AT = '2026-09-11T12:00:00.000Z' as IsoDateTime;
+/**
+ * Taken from the wall clock, never a literal: the Postgres adapter appends this instant to the event
+ * log, which refuses one before the previous UTC month (`test/support/recent-instant.ts`).
+ */
+const OCCURRED_AT: IsoDateTime = recentInstant();
 
 /** Builds an entry for `context`, so both implementations get ids they accept. */
 export const auditEntryFor = (

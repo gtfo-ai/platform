@@ -31,10 +31,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { toApiError } from '../../../apps/server/src/errors.js';
 import { createProjectSettingsPort } from '../../../apps/server/src/pipeline.js';
 import { databaseRunQueries, registerRunRoutes } from '../../../apps/server/src/routes/runs.js';
+import { recentInstant } from '../../support/recent-instant.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient, createTestPool } from '../support/postgres.js';
 
-const NOW = '2026-10-07T09:00:00.000Z' as IsoDateTime;
+/** Frozen, but taken from the wall clock: the cancel appends events at it (`recent-instant.ts`). */
+const NOW: IsoDateTime = recentInstant();
 
 let database: MigratedDatabase;
 let pool: pg.Pool;

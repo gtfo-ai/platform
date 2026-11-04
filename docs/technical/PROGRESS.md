@@ -62636,3 +62636,43 @@ under 10.
   `scripts/source-scanner.test.ts`'s shape census (the new `split('*')`), listed and re-run.
   `verify:integration` not run (Docker excluded by the brief), so acceptance (4)'s second half and (a)'s
   run are the orchestrator's.
+
+## WP notes — session 21 (M22)
+
+#### ci-fix — event-log partition window in integration fixtures
+
+- **The defect** (CI run 41805360327, head 9f37337e): 22 integration tests in three files failed with
+  `PartitionWindowError` on 2026-11-04. Their fixtures froze clocks at September 2026 instants, and
+  `assertInPartitionWindow` accepts nothing before the previous UTC month, so on 2026-11-01 they fell out
+  with nothing changed. The guard is product behaviour (technical/03) and is unchanged.
+- **Census, measured rather than grepped.** Grepping literal instants found ~70 test files, most of them
+  harmless (expiries, cursors, unpartitioned columns). So the integration and e2e tiers were run once with
+  temporary, reverted instrumentation: the event store logged every append more than two days old, and a
+  harness trigger logged every partitioned-table insert more than two days old. Six suites wrote a fixed
+  instant: `audit-contract-suites.ts` (via `audit-log.integration`), `jira-one-wrap`, `run-lease-sweep`
+  (all three failing today), and `cancel-before-cli-spawn` and `knowledge-apply-split` (October instants
+  into `events`, which would have failed on 2026-12-01), plus `read-api` (September transcript rows into
+  `run_messages`, which would have failed in January 2027 once the harness's three past partitions moved
+  on). The oldest clock-relative write measured was about seven days (`stats-queries`); e2e wrote none.
+  `event-store.integration`'s 2020 instant is the guard's own refusal test and stays.
+- **Fixes.** `test/support/recent-instant.ts` (`recentInstant(offsetMs)`, wall clock truncated to the
+  second) replaces each frozen instant; every instant a suite compares against is an offset from it, so the
+  assertions are unchanged. `run-lease-sweep` keeps its boundaries as offsets (`at(-1)`, `addMs(LEASE_CUTOFF,
+  ±1000)`, the spend window at `NOW - 12 h`). `jira-one-wrap` keeps the adapter at `JIRA_REPLAY_NOW` (its
+  JQL and the replay's fixtures are read against it) and gives the executor, whose clock only stamps the
+  audit row and event, a separate wall-clock instant.
+- **Guard.** `createMigratedDatabase` installs a test-only `before insert` trigger on every partition
+  that exists after `migrate` and the harness's past months (the partitions whose existence depends on the
+  day), refusing a row more than `staleWriteDays` (default 14; `null` turns it off) before `now()`, with a
+  message naming the table, the column, the value and the remedy. It is a trigger, not a source census,
+  because the three instants that broke arrived through three different call paths. It sits on those
+  partitions, not on the parent: the first version (on the parent, so cloned onto every later partition)
+  refused 16 tests in `deadline-recovery-store` and `postgres-pipeline-store`, which create their own
+  June 2026 partition and write June instants into it. Those do not depend on the date and are left
+  alone. Fourteen days: the event window drops an instant 29 days after it at the earliest, and
+  legitimate offsets reach about seven. Residual: a literal written today trips 14 days later, not at
+  once; a database built without `createMigratedDatabase` has no trigger. Calibration: with the guard and
+  the original fixtures, the six files failed (`PartitionWindowError` x3 files, the stale-write refusal
+  in the other three). With the fixes all seven files pass (96 tests). The new
+  `test/integration/support/migrated.integration.test.ts` holds coverage of every partitioned table,
+  the boundary, the message and the `null` switch.

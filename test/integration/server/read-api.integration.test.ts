@@ -64,6 +64,7 @@ import {
 import { databaseRunQueries, registerRunRoutes } from '../../../apps/server/src/routes/runs.js';
 import { SseHub, type SseTransport } from '../../../apps/server/src/sse/hub.js';
 import { startTranscriptBridge } from '../../../apps/server/src/sse/transcript-bridge.js';
+import { recentInstant } from '../../support/recent-instant.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestPool, withClient } from '../support/postgres.js';
 
@@ -81,7 +82,11 @@ let blobRunId: string;
 /** A BD-004 `local`-mode run: priced by the platform, never reported by a provider (WP-47). */
 let localRunId: string;
 
-const AT = '2026-09-12T10:00:00.000Z';
+/**
+ * Frozen, but taken from the wall clock: transcript entries are written to the partitioned
+ * `run_messages` at it, and the harness gives that table three past months (`recent-instant.ts`).
+ */
+const AT: string = recentInstant();
 
 const entry = (seq: number, text: string, run = runId): TranscriptEvent => ({
   run_id: run,

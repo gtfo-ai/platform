@@ -25,11 +25,12 @@ import {
   silentLogger,
   staticPipelineIntegrations,
 } from '@platform/application';
-import type { Id, IsoDateTime } from '@platform/contracts';
+import type { Id } from '@platform/contracts';
 import { fixedClock } from '@platform/domain';
 import { eventing, knowledge } from '@platform/infrastructure';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { recentInstant } from '../../support/recent-instant.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestPool } from '../support/postgres.js';
 
@@ -123,7 +124,9 @@ describe('a knowledge batch the provider refuses whole (WP-156 (d), backlog 420)
       } as unknown as KnowledgeApplyOptions['knowledge'],
       integrations: staticPipelineIntegrations(integrations),
       jobs: { enqueue: async () => ({ status: 'enqueued', jobId: null }) } as never,
-      clock: fixedClock('2026-10-07T10:00:00.000Z' as IsoDateTime),
+      // The wall clock's instant, frozen: `knowledge.proposal.applied` is appended at it, and the
+      // event log refuses one before the previous UTC month (`recent-instant.ts`).
+      clock: fixedClock(recentInstant()),
       ids: { next: () => crypto.randomUUID() as Id },
       project: async () => ({ knowledgeDir: '.agentic/knowledge', defaultBranch: 'main' }),
       ticketKeys: async () => new Map(),

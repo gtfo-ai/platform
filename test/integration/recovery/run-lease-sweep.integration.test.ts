@@ -25,6 +25,7 @@ import type { Commitment, ExpiredRunQuery, Transaction } from '@platform/applica
 import { runStrandedRecovery, sweepExpiredRunLeases } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import {
+  addMs,
   DEFAULT_STAGE_RUN_BUDGET_USD,
   FEATURE_TEMPLATE,
   SHIPPED_TEMPLATES,
@@ -38,6 +39,7 @@ import {
 } from '@platform/infrastructure';
 import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { recentInstant } from '../../support/recent-instant.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient, createTestPool } from '../support/postgres.js';
 
@@ -52,13 +54,19 @@ const pipeline = pipelineAdapters.createPostgresPipelineStore({ templates: SHIPP
 const costStore = costAdapters.createPostgresCostStore();
 
 /** The instant every case computes its bounds from. */
-const NOW = '2026-09-15T12:00:00.000Z' as IsoDateTime;
+// Taken from the wall clock, not written as a literal: the sweep appends `run.failed` at this
+// instant, and the event log refuses one before the previous UTC month (`recent-instant.ts`). Every
+// other instant below is an offset from it, so each case asserts the same boundary it always did.
+const NOW = recentInstant();
+const MINUTE = 60_000;
+/** `NOW` shifted by `minutes`. */
+const at = (minutes: number): IsoDateTime => addMs(NOW, minutes * MINUTE);
 const GRACE_MS = 60_000;
 const WALL_CLOCK_MS = 60 * 60_000;
 /** `now - grace`: a lease that expired before this is gone. */
-const LEASE_CUTOFF = '2026-09-15T11:59:00.000Z' as IsoDateTime;
+const LEASE_CUTOFF = at(-1);
 /** `now - (wallClock + grace)`: the backstop for a run that never held a lease. */
-const STARTED_CUTOFF = '2026-09-15T10:59:00.000Z' as IsoDateTime;
+const STARTED_CUTOFF = at(-61);
 
 const QUERY: ExpiredRunQuery = {
   leaseExpiredBefore: LEASE_CUTOFF,
@@ -102,9 +110,9 @@ const seedRun = async (run: SeededRun = {}): Promise<string> => {
       stage.rows[0]?.id,
       projectId,
       run.status ?? 'running',
-      run.startedAt ?? '2026-09-15T11:30:00.000Z',
+      run.startedAt ?? at(-30),
       run.leaseExpiresAt === null ? null : 'server-1:0f0f0f0f',
-      run.leaseExpiresAt === undefined ? '2026-09-15T11:50:00.000Z' : run.leaseExpiresAt,
+      run.leaseExpiresAt === undefined ? at(-10) : run.leaseExpiresAt,
       attempt,
     ],
   );
@@ -121,7 +129,7 @@ const pendingUsd = (reserveUsd: number): Promise<Commitment> =>
     costStore.pendingSpend(
       tx,
       { scope: 'project', scopeId: projectId as Id },
-      '2026-09-15T00:00:00.000Z' as IsoDateTime,
+      at(-12 * 60),
       reserveUsd,
     ),
   );
@@ -181,9 +189,9 @@ beforeEach(async () => {
 
 describe('the expired-run query', () => {
   it('finds a lease past the grace and not one inside it (rule 42)', async () => {
-    const gone = await seedRun({ leaseExpiresAt: '2026-09-15T11:58:59.000Z' });
+    const gone = await seedRun({ leaseExpiresAt: addMs(LEASE_CUTOFF, -1000) });
     // One second on the other side of the same cutoff: a heartbeat that landed a moment ago.
-    await seedRun({ leaseExpiresAt: '2026-09-15T11:59:01.000Z' });
+    await seedRun({ leaseExpiresAt: addMs(LEASE_CUTOFF, 1000) });
 
     const found = await withTx(async (tx) => store.expiredRuns(tx, QUERY));
 
@@ -193,14 +201,14 @@ describe('the expired-run query', () => {
 
   it('falls back to the wall clock only for a run that never held a lease', async () => {
     // A row from before `lease_expires_at` had a writer, older than a whole wall clock plus grace.
-    const old = await seedRun({ leaseExpiresAt: null, startedAt: '2026-09-15T10:58:59.000Z' });
+    const old = await seedRun({ leaseExpiresAt: null, startedAt: addMs(STARTED_CUTOFF, -1000) });
     // The same row one second inside the backstop.
-    await seedRun({ leaseExpiresAt: null, startedAt: '2026-09-15T10:59:01.000Z' });
+    await seedRun({ leaseExpiresAt: null, startedAt: addMs(STARTED_CUTOFF, 1000) });
     // A **leased** run started long ago whose lease is fresh: the wall clock must not reach it, or
     // the backstop would end every run that outlives an hour while its process is renewing.
     await seedRun({
-      startedAt: '2026-09-15T09:00:00.000Z',
-      leaseExpiresAt: '2026-09-15T12:05:00.000Z',
+      startedAt: at(-180),
+      leaseExpiresAt: at(5),
     });
 
     const found = await withTx(async (tx) => store.expiredRuns(tx, QUERY));
@@ -209,13 +217,13 @@ describe('the expired-run query', () => {
   });
 
   it('leaves a terminal run alone, whatever its lease says', async () => {
-    await seedRun({ status: 'completed', leaseExpiresAt: '2026-09-15T11:00:00.000Z' });
+    await seedRun({ status: 'completed', leaseExpiresAt: at(-60) });
 
     expect(await withTx(async (tx) => store.expiredRuns(tx, QUERY))).toEqual([]);
   });
 
   it('claims a row whose bound still holds and refuses one whose lease was renewed', async () => {
-    const runId = await seedRun({ leaseExpiresAt: '2026-09-15T11:50:00.000Z' });
+    const runId = await seedRun({ leaseExpiresAt: at(-10) });
 
     expect(
       await withTx(async (tx) => store.claimExpiredRun(tx, { runId: runId as Id, query: QUERY })),
@@ -224,10 +232,10 @@ describe('the expired-run query', () => {
     // The heartbeat lands between the pass's read and the ending's transaction. This is the case
     // the sweep must not act on, and in production it is prevented by the `for update` this claim
     // takes rather than by the re-read.
-    await pool.query(
-      "update runs set lease_expires_at = '2026-09-15T12:05:00.000Z' where id = $1",
-      [runId],
-    );
+    await pool.query('update runs set lease_expires_at = $2::timestamptz where id = $1', [
+      runId,
+      at(5),
+    ]);
     expect(
       await withTx(async (tx) => store.claimExpiredRun(tx, { runId: runId as Id, query: QUERY })),
     ).toBe(false);
