@@ -16,3 +16,4 @@ export * from './pipeline.js';
 export * from './platform.js';
 export * from './stats.js';
 export * from './transcripts.js';
+export * from './workers.js';

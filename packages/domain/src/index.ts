@@ -100,5 +100,8 @@ export * from './shadow/comparison.js';
 // A test fixture, exported for the same reason `FIXTURE_VAULT` is: four tiers assert over the same
 // set of hostile constructs, and a second copy of the set is a set that drifts (rule 68).
 export * from './testing/hostile-text.js';
+// Remote workers: the device flow's rules and the credential's spelling (WP-280, TD-031 §7, §10c)
+export * from './workers/credential.js';
+export * from './workers/device-flow.js';
 
 export const packageId = '@platform/domain' as const;

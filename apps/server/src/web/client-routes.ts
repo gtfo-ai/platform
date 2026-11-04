@@ -42,6 +42,8 @@ export const CLIENT_ROUTE_SEGMENTS: readonly string[] = [
   'sign-in',
   'stats',
   'tasks',
+  // WP-280: the Workers screen and the device flow's approval page.
+  'workers',
 ];
 
 const SEGMENTS = new Set(CLIENT_ROUTE_SEGMENTS);

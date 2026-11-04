@@ -69,16 +69,78 @@ export interface CreateAuthOptions {
    * in because the server created their account.
    */
   readonly onSessionCreated?: (userId: string) => Promise<void>;
+  /**
+   * Told about a user an update left unable to act — banned, or `status = 'disabled'` (WP-280,
+   * TD-031 §7): the served instance expires the leases of that user's workers' live runs, so the
+   * ordinary lease sweep ends them. Their credentials stop authenticating without it, because
+   * `findCredentialSubject` reads the user's state on every call.
+   *
+   * **Not the update's own transaction**: Better Auth's adapter owns that one and runs an `after`
+   * hook once it has committed. A failure here is reported and never fails the update; the runs'
+   * leases then expire at their own TTL instead (`docs/technical/BACKLOG.md` 711).
+   */
+  readonly onUserDeactivated?: (userId: string) => Promise<void>;
 }
 
+/** A user row an update produced, as far as deactivation reads it. */
+interface UpdatedUser {
+  readonly id: string;
+  readonly banned?: boolean | null;
+  readonly status?: string | null;
+}
+
+/** Whether an updated user may no longer act: banned, or disabled. */
+export const isDeactivated = (user: UpdatedUser): boolean =>
+  user.banned === true || user.status === 'disabled';
+
 /** Reports a failed `onSessionCreated` through Better Auth's own logger, when the hook has one. */
-const reportHookFailure = (context: unknown, error: unknown): void => {
+const reportHookFailure = (context: unknown, error: unknown, hook = 'onSessionCreated'): void => {
   const logger = (context as { context?: { logger?: { error?: unknown } } } | null)?.context
     ?.logger;
   if (typeof logger?.error === 'function') {
-    (logger.error as (...args: unknown[]) => void)('onSessionCreated failed', String(error));
+    (logger.error as (...args: unknown[]) => void)(`${hook} failed`, String(error));
   }
 };
+
+/** The served instance's two hooks; each present only when its callback is. */
+const databaseHooksOf = (options: CreateAuthOptions): BetterAuthOptions['databaseHooks'] => ({
+  ...(options.onSessionCreated === undefined
+    ? {}
+    : {
+        session: {
+          create: {
+            // A failure here never fails the sign-in it follows: the hint is not worth a 500
+            // on a correct password. `SetupState.signedIn` already absorbs and logs its own
+            // errors; anything else that escapes is reported through Better Auth's logger.
+            after: async (session: { userId: string }, context: unknown) => {
+              try {
+                await options.onSessionCreated?.(session.userId);
+              } catch (error) {
+                reportHookFailure(context, error);
+              }
+            },
+          },
+        },
+      }),
+  ...(options.onUserDeactivated === undefined
+    ? {}
+    : {
+        user: {
+          update: {
+            after: async (user: UpdatedUser, context: unknown) => {
+              if (!isDeactivated(user)) {
+                return;
+              }
+              try {
+                await options.onUserDeactivated?.(user.id);
+              } catch (error) {
+                reportHookFailure(context, error, 'onUserDeactivated');
+              }
+            },
+          },
+        },
+      }),
+});
 
 /**
  * The configuration object, separated from the instance it builds.
@@ -193,26 +255,10 @@ export const authOptions = (options: CreateAuthOptions): BetterAuthOptions => {
       fields: { expiresAt: 'expires_at', createdAt: 'created_at', updatedAt: 'updated_at' },
     },
 
-    ...(options.onSessionCreated === undefined
+    // No `databaseHooks` key at all on the bootstrap instance, which passes neither hook.
+    ...(options.onSessionCreated === undefined && options.onUserDeactivated === undefined
       ? {}
-      : {
-          databaseHooks: {
-            session: {
-              create: {
-                // A failure here never fails the sign-in it follows: the hint is not worth a 500
-                // on a correct password. `SetupState.signedIn` already absorbs and logs its own
-                // errors; anything else that escapes is reported through Better Auth's logger.
-                after: async (session: { userId: string }, context: unknown) => {
-                  try {
-                    await options.onSessionCreated?.(session.userId);
-                  } catch (error) {
-                    reportHookFailure(context, error);
-                  }
-                },
-              },
-            },
-          },
-        }),
+      : { databaseHooks: databaseHooksOf(options) }),
 
     plugins: [
       admin({

@@ -62,6 +62,8 @@ export const PERMISSION_ACTIONS = [
   'org.audit.read',
   // The dead-letter list and its re-queue (WP-95, PROGRESS backlog 126): an operator's instrument.
   'org.dead_letters.manage',
+  // Every worker of the organisation — the list and the revoke (WP-280, technical/08's TD-031 amendment)
+  'org.workers.manage',
   // Integrations (credentials are org-level; admin manages them — product/11)
   'integration.read',
   'integration.write',
@@ -109,6 +111,8 @@ export const PERMISSION_ACTIONS = [
   // Operating modes
   'shadow.run',
   'discovery.run',
+  // Remote workers: approve a device code for one's own machine, list and revoke one's own (WP-280)
+  'worker.register',
 ] as const;
 
 export type PermissionAction = (typeof PERMISSION_ACTIONS)[number];
@@ -130,6 +134,9 @@ export const PERMISSION_REQUIREMENTS = {
   // the list names handlers and events across every project and quotes a handler's error, and the
   // re-queue serves an event again to handlers that write — an operator's act, not a maintainer's.
   'org.dead_letters.manage': 'admin',
+  // Admin: another person's machine is not a member's to see or to cut off (technical/08's TD-031
+  // amendment, "own; all for `org.admin`").
+  'org.workers.manage': 'admin',
 
   'integration.read': 'maintainer',
   'integration.write': 'admin',
@@ -181,6 +188,11 @@ export const PERMISSION_REQUIREMENTS = {
 
   'shadow.run': 'maintainer',
   'discovery.run': 'maintainer',
+
+  // Viewer: TD-031 §10c asks only that the approver be an active user, and the worker is theirs.
+  // What a worker may then run is decided at the claim, by project membership at `member` or above
+  // (TD-031 §8) — so registering a machine grants nothing by itself.
+  'worker.register': 'viewer',
 } as const satisfies Record<PermissionAction, UserRole>;
 
 /**

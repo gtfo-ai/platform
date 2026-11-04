@@ -624,6 +624,26 @@ export const useDeadLetters = () => {
   });
 };
 
+/** `GET /api/workers` (WP-280): your workers, or every one for an administrator (`scope`). */
+export const useWorkers = () => {
+  const { endpoints } = useServices();
+  return useQuery({ queryKey: [...queryKeys.workers], queryFn: () => endpoints.workers() });
+};
+
+/**
+ * `GET /api/workers/device/:user_code` (WP-280): what a pending code's machine sent, read only once
+ * somebody has typed a whole code. A `404` is an answer (no such pending code), so it is not retried.
+ */
+export const useWorkerDevice = (userCode: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: [...queryKeys.workerDevice(userCode ?? '')],
+    queryFn: () => endpoints.workerDevice(userCode ?? ''),
+    enabled: userCode !== null,
+    retry: false,
+  });
+};
+
 /**
  * `GET /api/org/failed-jobs` (WP-108, PROGRESS backlog 325): the jobs pg-boss gave up on, a page at
  * a time with *Show older* following `next_cursor` (WP-114, backlog 324). Admin-only like the dead
@@ -1353,6 +1373,25 @@ export const useSettingsCommands = (mint?: MintKey) => {
       },
       onSettled: async () => {
         await queryClient.invalidateQueries({ queryKey: [...queryKeys.deadLetters] });
+      },
+    }),
+    /**
+     * `POST /api/workers/device/approve` (WP-280): approve or deny a device code. Not keyed: a
+     * second decision on one code is refused `409 device_code_already_decided`, never performed twice.
+     */
+    decideWorkerDevice: useMutation({
+      mutationFn: (body: Parameters<typeof endpoints.decideWorkerDevice>[0]) =>
+        endpoints.decideWorkerDevice(body),
+      // `exact`: the list only. The decided code's own read would answer 404 now, which is not news.
+      onSettled: async () => {
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.workers], exact: true });
+      },
+    }),
+    /** `DELETE /api/workers/:id` (WP-280): revoke; a repeat answers `performed: false`. */
+    revokeWorker: useMutation({
+      mutationFn: (workerId: string) => endpoints.revokeWorker(workerId),
+      onSettled: async () => {
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.workers], exact: true });
       },
     }),
     setOrgBudget: useMutation({

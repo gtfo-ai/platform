@@ -39,7 +39,7 @@ server on every request — the browser only hides what you cannot do.
 
 ### The top navigation
 
-**Dashboard · Agents · Inbox · Integrations · Onboarding · Statistics · Audit log · Settings**, and
+**Dashboard · Agents · Inbox · Integrations · Onboarding · Statistics · Audit log · Workers · Settings**, and
 from the dashboard, into a project: its **board**, **knowledge**, **pipeline** and **budgets**.
 
 Screens that show live data subscribe to a server-sent event stream, so agent counts, task states
@@ -1020,6 +1020,21 @@ Every number carries its definition, and its caveats are on the screen. A number
 compute is listed under **Not measured, and why** with its reason, never drawn as a zero — a zero
 would read as "we delivered nothing" instead of "nothing is measured"; and a range with nothing in
 it says *no data in this range*, which is a different sentence from `0`.
+
+### Workers
+
+**Workers** lists the machines registered to run agent stages for this instance — yours, or every
+one if you are an administrator — with when each was last seen, the protocol and image digests it
+reported, and whether it is active, paused or revoked. *Revoke* stops the machine's credential at its
+next call; any run it holds is ended by the lease sweep and planned again.
+
+A machine is added from its own terminal: it shows a code like `BCDF-GHJK`, and you approve it at
+**/workers/approve** while signed in. Before you decide, the page shows where the request came from,
+which client sent it and how old the code is. **Approve only a code your own machine is showing you
+now** — somebody who sends you a code is asking you to give their machine your access — and a code
+older than five minutes asks you to confirm that a second time. Name the machine and approve, or
+deny; the machine collects its credential at its next poll. The worker program itself, and running
+stages on it, arrive with the rest of the worker protocol.
 
 ## 13. The whole list of what is not there yet
 

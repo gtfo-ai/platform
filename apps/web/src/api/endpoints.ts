@@ -97,6 +97,7 @@ import {
   retryStageRequestSchema,
   retryStageResponseSchema,
   returnToStageRequestSchema,
+  revokeWorkerResponseSchema,
   reworkRequestSchema,
   runCommandsResponseSchema,
   runMessagesResponseSchema,
@@ -130,6 +131,10 @@ import {
   ticketStatusesResponseSchema,
   updateProjectConfigRequestSchema,
   versionResponseSchema,
+  workerDeviceDecisionRequestSchema,
+  workerDeviceDecisionResponseSchema,
+  workerDeviceLookupResponseSchema,
+  workersResponseSchema,
 } from '@platform/contracts';
 import * as z from 'zod';
 import type { ApiClient } from './http.js';
@@ -182,6 +187,24 @@ export interface Endpoints {
     position: number,
     idempotencyKey?: string,
   ) => Promise<z.output<typeof requeueDeadLetterResponseSchema>>;
+  /**
+   * `GET /api/workers` — the caller's registered workers, or every one for an administrator
+   * (WP-280). `scope` says which.
+   */
+  readonly workers: () => Promise<z.output<typeof workersResponseSchema>>;
+  /**
+   * `GET /api/workers/device/:user_code` — what a pending device code's machine sent (address,
+   * user agent, age) before anybody decides it (WP-280, TD-031 §10c). Rendered as text.
+   */
+  readonly workerDevice: (
+    userCode: string,
+  ) => Promise<z.output<typeof workerDeviceLookupResponseSchema>>;
+  /** `POST /api/workers/device/approve` — approve (naming the machine) or deny a device code. */
+  readonly decideWorkerDevice: (
+    body: z.input<typeof workerDeviceDecisionRequestSchema>,
+  ) => Promise<z.output<typeof workerDeviceDecisionResponseSchema>>;
+  /** `DELETE /api/workers/:id` — revoke; a repeat answers `performed: false`. */
+  readonly revokeWorker: (workerId: string) => Promise<z.output<typeof revokeWorkerResponseSchema>>;
   /** The newest refused or ignored inbound deliveries of one integration (WP-44, backlog 198). */
   readonly refusedDeliveries: (
     integrationId: string,
@@ -633,6 +656,21 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         body: {},
         idempotent: true,
         ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      }),
+    workers: () => client.get('/api/workers', { schema: workersResponseSchema }),
+    workerDevice: (userCode) =>
+      client.get(`/api/workers/device/${seg(userCode)}`, {
+        schema: workerDeviceLookupResponseSchema,
+      }),
+    decideWorkerDevice: (body) =>
+      client.command('/api/workers/device/approve', {
+        schema: workerDeviceDecisionResponseSchema,
+        body: workerDeviceDecisionRequestSchema.parse(body),
+      }),
+    revokeWorker: (workerId) =>
+      client.command(`/api/workers/${seg(workerId)}`, {
+        method: 'DELETE',
+        schema: revokeWorkerResponseSchema,
       }),
     orgAudit: (query) =>
       client.get('/api/org/audit', { schema: orgAuditResponseSchema, query: { ...query } }),

@@ -19,6 +19,7 @@
 import { fromNodeHeaders } from 'better-auth/node';
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 import fastifyPlugin from 'fastify-plugin';
+import { compileTrust, type TrustProxySetting } from '../client-address.js';
 import { CrossSiteRequestError, UnauthorizedError } from '../errors.js';
 import type { Database } from '../queries/identity-queries.js';
 import { findUserById } from '../queries/identity-queries.js';
@@ -40,8 +41,12 @@ export interface AuthPluginOptions {
   readonly database: Database;
   /** `APP_BASE_URL`. Normalised to an origin here, so a trailing slash cannot 403 every mutation. */
   readonly baseUrl: string;
-  /** `APP_TRUST_PROXY`. Decides whether `X-Forwarded-For` is believed; see `toWebRequest`. */
-  readonly trustProxy: boolean;
+  /**
+   * `APP_TRUST_PROXY`. Decides whether `X-Forwarded-For` is believed; see `toWebRequest`. Since
+   * WP-280 it may be a list of addresses and CIDR ranges, and the forwarding headers survive only
+   * for a request whose socket peer the list trusts.
+   */
+  readonly trustProxy: TrustProxySetting;
 }
 
 /**
@@ -102,9 +107,10 @@ export const FORWARDING_HEADERS = [
 export const applyClientAddress = (
   headers: Headers,
   clientIp: string,
-  trustProxy: boolean,
+  /** Whether `APP_TRUST_PROXY` trusts this request's socket peer (always, for `true`). */
+  peerTrusted: boolean,
 ): Headers => {
-  if (!trustProxy) {
+  if (!peerTrusted) {
     for (const header of FORWARDING_HEADERS) {
       headers.delete(header);
     }
@@ -115,9 +121,18 @@ export const applyClientAddress = (
   return headers;
 };
 
-const toWebRequest = (request: FastifyRequest, baseUrl: string, trustProxy: boolean): Request => {
+export const toWebRequest = (
+  request: FastifyRequest,
+  baseUrl: string,
+  trusted: (address: string) => boolean,
+): Request => {
   const url = new URL(request.url, baseUrl);
-  const headers = applyClientAddress(fromNodeHeaders(request.raw.headers), request.ip, trustProxy);
+  const peer = request.socket.remoteAddress;
+  const headers = applyClientAddress(
+    fromNodeHeaders(request.raw.headers),
+    request.ip,
+    peer !== undefined && trusted(peer),
+  );
   const method = request.method.toUpperCase();
   const body = typeof request.body === 'string' ? request.body : undefined;
   return new Request(url, {
@@ -137,6 +152,7 @@ const plugin: FastifyPluginAsync<AuthPluginOptions> = async (
   // 403'd every mutating request in the instance.
   const origin = new URL(options.baseUrl).origin;
   const trustedOrigins = [origin];
+  const trusted = compileTrust(options.trustProxy);
 
   /**
    * Resolves the session on every request, so a route only has to declare the permission it needs.
@@ -219,9 +235,7 @@ const plugin: FastifyPluginAsync<AuthPluginOptions> = async (
       // threshold anyway, so the exclusion costs nothing measurable and removes the question.
       compress: false,
       handler: async (request, reply) => {
-        const response = await options.auth.handler(
-          toWebRequest(request, origin, options.trustProxy),
-        );
+        const response = await options.auth.handler(toWebRequest(request, origin, trusted));
         reply.status(response.status);
         for (const [key, value] of response.headers) {
           if (key.toLowerCase() !== 'set-cookie') {

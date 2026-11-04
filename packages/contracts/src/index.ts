@@ -33,5 +33,6 @@ export * from './runlet.js';
 export * from './schemas.js';
 export * from './transcript.js';
 export * from './worker.js';
+export * from './workers.js';
 
 export const packageId = '@platform/contracts' as const;

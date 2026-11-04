@@ -390,6 +390,26 @@ the surface works through a CDN proxy (research/17 § 8). For people: `GET/DELET
 /api/projects/:id/execution` (`project.settings.write`), `GET /api/org/updates` (admin). Full contract:
 TD-031 decision 9.
 
+**The device flow and the people's routes are served since WP-280.** `POST /api/worker/v1/device` and
+`device/token` (`apps/server/src/routes/worker-device.ts`) are unauthenticated and `Cache-Control:
+no-store`; the poll answers RFC 8628's `400 { "error": … }` or, once, `200 { worker_id, credential }`,
+and an unknown `device_code` is `expired_token`. `device` answers `429 device_code_limit` (with
+`Retry-After: 60`) past 20 pending codes for the client address or 200 in the instance; the client
+address is `apps/server/src/client-address.ts`'s — `APP_TRUSTED_CLIENT_IP_HEADER` only from a socket
+peer `APP_TRUST_PROXY` trusts (`false | true | <addresses/CIDRs>`, a bare integer refused), else
+`request.ip`. The people's half is `apps/server/src/routes/workers.ts`, with **one route the amendment
+above did not list**: `GET /api/workers/device/:user_code`, the approval page's read of what the
+requesting machine sent (address, user agent, age, `needs_confirmation` past five minutes) before
+anybody decides — `404 device_code_not_found` for anything not pending, so it is no oracle.
+`POST /api/workers/device/approve` takes `{decision: "approve", user_code, name, confirm_stale}` or
+`{decision: "deny", user_code}` and refuses `409 device_code_needs_confirmation` /
+`device_code_expired` / `device_code_already_decided`; `DELETE /api/workers/:id` answers
+`{worker_id, performed, revoked_at, expired_runs}`. RBAC: `worker.register` (viewer — any active user)
+for the device pair, the own list and the own revoke; `org.workers.manage` (admin) for every worker,
+and somebody else's worker is `404` to anyone else. Each decision and each performed revocation writes
+one `human_actions` row (`worker.device.approve|deny`, `worker.revoke`). The DTOs are
+`packages/contracts/src/workers.ts`.
+
 **The contract is code since WP-273** (no route serves it yet; WP-280 to WP-284 do):
 `packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (1), `ACCEPTED_WORKER_PROTOCOLS`
 (`[N-1, N]`, today `[1]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the

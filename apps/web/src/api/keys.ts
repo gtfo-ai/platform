@@ -31,6 +31,9 @@ export const queryKeys = {
   deadLetters: ['org', 'dead-letters'] as const,
   /** WP-108: the jobs pg-boss gave up on, under the same prefix for the same reason. */
   failedJobs: ['org', 'failed-jobs'] as const,
+  /** WP-280: the registered workers, and one pending device code's details by what was typed. */
+  workers: ['workers'] as const,
+  workerDevice: (userCode: string) => ['workers', 'device', userCode] as const,
   /**
    * WP-41. Keyed by the filters, because a range and a bucket are two different answers rather than
    * one cached one — the shape `historyBootstraps` uses for its N.

@@ -18,6 +18,17 @@ path = '''(^|/)test/fixtures/'''
 regexTarget = "line"
 regexes = ['''FAKE''']
 
+# The worker credential (WP-280, TD-031 decision 7): `wkr_<26 base32>_<43 base64url>`. Its prefix
+# exists so a scanner can recognise it; the pattern redactor carries the same shape
+# (`packages/infrastructure/src/redaction/pattern-redaction.ts`, rule `worker-credential`).
+# `scripts/gitleaks-rules.test.ts` holds both directions with values assembled at run time.
+[[rules]]
+id = "platform-worker-credential"
+description = "Agentic platform worker credential (wkr_)"
+regex = '''\b(wkr_[a-z2-7]{26}_[A-Za-z0-9_-]{43})(?:[^A-Za-z0-9_-]|$)'''
+secretGroup = 1
+keywords = ["wkr_"]
+
 # The other half of the same convention, added at WP-12. The rule above catches a fixture
 # credential that is *missing* the marker; this allows one that *carries* it, because the default
 # gitleaks rules (`gitlab-pat`, `jwt`, `github-pat`, …) fire on shape alone, and a redaction test

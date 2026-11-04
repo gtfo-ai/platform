@@ -425,9 +425,19 @@ process cannot answer*, never zero:
 | `webhook_deliveries_rate_limited_total{provider="…"}` | webhook deliveries answered `429` by their integration's rate limit, before any signature check (API roles, WP-87) | a rate that does not stop: somebody is flooding the endpoint, or a vendor's burst is larger than the bucket — its deliveries are being retried, not lost, until the vendor gives up |
 | `command_idempotency_claims_unknown{action="…"}` | commands whose process died between claiming their `Idempotency-Key` and recording the outcome, past the in-flight window (`CLAIM_IN_FLIGHT_MS`, `apps/server/src/routes/idempotency.ts`); the key answers `409 idempotency_attempt_unknown` for good (API roles, WP-73) | anything above 0 asks a **human check** of the resource the action names — never a delete of the row, which would let a retry perform the command a second time |
 
-`APP_TRUST_PROXY=true` is what makes the app believe `X-Forwarded-For` and `X-Forwarded-Proto`. Set
-it **only** when a proxy you control terminates TLS in front; with it on and the app reachable
-directly, a client can forge its own address.
+`APP_TRUST_PROXY` decides which peers the app believes `X-Forwarded-For` and `X-Forwarded-Proto`
+from. Since WP-280 it takes three forms: `false` (the default — no peer), a **comma-separated list of
+addresses and CIDR ranges** (your proxy's address, or your CDN's published ranges — the safe way to
+run behind one), or `true` (every peer). Set `true` **only** when a proxy you control terminates TLS
+in front and the app's port is unreachable any other way; with it on and the app reachable directly,
+a client can forge its own address. A bare number other than `1`/`0` is refused at start-up — Fastify
+would read it as a hop count, which trusts whatever the nearest hops claim.
+
+`APP_TRUSTED_CLIENT_IP_HEADER` names the header your CDN puts the real client address in
+(`CF-Connecting-IP` behind Cloudflare). It is believed only from a peer `APP_TRUST_PROXY` trusts, and
+the worker device flow's limits (at most 20 pending codes per client address, 200 per instance) key
+on it — so behind a CDN, list the CDN's ranges in `APP_TRUST_PROXY` and name its header here, or
+every developer behind the CDN shares one address's limit.
 
 Both of those are among the variables `compose.yml` does not pass through, so they need the override
 from §2 to have any effect at all.

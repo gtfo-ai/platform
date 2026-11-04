@@ -138,6 +138,7 @@ import {
   listShadowBatches,
 } from './queries/shadow-queries.js';
 import { findOrganisationTimezone, readStatsSources } from './queries/stats-queries.js';
+import { createPostgresWorkerStore, type WorkerStore } from './queries/worker-queries.js';
 import { roleCapabilities } from './role.js';
 import { registerAskRoutes } from './routes/asks.js';
 import { registerBootstrapRoutes } from './routes/bootstrap.js';
@@ -165,6 +166,8 @@ import { registerStatsRoutes } from './routes/stats.js';
 import { registerTaskStartRoutes } from './routes/task-start.js';
 import { registerTaskRoutes } from './routes/tasks.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
+import { registerWorkerDeviceRoutes } from './routes/worker-device.js';
+import { registerWorkerRoutes } from './routes/workers.js';
 import type { ShadowCommands } from './shadow.js';
 import type { SseHub } from './sse/hub.js';
 import { registerSseRoutes } from './sse/routes.js';
@@ -269,6 +272,13 @@ export interface BuildAppOptions {
    * no job queue. Optional like `deadLetters`, for the same reason; the route answers `503` by name.
    */
   readonly failedJobs?: FailedJobsReader | null;
+  /**
+   * Workers and the device flow (WP-280). Absent: the PostgreSQL store over `database`, which is
+   * what every composition uses; a test hands an in-memory one (`queries/worker-store-memory.ts`).
+   */
+  readonly workers?: WorkerStore;
+  /** The clock the worker routes read (device-code expiry, a code's age). Absent: the wall clock. */
+  readonly workersNow?: () => Date;
   /**
    * Whether a project may start a shadow batch — the same predicate the command refuses with.
    *
@@ -378,7 +388,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     // concrete `Logger` would make every `FastifyInstance` in this package a different type from
     // the default one every plugin and route module is written against.
     loggerInstance: options.logger as FastifyBaseLogger,
-    trustProxy: config.trustProxy,
+    // An address list is handed over as Fastify's array form; never a number (a hop count).
+    trustProxy: typeof config.trustProxy === 'boolean' ? config.trustProxy : [...config.trustProxy],
     bodyLimit: config.bodyLimitBytes,
     // Fastify's own request id, reused as the correlation id in every log line (TD-023).
     genReqId: () => crypto.randomUUID(),
@@ -585,6 +596,21 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         findProjectRole(options.database, projectId, userId),
       // TD-012 step 2, the platform's patterns: a handler's error may quote a credential.
       redactor: redactionAdapters.patternRedactor(),
+    });
+    // WP-280: the device flow (unauthenticated, rate-limited) and the people's worker surface.
+    const workerStore = options.workers ?? createPostgresWorkerStore(options.database);
+    await registerWorkerDeviceRoutes(app, {
+      store: workerStore,
+      baseUrl: config.baseUrl,
+      trustProxy: config.trustProxy,
+      trustedClientIpHeader: config.trustedClientIpHeader,
+      ...(options.workersNow === undefined ? {} : { now: options.workersNow }),
+    });
+    await registerWorkerRoutes(app, {
+      store: workerStore,
+      projectRole: async (projectId, userId) =>
+        findProjectRole(options.database, projectId, userId),
+      ...(options.workersNow === undefined ? {} : { now: options.workersNow }),
     });
     // WP-108, backlog 325: beside it, the jobs pg-boss gave up on — a read, never a re-queue.
     await registerFailedJobRoutes(app, {

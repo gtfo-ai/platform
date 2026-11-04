@@ -83,3 +83,49 @@ describe('the first-sign-in hook (WP-291)', () => {
     await expect(after?.({ userId: 'x' }, null)).resolves.toBeUndefined();
   });
 });
+
+describe('the user-deactivation hook (WP-280, TD-031 §7)', () => {
+  const build = async (onUserDeactivated: (userId: string) => Promise<void>) => {
+    const { authOptions } = await import('./better-auth.js');
+    const { loadServerConfig } = await import('../config.js');
+    const config = loadServerConfig({
+      DATABASE_URL: 'postgres://app:app@db:5432/app',
+      APP_SECRET_KEY: 'x'.repeat(40),
+      APP_BASE_URL: 'http://localhost:8080',
+    });
+    return authOptions({ pool: {} as never, config, onUserDeactivated });
+  };
+  type After = (user: unknown, context: unknown) => Promise<void>;
+  const USER = '00000000-0000-4000-8000-000000000280';
+
+  it('is told about a user an update banned or disabled, and about no other update', async () => {
+    const seen: string[] = [];
+    const options = await build(async (userId) => {
+      seen.push(userId);
+    });
+    // Only this hook: the session hook is absent, and so is its key.
+    expect(options.databaseHooks?.session).toBeUndefined();
+    const after = options.databaseHooks?.user?.update?.after as After | undefined;
+    await after?.({ id: USER, banned: false, status: 'active' }, null);
+    await after?.({ id: USER, name: 'renamed' }, null);
+    expect(seen).toEqual([]);
+    await after?.({ id: USER, banned: true, status: 'active' }, null);
+    await after?.({ id: USER, banned: false, status: 'disabled' }, null);
+    expect(seen).toEqual([USER, USER]);
+  });
+
+  it('never fails the update when the hook throws, and reports it', async () => {
+    const options = await build(async () => {
+      throw new Error('connection terminated');
+    });
+    const after = options.databaseHooks?.user?.update?.after as After | undefined;
+    const reported: unknown[][] = [];
+    await expect(
+      after?.(
+        { id: USER, banned: true },
+        { context: { logger: { error: (...args: unknown[]) => reported.push(args) } } },
+      ),
+    ).resolves.toBeUndefined();
+    expect(reported).toEqual([['onUserDeactivated failed', 'Error: connection terminated']]);
+  });
+});

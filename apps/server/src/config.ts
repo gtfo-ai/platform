@@ -24,6 +24,7 @@ import {
 import { providerModeSchema } from '@platform/contracts';
 import { db, eventing, jobs } from '@platform/infrastructure';
 import * as z from 'zod';
+import { isTrustProxyEntry } from './client-address.js';
 import { ROLES, type RoleCapabilities, roleCapabilities } from './role.js';
 
 export type EnvLike = Readonly<Record<string, string | undefined>>;
@@ -56,6 +57,7 @@ const SOURCE_VARIABLE: Record<string, string> = {
   shutdownTimeoutMs: 'APP_SHUTDOWN_TIMEOUT_MS',
   bodyLimitBytes: 'APP_HTTP_BODY_LIMIT_BYTES',
   trustProxy: 'APP_TRUST_PROXY',
+  trustedClientIpHeader: 'APP_TRUSTED_CLIENT_IP_HEADER',
   providerMode: 'APP_PROVIDER_MODE',
   knowledgeMirrorRoot: 'APP_KNOWLEDGE_MIRROR_ROOT',
   knowledgeMirrorMaxBytes: 'APP_KNOWLEDGE_MIRROR_MAX_BYTES',
@@ -156,8 +158,36 @@ const serverConfigFields = z.strictObject({
     .int()
     .min(1_024)
     .max(64 * 1_024 * 1_024),
-  /** Behind a reverse proxy (technical/01's optional caddy), so `X-Forwarded-*` is honoured. */
-  trustProxy: z.boolean(),
+  /**
+   * Which peers may speak for a client (`X-Forwarded-*`, and {@link trustedClientIpHeader}):
+   * `false`, `true` (every peer — safe only when the port is reachable through the proxy alone), or
+   * a list of addresses and CIDR ranges (WP-280, TD-031 §10c). Handed to Fastify's `trustProxy` as
+   * is; a bare integer — which Fastify would read as a hop count — is refused.
+   * `apps/server/src/client-address.ts` has the rule.
+   */
+  trustProxy: z.union([
+    z.boolean(),
+    z
+      .array(
+        z
+          .string()
+          .refine(
+            isTrustProxyEntry,
+            'expected true, false, or comma-separated addresses or CIDR ranges; a bare integer is not accepted as a hop count',
+          ),
+      )
+      .min(1)
+      .readonly(),
+  ]),
+  /**
+   * The header a trusted proxy or CDN puts the client's address in (`cf-connecting-ip` behind
+   * Cloudflare), believed only from a peer {@link trustProxy} trusts; `null` uses `request.ip`. The
+   * device flow's rate limits key on the result (WP-280, TD-031 §10c).
+   */
+  trustedClientIpHeader: z
+    .string()
+    .regex(/^[a-z0-9-]{1,64}$/, 'expected an HTTP header name')
+    .nullable(),
 
   /**
    * How often the intake reconciliation looks for a ticket the platform matched and never started,
@@ -531,6 +561,7 @@ export const SERVER_CONFIG_DEFAULTS = {
   shutdownTimeoutMs: 30_000,
   bodyLimitBytes: 1_048_576,
   trustProxy: false,
+  trustedClientIpHeader: null,
   providerMode: 'api',
   // TD-025 §2's layout, and the path `compose.yml` mounts the `ctl` volume at in both containers.
   workspaceControlRoot: '/run/agentic/ctl',
@@ -876,6 +907,25 @@ const booleanFromEnv = (raw: string | undefined, fallback: boolean): unknown => 
   return value;
 };
 
+/**
+ * `APP_TRUST_PROXY`: the old boolean spellings keep their meaning (`1` is still `true`); anything
+ * else is a comma-separated list of addresses and CIDR ranges, held to {@link isTrustProxyEntry} by
+ * the schema — which is where a bare integer such as `2` is refused rather than becoming a hop count.
+ */
+const trustProxyFromEnv = (
+  raw: string | undefined,
+  fallback: boolean | readonly string[],
+): unknown => {
+  const flag = booleanFromEnv(raw, false);
+  if (typeof flag === 'boolean') {
+    return raw === undefined || raw.trim() === '' ? fallback : flag;
+  }
+  return String(flag)
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '');
+};
+
 const nullableString = (raw: string | undefined): string | null => {
   const value = raw?.trim();
   return value === undefined || value === '' ? null : value;
@@ -1031,7 +1081,8 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
       env.APP_HTTP_BODY_LIMIT_BYTES,
       SERVER_CONFIG_DEFAULTS.bodyLimitBytes,
     ),
-    trustProxy: booleanFromEnv(env.APP_TRUST_PROXY, SERVER_CONFIG_DEFAULTS.trustProxy),
+    trustProxy: trustProxyFromEnv(env.APP_TRUST_PROXY, SERVER_CONFIG_DEFAULTS.trustProxy),
+    trustedClientIpHeader: nullableString(env.APP_TRUSTED_CLIENT_IP_HEADER)?.toLowerCase() ?? null,
     providerMode: env.APP_PROVIDER_MODE?.trim() || SERVER_CONFIG_DEFAULTS.providerMode,
     modelApiKey: nullableString(readSecret('ANTHROPIC_API_KEY', env)),
     modelOauthToken: nullableString(readSecret('CLAUDE_CODE_OAUTH_TOKEN', env)),

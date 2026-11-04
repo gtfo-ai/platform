@@ -669,3 +669,38 @@ describe('the poll sweep interval and its renamed variable (WP-123)', () => {
     expect(text).not.toMatch(/^APP_TICKET_POLL_SWEEP_INTERVAL_MS=/m);
   });
 });
+
+describe('APP_TRUST_PROXY, widened (WP-280, TD-031 §10c)', () => {
+  it('keeps every old boolean spelling, `1` included, and defaults to false', () => {
+    expect(load().trustProxy).toBe(false);
+    for (const spelling of ['true', 'TRUE', '1', 'yes', 'on']) {
+      expect(load({ APP_TRUST_PROXY: spelling }).trustProxy).toBe(true);
+    }
+    for (const spelling of ['false', '0', 'no', 'off', '']) {
+      expect(load({ APP_TRUST_PROXY: spelling }).trustProxy).toBe(false);
+    }
+  });
+
+  it('reads a comma-separated list of addresses and CIDR ranges', () => {
+    expect(
+      load({ APP_TRUST_PROXY: ' 10.0.0.1, 173.245.48.0/20 ,2400:cb00::/32' }).trustProxy,
+    ).toEqual(['10.0.0.1', '173.245.48.0/20', '2400:cb00::/32']);
+  });
+
+  it('refuses a bare integer, which Fastify would read as a hop count, and a typo', () => {
+    expect(() => load({ APP_TRUST_PROXY: '2' })).toThrow(/APP_TRUST_PROXY.*hop count/s);
+    expect(() => load({ APP_TRUST_PROXY: 'ture' })).toThrow(/APP_TRUST_PROXY/);
+    expect(() => load({ APP_TRUST_PROXY: '10.0.0.0/33' })).toThrow(/APP_TRUST_PROXY/);
+    expect(() => load({ APP_TRUST_PROXY: ',' })).toThrow(/APP_TRUST_PROXY/);
+  });
+
+  it('reads APP_TRUSTED_CLIENT_IP_HEADER lower-cased, null by default, and refuses a non-name', () => {
+    expect(load().trustedClientIpHeader).toBeNull();
+    expect(load({ APP_TRUSTED_CLIENT_IP_HEADER: 'CF-Connecting-IP' }).trustedClientIpHeader).toBe(
+      'cf-connecting-ip',
+    );
+    expect(() => load({ APP_TRUSTED_CLIENT_IP_HEADER: 'x: y' })).toThrow(
+      /APP_TRUSTED_CLIENT_IP_HEADER/,
+    );
+  });
+});

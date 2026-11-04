@@ -47,6 +47,7 @@ import { ShadowScreen } from '../features/shadow.js';
 import { SignInScreen } from '../features/sign-in.js';
 import { StatisticsScreen } from '../features/statistics.js';
 import { TaskDetailScreen } from '../features/task-detail.js';
+import { WorkerApproveScreen, WorkersScreen } from '../features/workers.js';
 import { ErrorFallback } from '../ui/error-boundary.js';
 
 export interface RouterContext {
@@ -95,6 +96,9 @@ const statsRoute = route('/stats', StatisticsScreen);
 const auditRoute = route('/audit', AuditScreen);
 const settingsRoute = route('/settings', SettingsScreen);
 const onboardingRoute = route('/onboarding', OnboardingScreen);
+// WP-280: the registered machines, and the device flow's `verification_uri`.
+const workersRoute = route('/workers', WorkersScreen);
+const workerApproveRoute = route('/workers/approve', WorkerApproveScreen);
 
 const boardRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
@@ -204,6 +208,8 @@ export const routeTree = rootRoute.addChildren([
     auditRoute,
     settingsRoute,
     onboardingRoute,
+    workersRoute,
+    workerApproveRoute,
     boardRoute,
     projectTaskRoute,
     taskRoute,

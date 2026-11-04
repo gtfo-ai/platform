@@ -31,6 +31,8 @@ const FAKE = {
   google: 'AIzaSyD-000000000000000000000000000FAKE',
   jwt: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlIn0.FAKEFAKEFAKEsignatureFAKE',
   pem: '-----BEGIN RSA PRIVATE KEY-----\nFAKE-KEY-MATERIAL-0000\n-----END RSA PRIVATE KEY-----',
+  // WP-280: `wkr_<26 base32>_<43 base64url>`, the platform's own worker credential.
+  worker: 'wkr_aaaaaaaaaaaaaaaaaaaaaaaaaa_FAKE000000000000000000000000000000000000000',
 } as const;
 
 describe('the placeholder', () => {
@@ -188,6 +190,17 @@ describe('the rule set', () => {
   it('names the rule that fired, so `redaction_log.rule_id` means something', () => {
     expect(detectSecrets(FAKE.aws).map((hit) => hit.ruleId)).toEqual(['aws-access-key-id']);
     expect(detectSecrets(FAKE.pem).map((hit) => hit.ruleId)).toEqual(['private-key']);
+    expect(detectSecrets(`credential: ${FAKE.worker}`).map((hit) => hit.ruleId)).toContain(
+      'worker-credential',
+    );
+    expect(detectSecrets(`x ${FAKE.worker} y`).map((hit) => hit.ruleId)).toEqual([
+      'worker-credential',
+    ]);
+  });
+
+  it('does not take a worker credential’s prefix, or a short one, for a credential (WP-280)', () => {
+    expect(detectSecrets('the worker credential starts with wkr_ and is hashed')).toEqual([]);
+    expect(detectSecrets(`x ${FAKE.worker.slice(0, -1)} y`)).toEqual([]);
   });
 
   it('replaces the password of a connection string and not its username', () => {

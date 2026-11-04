@@ -79,6 +79,11 @@ describe('every client command has a control', () => {
     expect(hooks).toContain('useKbHealth');
     // WP-108's: the failed-jobs read beside the dead letters (backlog 325).
     expect(hooks).toContain('useFailedJobs');
+    // WP-280's: the Workers screen and the device-approval page.
+    expect(hooks).toContain('useWorkers');
+    expect(hooks).toContain('useWorkerDevice');
+    expect(mutations).toContain('decideWorkerDevice');
+    expect(mutations).toContain('revokeWorker');
   });
 
   // WP-249: slowest of 10 green CI runs 363 ms (median 338 ms); 2× it, 15 s floor.

@@ -108,6 +108,7 @@ import { listedModelIds } from './queries/cost-queries.js';
 import { countStaleCommandClaims } from './queries/idempotency-queries.js';
 import { listRunMessages } from './queries/pipeline-queries.js';
 import { anySignInRecorded, recordFirstSignIn } from './queries/setup-state-queries.js';
+import { createPostgresWorkerStore } from './queries/worker-queries.js';
 import { createReadinessCheck } from './readiness.js';
 import { roleCapabilities, roleIsIdle } from './role.js';
 import { CLAIM_IN_FLIGHT_MS } from './routes/idempotency.js';
@@ -1021,6 +1022,15 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       pool: database.pool,
       config,
       onSessionCreated: setupState.signedIn,
+      // WP-280, TD-031 §7: a banned or disabled user's workers' live runs lose their lease, so the
+      // lease sweep ends them; their credentials already stop authenticating at the next call.
+      onUserDeactivated: async (userId) => {
+        const expired = await createPostgresWorkerStore(database.db).expireUserWorkerLeases(userId);
+        logger.info(
+          { user_id: userId, expired_runs: expired },
+          'worker leases expired on user deactivation',
+        );
+      },
     });
     const hub = new SseHub({
       bufferSize: config.sseBufferSize,

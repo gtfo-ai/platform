@@ -132,6 +132,10 @@ const EXPECTED_TABLES = [
   'user_identities',
   'users',
   'verifications',
+  // WP-280, migration 0096: the device flow's codes (both hashed) and the registered workers
+  // (TD-031 decisions 7 and 10c).
+  'worker_device_codes',
+  'workers',
   'workspaces',
 ];
 
@@ -312,6 +316,10 @@ describe('migrate on an empty PostgreSQL 18', () => {
       row('ticket_breakdown_items', 'read_write', null),
       row('users', 'read_write', null),
       row('verifications', 'read_write', null),
+      // WP-280 (migration 0096): a code is polled, decided and consumed in place; a worker is
+      // revoked (and, from WP-281, seen and paused) in place.
+      row('worker_device_codes', 'read_write', null),
+      row('workers', 'read_write', null),
     ]);
   });
 

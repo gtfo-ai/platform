@@ -70,8 +70,9 @@ describe('Drizzle schema', () => {
     // by one SQL claim under an epoch, whose per-task index replaces the job singleton for a run's
     // duration (migration 0094, WP-274, TD-031 decisions 1–2), plus `run_plans` — the run's planned
     // spec, sealed, cleared at its terminal write (migration 0095, WP-275a, TD-031's 2026-11-04
-    // amendment §2).
-    expect(tables.length).toBe(74);
+    // amendment §2), plus `workers` and `worker_device_codes` — the registered machines and the
+    // device flow's hashed codes (migration 0096, WP-280, TD-031 decisions 7 and 10c).
+    expect(tables.length).toBe(76);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

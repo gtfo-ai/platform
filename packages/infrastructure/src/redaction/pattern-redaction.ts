@@ -99,6 +99,14 @@ export const GITLEAKS_DERIVED_RULES: readonly RedactionRule[] = [
     pattern: /sntry[su]_[A-Za-z0-9]{32,}/g,
   },
   {
+    // The platform's own worker credential (WP-280, TD-031 decision 7): `wkr_<26 base32>_<43
+    // base64url>`. The prefix exists so this rule and the repository's gitleaks rule
+    // (`platform-worker-credential`, `.gitleaks.toml`) can recognise it; a worker's transcript sink
+    // and the core's re-redaction both run these rules (TD-031 §10a).
+    id: 'worker-credential',
+    pattern: /wkr_[a-z2-7]{26}_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g,
+  },
+  {
     id: 'aws-access-key-id',
     pattern: /\b(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b/g,
   },

@@ -337,6 +337,11 @@ export const runs = pgTable('runs', {
    * conditional on it and on `lease_owner`. `0` for a run no claim took.
    */
   leaseEpoch: integer('lease_epoch').notNull().default(0),
+  /**
+   * The remote worker holding the run (migration 0096, WP-280; written by WP-281's claim). `null` for
+   * a run the server's runner took. Revoking the worker expires this run's lease (TD-031 §7).
+   */
+  workerId: uuid('worker_id'),
   numTurns: integer('num_turns').notNull().default(0),
   inputTokens: bigint('input_tokens', { mode: 'number' }).notNull().default(0),
   outputTokens: bigint('output_tokens', { mode: 'number' }).notNull().default(0),
@@ -560,7 +565,8 @@ export const commandIdempotency = pgTable(
  * `RunRepository.finish`. The partial unique index `run_offers_one_live_stage_per_task` holds one
  * open or claimed **stage** offer per task (the job singleton's successor); an `ask` offer is
  * outside it. The columns for routing, the run package, the run token, releases and the signature
- * counter are written by later M22 rows; `worker_id` is WP-280's (TD-032's 2026-11-04 amendment C).
+ * counter are written by later M22 rows; `worker_id` is WP-280's column (migration 0096, TD-032's
+ * 2026-11-04 amendment C), written by WP-281's remote claim.
  */
 export const runOffers = pgTable('run_offers', {
   id: uuid('id').primaryKey(),
@@ -593,6 +599,8 @@ export const runOffers = pgTable('run_offers', {
   withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
   withdrawnReason: text('withdrawn_reason'),
   expiresAt: timestamp('expires_at', { withTimezone: true }),
+  /** The remote worker that claimed the offer (migration 0096, WP-280; written by WP-281). */
+  workerId: uuid('worker_id'),
 });
 
 /**

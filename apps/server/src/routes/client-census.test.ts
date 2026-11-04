@@ -870,6 +870,38 @@ describe('the client’s endpoint list against the server’s router', () => {
     expect(`${response.statusCode} ${body.error?.code ?? ''}`).toBe('401 unauthenticated');
   }, 15_000);
 
+  it('serves the worker surface WP-280 added, the client calls all four, and each refuses an anonymous caller', async () => {
+    // Named positively (standing rule 10). The device flow's machine half (`/api/worker/v1/device…`)
+    // is not the SPA's to call and is not here: it is public by design, and WP-281 teaches this
+    // census the worker as a second client.
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readSource(path),
+      })),
+    );
+    for (const path of [
+      '/api/workers',
+      '/api/workers/device/{}',
+      '/api/workers/device/approve',
+      '/api/workers/{}',
+    ]) {
+      expect(paths).toContain(path);
+    }
+    for (const [method, url] of [
+      ['GET', '/api/workers'],
+      ['GET', '/api/workers/device/BCDF-GHJK'],
+      ['POST', '/api/workers/device/approve'],
+      ['DELETE', `/api/workers/${PROBE_ID}`],
+    ] as const) {
+      const response = await app.inject({ method, url });
+      const body = response.json() as ApiErrorBody;
+      expect(`${method} ${url} ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
+        `${method} ${url} 401 unauthenticated`,
+      );
+    }
+  }, 15_000);
+
   // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   // WP-291: walks the web sources like its neighbours, so it carries their 15 s floor (WP-249).
   it('serves the setup state to an anonymous caller, and the sign-in page names it (WP-291)', async () => {

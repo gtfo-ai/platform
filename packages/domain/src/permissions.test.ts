@@ -33,6 +33,7 @@ const EXPECTED_ROLES: Record<PermissionAction, readonly UserRole[]> = {
   'org.users.manage': ADMIN_ONLY,
   'org.audit.read': MAINTAINER_UP,
   'org.dead_letters.manage': ADMIN_ONLY,
+  'org.workers.manage': ADMIN_ONLY,
 
   'integration.read': MAINTAINER_UP,
   'integration.write': ADMIN_ONLY,
@@ -80,6 +81,8 @@ const EXPECTED_ROLES: Record<PermissionAction, readonly UserRole[]> = {
 
   'shadow.run': MAINTAINER_UP,
   'discovery.run': MAINTAINER_UP,
+
+  'worker.register': ALL,
 };
 
 describe('can — exhaustive role × action', () => {

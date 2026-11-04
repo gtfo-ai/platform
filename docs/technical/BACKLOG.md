@@ -31,6 +31,9 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 704 | minor | WP-284 | WP-279's launcher resolves a create's image digest with a bare `sha256:` inspect, which finds an image id (what `/v1/health` answers) but a registry manifest digest only under the containerd store; TD-032's `sha-<7>` digests need `repo@digest` or an id map — measure on a worker bundle |
 | 705 | minor | WP-283 | The relayed helper agent socket's ownership: WP-279's Docker phase measured `1000:0`/`0660` in a `1000:0`/`0750` directory (export helper uid 1000, mirror helper root with no capabilities); the `remote-worker` must create it so |
 | 708 | minor | WP-283 | The worker must serve each run's relayed helper agent socket from a directory of its own: the mirror/export helpers mount the socket's whole directory, so a shared one would let one run's helper reach another run's socket (PR #2 review) |
+| 711 | minor | — | A user's deactivation (Better Auth ban/disable) expires their workers' run leases from the update's after-hook, after its commit, not in its transaction as TD-031 §7 says; a trigger on users is not additive (TD-032 D) |
+| 712 | minor | WP-281 | WP-280 serves no X-Worker-Protocol check on device/device-token (a credential-less machine asks before it speaks the protocol); WP-281 should state whether the 426 applies there |
+| 713 | nit | — | worker_device_codes rows are never deleted; bounded by the 200-pending limit per ten minutes, but grow with use; add a sweep of consumed/expired rows |
 | 367 | nit | — | Lost-reminder recovery reads at most 50 never-reminded rows per kind, so not-yet-due rows can hold a due reminder back |
 | 422 | nit | — | pipeline.outbound polls at 0.5 s in every process; idle cost on a large job table and drain above N = 50 never measured |
 | 439 | nit | — | WP-136 put the pipeline harness's `now` on the test clock, which also moves run_commands.created_at and the steer window |

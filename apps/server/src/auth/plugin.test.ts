@@ -1,5 +1,7 @@
+import type { FastifyRequest } from 'fastify';
 import { describe, expect, it } from 'vitest';
-import { applyClientAddress, CSRF_HEADER_VALUE, csrfViolation } from './plugin.js';
+import { compileTrust } from '../client-address.js';
+import { applyClientAddress, CSRF_HEADER_VALUE, csrfViolation, toWebRequest } from './plugin.js';
 
 const ORIGIN = 'https://agentic.example.com';
 const base = {
@@ -113,5 +115,29 @@ describe('trusted origin normalisation', () => {
     expect(
       csrfViolation({ ...base, origin: 'http://localhost:8080', trustedOrigins: [origin] }),
     ).toBeNull();
+  });
+});
+
+describe('toWebRequest with an address list (WP-280)', () => {
+  const request = (peer: string): FastifyRequest =>
+    ({
+      url: '/api/auth/sign-in/email',
+      method: 'GET',
+      ip: peer,
+      socket: { remoteAddress: peer },
+      raw: { headers: { 'cf-connecting-ip': '192.0.2.1', 'x-real-ip': '192.0.2.2' } },
+    }) as unknown as FastifyRequest;
+  const trusted = compileTrust(['203.0.113.0/24']);
+
+  it('drops the forwarding headers of a peer the list does not trust', () => {
+    const built = toWebRequest(request('198.51.100.9'), 'http://localhost:8080', trusted);
+    expect(built.headers.get('cf-connecting-ip')).toBeNull();
+    expect(built.headers.get('x-real-ip')).toBeNull();
+    expect(built.headers.get('x-forwarded-for')).toBe('198.51.100.9');
+  });
+
+  it('keeps them for a peer the list trusts', () => {
+    const built = toWebRequest(request('203.0.113.4'), 'http://localhost:8080', trusted);
+    expect(built.headers.get('cf-connecting-ip')).toBe('192.0.2.1');
   });
 });
