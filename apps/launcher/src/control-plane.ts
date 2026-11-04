@@ -90,7 +90,7 @@
  */
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { Logger, WorkspaceSpec } from '@platform/application';
+import type { Logger, RunImages, WorkspaceSpec } from '@platform/application';
 import {
   WorkspaceError,
   type WorkspaceErrorReason,
@@ -104,7 +104,7 @@ const {
   CONTROL_PLANE_MAX_BODY_BYTES,
   CONTROL_PLANE_PATHS,
   CONTROL_PLANE_STATUS_BY_CODE,
-  createRunRequestSchema,
+  createRunRequestSchemaFor,
   destroyRunRequestSchema,
   endRunRequestSchema,
 } = launcherProtocol;
@@ -124,6 +124,16 @@ export interface ControlPlaneOptions {
   readonly runtimeImage: string;
   /** Where the CLI is in the run image; answered on every `create` (PROGRESS backlog 34). */
   readonly claudeCodePath: string;
+  /**
+   * The carriage this launcher's create requests are parsed under (WP-279): `carried` admits a
+   * deploy key, `relayed` refuses one and requires the helper agent socket of an SSH spec.
+   */
+  readonly deployKeyCarriage: launcherProtocol.LauncherDeployKeyCarriage;
+  /**
+   * The configured run and egress images by digest, as the daemon resolves them now — `/v1/health`'s
+   * `images` (WP-279). `DockerWorkspaceProvider.configuredImageDigests` in production.
+   */
+  readonly imageDigests: () => Promise<RunImages>;
   readonly logger: Logger;
 }
 
@@ -322,6 +332,21 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
     }
   };
 
+  /** `null`, logged, when the daemon cannot answer: health stays a liveness answer (WP-279). */
+  const resolvedImages = async (): Promise<RunImages | null> => {
+    try {
+      return await options.imageDigests();
+    } catch (error) {
+      logger.warn(
+        { err: error },
+        'the configured run and egress images could not be resolved to digests; health answers images: null and no run can name them',
+      );
+      return null;
+    }
+  };
+
+  const createRunRequestSchema = createRunRequestSchemaFor(options.deployKeyCarriage);
+
   const createRun = async (body: string, response: ServerResponse): Promise<CreateRunResponse> => {
     const request = parseBody(body, createRunRequestSchema, 'the create request');
     const spec: WorkspaceSpec = request.spec;
@@ -333,7 +358,13 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
       return { ...(await existing.promise), replayed: true };
     }
     const promise = (async (): Promise<CreateRunResponse> => {
-      const started = await options.service.startRun(spec, request.credential);
+      const started = await options.service.startRun(
+        spec,
+        request.credential,
+        // WP-279: what the core decided — the skills' bytes and the image digests.
+        { skills: request.skills, images: request.images },
+        request.helperAgentSocket ?? null,
+      );
       return {
         handle: started.handle,
         attachment: started.attachment,
@@ -430,6 +461,8 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
         controlRoot: options.controlRoot,
         runtimeImage: options.runtimeImage,
         claudeCodePath: options.claudeCodePath,
+        images: await resolvedImages(),
+        deployKeyCarriage: options.deployKeyCarriage,
         runs: creates.size,
       };
     }

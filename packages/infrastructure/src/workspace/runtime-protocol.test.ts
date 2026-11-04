@@ -15,7 +15,7 @@ import { WorkspaceError } from '@platform/application';
 import { RUNLET_PROTOCOL_IMAGE_LABEL, RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DockerEngine } from './engine.js';
-import { SKILL_CATALOGUE_FIXTURE, shortTempDir, workspaceSpecFixture } from './fixtures.js';
+import { provisioned, shortTempDir, workspaceSpecFixture } from './fixtures.js';
 import { DockerWorkspaceProvider } from './provider.js';
 import { FakeDockerDaemon } from './testing.js';
 
@@ -44,7 +44,6 @@ const providerOn = async (
     helperNetwork: 'platform',
     egressNetwork: 'platform',
     runnerUid: 1000,
-    skills: SKILL_CATALOGUE_FIXTURE,
     mintToken: () => 'a'.repeat(32),
     now: () => new Date('2026-09-10T12:00:00.000Z'),
   });
@@ -77,7 +76,7 @@ describe('the run image’s shim protocol (WP-151)', () => {
     const provider = await providerOn(declaring(String(RUNLET_PROTOCOL_VERSION)));
     const spec = workspaceSpecFixture();
     expect(spec.runletProtocol).toBe(RUNLET_PROTOCOL_VERSION);
-    const handle = await provider.create(spec);
+    const handle = await provider.create(...provisioned(spec));
     expect(handle.runId).toBe(spec.runId);
     expect(daemon.volumes.has(`ws-${spec.runId}`)).toBe(true);
   });
@@ -85,7 +84,7 @@ describe('the run image’s shim protocol (WP-151)', () => {
   it('refuses an image that declares another protocol, as invalid_spec naming the image and both numbers, before anything exists', async () => {
     const provider = await providerOn(declaring('2'));
     const spec = workspaceSpecFixture();
-    const refused = provider.create(spec);
+    const refused = provider.create(...provisioned(spec));
     await expect(refused).rejects.toBeInstanceOf(WorkspaceError);
     await expect(refused).rejects.toMatchObject({
       code: 'invalid_spec',
@@ -110,7 +109,7 @@ describe('the run image’s shim protocol (WP-151)', () => {
     ]) {
       const provider = await providerOn(labels);
       const spec = workspaceSpecFixture();
-      await expect(provider.create(spec)).rejects.toMatchObject({
+      await expect(provider.create(...provisioned(spec))).rejects.toMatchObject({
         code: 'invalid_spec',
         reason: 'runtime_image_protocol_missing',
         protocols: { runner: RUNLET_PROTOCOL_VERSION, shim: null },
@@ -127,7 +126,7 @@ describe('the run image’s shim protocol (WP-151)', () => {
     // The image matches this build — the launcher's — and the runner that asked is from another.
     const provider = await providerOn(declaring(String(RUNLET_PROTOCOL_VERSION)));
     const spec = workspaceSpecFixture({ runletProtocol: RUNLET_PROTOCOL_VERSION - 1 });
-    await expect(provider.create(spec)).rejects.toMatchObject({
+    await expect(provider.create(...provisioned(spec))).rejects.toMatchObject({
       code: 'invalid_spec',
       reason: 'runtime_image_protocol_mismatch',
       message: expect.stringContaining(
@@ -145,10 +144,10 @@ describe('the run image’s shim protocol (WP-151)', () => {
   it('reads the label at every create, so an image rebuilt under a running launcher is seen', async () => {
     const labels = declaring(String(RUNLET_PROTOCOL_VERSION));
     const provider = await providerOn(labels);
-    await provider.create(workspaceSpecFixture());
+    await provider.create(...provisioned(workspaceSpecFixture()));
     labels.set(RUNTIME, { [RUNLET_PROTOCOL_IMAGE_LABEL]: String(RUNLET_PROTOCOL_VERSION + 1) });
     await expect(
-      provider.create(workspaceSpecFixture({ runId: SECOND_RUN })),
+      provider.create(...provisioned(workspaceSpecFixture({ runId: SECOND_RUN }))),
     ).rejects.toMatchObject({ reason: 'runtime_image_protocol_mismatch' });
     expect(nothingFor(SECOND_RUN)).toBe(true);
   });
@@ -180,7 +179,7 @@ describe('the run image’s shim protocol (WP-151)', () => {
       }
       return record(...requests);
     };
-    const handle = await provider.create(workspaceSpecFixture());
+    const handle = await provider.create(...provisioned(workspaceSpecFixture()));
     // Which branch ran (rule 10): the tag really moved before the run container was created.
     expect(moved).toBe(true);
     expect(ids.get(RUNTIME)).toBe('sha256:rebuilt-image');

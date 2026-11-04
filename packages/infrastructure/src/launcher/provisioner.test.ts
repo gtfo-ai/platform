@@ -18,6 +18,7 @@ import {
   sshString,
   WorkspaceError,
 } from '@platform/application';
+import { skillSetVersionOf } from '@platform/domain';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRunletShim } from '../runlet/shim.js';
 import {
@@ -30,6 +31,7 @@ import { connectProbe, createControlVolume, nodeScript } from '../runlet/testing
 import { manualClock } from '../runner/clock.js';
 import { runSpecFixture } from '../runner/fixtures.js';
 import type { RunWorkspaceEnding } from '../runner/workspace-runner.js';
+import { SKILL_CATALOGUE_FIXTURE } from '../workspace/fixtures.js';
 import type { LauncherControlClient } from './client.js';
 import {
   type CreateRunRequestPayload,
@@ -40,6 +42,7 @@ import {
 import {
   assertControlSocketUnderRoot,
   createLauncherRunWorkspaceProvisioner,
+  launcherConfiguredImages,
   type RunGitCredentialAnswer,
   type RunGitCredentialMinter,
   type RunWorkspaceProject,
@@ -90,6 +93,12 @@ const CLI_ENVIRONMENT = {
   ],
 };
 
+/** WP-279: the digests every create names — the launcher's configured tags, resolved. */
+const IMAGES = { run: `sha256:${'1'.repeat(64)}`, egress: `sha256:${'2'.repeat(64)}` };
+const FIXED_IMAGES = { forRun: async () => IMAGES };
+/** What a request for a spec with no skills carries besides its spec and credential (WP-279). */
+const NO_SKILLS = { skills: { digest: 'skills@none', files: {}, versions: {} }, images: IMAGES };
+
 interface Recorded {
   readonly creates: CreateRunRequestPayload[];
   readonly ends: { runId: string; payload: EndRunRequestPayload }[];
@@ -135,6 +144,8 @@ const clientWith = (
         controlRoot: CONTROL_ROOT,
         runtimeImage: 'platform-runtime:dev',
         claudeCodePath: '/usr/local/bin/claude',
+        images: IMAGES,
+        deployKeyCarriage: 'carried',
         runs: 0,
       }),
       // The provisioner never lists or destroys by id — that is the reaper's (WP-103) — so both
@@ -193,6 +204,8 @@ const provisionerWith = (
   controlRoot: string = CONTROL_ROOT,
 ) =>
   createLauncherRunWorkspaceProvisioner({
+    skills: SKILL_CATALOGUE_FIXTURE,
+    images: FIXED_IMAGES,
     client,
     credentials,
     projects: { forRun: async () => project },
@@ -268,6 +281,8 @@ describe('the workspace spec a run gets', () => {
     // Rule 82: asserted on the create request the launcher receives, not on the builder alone.
     const { client, recorded } = clientWith();
     const provisioner = createLauncherRunWorkspaceProvisioner({
+      skills: SKILL_CATALOGUE_FIXTURE,
+      images: FIXED_IMAGES,
       client,
       credentials: minterWith().minter,
       projects: { forRun: async () => project },
@@ -496,11 +511,12 @@ describe('the workspace spec a run gets', () => {
       runRegistryHosts: [],
       now: new Date('2026-01-01T00:00:00.000Z'),
     });
-    expect(createRunRequestSchema.safeParse({ spec, credential: CARRIED }).success).toBe(
-      tools === undefined,
-    );
     expect(
-      createRunRequestSchema.safeParse({ spec, credential: { ...CARRIED, ...over } }).success,
+      createRunRequestSchema.safeParse({ ...NO_SKILLS, spec, credential: CARRIED }).success,
+    ).toBe(tools === undefined);
+    expect(
+      createRunRequestSchema.safeParse({ ...NO_SKILLS, spec, credential: { ...CARRIED, ...over } })
+        .success,
     ).toBe(false);
   });
 
@@ -512,9 +528,12 @@ describe('the workspace spec a run gets', () => {
       runRegistryHosts: [],
       now: new Date('2026-01-01T00:00:00.000Z'),
     });
-    expect(createRunRequestSchema.safeParse({ spec, credential: CARRIED }).success).toBe(false);
+    expect(
+      createRunRequestSchema.safeParse({ ...NO_SKILLS, spec, credential: CARRIED }).success,
+    ).toBe(false);
     expect(
       createRunRequestSchema.safeParse({
+        ...NO_SKILLS,
         spec,
         credential: { ...CARRIED, password: 'fake_run_credential_other' },
       }).success,
@@ -529,9 +548,9 @@ describe('the workspace spec a run gets', () => {
       runRegistryHosts: [],
       now: new Date('2026-01-01T00:00:00.000Z'),
     });
-    expect(createRunRequestSchema.safeParse({ spec: repoFul, credential: null }).success).toBe(
-      false,
-    );
+    expect(
+      createRunRequestSchema.safeParse({ ...NO_SKILLS, spec: repoFul, credential: null }).success,
+    ).toBe(false);
   });
 });
 
@@ -636,6 +655,8 @@ describe('revocation: exactly once, after the end request (TD-028 WP-76 decision
       }),
     };
     const workspace = await createLauncherRunWorkspaceProvisioner({
+      skills: SKILL_CATALOGUE_FIXTURE,
+      images: FIXED_IMAGES,
       client: clientWith().client,
       credentials: failingRevoke,
       projects: { forRun: async () => project },
@@ -783,6 +804,69 @@ describe('the workspace’s cred.get is answered by this process', () => {
     expect(await ask('git.example.com')).toBeNull();
     finishEnd();
     await releasing;
+  });
+});
+
+/**
+ * WP-279 (TD-031 decision 4): the launcher writes the skills it is given and runs the digests it is
+ * told, so the create request carries both — decided here, before a credential exists.
+ */
+describe('the skills and images a create names (WP-279)', () => {
+  it('carries the content of exactly the spec’s skills, with the digest the planner records', async () => {
+    const { client, recorded } = clientWith();
+    await provisionerWith(client).provision(runSpecFixture({ skills: ['agentic:kb'] }));
+    const sent = recorded.creates[0];
+    expect(sent?.spec.skills).toEqual(['kb']);
+    const kb = SKILL_CATALOGUE_FIXTURE['kb'] as { name: string; version: string; text: string };
+    expect(sent?.skills).toEqual({
+      digest: skillSetVersionOf([kb]),
+      files: { kb: { 'SKILL.md': kb.text } },
+      versions: { kb: kb.version },
+    });
+    expect(sent?.images).toEqual(IMAGES);
+    // What `createRunRequestSchema` would refuse the launcher refuses too: the request parses.
+    expect(createRunRequestSchema.safeParse(sent).success).toBe(true);
+  });
+
+  it('asks its launcher for the configured images per create, and refuses before minting when it cannot say', async () => {
+    const { client } = clientWith();
+    let images: { run: string; egress: string } | null = IMAGES;
+    const asking: LauncherControlClient = {
+      ...client,
+      health: async () => ({ ...(await client.health()), images }),
+    };
+    const source = launcherConfiguredImages(asking);
+    expect(await source.forRun({ runId: 'r' } as never)).toEqual(IMAGES);
+    images = null;
+    const minting = minterWith();
+    const provisioner = createLauncherRunWorkspaceProvisioner({
+      client: asking,
+      skills: SKILL_CATALOGUE_FIXTURE,
+      images: source,
+      credentials: minting.minter,
+      projects: { forRun: async () => project },
+      controlRoot: CONTROL_ROOT,
+      modelEgressHosts: [],
+      runRegistryHosts: [],
+      credentialTtlSeconds: 86_400,
+      clock: manualClock(Date.parse('2026-01-01T00:00:00.000Z')),
+    });
+    await expect(provisioner.provision(runSpecFixture())).rejects.toMatchObject({
+      code: 'engine_unavailable',
+    });
+    expect(minting.asked).toEqual([]);
+  });
+
+  it('refuses a skill this deployment does not ship, before minting', async () => {
+    const { client, recorded } = clientWith();
+    const minting = minterWith();
+    await expect(
+      provisionerWith(client, minting.minter).provision(
+        runSpecFixture({ skills: ['agentic:retro'] }),
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_spec', reason: 'skill_set_invalid' });
+    expect(minting.asked).toEqual([]);
+    expect(recorded.creates).toEqual([]);
   });
 });
 
@@ -998,6 +1082,8 @@ describe('the control root this process was configured with', () => {
   it('must be absolute, because a relative one is resolved against nothing', () => {
     expect(() =>
       createLauncherRunWorkspaceProvisioner({
+        skills: SKILL_CATALOGUE_FIXTURE,
+        images: FIXED_IMAGES,
         client: clientWith().client,
         credentials: minterWith().minter,
         projects: { forRun: async () => project },

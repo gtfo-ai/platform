@@ -18,6 +18,8 @@ import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import {
   describeStartFailure,
+  type RunImages,
+  type RunSkills,
   RunStartError,
   silentLogger,
   WorkspaceError,
@@ -67,13 +69,13 @@ class MirrorFailingProvider extends workspace.FakeWorkspaceProvider {
   }
 
   override async create(
-    spec: Parameters<workspace.FakeWorkspaceProvider['create']>[0],
+    ...args: Parameters<workspace.FakeWorkspaceProvider['create']>
   ): ReturnType<workspace.FakeWorkspaceProvider['create']> {
     if (createGate !== null) {
       createGate.started();
       await createGate.wait;
     }
-    return super.create(spec);
+    return super.create(...args);
   }
 }
 
@@ -108,6 +110,17 @@ const clientFor = (token = TOKEN): launcherAdapters.LauncherControlClient =>
     token,
   });
 
+/**
+ * A create request's payload plus what the core decides (WP-279): the shipped skills the spec names,
+ * with their digest, and the configured image digests the fake holds.
+ */
+const IMAGES = { run: `sha256:${'1'.repeat(64)}`, egress: `sha256:${'2'.repeat(64)}` };
+const withProvision = <T extends { readonly spec: WorkspaceSpec }>(payload: T) =>
+  ({
+    ...payload,
+    ...workspace.provisionFixture(payload.spec, PLATFORM_SKILLS, IMAGES),
+  }) as T & { skills: RunSkills; images: RunImages };
+
 const specFor = (runId: string, overrides: workspace.WorkspaceSpecOverrides = {}): WorkspaceSpec =>
   workspace.workspaceSpecFixture({
     runId,
@@ -141,10 +154,7 @@ beforeEach(async () => {
   mirrorFails = false;
   createGate = null;
   dir = await workspace.shortTempDir('agentic-control-plane-');
-  provider = new MirrorFailingProvider({
-    controlRoot: path.join(dir, 'ctl'),
-    skills: PLATFORM_SKILLS,
-  });
+  provider = new MirrorFailingProvider({ controlRoot: path.join(dir, 'ctl') });
   service = new LauncherService({
     provider,
     broker: new workspace.RunCredentialBroker(silentLogger),
@@ -161,6 +171,8 @@ beforeEach(async () => {
     controlRoot: path.join(dir, 'ctl'),
     runtimeImage: 'platform-runtime:test',
     claudeCodePath: '/usr/local/bin/claude',
+    deployKeyCarriage: 'carried',
+    imageDigests: async () => IMAGES,
     logger: silentLogger,
   });
 });
@@ -212,10 +224,12 @@ describe('authentication (TD-028 decision 3)', () => {
 describe('create (TD-028 decision 4: idempotent on the run id)', () => {
   it('creates a workspace and answers its control-socket coordinates', async () => {
     const runId = randomUUID();
-    const created = await clientFor().createRun({
-      spec: specFor(runId),
-      credential: credentialRequest,
-    });
+    const created = await clientFor().createRun(
+      withProvision({
+        spec: specFor(runId),
+        credential: credentialRequest,
+      }),
+    );
     expect(created.handle.runId).toBe(runId);
     expect(created.attachment.socketPath).toContain(runId);
     expect(created.attachment.workdir).toBe('/work/repo');
@@ -234,7 +248,7 @@ describe('create (TD-028 decision 4: idempotent on the run id)', () => {
     // Even a writable spec: what decides the credential here is the missing repository, not
     // `readOnly` — a writing spec *with* a repository must carry one.
     const spec = { ...workspace.repoLessWorkspaceSpecFixture({ runId }), readOnly: false };
-    const created = await clientFor().createRun({ spec, credential: null });
+    const created = await clientFor().createRun(withProvision({ spec, credential: null }));
     expect(created.handle.cacheKey).toBeNull();
     expect(created.credentialScope).toBeNull();
     expect(provider.events.map((event) => event.kind)).toEqual(['create', 'attach']);
@@ -252,14 +266,18 @@ describe('create (TD-028 decision 4: idempotent on the run id)', () => {
 
   it('answers the stored handle on a replay rather than starting a second container', async () => {
     const runId = randomUUID();
-    const first = await clientFor().createRun({
-      spec: specFor(runId),
-      credential: credentialRequest,
-    });
-    const second = await clientFor().createRun({
-      spec: specFor(runId),
-      credential: credentialRequest,
-    });
+    const first = await clientFor().createRun(
+      withProvision({
+        spec: specFor(runId),
+        credential: credentialRequest,
+      }),
+    );
+    const second = await clientFor().createRun(
+      withProvision({
+        spec: specFor(runId),
+        credential: credentialRequest,
+      }),
+    );
     expect(second.handle).toEqual(first.handle);
     expect(second.attachment).toEqual(first.attachment);
     expect(second.replayed).toBe(true);
@@ -273,8 +291,8 @@ describe('create (TD-028 decision 4: idempotent on the run id)', () => {
     const runId = randomUUID();
     const client = clientFor();
     const [a, b] = await Promise.all([
-      client.createRun({ spec: specFor(runId), credential: credentialRequest }),
-      client.createRun({ spec: specFor(runId), credential: credentialRequest }),
+      client.createRun(withProvision({ spec: specFor(runId), credential: credentialRequest })),
+      client.createRun(withProvision({ spec: specFor(runId), credential: credentialRequest })),
     ]);
     expect(a.handle).toEqual(b.handle);
     expect(createdRuns()).toEqual([runId]);
@@ -287,12 +305,12 @@ describe('create (TD-028 decision 4: idempotent on the run id)', () => {
     const runId = randomUUID();
     mirrorFails = true;
     await expect(
-      clientFor().createRun({ spec: specFor(runId), credential: credentialRequest }),
+      clientFor().createRun(withProvision({ spec: specFor(runId), credential: credentialRequest })),
     ).rejects.toMatchObject({ code: 'workspace_failed' });
     expect(createdRuns()).toEqual([]);
     mirrorFails = false;
     await expect(
-      clientFor().createRun({ spec: specFor(runId), credential: credentialRequest }),
+      clientFor().createRun(withProvision({ spec: specFor(runId), credential: credentialRequest })),
     ).resolves.toMatchObject({ replayed: false });
     expect(createdRuns()).toEqual([runId]);
   });
@@ -306,7 +324,9 @@ describe('create (TD-028 decision 4: idempotent on the run id)', () => {
     });
     try {
       await expect(
-        clientFor().createRun({ spec: specFor(randomUUID()), credential: credentialRequest }),
+        clientFor().createRun(
+          withProvision({ spec: specFor(randomUUID()), credential: credentialRequest }),
+        ),
       ).rejects.toMatchObject({
         code: 'invalid_spec',
         reason: 'checkout_commit_missing',
@@ -328,7 +348,12 @@ describe('create (TD-028 decision 4: idempotent on the run id)', () => {
     const runId = randomUUID();
     const other = RUNLET_PROTOCOL_VERSION + 1;
     const failure = await clientFor()
-      .createRun({ spec: specFor(runId, { runletProtocol: other }), credential: credentialRequest })
+      .createRun(
+        withProvision({
+          spec: specFor(runId, { runletProtocol: other }),
+          credential: credentialRequest,
+        }),
+      )
       .then(() => null)
       .catch((error: unknown) => error as WorkspaceError);
     expect(failure).toBeInstanceOf(WorkspaceError);
@@ -352,7 +377,7 @@ describe('create (TD-028 decision 4: idempotent on the run id)', () => {
     });
     try {
       const failure = await clientFor()
-        .createRun({ spec: specFor(randomUUID()), credential: credentialRequest })
+        .createRun(withProvision({ spec: specFor(randomUUID()), credential: credentialRequest }))
         .then(() => null)
         .catch((error: unknown) => error as WorkspaceError);
       expect(failure).toMatchObject({
@@ -394,10 +419,12 @@ describe('create (TD-028 decision 4: idempotent on the run id)', () => {
 describe('end', () => {
   it('destroys the workspace and clears the create record', async () => {
     const runId = randomUUID();
-    const created = await clientFor().createRun({
-      spec: specFor(runId),
-      credential: credentialRequest,
-    });
+    const created = await clientFor().createRun(
+      withProvision({
+        spec: specFor(runId),
+        credential: credentialRequest,
+      }),
+    );
     const ended = await clientFor().endRun(runId, { handle: created.handle, export: null });
     expect(ended.failures).toEqual([]);
     expect(await clientFor().health()).toMatchObject({ runs: 0 });
@@ -405,10 +432,12 @@ describe('end', () => {
 
   it('refuses a handle that names a different run from the path', async () => {
     const runId = randomUUID();
-    const created = await clientFor().createRun({
-      spec: specFor(runId),
-      credential: credentialRequest,
-    });
+    const created = await clientFor().createRun(
+      withProvision({
+        spec: specFor(runId),
+        credential: credentialRequest,
+      }),
+    );
     await expect(
       clientFor().endRun(randomUUID(), { handle: created.handle, export: null }),
     ).rejects.toMatchObject({ code: 'invalid_spec' });
@@ -418,10 +447,12 @@ describe('end', () => {
     // The handle travels on the request precisely so that this works: the in-memory map is what
     // *this* process created, not a record of what is running.
     const runId = randomUUID();
-    const created = await clientFor().createRun({
-      spec: specFor(runId),
-      credential: credentialRequest,
-    });
+    const created = await clientFor().createRun(
+      withProvision({
+        spec: specFor(runId),
+        credential: credentialRequest,
+      }),
+    );
     await clientFor().endRun(runId, { handle: created.handle, export: null });
     await expect(
       clientFor().endRun(runId, { handle: created.handle, export: null }),
@@ -430,10 +461,12 @@ describe('end', () => {
 
   it('carries an only-if-changed export to the workspace and its answer back (backlog 467)', async () => {
     const runId = randomUUID();
-    const created = await clientFor().createRun({
-      spec: specFor(runId),
-      credential: credentialRequest,
-    });
+    const created = await clientFor().createRun(
+      withProvision({
+        spec: specFor(runId),
+        credential: credentialRequest,
+      }),
+    );
     const ended = await clientFor().endRun(runId, {
       handle: created.handle,
       export: {
@@ -465,13 +498,17 @@ describe('orphans (WP-103)', () => {
       controlRoot: path.join(dir, 'ctl'),
       runtimeImage: 'platform-runtime:test',
       claudeCodePath: '/usr/local/bin/claude',
+      deployKeyCarriage: 'carried',
+      imageDigests: async () => IMAGES,
       logger: silentLogger,
     });
   };
 
   it('lists the runs the provider labelled, read from the provider rather than from its memory', async () => {
     const runId = randomUUID();
-    await clientFor().createRun({ spec: specFor(runId), credential: credentialRequest });
+    await clientFor().createRun(
+      withProvision({ spec: specFor(runId), credential: credentialRequest }),
+    );
     await restart();
     // The restarted process remembers nothing — `runs` is the idempotency map's size — and still
     // answers the run, because the answer is the provider's (the daemon's, in production).
@@ -483,7 +520,9 @@ describe('orphans (WP-103)', () => {
 
   it('destroys a run it holds no handle for, by id alone, and a second destroy still succeeds', async () => {
     const runId = randomUUID();
-    await clientFor().createRun({ spec: specFor(runId), credential: credentialRequest });
+    await clientFor().createRun(
+      withProvision({ spec: specFor(runId), credential: credentialRequest }),
+    );
     await restart();
     await expect(clientFor().destroyRun(runId)).resolves.toEqual({ found: true });
     expect(provider.isRunning(runId)).toBe(false);
@@ -501,7 +540,9 @@ describe('orphans (WP-103)', () => {
 
   it('refuses both verbs without the token, and destroys nothing', async () => {
     const runId = randomUUID();
-    await clientFor().createRun({ spec: specFor(runId), credential: credentialRequest });
+    await clientFor().createRun(
+      withProvision({ spec: specFor(runId), credential: credentialRequest }),
+    );
     const base = `http://127.0.0.1:${String(plane.port)}/v1/runs`;
     expect((await fetch(base)).status).toBe(401);
     const destroy = await fetch(`${base}/${runId}/destroy`, { method: 'POST', body: '{}' });
@@ -514,7 +555,9 @@ describe('orphans (WP-103)', () => {
 
   it('refuses a destroy whose body carries anything, because a handle is not this verb’s input', async () => {
     const runId = randomUUID();
-    await clientFor().createRun({ spec: specFor(runId), credential: credentialRequest });
+    await clientFor().createRun(
+      withProvision({ spec: specFor(runId), credential: credentialRequest }),
+    );
     const response = await fetch(
       `http://127.0.0.1:${String(plane.port)}/v1/runs/${runId}/destroy`,
       {
@@ -534,7 +577,7 @@ describe('orphans (WP-103)', () => {
     const request = fetch(`http://127.0.0.1:${String(plane.port)}/v1/runs`, {
       method: 'POST',
       headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ spec: specFor(runId), credential: credentialRequest }),
+      body: JSON.stringify(withProvision({ spec: specFor(runId), credential: credentialRequest })),
       signal: aborted.signal,
     }).catch(() => null);
     await gate.begun;
@@ -567,14 +610,16 @@ describe('orphans (WP-103)', () => {
     const first = fetch(`http://127.0.0.1:${String(plane.port)}/v1/runs`, {
       method: 'POST',
       headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ spec: specFor(runId), credential: credentialRequest }),
+      body: JSON.stringify(withProvision({ spec: specFor(runId), credential: credentialRequest })),
       signal: aborted.signal,
     }).catch(() => null);
     await gate.begun;
     aborted.abort();
     expect(await first).toBeNull();
     await new Promise((resolve) => setTimeout(resolve, 250));
-    const replay = clientFor().createRun({ spec: specFor(runId), credential: credentialRequest });
+    const replay = clientFor().createRun(
+      withProvision({ spec: specFor(runId), credential: credentialRequest }),
+    );
     // The replay must be parsed and waiting before the create is released, and nothing observable
     // says when it is; a late replay fails this case loudly (the fake refuses a second create of
     // one run id), it cannot pass it by accident.
@@ -583,6 +628,212 @@ describe('orphans (WP-103)', () => {
     await expect(replay).resolves.toMatchObject({ replayed: true });
     expect(provider.isRunning(runId)).toBe(true);
     expect(provider.events.some((event) => event.kind === 'remove')).toBe(false);
+  });
+});
+
+/**
+ * WP-279 (TD-031 decision 4): the launcher writes the skills it is given and runs only the digests it
+ * is told — both refused `invalid_spec` across the wire, before anything is created — and `/v1/health`
+ * answers the configured images by digest for the server's provisioner to send back.
+ */
+describe('skills and images from the request (WP-279)', () => {
+  it('answers its configured images by digest and its carriage on health', async () => {
+    expect(await clientFor().health()).toMatchObject({
+      images: IMAGES,
+      deployKeyCarriage: 'carried',
+    });
+  });
+
+  it('answers images: null when the daemon cannot resolve them, and stays a liveness answer', async () => {
+    await plane.close();
+    plane = await startControlPlane({
+      service,
+      token: TOKEN,
+      host: '127.0.0.1',
+      port: 0,
+      controlRoot: path.join(dir, 'ctl'),
+      runtimeImage: 'platform-runtime:test',
+      claudeCodePath: '/usr/local/bin/claude',
+      deployKeyCarriage: 'carried',
+      imageDigests: async () => {
+        throw new WorkspaceError('engine_unavailable', 'the daemon is down');
+      },
+      logger: silentLogger,
+    });
+    expect(await clientFor().health()).toMatchObject({ status: 'ok', images: null });
+  });
+
+  it('refuses skills whose digest is not their bytes’, invalid_spec, creating nothing', async () => {
+    const runId = randomUUID();
+    const request = withProvision({ spec: specFor(runId), credential: credentialRequest });
+    const kb = request.skills.files['kb'] as Record<string, string>;
+    const refused = await clientFor()
+      .createRun({
+        ...request,
+        skills: {
+          ...request.skills,
+          files: { ...request.skills.files, kb: { ...kb, 'SKILL.md': 'x' } },
+        },
+      })
+      .catch((error: unknown) => error);
+    expect(refused).toMatchObject({ code: 'invalid_spec', reason: 'skill_set_invalid' });
+    expect(createdRuns()).toEqual([]);
+  });
+
+  it('writes exactly the skills the request carried', async () => {
+    const runId = randomUUID();
+    const request = withProvision({ spec: specFor(runId), credential: credentialRequest });
+    await clientFor().createRun(request);
+    expect(provider.provisions.get(runId)).toEqual({ skills: request.skills, images: IMAGES });
+  });
+
+  it('refuses an image digest its daemon does not hold, naming it, and creates nothing', async () => {
+    provider = new MirrorFailingProvider({
+      controlRoot: path.join(dir, 'ctl'),
+      localImageDigests: new Set([IMAGES.run, IMAGES.egress]),
+    });
+    const absent = `sha256:${'f'.repeat(64)}`;
+    service.stop();
+    service = new LauncherService({
+      provider,
+      broker: new workspace.RunCredentialBroker(silentLogger),
+      clock: { now: () => Date.now(), setTimer: () => () => undefined },
+      logger: silentLogger,
+      exportDir: path.join(dir, 'exports'),
+      retentionSweepMs: 60_000,
+    });
+    await plane.close();
+    plane = await startControlPlane({
+      service,
+      token: TOKEN,
+      host: '127.0.0.1',
+      port: 0,
+      controlRoot: path.join(dir, 'ctl'),
+      runtimeImage: 'platform-runtime:test',
+      claudeCodePath: '/usr/local/bin/claude',
+      deployKeyCarriage: 'carried',
+      imageDigests: async () => IMAGES,
+      logger: silentLogger,
+    });
+    const runId = randomUUID();
+    const refused = await clientFor()
+      .createRun({
+        ...withProvision({ spec: specFor(runId), credential: credentialRequest }),
+        images: { run: IMAGES.run, egress: absent },
+      })
+      .catch((error: unknown) => error as Error);
+    expect(refused).toMatchObject({ code: 'invalid_spec', reason: 'image_not_local' });
+    expect((refused as Error).message).toContain(absent);
+    expect(createdRuns()).toEqual([]);
+  });
+
+  it('refuses a request with no skills or no images at the schema', async () => {
+    const runId = randomUUID();
+    const { skills: _skills, ...noSkills } = withProvision({
+      spec: specFor(runId),
+      credential: credentialRequest,
+    });
+    await expect(clientFor().createRun(noSkills as never)).rejects.toMatchObject({
+      code: 'invalid_spec',
+    });
+    expect(createdRuns()).toEqual([]);
+  });
+});
+
+/**
+ * WP-279 (TD-031's 2026-11-04 amendment, backlog 693): a worker's launcher is configured `relayed`.
+ * It refuses a deploy key, requires an SSH spec's helper agent socket, admits HTTPS as `carried`
+ * does, and hands the socket — never a key — to its mirror and export.
+ */
+describe('the relayed carriage (WP-279)', () => {
+  const SSH = {
+    publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf',
+    httpsPrefix: 'https://vcs.example.com/',
+    sshPrefix: 'ssh://git@altssh.vcs.example.com:443/',
+    connectHost: 'altssh.vcs.example.com',
+    connectPort: 443,
+    hostKeyAlias: 'vcs.example.com',
+    knownHosts: [
+      'vcs.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn',
+    ],
+  };
+  const sshSpec = (runId: string): WorkspaceSpec =>
+    workspace.workspaceSpecFixture({
+      runId,
+      readOnly: false,
+      repo: { url: 'https://vcs.example.com/acme/api.git', ssh: SSH } as never,
+      egress: { hosts: ['api.anthropic.com', 'vcs.example.com', 'altssh.vcs.example.com'] },
+    });
+  const SOCKET = 'ssh-helper-agents/run.sock';
+
+  beforeEach(async () => {
+    await plane.close();
+    plane = await startControlPlane({
+      service,
+      token: TOKEN,
+      host: '127.0.0.1',
+      port: 0,
+      controlRoot: path.join(dir, 'ctl'),
+      runtimeImage: 'platform-runtime:test',
+      claudeCodePath: '/usr/local/bin/claude',
+      deployKeyCarriage: 'relayed',
+      imageDigests: async () => IMAGES,
+      logger: silentLogger,
+    });
+  });
+
+  it('says so on health', async () => {
+    expect(await clientFor().health()).toMatchObject({ deployKeyCarriage: 'relayed' });
+  });
+
+  it('refuses a request carrying a deploy key, and an SSH spec with no helper socket', async () => {
+    const runId = randomUUID();
+    const deployKey = {
+      ...credentialRequest,
+      username: 'git',
+      password: 'FAKE-openssh-private-key',
+      source: 'deploy_key',
+    } as const;
+    for (const request of [
+      withProvision({ spec: sshSpec(runId), credential: deployKey, helperAgentSocket: SOCKET }),
+      withProvision({ spec: sshSpec(runId), credential: null }),
+      withProvision({
+        spec: specFor(runId),
+        credential: credentialRequest,
+        helperAgentSocket: SOCKET,
+      }),
+    ]) {
+      await expect(clientFor().createRun(request)).rejects.toMatchObject({
+        code: 'invalid_spec',
+      });
+    }
+    expect(createdRuns()).toEqual([]);
+  });
+
+  it('fetches and exports through the helper agent socket, holding no credential', async () => {
+    const runId = randomUUID();
+    const created = await clientFor().createRun(
+      withProvision({ spec: sshSpec(runId), credential: null, helperAgentSocket: SOCKET }),
+    );
+    expect(created.credentialScope).toBeNull();
+    await clientFor().endRun(runId, {
+      handle: created.handle,
+      export: { branch: 'agentic/task-1', commitMessage: 'wip', tarball: false },
+    });
+    const relayed = { kind: 'relayed_ssh', ssh: SSH, agentSocket: SOCKET };
+    expect(provider.gitAccess).toEqual([
+      { kind: 'mirror', access: relayed },
+      { kind: 'export', access: relayed },
+    ]);
+  });
+
+  it('admits an HTTPS spec with its token exactly as carried does', async () => {
+    const runId = randomUUID();
+    const created = await clientFor().createRun(
+      withProvision({ spec: specFor(runId), credential: credentialRequest }),
+    );
+    expect(created.credentialScope).toBe('push');
+    expect(provider.gitAccess[0]?.access).toMatchObject({ password: credentialRequest.password });
   });
 });
 

@@ -66,6 +66,7 @@
  */
 import type {
   Logger,
+  RunImages,
   RunnerClock,
   RunSpec,
   SshGitRoute,
@@ -86,6 +87,7 @@ import {
   type RunCredentialScope,
   type RunCredentialSource,
 } from '../workspace/broker.js';
+import { type PlatformSkillCatalogue, runSkillsFor } from '../workspace/skills.js';
 import { buildWorkspaceSpec } from '../workspace/spec.js';
 import type { LauncherControlClient } from './client.js';
 import { createDeployKeySigner, type DeployKeySigner } from './deploy-key-signer.js';
@@ -166,8 +168,45 @@ export interface RunGitCredentialMinter {
   }): Promise<RunGitCredentialAnswer>;
 }
 
+/**
+ * The run and egress images a create names **by digest** (WP-279, TD-031 decision 4). The server's
+ * composition answers its launcher's configured tags as that launcher's daemon resolves them
+ * ({@link launcherConfiguredImages}); a remote worker answers its run package's (WP-283).
+ */
+export interface RunImageSource {
+  forRun(spec: WorkspaceSpec): Promise<RunImages>;
+}
+
+/**
+ * The server's {@link RunImageSource}: `GET /v1/health`'s `images`, asked **per create** so an image
+ * rebuilt under a running launcher is the new digest at once — the server holds no Docker client
+ * (TD-021), so the launcher is the one that can resolve a tag. A launcher whose daemon could not
+ * answer is `engine_unavailable`, retryable, and no credential has been minted yet.
+ */
+export const launcherConfiguredImages = (client: LauncherControlClient): RunImageSource => ({
+  forRun: async (spec) => {
+    const health = await client.health();
+    if (health.images === null) {
+      throw new WorkspaceError(
+        'engine_unavailable',
+        'the launcher could not resolve its run and egress images to digests, so no run can name them (WP-279)',
+        { runId: spec.runId },
+      );
+    }
+    return health.images;
+  },
+});
+
 export interface LauncherProvisionerOptions {
   readonly client: LauncherControlClient;
+  /**
+   * The skills this deployment ships (`PLATFORM_SKILLS`), from which each create carries the content
+   * of exactly its spec's skills with the digest the planner recorded (WP-279). Required: the
+   * launcher holds no copy of its own any more, so a provisioner without one provisions nothing.
+   */
+  readonly skills: PlatformSkillCatalogue;
+  /** The image digests each create names (WP-279). Required for the same reason. */
+  readonly images: RunImageSource;
   readonly projects: RunWorkspaceProjectSource;
   /**
    * The run's git credential (WP-76). **Required**, with no default: standing rule 31 — an optional
@@ -277,6 +316,10 @@ export const createLauncherRunWorkspaceProvisioner = (
         runRegistryHosts: options.runRegistryHosts,
         now: new Date(options.clock.now()),
       });
+      // WP-279 (TD-031 decision 4): what the launcher writes and runs is decided here, before a
+      // credential exists — so a refusal of either has nothing to revoke.
+      const skills = runSkillsFor(spec.runId, workspaceSpec.skills, options.skills);
+      const images = await options.images.forRun(workspaceSpec);
       // WP-74: a run with no checkout gets no credential — there is no mirror to fetch and nothing
       // to push. WP-76: a run with one gets one minted here, once per provision call.
       const minted =
@@ -341,7 +384,12 @@ export const createLauncherRunWorkspaceProvisioner = (
             repositoryPath: project.projectPath,
           });
         }
-        created = await options.client.createRun({ spec: runSpec, credential: carried });
+        created = await options.client.createRun({
+          spec: runSpec,
+          credential: carried,
+          skills,
+          images,
+        });
         assertControlSocketUnderRoot(created.attachment.socketPath, options.controlRoot);
       } catch (error) {
         // A run that never started must not leave a live token behind (TD-028's WP-76 amendment,

@@ -162,9 +162,15 @@ Runner service (infrastructure)  ── platform-side SDK host; the CLI itself r
 > project's merge request. The plugin directory collides with nothing and is excluded from the
 > checkout through `.git/info/exclude`, which is local to the clone and cannot be committed.
 >
-> Two consequences that are **not** packaging details. The bytes come from the **launcher's own
+> Two consequences that are **not** packaging details. The bytes come from the **core's own
 > filesystem** (`@platform/prompts`), never from the run image, so the digest the platform records in
-> `runs.prompt_version` is a digest of the bytes the run was given. And the per-role list is the
+> `runs.prompt_version` is a digest of the bytes the run was given. Since WP-279 (TD-031 decision 4)
+> they travel **in the launcher's create request** — each skill's `SKILL.md`, its declared version and
+> the set's digest — and the launcher writes exactly those after recomputing the digest
+> (`invalid_spec`, `skill_set_invalid`, on a mismatch); the launcher's own `@platform/prompts` copy is
+> retired, because a worker's launcher may be a build behind the core that recorded the digest. The
+> create request also names the run and egress images **by digest**, which the launcher refuses
+> (`image_not_local`) when its daemon does not hold them and never pulls. And the per-role list is the
 > *provisioning* decision — the SDK's `skills` option is "a context filter, not a sandbox" — which
 > means a skill a role may not use is **absent from the workspace** rather than merely hidden. That
 > the list also hides a project's own skills is a product decision, recorded as **Q67**.

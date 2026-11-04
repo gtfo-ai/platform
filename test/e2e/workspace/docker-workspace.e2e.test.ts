@@ -47,6 +47,7 @@ import {
   runCredentialWrites,
   runOrphanWorkspaceReap,
   TOOLS_BY_ROLE,
+  type WorkspaceSpec,
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { fixedClock } from '@platform/domain';
@@ -85,6 +86,9 @@ import {
   harnessProbeName,
 } from '../support/harness-volumes.js';
 
+/** A create's two arguments with the **shipped** skills the spec names (WP-279: the request's bytes). */
+const shipped = (spec: WorkspaceSpec) => workspace.provisioned(spec, PLATFORM_SKILLS);
+
 let fixture: DockerFixture;
 
 const specFor = (overrides: Parameters<typeof workspace.workspaceSpecFixture>[0] = {}) =>
@@ -101,7 +105,7 @@ const startRun = async (overrides: Parameters<typeof workspace.workspaceSpecFixt
     repo: spec.repo,
     credential: null,
   });
-  return { spec, handle: await fixture.provider.create(spec) };
+  return { spec, handle: await fixture.provider.create(...shipped(spec)) };
 };
 
 beforeAll(async () => {
@@ -121,7 +125,7 @@ describe('the workspace lifecycle against a real daemon', () => {
       credential: null,
     });
     expect(mirror.cachePath).toBe('/cache/acme.git');
-    const handle = await fixture.provider.create(spec);
+    const handle = await fixture.provider.create(...shipped(spec));
     try {
       const probe = await probeUnderRunContainerConfig(
         fixture.engine,
@@ -159,7 +163,7 @@ describe('the workspace lifecycle against a real daemon', () => {
       repo: spec.repo,
       credential: null,
     });
-    const handle = await fixture.provider.create(spec);
+    const handle = await fixture.provider.create(...shipped(spec));
     try {
       const probe = await probeUnderRunContainerConfig(
         fixture.engine,
@@ -204,7 +208,7 @@ describe('the workspace lifecycle against a real daemon', () => {
       repo: spec.repo,
       credential: null,
     });
-    const handle = await fixture.provider.create(spec);
+    const handle = await fixture.provider.create(...shipped(spec));
     try {
       const listing = await fixture.provider.listExistingProtectedPaths(handle, {
         patterns: [FIXTURE_TASK_BRANCH_FILE, 'README.md'],
@@ -238,7 +242,7 @@ describe('the workspace lifecycle against a real daemon', () => {
       repo: refused.repo,
       credential: null,
     });
-    await expect(fixture.provider.create(refused)).rejects.toMatchObject({
+    await expect(fixture.provider.create(...shipped(refused))).rejects.toMatchObject({
       code: 'invalid_spec',
       message: expect.stringContaining(`the commit ${lost} this run must start from`),
     });
@@ -312,7 +316,7 @@ describe('the workspace lifecycle against a real daemon', () => {
       repo: spec.repo,
       credential: null,
     });
-    const handle = await fixture.provider.create(spec);
+    const handle = await fixture.provider.create(...shipped(spec));
     try {
       const probe = await probeUnderRunContainerConfig(
         fixture.engine,
@@ -795,7 +799,7 @@ describe('a run with no checkout (WP-74)', () => {
   it('asks the daemon for no mirror and no clone helper, where a run with a checkout asks for both', async () => {
     const from = fixture.engine.createdNames.length;
     const spec = workspace.repoLessWorkspaceSpecFixture({ runId: randomUUID() });
-    const handle = await fixture.provider.create(spec);
+    const handle = await fixture.provider.create(...shipped(spec));
     try {
       expect(helpersSince(from, spec.runId)).toEqual([
         'prep',
@@ -831,7 +835,7 @@ describe('a run with no checkout (WP-74)', () => {
 
   it('keeps its network, volume, sidecar and a control socket the shim accepts — and `agentic:kb` on disk', async () => {
     const spec = workspace.repoLessWorkspaceSpecFixture({ runId: randomUUID() });
-    const handle = await fixture.provider.create(spec);
+    const handle = await fixture.provider.create(...shipped(spec));
     try {
       await relaxControlDirectoryForHost(fixture, handle.runId);
       const attachment = await fixture.provider.attach(handle);
@@ -885,7 +889,7 @@ describe('a run with no checkout (WP-74)', () => {
 
   it('refuses an export by name, before the daemon is asked for an export helper', async () => {
     const spec = workspace.repoLessWorkspaceSpecFixture({ runId: randomUUID() });
-    const handle = await fixture.provider.create(spec);
+    const handle = await fixture.provider.create(...shipped(spec));
     try {
       const from = fixture.engine.createdNames.length;
       await expect(
@@ -1148,7 +1152,7 @@ describe('mount escapes', () => {
       `${randomUUID()}/../other`,
       `${randomUUID()}\0../other`,
     ]) {
-      await expect(fixture.provider.create(specFor({ runId }))).rejects.toMatchObject({
+      await expect(fixture.provider.create(...shipped(specFor({ runId })))).rejects.toMatchObject({
         code: 'invalid_spec',
       });
     }
@@ -1370,7 +1374,7 @@ describe('one project’s mirror, not every project’s (WP-75)', () => {
   it('refuses a checkout whose mirror was never made by name, before the run container is asked for', async () => {
     const from = fixture.engine.createdNames.length;
     const spec = specFor({ repo: { cacheKey: 'never-mirrored' } });
-    await expect(fixture.provider.create(spec)).rejects.toMatchObject({
+    await expect(fixture.provider.create(...shipped(spec))).rejects.toMatchObject({
       code: 'workspace_failed',
       message: /no mirror to clone from/,
     });
@@ -2054,7 +2058,7 @@ describe('a minted run credential against a credentialled git server (WP-76)', (
         repo: spec.repo,
         credential: broker.credentialFor(runId),
       });
-      const handle = await fixture.provider.create(spec);
+      const handle = await fixture.provider.create(...shipped(spec));
       try {
         await plantInWorkspace(
           fixture,
@@ -2128,7 +2132,7 @@ describe('a minted run credential against a credentialled git server (WP-76)', (
       repo: spec.repo,
       credential: broker.credentialFor(runId),
     });
-    const handle = await fixture.provider.create(spec);
+    const handle = await fixture.provider.create(...shipped(spec));
     try {
       const inspected = await docker([
         'inspect',
@@ -2170,7 +2174,7 @@ describe('a minted run credential against a credentialled git server (WP-76)', (
       repo: spec.repo,
       credential: broker.credentialFor(runId),
     });
-    const handle = await fixture.provider.create(spec);
+    const handle = await fixture.provider.create(...shipped(spec));
     try {
       const script = (name: string, body: string): string =>
         `printf '#!/bin/sh\\n${body}\\n' > /work/v/${name} && chmod 755 /work/v/${name}`;
@@ -2570,7 +2574,7 @@ describe('create is atomic', () => {
     ];
     const before = await docker(['ps', '-aq', ...ours]);
     const spec = specFor({ repo: { cacheKey: 'no-such-mirror' } });
-    await expect(fixture.provider.create(spec)).rejects.toMatchObject({
+    await expect(fixture.provider.create(...shipped(spec))).rejects.toMatchObject({
       code: 'workspace_failed',
     });
     const after = await docker(['ps', '-aq', ...ours]);
@@ -2638,7 +2642,6 @@ describe('a helper left mid-flight by its launcher (WP-132)', () => {
       cacheVolume: fixture.cacheVolume,
       helperNetwork: fixture.network,
       egressNetwork: fixture.network,
-      skills: PLATFORM_SKILLS,
       runnerUid: 1000,
     });
     const exporting = dying
@@ -2734,7 +2737,7 @@ runWorkspaceProviderContractSuite('DockerWorkspaceProvider', {
       provider: {
         updateMirror: (input) => fixture.provider.updateMirror(input),
         create: async (input) => {
-          const handle = await fixture.provider.create(input);
+          const handle = await fixture.provider.create(...shipped(input));
           created = handle.runId;
           // Q51, admitted: this process is not uid 1000, and `attach` reads a 0600 file owned by
           // it. The real mode is measured in its own case above, before anything relaxes it.
@@ -2816,7 +2819,7 @@ describe('on production’s control-volume shape, a plain named volume', () => {
       repo: spec.repo,
       credential: null,
     });
-    const handle = await named.provider.create(spec);
+    const handle = await named.provider.create(...shipped(spec));
     const hostile = await probeUnderRunContainerConfig(
       named.engine,
       handle.containerId,

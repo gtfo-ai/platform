@@ -294,6 +294,11 @@ export class FakeDockerDaemon {
         send(200, { Id: name, Config: { Env: held.env, Labels: held.labels } });
         return;
       }
+      if (name.startsWith('sha256:')) {
+        // An id the daemon never had is not a tag either (WP-279): the daemon answers 404.
+        send(404, { message: `No such image: ${name}` });
+        return;
+      }
       const configured = this.#options.imageEnv?.get(name);
       const env = configured === undefined ? [`PATH=${FAKE_IMAGE_PATH}`] : configured;
       const declared = this.#options.imageLabels?.get(name);
@@ -599,6 +604,12 @@ export class FakeDockerDaemon {
     const volumeAt = (target: string): string | undefined =>
       mounts.find((mount) => mount.Target === target)?.Source;
     for (const line of body.Cmd ?? []) {
+      // WP-279: the export's passwd helper writes `<ctl>/helper-etc/passwd`, a file sub-path.
+      for (const match of line.matchAll(
+        /mv -f \/ctl\/([a-z-]+)\/passwd\.new \/ctl\/[a-z-]+\/passwd/g,
+      )) {
+        this.#noteSubpath(volumeAt('/ctl'), `${match[1] ?? ''}/passwd`);
+      }
       for (const match of line.matchAll(/mkdir -p \/ctl\/([0-9a-f-]{36})/g)) {
         this.controlSubpaths.add(match[1] ?? '');
         this.#noteSubpath(volumeAt('/ctl'), match[1] ?? '');

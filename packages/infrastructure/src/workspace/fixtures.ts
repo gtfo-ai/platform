@@ -8,9 +8,14 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { WorkspaceRepo, WorkspaceSpec } from '@platform/application';
+import type {
+  RunImages,
+  WorkspaceProvision,
+  WorkspaceRepo,
+  WorkspaceSpec,
+} from '@platform/application';
 import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
-import type { PlatformSkillCatalogue } from './skills.js';
+import { type PlatformSkillCatalogue, runSkillsFor } from './skills.js';
 
 /**
  * A temporary directory short enough to hold a Unix socket path.
@@ -28,10 +33,9 @@ export const shortTempDir = async (prefix: string): Promise<string> => {
 /**
  * A skill catalogue for the tiers that cannot read the shipped one.
  *
- * `packages/infrastructure` does not depend on `@platform/prompts` — the launcher's composition
- * root supplies the real files (`apps/launcher/src/runtime.ts`) — so the unit tier uses these two,
- * which are exactly the names {@link workspaceSpecFixture} puts in its spec. The contract and e2e
- * tiers pass `PLATFORM_SKILLS` instead, so what reaches a real container is the real text.
+ * The unit tier uses these two, which are exactly the names {@link workspaceSpecFixture} puts in its
+ * spec, so a case is not coupled to the shipped wording; the contract and e2e tiers build their
+ * provision from `PLATFORM_SKILLS` instead, so what reaches a real container is the real text.
  *
  * The bodies are obviously fixtures: a case that asserted a shipped skill's wording against a copy
  * in this file would be asserting a string this repository wrote twice (standing rule 3).
@@ -124,3 +128,29 @@ export const repoLessWorkspaceSpecFixture = (
   }),
   repo: null,
 });
+
+/**
+ * What a test's create is given (WP-279): the content of exactly `spec.skills` from `catalogue`, with
+ * its digest, and `images` — `null`, the provider's configured tags, unless the case is about digests.
+ */
+export const provisionFixture = (
+  spec: WorkspaceSpec,
+  catalogue: PlatformSkillCatalogue = SKILL_CATALOGUE_FIXTURE,
+  images: RunImages | null = null,
+): WorkspaceProvision => ({
+  skills: runSkillsFor(spec.runId, spec.skills, catalogue),
+  images,
+});
+
+/**
+ * `provider.create(...provisioned(spec))` — the spec and its {@link provisionFixture}, as the two
+ * arguments `create` takes, so a test's spec expression is written (and evaluated) once.
+ */
+export const provisioned = (
+  spec: WorkspaceSpec,
+  catalogue: PlatformSkillCatalogue = SKILL_CATALOGUE_FIXTURE,
+  images: RunImages | null = null,
+): readonly [WorkspaceSpec, WorkspaceProvision] => [
+  spec,
+  provisionFixture(spec, catalogue, images),
+];

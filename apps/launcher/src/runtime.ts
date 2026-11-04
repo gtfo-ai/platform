@@ -7,7 +7,6 @@
  */
 import type { Logger, RunnerClock } from '@platform/application';
 import { workspace } from '@platform/infrastructure';
-import { PLATFORM_SKILLS } from '@platform/prompts';
 import { type LauncherConfig, readLauncherConfig } from './config.js';
 import { type ControlPlane, startControlPlane } from './control-plane.js';
 import { asLoggerPort, createLauncherLogger } from './logging.js';
@@ -103,12 +102,9 @@ export const buildLauncher = (options: BuildLauncherOptions): LauncherRuntime =>
     helperNetwork: config.helperNetwork,
     egressNetwork: config.egressNetwork,
     logger,
-    // The ten platform skills, from **this process' own filesystem** (WP-14a). Not from the run
-    // image: the digest the planner records in `runs.prompt_version` is computed from the bytes the
-    // platform has, so the bytes a run sees have to come from the same deployment rather than from
-    // a separately built image. `@platform/prompts` throws at import when the directory is missing,
-    // which makes an incomplete image a startup failure of this process.
-    skills: PLATFORM_SKILLS,
+    // No skills here since WP-279 (TD-031 decision 4): the create request carries the bytes the core
+    // planned with, and the provider checks their digest. This process' own `@platform/prompts` copy
+    // is retired, because a worker's launcher may be a build behind the core that recorded it.
     runnerUid: options.uid,
     maxExportBytes: config.maxExportBytes,
     mirrorMemoryMb: config.mirrorMemoryMb,
@@ -171,6 +167,8 @@ export const startLauncher = async (options: BuildLauncherOptions): Promise<Star
           controlRoot: runtime.config.controlRoot,
           runtimeImage: runtime.config.images.runtime,
           claudeCodePath: runtime.config.images.runtimeCliPath,
+          deployKeyCarriage: runtime.config.deployKeyCarriage,
+          imageDigests: () => runtime.provider.configuredImageDigests(),
           logger: runtime.logger,
         });
   if (controlPlane === null) {

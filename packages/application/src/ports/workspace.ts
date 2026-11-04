@@ -43,6 +43,8 @@
  */
 import type {
   ExistingProtectedPaths,
+  RunImages,
+  RunSkills,
   WorkspaceEgress,
   WorkspaceGitSsh,
   WorkspaceLimits,
@@ -81,6 +83,8 @@ import * as z from 'zod';
 // Re-exported here so every importer of this port is unchanged.
 export type {
   ExistingProtectedPaths,
+  RunImages,
+  RunSkills,
   WorkspaceEgress,
   WorkspaceGitSsh,
   WorkspaceLimits,
@@ -458,6 +462,14 @@ export const WORKSPACE_ERROR_REASONS = [
   'run_plan_unreadable',
   /** The run has no stored plan: it was planned by a build before WP-275a. */
   'run_plan_missing',
+  /**
+   * The skills a create request carried do not fit its spec, or their digest is not the one their
+   * bytes and versions give (WP-279, TD-031 decision 4): the launcher writes exactly what it is given
+   * and checks it, so a mismatch is refused rather than provisioned.
+   */
+  'skill_set_invalid',
+  /** An image digest the create request named is not on this launcher's daemon; it never pulls (WP-279). */
+  'image_not_local',
 ] as const;
 export type WorkspaceErrorReason = (typeof WORKSPACE_ERROR_REASONS)[number];
 export const workspaceErrorReasonSchema = z.enum(WORKSPACE_ERROR_REASONS);
@@ -574,7 +586,7 @@ export interface WorkspaceProvider {
   readonly updateMirror: (input: {
     readonly projectId: string;
     readonly repo: WorkspaceRepo;
-    readonly credential: WorkspaceGitCredential | null;
+    readonly credential: WorkspaceGitAccess | null;
   }) => Promise<{ readonly cachePath: string; readonly updated: boolean }>;
 
   /**
@@ -582,11 +594,14 @@ export interface WorkspaceProvider {
    * container, clone — the clone only when `spec.repo` is not `null`, and then only after
    * {@link updateMirror} (a repo-ful create with no mirror is refused; a repo-less one needs none).
    *
+   * The skills it writes and the images it runs are the **caller's** ({@link WorkspaceProvision},
+   * WP-279): an adapter holds no skill catalogue of its own and checks the set's digest.
+   *
    * **Either it returns a handle or it leaves nothing behind.** A create that fails half way
    * removes what it made before it throws, because the alternative is a container running an agent
    * that no handle names.
    */
-  readonly create: (spec: WorkspaceSpec) => Promise<WorkspaceHandle>;
+  readonly create: (spec: WorkspaceSpec, provision: WorkspaceProvision) => Promise<WorkspaceHandle>;
 
   /** The control-socket coordinates for a created workspace. */
   readonly attach: (handle: WorkspaceHandle) => Promise<WorkspaceAttachment>;
@@ -637,7 +652,7 @@ export interface WorkspaceProvider {
   readonly export: (
     handle: WorkspaceHandle,
     request: WorkspaceExportRequest,
-    credential: WorkspaceGitCredential | null,
+    credential: WorkspaceGitAccess | null,
   ) => Promise<WorkspaceExport>;
 
   /**
@@ -719,4 +734,47 @@ export interface WorkspaceGitCredential {
   readonly password: string;
   /** Present for a deploy key (TD-028 decision 13b): the route a helper's git takes over SSH. */
   readonly ssh?: WorkspaceGitSsh;
+}
+
+/**
+ * How a **worker's** launcher reaches a deploy-key repository from its mirror and export helpers —
+ * TD-031's 2026-11-04 amendment (backlog 693), the `relayed` carriage. It holds no key: the
+ * `remote-worker` serves an ssh-agent socket on the `ctl` volume beside the run's control directory,
+ * which lists the deploy key's public half and forwards each sign request to the core's oracle
+ * (`POST runs/:id/ssh-sign`). The helper mounts that socket's directory and runs `ssh` with
+ * `IdentityAgent=<socket>` and no key file.
+ */
+export interface WorkspaceRelayedSsh {
+  readonly kind: 'relayed_ssh';
+  /** The spec's SSH route — the same non-secret structure a carried deploy key travels with. */
+  readonly ssh: WorkspaceGitSsh;
+  /**
+   * The socket, **relative to the control volume's root** (`<directory>/<name>.sock`), never inside
+   * a run's own control directory — the run container mounts that one (`helperAgentSocketSchema`).
+   */
+  readonly agentSocket: string;
+}
+
+/** What a mirror or export helper authenticates with: a credential, or a relayed agent socket. */
+export type WorkspaceGitAccess = WorkspaceGitCredential | WorkspaceRelayedSsh;
+
+/** `true` for the relayed agent socket, `false` for a credential the helper holds itself. */
+export const isRelayedSsh = (access: WorkspaceGitAccess): access is WorkspaceRelayedSsh =>
+  'kind' in access && access.kind === 'relayed_ssh';
+
+/**
+ * What the **caller** decides about a workspace that the provider only executes — TD-031 decision 4,
+ * WP-279. The core decides the bytes even when the launcher is a worker's, one build behind.
+ *
+ *  - `skills`: the content of exactly the spec's skills, with each one's declared version and the
+ *    set's digest (`runSkillsSchema`). The provider recomputes the digest and refuses a mismatch
+ *    (`skill_set_invalid`); it writes what it is given and holds no catalogue of its own.
+ *  - `images`: the run and egress images **by digest**, checked to be on the daemon and refused
+ *    (`image_not_local`) when not — never pulled. `null` is the **in-process** composition's answer
+ *    (`scripts/runlet-launcher-inner.mjs`, the provider's own tests): the provider's configured tags.
+ *    The control plane never passes `null`; its request schema requires both digests.
+ */
+export interface WorkspaceProvision {
+  readonly skills: RunSkills;
+  readonly images: RunImages | null;
 }

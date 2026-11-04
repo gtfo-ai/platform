@@ -60,6 +60,10 @@ const runtime = await startLauncher({
     APP_LAUNCHER_PORT: required('CHECK_LAUNCHER_PORT'),
     // The path the run image really carries; the runner asserts it came from here.
     APP_WORKSPACE_RUNTIME_CLI_PATH: process.env['CHECK_CLI_PATH'] ?? '/usr/local/bin/claude',
+    // WP-279: `relayed` for `deploy-key-check.mjs`'s worker-launcher phase; absent is `carried`.
+    ...(process.env['CHECK_DEPLOY_KEY_CARRIAGE'] === undefined
+      ? {}
+      : { APP_LAUNCHER_DEPLOY_KEY_CARRIAGE: process.env['CHECK_DEPLOY_KEY_CARRIAGE'] }),
   },
   /** Q51: the uid the *run container* runs as. This container runs as root so it can reach `0600`. */
   uid: 1000,

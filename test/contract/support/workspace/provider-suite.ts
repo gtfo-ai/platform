@@ -34,7 +34,14 @@ import type {
 import { PLATFORM_SKILLS_PLUGIN_DIRECTORY, WorkspaceError } from '@platform/application';
 import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import { workspace } from '@platform/infrastructure';
+import { PLATFORM_SKILLS } from '@platform/prompts';
 import { describe, expect, it } from 'vitest';
+
+/**
+ * A create's two arguments (WP-279): the spec and the **shipped** skills it names, carried with their
+ * digest — both implementations write what the request carried and hold no catalogue of their own.
+ */
+const shipped = (spec: WorkspaceSpec) => workspace.provisioned(spec, PLATFORM_SKILLS);
 
 export interface WorkspaceProviderContractContext {
   /** A fresh provider and a fresh spec per case: every case creates its own run. */
@@ -109,7 +116,7 @@ export const runWorkspaceProviderContractSuite = (
             credential: null,
           });
         }
-        const handle = await harness.provider.create(harness.spec);
+        const handle = await harness.provider.create(...shipped(harness.spec));
         await body({ ...harness, handle });
       } finally {
         await harness.cleanup();
@@ -160,7 +167,7 @@ export const runWorkspaceProviderContractSuite = (
         // Named, in both implementations (WP-75): the Docker provider's clone helper checks the
         // mirror before any container that mounts it by sub-path is asked for, so this is the
         // provider's own words and never the daemon's refusal of a missing sub-path.
-        const refused = harness.provider.create(harness.spec);
+        const refused = harness.provider.create(...shipped(harness.spec));
         await expect(refused).rejects.toBeInstanceOf(WorkspaceError);
         await expect(refused).rejects.toMatchObject({
           code: 'workspace_failed',
@@ -182,7 +189,7 @@ export const runWorkspaceProviderContractSuite = (
       const harness = await context.provider();
       try {
         const spec: WorkspaceSpec = { ...harness.spec, repo: null, skills: ['kb'] };
-        const handle = await harness.provider.create(spec);
+        const handle = await harness.provider.create(...shipped(spec));
         expect(handle.cacheKey).toBeNull();
         expect(handle.containerId.length).toBeGreaterThan(0);
         const attachment = await harness.provider.attach(handle);
@@ -241,7 +248,9 @@ export const runWorkspaceProviderContractSuite = (
       });
       const harness = await context.provider();
       try {
-        const handle = await harness.provider.create({ ...harness.spec, repo: null, skills: [] });
+        const handle = await harness.provider.create(
+          ...shipped({ ...harness.spec, repo: null, skills: [] }),
+        );
         const listing = await harness.provider.listExistingProtectedPaths(handle, {
           patterns: ['README.md'],
           defaultBranch: 'main',
@@ -257,7 +266,7 @@ export const runWorkspaceProviderContractSuite = (
     it('refuses to export a workspace that has no checkout, by name', async () => {
       const harness = await context.provider();
       try {
-        const handle = await harness.provider.create({ ...harness.spec, repo: null });
+        const handle = await harness.provider.create(...shipped({ ...harness.spec, repo: null }));
         await expect(
           harness.provider.export(handle, exportRequest(harness.tarballPath), null),
         ).rejects.toMatchObject({ code: 'invalid_spec', message: /no checkout to export/ });
@@ -271,7 +280,7 @@ export const runWorkspaceProviderContractSuite = (
       const harness = await context.provider();
       try {
         await expect(
-          harness.provider.create({ ...harness.spec, runId: '../other-run' }),
+          harness.provider.create(...shipped({ ...harness.spec, runId: '../other-run' })),
         ).rejects.toMatchObject({ code: 'invalid_spec' });
       } finally {
         await harness.cleanup();
@@ -295,7 +304,7 @@ export const runWorkspaceProviderContractSuite = (
         }
         const other = RUNLET_PROTOCOL_VERSION + 1;
         await expect(
-          harness.provider.create({ ...harness.spec, runletProtocol: other }),
+          harness.provider.create(...shipped({ ...harness.spec, runletProtocol: other })),
         ).rejects.toMatchObject({
           code: 'invalid_spec',
           reason: 'runtime_image_protocol_mismatch',
@@ -303,9 +312,62 @@ export const runWorkspaceProviderContractSuite = (
             `declares shim protocol ${String(RUNLET_PROTOCOL_VERSION)}, and the runner speaks protocol ${String(other)}`,
           ),
         });
-        const handle = await harness.provider.create(harness.spec);
+        const handle = await harness.provider.create(...shipped(harness.spec));
         expect(handle.runId).toBe(harness.spec.runId);
         await harness.provider.destroy(handle);
+      } finally {
+        await harness.cleanup();
+      }
+    });
+
+    /**
+     * WP-279 (TD-031 decision 4): the launcher writes the skills it is given and runs only the
+     * digests it is told. Both refusals are `invalid_spec` with a reason, before anything exists, so
+     * the same run id is then created cleanly with the honest provision.
+     */
+    it('refuses skills whose digest is not their bytes’, before creating anything', async () => {
+      const harness = await context.provider();
+      try {
+        if (harness.spec.repo !== null) {
+          await harness.provider.updateMirror({
+            projectId: harness.spec.projectId,
+            repo: harness.spec.repo,
+            credential: null,
+          });
+        }
+        const [spec, provision] = shipped(harness.spec);
+        const [name] = spec.skills;
+        expect(name).toBeDefined();
+        const tampered = {
+          ...provision,
+          skills: {
+            ...provision.skills,
+            files: { ...provision.skills.files, [name as string]: { 'SKILL.md': 'tampered' } },
+          },
+        };
+        await expect(harness.provider.create(spec, tampered)).rejects.toMatchObject({
+          code: 'invalid_spec',
+          reason: 'skill_set_invalid',
+        });
+        const handle = await harness.provider.create(spec, provision);
+        await harness.provider.destroy(handle);
+      } finally {
+        await harness.cleanup();
+      }
+    });
+
+    it('refuses an image digest that is not on the daemon, naming it, before creating anything', async () => {
+      const harness = await context.provider();
+      try {
+        const absent = `sha256:${'f'.repeat(64)}`;
+        const [spec, provision] = shipped(harness.spec);
+        await expect(
+          harness.provider.create(spec, { ...provision, images: { run: absent, egress: absent } }),
+        ).rejects.toMatchObject({
+          code: 'invalid_spec',
+          reason: 'image_not_local',
+          message: expect.stringContaining(absent),
+        });
       } finally {
         await harness.cleanup();
       }

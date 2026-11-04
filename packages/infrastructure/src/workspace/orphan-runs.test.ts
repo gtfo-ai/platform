@@ -15,7 +15,7 @@ import path from 'node:path';
 import { WORKSPACE_LABELS } from '@platform/application';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DockerEngine } from './engine.js';
-import { SKILL_CATALOGUE_FIXTURE, shortTempDir, workspaceSpecFixture } from './fixtures.js';
+import { provisioned, shortTempDir, workspaceSpecFixture } from './fixtures.js';
 import { DockerWorkspaceProvider } from './provider.js';
 import { type FakeContainer, FakeDockerDaemon } from './testing.js';
 
@@ -69,7 +69,6 @@ const startWorld = async (
     helperNetwork: 'platform',
     egressNetwork: 'platform',
     runnerUid: 1000,
-    skills: SKILL_CATALOGUE_FIXTURE,
     now: () => NOW,
   });
 };
@@ -113,7 +112,7 @@ const runLabels = (runId: string, role: string, instance: string | null = CONTRO
 
 describe('the listing verb reads the daemon (WP-103)', () => {
   it('labels every object a create makes with this instance, and lists the run from them', async () => {
-    await provider.create(workspaceSpecFixture({ runId: RUN_A }));
+    await provider.create(...provisioned(workspaceSpecFixture({ runId: RUN_A })));
     const labelled = daemon.history.filter(
       (container) => container.body.Labels?.[WORKSPACE_LABELS.run] === RUN_A,
     );
@@ -170,7 +169,7 @@ describe('the listing verb reads the daemon (WP-103)', () => {
 
 describe('destroy by run id (WP-103)', () => {
   it('removes a created run with no handle: container, sidecar, network, egress volume, control directory', async () => {
-    const handle = await provider.create(workspaceSpecFixture({ runId: RUN_A }));
+    const handle = await provider.create(...provisioned(workspaceSpecFixture({ runId: RUN_A })));
     expect(handle.sidecarContainerId).not.toBeNull();
     await expect(provider.destroyRun(RUN_A)).resolves.toEqual({ found: true });
     const left = [...daemon.containers.values()].filter(
@@ -208,7 +207,7 @@ describe('destroy by run id (WP-103)', () => {
   });
 
   it('moves WP-86’s run_alive count: kept while the orphan runs, gone after it is destroyed (criterion 3)', async () => {
-    await provider.create(workspaceSpecFixture({ runId: RUN_A }));
+    await provider.create(...provisioned(workspaceSpecFixture({ runId: RUN_A })));
     controlListing = `${RUN_A}\n`;
     const aliveCount = async (): Promise<number> =>
       (await provider.purgeExpired(new Date('2026-10-01T12:00:00.000Z'))).controlDirectories.filter(
@@ -240,7 +239,7 @@ describe('a run a killed create left with only its network', () => {
   };
 
   it('labels the network a create makes with the run and this instance', async () => {
-    await provider.create(workspaceSpecFixture({ runId: RUN_A }));
+    await provider.create(...provisioned(workspaceSpecFixture({ runId: RUN_A })));
     const id = [...daemon.networks.entries()].find(([, n]) => n.name === `run-${RUN_A}`)?.[0];
     expect(daemon.networkMeta.get(id ?? '')?.labels).toMatchObject({
       [WORKSPACE_LABELS.run]: RUN_A,

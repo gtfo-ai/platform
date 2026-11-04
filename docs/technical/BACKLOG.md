@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 710, so the next is **711**), its grade
+line with the next free number (the highest is 713, so the next is **714**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -28,6 +28,8 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 697 | minor | WP-276 criterion (9) | Ruled: one lock order run_offers → runs → tasks, so a claim and a cancel/sweep/settle of the same run cannot deadlock |
 | 701 | minor | WP-281 | Ruled: a start failure in the claimant settles as not_started; run.started moves to the CLI spawn request; release until then (the first two built by S-22.1; `release` is WP-281's) |
 | 709 | minor | WP-276 | `recordCliSpawn` takes `run.started`'s context-pack record from transaction 1b's memory; a claimant outside the job must read it back (`run_context_pack` or the plan) |
+| 704 | minor | WP-284 | WP-279's launcher resolves a create's image digest with a bare `sha256:` inspect, which finds an image id (what `/v1/health` answers) but a registry manifest digest only under the containerd store; TD-032's `sha-<7>` digests need `repo@digest` or an id map — measure on a worker bundle |
+| 705 | minor | WP-283 | The relayed helper agent socket's ownership: WP-279's Docker phase measured `1000:0`/`0660` in a `1000:0`/`0750` directory (export helper uid 1000, mirror helper root with no capabilities); the `remote-worker` must create it so |
 | 367 | nit | — | Lost-reminder recovery reads at most 50 never-reminded rows per kind, so not-yet-due rows can hold a due reminder back |
 | 422 | nit | — | pipeline.outbound polls at 0.5 s in every process; idle cost on a large job table and drain above N = 50 never measured |
 | 439 | nit | — | WP-136 put the pipeline harness's `now` on the test clock, which also moves run_commands.created_at and the steer window |
@@ -42,6 +44,9 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 683 | nit | — | bash 5.3 keeps a backtick body's trailing backslash and 3.2 drops it; the policy records no reading for that byte |
 | 685 | nit | — | Over-ask: a quoted `[` as a command name reads as an expanded name and blocks, where bash finds nothing and runs nothing |
 | 698 | nit | WP-276 criterion (10) | Memory PipelineStore keeps writes made before finish threw LeaseLostError; PostgreSQL rolls them back |
+| 702 | nit | — | `apps/launcher` still declares `@platform/prompts` as a runtime dependency (and the launcher image copies it) though nothing at runtime reads it since WP-279; tests only — move to devDependencies |
+| 703 | nit | orchestrator | CLAUDE.md says `WorkspaceProvider.create` writes skills "from the launcher's own copy of `@platform/prompts`"; since WP-279 they come from the create request (technical/04 amended) |
+| 706 | nit | — | `DockerWorkspaceProvider.cliEnvironment` after a launcher restart answers the configured tag's `PATH`, not the digest the run was created from (the run→image map is memory); harmless while one tag serves every run |
 | 132 | ? | — | Unexplained once: authenticated GET /api/artifacts/:id answered 200 with an empty body in verify:e2e; instrumented, not seen since |
 | 7 | ? | — | "Carried, not yet scheduled": a bullet list of carried nits (route-sealed credential never opened by the loader, volume retention, …) |
 
@@ -55,3 +60,4 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 690 | WP-274 `4760587c` (scanner matched to TD-032's 2026-11-04 amendment) | Ruled (TD-032 amendment D): create trigger/type/sequence in additive migrations; scanner to match the amendment |
 | 691 | WP-274 `4760587c` (scanner matched to TD-032's 2026-11-04 amendment) | Ruled (TD-032 amendments A–C): scanner admits same-file unique index, validated constraint, platform_table_policy insert |
 | 700 | S-22.1 (WP-275a) | Ruled: settleRun in the claimant lacks the job's memory (redactor, review checklists); the planned spec is sealed in a new run_plans table |
+| 707 | S-22.4 (WP-279), found and fixed in the slice | An export over SSH never pushed: the export helper runs as uid 1000, the git image has no such user, and OpenSSH exits 255 (*No user exists for uid 1000*) — `pushed: false`, nothing in `failures`, carried (WP-146) or relayed alike; the helper now gets a read-only `/etc/passwd` from `<ctl>/helper-etc/` (measured by `deploy-key-check.mjs`) |

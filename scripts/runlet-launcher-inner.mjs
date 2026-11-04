@@ -134,7 +134,12 @@ let credential = 'not-minted';
 
 const provisioner = {
   provision: async () => {
-    const started = await launcher.service.startRun(workspaceSpec, null);
+    // WP-279: the request's skills (this spec names none) and the configured tags (`images: null`,
+    // the in-process composition's answer — no control plane, so nothing names a digest).
+    const started = await launcher.service.startRun(workspaceSpec, null, {
+      skills: workspaceAdapters.runSkillsFor(workspaceSpec.runId, workspaceSpec.skills, {}),
+      images: null,
+    });
     handle = started.handle;
     attachment = started.attachment;
     credential = started.credential === null ? 'none' : 'minted';

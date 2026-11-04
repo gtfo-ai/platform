@@ -23,7 +23,7 @@
       "$ref": "#/$defs/anon_e8af54fa"
     },
     "skills": {
-      "$ref": "#/$defs/anon_e9ddba2d"
+      "$ref": "#/$defs/anon_0d6b3d5e"
     },
     "images": {
       "$ref": "#/$defs/anon_16e0fe1d"
@@ -165,6 +165,50 @@
       "type": "integer",
       "exclusiveMinimum": 0,
       "maximum": 9007199254740991
+    },
+    "anon_0d6b3d5e": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "type": "string",
+          "pattern": "^skills@(?:none|[0-9a-f]{16})$"
+        },
+        "files": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/anon_6d600f46"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 262144
+            }
+          }
+        },
+        "versions": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/anon_6d600f46"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$"
+          }
+        }
+      },
+      "required": [
+        "digest",
+        "files",
+        "versions"
+      ],
+      "additionalProperties": false
     },
     "anon_16e0fe1d": {
       "type": "object",
@@ -972,39 +1016,6 @@
           "type": "null"
         }
       ]
-    },
-    "anon_e9ddba2d": {
-      "type": "object",
-      "properties": {
-        "digest": {
-          "type": "string",
-          "pattern": "^skills@(?:none|[0-9a-f]{16})$"
-        },
-        "files": {
-          "type": "object",
-          "propertyNames": {
-            "$ref": "#/$defs/anon_6d600f46"
-          },
-          "additionalProperties": {
-            "type": "object",
-            "propertyNames": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 256,
-              "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$"
-            },
-            "additionalProperties": {
-              "type": "string",
-              "maxLength": 262144
-            }
-          }
-        }
-      },
-      "required": [
-        "digest",
-        "files"
-      ],
-      "additionalProperties": false
     },
     "anon_f2e5cf00": {
       "type": "integer",

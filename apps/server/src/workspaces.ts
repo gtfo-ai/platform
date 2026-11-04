@@ -68,6 +68,7 @@ import {
   runner as runnerAdapters,
   workspace as workspaceAdapters,
 } from '@platform/infrastructure';
+import { PLATFORM_SKILLS } from '@platform/prompts';
 import type pg from 'pg';
 import type { Metrics } from './metrics.js';
 import {
@@ -398,12 +399,18 @@ export const composeRunWorkspaces = (
     },
     'this process runs agent stages: it provisions run workspaces through the launcher control plane',
   );
+  const client = launcherAdapters.createLauncherControlClient({
+    baseUrl: url,
+    token,
+    logger: options.logger,
+  });
   return launcherAdapters.createLauncherRunWorkspaceProvisioner({
-    client: launcherAdapters.createLauncherControlClient({
-      baseUrl: url,
-      token,
-      logger: options.logger,
-    }),
+    client,
+    // WP-279 (TD-031 decision 4): the core decides what the launcher writes and runs — the shipped
+    // skills, from this process' own `@platform/prompts` (the bytes the planner digested), and the
+    // launcher's configured images as its daemon resolves them, asked per create.
+    skills: PLATFORM_SKILLS,
+    images: launcherAdapters.launcherConfiguredImages(client),
     projects: createRunWorkspaceProjectSource(options.pool),
     credentials: createRunGitCredentialMinter({
       pool: options.pool,

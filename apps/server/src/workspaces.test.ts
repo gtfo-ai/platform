@@ -25,8 +25,13 @@ import {
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { fixedClock } from '@platform/domain';
-import { launcher as launcherAdapters, runner as runnerAdapters } from '@platform/infrastructure';
+import {
+  launcher as launcherAdapters,
+  runner as runnerAdapters,
+  workspace,
+} from '@platform/infrastructure';
 import { createFakeGitProvider } from '@platform/integrations';
+import { PLATFORM_SKILL_NAMES, PLATFORM_SKILLS } from '@platform/prompts';
 import type pg from 'pg';
 import { describe, expect, it } from 'vitest';
 import { createMetrics } from './metrics.js';
@@ -497,6 +502,13 @@ describe('minting the run credential (WP-76)', () => {
           },
           endRun: async () => ({ exported: null, keepUntil: null, failures: [] }),
         } as unknown as launcherAdapters.LauncherControlClient,
+        skills: PLATFORM_SKILLS,
+        images: {
+          forRun: async () => ({
+            run: `sha256:${'1'.repeat(64)}`,
+            egress: `sha256:${'2'.repeat(64)}`,
+          }),
+        },
         credentials: minter,
         projects: { forRun: async () => project },
         controlRoot: '/run/agentic/ctl',
@@ -546,5 +558,36 @@ describe('minting the run credential (WP-76)', () => {
     expect(answer.kind).toBe('unavailable');
     expect(git.credentials).toEqual([]);
     expect(auditLog.entries).toEqual([]);
+  });
+});
+
+/**
+ * WP-279 criterion (5): `CONTROL_PLANE_MAX_BODY_BYTES` re-measured against the create request that
+ * now carries the skills' content. Measured, not raised: a request naming all ten shipped skills is a
+ * small fraction of the bound (the figure is in the constant's docblock), and the bound is asserted
+ * against the real corpus here so a skill that grows past it fails this tier, not a run.
+ */
+describe('the create request with every shipped skill (WP-279)', () => {
+  it('fits the control plane’s body bound with fourfold room, and parses', () => {
+    const spec = workspace.workspaceSpecFixture({ skills: [...PLATFORM_SKILL_NAMES] });
+    const request = {
+      spec,
+      credential: null,
+      ...workspace.provisionFixture(spec, PLATFORM_SKILLS, {
+        run: `sha256:${'1'.repeat(64)}`,
+        egress: `sha256:${'2'.repeat(64)}`,
+      }),
+    };
+    const bytes = Buffer.byteLength(JSON.stringify(request));
+    expect(PLATFORM_SKILL_NAMES).toHaveLength(10);
+    expect(bytes * 4).toBeLessThan(launcherAdapters.CONTROL_PLANE_MAX_BODY_BYTES);
+    expect(launcherAdapters.CONTROL_PLANE_MAX_BODY_BYTES).toBe(256 * 1024);
+    // A read-only spec with no credential: what decides here is the skills block, not the credential.
+    expect(
+      launcherAdapters.createRunRequestSchema.safeParse({
+        ...request,
+        spec: { ...spec, readOnly: true },
+      }).success,
+    ).toBe(true);
   });
 });

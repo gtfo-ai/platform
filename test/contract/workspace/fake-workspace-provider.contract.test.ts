@@ -10,7 +10,6 @@ import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { workspace } from '@platform/infrastructure';
-import { PLATFORM_SKILLS } from '@platform/prompts';
 import { runWorkspaceProviderContractSuite } from '../support/workspace/provider-suite.js';
 
 /**
@@ -52,11 +51,13 @@ runWorkspaceProviderContractSuite('FakeWorkspaceProvider', {
   },
   provider: async () => {
     const dir = await workspace.shortTempDir('agentic-ws-contract-');
+    // The suite's creates carry the shipped files (WP-279), so its skills case is about the real
+    // corpus in both tiers — this one and the Docker runner's, which reads them out of a container.
+    // Divergence 9: the fake "daemon" holds no image digest at all, so a create that names one is
+    // refused as Docker refuses a digest it does not hold; every other case names none (`null`).
     const provider = new workspace.FakeWorkspaceProvider({
       controlRoot: path.join(dir, 'ctl'),
-      // The shipped files, so the shared suite's skills case is about the real corpus in both
-      // tiers — this one and the Docker runner's, which reads them out of a real container.
-      skills: PLATFORM_SKILLS,
+      localImageDigests: new Set(),
     });
     current = provider;
     const spec = workspace.workspaceSpecFixture({ runId: randomUUID() });

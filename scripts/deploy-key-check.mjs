@@ -30,7 +30,14 @@
  *     `/proc/<pid>/environ` — searched as the agent (uid 1000) *and* as root by the host (`docker exec -u
  *     0`) while the run is live — not in the container's configured environment, not in the
  *     launcher's log, the runner's output, the sidecar's log or the stand-in's;
- *  4. nothing is left: every container, network and volume this check made is removed by the check.
+ *  4. nothing is left: every container, network and volume this check made is removed by the check;
+ *  5. **WP-279's `relayed` phase** (TD-031's 2026-11-04 amendment, backlog 693, TODO V-WM8): a second
+ *     launcher configured `relayed` refuses a create request carrying the key, and with **no** key —
+ *     this check's runner serving the run's helper agent socket on the `ctl` volume and signing with
+ *     the throwaway key — its mirror helper fetches and its export pushes `agentic/wp279-relayed` to
+ *     the stand-in through that socket, one signature each, under the cap; the helpers are inspected
+ *     live (each signature is held three seconds) and the key fragment is in no helper's
+ *     configuration, the relayed launcher's log or the runner's report.
  *
  * Not a `verify` target, for the reason none of the Docker checks are: it needs a daemon. With no
  * daemon or no image it exits non-zero naming what is missing.
@@ -74,6 +81,12 @@ const expectedGitKeys = (standin) => [
 ];
 
 const RUN_ID = '9f3a1c2e-0000-4000-8000-00000000146a';
+/** WP-279's run: a relayed launcher, no key in the request, the helpers signing through the socket. */
+const RELAYED_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000279d';
+const RELAYED_LAUNCHER_NAME = 'agentic-wp279-launcher';
+const RELAYED_RUNNER_NAME = 'agentic-wp279-runner';
+/** How long the runner holds each signature, so the host can inspect the helper that asked. */
+const SIGN_DELAY_MS = 3_000;
 const IDLE_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000146b';
 const TOKEN = 'FAKE-wp146-launcher-token-0000000000';
 const PORT = '7780';
@@ -122,7 +135,10 @@ const carries = (text) =>
 let fixture = null;
 let standin = null;
 try {
-  fixture = await startDockerFixture();
+  // A plain named control volume, production's shape (WP-279): TODO V-WM8 is about a Unix socket on a
+  // mounted **named-volume** directory, and the bind-backed default refuses `chmod` on a socket on
+  // Docker Desktop's file sharing (measured: `EINVAL`), which no deployment has.
+  fixture = await startDockerFixture({ controlVolumeBind: false });
   standin = `altssh-standin-${fixture.network.slice(-8)}`;
 
   // ── the stand-in ──────────────────────────────────────────────────────────
@@ -443,6 +459,231 @@ try {
       !carries(`${standinLog.stdout}${standinLog.stderr}`),
     `searched ${[configuredEnv, launcherLog.stdout, runnerLog.stdout, sidecarText].map((text) => (text ?? '').length).join('/')} bytes`,
   );
+  // ── WP-279: the relayed carriage (TD-031's 2026-11-04 amendment, TODO V-WM8) ───────────────
+  // A second launcher, configured as a worker's: it is sent no key. This check's runner serves the
+  // run's helper agent socket on the ctl volume and signs with the throwaway key; the launcher's
+  // mirror and export helpers must reach the stand-in through it, through the socket-proxied daemon's
+  // named-volume mount — which is what V-WM8 asks.
+  await docker(['rm', '-f', LAUNCHER_NAME], { allowFailure: true });
+  await docker([
+    'run',
+    '-d',
+    '--name',
+    RELAYED_LAUNCHER_NAME,
+    '--user',
+    '0:0',
+    '--network',
+    fixture.network,
+    ...Object.entries({
+      DOCKER_HOST: 'unix:///var/run/docker.sock',
+      CHECK_CONTROL_VOLUME: fixture.controlVolume,
+      CHECK_CACHE_VOLUME: fixture.cacheVolume,
+      CHECK_RUNTIME_IMAGE: RUNTIME_IMAGE,
+      CHECK_EGRESS_IMAGE: EGRESS_IMAGE,
+      CHECK_GIT_IMAGE: GIT_IMAGE,
+      CHECK_REPO_ROOT: REPO_ROOT,
+      CHECK_NETWORK: fixture.network,
+      CHECK_LAUNCHER_TOKEN: TOKEN,
+      CHECK_LAUNCHER_PORT: PORT,
+      CHECK_DEPLOY_KEY_CARRIAGE: 'relayed',
+      HOME: '/tmp',
+    }).flatMap(([name, value]) => ['-e', `${name}=${value}`]),
+    '-v',
+    `${INNER_SOCKET}:/var/run/docker.sock`,
+    '-v',
+    `${REPO_ROOT}:${REPO_ROOT}:ro`,
+    '-v',
+    `${fixture.controlVolume}:/run/agentic/ctl`,
+    '-w',
+    REPO_ROOT,
+    '--entrypoint',
+    'node',
+    RUNTIME_IMAGE,
+    `${REPO_ROOT}/scripts/launcher-control-plane-launcher.mjs`,
+  ]);
+  let relayedListening = false;
+  for (let attempt = 0; attempt < 60 && !relayedListening; attempt += 1) {
+    const logs = await docker(['logs', RELAYED_LAUNCHER_NAME], { allowFailure: true });
+    relayedListening = logs.stdout.includes('"listening"');
+    if (!relayedListening) await sleep(500);
+  }
+  record('WP-279: the relayed launcher listens', relayedListening);
+  process.env['CHECK_DEPLOY_PRIVATE_KEY'] = privateKey;
+  await docker([
+    'run',
+    '-d',
+    '--name',
+    RELAYED_RUNNER_NAME,
+    '--user',
+    '0:0',
+    '--network',
+    fixture.network,
+    ...Object.entries({
+      CHECK_PHASE: 'deploy-key-relayed',
+      CHECK_RUN_ID: RELAYED_RUN_ID,
+      CHECK_IDEMPOTENCY_RUN_ID: IDLE_RUN_ID,
+      CHECK_RELAYED_RUN_ID: RELAYED_RUN_ID,
+      CHECK_LAUNCHER_URL: `http://${RELAYED_LAUNCHER_NAME}:${PORT}`,
+      CHECK_LAUNCHER_TOKEN: TOKEN,
+      CHECK_REPO_URL: 'https://gitlab.com/acme/api.git',
+      CHECK_REPO_HOST: 'gitlab.com',
+      CHECK_DEPLOY_PUBLIC_KEY: publicKey,
+      CHECK_SSH_HOST: standin,
+      CHECK_SSH_HOST_KEY: hostKey,
+      CHECK_DEPLOY_KEY_FRAGMENT_LENGTH: String(FRAGMENT_LENGTH),
+      CHECK_SIGN_DELAY_MS: String(SIGN_DELAY_MS),
+      HOME: '/tmp',
+    }).flatMap(([name, value]) => ['-e', `${name}=${value}`]),
+    '-e',
+    'CHECK_DEPLOY_PRIVATE_KEY',
+    '-v',
+    `${REPO_ROOT}:${REPO_ROOT}:ro`,
+    '-w',
+    REPO_ROOT,
+    '-v',
+    `${fixture.controlVolume}:/run/agentic/ctl`,
+    '--entrypoint',
+    'node',
+    RUNTIME_IMAGE,
+    `${REPO_ROOT}/scripts/launcher-control-plane-runner.mjs`,
+  ]);
+  delete process.env['CHECK_DEPLOY_PRIVATE_KEY'];
+  // Every mirror and export helper this launcher starts while the runner lives, inspected while it
+  // waits for its signature: its configured environment, command and mounts are what is searched.
+  const helpers = new Map();
+  for (let attempt = 0; attempt < 2400; attempt += 1) {
+    const listed = await docker(
+      [
+        'ps',
+        '-a',
+        '--filter',
+        `label=com.agentic.instance=${fixture.controlVolume}`,
+        '--format',
+        '{{.ID}} {{.Label "com.agentic.role"}}',
+      ],
+      { allowFailure: true },
+    );
+    for (const line of listed.stdout.split('\n')) {
+      const [id, role] = line.trim().split(' ');
+      if (id === undefined || id === '' || (role !== 'mirror' && role !== 'export')) continue;
+      if (helpers.has(id)) continue;
+      const inspected = await docker(['container', 'inspect', id], { allowFailure: true });
+      if (inspected.ok) helpers.set(id, { role, json: inspected.stdout });
+    }
+    const state = await docker(
+      ['container', 'inspect', '-f', '{{.State.Running}}', RELAYED_RUNNER_NAME],
+      { allowFailure: true },
+    );
+    if (state.stdout.trim() !== 'true') break;
+    await sleep(250);
+  }
+  const relayedRunnerLog = await docker(['logs', RELAYED_RUNNER_NAME], { allowFailure: true });
+  const relayedLauncherLog = await docker(['logs', RELAYED_LAUNCHER_NAME], { allowFailure: true });
+  let relayed = null;
+  try {
+    relayed = JSON.parse(
+      relayedRunnerLog.stdout
+        .split('\n')
+        .filter((line) => line.trim().startsWith('{') && !line.includes('"signing"'))
+        .at(-1) ?? 'null',
+    );
+  } catch {
+    relayed = null;
+  }
+  const relayedRef = await docker(
+    [
+      'exec',
+      '-u',
+      'git',
+      standin,
+      'git',
+      '-C',
+      '/acme/api.git',
+      'rev-parse',
+      'refs/heads/agentic/wp279-relayed',
+    ],
+    { allowFailure: true },
+  );
+  const helperList = [...helpers.values()];
+  process.stdout.write(
+    `--- WP-279: relayed ---\n${JSON.stringify(
+      {
+        relayed,
+        helpers: helperList.map((helper) => helper.role),
+        standinRef: relayedRef.stdout.trim(),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  record(
+    'WP-279: the relayed launcher refuses a create request that carries the deploy key',
+    relayed?.carriage === 'relayed' && relayed?.keyedRefusal === 'invalid_spec',
+    JSON.stringify({ carriage: relayed?.carriage, keyed: relayed?.keyedRefusal }),
+  );
+  record(
+    'WP-279 / V-WM8: the mirror helper reached the stand-in through the helper agent socket on the ctl volume',
+    (relayed?.mirrorSignatures ?? 0) >= 1 && relayed?.error === undefined,
+    JSON.stringify({
+      mirrorSignatures: relayed?.mirrorSignatures,
+      signedAt: relayed?.signedAt,
+      error: relayed?.error,
+    }),
+  );
+  record(
+    'WP-279 / V-WM8: the export pushed agentic/wp279-relayed through the same socket and it landed on the stand-in',
+    relayed?.exported?.pushed === true &&
+      (relayed?.exportSignatures ?? 0) >= 1 &&
+      relayedRef.ok &&
+      /^[0-9a-f]{40}$/.test(relayedRef.stdout.trim()),
+    JSON.stringify({
+      exported: relayed?.exported,
+      exportSignatures: relayed?.exportSignatures,
+      failures: relayed?.endFailures,
+      ref: relayedRef.stdout.trim(),
+    }),
+  );
+  record(
+    'WP-279: one signature per SSH connection — a mirror fetch one, an export push one — under the cap',
+    relayed?.mirrorSignatures === 1 &&
+      relayed?.exportSignatures === 1 &&
+      relayed?.refusals === 0 &&
+      relayed?.cap === 128,
+    JSON.stringify({
+      mirror: relayed?.mirrorSignatures,
+      export: relayed?.exportSignatures,
+      refusals: relayed?.refusals,
+      cap: relayed?.cap,
+    }),
+  );
+  const helperRoles = new Set(helperList.map((helper) => helper.role));
+  record(
+    'WP-279: the helpers were inspected live, mount the socket directory read-only and name IdentityAgent, no key file',
+    helperRoles.has('mirror') &&
+      helperRoles.has('export') &&
+      helperList.every(
+        (helper) =>
+          helper.json.includes('IdentityAgent=/run/agentic-ssh-agent/') &&
+          helper.json.includes('"Subpath": "ssh-helper-agents"') &&
+          !helper.json.includes('GIT_SSH_KEY') &&
+          !helper.json.includes('/tmp/agentic-ssh/key'),
+      ),
+    JSON.stringify([...helperRoles]),
+  );
+  record(
+    'WP-279 canary: the key is in no helper container’s configuration, the relayed launcher’s log or the runner’s report',
+    helperList.length > 0 &&
+      helperList.every((helper) => !carries(helper.json)) &&
+      !carries(`${relayedLauncherLog.stdout}${relayedLauncherLog.stderr}`) &&
+      !carries(relayedRunnerLog.stdout),
+    `searched ${helperList.length} helpers, ${relayedLauncherLog.stdout.length} launcher log bytes`,
+  );
+  if (relayed?.ok !== true) {
+    process.stderr.write(
+      `--- relayed runner ---\n${relayedRunnerLog.stdout.slice(-4000)}\n${relayedRunnerLog.stderr.slice(-4000)}\n--- relayed launcher ---\n${relayedLauncherLog.stdout.slice(-4000)}\n`,
+    );
+  }
+
   if (told?.ok !== true) {
     process.stderr.write(
       `--- runner ---\n${runnerLog.stdout.slice(-4000)}\n${runnerLog.stderr.slice(-4000)}\n--- launcher ---\n${launcherLog.stdout.slice(-4000)}\n--- stand-in ---\n${standinLog.stderr.slice(-2000)}\n`,
@@ -451,16 +692,36 @@ try {
 } catch (error) {
   record('the check ran to completion', false, String(error?.stack ?? error));
 } finally {
-  await docker(['rm', '-f', RUNNER_NAME, LAUNCHER_NAME, ...(standin === null ? [] : [standin])], {
+  await docker(
+    [
+      'rm',
+      '-f',
+      RUNNER_NAME,
+      LAUNCHER_NAME,
+      RELAYED_RUNNER_NAME,
+      RELAYED_LAUNCHER_NAME,
+      ...(standin === null ? [] : [standin]),
+    ],
+    { allowFailure: true },
+  );
+  await fixture?.cleanup();
+  await docker(['volume', 'rm', '-f', `ws-${RUN_ID}`, `ws-${RELAYED_RUN_ID}`], {
     allowFailure: true,
   });
-  await fixture?.cleanup();
-  await docker(['volume', 'rm', '-f', `ws-${RUN_ID}`], { allowFailure: true });
 }
 const left = await docker(['ps', '-a', '--filter', `name=${RUN_ID}`, '--format', '{{.Names}}'], {
   allowFailure: true,
 });
 record('nothing of the run is left on the daemon', left.stdout.trim() === '', left.stdout.trim());
+const relayedLeft = await docker(
+  ['ps', '-a', '--filter', `name=${RELAYED_RUN_ID}`, '--format', '{{.Names}}'],
+  { allowFailure: true },
+);
+record(
+  'nothing of the relayed run is left on the daemon',
+  relayedLeft.stdout.trim() === '',
+  relayedLeft.stdout.trim(),
+);
 
 const failed = results.filter((result) => !result.ok);
 process.stdout.write(

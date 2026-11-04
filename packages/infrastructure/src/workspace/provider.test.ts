@@ -7,8 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DockerEngine } from './engine.js';
 import {
   FIXTURE_RUN_ID,
+  provisioned,
   repoLessWorkspaceSpecFixture,
-  SKILL_CATALOGUE_FIXTURE,
   shortTempDir,
   workspaceSpecFixture,
 } from './fixtures.js';
@@ -19,6 +19,8 @@ import {
   DEFAULT_MIRROR_MEMORY_MB,
   DockerWorkspaceProvider,
   exportScript,
+  HELPER_PASSWD,
+  SSH_HELPER_KNOWN_HOSTS_SETUP,
   SSH_HELPER_SETUP,
 } from './provider.js';
 import { parseTar, writeTar } from './tar.js';
@@ -70,7 +72,6 @@ const providerWithSocketTimeout = (controlSocketTimeoutMs: number): DockerWorksp
     helperNetwork: 'platform',
     egressNetwork: 'platform',
     runnerUid: 1000,
-    skills: SKILL_CATALOGUE_FIXTURE,
     mintToken: () => TOKEN,
     now: () => new Date('2026-09-10T12:00:00.000Z'),
     controlSocketTimeoutMs,
@@ -78,12 +79,16 @@ const providerWithSocketTimeout = (controlSocketTimeoutMs: number): DockerWorksp
 
 const startDaemon = async (
   script?: (container: { name: string }) => { exitCode: number; logs: string },
-  { seedMirror = true }: { readonly seedMirror?: boolean } = {},
+  {
+    seedMirror = true,
+    imageIds,
+  }: { readonly seedMirror?: boolean; readonly imageIds?: ReadonlyMap<string, string> } = {},
 ): Promise<void> => {
   archives = new Map();
   daemon = new FakeDockerDaemon({
     archives,
     ...(script === undefined ? {} : { script }),
+    ...(imageIds === undefined ? {} : { imageIds }),
   });
   const socketPath = await daemon.start();
   // The fixture project's mirror, as an earlier `updateMirror` left it on the shared volume: the run
@@ -109,7 +114,6 @@ const startDaemon = async (
     helperNetwork: 'platform',
     egressNetwork: 'platform',
     runnerUid: 1000,
-    skills: SKILL_CATALOGUE_FIXTURE,
     mintToken: () => TOKEN,
     now: () => new Date('2026-09-10T12:00:00.000Z'),
   });
@@ -142,7 +146,7 @@ afterEach(async () => {
  */
 const created = async (): Promise<WorkspaceHandle> => {
   const spec = workspaceSpecFixture();
-  const handle = await provider.create(spec);
+  const handle = await provider.create(...provisioned(spec));
   await mkdir(path.join(controlRoot, spec.runId), { recursive: true });
   await writeFile(path.join(controlRoot, spec.runId, 'token'), `${TOKEN}\n`);
   const server = createServer();
@@ -162,9 +166,65 @@ describe('runner uid (Q51)', () => {
   });
 });
 
+/**
+ * WP-279 (TD-031 decision 4): the run and egress images are the digests the request names, checked
+ * on the daemon and never pulled; `configuredImageDigests` is what `GET /v1/health` answers.
+ */
+describe('images by digest (WP-279)', () => {
+  const RUN_ID_DIGEST = `sha256:${'1'.repeat(64)}`;
+  const EGRESS_ID_DIGEST = `sha256:${'2'.repeat(64)}`;
+
+  beforeEach(async () => {
+    await daemon.stop();
+    await startDaemon(undefined, {
+      imageIds: new Map([
+        ['platform-runtime:test', RUN_ID_DIGEST],
+        ['tinyproxy:test', EGRESS_ID_DIGEST],
+      ]),
+    });
+  });
+
+  it('answers the image ids its configured tags resolve to', async () => {
+    expect(await provider.configuredImageDigests()).toEqual({
+      run: RUN_ID_DIGEST,
+      egress: EGRESS_ID_DIGEST,
+    });
+  });
+
+  it('creates the run container and the sidecar from the digests it was told', async () => {
+    const images = await provider.configuredImageDigests();
+    const handle = await provider.create(...provisioned(workspaceSpecFixture(), undefined, images));
+    expect(daemon.containers.get(handle.containerId)?.body.Image).toBe(RUN_ID_DIGEST);
+    expect(daemon.containers.get(handle.sidecarContainerId as string)?.body.Image).toBe(
+      EGRESS_ID_DIGEST,
+    );
+    // The CLI check ran in the told image, not in whatever the tag names.
+    expect(daemon.history.find((c) => c.name.startsWith('clicheck-'))?.body.Image).toBe(
+      RUN_ID_DIGEST,
+    );
+  });
+
+  it('refuses a digest that is not on the daemon, naming it, and pulls nothing', async () => {
+    const absent = `sha256:${'f'.repeat(64)}`;
+    for (const images of [
+      { run: absent, egress: EGRESS_ID_DIGEST },
+      { run: RUN_ID_DIGEST, egress: absent },
+    ]) {
+      if (images.run === RUN_ID_DIGEST) await provider.configuredImageDigests();
+      const refused = await provider
+        .create(...provisioned(workspaceSpecFixture(), undefined, images))
+        .catch((error: unknown) => error as { code: string; reason: string; message: string });
+      expect(refused).toMatchObject({ code: 'invalid_spec', reason: 'image_not_local' });
+      expect((refused as { message: string }).message).toContain(absent);
+    }
+    expect(daemon.history).toEqual([]);
+    expect(daemon.requests.some((request) => request.path.includes('/images/create'))).toBe(false);
+  });
+});
+
 describe('create', () => {
   it('creates the control sub-directory before the run container starts (WP-13 obligation 1)', async () => {
-    await provider.create(workspaceSpecFixture());
+    await provider.create(...provisioned(workspaceSpecFixture()));
     // The double refuses a `volume-subpath` it has not seen created, the way the daemon does
     // (measured on 29.7.2). Reorder `#prepare` after the run container and this fails with the
     // daemon's own message rather than passing quietly.
@@ -176,7 +236,7 @@ describe('create', () => {
   });
 
   it('chowns the control directory and the workspace root to the uid the shim runs as', async () => {
-    await provider.create(workspaceSpecFixture());
+    await provider.create(...provisioned(workspaceSpecFixture()));
     const prepare = daemon.byName(`prep-${FIXTURE_RUN_ID}`);
     const script = (prepare?.body.Cmd ?? []).join('\n');
     expect(script).toContain(`chown -R 1000:1000 /ctl/${FIXTURE_RUN_ID}`);
@@ -186,13 +246,13 @@ describe('create', () => {
   });
 
   it('creates the run network as internal, so the workspace has no default route', async () => {
-    await provider.create(workspaceSpecFixture());
+    await provider.create(...provisioned(workspaceSpecFixture()));
     const network = [...daemon.networks.values()].find((entry) => entry.name.startsWith('run-'));
     expect(network).toEqual({ name: `run-${FIXTURE_RUN_ID}`, internal: true });
   });
 
   it('clones with no network at all', async () => {
-    await provider.create(workspaceSpecFixture());
+    await provider.create(...provisioned(workspaceSpecFixture()));
     const clone = daemon.byName(`clone-${FIXTURE_RUN_ID}`);
     expect(clone?.body.HostConfig?.NetworkMode).toBe('none');
     expect((clone?.body.Cmd ?? []).join('\n')).toContain('--shared');
@@ -208,7 +268,7 @@ describe('create', () => {
    * project's own `.claude/skills` survives, is `docker-workspace.e2e.test.ts`.
    */
   it('writes the spec’s platform skills into the workspace, as a plugin directory', async () => {
-    await provider.create(workspaceSpecFixture());
+    await provider.create(...provisioned(workspaceSpecFixture()));
     const skills = daemon.byName(`skills-${FIXTURE_RUN_ID}`);
     const script = (skills?.body.Cmd ?? []).join('\n');
     expect(script).toContain('/work/repo/.agentic-run/plugins/agentic/skills/ask-human/SKILL.md');
@@ -222,7 +282,7 @@ describe('create', () => {
   });
 
   it('excludes the platform’s directory from the checkout, locally to the clone', async () => {
-    await provider.create(workspaceSpecFixture());
+    await provider.create(...provisioned(workspaceSpecFixture()));
     const script = (daemon.byName(`skills-${FIXTURE_RUN_ID}`)?.body.Cmd ?? []).join('\n');
     // `.git/info/exclude`, never `.gitignore`: the second is a file of the project's, and the
     // Developer role's `git add -A` would otherwise sweep the platform's directory into the MR.
@@ -232,20 +292,52 @@ describe('create', () => {
   });
 
   it('starts no helper at all for a role with no skills', async () => {
-    await provider.create(workspaceSpecFixture({ skills: [] }));
+    await provider.create(...provisioned(workspaceSpecFixture({ skills: [] })));
     expect(daemon.byName(`skills-${FIXTURE_RUN_ID}`)).toBeUndefined();
   });
 
-  it('refuses a spec naming a skill this deployment does not ship, before the run starts', async () => {
-    await expect(
-      provider.create(workspaceSpecFixture({ skills: ['not-a-shipped-skill'] })),
-    ).rejects.toMatchObject({ code: 'invalid_spec' });
-    // `create`'s own teardown: either a handle or nothing.
-    expect(daemon.containers.get(`ws-${FIXTURE_RUN_ID}`)?.state).not.toBe('running');
+  /**
+   * WP-279 (TD-031 decision 4): the skills are the request's, and their digest is recomputed before
+   * anything exists — a mismatch creates no network, no volume and no helper.
+   */
+  it('refuses skills whose digest is not the one their bytes give, before creating anything', async () => {
+    const spec = workspaceSpecFixture();
+    const [, provision] = provisioned(spec);
+    const tampered = {
+      ...provision,
+      skills: {
+        ...provision.skills,
+        files: { ...provision.skills.files, kb: { 'SKILL.md': 'not the planned bytes' } },
+      },
+    };
+    await expect(provider.create(spec, tampered)).rejects.toMatchObject({
+      code: 'invalid_spec',
+      reason: 'skill_set_invalid',
+    });
+    expect(daemon.history).toEqual([]);
+    expect(daemon.networks.has(`net-${FIXTURE_RUN_ID}`)).toBe(false);
   });
 
+  it('refuses a block of skills that does not parse, by the same reason', async () => {
+    const spec = workspaceSpecFixture();
+    const [, provision] = provisioned(spec);
+    await expect(
+      provider.create(spec, { ...provision, skills: { ...provision.skills, digest: 'sha256:x' } }),
+    ).rejects.toMatchObject({ code: 'invalid_spec', reason: 'skill_set_invalid' });
+    expect(daemon.history).toEqual([]);
+  });
+
+  it('writes the bytes the request carried, never a catalogue of its own', async () => {
+    const spec = workspaceSpecFixture({ skills: ['kb'] });
+    const own = {
+      kb: { name: 'kb', version: '7', text: '---\nname: kb\ndescription: d\n---\nmine\n' },
+    };
+    await provider.create(...provisioned(spec, own));
+    const helper = daemon.byName(`skills-${FIXTURE_RUN_ID}`);
+    expect(helper?.body.Env).toContain(`AGENTIC_SKILL_0=${own.kb.text}`);
+  });
   it('starts the run container with technical/05 hardening and the control sub-path', async () => {
-    const handle = await provider.create(workspaceSpecFixture());
+    const handle = await provider.create(...provisioned(workspaceSpecFixture()));
     const container = daemon.containers.get(handle.containerId);
     expect(container?.body.User).toBe('1000:1000');
     expect(container?.body.HostConfig?.Mounts?.[1]).toMatchObject({
@@ -257,7 +349,7 @@ describe('create', () => {
 
   it('labels every object with the run, the project and the retention window', async () => {
     const spec = workspaceSpecFixture();
-    const handle = await provider.create(spec);
+    const handle = await provider.create(...provisioned(spec));
     expect(daemon.volumes.get(handle.volumeName)).toMatchObject({
       [WORKSPACE_LABELS.run]: spec.runId,
       [WORKSPACE_LABELS.project]: spec.projectId,
@@ -267,7 +359,7 @@ describe('create', () => {
   });
 
   it('points the workspace at the sidecar and connects the sidecar to a second network', async () => {
-    const handle = await provider.create(workspaceSpecFixture());
+    const handle = await provider.create(...provisioned(workspaceSpecFixture()));
     const env = daemon.containers.get(handle.containerId)?.body.Env ?? [];
     expect(env).toContain(`HTTPS_PROXY=http://egress-${FIXTURE_RUN_ID}:8888`);
     const sidecar = daemon.containers.get(handle.sidecarContainerId ?? '');
@@ -278,7 +370,7 @@ describe('create', () => {
 
   it('starts no sidecar when the spec allows no host, and sets no proxy', async () => {
     const handle = await provider.create(
-      workspaceSpecFixture({ egress: { hosts: [], connectPorts: [443] } }),
+      ...provisioned(workspaceSpecFixture({ egress: { hosts: [], connectPorts: [443] } })),
     );
     expect(handle.sidecarContainerId).toBeNull();
     const env = daemon.containers.get(handle.containerId)?.body.Env ?? [];
@@ -286,7 +378,7 @@ describe('create', () => {
   });
 
   it('makes the credential helper the shim, not anything in the repository', async () => {
-    const handle = await provider.create(workspaceSpecFixture());
+    const handle = await provider.create(...provisioned(workspaceSpecFixture()));
     const env = daemon.containers.get(handle.containerId)?.body.Env ?? [];
     expect(env).toContain('GIT_CONFIG_KEY_0=credential.helper');
     expect(env).toContain('GIT_CONFIG_VALUE_0=!agentic-runlet credential --socket /ctl/cred.sock');
@@ -318,7 +410,7 @@ describe('create', () => {
   it('refuses a spec that does not validate before it touches the daemon', async () => {
     const before = daemon.requests.length;
     await expect(
-      provider.create({ ...workspaceSpecFixture(), runId: '../other' }),
+      provider.create(...provisioned({ ...workspaceSpecFixture(), runId: '../other' })),
     ).rejects.toMatchObject({ code: 'invalid_spec' });
     expect(daemon.requests).toHaveLength(before);
   });
@@ -335,7 +427,7 @@ describe('create', () => {
         ? { exitCode: 128, logs: 'fatal: repository not found\n' }
         : { exitCode: 0, logs: '' },
     );
-    await expect(provider.create(workspaceSpecFixture())).rejects.toMatchObject({
+    await expect(provider.create(...provisioned(workspaceSpecFixture()))).rejects.toMatchObject({
       code: 'workspace_failed',
     });
     expect(daemon.created.filter((container) => container.state === 'running')).toEqual([]);
@@ -401,7 +493,7 @@ describe('create', () => {
         : { exitCode: 0, logs: '' },
     );
     const failure = await provider
-      .create(workspaceSpecFixture())
+      .create(...provisioned(workspaceSpecFixture()))
       .then(() => null)
       .catch((error: unknown) => error as { code: string; message: string; detail: string | null });
     expect(failure?.code).toBe('workspace_failed');
@@ -417,7 +509,7 @@ describe('create', () => {
   it('has nothing to redact, and still reports, when the helper carries no credential', async () => {
     await daemon.stop();
     await startDaemon(() => ({ exitCode: 1, logs: 'fatal: repository not found\n' }));
-    await expect(provider.create(workspaceSpecFixture())).rejects.toMatchObject({
+    await expect(provider.create(...provisioned(workspaceSpecFixture()))).rejects.toMatchObject({
       detail: expect.stringContaining('repository not found'),
     });
   });
@@ -441,7 +533,7 @@ describe('attach', () => {
   });
 
   it('refuses when the token is not on the control volume', async () => {
-    const handle = await provider.create(workspaceSpecFixture());
+    const handle = await provider.create(...provisioned(workspaceSpecFixture()));
     await expect(provider.attach(handle)).rejects.toMatchObject({ code: 'not_found' });
   });
 
@@ -463,7 +555,7 @@ describe('attach', () => {
   it('waits for a shim that starts listening after attach was called', async () => {
     provider = providerWithSocketTimeout(2_000);
     const spec = workspaceSpecFixture();
-    const handle = await provider.create(spec);
+    const handle = await provider.create(...provisioned(spec));
     await mkdir(path.join(controlRoot, spec.runId), { recursive: true });
     await writeFile(path.join(controlRoot, spec.runId, 'token'), `${TOKEN}\n`);
     const socketPath = path.join(controlRoot, spec.runId, 'ctl.sock');
@@ -492,7 +584,7 @@ describe('attach', () => {
   it('waits for the shim’s control socket and reports a shim that never listened', async () => {
     provider = providerWithSocketTimeout(50);
     const spec = workspaceSpecFixture();
-    const handle = await provider.create(spec);
+    const handle = await provider.create(...provisioned(spec));
     await mkdir(path.join(controlRoot, spec.runId), { recursive: true });
     await writeFile(path.join(controlRoot, spec.runId, 'token'), `${TOKEN}\n`);
     // A plain file at the socket's path is not a socket, and the check asks which it is.
@@ -699,13 +791,13 @@ describe('a spec with no checkout (WP-74)', () => {
       .filter((role) => role !== 'clicheck');
 
   it('runs no clone helper, and every other create step it would have run', async () => {
-    const handle = await provider.create(repoLessWorkspaceSpecFixture());
+    const handle = await provider.create(...provisioned(repoLessWorkspaceSpecFixture()));
     expect(helperRoles()).toEqual(['prep', 'skills', 'egresscfg', 'egress', 'ws']);
     expect(handle.cacheKey).toBeNull();
     // The other direction (rule 42): a spec with a repository still clones, in its place.
     await daemon.stop();
     await startDaemon();
-    await provider.create(workspaceSpecFixture());
+    await provider.create(...provisioned(workspaceSpecFixture()));
     expect(helperRoles()).toEqual(['prep', 'clone', 'skills', 'egresscfg', 'egress', 'ws']);
   });
 
@@ -714,7 +806,7 @@ describe('a spec with no checkout (WP-74)', () => {
    * with `filter=lfs` failed every create until the smudge was skipped (first local test).
    */
   it('clones with Git LFS left as pointer files', async () => {
-    await provider.create(workspaceSpecFixture());
+    await provider.create(...provisioned(workspaceSpecFixture()));
     const env = daemon.byName(`clone-${FIXTURE_RUN_ID}`)?.body.Env ?? [];
     expect(env).toContain('GIT_LFS_SKIP_SMUDGE=1');
   });
@@ -724,7 +816,7 @@ describe('a spec with no checkout (WP-74)', () => {
    * has no `DAC_OVERRIDE`: it must take the root back before it creates the run's directory.
    */
   it('takes the control volume’s root only when it cannot create the run’s directory there', async () => {
-    await provider.create(workspaceSpecFixture());
+    await provider.create(...provisioned(workspaceSpecFixture()));
     const lines = daemon.byName(`prep-${FIXTURE_RUN_ID}`)?.body.Cmd?.join('\n').split('\n') ?? [];
     const mkdir = lines.find((line) => line.startsWith('mkdir -p /ctl/')) ?? '';
     // The first `mkdir` is tried as-is; the `chown` is its fallback, never a step of its own, so a
@@ -736,7 +828,7 @@ describe('a spec with no checkout (WP-74)', () => {
   });
 
   it('makes the working directory the runner will spawn in, owned by the shim’s uid', async () => {
-    await provider.create(repoLessWorkspaceSpecFixture({ skills: [] }));
+    await provider.create(...provisioned(repoLessWorkspaceSpecFixture({ skills: [] })));
     const script = (daemon.byName(`prep-${FIXTURE_RUN_ID}`)?.body.Cmd ?? []).join('\n');
     expect(script).toContain('mkdir -p /work/repo');
     expect(script).toContain('chown 1000:1000 /work/repo');
@@ -744,27 +836,27 @@ describe('a spec with no checkout (WP-74)', () => {
     expect(daemon.byName(`skills-${FIXTURE_RUN_ID}`)).toBeUndefined();
     await daemon.stop();
     await startDaemon();
-    await provider.create(workspaceSpecFixture());
+    await provider.create(...provisioned(workspaceSpecFixture()));
     const cloned = (daemon.byName(`prep-${FIXTURE_RUN_ID}`)?.body.Cmd ?? []).join('\n');
     // `git clone` refuses a target that exists with content, so a repo-ful prep leaves it alone.
     expect(cloned).not.toContain('/work/repo');
   });
 
   it('still writes the platform skills, and no `.git/info/exclude` into a tree with no `.git`', async () => {
-    await provider.create(repoLessWorkspaceSpecFixture());
+    await provider.create(...provisioned(repoLessWorkspaceSpecFixture()));
     const script = (daemon.byName(`skills-${FIXTURE_RUN_ID}`)?.body.Cmd ?? []).join('\n');
     expect(script).toContain('/work/repo/.agentic-run/plugins/agentic/skills/kb/SKILL.md');
     expect(script).not.toContain('.git');
   });
 
   it('mounts no repo-cache into the run container', async () => {
-    const handle = await provider.create(repoLessWorkspaceSpecFixture());
+    const handle = await provider.create(...provisioned(repoLessWorkspaceSpecFixture()));
     const mounts = daemon.containers.get(handle.containerId)?.body.HostConfig?.Mounts ?? [];
     expect(mounts.map((mount) => mount.Target)).toEqual(['/work', '/ctl']);
   });
 
   it('refuses to export by name, before any helper starts', async () => {
-    const handle = await provider.create(repoLessWorkspaceSpecFixture());
+    const handle = await provider.create(...provisioned(repoLessWorkspaceSpecFixture()));
     await expect(
       provider.export(
         handle,
@@ -1035,7 +1127,7 @@ describe('one mirror, not the volume (WP-75)', () => {
     // The double read the sub-path off the mirror helper's own `git clone --mirror` line — so a
     // change to that line that moved the mirror would fail here, not in production.
     expect(noMirrorYet()).toBe(false);
-    const handle = await provider.create(spec);
+    const handle = await provider.create(...provisioned(spec));
     const cache = (daemon.containers.get(handle.containerId)?.body.HostConfig?.Mounts ?? []).filter(
       (mount) => mount.Source === 'repo-cache',
     );
@@ -1064,7 +1156,7 @@ describe('one mirror, not the volume (WP-75)', () => {
           : { exitCode: 0, logs: '' },
       { seedMirror: false },
     );
-    await expect(provider.create(workspaceSpecFixture())).rejects.toMatchObject({
+    await expect(provider.create(...provisioned(workspaceSpecFixture()))).rejects.toMatchObject({
       code: 'workspace_failed',
       message: /the project has no mirror to clone from \(\/cache\/acme\.git\)/,
     });
@@ -1082,7 +1174,7 @@ describe('one mirror, not the volume (WP-75)', () => {
     // container — the error an operator would get without the clone's check.
     await daemon.stop();
     await startDaemon(undefined, { seedMirror: false });
-    await expect(provider.create(workspaceSpecFixture())).rejects.toThrow(
+    await expect(provider.create(...provisioned(workspaceSpecFixture()))).rejects.toThrow(
       /cannot access path .*repo-cache\/_data\/acme\.git/,
     );
     expect(runContainerCreates()).toBe(1);
@@ -1246,7 +1338,7 @@ describe('one mirror, not the volume (WP-75)', () => {
       Memory: DEFAULT_MIRROR_MEMORY_MB * 1024 * 1024,
       MemorySwap: DEFAULT_MIRROR_MEMORY_MB * 1024 * 1024,
     });
-    await provider.create(spec);
+    await provider.create(...provisioned(spec));
     expect(daemon.byName(`clone-${FIXTURE_RUN_ID}`)?.body.HostConfig).toMatchObject({
       Memory: 512 * 1024 * 1024,
       MemorySwap: 512 * 1024 * 1024,
@@ -1384,7 +1476,9 @@ describe('the clone’s checkout (WP-105)', () => {
         ? { exitCode: 4, logs: 'AGENTIC_NO_CHECKOUT_COMMIT\n' }
         : { exitCode: 0, logs: '' },
     );
-    const refusal = provider.create(workspaceSpecFixture({ repo: { checkoutCommit: BASE } }));
+    const refusal = provider.create(
+      ...provisioned(workspaceSpecFixture({ repo: { checkoutCommit: BASE } })),
+    );
     await expect(refusal).rejects.toMatchObject({
       // Terminal: `classifyProvisionFailure` retries `workspace_failed` and not this.
       code: 'invalid_spec',
@@ -1405,11 +1499,13 @@ describe('the clone’s checkout (WP-105)', () => {
   });
 
   it('checks out a commit it holds detached, and a branch with the create fallback', async () => {
-    await provider.create(workspaceSpecFixture({ repo: { checkoutCommit: BASE } }));
+    await provider.create(...provisioned(workspaceSpecFixture({ repo: { checkoutCommit: BASE } })));
     expect(cloneScript()).toContain('git -C /work/repo checkout -q --detach "$CHECKOUT_COMMIT"');
     await daemon.stop();
     await startDaemon();
-    await provider.create(workspaceSpecFixture({ repo: { checkoutBranch: 'agentic/acme-1' } }));
+    await provider.create(
+      ...provisioned(workspaceSpecFixture({ repo: { checkoutBranch: 'agentic/acme-1' } })),
+    );
     // A branch keeps backlog 71's `||`: a task's first run creates its branch.
     expect(cloneScript()).toContain(
       'git -C /work/repo checkout "$CHECKOUT_BRANCH" 2>/dev/null || git -C /work/repo checkout -b "$CHECKOUT_BRANCH"',
@@ -1420,7 +1516,11 @@ describe('the clone’s checkout (WP-105)', () => {
   it('refuses a spec that names a branch and a commit at once', async () => {
     await expect(
       provider.create(
-        workspaceSpecFixture({ repo: { checkoutBranch: 'agentic/acme-1', checkoutCommit: BASE } }),
+        ...provisioned(
+          workspaceSpecFixture({
+            repo: { checkoutBranch: 'agentic/acme-1', checkoutCommit: BASE },
+          }),
+        ),
       ),
     ).rejects.toMatchObject({ code: 'invalid_spec' });
     expect(runContainerCreates()).toBe(0);
@@ -1485,7 +1585,8 @@ describe('every object the provider creates carries the instance label (WP-132)'
 
   it('reads every helper call in the source, and each carries the run label or is a named run-less one', () => {
     const calls = callsOf(/this\.#helper\(/g);
-    expect(calls).toHaveLength(11);
+    // 12 since WP-279: the SSH export's `/etc/passwd` helper (run-labelled).
+    expect(calls).toHaveLength(12);
     const runless = calls.filter(
       (call) => !/#labels\(|WORKSPACE_LABELS\.run\]|\blabels,/.test(call),
     );
@@ -1596,7 +1697,7 @@ describe('a deploy-key run (WP-146)', () => {
 
   it('gives the shim its agent socket and key, and the CLI ssh through the sidecar with no credential helper', async () => {
     const spec = sshSpec();
-    const handle = await provider.create(spec);
+    const handle = await provider.create(...provisioned(spec));
     expect(handle.gitSsh).toEqual(SSH);
     const env = daemon.containers.get(handle.containerId)?.body.Env ?? [];
     expect(env).toContain('RUNLET_SSH_AGENT_SOCKET=/ctl/ssh-agent.sock');
@@ -1621,7 +1722,7 @@ describe('a deploy-key run (WP-146)', () => {
   });
 
   it('answers the same environment for a handle after a launcher restart: it is the handle’s', async () => {
-    const handle = await provider.create(sshSpec());
+    const handle = await provider.create(...provisioned(sshSpec()));
     const restarted = providerWithSocketTimeout(1_000);
     expect((await restarted.cliEnvironment(handle)).gitSshCommand).toContain(
       'HostKeyAlias=gitlab.com',
@@ -1646,13 +1747,106 @@ describe('a deploy-key run (WP-146)', () => {
     expect(body).toContain('HostKeyAlias=gitlab.com');
     expect(body).not.toContain('credential.helper');
     expect(body).not.toContain(`${PRIVATE_KEY}@`);
-    const handle = await provider.create(spec);
+    const handle = await provider.create(...provisioned(spec));
     const runEnv = JSON.stringify(daemon.containers.get(handle.containerId)?.body ?? {});
     expect(runEnv).not.toContain(PRIVATE_KEY);
   });
 
+  /**
+   * WP-279 (TD-031's 2026-11-04 amendment, backlog 693): a worker's launcher holds no key. Its mirror
+   * and export helpers mount the run's helper agent socket directory read-only and run ssh with
+   * `IdentityAgent=<socket>` — no key file, no `GIT_SSH_KEY`, no secret in the helper at all.
+   */
+  const relayed = {
+    kind: 'relayed_ssh',
+    ssh: SSH,
+    agentSocket: 'ssh-helper-agents/run-1.sock',
+  } as const;
+  const assertRelayedHelper = (body: {
+    readonly Env?: readonly string[];
+    readonly Cmd?: readonly string[];
+    readonly HostConfig?: unknown;
+  }) => {
+    const env = body.Env ?? [];
+    expect(env.some((entry) => entry.startsWith('GIT_SSH_KEY='))).toBe(false);
+    expect(env).toContain(
+      'GIT_SSH_COMMAND=ssh -F /dev/null -o IdentityAgent=/run/agentic-ssh-agent/run-1.sock ' +
+        '-o IdentitiesOnly=no -o BatchMode=yes -o StrictHostKeyChecking=yes ' +
+        '-o UserKnownHostsFile=/tmp/agentic-ssh/known_hosts -o HostKeyAlias=gitlab.com',
+    );
+    expect(env).toContain(`GIT_SSH_KNOWN_HOSTS=${SSH.knownHosts[0]}`);
+    expect(env).toContain('GIT_CONFIG_KEY_0=url.ssh://git@altssh.gitlab.com:443/.insteadOf');
+    const script = (body.Cmd ?? []).join('\n');
+    expect(script).toContain(SSH_HELPER_KNOWN_HOSTS_SETUP[0]);
+    expect(script).not.toContain('/tmp/agentic-ssh/key');
+    expect(script).not.toContain('GIT_SSH_KEY');
+    expect((body.HostConfig as { Mounts: unknown[] }).Mounts).toContainEqual({
+      Type: 'volume',
+      Source: 'ctl',
+      Target: '/run/agentic-ssh-agent',
+      ReadOnly: true,
+      VolumeOptions: { Subpath: 'ssh-helper-agents' },
+    });
+  };
+
+  it('relayed: fetches the mirror through the helper agent socket, holding no key (WP-279)', async () => {
+    const spec = sshSpec();
+    // The remote-worker made the socket's directory (WP-283); the daemon refuses a missing sub-path.
+    daemon.seedSubpath('ctl', 'ssh-helper-agents');
+    await provider.updateMirror({
+      projectId: spec.projectId,
+      repo: spec.repo,
+      credential: relayed,
+    });
+    const mirror = daemon.history.find((container) => container.name === 'mirror-acme');
+    assertRelayedHelper(mirror?.body ?? {});
+    expect(mirror?.body.HostConfig?.NetworkMode).toBe('platform');
+  });
+
+  it('relayed: pushes an export through the same socket, holding no key (WP-279)', async () => {
+    daemon.seedSubpath('ctl', 'ssh-helper-agents');
+    const handle = await provider.create(...provisioned(sshSpec()));
+    await provider.export(
+      handle,
+      { branch: 'agentic/task-1', tarballPath: null, commitMessage: 'wip' },
+      relayed,
+    );
+    const helper = daemon.byName(`export-${FIXTURE_RUN_ID}`);
+    assertRelayedHelper(helper?.body ?? {});
+    // OpenSSH refuses a uid with no passwd entry (measured): the export helper is given one.
+    expect(helper?.body.HostConfig?.Mounts).toContainEqual({
+      Type: 'volume',
+      Source: 'ctl',
+      Target: '/etc/passwd',
+      ReadOnly: true,
+      VolumeOptions: { Subpath: 'helper-etc/passwd' },
+    });
+    const etc = daemon.byName(`etc-${FIXTURE_RUN_ID}`);
+    expect(etc?.body.Env).toContain(`HELPER_PASSWD=${HELPER_PASSWD}`);
+    expect(etc?.body.User).toBe('0:0');
+  });
+
+  it('relayed: refuses a socket inside a run’s control directory, or one that climbs, before any helper', async () => {
+    const spec = sshSpec();
+    for (const agentSocket of [`${FIXTURE_RUN_ID}/agent.sock`, '../agent.sock', 'agent.sock']) {
+      await expect(
+        provider.updateMirror({
+          projectId: spec.projectId,
+          repo: spec.repo,
+          credential: { ...relayed, agentSocket },
+        }),
+      ).rejects.toMatchObject({ code: 'invalid_spec' });
+    }
+    expect(daemon.history).toEqual([]);
+  });
+
   it('pushes a take-over export over SSH with the same tmpfs key, and over HTTPS otherwise', () => {
-    const ssh = exportScript({ mirror: '/cache/acme.git', push: true, tarball: false, ssh: true });
+    const ssh = exportScript({
+      mirror: '/cache/acme.git',
+      push: true,
+      tarball: false,
+      sshSetup: SSH_HELPER_SETUP,
+    });
     expect(ssh.split('\n').slice(1, 3)).toEqual([...SSH_HELPER_SETUP]);
     const https = exportScript({ mirror: '/cache/acme.git', push: true, tarball: false });
     expect(https).not.toContain('GIT_SSH_KEY');

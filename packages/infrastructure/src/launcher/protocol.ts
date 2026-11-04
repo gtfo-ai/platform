@@ -57,11 +57,16 @@ import {
   workspaceSpecSchema,
 } from '@platform/application';
 import {
+  type DeployKeyCarriage,
+  helperAgentSocketSchema,
   isoDateTimeSchema,
   nonEmptyStringSchema,
   type RunCredentialPayload,
   runCredentialIssues,
   runCredentialSchema,
+  runImagesSchema,
+  runSkillsIssues,
+  runSkillsSchema,
   secretInEnvironment,
   shaSchema,
 } from '@platform/contracts';
@@ -95,6 +100,13 @@ export const CONTROL_PLANE_AUTH_HEADER = 'authorization';
  * long before it costs anything. Bounded *here* rather than at the reverse proxy, because there is
  * no reverse proxy on an `internal: true` compose network (standing rule 31: the bound that is
  * optional is the bound that is absent).
+ *
+ * **Re-measured at WP-279**, when the create request began carrying the skills' content (TD-031
+ * decision 4), and **not raised**: a request carrying all ten shipped skills is **29,600 bytes**
+ * (the skills block 28,686 of it; `apps/server/src/workspaces.test.ts` holds it under a quarter of
+ * the bound), and ten skills each at `MAX_SKILL_BYTES` (16 KiB, the loader's cap) of plain text are
+ * 165,103 bytes. What would not fit is ten capped skills of nothing but characters JSON escapes
+ * (329 KB of newlines) — refused `413` here, never cut, and a corpus nowhere near either cap.
  */
 export const CONTROL_PLANE_MAX_BODY_BYTES = 256 * 1024;
 
@@ -304,25 +316,72 @@ export { type RunCredentialPayload, runCredentialSchema };
  *    environment a caller controls. `#gitCredentialEnv` keeps the helpers' copy out of the run
  *    container; this keeps the spec's.
  */
-export const createRunRequestSchema = z
-  .strictObject({
-    spec: workspaceSpecSchema,
-    credential: runCredentialSchema.nullable(),
-  })
-  .superRefine((request, context) => {
-    const { spec, credential } = request;
-    const refuse = (message: string): void => {
-      context.addIssue({ code: 'custom', message, path: ['credential'] });
-    };
-    // The rules live in `@platform/contracts` since WP-273, so a remote worker's run package applies
-    // the same ones (TD-031 decision 4); `carried` is this hop's: the deploy key reaches the launcher.
-    for (const message of runCredentialIssues(spec, credential, 'carried')) refuse(message);
-    if (credential !== null && secretInEnvironment(credential.password, [spec.env])) {
-      refuse(
-        'the credential appears in the spec’s container environment, which the agent can read',
-      );
-    }
-  });
+/**
+ * Which deploy-key carriage a launcher applies — `carried` for the server's (the key in the request,
+ * TD-028 decision 13b) or `relayed` for a worker's (TD-031's 2026-11-04 amendment, backlog 693:
+ * no key, and a {@link CreateRunRequestPayload.helperAgentSocket} instead). The launcher's own
+ * configuration decides (`APP_LAUNCHER_DEPLOY_KEY_CARRIAGE`, set by `compose.worker.yml`), never the
+ * request; `signed_by_core` is the run package's rule and no launcher's.
+ */
+export type LauncherDeployKeyCarriage = Extract<DeployKeyCarriage, 'carried' | 'relayed'>;
+
+/**
+ * The create request under one carriage — {@link createRunRequestSchema} is `carried`'s, the
+ * server's; a worker's launcher parses with `relayed`'s.
+ *
+ * Since WP-279 it also carries what the **caller** decided (TD-031 decision 4): the `skills`' content
+ * with each one's version and the set's digest — exactly the spec's names (`runSkillsIssues`); the
+ * launcher recomputes the digest and refuses a mismatch `invalid_spec` — and the run and egress
+ * `images` by digest, which it refuses `invalid_spec` when they are not on its daemon, never pulling.
+ */
+export const createRunRequestSchemaFor = (carriage: LauncherDeployKeyCarriage) =>
+  z
+    .strictObject({
+      spec: workspaceSpecSchema,
+      credential: runCredentialSchema.nullable(),
+      skills: runSkillsSchema,
+      images: runImagesSchema,
+      /**
+       * `relayed` only, and then exactly for an SSH spec: the run's helper agent socket, relative to
+       * the `ctl` volume (`helperAgentSocketSchema`), which the mirror and export helpers mount.
+       */
+      helperAgentSocket: helperAgentSocketSchema.optional(),
+    })
+    .superRefine((request, context) => {
+      const { spec, credential } = request;
+      const refuse = (message: string, path: string = 'credential'): void => {
+        context.addIssue({ code: 'custom', message, path: [path] });
+      };
+      // The rules live in `@platform/contracts` since WP-273, so a remote worker's run package applies
+      // the same ones (TD-031 decision 4); the carriage is this launcher's.
+      for (const message of runCredentialIssues(spec, credential, carriage)) refuse(message);
+      if (credential !== null && secretInEnvironment(credential.password, [spec.env])) {
+        refuse(
+          'the credential appears in the spec’s container environment, which the agent can read',
+        );
+      }
+      const ssh = spec.repo?.ssh !== undefined;
+      if (carriage === 'relayed' && ssh && request.helperAgentSocket === undefined) {
+        refuse(
+          'a relayed SSH spec names the helper agent socket its mirror and export helpers sign through (TD-031’s 2026-11-04 amendment)',
+          'helperAgentSocket',
+        );
+      }
+      if (request.helperAgentSocket !== undefined && (carriage !== 'relayed' || !ssh)) {
+        refuse(
+          'a helper agent socket travels only with a relayed SSH spec: anything else has nothing to sign',
+          'helperAgentSocket',
+        );
+      }
+      for (const message of runSkillsIssues(request.skills, spec.skills)) refuse(message, 'skills');
+    });
+
+/** The server's launcher: `carried` (TD-028 decision 13b), unchanged by WP-279 but for skills and images. */
+export const createRunRequestSchema = createRunRequestSchemaFor('carried');
+
+/** A worker's launcher: `relayed` (TD-031's 2026-11-04 amendment). */
+export const relayedCreateRunRequestSchema = createRunRequestSchemaFor('relayed');
+
 export type CreateRunRequestPayload = z.infer<typeof createRunRequestSchema>;
 
 /**
@@ -431,6 +490,15 @@ export const healthResponseSchema = z.strictObject({
   controlRoot: nonEmptyStringSchema.max(4_096),
   runtimeImage: nonEmptyStringSchema.max(512),
   claudeCodePath: nonEmptyStringSchema.max(4_096),
+  /**
+   * The run and egress images this launcher is configured with, **by digest** as its daemon resolves
+   * them now (WP-279's "configured tags resolved") — what a server's provisioner sends back on every
+   * create. `null` when the daemon could not answer; the provisioner then refuses the run as
+   * `engine_unavailable`, which is retryable.
+   */
+  images: runImagesSchema.nullable(),
+  /** Which deploy-key carriage this launcher applies (WP-279). */
+  deployKeyCarriage: z.enum(['carried', 'relayed']),
   /** How many runs this process holds a create handle for. A gauge, never a record. */
   runs: z.int().min(0),
 });

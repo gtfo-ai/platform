@@ -14,6 +14,7 @@ import {
   type PurgeReport,
   silentLogger,
   type WorkspaceProvider,
+  type WorkspaceSpec,
 } from '@platform/application';
 import { runner, workspace } from '@platform/infrastructure';
 import { PLATFORM_SKILLS } from '@platform/prompts';
@@ -38,6 +39,12 @@ const carried = (overrides: Partial<workspace.CarriedRunCredential> = {}) => ({
   ...overrides,
 });
 
+/**
+ * What the core decided for a spec (WP-279): the shipped skills it names, carried with their digest
+ * — the launcher holds no copy of its own — and the provider's configured images (`null`).
+ */
+const provisionOf = (spec: WorkspaceSpec) => workspace.provisionFixture(spec, PLATFORM_SKILLS);
+
 const build = (overrides: { retentionSweepMs?: number } = {}) => {
   broker = new workspace.RunCredentialBroker(silentLogger);
   service = new LauncherService({
@@ -55,19 +62,18 @@ const start = async (overrides: { readOnly?: boolean } = {}) => {
   const spec = workspace.workspaceSpecFixture({ runId: randomUUID(), readOnly });
   return {
     spec,
-    started: await service.startRun(spec, carried(readOnly ? { scope: 'read' } : {})),
+    started: await service.startRun(
+      spec,
+      carried(readOnly ? { scope: 'read' } : {}),
+      provisionOf(spec),
+    ),
   };
 };
 
 beforeEach(async () => {
   dir = await workspace.shortTempDir('agentic-launcher-');
   clock = runner.manualClock();
-  provider = new workspace.FakeWorkspaceProvider({
-    controlRoot: path.join(dir, 'ctl'),
-    // The shipped ten, because this is `apps/launcher` — the composition root that supplies them
-    // in production does so from exactly this import.
-    skills: PLATFORM_SKILLS,
-  });
+  provider = new workspace.FakeWorkspaceProvider({ controlRoot: path.join(dir, 'ctl') });
   build();
 });
 
@@ -102,7 +108,7 @@ describe('startRun', () => {
       runId: randomUUID(),
       protectedPaths: ['README.md', '**/*.test.*'],
     });
-    const started = await service.startRun(spec, carried());
+    const started = await service.startRun(spec, carried(), provisionOf(spec));
     expect(started.existingProtectedPaths).toEqual({
       state: 'listed',
       paths: ['README.md'],
@@ -113,7 +119,7 @@ describe('startRun', () => {
   it('starts the run with an unlisted answer when the listing throws', async () => {
     const throwing: WorkspaceProvider = {
       updateMirror: (input) => provider.updateMirror(input),
-      create: (spec) => provider.create(spec),
+      create: (spec, provision) => provider.create(spec, provision),
       attach: (handle) => provider.attach(handle),
       cliEnvironment: (handle) => provider.cliEnvironment(handle),
       listExistingProtectedPaths: async () => {
@@ -136,7 +142,7 @@ describe('startRun', () => {
       retentionSweepMs: 60_000,
     });
     const spec = workspace.workspaceSpecFixture({ runId: randomUUID() });
-    const started = await listing.startRun(spec, carried());
+    const started = await listing.startRun(spec, carried(), provisionOf(spec));
     expect(started.existingProtectedPaths).toMatchObject({
       state: 'unlisted',
       reason: /the daemon went away mid-listing/,
@@ -148,14 +154,14 @@ describe('startRun', () => {
     const { started } = await start({ readOnly: true });
     expect(started.credentialScope).toBe('read');
     const spec = workspace.workspaceSpecFixture({ runId: randomUUID(), readOnly: true });
-    await expect(service.startRun(spec, carried())).rejects.toMatchObject({
+    await expect(service.startRun(spec, carried(), provisionOf(spec))).rejects.toMatchObject({
       code: 'invalid_spec',
     });
   });
 
   it('lets a read-only stage start with no credential — an anonymous fetch', async () => {
     const spec = workspace.workspaceSpecFixture({ runId: randomUUID(), readOnly: true });
-    const started = await service.startRun(spec, null);
+    const started = await service.startRun(spec, null, provisionOf(spec));
     expect(started.credential).toBeNull();
     expect(provider.events.map((event) => event.kind)).toEqual(['mirror', 'create', 'attach']);
   });
@@ -169,7 +175,7 @@ describe('startRun', () => {
   it('neither mirrors nor asks the broker for a spec with no checkout, and still attaches', async () => {
     const hold = vi.spyOn(broker, 'hold');
     const spec = workspace.repoLessWorkspaceSpecFixture({ runId: randomUUID() });
-    const started = await service.startRun(spec, null);
+    const started = await service.startRun(spec, null, provisionOf(spec));
     expect(provider.events.map((event) => event.kind)).toEqual(['create', 'attach']);
     expect(hold).not.toHaveBeenCalled();
     expect(started.credential).toBeNull();
@@ -179,11 +185,15 @@ describe('startRun', () => {
 
   it('refuses a credential that does not match the spec: none for no repository, one for a writer', async () => {
     const repoLess = workspace.repoLessWorkspaceSpecFixture({ runId: randomUUID() });
-    await expect(service.startRun(repoLess, carried())).rejects.toMatchObject({
+    await expect(
+      service.startRun(repoLess, carried(), provisionOf(repoLess)),
+    ).rejects.toMatchObject({
       code: 'invalid_spec',
     });
     const repoFul = workspace.workspaceSpecFixture({ runId: randomUUID() });
-    await expect(service.startRun(repoFul, null)).rejects.toMatchObject({ code: 'invalid_spec' });
+    await expect(service.startRun(repoFul, null, provisionOf(repoFul))).rejects.toMatchObject({
+      code: 'invalid_spec',
+    });
     expect(broker.liveCount).toBe(0);
     expect(provider.events).toEqual([]);
   });
@@ -196,9 +206,9 @@ describe('startRun', () => {
   it('forgets the credential when the workspace cannot be created', async () => {
     const spec = workspace.workspaceSpecFixture({ runId: randomUUID() });
     const other = workspace.workspaceSpecFixture({ runId: randomUUID() });
-    await service.startRun(other, carried());
-    await service.startRun(spec, carried());
-    await expect(service.startRun(spec, carried())).rejects.toMatchObject({
+    await service.startRun(other, carried(), provisionOf(other));
+    await service.startRun(spec, carried(), provisionOf(spec));
+    await expect(service.startRun(spec, carried(), provisionOf(spec))).rejects.toMatchObject({
       code: 'invalid_spec',
     });
     expect(broker.answer(spec.runId, { host: 'vcs.example.com', path: 'acme/api' })).toBeNull();
@@ -227,6 +237,23 @@ describe('startRun', () => {
  * later is covered the day it is added, which is what makes the docblock's claim enforced rather
  * than decorative.
  */
+/**
+ * WP-279: the relayed carriage's refusals hold at the service too, for a caller that reached it
+ * without the control plane's schema (defence in depth, named as such).
+ */
+describe('startRun with a relayed helper agent socket (WP-279)', () => {
+  it('refuses a socket beside a credential, or on a spec whose git is not SSH', async () => {
+    const spec = workspace.workspaceSpecFixture({ runId: randomUUID() });
+    await expect(
+      service.startRun(spec, carried(), provisionOf(spec), 'ssh-helper-agents/run.sock'),
+    ).rejects.toMatchObject({ code: 'invalid_spec' });
+    await expect(
+      service.startRun(spec, null, provisionOf(spec), 'ssh-helper-agents/run.sock'),
+    ).rejects.toMatchObject({ code: 'invalid_spec' });
+    expect(provider.events).toEqual([]);
+  });
+});
+
 describe('startRun leaves no container behind on any failure path', () => {
   const request = carried();
 
@@ -254,7 +281,7 @@ describe('startRun leaves no container behind on any failure path', () => {
       steps: () => steps,
       provider: {
         updateMirror: (input) => step('updateMirror', () => target.updateMirror(input)),
-        create: (spec) => step('create', () => target.create(spec)),
+        create: (spec, provision) => step('create', () => target.create(spec, provision)),
         attach: (handle) => step('attach', () => target.attach(handle)),
         // Not a step either: it reads what `create` already decided (WP-118).
         cliEnvironment: (handle) => target.cliEnvironment(handle),
@@ -293,7 +320,7 @@ describe('startRun leaves no container behind on any failure path', () => {
   it('destroys the workspace when attach fails, stopping before removing', async () => {
     const spec = workspace.workspaceSpecFixture({ runId: randomUUID() });
     const { provider: broken } = failingAtStep(provider, 3);
-    await expect(serviceWith(broken).startRun(spec, request)).rejects.toThrow(
+    await expect(serviceWith(broken).startRun(spec, request, provisionOf(spec))).rejects.toThrow(
       'injected failure in attach',
     );
     const kinds = provider.events
@@ -314,7 +341,7 @@ describe('startRun leaves no container behind on any failure path', () => {
   it('reports the original failure even when the teardown itself fails', async () => {
     const spec = workspace.workspaceSpecFixture({ runId: randomUUID() });
     const { provider: broken } = failingAtStep(provider, 3, 'throw');
-    await expect(serviceWith(broken).startRun(spec, request)).rejects.toThrow(
+    await expect(serviceWith(broken).startRun(spec, request, provisionOf(spec))).rejects.toThrow(
       'injected failure in attach',
     );
   });
@@ -326,6 +353,7 @@ describe('startRun leaves no container behind on any failure path', () => {
     await serviceWith(probe.provider).startRun(
       workspace.workspaceSpecFixture({ runId: randomUUID() }),
       request,
+      provisionOf(workspace.workspaceSpecFixture({ runId: randomUUID() })),
     );
     const stepCount = probe.steps().length;
     expect(stepCount).toBeGreaterThanOrEqual(3);
@@ -334,7 +362,7 @@ describe('startRun leaves no container behind on any failure path', () => {
       const spec = workspace.workspaceSpecFixture({ runId: randomUUID() });
       const attempt = failingAtStep(provider, failAt);
       const failure = await serviceWith(attempt.provider)
-        .startRun(spec, request)
+        .startRun(spec, request, provisionOf(spec))
         .then(
           () => null,
           (error: unknown) => error,
@@ -372,7 +400,9 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
     expect(ended.failures).toEqual([]);
     expect(ended.exported?.pushed).toBe(true);
     // The export pushed with the run's own credential, and it is gone afterwards.
-    expect(exported.mock.calls[0]?.[2]?.password).toBe(`${SECRET}-1`);
+    expect((exported.mock.calls[0]?.[2] as { password?: string } | null)?.password).toBe(
+      `${SECRET}-1`,
+    );
     expect(broker.credentialFor(started.handle.runId)).toBeNull();
     expect(provider.isRunning(started.handle.runId)).toBe(false);
     const kinds = provider.events.map((event) => event.kind);
@@ -386,7 +416,7 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
     // them. The failure ("Cannot read private member #runs") looks like a bug in the fake.
     const broken: WorkspaceProvider = {
       updateMirror: (input) => provider.updateMirror(input),
-      create: (spec) => provider.create(spec),
+      create: (spec, provision) => provider.create(spec, provision),
       attach: (handle) => provider.attach(handle),
       cliEnvironment: (handle) => provider.cliEnvironment(handle),
       listExistingProtectedPaths: (handle, request) =>
@@ -482,7 +512,7 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
     const { started } = await start();
     const broken: WorkspaceProvider = {
       updateMirror: (input) => provider.updateMirror(input),
-      create: (spec) => provider.create(spec),
+      create: (spec, provision) => provider.create(spec, provision),
       attach: (handle) => provider.attach(handle),
       cliEnvironment: (handle) => provider.cliEnvironment(handle),
       listExistingProtectedPaths: (handle, request) =>
@@ -522,7 +552,7 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
     const { started } = await start();
     const broken: WorkspaceProvider = {
       updateMirror: (input) => provider.updateMirror(input),
-      create: (spec) => provider.create(spec),
+      create: (spec, provision) => provider.create(spec, provision),
       attach: (handle) => provider.attach(handle),
       cliEnvironment: (handle) => provider.cliEnvironment(handle),
       listExistingProtectedPaths: (handle, request) =>
@@ -597,7 +627,7 @@ describe('retention sweep', () => {
       runId: randomUUID(),
       keepUntil: '1969-01-01T00:00:00.000Z',
     });
-    const started = await service.startRun(spec, carried());
+    const started = await service.startRun(spec, carried(), provisionOf(spec));
     await service.endRun(started.handle, { export: null });
 
     service.startRetentionSweep();

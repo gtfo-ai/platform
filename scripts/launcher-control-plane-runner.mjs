@@ -57,8 +57,13 @@ const FAKE_OAUTH_TOKEN = 'FAKE-wp133-oauth-token-not-a-credential';
 const { noSecretsRedactor, runOrphanWorkspaceReap } = await import(
   new URL('../packages/application/src/index.ts', import.meta.url).href
 );
-const { launcher: launcherAdapters, runner: runnerAdapters } = await import(
-  new URL('../packages/infrastructure/src/index.ts', import.meta.url).href
+const {
+  launcher: launcherAdapters,
+  runner: runnerAdapters,
+  workspace: workspaceAdapters,
+} = await import(new URL('../packages/infrastructure/src/index.ts', import.meta.url).href);
+const { PLATFORM_SKILLS } = await import(
+  new URL('../packages/prompts/src/index.ts', import.meta.url).href
 );
 
 const notes = [];
@@ -117,6 +122,16 @@ const client = {
   },
 };
 
+/**
+ * WP-279 (TD-031 decision 4): what every provisioner here sends besides the spec — the shipped skills
+ * the spec names, carried with their digest (the launcher holds no copy any more), and the launcher's
+ * configured images by digest, asked of its `/v1/health` per create, as `apps/server` composes it.
+ */
+const PROVISION = {
+  skills: PLATFORM_SKILLS,
+  images: launcherAdapters.launcherConfiguredImages(real),
+};
+
 const projectSource = {
   forRun: async () => ({
     repoUrl: required('CHECK_REPO_URL'),
@@ -142,6 +157,7 @@ const credentials = {
 };
 
 const provisioner = launcherAdapters.createLauncherRunWorkspaceProvisioner({
+  ...PROVISION,
   client,
   credentials,
   projects: projectSource,
@@ -359,6 +375,79 @@ if (PHASE === 'reap') {
  * `/proc/<pid>/environ` it can read for a fragment of the private key, passed as an **argument** so
  * the search pattern is in no environment. Nothing of the key is printed.
  */
+/**
+ * WP-279 (TD-031 decision 4), the launcher's two new refusals against the real one: skills whose
+ * digest is not their bytes', and an image digest its daemon does not hold. Both are `invalid_spec`
+ * with a reason the runner can name, and both before anything is created — which the host checks
+ * off the daemon for the two run ids. A third create with the honest provision and the digests the
+ * launcher's own health answered must succeed, so the refusals are about the change and nothing else.
+ */
+if (PHASE === 'wp279-refusals') {
+  const [skillRunId, imageRunId, honestRunId] = required('CHECK_WP279_RUN_IDS').split(',');
+  const health = await real.health();
+  const requestFor = (runId) => {
+    const spec = launcherAdapters.runWorkspaceSpecFor({
+      spec: specFor(runId),
+      project: {
+        repoUrl: required('CHECK_REPO_URL'),
+        defaultBranch: 'main',
+        projectPath: 'acme/api',
+        gitHost: required('CHECK_REPO_HOST'),
+        branchPatterns: ['agentic/*'],
+        containerEnv: {},
+      },
+      modelEgressHosts: [],
+      runRegistryHosts: [],
+      now: new Date(),
+    });
+    const named = { ...spec, skills: ['kb', 'verify-work'] };
+    return {
+      spec: named,
+      credential: null,
+      skills: workspaceAdapters.runSkillsFor(runId, named.skills, PLATFORM_SKILLS),
+      images: health.images,
+    };
+  };
+  const attempt = async (payload) => {
+    try {
+      const created = await real.createRun(payload);
+      await real.endRun(payload.spec.runId, { handle: created.handle, export: null });
+      return { created: true };
+    } catch (error) {
+      return {
+        created: false,
+        code: error?.code ?? null,
+        reason: error?.reason ?? null,
+        message: String(error?.message ?? error).slice(0, 400),
+      };
+    }
+  };
+  const tampered = requestFor(skillRunId);
+  tampered.skills = {
+    ...tampered.skills,
+    files: {
+      ...tampered.skills.files,
+      kb: { 'SKILL.md': 'not the bytes the run was planned with' },
+    },
+  };
+  const ABSENT = `sha256:${'f'.repeat(64)}`;
+  const absent = requestFor(imageRunId);
+  absent.images = { ...absent.images, egress: ABSENT };
+  process.stdout.write(
+    `${JSON.stringify({
+      phase: PHASE,
+      healthImages: health.images,
+      carriage: health.deployKeyCarriage,
+      skill: await attempt(tampered),
+      image: await attempt(absent),
+      absentDigest: ABSENT,
+      honest: await attempt(requestFor(honestRunId)),
+      notes,
+    })}\n`,
+  );
+  process.exit(0);
+}
+
 if (PHASE === 'deploy-key') {
   const runId = required('CHECK_DEPLOY_KEY_RUN_ID');
   const privateKey = required('CHECK_DEPLOY_PRIVATE_KEY');
@@ -392,6 +481,7 @@ if (PHASE === 'deploy-key') {
     revoke: async () => undefined,
   };
   const deployKeyProvisioner = launcherAdapters.createLauncherRunWorkspaceProvisioner({
+    ...PROVISION,
     client,
     credentials: { mint: async () => ({ kind: 'minted', credential: minted }) },
     projects: {
@@ -524,6 +614,187 @@ if (PHASE === 'deploy-key') {
 }
 
 /**
+ * WP-279 (TD-031's 2026-11-04 amendment, backlog 693; TODO V-WM8): **a worker's launcher holds no key**.
+ * This runner plays the `remote-worker`: it serves the run's **helper agent socket** on the `ctl`
+ * volume, beside the run's control directory, signing with the throwaway key through the same narrow
+ * oracle the core uses (`createDeployKeySigner`: the key, a git user-authentication blob, the cap),
+ * and asks a launcher configured `relayed` for a run whose create request carries **no credential**.
+ * The mirror helper must fetch through the socket (the clone exists at all only then) and the export
+ * of the end request must push through it, each counted. Each signature is held back
+ * `CHECK_SIGN_DELAY_MS` so the host can inspect the live helper container that asked for it.
+ *
+ * The socket's ownership is part of what is measured: `1000:0`, `0660`, in a `1000:0` `0750`
+ * directory — the export helper runs as uid 1000 and the mirror helper as root **with no
+ * capabilities** (no `DAC_OVERRIDE`), so root reaches it through group 0 and nobody else at all.
+ */
+if (PHASE === 'deploy-key-relayed') {
+  const { createServer } = await import('node:net');
+  const { chmod, chown, mkdir, rm: remove } = await import('node:fs/promises');
+  const agent = await import(
+    new URL('../packages/infrastructure/src/runlet/ssh-agent.ts', import.meta.url).href
+  );
+  const { createDeployKeySigner, MAX_DEPLOY_KEY_SIGNATURES } = await import(
+    new URL('../packages/infrastructure/src/launcher/deploy-key-signer.ts', import.meta.url).href
+  );
+  const runId = required('CHECK_RELAYED_RUN_ID');
+  const privateKey = required('CHECK_DEPLOY_PRIVATE_KEY');
+  const publicKey = required('CHECK_DEPLOY_PUBLIC_KEY');
+  const sshHost = required('CHECK_SSH_HOST');
+  const hostKey = required('CHECK_SSH_HOST_KEY');
+  const signDelayMs = Number(process.env['CHECK_SIGN_DELAY_MS'] ?? '0');
+  const probe = (privateKey.trim().split('\n')[4] ?? '').slice(
+    4,
+    4 + Number(required('CHECK_DEPLOY_KEY_FRAGMENT_LENGTH')),
+  );
+  const signer = createDeployKeySigner({ privateKey, publicKey });
+  /** The comment the agent lists beside the public key: a label, not a secret. */
+  const IDENTITY_COMMENT = ['wp279', 'relayed', 'agent'].join(' ');
+  const keyBlob = agent.publicKeyBlobOf(publicKey);
+  const directory = 'ssh-helper-agents';
+  const helperAgentSocket = `${directory}/${runId}.sock`;
+  const socketPath = `${CONTROL_ROOT}/${helperAgentSocket}`;
+  const phase = { phase: PHASE, ok: false, helperAgentSocket, notes, signedAt: [] };
+  let stage = 'create';
+  const server = createServer((socket) => {
+    let buffered = Buffer.alloc(0);
+    socket.on('data', (chunk) => {
+      try {
+        const split = agent.splitAgentMessages(Buffer.concat([buffered, chunk]));
+        buffered = Buffer.from(split.rest);
+        for (const message of split.messages) {
+          const request = agent.parseAgentRequest(message);
+          if (request.kind === 'identities') {
+            socket.write(agent.encodeIdentitiesAnswer(keyBlob, IDENTITY_COMMENT));
+          } else if (request.kind === 'sign') {
+            process.stdout.write(`${JSON.stringify({ phase: PHASE, signing: stage })}\n`);
+            setTimeout(() => {
+              void signer.sign(request).then((signature) => {
+                phase.signedAt.push(stage);
+                socket.write(
+                  signature === null ? agent.AGENT_FAILURE : agent.encodeSignResponse(signature),
+                );
+              });
+            }, signDelayMs);
+          } else {
+            socket.write(agent.AGENT_FAILURE);
+          }
+        }
+      } catch {
+        socket.destroy();
+      }
+    });
+    socket.on('error', () => socket.destroy());
+  });
+  try {
+    await mkdir(`${CONTROL_ROOT}/${directory}`, { recursive: true });
+    await chown(`${CONTROL_ROOT}/${directory}`, 1000, 0);
+    await chmod(`${CONTROL_ROOT}/${directory}`, 0o750);
+    await remove(socketPath, { force: true });
+    // Created `0660` rather than chmod-ed after: no window in which the socket is wider.
+    const umask = process.umask(0o117);
+    try {
+      await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(socketPath, () => resolve(undefined));
+      });
+    } finally {
+      process.umask(umask);
+    }
+    await chown(socketPath, 1000, 0);
+    await chmod(socketPath, 0o660);
+    const health = await real.health();
+    phase.carriage = health.deployKeyCarriage;
+    const gitSsh = {
+      publicKey,
+      httpsPrefix: 'https://gitlab.com/',
+      sshPrefix: `ssh://git@${sshHost}:443/`,
+      connectHost: sshHost,
+      connectPort: 443,
+      hostKeyAlias: 'gitlab.com',
+      knownHosts: [`gitlab.com ${hostKey}`],
+    };
+    const spec = launcherAdapters.withGitSsh(
+      launcherAdapters.runWorkspaceSpecFor({
+        spec: runnerAdapters.runSpecFixture({
+          runId,
+          tools: ['Read', 'Edit', 'Bash'],
+          artifactType: null,
+          checkoutRef: 'agentic/wp279-relayed',
+        }),
+        project: {
+          repoUrl: 'https://gitlab.com/acme/api.git',
+          defaultBranch: 'main',
+          projectPath: 'acme/api',
+          gitHost: 'gitlab.com',
+          branchPatterns: ['agentic/*'],
+          containerEnv: {},
+        },
+        modelEgressHosts: [],
+        runRegistryHosts: [],
+        now: new Date(),
+      }),
+      gitSsh,
+    );
+    // The carried launcher would refuse this request (no deploy key on an SSH spec); the relayed
+    // one requires exactly it. A deploy key beside it is refused first, to show the carriage holds.
+    const keyed = await real
+      .createRun({
+        spec,
+        credential: {
+          host: 'gitlab.com',
+          username: 'git',
+          password: privateKey,
+          scope: 'push',
+          expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+          source: 'deploy_key',
+        },
+        skills: workspaceAdapters.runSkillsFor(runId, spec.skills, PLATFORM_SKILLS),
+        images: health.images,
+      })
+      .then(() => 'created')
+      .catch((error) => error?.code ?? 'error');
+    phase.keyedRefusal = keyed;
+    const created = await real.createRun({
+      spec,
+      credential: null,
+      skills: workspaceAdapters.runSkillsFor(runId, spec.skills, PLATFORM_SKILLS),
+      images: health.images,
+      helperAgentSocket,
+    });
+    phase.mirrorSignatures = signer.signatures;
+    stage = 'export';
+    const ended = await real.endRun(runId, {
+      handle: created.handle,
+      export: {
+        branch: 'agentic/wp279-relayed',
+        commitMessage: 'wip: wp279 relayed export',
+        tarball: false,
+      },
+    });
+    phase.exported = ended.exported;
+    phase.endFailures = ended.failures;
+    phase.exportSignatures = signer.signatures - phase.mirrorSignatures;
+    phase.refusals = signer.refusals;
+    phase.cap = MAX_DEPLOY_KEY_SIGNATURES;
+    phase.ok =
+      keyed === 'invalid_spec' &&
+      phase.mirrorSignatures >= 1 &&
+      ended.exported?.pushed === true &&
+      phase.exportSignatures >= 1;
+  } catch (error) {
+    phase.error = String(error?.message ?? error).slice(0, 600);
+  } finally {
+    server.close();
+    await remove(socketPath, { force: true });
+  }
+  const printed = JSON.stringify(phase);
+  process.stdout.write(
+    `${printed.includes(probe) ? '{"phase":"deploy-key-relayed","ok":false,"error":"the report carried the key"}' : printed}\n`,
+  );
+  process.exit(0);
+}
+
+/**
  * WP-118 review round 1: **the CLI's git asks the shim for the run's credential**, end to end.
  *
  * A run minted a (fake) `read` credential — the one piece this check has no provider for — is
@@ -551,6 +822,7 @@ if (PHASE === 'git-credential') {
     revoke: async () => undefined,
   };
   const minting = launcherAdapters.createLauncherRunWorkspaceProvisioner({
+    ...PROVISION,
     client,
     credentials: { mint: async () => ({ kind: 'minted', credential: minted }) },
     projects: projectSource,
@@ -656,6 +928,7 @@ if (PHASE === 'real-cli') {
     : null;
   const runProvisioner = local
     ? launcherAdapters.createLauncherRunWorkspaceProvisioner({
+        ...PROVISION,
         client,
         credentials,
         projects: projectSource,
@@ -795,6 +1068,7 @@ if (PHASE === 'real-model') {
     modelOauthToken: value.length > 0 ? value : null,
   });
   const runProvisioner = launcherAdapters.createLauncherRunWorkspaceProvisioner({
+    ...PROVISION,
     client,
     credentials,
     projects: projectSource,
@@ -1278,6 +1552,7 @@ try {
   const badUrl = process.env['CHECK_BAD_LAUNCHER_URL'];
   if (badUrl !== undefined && badUrl.length > 0) {
     const badProvisioner = launcherAdapters.createLauncherRunWorkspaceProvisioner({
+      ...PROVISION,
       client: launcherAdapters.createLauncherControlClient({ baseUrl: badUrl, token, logger }),
       credentials,
       projects: projectSource,
@@ -1304,6 +1579,7 @@ try {
   const relabelledUrl = process.env['CHECK_RELABELLED_LAUNCHER_URL'];
   if (relabelledUrl !== undefined && relabelledUrl.length > 0) {
     const relabelledProvisioner = launcherAdapters.createLauncherRunWorkspaceProvisioner({
+      ...PROVISION,
       client: launcherAdapters.createLauncherControlClient({
         baseUrl: relabelledUrl,
         token,

@@ -32,6 +32,7 @@
  * | 5 | `updateMirror` performs no fetch, so a URL that does not resolve still "updates". | **Kinder** | The fake refuses a `create` whose project has no mirror (stricter than nothing, same as Docker's failing clone), asserted by `provider-suite.ts` › "refuses to create a workspace before the mirror exists". The refusal is for a spec **with** a repository only: a repo-less spec (WP-74) clones nothing in either implementation, and `provider-suite.ts` › "creates a workspace with no checkout and no mirror, and keeps its container, socket and skills" holds both to that. |
  * | 6 | No image pull, no daemon, so `engine_unavailable` never happens. | Kinder | Nothing pins it. Stated so no one reads the fake's reliability as the system's. |
  * | 7 | No repository, so a `repo.checkoutCommit` the mirror does not hold is not refused: the fake has no objects to look it up in (WP-105). | **Kinder** — a spec naming a lost shadow base creates a workspace here | `workspace/provider.test.ts` › "refuses a checkout commit the mirror does not hold, by name, before the run container" and the daemon case in `test/e2e/workspace/docker-workspace.e2e.test.ts` › "refuses a shadow base the mirror does not hold, and checks out one it does, detached". |
+ * | 9 | No daemon, so an image digest is "local" when it is in `localImageDigests` — **every** digest when that option is absent (WP-279). | **Kinder** when absent | Both implementations refuse a digest that is not local: `provider-suite.ts` › "refuses an image digest that is not on the daemon, naming it, before creating anything" passes `localImageDigests` to the fake and a digest no image has to Docker. The relayed helper agent socket (WP-279) is accepted and recorded, never connected to — the helper's own mount and ssh are `workspace/provider.test.ts`'s and `scripts/deploy-key-check.mjs`'s. |
  * | 8 | No image, so its shim protocol label is this build's `RUNLET_PROTOCOL_VERSION` by definition: an image with **no** label cannot be expressed (WP-151). | Neither for a mismatch, **kinder** for an absent label | A runner protocol the "image" does not speak is refused in both implementations: `provider-suite.ts` › "refuses a spec whose runner speaks another shim protocol than the run image, before creating anything". The absent label is the Docker provider's alone: `workspace/runtime-protocol.test.ts` › "refuses an image with no protocol label, and one with a label that is not a number". |
  *
  * Three places the fake is deliberately **stricter**, which is always allowed: it refuses a second
@@ -50,13 +51,15 @@ import type {
   LabelledRunWorkspace,
   PurgedWorkspace,
   PurgeReport,
+  RunImages,
   WorkspaceAttachment,
   WorkspaceCliEnvironment,
   WorkspaceExport,
   WorkspaceExportRequest,
-  WorkspaceGitCredential,
+  WorkspaceGitAccess,
   WorkspaceHandle,
   WorkspaceProvider,
+  WorkspaceProvision,
   WorkspaceRepo,
   WorkspaceSpec,
 } from '@platform/application';
@@ -80,11 +83,7 @@ import {
 import { assertHasCheckout, assertProjectEnv, mintRunToken } from './provider.js';
 import { expiredHolds, type RetentionHold, retentionDecisions } from './retention.js';
 
-import {
-  type PlatformSkillCatalogue,
-  WORKSPACE_GIT_EXCLUDE_ENTRY,
-  workspaceSkillFiles,
-} from './skills.js';
+import { WORKSPACE_GIT_EXCLUDE_ENTRY, workspaceSkillFiles } from './skills.js';
 import { filterTar, type TarInput, writeTar } from './tar.js';
 import { listingRefusal, parseTrackedListing, trackedListingOutput } from './tracked.js';
 
@@ -121,12 +120,10 @@ interface FakeRun {
 
 export interface FakeWorkspaceProviderOptions {
   /**
-   * The platform skills this deployment ships. Required for the same reason the Docker provider
-   * requires them: a fake that quietly provisioned none would be kinder than the implementation it
-   * stands in for (standing rule 1), and the contract suite would certify a workspace with nothing
-   * in it.
+   * The image digests this fake "daemon" holds (WP-279): a create naming another is refused
+   * `image_not_local`, as the Docker provider refuses it. Absent holds every digest — divergence 9.
    */
-  readonly skills: PlatformSkillCatalogue;
+  readonly localImageDigests?: ReadonlySet<string>;
   /** Where the (never-listening) control sockets are said to live. */
   readonly controlRoot?: string;
   readonly now?: () => Date;
@@ -160,7 +157,14 @@ export interface FakeWorkspaceEvent {
 
 export class FakeWorkspaceProvider implements WorkspaceProvider {
   readonly #controlRoot: string;
-  readonly #skills: PlatformSkillCatalogue;
+  readonly #localImageDigests: ReadonlySet<string> | null;
+  /** What each create was given (WP-279) — the skills it wrote and the image digests, for assertions. */
+  readonly provisions = new Map<string, WorkspaceProvision>();
+  /** The git access each mirror update and export was handed, in order (WP-279's relayed socket). */
+  readonly gitAccess: Array<{
+    readonly kind: 'mirror' | 'export';
+    readonly access: WorkspaceGitAccess | null;
+  }> = [];
   readonly #now: () => Date;
   readonly #mintToken: () => string;
   readonly #runs = new Map<string, FakeRun>();
@@ -171,7 +175,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
 
   constructor(options: FakeWorkspaceProviderOptions) {
     this.#controlRoot = options.controlRoot ?? '/tmp/agentic-fake-ctl';
-    this.#skills = options.skills;
+    this.#localImageDigests = options.localImageDigests ?? null;
     this.#now = options.now ?? (() => new Date());
     this.#mintToken = options.mintToken ?? mintRunToken;
     this.#tracked = options.tracked ?? DEFAULT_FAKE_TRACKED;
@@ -192,7 +196,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
   async updateMirror(input: {
     readonly projectId: string;
     readonly repo: WorkspaceRepo;
-    readonly credential: WorkspaceGitCredential | null;
+    readonly credential: WorkspaceGitAccess | null;
   }): Promise<{ readonly cachePath: string; readonly updated: boolean }> {
     // Stricter than doing nothing: a URL the Docker provider's `git` would refuse is refused here
     // too, so a spec with a nonsense remote fails in both tiers rather than only in production.
@@ -202,11 +206,29 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       });
     }
     this.#mirrors.add(input.repo.cacheKey);
+    this.gitAccess.push({ kind: 'mirror', access: input.credential });
     this.#record('mirror', input.projectId);
     return { cachePath: `/cache/${input.repo.cacheKey}.git`, updated: true };
   }
 
-  async create(rawSpec: WorkspaceSpec): Promise<WorkspaceHandle> {
+  /** Divergence 9: a digest not in `localImageDigests` is refused as the Docker provider refuses it. */
+  #assertImagesLocal(runId: string, images: RunImages | null): void {
+    if (images === null || this.#localImageDigests === null) return;
+    for (const [role, digest] of [
+      ['run', images.run],
+      ['egress', images.egress],
+    ] as const) {
+      if (!this.#localImageDigests.has(digest)) {
+        throw new WorkspaceError(
+          'invalid_spec',
+          `the ${role} image ${digest} is not on this launcher's daemon, and a launcher never pulls at create (TD-031 decision 4)`,
+          { runId, reason: 'image_not_local' },
+        );
+      }
+    }
+  }
+
+  async create(rawSpec: WorkspaceSpec, provision: WorkspaceProvision): Promise<WorkspaceHandle> {
     const parsed = workspaceSpecSchema.safeParse(rawSpec);
     if (!parsed.success) {
       throw new WorkspaceError('invalid_spec', 'workspace spec did not validate', {
@@ -216,6 +238,10 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     const spec = parsed.data;
     assertRunId(spec.runId);
     assertProjectEnv(spec.env);
+    // WP-279: the request's skills, digest checked by the function the Docker provider calls, and
+    // its image digests — both before anything is marked, as Docker creates nothing.
+    const skillFiles = workspaceSkillFiles(spec, provision.skills);
+    this.#assertImagesLocal(spec.runId, provision.images);
     // WP-151: the fake's run image is one built from this commit, so its shim speaks this build's
     // protocol — refused before the run id is marked seen, as the Docker provider creates nothing.
     if (spec.runletProtocol !== RUNLET_PROTOCOL_VERSION) {
@@ -261,6 +287,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       keepUntil: spec.keepUntil,
     };
     this.#seen.add(spec.runId);
+    this.provisions.set(spec.runId, provision);
     this.#runs.set(spec.runId, {
       spec,
       handle,
@@ -306,7 +333,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
         // container, so the two cannot disagree about which files a spec produces. What this
         // **cannot** show is that a CLI discovers them: that is the real container's tier and
         // standing rule 82's whole point (`docker-workspace.e2e.test.ts`).
-        ...workspaceSkillFiles(spec, this.#skills).map(
+        ...skillFiles.map(
           (file) =>
             [
               `repo/${file.path}`,
@@ -450,9 +477,10 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
   async export(
     handle: WorkspaceHandle,
     request: WorkspaceExportRequest,
-    credential: WorkspaceGitCredential | null,
+    credential: WorkspaceGitAccess | null,
   ): Promise<WorkspaceExport> {
     const run = this.#run(handle.runId);
+    this.gitAccess.push({ kind: 'export', access: credential });
     assertHasCheckout(handle);
     if (run.volumeRemoved) {
       throw new WorkspaceError('not_found', 'the workspace volume has been purged', {

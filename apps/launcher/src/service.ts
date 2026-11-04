@@ -55,9 +55,12 @@ import type {
   WorkspaceCliEnvironment,
   WorkspaceExport,
   WorkspaceExportRequest,
+  WorkspaceGitAccess,
   WorkspaceGitCredential,
   WorkspaceHandle,
   WorkspaceProvider,
+  WorkspaceProvision,
+  WorkspaceRelayedSsh,
   WorkspaceSpec,
 } from '@platform/application';
 import { unlistedProtectedPaths, WorkspaceError } from '@platform/application';
@@ -132,6 +135,12 @@ export interface LauncherServiceOptions {
 
 export class LauncherService {
   readonly #options: LauncherServiceOptions;
+  /**
+   * A relayed run's helper agent socket, by run id (WP-279, TD-031's 2026-11-04 amendment) — what its
+   * mirror fetch and its export sign through. Not a credential, and never in the broker: the broker
+   * answers the workspace's `cred.get`, and a socket is nothing it may answer with.
+   */
+  readonly #relayed = new Map<string, WorkspaceRelayedSsh>();
   #cancelSweep: (() => void) | null = null;
   #sweeping = false;
 
@@ -151,8 +160,14 @@ export class LauncherService {
    * refused too (TD-028's WP-76 amendment, decision 3): the runner refuses such a run before it
    * asks, so one arriving here is a caller that forgot, and running it would fail at the push.
    */
-  async startRun(spec: WorkspaceSpec, credential: RunCredential | null): Promise<StartedRun> {
+  async startRun(
+    spec: WorkspaceSpec,
+    credential: RunCredential | null,
+    provision: WorkspaceProvision,
+    helperAgentSocket: string | null = null,
+  ): Promise<StartedRun> {
     const { provider, broker, logger } = this.#options;
+    const relayed = this.#relayedAccess(spec, credential, helperAgentSocket);
     if (spec.repo === null && credential !== null) {
       throw new WorkspaceError(
         'invalid_spec',
@@ -160,7 +175,8 @@ export class LauncherService {
         { runId: spec.runId, reason: 'run_credential_scope_mismatch' },
       );
     }
-    if (spec.repo !== null && !spec.readOnly && credential === null) {
+    // A relayed SSH spec writes with no credential here: its helpers sign through the socket (WP-279).
+    if (spec.repo !== null && !spec.readOnly && credential === null && relayed === null) {
       throw new WorkspaceError(
         'invalid_spec',
         'a spec that writes must carry a run credential (TD-028, WP-76 amendment decision 3)',
@@ -185,14 +201,18 @@ export class LauncherService {
     // a running agent anywhere in the process.
     let handle: WorkspaceHandle | null = null;
     try {
+      if (relayed !== null) {
+        this.#relayed.set(spec.runId, relayed);
+      }
       if (spec.repo !== null) {
         await provider.updateMirror({
           projectId: spec.projectId,
           repo: spec.repo,
-          credential: held,
+          credential: held ?? relayed,
         });
       }
-      handle = await provider.create(spec);
+      // WP-279: the skills and the image digests are the request's, never this process' own.
+      handle = await provider.create(spec, provision);
       const attachment = await provider.attach(handle);
       const cliEnvironment = await provider.cliEnvironment(handle);
       // After `create`, before the runner starts the CLI: the index nothing has touched (WP-99).
@@ -217,11 +237,42 @@ export class LauncherService {
       // Forgotten here; **revoked by the runner**, which sees this create fail and owns the
       // credential it minted (decision 5). The launcher can no longer hand it to anything.
       broker.forget(spec.runId);
+      this.#relayed.delete(spec.runId);
       if (handle !== null) {
         await this.#destroyQuietly(handle);
       }
       throw error;
     }
+  }
+
+  /**
+   * A relayed run's git access (WP-279): the spec's SSH route and the helper agent socket the request
+   * named — and the carriage's three refusals again, here, for a caller that reached the service
+   * without the control plane's schema (standing rule 22: defence in depth, named as such). `null`
+   * for every run that names no socket.
+   */
+  #relayedAccess(
+    spec: WorkspaceSpec,
+    credential: RunCredential | null,
+    helperAgentSocket: string | null,
+  ): WorkspaceRelayedSsh | null {
+    if (helperAgentSocket === null) {
+      return null;
+    }
+    const ssh = spec.repo?.ssh;
+    if (ssh === undefined || credential !== null) {
+      throw new WorkspaceError(
+        'invalid_spec',
+        'a helper agent socket travels only with an SSH spec that carries no credential (TD-031’s 2026-11-04 amendment)',
+        { runId: spec.runId, reason: 'run_credential_scope_mismatch' },
+      );
+    }
+    return { kind: 'relayed_ssh', ssh, agentSocket: helperAgentSocket };
+  }
+
+  /** What a run's export pushes with: the held credential, or its relayed socket, or nothing. */
+  #gitAccessFor(runId: string): WorkspaceGitAccess | null {
+    return this.#options.broker.credentialFor(runId) ?? this.#relayed.get(runId) ?? null;
   }
 
   /**
@@ -297,7 +348,7 @@ export class LauncherService {
             // Backlog 467: an unsuccessful run's export, which pushes nothing for an unchanged tree.
             ...(request.export.onlyIfChanged === true ? { onlyIfChanged: true } : {}),
           },
-          broker.credentialFor(handle.runId),
+          this.#gitAccessFor(handle.runId),
         );
       }
     } catch (error) {
@@ -319,6 +370,7 @@ export class LauncherService {
       // Forgotten, not revoked: the runner revokes after this returns (decision 5), so the export
       // above has already pushed with it and nothing after this line can.
       broker.forget(handle.runId);
+      this.#relayed.delete(handle.runId);
       // The container stop is the guarantee. Nothing above may skip it.
       await provider.destroy(handle);
     }

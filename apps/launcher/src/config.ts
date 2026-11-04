@@ -36,6 +36,7 @@ export const launcherEnvSchema = z.strictObject({
   APP_LAUNCHER_TOKEN: z.string().min(1).optional(),
   APP_LAUNCHER_HOST: z.string().min(1).optional(),
   APP_LAUNCHER_PORT: positiveInt.max(65_535).optional(),
+  APP_LAUNCHER_DEPLOY_KEY_CARRIAGE: z.enum(['carried', 'relayed']).optional(),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error', 'silent']).optional(),
 });
 
@@ -72,6 +73,14 @@ export interface LauncherConfig {
     readonly host: string;
     readonly port: number;
   } | null;
+  /**
+   * How a deploy key reaches this launcher's mirror and export helpers (WP-279, TD-031's 2026-11-04
+   * amendment): `carried` — in the create request, the server's launcher (TD-028 decision 13b) — or
+   * `relayed` — never; the helpers sign through the run's helper agent socket, which a worker's
+   * `remote-worker` serves. `compose.worker.yml` (WP-284) sets `relayed`; absent is `carried`, which
+   * is every launcher that existed before it.
+   */
+  readonly deployKeyCarriage: 'carried' | 'relayed';
   readonly helperNetwork: string;
   readonly egressNetwork: string;
   readonly exportDir: string;
@@ -185,6 +194,7 @@ export const readLauncherConfig = (env: Record<string, string | undefined>): Lau
           // strict schema, which is why the filter names the three exactly rather than the prefix.
           key === 'APP_LAUNCHER_HOST' ||
           key === 'APP_LAUNCHER_PORT' ||
+          key === 'APP_LAUNCHER_DEPLOY_KEY_CARRIAGE' ||
           key === 'APP_LAUNCHER_TOKEN'),
     ),
   );
@@ -225,6 +235,7 @@ export const readLauncherConfig = (env: Record<string, string | undefined>): Lau
             host: parsed.APP_LAUNCHER_HOST ?? '0.0.0.0',
             port: parsed.APP_LAUNCHER_PORT ?? DEFAULT_CONTROL_PLANE_PORT,
           },
+    deployKeyCarriage: parsed.APP_LAUNCHER_DEPLOY_KEY_CARRIAGE ?? 'carried',
     helperNetwork: parsed.APP_WORKSPACE_HELPER_NETWORK ?? 'bridge',
     egressNetwork: parsed.APP_WORKSPACE_EGRESS_NETWORK ?? 'bridge',
     exportDir: parsed.APP_WORKSPACE_EXPORT_DIR ?? '/var/lib/app/exports',

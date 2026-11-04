@@ -10,12 +10,7 @@ import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FakeWorkspaceProvider } from './fake.js';
-import {
-  FIXTURE_RUN_ID,
-  SKILL_CATALOGUE_FIXTURE,
-  shortTempDir,
-  workspaceSpecFixture,
-} from './fixtures.js';
+import { FIXTURE_RUN_ID, provisioned, shortTempDir, workspaceSpecFixture } from './fixtures.js';
 import { parseTar } from './tar.js';
 
 let dir: string;
@@ -24,14 +19,13 @@ let provider: FakeWorkspaceProvider;
 const created = async () => {
   const spec = workspaceSpecFixture();
   await provider.updateMirror({ projectId: spec.projectId, repo: spec.repo, credential: null });
-  return { spec, handle: await provider.create(spec) };
+  return { spec, handle: await provider.create(...provisioned(spec)) };
 };
 
 beforeEach(async () => {
   dir = await shortTempDir('agentic-fake-ws-');
   provider = new FakeWorkspaceProvider({
     controlRoot: path.join(dir, 'ctl'),
-    skills: SKILL_CATALOGUE_FIXTURE,
   });
 });
 
@@ -131,7 +125,9 @@ describe('divergence 5 — the mirror is not fetched', () => {
 describe('where the fake is deliberately stricter', () => {
   it('refuses a second workspace for a run id it has ever seen', async () => {
     const { spec } = await created();
-    await expect(provider.create(spec)).rejects.toMatchObject({ code: 'invalid_spec' });
+    await expect(provider.create(...provisioned(spec))).rejects.toMatchObject({
+      code: 'invalid_spec',
+    });
   });
 
   it('refuses to export a run whose volume the sweep has purged', async () => {
@@ -146,6 +142,8 @@ describe('where the fake is deliberately stricter', () => {
   it('refuses a project variable that would redirect the run, exactly as Docker does', async () => {
     const spec = workspaceSpecFixture({ env: { HTTPS_PROXY: 'http://attacker' } });
     await provider.updateMirror({ projectId: spec.projectId, repo: spec.repo, credential: null });
-    await expect(provider.create(spec)).rejects.toMatchObject({ code: 'invalid_spec' });
+    await expect(provider.create(...provisioned(spec))).rejects.toMatchObject({
+      code: 'invalid_spec',
+    });
   });
 });

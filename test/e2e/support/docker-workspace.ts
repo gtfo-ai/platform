@@ -33,7 +33,6 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { type Logger, WORKSPACE_LABELS } from '@platform/application';
 import { workspace } from '@platform/infrastructure';
-import { PLATFORM_SKILLS } from '@platform/prompts';
 import {
   harnessLabelMap,
   harnessLabels,
@@ -509,9 +508,6 @@ export const startDockerFixture = async (
     cacheVolume,
     helperNetwork: network,
     egressNetwork: network,
-    // The shipped ten, not a fixture: this tier's whole point is that what a real container ends
-    // up holding is what the platform ships (standing rule 82).
-    skills: PLATFORM_SKILLS,
     // Q51: the provider refuses any uid but 1000, because the shim's control socket is 0600 and
     // created as uid 1000. This process is almost certainly *not* uid 1000 — a GitHub Actions
     // runner is 1001 — and that is the point of {@link relaxControlDirectoryForHost}: the

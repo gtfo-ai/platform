@@ -25,7 +25,7 @@ import { cliEnvironment } from '../runner/options.js';
 import { cliEnvironmentVariables, numberGitConfig } from './cli-environment.js';
 import { DockerEngine } from './engine.js';
 import { FakeWorkspaceProvider } from './fake.js';
-import { SKILL_CATALOGUE_FIXTURE, shortTempDir, workspaceSpecFixture } from './fixtures.js';
+import { provisioned, shortTempDir, workspaceSpecFixture } from './fixtures.js';
 import { DockerWorkspaceProvider } from './provider.js';
 import { FAKE_IMAGE_PATH, FakeDockerDaemon } from './testing.js';
 
@@ -52,7 +52,6 @@ const providerOn = async (
     helperNetwork: 'platform',
     egressNetwork: 'platform',
     runnerUid: 1000,
-    skills: SKILL_CATALOGUE_FIXTURE,
     mintToken: () => 'a'.repeat(32),
     now: () => new Date('2026-09-10T12:00:00.000Z'),
   });
@@ -90,7 +89,7 @@ afterEach(async () => {
 describe('the launcher’s answer and the run container’s environment come from one function (WP-118)', () => {
   it('writes every answered value onto the container, name for name and value for value', async () => {
     const provider = await providerOn();
-    const handle = await provider.create(workspaceSpecFixture());
+    const handle = await provider.create(...provisioned(workspaceSpecFixture()));
     const answer = await provider.cliEnvironment(handle);
     const env = containerEnv(handle.containerId);
     const rendered = { ...cliEnvironmentVariables(answer), ...numberGitConfig(answer.gitConfig) };
@@ -122,7 +121,7 @@ describe('the launcher’s answer and the run container’s environment come fro
   it('writes exactly the project’s names, the answer’s and the shim’s own onto the container', async () => {
     const provider = await providerOn();
     const spec = workspaceSpecFixture({ env: { CI: 'true', NODE_ENV: 'test' } });
-    const handle = await provider.create(spec);
+    const handle = await provider.create(...provisioned(spec));
     const answer = await provider.cliEnvironment(handle);
     const containerOnly = [
       'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
@@ -144,7 +143,7 @@ describe('the launcher’s answer and the run container’s environment come fro
   it('answers no proxy for a run with no sidecar, and the container has none either', async () => {
     const provider = await providerOn();
     const handle = await provider.create(
-      workspaceSpecFixture({ egress: { hosts: [], connectPorts: [443] } }),
+      ...provisioned(workspaceSpecFixture({ egress: { hosts: [], connectPorts: [443] } })),
     );
     const answer = await provider.cliEnvironment(handle);
     expect(answer.proxy).toBeNull();
@@ -155,7 +154,7 @@ describe('the launcher’s answer and the run container’s environment come fro
 
   it('answers the same values from the handle alone, as a restarted launcher would', async () => {
     const first = await providerOn();
-    const handle = await first.create(workspaceSpecFixture());
+    const handle = await first.create(...provisioned(workspaceSpecFixture()));
     const answered = await first.cliEnvironment(handle);
     await daemon.stop();
     const restarted = await providerOn();
@@ -168,13 +167,15 @@ describe('PATH is the run image’s own declared value (WP-118)', () => {
     const provider = await providerOn(
       new Map([[RUNTIME, ['NODE_VERSION=24', 'PATH=/opt/tools/bin:/usr/bin:/bin']]]),
     );
-    const handle = await provider.create(workspaceSpecFixture());
+    const handle = await provider.create(...provisioned(workspaceSpecFixture()));
     expect((await provider.cliEnvironment(handle)).path).toBe('/opt/tools/bin:/usr/bin:/bin');
     expect(containerEnv(handle.containerId)['PATH']).toBe('/opt/tools/bin:/usr/bin:/bin');
     // The `PATH` is asked of the image by name once per process, beside `test -x`; every create
     // inspects it once more for its shim protocol label (WP-151, `runtime-protocol.test.ts`), which
     // must not be memoised. So: one, then one per create.
-    await provider.create(workspaceSpecFixture({ runId: 'aaaaaaaa-1111-4111-8111-111111111111' }));
+    await provider.create(
+      ...provisioned(workspaceSpecFixture({ runId: 'aaaaaaaa-1111-4111-8111-111111111111' })),
+    );
     const inspects = daemon.requests.filter(
       (request) => request.method === 'GET' && request.path.startsWith('/images/'),
     );
@@ -185,16 +186,16 @@ describe('PATH is the run image’s own declared value (WP-118)', () => {
 
   it('is the Debian/node value when the image declares that', async () => {
     const provider = await providerOn();
-    const handle = await provider.create(workspaceSpecFixture());
+    const handle = await provider.create(...provisioned(workspaceSpecFixture()));
     expect((await provider.cliEnvironment(handle)).path).toBe(FAKE_IMAGE_PATH);
   });
 
   it('refuses an image that declares no PATH, as invalid_spec naming the image, before any run exists', async () => {
     for (const env of [null, ['NODE_VERSION=24']]) {
       const provider = await providerOn(new Map([[RUNTIME, env]]));
-      const attempt = provider.create(workspaceSpecFixture());
+      const attempt = provider.create(...provisioned(workspaceSpecFixture()));
       await expect(attempt).rejects.toBeInstanceOf(WorkspaceError);
-      await expect(provider.create(workspaceSpecFixture())).rejects.toMatchObject({
+      await expect(provider.create(...provisioned(workspaceSpecFixture()))).rejects.toMatchObject({
         code: 'invalid_spec',
         message: expect.stringContaining(`the run image ${RUNTIME} declares no PATH`),
       });
@@ -205,7 +206,7 @@ describe('PATH is the run image’s own declared value (WP-118)', () => {
 
   it('refuses a PATH that is not a list of absolute directories', async () => {
     const provider = await providerOn(new Map([[RUNTIME, ['PATH=bin:/usr/bin']]]));
-    await expect(provider.create(workspaceSpecFixture())).rejects.toMatchObject({
+    await expect(provider.create(...provisioned(workspaceSpecFixture()))).rejects.toMatchObject({
       code: 'invalid_spec',
       message: expect.stringContaining('not a list of absolute directories'),
     });
@@ -222,11 +223,11 @@ describe('no secret is added to the spawn frame (WP-118, TD-012)', () => {
     await writeFile(path.join(sourceMount, 'pnpm-workspace.yaml'), 'packages: []\n');
     for (const sourceDir of [null, sourceMount]) {
       const provider = await providerOn(new Map(), sourceDir);
-      const handle = await provider.create(workspaceSpecFixture());
+      const handle = await provider.create(...provisioned(workspaceSpecFixture()));
       answers.push(await provider.cliEnvironment(handle));
       await daemon.stop();
     }
-    const fake = new FakeWorkspaceProvider({ controlRoot, skills: SKILL_CATALOGUE_FIXTURE });
+    const fake = new FakeWorkspaceProvider({ controlRoot });
     await fake.updateMirror({
       projectId: workspaceSpecFixture().projectId,
       repo: workspaceSpecFixture().repo as NonNullable<
@@ -234,7 +235,9 @@ describe('no secret is added to the spawn frame (WP-118, TD-012)', () => {
       >,
       credential: null,
     });
-    answers.push(await fake.cliEnvironment(await fake.create(workspaceSpecFixture())));
+    answers.push(
+      await fake.cliEnvironment(await fake.create(...provisioned(workspaceSpecFixture()))),
+    );
     for (const answer of answers) {
       for (const value of valuesOf(answer)) {
         expect(detectSecrets(value), value).toEqual([]);
@@ -332,7 +335,9 @@ describe('a real git sends the helper the path under the composed list (backlog 
     const port = await unauthorised();
     const base = `http://127.0.0.1:${port}`;
     const provider = await providerOn();
-    const answer = await provider.cliEnvironment(await provider.create(workspaceSpecFixture()));
+    const answer = await provider.cliEnvironment(
+      await provider.create(...provisioned(workspaceSpecFixture())),
+    );
     const helper = path.join(workDir, 'record-helper');
     const log = path.join(workDir, 'asked.log');
     await writeFile(

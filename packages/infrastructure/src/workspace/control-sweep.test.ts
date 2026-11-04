@@ -33,7 +33,7 @@ import path from 'node:path';
 import { WORKSPACE_LABELS } from '@platform/application';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DockerEngine } from './engine.js';
-import { SKILL_CATALOGUE_FIXTURE, shortTempDir, workspaceSpecFixture } from './fixtures.js';
+import { provisioned, shortTempDir, workspaceSpecFixture } from './fixtures.js';
 import { DockerWorkspaceProvider } from './provider.js';
 import { FakeDockerDaemon } from './testing.js';
 
@@ -85,7 +85,6 @@ const build = async (): Promise<void> => {
     helperNetwork: 'platform',
     egressNetwork: 'platform',
     runnerUid: 1000,
-    skills: SKILL_CATALOGUE_FIXTURE,
     now: () => new Date('2026-09-10T12:00:00.000Z'),
   });
 };
@@ -213,20 +212,24 @@ describe('backlog 0b — the retention sweep reclaims an orphaned control direct
 describe('backlog 34 — a wrong CLI path fails by name, on the platform side', () => {
   it('refuses to create a run when the image has no executable there, naming the image and the path', async () => {
     cliPresent = false;
-    await expect(provider.create(workspaceSpecFixture({ runId: RUN_A }))).rejects.toMatchObject({
+    await expect(
+      provider.create(...provisioned(workspaceSpecFixture({ runId: RUN_A }))),
+    ).rejects.toMatchObject({
       name: 'WorkspaceError',
       // Terminal, because the same image would refuse the same path again
       // (`classifyProvisionFailure`): retrying would hide a configuration mistake.
       code: 'invalid_spec',
     });
-    await expect(provider.create(workspaceSpecFixture({ runId: RUN_A }))).rejects.toThrow(
-      /platform-runtime:test has no executable at \/usr\/local\/bin\/claude/,
-    );
+    await expect(
+      provider.create(...provisioned(workspaceSpecFixture({ runId: RUN_A }))),
+    ).rejects.toThrow(/platform-runtime:test has no executable at \/usr\/local\/bin\/claude/);
   });
 
   it('creates nothing when the check fails, so a bad image does not leak a container per attempt', async () => {
     cliPresent = false;
-    await expect(provider.create(workspaceSpecFixture({ runId: RUN_A }))).rejects.toThrow();
+    await expect(
+      provider.create(...provisioned(workspaceSpecFixture({ runId: RUN_A }))),
+    ).rejects.toThrow();
     const made = daemon.history.map((container) => container.name.split('-')[0]);
     expect(new Set(made)).toEqual(new Set(['clicheck']));
     expect(daemon.volumes.has(`ws-${RUN_A}`)).toBe(false);
@@ -236,20 +239,24 @@ describe('backlog 34 — a wrong CLI path fails by name, on the platform side', 
     // One helper container on the first create and none afterwards: the verdict is memoised,
     // because a `test -x` per run is a container per run for an answer that cannot change while the
     // image tag does not.
-    await provider.create(workspaceSpecFixture({ runId: RUN_A }));
-    await provider.create(workspaceSpecFixture({ runId: RUN_B }));
+    await provider.create(...provisioned(workspaceSpecFixture({ runId: RUN_A })));
+    await provider.create(...provisioned(workspaceSpecFixture({ runId: RUN_B })));
     expect(daemon.history.filter((c) => c.name.startsWith('clicheck-'))).toHaveLength(1);
   });
 
   it('does not cache a failure, so fixing the image needs no restart', async () => {
     cliPresent = false;
-    await expect(provider.create(workspaceSpecFixture({ runId: RUN_A }))).rejects.toThrow();
+    await expect(
+      provider.create(...provisioned(workspaceSpecFixture({ runId: RUN_A }))),
+    ).rejects.toThrow();
     cliPresent = true;
-    await expect(provider.create(workspaceSpecFixture({ runId: RUN_A }))).resolves.toBeDefined();
+    await expect(
+      provider.create(...provisioned(workspaceSpecFixture({ runId: RUN_A }))),
+    ).resolves.toBeDefined();
   });
 
   it('runs `test -x` in the run image, as uid 1000 and with no network', async () => {
-    await provider.create(workspaceSpecFixture({ runId: RUN_A }));
+    await provider.create(...provisioned(workspaceSpecFixture({ runId: RUN_A })));
     const check = daemon.history.find((container) => container.name.startsWith('clicheck-'));
     expect(check?.body.Image).toBe('platform-runtime:test');
     expect(check?.body.Cmd?.[0]).toBe('test -x /usr/local/bin/claude');

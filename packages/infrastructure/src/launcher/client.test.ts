@@ -146,6 +146,8 @@ describe('the client', () => {
         controlRoot: '/run/agentic/ctl',
         runtimeImage: 'platform-runtime:dev',
         claudeCodePath: '/usr/local/bin/claude',
+        images: null,
+        deployKeyCarriage: 'carried',
         runs: 0,
       }),
     }));

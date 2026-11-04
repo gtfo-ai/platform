@@ -220,21 +220,71 @@ export const skillSetDigestSchema = z
   .string()
   .regex(/^skills@(?:none|[0-9a-f]{16})$/, 'expected skills@<16 hex> or skills@none');
 
-/** The skills' **content** (TD-031 §4): name → relative path → text, with the set's digest. */
+/** A platform skill's declared version (`PLATFORM_SKILL_VERSIONS`): what the set's digest folds in. */
+const skillVersionSchema = z
+  .string()
+  .regex(/^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$/, 'expected a declared skill version');
+
+/**
+ * The one file of a skill the set's digest covers: `skillSetVersionOf` folds each skill's name, its
+ * declared version and its `SKILL.md` — nothing else — so a skill carries that file and no other
+ * (WP-279): a second file would reach the run with no digest that says which bytes it was.
+ */
+export const SKILL_FILE = 'SKILL.md';
+
+/**
+ * The skills' **content** (TD-031 §4): name → relative path → text, with the set's digest — and,
+ * since WP-279, each skill's declared version, because the digest is `skillSetVersionOf`'s over
+ * `(name, version, SKILL.md)` and a receiver cannot recompute it without the version. The launcher
+ * recomputes it and refuses a mismatch (`workspace/skills.ts`); this schema holds the shape.
+ */
 export const runSkillsSchema = z.strictObject({
   digest: skillSetDigestSchema,
   files: z.record(
     platformSkillNameSchema,
     z.record(skillFilePathSchema, z.string().max(256 * 1024)),
   ),
+  versions: z.record(platformSkillNameSchema, skillVersionSchema),
 });
 export type RunSkills = z.infer<typeof runSkillsSchema>;
+
+/**
+ * Why a skills block does not fit the skill names it travels with — one message per refusal, empty
+ * when it fits (WP-279). The run package and the launcher's create request apply the same rules: the
+ * content of **exactly** the named skills, a version for exactly those, and each skill's one
+ * {@link SKILL_FILE}. Whether the digest is right is the receiver's to recompute (`@platform/domain`).
+ */
+export const runSkillsIssues = (skills: RunSkills, names: readonly string[]): string[] => {
+  const issues: string[] = [];
+  const named = [...names].sort();
+  const same = (keys: string[]): boolean =>
+    keys.length === named.length && keys.every((name, index) => name === named[index]);
+  if (!same(Object.keys(skills.files).sort())) {
+    issues.push('the skills carried are exactly the skills the WorkspaceSpec names');
+  }
+  if (!same(Object.keys(skills.versions).sort())) {
+    issues.push('a version is carried for exactly the skills the WorkspaceSpec names');
+  }
+  for (const [name, files] of Object.entries(skills.files)) {
+    const paths = Object.keys(files);
+    if (paths.length !== 1 || paths[0] !== SKILL_FILE) {
+      issues.push(
+        `skill ${name} carries ${SKILL_FILE} and nothing else: the set's digest covers no other file (WP-279)`,
+      );
+    }
+  }
+  if ((skills.digest === 'skills@none') !== (named.length === 0)) {
+    issues.push('skills@none is the digest of the empty set, and only of it');
+  }
+  return issues;
+};
 
 /** The run and egress images by digest (TD-031 §4; the launcher never pulls at create). */
 export const runImagesSchema = z.strictObject({
   run: imageDigestSchema,
   egress: imageDigestSchema,
 });
+export type RunImages = z.infer<typeof runImagesSchema>;
 
 const textEncoder = new TextEncoder();
 
@@ -249,7 +299,7 @@ const textEncoder = new TextEncoder();
  *   launcher's own credential rules ({@link runCredentialIssues}, the rules `createRunRequestSchema`
  *   applies) **except** that a deploy key never travels: a package for an SSH run carries no
  *   credential and the worker forwards `ssh.sign` to the core (TD-031 §5).
- * - `skills` is the content of exactly the skills `workspace.skills` names.
+ * - `skills` is the content of exactly the skills `workspace.skills` names ({@link runSkillsIssues}).
  * - `runId`, `epoch`, `runToken`: the fence and the authentication of every run-scoped call.
  *
  * Bounded at {@link WORKER_PACKAGE_MAX_BYTES} of JSON, refused past it.
@@ -360,13 +410,8 @@ export const runPackageSchema = z
     for (const message of runCredentialIssues(pkg.workspace, pkg.credential, 'signed_by_core')) {
       refuse(['credential'], message);
     }
-    const named = [...pkg.workspace.skills].sort();
-    const carried = Object.keys(pkg.skills.files).sort();
-    if (named.length !== carried.length || named.some((name, index) => name !== carried[index])) {
-      refuse(
-        ['skills', 'files'],
-        'the package carries the content of exactly the skills the WorkspaceSpec names',
-      );
+    for (const message of runSkillsIssues(pkg.skills, pkg.workspace.skills)) {
+      refuse(['skills'], message);
     }
     if (textEncoder.encode(JSON.stringify(pkg)).length > WORKER_PACKAGE_MAX_BYTES) {
       refuse(

@@ -684,9 +684,12 @@ export type RunCredentialPayload = z.infer<typeof runCredentialSchema>;
 /**
  * How a deploy key travels: `carried` — in the launcher's create request, to the launcher's own mirror
  * and export helpers (TD-028 decision 13b) — or `signed_by_core` — never: a run package for a remote
- * worker carries no deploy key and the worker forwards `ssh.sign` to the core (TD-031 decision 5).
+ * worker carries no deploy key and the worker forwards `ssh.sign` to the core (TD-031 decision 5) — or
+ * `relayed`, the **worker's launcher** rule (TD-031's 2026-11-04 amendment, backlog 693): never in its
+ * create request either, and its mirror and export helpers sign through the run's helper agent socket,
+ * which the `remote-worker` relays to the core. For an HTTPS spec `relayed` is `carried`'s rule.
  */
-export type DeployKeyCarriage = 'carried' | 'signed_by_core';
+export type DeployKeyCarriage = 'carried' | 'signed_by_core' | 'relayed';
 
 /**
  * The run credential's rules against the spec it travels with — TD-028's WP-76 amendment (decisions 3
@@ -695,8 +698,9 @@ export type DeployKeyCarriage = 'carried' | 'signed_by_core';
  * message is one refusal; an empty list admits the pair. The order of the checks, and therefore of
  * the messages, is the launcher's own.
  *
- * The one difference is {@link DeployKeyCarriage}: under `signed_by_core` a `deploy_key` credential
- * is refused and an SSH spec carries none, because the key never leaves the core (TD-031 §5).
+ * The one difference is {@link DeployKeyCarriage}: under `signed_by_core` and `relayed` a
+ * `deploy_key` credential is refused and an SSH spec carries none, because the key never leaves the
+ * core (TD-031 §5 and its 2026-11-04 amendment); for an HTTPS spec both are `carried`'s rule.
  *
  * What it does **not** check is the credential in the environment: the launcher's request has one
  * environment (`spec.env`) and a package has two, so each schema runs `secretInEnvironment` over its own.
@@ -714,16 +718,22 @@ export const runCredentialIssues = (
     return issues;
   }
   const ssh = spec.repo.ssh;
-  if (deployKey === 'signed_by_core') {
+  // `signed_by_core` and `relayed` share every rule about the key: it is never on this hop, and an
+  // SSH spec carries no credential at all, because the core signs for it.
+  if (deployKey !== 'carried') {
     if (credential?.source === 'deploy_key') {
       issues.push(
-        'a deploy key never leaves the core: a run package carries none, and the worker forwards ssh.sign to the core (TD-031 decision 5)',
+        deployKey === 'relayed'
+          ? 'a deploy key never reaches a worker’s launcher: its helpers sign through the run’s helper agent socket (TD-031’s 2026-11-04 amendment)'
+          : 'a deploy key never leaves the core: a run package carries none, and the worker forwards ssh.sign to the core (TD-031 decision 5)',
       );
       return issues;
     }
     if (ssh !== undefined && credential !== null) {
       issues.push(
-        'a spec whose git goes over SSH carries no credential in a run package: the core signs for it (TD-031 decision 5)',
+        deployKey === 'relayed'
+          ? 'a spec whose git goes over SSH carries no credential to a worker’s launcher: the core signs for it (TD-031’s 2026-11-04 amendment)'
+          : 'a spec whose git goes over SSH carries no credential in a run package: the core signs for it (TD-031 decision 5)',
       );
     }
   }
@@ -736,7 +746,7 @@ export const runCredentialIssues = (
         'a spec that writes must carry a run credential; a binding that cannot mint refuses the run before it is created',
       );
     }
-    if (ssh !== undefined && deployKey === 'signed_by_core') {
+    if (ssh !== undefined && deployKey !== 'carried') {
       issues.push(...sshRouteIssues(spec, ssh));
     }
     return issues;
@@ -763,6 +773,40 @@ export const runCredentialIssues = (
     issues.push('the credential names a host that is not one of the spec’s egress hosts');
   }
   return issues;
+};
+
+/**
+ * A worker's **helper agent socket** — TD-031's 2026-11-04 amendment (backlog 693), the `relayed`
+ * carriage: `<directory>/<name>.sock`, **relative to the `ctl` volume's root**, which the
+ * `remote-worker` serves (WP-283) and the launcher mounts into its mirror and export helpers (WP-279).
+ *
+ * Two plain segments and nothing else — no `.`/`..`, no absolute path — because the directory becomes
+ * a volume `Subpath` and the name part of an `ssh` argument. The directory is **never uuid-shaped**:
+ * a uuid directory on that volume is a run's own control directory, which the run container mounts,
+ * and the ruling puts this socket *beside* it, where no run container can reach it.
+ */
+export const helperAgentSocketSchema = z
+  .string()
+  .max(160)
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/[A-Za-z0-9][A-Za-z0-9_-]{0,58}\.sock$/,
+    'expected <directory>/<name>.sock relative to the control volume',
+  )
+  .refine((value) => {
+    const directory = value.split('/')[0] as string;
+    return (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(directory) &&
+      !/^\.+$/.test(directory)
+    );
+  }, 'the helper agent socket is beside a run’s control directory, never inside one');
+
+/** `<directory>/<name>.sock` → its two parts, or `null` for a path {@link helperAgentSocketSchema} refuses. */
+export const parseHelperAgentSocket = (
+  value: string,
+): { readonly directory: string; readonly file: string } | null => {
+  if (!helperAgentSocketSchema.safeParse(value).success) return null;
+  const [directory, file] = value.split('/') as [string, string];
+  return { directory, file };
 };
 
 /** The SSH route's CONNECT host and port are ones the run may reach — 443, never 22. */

@@ -10,11 +10,19 @@
 import { MAX_LABELLED_RUNS } from '@platform/application';
 import { describe, expect, it } from 'vitest';
 import {
+  FIXTURE_RUN_ID,
+  provisionFixture,
+  SKILL_CATALOGUE_FIXTURE,
+  workspaceSpecFixture,
+} from '../workspace/fixtures.js';
+import {
   CONTROL_PLANE_PATHS,
+  createRunRequestSchema,
   createRunResponseSchema,
   destroyRunRequestSchema,
   destroyRunResponseSchema,
   listRunsResponseSchema,
+  relayedCreateRunRequestSchema,
   workspaceCliEnvironmentSchema,
 } from './protocol.js';
 
@@ -132,5 +140,87 @@ describe('the CLI environment on the wire (WP-118)', () => {
     expect(Object.keys(shape)).toContain('cliEnvironment');
     expect(Object.keys(shape)).toContain('claudeCodePath');
     expect(shape.cliEnvironment.safeParse(undefined).success).toBe(false);
+  });
+});
+
+/**
+ * WP-279: the create request under each carriage (TD-031's 2026-11-04 amendment) and the skills and
+ * images it carries (TD-031 decision 4). The schema is both ends', so the table is the contract.
+ */
+describe('the create request’s carriage, skills and images (WP-279)', () => {
+  const SSH = {
+    publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf',
+    httpsPrefix: 'https://vcs.example.com/',
+    sshPrefix: 'ssh://git@altssh.vcs.example.com:443/',
+    connectHost: 'altssh.vcs.example.com',
+    connectPort: 443,
+    hostKeyAlias: 'vcs.example.com',
+    knownHosts: [
+      'vcs.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn',
+    ],
+  };
+  const https = workspaceSpecFixture({ egress: { hosts: ['vcs.example.com'] } });
+  const ssh = workspaceSpecFixture({
+    repo: { url: 'https://vcs.example.com/acme/api.git', ssh: SSH } as never,
+    egress: { hosts: ['vcs.example.com', 'altssh.vcs.example.com'] },
+  });
+  const token = {
+    host: 'vcs.example.com',
+    username: 'oauth2',
+    password: 'fake_run_credential_push_0001',
+    scope: 'push',
+    expiresAt: '2026-11-05T00:00:00.000Z',
+  } as const;
+  const deployKey = {
+    ...token,
+    username: 'git',
+    password: 'FAKE-key',
+    source: 'deploy_key',
+  } as const;
+  const IMAGES = { run: `sha256:${'1'.repeat(64)}`, egress: `sha256:${'2'.repeat(64)}` };
+  const request = (spec: typeof https, credential: unknown, extra: object = {}) => ({
+    spec,
+    credential,
+    ...provisionFixture(spec, SKILL_CATALOGUE_FIXTURE, IMAGES),
+    ...extra,
+  });
+  const SOCKET = { helperAgentSocket: 'ssh-helper-agents/run.sock' };
+
+  it.each([
+    ['an HTTPS spec with its token', https, token, {}, true, true],
+    ['an HTTPS spec with a helper socket', https, token, SOCKET, false, false],
+    ['an SSH spec with its deploy key', ssh, deployKey, {}, true, false],
+    ['an SSH spec with its deploy key and a socket', ssh, deployKey, SOCKET, false, false],
+    ['an SSH spec with nothing', ssh, null, {}, false, false],
+    ['an SSH spec with only its helper socket', ssh, null, SOCKET, false, true],
+  ] as const)('%s: carried %s, relayed %s', (_label, spec, credential, extra, carried, relayed) => {
+    const body = request(spec, credential, extra);
+    expect(createRunRequestSchema.safeParse(body).success).toBe(carried);
+    expect(relayedCreateRunRequestSchema.safeParse(body).success).toBe(relayed);
+  });
+
+  it('refuses a helper socket inside a run’s control directory, or one that climbs', () => {
+    for (const helperAgentSocket of [`${FIXTURE_RUN_ID}/agent.sock`, '../x.sock', '/abs/x.sock']) {
+      expect(
+        relayedCreateRunRequestSchema.safeParse(request(ssh, null, { helperAgentSocket })).success,
+      ).toBe(false);
+    }
+  });
+
+  it('requires both images by digest and the skills of exactly the spec’s names', () => {
+    const body = request(https, token);
+    expect(
+      createRunRequestSchema.safeParse({
+        ...body,
+        images: { ...IMAGES, run: 'platform-runtime:latest' },
+      }).success,
+    ).toBe(false);
+    expect(createRunRequestSchema.safeParse({ ...body, images: undefined }).success).toBe(false);
+    expect(
+      createRunRequestSchema.safeParse({
+        ...body,
+        spec: { ...https, skills: ['kb'] },
+      }).success,
+    ).toBe(false);
   });
 });

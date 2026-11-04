@@ -64,6 +64,18 @@ describe('launcher configuration', () => {
     expect(config.images.runtimeSourceDir).toBeNull();
   });
 
+  /** WP-279 (TD-031's 2026-11-04 amendment): `relayed` is a worker's, set by its compose file. */
+  it('carries deploy keys unless told the helpers sign through a relayed socket', () => {
+    expect(readLauncherConfig(DAEMON).deployKeyCarriage).toBe('carried');
+    expect(
+      readLauncherConfig({ ...DAEMON, APP_LAUNCHER_DEPLOY_KEY_CARRIAGE: 'relayed' })
+        .deployKeyCarriage,
+    ).toBe('relayed');
+    expect(() =>
+      readLauncherConfig({ ...DAEMON, APP_LAUNCHER_DEPLOY_KEY_CARRIAGE: 'signed_by_core' }),
+    ).toThrow();
+  });
+
   it('ignores the rest of the environment rather than refusing it', () => {
     // `process.env` carries the world; a strict schema over all of it would refuse to start on any
     // machine. Strictness applies to the names this service owns.

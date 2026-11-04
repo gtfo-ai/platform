@@ -70,19 +70,23 @@ import type {
   PurgedControlDirectory,
   PurgedWorkspace,
   PurgeReport,
+  RunImages,
+  RunSkills,
   WorkspaceAttachment,
   WorkspaceCliEnvironment,
   WorkspaceExport,
   WorkspaceExportRequest,
-  WorkspaceGitCredential,
+  WorkspaceGitAccess,
   WorkspaceGitSsh,
   WorkspaceHandle,
   WorkspaceProvider,
+  WorkspaceProvision,
   WorkspaceRepo,
   WorkspaceSpec,
 } from '@platform/application';
 import {
   exactSecretRedactor,
+  isRelayedSsh,
   MAX_LABELLED_RUNS,
   MIN_SECRET_LENGTH,
   PLATFORM_SKILLS_PLUGIN_DIRECTORY,
@@ -92,7 +96,14 @@ import {
   WorkspaceError,
   workspaceSpecSchema,
 } from '@platform/application';
-import { declaredRunletProtocol, RUNLET_PROTOCOL_IMAGE_LABEL } from '@platform/contracts';
+import {
+  declaredRunletProtocol,
+  imageDigestSchema,
+  parseHelperAgentSocket,
+  RUNLET_PROTOCOL_IMAGE_LABEL,
+  runImagesSchema,
+  runSkillsSchema,
+} from '@platform/contracts';
 import { cliEnvironmentVariables, numberGitConfig } from './cli-environment.js';
 import { EGRESS_CONFIG_MOUNT, egressProxyUrl, renderEgressConfig } from './egress.js';
 import type { DockerEngine, EngineContainerSummary, EngineVolume } from './engine.js';
@@ -121,8 +132,8 @@ import {
 } from './names.js';
 import { expiredHolds, type RetentionHold, retentionDecisions } from './retention.js';
 import {
-  type PlatformSkillCatalogue,
   WORKSPACE_GIT_EXCLUDE_ENTRY,
+  type WorkspaceSkillFile,
   workspaceSkillFiles,
 } from './skills.js';
 import { filterTar, parseTar } from './tar.js';
@@ -192,6 +203,63 @@ export const SSH_HELPER_SETUP: readonly string[] = [
   `(umask 077 && mkdir -p ${HELPER_SSH_DIR} && printf '%s\\n' "$GIT_SSH_KEY" > ${HELPER_SSH_DIR}/key && printf '%s\\n' "$GIT_SSH_KNOWN_HOSTS" > ${HELPER_SSH_DIR}/known_hosts)`,
   'unset GIT_SSH_KEY',
 ];
+
+/**
+ * The `relayed` carriage's setup (TD-031's 2026-11-04 amendment, backlog 693): the documented
+ * `known_hosts` on the helper's tmpfs and **nothing else** — no key exists to write. The helper signs
+ * through the run's helper agent socket, mounted at {@link HELPER_AGENT_MOUNT}.
+ */
+export const SSH_HELPER_KNOWN_HOSTS_SETUP: readonly string[] = [
+  `(umask 077 && mkdir -p ${HELPER_SSH_DIR} && printf '%s\\n' "$GIT_SSH_KNOWN_HOSTS" > ${HELPER_SSH_DIR}/known_hosts)`,
+];
+
+/**
+ * The `/etc/passwd` an export helper that pushes over SSH is given (WP-279, measured): the export
+ * helper runs as uid 1000 and the git image names no such user, and OpenSSH's client refuses to start
+ * without one — *"No user exists for uid 1000"*, exit 255 — so a deploy-key export never pushed
+ * (`pushed: false`, nothing in `failures`), carried or relayed. Two lines, both with no login shell:
+ * root, which the image already had, and uid 1000 with its home on the helper's tmpfs.
+ */
+export const HELPER_PASSWD = [
+  'root:x:0:0:root:/root:/sbin/nologin',
+  `agentic:x:${WORKSPACE_UID}:${WORKSPACE_GID}:agentic:/tmp:/sbin/nologin`,
+  '',
+].join('\n');
+
+/**
+ * Where it lives: a directory at the **root** of the control volume, beside the runs' directories —
+ * never inside one, because a run container mounts its own and could rewrite a file the helper then
+ * trusts (a home directory is where `ssh` would look for configuration). Not uuid-shaped, so the
+ * control sweep never takes it for a run's.
+ */
+export const HELPER_ETC_DIRECTORY = 'helper-etc';
+
+/** Where a mirror or export helper sees the directory of a relayed run's helper agent socket. */
+export const HELPER_AGENT_MOUNT = '/run/agentic-ssh-agent';
+
+/**
+ * The `relayed` helper's `GIT_SSH_COMMAND`: no key file and no configuration file; the mounted helper
+ * agent socket is the one identity source (`IdentityAgent=<socket>`, `IdentitiesOnly=no` so the
+ * agent's key is offered with no file — the run container's `runSshCommand` says the same), and the
+ * documented host keys pinned by alias. Direct to the route's host and port, as {@link helperSshCommand}.
+ */
+export const relayedHelperSshCommand = (ssh: WorkspaceGitSsh, socketFile: string): string =>
+  [
+    'ssh -F /dev/null',
+    `-o IdentityAgent=${HELPER_AGENT_MOUNT}/${socketFile}`,
+    '-o IdentitiesOnly=no',
+    '-o BatchMode=yes',
+    '-o StrictHostKeyChecking=yes',
+    `-o UserKnownHostsFile=${HELPER_SSH_DIR}/known_hosts`,
+    `-o HostKeyAlias=${ssh.hostKeyAlias}`,
+  ].join(' ');
+
+/** The setup lines a mirror or export helper runs for its git access: a key, `known_hosts` only, or none. */
+export const helperSshSetup = (access: WorkspaceGitAccess | null): readonly string[] => {
+  if (access === null) return [];
+  if (isRelayedSsh(access)) return SSH_HELPER_KNOWN_HOSTS_SETUP;
+  return access.ssh === undefined ? [] : SSH_HELPER_SETUP;
+};
 
 /**
  * A helper's `GIT_SSH_COMMAND`: the key file, no agent, no configuration file, the documented host
@@ -369,14 +437,17 @@ export const exportScript = (input: {
   readonly mirror: string;
   readonly push: boolean;
   readonly tarball: boolean;
-  /** WP-146: the push goes over SSH with a deploy key written to the helper's tmpfs. */
-  readonly ssh?: boolean;
+  /**
+   * WP-146: the push goes over SSH — the lines {@link helperSshSetup} chose for the access (a deploy
+   * key written to the helper's tmpfs, or WP-279's relayed `known_hosts` only).
+   */
+  readonly sshSetup?: readonly string[];
   /** Backlog 467: commit and push only a tree that changed; print `CHANGED=yes|no`. */
   readonly onlyIfChanged?: boolean;
 }): string =>
   [
     'set -e',
-    ...(input.ssh === true ? SSH_HELPER_SETUP : []),
+    ...(input.sshSetup ?? []),
     'g() { git -c core.hooksPath=/dev/null "$@"; }',
     'cd /work/repo',
     `if [ -L .git ] || [ ! -d .git ] || [ -e .git/commondir ]; then echo "${UNSAFE_GITDIR_SENTINEL}"; exit 4; fi`,
@@ -474,11 +545,6 @@ export interface DockerWorkspaceProviderOptions {
   /** The network the egress sidecar is connected to besides the run's own. */
   readonly egressNetwork: string;
   readonly logger?: Logger;
-  /**
-   * The platform skills this deployment ships (`@platform/prompts`), which `create` provisions into
-   * the workspace. Required — see {@link PlatformSkillCatalogue}.
-   */
-  readonly skills: PlatformSkillCatalogue;
   /** `process.getuid()` in production; a number in tests. Q51: it must be 1000. */
   readonly runnerUid: number;
   readonly mintToken?: () => string;
@@ -642,7 +708,6 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    */
   readonly #cacheMount = CONTAINER_CACHE_MOUNT;
   readonly #helperNetwork: string;
-  readonly #skillCatalogue: PlatformSkillCatalogue;
   readonly #egressNetwork: string;
   readonly #logger: Logger;
   readonly #mintToken: () => string;
@@ -660,13 +725,17 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * only a helper no live call is waiting on — one a crashed launcher left.
    */
   readonly #liveHelpers = new Set<string>();
-  /** The memoised verdict of {@link assertRuntimeCli}; one helper container per process. */
-  #runtimeCliVerified: Promise<void> | null = null;
   /**
-   * The run image's own declared `PATH`, read by {@link assertRuntimeCli} beside the CLI path
-   * (WP-118) and `null` until it has been. The CLI is given it rather than a platform guess.
+   * The memoised verdicts of {@link assertRuntimeCli}, **per run image** — one helper container per
+   * image per process. Per image since WP-279: a create names its run image by digest, and a verdict
+   * about one image is not a verdict about another.
    */
-  #runtimeImagePath: string | null = null;
+  readonly #runtimeCliVerified = new Map<string, Promise<string>>();
+  /**
+   * The run image each live run was created from (WP-279), so {@link cliEnvironment} answers that
+   * image's declared `PATH`; a run this process did not create falls back to the configured tag.
+   */
+  readonly #runImages = new Map<string, string>();
 
   constructor(options: DockerWorkspaceProviderOptions) {
     assertRunnerUid(options.runnerUid);
@@ -676,7 +745,6 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     this.#controlRoot = options.controlRoot;
     this.#cacheVolume = options.cacheVolume;
     this.#helperNetwork = options.helperNetwork;
-    this.#skillCatalogue = options.skills;
     this.#egressNetwork = options.egressNetwork;
     this.#logger = options.logger ?? silentLogger;
     this.#mintToken = options.mintToken ?? mintRunToken;
@@ -711,15 +779,20 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * A **failed verification is not cached**: the field is cleared on rejection, so an operator who
    * fixes the image (or the daemon that was unreachable) does not have to restart the launcher.
    */
-  async assertRuntimeCli(): Promise<void> {
-    this.#runtimeCliVerified ??= this.#verifyRuntimeCli().catch((error: unknown) => {
-      this.#runtimeCliVerified = null;
-      throw error;
-    });
-    await this.#runtimeCliVerified;
+  async assertRuntimeCli(image: string = this.#images.runtime): Promise<string> {
+    let verdict = this.#runtimeCliVerified.get(image);
+    if (verdict === undefined) {
+      verdict = this.#verifyRuntimeCli(image).catch((error: unknown) => {
+        this.#runtimeCliVerified.delete(image);
+        throw error;
+      });
+      this.#runtimeCliVerified.set(image, verdict);
+    }
+    return verdict;
   }
 
-  async #verifyRuntimeCli(): Promise<void> {
+  /** Answers the image's declared `PATH` (WP-118) once its CLI is known to be there. */
+  async #verifyRuntimeCli(image: string): Promise<string> {
     const cliPath = this.runtimeCliPath;
     if (!cliPath.startsWith('/') || /[^\w./-]/.test(cliPath)) {
       throw new WorkspaceError(
@@ -731,7 +804,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     try {
       await this.#helper({
         name: `clicheck-${Math.random().toString(36).slice(2, 10)}`,
-        image: this.#images.runtime,
+        image,
         // `test -x` and nothing else: the binary is 216 MB and running `--version` would pay for
         // a Node start-up on every launcher boot for an answer `test -x` already gives.
         script: `test -x ${cliPath}`,
@@ -745,7 +818,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       if (error instanceof WorkspaceError && error.code === 'workspace_failed') {
         throw new WorkspaceError(
           'invalid_spec',
-          `the run image ${this.#images.runtime} has no executable at ${cliPath}, so every run would exec a path that is not in the container (APP_WORKSPACE_RUNTIME_CLI_PATH)`,
+          `the run image ${image} has no executable at ${cliPath}, so every run would exec a path that is not in the container (APP_WORKSPACE_RUNTIME_CLI_PATH)`,
           {
             ...(error.detail === null ? {} : { detail: error.detail }),
             cause: error,
@@ -755,11 +828,12 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       }
       throw error;
     }
-    this.#runtimeImagePath = await this.#readRuntimeImagePath();
+    const declaredPath = await this.#readRuntimeImagePath(image);
     this.#logger.info(
-      { image: this.#images.runtime, claude_code_path: cliPath },
+      { image, claude_code_path: cliPath },
       'the run image carries the CLI the platform will ask the shim to exec',
     );
+    return declaredPath;
   }
 
   /**
@@ -774,8 +848,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * there is no value to fall back on that is the image's. A value that is not a list of absolute
    * directories is refused the same way, since it becomes the CLI's command search path.
    */
-  async #readRuntimeImagePath(): Promise<string> {
-    const image = this.#images.runtime;
+  async #readRuntimeImagePath(image: string): Promise<string> {
     const inspected = await this.#engine.inspectImage(image);
     const declared = (inspected.Config?.Env ?? [])
       .filter((entry) => entry.startsWith('PATH='))
@@ -820,8 +893,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * declares none), so they reach the run's diagnosis as integers rather than only inside this
    * message, which the runner stores as the launcher's untrusted words.
    */
-  async #assertRunletProtocol(spec: WorkspaceSpec): Promise<string> {
-    const image = this.#images.runtime;
+  async #assertRunletProtocol(spec: WorkspaceSpec, image: string): Promise<string> {
     const inspected = await this.#engine.inspectImage(image);
     const label = inspected.Config?.Labels?.[RUNLET_PROTOCOL_IMAGE_LABEL];
     const declared = declaredRunletProtocol(label);
@@ -1006,9 +1078,13 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   async updateMirror(input: {
     readonly projectId: string;
     readonly repo: WorkspaceRepo;
-    readonly credential: WorkspaceGitCredential | null;
+    readonly credential: WorkspaceGitAccess | null;
   }): Promise<{ readonly cachePath: string; readonly updated: boolean }> {
     const cachePath = mirrorPath(this.#cacheMount, input.repo.cacheKey);
+    // Before the lock: a relayed socket path that does not parse is refused without a helper.
+    const { mounts: helperGitMounts, ...helperGitEnv } = this.#gitCredentialEnv(input.credential, {
+      REPO_URL: input.repo.url,
+    });
     const previous = this.#mirrorLocks.get(input.repo.cacheKey) ?? Promise.resolve();
     const work = previous
       .catch(() => undefined)
@@ -1022,7 +1098,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
           // delete objects a live run's alternates still point at.
           script: [
             'set -e',
-            ...(input.credential?.ssh === undefined ? [] : SSH_HELPER_SETUP),
+            ...helperSshSetup(input.credential),
             `if [ -d "${cachePath}" ]; then`,
             `  git -C "${cachePath}" remote set-url origin "$REPO_URL"`,
             `  git -C "${cachePath}" config gc.auto 0`,
@@ -1033,13 +1109,16 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
             'fi',
             `git -C "${cachePath}" rev-parse --is-bare-repository`,
           ].join('\n'),
-          ...this.#gitCredentialEnv(input.credential, { REPO_URL: input.repo.url }),
+          ...helperGitEnv,
           // **The whole volume, read-write, and it has to be** (WP-75): this helper *creates*
           // `<key>.git` on a first update, so a sub-path mount of it cannot exist yet — the daemon
           // refuses a `Subpath` that does not. What runs in it is platform content only: this
           // script, the platform's `git`, and a fetch that executes nothing it receives (no hook,
           // no filter and no config travels with a fetch). No agent code reaches this container.
-          mounts: [this.#volumeMount(this.#cacheVolume, this.#cacheMount, false)],
+          mounts: [
+            this.#volumeMount(this.#cacheVolume, this.#cacheMount, false),
+            ...helperGitMounts,
+          ],
           // Root, and it stays root: the mirror is written into a volume whose root is
           // `root:root`, and a helper with `cap-drop ALL` has no `DAC_OVERRIDE`, so root writing
           // into a tree owned by anyone else is refused exactly as an ordinary user would be. The
@@ -1074,12 +1153,50 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * script reading two variables keeps it out of all three.
    */
   #gitCredentialEnv(
-    credential: WorkspaceGitCredential | null,
+    credential: WorkspaceGitAccess | null,
     extra: Readonly<Record<string, string>>,
-  ): { readonly env: Record<string, string>; readonly secrets: readonly string[] } {
+  ): {
+    readonly env: Record<string, string>;
+    readonly secrets: readonly string[];
+    readonly mounts: readonly DockerMount[];
+  } {
     const base: Record<string, string> = { HOME: '/tmp', ...extra };
     if (credential === null) {
-      return { env: base, secrets: [] };
+      return { env: base, secrets: [], mounts: [] };
+    }
+    if (isRelayedSsh(credential)) {
+      // WP-279 (TD-031's 2026-11-04 amendment): no key reaches this process. The helper mounts the
+      // directory of the run's helper agent socket — read-only: `connect(2)` on a socket needs no
+      // write access to the filesystem it is on — and signs through it, so the environment carries
+      // the route and the host keys and no secret at all.
+      const socket = parseHelperAgentSocket(credential.agentSocket);
+      if (socket === null) {
+        throw new WorkspaceError(
+          'invalid_spec',
+          'the helper agent socket is not <directory>/<name>.sock beside a run’s control directory (TD-031’s 2026-11-04 amendment)',
+        );
+      }
+      const ssh = credential.ssh;
+      return {
+        env: {
+          ...base,
+          GIT_SSH_KNOWN_HOSTS: ssh.knownHosts.join('\n'),
+          GIT_SSH_COMMAND: relayedHelperSshCommand(ssh, socket.file),
+          GIT_CONFIG_COUNT: '1',
+          GIT_CONFIG_KEY_0: `url.${ssh.sshPrefix}.insteadOf`,
+          GIT_CONFIG_VALUE_0: ssh.httpsPrefix,
+        },
+        secrets: [],
+        mounts: [
+          {
+            Type: 'volume',
+            Source: this.#controlVolume,
+            Target: HELPER_AGENT_MOUNT,
+            ReadOnly: true,
+            VolumeOptions: { Subpath: socket.directory },
+          },
+        ],
+      };
     }
     if (credential.ssh !== undefined) {
       // WP-146 (TD-028 decision 13b item 5): a deploy key. The helper's script writes it to a
@@ -1097,6 +1214,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
           GIT_CONFIG_VALUE_0: ssh.httpsPrefix,
         },
         secrets: [credential.password],
+        mounts: [],
       };
     }
     return {
@@ -1109,12 +1227,13 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         GIT_CONFIG_VALUE_0: '!f() { echo "username=$GIT_USER"; echo "password=$GIT_PASS"; }; f',
       },
       secrets: [credential.password],
+      mounts: [],
     };
   }
 
   // ── Create ─────────────────────────────────────────────────────────────────
 
-  async create(rawSpec: WorkspaceSpec): Promise<WorkspaceHandle> {
+  async create(rawSpec: WorkspaceSpec, provision: WorkspaceProvision): Promise<WorkspaceHandle> {
     const parsed = workspaceSpecSchema.safeParse(rawSpec);
     if (!parsed.success) {
       throw new WorkspaceError('invalid_spec', 'workspace spec did not validate', {
@@ -1128,11 +1247,15 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     const spec = parsed.data;
     assertRunId(spec.runId);
     assertProjectEnv(spec.env);
+    // WP-279: the skills are the request's, checked against their digest before anything exists.
+    const skillFiles = this.#skillFilesOf(spec, provision.skills);
+    // WP-279: and the images are the digests the request named, on this daemon — never pulled.
+    const images = await this.#resolveImages(spec, provision.images);
     // Before anything is created, so a launcher pointed at an image with no CLI refuses rather
     // than leaking a network, a volume and three helpers per attempt (backlog 34).
-    await this.assertRuntimeCli();
+    const imagePath = await this.assertRuntimeCli(images.runtime);
     // WP-151: and an image whose shim the requesting runner cannot speak to is refused the same way.
-    const runtimeImageId = await this.#assertRunletProtocol(spec);
+    const runtimeImageId = await this.#assertRunletProtocol(spec, images.runtime);
 
     const names = runObjectNames(spec.runId);
     const token = this.#mintToken();
@@ -1166,21 +1289,21 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       if (spec.repo !== null) {
         await this.#clone(spec, spec.repo);
       }
-      await this.#provisionSkills(spec);
+      await this.#provisionSkills(spec, skillFiles);
 
-      const sidecarHost = await this.#startSidecar(spec, made);
+      const sidecarHost = await this.#startSidecar(spec, made, images.egress);
 
       const gitSsh = spec.repo?.ssh;
       const env = this.#runContainerEnv(
         spec,
-        this.#runCliEnvironment(spec.runId, sidecarHost !== null, gitSsh),
+        this.#runCliEnvironment(spec.runId, sidecarHost !== null, gitSsh, imagePath),
       );
       made.container = await this.#engine.createContainer(
         names.container,
         runContainerCreateBody({
           spec,
           // The image whose label was read, by id — never the tag again (WP-151 round 1).
-          images: { ...this.#images, runtime: runtimeImageId },
+          images: { ...this.#images, runtime: runtimeImageId, egress: images.egress },
           controlVolume: this.#controlVolume,
           cacheVolume: this.#cacheVolume,
           labels: this.#labels(spec, 'workspace', spec.keepUntil),
@@ -1191,6 +1314,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       );
       await this.#engine.startContainer(made.container);
       await this.#assertSidecarAlive(spec, made.sidecar);
+      this.#runImages.set(spec.runId, images.runtime);
 
       return {
         runId: spec.runId,
@@ -1469,8 +1593,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * does **not** write `.git/info/exclude` for such a spec: there is no clone to exclude anything
    * from, and a `.git/` made by `mkdir -p` would be a directory git reads as a broken repository.
    */
-  async #provisionSkills(spec: WorkspaceSpec): Promise<void> {
-    const files = workspaceSkillFiles(spec, this.#skillCatalogue);
+  async #provisionSkills(spec: WorkspaceSpec, files: readonly WorkspaceSkillFile[]): Promise<void> {
     if (files.length === 0) {
       this.#logger.info(
         { run_id: spec.runId },
@@ -1523,8 +1646,100 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     });
   }
 
+  /**
+   * The request's skills as files, after {@link workspaceSkillFiles} recomputed their digest — or
+   * `invalid_spec` (`skill_set_invalid`) for a block that does not even parse. The control plane
+   * parses the request already; this is the in-process caller's check (standing rule 22: defence in
+   * depth, named as such).
+   */
+  #skillFilesOf(spec: WorkspaceSpec, skills: RunSkills): readonly WorkspaceSkillFile[] {
+    const parsed = runSkillsSchema.safeParse(skills);
+    if (!parsed.success) {
+      throw new WorkspaceError(
+        'invalid_spec',
+        'the skills the create request carried did not validate',
+        {
+          runId: spec.runId,
+          reason: 'skill_set_invalid',
+          detail: parsed.error.issues
+            .slice(0, 3)
+            .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+            .join('; '),
+        },
+      );
+    }
+    return workspaceSkillFiles(spec, parsed.data);
+  }
+
+  /**
+   * The run and egress images this create starts — WP-279, TD-031 decision 4: the **digests the
+   * request named**, each asked of this daemon by digest, and `invalid_spec` (`image_not_local`)
+   * naming the digest when the daemon does not hold it. **Nothing is pulled**: the Engine API's
+   * container create never pulls (the CLI's `docker run` does), and this class calls no pull; a
+   * worker's updater pre-pulls (TD-032). Terminal rather than retryable, because the same digest is
+   * absent on the next attempt.
+   *
+   * `null` is the in-process composition's: the configured tags, as before WP-279.
+   *
+   * What a digest is here, stated: the daemon resolves `sha256:<hex>` against its **image ids** — what
+   * a launcher's `GET /v1/health` answers for its configured tags, so a server's own run always
+   * finds its images. A registry manifest digest (TD-032's `sha-<7>` resolution) is the image id only
+   * under the containerd image store; WP-284 measures it on a worker bundle.
+   */
+  async #resolveImages(
+    spec: WorkspaceSpec,
+    images: RunImages | null,
+  ): Promise<{ readonly runtime: string; readonly egress: string }> {
+    if (images === null) {
+      return { runtime: this.#images.runtime, egress: this.#images.egress };
+    }
+    const local = async (role: 'run' | 'egress', digest: string): Promise<string> => {
+      const parsed = imageDigestSchema.safeParse(digest);
+      if (!parsed.success) {
+        throw new WorkspaceError('invalid_spec', `the ${role} image is not named by digest`, {
+          runId: spec.runId,
+          reason: 'image_not_local',
+          detail: digest.slice(0, 100),
+        });
+      }
+      try {
+        return (await this.#engine.inspectImage(parsed.data)).Id;
+      } catch (error) {
+        if (error instanceof WorkspaceError && error.code === 'not_found') {
+          throw new WorkspaceError(
+            'invalid_spec',
+            `the ${role} image ${parsed.data} is not on this launcher's daemon, and a launcher never pulls at create (TD-031 decision 4)`,
+            { runId: spec.runId, reason: 'image_not_local', cause: error },
+          );
+        }
+        throw error;
+      }
+    };
+    return {
+      runtime: await local('run', images.run),
+      egress: await local('egress', images.egress),
+    };
+  }
+
+  /**
+   * The digests of the images this launcher is configured with — what `GET /v1/health` answers, and
+   * what a server's provisioner sends back on every create (WP-279's "configured tags resolved").
+   * Read per call, never memoised: an image rebuilt under a running launcher is the new id at once.
+   */
+  async configuredImageDigests(): Promise<RunImages> {
+    const [run, egress] = await Promise.all([
+      this.#engine.inspectImage(this.#images.runtime),
+      this.#engine.inspectImage(this.#images.egress),
+    ]);
+    return runImagesSchema.parse({ run: run.Id, egress: egress.Id });
+  }
+
   /** The egress sidecar, or `null` when the spec allows no host at all. */
-  async #startSidecar(spec: WorkspaceSpec, made: CreatedObjects): Promise<string | null> {
+  async #startSidecar(
+    spec: WorkspaceSpec,
+    made: CreatedObjects,
+    egressImage: string,
+  ): Promise<string | null> {
     if (spec.egress.hosts.length === 0) {
       this.#logger.info({ run_id: spec.runId }, 'no egress hosts allowed: no sidecar');
       return null;
@@ -1558,7 +1773,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       egressContainerName(spec.runId),
       sidecarCreateBody({
         spec,
-        images: this.#images,
+        images: { ...this.#images, egress: egressImage },
         labels: this.#labels(spec, 'egress', spec.keepUntil),
         command: this.#images.egressCommand ?? [],
         entrypoint: null,
@@ -1622,15 +1837,8 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     runId: string,
     hasSidecar: boolean,
     gitSsh: WorkspaceGitSsh | undefined,
+    imagePath: string,
   ): WorkspaceCliEnvironment {
-    if (this.#runtimeImagePath === null) {
-      // Unreachable through `create` and `cliEnvironment`, which both await `assertRuntimeCli`.
-      throw new WorkspaceError(
-        'workspace_failed',
-        'the run image has not been verified, so its PATH is not known',
-        { runId },
-      );
-    }
     const proxyUrl = egressProxyUrl(egressContainerName(runId));
     if (gitSsh !== undefined && !hasSidecar) {
       // Unreachable through `create`: the route's CONNECT host is on the spec's egress list, so the
@@ -1647,7 +1855,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       proxy: hasSidecar ? { url: proxyUrl, noProxy: 'localhost,127.0.0.1' } : null,
       home: '/tmp',
       claudeConfigDir: '/tmp/claude',
-      path: this.#runtimeImagePath,
+      path: imagePath,
       gitConfig:
         gitSsh === undefined
           ? // TD-021: `credential.helper=!agentic-cred` — git asks the shim, which asks the runner.
@@ -1711,8 +1919,13 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    */
   async cliEnvironment(handle: WorkspaceHandle): Promise<WorkspaceCliEnvironment> {
     assertRunId(handle.runId);
-    await this.assertRuntimeCli();
-    return this.#runCliEnvironment(handle.runId, handle.sidecarContainerId !== null, handle.gitSsh);
+    const imagePath = await this.assertRuntimeCli(this.#runImages.get(handle.runId));
+    return this.#runCliEnvironment(
+      handle.runId,
+      handle.sidecarContainerId !== null,
+      handle.gitSsh,
+      imagePath,
+    );
   }
 
   // ── Attach, kill, destroy ──────────────────────────────────────────────────
@@ -2267,10 +2480,40 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
 
   // ── Export ─────────────────────────────────────────────────────────────────
 
+  /**
+   * Writes {@link HELPER_PASSWD} to `<ctl>/helper-etc/passwd`, `0644` in a `0755` directory, as root
+   * with `CHOWN` only — `#prepare`'s pattern for a control volume whose root the launcher's image
+   * made uid 1000's. Idempotent, and per export rather than per process: a file the operator removed
+   * is written again, and the cost is one helper on a push that already pays several.
+   */
+  async #writeHelperPasswd(handle: WorkspaceHandle): Promise<void> {
+    const dir = `/ctl/${HELPER_ETC_DIRECTORY}`;
+    await this.#helper({
+      name: `etc-${assertRunId(handle.runId)}`,
+      image: this.#images.git,
+      script: [
+        'set -e',
+        `mkdir -p ${dir} 2>/dev/null || { chown 0:0 /ctl && mkdir -p ${dir}; }`,
+        `printf %s "$HELPER_PASSWD" > ${dir}/passwd.new`,
+        `chmod 644 ${dir}/passwd.new`,
+        `mv -f ${dir}/passwd.new ${dir}/passwd`,
+        `chown -R 0:0 ${dir}`,
+        `chmod 755 ${dir}`,
+      ].join('\n'),
+      env: { HELPER_PASSWD },
+      mounts: [this.#volumeMount(this.#controlVolume, '/ctl', false)],
+      user: '0:0',
+      capAdd: ['CHOWN'],
+      secrets: [],
+      network: 'none',
+      labels: { [WORKSPACE_LABELS.run]: handle.runId, [WORKSPACE_LABELS.role]: 'export-passwd' },
+    });
+  }
+
   async export(
     handle: WorkspaceHandle,
     request: WorkspaceExportRequest,
-    credential: WorkspaceGitCredential | null,
+    credential: WorkspaceGitAccess | null,
   ): Promise<WorkspaceExport> {
     const name = `export-${assertRunId(handle.runId)}`;
     const cacheKey = assertHasCheckout(handle);
@@ -2283,6 +2526,21 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     // — and `destroy`, which `LauncherService.endRun` calls after this, stops it again. Nothing the
     // export does needs the run container: the helper mounts the workspace volume itself.
     await this.#stopContainer(handle.containerId, 20);
+    // A push over SSH needs a user for uid 1000 (`HELPER_PASSWD`): written first, mounted below.
+    const sshPush =
+      credential !== null && (isRelayedSsh(credential) || credential.ssh !== undefined);
+    if (sshPush) {
+      await this.#writeHelperPasswd(handle);
+    }
+    const { mounts: helperGitMounts, ...helperGitEnv } = this.#gitCredentialEnv(credential, {
+      BRANCH: request.branch,
+      COMMIT_MESSAGE: request.commitMessage,
+      // Nothing but the platform's configuration is read (WP-75): no system file, and a global
+      // file the script writes itself. The credential helper travels as `GIT_CONFIG_COUNT`
+      // (command scope), which neither variable touches.
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: EXPORT_GLOBAL_CONFIG,
+    });
     const helper = await this.#helper({
       name,
       image: this.#images.git,
@@ -2290,18 +2548,10 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         mirror,
         push: credential !== null,
         tarball: wantsTarball,
-        ssh: credential?.ssh !== undefined,
+        sshSetup: helperSshSetup(credential),
         onlyIfChanged: request.onlyIfChanged === true,
       }),
-      ...this.#gitCredentialEnv(credential, {
-        BRANCH: request.branch,
-        COMMIT_MESSAGE: request.commitMessage,
-        // Nothing but the platform's configuration is read (WP-75): no system file, and a global
-        // file the script writes itself. The credential helper travels as `GIT_CONFIG_COUNT`
-        // (command scope), which neither variable touches.
-        GIT_CONFIG_NOSYSTEM: '1',
-        GIT_CONFIG_GLOBAL: EXPORT_GLOBAL_CONFIG,
-      }),
+      ...helperGitEnv,
       // The project's own mirror, read-only, at the same path the run container sees it: the clone
       // is `--shared`, so `.git/objects/info/alternates` points at `/cache/<key>.git/objects` and
       // **every** object older than this run lives there. Without it `git rev-parse HEAD` still
@@ -2312,6 +2562,19 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       mounts: [
         this.#volumeMount(handle.volumeName, '/work', false),
         projectMirrorMount(this.#cacheVolume, this.#cacheMount, cacheKey),
+        // WP-279: a relayed run's helper agent socket directory, read-only; nothing otherwise.
+        ...helperGitMounts,
+        ...(sshPush
+          ? [
+              {
+                Type: 'volume' as const,
+                Source: this.#controlVolume,
+                Target: '/etc/passwd',
+                ReadOnly: true,
+                VolumeOptions: { Subpath: `${HELPER_ETC_DIRECTORY}/passwd` },
+              },
+            ]
+          : []),
       ],
       user: `${WORKSPACE_UID}:${WORKSPACE_GID}`,
       network: credential === null ? 'none' : this.#helperNetwork,

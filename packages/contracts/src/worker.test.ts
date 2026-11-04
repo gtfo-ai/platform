@@ -160,7 +160,11 @@ const runPackage = () => ({
     expiresAt: '2026-11-04T18:00:00.000Z',
     source: 'minted',
   },
-  skills: { digest: 'skills@0123456789abcdef', files: { kb: { 'SKILL.md': '# kb\n' } } },
+  skills: {
+    digest: 'skills@0123456789abcdef',
+    files: { kb: { 'SKILL.md': '# kb\n' } },
+    versions: { kb: '2' },
+  },
   images: { run: DIGEST_B, egress: DIGEST_B },
   limits: { leaseTtlMs: 600_000 },
 });
@@ -358,22 +362,50 @@ describe('runPackageSchema (TD-031 decision 4)', () => {
       'the RunSpec and the WorkspaceSpec name one project',
     ]);
     expect(
-      refusals({ ...runPackage(), skills: { digest: 'skills@none', files: { other: {} } } }),
-    ).toEqual(['the package carries the content of exactly the skills the WorkspaceSpec names']);
+      refusals({
+        ...runPackage(),
+        skills: {
+          digest: 'skills@0123456789abcdef',
+          files: { other: { 'SKILL.md': '' } },
+          versions: { other: '1' },
+        },
+      }),
+    ).toEqual([
+      'the skills carried are exactly the skills the WorkspaceSpec names',
+      'a version is carried for exactly the skills the WorkspaceSpec names',
+    ]);
+  });
+
+  it('refuses a skill with no version, a file the digest does not cover, and a misused skills@none (WP-279)', () => {
+    const base = runPackage().skills;
+    expect(refusals({ ...runPackage(), skills: { ...base, versions: {} } })).toEqual([
+      'a version is carried for exactly the skills the WorkspaceSpec names',
+    ]);
+    expect(
+      refusals({
+        ...runPackage(),
+        skills: { ...base, files: { kb: { 'SKILL.md': '# kb\n', 'extra.md': 'unverified' } } },
+      }),
+    ).toEqual([
+      "skill kb carries SKILL.md and nothing else: the set's digest covers no other file (WP-279)",
+    ]);
+    expect(refusals({ ...runPackage(), skills: { ...base, digest: 'skills@none' } })).toEqual([
+      'skills@none is the digest of the empty set, and only of it',
+    ]);
   });
 
   it('refuses a skill file path that escapes its directory, and a digest of another shape', () => {
     for (const path of ['../SKILL.md', '/abs', 'a/./b', 'a//b']) {
       const pkg = {
         ...runPackage(),
-        skills: { digest: 'skills@none', files: { kb: { [path]: '' } } },
+        skills: { digest: 'skills@none', files: { kb: { [path]: '' } }, versions: { kb: '1' } },
       };
       expect(runPackageSchema.safeParse(pkg).success, path).toBe(false);
     }
     expect(
       runPackageSchema.safeParse({
         ...runPackage(),
-        skills: { digest: 'sha256:abc', files: { kb: {} } },
+        skills: { digest: 'sha256:abc', files: { kb: {} }, versions: { kb: '1' } },
       }).success,
     ).toBe(false);
     expect(
@@ -384,9 +416,16 @@ describe('runPackageSchema (TD-031 decision 4)', () => {
 
   it(`refuses a package past ${WORKER_PACKAGE_MAX_BYTES} bytes rather than truncating it`, () => {
     const chunk = 'x'.repeat(200 * 1024);
-    const files: Record<string, string> = {};
-    for (let index = 0; index < 22; index += 1) files[`part-${index}.md`] = chunk;
-    const big = { ...runPackage(), skills: { digest: 'skills@none', files: { kb: files } } };
+    const names = Array.from({ length: 22 }, (_, index) => `part-${index}`);
+    const big = {
+      ...runPackage(),
+      workspace: workspace({ skills: names }),
+      skills: {
+        digest: 'skills@0123456789abcdef',
+        files: Object.fromEntries(names.map((name) => [name, { 'SKILL.md': chunk }])),
+        versions: Object.fromEntries(names.map((name) => [name, '1'])),
+      },
+    };
     expect(refusals(big)).toEqual([
       `a run package is at most ${WORKER_PACKAGE_MAX_BYTES} bytes of JSON; it is refused, not truncated (TD-031 §4)`,
     ]);
@@ -411,6 +450,55 @@ describe('runCredentialIssues — the launcher’s carriage', () => {
     expect(runCredentialIssues(ssh, credential, 'carried')).toEqual([]);
     expect(runCredentialIssues(workspace(), credential, 'carried')).toEqual([
       'a deploy-key credential and the spec’s repo.ssh route travel together: one without the other is an SSH run with no key or a key with no route (TD-028 decision 13b)',
+    ]);
+  });
+
+  /**
+   * TD-031's 2026-11-04 amendment (backlog 693): the worker's launcher holds no key. The table is the
+   * three carriages over the four shapes that differ — an SSH spec with no credential, with a deploy
+   * key, with another credential, and an HTTPS spec with a token.
+   */
+  it('relayed: an SSH spec carries nothing, a deploy key is refused, HTTPS is carried’s rule', () => {
+    const ssh = sshWorkspace();
+    const deployKey = {
+      host: 'git.example.com',
+      username: 'git',
+      password: 'FAKE-PRIVATE-KEY',
+      scope: 'push',
+      expiresAt: '2026-11-04T18:00:00.000Z',
+      source: 'deploy_key',
+    } as const;
+    const token = {
+      ...deployKey,
+      username: 'oauth2',
+      password: PASSWORD,
+      source: 'static',
+    } as const;
+    expect(runCredentialIssues(ssh, null, 'relayed')).toEqual([]);
+    expect(runCredentialIssues(ssh, deployKey, 'relayed')).toEqual([
+      'a deploy key never reaches a worker’s launcher: its helpers sign through the run’s helper agent socket (TD-031’s 2026-11-04 amendment)',
+    ]);
+    expect(runCredentialIssues(ssh, token, 'relayed')).toEqual([
+      'a spec whose git goes over SSH carries no credential to a worker’s launcher: the core signs for it (TD-031’s 2026-11-04 amendment)',
+    ]);
+    for (const spec of [workspace(), workspace({ readOnly: true }), workspace({ repo: null })]) {
+      for (const credential of [null, token, deployKey]) {
+        const carried = runCredentialIssues(spec, credential, 'carried');
+        const relayed = runCredentialIssues(spec, credential, 'relayed');
+        if (credential?.source === 'deploy_key' && spec.repo !== null) {
+          expect(relayed).toHaveLength(1);
+        } else {
+          expect(relayed).toEqual(carried);
+        }
+      }
+    }
+    // The route is still checked with no credential to carry it.
+    const port22 = workspace({
+      repo: { ...REPO, ssh: { ...SSH, connectPort: 22 } },
+      egress: { hosts: ['git.example.com', 'altssh.example.com'], connectPorts: [443] },
+    });
+    expect(runCredentialIssues(port22, null, 'relayed')).toEqual([
+      'the SSH route’s port must be one the sidecar admits for CONNECT, and never 22 (TD-028 decision 13b item 4)',
     ]);
   });
 });

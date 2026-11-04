@@ -254,6 +254,12 @@ const NETWORK_ONLY_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000286f';
 const GIT_CREDENTIAL_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000342b';
 /** WP-144: a live run stopped by the runner's own `shutdown` stop (PROGRESS backlog 432). */
 const SHUTDOWN_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000432a';
+/** WP-279's three creates: a tampered skill set, an absent image digest, and the honest control. */
+const WP279_RUN_IDS = [
+  '9f3a1c2e-0000-4000-8000-00000000279a',
+  '9f3a1c2e-0000-4000-8000-00000000279b',
+  '9f3a1c2e-0000-4000-8000-00000000279c',
+];
 /** The row's budget for the hand-back, inside the runner's shutdown deadline (WP-144 ruling (c)). */
 const SHUTDOWN_BUDGET_MS = 10_000;
 /** WP-118's run of the image's real `claude` (PROGRESS backlog 342, consequence (a)). */
@@ -1513,6 +1519,52 @@ try {
       otherExit: gitCredential?.otherExit,
       otherRefused: gitCredential?.otherRefused,
     }),
+  );
+
+  // WP-279 (TD-031 decision 4): the launcher writes the skills it is given and runs only the digests
+  // it is told — the two refusals, against the real launcher and daemon, and the honest control.
+  const wp279 = lastJsonLine(
+    await runRunner(
+      { CHECK_PHASE: 'wp279-refusals', CHECK_WP279_RUN_IDS: WP279_RUN_IDS.join(',') },
+      { name: 'agentic-wp279-runner-refusals' },
+    ),
+  );
+  const wp279Left = await Promise.all(WP279_RUN_IDS.map((runId) => runObjects(runId)));
+  process.stdout.write(
+    `--- WP-279: skills and images from the request ---\n${JSON.stringify({ wp279, wp279Left }, null, 2)}\n`,
+  );
+  record(
+    'WP-279: the launcher answers its configured run and egress images by digest on /v1/health',
+    /^sha256:[0-9a-f]{64}$/.test(wp279?.healthImages?.run ?? '') &&
+      /^sha256:[0-9a-f]{64}$/.test(wp279?.healthImages?.egress ?? '') &&
+      wp279?.carriage === 'carried',
+    JSON.stringify({ images: wp279?.healthImages, carriage: wp279?.carriage }),
+  );
+  record(
+    'WP-279: skills whose digest is not their bytes’ are refused invalid_spec (skill_set_invalid), nothing created',
+    wp279?.skill?.created === false &&
+      wp279.skill.code === 'invalid_spec' &&
+      wp279.skill.reason === 'skill_set_invalid' &&
+      wp279Left[0]?.containers.length === 0 &&
+      wp279Left[0]?.networks.length === 0,
+    JSON.stringify({ skill: wp279?.skill, left: wp279Left[0] }),
+  );
+  record(
+    'WP-279: an image digest the daemon does not hold is refused invalid_spec naming it, never pulled, nothing created',
+    wp279?.image?.created === false &&
+      wp279.image.code === 'invalid_spec' &&
+      wp279.image.reason === 'image_not_local' &&
+      String(wp279.image.message).includes(wp279.absentDigest) &&
+      wp279Left[1]?.containers.length === 0 &&
+      wp279Left[1]?.networks.length === 0,
+    JSON.stringify({ image: wp279?.image, left: wp279Left[1] }),
+  );
+  record(
+    'WP-279: the same create with the honest skills and the launcher’s own digests starts and ends',
+    wp279?.honest?.created === true &&
+      wp279Left[2]?.containers.length === 0 &&
+      wp279Left[2]?.networks.length === 0,
+    JSON.stringify({ honest: wp279?.honest, left: wp279Left[2] }),
   );
 
   // WP-144: the runner's own stop on a live session, timed through the workspace's release.
