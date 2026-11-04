@@ -7,6 +7,8 @@
  *  - **Idempotent.** Each file is applied at most once, recorded in `platform_migrations` inside
  *    the same transaction as its own DDL. A second run applies nothing.
  *  - **Forward-only.** An applied file whose checksum changed is an error, not a re-apply.
+ *  - **Classified.** Each file applied from 0092 on is recorded with the class its header declares
+ *    (`platform_migrations.class`, TD-032 decision 1, WP-271); a row before it carries `null`.
  *  - **Self-reporting.** The returned report says exactly what was applied, installed and created.
  *
  * pg-boss owns its own schema (TD-004), so it is installed through its own API rather than copied
@@ -250,10 +252,20 @@ const applyMigration = async (client: MigrationClient, migration: Migration): Pr
   try {
     await client.query(migration.sql);
     const durationMs = Date.now() - started;
-    await client.query(
-      'insert into platform_migrations (name, checksum, duration_ms) values ($1, $2, $3)',
-      [migration.name, migration.checksum, durationMs],
-    );
+    // The class column is added by 0092 itself, so a file before it is recorded without one
+    // (its row keeps `null`, read as `contract` — TD-032 decision 1), and 0092 is recorded with
+    // its own class after its DDL, in the same transaction.
+    if (migration.header === null) {
+      await client.query(
+        'insert into platform_migrations (name, checksum, duration_ms) values ($1, $2, $3)',
+        [migration.name, migration.checksum, durationMs],
+      );
+    } else {
+      await client.query(
+        'insert into platform_migrations (name, checksum, duration_ms, class) values ($1, $2, $3, $4)',
+        [migration.name, migration.checksum, durationMs, migration.header.class],
+      );
+    }
     await client.query('commit');
     return durationMs;
   } catch (error) {

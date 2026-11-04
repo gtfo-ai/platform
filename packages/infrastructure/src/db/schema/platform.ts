@@ -2,6 +2,7 @@
  * The migrator's own tables. Readable by the application role, never writable by it.
  */
 import { integer, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import type { MigrationClass } from '../migration-class.js';
 
 /** Applied migrations, one row per SQL file (TD-019). Created by the migrator, not by a file. */
 export const platformMigrations = pgTable('platform_migrations', {
@@ -9,6 +10,11 @@ export const platformMigrations = pgTable('platform_migrations', {
   checksum: text('checksum').notNull(),
   appliedAt: timestamp('applied_at', { withTimezone: true }).notNull().defaultNow(),
   durationMs: integer('duration_ms').notNull(),
+  /**
+   * The class the file declared (TD-032 decision 1), written on apply since migration 0092 (WP-271);
+   * `null` on every row applied before it, which TD-032 reads as `contract`.
+   */
+  class: text('class').$type<MigrationClass>(),
 });
 
 /** What the application role may do to a table. */

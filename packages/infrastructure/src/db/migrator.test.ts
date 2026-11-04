@@ -176,6 +176,59 @@ describe('runMigrations', () => {
     ]);
   });
 
+  it('records the class a file declares, and none for a file before 0092 (WP-271)', async () => {
+    const fake = fakeClient();
+
+    await runMigrations(
+      {
+        connectionString: 'postgres://fake',
+        migrationsDirectory: migrationDir({
+          '0091_unclassified.sql': 'create table one ();',
+          '0092_classified.sql': '-- migration-class: additive\ncreate table two ();',
+          '0093_contract.sql':
+            '-- migration-class: contract; expands: 0092_classified\nalter table two drop column x;',
+        }),
+      },
+      dependencies(fake.client),
+    );
+
+    const records = fake.queries.filter((query) =>
+      query.text.startsWith('insert into platform_migrations'),
+    );
+    expect(records.map((query) => [query.text, query.values[0], query.values[3]])).toEqual([
+      [
+        'insert into platform_migrations (name, checksum, duration_ms) values ($1, $2, $3)',
+        '0091_unclassified',
+        undefined,
+      ],
+      [
+        'insert into platform_migrations (name, checksum, duration_ms, class) values ($1, $2, $3, $4)',
+        '0092_classified',
+        'additive',
+      ],
+      [
+        'insert into platform_migrations (name, checksum, duration_ms, class) values ($1, $2, $3, $4)',
+        '0093_contract',
+        'contract',
+      ],
+    ]);
+  });
+
+  it('refuses a directory holding a file from 0092 on that declares no class (WP-271)', async () => {
+    const fake = fakeClient();
+
+    await expect(
+      runMigrations(
+        {
+          connectionString: 'postgres://fake',
+          migrationsDirectory: migrationDir({ '0092_bare.sql': 'create table two ();' }),
+        },
+        dependencies(fake.client),
+      ),
+    ).rejects.toThrow(/0092_bare declares no class/);
+    expect(fake.texts()).toEqual([]);
+  });
+
   it('skips a migration already recorded with the same checksum', async () => {
     const dir = migrationDir(TWO_MIGRATIONS);
     const fake = fakeClient({
@@ -410,7 +463,7 @@ describe('findUnknownMigrations', () => {
     connectionLost: () => null,
   });
 
-  const known = [{ name: '0001_first', sql: '', checksum: '' }];
+  const known = [{ name: '0001_first', sql: '', checksum: '', header: null }];
 
   it('reports nothing on a database that has never been migrated', async () => {
     await expect(findUnknownMigrations(catalogue(false, []), known)).resolves.toEqual([]);

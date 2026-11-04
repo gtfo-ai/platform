@@ -32,6 +32,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # `migrations:check` (WP-271) compares the migrations with the push's base commit, which a
+          # shallow clone does not have; it refuses one by name rather than pass.
+          fetch-depth: 0
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -40,8 +43,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Every static check `pnpm run -s verify` runs, as one command derived from the same table
       # (scripts/verify-targets.ts): biome, the generated JSON Schemas, the .gitignore guard, the
-      # NUL-byte guard, the merge-conflict-marker guard, the third-party notices check and
-      # technical/03 held to the migrations' tables (WP-97). Listing
+      # NUL-byte guard, the merge-conflict-marker guard, the third-party notices check,
+      # technical/03 held to the migrations' tables (WP-97) and the migration classes (WP-271). Listing
       # them here instead was a second
       # copy of the list, and it had
       # drifted — `ignored:check` was in `verify` and in no CI job at all, so a guard that had

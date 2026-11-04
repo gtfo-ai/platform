@@ -6,6 +6,7 @@
  */
 export * from './client.js';
 export * from './config.js';
+export * from './migration-class.js';
 export * from './migrations.js';
 export * from './migrator.js';
 export * from './partitions.js';

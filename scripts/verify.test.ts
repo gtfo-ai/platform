@@ -163,6 +163,19 @@ describe('the verification targets and .github/workflows/ci.yml', () => {
     );
   });
 
+  it('keeps the migration-class check in the static group, on a full-history checkout (WP-271)', () => {
+    // The blind spot above once more: dropping `migrations:check` keeps the table equal to CI.
+    expect(VERIFY_GROUPS['verify:static'], 'verify:static lost migrations:check').toContain(
+      'migrations:check',
+    );
+    // It compares the tree with the push's base and refuses a shallow clone, so the job that runs
+    // `verify:static` must fetch the whole history.
+    const workflow = read('.github/workflows/ci.yml');
+    const job = /\n {2}lint:\n([\s\S]*?)\n {2}[a-z][\w-]*:\n/.exec(workflow)?.[1] ?? '';
+    expect(job, 'the lint job was not found').toContain('pnpm run -s verify:static');
+    expect(job, 'the lint job checks out a shallow clone').toMatch(/^\s+fetch-depth: 0$/m);
+  });
+
   it('runs every step of `verify` in some CI job', () => {
     const inCi = new Set(workflowCommands().flatMap(expand));
 

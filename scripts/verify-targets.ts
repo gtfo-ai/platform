@@ -43,6 +43,9 @@ export const VERIFY_GROUPS: Readonly<Record<string, readonly string[]>> = {
     'data-model:check',
     // The shared git hooks name no path outside this checkout (WP-219, PROGRESS backlog 615).
     'hooks:check',
+    // Every new migration declares its class and the class is true (WP-271, TD-032 decision 1).
+    // It reads the push's base commit, so CI's lint job checks out the full history.
+    'migrations:check',
   ],
   'verify:types': ['typecheck'],
   // TD-013's bundle budget is an **acceptance criterion** of WP-20, not a nicety, so it is a step

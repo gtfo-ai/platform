@@ -51,7 +51,9 @@ prune the user's images on your own judgement, ask. No secrets ever; every outbo
 through `IntegrationActionExecutor` and never inside an open transaction (the one named exception is
 in `CLAUDE.md`); docs win over code — amend the decision record yourself before the code; forward-only
 migrations, never edited once applied (the next number is one past the highest file in
-`packages/infrastructure/src/db/migrations/`). Small green commits `feat(scope): WP-nn <title>`,
+`packages/infrastructure/src/db/migrations/`), and from 0092 on each file opens with a
+`-- migration-class: additive` or `-- migration-class: contract; expands: <nnnn>_<name>` header that
+`pnpm migrations:check` holds (TD-032 decision 1). Small green commits `feat(scope): WP-nn <title>`,
 header under 100 characters, ending with `Signed-off-by: <your git user.name> <user.email>`,
 `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` and `Claude-Session: <the URL of the
 session you are running in, if the harness gave you one; omit the trailer otherwise>`, pushed to

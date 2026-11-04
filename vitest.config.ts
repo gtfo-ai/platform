@@ -310,7 +310,7 @@ export const COVERAGE_RINGS: Readonly<
   },
   infrastructure: {
     glob: 'packages/infrastructure/src/{!(testing).ts,!(runlet|testing)/**/!(testing).ts}',
-    thresholds: { lines: 79, branches: 68, functions: 66, statements: 78 },
+    thresholds: { lines: 79, branches: 70, functions: 66, statements: 78 },
     owes: 'branches: 1012 uncovered (WP-97), 652 of them in the `postgres-*` stores, which the integration tier drives against PostgreSQL 18 and collects no coverage from; then `workspace/` 104 and `runner/` 103',
   },
   runlet: {
