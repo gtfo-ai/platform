@@ -8,6 +8,7 @@
  */
 import {
   CorruptEventError,
+  makeEvent,
   PartitionWindowError,
   StreamConflictError,
   streamId,
@@ -163,12 +164,12 @@ describe('PostgresEventStore', () => {
 });
 
 describe('PostgresEventAppender', () => {
-  it('writes the envelope, the cause link and one wake-up hint per call', async () => {
+  it('writes the envelope, the cause link, one wake-up hint and one live hint per call', async () => {
     const sql = executor([{ rows: [{ position: '7' }] }, { rows: [{ position: '8' }] }]);
-    const published: string[] = [];
+    const published: { topic: string; payload: unknown }[] = [];
     const appender = new PostgresEventAppender(sql, {
       publish: async (message) => {
-        published.push(message.topic);
+        published.push(message);
       },
     });
 
@@ -179,7 +180,54 @@ describe('PostgresEventAppender', () => {
     expect(appended.map((entry) => entry.position)).toEqual([7, 8]);
     expect(sql.calls[0]?.values[0]).toBe(event.id);
     expect(sql.calls[0]?.values[8]).toBe(3);
-    expect(published).toEqual(['events.appended']);
+    // The outbox's wake-up stays the identical empty hint TD-005 collapses; the live SSE topics'
+    // hint names the positions (S-23.14).
+    expect(published).toEqual([
+      { topic: 'events.appended', payload: {} },
+      { topic: 'events.appended.live', payload: { from: 7, to: 8 } },
+    ]);
+  });
+
+  it('announces only the live rows of a mixed batch, and nothing live for a batch with none', async () => {
+    const project = '00000000-0000-4000-8000-0000000000ff';
+    const projectStream = { streamType: 'project', streamId: project } as const;
+    const comment = (seq: number) =>
+      makeEvent(
+        'ticket.comment.added',
+        {
+          project_id: project,
+          ticket: { provider: 'jira', key: 'PRJ-1', url: 'https://jira.example.test/browse/PRJ-1' },
+          comment_id: 'c-1',
+          author: { provider: 'jira', external_id: 'a-1', verified: false },
+          text: 'not live',
+        },
+        { ...projectStream, streamSeq: seq },
+      );
+    const published: { topic: string; payload: unknown }[] = [];
+    const recorder = {
+      publish: async (message: { topic: string; payload: unknown }) => {
+        published.push(message);
+      },
+    };
+
+    await new PostgresEventAppender(
+      executor([
+        { rows: [{ position: '20' }] },
+        { rows: [{ position: '21' }] },
+        { rows: [{ position: '22' }] },
+      ]),
+      recorder,
+    ).append([comment(1), taskQueued({ ...stream, streamSeq: 2 }), comment(2)]);
+    expect(published.at(-1)).toEqual({
+      topic: 'events.appended.live',
+      payload: { from: 21, to: 21 },
+    });
+
+    published.length = 0;
+    await new PostgresEventAppender(executor([{ rows: [{ position: '30' }] }]), recorder).append([
+      comment(3),
+    ]);
+    expect(published).toEqual([{ topic: 'events.appended', payload: {} }]);
   });
 
   it('does nothing at all for an empty batch', async () => {

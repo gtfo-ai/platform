@@ -65,6 +65,7 @@ export * from './events/consumption.js';
 export * from './events/dead-letter.js';
 export * from './events/event-bus.js';
 export * from './events/handler.js';
+export * from './events/live-hint.js';
 export * from './events/open-transaction.js';
 export * from './events/outbox.js';
 export * from './events/replay.js';

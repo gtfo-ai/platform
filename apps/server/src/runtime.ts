@@ -108,6 +108,7 @@ import { createProjectConfigCommands } from './project-config.js';
 import { listedModelIds } from './queries/cost-queries.js';
 import { serverClaimantRunning } from './queries/execution-queries.js';
 import { countStaleCommandClaims } from './queries/idempotency-queries.js';
+import { readLiveEvents } from './queries/live-event-queries.js';
 import { listRunMessages } from './queries/pipeline-queries.js';
 import { anySignInRecorded, recordFirstSignIn } from './queries/setup-state-queries.js';
 import { createPostgresWorkerStore } from './queries/worker-queries.js';
@@ -115,6 +116,7 @@ import { createReadinessCheck } from './readiness.js';
 import { roleCapabilities, roleIsIdle } from './role.js';
 import { CLAIM_IN_FLIGHT_MS } from './routes/idempotency.js';
 import { createShadowCommands } from './shadow.js';
+import { startDomainEventBridge } from './sse/domain-event-bridge.js';
 import { SseHub } from './sse/hub.js';
 import { startTranscriptBridge } from './sse/transcript-bridge.js';
 import { createStorageSamplers } from './storage.js';
@@ -1099,9 +1101,21 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         },
         logger: loggerPort,
       });
+      /**
+       * The `org`, `project:<id>` and `task:<id>` topics' producer (S-23.14), beside the transcript
+       * bridge for the same reason: it publishes into this process's hub, woken by the appender's
+       * live hint from whichever process committed the events.
+       */
+      const domainEvents = await startDomainEventBridge({
+        hub,
+        broadcast: eventing.broadcast,
+        read: (request) => readLiveEvents(database.db, request),
+        logger: loggerPort,
+      });
       stopCallbacks.unshift({
         name: 'transcript-bridge',
         stop: async () => {
+          await domainEvents.stop();
           await bridge.stop();
           if (!capabilities.worker) {
             await eventing.broadcast.close();

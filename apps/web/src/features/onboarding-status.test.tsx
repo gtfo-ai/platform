@@ -599,22 +599,15 @@ const escalatedFrame = (topic: SseTopic): SseFrame => {
     topic,
     seq: 1,
     type: 'task.escalated',
+    // The server's projection (S-23.14): ids only — the reason and the brief stay behind the read API.
     data: {
       id: '00000000-0000-4000-8000-0000000000e1',
+      type: 'task.escalated',
       stream_type: 'task',
       stream_id: TASK,
-      stream_seq: 3,
-      correlation_id: TASK,
-      cause_event_id: null,
-      actor: { kind: 'system', component: 'pipeline' },
       occurred_at: '2026-10-07T05:30:00.000Z',
-      type: 'task.escalated',
-      payload: {
-        project_id: PROJECT,
-        task_id: TASK,
-        reason: 'run_failed',
-        blocker_brief: 'exit 1',
-      },
+      project_id: PROJECT,
+      task_id: TASK,
     },
   });
   return frame;

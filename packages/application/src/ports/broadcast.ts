@@ -50,6 +50,33 @@ export type TranscriptAppendedHint = {
 };
 
 /**
+ * Topic the SSE layer listens on for "task or run events were appended" (S-23.14).
+ *
+ * The `org`, `project:<id>` and `task:<id>` streams' hint, the domain-event twin of
+ * {@link RUN_TRANSCRIPT_TOPIC}. It is **not** {@link EVENTS_APPENDED_TOPIC}, and that is decided:
+ * the outbox's wake-up is one identical, empty notification per committing transaction (TD-005),
+ * which PostgreSQL collapses, and it says nothing about *which* rows. This hint carries the
+ * positions, because the global position is not gapless and not in commit order (migration 0005,
+ * research/07): a reader that only kept a watermark would skip a row whose transaction took a lower
+ * position and committed after a higher one. A hint is delivered after its transaction commits, so
+ * the range it names is readable when it arrives, whatever else committed around it.
+ *
+ * Published by the appender only for a batch that holds at least one live type
+ * (`isLiveDomainEventType` in `@platform/contracts`), so a transaction that appends only provider
+ * or organisation events announces nothing here.
+ */
+export const LIVE_EVENTS_APPENDED_TOPIC = 'events.appended.live';
+
+/**
+ * The payload of {@link LIVE_EVENTS_APPENDED_TOPIC}: the lowest and highest `events.position` of
+ * the live events one `append` call wrote. Positions only — the rows are read back.
+ */
+export type LiveEventsAppendedHint = {
+  readonly from: number;
+  readonly to: number;
+};
+
+/**
  * Topic a recorded minted-credential shape is announced on (WP-107, TD-012's M6 amendment (1)).
  *
  * Published inside the transaction that writes the `minted_credential_shapes` row, so it is

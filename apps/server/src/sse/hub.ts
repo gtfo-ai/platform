@@ -19,8 +19,10 @@
  * would replay from nowhere. Only `domain_event` and `transcript` frames — the replayable ones —
  * carry ids.
  *
- * **The publisher owns `seq`, the hub does not invent it.** For a task topic the sequence is the
- * event's `stream_seq`; for a run's transcript it is the `run_messages.seq`. A hub-assigned
+ * **The publisher owns `seq`, the hub does not invent it.** For a domain event — on `org`,
+ * `project:<id>` and `task:<id>` alike — the sequence is the event's global `events.position`
+ * (S-23.14), because one task topic fans in the task's, its runs' and its questions' streams and a
+ * per-stream `stream_seq` would repeat; for a run's transcript it is the `run_messages.seq`. A hub-assigned
  * counter would be per-process, so two replicas would hand the same client two different
  * numberings for one topic. Replay is therefore *positional*: find the buffered frame whose `seq`
  * equals the cursor and send everything after it. That is correct even where a topic fans several
@@ -162,17 +164,24 @@
  *     `Connection.close`. Arbiter: the `#connections` map, deleted from *before* `connection.close()`
  *     runs, so the re-entrant call finds nothing and returns.
  *
- * ## Fan-out between app instances: one topic has it, the rest do not
+ * ## Fan-out between app instances: every topic has it
  *
  * TD-014 routes cross-instance fan-out through `NOTIFY` behind the `Broadcast` port, which carries
- * a **hint** rather than content — the receiving instance reads the rows back. That path exists for
- * exactly one topic, `run:<id>`: `sse/transcript-bridge.ts` subscribes to the sink's
- * `run.transcript.appended` hints, reads `run_messages` and calls {@link SseHub.publish}, so a
- * stream held by a `ROLE=api` process carries a transcript a `ROLE=worker` process produced
- * (WP-15h). Nothing else publishes into this hub yet, so `org`, `project:<id>` and `task:<id>` are
- * still single-instance: the read-back for a **domain event** belongs to the work package that
- * builds it, and a hint nothing renders would be an announcement of a change the instance cannot
- * show. `docs/technical/PROGRESS.md` carries the remainder as discovered work.
+ * a **hint** rather than content — the receiving instance reads the rows back. Two producers do
+ * that, and nothing else publishes into this hub:
+ *
+ *  - **`run:<id>`** — `sse/transcript-bridge.ts` subscribes to the sink's `run.transcript.appended`
+ *    hints, reads `run_messages` and publishes `transcript` frames (WP-15h).
+ *  - **`org`, `project:<id>`, `task:<id>`** — `sse/domain-event-bridge.ts` (S-23.14) subscribes to
+ *    the appender's `events.appended.live` hints (the positions of a transaction's `task.*` and
+ *    `run.*` events), reads them back from `events` and publishes one `domain_event` frame per event
+ *    to each of the three topics that is watched here. The frame's `data` is a **projection** —
+ *    ids, the stage and three small enums (`liveDomainEventSchema`), never the payload's text — so a
+ *    client refetches through the read API, which authorises what it returns.
+ *
+ * Both read back only what somebody here is watching, and publish only to a topic with a
+ * subscriber, so a ring buffer is never grown for nobody. Who may subscribe to which topic is
+ * `sse/topic-access.ts`, unchanged by either.
  */
 import type { Logger } from '@platform/application';
 import { silentLogger } from '@platform/application';

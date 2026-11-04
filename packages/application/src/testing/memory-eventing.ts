@@ -36,6 +36,7 @@
 import type { DomainEvent, Id, StreamType } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { CorruptEventError, StreamConflictError } from '../errors.js';
+import { liveEventsAppendedHint } from '../events/live-hint.js';
 import {
   assertTopic,
   type Broadcast,
@@ -574,6 +575,11 @@ class MemoryTransaction {
         if (appended.length > 0) {
           // One hint per transaction, exactly as Postgres collapses identical NOTIFYs (TD-005).
           this.broadcasts.push({ topic: EVENTS_APPENDED_TOPIC, payload: {} });
+          // The live SSE topics' hint, as the PostgreSQL appender publishes it (S-23.14).
+          const live = liveEventsAppendedHint(appended);
+          if (live !== null) {
+            this.broadcasts.push(live);
+          }
         }
         return appended;
       },

@@ -22,38 +22,32 @@ const RUN = '33333333-3333-4333-8333-333333333333';
 const domainEvent = (
   overrides: Record<string, unknown> = {},
 ): SseFrame & { frame: 'domain_event' } => {
+  const data = {
+    id: '44444444-4444-4444-8444-444444444444',
+    type: 'run.started',
+    stream_type: 'run',
+    stream_id: RUN,
+    occurred_at: '2026-09-10T09:00:00.000Z',
+    project_id: PROJECT,
+    task_id: TASK,
+    run_id: RUN,
+    ...overrides,
+  };
   const frame = sseFrameSchema.parse({
     frame: 'domain_event',
     topic: `project:${PROJECT}` as SseTopic,
     seq: 1,
-    type: 'run.started',
-    data: {
-      id: '44444444-4444-4444-8444-444444444444',
-      stream_type: 'run',
-      stream_id: RUN,
-      stream_seq: 1,
-      correlation_id: TASK,
-      cause_event_id: null,
-      actor: { kind: 'system', component: 'pipeline' },
-      occurred_at: '2026-09-10T09:00:00.000Z',
-      type: 'run.started',
-      payload: {
-        project_id: PROJECT,
-        task_id: TASK,
-        run_id: RUN,
-        model: 'claude-opus-5',
-        effort: 'medium',
-        prompt_version: 'developer@3',
-        context_pack: { tier0: [], tier1: [], budget_tokens: 0, total_tokens: 0, kb_commit: null },
-      },
-      ...overrides,
-    },
+    type: data.type,
+    data,
   });
   if (frame.frame !== 'domain_event') {
     throw new Error('the fixture above is a domain-event frame by construction');
   }
   return frame;
 };
+
+const QUESTION = '55555555-5555-4555-8555-555555555555';
+const WORKER = '66666666-6666-4666-8666-666666666666';
 
 describe('staleKeysForEvent', () => {
   it('names the project, task and run prefixes the event could have changed', () => {
@@ -65,30 +59,149 @@ describe('staleKeysForEvent', () => {
     expect(keys).toContainEqual([...queryKeys.agents]);
   });
 
-  it('falls back to the stream when the payload names no id', () => {
-    /**
-     * **The one cast this file keeps, and why** (PROGRESS backlog 93): the frame below is a payload
-     * the published schema **refuses**, which is the point — the reader must fall back to the
-     * stream rather than throw when it is handed something it cannot read, and a fixture that
-     * parsed could not express that. It is built through the helper and then broken deliberately,
-     * so everything except the payload is still a real frame.
-     */
-    const withoutIds = {
-      ...domainEvent(),
-      data: { ...domainEvent().data, stream_type: 'task', stream_id: TASK, payload: {} },
-    } as SseFrame & { frame: 'domain_event' };
-    const keys = staleKeysForEvent(withoutIds);
+  it('falls back to the stream when the projection names no id', () => {
+    const keys = staleKeysForEvent(
+      domainEvent({
+        type: 'task.paused',
+        stream_type: 'task',
+        stream_id: TASK,
+        project_id: undefined,
+        task_id: undefined,
+        run_id: undefined,
+      }),
+    );
 
     expect(keys).toContainEqual([...queryKeys.task(TASK)]);
+    expect(keys).not.toContainEqual([...queryKeys.agents]);
+    expect(keys).not.toContainEqual([...queryKeys.inbox]);
   });
 
-  it('marks the inbox stale for a question or an approval', () => {
+  it('marks the inbox stale for a question or an approval, whichever stream it was appended to', () => {
     expect(staleKeysForEvent(domainEvent({ stream_type: 'question' }))).toContainEqual([
       ...queryKeys.inbox,
     ]);
     expect(staleKeysForEvent(domainEvent({ stream_type: 'approval' }))).toContainEqual([
       ...queryKeys.inbox,
     ]);
+    // `task.question.asked` is appended to the **task** stream, so the type and the id decide.
+    expect(
+      staleKeysForEvent(
+        domainEvent({
+          type: 'task.question.asked',
+          stream_type: 'task',
+          stream_id: TASK,
+          run_id: undefined,
+          question_id: QUESTION,
+        }),
+      ),
+    ).toContainEqual([...queryKeys.inbox]);
+    expect(
+      staleKeysForEvent(
+        domainEvent({
+          type: 'task.approval.requested',
+          stream_type: 'task',
+          stream_id: TASK,
+          run_id: undefined,
+        }),
+      ),
+    ).toContainEqual([...queryKeys.inbox]);
+  });
+
+  it('refreshes the workers list for a claim that names a worker', () => {
+    expect(
+      staleKeysForEvent(
+        domainEvent({ type: 'run.claimed', worker_id: WORKER, claimant_kind: 'worker' }),
+      ),
+    ).toContainEqual([...queryKeys.workers]);
+    expect(staleKeysForEvent(domainEvent({ type: 'run.claimed' }))).not.toContainEqual([
+      ...queryKeys.workers,
+    ]);
+  });
+});
+
+/**
+ * S-23.14's three named frames, as the server's projection sends them, driven through the bridge
+ * into a real `QueryClient` holding the queries the Agents, Inbox, board and task screens read — so
+ * the assertion is that those queries are **invalidated** (a mounted screen refetches without
+ * navigation), not merely that a key list contains them.
+ */
+describe('the live frames the screens refresh on', () => {
+  const seeded = () => {
+    const queryClient = new QueryClient();
+    const keys = {
+      agents: [...queryKeys.agents],
+      inbox: [...queryKeys.inbox],
+      board: [...queryKeys.projectTasks(PROJECT)],
+      task: [...queryKeys.task(TASK)],
+      run: [...queryKeys.run(RUN)],
+      otherTask: [...queryKeys.task('77777777-7777-4777-8777-777777777777')],
+    };
+    for (const key of Object.values(keys)) {
+      queryClient.setQueryData(key, { seeded: true });
+    }
+    const stale = () =>
+      Object.fromEntries(
+        Object.entries(keys).map(([name, key]) => [
+          name,
+          queryClient.getQueryState(key)?.isInvalidated === true,
+        ]),
+      );
+    return { bridge: createQueryBridge({ queryClient }), stale };
+  };
+
+  it('run.claimed refreshes the agents list, the board, the task and the run', () => {
+    const { bridge, stale } = seeded();
+    bridge.onFrame(domainEvent({ type: 'run.claimed', claimant_kind: 'server' }));
+    expect(stale()).toEqual({
+      agents: true,
+      inbox: false,
+      board: true,
+      task: true,
+      run: true,
+      otherTask: false,
+    });
+  });
+
+  it('task.stage.entered refreshes the board and the task, not the agents list or the inbox', () => {
+    const { bridge, stale } = seeded();
+    bridge.onFrame(
+      domainEvent({
+        type: 'task.stage.entered',
+        stream_type: 'task',
+        stream_id: TASK,
+        run_id: undefined,
+        stage: 'development',
+      }),
+    );
+    expect(stale()).toEqual({
+      agents: false,
+      inbox: false,
+      board: true,
+      task: true,
+      run: false,
+      otherTask: false,
+    });
+  });
+
+  it('task.question.asked refreshes the inbox, the board and the task', () => {
+    const { bridge, stale } = seeded();
+    bridge.onFrame(
+      domainEvent({
+        type: 'task.question.asked',
+        stream_type: 'task',
+        stream_id: TASK,
+        run_id: undefined,
+        question_id: QUESTION,
+      }),
+    );
+    expect(stale()).toEqual({
+      agents: false,
+      inbox: true,
+      board: true,
+      task: true,
+      run: false,
+      otherTask: false,
+    });
   });
 });
 

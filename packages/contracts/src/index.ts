@@ -26,6 +26,7 @@ export * from './common.js';
 export * from './config.js';
 export * from './events.js';
 export * from './knowledge.js';
+export * from './live-events.js';
 export * from './pipeline.js';
 export * from './records.js';
 export * from './run-spec.js';

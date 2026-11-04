@@ -2,11 +2,13 @@
  * Frames in, cache invalidations out (technical/09 § "Real-time state").
  *
  * The bridge is deliberately **event-agnostic**. It does not switch on the catalogue's ~60 event
- * types; it reads the ids an event carries — the envelope's `stream_type`/`stream_id` and
- * `correlation_id`, and the `project_id` / `task_id` / `run_id` that technical/02 puts in every
- * payload that has them — and invalidates the query prefixes those ids own. A `switch` over the
- * catalogue would need a new arm for every event a later work package adds, and the arm nobody
- * adds is a screen that quietly stops updating (standing rule 7: do not carry your own list).
+ * types; it reads the ids a frame carries — the envelope's `stream_type`/`stream_id`, and the
+ * `project_id` / `task_id` / `run_id` / `worker_id` the server's projection copies out of the
+ * payload (S-23.14, `liveDomainEventSchema`) — and invalidates the query prefixes those ids own.
+ * One family is read off the type's prefix rather than an arm per type: `task.question.*` and
+ * `task.approval.*` refresh the inbox. A `switch` over the catalogue would need a new arm for every
+ * event a later work package adds, and the arm nobody adds is a screen that quietly stops updating
+ * (standing rule 7: do not carry your own list).
  *
  * technical/09 also asks for `setQueryData` on "known shapes" (card cost, time-in-stage, run
  * status). That is an optimisation over this: invalidation is always correct and costs a refetch,
@@ -21,48 +23,49 @@ import type { SseFrame, SseTopic } from '@platform/contracts';
 import type { QueryClient } from '@tanstack/react-query';
 import { queryKeys } from '../api/keys.js';
 
-/** Reads a string field off a payload whose union member is not known at the type level. */
-const readId = (source: unknown, key: string): string | null => {
-  if (typeof source !== 'object' || source === null) {
-    return null;
-  }
-  const value = (source as Record<string, unknown>)[key];
-  return typeof value === 'string' && value !== '' ? value : null;
-};
+/** The inbox lists open questions and approvals (`inboxResponseSchema`), so their events refresh it. */
+const INBOX_PREFIXES = ['task.question.', 'task.approval.'] as const;
 
-/** Every query prefix a domain event can have made stale. */
+/**
+ * Every query prefix a domain event can have made stale.
+ *
+ * Since S-23.14 a frame carries a **projection** (`liveDomainEventSchema`): the envelope's ids, the
+ * `project_id` / `task_id` / `run_id` / `question_id` / `approval_id` / `worker_id` the payload named,
+ * and never its text — so this reads ids, and the screens refetch the words through the read API.
+ */
 export const staleKeysForEvent = (event: SseFrame & { frame: 'domain_event' }): unknown[][] => {
-  const payload = event.data.payload;
+  const data = event.data;
   const keys: unknown[][] = [];
 
-  const projectId =
-    readId(payload, 'project_id') ??
-    (event.data.stream_type === 'project' ? event.data.stream_id : null);
+  const projectId = data.project_id ?? (data.stream_type === 'project' ? data.stream_id : null);
   if (projectId !== null) {
     keys.push([...queryKeys.project(projectId)]);
     keys.push([...queryKeys.projects]);
   }
 
-  const taskId =
-    readId(payload, 'task_id') ??
-    event.data.correlation_id ??
-    (event.data.stream_type === 'task' ? event.data.stream_id : null);
-  if (typeof taskId === 'string' && taskId !== '') {
+  const taskId = data.task_id ?? (data.stream_type === 'task' ? data.stream_id : null);
+  if (taskId !== null) {
     keys.push([...queryKeys.task(taskId)]);
   }
 
-  const runId =
-    readId(payload, 'run_id') ?? (event.data.stream_type === 'run' ? event.data.stream_id : null);
+  const runId = data.run_id ?? (data.stream_type === 'run' ? data.stream_id : null);
   if (runId !== null) {
     keys.push([...queryKeys.run(runId)]);
   }
 
   // Questions, approvals and runs are what the org-level screens show, and both are cheap lists.
-  if (event.data.stream_type === 'question' || event.data.stream_type === 'approval') {
+  if (
+    data.stream_type === 'question' ||
+    data.stream_type === 'approval' ||
+    INBOX_PREFIXES.some((prefix) => data.type.startsWith(prefix))
+  ) {
     keys.push([...queryKeys.inbox]);
   }
-  if (event.data.stream_type === 'run') {
+  if (runId !== null) {
     keys.push([...queryKeys.agents]);
+  }
+  if (data.worker_id !== undefined) {
+    keys.push([...queryKeys.workers]);
   }
   keys.push(['org', 'audit']);
 

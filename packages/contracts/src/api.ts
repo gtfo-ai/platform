@@ -61,7 +61,7 @@ import {
   organisationSettingsSchema,
   riskClassSchema,
 } from './config.js';
-import { domainEventSchema, domainEventTypeSchema } from './events.js';
+import { liveDomainEventSchema, liveDomainEventTypeSchema } from './live-events.js';
 import { taskStageOutcomeSchema, taskStageStateSchema } from './pipeline.js';
 import {
   approvalRecordSchema,
@@ -2358,7 +2358,7 @@ export const MAX_TASK_EXPORT_HUMAN_ACTIONS = 1_000;
  * catalogue (WP-112).
  *
  * `events` is append-only (TD-005) and holds every event written under every earlier version of
- * {@link domainEventSchema}: a `task.taken_over` from before WP-73 has no `run_id`, and a strict
+ * `domainEventSchema`: a `task.taken_over` from before WP-73 has no `run_id`, and a strict
  * parse of such a row would refuse the export of every task older than the schema change it
  * predates. So `type` is a string and `payload`/`actor` are opaque JSON, and the envelope's
  * columns are published beside them. `position` is the log's own order.
@@ -2879,9 +2879,15 @@ export const sseFrameSchema = z.discriminatedUnion('frame', [
   z.strictObject({
     frame: z.literal('domain_event'),
     topic: sseTopicSchema,
+    /** The event's global `events.position` — one numbering for every topic it is fanned into. */
     seq: sequenceSchema,
-    type: domainEventTypeSchema,
-    data: domainEventSchema,
+    type: liveDomainEventTypeSchema,
+    /**
+     * A **projection** of the stored event — ids, the stage and three small enums, never free text
+     * (S-23.14; `live-events.ts` has the allow-list and the reasons). The client refetches the
+     * resource through the read API, which applies its own authorisation.
+     */
+    data: liveDomainEventSchema,
   }),
   z.strictObject({
     frame: z.literal('transcript'),

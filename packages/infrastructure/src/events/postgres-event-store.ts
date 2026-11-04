@@ -31,6 +31,7 @@ import {
   type HandlerExecutionStatus,
   type HandlerExecutionWriter,
   type HandlerRef,
+  liveEventsAppendedHint,
   PartitionWindowError,
   type PendingDispatchRequest,
   type ReadRangeRequest,
@@ -229,6 +230,12 @@ export class PostgresEventAppender implements EventAppender {
     // One hint per committing transaction: PostgreSQL collapses identical notifications from one
     // transaction into a single delivery, so this stays a hint however many events were appended.
     await this.#broadcast.publish({ topic: EVENTS_APPENDED_TOPIC, payload: {} });
+    // The live SSE topics' hint (S-23.14): the positions, so the API processes read exactly these
+    // rows back. A separate topic, so the wake-up above stays one collapsed notification.
+    const live = liveEventsAppendedHint(appended);
+    if (live !== null) {
+      await this.#broadcast.publish(live);
+    }
     return appended;
   }
 
